@@ -18,7 +18,7 @@ export const BALL = {
   maxSpeed: 760,
 } as const;
 
-export const WIN_SCORE = 11;
+export const WIN_SCORE = 3;
 export const TICK_MS = 1000 / 60;
 export const MAX_BOUNCE = Math.PI / 3; // steepest deflection off a paddle edge
 export const SERVE_DELAY = 0.7; // seconds the ball pauses at center before launching

@@ -10,7 +10,7 @@ live — and any observer can claim a paddle when a spot opens up. The match run
 - Server owns the physics, ball, and score (no client can cheat)
 - Observers watch live and can **Join** an open paddle spot
 - Paddle control by **keyboard** (↑/↓ or W/S) or **mouse**
-- First to 11 wins, then both spots reopen for a fresh match
+- First to 3 wins, then both spots reopen for a fresh match
 - Nicknames shown on the scoreboard and watcher list
 
 ## Tech
