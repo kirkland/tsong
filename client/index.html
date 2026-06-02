@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>tsong — multiplayer pong</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: system-ui, sans-serif;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 14px;
+        background: #060912;
+        color: #e8eefc;
+      }
+      h1 {
+        margin: 0;
+        font-size: 20px;
+        letter-spacing: 2px;
+        color: #7da2ff;
+      }
+      #game {
+        width: min(90vw, 800px);
+        height: auto;
+        aspect-ratio: 800 / 500;
+        border: 1px solid #2a3550;
+        border-radius: 8px;
+        background: #0b1020;
+        cursor: none;
+      }
+      #status {
+        min-height: 22px;
+        font-size: 18px;
+        color: #cdd7f5;
+      }
+      #watchers {
+        min-height: 18px;
+        font-size: 13px;
+        color: #6b7796;
+      }
+      button {
+        font: inherit;
+        padding: 8px 20px;
+        border-radius: 6px;
+        border: 1px solid #3a6df0;
+        background: #3a6df0;
+        color: white;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #2f5fd6;
+      }
+      #overlay {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(6, 9, 18, 0.92);
+        backdrop-filter: blur(2px);
+      }
+      #joinForm {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        align-items: stretch;
+        width: min(86vw, 280px);
+        text-align: center;
+      }
+      #joinForm input {
+        font: inherit;
+        padding: 10px 12px;
+        border-radius: 6px;
+        border: 1px solid #2a3550;
+        background: #0b1020;
+        color: #e8eefc;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>T S O N G</h1>
+    <canvas id="game" width="800" height="500"></canvas>
+    <div id="status"></div>
+    <button id="join" style="display: none">Join game</button>
+    <div id="watchers"></div>
+
+    <div id="overlay">
+      <form id="joinForm">
+        <h1>T S O N G</h1>
+        <input id="nick" maxlength="20" placeholder="enter a nickname" autocomplete="off" autofocus />
+        <button type="submit">Enter</button>
+      </form>
+    </div>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>
