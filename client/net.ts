@@ -3,9 +3,11 @@
 
 import { ClientMsg, ServerMsg } from '../shared/types';
 
-export function connect(onMsg: (msg: ServerMsg) => void) {
+export function connect(onMsg: (msg: ServerMsg) => void, onOpen?: () => void) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+  ws.onopen = () => onOpen?.();
 
   ws.onmessage = (e) => {
     try {

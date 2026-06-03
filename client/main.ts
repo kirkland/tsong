@@ -12,10 +12,23 @@ const overlay = document.getElementById('overlay') as HTMLDivElement;
 const joinForm = document.getElementById('joinForm') as HTMLFormElement;
 const nick = document.getElementById('nick') as HTMLInputElement;
 const joinBtn = document.getElementById('join') as HTMLButtonElement;
+const renameBtn = document.getElementById('rename') as HTMLButtonElement;
 const statusEl = document.getElementById('status') as HTMLDivElement;
 const watchersEl = document.getElementById('watchers') as HTMLDivElement;
 
+// Persist the nickname so returning visitors skip the prompt. Cookie (not
+// localStorage) per request; ~1 year, scoped to the site.
+const NICK_COOKIE = 'tsong_nick';
+function saveNick(name: string) {
+  document.cookie = `${NICK_COOKIE}=${encodeURIComponent(name)};path=/;max-age=${60 * 60 * 24 * 365};samesite=lax`;
+}
+function loadNick(): string | null {
+  const m = document.cookie.match(new RegExp('(?:^|; )' + NICK_COOKIE + '=([^;]*)'));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
 let myRole: Role = 'observer';
+let myName = '';
 let state: StateMsg | null = null;
 
 let target = COURT.h / 2; // desired paddle center Y, court units
@@ -23,15 +36,22 @@ let lastSent = -1;
 let lastSendAt = 0;
 const keys = new Set<string>();
 
-const net = connect((msg) => {
-  if (msg.type === 'you') {
-    myRole = msg.role;
-  } else if (msg.type === 'state') {
-    state = msg;
-    syncMyPaddleFromServer();
-    updateUI();
-  }
-});
+const net = connect(
+  (msg) => {
+    if (msg.type === 'you') {
+      myRole = msg.role;
+    } else if (msg.type === 'state') {
+      state = msg;
+      syncMyPaddleFromServer();
+      updateUI();
+    }
+  },
+  // On (re)connect, join automatically if we already have a name. This is also what
+  // delivers the cookie-remembered nickname once the socket is actually open.
+  () => {
+    if (myName) net.send({ type: 'join', nickname: myName });
+  },
+);
 
 const isPlayer = () => myRole === 'left' || myRole === 'right';
 
@@ -43,15 +63,36 @@ function syncMyPaddleFromServer() {
   }
 }
 
-// --- nickname entry ---
+// --- nickname entry / rename (same form serves both) ---
 joinForm.addEventListener('submit', (e) => {
   e.preventDefault();
-  net.send({ type: 'join', nickname: nick.value.trim() || 'anon' });
+  myName = nick.value.trim().slice(0, 20) || 'anon';
+  saveNick(myName);
+  net.send({ type: 'join', nickname: myName }); // server treats a repeat join as a rename
   overlay.style.display = 'none';
+});
+
+// --- change name: reopen the prompt pre-filled with the current name ---
+renameBtn.addEventListener('click', () => {
+  nick.value = myName;
+  overlay.style.display = 'flex';
+  nick.focus();
+  nick.select();
 });
 
 // --- claim a paddle spot ---
 joinBtn.addEventListener('click', () => net.send({ type: 'claim' }));
+
+// --- startup: a remembered nickname skips the prompt (the actual join is sent in
+// the onOpen handler once the socket connects). ---
+const remembered = loadNick();
+if (remembered) {
+  myName = remembered;
+  nick.value = remembered;
+  overlay.style.display = 'none';
+} else {
+  nick.focus();
+}
 
 // --- mouse control ---
 canvas.addEventListener('mousemove', (e) => {
@@ -103,6 +144,7 @@ function updateUI() {
 
   const spotOpen = !state.paddles.left.name || !state.paddles.right.name;
   joinBtn.style.display = myRole === 'observer' && spotOpen ? 'inline-block' : 'none';
+  renameBtn.style.display = myName ? 'inline-block' : 'none';
 
   canvas.style.cursor = isPlayer() ? 'none' : 'default';
   watchersEl.textContent = state.watchers.length
