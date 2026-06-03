@@ -32,7 +32,8 @@ export type Status = 'waiting' | 'playing' | 'over';
 
 // --- Client -> Server ---
 export type ClientMsg =
-  | { type: 'join'; nickname: string; pid: string } // pid = stable per-browser identity
+  // pid = stable per-browser identity; color = chosen paddle color
+  | { type: 'join'; nickname: string; pid: string; color?: string }
   | { type: 'claim' }
   | { type: 'paddle'; y: number } // desired paddle center Y, in court units
   | { type: 'chat'; text: string };
@@ -41,6 +42,7 @@ export type ClientMsg =
 export interface PaddleState {
   y: number; // paddle center Y in court units
   name: string | null; // nickname of the player on this side, or null if open
+  color: string; // hex color for rendering
 }
 
 export interface StateMsg {

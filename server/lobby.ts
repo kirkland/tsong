@@ -20,6 +20,7 @@ interface Conn {
   pid: string; // stable per-browser identity (leaderboard key); '' until joined
   nickname: string; // '' until the client has sent `join`
   role: Role;
+  color: string; // chosen paddle color
   lastChatAt: number; // ms timestamp of last chat message (light rate limiting)
 }
 
@@ -42,6 +43,7 @@ export class Lobby {
       pid: '',
       nickname: '',
       role: 'observer',
+      color: '#e8eefc',
       lastChatAt: 0,
     };
     this.conns.set(ws, conn);
@@ -73,11 +75,12 @@ export class Lobby {
     }
   }
 
-  join(ws: WebSocket, nickname: string, pid: string) {
+  join(ws: WebSocket, nickname: string, pid: string, color?: string) {
     const conn = this.conns.get(ws);
     if (!conn) return;
     conn.pid = pid.slice(0, 64);
     conn.nickname = nickname.slice(0, 20).trim() || 'anon';
+    if (color) conn.color = color;
     // If this identity already has a leaderboard record, reflect the (possibly new)
     // display name right away — a rename shows on the board without playing again.
     updateName(conn.pid, conn.nickname)
@@ -185,8 +188,8 @@ export class Lobby {
       ball: { x: this.game.ball.x, y: this.game.ball.y },
       ballSpeed: Math.hypot(this.game.ball.vx, this.game.ball.vy),
       paddles: {
-        left: { y: this.game.paddleY.left, name: this.nameOf('left') },
-        right: { y: this.game.paddleY.right, name: this.nameOf('right') },
+        left: { y: this.game.paddleY.left, name: this.nameOf('left'), color: this.colorOf('left') },
+        right: { y: this.game.paddleY.right, name: this.nameOf('right'), color: this.colorOf('right') },
       },
       score: { ...this.game.score },
       status: this.game.status,
@@ -198,6 +201,11 @@ export class Lobby {
   private nameOf(side: Side): string | null {
     const ws = this.sides[side];
     return ws ? this.conns.get(ws)?.nickname ?? null : null;
+  }
+
+  private colorOf(side: Side): string {
+    const ws = this.sides[side];
+    return ws ? this.conns.get(ws)?.color ?? '#e8eefc' : '#e8eefc';
   }
 
   private connOn(side: Side): Conn | null {

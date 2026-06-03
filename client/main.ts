@@ -16,6 +16,7 @@ const renameBtn = document.getElementById('rename') as HTMLButtonElement;
 const statusEl = document.getElementById('status') as HTMLDivElement;
 const watchersEl = document.getElementById('watchers') as HTMLDivElement;
 const leaderboardEl = document.getElementById('leaderboard') as HTMLDivElement;
+const colorPicker = document.getElementById('colorPicker') as HTMLDivElement;
 const chatLog = document.getElementById('chatlog') as HTMLDivElement;
 const chatForm = document.getElementById('chatForm') as HTMLFormElement;
 const chatInput = document.getElementById('chatInput') as HTMLInputElement;
@@ -28,6 +29,12 @@ function setCookie(name: string, value: string) {
 function getCookie(name: string): string | null {
   const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
   return m ? decodeURIComponent(m[1]) : null;
+}
+
+function selectSwatch(color: string) {
+  for (const btn of colorPicker.querySelectorAll<HTMLButtonElement>('.swatch')) {
+    btn.classList.toggle('selected', btn.dataset.color === color);
+  }
 }
 
 // Stable per-browser identity — the real leaderboard key. The nickname is just a
@@ -48,12 +55,24 @@ const myPid = getCookie('tsong_pid') ?? (() => {
 
 let myRole: Role = 'observer';
 let myName = '';
+let myColor = '#e8eefc';
 let state: StateMsg | null = null;
 
 let target = COURT.h / 2; // desired paddle center Y, court units
 let lastSent = -1;
 let lastSendAt = 0;
 const keys = new Set<string>();
+
+// --- color swatch selection ---
+colorPicker.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.swatch');
+  if (!btn) return;
+  const color = btn.dataset.color;
+  if (color) {
+    myColor = color;
+    selectSwatch(color);
+  }
+});
 
 const net = connect(
   (msg) => {
@@ -69,10 +88,8 @@ const net = connect(
       msg.lines.forEach(addChatLine);
     }
   },
-  // On (re)connect, join automatically if we already have a name. This is also what
-  // delivers the cookie-remembered nickname once the socket is actually open.
   () => {
-    if (myName) net.send({ type: 'join', nickname: myName, pid: myPid });
+    if (myName) net.send({ type: 'join', nickname: myName, pid: myPid, color: myColor });
   },
 );
 
@@ -91,7 +108,9 @@ joinForm.addEventListener('submit', (e) => {
   e.preventDefault();
   myName = nick.value.trim().slice(0, 20) || 'anon';
   setCookie('tsong_nick', myName);
-  net.send({ type: 'join', nickname: myName, pid: myPid }); // repeat join = rename
+  setCookie('tsong_color', myColor);
+  // repeat join = rename; pid keeps the leaderboard identity stable
+  net.send({ type: 'join', nickname: myName, pid: myPid, color: myColor });
   overlay.style.display = 'none';
   enableChat();
 });
@@ -138,6 +157,11 @@ function addChatLine(line: ChatLine) {
 // --- startup: a remembered nickname skips the prompt (the actual join is sent in
 // the onOpen handler once the socket connects). ---
 const remembered = getCookie('tsong_nick');
+const savedColor = getCookie('tsong_color');
+if (savedColor) {
+  myColor = savedColor;
+  selectSwatch(savedColor);
+}
 if (remembered) {
   myName = remembered;
   nick.value = remembered;
@@ -157,13 +181,18 @@ canvas.addEventListener('mousemove', (e) => {
 // --- keyboard control ---
 const MOVE_KEYS = new Set(['arrowup', 'arrowdown', 'w', 's']);
 window.addEventListener('keydown', (e) => {
+  if (e.target instanceof HTMLInputElement) return;
+  if (overlay.style.display !== 'none') return;
   const k = e.key.toLowerCase();
   if (MOVE_KEYS.has(k)) {
     keys.add(k);
     e.preventDefault();
   }
 });
-window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
+window.addEventListener('keyup', (e) => {
+  if (e.target instanceof HTMLInputElement) return;
+  keys.delete(e.key.toLowerCase());
+});
 
 // --- main loop ---
 function loop(t: number) {

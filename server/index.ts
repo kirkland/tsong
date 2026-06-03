@@ -49,7 +49,7 @@ wss.on('connection', (ws: WebSocket) => {
     switch (msg?.type) {
       case 'join':
         if (typeof msg.nickname === 'string' && typeof msg.pid === 'string') {
-          lobby.join(ws, msg.nickname, msg.pid);
+          lobby.join(ws, msg.nickname, msg.pid, typeof msg.color === 'string' ? msg.color : undefined);
         }
         break;
       case 'claim':
