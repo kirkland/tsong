@@ -30,7 +30,7 @@ export type Status = 'waiting' | 'playing' | 'over';
 
 // --- Client -> Server ---
 export type ClientMsg =
-  | { type: 'join'; nickname: string }
+  | { type: 'join'; nickname: string; pid: string } // pid = stable per-browser identity
   | { type: 'claim' }
   | { type: 'paddle'; y: number }; // desired paddle center Y, in court units
 

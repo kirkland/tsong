@@ -17,16 +17,31 @@ const statusEl = document.getElementById('status') as HTMLDivElement;
 const watchersEl = document.getElementById('watchers') as HTMLDivElement;
 const leaderboardEl = document.getElementById('leaderboard') as HTMLDivElement;
 
-// Persist the nickname so returning visitors skip the prompt. Cookie (not
-// localStorage) per request; ~1 year, scoped to the site.
-const NICK_COOKIE = 'tsong_nick';
-function saveNick(name: string) {
-  document.cookie = `${NICK_COOKIE}=${encodeURIComponent(name)};path=/;max-age=${60 * 60 * 24 * 365};samesite=lax`;
+// Cookies (not localStorage, per request); ~1 year, scoped to the site.
+const YEAR = 60 * 60 * 24 * 365;
+function setCookie(name: string, value: string) {
+  document.cookie = `${name}=${encodeURIComponent(value)};path=/;max-age=${YEAR};samesite=lax`;
 }
-function loadNick(): string | null {
-  const m = document.cookie.match(new RegExp('(?:^|; )' + NICK_COOKIE + '=([^;]*)'));
+function getCookie(name: string): string | null {
+  const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
   return m ? decodeURIComponent(m[1]) : null;
 }
+
+// Stable per-browser identity — the real leaderboard key. The nickname is just a
+// display label; this id is what wins/losses are tied to, so renaming is safe.
+function makeId(): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  // Fallback for non-secure contexts (e.g. plain http on a LAN IP).
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+const myPid = getCookie('tsong_pid') ?? (() => {
+  const id = makeId();
+  setCookie('tsong_pid', id);
+  return id;
+})();
 
 let myRole: Role = 'observer';
 let myName = '';
@@ -52,7 +67,7 @@ const net = connect(
   // On (re)connect, join automatically if we already have a name. This is also what
   // delivers the cookie-remembered nickname once the socket is actually open.
   () => {
-    if (myName) net.send({ type: 'join', nickname: myName });
+    if (myName) net.send({ type: 'join', nickname: myName, pid: myPid });
   },
 );
 
@@ -70,8 +85,8 @@ function syncMyPaddleFromServer() {
 joinForm.addEventListener('submit', (e) => {
   e.preventDefault();
   myName = nick.value.trim().slice(0, 20) || 'anon';
-  saveNick(myName);
-  net.send({ type: 'join', nickname: myName }); // server treats a repeat join as a rename
+  setCookie('tsong_nick', myName);
+  net.send({ type: 'join', nickname: myName, pid: myPid }); // repeat join = rename
   overlay.style.display = 'none';
 });
 
@@ -88,7 +103,7 @@ joinBtn.addEventListener('click', () => net.send({ type: 'claim' }));
 
 // --- startup: a remembered nickname skips the prompt (the actual join is sent in
 // the onOpen handler once the socket connects). ---
-const remembered = loadNick();
+const remembered = getCookie('tsong_nick');
 if (remembered) {
   myName = remembered;
   nick.value = remembered;

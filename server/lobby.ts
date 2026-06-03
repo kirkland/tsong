@@ -4,10 +4,11 @@
 import type { WebSocket } from 'ws';
 import { Game } from './game';
 import { LeaderboardRow, Role, ServerMsg, Side, StateMsg } from '../shared/types';
-import { getLeaderboard, recordResult } from './db';
+import { getLeaderboard, recordResult, updateName } from './db';
 
 interface Conn {
-  id: string;
+  id: string; // per-connection id (used in `you` messages)
+  pid: string; // stable per-browser identity (leaderboard key); '' until joined
   nickname: string; // '' until the client has sent `join`
   role: Role;
 }
@@ -25,16 +26,24 @@ export class Lobby {
   constructor(private game: Game) {}
 
   add(ws: WebSocket) {
-    const conn: Conn = { id: String(this.nextId++), nickname: '', role: 'observer' };
+    const conn: Conn = { id: String(this.nextId++), pid: '', nickname: '', role: 'observer' };
     this.conns.set(ws, conn);
     this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
     this.tell(ws, { type: 'leaderboard', rows: this.leaderboard });
   }
 
-  join(ws: WebSocket, nickname: string) {
+  join(ws: WebSocket, nickname: string, pid: string) {
     const conn = this.conns.get(ws);
     if (!conn) return;
+    conn.pid = pid.slice(0, 64);
     conn.nickname = nickname.slice(0, 20).trim() || 'anon';
+    // If this identity already has a leaderboard record, reflect the (possibly new)
+    // display name right away — a rename shows on the board without playing again.
+    updateName(conn.pid, conn.nickname)
+      .then((changed) => {
+        if (changed) this.refreshLeaderboard();
+      })
+      .catch((e) => console.error('name update failed:', e));
   }
 
   claim(ws: WebSocket) {
@@ -75,14 +84,16 @@ export class Lobby {
             ? 'right'
             : 'left'
           : null;
-        // Capture both names before releasing (release nulls out the side slots).
-        this.winnerName = winnerSide ? this.nameOf(winnerSide) : null;
-        const loserName = loserSide ? this.nameOf(loserSide) : null;
+        // Capture both players before releasing (release nulls out the side slots).
+        const winner = winnerSide ? this.connOn(winnerSide) : null;
+        const loser = loserSide ? this.connOn(loserSide) : null;
+        this.winnerName = winner?.nickname ?? null;
         for (const s of SIDES) this.release(s);
         this.overHandled = true;
 
-        if (this.winnerName && loserName) {
-          recordResult(this.winnerName, loserName)
+        // Record against stable identities (pids), storing the current display names.
+        if (winner?.pid && loser?.pid) {
+          recordResult(winner.pid, winner.nickname, loser.pid, loser.nickname)
             .then(() => this.refreshLeaderboard())
             .catch((e) => console.error('leaderboard update failed:', e));
         }
@@ -146,6 +157,11 @@ export class Lobby {
   private nameOf(side: Side): string | null {
     const ws = this.sides[side];
     return ws ? this.conns.get(ws)?.nickname ?? null : null;
+  }
+
+  private connOn(side: Side): Conn | null {
+    const ws = this.sides[side];
+    return ws ? this.conns.get(ws) ?? null : null;
   }
 
   private sideOf(ws: WebSocket): Side | null {
