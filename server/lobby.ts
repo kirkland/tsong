@@ -3,7 +3,16 @@
 
 import type { WebSocket } from 'ws';
 import { Game } from './game';
-import { LeaderboardRow, Role, ServerMsg, Side, StateMsg } from '../shared/types';
+import {
+  CHAT_HISTORY,
+  CHAT_MAX_LEN,
+  ChatLine,
+  LeaderboardRow,
+  Role,
+  ServerMsg,
+  Side,
+  StateMsg,
+} from '../shared/types';
 import { getLeaderboard, recordResult, updateName } from './db';
 
 interface Conn {
@@ -11,6 +20,7 @@ interface Conn {
   pid: string; // stable per-browser identity (leaderboard key); '' until joined
   nickname: string; // '' until the client has sent `join`
   role: Role;
+  lastChatAt: number; // ms timestamp of last chat message (light rate limiting)
 }
 
 const SIDES: Side[] = ['left', 'right'];
@@ -21,15 +31,46 @@ export class Lobby {
   private winnerName: string | null = null;
   private overHandled = false; // guards the one-time spot reopening when a match ends
   private leaderboard: LeaderboardRow[] = []; // cached standings, pushed to clients
+  private chatLog: ChatLine[] = []; // recent chat, replayed to new connections
   private nextId = 1;
 
   constructor(private game: Game) {}
 
   add(ws: WebSocket) {
-    const conn: Conn = { id: String(this.nextId++), pid: '', nickname: '', role: 'observer' };
+    const conn: Conn = {
+      id: String(this.nextId++),
+      pid: '',
+      nickname: '',
+      role: 'observer',
+      lastChatAt: 0,
+    };
     this.conns.set(ws, conn);
     this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
     this.tell(ws, { type: 'leaderboard', rows: this.leaderboard });
+    if (this.chatLog.length) this.tell(ws, { type: 'chat', lines: this.chatLog });
+  }
+
+  chat(ws: WebSocket, text: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return; // must have joined
+    const now = Date.now();
+    if (now - conn.lastChatAt < 400) return; // light anti-spam throttle
+    const clean = text.replace(/\s+/g, ' ').trim().slice(0, CHAT_MAX_LEN);
+    if (!clean) return;
+    conn.lastChatAt = now;
+
+    const line: ChatLine = {
+      from: conn.nickname,
+      text: clean,
+      player: conn.role === 'left' || conn.role === 'right',
+    };
+    this.chatLog.push(line);
+    if (this.chatLog.length > CHAT_HISTORY) this.chatLog.shift();
+
+    const data = JSON.stringify({ type: 'chat', lines: [line] });
+    for (const sock of this.conns.keys()) {
+      if (sock.readyState === sock.OPEN) sock.send(data);
+    }
   }
 
   join(ws: WebSocket, nickname: string, pid: string) {

@@ -20,6 +20,8 @@ export const BALL = {
 export const WIN_SCORE = 3;
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
 export const LEADERBOARD_SIZE = 10;
+export const CHAT_MAX_LEN = 200; // max characters per chat message
+export const CHAT_HISTORY = 50; // recent messages kept/sent to new joiners
 export const TICK_MS = 1000 / 60;
 export const MAX_BOUNCE = Math.PI / 3; // steepest deflection off a paddle edge
 export const SERVE_DELAY = 0.7; // seconds the ball pauses at center before launching
@@ -32,7 +34,8 @@ export type Status = 'waiting' | 'playing' | 'over';
 export type ClientMsg =
   | { type: 'join'; nickname: string; pid: string } // pid = stable per-browser identity
   | { type: 'claim' }
-  | { type: 'paddle'; y: number }; // desired paddle center Y, in court units
+  | { type: 'paddle'; y: number } // desired paddle center Y, in court units
+  | { type: 'chat'; text: string };
 
 // --- Server -> Client ---
 export interface PaddleState {
@@ -70,4 +73,16 @@ export interface LeaderboardMsg {
   rows: LeaderboardRow[];
 }
 
-export type ServerMsg = YouMsg | StateMsg | LeaderboardMsg;
+export interface ChatLine {
+  from: string;
+  text: string;
+  player: boolean; // true if the sender held a paddle when they sent it
+}
+
+// One line for a live message; the full recent history on connect. Client appends.
+export interface ChatMsg {
+  type: 'chat';
+  lines: ChatLine[];
+}
+
+export type ServerMsg = YouMsg | StateMsg | LeaderboardMsg | ChatMsg;

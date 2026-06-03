@@ -3,7 +3,7 @@
 
 import { connect } from './net';
 import { draw } from './render';
-import { COURT, PADDLE, LeaderboardRow, Role, StateMsg } from '../shared/types';
+import { COURT, PADDLE, ChatLine, LeaderboardRow, Role, StateMsg } from '../shared/types';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -16,6 +16,9 @@ const renameBtn = document.getElementById('rename') as HTMLButtonElement;
 const statusEl = document.getElementById('status') as HTMLDivElement;
 const watchersEl = document.getElementById('watchers') as HTMLDivElement;
 const leaderboardEl = document.getElementById('leaderboard') as HTMLDivElement;
+const chatLog = document.getElementById('chatlog') as HTMLDivElement;
+const chatForm = document.getElementById('chatForm') as HTMLFormElement;
+const chatInput = document.getElementById('chatInput') as HTMLInputElement;
 
 // Cookies (not localStorage, per request); ~1 year, scoped to the site.
 const YEAR = 60 * 60 * 24 * 365;
@@ -62,6 +65,8 @@ const net = connect(
       updateUI();
     } else if (msg.type === 'leaderboard') {
       renderLeaderboard(msg.rows);
+    } else if (msg.type === 'chat') {
+      msg.lines.forEach(addChatLine);
     }
   },
   // On (re)connect, join automatically if we already have a name. This is also what
@@ -88,6 +93,7 @@ joinForm.addEventListener('submit', (e) => {
   setCookie('tsong_nick', myName);
   net.send({ type: 'join', nickname: myName, pid: myPid }); // repeat join = rename
   overlay.style.display = 'none';
+  enableChat();
 });
 
 // --- change name: reopen the prompt pre-filled with the current name ---
@@ -101,6 +107,34 @@ renameBtn.addEventListener('click', () => {
 // --- claim a paddle spot ---
 joinBtn.addEventListener('click', () => net.send({ type: 'claim' }));
 
+// --- chat ---
+chatForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = chatInput.value.trim();
+  if (!text) return;
+  net.send({ type: 'chat', text });
+  chatInput.value = '';
+});
+
+function enableChat() {
+  chatInput.disabled = false;
+}
+
+// textContent (not innerHTML) keeps user-supplied names/messages from injecting markup.
+function addChatLine(line: ChatLine) {
+  const row = document.createElement('div');
+  const who = document.createElement('span');
+  who.className = line.player ? 'chatfrom tag' : 'chatfrom';
+  who.textContent = line.player ? `${line.from} (playing)` : line.from;
+  const body = document.createElement('span');
+  body.className = 'chattext';
+  body.textContent = `: ${line.text}`;
+  row.append(who, body);
+  chatLog.append(row);
+  while (chatLog.childElementCount > 100) chatLog.firstElementChild!.remove();
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
 // --- startup: a remembered nickname skips the prompt (the actual join is sent in
 // the onOpen handler once the socket connects). ---
 const remembered = getCookie('tsong_nick');
@@ -108,6 +142,7 @@ if (remembered) {
   myName = remembered;
   nick.value = remembered;
   overlay.style.display = 'none';
+  enableChat();
 } else {
   nick.focus();
 }

@@ -58,6 +58,9 @@ wss.on('connection', (ws: WebSocket) => {
       case 'paddle':
         if (typeof msg.y === 'number' && Number.isFinite(msg.y)) lobby.setPaddle(ws, msg.y);
         break;
+      case 'chat':
+        if (typeof msg.text === 'string') lobby.chat(ws, msg.text);
+        break;
     }
   });
 
