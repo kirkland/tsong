@@ -12,6 +12,7 @@ live — and any observer can claim a paddle when a spot opens up. The match run
 - Paddle control by **keyboard** (↑/↓ or W/S) or **mouse**
 - First to 3 wins, then both spots reopen for a fresh match
 - Nicknames shown on the scoreboard and watcher list (remembered in a cookie)
+- Custom paddle colors chosen from a palette
 - Win–loss **leaderboard** persisted in Postgres
 
 ## Tech

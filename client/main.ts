@@ -16,6 +16,7 @@ const renameBtn = document.getElementById('rename') as HTMLButtonElement;
 const statusEl = document.getElementById('status') as HTMLDivElement;
 const watchersEl = document.getElementById('watchers') as HTMLDivElement;
 const leaderboardEl = document.getElementById('leaderboard') as HTMLDivElement;
+const colorPicker = document.getElementById('colorPicker') as HTMLDivElement;
 
 // Persist the nickname so returning visitors skip the prompt. Cookie (not
 // localStorage) per request; ~1 year, scoped to the site.
@@ -28,14 +29,41 @@ function loadNick(): string | null {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
+const COLOR_COOKIE = 'tsong_color';
+function saveColor(color: string) {
+  document.cookie = `${COLOR_COOKIE}=${encodeURIComponent(color)};path=/;max-age=${60 * 60 * 24 * 365};samesite=lax`;
+}
+function loadColor(): string | null {
+  const m = document.cookie.match(new RegExp('(?:^|; )' + COLOR_COOKIE + '=([^;]*)'));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+function selectSwatch(color: string) {
+  for (const btn of colorPicker.querySelectorAll<HTMLButtonElement>('.swatch')) {
+    btn.classList.toggle('selected', btn.dataset.color === color);
+  }
+}
+
 let myRole: Role = 'observer';
 let myName = '';
+let myColor = '#e8eefc';
 let state: StateMsg | null = null;
 
 let target = COURT.h / 2; // desired paddle center Y, court units
 let lastSent = -1;
 let lastSendAt = 0;
 const keys = new Set<string>();
+
+// --- color swatch selection ---
+colorPicker.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.swatch');
+  if (!btn) return;
+  const color = btn.dataset.color;
+  if (color) {
+    myColor = color;
+    selectSwatch(color);
+  }
+});
 
 const net = connect(
   (msg) => {
@@ -49,10 +77,8 @@ const net = connect(
       renderLeaderboard(msg.rows);
     }
   },
-  // On (re)connect, join automatically if we already have a name. This is also what
-  // delivers the cookie-remembered nickname once the socket is actually open.
   () => {
-    if (myName) net.send({ type: 'join', nickname: myName });
+    if (myName) net.send({ type: 'join', nickname: myName, color: myColor });
   },
 );
 
@@ -71,7 +97,8 @@ joinForm.addEventListener('submit', (e) => {
   e.preventDefault();
   myName = nick.value.trim().slice(0, 20) || 'anon';
   saveNick(myName);
-  net.send({ type: 'join', nickname: myName }); // server treats a repeat join as a rename
+  saveColor(myColor);
+  net.send({ type: 'join', nickname: myName, color: myColor });
   overlay.style.display = 'none';
 });
 
@@ -89,6 +116,11 @@ joinBtn.addEventListener('click', () => net.send({ type: 'claim' }));
 // --- startup: a remembered nickname skips the prompt (the actual join is sent in
 // the onOpen handler once the socket connects). ---
 const remembered = loadNick();
+const savedColor = loadColor();
+if (savedColor) {
+  myColor = savedColor;
+  selectSwatch(savedColor);
+}
 if (remembered) {
   myName = remembered;
   nick.value = remembered;
@@ -107,13 +139,18 @@ canvas.addEventListener('mousemove', (e) => {
 // --- keyboard control ---
 const MOVE_KEYS = new Set(['arrowup', 'arrowdown', 'w', 's']);
 window.addEventListener('keydown', (e) => {
+  if (e.target instanceof HTMLInputElement) return;
+  if (overlay.style.display !== 'none') return;
   const k = e.key.toLowerCase();
   if (MOVE_KEYS.has(k)) {
     keys.add(k);
     e.preventDefault();
   }
 });
-window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
+window.addEventListener('keyup', (e) => {
+  if (e.target instanceof HTMLInputElement) return;
+  keys.delete(e.key.toLowerCase());
+});
 
 // --- main loop ---
 function loop(t: number) {

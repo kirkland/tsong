@@ -10,6 +10,7 @@ interface Conn {
   id: string;
   nickname: string; // '' until the client has sent `join`
   role: Role;
+  color: string;
 }
 
 const SIDES: Side[] = ['left', 'right'];
@@ -25,16 +26,17 @@ export class Lobby {
   constructor(private game: Game) {}
 
   add(ws: WebSocket) {
-    const conn: Conn = { id: String(this.nextId++), nickname: '', role: 'observer' };
+    const conn: Conn = { id: String(this.nextId++), nickname: '', role: 'observer', color: '#e8eefc' };
     this.conns.set(ws, conn);
     this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
     this.tell(ws, { type: 'leaderboard', rows: this.leaderboard });
   }
 
-  join(ws: WebSocket, nickname: string) {
+  join(ws: WebSocket, nickname: string, color?: string) {
     const conn = this.conns.get(ws);
     if (!conn) return;
     conn.nickname = nickname.slice(0, 20).trim() || 'anon';
+    if (color) conn.color = color;
   }
 
   claim(ws: WebSocket) {
@@ -133,8 +135,8 @@ export class Lobby {
       ball: { x: this.game.ball.x, y: this.game.ball.y },
       ballSpeed: Math.hypot(this.game.ball.vx, this.game.ball.vy),
       paddles: {
-        left: { y: this.game.paddleY.left, name: this.nameOf('left') },
-        right: { y: this.game.paddleY.right, name: this.nameOf('right') },
+        left: { y: this.game.paddleY.left, name: this.nameOf('left'), color: this.colorOf('left') },
+        right: { y: this.game.paddleY.right, name: this.nameOf('right'), color: this.colorOf('right') },
       },
       score: { ...this.game.score },
       status: this.game.status,
@@ -146,6 +148,11 @@ export class Lobby {
   private nameOf(side: Side): string | null {
     const ws = this.sides[side];
     return ws ? this.conns.get(ws)?.nickname ?? null : null;
+  }
+
+  private colorOf(side: Side): string {
+    const ws = this.sides[side];
+    return ws ? this.conns.get(ws)?.color ?? '#e8eefc' : '#e8eefc';
   }
 
   private sideOf(ws: WebSocket): Side | null {

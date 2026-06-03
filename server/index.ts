@@ -48,7 +48,7 @@ wss.on('connection', (ws: WebSocket) => {
     }
     switch (msg?.type) {
       case 'join':
-        if (typeof msg.nickname === 'string') lobby.join(ws, msg.nickname);
+        if (typeof msg.nickname === 'string') lobby.join(ws, msg.nickname, typeof msg.color === 'string' ? msg.color : undefined);
         break;
       case 'claim':
         lobby.claim(ws);

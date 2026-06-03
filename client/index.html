@@ -137,6 +137,28 @@
         color: #e8eefc;
         text-align: center;
       }
+      #colorPicker {
+        display: flex;
+        gap: 8px;
+        justify-content: center;
+        padding: 4px 0;
+      }
+      #colorPicker .swatch {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        border: 2px solid transparent;
+        padding: 0;
+        cursor: pointer;
+        transition: border-color 0.15s;
+      }
+      #colorPicker .swatch:hover {
+        border-color: #9fb0d8;
+      }
+      #colorPicker .swatch.selected {
+        border-color: #e8eefc;
+        box-shadow: 0 0 6px rgba(232, 238, 252, 0.4);
+      }
     </style>
   </head>
   <body>
@@ -152,6 +174,16 @@
       <form id="joinForm">
         <h1>T S O N G</h1>
         <input id="nick" maxlength="20" placeholder="enter a nickname" autocomplete="off" autofocus />
+        <div id="colorPicker">
+          <button class="swatch selected" data-color="#e8eefc" style="background:#e8eefc" type="button"></button>
+          <button class="swatch" data-color="#ff6b6b" style="background:#ff6b6b" type="button"></button>
+          <button class="swatch" data-color="#51cf66" style="background:#51cf66" type="button"></button>
+          <button class="swatch" data-color="#339af0" style="background:#339af0" type="button"></button>
+          <button class="swatch" data-color="#fcc419" style="background:#fcc419" type="button"></button>
+          <button class="swatch" data-color="#cc5de8" style="background:#cc5de8" type="button"></button>
+          <button class="swatch" data-color="#ff922b" style="background:#ff922b" type="button"></button>
+          <button class="swatch" data-color="#20c997" style="background:#20c997" type="button"></button>
+        </div>
         <button type="submit">Enter</button>
       </form>
     </div>
