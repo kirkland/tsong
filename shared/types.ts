@@ -13,7 +13,7 @@ export const PADDLE = {
 
 export const BALL = {
   r: 9,
-  speed: 340, // serve speed, court units / second
+  speed: 480, // serve speed, court units / second
   speedup: 1.05, // multiplier applied on each paddle hit
   maxSpeed: 760,
 } as const;
