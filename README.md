@@ -39,16 +39,6 @@ nickname → clicks **Join game**); any extra windows watch as observers.
 | `npm start`       | Run the server, serving the built client (`PORT` from env)|
 | `npm run typecheck` | Type-check the whole project                            |
 
-## TODO
-
-- [ ] **Deploy to a public website** so anyone can play over the internet (host the
-      Node server + built client, e.g. on Render / Fly / Railway)
-- [ ] Resume a match instead of abandoning it when a player disconnects mid-game
-- [ ] Reconnect handling for brief network drops
-- [ ] Support multiple concurrent games / rooms instead of a single shared match
-- [ ] Sound effects and a bit more visual polish
-- [ ] Mobile / touch controls
-
 ## Code of conduct
 
 [Have fun!](./CODE_OF_CONDUCT.md) 🏓
