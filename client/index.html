@@ -13,15 +13,23 @@
         margin: 0;
         min-height: 100vh;
         display: flex;
-        flex-direction: row;
-        flex-wrap: wrap;
+        flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 24px;
+        gap: 14px;
         background: #060912;
         color: #e8eefc;
       }
-      /* The game and its HUD stack vertically; chat sits to the right. */
+      /* Game column on the left, chat on the right, tops aligned to the board. */
+      .arena {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: flex-start;
+        justify-content: center;
+        gap: 24px;
+      }
+      /* The game and its HUD stack vertically. */
       #stage {
         display: flex;
         flex-direction: column;
@@ -121,7 +129,9 @@
       }
       #chat {
         width: 300px;
-        height: min(70vh, 560px);
+        /* Match the canvas height (width min(90vw,800px) at a 800/500 ratio) so the
+           chat box lines up top-and-bottom with the playing field. */
+        height: min(56.25vw, 500px);
         display: flex;
         flex-direction: column;
         gap: 6px;
@@ -233,22 +243,24 @@
     </style>
   </head>
   <body>
-    <div id="stage">
-      <h1>T S O N G</h1>
-      <canvas id="game" width="800" height="500"></canvas>
-      <div id="status"></div>
-      <button id="join" style="display: none">Join game</button>
-      <div id="watchers"></div>
-      <button id="rename" class="link" style="display: none">change name</button>
-      <div id="leaderboard"></div>
-    </div>
+    <h1>T S O N G</h1>
+    <div class="arena">
+      <div id="stage">
+        <canvas id="game" width="800" height="500"></canvas>
+        <div id="status"></div>
+        <button id="join" style="display: none">Join game</button>
+        <div id="watchers"></div>
+        <button id="rename" class="link" style="display: none">change name</button>
+        <div id="leaderboard"></div>
+      </div>
 
-    <div id="chat">
-      <h2>Chat</h2>
-      <div id="chatlog"></div>
-      <form id="chatForm">
-        <input id="chatInput" maxlength="200" placeholder="say something…" autocomplete="off" disabled />
-      </form>
+      <div id="chat">
+        <h2>Chat</h2>
+        <div id="chatlog"></div>
+        <form id="chatForm">
+          <input id="chatInput" maxlength="200" placeholder="say something…" autocomplete="off" disabled />
+        </form>
+      </div>
     </div>
 
     <div id="overlay">
