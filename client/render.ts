@@ -37,6 +37,11 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg) {
   ctx.fillText(String(s.score.left), COURT.w / 2 - 70, 18);
   ctx.fillText(String(s.score.right), COURT.w / 2 + 70, 18);
 
+  // Current ball speed
+  ctx.fillStyle = '#6b7796';
+  ctx.font = '13px ui-monospace, monospace';
+  ctx.fillText(`${Math.round(s.ballSpeed)}`, COURT.w / 2, 22);
+
   // Player names along the bottom
   ctx.fillStyle = '#9fb0d8';
   ctx.font = '16px system-ui, sans-serif';

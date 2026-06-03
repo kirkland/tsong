@@ -41,6 +41,7 @@ export interface PaddleState {
 export interface StateMsg {
   type: 'state';
   ball: { x: number; y: number };
+  ballSpeed: number; // current ball speed, court units / second
   paddles: { left: PaddleState; right: PaddleState };
   score: { left: number; right: number };
   status: Status;

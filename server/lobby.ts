@@ -106,6 +106,7 @@ export class Lobby {
     return {
       type: 'state',
       ball: { x: this.game.ball.x, y: this.game.ball.y },
+      ballSpeed: Math.hypot(this.game.ball.vx, this.game.ball.vy),
       paddles: {
         left: { y: this.game.paddleY.left, name: this.nameOf('left') },
         right: { y: this.game.paddleY.right, name: this.nameOf('right') },
