@@ -17,6 +17,7 @@ export class Lobby {
   private conns = new Map<WebSocket, Conn>();
   private sides: Record<Side, WebSocket | null> = { left: null, right: null };
   private winnerName: string | null = null;
+  private overHandled = false; // guards the one-time spot reopening when a match ends
   private nextId = 1;
 
   constructor(private game: Game) {}
@@ -60,10 +61,18 @@ export class Lobby {
 
   /** Called every tick after game.tick(). Reopens both spots once a match ends. */
   sync() {
-    if (this.game.status === 'over' && (this.sides.left || this.sides.right)) {
-      const ws = this.game.winnerSide ? this.sides[this.game.winnerSide] : null;
-      this.winnerName = ws ? this.conns.get(ws)?.nickname ?? null : null;
-      for (const s of SIDES) this.release(s);
+    // Reopen both spots exactly once, when the match first ends. Doing this every
+    // tick would re-release the next player the instant they claim a spot, making it
+    // impossible to start a second game.
+    if (this.game.status === 'over') {
+      if (!this.overHandled) {
+        const ws = this.game.winnerSide ? this.sides[this.game.winnerSide] : null;
+        this.winnerName = ws ? this.conns.get(ws)?.nickname ?? null : null;
+        for (const s of SIDES) this.release(s);
+        this.overHandled = true;
+      }
+    } else {
+      this.overHandled = false;
     }
   }
 
