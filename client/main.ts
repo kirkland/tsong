@@ -3,7 +3,7 @@
 
 import { connect } from './net';
 import { draw } from './render';
-import { COURT, PADDLE, LeaderboardRow, Role, StateMsg } from '../shared/types';
+import { COURT, PADDLE, ChatLine, LeaderboardRow, Role, StateMsg } from '../shared/types';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -17,24 +17,17 @@ const statusEl = document.getElementById('status') as HTMLDivElement;
 const watchersEl = document.getElementById('watchers') as HTMLDivElement;
 const leaderboardEl = document.getElementById('leaderboard') as HTMLDivElement;
 const colorPicker = document.getElementById('colorPicker') as HTMLDivElement;
+const chatLog = document.getElementById('chatlog') as HTMLDivElement;
+const chatForm = document.getElementById('chatForm') as HTMLFormElement;
+const chatInput = document.getElementById('chatInput') as HTMLInputElement;
 
-// Persist the nickname so returning visitors skip the prompt. Cookie (not
-// localStorage) per request; ~1 year, scoped to the site.
-const NICK_COOKIE = 'tsong_nick';
-function saveNick(name: string) {
-  document.cookie = `${NICK_COOKIE}=${encodeURIComponent(name)};path=/;max-age=${60 * 60 * 24 * 365};samesite=lax`;
+// Cookies (not localStorage, per request); ~1 year, scoped to the site.
+const YEAR = 60 * 60 * 24 * 365;
+function setCookie(name: string, value: string) {
+  document.cookie = `${name}=${encodeURIComponent(value)};path=/;max-age=${YEAR};samesite=lax`;
 }
-function loadNick(): string | null {
-  const m = document.cookie.match(new RegExp('(?:^|; )' + NICK_COOKIE + '=([^;]*)'));
-  return m ? decodeURIComponent(m[1]) : null;
-}
-
-const COLOR_COOKIE = 'tsong_color';
-function saveColor(color: string) {
-  document.cookie = `${COLOR_COOKIE}=${encodeURIComponent(color)};path=/;max-age=${60 * 60 * 24 * 365};samesite=lax`;
-}
-function loadColor(): string | null {
-  const m = document.cookie.match(new RegExp('(?:^|; )' + COLOR_COOKIE + '=([^;]*)'));
+function getCookie(name: string): string | null {
+  const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
   return m ? decodeURIComponent(m[1]) : null;
 }
 
@@ -43,6 +36,22 @@ function selectSwatch(color: string) {
     btn.classList.toggle('selected', btn.dataset.color === color);
   }
 }
+
+// Stable per-browser identity — the real leaderboard key. The nickname is just a
+// display label; this id is what wins/losses are tied to, so renaming is safe.
+function makeId(): string {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  // Fallback for non-secure contexts (e.g. plain http on a LAN IP).
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+  });
+}
+const myPid = getCookie('tsong_pid') ?? (() => {
+  const id = makeId();
+  setCookie('tsong_pid', id);
+  return id;
+})();
 
 let myRole: Role = 'observer';
 let myName = '';
@@ -75,10 +84,12 @@ const net = connect(
       updateUI();
     } else if (msg.type === 'leaderboard') {
       renderLeaderboard(msg.rows);
+    } else if (msg.type === 'chat') {
+      msg.lines.forEach(addChatLine);
     }
   },
   () => {
-    if (myName) net.send({ type: 'join', nickname: myName, color: myColor });
+    if (myName) net.send({ type: 'join', nickname: myName, pid: myPid, color: myColor });
   },
 );
 
@@ -96,10 +107,12 @@ function syncMyPaddleFromServer() {
 joinForm.addEventListener('submit', (e) => {
   e.preventDefault();
   myName = nick.value.trim().slice(0, 20) || 'anon';
-  saveNick(myName);
-  saveColor(myColor);
-  net.send({ type: 'join', nickname: myName, color: myColor });
+  setCookie('tsong_nick', myName);
+  setCookie('tsong_color', myColor);
+  // repeat join = rename; pid keeps the leaderboard identity stable
+  net.send({ type: 'join', nickname: myName, pid: myPid, color: myColor });
   overlay.style.display = 'none';
+  enableChat();
 });
 
 // --- change name: reopen the prompt pre-filled with the current name ---
@@ -113,10 +126,38 @@ renameBtn.addEventListener('click', () => {
 // --- claim a paddle spot ---
 joinBtn.addEventListener('click', () => net.send({ type: 'claim' }));
 
+// --- chat ---
+chatForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = chatInput.value.trim();
+  if (!text) return;
+  net.send({ type: 'chat', text });
+  chatInput.value = '';
+});
+
+function enableChat() {
+  chatInput.disabled = false;
+}
+
+// textContent (not innerHTML) keeps user-supplied names/messages from injecting markup.
+function addChatLine(line: ChatLine) {
+  const row = document.createElement('div');
+  const who = document.createElement('span');
+  who.className = line.player ? 'chatfrom tag' : 'chatfrom';
+  who.textContent = line.player ? `${line.from} (playing)` : line.from;
+  const body = document.createElement('span');
+  body.className = 'chattext';
+  body.textContent = `: ${line.text}`;
+  row.append(who, body);
+  chatLog.append(row);
+  while (chatLog.childElementCount > 100) chatLog.firstElementChild!.remove();
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+
 // --- startup: a remembered nickname skips the prompt (the actual join is sent in
 // the onOpen handler once the socket connects). ---
-const remembered = loadNick();
-const savedColor = loadColor();
+const remembered = getCookie('tsong_nick');
+const savedColor = getCookie('tsong_color');
 if (savedColor) {
   myColor = savedColor;
   selectSwatch(savedColor);
@@ -125,6 +166,7 @@ if (remembered) {
   myName = remembered;
   nick.value = remembered;
   overlay.style.display = 'none';
+  enableChat();
 } else {
   nick.focus();
 }

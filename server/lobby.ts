@@ -3,14 +3,25 @@
 
 import type { WebSocket } from 'ws';
 import { Game } from './game';
-import { LeaderboardRow, Role, ServerMsg, Side, StateMsg } from '../shared/types';
-import { getLeaderboard, recordResult } from './db';
+import {
+  CHAT_HISTORY,
+  CHAT_MAX_LEN,
+  ChatLine,
+  LeaderboardRow,
+  Role,
+  ServerMsg,
+  Side,
+  StateMsg,
+} from '../shared/types';
+import { getLeaderboard, recordResult, updateName } from './db';
 
 interface Conn {
-  id: string;
+  id: string; // per-connection id (used in `you` messages)
+  pid: string; // stable per-browser identity (leaderboard key); '' until joined
   nickname: string; // '' until the client has sent `join`
   role: Role;
-  color: string;
+  color: string; // chosen paddle color
+  lastChatAt: number; // ms timestamp of last chat message (light rate limiting)
 }
 
 const SIDES: Side[] = ['left', 'right'];
@@ -21,22 +32,62 @@ export class Lobby {
   private winnerName: string | null = null;
   private overHandled = false; // guards the one-time spot reopening when a match ends
   private leaderboard: LeaderboardRow[] = []; // cached standings, pushed to clients
+  private chatLog: ChatLine[] = []; // recent chat, replayed to new connections
   private nextId = 1;
 
   constructor(private game: Game) {}
 
   add(ws: WebSocket) {
-    const conn: Conn = { id: String(this.nextId++), nickname: '', role: 'observer', color: '#e8eefc' };
+    const conn: Conn = {
+      id: String(this.nextId++),
+      pid: '',
+      nickname: '',
+      role: 'observer',
+      color: '#e8eefc',
+      lastChatAt: 0,
+    };
     this.conns.set(ws, conn);
     this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
     this.tell(ws, { type: 'leaderboard', rows: this.leaderboard });
+    if (this.chatLog.length) this.tell(ws, { type: 'chat', lines: this.chatLog });
   }
 
-  join(ws: WebSocket, nickname: string, color?: string) {
+  chat(ws: WebSocket, text: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return; // must have joined
+    const now = Date.now();
+    if (now - conn.lastChatAt < 400) return; // light anti-spam throttle
+    const clean = text.replace(/\s+/g, ' ').trim().slice(0, CHAT_MAX_LEN);
+    if (!clean) return;
+    conn.lastChatAt = now;
+
+    const line: ChatLine = {
+      from: conn.nickname,
+      text: clean,
+      player: conn.role === 'left' || conn.role === 'right',
+    };
+    this.chatLog.push(line);
+    if (this.chatLog.length > CHAT_HISTORY) this.chatLog.shift();
+
+    const data = JSON.stringify({ type: 'chat', lines: [line] });
+    for (const sock of this.conns.keys()) {
+      if (sock.readyState === sock.OPEN) sock.send(data);
+    }
+  }
+
+  join(ws: WebSocket, nickname: string, pid: string, color?: string) {
     const conn = this.conns.get(ws);
     if (!conn) return;
+    conn.pid = pid.slice(0, 64);
     conn.nickname = nickname.slice(0, 20).trim() || 'anon';
     if (color) conn.color = color;
+    // If this identity already has a leaderboard record, reflect the (possibly new)
+    // display name right away — a rename shows on the board without playing again.
+    updateName(conn.pid, conn.nickname)
+      .then((changed) => {
+        if (changed) this.refreshLeaderboard();
+      })
+      .catch((e) => console.error('name update failed:', e));
   }
 
   claim(ws: WebSocket) {
@@ -77,14 +128,16 @@ export class Lobby {
             ? 'right'
             : 'left'
           : null;
-        // Capture both names before releasing (release nulls out the side slots).
-        this.winnerName = winnerSide ? this.nameOf(winnerSide) : null;
-        const loserName = loserSide ? this.nameOf(loserSide) : null;
+        // Capture both players before releasing (release nulls out the side slots).
+        const winner = winnerSide ? this.connOn(winnerSide) : null;
+        const loser = loserSide ? this.connOn(loserSide) : null;
+        this.winnerName = winner?.nickname ?? null;
         for (const s of SIDES) this.release(s);
         this.overHandled = true;
 
-        if (this.winnerName && loserName) {
-          recordResult(this.winnerName, loserName)
+        // Record against stable identities (pids), storing the current display names.
+        if (winner?.pid && loser?.pid) {
+          recordResult(winner.pid, winner.nickname, loser.pid, loser.nickname)
             .then(() => this.refreshLeaderboard())
             .catch((e) => console.error('leaderboard update failed:', e));
         }
@@ -153,6 +206,11 @@ export class Lobby {
   private colorOf(side: Side): string {
     const ws = this.sides[side];
     return ws ? this.conns.get(ws)?.color ?? '#e8eefc' : '#e8eefc';
+  }
+
+  private connOn(side: Side): Conn | null {
+    const ws = this.sides[side];
+    return ws ? this.conns.get(ws) ?? null : null;
   }
 
   private sideOf(ws: WebSocket): Side | null {

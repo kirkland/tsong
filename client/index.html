@@ -111,6 +111,52 @@
         color: #7da2ff;
         text-align: right;
       }
+      #chat {
+        width: min(90vw, 360px);
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      #chatlog {
+        height: 140px;
+        overflow-y: auto;
+        background: #0e1424;
+        border: 1px solid #1c2640;
+        border-radius: 6px;
+        padding: 8px 10px;
+        font-size: 13px;
+        line-height: 1.5;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      #chatlog .chatfrom {
+        color: #7da2ff;
+        font-weight: 600;
+      }
+      #chatlog .chatfrom.tag {
+        color: #e8b84b;
+      }
+      #chatlog .chattext {
+        color: #cdd7f5;
+        word-break: break-word;
+      }
+      #chatForm {
+        display: flex;
+      }
+      #chatInput {
+        flex: 1;
+        font: inherit;
+        font-size: 14px;
+        padding: 8px 10px;
+        border-radius: 6px;
+        border: 1px solid #2a3550;
+        background: #0b1020;
+        color: #e8eefc;
+      }
+      #chatInput:disabled {
+        opacity: 0.5;
+      }
       #overlay {
         position: fixed;
         inset: 0;
@@ -169,6 +215,13 @@
     <div id="watchers"></div>
     <button id="rename" class="link" style="display: none">change name</button>
     <div id="leaderboard"></div>
+
+    <div id="chat">
+      <div id="chatlog"></div>
+      <form id="chatForm">
+        <input id="chatInput" maxlength="200" placeholder="say something…" autocomplete="off" disabled />
+      </form>
+    </div>
 
     <div id="overlay">
       <form id="joinForm">

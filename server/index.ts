@@ -48,13 +48,18 @@ wss.on('connection', (ws: WebSocket) => {
     }
     switch (msg?.type) {
       case 'join':
-        if (typeof msg.nickname === 'string') lobby.join(ws, msg.nickname, typeof msg.color === 'string' ? msg.color : undefined);
+        if (typeof msg.nickname === 'string' && typeof msg.pid === 'string') {
+          lobby.join(ws, msg.nickname, msg.pid, typeof msg.color === 'string' ? msg.color : undefined);
+        }
         break;
       case 'claim':
         lobby.claim(ws);
         break;
       case 'paddle':
         if (typeof msg.y === 'number' && Number.isFinite(msg.y)) lobby.setPaddle(ws, msg.y);
+        break;
+      case 'chat':
+        if (typeof msg.text === 'string') lobby.chat(ws, msg.text);
         break;
     }
   });

@@ -28,9 +28,11 @@ export async function initDb(): Promise<void> {
     return;
   }
   pool = new pg.Pool({ connectionString: url, ssl: sslFor(url) });
+  // Keyed on a stable per-browser id; `name` is the current display label.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS players (
-      name   TEXT PRIMARY KEY,
+      id     TEXT PRIMARY KEY,
+      name   TEXT NOT NULL,
       wins   INTEGER NOT NULL DEFAULT 0,
       losses INTEGER NOT NULL DEFAULT 0
     )
@@ -38,18 +40,31 @@ export async function initDb(): Promise<void> {
   console.log('leaderboard DB ready');
 }
 
-export async function recordResult(winner: string, loser: string): Promise<void> {
+export async function recordResult(
+  winnerId: string,
+  winnerName: string,
+  loserId: string,
+  loserName: string,
+): Promise<void> {
   if (!pool) return;
+  // Upsert by id; refresh the stored name to the latest nickname each time.
   await pool.query(
-    `INSERT INTO players (name, wins) VALUES ($1, 1)
-       ON CONFLICT (name) DO UPDATE SET wins = players.wins + 1`,
-    [winner],
+    `INSERT INTO players (id, name, wins) VALUES ($1, $2, 1)
+       ON CONFLICT (id) DO UPDATE SET wins = players.wins + 1, name = EXCLUDED.name`,
+    [winnerId, winnerName],
   );
   await pool.query(
-    `INSERT INTO players (name, losses) VALUES ($1, 1)
-       ON CONFLICT (name) DO UPDATE SET losses = players.losses + 1`,
-    [loser],
+    `INSERT INTO players (id, name, losses) VALUES ($1, $2, 1)
+       ON CONFLICT (id) DO UPDATE SET losses = players.losses + 1, name = EXCLUDED.name`,
+    [loserId, loserName],
   );
+}
+
+/** Update an existing player's display name (for renames). Returns rows changed. */
+export async function updateName(id: string, name: string): Promise<number> {
+  if (!pool) return 0;
+  const res = await pool.query(`UPDATE players SET name = $2 WHERE id = $1`, [id, name]);
+  return res.rowCount ?? 0;
 }
 
 export async function getLeaderboard(): Promise<LeaderboardRow[]> {
