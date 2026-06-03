@@ -117,7 +117,7 @@ export class Game {
   private bounce(side: Side) {
     const b = this.ball;
     const rel = clamp((b.y - this.paddleY[side]) / HALF_H, -1, 1);
-    const speed = Math.min(Math.hypot(b.vx, b.vy) * BALL.speedup, BALL.maxSpeed);
+    const speed = Math.hypot(b.vx, b.vy) * BALL.speedup;
     const angle = rel * MAX_BOUNCE;
     const dir = side === 'left' ? 1 : -1;
     b.vx = dir * speed * Math.cos(angle);
