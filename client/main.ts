@@ -3,7 +3,7 @@
 
 import { connect } from './net';
 import { draw } from './render';
-import { COURT, PADDLE, Role, StateMsg } from '../shared/types';
+import { COURT, PADDLE, LeaderboardRow, Role, StateMsg } from '../shared/types';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -15,6 +15,7 @@ const joinBtn = document.getElementById('join') as HTMLButtonElement;
 const renameBtn = document.getElementById('rename') as HTMLButtonElement;
 const statusEl = document.getElementById('status') as HTMLDivElement;
 const watchersEl = document.getElementById('watchers') as HTMLDivElement;
+const leaderboardEl = document.getElementById('leaderboard') as HTMLDivElement;
 
 // Persist the nickname so returning visitors skip the prompt. Cookie (not
 // localStorage) per request; ~1 year, scoped to the site.
@@ -44,6 +45,8 @@ const net = connect(
       state = msg;
       syncMyPaddleFromServer();
       updateUI();
+    } else if (msg.type === 'leaderboard') {
+      renderLeaderboard(msg.rows);
     }
   },
   // On (re)connect, join automatically if we already have a name. This is also what
@@ -150,4 +153,28 @@ function updateUI() {
   watchersEl.textContent = state.watchers.length
     ? `Watching: ${state.watchers.join(', ')}`
     : '';
+}
+
+// Names come from arbitrary user input, so escape before inserting as HTML.
+const escapeHtml = (s: string) =>
+  s.replace(
+    /[&<>"']/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!,
+  );
+
+function renderLeaderboard(rows: LeaderboardRow[]) {
+  if (!rows.length) {
+    leaderboardEl.innerHTML = '';
+    return;
+  }
+  const items = rows
+    .map((r, i) => {
+      const games = r.wins + r.losses;
+      const pct = games ? Math.round((r.wins / games) * 100) : 0;
+      return `<li><span class="rank">${i + 1}</span><span class="lbname">${escapeHtml(
+        r.name,
+      )}</span><span class="rec">${r.wins}–${r.losses}</span><span class="pct">${pct}%</span></li>`;
+    })
+    .join('');
+  leaderboardEl.innerHTML = `<h2>Leaderboard</h2><ol>${items}</ol>`;
 }

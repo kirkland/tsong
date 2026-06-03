@@ -69,6 +69,48 @@
         background: none;
         color: #9fb0d8;
       }
+      #leaderboard {
+        width: min(90vw, 360px);
+        font-size: 14px;
+      }
+      #leaderboard h2 {
+        font-size: 13px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        color: #7da2ff;
+        text-align: center;
+        margin: 8px 0 6px;
+      }
+      #leaderboard ol {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      #leaderboard li {
+        display: grid;
+        grid-template-columns: 22px 1fr auto 48px;
+        gap: 10px;
+        align-items: baseline;
+        padding: 4px 10px;
+        border-radius: 4px;
+      }
+      #leaderboard li:nth-child(odd) {
+        background: #0e1424;
+      }
+      #leaderboard .rank {
+        color: #6b7796;
+      }
+      #leaderboard .rec,
+      #leaderboard .pct {
+        font-variant-numeric: tabular-nums;
+      }
+      #leaderboard .rec {
+        color: #9fb0d8;
+      }
+      #leaderboard .pct {
+        color: #7da2ff;
+        text-align: right;
+      }
       #overlay {
         position: fixed;
         inset: 0;
@@ -104,6 +146,7 @@
     <button id="join" style="display: none">Join game</button>
     <div id="watchers"></div>
     <button id="rename" class="link" style="display: none">change name</button>
+    <div id="leaderboard"></div>
 
     <div id="overlay">
       <form id="joinForm">

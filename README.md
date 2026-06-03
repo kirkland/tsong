@@ -11,7 +11,8 @@ live — and any observer can claim a paddle when a spot opens up. The match run
 - Observers watch live and can **Join** an open paddle spot
 - Paddle control by **keyboard** (↑/↓ or W/S) or **mouse**
 - First to 3 wins, then both spots reopen for a fresh match
-- Nicknames shown on the scoreboard and watcher list
+- Nicknames shown on the scoreboard and watcher list (remembered in a cookie)
+- Win–loss **leaderboard** persisted in Postgres
 
 ## Tech
 
@@ -38,6 +39,19 @@ nickname → clicks **Join game**); any extra windows watch as observers.
 | `npm run build`   | Build the client into `client/dist`                       |
 | `npm start`       | Run the server, serving the built client (`PORT` from env)|
 | `npm run typecheck` | Type-check the whole project                            |
+
+## Leaderboard / database
+
+The win–loss leaderboard is stored in Postgres via the `DATABASE_URL` env var. The
+`players` table is created automatically on startup.
+
+- **No `DATABASE_URL`** (default for local dev): the leaderboard is simply disabled
+  and empty — everything else works normally.
+- **With a DB:** set `DATABASE_URL`, e.g. run a local Postgres and
+  `DATABASE_URL=postgres://user:pass@localhost:5432/tsong npm run dev`.
+- **On Railway:** add a **PostgreSQL** database to the project, then reference it from
+  the app service with a variable `DATABASE_URL = ${{Postgres.DATABASE_URL}}`. The app
+  uses the internal connection (no SSL); the public proxy host enables SSL automatically.
 
 ## Code of conduct
 

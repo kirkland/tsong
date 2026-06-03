@@ -8,11 +8,18 @@ import sirv from 'sirv';
 import { ClientMsg, TICK_MS } from '../shared/types';
 import { Game } from './game';
 import { Lobby } from './lobby';
+import { initDb } from './db';
 
 const PORT = Number(process.env.PORT ?? 3000);
 
 const game = new Game();
 const lobby = new Lobby(game);
+
+// Bring up the leaderboard DB and prime the cache. The server starts serving
+// immediately; standings populate once the DB is ready (no-op without DATABASE_URL).
+initDb()
+  .then(() => lobby.refreshLeaderboard())
+  .catch((e) => console.error('DB init failed:', e));
 
 // Static client (only exists after `npm run build`; harmless in dev where Vite serves it).
 const serveStatic = sirv(path.resolve(process.cwd(), 'client/dist'), {

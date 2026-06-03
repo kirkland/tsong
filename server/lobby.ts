@@ -3,7 +3,8 @@
 
 import type { WebSocket } from 'ws';
 import { Game } from './game';
-import { Role, ServerMsg, Side, StateMsg } from '../shared/types';
+import { LeaderboardRow, Role, ServerMsg, Side, StateMsg } from '../shared/types';
+import { getLeaderboard, recordResult } from './db';
 
 interface Conn {
   id: string;
@@ -18,6 +19,7 @@ export class Lobby {
   private sides: Record<Side, WebSocket | null> = { left: null, right: null };
   private winnerName: string | null = null;
   private overHandled = false; // guards the one-time spot reopening when a match ends
+  private leaderboard: LeaderboardRow[] = []; // cached standings, pushed to clients
   private nextId = 1;
 
   constructor(private game: Game) {}
@@ -26,6 +28,7 @@ export class Lobby {
     const conn: Conn = { id: String(this.nextId++), nickname: '', role: 'observer' };
     this.conns.set(ws, conn);
     this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
+    this.tell(ws, { type: 'leaderboard', rows: this.leaderboard });
   }
 
   join(ws: WebSocket, nickname: string) {
@@ -66,13 +69,35 @@ export class Lobby {
     // impossible to start a second game.
     if (this.game.status === 'over') {
       if (!this.overHandled) {
-        const ws = this.game.winnerSide ? this.sides[this.game.winnerSide] : null;
-        this.winnerName = ws ? this.conns.get(ws)?.nickname ?? null : null;
+        const winnerSide = this.game.winnerSide;
+        const loserSide: Side | null = winnerSide
+          ? winnerSide === 'left'
+            ? 'right'
+            : 'left'
+          : null;
+        // Capture both names before releasing (release nulls out the side slots).
+        this.winnerName = winnerSide ? this.nameOf(winnerSide) : null;
+        const loserName = loserSide ? this.nameOf(loserSide) : null;
         for (const s of SIDES) this.release(s);
         this.overHandled = true;
+
+        if (this.winnerName && loserName) {
+          recordResult(this.winnerName, loserName)
+            .then(() => this.refreshLeaderboard())
+            .catch((e) => console.error('leaderboard update failed:', e));
+        }
       }
     } else {
       this.overHandled = false;
+    }
+  }
+
+  /** Re-query the standings, cache them, and push to every connected client. */
+  async refreshLeaderboard() {
+    this.leaderboard = await getLeaderboard();
+    const data = JSON.stringify({ type: 'leaderboard', rows: this.leaderboard });
+    for (const ws of this.conns.keys()) {
+      if (ws.readyState === ws.OPEN) ws.send(data);
     }
   }
 

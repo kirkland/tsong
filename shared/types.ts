@@ -18,6 +18,8 @@ export const BALL = {
 } as const;
 
 export const WIN_SCORE = 3;
+export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
+export const LEADERBOARD_SIZE = 10;
 export const TICK_MS = 1000 / 60;
 export const MAX_BOUNCE = Math.PI / 3; // steepest deflection off a paddle edge
 export const SERVE_DELAY = 0.7; // seconds the ball pauses at center before launching
@@ -56,4 +58,16 @@ export interface YouMsg {
   role: Role;
 }
 
-export type ServerMsg = YouMsg | StateMsg;
+export interface LeaderboardRow {
+  name: string;
+  wins: number;
+  losses: number;
+}
+
+// Broadcast on connect and whenever the standings change (after a match).
+export interface LeaderboardMsg {
+  type: 'leaderboard';
+  rows: LeaderboardRow[];
+}
+
+export type ServerMsg = YouMsg | StateMsg | LeaderboardMsg;
