@@ -47,7 +47,7 @@ export interface PaddleState {
 
 export interface StateMsg {
   type: 'state';
-  ball: { x: number; y: number };
+  ball: { x: number; y: number; color: string }; // color = paddle that last hit it (neutral until first hit)
   ballSpeed: number; // current ball speed, court units / second
   paddles: { left: PaddleState; right: PaddleState };
   score: { left: number; right: number };

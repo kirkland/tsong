@@ -25,7 +25,8 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg) {
   ctx.fillStyle = s.paddles.right.color;
   drawPaddle(ctx, COURT.w - PADDLE.margin, s.paddles.right.y);
 
-  // Ball
+  // Ball — colored by whichever paddle last hit it
+  ctx.fillStyle = s.ball.color;
   ctx.beginPath();
   ctx.arc(s.ball.x, s.ball.y, BALL.r, 0, Math.PI * 2);
   ctx.fill();

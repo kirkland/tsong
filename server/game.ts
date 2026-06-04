@@ -26,6 +26,7 @@ export class Game {
   score = { left: 0, right: 0 };
   status: Status = 'waiting';
   winnerSide: Side | null = null;
+  lastHit: Side | null = null; // side whose paddle last touched the ball (null until first hit)
 
   private serveTimer = 0;
   private serveDir = 1; // +1 = launch toward right, -1 = toward left
@@ -44,6 +45,7 @@ export class Game {
   toWaiting() {
     this.status = 'waiting';
     this.ball = { x: COURT.w / 2, y: COURT.h / 2, vx: 0, vy: 0 };
+    this.lastHit = null;
   }
 
   setTarget(side: Side, y: number) {
@@ -54,6 +56,7 @@ export class Game {
     this.serveDir = dir;
     this.serveTimer = SERVE_DELAY;
     this.ball = { x: COURT.w / 2, y: COURT.h / 2, vx: 0, vy: 0 };
+    this.lastHit = null; // neutral color until the next paddle touch
   }
 
   private launch() {
@@ -115,6 +118,7 @@ export class Game {
   }
 
   private bounce(side: Side) {
+    this.lastHit = side;
     const b = this.ball;
     const rel = clamp((b.y - this.paddleY[side]) / HALF_H, -1, 1);
     const speed = Math.hypot(b.vx, b.vy) * BALL.speedup;

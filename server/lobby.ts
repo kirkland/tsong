@@ -183,9 +183,15 @@ export class Lobby {
     for (const c of this.conns.values()) {
       if (c.role === 'observer' && c.nickname) watchers.push(c.nickname);
     }
+    const lastHit = this.game.lastHit;
     return {
       type: 'state',
-      ball: { x: this.game.ball.x, y: this.game.ball.y },
+      ball: {
+        x: this.game.ball.x,
+        y: this.game.ball.y,
+        // Take on the color of the paddle that last hit it; neutral until first touch.
+        color: lastHit ? this.colorOf(lastHit) : '#e8eefc',
+      },
       ballSpeed: Math.hypot(this.game.ball.vx, this.game.ball.vy),
       paddles: {
         left: { y: this.game.paddleY.left, name: this.nameOf('left'), color: this.colorOf('left') },
