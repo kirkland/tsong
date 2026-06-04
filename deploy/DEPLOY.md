@@ -85,6 +85,16 @@ Now it's live on `https://your-domain.com`, WebSocket and all.
 
 ## Updating later
 
+From your laptop, after pushing to `main`:
+
+```sh
+./deploy/redeploy.sh        # ssh in, pull, npm ci, build, restart
+```
+
+Override the target host with `TSONG_HOST=root@1.2.3.4 ./deploy/redeploy.sh`.
+nginx and the TLS cert are left untouched — they only need attention if the
+domain or proxy config changes. The equivalent manual steps on the box are:
+
 ```sh
 cd /opt/tsong
 sudo -u tsong git pull
