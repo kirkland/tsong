@@ -54,6 +54,16 @@ The win–loss leaderboard is stored in Postgres via the `DATABASE_URL` env var.
   the app service with a variable `DATABASE_URL = ${{Postgres.DATABASE_URL}}`. The app
   uses the internal connection (no SSL); the public proxy host enables SSL automatically.
 
+## Contributors
+
+Built by:
+
+- [Robert Kaufman](https://github.com/robkaufmanls) (@robkaufmanls)
+- [Noam Molloy](https://github.com/noammolloy) (@noammolloy)
+- [Jay Srinivasan](https://github.com/jayyy-s) (@jayyy-s)
+- [Matt Beauvais](https://github.com/mattb102) (@mattb102)
+- [Josiel](https://github.com/japonte21) (@japonte21)
+
 ## Code of conduct
 
 [Have fun!](./CODE_OF_CONDUCT.md) 🏓
