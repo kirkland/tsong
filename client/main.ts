@@ -30,6 +30,7 @@ const colorPicker = document.getElementById('colorPicker') as HTMLDivElement;
 const chatLog = document.getElementById('chatlog') as HTMLDivElement;
 const chatForm = document.getElementById('chatForm') as HTMLFormElement;
 const chatInput = document.getElementById('chatInput') as HTMLInputElement;
+const closingModeEl = document.getElementById('closingMode') as HTMLInputElement;
 const reactionsEl = document.getElementById('reactions') as HTMLDivElement;
 const recentReactionsEl = document.getElementById('recentReactions') as HTMLDivElement;
 const ballReactionEl = document.getElementById('ballReaction') as HTMLDivElement;
@@ -158,6 +159,11 @@ renameBtn.addEventListener('click', () => {
 // --- claim a paddle spot ---
 joinBtn.addEventListener('click', () => net.send({ type: 'claim' }));
 
+// --- closing-walls game mode toggle (shared by everyone; applies next match) ---
+closingModeEl.addEventListener('change', () =>
+  net.send({ type: 'mode', closing: closingModeEl.checked }),
+);
+
 // --- chat ---
 chatForm.addEventListener('submit', (e) => {
   e.preventDefault();
@@ -177,6 +183,7 @@ chatForm.addEventListener('submit', (e) => {
 function enableChat() {
   joined = true;
   chatInput.disabled = false;
+  closingModeEl.disabled = false;
   for (const btn of reactionsEl.querySelectorAll<HTMLButtonElement>('.reaction-btn')) {
     btn.disabled = false;
   }
@@ -567,6 +574,12 @@ function updateUI() {
   if (state.ball.color !== ballColor) {
     ballColor = state.ball.color;
     ballBtn.style.setProperty('--ball-color', ballColor);
+  }
+
+  // Reflect the shared mode (another client may have toggled it). Don't fight the
+  // user while they're interacting with the box.
+  if (document.activeElement !== closingModeEl && closingModeEl.checked !== state.closing) {
+    closingModeEl.checked = state.closing;
   }
 
   // Keep the checkbox in sync with the shared setting (another player may have flipped it).
