@@ -78,7 +78,7 @@ rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx
 
 apt install -y certbot python3-certbot-nginx
-certbot --nginx -d your-domain.com   # auto-renews via systemd timer
+certbot --nginx -d tsong.life   # auto-renews via systemd timer
 ```
 
 Now it's live on `https://your-domain.com`, WebSocket and all.
