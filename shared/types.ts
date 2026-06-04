@@ -76,7 +76,8 @@ export type ClientMsg =
   | { type: 'mode'; closing: boolean } // toggle "closing walls" mode (takes effect next match)
   | { type: 'fatality'; move: string } // winner-only, validated server-side
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
-  | { type: 'forfeit' }; // "/ff": leave your paddle spot mid-game (and get shamed)
+  | { type: 'forfeit' } // "/ff": leave your paddle spot mid-game (and get shamed)
+  | { type: 'spawnPowerup' }; // "/powerup": drop a random power-up target onto the board
 
 // --- Server -> Client ---
 export interface PaddleState {

@@ -122,6 +122,13 @@ export class Lobby {
     this.announce(`Booo, ${name} quit the game`);
   }
 
+  /** "/powerup": drop a random power-up target onto the board. Live matches only. */
+  spawnPowerup(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return; // must have joined
+    this.game.forceTarget();
+  }
+
   join(ws: WebSocket, nickname: string, pid: string, color?: string) {
     const conn = this.conns.get(ws);
     if (!conn) return;

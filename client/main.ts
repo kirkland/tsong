@@ -166,20 +166,147 @@ closingModeEl.addEventListener('change', () =>
   net.send({ type: 'mode', closing: closingModeEl.checked }),
 );
 
+// --- slash commands ---
+// Typing "/" in chat pops up this menu of commands; each only appears when usable.
+interface ChatCommand {
+  name: string; // the word after the slash, e.g. "ff"
+  hint: string; // short description shown in the menu
+  enabled: () => boolean; // whether it's currently usable (greyed out when false)
+  disabledHint: string; // why it's unusable right now (shown greyed in its place)
+  run: () => void; // what it does when chosen
+}
+
+const COMMANDS: ChatCommand[] = [
+  {
+    name: 'ff',
+    hint: 'Forfeit the match',
+    enabled: () => isPlayer(),
+    disabledHint: "only while you're playing",
+    run: () => net.send({ type: 'forfeit' }),
+  },
+  {
+    name: 'powerup',
+    hint: 'Spawn a random power-up',
+    enabled: () => state?.status === 'playing',
+    disabledHint: 'only during a live match',
+    run: () => net.send({ type: 'spawnPowerup' }),
+  },
+];
+
+// Every command whose name matches what's typed after "/", usable or not.
+function matchingCommands(): ChatCommand[] {
+  const v = chatInput.value;
+  if (!v.startsWith('/')) return [];
+  const prefix = v.slice(1).split(/\s+/)[0].toLowerCase();
+  return COMMANDS.filter((c) => c.name.startsWith(prefix));
+}
+
+const commandMenu = document.createElement('div');
+commandMenu.id = 'commandMenu';
+commandMenu.hidden = true;
+chatForm.append(commandMenu);
+
+let menuCmds: ChatCommand[] = [];
+let menuIndex = 0;
+
+function renderCommandMenu() {
+  commandMenu.replaceChildren();
+  const hdr = document.createElement('div');
+  hdr.className = 'cmd-hdr';
+  hdr.textContent = 'Commands';
+  commandMenu.append(hdr);
+  menuCmds.forEach((c, i) => {
+    const ok = c.enabled();
+    const row = document.createElement('div');
+    row.className = 'cmd-row' + (i === menuIndex ? ' active' : '') + (ok ? '' : ' disabled');
+    const name = document.createElement('span');
+    name.className = 'cmd-name';
+    name.textContent = `/${c.name}`;
+    const hint = document.createElement('span');
+    hint.className = 'cmd-hint';
+    hint.textContent = ok ? c.hint : `${c.hint} — ${c.disabledHint}`;
+    row.append(name, hint);
+    // mousedown (not click) so the input doesn't blur out from under the selection.
+    // Always preventDefault to keep focus; runCommand ignores disabled commands.
+    row.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      runCommand(c);
+    });
+    commandMenu.append(row);
+  });
+}
+
+function refreshCommandMenu() {
+  menuCmds = joined ? matchingCommands() : [];
+  if (!menuCmds.length) {
+    commandMenu.hidden = true;
+    return;
+  }
+  if (menuIndex >= menuCmds.length) menuIndex = 0;
+  renderCommandMenu();
+  commandMenu.hidden = false;
+}
+
+function closeCommandMenu() {
+  commandMenu.hidden = true;
+}
+
+function runCommand(cmd: ChatCommand) {
+  if (!cmd.enabled()) return; // greyed out: leave the text so it's clear nothing happened
+  cmd.run();
+  chatInput.value = '';
+  closeCommandMenu();
+}
+
 // --- chat ---
 chatForm.addEventListener('submit', (e) => {
   e.preventDefault();
   const text = chatInput.value.trim();
   if (!text) return;
-  // "/ff" = forfeit: only does anything while you hold a paddle (the server validates
-  // too). Swallow it either way so the command never shows up as a chat message.
-  if (text.toLowerCase() === '/ff') {
-    if (isPlayer()) net.send({ type: 'forfeit' });
-    chatInput.value = '';
-    return;
+  // A recognized "/command" runs (and is swallowed); unknown slash text falls through
+  // to chat. Enter with the menu open is handled in the keydown listener below.
+  if (text.startsWith('/')) {
+    const name = text.slice(1).split(/\s+/)[0].toLowerCase();
+    const cmd = COMMANDS.find((c) => c.name === name);
+    if (cmd) {
+      runCommand(cmd);
+      return;
+    }
   }
   net.send({ type: 'chat', text });
   chatInput.value = '';
+  closeCommandMenu();
+});
+
+chatInput.addEventListener('input', refreshCommandMenu);
+chatInput.addEventListener('focus', refreshCommandMenu);
+chatInput.addEventListener('keydown', (e) => {
+  if (commandMenu.hidden) return;
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    menuIndex = (menuIndex + 1) % menuCmds.length;
+    renderCommandMenu();
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    menuIndex = (menuIndex - 1 + menuCmds.length) % menuCmds.length;
+    renderCommandMenu();
+  } else if (e.key === 'Enter') {
+    // Run the highlighted command instead of submitting the raw text.
+    e.preventDefault();
+    runCommand(menuCmds[menuIndex]);
+  } else if (e.key === 'Tab') {
+    // Autocomplete the name without running it.
+    e.preventDefault();
+    chatInput.value = `/${menuCmds[menuIndex].name}`;
+    refreshCommandMenu();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closeCommandMenu();
+  }
+});
+// Close the menu when focus/clicks leave the chat form.
+document.addEventListener('click', (e) => {
+  if (!commandMenu.hidden && !chatForm.contains(e.target as Node)) closeCommandMenu();
 });
 
 function enableChat() {

@@ -91,6 +91,9 @@ wss.on('connection', (ws: WebSocket) => {
       case 'forfeit':
         lobby.forfeit(ws);
         break;
+      case 'spawnPowerup':
+        lobby.spawnPowerup(ws);
+        break;
     }
   });
 

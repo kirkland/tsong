@@ -195,6 +195,55 @@
       }
       #chatForm {
         display: flex;
+        position: relative;
+      }
+      /* Slash-command autocomplete, popped just above the chat input. */
+      #commandMenu {
+        position: absolute;
+        bottom: calc(100% + 6px);
+        left: 0;
+        right: 0;
+        background: #0e1424;
+        border: 1px solid #2a3550;
+        border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+        overflow: hidden;
+        z-index: 70;
+      }
+      #commandMenu[hidden] {
+        display: none;
+      }
+      #commandMenu .cmd-hdr {
+        padding: 6px 10px 3px;
+        font-size: 10px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        color: #6b7796;
+      }
+      #commandMenu .cmd-row {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        padding: 7px 10px;
+        cursor: pointer;
+      }
+      #commandMenu .cmd-row.active {
+        background: #18203a;
+      }
+      /* Unusable in the current state: greyed out (the dim also softens the
+         keyboard-highlight background, which stays visible for navigation). */
+      #commandMenu .cmd-row.disabled {
+        opacity: 0.4;
+        cursor: default;
+      }
+      #commandMenu .cmd-name {
+        color: #7da2ff;
+        font-weight: 600;
+        font-size: 13px;
+      }
+      #commandMenu .cmd-hint {
+        color: #9fb0d8;
+        font-size: 12px;
       }
       #chatInput {
         flex: 1;

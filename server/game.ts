@@ -251,19 +251,29 @@ export class Game {
     return TARGET.minDelay + Math.random() * (TARGET.maxDelay - TARGET.minDelay);
   }
 
+  // Drop a fresh random power-up target onto the board, replacing any current one.
+  private placeTarget() {
+    const margin = TARGET.r + 24; // keep it clear of the walls
+    this.target = {
+      x: COURT.w * 0.3 + Math.random() * COURT.w * 0.4, // central band, clear of paddles
+      y: margin + Math.random() * (COURT.h - 2 * margin),
+      kind: POWERUPS[Math.floor(Math.random() * POWERUPS.length)],
+    };
+    this.targetTimer = TARGET.life;
+  }
+
+  /** Force a random power-up onto the board now (the "/powerup" command). Live matches only. */
+  forceTarget(): boolean {
+    if (this.status !== 'playing') return false;
+    this.placeTarget();
+    return true;
+  }
+
   // Spawn or expire the power-up target on its own timer.
   private updateTargetTimer(dt: number) {
     this.targetTimer -= dt;
     if (!this.target) {
-      if (this.targetTimer <= 0) {
-        const margin = TARGET.r + 24; // keep it clear of the walls
-        this.target = {
-          x: COURT.w * 0.3 + Math.random() * COURT.w * 0.4, // central band, clear of paddles
-          y: margin + Math.random() * (COURT.h - 2 * margin),
-          kind: POWERUPS[Math.floor(Math.random() * POWERUPS.length)],
-        };
-        this.targetTimer = TARGET.life;
-      }
+      if (this.targetTimer <= 0) this.placeTarget();
     } else if (this.targetTimer <= 0) {
       this.target = null; // unclaimed; vanish and schedule the next one
       this.targetTimer = this.nextTargetDelay();
