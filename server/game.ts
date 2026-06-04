@@ -63,6 +63,7 @@ export class Game {
   closing = false; // "closing walls" mode armed; applies from the next match start
   winnerSide: Side | null = null;
   lastHit: Side | null = null; // side whose paddle last touched any ball (null until first hit)
+  paused = false; // set by the lobby: freeze play until both players capture their mouse
 
   // Power-ups. A target floats on the board; bouncing the ball over it grants its kind.
   target: { x: number; y: number; kind: PowerupKind } | null = null;
@@ -157,6 +158,10 @@ export class Game {
     }
 
     if (this.status !== 'playing') return;
+
+    // Frozen while waiting for both players to capture their mouse. Paddles still ease
+    // (above) but the ball, serve countdown and power-up timers all hold.
+    if (this.paused) return;
 
     if (this.serveTimer > 0) {
       this.serveTimer -= dt;
