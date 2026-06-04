@@ -1,0 +1,33 @@
+name: Reset leaderboard
+
+# Manually-triggered only. workflow_dispatch can be run solely by users with
+# write access to this repo, so the public cannot trigger it.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type RESET to confirm wiping ALL leaderboard standings'
+        required: true
+        default: ''
+
+# Share the deploy lock so a reset never overlaps an in-flight deploy.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  reset:
+    # Hard guard: do nothing unless the operator typed exactly RESET.
+    if: ${{ inputs.confirm == 'RESET' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          echo "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Reset leaderboard
+        run: ssh -i ~/.ssh/id_ed25519 root@159.223.137.196 reset
