@@ -3,7 +3,17 @@
 
 import { connect } from './net';
 import { draw } from './render';
-import { COURT, PADDLE, ChatLine, LeaderboardRow, Role, StateMsg } from '../shared/types';
+import {
+  COURT,
+  PADDLE,
+  BALL,
+  REACTIONS,
+  BALL_REACTION,
+  ChatLine,
+  LeaderboardRow,
+  Role,
+  StateMsg,
+} from '../shared/types';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
@@ -20,6 +30,9 @@ const colorPicker = document.getElementById('colorPicker') as HTMLDivElement;
 const chatLog = document.getElementById('chatlog') as HTMLDivElement;
 const chatForm = document.getElementById('chatForm') as HTMLFormElement;
 const chatInput = document.getElementById('chatInput') as HTMLInputElement;
+const reactionsEl = document.getElementById('reactions') as HTMLDivElement;
+const ballReactionEl = document.getElementById('ballReaction') as HTMLDivElement;
+const reactionLayer = document.getElementById('reactionLayer') as HTMLDivElement;
 
 // Cookies (not localStorage, per request); ~1 year, scoped to the site.
 const YEAR = 60 * 60 * 24 * 365;
@@ -57,6 +70,7 @@ let myRole: Role = 'observer';
 let myName = '';
 let myColor = '#e8eefc';
 let state: StateMsg | null = null;
+let ballColor = '#e8eefc'; // live pong-ball color, mirrored onto the ball reaction
 
 let target = COURT.h / 2; // desired paddle center Y, court units
 let lastSent = -1;
@@ -86,6 +100,8 @@ const net = connect(
       renderLeaderboard(msg.rows);
     } else if (msg.type === 'chat') {
       msg.lines.forEach(addChatLine);
+    } else if (msg.type === 'reaction') {
+      spawnReaction(msg.emoji);
     }
   },
   () => {
@@ -137,6 +153,74 @@ chatForm.addEventListener('submit', (e) => {
 
 function enableChat() {
   chatInput.disabled = false;
+  for (const btn of reactionsEl.querySelectorAll<HTMLButtonElement>('.reaction-btn')) {
+    btn.disabled = false;
+  }
+  ballBtn.disabled = false;
+}
+
+// --- emoji reactions (Zoom-style: click to fly an emoji up everyone's screen) ---
+for (const emoji of REACTIONS) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'reaction-btn';
+  btn.textContent = emoji;
+  btn.disabled = true; // enabled once the player has joined
+  btn.setAttribute('aria-label', `react ${emoji}`);
+  btn.addEventListener('click', () => net.send({ type: 'reaction', emoji }));
+  reactionsEl.append(btn);
+}
+
+// The pong-ball reaction: same circular button as the others, but the glyph is a
+// flat dot in the live ball color instead of an emoji.
+const ballBtn = document.createElement('button');
+ballBtn.type = 'button';
+ballBtn.className = 'reaction-btn';
+ballBtn.disabled = true;
+ballBtn.setAttribute('aria-label', 'throw the ball');
+ballBtn.style.setProperty('--ball-color', ballColor);
+const ballDot = document.createElement('span');
+ballDot.className = 'ball-dot';
+ballBtn.append(ballDot);
+ballBtn.addEventListener('click', () => net.send({ type: 'reaction', emoji: BALL_REACTION }));
+ballReactionEl.append(ballBtn);
+
+// Float one emoji from the bottom of the viewport up to the top, with a little
+// horizontal drift, wobble, and fade. Cleans itself up when the animation ends.
+function spawnReaction(emoji: string) {
+  const el = document.createElement('div');
+  if (emoji === BALL_REACTION) {
+    // Match the on-screen ball exactly: same color, and the same pixel size as the
+    // canvas renders it (court radius scaled by the canvas's current display width).
+    el.className = 'floating-ball';
+    el.style.background = ballColor;
+    const scale = canvas.getBoundingClientRect().width / COURT.w;
+    const d = 2 * BALL.r * scale;
+    el.style.width = `${d}px`;
+    el.style.height = `${d}px`;
+  } else {
+    el.className = 'floating-reaction';
+    el.textContent = emoji;
+  }
+  el.style.left = `${5 + Math.random() * 90}vw`;
+  reactionLayer.append(el);
+
+  const rise = window.innerHeight + 120; // travel fully off the top
+  const drift = (Math.random() - 0.5) * 180; // px sideways by the time it exits
+  const wobble = (Math.random() - 0.5) * 40; // mid-flight sway
+  const duration = 2600 + Math.random() * 1600;
+
+  const anim = el.animate(
+    [
+      { transform: 'translate(0, 0) scale(0.5)', opacity: 0 },
+      { transform: `translate(${wobble}px, ${-rise * 0.15}px) scale(1)`, opacity: 1, offset: 0.12 },
+      { transform: `translate(${drift - wobble}px, ${-rise * 0.6}px) scale(1.05)`, opacity: 1, offset: 0.65 },
+      { transform: `translate(${drift}px, ${-rise}px) scale(1.1)`, opacity: 0 },
+    ],
+    { duration, easing: 'cubic-bezier(0.4, 0, 0.6, 1)' },
+  );
+  anim.onfinish = () => el.remove();
+  anim.oncancel = () => el.remove();
 }
 
 // textContent (not innerHTML) keeps user-supplied names/messages from injecting markup.
@@ -218,6 +302,12 @@ requestAnimationFrame(loop);
 // --- HUD ---
 function updateUI() {
   if (!state) return;
+
+  // Mirror the live ball color onto the ball reaction button.
+  if (state.ball.color !== ballColor) {
+    ballColor = state.ball.color;
+    ballBtn.style.setProperty('--ball-color', ballColor);
+  }
 
   if (state.status === 'waiting') statusEl.textContent = 'Waiting for players…';
   else if (state.status === 'over')

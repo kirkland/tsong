@@ -7,12 +7,16 @@ import {
   CHAT_HISTORY,
   CHAT_MAX_LEN,
   ChatLine,
+  BALL_REACTION,
   LeaderboardRow,
+  REACTIONS,
   Role,
   ServerMsg,
   Side,
   StateMsg,
 } from '../shared/types';
+
+const ALLOWED_REACTIONS = new Set<string>([...REACTIONS, BALL_REACTION]);
 import { getLeaderboard, recordResult, updateName } from './db';
 
 interface Conn {
@@ -70,6 +74,20 @@ export class Lobby {
     if (this.chatLog.length > CHAT_HISTORY) this.chatLog.shift();
 
     const data = JSON.stringify({ type: 'chat', lines: [line] });
+    for (const sock of this.conns.keys()) {
+      if (sock.readyState === sock.OPEN) sock.send(data);
+    }
+  }
+
+  reaction(ws: WebSocket, emoji: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return; // must have joined
+    if (!ALLOWED_REACTIONS.has(emoji)) return; // only known emojis
+    const now = Date.now();
+    if (now - conn.lastChatAt < 250) return; // share the chat throttle (light anti-spam)
+    conn.lastChatAt = now;
+
+    const data = JSON.stringify({ type: 'reaction', emoji });
     for (const sock of this.conns.keys()) {
       if (sock.readyState === sock.OPEN) sock.send(data);
     }
