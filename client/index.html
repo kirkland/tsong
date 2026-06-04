@@ -61,6 +61,23 @@
         font-size: 13px;
         color: #6b7796;
       }
+      #modeToggle {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        color: #9fb0d8;
+        cursor: pointer;
+        user-select: none;
+      }
+      #modeToggle:has(input:disabled) {
+        opacity: 0.5;
+        cursor: default;
+      }
+      #modeToggle input {
+        accent-color: #3a6df0;
+        cursor: inherit;
+      }
       button {
         font: inherit;
         padding: 8px 20px;
@@ -325,6 +342,9 @@
         <canvas id="game" width="800" height="500"></canvas>
         <div id="status"></div>
         <button id="join" style="display: none">Join game</button>
+        <label id="modeToggle" title="Each paddle hit drags both paddles toward center. Applies at the next match.">
+          <input type="checkbox" id="closingMode" disabled /> Closing walls
+        </label>
         <div id="watchers"></div>
         <button id="rename" class="link" style="display: none">change name</button>
         <div id="leaderboard"></div>

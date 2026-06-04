@@ -17,6 +17,12 @@ export const BALL = {
   speedup: 1.05, // multiplier applied on each paddle hit (no upper cap)
 } as const;
 
+// "Closing walls" mode: each paddle hit drags both paddles a step toward center.
+export const CLOSING = {
+  step: 12, // court units each paddle slides inward per paddle hit
+  minGap: 200, // closest the two paddle faces may get (court units between faces)
+} as const;
+
 export const WIN_SCORE = 3;
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
 export const LEADERBOARD_SIZE = 10;
@@ -37,10 +43,12 @@ export type ClientMsg =
   | { type: 'claim' }
   | { type: 'paddle'; y: number } // desired paddle center Y, in court units
   | { type: 'chat'; text: string }
-  | { type: 'reaction'; emoji: string }; // a floating emoji reaction, shown to everyone
+  | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
+  | { type: 'mode'; closing: boolean }; // toggle "closing walls" mode (takes effect next match)
 
 // --- Server -> Client ---
 export interface PaddleState {
+  x: number; // paddle center X in court units (moves inward in "closing walls" mode)
   y: number; // paddle center Y in court units
   name: string | null; // nickname of the player on this side, or null if open
   color: string; // hex color for rendering
@@ -53,6 +61,7 @@ export interface StateMsg {
   paddles: { left: PaddleState; right: PaddleState };
   score: { left: number; right: number };
   status: Status;
+  closing: boolean; // whether "closing walls" mode is armed
   winner: string | null; // nickname of the winner when status === 'over'
   watchers: string[]; // nicknames of joined observers
 }

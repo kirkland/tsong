@@ -124,6 +124,13 @@ export class Lobby {
     if (side) this.game.setTarget(side, y);
   }
 
+  // Any joined client may arm/disarm closing-walls mode; it applies from the next match.
+  setMode(ws: WebSocket, closing: boolean) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return;
+    this.game.setClosing(closing);
+  }
+
   remove(ws: WebSocket) {
     const side = this.sideOf(ws);
     if (side) {
@@ -212,11 +219,12 @@ export class Lobby {
       },
       ballSpeed: Math.hypot(this.game.ball.vx, this.game.ball.vy),
       paddles: {
-        left: { y: this.game.paddleY.left, name: this.nameOf('left'), color: this.colorOf('left') },
-        right: { y: this.game.paddleY.right, name: this.nameOf('right'), color: this.colorOf('right') },
+        left: { x: this.game.paddleX.left, y: this.game.paddleY.left, name: this.nameOf('left'), color: this.colorOf('left') },
+        right: { x: this.game.paddleX.right, y: this.game.paddleY.right, name: this.nameOf('right'), color: this.colorOf('right') },
       },
       score: { ...this.game.score },
       status: this.game.status,
+      closing: this.game.closing,
       winner: this.game.status === 'over' ? this.winnerName : null,
       watchers,
     };

@@ -19,11 +19,11 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg) {
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // Paddles
+  // Paddles (X comes from the server so "closing walls" mode renders correctly)
   ctx.fillStyle = s.paddles.left.color;
-  drawPaddle(ctx, PADDLE.margin, s.paddles.left.y);
+  drawPaddle(ctx, s.paddles.left.x, s.paddles.left.y);
   ctx.fillStyle = s.paddles.right.color;
-  drawPaddle(ctx, COURT.w - PADDLE.margin, s.paddles.right.y);
+  drawPaddle(ctx, s.paddles.right.x, s.paddles.right.y);
 
   // Ball — colored by whichever paddle last hit it
   ctx.fillStyle = s.ball.color;
