@@ -32,8 +32,10 @@ const chatForm = document.getElementById('chatForm') as HTMLFormElement;
 const chatInput = document.getElementById('chatInput') as HTMLInputElement;
 const closingModeEl = document.getElementById('closingMode') as HTMLInputElement;
 const reactionsEl = document.getElementById('reactions') as HTMLDivElement;
+const recentReactionsEl = document.getElementById('recentReactions') as HTMLDivElement;
 const ballReactionEl = document.getElementById('ballReaction') as HTMLDivElement;
 const reactionLayer = document.getElementById('reactionLayer') as HTMLDivElement;
+const fatalityCheck = document.getElementById('fatalityCheck') as HTMLInputElement;
 
 // Cookies (not localStorage, per request); ~1 year, scoped to the site.
 const YEAR = 60 * 60 * 24 * 365;
@@ -72,11 +74,23 @@ let myName = '';
 let myColor = '#e8eefc';
 let state: StateMsg | null = null;
 let ballColor = '#e8eefc'; // live pong-ball color, mirrored onto the ball reaction
+let joined = false; // true once the player has entered a nickname (gates reactions)
 
 let target = COURT.h / 2; // desired paddle center Y, court units
 let lastSent = -1;
 let lastSendAt = 0;
 const keys = new Set<string>();
+
+// --- fatalities (opt-in finishing move for the match winner) ---
+// The one move we ship: a "Screen Melt". Its input combo is shown to the winner.
+const FATALITY = {
+  move: 'SCREEN_MELT',
+  seq: ['arrowdown', 'arrowdown', 'arrowup'], // the "FINISH HIM" combo
+  hint: '↓ ↓ ↑',
+};
+const COMBO_WINDOW_MS = 1500; // presses older than this are forgotten
+let fatalityDone = false; // already fired (or skipped) for the current 'over' screen
+let comboBuf: { k: string; t: number }[] = [];
 
 // --- color swatch selection ---
 colorPicker.addEventListener('click', (e) => {
@@ -158,15 +172,72 @@ chatForm.addEventListener('submit', (e) => {
 });
 
 function enableChat() {
+  joined = true;
   chatInput.disabled = false;
   closingModeEl.disabled = false;
   for (const btn of reactionsEl.querySelectorAll<HTMLButtonElement>('.reaction-btn')) {
     btn.disabled = false;
   }
+  pickerBtn.disabled = false;
   ballBtn.disabled = false;
+  renderRecent(); // re-render so the recent buttons pick up the enabled state
 }
 
 // --- emoji reactions (Zoom-style: click to fly an emoji up everyone's screen) ---
+function sendReaction(emoji: string) {
+  net.send({ type: 'reaction', emoji });
+  pushRecent(emoji); // no-op for the defaults and the ball
+}
+
+// --- recently-used row: most-recent-first, capped to the default row's length, and
+// excluding the defaults (which already have permanent buttons). Persisted in a cookie. ---
+const DEFAULT_REACTIONS = new Set<string>(REACTIONS);
+const RECENT_SLOTS = REACTIONS.length; // keep the recents row the same length as defaults
+
+function loadRecent(): string[] {
+  const raw = getCookie('tsong_recent');
+  if (!raw) return [];
+  try {
+    const arr: unknown = JSON.parse(raw);
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((e): e is string => typeof e === 'string' && !DEFAULT_REACTIONS.has(e))
+      .slice(0, RECENT_SLOTS);
+  } catch {
+    return [];
+  }
+}
+let recent = loadRecent();
+
+function pushRecent(emoji: string) {
+  if (emoji === BALL_REACTION || DEFAULT_REACTIONS.has(emoji)) return;
+  recent = [emoji, ...recent.filter((e) => e !== emoji)].slice(0, RECENT_SLOTS);
+  setCookie('tsong_recent', JSON.stringify(recent));
+  renderRecent();
+}
+
+function renderRecent() {
+  recentReactionsEl.replaceChildren();
+  for (let i = 0; i < RECENT_SLOTS; i++) {
+    const emoji = recent[i];
+    if (emoji) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'reaction-btn';
+      btn.textContent = emoji;
+      btn.disabled = !joined;
+      btn.setAttribute('aria-label', `react ${emoji}`);
+      btn.addEventListener('click', () => sendReaction(emoji));
+      recentReactionsEl.append(btn);
+    } else {
+      const slot = document.createElement('span');
+      slot.className = 'recent-slot';
+      recentReactionsEl.append(slot);
+    }
+  }
+}
+renderRecent();
+
 for (const emoji of REACTIONS) {
   const btn = document.createElement('button');
   btn.type = 'button';
@@ -174,9 +245,125 @@ for (const emoji of REACTIONS) {
   btn.textContent = emoji;
   btn.disabled = true; // enabled once the player has joined
   btn.setAttribute('aria-label', `react ${emoji}`);
-  btn.addEventListener('click', () => net.send({ type: 'reaction', emoji }));
+  btn.addEventListener('click', () => sendReaction(emoji));
   reactionsEl.append(btn);
 }
+
+// --- "more emojis" button + Slack-style picker (lazy-loaded full emoji set) ---
+interface EmojiEntry {
+  emoji: string;
+  name: string;
+  slug: string;
+}
+interface EmojiGroup {
+  name: string;
+  emojis: EmojiEntry[];
+}
+
+const pickerBtn = document.createElement('button');
+pickerBtn.type = 'button';
+pickerBtn.className = 'reaction-btn more';
+pickerBtn.textContent = '▾';
+pickerBtn.disabled = true;
+pickerBtn.setAttribute('aria-label', 'more emojis');
+pickerBtn.setAttribute('aria-expanded', 'false');
+ballReactionEl.append(pickerBtn);
+
+const picker = document.createElement('div');
+picker.id = 'emojiPicker';
+picker.hidden = true;
+const searchInput = document.createElement('input');
+searchInput.id = 'emojiSearch';
+searchInput.type = 'text';
+searchInput.placeholder = 'search emojis…';
+searchInput.autocomplete = 'off';
+const grid = document.createElement('div');
+grid.id = 'emojiGrid';
+grid.innerHTML = '<div class="emoji-loading">loading…</div>';
+picker.append(searchInput, grid);
+ballReactionEl.append(picker);
+
+// Each category's label + cells, kept around so search can show/hide in place.
+const sections: { label: HTMLElement; gridEl: HTMLElement; cells: { btn: HTMLElement; terms: string }[] }[] = [];
+let emptyMsg: HTMLElement | null = null;
+let pickerLoaded = false;
+
+async function buildPicker() {
+  if (pickerLoaded) return;
+  pickerLoaded = true;
+  // The full emoji dataset is ~200KB, so only fetch it the first time the picker opens.
+  const mod = await import('unicode-emoji-json/data-by-group.json');
+  const groups = (mod.default ?? mod) as unknown as EmojiGroup[];
+
+  grid.innerHTML = '';
+  for (const group of groups) {
+    const label = document.createElement('div');
+    label.className = 'emoji-cat-label';
+    label.textContent = group.name;
+    const catGrid = document.createElement('div');
+    catGrid.className = 'emoji-cat-grid';
+    const cells: { btn: HTMLElement; terms: string }[] = [];
+    for (const e of group.emojis) {
+      const cell = document.createElement('button');
+      cell.type = 'button';
+      cell.className = 'emoji-cell';
+      cell.textContent = e.emoji;
+      cell.title = e.name;
+      cell.addEventListener('click', () => {
+        sendReaction(e.emoji);
+        closePicker();
+      });
+      catGrid.append(cell);
+      cells.push({ btn: cell, terms: `${e.name} ${e.slug}` });
+    }
+    grid.append(label, catGrid);
+    sections.push({ label, gridEl: catGrid, cells });
+  }
+
+  emptyMsg = document.createElement('div');
+  emptyMsg.className = 'emoji-empty';
+  emptyMsg.textContent = 'no emojis match';
+  emptyMsg.style.display = 'none';
+  grid.append(emptyMsg);
+}
+
+searchInput.addEventListener('input', () => {
+  const q = searchInput.value.trim().toLowerCase();
+  let anyMatch = false;
+  for (const s of sections) {
+    let visible = false;
+    for (const c of s.cells) {
+      const show = !q || c.terms.includes(q);
+      c.btn.style.display = show ? '' : 'none';
+      if (show) visible = true;
+    }
+    s.label.style.display = visible ? '' : 'none';
+    s.gridEl.style.display = visible ? '' : 'none';
+    if (visible) anyMatch = true;
+  }
+  if (emptyMsg) emptyMsg.style.display = anyMatch ? 'none' : '';
+});
+
+function openPicker() {
+  picker.hidden = false;
+  pickerBtn.setAttribute('aria-expanded', 'true');
+  void buildPicker().then(() => searchInput.focus());
+}
+function closePicker() {
+  picker.hidden = true;
+  pickerBtn.setAttribute('aria-expanded', 'false');
+}
+pickerBtn.addEventListener('click', () => (picker.hidden ? openPicker() : closePicker()));
+
+// Dismiss on outside click or Escape.
+document.addEventListener('click', (e) => {
+  if (picker.hidden) return;
+  const t = e.target as Node;
+  if (!picker.contains(t) && !pickerBtn.contains(t)) closePicker();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !picker.hidden) closePicker();
+});
 
 // The pong-ball reaction: same circular button as the others, but the glyph is a
 // flat dot in the live ball color instead of an emoji.
@@ -189,7 +376,7 @@ ballBtn.style.setProperty('--ball-color', ballColor);
 const ballDot = document.createElement('span');
 ballDot.className = 'ball-dot';
 ballBtn.append(ballDot);
-ballBtn.addEventListener('click', () => net.send({ type: 'reaction', emoji: BALL_REACTION }));
+ballBtn.addEventListener('click', () => sendReaction(BALL_REACTION));
 ballReactionEl.append(ballBtn);
 
 // Float one emoji from the bottom of the viewport up to the top, with a little
@@ -285,6 +472,51 @@ window.addEventListener('keyup', (e) => {
   keys.delete(e.key.toLowerCase());
 });
 
+// --- fatality input ---
+// The winner is released to "observer" the moment the match ends, so we can't use the
+// role to know we won — we match the winning nickname instead (good enough; it's purely
+// cosmetic and the server re-checks the real winner by stable id before honoring it).
+function canFinish(): boolean {
+  return (
+    !!state &&
+    state.fatalitiesEnabled &&
+    state.status === 'over' &&
+    !state.fatality &&
+    !fatalityDone &&
+    !!myName &&
+    state.winner === myName
+  );
+}
+
+// Record a keypress and report whether the tail of recent presses spells the combo.
+function pushCombo(k: string, t: number): boolean {
+  comboBuf = comboBuf.filter((e) => t - e.t < COMBO_WINDOW_MS);
+  comboBuf.push({ k, t });
+  const seq = FATALITY.seq;
+  const tail = comboBuf.slice(-seq.length);
+  return tail.length === seq.length && tail.every((e, i) => e.k === seq[i]);
+}
+
+window.addEventListener('keydown', (e) => {
+  if (e.target instanceof HTMLInputElement) return;
+  if (!canFinish()) return;
+  const k = e.key.toLowerCase();
+  if (!FATALITY.seq.includes(k)) return;
+  e.preventDefault(); // arrows would otherwise scroll the page
+  if (pushCombo(k, performance.now())) {
+    net.send({ type: 'fatality', move: FATALITY.move });
+    fatalityDone = true;
+    comboBuf = [];
+  }
+});
+
+// --- fatalities toggle (shared room-wide setting, not per-user) ---
+// The checkbox just requests a change; the server owns the value and broadcasts it to
+// everyone in `state.fatalitiesEnabled`, which is what updateUI() renders the box from.
+fatalityCheck.addEventListener('change', () => {
+  net.send({ type: 'setFatalities', enabled: fatalityCheck.checked });
+});
+
 // --- main loop ---
 function loop(t: number) {
   if (isPlayer()) {
@@ -322,10 +554,18 @@ function updateUI() {
     closingModeEl.checked = state.closing;
   }
 
+  // Keep the checkbox in sync with the shared setting (another player may have flipped it).
+  fatalityCheck.checked = state.fatalitiesEnabled;
+
+  // Once the match is no longer over, re-arm the finishing move for next time.
+  if (state.status !== 'over') fatalityDone = false;
+
   if (state.status === 'waiting') statusEl.textContent = 'Waiting for players…';
-  else if (state.status === 'over')
-    statusEl.textContent = state.winner ? `🏆 ${state.winner} wins!` : 'Game over';
-  else statusEl.textContent = '';
+  else if (state.status === 'over') {
+    if (state.fatality) statusEl.textContent = '☠  F A T A L I T Y  ☠';
+    else if (canFinish()) statusEl.textContent = `🔪 FINISH HIM!  press  ${FATALITY.hint}`;
+    else statusEl.textContent = state.winner ? `🏆 ${state.winner} wins!` : 'Game over';
+  } else statusEl.textContent = '';
 
   const spotOpen = !state.paddles.left.name || !state.paddles.right.name;
   joinBtn.style.display = myRole === 'observer' && spotOpen ? 'inline-block' : 'none';

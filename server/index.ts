@@ -67,6 +67,12 @@ wss.on('connection', (ws: WebSocket) => {
       case 'mode':
         if (typeof msg.closing === 'boolean') lobby.setMode(ws, msg.closing);
         break;
+      case 'fatality':
+        if (typeof msg.move === 'string') lobby.fatality(ws, msg.move);
+        break;
+      case 'setFatalities':
+        if (typeof msg.enabled === 'boolean') lobby.setFatalities(ws, msg.enabled);
+        break;
     }
   });
 
