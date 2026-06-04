@@ -116,6 +116,8 @@ const net = connect(
       msg.lines.forEach(addChatLine);
     } else if (msg.type === 'reaction') {
       spawnReaction(msg.emoji);
+    } else if (msg.type === 'announce') {
+      showAnnouncement(msg.text);
     }
   },
   () => {
@@ -161,6 +163,13 @@ chatForm.addEventListener('submit', (e) => {
   e.preventDefault();
   const text = chatInput.value.trim();
   if (!text) return;
+  // "/ff" = forfeit: only does anything while you hold a paddle (the server validates
+  // too). Swallow it either way so the command never shows up as a chat message.
+  if (text.toLowerCase() === '/ff') {
+    if (isPlayer()) net.send({ type: 'forfeit' });
+    chatInput.value = '';
+    return;
+  }
   net.send({ type: 'chat', text });
   chatInput.value = '';
 });
@@ -423,6 +432,25 @@ function addChatLine(line: ChatLine) {
   chatLog.append(row);
   while (chatLog.childElementCount > 100) chatLog.firstElementChild!.remove();
   chatLog.scrollTop = chatLog.scrollHeight;
+}
+
+// A big, transient banner across the middle of the screen (e.g. someone forfeits).
+function showAnnouncement(text: string) {
+  const el = document.createElement('div');
+  el.className = 'announce-banner';
+  el.textContent = text;
+  reactionLayer.append(el);
+  const anim = el.animate(
+    [
+      { opacity: 0, transform: 'translate(-50%, -50%) scale(0.7)' },
+      { opacity: 1, transform: 'translate(-50%, -50%) scale(1)', offset: 0.15 },
+      { opacity: 1, transform: 'translate(-50%, -50%) scale(1)', offset: 0.8 },
+      { opacity: 0, transform: 'translate(-50%, -50%) scale(1.12)' },
+    ],
+    { duration: 3200, easing: 'ease-out' },
+  );
+  anim.onfinish = () => el.remove();
+  anim.oncancel = () => el.remove();
 }
 
 // --- startup: a remembered nickname skips the prompt (the actual join is sent in

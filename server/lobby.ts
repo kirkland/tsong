@@ -109,6 +109,19 @@ export class Lobby {
     }
   }
 
+  /** "/ff": a player abandons their paddle mid-match and is publicly shamed for it. */
+  forfeit(ws: WebSocket) {
+    const side = this.sideOf(ws);
+    if (!side) return; // only someone currently holding a paddle can forfeit
+    const conn = this.conns.get(ws);
+    const name = conn?.nickname || 'someone';
+    // Vacate the spot (and drop a live match back to waiting), like a quiet leave...
+    this.release(side);
+    if (this.game.status === 'playing') this.game.toWaiting();
+    // ...but loudly, so everyone knows.
+    this.announce(`Booo, ${name} quit the game`);
+  }
+
   join(ws: WebSocket, nickname: string, pid: string, color?: string) {
     const conn = this.conns.get(ws);
     if (!conn) return;
@@ -237,6 +250,14 @@ export class Lobby {
   }
 
   // --- internals ---
+
+  /** Fan a big center-screen banner out to every client (transient, not kept). */
+  private announce(text: string) {
+    const data = JSON.stringify({ type: 'announce', text });
+    for (const sock of this.conns.keys()) {
+      if (sock.readyState === sock.OPEN) sock.send(data);
+    }
+  }
 
   private release(side: Side) {
     const ws = this.sides[side];

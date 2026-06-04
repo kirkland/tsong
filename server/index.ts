@@ -70,6 +70,9 @@ wss.on('connection', (ws: WebSocket) => {
       case 'setFatalities':
         if (typeof msg.enabled === 'boolean') lobby.setFatalities(ws, msg.enabled);
         break;
+      case 'forfeit':
+        lobby.forfeit(ws);
+        break;
     }
   });
 

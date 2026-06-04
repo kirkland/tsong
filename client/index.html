@@ -344,6 +344,23 @@
         pointer-events: none;
         z-index: 50;
       }
+      /* Big transient center-screen banner (e.g. a forfeit callout). */
+      .announce-banner {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: max-content;
+        max-width: 90vw;
+        text-align: center;
+        font-size: clamp(28px, 6vw, 64px);
+        font-weight: 800;
+        letter-spacing: 1px;
+        color: #ff6b6b;
+        text-shadow: 0 4px 28px rgba(0, 0, 0, 0.7);
+        user-select: none;
+        will-change: transform, opacity;
+      }
       .floating-reaction {
         position: fixed;
         bottom: -48px;

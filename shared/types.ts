@@ -54,7 +54,8 @@ export type ClientMsg =
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
   | { type: 'fatality'; move: string } // winner-only, validated server-side
-  | { type: 'setFatalities'; enabled: boolean }; // flips the shared fatalities setting
+  | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
+  | { type: 'forfeit' }; // "/ff": leave your paddle spot mid-game (and get shamed)
 
 // --- Server -> Client ---
 export interface PaddleState {
@@ -120,6 +121,12 @@ export interface ReactionMsg {
   emoji: string;
 }
 
+// A one-off big center-screen banner (e.g. a forfeit). Transient; not replayed.
+export interface AnnounceMsg {
+  type: 'announce';
+  text: string;
+}
+
 // The default quick-reaction row, in display order.
 export const REACTIONS = ['🔥', '🎉', '🫵', '👍', '😂', '😮', '👏', '😡', '🖕'] as const;
 
@@ -127,4 +134,10 @@ export const REACTIONS = ['🔥', '🎉', '🫵', '👍', '😂', '😮', '👏'
 // color isn't sent — each client paints it with whatever its own ball shows.
 export const BALL_REACTION = 'ball';
 
-export type ServerMsg = YouMsg | StateMsg | LeaderboardMsg | ChatMsg | ReactionMsg;
+export type ServerMsg =
+  | YouMsg
+  | StateMsg
+  | LeaderboardMsg
+  | ChatMsg
+  | ReactionMsg
+  | AnnounceMsg;
