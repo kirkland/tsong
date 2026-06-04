@@ -36,7 +36,8 @@ export type ClientMsg =
   | { type: 'join'; nickname: string; pid: string; color?: string }
   | { type: 'claim' }
   | { type: 'paddle'; y: number } // desired paddle center Y, in court units
-  | { type: 'chat'; text: string };
+  | { type: 'chat'; text: string }
+  | { type: 'reaction'; emoji: string }; // a floating emoji reaction, shown to everyone
 
 // --- Server -> Client ---
 export interface PaddleState {
@@ -87,4 +88,17 @@ export interface ChatMsg {
   lines: ChatLine[];
 }
 
-export type ServerMsg = YouMsg | StateMsg | LeaderboardMsg | ChatMsg;
+// A one-off emoji reaction, fanned out live to every client (not replayed on join).
+export interface ReactionMsg {
+  type: 'reaction';
+  emoji: string;
+}
+
+// Emojis the server will accept; anything else is dropped (keeps the air clean).
+export const REACTIONS = ['👍', '❤️', '😂', '🎉', '🔥', '😮', '👏', '🏓', '😡', '🫵', '🖕'] as const;
+
+// Special non-emoji reaction: a pong ball rendered in the live ball color. The
+// color isn't sent — each client paints it with whatever its own ball shows.
+export const BALL_REACTION = 'ball';
+
+export type ServerMsg = YouMsg | StateMsg | LeaderboardMsg | ChatMsg | ReactionMsg;

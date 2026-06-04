@@ -61,6 +61,9 @@ wss.on('connection', (ws: WebSocket) => {
       case 'chat':
         if (typeof msg.text === 'string') lobby.chat(ws, msg.text);
         break;
+      case 'reaction':
+        if (typeof msg.emoji === 'string') lobby.reaction(ws, msg.emoji);
+        break;
     }
   });
 

@@ -192,6 +192,82 @@
       #chatInput:disabled {
         opacity: 0.5;
       }
+      /* Emoji reaction bar under the chat. */
+      #reactions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 8px;
+      }
+      .reaction-btn {
+        width: 38px;
+        height: 38px;
+        padding: 0;
+        border-radius: 50%;
+        border: 1px solid #2a3550;
+        background: #0e1424;
+        font-size: 18px;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: transform 0.1s ease, background 0.15s;
+      }
+      .reaction-btn:hover {
+        background: #18203a;
+        transform: scale(1.15);
+      }
+      .reaction-btn:active {
+        transform: scale(0.92);
+      }
+      .reaction-btn:disabled {
+        opacity: 0.5;
+        cursor: default;
+        transform: none;
+      }
+      /* The pong-ball reaction: centered on its own row, set apart by a divider. */
+      #ballReaction {
+        display: flex;
+        justify-content: center;
+        margin-top: 4px;
+        padding-top: 10px;
+        border-top: 1px solid #1c2640;
+      }
+      /* The dot inside the ball button: a flat disc in the live ball color,
+         matching how the ball is drawn on the canvas (a plain filled circle).
+         --ball-color tracks the game state. */
+      .ball-dot {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--ball-color, #e8eefc);
+      }
+      /* Full-screen layer the floating emojis drift through; never eats clicks. */
+      #reactionLayer {
+        position: fixed;
+        inset: 0;
+        overflow: hidden;
+        pointer-events: none;
+        z-index: 50;
+      }
+      .floating-reaction {
+        position: fixed;
+        bottom: -48px;
+        font-size: 34px;
+        line-height: 1;
+        user-select: none;
+        will-change: transform, opacity;
+      }
+      /* A floating ball reaction is a flat filled disc, drawn just like the
+         on-screen ball. Its pixel size is set from the live canvas so it matches. */
+      .floating-ball {
+        position: fixed;
+        bottom: -48px;
+        border-radius: 50%;
+        user-select: none;
+        will-change: transform, opacity;
+      }
       #overlay {
         position: fixed;
         inset: 0;
@@ -260,8 +336,12 @@
         <form id="chatForm">
           <input id="chatInput" maxlength="200" placeholder="say something…" autocomplete="off" disabled />
         </form>
+        <div id="reactions"></div>
+        <div id="ballReaction"></div>
       </div>
     </div>
+
+    <div id="reactionLayer" aria-hidden="true"></div>
 
     <div id="overlay">
       <form id="joinForm">
