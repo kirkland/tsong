@@ -64,6 +64,12 @@ wss.on('connection', (ws: WebSocket) => {
       case 'reaction':
         if (typeof msg.emoji === 'string') lobby.reaction(ws, msg.emoji);
         break;
+      case 'fatality':
+        if (typeof msg.move === 'string') lobby.fatality(ws, msg.move);
+        break;
+      case 'setFatalities':
+        if (typeof msg.enabled === 'boolean') lobby.setFatalities(ws, msg.enabled);
+        break;
     }
   });
 

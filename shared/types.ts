@@ -30,6 +30,13 @@ export type Side = 'left' | 'right';
 export type Role = Side | 'observer';
 export type Status = 'waiting' | 'playing' | 'over';
 
+// Finishing moves the winner can perform during the 'over' window (opt-in, see the
+// "Fatalities" toggle on the client). Start with one; the name is the wire value.
+// SCREEN_MELT: the ball flares into a fireball and the losing paddle melts down the
+// court like liquid wax.
+export const FATALITY_MOVES = ['SCREEN_MELT'] as const;
+export type FatalityMove = (typeof FATALITY_MOVES)[number];
+
 // --- Client -> Server ---
 export type ClientMsg =
   // pid = stable per-browser identity; color = chosen paddle color
@@ -37,7 +44,9 @@ export type ClientMsg =
   | { type: 'claim' }
   | { type: 'paddle'; y: number } // desired paddle center Y, in court units
   | { type: 'chat'; text: string }
-  | { type: 'reaction'; emoji: string }; // a floating emoji reaction, shown to everyone
+  | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
+  | { type: 'fatality'; move: string } // winner-only, validated server-side
+  | { type: 'setFatalities'; enabled: boolean }; // flips the shared fatalities setting
 
 // --- Server -> Client ---
 export interface PaddleState {
@@ -54,6 +63,12 @@ export interface StateMsg {
   score: { left: number; right: number };
   status: Status;
   winner: string | null; // nickname of the winner when status === 'over'
+  // Shared, room-wide toggle: when true, the match winner can perform a finishing move.
+  // It's one setting for everyone (not per-user), so it rides along in the state.
+  fatalitiesEnabled: boolean;
+  // Set once the winner lands a finishing move; drives the on-court animation for
+  // every client. `side` is the winning side; null until/unless a fatality happens.
+  fatality: { side: Side; move: string } | null;
   watchers: string[]; // nicknames of joined observers
 }
 
