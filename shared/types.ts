@@ -77,7 +77,8 @@ export type ClientMsg =
   | { type: 'fatality'; move: string } // winner-only, validated server-side
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
   | { type: 'forfeit' } // "/ff": leave your paddle spot mid-game (and get shamed)
-  | { type: 'spawnPowerup' }; // "/powerup": drop a random power-up target onto the board
+  | { type: 'spawnPowerup' } // "/powerup": drop a random power-up target onto the board
+  | { type: 'capture'; on: boolean }; // whether this player's mouse is captured to the board
 
 // --- Server -> Client ---
 export interface PaddleState {
@@ -99,6 +100,9 @@ export interface StateMsg {
   target: { x: number; y: number; kind: PowerupKind } | null;
   score: { left: number; right: number };
   status: Status;
+  // True while an in-progress match is frozen waiting for both players to capture
+  // their mouse (pointer lock). The client overlays a "capture to play" prompt.
+  paused: boolean;
   closing: boolean; // whether "closing walls" mode is armed
   winner: string | null; // nickname of the winner when status === 'over'
   // Shared, room-wide toggle: when true, the match winner can perform a finishing move.

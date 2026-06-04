@@ -125,6 +125,8 @@ const net = connect(
   },
   () => {
     if (myName) net.send({ type: 'join', nickname: myName, pid: myPid, color: myColor });
+    // Re-assert capture state after a (re)connect so the server's view stays in sync.
+    if (pointerLocked) net.send({ type: 'capture', on: true });
   },
 );
 
@@ -717,6 +719,8 @@ canvas.addEventListener('click', () => {
 
 document.addEventListener('pointerlockchange', () => {
   pointerLocked = document.pointerLockElement === canvas;
+  // Tell the server: the match stays paused until both players have captured.
+  net.send({ type: 'capture', on: pointerLocked });
   updateUI();
 });
 
@@ -840,6 +844,13 @@ function updateUI() {
     if (state.fatality) statusEl.textContent = '☠  F A T A L I T Y  ☠';
     else if (canFinish()) statusEl.textContent = `🔪 FINISH HIM!  press  ${FATALITY.hint}`;
     else statusEl.textContent = state.winner ? `🏆 ${state.winner} wins!` : 'Game over';
+  } else if (state.paused) {
+    // Match is frozen until both players capture their mouse.
+    if (isPlayer() && !pointerLocked)
+      statusEl.textContent = '🖱 click the board to capture your mouse to start';
+    else if (isPlayer())
+      statusEl.textContent = '⏸ waiting for the other player to capture their mouse…';
+    else statusEl.textContent = '⏸ paused — waiting for players to capture their mice';
   } else if (isPlayer() && !pointerLocked) {
     statusEl.textContent = '🖱 click the board to capture your mouse · Esc to release';
   } else statusEl.textContent = '';

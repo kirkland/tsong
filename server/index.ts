@@ -94,6 +94,9 @@ wss.on('connection', (ws: WebSocket) => {
       case 'spawnPowerup':
         lobby.spawnPowerup(ws);
         break;
+      case 'capture':
+        if (typeof msg.on === 'boolean') lobby.setCapture(ws, msg.on);
+        break;
     }
   });
 

@@ -33,6 +33,7 @@ interface Conn {
   nickname: string; // '' until the client has sent `join`
   role: Role;
   color: string; // chosen paddle color
+  captured: boolean; // mouse captured to the board (pointer lock); gates play start
   lastChatAt: number; // ms timestamp of last chat message (light rate limiting)
 }
 
@@ -64,6 +65,7 @@ export class Lobby {
       nickname: '',
       role: 'observer',
       color: '#e8eefc',
+      captured: false,
       lastChatAt: 0,
     };
     this.conns.set(ws, conn);
@@ -151,13 +153,33 @@ export class Lobby {
     if (!side) return; // no spot open
     this.sides[side] = ws;
     conn.role = side;
+    conn.captured = false; // must (re)capture the mouse before play starts
     this.tell(ws, { type: 'you', id: conn.id, role: side });
     if (this.sides.left && this.sides.right) this.game.start();
+    this.refreshPause();
   }
 
   setPaddle(ws: WebSocket, y: number) {
     const side = this.sideOf(ws);
     if (side) this.game.setTarget(side, y);
+  }
+
+  // A player's mouse-capture (pointer lock) state changed. The match stays frozen until
+  // both side players have their mouse captured.
+  setCapture(ws: WebSocket, on: boolean) {
+    const conn = this.conns.get(ws);
+    if (!conn) return;
+    conn.captured = on;
+    this.refreshPause();
+  }
+
+  private isCaptured(side: Side): boolean {
+    const ws = this.sides[side];
+    return ws ? this.conns.get(ws)?.captured ?? false : false;
+  }
+
+  private refreshPause() {
+    this.game.paused = !(this.isCaptured('left') && this.isCaptured('right'));
   }
 
   // Any joined client may arm/disarm closing-walls mode; it applies from the next match.
@@ -174,6 +196,7 @@ export class Lobby {
       if (this.game.status === 'playing') this.game.toWaiting();
     }
     this.conns.delete(ws);
+    this.refreshPause();
   }
 
   /** Called every tick after game.tick(). Reopens both spots once a match ends. */
@@ -279,6 +302,7 @@ export class Lobby {
       const conn = this.conns.get(ws);
       if (conn) {
         conn.role = 'observer';
+        conn.captured = false; // dropped pointer lock on becoming an observer
         this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
       }
     }
@@ -323,6 +347,7 @@ export class Lobby {
         : null,
       score: { ...this.game.score },
       status: this.game.status,
+      paused: this.game.status === 'playing' && this.game.paused,
       closing: this.game.closing,
       winner: this.game.status === 'over' ? this.winnerName : null,
       fatalitiesEnabled: this.fatalitiesEnabled,
