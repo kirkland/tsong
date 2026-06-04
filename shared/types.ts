@@ -24,14 +24,28 @@ export const CLOSING = {
 } as const;
 
 export const WIN_SCORE = 3;
-export const PADDLE_BOOST = 1.5; // paddle height multiplier while a power-up is active
-export const POWERUP_HITS = 3; // boosted hits granted for bouncing the ball over a target
+export const PADDLE_BOOST = 1.5; // paddle height multiplier while "grow" is active
+export const PADDLE_SHRINK = 0.6; // opponent paddle height multiplier while "shrink" is active
+export const SMASH_BONUS = 1.35; // extra ball-speed multiplier applied on each "smash" hit
+export const SLOW_SCALE = 0.6; // ball-speed multiplier during "slow" motion
+export const SLOW_TIME = 4; // seconds a "slow" power-up lasts
+export const MULTI_MAX = 2; // max simultaneous extra balls from "multi"
+export const POWERUP_HITS = 3; // hits a per-hit power-up (grow/shrink/smash) lasts
 export const TARGET = {
   r: 24, // target radius, court units
   minDelay: 6, // min seconds before a target (re)appears
   maxDelay: 14, // max seconds before a target (re)appears
   life: 7, // seconds an unclaimed target lingers before vanishing
 } as const;
+
+// The power-up a target grants when the ball is bounced across it:
+//   grow   — your paddle grows for your next 3 hits
+//   shrink — the opponent's paddle shrinks for their next 3 hits
+//   smash  — your next 3 hits launch the ball faster
+//   slow   — the ball slows down for a few seconds
+//   multi  — an extra ball joins the rally until the next point
+export const POWERUPS = ['grow', 'shrink', 'smash', 'slow', 'multi'] as const;
+export type PowerupKind = (typeof POWERUPS)[number];
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
 export const LEADERBOARD_SIZE = 10;
 export const CHAT_MAX_LEN = 200; // max characters per chat message
@@ -75,10 +89,12 @@ export interface PaddleState {
 export interface StateMsg {
   type: 'state';
   ball: { x: number; y: number; color: string }; // color = paddle that last hit it (neutral until first hit)
+  // Extra balls in play during a "multi" power-up; empty the rest of the time.
+  extraBalls: { x: number; y: number; color: string }[];
   ballSpeed: number; // current ball speed, court units / second
   paddles: { left: PaddleState; right: PaddleState };
-  // Active "longer paddle" power-up target, or null when none is on the board.
-  target: { x: number; y: number } | null;
+  // Active power-up target, or null when none is on the board. `kind` picks its icon/effect.
+  target: { x: number; y: number; kind: PowerupKind } | null;
   score: { left: number; right: number };
   status: Status;
   closing: boolean; // whether "closing walls" mode is armed

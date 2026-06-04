@@ -1,6 +1,6 @@
 // Authoritative game simulation. Knows nothing about networking, nicknames, or the
-// DOM — it just owns the ball, paddle positions, score and match status. The Lobby
-// drives it (start/setTarget) and reads its state to broadcast.
+// DOM — it just owns the ball(s), paddle positions, score, status and power-ups. The
+// Lobby drives it (start/setTarget) and reads its state to broadcast.
 
 import {
   COURT,
@@ -11,13 +11,21 @@ import {
   MAX_BOUNCE,
   SERVE_DELAY,
   PADDLE_BOOST,
+  PADDLE_SHRINK,
+  SMASH_BONUS,
+  SLOW_SCALE,
+  SLOW_TIME,
+  MULTI_MAX,
   POWERUP_HITS,
+  POWERUPS,
   TARGET,
+  PowerupKind,
   Side,
   Status,
 } from '../shared/types';
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+const other = (s: Side): Side => (s === 'left' ? 'right' : 'left');
 
 // Default paddle center X for each side (closing mode slides these toward center).
 const HOME_X: Record<Side, number> = {
@@ -26,6 +34,13 @@ const HOME_X: Record<Side, number> = {
 };
 // Furthest each paddle center may travel inward before the faces hit the min gap.
 const MAX_INSET = (COURT.w - CLOSING.minGap) / 2 - PADDLE.margin - PADDLE.w / 2;
+
+interface Ball {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+}
 
 // Shortest distance from point p to the segment a→b (for swept target hit-testing,
 // so a fast ball can't tunnel straight through the target between two ticks).
@@ -38,7 +53,8 @@ function distToSegment(px: number, py: number, ax: number, ay: number, bx: numbe
 }
 
 export class Game {
-  ball = { x: COURT.w / 2, y: COURT.h / 2, vx: 0, vy: 0 };
+  ball: Ball = { x: COURT.w / 2, y: COURT.h / 2, vx: 0, vy: 0 };
+  extraBalls: Ball[] = []; // additional balls during a "multi" power-up
   paddleY: Record<Side, number> = { left: COURT.h / 2, right: COURT.h / 2 };
   paddleX: Record<Side, number> = { ...HOME_X }; // current paddle center X (slides in closing mode)
   targetY: Record<Side, number> = { left: COURT.h / 2, right: COURT.h / 2 };
@@ -46,20 +62,25 @@ export class Game {
   status: Status = 'waiting';
   closing = false; // "closing walls" mode armed; applies from the next match start
   winnerSide: Side | null = null;
-  lastHit: Side | null = null; // side whose paddle last touched the ball (null until first hit)
+  lastHit: Side | null = null; // side whose paddle last touched any ball (null until first hit)
 
-  // "Longer paddle" power-up. A target floats on the board; bouncing the ball over it
-  // grants the side that last hit it a few oversized hits.
-  target: { x: number; y: number } | null = null;
-  powerHits: Record<Side, number> = { left: 0, right: 0 }; // remaining boosted hits per side
+  // Power-ups. A target floats on the board; bouncing the ball over it grants its kind.
+  target: { x: number; y: number; kind: PowerupKind } | null = null;
+  growHits: Record<Side, number> = { left: 0, right: 0 }; // taller paddle, per remaining hit
+  shrinkHits: Record<Side, number> = { left: 0, right: 0 }; // shorter paddle, per remaining hit
+  smashHits: Record<Side, number> = { left: 0, right: 0 }; // faster launch, per remaining hit
+  slowTimer = 0; // seconds of slow-motion remaining (affects every ball)
 
   private serveTimer = 0;
   private serveDir = 1; // +1 = launch toward right, -1 = toward left
   private targetTimer = 0; // counts down to spawn (no target) or to despawn (target up)
 
-  /** Current paddle half-height for a side — taller while its power-up is active. */
+  /** Current paddle half-height for a side — grown/shrunk by active power-ups. */
   halfH(side: Side): number {
-    return (this.powerHits[side] > 0 ? PADDLE.h * PADDLE_BOOST : PADDLE.h) / 2;
+    let h = PADDLE.h;
+    if (this.growHits[side] > 0) h *= PADDLE_BOOST;
+    if (this.shrinkHits[side] > 0) h *= PADDLE_SHRINK;
+    return h / 2;
   }
 
   /** Begin a fresh match (called once both spots are filled). */
@@ -69,7 +90,7 @@ export class Game {
     this.paddleY = { left: COURT.h / 2, right: COURT.h / 2 };
     this.paddleX = { ...HOME_X }; // paddles always start at full width
     this.targetY = { left: COURT.h / 2, right: COURT.h / 2 };
-    this.powerHits = { left: 0, right: 0 };
+    this.clearPowerups();
     this.target = null;
     this.targetTimer = this.nextTargetDelay();
     this.status = 'playing';
@@ -93,9 +114,17 @@ export class Game {
   toWaiting() {
     this.status = 'waiting';
     this.ball = { x: COURT.w / 2, y: COURT.h / 2, vx: 0, vy: 0 };
+    this.extraBalls = [];
     this.lastHit = null;
     this.target = null;
-    this.powerHits = { left: 0, right: 0 };
+    this.clearPowerups();
+  }
+
+  private clearPowerups() {
+    this.growHits = { left: 0, right: 0 };
+    this.shrinkHits = { left: 0, right: 0 };
+    this.smashHits = { left: 0, right: 0 };
+    this.slowTimer = 0;
   }
 
   setTarget(side: Side, y: number) {
@@ -107,6 +136,8 @@ export class Game {
     this.serveDir = dir;
     this.serveTimer = SERVE_DELAY;
     this.ball = { x: COURT.w / 2, y: COURT.h / 2, vx: 0, vy: 0 };
+    this.extraBalls = []; // multi-ball ends with the point
+    this.slowTimer = 0; // slow-mo doesn't carry across serves
     this.lastHit = null; // neutral color until the next paddle touch
   }
 
@@ -133,11 +164,28 @@ export class Game {
       return;
     }
 
-    const b = this.ball;
+    if (this.slowTimer > 0) this.slowTimer -= dt;
+    const scale = this.slowTimer > 0 ? SLOW_SCALE : 1;
+
+    // Advance every ball; the first to leave the court decides the point.
+    let scorer: Side | null = null;
+    for (const b of [this.ball, ...this.extraBalls]) {
+      const s = this.stepBall(b, dt, scale);
+      if (s && !scorer) scorer = s;
+    }
+
+    this.updateTargetTimer(dt);
+
+    if (scorer) this.award(scorer);
+  }
+
+  // Move one ball a tick: integrate, bounce off walls/paddles, claim the target, and
+  // return the scoring side if it left the court (else null).
+  private stepBall(b: Ball, dt: number, scale: number): Side | null {
     const prevX = b.x;
     const prevY = b.y;
-    b.x += b.vx * dt;
-    b.y += b.vy * dt;
+    b.x += b.vx * dt * scale;
+    b.y += b.vy * dt * scale;
 
     // Top / bottom walls
     if (b.y - BALL.r < 0) {
@@ -148,7 +196,7 @@ export class Game {
       b.vy = -Math.abs(b.vy);
     }
 
-    this.updateTarget(dt, prevX, prevY);
+    this.checkTargetHit(prevX, prevY, b);
 
     // Paddle collisions
     const leftFace = this.faceX('left');
@@ -159,63 +207,89 @@ export class Game {
       b.x - BALL.r > leftFace - 40 &&
       Math.abs(b.y - this.paddleY.left) <= this.halfH('left') + BALL.r
     ) {
-      this.bounce('left');
+      this.bounce('left', b);
     } else if (
       b.vx > 0 &&
       b.x + BALL.r >= rightFace &&
       b.x + BALL.r < rightFace + 40 &&
       Math.abs(b.y - this.paddleY.right) <= this.halfH('right') + BALL.r
     ) {
-      this.bounce('right');
+      this.bounce('right', b);
     }
 
     // Scoring (ball fully past a wall)
-    if (b.x < -BALL.r) this.award('right');
-    else if (b.x > COURT.w + BALL.r) this.award('left');
+    if (b.x < -BALL.r) return 'right';
+    if (b.x > COURT.w + BALL.r) return 'left';
+    return null;
   }
 
   private nextTargetDelay(): number {
     return TARGET.minDelay + Math.random() * (TARGET.maxDelay - TARGET.minDelay);
   }
 
-  // Spawn/expire the power-up target and detect the ball sweeping across it.
-  private updateTarget(dt: number, prevX: number, prevY: number) {
+  // Spawn or expire the power-up target on its own timer.
+  private updateTargetTimer(dt: number) {
     this.targetTimer -= dt;
-
     if (!this.target) {
       if (this.targetTimer <= 0) {
-        // Place it in the central band, clear of the paddles and walls.
-        const margin = TARGET.r + 24;
+        const margin = TARGET.r + 24; // keep it clear of the walls
         this.target = {
-          x: COURT.w * 0.3 + Math.random() * COURT.w * 0.4,
+          x: COURT.w * 0.3 + Math.random() * COURT.w * 0.4, // central band, clear of paddles
           y: margin + Math.random() * (COURT.h - 2 * margin),
+          kind: POWERUPS[Math.floor(Math.random() * POWERUPS.length)],
         };
         this.targetTimer = TARGET.life;
       }
-      return;
-    }
-
-    // Active target: award it if the ball's path this tick crossed it (and the ball
-    // has actually been struck, so a serve flying through doesn't gift a power-up).
-    const hit =
-      this.lastHit &&
-      distToSegment(this.target.x, this.target.y, prevX, prevY, this.ball.x, this.ball.y) <=
-        TARGET.r + BALL.r;
-    if (hit) {
-      this.powerHits[this.lastHit!] = POWERUP_HITS;
-      this.target = null;
-      this.targetTimer = this.nextTargetDelay();
     } else if (this.targetTimer <= 0) {
       this.target = null; // unclaimed; vanish and schedule the next one
       this.targetTimer = this.nextTargetDelay();
     }
   }
 
-  private bounce(side: Side) {
+  // Award the target if a ball's path this tick crossed it (and the ball has actually
+  // been struck, so a serve flying through doesn't gift a power-up).
+  private checkTargetHit(prevX: number, prevY: number, b: Ball) {
+    if (!this.target || !this.lastHit) return;
+    const d = distToSegment(this.target.x, this.target.y, prevX, prevY, b.x, b.y);
+    if (d > TARGET.r + BALL.r) return;
+    this.grant(this.target.kind, this.lastHit);
+    this.target = null;
+    this.targetTimer = this.nextTargetDelay();
+  }
+
+  private grant(kind: PowerupKind, side: Side) {
+    switch (kind) {
+      case 'grow':
+        this.growHits[side] = POWERUP_HITS;
+        break;
+      case 'shrink':
+        this.shrinkHits[other(side)] = POWERUP_HITS;
+        break;
+      case 'smash':
+        this.smashHits[side] = POWERUP_HITS;
+        break;
+      case 'slow':
+        this.slowTimer = SLOW_TIME;
+        break;
+      case 'multi':
+        this.spawnExtraBall();
+        break;
+    }
+  }
+
+  private spawnExtraBall() {
+    if (this.extraBalls.length >= MULTI_MAX) return;
+    const src = this.ball;
+    // Diverge from the primary ball: same speed, mirrored vertical component.
+    const vy = src.vy !== 0 ? -src.vy : BALL.speed * 0.4;
+    this.extraBalls.push({ x: src.x, y: src.y, vx: src.vx, vy });
+  }
+
+  private bounce(side: Side, b: Ball) {
     this.lastHit = side;
-    const b = this.ball;
     const rel = clamp((b.y - this.paddleY[side]) / this.halfH(side), -1, 1);
-    const speed = Math.hypot(b.vx, b.vy) * BALL.speedup;
+    let speed = Math.hypot(b.vx, b.vy) * BALL.speedup;
+    if (this.smashHits[side] > 0) speed *= SMASH_BONUS;
     const angle = rel * MAX_BOUNCE;
     const dir = side === 'left' ? 1 : -1;
     b.vx = dir * speed * Math.cos(angle);
@@ -229,7 +303,10 @@ export class Game {
 
     // Place the ball just off the (possibly moved) face so it can't re-trigger.
     b.x = side === 'left' ? this.faceX('left') + BALL.r : this.faceX('right') - BALL.r;
-    if (this.powerHits[side] > 0) this.powerHits[side] -= 1; // consume one boosted hit
+    // Consume one of each per-hit charge that affects this side.
+    if (this.growHits[side] > 0) this.growHits[side] -= 1;
+    if (this.shrinkHits[side] > 0) this.shrinkHits[side] -= 1;
+    if (this.smashHits[side] > 0) this.smashHits[side] -= 1;
   }
 
   private award(scorer: Side) {
@@ -237,6 +314,7 @@ export class Game {
     if (this.score[scorer] >= WIN_SCORE) {
       this.status = 'over';
       this.winnerSide = scorer;
+      this.extraBalls = []; // tidy up any multi-balls when the match ends
     } else {
       // Serve toward the player who was just scored on.
       this.serve(scorer === 'left' ? 1 : -1);
