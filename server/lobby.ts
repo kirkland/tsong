@@ -277,14 +277,16 @@ export class Lobby {
       if (c.role === 'observer' && c.nickname) watchers.push(c.nickname);
     }
     const lastHit = this.game.lastHit;
+    const ballColor = lastHit ? this.colorOf(lastHit) : '#e8eefc';
     return {
       type: 'state',
       ball: {
         x: this.game.ball.x,
         y: this.game.ball.y,
         // Take on the color of the paddle that last hit it; neutral until first touch.
-        color: lastHit ? this.colorOf(lastHit) : '#e8eefc',
+        color: ballColor,
       },
+      extraBalls: this.game.extraBalls.map((b) => ({ x: b.x, y: b.y, color: ballColor })),
       ballSpeed: Math.hypot(this.game.ball.vx, this.game.ball.vy),
       paddles: {
         left: {
@@ -300,7 +302,9 @@ export class Lobby {
           h: this.game.halfH('right') * 2,
         },
       },
-      target: this.game.target ? { x: this.game.target.x, y: this.game.target.y } : null,
+      target: this.game.target
+        ? { x: this.game.target.x, y: this.game.target.y, kind: this.game.target.kind }
+        : null,
       score: { ...this.game.score },
       status: this.game.status,
       winner: this.game.status === 'over' ? this.winnerName : null,
