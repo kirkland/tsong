@@ -1,0 +1,29 @@
+name: Deploy
+
+# Auto-deploy to the production VPS on every push to main.
+# The SSH key is restricted on the server by a forced command, so this can only
+# trigger the deploy script — it cannot run arbitrary commands on the box.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Never run two deploys at once; let an in-flight one finish.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          echo "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Deploy
+        run: ssh -i ~/.ssh/id_ed25519 root@159.223.137.196 deploy
