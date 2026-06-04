@@ -18,6 +18,14 @@ export const BALL = {
 } as const;
 
 export const WIN_SCORE = 3;
+export const PADDLE_BOOST = 1.5; // paddle height multiplier while a power-up is active
+export const POWERUP_HITS = 3; // boosted hits granted for bouncing the ball over a target
+export const TARGET = {
+  r: 24, // target radius, court units
+  minDelay: 6, // min seconds before a target (re)appears
+  maxDelay: 14, // max seconds before a target (re)appears
+  life: 7, // seconds an unclaimed target lingers before vanishing
+} as const;
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
 export const LEADERBOARD_SIZE = 10;
 export const CHAT_MAX_LEN = 200; // max characters per chat message
@@ -30,6 +38,13 @@ export type Side = 'left' | 'right';
 export type Role = Side | 'observer';
 export type Status = 'waiting' | 'playing' | 'over';
 
+// Finishing moves the winner can perform during the 'over' window (opt-in, see the
+// "Fatalities" toggle on the client). Start with one; the name is the wire value.
+// SCREEN_MELT: the ball flares into a fireball and the losing paddle melts down the
+// court like liquid wax.
+export const FATALITY_MOVES = ['SCREEN_MELT'] as const;
+export type FatalityMove = (typeof FATALITY_MOVES)[number];
+
 // --- Client -> Server ---
 export type ClientMsg =
   // pid = stable per-browser identity; color = chosen paddle color
@@ -37,13 +52,16 @@ export type ClientMsg =
   | { type: 'claim' }
   | { type: 'paddle'; y: number } // desired paddle center Y, in court units
   | { type: 'chat'; text: string }
-  | { type: 'reaction'; emoji: string }; // a floating emoji reaction, shown to everyone
+  | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
+  | { type: 'fatality'; move: string } // winner-only, validated server-side
+  | { type: 'setFatalities'; enabled: boolean }; // flips the shared fatalities setting
 
 // --- Server -> Client ---
 export interface PaddleState {
   y: number; // paddle center Y in court units
   name: string | null; // nickname of the player on this side, or null if open
   color: string; // hex color for rendering
+  h: number; // current paddle height in court units (taller while powered up)
 }
 
 export interface StateMsg {
@@ -51,9 +69,17 @@ export interface StateMsg {
   ball: { x: number; y: number; color: string }; // color = paddle that last hit it (neutral until first hit)
   ballSpeed: number; // current ball speed, court units / second
   paddles: { left: PaddleState; right: PaddleState };
+  // Active "longer paddle" power-up target, or null when none is on the board.
+  target: { x: number; y: number } | null;
   score: { left: number; right: number };
   status: Status;
   winner: string | null; // nickname of the winner when status === 'over'
+  // Shared, room-wide toggle: when true, the match winner can perform a finishing move.
+  // It's one setting for everyone (not per-user), so it rides along in the state.
+  fatalitiesEnabled: boolean;
+  // Set once the winner lands a finishing move; drives the on-court animation for
+  // every client. `side` is the winning side; null until/unless a fatality happens.
+  fatality: { side: Side; move: string } | null;
   watchers: string[]; // nicknames of joined observers
 }
 

@@ -34,6 +34,7 @@ const reactionsEl = document.getElementById('reactions') as HTMLDivElement;
 const recentReactionsEl = document.getElementById('recentReactions') as HTMLDivElement;
 const ballReactionEl = document.getElementById('ballReaction') as HTMLDivElement;
 const reactionLayer = document.getElementById('reactionLayer') as HTMLDivElement;
+const fatalityCheck = document.getElementById('fatalityCheck') as HTMLInputElement;
 
 // Cookies (not localStorage, per request); ~1 year, scoped to the site.
 const YEAR = 60 * 60 * 24 * 365;
@@ -78,6 +79,17 @@ let target = COURT.h / 2; // desired paddle center Y, court units
 let lastSent = -1;
 let lastSendAt = 0;
 const keys = new Set<string>();
+
+// --- fatalities (opt-in finishing move for the match winner) ---
+// The one move we ship: a "Screen Melt". Its input combo is shown to the winner.
+const FATALITY = {
+  move: 'SCREEN_MELT',
+  seq: ['arrowdown', 'arrowdown', 'arrowup'], // the "FINISH HIM" combo
+  hint: '↓ ↓ ↑',
+};
+const COMBO_WINDOW_MS = 1500; // presses older than this are forgotten
+let fatalityDone = false; // already fired (or skipped) for the current 'over' screen
+let comboBuf: { k: string; t: number }[] = [];
 
 // --- color swatch selection ---
 colorPicker.addEventListener('click', (e) => {
@@ -453,6 +465,51 @@ window.addEventListener('keyup', (e) => {
   keys.delete(e.key.toLowerCase());
 });
 
+// --- fatality input ---
+// The winner is released to "observer" the moment the match ends, so we can't use the
+// role to know we won — we match the winning nickname instead (good enough; it's purely
+// cosmetic and the server re-checks the real winner by stable id before honoring it).
+function canFinish(): boolean {
+  return (
+    !!state &&
+    state.fatalitiesEnabled &&
+    state.status === 'over' &&
+    !state.fatality &&
+    !fatalityDone &&
+    !!myName &&
+    state.winner === myName
+  );
+}
+
+// Record a keypress and report whether the tail of recent presses spells the combo.
+function pushCombo(k: string, t: number): boolean {
+  comboBuf = comboBuf.filter((e) => t - e.t < COMBO_WINDOW_MS);
+  comboBuf.push({ k, t });
+  const seq = FATALITY.seq;
+  const tail = comboBuf.slice(-seq.length);
+  return tail.length === seq.length && tail.every((e, i) => e.k === seq[i]);
+}
+
+window.addEventListener('keydown', (e) => {
+  if (e.target instanceof HTMLInputElement) return;
+  if (!canFinish()) return;
+  const k = e.key.toLowerCase();
+  if (!FATALITY.seq.includes(k)) return;
+  e.preventDefault(); // arrows would otherwise scroll the page
+  if (pushCombo(k, performance.now())) {
+    net.send({ type: 'fatality', move: FATALITY.move });
+    fatalityDone = true;
+    comboBuf = [];
+  }
+});
+
+// --- fatalities toggle (shared room-wide setting, not per-user) ---
+// The checkbox just requests a change; the server owns the value and broadcasts it to
+// everyone in `state.fatalitiesEnabled`, which is what updateUI() renders the box from.
+fatalityCheck.addEventListener('change', () => {
+  net.send({ type: 'setFatalities', enabled: fatalityCheck.checked });
+});
+
 // --- main loop ---
 function loop(t: number) {
   if (isPlayer()) {
@@ -484,10 +541,18 @@ function updateUI() {
     ballBtn.style.setProperty('--ball-color', ballColor);
   }
 
+  // Keep the checkbox in sync with the shared setting (another player may have flipped it).
+  fatalityCheck.checked = state.fatalitiesEnabled;
+
+  // Once the match is no longer over, re-arm the finishing move for next time.
+  if (state.status !== 'over') fatalityDone = false;
+
   if (state.status === 'waiting') statusEl.textContent = 'Waiting for players…';
-  else if (state.status === 'over')
-    statusEl.textContent = state.winner ? `🏆 ${state.winner} wins!` : 'Game over';
-  else statusEl.textContent = '';
+  else if (state.status === 'over') {
+    if (state.fatality) statusEl.textContent = '☠  F A T A L I T Y  ☠';
+    else if (canFinish()) statusEl.textContent = `🔪 FINISH HIM!  press  ${FATALITY.hint}`;
+    else statusEl.textContent = state.winner ? `🏆 ${state.winner} wins!` : 'Game over';
+  } else statusEl.textContent = '';
 
   const spotOpen = !state.paddles.left.name || !state.paddles.right.name;
   joinBtn.style.display = myRole === 'observer' && spotOpen ? 'inline-block' : 'none';

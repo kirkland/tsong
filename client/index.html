@@ -409,6 +409,23 @@
         border-color: #e8eefc;
         box-shadow: 0 0 6px rgba(232, 238, 252, 0.4);
       }
+      /* Fatalities opt-in toggle, under the board. */
+      #fatalityToggle {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        color: #6b7796;
+        user-select: none;
+        cursor: pointer;
+      }
+      #fatalityToggle input {
+        accent-color: #ff6b6b;
+        cursor: pointer;
+      }
+      #fatalityToggle:hover {
+        color: #9fb0d8;
+      }
     </style>
   </head>
   <body>
@@ -419,6 +436,10 @@
         <div id="status"></div>
         <button id="join" style="display: none">Join game</button>
         <div id="watchers"></div>
+        <label id="fatalityToggle" title="When on, win a match to perform a finishing move">
+          <input type="checkbox" id="fatalityCheck" />
+          Fatalities
+        </label>
         <button id="rename" class="link" style="display: none">change name</button>
         <div id="leaderboard"></div>
       </div>

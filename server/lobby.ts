@@ -8,6 +8,7 @@ import {
   CHAT_MAX_LEN,
   ChatLine,
   BALL_REACTION,
+  FATALITY_MOVES,
   LeaderboardRow,
   Role,
   ServerMsg,
@@ -36,12 +37,20 @@ interface Conn {
 }
 
 const SIDES: Side[] = ['left', 'right'];
+const FATALITY_DISPLAY_MS = 4500; // how long the finishing move holds before the lobby resets
 
 export class Lobby {
   private conns = new Map<WebSocket, Conn>();
   private sides: Record<Side, WebSocket | null> = { left: null, right: null };
   private winnerName: string | null = null;
   private overHandled = false; // guards the one-time spot reopening when a match ends
+  // The winner is released to observer the instant the match ends, so we can't use the
+  // side slots to authorize a finishing move — we remember who won by stable pid/side.
+  private fatalityWinnerPid: string | null = null;
+  private fatalityWinnerSide: Side | null = null;
+  private activeFatality: { side: Side; move: string } | null = null;
+  private fatalityAt = 0; // ms timestamp the finishing move started (0 = none)
+  private fatalitiesEnabled = false; // shared room-wide toggle (off for everyone by default)
   private leaderboard: LeaderboardRow[] = []; // cached standings, pushed to clients
   private chatLog: ChatLine[] = []; // recent chat, replayed to new connections
   private nextId = 1;
@@ -157,6 +166,10 @@ export class Lobby {
         const winner = winnerSide ? this.connOn(winnerSide) : null;
         const loser = loserSide ? this.connOn(loserSide) : null;
         this.winnerName = winner?.nickname ?? null;
+        // Remember the winner so a fatality message can be authorized after release.
+        this.fatalityWinnerPid = winner?.pid ?? null;
+        this.fatalityWinnerSide = winnerSide;
+        this.activeFatality = null;
         for (const s of SIDES) this.release(s);
         this.overHandled = true;
 
@@ -166,10 +179,44 @@ export class Lobby {
             .then(() => this.refreshLeaderboard())
             .catch((e) => console.error('leaderboard update failed:', e));
         }
+      } else if (this.activeFatality && Date.now() - this.fatalityAt > FATALITY_DISPLAY_MS) {
+        // Once the finishing move has played out, return to the lobby so the frozen
+        // FATALITY screen clears and a fresh match can be started.
+        this.activeFatality = null;
+        this.game.toWaiting();
       }
     } else {
       this.overHandled = false;
+      // Match no longer over (back to waiting/playing): clear the finishing-move window.
+      this.fatalityWinnerPid = null;
+      this.fatalityWinnerSide = null;
+      this.activeFatality = null;
+      this.fatalityAt = 0;
     }
+  }
+
+  /** Flip the shared fatalities toggle for the whole room. Any joined user may change it. */
+  setFatalities(ws: WebSocket, enabled: boolean) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return; // must have joined
+    this.fatalitiesEnabled = enabled;
+  }
+
+  /**
+   * Perform the winner's finishing move. Cosmetic only (no leaderboard impact), so the
+   * checks are light — but we still confirm the sender is the actual winner (by stable
+   * pid), that the match is over, and that the move is one we know about, so a random
+   * observer can't trigger or spoof a fatality.
+   */
+  fatality(ws: WebSocket, move: string) {
+    if (!this.fatalitiesEnabled) return; // disabled room-wide
+    if (this.game.status !== 'over') return;
+    if (!this.fatalityWinnerSide || this.activeFatality) return; // no winner, or already done
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || conn.pid !== this.fatalityWinnerPid) return; // not the winner
+    if (!(FATALITY_MOVES as readonly string[]).includes(move)) return; // unknown move
+    this.activeFatality = { side: this.fatalityWinnerSide, move };
+    this.fatalityAt = Date.now();
   }
 
   /** Re-query the standings, cache them, and push to every connected client. */
@@ -219,12 +266,25 @@ export class Lobby {
       },
       ballSpeed: Math.hypot(this.game.ball.vx, this.game.ball.vy),
       paddles: {
-        left: { y: this.game.paddleY.left, name: this.nameOf('left'), color: this.colorOf('left') },
-        right: { y: this.game.paddleY.right, name: this.nameOf('right'), color: this.colorOf('right') },
+        left: {
+          y: this.game.paddleY.left,
+          name: this.nameOf('left'),
+          color: this.colorOf('left'),
+          h: this.game.halfH('left') * 2,
+        },
+        right: {
+          y: this.game.paddleY.right,
+          name: this.nameOf('right'),
+          color: this.colorOf('right'),
+          h: this.game.halfH('right') * 2,
+        },
       },
+      target: this.game.target ? { x: this.game.target.x, y: this.game.target.y } : null,
       score: { ...this.game.score },
       status: this.game.status,
       winner: this.game.status === 'over' ? this.winnerName : null,
+      fatalitiesEnabled: this.fatalitiesEnabled,
+      fatality: this.game.status === 'over' ? this.activeFatality : null,
       watchers,
     };
   }
