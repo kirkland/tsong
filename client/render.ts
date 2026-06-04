@@ -20,11 +20,12 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg) {
   // Power-up target (drawn under the ball/paddles so they read on top)
   if (s.target) drawTarget(ctx, s.target.x, s.target.y, s.target.kind);
 
-  // Paddles — height comes from the server (taller/shorter while powered up)
+  // Paddles — X and height both come from the server, so "closing walls" mode and
+  // the grow/shrink power-ups render correctly.
   ctx.fillStyle = s.paddles.left.color;
-  drawPaddle(ctx, PADDLE.margin, s.paddles.left.y, s.paddles.left.h);
+  drawPaddle(ctx, s.paddles.left.x, s.paddles.left.y, s.paddles.left.h);
   ctx.fillStyle = s.paddles.right.color;
-  drawPaddle(ctx, COURT.w - PADDLE.margin, s.paddles.right.y, s.paddles.right.h);
+  drawPaddle(ctx, s.paddles.right.x, s.paddles.right.y, s.paddles.right.h);
 
   // Ball(s) — colored by whichever paddle last hit them. Extra balls = multi power-up.
   for (const b of [s.ball, ...s.extraBalls]) {
@@ -198,9 +199,10 @@ function drawFatality(
   const loserSide = fx.side === 'left' ? 'right' : 'left';
   const loser = s.paddles[loserSide];
   const winner = s.paddles[fx.side];
-  const loserX = loserSide === 'left' ? PADDLE.margin : COURT.w - PADDLE.margin;
-  const winFaceX =
-    fx.side === 'left' ? PADDLE.margin + PADDLE.w / 2 : COURT.w - PADDLE.margin - PADDLE.w / 2;
+  // Use the live paddle X so the melt lands on the paddle even when "closing walls"
+  // mode has slid it inward from its home position.
+  const loserX = loser.x;
+  const winFaceX = fx.side === 'left' ? winner.x + PADDLE.w / 2 : winner.x - PADDLE.w / 2;
 
   // 1) Dim the court.
   ctx.fillStyle = `rgba(4,7,16,${Math.min(0.5, t * 1.2)})`;
