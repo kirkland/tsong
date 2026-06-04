@@ -18,6 +18,14 @@ export const BALL = {
 } as const;
 
 export const WIN_SCORE = 3;
+export const PADDLE_BOOST = 1.5; // paddle height multiplier while a power-up is active
+export const POWERUP_HITS = 3; // boosted hits granted for bouncing the ball over a target
+export const TARGET = {
+  r: 24, // target radius, court units
+  minDelay: 6, // min seconds before a target (re)appears
+  maxDelay: 14, // max seconds before a target (re)appears
+  life: 7, // seconds an unclaimed target lingers before vanishing
+} as const;
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
 export const LEADERBOARD_SIZE = 10;
 export const CHAT_MAX_LEN = 200; // max characters per chat message
@@ -53,6 +61,7 @@ export interface PaddleState {
   y: number; // paddle center Y in court units
   name: string | null; // nickname of the player on this side, or null if open
   color: string; // hex color for rendering
+  h: number; // current paddle height in court units (taller while powered up)
 }
 
 export interface StateMsg {
@@ -60,6 +69,8 @@ export interface StateMsg {
   ball: { x: number; y: number; color: string }; // color = paddle that last hit it (neutral until first hit)
   ballSpeed: number; // current ball speed, court units / second
   paddles: { left: PaddleState; right: PaddleState };
+  // Active "longer paddle" power-up target, or null when none is on the board.
+  target: { x: number; y: number } | null;
   score: { left: number; right: number };
   status: Status;
   winner: string | null; // nickname of the winner when status === 'over'

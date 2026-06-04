@@ -259,9 +259,20 @@ export class Lobby {
       },
       ballSpeed: Math.hypot(this.game.ball.vx, this.game.ball.vy),
       paddles: {
-        left: { y: this.game.paddleY.left, name: this.nameOf('left'), color: this.colorOf('left') },
-        right: { y: this.game.paddleY.right, name: this.nameOf('right'), color: this.colorOf('right') },
+        left: {
+          y: this.game.paddleY.left,
+          name: this.nameOf('left'),
+          color: this.colorOf('left'),
+          h: this.game.halfH('left') * 2,
+        },
+        right: {
+          y: this.game.paddleY.right,
+          name: this.nameOf('right'),
+          color: this.colorOf('right'),
+          h: this.game.halfH('right') * 2,
+        },
       },
+      target: this.game.target ? { x: this.game.target.x, y: this.game.target.y } : null,
       score: { ...this.game.score },
       status: this.game.status,
       winner: this.game.status === 'over' ? this.winnerName : null,

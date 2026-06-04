@@ -1,8 +1,6 @@
 // Pure drawing: takes the latest server state and paints one frame. No game logic.
 
-import { COURT, PADDLE, BALL, StateMsg } from '../shared/types';
-
-const HALF_H = PADDLE.h / 2;
+import { COURT, PADDLE, BALL, TARGET, StateMsg } from '../shared/types';
 
 export function draw(ctx: CanvasRenderingContext2D, s: StateMsg) {
   // Court
@@ -19,11 +17,14 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg) {
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // Paddles
+  // Power-up target (drawn under the ball/paddles so they read on top)
+  if (s.target) drawTarget(ctx, s.target.x, s.target.y);
+
+  // Paddles — height comes from the server (taller while powered up)
   ctx.fillStyle = s.paddles.left.color;
-  drawPaddle(ctx, PADDLE.margin, s.paddles.left.y);
+  drawPaddle(ctx, PADDLE.margin, s.paddles.left.y, s.paddles.left.h);
   ctx.fillStyle = s.paddles.right.color;
-  drawPaddle(ctx, COURT.w - PADDLE.margin, s.paddles.right.y);
+  drawPaddle(ctx, COURT.w - PADDLE.margin, s.paddles.right.y, s.paddles.right.h);
 
   // Ball — colored by whichever paddle last hit it
   ctx.fillStyle = s.ball.color;
@@ -64,8 +65,46 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg) {
   }
 }
 
-function drawPaddle(ctx: CanvasRenderingContext2D, cx: number, cy: number) {
-  ctx.fillRect(cx - PADDLE.w / 2, cy - HALF_H, PADDLE.w, PADDLE.h);
+function drawPaddle(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.fillRect(cx - PADDLE.w / 2, cy - h / 2, PADDLE.w, h);
+}
+
+// The "longer paddle" power-up badge: an amber ring around a tall bar with up/down
+// chevrons, signaling that hitting the ball over it stretches your paddle.
+function drawTarget(ctx: CanvasRenderingContext2D, x: number, y: number) {
+  const amber = '#ffd166';
+  ctx.save();
+
+  // Ring
+  ctx.beginPath();
+  ctx.arc(x, y, TARGET.r, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(255, 209, 102, 0.12)';
+  ctx.fill();
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = amber;
+  ctx.stroke();
+
+  // Tall bar (a mini elongated paddle)
+  const bw = 5;
+  const bh = TARGET.r;
+  ctx.fillStyle = amber;
+  ctx.fillRect(x - bw / 2, y - bh / 2, bw, bh);
+
+  // Up / down chevrons hinting "grow taller"
+  const reach = bh / 2 + 5;
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(x - 5, y - reach + 5);
+  ctx.lineTo(x, y - reach);
+  ctx.lineTo(x + 5, y - reach + 5);
+  ctx.moveTo(x - 5, y + reach - 5);
+  ctx.lineTo(x, y + reach);
+  ctx.lineTo(x + 5, y + reach - 5);
+  ctx.stroke();
+
+  ctx.restore();
 }
 
 // --- Fatality: "Screen Melt" -------------------------------------------------
