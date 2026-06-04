@@ -1,0 +1,19 @@
+# systemd unit for the tsong game server.
+# Install to /etc/systemd/system/tsong.service on the VPS.
+[Unit]
+Description=tsong game server
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=tsong
+WorkingDirectory=/opt/tsong
+# Secrets (DATABASE_URL) and PORT live here, out of the unit file and out of git.
+EnvironmentFile=/etc/tsong.env
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
