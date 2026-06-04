@@ -94,8 +94,8 @@ export interface ReactionMsg {
   emoji: string;
 }
 
-// Emojis the server will accept; anything else is dropped (keeps the air clean).
-export const REACTIONS = ['👍', '❤️', '😂', '🎉', '🔥', '😮', '👏', '🏓', '😡', '🫵', '🖕'] as const;
+// The default quick-reaction row, in display order.
+export const REACTIONS = ['🔥', '🎉', '🫵', '👍', '😂', '😮', '👏', '😡', '🖕'] as const;
 
 // Special non-emoji reaction: a pong ball rendered in the live ball color. The
 // color isn't sent — each client paints it with whatever its own ball shows.

@@ -192,27 +192,38 @@
       #chatInput:disabled {
         opacity: 0.5;
       }
-      /* Emoji reaction bar under the chat. */
-      #reactions {
-        display: flex;
-        flex-wrap: wrap;
+      /* Two fixed 9-column rows under the chat — defaults and recently-used — so
+         both rows are exactly the same width regardless of how many recents exist. */
+      #reactions,
+      #recentReactions {
+        display: grid;
+        grid-template-columns: repeat(9, 28px);
+        gap: 5px;
         justify-content: center;
-        gap: 8px;
       }
       .reaction-btn {
-        width: 38px;
-        height: 38px;
+        box-sizing: border-box;
+        width: 28px;
+        height: 28px;
         padding: 0;
         border-radius: 50%;
         border: 1px solid #2a3550;
         background: #0e1424;
-        font-size: 18px;
+        font-size: 16px;
         line-height: 1;
         display: flex;
         align-items: center;
         justify-content: center;
         cursor: pointer;
         transition: transform 0.1s ease, background 0.15s;
+      }
+      /* Empty recently-used slot: a faint placeholder that holds the row's shape. */
+      .recent-slot {
+        box-sizing: border-box;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        border: 1px dashed #1c2640;
       }
       .reaction-btn:hover {
         background: #18203a;
@@ -226,10 +237,92 @@
         cursor: default;
         transform: none;
       }
-      /* The pong-ball reaction: centered on its own row, set apart by a divider. */
-      #ballReaction {
+      /* The "more emojis" arrow uses the same circle; just a smaller glyph. */
+      .reaction-btn.more {
+        font-size: 11px;
+        color: #9fb0d8;
+      }
+      /* Slack-style emoji picker, popped above the reaction bar. */
+      #emojiPicker {
+        position: absolute;
+        bottom: calc(100% + 8px);
+        left: 50%;
+        transform: translateX(-50%);
+        width: min(92vw, 300px);
+        max-height: 320px;
         display: flex;
+        flex-direction: column;
+        background: #0e1424;
+        border: 1px solid #2a3550;
+        border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+        overflow: hidden;
+        z-index: 60;
+      }
+      #emojiPicker[hidden] {
+        display: none;
+      }
+      #emojiSearch {
+        margin: 8px;
+        padding: 7px 10px;
+        font: inherit;
+        font-size: 14px;
+        border-radius: 6px;
+        border: 1px solid #2a3550;
+        background: #0b1020;
+        color: #e8eefc;
+      }
+      #emojiGrid {
+        overflow-y: auto;
+        padding: 0 6px 8px;
+      }
+      .emoji-cat-label {
+        position: sticky;
+        top: 0;
+        background: #0e1424;
+        font-size: 11px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        color: #6b7796;
+        padding: 6px 4px 3px;
+      }
+      .emoji-cat-grid {
+        display: grid;
+        grid-template-columns: repeat(8, 1fr);
+        gap: 1px;
+      }
+      .emoji-cell {
+        border: none;
+        background: none;
+        padding: 3px 0;
+        font-size: 20px;
+        line-height: 1.2;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      .emoji-cell:hover {
+        background: #18203a;
+      }
+      .emoji-empty {
+        padding: 16px;
+        text-align: center;
+        font-size: 13px;
+        color: #6b7796;
+      }
+      .emoji-loading {
+        padding: 16px;
+        text-align: center;
+        font-size: 13px;
+        color: #6b7796;
+      }
+      /* Bottom row: the "more emojis" picker and the pong-ball reaction, centered
+         and set apart by a divider. position: relative anchors the picker popup. */
+      #ballReaction {
+        position: relative;
+        display: flex;
+        align-items: center;
         justify-content: center;
+        gap: 5px;
         margin-top: 4px;
         padding-top: 10px;
         border-top: 1px solid #1c2640;
@@ -238,8 +331,8 @@
          matching how the ball is drawn on the canvas (a plain filled circle).
          --ball-color tracks the game state. */
       .ball-dot {
-        width: 18px;
-        height: 18px;
+        width: 14px;
+        height: 14px;
         border-radius: 50%;
         background: var(--ball-color, #e8eefc);
       }
@@ -337,6 +430,7 @@
           <input id="chatInput" maxlength="200" placeholder="say something…" autocomplete="off" disabled />
         </form>
         <div id="reactions"></div>
+        <div id="recentReactions"></div>
         <div id="ballReaction"></div>
       </div>
     </div>

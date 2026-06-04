@@ -9,15 +9,22 @@ import {
   ChatLine,
   BALL_REACTION,
   LeaderboardRow,
-  REACTIONS,
   Role,
   ServerMsg,
   Side,
   StateMsg,
 } from '../shared/types';
-
-const ALLOWED_REACTIONS = new Set<string>([...REACTIONS, BALL_REACTION]);
 import { getLeaderboard, recordResult, updateName } from './db';
+
+// A reaction is valid if it's the ball sentinel or a short string made only of
+// emoji code points (pictographs, components, ZWJ, variation selectors, flags).
+// This lets the full picker through while blocking arbitrary text / markup.
+const EMOJI_ONLY =
+  /^(?:\p{Extended_Pictographic}|\p{Emoji_Component}|\p{Regional_Indicator}|‍|️)+$/u;
+function isValidReaction(emoji: string): boolean {
+  if (emoji === BALL_REACTION) return true;
+  return emoji.length > 0 && emoji.length <= 16 && EMOJI_ONLY.test(emoji);
+}
 
 interface Conn {
   id: string; // per-connection id (used in `you` messages)
@@ -82,7 +89,7 @@ export class Lobby {
   reaction(ws: WebSocket, emoji: string) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return; // must have joined
-    if (!ALLOWED_REACTIONS.has(emoji)) return; // only known emojis
+    if (!isValidReaction(emoji)) return; // emoji (or the ball sentinel) only
     const now = Date.now();
     if (now - conn.lastChatAt < 250) return; // share the chat throttle (light anti-spam)
     conn.lastChatAt = now;
