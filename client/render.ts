@@ -1,6 +1,6 @@
 // Pure drawing: takes the latest server state and paints one frame. No game logic.
 
-import { COURT, PADDLE, BALL, TARGET, StateMsg } from '../shared/types';
+import { COURT, PADDLE, BALL, TARGET, PowerupKind, StateMsg } from '../shared/types';
 
 export function draw(ctx: CanvasRenderingContext2D, s: StateMsg) {
   // Court
@@ -18,19 +18,21 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg) {
   ctx.setLineDash([]);
 
   // Power-up target (drawn under the ball/paddles so they read on top)
-  if (s.target) drawTarget(ctx, s.target.x, s.target.y);
+  if (s.target) drawTarget(ctx, s.target.x, s.target.y, s.target.kind);
 
-  // Paddles — height comes from the server (taller while powered up)
+  // Paddles — height comes from the server (taller/shorter while powered up)
   ctx.fillStyle = s.paddles.left.color;
   drawPaddle(ctx, PADDLE.margin, s.paddles.left.y, s.paddles.left.h);
   ctx.fillStyle = s.paddles.right.color;
   drawPaddle(ctx, COURT.w - PADDLE.margin, s.paddles.right.y, s.paddles.right.h);
 
-  // Ball — colored by whichever paddle last hit it
-  ctx.fillStyle = s.ball.color;
-  ctx.beginPath();
-  ctx.arc(s.ball.x, s.ball.y, BALL.r, 0, Math.PI * 2);
-  ctx.fill();
+  // Ball(s) — colored by whichever paddle last hit them. Extra balls = multi power-up.
+  for (const b of [s.ball, ...s.extraBalls]) {
+    ctx.fillStyle = b.color;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, BALL.r, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   // Score
   ctx.fillStyle = '#7da2ff';
@@ -69,43 +71,105 @@ function drawPaddle(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: nu
   ctx.fillRect(cx - PADDLE.w / 2, cy - h / 2, PADDLE.w, h);
 }
 
-// The "longer paddle" power-up badge: an amber ring around a tall bar with up/down
-// chevrons, signaling that hitting the ball over it stretches your paddle.
-function drawTarget(ctx: CanvasRenderingContext2D, x: number, y: number) {
-  const amber = '#ffd166';
+// Each power-up target gets its own ring color + glyph so players can read at a glance
+// what bouncing the ball over it will do.
+const TARGET_STYLE: Record<PowerupKind, { stroke: string; fill: string }> = {
+  grow: { stroke: '#ffd166', fill: 'rgba(255, 209, 102, 0.12)' }, // amber
+  shrink: { stroke: '#5ad1e6', fill: 'rgba(90, 209, 230, 0.12)' }, // cyan
+  smash: { stroke: '#ff6b3d', fill: 'rgba(255, 107, 61, 0.13)' }, // orange-red
+  slow: { stroke: '#7aa2ff', fill: 'rgba(122, 162, 255, 0.13)' }, // blue
+  multi: { stroke: '#c08cff', fill: 'rgba(192, 140, 255, 0.14)' }, // violet
+};
+
+function drawTarget(ctx: CanvasRenderingContext2D, x: number, y: number, kind: PowerupKind) {
+  const style = TARGET_STYLE[kind];
   ctx.save();
 
   // Ring
   ctx.beginPath();
   ctx.arc(x, y, TARGET.r, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(255, 209, 102, 0.12)';
+  ctx.fillStyle = style.fill;
   ctx.fill();
   ctx.lineWidth = 2.5;
-  ctx.strokeStyle = amber;
+  ctx.strokeStyle = style.stroke;
   ctx.stroke();
 
-  // Tall bar (a mini elongated paddle)
-  const bw = 5;
-  const bh = TARGET.r;
-  ctx.fillStyle = amber;
-  ctx.fillRect(x - bw / 2, y - bh / 2, bw, bh);
-
-  // Up / down chevrons hinting "grow taller"
-  const reach = bh / 2 + 5;
+  ctx.fillStyle = style.stroke;
+  ctx.strokeStyle = style.stroke;
   ctx.lineWidth = 2;
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
-  ctx.beginPath();
-  ctx.moveTo(x - 5, y - reach + 5);
-  ctx.lineTo(x, y - reach);
-  ctx.lineTo(x + 5, y - reach + 5);
-  ctx.moveTo(x - 5, y + reach - 5);
-  ctx.lineTo(x, y + reach);
-  ctx.lineTo(x + 5, y + reach - 5);
-  ctx.stroke();
+  GLYPHS[kind](ctx, x, y);
 
   ctx.restore();
 }
+
+// Glyphs are drawn centered on (x, y) within the ring (radius TARGET.r ≈ 24).
+const GLYPHS: Record<PowerupKind, (ctx: CanvasRenderingContext2D, x: number, y: number) => void> = {
+  // grow: a tall bar with outward chevrons → "your paddle gets longer"
+  grow(ctx, x, y) {
+    const bh = TARGET.r;
+    ctx.fillRect(x - 2.5, y - bh / 2, 5, bh);
+    const reach = bh / 2 + 5;
+    ctx.beginPath();
+    ctx.moveTo(x - 5, y - reach + 5);
+    ctx.lineTo(x, y - reach);
+    ctx.lineTo(x + 5, y - reach + 5);
+    ctx.moveTo(x - 5, y + reach - 5);
+    ctx.lineTo(x, y + reach);
+    ctx.lineTo(x + 5, y + reach - 5);
+    ctx.stroke();
+  },
+  // shrink: a short bar with inward chevrons → "their paddle gets shorter"
+  shrink(ctx, x, y) {
+    ctx.fillRect(x - 2.5, y - 6, 5, 12);
+    const reach = 12;
+    ctx.beginPath();
+    ctx.moveTo(x - 5, y - reach);
+    ctx.lineTo(x, y - reach + 5);
+    ctx.lineTo(x + 5, y - reach);
+    ctx.moveTo(x - 5, y + reach);
+    ctx.lineTo(x, y + reach - 5);
+    ctx.lineTo(x + 5, y + reach);
+    ctx.stroke();
+  },
+  // smash: a lightning bolt → "faster, harder hits"
+  smash(ctx, x, y) {
+    ctx.beginPath();
+    ctx.moveTo(x + 3, y - 13);
+    ctx.lineTo(x - 7, y + 2);
+    ctx.lineTo(x - 1, y + 2);
+    ctx.lineTo(x - 4, y + 13);
+    ctx.lineTo(x + 7, y - 3);
+    ctx.lineTo(x + 1, y - 3);
+    ctx.closePath();
+    ctx.fill();
+  },
+  // slow: an hourglass → "the ball slows down"
+  slow(ctx, x, y) {
+    const w = 11;
+    const h = 14;
+    ctx.beginPath();
+    ctx.moveTo(x - w / 2, y - h / 2);
+    ctx.lineTo(x + w / 2, y - h / 2);
+    ctx.lineTo(x, y);
+    ctx.closePath();
+    ctx.moveTo(x - w / 2, y + h / 2);
+    ctx.lineTo(x + w / 2, y + h / 2);
+    ctx.lineTo(x, y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillRect(x - w / 2 - 1, y - h / 2 - 3, w + 2, 2.5);
+    ctx.fillRect(x - w / 2 - 1, y + h / 2 + 0.5, w + 2, 2.5);
+  },
+  // multi: two dots → "an extra ball"
+  multi(ctx, x, y) {
+    ctx.beginPath();
+    ctx.arc(x - 6, y, 4, 0, Math.PI * 2);
+    ctx.arc(x + 6, y, 4, 0, Math.PI * 2);
+    ctx.fill();
+  },
+};
 
 // --- Fatality: "Screen Melt" -------------------------------------------------
 // The ball flares into a fireball, streaks into the losing paddle, and that paddle
@@ -143,8 +207,9 @@ function drawFatality(
   ctx.fillRect(0, 0, COURT.w, COURT.h);
 
   // Erase the loser's intact paddle so we can render the melting version ourselves.
+  // Use the loser's actual height so a boosted paddle is fully covered.
   ctx.fillStyle = '#0b1020';
-  ctx.fillRect(loserX - PADDLE.w / 2 - 2, loser.y - HALF_H - 2, PADDLE.w + 4, PADDLE.h + 4);
+  ctx.fillRect(loserX - PADDLE.w / 2 - 2, loser.y - loser.h / 2 - 2, PADDLE.w + 4, loser.h + 4);
 
   // 2) Fireball streaks from the winner's face into the loser.
   if (t < FLY) {
@@ -157,8 +222,8 @@ function drawFatality(
   // 3) The loser melts.
   const m = Math.max(0, t - FLY);
   const mp = Math.min(1, m / MELT); // 0 → 1 melt progress
-  const topY = loser.y - HALF_H;
-  const solidH = Math.max(0, PADDLE.h * (1 - mp));
+  const topY = loser.y - loser.h / 2;
+  const solidH = Math.max(0, loser.h * (1 - mp));
   const frontY = topY + solidH;
 
   // Remaining solid chunk, tinting molten as it goes.
