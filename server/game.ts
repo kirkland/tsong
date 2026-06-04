@@ -167,16 +167,40 @@ export class Game {
     if (this.slowTimer > 0) this.slowTimer -= dt;
     const scale = this.slowTimer > 0 ? SLOW_SCALE : 1;
 
-    // Advance every ball; the first to leave the court decides the point.
-    let scorer: Side | null = null;
+    // Advance every ball. A ball that leaves the court scores for the opposite side and
+    // drops out of play; the rally only ends (and a new ball is served) once no balls
+    // remain — so during multi-ball one ball going out doesn't kill the others.
+    const survivors: Ball[] = [];
+    let lastScorer: Side | null = null;
+    let ended = false;
     for (const b of [this.ball, ...this.extraBalls]) {
-      const s = this.stepBall(b, dt, scale);
-      if (s && !scorer) scorer = s;
+      const scorer = this.stepBall(b, dt, scale);
+      if (scorer) {
+        lastScorer = scorer;
+        if (this.scorePoint(scorer)) {
+          ended = true;
+          break;
+        }
+      } else {
+        survivors.push(b);
+      }
     }
 
     this.updateTargetTimer(dt);
 
-    if (scorer) this.award(scorer);
+    if (ended) {
+      this.extraBalls = []; // tidy up any multi-balls when the match ends
+      return;
+    }
+
+    if (survivors.length > 0) {
+      // Some balls are still live: keep playing, promoting one to the primary slot.
+      this.ball = survivors[0];
+      this.extraBalls = survivors.slice(1);
+    } else if (lastScorer) {
+      // Zero balls left → serve a fresh single ball toward the side just scored on.
+      this.serve(lastScorer === 'left' ? 1 : -1);
+    }
   }
 
   // Move one ball a tick: integrate, bounce off walls/paddles, claim the target, and
@@ -280,9 +304,19 @@ export class Game {
   private spawnExtraBall() {
     if (this.extraBalls.length >= MULTI_MAX) return;
     const src = this.ball;
-    // Diverge from the primary ball: same speed, mirrored vertical component.
-    const vy = src.vy !== 0 ? -src.vy : BALL.speed * 0.4;
-    this.extraBalls.push({ x: src.x, y: src.y, vx: src.vx, vy });
+    // Random speed between the default serve speed and the primary ball's current
+    // speed, fired in a random direction (random side + random vertical spread, but
+    // always with a real horizontal component so it actually reaches a paddle).
+    const current = Math.hypot(src.vx, src.vy);
+    const speed = BALL.speed + Math.random() * Math.max(0, current - BALL.speed);
+    const dirX = Math.random() < 0.5 ? -1 : 1;
+    const angle = (Math.random() * 2 - 1) * (Math.PI / 3); // ±60° off horizontal
+    this.extraBalls.push({
+      x: src.x,
+      y: src.y,
+      vx: dirX * speed * Math.cos(angle),
+      vy: speed * Math.sin(angle),
+    });
   }
 
   private bounce(side: Side, b: Ball) {
@@ -309,15 +343,15 @@ export class Game {
     if (this.smashHits[side] > 0) this.smashHits[side] -= 1;
   }
 
-  private award(scorer: Side) {
+  // Credit a point to the scoring side; returns true if that ended the match. Serving
+  // the next ball is handled by tick() once the court is clear of balls.
+  private scorePoint(scorer: Side): boolean {
     this.score[scorer] += 1;
     if (this.score[scorer] >= WIN_SCORE) {
       this.status = 'over';
       this.winnerSide = scorer;
-      this.extraBalls = []; // tidy up any multi-balls when the match ends
-    } else {
-      // Serve toward the player who was just scored on.
-      this.serve(scorer === 'left' ? 1 : -1);
+      return true;
     }
+    return false;
   }
 }
