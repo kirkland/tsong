@@ -107,6 +107,8 @@ const net = connect(
   (msg) => {
     if (msg.type === 'you') {
       myRole = msg.role;
+      // Hand the cursor back when we're no longer holding a paddle (e.g. match ended).
+      if (!isPlayer() && document.pointerLockElement === canvas) document.exitPointerLock();
     } else if (msg.type === 'state') {
       state = msg;
       syncMyPaddleFromServer();
@@ -478,10 +480,31 @@ if (remembered) {
 }
 
 // --- mouse control ---
+// While holding a paddle, lock the pointer to the board so a quick flick can't send the
+// cursor out of the play area (which would freeze the paddle or land clicks on the chat
+// and buttons). Locked → track relative movement; unlocked → fall back to absolute
+// position over the canvas, and click the board to (re)capture the mouse.
+let pointerLocked = false;
+const clampPaddle = (y: number) => Math.max(PADDLE.h / 2, Math.min(COURT.h - PADDLE.h / 2, y));
+
+canvas.addEventListener('click', () => {
+  if (isPlayer() && !pointerLocked) canvas.requestPointerLock();
+});
+
+document.addEventListener('pointerlockchange', () => {
+  pointerLocked = document.pointerLockElement === canvas;
+  updateUI();
+});
+
 canvas.addEventListener('mousemove', (e) => {
   if (!isPlayer()) return;
   const r = canvas.getBoundingClientRect();
-  target = ((e.clientY - r.top) / r.height) * COURT.h;
+  if (pointerLocked) {
+    // Convert screen-pixel movement to court units (1:1 with what's drawn).
+    target = clampPaddle(target + e.movementY * (COURT.h / r.height));
+  } else {
+    target = clampPaddle(((e.clientY - r.top) / r.height) * COURT.h);
+  }
 });
 
 // --- keyboard control ---
@@ -593,13 +616,17 @@ function updateUI() {
     if (state.fatality) statusEl.textContent = '☠  F A T A L I T Y  ☠';
     else if (canFinish()) statusEl.textContent = `🔪 FINISH HIM!  press  ${FATALITY.hint}`;
     else statusEl.textContent = state.winner ? `🏆 ${state.winner} wins!` : 'Game over';
+  } else if (isPlayer() && !pointerLocked) {
+    statusEl.textContent = '🖱 click the board to capture your mouse · Esc to release';
   } else statusEl.textContent = '';
 
   const spotOpen = !state.paddles.left.name || !state.paddles.right.name;
   joinBtn.style.display = myRole === 'observer' && spotOpen ? 'inline-block' : 'none';
   renameBtn.style.display = myName ? 'inline-block' : 'none';
 
-  canvas.style.cursor = isPlayer() ? 'none' : 'default';
+  // Hidden once the pointer is captured (lock hides it natively anyway); visible while
+  // unlocked so a player can see where to click to capture, and for observers.
+  canvas.style.cursor = isPlayer() && pointerLocked ? 'none' : 'default';
   watchersEl.textContent = state.watchers.length
     ? `Watching: ${state.watchers.join(', ')}`
     : '';
