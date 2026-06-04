@@ -19,6 +19,10 @@ export default defineConfig({
         target: `ws://localhost:${serverPort}`,
         ws: true,
       },
+      // The changelog endpoint is served by the Node server; proxy it in dev too.
+      '/api': {
+        target: `http://localhost:${serverPort}`,
+      },
     },
   },
 });

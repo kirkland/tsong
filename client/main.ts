@@ -265,7 +265,12 @@ interface EmojiGroup {
 const pickerBtn = document.createElement('button');
 pickerBtn.type = 'button';
 pickerBtn.className = 'reaction-btn more';
-pickerBtn.textContent = '▾';
+// Wrap the glyph so it can be nudged up (it sits low in its line box) like the
+// CHANGELOG caret, without moving the button itself.
+const pickerCaret = document.createElement('span');
+pickerCaret.className = 'caret';
+pickerCaret.textContent = '▾';
+pickerBtn.append(pickerCaret);
 pickerBtn.disabled = true;
 pickerBtn.setAttribute('aria-label', 'more emojis');
 pickerBtn.setAttribute('aria-expanded', 'false');
@@ -452,6 +457,98 @@ function showAnnouncement(text: string) {
   anim.onfinish = () => el.remove();
   anim.oncancel = () => el.remove();
 }
+
+// --- CHANGELOG dropdown (top-right): recent commit messages on main ---
+const changelogBtn = document.getElementById('changelogBtn') as HTMLButtonElement;
+const changelogPanel = document.getElementById('changelogPanel') as HTMLDivElement;
+
+interface Commit {
+  hash: string;
+  subject: string;
+  date: string;
+}
+let changelogLoaded = false;
+
+function timeAgo(iso: string): string {
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return '';
+  let s = Math.max(0, (Date.now() - then) / 1000);
+  const steps: [number, string][] = [
+    [60, 'second'],
+    [60, 'minute'],
+    [24, 'hour'],
+    [30, 'day'],
+    [12, 'month'],
+  ];
+  let unit = 'year';
+  for (const [size, name] of steps) {
+    if (s < size) {
+      unit = name;
+      break;
+    }
+    s /= size;
+  }
+  const n = Math.floor(s);
+  return `${n} ${unit}${n === 1 ? '' : 's'} ago`;
+}
+
+async function loadChangelog() {
+  if (changelogLoaded) return;
+  changelogLoaded = true;
+  try {
+    const res = await fetch('/api/changelog');
+    const data: { commits?: Commit[] } = await res.json();
+    const commits = data.commits ?? [];
+    changelogPanel.replaceChildren();
+    if (!commits.length) {
+      const empty = document.createElement('div');
+      empty.className = 'changelog-empty';
+      empty.textContent = 'No commits to show.';
+      changelogPanel.append(empty);
+      return;
+    }
+    for (const c of commits) {
+      const item = document.createElement('div');
+      item.className = 'changelog-item';
+      const subject = document.createElement('div');
+      subject.className = 'changelog-subject';
+      subject.textContent = c.subject;
+      const meta = document.createElement('div');
+      meta.className = 'changelog-meta';
+      meta.textContent = `${c.hash} · ${timeAgo(c.date)}`;
+      item.append(subject, meta);
+      changelogPanel.append(item);
+    }
+  } catch {
+    changelogLoaded = false; // let a later open retry
+    changelogPanel.replaceChildren();
+    const err = document.createElement('div');
+    err.className = 'changelog-empty';
+    err.textContent = 'Could not load changelog.';
+    changelogPanel.append(err);
+  }
+}
+
+function openChangelog() {
+  changelogPanel.hidden = false;
+  changelogBtn.setAttribute('aria-expanded', 'true');
+  void loadChangelog();
+}
+function closeChangelog() {
+  changelogPanel.hidden = true;
+  changelogBtn.setAttribute('aria-expanded', 'false');
+}
+changelogBtn.addEventListener('click', () =>
+  changelogPanel.hidden ? openChangelog() : closeChangelog(),
+);
+document.addEventListener('click', (e) => {
+  if (changelogPanel.hidden) return;
+  const t = e.target as Node;
+  if (!changelogPanel.contains(t) && !changelogBtn.contains(t)) closeChangelog();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !changelogPanel.hidden) closeChangelog();
+});
 
 // --- startup: a remembered nickname skips the prompt (the actual join is sent in
 // the onOpen handler once the socket connects). ---

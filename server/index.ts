@@ -9,6 +9,7 @@ import { ClientMsg, TICK_MS } from '../shared/types';
 import { Game } from './game';
 import { Lobby } from './lobby';
 import { initDb } from './db';
+import { getChangelog } from './changelog';
 
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -28,6 +29,20 @@ const serveStatic = sirv(path.resolve(process.cwd(), 'client/dist'), {
 });
 
 const server = http.createServer((req, res) => {
+  // Recent commit messages for the in-app CHANGELOG dropdown.
+  if (req.url === '/api/changelog') {
+    getChangelog()
+      .then((commits) => {
+        res.setHeader('content-type', 'application/json');
+        res.setHeader('cache-control', 'no-cache');
+        res.end(JSON.stringify({ commits }));
+      })
+      .catch(() => {
+        res.statusCode = 500;
+        res.end('{"commits":[]}');
+      });
+    return;
+  }
   serveStatic(req, res, () => {
     res.statusCode = 404;
     res.end('Not found');
