@@ -89,7 +89,9 @@ export type Status = 'waiting' | 'playing' | 'over';
 // checkerboard, flickers under a "404 PADDLE NOT FOUND" tag, and blinks out.
 // SINGULARITY: a black hole tears open at court center, the losing paddle is
 // spaghettified into a glowing accretion disk, then it implodes and detonates.
-export const FATALITY_MOVES = ['SCREEN_MELT', 'PADDLE_SPLIT', 'FROST_SHATTER', 'NOT_FOUND', 'SINGULARITY'] as const;
+// PAC_CHOMP: the winner becomes a yellow Pac-Man and chomps a trail of ping-pong
+// pellets across the court to the frozen loser, eats it, then balloons and bursts.
+export const FATALITY_MOVES = ['SCREEN_MELT', 'PADDLE_SPLIT', 'FROST_SHATTER', 'NOT_FOUND', 'SINGULARITY', 'PAC_CHOMP'] as const;
 export type FatalityMove = (typeof FATALITY_MOVES)[number];
 
 // --- Client -> Server ---
