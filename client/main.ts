@@ -2,7 +2,7 @@
 // and the Join button. Input is only sent when this client holds a paddle.
 
 import { connect } from './net';
-import { draw } from './render';
+import { draw, drawLegendIcon } from './render';
 import {
   COURT,
   PADDLE,
@@ -13,6 +13,7 @@ import {
   LeaderboardRow,
   Role,
   StateMsg,
+  PowerupKind,
 } from '../shared/types';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -35,11 +36,18 @@ const chatLog = document.getElementById('chatlog') as HTMLDivElement;
 const chatForm = document.getElementById('chatForm') as HTMLFormElement;
 const chatInput = document.getElementById('chatInput') as HTMLInputElement;
 const closingModeEl = document.getElementById('closingMode') as HTMLInputElement;
+const gravityModeEl = document.getElementById('gravityMode') as HTMLInputElement;
+const turboModeEl = document.getElementById('turboMode') as HTMLInputElement;
 const reactionsEl = document.getElementById('reactions') as HTMLDivElement;
 const recentReactionsEl = document.getElementById('recentReactions') as HTMLDivElement;
 const ballReactionEl = document.getElementById('ballReaction') as HTMLDivElement;
 const reactionLayer = document.getElementById('reactionLayer') as HTMLDivElement;
 const fatalityCheck = document.getElementById('fatalityCheck') as HTMLInputElement;
+const combosBtn = document.getElementById('combosBtn') as HTMLButtonElement;
+const combosModal = document.getElementById('combosModal') as HTMLDivElement;
+const combosCard = document.getElementById('combosCard') as HTMLDivElement;
+const combosClose = document.getElementById('combosClose') as HTMLButtonElement;
+const combosList = document.getElementById('combosList') as HTMLDivElement;
 
 // Cookies (not localStorage, per request); ~1 year, scoped to the site.
 const YEAR = 60 * 60 * 24 * 365;
@@ -86,15 +94,30 @@ let lastSendAt = 0;
 const keys = new Set<string>();
 
 // --- fatalities (opt-in finishing move for the match winner) ---
-const FATALITY_SEQ = ['arrowdown', 'arrowdown', 'arrowup'] as const;
-const FATALITY_HINT = '↓ ↓ ↑';
-const FATALITY_MOVES = ['SCREEN_MELT', 'PADDLE_SPLIT', 'FROST_SHATTER'] as const;
+// Each finisher has its own arrow combo so the winner can pick which one to perform.
+const FATALITIES = [
+  { move: 'SCREEN_MELT', label: 'Melt', seq: ['arrowdown', 'arrowdown', 'arrowup'], hint: '↓↓↑', desc: 'The ball flares into a fireball and melts the loser down the court like wax.' },
+  { move: 'PADDLE_SPLIT', label: 'Explode', seq: ['arrowup', 'arrowup', 'arrowdown'], hint: '↑↑↓', desc: 'The loser is dragged to center, cracks apart, and explodes in shrapnel.' },
+  { move: 'FROST_SHATTER', label: 'Freeze', seq: ['arrowdown', 'arrowup', 'arrowdown'], hint: '↓↑↓', desc: 'The loser freezes solid, cracks, and shatters into a spray of ice shards.' },
+  { move: 'NOT_FOUND', label: '404', seq: ['arrowup', 'arrowup', 'arrowup'], hint: '↑↑↑', desc: 'The loser glitches into a missing-texture checkerboard and blinks out: 404.' },
+] as const;
+const COMBO_KEYS = new Set(FATALITIES.flatMap((f) => f.seq as readonly string[]));
 const COMBO_WINDOW_MS = 1500; // presses older than this are forgotten
 let fatalityDone = false; // already fired (or skipped) for the current 'over' screen
+
+// "FINISH HIM!" announcer sting, played once when a match ends with fatalities armed.
+const finishSound = new Audio('/finish-him.mp3');
+finishSound.preload = 'auto';
+let prevStatus: StateMsg['status'] | null = null; // last seen status, to fire on the rising edge into 'over'
 let comboBuf: { k: string; t: number }[] = [];
 
-function randomFatalityMove(): string {
-  return FATALITY_MOVES[Math.floor(Math.random() * FATALITY_MOVES.length)];
+// Return the fatality move whose combo the recent keypresses just completed, or null.
+function matchCombo(): string | null {
+  for (const f of FATALITIES) {
+    const tail = comboBuf.slice(-f.seq.length);
+    if (tail.length === f.seq.length && tail.every((e, i) => e.k === f.seq[i])) return f.move;
+  }
+  return null;
 }
 
 function randomColor(): string {
@@ -124,6 +147,14 @@ const net = connect(
       // Hand the cursor back when we're no longer holding a paddle (e.g. match ended).
       if (!isPlayer() && document.pointerLockElement === canvas) document.exitPointerLock();
     } else if (msg.type === 'state') {
+      // Play the "FINISH HIM!" sting once, the instant the match ends with fatalities
+      // armed (the moment the prompt appears for the winner). Edge-triggered so it
+      // doesn't retrigger on every state frame while the 'over' screen lingers.
+      if (msg.status === 'over' && prevStatus !== 'over' && msg.fatalitiesEnabled && msg.winner) {
+        finishSound.currentTime = 0;
+        finishSound.play().catch(() => {}); // ignore autoplay blocks (e.g. a spectator who never clicked)
+      }
+      prevStatus = msg.status;
       state = msg;
       syncMyPaddleFromServer();
       updateUI();
@@ -138,6 +169,9 @@ const net = connect(
     }
   },
   () => {
+    // The server replays recent chat history on every (re)connect. Clear the log first so
+    // a reconnect (which keeps the page, and thus the old lines) doesn't duplicate them.
+    chatLog.replaceChildren();
     if (myName) net.send({ type: 'join', nickname: myName, pid: myPid, color: myColor });
     // Re-assert capture state after a (re)connect so the server's view stays in sync.
     if (pointerLocked) net.send({ type: 'capture', on: true });
@@ -201,6 +235,12 @@ kingStatusEl.addEventListener('click', () => net.send({ type: 'kingExit' }));
 closingModeEl.addEventListener('change', () =>
   net.send({ type: 'mode', closing: closingModeEl.checked }),
 );
+gravityModeEl.addEventListener('change', () =>
+  net.send({ type: 'mode', gravity: gravityModeEl.checked }),
+);
+turboModeEl.addEventListener('change', () =>
+  net.send({ type: 'mode', turbo: turboModeEl.checked }),
+);
 
 // --- slash commands ---
 // Typing "/" in chat pops up this menu of commands; each only appears when usable.
@@ -223,8 +263,8 @@ const COMMANDS: ChatCommand[] = [
   {
     name: 'powerup',
     hint: 'Spawn a random power-up',
-    enabled: () => state?.status === 'playing',
-    disabledHint: 'only during a live match',
+    enabled: () => !isPlayer() && state?.status === 'playing',
+    disabledHint: 'spectators only, during a live match',
     run: () => net.send({ type: 'spawnPowerup' }),
   },
 ];
@@ -349,6 +389,8 @@ function enableChat() {
   joined = true;
   chatInput.disabled = false;
   closingModeEl.disabled = false;
+  gravityModeEl.disabled = false;
+  turboModeEl.disabled = false;
   for (const btn of reactionsEl.querySelectorAll<HTMLButtonElement>('.reaction-btn')) {
     btn.disabled = false;
   }
@@ -655,6 +697,30 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !gameModesPanel.hidden) closeGameModes();
 });
 
+// --- Power-ups dropdown (top-left, next to MODES): legend of all power-ups ---
+const powerupInfoBtn = document.getElementById('powerupInfoBtn') as HTMLButtonElement;
+const powerupInfoPanel = document.getElementById('powerupInfoPanel') as HTMLDivElement;
+
+function openPowerupInfo() {
+  powerupInfoPanel.hidden = false;
+  powerupInfoBtn.setAttribute('aria-expanded', 'true');
+}
+function closePowerupInfo() {
+  powerupInfoPanel.hidden = true;
+  powerupInfoBtn.setAttribute('aria-expanded', 'false');
+}
+powerupInfoBtn.addEventListener('click', () =>
+  powerupInfoPanel.hidden ? openPowerupInfo() : closePowerupInfo(),
+);
+document.addEventListener('click', (e) => {
+  if (powerupInfoPanel.hidden) return;
+  const t = e.target as Node;
+  if (!powerupInfoPanel.contains(t) && !powerupInfoBtn.contains(t)) closePowerupInfo();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !powerupInfoPanel.hidden) closePowerupInfo();
+});
+
 // --- CHANGELOG dropdown (top-right): recent commit messages on main ---
 const changelogBtn = document.getElementById('changelogBtn') as HTMLButtonElement;
 const changelogPanel = document.getElementById('changelogPanel') as HTMLDivElement;
@@ -784,14 +850,11 @@ document.addEventListener('pointerlockchange', () => {
 });
 
 canvas.addEventListener('mousemove', (e) => {
-  if (!isPlayer()) return;
+  // The paddle only moves while the mouse is captured to the board.
+  if (!isPlayer() || !pointerLocked) return;
   const r = canvas.getBoundingClientRect();
-  if (pointerLocked) {
-    // Convert screen-pixel movement to court units (1:1 with what's drawn).
-    target = clampPaddle(target + e.movementY * (COURT.h / r.height));
-  } else {
-    target = clampPaddle(((e.clientY - r.top) / r.height) * COURT.h);
-  }
+  // Convert screen-pixel movement to court units (1:1 with what's drawn).
+  target = clampPaddle(target + e.movementY * (COURT.h / r.height));
 });
 
 // --- keyboard control ---
@@ -826,23 +889,18 @@ function canFinish(): boolean {
   );
 }
 
-// Record a keypress and report whether the tail of recent presses spells the combo.
-function pushCombo(k: string, t: number): boolean {
-  comboBuf = comboBuf.filter((e) => t - e.t < COMBO_WINDOW_MS);
-  comboBuf.push({ k, t });
-  const seq = FATALITY_SEQ;
-  const tail = comboBuf.slice(-seq.length);
-  return tail.length === seq.length && tail.every((e, i) => e.k === seq[i]);
-}
-
 window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement) return;
   if (!canFinish()) return;
   const k = e.key.toLowerCase();
-  if (!FATALITY_SEQ.includes(k as typeof FATALITY_SEQ[number])) return;
+  if (!COMBO_KEYS.has(k)) return;
   e.preventDefault(); // arrows would otherwise scroll the page
-  if (pushCombo(k, performance.now())) {
-    net.send({ type: 'fatality', move: randomFatalityMove() });
+  const t = performance.now();
+  comboBuf = comboBuf.filter((entry) => t - entry.t < COMBO_WINDOW_MS);
+  comboBuf.push({ k, t });
+  const move = matchCombo();
+  if (move) {
+    net.send({ type: 'fatality', move });
     fatalityDone = true;
     comboBuf = [];
   }
@@ -855,9 +913,61 @@ fatalityCheck.addEventListener('change', () => {
   net.send({ type: 'setFatalities', enabled: fatalityCheck.checked });
 });
 
+// --- fatality combos reference modal ---
+// Built once from FATALITIES so adding a finisher there auto-lists it here. Keys render
+// as little ↑/↓ keycaps; the description explains what each finisher does.
+const ARROW: Record<string, string> = { arrowup: '↑', arrowdown: '↓' };
+function buildCombosList() {
+  combosList.replaceChildren();
+  for (const f of FATALITIES) {
+    const row = document.createElement('div');
+    row.className = 'combo-row';
+
+    const keys = document.createElement('div');
+    keys.className = 'combo-keys';
+    for (const k of f.seq) {
+      const cap = document.createElement('span');
+      cap.className = 'combo-key';
+      cap.textContent = ARROW[k] ?? k;
+      keys.append(cap);
+    }
+
+    const info = document.createElement('div');
+    info.className = 'combo-info';
+    const name = document.createElement('span');
+    name.className = 'combo-name';
+    name.textContent = f.label;
+    const desc = document.createElement('span');
+    desc.className = 'combo-desc';
+    desc.textContent = f.desc;
+    info.append(name, desc);
+
+    row.append(keys, info);
+    combosList.append(row);
+  }
+}
+buildCombosList();
+
+function openCombos() {
+  combosModal.hidden = false;
+}
+function closeCombos() {
+  combosModal.hidden = true;
+}
+combosBtn.addEventListener('click', openCombos);
+combosClose.addEventListener('click', closeCombos);
+// Click the dim backdrop (but not the card) to dismiss.
+combosModal.addEventListener('click', (e) => {
+  if (!combosCard.contains(e.target as Node)) closeCombos();
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !combosModal.hidden) closeCombos();
+});
+
 // --- main loop ---
 function loop(t: number) {
-  if (isPlayer()) {
+  // Paddle input (mouse and keyboard) only applies while the mouse is captured.
+  if (isPlayer() && pointerLocked) {
     const step = PADDLE.speed / 60;
     if (keys.has('arrowup') || keys.has('w')) target -= step;
     if (keys.has('arrowdown') || keys.has('s')) target += step;
@@ -871,7 +981,7 @@ function loop(t: number) {
     }
   }
 
-  if (state) draw(ctx, state);
+  if (state) draw(ctx, state, myRole);
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
@@ -891,9 +1001,20 @@ function updateUI() {
   if (document.activeElement !== closingModeEl && closingModeEl.checked !== state.closing) {
     closingModeEl.checked = state.closing;
   }
+  if (document.activeElement !== gravityModeEl && gravityModeEl.checked !== state.gravity) {
+    gravityModeEl.checked = state.gravity;
+  }
+  if (document.activeElement !== turboModeEl && turboModeEl.checked !== state.turbo) {
+    turboModeEl.checked = state.turbo;
+  }
 
   // Keep the checkbox in sync with the shared setting (another player may have flipped it).
   fatalityCheck.checked = state.fatalitiesEnabled;
+
+  // The combos reference is only meaningful when fatalities are armed; hide it (and the
+  // modal) otherwise.
+  combosBtn.hidden = !state.fatalitiesEnabled;
+  if (!state.fatalitiesEnabled) combosModal.hidden = true;
 
   // Once the match is no longer over, re-arm the finishing move for next time.
   if (state.status !== 'over') fatalityDone = false;
@@ -901,7 +1022,7 @@ function updateUI() {
   if (state.status === 'waiting') statusEl.textContent = 'Waiting for players…';
   else if (state.status === 'over') {
     if (state.fatality) statusEl.textContent = '☠  F A T A L I T Y  ☠';
-    else if (canFinish()) statusEl.textContent = `🔪 FINISH HIM!  press  ${FATALITY_HINT}`;
+    else if (canFinish()) statusEl.textContent = '🔪 FINISH HIM!  ·  tap a combo (see Combos ▸)';
     else statusEl.textContent = state.winner ? `🏆 ${state.winner} wins!` : 'Game over';
   } else if (state.paused) {
     // Match is frozen until both players capture their mouse.
@@ -914,12 +1035,20 @@ function updateUI() {
     statusEl.textContent = '🖱 click the board to capture your mouse · Esc to release';
   } else statusEl.textContent = '';
 
-  // King of the court: winner who stayed can exit
+  // King of the court: show who's reigning and their win streak (to everyone); the
+  // king themselves also gets a click-to-exit prompt between matches.
   const isKing = !!state.king && state.king === myName;
-  if (isKing && state.status !== 'playing') {
+  if (state.king) {
+    const n = state.kingWins;
+    const streak = `${n} win${n === 1 ? '' : 's'} in a row`;
     kingStatusEl.style.display = 'block';
-    kingStatusEl.textContent = `👑 You're the king! Click to exit`;
-    kingStatusEl.style.cursor = 'pointer';
+    if (isKing && state.status !== 'playing') {
+      kingStatusEl.textContent = `👑 You're the king — ${streak}! Click to exit`;
+      kingStatusEl.style.cursor = 'pointer';
+    } else {
+      kingStatusEl.textContent = `👑 ${state.king} — ${streak}`;
+      kingStatusEl.style.cursor = 'default';
+    }
   } else {
     kingStatusEl.style.display = 'none';
   }
@@ -966,6 +1095,11 @@ const escapeHtml = (s: string) =>
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!,
   );
+
+// Draw each power-up legend icon once at startup.
+for (const canvas of document.querySelectorAll<HTMLCanvasElement>('.pu-icon')) {
+  drawLegendIcon(canvas, canvas.dataset.kind as PowerupKind);
+}
 
 function renderLeaderboard(rows: LeaderboardRow[]) {
   if (!rows.length) {

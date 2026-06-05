@@ -510,12 +510,19 @@
       #colorPicker .swatch.random:hover {
         border-color: #9fb0d8;
       }
-      /* Game modes dropdown, pinned to the top-left corner. */
-      #gameModes {
+      /* Top-left button group: MODES + POWER-UPS, pinned to the corner. */
+      #topLeft {
         position: fixed;
         top: 12px;
         left: 12px;
         z-index: 80;
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+      }
+      /* Game modes dropdown — now inside #topLeft, so no longer fixed itself. */
+      #gameModes {
+        position: relative;
       }
       #gameModesBtn {
         display: flex;
@@ -584,6 +591,128 @@
       }
       #gameModesPanel .mode-option.fatalities:hover {
         color: #9fb0d8;
+      }
+      /* "Fatality combos" button inside the modes panel; shown only when fatalities are on. */
+      #combosBtn {
+        font: inherit;
+        font-size: 12px;
+        text-align: left;
+        padding: 6px 8px;
+        margin-top: 2px;
+        border-radius: 6px;
+        border: 1px solid #3a2a40;
+        background: #160e18;
+        color: #ff8fbf;
+        cursor: pointer;
+      }
+      #combosBtn[hidden] {
+        display: none;
+      }
+      #combosBtn:hover {
+        background: #241326;
+        color: #ffb3d4;
+      }
+      /* Centered modal listing every fatality and its combo. */
+      #combosModal {
+        position: fixed;
+        inset: 0;
+        z-index: 120;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(4, 7, 16, 0.72);
+      }
+      #combosModal[hidden] {
+        display: none;
+      }
+      #combosCard {
+        width: min(92vw, 420px);
+        max-height: 80vh;
+        overflow-y: auto;
+        background: #0e1424;
+        border: 1px solid #3a2a40;
+        border-radius: 12px;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
+        padding: 16px 18px 18px;
+      }
+      #combosHead {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        color: #ff6b6b;
+        margin-bottom: 12px;
+      }
+      #combosClose {
+        font: inherit;
+        font-size: 15px;
+        line-height: 1;
+        padding: 4px 8px;
+        border-radius: 6px;
+        border: 1px solid #2a3550;
+        background: #0e1424;
+        color: #9fb0d8;
+        cursor: pointer;
+      }
+      #combosClose:hover {
+        background: #18203a;
+        color: #e8eefc;
+      }
+      #combosList {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .combo-row {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 10px;
+        border: 1px solid #1f2940;
+        border-radius: 8px;
+        background: #0b1020;
+      }
+      .combo-keys {
+        display: flex;
+        gap: 4px;
+        flex: 0 0 auto;
+        padding-top: 1px;
+      }
+      .combo-key {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 26px;
+        height: 26px;
+        border-radius: 5px;
+        border: 1px solid #3a4a6e;
+        background: #18203a;
+        color: #cfe0ff;
+        font-size: 15px;
+      }
+      .combo-info {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .combo-name {
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        color: #ffd166;
+      }
+      .combo-desc {
+        font-size: 12px;
+        color: #9fb0d8;
+        line-height: 1.35;
+      }
+      #combosFoot {
+        margin: 14px 0 0;
+        font-size: 11px;
+        color: #6b7796;
+        text-align: center;
       }
       /* CHANGELOG dropdown, pinned to the top-right corner. */
       #changelog {
@@ -658,21 +787,228 @@
         font-size: 13px;
         color: #6b7796;
       }
+      /* Power-up info dropdown — sibling of #gameModes inside #topLeft. */
+      #powerupInfo {
+        position: relative;
+      }
+      #powerupInfoBtn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font: inherit;
+        font-size: 12px;
+        letter-spacing: 1px;
+        padding: 7px 12px;
+        border-radius: 6px;
+        border: 1px solid #2a3550;
+        background: #0e1424;
+        color: #7da2ff;
+        cursor: pointer;
+      }
+      #powerupInfoBtn:hover {
+        background: #18203a;
+      }
+      #powerupInfoBtn .caret {
+        font-size: 14px;
+        transition: transform 0.15s;
+        transform: translateY(-0.15em);
+      }
+      #powerupInfoBtn[aria-expanded='true'] .caret {
+        transform: translateY(-0.15em) rotate(180deg);
+      }
+      #powerupInfoPanel {
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 0;
+        width: min(86vw, 270px);
+        background: #0e1424;
+        border: 1px solid #2a3550;
+        border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+        padding: 6px 0 8px;
+      }
+      #powerupInfoPanel[hidden] {
+        display: none;
+      }
+      #powerupInfoPanel h3 {
+        font-size: 10px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        color: #6b7796;
+        margin: 0;
+        padding: 6px 10px 4px;
+      }
+      .pu-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0;
+      }
+      .pu-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 4px 10px;
+      }
+      .pu-row:nth-child(odd) {
+        background: #0b1020;
+      }
+      .pu-icon {
+        flex-shrink: 0;
+        width: 40px;
+        height: 40px;
+      }
+      .pu-info {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        min-width: 0;
+      }
+      .pu-name {
+        font-weight: 700;
+        font-size: 12px;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+      }
+      .pu-desc {
+        color: #9fb0d8;
+        font-size: 12px;
+      }
     </style>
   </head>
   <body>
-    <div id="gameModes">
-      <button id="gameModesBtn" type="button" aria-expanded="false">
-        MODES <span class="caret">▾</span>
-      </button>
-      <div id="gameModesPanel" hidden>
-        <label class="mode-option" title="Each paddle hit drags both paddles toward center. Applies at the next match.">
-          <input type="checkbox" id="closingMode" disabled /> Closing walls
-        </label>
-        <label class="mode-option fatalities" title="When on, win a match to perform a finishing move">
-          <input type="checkbox" id="fatalityCheck" />
-          Fatalities
-        </label>
+    <div id="topLeft">
+      <div id="gameModes">
+        <button id="gameModesBtn" type="button" aria-expanded="false">
+          MODES <span class="caret">▾</span>
+        </button>
+        <div id="gameModesPanel" hidden>
+          <label class="mode-option" title="Each paddle hit drags both paddles toward center. Applies at the next match.">
+            <input type="checkbox" id="closingMode" disabled /> Closing walls
+          </label>
+          <label class="mode-option" title="The ball is pulled downward by gravity, making trajectories arc toward the floor.">
+            <input type="checkbox" id="gravityMode" disabled /> Gravity
+          </label>
+          <label class="mode-option" title="Ball serves 50% faster and accelerates more aggressively on each hit.">
+            <input type="checkbox" id="turboMode" disabled /> Turbo
+          </label>
+          <label class="mode-option fatalities" title="When on, win a match to perform a finishing move">
+            <input type="checkbox" id="fatalityCheck" />
+            Fatalities
+          </label>
+          <button id="combosBtn" type="button" hidden>📓 Fatality combos</button>
+        </div>
+      </div>
+      <div id="powerupInfo">
+        <button id="powerupInfoBtn" type="button" aria-expanded="false">
+          POWER-UPS <span class="caret">▾</span>
+        </button>
+        <div id="powerupInfoPanel" hidden>
+          <h3>Power-ups</h3>
+          <div class="pu-list">
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="grow" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#ffd166">grow</span>
+                <span class="pu-desc">Your paddle 1.5× bigger — 3 hits</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="shrink" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#5ad1e6">shrink</span>
+                <span class="pu-desc">Foe paddle 0.6× — 3 hits</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="smash" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#ff6b3d">smash</span>
+                <span class="pu-desc">Ball 1.35× faster on your hits — 3 hits</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="slow" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#7aa2ff">slow</span>
+                <span class="pu-desc">Ball 0.6× speed — 4 seconds</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="multi" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#c08cff">multi</span>
+                <span class="pu-desc">Spawns 2 extra balls</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="freeze" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#88d8f7">freeze</span>
+                <span class="pu-desc">Locks foe paddle for 2 s</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="curve" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#7ddc4a">curve</span>
+                <span class="pu-desc">Next hit puts spin on the ball</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="blind" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#9988bb">blind</span>
+                <span class="pu-desc">Foe's view goes dark for 3 s</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="mirror" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#ff7eb3">mirror</span>
+                <span class="pu-desc">Foe controls flip up/down for 3 s</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="shield" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#f5cc00">shield</span>
+                <span class="pu-desc">Absorbs the next goal against you</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="ghost" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#c8beff">ghost</span>
+                <span class="pu-desc">Ball turns invisible for 3 s</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="tiny" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#ff8c42">tiny</span>
+                <span class="pu-desc">Ball shrinks to near-invisible for 5 s</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="warp" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#e040fb">warp</span>
+                <span class="pu-desc">Ball teleports to a random position</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Fatality combos reference, opened from the modes panel (only while fatalities are on). -->
+    <div id="combosModal" hidden>
+      <div id="combosCard" role="dialog" aria-modal="true" aria-label="Fatality combos">
+        <div id="combosHead">
+          <span>☠ Fatality Combos</span>
+          <button id="combosClose" type="button" aria-label="Close">✕</button>
+        </div>
+        <div id="combosList"></div>
+        <p id="combosFoot">Win a match, then tap the arrow combo to perform that finisher.</p>
       </div>
     </div>
     <div id="changelog">

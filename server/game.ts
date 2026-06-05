@@ -17,6 +17,15 @@ import {
   SLOW_TIME,
   MULTI_MAX,
   POWERUP_HITS,
+  FREEZE_TIME,
+  BLIND_TIME,
+  MIRROR_TIME,
+  GHOST_TIME,
+  TINY_TIME,
+  CURVE_SPIN,
+  GRAVITY_ACCEL,
+  TURBO_SPEED_MULT,
+  TURBO_SPEEDUP,
   POWERUPS,
   TARGET,
   PowerupKind,
@@ -40,6 +49,32 @@ interface Ball {
   y: number;
   vx: number;
   vy: number;
+  spin: number; // rad/s; positive = counter-clockwise; decays each tick
+}
+
+// Everything needed to resume the simulation after a restart. Mirrors the Game's own
+// fields (including the private serve/target timers) so a saved match continues exactly
+// where it left off. `paused` is deliberately omitted — a resumed match always starts
+// frozen until the reconnected players re-capture their mice.
+export interface GameSnapshot {
+  ball: Ball;
+  extraBalls: Ball[];
+  paddleY: Record<Side, number>;
+  paddleX: Record<Side, number>;
+  targetY: Record<Side, number>;
+  score: { left: number; right: number };
+  status: Status;
+  closing: boolean;
+  winnerSide: Side | null;
+  lastHit: Side | null;
+  target: { x: number; y: number; kind: PowerupKind } | null;
+  growHits: Record<Side, number>;
+  shrinkHits: Record<Side, number>;
+  smashHits: Record<Side, number>;
+  slowTimer: number;
+  serveTimer: number;
+  serveDir: number;
+  targetTimer: number;
 }
 
 // Shortest distance from point p to the segment a→b (for swept target hit-testing,
@@ -53,7 +88,7 @@ function distToSegment(px: number, py: number, ax: number, ay: number, bx: numbe
 }
 
 export class Game {
-  ball: Ball = { x: COURT.w / 2, y: COURT.h / 2, vx: 0, vy: 0 };
+  ball: Ball = { x: COURT.w / 2, y: COURT.h / 2, vx: 0, vy: 0, spin: 0 };
   extraBalls: Ball[] = []; // additional balls during a "multi" power-up
   paddleY: Record<Side, number> = { left: COURT.h / 2, right: COURT.h / 2 };
   paddleX: Record<Side, number> = { ...HOME_X }; // current paddle center X (slides in closing mode)
@@ -61,20 +96,79 @@ export class Game {
   score = { left: 0, right: 0 };
   status: Status = 'waiting';
   closing = false; // "closing walls" mode armed; applies from the next match start
+  gravity = false; // constant downward pull bends ball trajectory
+  turbo = false; // faster serve speed and steeper per-hit speedup
   winnerSide: Side | null = null;
   lastHit: Side | null = null; // side whose paddle last touched any ball (null until first hit)
   paused = false; // set by the lobby: freeze play until both players capture their mouse
 
   // Power-ups. A target floats on the board; bouncing the ball over it grants its kind.
   target: { x: number; y: number; kind: PowerupKind } | null = null;
-  growHits: Record<Side, number> = { left: 0, right: 0 }; // taller paddle, per remaining hit
-  shrinkHits: Record<Side, number> = { left: 0, right: 0 }; // shorter paddle, per remaining hit
-  smashHits: Record<Side, number> = { left: 0, right: 0 }; // faster launch, per remaining hit
-  slowTimer = 0; // seconds of slow-motion remaining (affects every ball)
+  growHits: Record<Side, number> = { left: 0, right: 0 };
+  shrinkHits: Record<Side, number> = { left: 0, right: 0 };
+  smashHits: Record<Side, number> = { left: 0, right: 0 };
+  curveHits: Record<Side, number> = { left: 0, right: 0 };
+  slowTimer = 0;
+  freezeTimer: Record<Side, number> = { left: 0, right: 0 };
+  blindTimer: Record<Side, number> = { left: 0, right: 0 };
+  mirrorTimer: Record<Side, number> = { left: 0, right: 0 };
+  ghostTimer = 0;
+  tinyTimer = 0;
+  shielded: Record<Side, boolean> = { left: false, right: false };
 
   private serveTimer = 0;
   private serveDir = 1; // +1 = launch toward right, -1 = toward left
   private targetTimer = 0; // counts down to spawn (no target) or to despawn (target up)
+
+  /** Capture the full simulation state for persistence across a restart. */
+  serialize(): GameSnapshot {
+    return {
+      ball: { ...this.ball },
+      extraBalls: this.extraBalls.map((b) => ({ ...b })),
+      paddleY: { ...this.paddleY },
+      paddleX: { ...this.paddleX },
+      targetY: { ...this.targetY },
+      score: { ...this.score },
+      status: this.status,
+      closing: this.closing,
+      winnerSide: this.winnerSide,
+      lastHit: this.lastHit,
+      target: this.target ? { ...this.target } : null,
+      growHits: { ...this.growHits },
+      shrinkHits: { ...this.shrinkHits },
+      smashHits: { ...this.smashHits },
+      slowTimer: this.slowTimer,
+      serveTimer: this.serveTimer,
+      serveDir: this.serveDir,
+      targetTimer: this.targetTimer,
+    };
+  }
+
+  /** Restore a previously serialized state (after a restart). Resumes frozen. */
+  restore(s: GameSnapshot) {
+    this.ball = { ...s.ball, spin: s.ball.spin ?? 0 };
+    this.extraBalls = s.extraBalls.map((b) => ({ ...b, spin: b.spin ?? 0 }));
+    this.paddleY = { ...s.paddleY };
+    this.paddleX = { ...s.paddleX };
+    this.targetY = { ...s.targetY };
+    this.score = { ...s.score };
+    this.status = s.status;
+    this.closing = s.closing;
+    this.winnerSide = s.winnerSide;
+    this.lastHit = s.lastHit;
+    this.target = s.target ? { ...s.target } : null;
+    this.growHits = { ...s.growHits };
+    this.shrinkHits = { ...s.shrinkHits };
+    this.smashHits = { ...s.smashHits };
+    this.slowTimer = s.slowTimer;
+    this.serveTimer = s.serveTimer;
+    this.serveDir = s.serveDir;
+    this.targetTimer = s.targetTimer;
+    // The sockets that drove this match (and their mouse-capture) are gone after a
+    // restart, so always resume frozen — the reattached players unfreeze it by
+    // capturing their mice again, exactly like the normal start-of-match flow.
+    this.paused = true;
+  }
 
   /** Current paddle half-height for a side — grown/shrunk by active power-ups. */
   halfH(side: Side): number {
@@ -104,6 +198,9 @@ export class Game {
     if (!on) this.paddleX = { ...HOME_X };
   }
 
+  setGravity(on: boolean) { this.gravity = on; }
+  setTurbo(on: boolean) { this.turbo = on; }
+
   /** X of a paddle's hitting face — its inner edge, which moves with the paddle. */
   private faceX(side: Side): number {
     return side === 'left'
@@ -114,7 +211,7 @@ export class Game {
   /** Park the simulation back in the lobby (e.g. a player left mid-match). */
   toWaiting() {
     this.status = 'waiting';
-    this.ball = { x: COURT.w / 2, y: COURT.h / 2, vx: 0, vy: 0 };
+    this.ball = { x: COURT.w / 2, y: COURT.h / 2, vx: 0, vy: 0, spin: 0 };
     this.extraBalls = [];
     this.lastHit = null;
     this.target = null;
@@ -125,34 +222,52 @@ export class Game {
     this.growHits = { left: 0, right: 0 };
     this.shrinkHits = { left: 0, right: 0 };
     this.smashHits = { left: 0, right: 0 };
+    this.curveHits = { left: 0, right: 0 };
     this.slowTimer = 0;
+    this.freezeTimer = { left: 0, right: 0 };
+    this.blindTimer = { left: 0, right: 0 };
+    this.mirrorTimer = { left: 0, right: 0 };
+    this.ghostTimer = 0;
+    this.tinyTimer = 0;
+    this.shielded = { left: false, right: false };
   }
 
   setTarget(side: Side, y: number) {
     const half = this.halfH(side);
-    this.targetY[side] = clamp(y, half, COURT.h - half);
+    // Mirror power-up: invert the client's desired y so controls feel upside-down.
+    const effective = this.mirrorTimer[side] > 0 ? COURT.h - y : y;
+    this.targetY[side] = clamp(effective, half, COURT.h - half);
   }
 
   private serve(dir: number) {
     this.serveDir = dir;
     this.serveTimer = SERVE_DELAY;
-    this.ball = { x: COURT.w / 2, y: COURT.h / 2, vx: 0, vy: 0 };
-    this.extraBalls = []; // multi-ball ends with the point
-    this.slowTimer = 0; // slow-mo doesn't carry across serves
-    this.lastHit = null; // neutral color until the next paddle touch
+    this.ball = { x: COURT.w / 2, y: COURT.h / 2, vx: 0, vy: 0, spin: 0 };
+    this.extraBalls = [];
+    this.lastHit = null;
+    // Clear all per-point effects so they don't bleed into the next rally.
+    this.slowTimer = 0;
+    this.freezeTimer = { left: 0, right: 0 };
+    this.blindTimer = { left: 0, right: 0 };
+    this.mirrorTimer = { left: 0, right: 0 };
+    this.ghostTimer = 0;
+    this.tinyTimer = 0;
+    this.curveHits = { left: 0, right: 0 };
+    // Shield intentionally persists — an unused shield stays for the next point.
   }
 
   private launch() {
+    const speed = this.turbo ? BALL.speed * TURBO_SPEED_MULT : BALL.speed;
     const angle = (Math.random() * 2 - 1) * 0.3; // small vertical spread on serve
-    this.ball.vx = this.serveDir * BALL.speed * Math.cos(angle);
-    this.ball.vy = BALL.speed * Math.sin(angle);
+    this.ball.vx = this.serveDir * speed * Math.cos(angle);
+    this.ball.vy = speed * Math.sin(angle);
   }
 
   tick(dt: number) {
-    // Paddles always ease toward their target, capped by max paddle speed. This both
-    // smooths movement and prevents a client from teleporting its paddle.
+    // Paddles ease toward their target each tick; frozen paddles don't move.
     const maxStep = PADDLE.speed * dt;
     for (const side of ['left', 'right'] as Side[]) {
+      if (this.freezeTimer[side] > 0) continue; // frozen — skip easing
       const diff = this.targetY[side] - this.paddleY[side];
       this.paddleY[side] += clamp(diff, -maxStep, maxStep);
     }
@@ -170,40 +285,45 @@ export class Game {
     }
 
     if (this.slowTimer > 0) this.slowTimer -= dt;
+    if (this.ghostTimer > 0) this.ghostTimer -= dt;
+    if (this.tinyTimer > 0) this.tinyTimer -= dt;
+    for (const side of ['left', 'right'] as Side[]) {
+      if (this.freezeTimer[side] > 0) this.freezeTimer[side] -= dt;
+      if (this.blindTimer[side] > 0) this.blindTimer[side] -= dt;
+      if (this.mirrorTimer[side] > 0) this.mirrorTimer[side] -= dt;
+    }
     const scale = this.slowTimer > 0 ? SLOW_SCALE : 1;
 
-    // Advance every ball. A ball that leaves the court scores for the opposite side and
-    // drops out of play; the rally only ends (and a new ball is served) once no balls
-    // remain — so during multi-ball one ball going out doesn't kill the others.
+    // Advance every ball. A ball that leaves the court just drops out of play — NO point
+    // is scored while other balls remain, so during multi-ball one ball going out never
+    // ends the rally. Only once the court is completely empty does the last ball out
+    // concede the single point for the rally.
+    const prevExtras = this.extraBalls.length; // a multi power-up may append more below
     const survivors: Ball[] = [];
     let lastScorer: Side | null = null;
-    let ended = false;
     for (const b of [this.ball, ...this.extraBalls]) {
       const scorer = this.stepBall(b, dt, scale);
-      if (scorer) {
-        lastScorer = scorer;
-        if (this.scorePoint(scorer)) {
-          ended = true;
-          break;
-        }
-      } else {
-        survivors.push(b);
-      }
+      if (scorer) lastScorer = scorer; // remember who'd score, but don't award yet
+      else survivors.push(b);
     }
 
     this.updateTargetTimer(dt);
 
-    if (ended) {
-      this.extraBalls = []; // tidy up any multi-balls when the match ends
-      return;
-    }
+    // A "multi" power-up claimed this tick appends new balls past extraBalls' original
+    // length; keep them alongside the survivors (otherwise the new ball is discarded).
+    const spawned = this.extraBalls.slice(prevExtras);
+    const live = [...survivors, ...spawned];
 
-    if (survivors.length > 0) {
-      // Some balls are still live: keep playing, promoting one to the primary slot.
-      this.ball = survivors[0];
-      this.extraBalls = survivors.slice(1);
+    if (live.length > 0) {
+      // Balls still in play: keep going, promoting one to the primary slot.
+      this.ball = live[0];
+      this.extraBalls = live.slice(1);
     } else if (lastScorer) {
-      // Zero balls left → serve a fresh single ball toward the side just scored on.
+      // Court is empty → award one point to the last ball's scorer, then end or re-serve.
+      if (this.scorePoint(lastScorer)) {
+        this.extraBalls = []; // match over
+        return;
+      }
       this.serve(lastScorer === 'left' ? 1 : -1);
     }
   }
@@ -211,6 +331,19 @@ export class Game {
   // Move one ball a tick: integrate, bounce off walls/paddles, claim the target, and
   // return the scoring side if it left the court (else null).
   private stepBall(b: Ball, dt: number, scale: number): Side | null {
+    // Spin (curve power-up): rotate velocity direction and decay.
+    if (b.spin !== 0) {
+      const speed = Math.hypot(b.vx, b.vy);
+      const angle = Math.atan2(b.vy, b.vx) + b.spin * dt;
+      b.vx = speed * Math.cos(angle);
+      b.vy = speed * Math.sin(angle);
+      b.spin *= Math.exp(-2 * dt); // ~0.5 s half-life
+      if (Math.abs(b.spin) < 0.01) b.spin = 0;
+    }
+
+    // Gravity: accelerate downward before integrating position.
+    if (this.gravity) b.vy += GRAVITY_ACCEL * dt * scale;
+
     const prevX = b.x;
     const prevY = b.y;
     b.x += b.vx * dt * scale;
@@ -246,14 +379,40 @@ export class Game {
       this.bounce('right', b);
     }
 
-    // Scoring (ball fully past a wall)
-    if (b.x < -BALL.r) return 'right';
-    if (b.x > COURT.w + BALL.r) return 'left';
+    // Scoring — check shield before awarding the point.
+    if (b.x < -BALL.r) {
+      if (this.shielded.left) {
+        // Shield absorbs the goal: bounce the ball back and clear the shield.
+        b.x = BALL.r;
+        b.vx = Math.abs(b.vx);
+        b.spin = 0;
+        this.shielded.left = false;
+        return null;
+      }
+      return 'right';
+    }
+    if (b.x > COURT.w + BALL.r) {
+      if (this.shielded.right) {
+        b.x = COURT.w - BALL.r;
+        b.vx = -Math.abs(b.vx);
+        b.spin = 0;
+        this.shielded.right = false;
+        return null;
+      }
+      return 'left';
+    }
     return null;
   }
 
   private nextTargetDelay(): number {
     return TARGET.minDelay + Math.random() * (TARGET.maxDelay - TARGET.minDelay);
+  }
+
+  /** Force a random power-up onto the board now (the "/powerup" command). Live matches only. */
+  forceTarget(): boolean {
+    if (this.status !== 'playing') return false;
+    this.placeTarget();
+    return true;
   }
 
   // Drop a fresh random power-up target onto the board, replacing any current one.
@@ -265,13 +424,6 @@ export class Game {
       kind: POWERUPS[Math.floor(Math.random() * POWERUPS.length)],
     };
     this.targetTimer = TARGET.life;
-  }
-
-  /** Force a random power-up onto the board now (the "/powerup" command). Live matches only. */
-  forceTarget(): boolean {
-    if (this.status !== 'playing') return false;
-    this.placeTarget();
-    return true;
   }
 
   // Spawn or expire the power-up target on its own timer.
@@ -312,7 +464,37 @@ export class Game {
         break;
       case 'multi':
         this.spawnExtraBall();
+        this.spawnExtraBall();
         break;
+      case 'freeze':
+        this.freezeTimer[other(side)] = FREEZE_TIME;
+        break;
+      case 'curve':
+        this.curveHits[side] = 1;
+        break;
+      case 'blind':
+        this.blindTimer[other(side)] = BLIND_TIME;
+        break;
+      case 'mirror':
+        this.mirrorTimer[other(side)] = MIRROR_TIME;
+        break;
+      case 'shield':
+        this.shielded[side] = true;
+        break;
+      case 'ghost':
+        this.ghostTimer = GHOST_TIME;
+        break;
+      case 'tiny':
+        this.tinyTimer = TINY_TIME;
+        break;
+      case 'warp': {
+        // Teleport the ball to a random mid-court position; preserve speed and direction.
+        const margin = BALL.r + 40;
+        this.ball.x = COURT.w * 0.25 + Math.random() * COURT.w * 0.5;
+        this.ball.y = margin + Math.random() * (COURT.h - 2 * margin);
+        this.ball.spin = 0;
+        break;
+      }
     }
   }
 
@@ -331,13 +513,15 @@ export class Game {
       y: src.y,
       vx: dirX * speed * Math.cos(angle),
       vy: speed * Math.sin(angle),
+      spin: 0,
     });
   }
 
   private bounce(side: Side, b: Ball) {
     this.lastHit = side;
     const rel = clamp((b.y - this.paddleY[side]) / this.halfH(side), -1, 1);
-    let speed = Math.hypot(b.vx, b.vy) * BALL.speedup;
+    const speedup = this.turbo ? TURBO_SPEEDUP : BALL.speedup;
+    let speed = Math.hypot(b.vx, b.vy) * speedup;
     if (this.smashHits[side] > 0) speed *= SMASH_BONUS;
     const angle = rel * MAX_BOUNCE;
     const dir = side === 'left' ? 1 : -1;
@@ -352,10 +536,15 @@ export class Game {
 
     // Place the ball just off the (possibly moved) face so it can't re-trigger.
     b.x = side === 'left' ? this.faceX('left') + BALL.r : this.faceX('right') - BALL.r;
-    // Consume one of each per-hit charge that affects this side.
+    // Consume per-hit charges.
     if (this.growHits[side] > 0) this.growHits[side] -= 1;
     if (this.shrinkHits[side] > 0) this.shrinkHits[side] -= 1;
     if (this.smashHits[side] > 0) this.smashHits[side] -= 1;
+    if (this.curveHits[side] > 0) {
+      // Spin direction based on hit position: top half curves one way, bottom the other.
+      b.spin = CURVE_SPIN * (rel >= 0 ? 1 : -1);
+      this.curveHits[side] -= 1;
+    }
   }
 
   // Credit a point to the scoring side; returns true if that ended the match. Serving

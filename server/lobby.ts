@@ -40,6 +40,35 @@ interface Conn {
 
 const SIDES: Side[] = ['left', 'right'];
 const FATALITY_DISPLAY_MS = 4500; // how long the finishing move holds before the lobby resets
+const RESUME_GRACE = 45; // seconds a resumed match waits for seated players to reconnect
+
+// What a seat / queue spot needs to be reclaimed by the same identity after a restart.
+interface SeatInfo {
+  pid: string;
+  nickname: string;
+  color: string;
+}
+
+// Everything the lobby needs to put players back where they were after a restart.
+// Seats, king and queue are stored by stable pid (sockets don't survive a restart);
+// reconnecting clients reclaim them in join(). The rest is plain state.
+export interface LobbySnapshot {
+  sides: Record<Side, SeatInfo | null>;
+  king: { side: Side; pid: string; nickname: string } | null;
+  streakPid: string | null;
+  kingStreak: number;
+  fatalityWinnerPid: string | null;
+  fatalityWinnerSide: Side | null;
+  activeFatality: { side: Side; move: string } | null;
+  fatalityAt: number;
+  fatalitiesEnabled: boolean;
+  queue: { pid: string; nickname: string }[];
+  ready: Record<Side, boolean>;
+  readyTimer: number;
+  winnerName: string | null;
+  overHandled: boolean;
+  chatLog: ChatLine[];
+}
 
 export class Lobby {
   private conns = new Map<WebSocket, Conn>();
@@ -47,6 +76,8 @@ export class Lobby {
   private winnerName: string | null = null;
   private overHandled = false; // guards the one-time spot reopening when a match ends
   private king: { side: Side; pid: string; nickname: string; ws: WebSocket } | null = null;
+  private streakPid: string | null = null; // pid of the player on the current win streak
+  private kingStreak = 0; // consecutive match wins by that player (the king's reign length)
   // The winner is released to observer the instant the match ends, so we can't use the
   // side slots to authorize a finishing move — we remember who won by stable pid/side.
   private fatalityWinnerPid: string | null = null;
@@ -60,6 +91,13 @@ export class Lobby {
   private leaderboard: LeaderboardRow[] = []; // cached standings, pushed to clients
   private chatLog: ChatLine[] = []; // recent chat, replayed to new connections
   private nextId = 1;
+
+  // Restart resume: seats/king/queue a previous process held, keyed by stable pid,
+  // waiting for those clients to reconnect and reclaim them (see restore/reattach).
+  private pendingSides: Record<Side, SeatInfo | null> = { left: null, right: null };
+  private pendingKing: { side: Side; pid: string; nickname: string } | null = null;
+  private pendingQueue: { pid: string; nickname: string }[] = [];
+  private resumeGrace = 0; // seconds left to reclaim seats before abandoning the resume
 
   constructor(private game: Game) {}
 
@@ -117,6 +155,12 @@ export class Lobby {
     }
   }
 
+  // End the current win streak (a reign ended by something other than a win).
+  private endStreak() {
+    this.streakPid = null;
+    this.kingStreak = 0;
+  }
+
   /** "/ff": a player abandons their paddle mid-match and is publicly shamed for it. */
   forfeit(ws: WebSocket) {
     const side = this.sideOf(ws);
@@ -124,6 +168,7 @@ export class Lobby {
     const conn = this.conns.get(ws);
     const name = conn?.nickname || 'someone';
     if (conn) this.echoCommand(conn, '/ff'); // show it in chat before they leave their spot
+    if (conn?.pid === this.streakPid) this.endStreak(); // bailing forfeits the reign
     // Vacate the spot (and drop a live match back to waiting), like a quiet leave...
     this.release(side);
     if (this.game.status === 'playing') this.game.toWaiting();
@@ -179,14 +224,17 @@ export class Lobby {
     if (!this.king || this.king.ws !== ws) return; // only the king can exit
     const side = this.king.side;
     this.king = null;
+    this.endStreak(); // stepping down ends the reign
     this.release(side);
     if (this.game.status === 'over') this.game.toWaiting();
   }
 
-  /** "/powerup": drop a random power-up target onto the board. Live matches only. */
+  /** "/powerup": drop a random power-up target. Spectators only — a player in the
+   *  current match can't conjure power-ups for themselves. */
   spawnPowerup(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return; // must have joined
+    if (this.sideOf(ws)) return; // not from someone currently holding a paddle
     if (this.game.forceTarget()) this.echoCommand(conn, '/powerup');
   }
 
@@ -196,6 +244,8 @@ export class Lobby {
     conn.pid = pid.slice(0, 64);
     conn.nickname = nickname.slice(0, 20).trim() || 'anon';
     if (color) conn.color = color;
+    // Reclaim a seat / king / queue spot this identity held before a restart, if any.
+    this.reattach(ws, conn);
     // If this identity already has a leaderboard record, reflect the (possibly new)
     // display name right away — a rename shows on the board without playing again.
     updateName(conn.pid, conn.nickname)
@@ -252,11 +302,13 @@ export class Lobby {
     this.game.paused = !(this.isCaptured('left') && this.isCaptured('right'));
   }
 
-  // Any joined client may arm/disarm closing-walls mode; it applies from the next match.
-  setMode(ws: WebSocket, closing: boolean) {
+  // Any joined client may toggle game modes.
+  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean }) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return;
-    this.game.setClosing(closing);
+    if (opts.closing !== undefined) this.game.setClosing(opts.closing);
+    if (opts.gravity !== undefined) this.game.setGravity(opts.gravity);
+    if (opts.turbo !== undefined) this.game.setTurbo(opts.turbo);
   }
 
   remove(ws: WebSocket) {
@@ -266,6 +318,7 @@ export class Lobby {
       if (this.game.status === 'playing') this.game.toWaiting();
     }
     if (this.king && this.king.ws === ws) this.king = null;
+    if (this.conns.get(ws)?.pid === this.streakPid) this.endStreak(); // streak holder left
     this.queueLeave(ws);
     this.conns.delete(ws);
     this.refreshPause();
@@ -273,6 +326,7 @@ export class Lobby {
 
   /** Called every tick after game.tick(). Reopens both spots once a match ends. */
   sync() {
+    this.expireResume();
     // Reopen both spots exactly once, when the match first ends. Doing this every
     // tick would re-release the next player the instant they claim a spot, making it
     // impossible to start a second game.
@@ -299,6 +353,10 @@ export class Lobby {
             nickname: winner.nickname,
             ws: this.sides[winnerSide]!,
           };
+          // Win streak: extend it if the same player just defended their throne,
+          // otherwise this is a fresh king with a streak of one.
+          this.kingStreak = winner.pid === this.streakPid ? this.kingStreak + 1 : 1;
+          this.streakPid = winner.pid;
         }
         this.overHandled = true;
 
@@ -331,6 +389,7 @@ export class Lobby {
             for (const s of SIDES) this.release(s);
             this.ready = { left: false, right: false };
             this.readyTimer = 0;
+            this.endStreak(); // reign lapses if no rematch is readied in time
             this.game.toWaiting();
           }
         }
@@ -344,7 +403,16 @@ export class Lobby {
       this.ready = { left: false, right: false };
       this.readyTimer = 0;
       if (this.game.status === 'playing') this.king = null;
+      // Catch-all: idle in the lobby with both spots filled (e.g. the queue auto-filled
+      // a seat after a forfeit, a leave, or a ready-timeout). Kick off the match —
+      // otherwise it sits frozen in 'waiting' with two players present.
+      if (this.game.status === 'waiting' && this.sides.left && this.sides.right) {
+        this.game.start();
+      }
     }
+    // Keep the pause flag honest every tick: a live match only advances once both
+    // players have captured their mouse, no matter how the seats got filled.
+    this.refreshPause();
   }
 
   /** Flip the shared fatalities toggle for the whole room. Any joined user may change it. */
@@ -457,6 +525,11 @@ export class Lobby {
           name: this.nameOf('left'),
           color: this.colorOf('left'),
           h: this.game.halfH('left') * 2,
+          frozen: this.game.freezeTimer.left > 0,
+          mirrored: this.game.mirrorTimer.left > 0,
+          shielded: this.game.shielded.left,
+          blinded: this.game.blindTimer.left > 0,
+          curveReady: this.game.curveHits.left > 0,
         },
         right: {
           x: this.game.paddleX.right,
@@ -464,6 +537,11 @@ export class Lobby {
           name: this.nameOf('right'),
           color: this.colorOf('right'),
           h: this.game.halfH('right') * 2,
+          frozen: this.game.freezeTimer.right > 0,
+          mirrored: this.game.mirrorTimer.right > 0,
+          shielded: this.game.shielded.right,
+          blinded: this.game.blindTimer.right > 0,
+          curveReady: this.game.curveHits.right > 0,
         },
       },
       target: this.game.target
@@ -473,13 +551,18 @@ export class Lobby {
       status: this.game.status,
       paused: this.game.status === 'playing' && this.game.paused,
       closing: this.game.closing,
+      gravity: this.game.gravity,
+      turbo: this.game.turbo,
       winner: this.game.status === 'over' ? this.winnerName : null,
       fatalitiesEnabled: this.fatalitiesEnabled,
       fatality: this.game.status === 'over' ? this.activeFatality : null,
       watchers,
       king: this.king?.nickname ?? null,
+      kingWins: this.kingStreak,
       queue: this.queue.map((ws) => this.conns.get(ws)?.nickname ?? '').filter(Boolean),
       ready: { ...this.ready },
+      ghostBall: this.game.ghostTimer > 0,
+      tinyBall: this.game.tinyTimer > 0,
     };
   }
 
@@ -502,6 +585,105 @@ export class Lobby {
     if (this.sides.left === ws) return 'left';
     if (this.sides.right === ws) return 'right';
     return null;
+  }
+
+  // --- restart resume ---
+
+  /** Snapshot the lobby for persistence across a restart (paired with restore). */
+  serialize(): LobbySnapshot {
+    const seat = (side: Side): SeatInfo | null => {
+      const c = this.connOn(side);
+      return c && c.pid ? { pid: c.pid, nickname: c.nickname, color: c.color } : null;
+    };
+    return {
+      sides: { left: seat('left'), right: seat('right') },
+      king: this.king
+        ? { side: this.king.side, pid: this.king.pid, nickname: this.king.nickname }
+        : null,
+      streakPid: this.streakPid,
+      kingStreak: this.kingStreak,
+      fatalityWinnerPid: this.fatalityWinnerPid,
+      fatalityWinnerSide: this.fatalityWinnerSide,
+      activeFatality: this.activeFatality,
+      fatalityAt: this.fatalityAt,
+      fatalitiesEnabled: this.fatalitiesEnabled,
+      queue: this.queue
+        .map((ws) => this.conns.get(ws))
+        .filter((c): c is Conn => !!c && !!c.pid && !!c.nickname)
+        .map((c) => ({ pid: c.pid, nickname: c.nickname })),
+      ready: { ...this.ready },
+      readyTimer: this.readyTimer,
+      winnerName: this.winnerName,
+      overHandled: this.overHandled,
+      chatLog: this.chatLog,
+    };
+  }
+
+  /** Restore a snapshot after a restart. Seats/king/queue become pending reattachments
+   *  that their clients reclaim by pid as they reconnect; the rest is set directly. */
+  restore(s: LobbySnapshot) {
+    this.pendingSides = s.sides ?? { left: null, right: null };
+    this.pendingKing = s.king ?? null;
+    this.pendingQueue = s.queue ?? [];
+    this.streakPid = s.streakPid ?? null;
+    this.kingStreak = s.kingStreak ?? 0;
+    this.fatalityWinnerPid = s.fatalityWinnerPid ?? null;
+    this.fatalityWinnerSide = s.fatalityWinnerSide ?? null;
+    this.activeFatality = s.activeFatality ?? null;
+    this.fatalityAt = s.fatalityAt ?? 0;
+    this.fatalitiesEnabled = !!s.fatalitiesEnabled;
+    this.ready = s.ready ?? { left: false, right: false };
+    this.readyTimer = s.readyTimer ?? 0;
+    this.winnerName = s.winnerName ?? null;
+    this.overHandled = !!s.overHandled;
+    this.chatLog = Array.isArray(s.chatLog) ? s.chatLog : [];
+    // Give seated players a window to reconnect and reclaim their seats; if they don't,
+    // expireResume() abandons the resume so the room isn't wedged on a frozen match.
+    if (this.pendingSides.left || this.pendingSides.right) this.resumeGrace = RESUME_GRACE;
+  }
+
+  /** On (re)join, reclaim any seat / king / queue spot this identity held pre-restart. */
+  private reattach(ws: WebSocket, conn: Conn) {
+    if (!conn.pid) return;
+    for (const side of SIDES) {
+      const p = this.pendingSides[side];
+      if (p && p.pid === conn.pid && this.sides[side] === null) {
+        this.pendingSides[side] = null;
+        this.sides[side] = ws;
+        conn.role = side;
+        conn.captured = false; // must re-capture the mouse to unfreeze the resumed match
+        if (p.color) conn.color = p.color;
+        this.tell(ws, { type: 'you', id: conn.id, role: side });
+        // The reigning winner sits on their seat through the 'over' screen — restore it.
+        if (this.pendingKing && this.pendingKing.pid === conn.pid) {
+          this.king = { side, pid: conn.pid, nickname: conn.nickname, ws };
+          this.pendingKing = null;
+        }
+        if (!this.pendingSides.left && !this.pendingSides.right) this.resumeGrace = 0;
+        return;
+      }
+    }
+    const qi = this.pendingQueue.findIndex((q) => q.pid === conn.pid);
+    if (qi !== -1) {
+      this.pendingQueue.splice(qi, 1);
+      if (!this.queue.includes(ws) && !this.sideOf(ws)) this.queue.push(ws);
+    }
+  }
+
+  /** Count down the resume window; when it lapses with seats still unclaimed, give up
+   *  on the resume and return to the lobby so a missing player can't wedge the room. */
+  private expireResume() {
+    if (this.resumeGrace <= 0) return;
+    this.resumeGrace -= TICK_MS / 1000;
+    if (this.resumeGrace > 0) return;
+    if (this.pendingSides.left || this.pendingSides.right) {
+      this.pendingSides = { left: null, right: null };
+      this.pendingKing = null;
+      for (const side of SIDES) this.release(side);
+      this.king = null;
+      this.endStreak();
+      if (this.game.status !== 'waiting') this.game.toWaiting();
+    }
   }
 
   private tell(ws: WebSocket, msg: ServerMsg) {
