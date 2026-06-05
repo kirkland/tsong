@@ -172,6 +172,39 @@ const GLYPHS: Record<PowerupKind, (ctx: CanvasRenderingContext2D, x: number, y: 
   },
 };
 
+// Draws a single power-up icon (ring + glyph) centered in the given canvas.
+// Used by the in-page legend; reuses the same TARGET_STYLE and GLYPHS maps so
+// the legend icons are always pixel-identical to the in-game targets.
+export function drawLegendIcon(canvas: HTMLCanvasElement, kind: PowerupKind) {
+  const ctx = canvas.getContext('2d')!;
+  const { width: w, height: h } = canvas;
+  const margin = 3;
+  const scale = (Math.min(w, h) / 2 - margin) / TARGET.r;
+  const style = TARGET_STYLE[kind];
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.save();
+  ctx.translate(w / 2, h / 2);
+  ctx.scale(scale, scale);
+
+  ctx.beginPath();
+  ctx.arc(0, 0, TARGET.r, 0, Math.PI * 2);
+  ctx.fillStyle = style.fill;
+  ctx.fill();
+  ctx.lineWidth = 2.5;
+  ctx.strokeStyle = style.stroke;
+  ctx.stroke();
+
+  ctx.fillStyle = style.stroke;
+  ctx.strokeStyle = style.stroke;
+  ctx.lineWidth = 2;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  GLYPHS[kind](ctx, 0, 0);
+
+  ctx.restore();
+}
+
 // --- Fatality animations ------------------------------------------------------
 // render is otherwise stateless, so we latch each animation's start time here.
 let fxStart = 0;

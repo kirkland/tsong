@@ -653,6 +653,56 @@
         font-size: 13px;
         color: #6b7796;
       }
+      /* Power-up legend, shown below the leaderboard. */
+      #powerupLegend {
+        width: min(90vw, 360px);
+        font-size: 13px;
+        margin-top: 4px;
+      }
+      #powerupLegend h2 {
+        font-size: 13px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        color: #7da2ff;
+        text-align: center;
+        margin: 8px 0 6px;
+      }
+      .pu-list {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .pu-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 4px 10px;
+        border-radius: 4px;
+      }
+      .pu-row:nth-child(odd) {
+        background: #0e1424;
+      }
+      .pu-icon {
+        flex-shrink: 0;
+        width: 40px;
+        height: 40px;
+      }
+      .pu-info {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        min-width: 0;
+      }
+      .pu-name {
+        font-weight: 700;
+        font-size: 12px;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+      }
+      .pu-desc {
+        color: #9fb0d8;
+        font-size: 12px;
+      }
     </style>
   </head>
   <body>
@@ -689,6 +739,46 @@
         <button id="readyBtn" style="display: none">Ready</button>
         <button id="rename" class="link" style="display: none">change name</button>
         <div id="leaderboard"></div>
+        <div id="powerupLegend">
+          <h2>Power-ups</h2>
+          <div class="pu-list">
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="grow" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#ffd166">grow</span>
+                <span class="pu-desc">Your paddle 1.5× bigger — 3 hits</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="shrink" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#5ad1e6">shrink</span>
+                <span class="pu-desc">Foe paddle 0.6× — 3 hits</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="smash" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#ff6b3d">smash</span>
+                <span class="pu-desc">Ball 1.35× faster on your hits — 3 hits</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="slow" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#7aa2ff">slow</span>
+                <span class="pu-desc">Ball 0.6× speed — 4 seconds</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="multi" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#c08cff">multi</span>
+                <span class="pu-desc">Spawns 2 extra balls</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div id="chat">

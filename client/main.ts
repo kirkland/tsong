@@ -2,7 +2,7 @@
 // and the Join button. Input is only sent when this client holds a paddle.
 
 import { connect } from './net';
-import { draw } from './render';
+import { draw, drawLegendIcon } from './render';
 import {
   COURT,
   PADDLE,
@@ -13,6 +13,7 @@ import {
   LeaderboardRow,
   Role,
   StateMsg,
+  PowerupKind,
 } from '../shared/types';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -977,6 +978,11 @@ const escapeHtml = (s: string) =>
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!,
   );
+
+// Draw each power-up legend icon once at startup.
+for (const canvas of document.querySelectorAll<HTMLCanvasElement>('.pu-icon')) {
+  drawLegendIcon(canvas, canvas.dataset.kind as PowerupKind);
+}
 
 function renderLeaderboard(rows: LeaderboardRow[]) {
   if (!rows.length) {
