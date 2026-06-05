@@ -148,6 +148,7 @@ export interface ChatLine {
   text: string;
   player: boolean; // true if the sender held a paddle when they sent it
   color: string; // hex color of the sender's name
+  command?: boolean; // true if this line is a slash command someone ran (styled apart)
 }
 
 // One line for a live message; the full recent history on connect. Client appends.

@@ -123,6 +123,7 @@ export class Lobby {
     if (!side) return; // only someone currently holding a paddle can forfeit
     const conn = this.conns.get(ws);
     const name = conn?.nickname || 'someone';
+    if (conn) this.echoCommand(conn, '/ff'); // show it in chat before they leave their spot
     // Vacate the spot (and drop a live match back to waiting), like a quiet leave...
     this.release(side);
     if (this.game.status === 'playing') this.game.toWaiting();
@@ -186,7 +187,7 @@ export class Lobby {
   spawnPowerup(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return; // must have joined
-    this.game.forceTarget();
+    if (this.game.forceTarget()) this.echoCommand(conn, '/powerup');
   }
 
   join(ws: WebSocket, nickname: string, pid: string, color?: string) {
@@ -392,6 +393,23 @@ export class Lobby {
   /** Fan a big center-screen banner out to every client (transient, not kept). */
   private announce(text: string) {
     const data = JSON.stringify({ type: 'announce', text });
+    for (const sock of this.conns.keys()) {
+      if (sock.readyState === sock.OPEN) sock.send(data);
+    }
+  }
+
+  /** Echo a slash command into chat (styled apart on the client) so it's visible to all. */
+  private echoCommand(conn: Conn, text: string) {
+    const line: ChatLine = {
+      from: conn.nickname,
+      text,
+      player: conn.role === 'left' || conn.role === 'right',
+      color: conn.color,
+      command: true,
+    };
+    this.chatLog.push(line);
+    if (this.chatLog.length > CHAT_HISTORY) this.chatLog.shift();
+    const data = JSON.stringify({ type: 'chat', lines: [line] });
     for (const sock of this.conns.keys()) {
       if (sock.readyState === sock.OPEN) sock.send(data);
     }

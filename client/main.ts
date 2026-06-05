@@ -604,7 +604,7 @@ function addChatLine(line: ChatLine) {
   who.textContent = line.player ? `${line.from} (playing)` : line.from;
   who.style.color = line.color;
   const body = document.createElement('span');
-  body.className = 'chattext';
+  body.className = line.command ? 'chattext chatcmd' : 'chattext';
   body.textContent = `: ${line.text}`;
   row.append(who, body);
   chatLog.append(row);
