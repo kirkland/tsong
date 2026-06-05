@@ -236,6 +236,9 @@ function drawFatality(
     case 'FROST_SHATTER':
       drawFrostShatter(ctx, s, fx, t, banner);
       break;
+    case 'NOT_FOUND':
+      drawNotFound(ctx, s, fx, t, banner);
+      break;
   }
 }
 
@@ -1030,6 +1033,104 @@ function drawFrostShatter(
       ctx.fillStyle = `rgba(176,224,255,${ghostAlpha})`;
       ctx.fillRect(loserX - PADDLE.w / 2, loser.y - loser.h / 2, PADDLE.w, loser.h);
     }
+  }
+
+  banner();
+}
+
+// --- Fatality: "404 Not Found" -----------------------------------------------
+// The losing paddle glitches into a magenta/black missing-texture checkerboard, flickers
+// under a "404 PADDLE NOT FOUND" tag, then strobes out of existence. A meta finisher —
+// the game pretending it can't find the loser's asset.
+function drawNotFound(
+  ctx: CanvasRenderingContext2D,
+  s: StateMsg,
+  fx: { side: 'left' | 'right' },
+  t: number,
+  banner: () => void,
+) {
+  const loserSide = fx.side === 'left' ? 'right' : 'left';
+  const loser = s.paddles[loserSide];
+  const px = loser.x - PADDLE.w / 2;
+  const pw = PADDLE.w;
+  const top = loser.y - loser.h / 2;
+  const ph = loser.h;
+
+  const GLITCH = 0.35; // initial RGB-split tearing
+  const TAG_AT = 0.5; // when the "404" tag pops in
+  const BLINK_AT = 1.6; // when the paddle starts strobing out
+
+  // Court faults to black as the "asset" fails to load.
+  ctx.fillStyle = `rgba(4,7,16,${Math.min(0.45, t)})`;
+  ctx.fillRect(0, 0, COURT.w, COURT.h);
+
+  // Blank the real paddle so it reads as replaced by the broken texture.
+  ctx.fillStyle = '#0b1020';
+  ctx.fillRect(px - 2, top - 2, pw + 4, ph + 4);
+
+  // Visibility: dropout flicker while "loading wrong", strobing fade once it blinks out.
+  let alpha: number;
+  if (t >= BLINK_AT) {
+    const fade = Math.max(0, 1 - (t - BLINK_AT) / 0.8);
+    alpha = fade * (Math.sin(t * 60) > 0 ? 1 : 0.15);
+  } else {
+    alpha = Math.sin(t * 47) > -0.75 ? 1 : 0.25;
+  }
+
+  // Horizontal glitch jitter — violent at first, then a faint persistent wobble.
+  const glitchAmt = t < GLITCH ? 1 - t / GLITCH : 0.12 + 0.12 * Math.abs(Math.sin(t * 9));
+  const jx = Math.sin(t * 60) * 6 * glitchAmt;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  // Missing-texture checkerboard (magenta / near-black), keyed to court space so the
+  // pattern stays put as the height varies.
+  const cell = 7;
+  for (let cy = 0; cy < ph; cy += cell) {
+    for (let cx = 0; cx < pw; cx += cell) {
+      const odd = (Math.floor(cx / cell) + Math.floor((top + cy) / cell)) % 2 === 0;
+      ctx.fillStyle = odd ? '#ff00dc' : '#16121c';
+      ctx.fillRect(px + cx + jx, top + cy, Math.min(cell, pw - cx), Math.min(cell, ph - cy));
+    }
+  }
+
+  // RGB-split ghost slices during the initial tear.
+  if (t < GLITCH + 0.4) {
+    const slices = 5;
+    for (let i = 0; i < slices; i++) {
+      const off = Math.sin(t * 30 + i * 2) * 7 * (glitchAmt + 0.2);
+      ctx.globalAlpha = alpha * 0.4;
+      ctx.fillStyle = i % 2 ? '#00e5ff' : '#ff2bd0';
+      ctx.fillRect(px + off, top + (i / slices) * ph, pw, (ph / slices) * 0.7);
+    }
+  }
+  ctx.restore();
+
+  // "404 PADDLE NOT FOUND" tag, nudged toward court center so the wall doesn't clip it.
+  if (t >= TAG_AT) {
+    const tp = Math.min(1, (t - TAG_AT) / 0.25);
+    const boxW = 150;
+    const boxH = 48;
+    const cx = loserSide === 'left' ? loser.x + 30 + boxW / 2 : loser.x - 30 - boxW / 2;
+    const bx = cx - boxW / 2;
+    const by = Math.max(6, Math.min(COURT.h - boxH - 6, loser.y - boxH / 2));
+    ctx.save();
+    ctx.globalAlpha = (t >= BLINK_AT ? alpha : 1) * tp * (Math.sin(t * 41) < -0.8 ? 0.4 : 1);
+    ctx.fillStyle = '#16121c';
+    ctx.strokeStyle = '#ff00dc';
+    ctx.lineWidth = 2;
+    ctx.fillRect(bx, by, boxW, boxH);
+    ctx.strokeRect(bx, by, boxW, boxH);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ff00dc';
+    ctx.font = 'bold 22px ui-monospace, monospace';
+    ctx.fillText('404', cx, by + 17);
+    ctx.fillStyle = '#cfe0ff';
+    ctx.font = '11px ui-monospace, monospace';
+    ctx.fillText('PADDLE NOT FOUND', cx, by + 35);
+    ctx.restore();
   }
 
   banner();

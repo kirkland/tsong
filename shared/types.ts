@@ -65,7 +65,9 @@ export type Status = 'waiting' | 'playing' | 'over';
 // court like liquid wax.
 // PADDLE_SPLIT: the losing paddle is dragged to center, split in half, and explodes.
 // FROST_SHATTER: the losing paddle freezes, cracks, and shatters into ice shards.
-export const FATALITY_MOVES = ['SCREEN_MELT', 'PADDLE_SPLIT', 'FROST_SHATTER'] as const;
+// NOT_FOUND: the losing paddle glitches into a magenta/black missing-texture
+// checkerboard, flickers under a "404 PADDLE NOT FOUND" tag, and blinks out.
+export const FATALITY_MOVES = ['SCREEN_MELT', 'PADDLE_SPLIT', 'FROST_SHATTER', 'NOT_FOUND'] as const;
 export type FatalityMove = (typeof FATALITY_MOVES)[number];
 
 // --- Client -> Server ---
