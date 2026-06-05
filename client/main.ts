@@ -111,11 +111,11 @@ let fatalityDone = false; // already fired (or skipped) for the current 'over' s
 // "FINISH HIM!" announcer sting, played once when a match ends with fatalities armed.
 const finishSound = new Audio('/finish-him.mp3');
 finishSound.preload = 'auto';
-// Music that plays for the duration of a fatality animation. Most finishers use the
-// generic track; the JSAV finisher has its own "you lose" sound.
-const fatalityMusic = new Audio('/start-music.mp3');
-fatalityMusic.preload = 'auto';
-const jsavSound = new Audio('/you-lose.mp3');
+// Per-fatality sounds, played for the duration of the finisher animation. Only two
+// finishers have a sound; the rest play silently.
+const pacmanSound = new Audio('/start-music.mp3'); // PAC_CHOMP only
+pacmanSound.preload = 'auto';
+const jsavSound = new Audio('/you-lose.mp3'); // JSAV only
 jsavSound.preload = 'auto';
 let prevStatus: StateMsg['status'] | null = null; // last seen status, to fire on the rising edge into 'over'
 let prevFatality = false; // whether a fatality was playing last frame, to fire music on the rising edge
@@ -164,17 +164,23 @@ const net = connect(
         finishSound.currentTime = 0;
         finishSound.play().catch(() => {}); // ignore autoplay blocks (e.g. a spectator who never clicked)
       }
-      // Play the fatality music while a finisher animates: start it the frame the
-      // fatality appears, stop it the frame it clears (or the screen moves on).
+      // Play a finisher's sound for the duration of its animation: start it the frame
+      // the fatality appears, stop it the frame it clears. Only Pac-Man and Jsav have
+      // a sound; every other finisher is silent.
       const fatalityActive = !!msg.fatality;
       if (fatalityActive && !prevFatality) {
-        finishSound.pause(); // hand off from the "FINISH HIM!" sting to the music
-        const track = msg.fatality?.move === 'JSAV' ? jsavSound : fatalityMusic;
-        track.currentTime = 0;
-        track.play().catch(() => {});
+        const track =
+          msg.fatality?.move === 'JSAV' ? jsavSound
+          : msg.fatality?.move === 'PAC_CHOMP' ? pacmanSound
+          : null;
+        if (track) {
+          finishSound.pause(); // hand off from the "FINISH HIM!" sting to the sound
+          track.currentTime = 0;
+          track.play().catch(() => {});
+        }
       } else if (!fatalityActive && prevFatality) {
-        fatalityMusic.pause();
-        fatalityMusic.currentTime = 0;
+        pacmanSound.pause();
+        pacmanSound.currentTime = 0;
         jsavSound.pause();
         jsavSound.currentTime = 0;
       }
