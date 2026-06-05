@@ -88,8 +88,18 @@ Now it's live on `https://your-domain.com`, WebSocket and all.
 From your laptop, after pushing to `main`:
 
 ```sh
-./deploy/redeploy.sh        # ssh in, pull, npm ci, build, restart
+./deploy/redeploy.sh          # pull, npm ci, build, then restart at a match break
+./deploy/redeploy.sh --force  # restart immediately, even mid-match
 ```
+
+The client is built **before** the restart (the build doesn't touch the running
+server), so the only disruptive step is `systemctl restart`. By default the script
+holds that restart until there's a gap between matches (polling `/api/status`, up to
+~2 min) so no live rally is cut off. A graceful restart also snapshots the current
+match to `.tsong-state.json`; the new process restores it and players reconnect into
+the same game (frozen until they re-capture their mice) — and clients reconnect on
+their own, so nobody has to refresh. Use `--force` (or `TSONG_FORCE=1`) to skip the
+wait.
 
 Override the target host with `TSONG_HOST=root@1.2.3.4 ./deploy/redeploy.sh`.
 nginx and the TLS cert are left untouched — they only need attention if the

@@ -42,6 +42,31 @@ interface Ball {
   vy: number;
 }
 
+// Everything needed to resume the simulation after a restart. Mirrors the Game's own
+// fields (including the private serve/target timers) so a saved match continues exactly
+// where it left off. `paused` is deliberately omitted — a resumed match always starts
+// frozen until the reconnected players re-capture their mice.
+export interface GameSnapshot {
+  ball: Ball;
+  extraBalls: Ball[];
+  paddleY: Record<Side, number>;
+  paddleX: Record<Side, number>;
+  targetY: Record<Side, number>;
+  score: { left: number; right: number };
+  status: Status;
+  closing: boolean;
+  winnerSide: Side | null;
+  lastHit: Side | null;
+  target: { x: number; y: number; kind: PowerupKind } | null;
+  growHits: Record<Side, number>;
+  shrinkHits: Record<Side, number>;
+  smashHits: Record<Side, number>;
+  slowTimer: number;
+  serveTimer: number;
+  serveDir: number;
+  targetTimer: number;
+}
+
 // Shortest distance from point p to the segment a→b (for swept target hit-testing,
 // so a fast ball can't tunnel straight through the target between two ticks).
 function distToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number) {
@@ -75,6 +100,56 @@ export class Game {
   private serveTimer = 0;
   private serveDir = 1; // +1 = launch toward right, -1 = toward left
   private targetTimer = 0; // counts down to spawn (no target) or to despawn (target up)
+
+  /** Capture the full simulation state for persistence across a restart. */
+  serialize(): GameSnapshot {
+    return {
+      ball: { ...this.ball },
+      extraBalls: this.extraBalls.map((b) => ({ ...b })),
+      paddleY: { ...this.paddleY },
+      paddleX: { ...this.paddleX },
+      targetY: { ...this.targetY },
+      score: { ...this.score },
+      status: this.status,
+      closing: this.closing,
+      winnerSide: this.winnerSide,
+      lastHit: this.lastHit,
+      target: this.target ? { ...this.target } : null,
+      growHits: { ...this.growHits },
+      shrinkHits: { ...this.shrinkHits },
+      smashHits: { ...this.smashHits },
+      slowTimer: this.slowTimer,
+      serveTimer: this.serveTimer,
+      serveDir: this.serveDir,
+      targetTimer: this.targetTimer,
+    };
+  }
+
+  /** Restore a previously serialized state (after a restart). Resumes frozen. */
+  restore(s: GameSnapshot) {
+    this.ball = { ...s.ball };
+    this.extraBalls = s.extraBalls.map((b) => ({ ...b }));
+    this.paddleY = { ...s.paddleY };
+    this.paddleX = { ...s.paddleX };
+    this.targetY = { ...s.targetY };
+    this.score = { ...s.score };
+    this.status = s.status;
+    this.closing = s.closing;
+    this.winnerSide = s.winnerSide;
+    this.lastHit = s.lastHit;
+    this.target = s.target ? { ...s.target } : null;
+    this.growHits = { ...s.growHits };
+    this.shrinkHits = { ...s.shrinkHits };
+    this.smashHits = { ...s.smashHits };
+    this.slowTimer = s.slowTimer;
+    this.serveTimer = s.serveTimer;
+    this.serveDir = s.serveDir;
+    this.targetTimer = s.targetTimer;
+    // The sockets that drove this match (and their mouse-capture) are gone after a
+    // restart, so always resume frozen — the reattached players unfreeze it by
+    // capturing their mice again, exactly like the normal start-of-match flow.
+    this.paused = true;
+  }
 
   /** Current paddle half-height for a side — grown/shrunk by active power-ups. */
   halfH(side: Side): number {
@@ -309,6 +384,9 @@ export class Game {
         this.slowTimer = SLOW_TIME;
         break;
       case 'multi':
+        // A multi pickup splits the rally wide open: two extra balls, not one
+        // (capped at MULTI_MAX, so a fresh pickup from a single ball yields both).
+        this.spawnExtraBall();
         this.spawnExtraBall();
         break;
     }

@@ -162,6 +162,9 @@ const net = connect(
     }
   },
   () => {
+    // The server replays recent chat history on every (re)connect. Clear the log first so
+    // a reconnect (which keeps the page, and thus the old lines) doesn't duplicate them.
+    chatLog.replaceChildren();
     if (myName) net.send({ type: 'join', nickname: myName, pid: myPid, color: myColor });
     // Re-assert capture state after a (re)connect so the server's view stays in sync.
     if (pointerLocked) net.send({ type: 'capture', on: true });
