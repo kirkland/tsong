@@ -102,6 +102,7 @@ const FATALITIES = [
   { move: 'NOT_FOUND', label: '404', seq: ['arrowup', 'arrowup', 'arrowup'], hint: '↑↑↑', desc: 'The loser glitches into a missing-texture checkerboard and blinks out: 404.' },
   { move: 'SINGULARITY', label: 'Black Hole', seq: ['arrowdown', 'arrowdown', 'arrowdown'], hint: '↓↓↓', desc: 'Space buckles. A black hole tears open at center court, spaghettifies the loser into its accretion disk, then implodes into a blinding singularity and detonates.' },
   { move: 'PAC_CHOMP', label: 'Pac-Man', seq: ['arrowup', 'arrowdown', 'arrowup'], hint: '↑↓↑', desc: 'You become a yellow Pac-Man and waka-waka down a trail of ping-pong pellets to the frozen loser, devour them, then balloon up and burst.' },
+  { move: 'JSAV', label: 'Jsav', seq: ['arrowup', 'arrowdown', 'arrowdown'], hint: '↑↓↓', desc: "The loser becomes Jsav, whose face stretches taller and inflates ever bigger and wider until it swallows the whole court." },
 ] as const;
 const COMBO_KEYS = new Set(FATALITIES.flatMap((f) => f.seq as readonly string[]));
 const COMBO_WINDOW_MS = 1500; // presses older than this are forgotten
@@ -110,9 +111,12 @@ let fatalityDone = false; // already fired (or skipped) for the current 'over' s
 // "FINISH HIM!" announcer sting, played once when a match ends with fatalities armed.
 const finishSound = new Audio('/finish-him.mp3');
 finishSound.preload = 'auto';
-// Music that plays for the duration of a fatality animation (any finisher).
+// Music that plays for the duration of a fatality animation. Most finishers use the
+// generic track; the JSAV finisher has its own "you lose" sound.
 const fatalityMusic = new Audio('/start-music.mp3');
 fatalityMusic.preload = 'auto';
+const jsavSound = new Audio('/you-lose.mp3');
+jsavSound.preload = 'auto';
 let prevStatus: StateMsg['status'] | null = null; // last seen status, to fire on the rising edge into 'over'
 let prevFatality = false; // whether a fatality was playing last frame, to fire music on the rising edge
 let comboBuf: { k: string; t: number }[] = [];
@@ -165,11 +169,14 @@ const net = connect(
       const fatalityActive = !!msg.fatality;
       if (fatalityActive && !prevFatality) {
         finishSound.pause(); // hand off from the "FINISH HIM!" sting to the music
-        fatalityMusic.currentTime = 0;
-        fatalityMusic.play().catch(() => {});
+        const track = msg.fatality?.move === 'JSAV' ? jsavSound : fatalityMusic;
+        track.currentTime = 0;
+        track.play().catch(() => {});
       } else if (!fatalityActive && prevFatality) {
         fatalityMusic.pause();
         fatalityMusic.currentTime = 0;
+        jsavSound.pause();
+        jsavSound.currentTime = 0;
       }
       prevFatality = fatalityActive;
       prevStatus = msg.status;
