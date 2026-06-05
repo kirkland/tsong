@@ -971,7 +971,7 @@ function loop(t: number) {
     }
   }
 
-  if (state) draw(ctx, state);
+  if (state) draw(ctx, state, myRole);
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);

@@ -505,6 +505,11 @@ export class Lobby {
           name: this.nameOf('left'),
           color: this.colorOf('left'),
           h: this.game.halfH('left') * 2,
+          frozen: this.game.freezeTimer.left > 0,
+          mirrored: this.game.mirrorTimer.left > 0,
+          shielded: this.game.shielded.left,
+          blinded: this.game.blindTimer.left > 0,
+          curveReady: this.game.curveHits.left > 0,
         },
         right: {
           x: this.game.paddleX.right,
@@ -512,6 +517,11 @@ export class Lobby {
           name: this.nameOf('right'),
           color: this.colorOf('right'),
           h: this.game.halfH('right') * 2,
+          frozen: this.game.freezeTimer.right > 0,
+          mirrored: this.game.mirrorTimer.right > 0,
+          shielded: this.game.shielded.right,
+          blinded: this.game.blindTimer.right > 0,
+          curveReady: this.game.curveHits.right > 0,
         },
       },
       target: this.game.target
@@ -529,6 +539,8 @@ export class Lobby {
       kingWins: this.kingStreak,
       queue: this.queue.map((ws) => this.conns.get(ws)?.nickname ?? '').filter(Boolean),
       ready: { ...this.ready },
+      ghostBall: this.game.ghostTimer > 0,
+      tinyBall: this.game.tinyTimer > 0,
     };
   }
 

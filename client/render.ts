@@ -1,8 +1,8 @@
 // Pure drawing: takes the latest server state and paints one frame. No game logic.
 
-import { COURT, PADDLE, BALL, TARGET, PowerupKind, StateMsg } from '../shared/types';
+import { COURT, PADDLE, BALL, TARGET, PowerupKind, StateMsg, Role } from '../shared/types';
 
-export function draw(ctx: CanvasRenderingContext2D, s: StateMsg) {
+export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 'observer') {
   // Court
   ctx.fillStyle = '#0b1020';
   ctx.fillRect(0, 0, COURT.w, COURT.h);
@@ -20,6 +20,22 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg) {
   // Power-up target (drawn under the ball/paddles so they read on top)
   if (s.target) drawTarget(ctx, s.target.x, s.target.y, s.target.kind);
 
+  // Shield glow — a gold bar at the goal wall when a side has shield active.
+  for (const side of ['left', 'right'] as const) {
+    if (!s.paddles[side].shielded) continue;
+    const sx = side === 'left' ? 0 : COURT.w;
+    ctx.save();
+    ctx.strokeStyle = '#f5cc00';
+    ctx.lineWidth = 5;
+    ctx.shadowColor = '#f5cc00';
+    ctx.shadowBlur = 18;
+    ctx.beginPath();
+    ctx.moveTo(sx, 0);
+    ctx.lineTo(sx, COURT.h);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   // Paddles — X and height both come from the server, so "closing walls" mode and
   // the grow/shrink power-ups render correctly.
   ctx.fillStyle = s.paddles.left.color;
@@ -27,12 +43,28 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg) {
   ctx.fillStyle = s.paddles.right.color;
   drawPaddle(ctx, s.paddles.right.x, s.paddles.right.y, s.paddles.right.h);
 
+  // Paddle status overlays (frozen, mirrored, curve-ready).
+  drawPaddleEffects(ctx, s);
+
   // Ball(s) — colored by whichever paddle last hit them. Extra balls = multi power-up.
+  const ballR = s.tinyBall ? 3 : BALL.r;
+  ctx.globalAlpha = s.ghostBall ? 0.12 : 1;
   for (const b of [s.ball, ...s.extraBalls]) {
     ctx.fillStyle = b.color;
     ctx.beginPath();
-    ctx.arc(b.x, b.y, BALL.r, 0, Math.PI * 2);
+    ctx.arc(b.x, b.y, ballR, 0, Math.PI * 2);
     ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Blind overlay — drawn over the opponent's half so the blinded player can't
+  // read the ball trajectory until it crosses into their side.
+  if (myRole === 'left' && s.paddles.left.blinded) {
+    ctx.fillStyle = 'rgba(6, 9, 18, 0.82)';
+    ctx.fillRect(COURT.w / 2, 0, COURT.w / 2, COURT.h);
+  } else if (myRole === 'right' && s.paddles.right.blinded) {
+    ctx.fillStyle = 'rgba(6, 9, 18, 0.82)';
+    ctx.fillRect(0, 0, COURT.w / 2, COURT.h);
   }
 
   // Score
@@ -72,14 +104,70 @@ function drawPaddle(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: nu
   ctx.fillRect(cx - PADDLE.w / 2, cy - h / 2, PADDLE.w, h);
 }
 
+function drawPaddleEffects(ctx: CanvasRenderingContext2D, s: StateMsg) {
+  for (const side of ['left', 'right'] as const) {
+    const p = s.paddles[side];
+    const px = p.x;
+    const py = p.y;
+    const hh = p.h / 2;
+
+    // Frozen: ice-blue crosshatch lines across the paddle face.
+    if (p.frozen) {
+      ctx.save();
+      ctx.strokeStyle = '#88d8f7';
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = 0.7;
+      for (let dy = -hh + 6; dy < hh; dy += 10) {
+        ctx.beginPath();
+        ctx.moveTo(px - PADDLE.w / 2, py + dy);
+        ctx.lineTo(px + PADDLE.w / 2, py + dy);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    // Mirrored: ↕ indicator just outside the paddle.
+    if (p.mirrored) {
+      const ix = side === 'left' ? px + PADDLE.w / 2 + 10 : px - PADDLE.w / 2 - 10;
+      ctx.save();
+      ctx.fillStyle = '#ff7eb3';
+      ctx.font = 'bold 14px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('↕', ix, py);
+      ctx.restore();
+    }
+
+    // Curve ready: a small arc indicator above the paddle.
+    if (p.curveReady) {
+      const ix = side === 'left' ? px + PADDLE.w / 2 + 10 : px - PADDLE.w / 2 - 10;
+      ctx.save();
+      ctx.strokeStyle = '#7ddc4a';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(ix, py - hh - 10, 6, Math.PI, 0);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+}
+
 // Each power-up target gets its own ring color + glyph so players can read at a glance
 // what bouncing the ball over it will do.
 const TARGET_STYLE: Record<PowerupKind, { stroke: string; fill: string }> = {
-  grow: { stroke: '#ffd166', fill: 'rgba(255, 209, 102, 0.12)' }, // amber
-  shrink: { stroke: '#5ad1e6', fill: 'rgba(90, 209, 230, 0.12)' }, // cyan
-  smash: { stroke: '#ff6b3d', fill: 'rgba(255, 107, 61, 0.13)' }, // orange-red
-  slow: { stroke: '#7aa2ff', fill: 'rgba(122, 162, 255, 0.13)' }, // blue
-  multi: { stroke: '#c08cff', fill: 'rgba(192, 140, 255, 0.14)' }, // violet
+  grow:   { stroke: '#ffd166', fill: 'rgba(255, 209, 102, 0.12)' }, // amber
+  shrink: { stroke: '#5ad1e6', fill: 'rgba(90,  209, 230, 0.12)' }, // cyan
+  smash:  { stroke: '#ff6b3d', fill: 'rgba(255, 107,  61, 0.13)' }, // orange-red
+  slow:   { stroke: '#7aa2ff', fill: 'rgba(122, 162, 255, 0.13)' }, // blue
+  multi:  { stroke: '#c08cff', fill: 'rgba(192, 140, 255, 0.14)' }, // violet
+  freeze: { stroke: '#88d8f7', fill: 'rgba(136, 216, 247, 0.12)' }, // ice blue
+  curve:  { stroke: '#7ddc4a', fill: 'rgba(125, 220,  74, 0.12)' }, // lime green
+  blind:  { stroke: '#9988bb', fill: 'rgba(153, 136, 187, 0.12)' }, // muted purple
+  mirror: { stroke: '#ff7eb3', fill: 'rgba(255, 126, 179, 0.12)' }, // hot pink
+  shield: { stroke: '#f5cc00', fill: 'rgba(245, 204,   0, 0.12)' }, // gold
+  ghost:  { stroke: '#c8beff', fill: 'rgba(200, 190, 255, 0.12)' }, // pale lavender
+  tiny:   { stroke: '#ff8c42', fill: 'rgba(255, 140,  66, 0.12)' }, // warm orange
+  warp:   { stroke: '#e040fb', fill: 'rgba(224,  64, 251, 0.12)' }, // magenta
 };
 
 function drawTarget(ctx: CanvasRenderingContext2D, x: number, y: number, kind: PowerupKind) {
@@ -168,6 +256,114 @@ const GLYPHS: Record<PowerupKind, (ctx: CanvasRenderingContext2D, x: number, y: 
     ctx.beginPath();
     ctx.arc(x - 6, y, 4, 0, Math.PI * 2);
     ctx.arc(x + 6, y, 4, 0, Math.PI * 2);
+    ctx.fill();
+  },
+  // freeze: snowflake — three lines through center with branch ticks
+  freeze(ctx, x, y) {
+    for (let i = 0; i < 3; i++) {
+      const a = (i * Math.PI) / 3;
+      const cos = Math.cos(a), sin = Math.sin(a);
+      ctx.beginPath();
+      ctx.moveTo(x + cos * 14, y + sin * 14);
+      ctx.lineTo(x - cos * 14, y - sin * 14);
+      for (const sign of [1, -1]) {
+        const bx = x + cos * 7 * sign, by = y + sin * 7 * sign;
+        const tx = Math.cos(a + Math.PI / 2) * 5, ty = Math.sin(a + Math.PI / 2) * 5;
+        ctx.moveTo(bx + tx, by + ty);
+        ctx.lineTo(bx - tx, by - ty);
+      }
+      ctx.stroke();
+    }
+  },
+  // curve: ¾-circle arc with arrowhead → "ball will arc after your hit"
+  curve(ctx, x, y) {
+    const r = 11, startA = 0.6, endA = 0.6 + Math.PI * 1.75;
+    ctx.beginPath();
+    ctx.arc(x, y, r, startA, endA);
+    ctx.stroke();
+    const ex = x + Math.cos(endA) * r, ey = y + Math.sin(endA) * r;
+    const ta = endA + Math.PI / 2;
+    ctx.beginPath();
+    ctx.moveTo(ex + Math.cos(ta - 0.45) * 5, ey + Math.sin(ta - 0.45) * 5);
+    ctx.lineTo(ex, ey);
+    ctx.lineTo(ex + Math.cos(ta + 0.45) * 5, ey + Math.sin(ta + 0.45) * 5);
+    ctx.stroke();
+  },
+  // blind: eye with a slash → "opponent loses sight"
+  blind(ctx, x, y) {
+    ctx.beginPath();
+    ctx.moveTo(x - 13, y);
+    ctx.quadraticCurveTo(x, y - 9, x + 13, y);
+    ctx.quadraticCurveTo(x, y + 9, x - 13, y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x - 10, y + 11);
+    ctx.lineTo(x + 10, y - 11);
+    ctx.stroke();
+  },
+  // mirror: horizontal mirror line with arrows above and below → "controls flip"
+  mirror(ctx, x, y) {
+    ctx.beginPath();
+    ctx.moveTo(x - 12, y);
+    ctx.lineTo(x + 12, y);
+    ctx.stroke();
+    for (const sign of [1, -1]) {
+      ctx.beginPath();
+      ctx.moveTo(x, y + sign * 5);
+      ctx.lineTo(x, y + sign * 12);
+      ctx.moveTo(x - 4, y + sign * 9);
+      ctx.lineTo(x, y + sign * 13);
+      ctx.lineTo(x + 4, y + sign * 9);
+      ctx.stroke();
+    }
+  },
+  // shield: pentagon shield shape → "absorbs the next goal"
+  shield(ctx, x, y) {
+    ctx.beginPath();
+    ctx.moveTo(x - 10, y - 13);
+    ctx.lineTo(x + 10, y - 13);
+    ctx.lineTo(x + 13, y - 3);
+    ctx.lineTo(x, y + 13);
+    ctx.lineTo(x - 13, y - 3);
+    ctx.closePath();
+    ctx.stroke();
+  },
+  // ghost: pac-ghost shape → "ball goes invisible"
+  ghost(ctx, x, y) {
+    const r = 10;
+    ctx.beginPath();
+    ctx.arc(x, y - 3, r, Math.PI, 0);
+    ctx.lineTo(x + r, y + 9);
+    ctx.quadraticCurveTo(x + r - 4, y + 13, x + r - 7, y + 9);
+    ctx.quadraticCurveTo(x + r - 10, y + 5, x, y + 9);
+    ctx.quadraticCurveTo(x - r + 10, y + 13, x - r + 7, y + 9);
+    ctx.lineTo(x - r, y - 3);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x - 4, y - 5, 2.5, 0, Math.PI * 2);
+    ctx.arc(x + 4, y - 5, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  },
+  // tiny: small dot → "ball shrinks"
+  tiny(ctx, x, y) {
+    ctx.beginPath();
+    ctx.arc(x, y, 4, 0, Math.PI * 2);
+    ctx.fill();
+  },
+  // warp: diamond with center dot → "ball teleports"
+  warp(ctx, x, y) {
+    ctx.beginPath();
+    ctx.moveTo(x, y - 14);
+    ctx.lineTo(x + 10, y);
+    ctx.lineTo(x, y + 14);
+    ctx.lineTo(x - 10, y);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
     ctx.fill();
   },
 };

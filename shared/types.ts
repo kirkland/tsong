@@ -31,6 +31,12 @@ export const SLOW_SCALE = 0.6; // ball-speed multiplier during "slow" motion
 export const SLOW_TIME = 4; // seconds a "slow" power-up lasts
 export const MULTI_MAX = 2; // max simultaneous extra balls from "multi"
 export const POWERUP_HITS = 3; // hits a per-hit power-up (grow/shrink/smash) lasts
+export const FREEZE_TIME = 2; // seconds the opponent paddle is locked
+export const BLIND_TIME = 3; // seconds the opponent's view is obscured
+export const MIRROR_TIME = 3; // seconds the opponent's controls are inverted
+export const GHOST_TIME = 3; // seconds the ball is invisible
+export const TINY_TIME = 5; // seconds the ball is rendered tiny
+export const CURVE_SPIN = 1.4; // spin (rad/s) applied to the ball on a curve hit
 export const TARGET = {
   r: 24, // target radius, court units
   minDelay: 6, // min seconds before a target (re)appears
@@ -44,7 +50,18 @@ export const TARGET = {
 //   smash  — your next 3 hits launch the ball faster
 //   slow   — the ball slows down for a few seconds
 //   multi  — two extra balls join the rally until the next point
-export const POWERUPS = ['grow', 'shrink', 'smash', 'slow', 'multi'] as const;
+//   freeze — opponent's paddle locks in place for 2 s
+//   curve  — your next hit puts spin on the ball, making it arc
+//   blind  — opponent's view of their side goes dark for 3 s
+//   mirror — opponent's up/down controls are inverted for 3 s
+//   shield — absorbs the next goal scored against you
+//   ghost  — ball turns invisible for 3 s
+//   tiny   — ball shrinks to near-invisible size for 5 s
+//   warp   — ball teleports to a random mid-court position
+export const POWERUPS = [
+  'grow', 'shrink', 'smash', 'slow', 'multi',
+  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp',
+] as const;
 export type PowerupKind = (typeof POWERUPS)[number];
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
 export const LEADERBOARD_SIZE = 10;
@@ -96,6 +113,11 @@ export interface PaddleState {
   name: string | null; // nickname of the player on this side, or null if open
   color: string; // hex color for rendering
   h: number; // current paddle height in court units (taller while powered up)
+  frozen: boolean; // paddle is temporarily immobile (freeze power-up)
+  mirrored: boolean; // up/down controls are inverted (mirror power-up)
+  shielded: boolean; // next goal against this side is absorbed (shield power-up)
+  blinded: boolean; // opponent's half of the court is obscured (blind power-up)
+  curveReady: boolean; // next hit will put spin on the ball (curve power-up)
 }
 
 export interface StateMsg {
@@ -125,6 +147,8 @@ export interface StateMsg {
   kingWins: number; // the king's current win streak (consecutive match wins)
   queue: string[]; // ordered nicknames of spectators waiting to play
   ready: { left: boolean; right: boolean }; // ready-up status when match is over
+  ghostBall: boolean; // ball is currently invisible (ghost power-up)
+  tinyBall: boolean; // ball is currently rendered tiny (tiny power-up)
 }
 
 // Sent to a single connection whenever its own role changes (connect / claim / release).
