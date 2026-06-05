@@ -91,7 +91,9 @@ export type Status = 'waiting' | 'playing' | 'over';
 // spaghettified into a glowing accretion disk, then it implodes and detonates.
 // PAC_CHOMP: the winner becomes a yellow Pac-Man and chomps a trail of ping-pong
 // pellets across the court to the frozen loser, eats it, then balloons and bursts.
-export const FATALITY_MOVES = ['SCREEN_MELT', 'PADDLE_SPLIT', 'FROST_SHATTER', 'NOT_FOUND', 'SINGULARITY', 'PAC_CHOMP'] as const;
+// JSAV: the losing paddle becomes Jsav's face, which stretches vertically and
+// inflates ever bigger and wider until it swallows the whole court.
+export const FATALITY_MOVES = ['SCREEN_MELT', 'PADDLE_SPLIT', 'FROST_SHATTER', 'NOT_FOUND', 'SINGULARITY', 'PAC_CHOMP', 'JSAV'] as const;
 export type FatalityMove = (typeof FATALITY_MOVES)[number];
 
 // --- Client -> Server ---

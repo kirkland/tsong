@@ -408,6 +408,11 @@ let fxKey = '';
 
 const MOLTEN = '#ff5a2a';
 
+// Jsav's face, used by the JSAV fatality. Loaded once; drawn only once ready.
+const jsavImg = new Image();
+jsavImg.src = '/jsav.jpg';
+const jsavReady = () => jsavImg.complete && jsavImg.naturalWidth > 0;
+
 function drawFatality(
   ctx: CanvasRenderingContext2D,
   s: StateMsg,
@@ -420,7 +425,9 @@ function drawFatality(
     fxKey = key;
   }
   const t = (now - fxStart) / 1000;
-  const banner = () => drawFatalityBanner(ctx, t);
+  // JSAV gets its own "JSAVALITY" banner; everything else reads "FATALITY".
+  const bannerText = fx.move === 'JSAV' ? 'JSAVALITY' : 'FATALITY';
+  const banner = () => drawFatalityBanner(ctx, t, bannerText);
 
   switch (fx.move) {
     case 'SCREEN_MELT':
@@ -441,11 +448,14 @@ function drawFatality(
     case 'PAC_CHOMP':
       drawPacChomp(ctx, s, fx, t, banner);
       break;
+    case 'JSAV':
+      drawJsavStretch(ctx, s, fx, t, banner);
+      break;
   }
 }
 
-// Shared FATALITY banner, pulsing in.
-function drawFatalityBanner(ctx: CanvasRenderingContext2D, t: number) {
+// Shared finisher banner, pulsing in. Text defaults to "FATALITY".
+function drawFatalityBanner(ctx: CanvasRenderingContext2D, t: number, text = 'FATALITY') {
   if (t > 0.3) {
     const a = Math.min(1, (t - 0.3) * 3);
     const pulse = 1 + Math.sin(t * 8) * 0.02;
@@ -459,7 +469,7 @@ function drawFatalityBanner(ctx: CanvasRenderingContext2D, t: number) {
     ctx.textBaseline = 'middle';
     ctx.shadowColor = '#ff2b2b';
     ctx.shadowBlur = 24;
-    ctx.fillText('FATALITY', 0, 0);
+    ctx.fillText(text, 0, 0);
     ctx.restore();
   }
 }
@@ -1826,6 +1836,66 @@ function roundRect(
   ctx.arcTo(x, y + h, x, y, rr);
   ctx.arcTo(x, y, x + w, y, rr);
   ctx.closePath();
+}
+
+// --- Fatality: "Jsav" --------------------------------------------------------
+// The losing paddle becomes Jsav's face, which stretches taller and then inflates
+// ever bigger and wider — accelerating, jiggling — until it engulfs the court.
+function drawJsavStretch(
+  ctx: CanvasRenderingContext2D,
+  s: StateMsg,
+  fx: { side: 'left' | 'right' },
+  t: number,
+  banner: () => void,
+) {
+  const loserSide = fx.side === 'left' ? 'right' : 'left';
+  const loser = s.paddles[loserSide];
+
+  const MORPH = 0.4; // paddle morphs into the face
+  const g = Math.max(0, t - MORPH); // seconds spent growing
+
+  // Background creeps to black as the face takes over the screen.
+  ctx.fillStyle = `rgba(2,3,10,${Math.min(0.92, 0.25 + g * 0.5)})`;
+  ctx.fillRect(0, 0, COURT.w, COURT.h);
+
+  // Erase the real loser paddle — it's the face now.
+  ctx.fillStyle = '#0b1020';
+  ctx.fillRect(loser.x - PADDLE.w / 2 - 2, loser.y - loser.h / 2 - 2, PADDLE.w + 4, loser.h + 4);
+
+  // Start recognizably face-shaped (a touch wide, not a thin paddle sliver) so it
+  // reads as Jsav from the first frame, then stretch from there.
+  const BASE_W = 108;
+  const BASE_H = 84;
+  // Vertical stretch leads; width catches up and both balloon, accelerating.
+  const vGrow = 1 + g * 4.5 + g * g * 3.5;
+  const wGrow = 1 + g * 1.1 + g * g * 2.2;
+  const jiggle = 1 + Math.sin(t * 20) * 0.04 * Math.min(1, g * 2);
+  let w = Math.min(BASE_W * wGrow * jiggle, COURT.w * 2.6);
+  let h = Math.min(BASE_H * vGrow * jiggle, COURT.h * 2.6);
+
+  // Recenter from the paddle toward court center as the head swells, so it fills
+  // the screen rather than spilling off one wall.
+  const drift = Math.min(1, g / 1.4);
+  const cx = loser.x + (COURT.w / 2 - loser.x) * drift;
+  const cy = loser.y + (COURT.h / 2 - loser.y) * drift;
+
+  // Mild zoom-shake as it gets huge, for that unsettling in-your-face energy.
+  const shake = Math.min(8, g * 4);
+  const sx = cx + Math.sin(t * 47) * shake;
+  const sy = cy + Math.cos(t * 39) * shake;
+
+  if (jsavReady()) {
+    // Fade the image in over the paddle during the morph, then full opacity.
+    ctx.globalAlpha = Math.min(1, t / MORPH);
+    ctx.drawImage(jsavImg, sx - w / 2, sy - h / 2, w, h);
+    ctx.globalAlpha = 1;
+  } else {
+    // Fallback if the image hasn't loaded: a stretching colored block.
+    ctx.fillStyle = loser.color;
+    ctx.fillRect(sx - w / 2, sy - h / 2, w, h);
+  }
+
+  banner();
 }
 
 function drawFireball(ctx: CanvasRenderingContext2D, x: number, y: number, r: number) {
