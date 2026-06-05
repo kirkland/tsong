@@ -343,7 +343,16 @@ export class Lobby {
       this.ready = { left: false, right: false };
       this.readyTimer = 0;
       if (this.game.status === 'playing') this.king = null;
+      // Catch-all: idle in the lobby with both spots filled (e.g. the queue auto-filled
+      // a seat after a forfeit, a leave, or a ready-timeout). Kick off the match —
+      // otherwise it sits frozen in 'waiting' with two players present.
+      if (this.game.status === 'waiting' && this.sides.left && this.sides.right) {
+        this.game.start();
+      }
     }
+    // Keep the pause flag honest every tick: a live match only advances once both
+    // players have captured their mouse, no matter how the seats got filled.
+    this.refreshPause();
   }
 
   /** Flip the shared fatalities toggle for the whole room. Any joined user may change it. */
