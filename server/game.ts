@@ -172,32 +172,20 @@ export class Game {
     if (this.slowTimer > 0) this.slowTimer -= dt;
     const scale = this.slowTimer > 0 ? SLOW_SCALE : 1;
 
-    // Advance every ball. A ball that leaves the court scores for the opposite side and
-    // drops out of play; the rally only ends (and a new ball is served) once no balls
-    // remain — so during multi-ball one ball going out doesn't kill the others.
+    // Advance every ball. A ball that leaves the court just drops out of play — NO point
+    // is scored while other balls remain, so during multi-ball one ball going out never
+    // ends the rally. Only once the court is completely empty does the last ball out
+    // concede the single point for the rally.
     const prevExtras = this.extraBalls.length; // a multi power-up may append more below
     const survivors: Ball[] = [];
     let lastScorer: Side | null = null;
-    let ended = false;
     for (const b of [this.ball, ...this.extraBalls]) {
       const scorer = this.stepBall(b, dt, scale);
-      if (scorer) {
-        lastScorer = scorer;
-        if (this.scorePoint(scorer)) {
-          ended = true;
-          break;
-        }
-      } else {
-        survivors.push(b);
-      }
+      if (scorer) lastScorer = scorer; // remember who'd score, but don't award yet
+      else survivors.push(b);
     }
 
     this.updateTargetTimer(dt);
-
-    if (ended) {
-      this.extraBalls = []; // tidy up any multi-balls when the match ends
-      return;
-    }
 
     // A "multi" power-up claimed this tick appends new balls past extraBalls' original
     // length; keep them alongside the survivors (otherwise the new ball is discarded).
@@ -205,11 +193,15 @@ export class Game {
     const live = [...survivors, ...spawned];
 
     if (live.length > 0) {
-      // Some balls are still live: keep playing, promoting one to the primary slot.
+      // Balls still in play: keep going, promoting one to the primary slot.
       this.ball = live[0];
       this.extraBalls = live.slice(1);
     } else if (lastScorer) {
-      // Zero balls left → serve a fresh single ball toward the side just scored on.
+      // Court is empty → award one point to the last ball's scorer, then end or re-serve.
+      if (this.scorePoint(lastScorer)) {
+        this.extraBalls = []; // match over
+        return;
+      }
       this.serve(lastScorer === 'left' ? 1 : -1);
     }
   }
@@ -262,6 +254,13 @@ export class Game {
     return TARGET.minDelay + Math.random() * (TARGET.maxDelay - TARGET.minDelay);
   }
 
+  /** Force a random power-up onto the board now (the "/powerup" command). Live matches only. */
+  forceTarget(): boolean {
+    if (this.status !== 'playing') return false;
+    this.placeTarget();
+    return true;
+  }
+
   // Drop a fresh random power-up target onto the board, replacing any current one.
   private placeTarget() {
     const margin = TARGET.r + 24; // keep it clear of the walls
@@ -271,13 +270,6 @@ export class Game {
       kind: POWERUPS[Math.floor(Math.random() * POWERUPS.length)],
     };
     this.targetTimer = TARGET.life;
-  }
-
-  /** Force a random power-up onto the board now (the "/powerup" command). Live matches only. */
-  forceTarget(): boolean {
-    if (this.status !== 'playing') return false;
-    this.placeTarget();
-    return true;
   }
 
   // Spawn or expire the power-up target on its own timer.

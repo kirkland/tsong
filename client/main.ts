@@ -233,8 +233,8 @@ const COMMANDS: ChatCommand[] = [
   {
     name: 'powerup',
     hint: 'Spawn a random power-up',
-    enabled: () => state?.status === 'playing',
-    disabledHint: 'only during a live match',
+    enabled: () => !isPlayer() && state?.status === 'playing',
+    disabledHint: 'spectators only, during a live match',
     run: () => net.send({ type: 'spawnPowerup' }),
   },
 ];
@@ -794,14 +794,11 @@ document.addEventListener('pointerlockchange', () => {
 });
 
 canvas.addEventListener('mousemove', (e) => {
-  if (!isPlayer()) return;
+  // The paddle only moves while the mouse is captured to the board.
+  if (!isPlayer() || !pointerLocked) return;
   const r = canvas.getBoundingClientRect();
-  if (pointerLocked) {
-    // Convert screen-pixel movement to court units (1:1 with what's drawn).
-    target = clampPaddle(target + e.movementY * (COURT.h / r.height));
-  } else {
-    target = clampPaddle(((e.clientY - r.top) / r.height) * COURT.h);
-  }
+  // Convert screen-pixel movement to court units (1:1 with what's drawn).
+  target = clampPaddle(target + e.movementY * (COURT.h / r.height));
 });
 
 // --- keyboard control ---
@@ -862,7 +859,8 @@ fatalityCheck.addEventListener('change', () => {
 
 // --- main loop ---
 function loop(t: number) {
-  if (isPlayer()) {
+  // Paddle input (mouse and keyboard) only applies while the mouse is captured.
+  if (isPlayer() && pointerLocked) {
     const step = PADDLE.speed / 60;
     if (keys.has('arrowup') || keys.has('w')) target -= step;
     if (keys.has('arrowdown') || keys.has('s')) target += step;
@@ -919,12 +917,20 @@ function updateUI() {
     statusEl.textContent = '🖱 click the board to capture your mouse · Esc to release';
   } else statusEl.textContent = '';
 
-  // King of the court: winner who stayed can exit
+  // King of the court: show who's reigning and their win streak (to everyone); the
+  // king themselves also gets a click-to-exit prompt between matches.
   const isKing = !!state.king && state.king === myName;
-  if (isKing && state.status !== 'playing') {
+  if (state.king) {
+    const n = state.kingWins;
+    const streak = `${n} win${n === 1 ? '' : 's'} in a row`;
     kingStatusEl.style.display = 'block';
-    kingStatusEl.textContent = `👑 You're the king! Click to exit`;
-    kingStatusEl.style.cursor = 'pointer';
+    if (isKing && state.status !== 'playing') {
+      kingStatusEl.textContent = `👑 You're the king — ${streak}! Click to exit`;
+      kingStatusEl.style.cursor = 'pointer';
+    } else {
+      kingStatusEl.textContent = `👑 ${state.king} — ${streak}`;
+      kingStatusEl.style.cursor = 'default';
+    }
   } else {
     kingStatusEl.style.display = 'none';
   }

@@ -47,6 +47,8 @@ export class Lobby {
   private winnerName: string | null = null;
   private overHandled = false; // guards the one-time spot reopening when a match ends
   private king: { side: Side; pid: string; nickname: string; ws: WebSocket } | null = null;
+  private streakPid: string | null = null; // pid of the player on the current win streak
+  private kingStreak = 0; // consecutive match wins by that player (the king's reign length)
   // The winner is released to observer the instant the match ends, so we can't use the
   // side slots to authorize a finishing move — we remember who won by stable pid/side.
   private fatalityWinnerPid: string | null = null;
@@ -117,12 +119,19 @@ export class Lobby {
     }
   }
 
+  // End the current win streak (a reign ended by something other than a win).
+  private endStreak() {
+    this.streakPid = null;
+    this.kingStreak = 0;
+  }
+
   /** "/ff": a player abandons their paddle mid-match and is publicly shamed for it. */
   forfeit(ws: WebSocket) {
     const side = this.sideOf(ws);
     if (!side) return; // only someone currently holding a paddle can forfeit
     const conn = this.conns.get(ws);
     const name = conn?.nickname || 'someone';
+    if (conn?.pid === this.streakPid) this.endStreak(); // bailing forfeits the reign
     // Vacate the spot (and drop a live match back to waiting), like a quiet leave...
     this.release(side);
     if (this.game.status === 'playing') this.game.toWaiting();
@@ -178,14 +187,17 @@ export class Lobby {
     if (!this.king || this.king.ws !== ws) return; // only the king can exit
     const side = this.king.side;
     this.king = null;
+    this.endStreak(); // stepping down ends the reign
     this.release(side);
     if (this.game.status === 'over') this.game.toWaiting();
   }
 
-  /** "/powerup": drop a random power-up target onto the board. Live matches only. */
+  /** "/powerup": drop a random power-up target. Spectators only — a player in the
+   *  current match can't conjure power-ups for themselves. */
   spawnPowerup(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return; // must have joined
+    if (this.sideOf(ws)) return; // not from someone currently holding a paddle
     this.game.forceTarget();
   }
 
@@ -265,6 +277,7 @@ export class Lobby {
       if (this.game.status === 'playing') this.game.toWaiting();
     }
     if (this.king && this.king.ws === ws) this.king = null;
+    if (this.conns.get(ws)?.pid === this.streakPid) this.endStreak(); // streak holder left
     this.queueLeave(ws);
     this.conns.delete(ws);
     this.refreshPause();
@@ -298,6 +311,10 @@ export class Lobby {
             nickname: winner.nickname,
             ws: this.sides[winnerSide]!,
           };
+          // Win streak: extend it if the same player just defended their throne,
+          // otherwise this is a fresh king with a streak of one.
+          this.kingStreak = winner.pid === this.streakPid ? this.kingStreak + 1 : 1;
+          this.streakPid = winner.pid;
         }
         this.overHandled = true;
 
@@ -330,6 +347,7 @@ export class Lobby {
             for (const s of SIDES) this.release(s);
             this.ready = { left: false, right: false };
             this.readyTimer = 0;
+            this.endStreak(); // reign lapses if no rematch is readied in time
             this.game.toWaiting();
           }
         }
@@ -469,6 +487,7 @@ export class Lobby {
       fatality: this.game.status === 'over' ? this.activeFatality : null,
       watchers,
       king: this.king?.nickname ?? null,
+      kingWins: this.kingStreak,
       queue: this.queue.map((ws) => this.conns.get(ws)?.nickname ?? '').filter(Boolean),
       ready: { ...this.ready },
     };

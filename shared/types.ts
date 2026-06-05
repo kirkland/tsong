@@ -80,7 +80,7 @@ export type ClientMsg =
   | { type: 'fatality'; move: string } // winner-only, validated server-side
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
   | { type: 'forfeit' } // "/ff": leave your paddle spot mid-game (and get shamed)
-  | { type: 'spawnPowerup' } // "/powerup": drop a random power-up target onto the board
+  | { type: 'spawnPowerup' } // "/powerup": spectators only — drop a random power-up target
   | { type: 'capture'; on: boolean } // whether this player's mouse is captured to the board
   | { type: 'kingExit' } // winner declines to stay as king of the court
   | { type: 'queueJoin' } // join the spectator queue
@@ -120,6 +120,7 @@ export interface StateMsg {
   fatality: { side: Side; move: string } | null;
   watchers: string[]; // nicknames of joined observers
   king: string | null; // nickname of the king (winner who stayed), null if none
+  kingWins: number; // the king's current win streak (consecutive match wins)
   queue: string[]; // ordered nicknames of spectators waiting to play
   ready: { left: boolean; right: boolean }; // ready-up status when match is over
 }
