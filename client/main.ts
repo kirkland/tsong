@@ -101,7 +101,7 @@ const FATALITIES = [
   { move: 'FROST_SHATTER', label: 'Freeze', seq: ['arrowdown', 'arrowup', 'arrowdown'], hint: '↓↑↓', desc: 'The loser freezes solid, cracks, and shatters into a spray of ice shards.' },
   { move: 'NOT_FOUND', label: '404', seq: ['arrowup', 'arrowup', 'arrowup'], hint: '↑↑↑', desc: 'The loser glitches into a missing-texture checkerboard and blinks out: 404.' },
   { move: 'SINGULARITY', label: 'Black Hole', seq: ['arrowdown', 'arrowdown', 'arrowdown'], hint: '↓↓↓', desc: 'Space buckles. A black hole tears open at center court, spaghettifies the loser into its accretion disk, then implodes into a blinding singularity and detonates.' },
-  { move: 'PAC_CHOMP', label: 'Pac-Man', seq: ['arrowup', 'arrowdown', 'arrowup', 'arrowdown'], hint: '↑↓↑↓', desc: 'You become a yellow Pac-Man and waka-waka down a trail of ping-pong pellets to the frozen loser, devour them, then balloon up and burst.' },
+  { move: 'PAC_CHOMP', label: 'Pac-Man', seq: ['arrowup', 'arrowdown', 'arrowup'], hint: '↑↓↑', desc: 'You become a yellow Pac-Man and waka-waka down a trail of ping-pong pellets to the frozen loser, devour them, then balloon up and burst.' },
 ] as const;
 const COMBO_KEYS = new Set(FATALITIES.flatMap((f) => f.seq as readonly string[]));
 const COMBO_WINDOW_MS = 1500; // presses older than this are forgotten
@@ -118,17 +118,12 @@ let prevFatality = false; // whether a fatality was playing last frame, to fire 
 let comboBuf: { k: string; t: number }[] = [];
 
 // Return the fatality move whose combo the recent keypresses just completed, or null.
-// Prefers the LONGEST matching combo, so a longer finisher (e.g. ↑↓↑↓) wins over a
-// shorter one that happens to be its suffix (↓↑↓), rather than firing the short one.
 function matchCombo(): string | null {
-  let best: { move: string; len: number } | null = null;
   for (const f of FATALITIES) {
     const tail = comboBuf.slice(-f.seq.length);
-    if (tail.length === f.seq.length && tail.every((e, i) => e.k === f.seq[i])) {
-      if (!best || f.seq.length > best.len) best = { move: f.move, len: f.seq.length };
-    }
+    if (tail.length === f.seq.length && tail.every((e, i) => e.k === f.seq[i])) return f.move;
   }
-  return best?.move ?? null;
+  return null;
 }
 
 function randomColor(): string {
