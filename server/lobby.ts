@@ -301,11 +301,13 @@ export class Lobby {
     this.game.paused = !(this.isCaptured('left') && this.isCaptured('right'));
   }
 
-  // Any joined client may arm/disarm closing-walls mode; it applies from the next match.
-  setMode(ws: WebSocket, closing: boolean) {
+  // Any joined client may toggle game modes.
+  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean }) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return;
-    this.game.setClosing(closing);
+    if (opts.closing !== undefined) this.game.setClosing(opts.closing);
+    if (opts.gravity !== undefined) this.game.setGravity(opts.gravity);
+    if (opts.turbo !== undefined) this.game.setTurbo(opts.turbo);
   }
 
   remove(ws: WebSocket) {
@@ -531,6 +533,8 @@ export class Lobby {
       status: this.game.status,
       paused: this.game.status === 'playing' && this.game.paused,
       closing: this.game.closing,
+      gravity: this.game.gravity,
+      turbo: this.game.turbo,
       winner: this.game.status === 'over' ? this.winnerName : null,
       fatalitiesEnabled: this.fatalitiesEnabled,
       fatality: this.game.status === 'over' ? this.activeFatality : null,

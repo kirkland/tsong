@@ -36,6 +36,8 @@ const chatLog = document.getElementById('chatlog') as HTMLDivElement;
 const chatForm = document.getElementById('chatForm') as HTMLFormElement;
 const chatInput = document.getElementById('chatInput') as HTMLInputElement;
 const closingModeEl = document.getElementById('closingMode') as HTMLInputElement;
+const gravityModeEl = document.getElementById('gravityMode') as HTMLInputElement;
+const turboModeEl = document.getElementById('turboMode') as HTMLInputElement;
 const reactionsEl = document.getElementById('reactions') as HTMLDivElement;
 const recentReactionsEl = document.getElementById('recentReactions') as HTMLDivElement;
 const ballReactionEl = document.getElementById('ballReaction') as HTMLDivElement;
@@ -233,6 +235,12 @@ kingStatusEl.addEventListener('click', () => net.send({ type: 'kingExit' }));
 closingModeEl.addEventListener('change', () =>
   net.send({ type: 'mode', closing: closingModeEl.checked }),
 );
+gravityModeEl.addEventListener('change', () =>
+  net.send({ type: 'mode', gravity: gravityModeEl.checked }),
+);
+turboModeEl.addEventListener('change', () =>
+  net.send({ type: 'mode', turbo: turboModeEl.checked }),
+);
 
 // --- slash commands ---
 // Typing "/" in chat pops up this menu of commands; each only appears when usable.
@@ -381,6 +389,8 @@ function enableChat() {
   joined = true;
   chatInput.disabled = false;
   closingModeEl.disabled = false;
+  gravityModeEl.disabled = false;
+  turboModeEl.disabled = false;
   for (const btn of reactionsEl.querySelectorAll<HTMLButtonElement>('.reaction-btn')) {
     btn.disabled = false;
   }
@@ -990,6 +1000,12 @@ function updateUI() {
   // user while they're interacting with the box.
   if (document.activeElement !== closingModeEl && closingModeEl.checked !== state.closing) {
     closingModeEl.checked = state.closing;
+  }
+  if (document.activeElement !== gravityModeEl && gravityModeEl.checked !== state.gravity) {
+    gravityModeEl.checked = state.gravity;
+  }
+  if (document.activeElement !== turboModeEl && turboModeEl.checked !== state.turbo) {
+    turboModeEl.checked = state.turbo;
   }
 
   // Keep the checkbox in sync with the shared setting (another player may have flipped it).

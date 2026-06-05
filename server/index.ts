@@ -103,7 +103,11 @@ wss.on('connection', (ws: WebSocket) => {
         if (typeof msg.emoji === 'string') lobby.reaction(ws, msg.emoji);
         break;
       case 'mode':
-        if (typeof msg.closing === 'boolean') lobby.setMode(ws, msg.closing);
+        lobby.setMode(ws, {
+          closing: typeof msg.closing === 'boolean' ? msg.closing : undefined,
+          gravity: typeof msg.gravity === 'boolean' ? msg.gravity : undefined,
+          turbo: typeof msg.turbo === 'boolean' ? msg.turbo : undefined,
+        });
         break;
       case 'fatality':
         if (typeof msg.move === 'string') lobby.fatality(ws, msg.move);

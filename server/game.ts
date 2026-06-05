@@ -23,6 +23,9 @@ import {
   GHOST_TIME,
   TINY_TIME,
   CURVE_SPIN,
+  GRAVITY_ACCEL,
+  TURBO_SPEED_MULT,
+  TURBO_SPEEDUP,
   POWERUPS,
   TARGET,
   PowerupKind,
@@ -93,6 +96,8 @@ export class Game {
   score = { left: 0, right: 0 };
   status: Status = 'waiting';
   closing = false; // "closing walls" mode armed; applies from the next match start
+  gravity = false; // constant downward pull bends ball trajectory
+  turbo = false; // faster serve speed and steeper per-hit speedup
   winnerSide: Side | null = null;
   lastHit: Side | null = null; // side whose paddle last touched any ball (null until first hit)
   paused = false; // set by the lobby: freeze play until both players capture their mouse
@@ -193,6 +198,9 @@ export class Game {
     if (!on) this.paddleX = { ...HOME_X };
   }
 
+  setGravity(on: boolean) { this.gravity = on; }
+  setTurbo(on: boolean) { this.turbo = on; }
+
   /** X of a paddle's hitting face — its inner edge, which moves with the paddle. */
   private faceX(side: Side): number {
     return side === 'left'
@@ -249,9 +257,10 @@ export class Game {
   }
 
   private launch() {
+    const speed = this.turbo ? BALL.speed * TURBO_SPEED_MULT : BALL.speed;
     const angle = (Math.random() * 2 - 1) * 0.3; // small vertical spread on serve
-    this.ball.vx = this.serveDir * BALL.speed * Math.cos(angle);
-    this.ball.vy = BALL.speed * Math.sin(angle);
+    this.ball.vx = this.serveDir * speed * Math.cos(angle);
+    this.ball.vy = speed * Math.sin(angle);
   }
 
   tick(dt: number) {
@@ -331,6 +340,9 @@ export class Game {
       b.spin *= Math.exp(-2 * dt); // ~0.5 s half-life
       if (Math.abs(b.spin) < 0.01) b.spin = 0;
     }
+
+    // Gravity: accelerate downward before integrating position.
+    if (this.gravity) b.vy += GRAVITY_ACCEL * dt * scale;
 
     const prevX = b.x;
     const prevY = b.y;
@@ -508,7 +520,8 @@ export class Game {
   private bounce(side: Side, b: Ball) {
     this.lastHit = side;
     const rel = clamp((b.y - this.paddleY[side]) / this.halfH(side), -1, 1);
-    let speed = Math.hypot(b.vx, b.vy) * BALL.speedup;
+    const speedup = this.turbo ? TURBO_SPEEDUP : BALL.speedup;
+    let speed = Math.hypot(b.vx, b.vy) * speedup;
     if (this.smashHits[side] > 0) speed *= SMASH_BONUS;
     const angle = rel * MAX_BOUNCE;
     const dir = side === 'left' ? 1 : -1;

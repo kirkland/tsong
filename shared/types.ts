@@ -37,6 +37,9 @@ export const MIRROR_TIME = 3; // seconds the opponent's controls are inverted
 export const GHOST_TIME = 3; // seconds the ball is invisible
 export const TINY_TIME = 5; // seconds the ball is rendered tiny
 export const CURVE_SPIN = 1.4; // spin (rad/s) applied to the ball on a curve hit
+export const GRAVITY_ACCEL = 220; // court units/sec² downward pull in gravity mode
+export const TURBO_SPEED_MULT = 1.5; // serve speed multiplier in turbo mode
+export const TURBO_SPEEDUP = 1.1; // per-hit speedup in turbo mode (vs BALL.speedup = 1.05)
 export const TARGET = {
   r: 24, // target radius, court units
   minDelay: 6, // min seconds before a target (re)appears
@@ -95,7 +98,7 @@ export type ClientMsg =
   | { type: 'paddle'; y: number } // desired paddle center Y, in court units
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
-  | { type: 'mode'; closing: boolean } // toggle "closing walls" mode (takes effect next match)
+  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean } // toggle game modes
   | { type: 'fatality'; move: string } // winner-only, validated server-side
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
   | { type: 'forfeit' } // "/ff": leave your paddle spot mid-game (and get shamed)
@@ -135,6 +138,8 @@ export interface StateMsg {
   // their mouse (pointer lock). The client overlays a "capture to play" prompt.
   paused: boolean;
   closing: boolean; // whether "closing walls" mode is armed
+  gravity: boolean; // whether gravity mode is active
+  turbo: boolean; // whether turbo mode is active
   winner: string | null; // nickname of the winner when status === 'over'
   // Shared, room-wide toggle: when true, the match winner can perform a finishing move.
   // It's one setting for everyone (not per-user), so it rides along in the state.
