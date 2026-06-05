@@ -666,6 +666,30 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !gameModesPanel.hidden) closeGameModes();
 });
 
+// --- Power-ups dropdown (top-left, next to MODES): legend of all power-ups ---
+const powerupInfoBtn = document.getElementById('powerupInfoBtn') as HTMLButtonElement;
+const powerupInfoPanel = document.getElementById('powerupInfoPanel') as HTMLDivElement;
+
+function openPowerupInfo() {
+  powerupInfoPanel.hidden = false;
+  powerupInfoBtn.setAttribute('aria-expanded', 'true');
+}
+function closePowerupInfo() {
+  powerupInfoPanel.hidden = true;
+  powerupInfoBtn.setAttribute('aria-expanded', 'false');
+}
+powerupInfoBtn.addEventListener('click', () =>
+  powerupInfoPanel.hidden ? openPowerupInfo() : closePowerupInfo(),
+);
+document.addEventListener('click', (e) => {
+  if (powerupInfoPanel.hidden) return;
+  const t = e.target as Node;
+  if (!powerupInfoPanel.contains(t) && !powerupInfoBtn.contains(t)) closePowerupInfo();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !powerupInfoPanel.hidden) closePowerupInfo();
+});
+
 // --- CHANGELOG dropdown (top-right): recent commit messages on main ---
 const changelogBtn = document.getElementById('changelogBtn') as HTMLButtonElement;
 const changelogPanel = document.getElementById('changelogPanel') as HTMLDivElement;
