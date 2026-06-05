@@ -97,6 +97,11 @@ const FATALITY_HINT = FATALITIES.map((f) => `${f.label} ${f.hint}`).join('  ·  
 const COMBO_KEYS = new Set(FATALITIES.flatMap((f) => f.seq as readonly string[]));
 const COMBO_WINDOW_MS = 1500; // presses older than this are forgotten
 let fatalityDone = false; // already fired (or skipped) for the current 'over' screen
+
+// "FINISH HIM!" announcer sting, played once when a match ends with fatalities armed.
+const finishSound = new Audio('/finish-him.mp3');
+finishSound.preload = 'auto';
+let prevStatus: StateMsg['status'] | null = null; // last seen status, to fire on the rising edge into 'over'
 let comboBuf: { k: string; t: number }[] = [];
 
 // Return the fatality move whose combo the recent keypresses just completed, or null.
@@ -135,6 +140,14 @@ const net = connect(
       // Hand the cursor back when we're no longer holding a paddle (e.g. match ended).
       if (!isPlayer() && document.pointerLockElement === canvas) document.exitPointerLock();
     } else if (msg.type === 'state') {
+      // Play the "FINISH HIM!" sting once, the instant the match ends with fatalities
+      // armed (the moment the prompt appears for the winner). Edge-triggered so it
+      // doesn't retrigger on every state frame while the 'over' screen lingers.
+      if (msg.status === 'over' && prevStatus !== 'over' && msg.fatalitiesEnabled && msg.winner) {
+        finishSound.currentTime = 0;
+        finishSound.play().catch(() => {}); // ignore autoplay blocks (e.g. a spectator who never clicked)
+      }
+      prevStatus = msg.status;
       state = msg;
       syncMyPaddleFromServer();
       updateUI();
