@@ -100,6 +100,8 @@ const FATALITIES = [
   { move: 'PADDLE_SPLIT', label: 'Explode', seq: ['arrowup', 'arrowup', 'arrowdown'], hint: '↑↑↓', desc: 'The loser is dragged to center, cracks apart, and explodes in shrapnel.' },
   { move: 'FROST_SHATTER', label: 'Freeze', seq: ['arrowdown', 'arrowup', 'arrowdown'], hint: '↓↑↓', desc: 'The loser freezes solid, cracks, and shatters into a spray of ice shards.' },
   { move: 'NOT_FOUND', label: '404', seq: ['arrowup', 'arrowup', 'arrowup'], hint: '↑↑↑', desc: 'The loser glitches into a missing-texture checkerboard and blinks out: 404.' },
+  { move: 'SINGULARITY', label: 'Black Hole', seq: ['arrowdown', 'arrowdown', 'arrowdown'], hint: '↓↓↓', desc: 'Space buckles. A black hole tears open at center court, spaghettifies the loser into its accretion disk, then implodes into a blinding singularity and detonates.' },
+  { move: 'PAC_CHOMP', label: 'Pac-Man', seq: ['arrowup', 'arrowdown', 'arrowup'], hint: '↑↓↑', desc: 'You become a yellow Pac-Man and waka-waka down a trail of ping-pong pellets to the frozen loser, devour them, then balloon up and burst.' },
 ] as const;
 const COMBO_KEYS = new Set(FATALITIES.flatMap((f) => f.seq as readonly string[]));
 const COMBO_WINDOW_MS = 1500; // presses older than this are forgotten
@@ -108,7 +110,11 @@ let fatalityDone = false; // already fired (or skipped) for the current 'over' s
 // "FINISH HIM!" announcer sting, played once when a match ends with fatalities armed.
 const finishSound = new Audio('/finish-him.mp3');
 finishSound.preload = 'auto';
+// Music that plays for the duration of a fatality animation (any finisher).
+const fatalityMusic = new Audio('/start-music.mp3');
+fatalityMusic.preload = 'auto';
 let prevStatus: StateMsg['status'] | null = null; // last seen status, to fire on the rising edge into 'over'
+let prevFatality = false; // whether a fatality was playing last frame, to fire music on the rising edge
 let comboBuf: { k: string; t: number }[] = [];
 
 // Return the fatality move whose combo the recent keypresses just completed, or null.
@@ -154,6 +160,18 @@ const net = connect(
         finishSound.currentTime = 0;
         finishSound.play().catch(() => {}); // ignore autoplay blocks (e.g. a spectator who never clicked)
       }
+      // Play the fatality music while a finisher animates: start it the frame the
+      // fatality appears, stop it the frame it clears (or the screen moves on).
+      const fatalityActive = !!msg.fatality;
+      if (fatalityActive && !prevFatality) {
+        finishSound.pause(); // hand off from the "FINISH HIM!" sting to the music
+        fatalityMusic.currentTime = 0;
+        fatalityMusic.play().catch(() => {});
+      } else if (!fatalityActive && prevFatality) {
+        fatalityMusic.pause();
+        fatalityMusic.currentTime = 0;
+      }
+      prevFatality = fatalityActive;
       prevStatus = msg.status;
       state = msg;
       syncMyPaddleFromServer();

@@ -435,6 +435,12 @@ function drawFatality(
     case 'NOT_FOUND':
       drawNotFound(ctx, s, fx, t, banner);
       break;
+    case 'SINGULARITY':
+      drawSingularity(ctx, s, fx, t, banner);
+      break;
+    case 'PAC_CHOMP':
+      drawPacChomp(ctx, s, fx, t, banner);
+      break;
   }
 }
 
@@ -1330,6 +1336,496 @@ function drawNotFound(
   }
 
   banner();
+}
+
+// --- Fatality: "Singularity" (Black Hole) ------------------------------------
+// Space buckles. A black hole tears open at court center: gravitational lensing
+// rings ripple out, the surrounding starfield spirals inward and redshifts, the
+// losing paddle is spaghettified along a tidal stream into a glowing accretion
+// disk, then the whole thing collapses to a blinding point and detonates.
+function drawSingularity(
+  ctx: CanvasRenderingContext2D,
+  s: StateMsg,
+  fx: { side: 'left' | 'right' },
+  t: number,
+  banner: () => void,
+) {
+  const loserSide = fx.side === 'left' ? 'right' : 'left';
+  const loser = s.paddles[loserSide];
+  const cx = COURT.w / 2;
+  const cy = COURT.h / 2;
+  const TAU = Math.PI * 2;
+  // Stable per-index pseudo-random in [0,1) — Math.random() drifts every frame.
+  const hash = (n: number) => {
+    const x = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+    return x - Math.floor(x);
+  };
+
+  const FORM = 0.45; // hole tears open, lensing ripples, starfield begins to fall in
+  const DEVOUR = 1.3; // accretion disk ignites, the paddle is spaghettified inward
+  const IMPLODE = 0.7; // collapse to a point, blinding flash, detonation shockwave
+
+  const formP = Math.min(1, t / FORM);
+  const devourActive = t >= FORM;
+  const dp = devourActive ? Math.min(1, (t - FORM) / DEVOUR) : 0;
+  const implodeActive = t >= FORM + DEVOUR;
+  const ip = implodeActive ? Math.min(1, (t - FORM - DEVOUR) / IMPLODE) : 0;
+
+  // Deep-space blackout — darker than the other finishers; space itself is eaten.
+  ctx.fillStyle = `rgba(2,3,10,${Math.min(0.9, t * 1.5)})`;
+  ctx.fillRect(0, 0, COURT.w, COURT.h);
+
+  // Erase the loser paddle from its home cell — its matter is the disk now.
+  ctx.fillStyle = '#0b1020';
+  ctx.fillRect(loser.x - PADDLE.w / 2 - 2, loser.y - loser.h / 2 - 2, PADDLE.w + 4, loser.h + 4);
+
+  // Event horizon: grows as it forms, then collapses to nothing during the implosion.
+  const baseR = 7 + formP * 26;
+  const horizonR = implodeActive ? Math.max(0, baseR * (1 - ip)) : baseR;
+
+  // --- Infalling starfield: points spiraling in, redshifting and accelerating ---
+  if (!implodeActive || ip < 0.5) {
+    const span = Math.max(COURT.w, COURT.h);
+    const pull = formP * 0.28 + dp * 0.72; // 0 → undisturbed, 1 → fully consumed
+    for (let i = 0; i < 90; i++) {
+      const a0 = hash(i) * TAU;
+      const r0 = 70 + hash(i + 99) * span * 0.7;
+      const g = Math.min(1, pull * (0.6 + hash(i + 7) * 0.7));
+      const dist = r0 * Math.pow(1 - g, 1.8) + horizonR;
+      if (dist <= horizonR + 1) continue; // already swallowed
+      const ang = a0 + g * (3 + hash(i + 41) * 4) * TAU * (i % 2 === 0 ? 1 : -1);
+      const sx = cx + Math.cos(ang) * dist;
+      const sy = cy + Math.sin(ang) * dist;
+      // Redshift: white/blue far out, deep red as it nears the horizon.
+      const near = 1 - Math.min(1, (dist - horizonR) / (span * 0.5));
+      const col = blend('#cfe0ff', '#ff3a1a', near);
+      const r = 0.6 + hash(i + 13) * 1.4;
+      ctx.fillStyle = col;
+      ctx.globalAlpha = 0.5 + 0.5 * near;
+      ctx.beginPath();
+      ctx.arc(sx, sy, r, 0, TAU);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // --- Gravitational lensing rings rippling outward as the hole tears open ---
+  if (formP < 1 || t < FORM + 0.4) {
+    const rip = (t / 0.7) % 1;
+    for (let k = 0; k < 3; k++) {
+      const rp = (rip + k / 3) % 1;
+      const rr = horizonR + rp * 130;
+      const alpha = 0.35 * (1 - rp) * Math.min(1, formP * 1.5);
+      ctx.strokeStyle = `rgba(150,120,255,${alpha})`;
+      ctx.lineWidth = 2 * (1 - rp);
+      ctx.beginPath();
+      ctx.arc(cx, cy, rr, 0, TAU);
+      ctx.stroke();
+    }
+  }
+
+  // --- Accretion disk: a tilted, spinning ring of superheated matter ---
+  if (devourActive && !(implodeActive && ip > 0.4)) {
+    const intensity = Math.min(1, dp * 1.5) * (implodeActive ? 1 - ip / 0.4 : 1);
+    const tilt = 0.34; // vertical squash → disk seen near edge-on
+    const inner = horizonR * 1.1;
+    const outer = horizonR * 3.2 + 30;
+    ctx.save();
+    ctx.translate(cx, cy);
+    // Soft hot haze of the disk.
+    const haze = ctx.createRadialGradient(0, 0, inner, 0, 0, outer);
+    haze.addColorStop(0, `rgba(255,240,200,${0.22 * intensity})`);
+    haze.addColorStop(0.5, `rgba(255,140,40,${0.16 * intensity})`);
+    haze.addColorStop(1, 'rgba(255,80,20,0)');
+    ctx.save();
+    ctx.scale(1, tilt);
+    ctx.fillStyle = haze;
+    ctx.beginPath();
+    ctx.arc(0, 0, outer, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+    // Streaking orbital particles, brighter on the Doppler-boosted approaching side.
+    for (let i = 0; i < 70; i++) {
+      const orbit = inner + hash(i) * (outer - inner);
+      const speed = 5 + (1 - (orbit - inner) / (outer - inner)) * 7; // inner orbits faster
+      const ang = hash(i + 200) * TAU + t * speed * (1 + dp);
+      const ox = Math.cos(ang) * orbit;
+      const oy = Math.sin(ang) * orbit * tilt;
+      // Approaching side (left half here) beams brighter and bluer-white.
+      const boost = 0.45 + 0.55 * (Math.cos(ang) * 0.5 + 0.5);
+      const col = blend('#ff5a14', '#fff4d0', boost);
+      ctx.globalAlpha = intensity * (0.4 + 0.6 * boost);
+      ctx.fillStyle = col;
+      const ps = 1 + hash(i + 5) * 1.6;
+      ctx.beginPath();
+      ctx.arc(ox, oy, ps, 0, TAU);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  // --- Spaghettification: the paddle stretched into a tidal stream and spiraled in ---
+  if (devourActive && dp < 1) {
+    const segs = 16;
+    const pp = dp * dp; // accelerating infall
+    for (let i = 0; i <= segs; i++) {
+      const frac = i / segs;
+      const hx = loser.x;
+      const hy = loser.y - loser.h / 2 + frac * loser.h;
+      const ang0 = Math.atan2(hy - cy, hx - cx);
+      const dist0 = Math.hypot(hx - cx, hy - cy);
+      // Each segment winds inward; outer-of-paddle lags, near-edge leads → stretch.
+      const lead = pp * (1 + frac * 0.6);
+      const ang = ang0 + lead * 7;
+      const dist = Math.max(horizonR, dist0 * Math.pow(1 - Math.min(1, lead), 1.5));
+      const x = cx + Math.cos(ang) * dist;
+      const y = cy + Math.sin(ang) * dist;
+      // Stretch streak pointing back along its orbit, lengthening as it falls in.
+      const tail = 10 + pp * 60;
+      const tx = cx + Math.cos(ang - 0.5) * (dist + tail);
+      const ty = cy + Math.sin(ang - 0.5) * (dist + tail);
+      const heat = Math.min(1, (1 - dist / (dist0 + 1)) + pp * 0.4);
+      const col = blend(loser.color, '#fff4d0', heat);
+      ctx.strokeStyle = col;
+      ctx.globalAlpha = Math.max(0, 1 - pp * 0.7);
+      ctx.lineWidth = Math.max(0.5, (PADDLE.w * 0.6) * (1 - heat * 0.7));
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(tx, ty);
+      ctx.lineTo(x, y);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    ctx.lineCap = 'butt';
+  }
+
+  // --- Photon ring + event horizon (drawn over the disk so the void reads on top) ---
+  if (horizonR > 0.5) {
+    // Bright photon ring hugging the horizon.
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,236,190,0.9)';
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = '#ffd27a';
+    ctx.shadowBlur = 22;
+    ctx.beginPath();
+    ctx.arc(cx, cy, horizonR * 1.18, 0, TAU);
+    ctx.stroke();
+    ctx.restore();
+    // The void itself.
+    const hole = ctx.createRadialGradient(cx, cy, 0, cx, cy, horizonR * 1.1);
+    hole.addColorStop(0, '#000000');
+    hole.addColorStop(0.82, '#000000');
+    hole.addColorStop(1, 'rgba(40,20,60,0.6)');
+    ctx.fillStyle = hole;
+    ctx.beginPath();
+    ctx.arc(cx, cy, horizonR * 1.1, 0, TAU);
+    ctx.fill();
+  }
+
+  // --- Implosion: blinding flash, then a detonation shockwave ---
+  if (implodeActive) {
+    // Collapse flash — everything piles into the point and ignites.
+    if (ip < 0.35) {
+      const fp = ip / 0.35;
+      const fr = 20 + fp * 260;
+      const flash = ctx.createRadialGradient(cx, cy, 0, cx, cy, fr);
+      flash.addColorStop(0, `rgba(255,255,255,${0.95 * (1 - fp * 0.3)})`);
+      flash.addColorStop(0.3, `rgba(220,200,255,${0.7 * (1 - fp)})`);
+      flash.addColorStop(1, 'rgba(150,120,255,0)');
+      ctx.fillStyle = flash;
+      ctx.beginPath();
+      ctx.arc(cx, cy, fr, 0, TAU);
+      ctx.fill();
+    }
+    // Detonation shockwave ring blasting outward.
+    if (ip > 0.2) {
+      const wp = (ip - 0.2) / 0.8;
+      const wr = wp * Math.max(COURT.w, COURT.h) * 0.75;
+      const wAlpha = 0.6 * (1 - wp);
+      ctx.strokeStyle = `rgba(190,170,255,${wAlpha})`;
+      ctx.lineWidth = 6 * (1 - wp);
+      ctx.beginPath();
+      ctx.arc(cx, cy, wr, 0, TAU);
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(255,255,255,${wAlpha * 0.7})`;
+      ctx.lineWidth = 2 * (1 - wp);
+      ctx.beginPath();
+      ctx.arc(cx, cy, wr * 0.88, 0, TAU);
+      ctx.stroke();
+    }
+  }
+
+  banner();
+}
+
+// --- Fatality: "Pac-Man" -----------------------------------------------------
+// The WINNER (not the loser) is the star here: their paddle morphs into a yellow
+// Pac-Man, which waka-wakas along a trail of ping-pong pellets across the court to
+// the frozen, increasingly-nervous loser, devours them, balloons up fat, and bursts.
+function drawPacChomp(
+  ctx: CanvasRenderingContext2D,
+  s: StateMsg,
+  fx: { side: 'left' | 'right' },
+  t: number,
+  banner: () => void,
+) {
+  const loserSide = fx.side === 'left' ? 'right' : 'left';
+  const winner = s.paddles[fx.side];
+  const loser = s.paddles[loserSide];
+  const dir = fx.side === 'left' ? 1 : -1; // travel direction across the court
+  const facing = dir === 1 ? 0 : Math.PI; // mouth points the way Pac travels
+  const TAU = Math.PI * 2;
+
+  const PAC_R = 20; // starting Pac radius
+  const GROW = 2.4; // radius gained per pellet eaten
+
+  const MORPH = 0.5; // paddle morphs into Pac, pellets fade in
+  const TRAVEL = 1.6; // chomp along the trail
+  const DEVOUR = 0.4; // swallow the loser
+  const EXPLODE = 1.0; // balloon and burst
+  const tTravel = MORPH;
+  const tDevour = MORPH + TRAVEL;
+  const tExplode = MORPH + TRAVEL + DEVOUR;
+
+  // Path: from just in front of the winner to just in front of the loser.
+  const startX = winner.x + dir * (PADDLE.w / 2 + 16);
+  const startY = winner.y;
+  const stopX = loser.x - dir * (PADDLE.w / 2 + 4);
+  const stopY = loser.y;
+  const lerpPath = (f: number) => ({ x: startX + (stopX - startX) * f, y: startY + (stopY - startY) * f });
+
+  // Evenly-spaced pellets along the path.
+  const pelletCount = Math.max(3, Math.round(Math.abs(stopX - startX) / 34));
+  const pelletFrac = (i: number) => (i + 0.5) / pelletCount;
+
+  // How far Pac is along the path right now (eased), and its current fatness.
+  let pacFrac = 0;
+  if (t >= tTravel) pacFrac = Math.min(1, (t - tTravel) / TRAVEL);
+  const easedFrac = pacFrac < 0.5 ? 2 * pacFrac * pacFrac : 1 - Math.pow(-2 * pacFrac + 2, 2) / 2;
+  const eaten = t < tTravel ? 0 : Math.min(pelletCount, Math.floor(easedFrac * pelletCount + 0.5));
+  const pac = t < tTravel ? { x: startX, y: startY } : lerpPath(easedFrac);
+
+  // Background dim (dark, arcade-maze blue-black).
+  ctx.fillStyle = `rgba(2,4,14,${Math.min(0.7, t * 1.3)})`;
+  ctx.fillRect(0, 0, COURT.w, COURT.h);
+
+  // Erase both real paddles — winner becomes Pac, loser is drawn by us below.
+  ctx.fillStyle = '#0b1020';
+  ctx.fillRect(winner.x - PADDLE.w / 2 - 2, winner.y - loser.h / 2 - 2, PADDLE.w + 4, winner.h + 4);
+  ctx.fillRect(loser.x - PADDLE.w / 2 - 2, loser.y - loser.h / 2 - 2, PADDLE.w + 4, loser.h + 4);
+
+  // --- Ping-pong pellet trail (drawn under Pac) ---
+  if (t < tExplode) {
+    for (let i = 0; i < pelletCount; i++) {
+      if (t >= tTravel && pelletFrac(i) <= easedFrac) continue; // already eaten
+      const p = lerpPath(pelletFrac(i));
+      const fadeIn = Math.min(1, t / MORPH);
+      const bob = Math.sin(t * 6 + i) * 1.5;
+      drawPellet(ctx, p.x, p.y + bob, 5, fadeIn);
+    }
+  }
+
+  // --- The loser: frozen, shaking harder the closer Pac gets, then swallowed ---
+  if (t < tDevour) {
+    const nearness = t < tTravel ? 0 : easedFrac;
+    const shake = Math.sin(t * 38) * (0.4 + nearness * 4);
+    ctx.fillStyle = loser.color;
+    ctx.fillRect(loser.x - PADDLE.w / 2 + shake, loser.y - loser.h / 2, PADDLE.w, loser.h);
+    // Wide, nervous eyes that grow as doom approaches.
+    const eyeR = 2 + nearness * 2;
+    ctx.fillStyle = '#fff';
+    for (const dy of [-loser.h * 0.18, loser.h * 0.06]) {
+      ctx.beginPath();
+      ctx.arc(loser.x + shake - dir * 2, loser.y + dy, eyeR, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = '#0b1020';
+      ctx.beginPath();
+      ctx.arc(loser.x + shake - dir * 2, loser.y + dy, eyeR * 0.5, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = '#fff';
+    }
+    // Sweat bead near the top once Pac is close.
+    if (nearness > 0.4) {
+      ctx.fillStyle = `rgba(120,200,255,${(nearness - 0.4) * 1.6})`;
+      ctx.beginPath();
+      ctx.arc(loser.x + shake - dir * 6, loser.y - loser.h / 2 + 6, 2.5, 0, TAU);
+      ctx.fill();
+    }
+  } else if (t < tExplode) {
+    // Being swallowed: the paddle shrinks toward Pac's mouth.
+    const dvp = (t - tDevour) / DEVOUR;
+    const h = loser.h * (1 - dvp);
+    const lx = loser.x + (pac.x - loser.x) * dvp;
+    ctx.globalAlpha = 1 - dvp * 0.5;
+    ctx.fillStyle = loser.color;
+    ctx.fillRect(lx - PADDLE.w / 2, loser.y - h / 2, PADDLE.w, h);
+    ctx.globalAlpha = 1;
+  }
+
+  // --- Pac-Man ---
+  const pacR = PAC_R + eaten * GROW;
+  if (t < MORPH) {
+    // Morph: winner paddle squashes into a growing yellow ball.
+    const mp = t / MORPH;
+    const w = PADDLE.w + (pacR * 2 - PADDLE.w) * mp;
+    const h = winner.h + (pacR * 2 - winner.h) * mp;
+    ctx.fillStyle = blend(winner.color, '#ffe600', mp);
+    if (mp < 0.6) {
+      roundRect(ctx, winner.x - w / 2, winner.y - h / 2, w, h, pacR * mp);
+      ctx.fill();
+    } else {
+      const mouth = (mp - 0.6) / 0.4 * 0.3 * Math.PI;
+      pacMan(ctx, winner.x, winner.y, pacR, facing, mouth);
+    }
+  } else if (t < tExplode) {
+    // Chomp! Mouth opens and closes as it travels / devours.
+    const chomp = Math.abs(Math.sin(t * 16));
+    const mouth = (0.05 + chomp * 0.3) * Math.PI;
+    pacMan(ctx, pac.x, pac.y, pacR, facing, mouth);
+    // Little motion-puff dots trailing behind during travel.
+    if (t < tDevour) {
+      for (let i = 1; i <= 3; i++) {
+        const bp = easedFrac - i * 0.03;
+        if (bp < 0) continue;
+        const b = lerpPath(bp);
+        ctx.fillStyle = `rgba(255,230,0,${0.12 / i})`;
+        ctx.beginPath();
+        ctx.arc(b.x, b.y, pacR * (1 - i * 0.12), 0, TAU);
+        ctx.fill();
+      }
+    }
+  } else {
+    // --- Balloon & burst ---
+    const ep = Math.min(1, (t - tExplode) / EXPLODE);
+    const POP = 0.4;
+    const bigR = pacR + 26;
+    if (ep < POP) {
+      // Swell, straining and reddening, with a nervous wobble before it goes.
+      const sp = ep / POP;
+      const wobble = 1 + Math.sin(t * 40) * 0.04 * sp;
+      const r = (bigR + sp * 60) * wobble;
+      ctx.fillStyle = blend('#ffe600', '#ff5a2a', sp * 0.5);
+      pacMan(ctx, pac.x, pac.y, r, facing, (0.05 + sp * 0.1) * Math.PI);
+      // Strain glints.
+      ctx.strokeStyle = `rgba(255,255,255,${sp * 0.5})`;
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 4; i++) {
+        const a = (i / 4) * TAU + t;
+        ctx.beginPath();
+        ctx.moveTo(pac.x + Math.cos(a) * r * 0.6, pac.y + Math.sin(a) * r * 0.6);
+        ctx.lineTo(pac.x + Math.cos(a) * r * 0.9, pac.y + Math.sin(a) * r * 0.9);
+        ctx.stroke();
+      }
+    } else {
+      // POP: flash, shockwave, yellow shards + raining pellets.
+      const bp = (ep - POP) / (1 - POP);
+      if (bp < 0.3) {
+        const fp = bp / 0.3;
+        const fr = bigR + fp * 200;
+        const flash = ctx.createRadialGradient(pac.x, pac.y, 0, pac.x, pac.y, fr);
+        flash.addColorStop(0, `rgba(255,255,210,${0.9 * (1 - fp)})`);
+        flash.addColorStop(0.5, `rgba(255,230,0,${0.5 * (1 - fp)})`);
+        flash.addColorStop(1, 'rgba(255,180,0,0)');
+        ctx.fillStyle = flash;
+        ctx.beginPath();
+        ctx.arc(pac.x, pac.y, fr, 0, TAU);
+        ctx.fill();
+      }
+      // Shockwave ring.
+      const wr = bp * 260;
+      ctx.strokeStyle = `rgba(255,230,0,${0.6 * (1 - bp)})`;
+      ctx.lineWidth = 5 * (1 - bp);
+      ctx.beginPath();
+      ctx.arc(pac.x, pac.y, wr, 0, TAU);
+      ctx.stroke();
+      // Yellow Pac-wedge shards spinning out.
+      for (let i = 0; i < 14; i++) {
+        const a = (i / 14) * TAU + 0.2;
+        const dist = bp * (80 + ((i * 17) % 60));
+        const sx = pac.x + Math.cos(a) * dist;
+        const sy = pac.y + Math.sin(a) * dist + bp * bp * 40; // gravity
+        const alpha = Math.max(0, 1 - bp * 1.2);
+        ctx.save();
+        ctx.translate(sx, sy);
+        ctx.rotate(a + bp * 6);
+        ctx.globalAlpha = alpha;
+        pacMan(ctx, 0, 0, 6 + (i % 3) * 2, 0, 0.35 * Math.PI);
+        ctx.restore();
+      }
+      // Eaten pellets raining back out.
+      for (let i = 0; i < pelletCount; i++) {
+        const a = (i / pelletCount) * TAU + 1.1;
+        const dist = bp * (50 + ((i * 23) % 70));
+        const px = pac.x + Math.cos(a) * dist;
+        const py = pac.y + Math.sin(a) * dist + bp * bp * 55;
+        drawPellet(ctx, px, py, 5, Math.max(0, 1 - bp * 1.3));
+      }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  banner();
+}
+
+// A glossy white ping-pong pellet.
+function drawPellet(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, alpha: number) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  const g = ctx.createRadialGradient(x - r * 0.3, y - r * 0.3, 0, x, y, r);
+  g.addColorStop(0, '#ffffff');
+  g.addColorStop(1, '#cdd6e6');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+// Draw a Pac-Man: a yellow disk with a wedge mouth cut out, mouth pointed along
+// `facing` (radians) and opened by `mouth` (radians, 0 = closed).
+function pacMan(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  r: number,
+  facing: number,
+  mouth: number,
+) {
+  ctx.save();
+  ctx.fillStyle = '#ffe600';
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.arc(x, y, r, facing + mouth, facing + Math.PI * 2 - mouth);
+  ctx.closePath();
+  ctx.fill();
+  // Eye: up and slightly toward the front.
+  const ex = x + Math.cos(facing) * r * 0.2;
+  const ey = y - r * 0.45;
+  ctx.fillStyle = '#0b1020';
+  ctx.beginPath();
+  ctx.arc(ex, ey, Math.max(1.2, r * 0.12), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+// Path a rounded rectangle (used for the paddle→Pac morph).
+function roundRect(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  r: number,
+) {
+  const rr = Math.min(r, w / 2, h / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
 }
 
 function drawFireball(ctx: CanvasRenderingContext2D, x: number, y: number, r: number) {

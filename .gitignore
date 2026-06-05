@@ -5,3 +5,4 @@ client/dist/
 *.swp
 .tsong-state.json
 CLAUDE.md
+bot.ts
