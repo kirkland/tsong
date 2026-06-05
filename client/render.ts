@@ -587,7 +587,6 @@ function drawFrostShatter(
 ) {
   const loserSide = fx.side === 'left' ? 'right' : 'left';
   const loser = s.paddles[loserSide];
-  const winner = s.paddles[fx.side];
   const loserX = loser.x;
 
   const FREEZE = 0.6;

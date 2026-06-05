@@ -175,6 +175,7 @@ export class Game {
     // Advance every ball. A ball that leaves the court scores for the opposite side and
     // drops out of play; the rally only ends (and a new ball is served) once no balls
     // remain — so during multi-ball one ball going out doesn't kill the others.
+    const prevExtras = this.extraBalls.length; // a multi power-up may append more below
     const survivors: Ball[] = [];
     let lastScorer: Side | null = null;
     let ended = false;
@@ -198,10 +199,15 @@ export class Game {
       return;
     }
 
-    if (survivors.length > 0) {
+    // A "multi" power-up claimed this tick appends new balls past extraBalls' original
+    // length; keep them alongside the survivors (otherwise the new ball is discarded).
+    const spawned = this.extraBalls.slice(prevExtras);
+    const live = [...survivors, ...spawned];
+
+    if (live.length > 0) {
       // Some balls are still live: keep playing, promoting one to the primary slot.
-      this.ball = survivors[0];
-      this.extraBalls = survivors.slice(1);
+      this.ball = live[0];
+      this.extraBalls = live.slice(1);
     } else if (lastScorer) {
       // Zero balls left → serve a fresh single ball toward the side just scored on.
       this.serve(lastScorer === 'left' ? 1 : -1);

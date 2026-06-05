@@ -86,15 +86,25 @@ let lastSendAt = 0;
 const keys = new Set<string>();
 
 // --- fatalities (opt-in finishing move for the match winner) ---
-const FATALITY_SEQ = ['arrowdown', 'arrowdown', 'arrowup'] as const;
-const FATALITY_HINT = '↓ ↓ ↑';
-const FATALITY_MOVES = ['SCREEN_MELT', 'PADDLE_SPLIT', 'FROST_SHATTER'] as const;
+// Each finisher has its own arrow combo so the winner can pick which one to perform.
+const FATALITIES = [
+  { move: 'SCREEN_MELT', label: 'Melt', seq: ['arrowdown', 'arrowdown', 'arrowup'], hint: '↓↓↑' },
+  { move: 'PADDLE_SPLIT', label: 'Explode', seq: ['arrowup', 'arrowup', 'arrowdown'], hint: '↑↑↓' },
+  { move: 'FROST_SHATTER', label: 'Freeze', seq: ['arrowdown', 'arrowup', 'arrowdown'], hint: '↓↑↓' },
+] as const;
+const FATALITY_HINT = FATALITIES.map((f) => `${f.label} ${f.hint}`).join('  ·  ');
+const COMBO_KEYS = new Set(FATALITIES.flatMap((f) => f.seq as readonly string[]));
 const COMBO_WINDOW_MS = 1500; // presses older than this are forgotten
 let fatalityDone = false; // already fired (or skipped) for the current 'over' screen
 let comboBuf: { k: string; t: number }[] = [];
 
-function randomFatalityMove(): string {
-  return FATALITY_MOVES[Math.floor(Math.random() * FATALITY_MOVES.length)];
+// Return the fatality move whose combo the recent keypresses just completed, or null.
+function matchCombo(): string | null {
+  for (const f of FATALITIES) {
+    const tail = comboBuf.slice(-f.seq.length);
+    if (tail.length === f.seq.length && tail.every((e, i) => e.k === f.seq[i])) return f.move;
+  }
+  return null;
 }
 
 function randomColor(): string {
@@ -826,23 +836,18 @@ function canFinish(): boolean {
   );
 }
 
-// Record a keypress and report whether the tail of recent presses spells the combo.
-function pushCombo(k: string, t: number): boolean {
-  comboBuf = comboBuf.filter((e) => t - e.t < COMBO_WINDOW_MS);
-  comboBuf.push({ k, t });
-  const seq = FATALITY_SEQ;
-  const tail = comboBuf.slice(-seq.length);
-  return tail.length === seq.length && tail.every((e, i) => e.k === seq[i]);
-}
-
 window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement) return;
   if (!canFinish()) return;
   const k = e.key.toLowerCase();
-  if (!FATALITY_SEQ.includes(k as typeof FATALITY_SEQ[number])) return;
+  if (!COMBO_KEYS.has(k)) return;
   e.preventDefault(); // arrows would otherwise scroll the page
-  if (pushCombo(k, performance.now())) {
-    net.send({ type: 'fatality', move: randomFatalityMove() });
+  const t = performance.now();
+  comboBuf = comboBuf.filter((entry) => t - entry.t < COMBO_WINDOW_MS);
+  comboBuf.push({ k, t });
+  const move = matchCombo();
+  if (move) {
+    net.send({ type: 'fatality', move });
     fatalityDone = true;
     comboBuf = [];
   }
