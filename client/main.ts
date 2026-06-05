@@ -41,6 +41,11 @@ const recentReactionsEl = document.getElementById('recentReactions') as HTMLDivE
 const ballReactionEl = document.getElementById('ballReaction') as HTMLDivElement;
 const reactionLayer = document.getElementById('reactionLayer') as HTMLDivElement;
 const fatalityCheck = document.getElementById('fatalityCheck') as HTMLInputElement;
+const combosBtn = document.getElementById('combosBtn') as HTMLButtonElement;
+const combosModal = document.getElementById('combosModal') as HTMLDivElement;
+const combosCard = document.getElementById('combosCard') as HTMLDivElement;
+const combosClose = document.getElementById('combosClose') as HTMLButtonElement;
+const combosList = document.getElementById('combosList') as HTMLDivElement;
 
 // Cookies (not localStorage, per request); ~1 year, scoped to the site.
 const YEAR = 60 * 60 * 24 * 365;
@@ -89,11 +94,11 @@ const keys = new Set<string>();
 // --- fatalities (opt-in finishing move for the match winner) ---
 // Each finisher has its own arrow combo so the winner can pick which one to perform.
 const FATALITIES = [
-  { move: 'SCREEN_MELT', label: 'Melt', seq: ['arrowdown', 'arrowdown', 'arrowup'], hint: '↓↓↑' },
-  { move: 'PADDLE_SPLIT', label: 'Explode', seq: ['arrowup', 'arrowup', 'arrowdown'], hint: '↑↑↓' },
-  { move: 'FROST_SHATTER', label: 'Freeze', seq: ['arrowdown', 'arrowup', 'arrowdown'], hint: '↓↑↓' },
+  { move: 'SCREEN_MELT', label: 'Melt', seq: ['arrowdown', 'arrowdown', 'arrowup'], hint: '↓↓↑', desc: 'The ball flares into a fireball and melts the loser down the court like wax.' },
+  { move: 'PADDLE_SPLIT', label: 'Explode', seq: ['arrowup', 'arrowup', 'arrowdown'], hint: '↑↑↓', desc: 'The loser is dragged to center, cracks apart, and explodes in shrapnel.' },
+  { move: 'FROST_SHATTER', label: 'Freeze', seq: ['arrowdown', 'arrowup', 'arrowdown'], hint: '↓↑↓', desc: 'The loser freezes solid, cracks, and shatters into a spray of ice shards.' },
+  { move: 'NOT_FOUND', label: '404', seq: ['arrowup', 'arrowup', 'arrowup'], hint: '↑↑↑', desc: 'The loser glitches into a missing-texture checkerboard and blinks out: 404.' },
 ] as const;
-const FATALITY_HINT = FATALITIES.map((f) => `${f.label} ${f.hint}`).join('  ·  ');
 const COMBO_KEYS = new Set(FATALITIES.flatMap((f) => f.seq as readonly string[]));
 const COMBO_WINDOW_MS = 1500; // presses older than this are forgotten
 let fatalityDone = false; // already fired (or skipped) for the current 'over' screen
@@ -898,6 +903,57 @@ fatalityCheck.addEventListener('change', () => {
   net.send({ type: 'setFatalities', enabled: fatalityCheck.checked });
 });
 
+// --- fatality combos reference modal ---
+// Built once from FATALITIES so adding a finisher there auto-lists it here. Keys render
+// as little ↑/↓ keycaps; the description explains what each finisher does.
+const ARROW: Record<string, string> = { arrowup: '↑', arrowdown: '↓' };
+function buildCombosList() {
+  combosList.replaceChildren();
+  for (const f of FATALITIES) {
+    const row = document.createElement('div');
+    row.className = 'combo-row';
+
+    const keys = document.createElement('div');
+    keys.className = 'combo-keys';
+    for (const k of f.seq) {
+      const cap = document.createElement('span');
+      cap.className = 'combo-key';
+      cap.textContent = ARROW[k] ?? k;
+      keys.append(cap);
+    }
+
+    const info = document.createElement('div');
+    info.className = 'combo-info';
+    const name = document.createElement('span');
+    name.className = 'combo-name';
+    name.textContent = f.label;
+    const desc = document.createElement('span');
+    desc.className = 'combo-desc';
+    desc.textContent = f.desc;
+    info.append(name, desc);
+
+    row.append(keys, info);
+    combosList.append(row);
+  }
+}
+buildCombosList();
+
+function openCombos() {
+  combosModal.hidden = false;
+}
+function closeCombos() {
+  combosModal.hidden = true;
+}
+combosBtn.addEventListener('click', openCombos);
+combosClose.addEventListener('click', closeCombos);
+// Click the dim backdrop (but not the card) to dismiss.
+combosModal.addEventListener('click', (e) => {
+  if (!combosCard.contains(e.target as Node)) closeCombos();
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !combosModal.hidden) closeCombos();
+});
+
 // --- main loop ---
 function loop(t: number) {
   // Paddle input (mouse and keyboard) only applies while the mouse is captured.
@@ -939,13 +995,18 @@ function updateUI() {
   // Keep the checkbox in sync with the shared setting (another player may have flipped it).
   fatalityCheck.checked = state.fatalitiesEnabled;
 
+  // The combos reference is only meaningful when fatalities are armed; hide it (and the
+  // modal) otherwise.
+  combosBtn.hidden = !state.fatalitiesEnabled;
+  if (!state.fatalitiesEnabled) combosModal.hidden = true;
+
   // Once the match is no longer over, re-arm the finishing move for next time.
   if (state.status !== 'over') fatalityDone = false;
 
   if (state.status === 'waiting') statusEl.textContent = 'Waiting for players…';
   else if (state.status === 'over') {
     if (state.fatality) statusEl.textContent = '☠  F A T A L I T Y  ☠';
-    else if (canFinish()) statusEl.textContent = `🔪 FINISH HIM!  press  ${FATALITY_HINT}`;
+    else if (canFinish()) statusEl.textContent = '🔪 FINISH HIM!  ·  tap a combo (see Combos ▸)';
     else statusEl.textContent = state.winner ? `🏆 ${state.winner} wins!` : 'Game over';
   } else if (state.paused) {
     // Match is frozen until both players capture their mouse.
