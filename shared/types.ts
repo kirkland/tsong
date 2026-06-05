@@ -53,16 +53,19 @@ export const CHAT_HISTORY = 50; // recent messages kept/sent to new joiners
 export const TICK_MS = 1000 / 60;
 export const MAX_BOUNCE = Math.PI / 3; // steepest deflection off a paddle edge
 export const SERVE_DELAY = 0.7; // seconds the ball pauses at center before launching
+export const READY_TIMEOUT = 15; // seconds to wait for both players to ready up before clearing spots
 
 export type Side = 'left' | 'right';
 export type Role = Side | 'observer';
 export type Status = 'waiting' | 'playing' | 'over';
 
 // Finishing moves the winner can perform during the 'over' window (opt-in, see the
-// "Fatalities" toggle on the client). Start with one; the name is the wire value.
+// "Fatalities" toggle on the client). The name is the wire value.
 // SCREEN_MELT: the ball flares into a fireball and the losing paddle melts down the
 // court like liquid wax.
-export const FATALITY_MOVES = ['SCREEN_MELT'] as const;
+// PADDLE_SPLIT: the losing paddle is dragged to center, split in half, and explodes.
+// FROST_SHATTER: the losing paddle freezes, cracks, and shatters into ice shards.
+export const FATALITY_MOVES = ['SCREEN_MELT', 'PADDLE_SPLIT', 'FROST_SHATTER'] as const;
 export type FatalityMove = (typeof FATALITY_MOVES)[number];
 
 // --- Client -> Server ---
@@ -78,7 +81,11 @@ export type ClientMsg =
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
   | { type: 'forfeit' } // "/ff": leave your paddle spot mid-game (and get shamed)
   | { type: 'spawnPowerup' } // "/powerup": drop a random power-up target onto the board
-  | { type: 'capture'; on: boolean }; // whether this player's mouse is captured to the board
+  | { type: 'capture'; on: boolean } // whether this player's mouse is captured to the board
+  | { type: 'kingExit' } // winner declines to stay as king of the court
+  | { type: 'queueJoin' } // join the spectator queue
+  | { type: 'queueLeave' } // leave the spectator queue
+  | { type: 'ready' }; // ready up for the next match
 
 // --- Server -> Client ---
 export interface PaddleState {
@@ -112,6 +119,9 @@ export interface StateMsg {
   // every client. `side` is the winning side; null until/unless a fatality happens.
   fatality: { side: Side; move: string } | null;
   watchers: string[]; // nicknames of joined observers
+  king: string | null; // nickname of the king (winner who stayed), null if none
+  queue: string[]; // ordered nicknames of spectators waiting to play
+  ready: { left: boolean; right: boolean }; // ready-up status when match is over
 }
 
 // Sent to a single connection whenever its own role changes (connect / claim / release).
@@ -137,6 +147,7 @@ export interface ChatLine {
   from: string;
   text: string;
   player: boolean; // true if the sender held a paddle when they sent it
+  color: string; // hex color of the sender's name
 }
 
 // One line for a live message; the full recent history on connect. Client appends.

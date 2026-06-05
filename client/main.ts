@@ -22,7 +22,11 @@ const overlay = document.getElementById('overlay') as HTMLDivElement;
 const joinForm = document.getElementById('joinForm') as HTMLFormElement;
 const nick = document.getElementById('nick') as HTMLInputElement;
 const joinBtn = document.getElementById('join') as HTMLButtonElement;
+const queueBtn = document.getElementById('queueBtn') as HTMLButtonElement;
+const queueArea = document.getElementById('queueArea') as HTMLDivElement;
+const readyBtn = document.getElementById('readyBtn') as HTMLButtonElement;
 const renameBtn = document.getElementById('rename') as HTMLButtonElement;
+const kingStatusEl = document.getElementById('kingStatus') as HTMLDivElement;
 const statusEl = document.getElementById('status') as HTMLDivElement;
 const watchersEl = document.getElementById('watchers') as HTMLDivElement;
 const leaderboardEl = document.getElementById('leaderboard') as HTMLDivElement;
@@ -82,24 +86,34 @@ let lastSendAt = 0;
 const keys = new Set<string>();
 
 // --- fatalities (opt-in finishing move for the match winner) ---
-// The one move we ship: a "Screen Melt". Its input combo is shown to the winner.
-const FATALITY = {
-  move: 'SCREEN_MELT',
-  seq: ['arrowdown', 'arrowdown', 'arrowup'], // the "FINISH HIM" combo
-  hint: '↓ ↓ ↑',
-};
+const FATALITY_SEQ = ['arrowdown', 'arrowdown', 'arrowup'] as const;
+const FATALITY_HINT = '↓ ↓ ↑';
+const FATALITY_MOVES = ['SCREEN_MELT', 'PADDLE_SPLIT', 'FROST_SHATTER'] as const;
 const COMBO_WINDOW_MS = 1500; // presses older than this are forgotten
 let fatalityDone = false; // already fired (or skipped) for the current 'over' screen
 let comboBuf: { k: string; t: number }[] = [];
+
+function randomFatalityMove(): string {
+  return FATALITY_MOVES[Math.floor(Math.random() * FATALITY_MOVES.length)];
+}
+
+function randomColor(): string {
+  const hue = Math.random() * 360;
+  const sat = 60 + Math.random() * 30;
+  const lit = 50 + Math.random() * 25;
+  return `hsl(${hue}, ${sat}%, ${lit}%)`;
+}
 
 // --- color swatch selection ---
 colorPicker.addEventListener('click', (e) => {
   const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.swatch');
   if (!btn) return;
-  const color = btn.dataset.color;
+  const color = btn.id === 'randomColor' ? randomColor() : btn.dataset.color;
   if (color) {
     myColor = color;
     selectSwatch(color);
+    // Update the random button background to show the current random color
+    if (btn.id === 'randomColor') btn.style.background = color;
   }
 });
 
@@ -152,6 +166,23 @@ joinForm.addEventListener('submit', (e) => {
   enableChat();
 });
 
+// --- queue: join/leave the spectator queue ---
+let inQueue = false;
+queueBtn.addEventListener('click', () => {
+  if (inQueue) {
+    net.send({ type: 'queueLeave' });
+    inQueue = false;
+    queueBtn.textContent = 'Join queue';
+  } else {
+    net.send({ type: 'queueJoin' });
+    inQueue = true;
+    queueBtn.textContent = 'Leave queue';
+  }
+});
+
+// --- ready up for the next match ---
+readyBtn.addEventListener('click', () => net.send({ type: 'ready' }));
+
 // --- change name: reopen the prompt pre-filled with the current name ---
 renameBtn.addEventListener('click', () => {
   nick.value = myName;
@@ -162,6 +193,9 @@ renameBtn.addEventListener('click', () => {
 
 // --- claim a paddle spot ---
 joinBtn.addEventListener('click', () => net.send({ type: 'claim' }));
+
+// --- king exit: winner declines to stay ---
+kingStatusEl.addEventListener('click', () => net.send({ type: 'kingExit' }));
 
 // --- closing-walls game mode toggle (shared by everyone; applies next match) ---
 closingModeEl.addEventListener('change', () =>
@@ -568,6 +602,7 @@ function addChatLine(line: ChatLine) {
   const who = document.createElement('span');
   who.className = line.player ? 'chatfrom tag' : 'chatfrom';
   who.textContent = line.player ? `${line.from} (playing)` : line.from;
+  who.style.color = line.color;
   const body = document.createElement('span');
   body.className = 'chattext';
   body.textContent = `: ${line.text}`;
@@ -595,6 +630,30 @@ function showAnnouncement(text: string) {
   anim.onfinish = () => el.remove();
   anim.oncancel = () => el.remove();
 }
+
+// --- Game Modes dropdown (top-left): game mode toggles ---
+const gameModesBtn = document.getElementById('gameModesBtn') as HTMLButtonElement;
+const gameModesPanel = document.getElementById('gameModesPanel') as HTMLDivElement;
+
+function openGameModes() {
+  gameModesPanel.hidden = false;
+  gameModesBtn.setAttribute('aria-expanded', 'true');
+}
+function closeGameModes() {
+  gameModesPanel.hidden = true;
+  gameModesBtn.setAttribute('aria-expanded', 'false');
+}
+gameModesBtn.addEventListener('click', () =>
+  gameModesPanel.hidden ? openGameModes() : closeGameModes(),
+);
+document.addEventListener('click', (e) => {
+  if (gameModesPanel.hidden) return;
+  const t = e.target as Node;
+  if (!gameModesPanel.contains(t) && !gameModesBtn.contains(t)) closeGameModes();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !gameModesPanel.hidden) closeGameModes();
+});
 
 // --- CHANGELOG dropdown (top-right): recent commit messages on main ---
 const changelogBtn = document.getElementById('changelogBtn') as HTMLButtonElement;
@@ -771,7 +830,7 @@ function canFinish(): boolean {
 function pushCombo(k: string, t: number): boolean {
   comboBuf = comboBuf.filter((e) => t - e.t < COMBO_WINDOW_MS);
   comboBuf.push({ k, t });
-  const seq = FATALITY.seq;
+  const seq = FATALITY_SEQ;
   const tail = comboBuf.slice(-seq.length);
   return tail.length === seq.length && tail.every((e, i) => e.k === seq[i]);
 }
@@ -780,10 +839,10 @@ window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement) return;
   if (!canFinish()) return;
   const k = e.key.toLowerCase();
-  if (!FATALITY.seq.includes(k)) return;
+  if (!FATALITY_SEQ.includes(k as typeof FATALITY_SEQ[number])) return;
   e.preventDefault(); // arrows would otherwise scroll the page
   if (pushCombo(k, performance.now())) {
-    net.send({ type: 'fatality', move: FATALITY.move });
+    net.send({ type: 'fatality', move: randomFatalityMove() });
     fatalityDone = true;
     comboBuf = [];
   }
@@ -842,7 +901,7 @@ function updateUI() {
   if (state.status === 'waiting') statusEl.textContent = 'Waiting for players…';
   else if (state.status === 'over') {
     if (state.fatality) statusEl.textContent = '☠  F A T A L I T Y  ☠';
-    else if (canFinish()) statusEl.textContent = `🔪 FINISH HIM!  press  ${FATALITY.hint}`;
+    else if (canFinish()) statusEl.textContent = `🔪 FINISH HIM!  press  ${FATALITY_HINT}`;
     else statusEl.textContent = state.winner ? `🏆 ${state.winner} wins!` : 'Game over';
   } else if (state.paused) {
     // Match is frozen until both players capture their mouse.
@@ -854,6 +913,40 @@ function updateUI() {
   } else if (isPlayer() && !pointerLocked) {
     statusEl.textContent = '🖱 click the board to capture your mouse · Esc to release';
   } else statusEl.textContent = '';
+
+  // King of the court: winner who stayed can exit
+  const isKing = !!state.king && state.king === myName;
+  if (isKing && state.status !== 'playing') {
+    kingStatusEl.style.display = 'block';
+    kingStatusEl.textContent = `👑 You're the king! Click to exit`;
+    kingStatusEl.style.cursor = 'pointer';
+  } else {
+    kingStatusEl.style.display = 'none';
+  }
+
+  // Queue display
+  if (state.queue.length > 0) {
+    queueArea.style.display = 'block';
+    queueArea.textContent = `Queue: ${state.queue.join(', ')}`;
+  } else {
+    queueArea.style.display = 'none';
+  }
+  // Queue button for observers
+  if (myRole === 'observer' && joined) {
+    queueBtn.style.display = 'inline-block';
+  } else {
+    queueBtn.style.display = 'none';
+  }
+  // Reset inQueue if we left observer state (e.g. we claimed a spot)
+  if (myRole !== 'observer') inQueue = false;
+
+  // Ready button when the match is over and you hold a paddle
+  if (state.status === 'over' && isPlayer()) {
+    readyBtn.style.display = 'inline-block';
+    readyBtn.textContent = state.ready[myRole as 'left' | 'right'] ? '✓ Ready' : 'Ready?';
+  } else {
+    readyBtn.style.display = 'none';
+  }
 
   const spotOpen = !state.paddles.left.name || !state.paddles.right.name;
   joinBtn.style.display = myRole === 'observer' && spotOpen ? 'inline-block' : 'none';
