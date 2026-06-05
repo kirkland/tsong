@@ -102,6 +102,11 @@ const FATALITIES = [
 const COMBO_KEYS = new Set(FATALITIES.flatMap((f) => f.seq as readonly string[]));
 const COMBO_WINDOW_MS = 1500; // presses older than this are forgotten
 let fatalityDone = false; // already fired (or skipped) for the current 'over' screen
+
+// "FINISH HIM!" announcer sting, played once when a match ends with fatalities armed.
+const finishSound = new Audio('/finish-him.mp3');
+finishSound.preload = 'auto';
+let prevStatus: StateMsg['status'] | null = null; // last seen status, to fire on the rising edge into 'over'
 let comboBuf: { k: string; t: number }[] = [];
 
 // Return the fatality move whose combo the recent keypresses just completed, or null.
@@ -140,6 +145,14 @@ const net = connect(
       // Hand the cursor back when we're no longer holding a paddle (e.g. match ended).
       if (!isPlayer() && document.pointerLockElement === canvas) document.exitPointerLock();
     } else if (msg.type === 'state') {
+      // Play the "FINISH HIM!" sting once, the instant the match ends with fatalities
+      // armed (the moment the prompt appears for the winner). Edge-triggered so it
+      // doesn't retrigger on every state frame while the 'over' screen lingers.
+      if (msg.status === 'over' && prevStatus !== 'over' && msg.fatalitiesEnabled && msg.winner) {
+        finishSound.currentTime = 0;
+        finishSound.play().catch(() => {}); // ignore autoplay blocks (e.g. a spectator who never clicked)
+      }
+      prevStatus = msg.status;
       state = msg;
       syncMyPaddleFromServer();
       updateUI();
@@ -154,6 +167,9 @@ const net = connect(
     }
   },
   () => {
+    // The server replays recent chat history on every (re)connect. Clear the log first so
+    // a reconnect (which keeps the page, and thus the old lines) doesn't duplicate them.
+    chatLog.replaceChildren();
     if (myName) net.send({ type: 'join', nickname: myName, pid: myPid, color: myColor });
     // Re-assert capture state after a (re)connect so the server's view stays in sync.
     if (pointerLocked) net.send({ type: 'capture', on: true });
@@ -669,6 +685,30 @@ document.addEventListener('click', (e) => {
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !gameModesPanel.hidden) closeGameModes();
+});
+
+// --- Power-ups dropdown (top-left, next to MODES): legend of all power-ups ---
+const powerupInfoBtn = document.getElementById('powerupInfoBtn') as HTMLButtonElement;
+const powerupInfoPanel = document.getElementById('powerupInfoPanel') as HTMLDivElement;
+
+function openPowerupInfo() {
+  powerupInfoPanel.hidden = false;
+  powerupInfoBtn.setAttribute('aria-expanded', 'true');
+}
+function closePowerupInfo() {
+  powerupInfoPanel.hidden = true;
+  powerupInfoBtn.setAttribute('aria-expanded', 'false');
+}
+powerupInfoBtn.addEventListener('click', () =>
+  powerupInfoPanel.hidden ? openPowerupInfo() : closePowerupInfo(),
+);
+document.addEventListener('click', (e) => {
+  if (powerupInfoPanel.hidden) return;
+  const t = e.target as Node;
+  if (!powerupInfoPanel.contains(t) && !powerupInfoBtn.contains(t)) closePowerupInfo();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !powerupInfoPanel.hidden) closePowerupInfo();
 });
 
 // --- CHANGELOG dropdown (top-right): recent commit messages on main ---

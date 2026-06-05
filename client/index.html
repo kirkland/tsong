@@ -505,12 +505,19 @@
       #colorPicker .swatch.random:hover {
         border-color: #9fb0d8;
       }
-      /* Game modes dropdown, pinned to the top-left corner. */
-      #gameModes {
+      /* Top-left button group: MODES + POWER-UPS, pinned to the corner. */
+      #topLeft {
         position: fixed;
         top: 12px;
         left: 12px;
         z-index: 80;
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+      }
+      /* Game modes dropdown — now inside #topLeft, so no longer fixed itself. */
+      #gameModes {
+        position: relative;
       }
       #gameModesBtn {
         display: flex;
@@ -775,34 +782,70 @@
         font-size: 13px;
         color: #6b7796;
       }
-      /* Power-up legend, shown below the leaderboard. */
-      #powerupLegend {
-        width: min(90vw, 360px);
-        font-size: 13px;
-        margin-top: 4px;
+      /* Power-up info dropdown — sibling of #gameModes inside #topLeft. */
+      #powerupInfo {
+        position: relative;
       }
-      #powerupLegend h2 {
-        font-size: 13px;
+      #powerupInfoBtn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font: inherit;
+        font-size: 12px;
+        letter-spacing: 1px;
+        padding: 7px 12px;
+        border-radius: 6px;
+        border: 1px solid #2a3550;
+        background: #0e1424;
+        color: #7da2ff;
+        cursor: pointer;
+      }
+      #powerupInfoBtn:hover {
+        background: #18203a;
+      }
+      #powerupInfoBtn .caret {
+        font-size: 14px;
+        transition: transform 0.15s;
+        transform: translateY(-0.15em);
+      }
+      #powerupInfoBtn[aria-expanded='true'] .caret {
+        transform: translateY(-0.15em) rotate(180deg);
+      }
+      #powerupInfoPanel {
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 0;
+        width: min(86vw, 270px);
+        background: #0e1424;
+        border: 1px solid #2a3550;
+        border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+        padding: 6px 0 8px;
+      }
+      #powerupInfoPanel[hidden] {
+        display: none;
+      }
+      #powerupInfoPanel h3 {
+        font-size: 10px;
         letter-spacing: 1px;
         text-transform: uppercase;
-        color: #7da2ff;
-        text-align: center;
-        margin: 8px 0 6px;
+        color: #6b7796;
+        margin: 0;
+        padding: 6px 10px 4px;
       }
       .pu-list {
         display: flex;
         flex-direction: column;
-        gap: 2px;
+        gap: 0;
       }
       .pu-row {
         display: flex;
         align-items: center;
         gap: 10px;
         padding: 4px 10px;
-        border-radius: 4px;
       }
       .pu-row:nth-child(odd) {
-        background: #0e1424;
+        background: #0b1020;
       }
       .pu-icon {
         flex-shrink: 0;
@@ -828,53 +871,28 @@
     </style>
   </head>
   <body>
-    <div id="gameModes">
-      <button id="gameModesBtn" type="button" aria-expanded="false">
-        MODES <span class="caret">▾</span>
-      </button>
-      <div id="gameModesPanel" hidden>
-        <label class="mode-option" title="Each paddle hit drags both paddles toward center. Applies at the next match.">
-          <input type="checkbox" id="closingMode" disabled /> Closing walls
-        </label>
-        <label class="mode-option fatalities" title="When on, win a match to perform a finishing move">
-          <input type="checkbox" id="fatalityCheck" />
-          Fatalities
-        </label>
-        <button id="combosBtn" type="button" hidden>📓 Fatality combos</button>
-      </div>
-    </div>
-    <!-- Fatality combos reference, opened from the modes panel (only while fatalities are on). -->
-    <div id="combosModal" hidden>
-      <div id="combosCard" role="dialog" aria-modal="true" aria-label="Fatality combos">
-        <div id="combosHead">
-          <span>☠ Fatality Combos</span>
-          <button id="combosClose" type="button" aria-label="Close">✕</button>
+    <div id="topLeft">
+      <div id="gameModes">
+        <button id="gameModesBtn" type="button" aria-expanded="false">
+          MODES <span class="caret">▾</span>
+        </button>
+        <div id="gameModesPanel" hidden>
+          <label class="mode-option" title="Each paddle hit drags both paddles toward center. Applies at the next match.">
+            <input type="checkbox" id="closingMode" disabled /> Closing walls
+          </label>
+          <label class="mode-option fatalities" title="When on, win a match to perform a finishing move">
+            <input type="checkbox" id="fatalityCheck" />
+            Fatalities
+          </label>
+          <button id="combosBtn" type="button" hidden>📓 Fatality combos</button>
         </div>
-        <div id="combosList"></div>
-        <p id="combosFoot">Win a match, then tap the arrow combo to perform that finisher.</p>
       </div>
-    </div>
-    <div id="changelog">
-      <button id="changelogBtn" type="button" aria-expanded="false">
-        CHANGELOG <span class="caret">▾</span>
-      </button>
-      <div id="changelogPanel" hidden></div>
-    </div>
-    <h1>T S O N G</h1>
-    <div class="arena">
-      <div id="stage">
-        <canvas id="game" width="800" height="500"></canvas>
-        <div id="status"></div>
-        <button id="join" style="display: none">Join game</button>
-        <div id="kingStatus" style="display: none; font-size: 13px; color: #e8b84b;"></div>
-        <div id="watchers"></div>
-        <div id="queueArea" style="display: none; font-size: 13px; color: #6b7796;"></div>
-        <button id="queueBtn" style="display: none; font-size: 12px; padding: 4px 10px;">Join queue</button>
-        <button id="readyBtn" style="display: none">Ready</button>
-        <button id="rename" class="link" style="display: none">change name</button>
-        <div id="leaderboard"></div>
-        <div id="powerupLegend">
-          <h2>Power-ups</h2>
+      <div id="powerupInfo">
+        <button id="powerupInfoBtn" type="button" aria-expanded="false">
+          POWER-UPS <span class="caret">▾</span>
+        </button>
+        <div id="powerupInfoPanel" hidden>
+          <h3>Power-ups</h3>
           <div class="pu-list">
             <div class="pu-row">
               <canvas class="pu-icon" data-kind="grow" width="40" height="40"></canvas>
@@ -913,6 +931,38 @@
             </div>
           </div>
         </div>
+      </div>
+    </div>
+    <!-- Fatality combos reference, opened from the modes panel (only while fatalities are on). -->
+    <div id="combosModal" hidden>
+      <div id="combosCard" role="dialog" aria-modal="true" aria-label="Fatality combos">
+        <div id="combosHead">
+          <span>☠ Fatality Combos</span>
+          <button id="combosClose" type="button" aria-label="Close">✕</button>
+        </div>
+        <div id="combosList"></div>
+        <p id="combosFoot">Win a match, then tap the arrow combo to perform that finisher.</p>
+      </div>
+    </div>
+    <div id="changelog">
+      <button id="changelogBtn" type="button" aria-expanded="false">
+        CHANGELOG <span class="caret">▾</span>
+      </button>
+      <div id="changelogPanel" hidden></div>
+    </div>
+    <h1>T S O N G</h1>
+    <div class="arena">
+      <div id="stage">
+        <canvas id="game" width="800" height="500"></canvas>
+        <div id="status"></div>
+        <button id="join" style="display: none">Join game</button>
+        <div id="kingStatus" style="display: none; font-size: 13px; color: #e8b84b;"></div>
+        <div id="watchers"></div>
+        <div id="queueArea" style="display: none; font-size: 13px; color: #6b7796;"></div>
+        <button id="queueBtn" style="display: none; font-size: 12px; padding: 4px 10px;">Join queue</button>
+        <button id="readyBtn" style="display: none">Ready</button>
+        <button id="rename" class="link" style="display: none">change name</button>
+        <div id="leaderboard"></div>
       </div>
 
       <div id="chat">

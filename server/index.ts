@@ -6,15 +6,30 @@ import path from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import sirv from 'sirv';
 import { ClientMsg, TICK_MS } from '../shared/types';
-import { Game } from './game';
-import { Lobby } from './lobby';
+import { Game, GameSnapshot } from './game';
+import { Lobby, LobbySnapshot } from './lobby';
 import { initDb } from './db';
 import { getChangelog } from './changelog';
+import { loadSnapshot, saveSnapshot } from './persist';
 
 const PORT = Number(process.env.PORT ?? 3000);
 
 const game = new Game();
 const lobby = new Lobby(game);
+
+// Resume across a restart/deploy: if the previous process left a fresh snapshot, restore
+// the match so reconnecting players land back in it (frozen until they re-capture their
+// mice) instead of losing it. No-op on a clean start or a stale/missing snapshot.
+const snap = loadSnapshot<GameSnapshot, LobbySnapshot>();
+if (snap) {
+  try {
+    game.restore(snap.game);
+    lobby.restore(snap.lobby);
+    console.log('resumed game state from snapshot');
+  } catch (e) {
+    console.error('snapshot restore failed — starting fresh:', e);
+  }
+}
 
 // Bring up the leaderboard DB and prime the cache. The server starts serving
 // immediately; standings populate once the DB is ready (no-op without DATABASE_URL).
@@ -29,6 +44,14 @@ const serveStatic = sirv(path.resolve(process.cwd(), 'client/dist'), {
 });
 
 const server = http.createServer((req, res) => {
+  // Liveness + match state, polled by the deploy script so it can hold a restart until
+  // there's a break between matches (no rally gets cut off).
+  if (req.url === '/api/status') {
+    res.setHeader('content-type', 'application/json');
+    res.setHeader('cache-control', 'no-cache');
+    res.end(JSON.stringify({ status: game.status, playing: game.status === 'playing' }));
+    return;
+  }
   // Recent commit messages for the in-app CHANGELOG dropdown.
   if (req.url === '/api/changelog') {
     getChangelog()
@@ -118,7 +141,7 @@ wss.on('connection', (ws: WebSocket) => {
 
 // Single authoritative loop: advance physics, reconcile spots, broadcast to everyone.
 const dt = TICK_MS / 1000;
-setInterval(() => {
+const loop = setInterval(() => {
   game.tick(dt);
   lobby.sync();
   lobby.broadcast();
@@ -127,3 +150,20 @@ setInterval(() => {
 server.listen(PORT, () => {
   console.log(`tsong server listening on http://localhost:${PORT} (ws at /ws)`);
 });
+
+// Graceful shutdown: a deploy (systemctl restart) or Ctrl-C sends SIGTERM/SIGINT. Snapshot
+// the live match to disk before exiting so the next process can resume it. The write is
+// synchronous and fast; we then stop the loop and close the server, with a short hard cap
+// in case sockets linger.
+let shuttingDown = false;
+function shutdown(signal: string) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`${signal} received — saving state and shutting down`);
+  saveSnapshot(game.serialize(), lobby.serialize());
+  clearInterval(loop);
+  server.close(() => process.exit(0));
+  setTimeout(() => process.exit(0), 1000).unref();
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));

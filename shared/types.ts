@@ -43,7 +43,7 @@ export const TARGET = {
 //   shrink — the opponent's paddle shrinks for their next 3 hits
 //   smash  — your next 3 hits launch the ball faster
 //   slow   — the ball slows down for a few seconds
-//   multi  — an extra ball joins the rally until the next point
+//   multi  — two extra balls join the rally until the next point
 export const POWERUPS = ['grow', 'shrink', 'smash', 'slow', 'multi'] as const;
 export type PowerupKind = (typeof POWERUPS)[number];
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
