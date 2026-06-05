@@ -97,6 +97,18 @@ wss.on('connection', (ws: WebSocket) => {
       case 'capture':
         if (typeof msg.on === 'boolean') lobby.setCapture(ws, msg.on);
         break;
+      case 'kingExit':
+        lobby.kingExit(ws);
+        break;
+      case 'queueJoin':
+        lobby.queueJoin(ws);
+        break;
+      case 'queueLeave':
+        lobby.queueLeave(ws);
+        break;
+      case 'ready':
+        lobby.setReady(ws);
+        break;
     }
   });
 

@@ -172,16 +172,12 @@ const GLYPHS: Record<PowerupKind, (ctx: CanvasRenderingContext2D, x: number, y: 
   },
 };
 
-// --- Fatality: "Screen Melt" -------------------------------------------------
-// The ball flares into a fireball, streaks into the losing paddle, and that paddle
-// melts down the court like wax while a FATALITY banner pulses over a darkened court.
-// render is otherwise stateless, so we latch the animation's start time here.
+// --- Fatality animations ------------------------------------------------------
+// render is otherwise stateless, so we latch each animation's start time here.
 let fxStart = 0;
 let fxKey = '';
 
 const MOLTEN = '#ff5a2a';
-const FLY = 0.55; // seconds the fireball takes to cross to the loser
-const MELT = 1.4; // seconds for the paddle to fully melt
 
 function drawFatality(
   ctx: CanvasRenderingContext2D,
@@ -195,63 +191,23 @@ function drawFatality(
     fxKey = key;
   }
   const t = (now - fxStart) / 1000;
+  const banner = () => drawFatalityBanner(ctx, t);
 
-  const loserSide = fx.side === 'left' ? 'right' : 'left';
-  const loser = s.paddles[loserSide];
-  const winner = s.paddles[fx.side];
-  // Use the live paddle X so the melt lands on the paddle even when "closing walls"
-  // mode has slid it inward from its home position.
-  const loserX = loser.x;
-  const winFaceX = fx.side === 'left' ? winner.x + PADDLE.w / 2 : winner.x - PADDLE.w / 2;
-
-  // 1) Dim the court.
-  ctx.fillStyle = `rgba(4,7,16,${Math.min(0.5, t * 1.2)})`;
-  ctx.fillRect(0, 0, COURT.w, COURT.h);
-
-  // Erase the loser's intact paddle so we can render the melting version ourselves.
-  // Use the loser's actual height so a boosted paddle is fully covered.
-  ctx.fillStyle = '#0b1020';
-  ctx.fillRect(loserX - PADDLE.w / 2 - 2, loser.y - loser.h / 2 - 2, PADDLE.w + 4, loser.h + 4);
-
-  // 2) Fireball streaks from the winner's face into the loser.
-  if (t < FLY) {
-    const p = t / FLY;
-    const bx = winFaceX + (loserX - winFaceX) * p;
-    const by = winner.y + (loser.y - winner.y) * p;
-    drawFireball(ctx, bx, by, BALL.r + p * 8);
+  switch (fx.move) {
+    case 'SCREEN_MELT':
+      drawScreenMelt(ctx, s, fx, t, banner);
+      break;
+    case 'PADDLE_SPLIT':
+      drawPaddleSplit(ctx, s, fx, t, banner);
+      break;
+    case 'FROST_SHATTER':
+      drawFrostShatter(ctx, s, fx, t, banner);
+      break;
   }
+}
 
-  // 3) The loser melts.
-  const m = Math.max(0, t - FLY);
-  const mp = Math.min(1, m / MELT); // 0 → 1 melt progress
-  const topY = loser.y - loser.h / 2;
-  const solidH = Math.max(0, loser.h * (1 - mp));
-  const frontY = topY + solidH;
-
-  // Remaining solid chunk, tinting molten as it goes.
-  ctx.fillStyle = blend(loser.color, MOLTEN, mp * 0.7);
-  ctx.fillRect(loserX - PADDLE.w / 2, topY, PADDLE.w, solidH);
-
-  // Drips running down to the floor, each at its own pace.
-  const cols = 4;
-  ctx.fillStyle = MOLTEN;
-  for (let i = 0; i < cols; i++) {
-    const cx = loserX - PADDLE.w / 2 + (i + 0.5) * (PADDLE.w / cols);
-    const lead = 0.5 + ((i * 7) % 5) / 5; // 0.5–1.5, deterministic spread
-    const bottom = Math.min(COURT.h - 4, frontY + (COURT.h - frontY) * Math.min(1, mp * lead));
-    ctx.fillRect(cx - 2, frontY, 4, Math.max(0, bottom - frontY));
-    ctx.beginPath();
-    ctx.arc(cx, bottom, 3.5, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  // Puddle pooling at the base.
-  ctx.fillStyle = MOLTEN;
-  ctx.beginPath();
-  ctx.ellipse(loserX, COURT.h - 4, 8 + mp * 60, 5 + mp * 4, 0, 0, Math.PI * 2);
-  ctx.fill();
-
-  // 4) FATALITY banner, pulsing in.
+// Shared FATALITY banner, pulsing in.
+function drawFatalityBanner(ctx: CanvasRenderingContext2D, t: number) {
   if (t > 0.3) {
     const a = Math.min(1, (t - 0.3) * 3);
     const pulse = 1 + Math.sin(t * 8) * 0.02;
@@ -268,6 +224,215 @@ function drawFatality(
     ctx.fillText('FATALITY', 0, 0);
     ctx.restore();
   }
+}
+
+// --- Fatality: "Screen Melt" -------------------------------------------------
+// The ball flares into a fireball, streaks into the losing paddle, and that paddle
+// melts down the court like wax.
+function drawScreenMelt(
+  ctx: CanvasRenderingContext2D,
+  s: StateMsg,
+  fx: { side: 'left' | 'right' },
+  t: number,
+  banner: () => void,
+) {
+  const loserSide = fx.side === 'left' ? 'right' : 'left';
+  const winner = s.paddles[fx.side];
+  const loser = s.paddles[loserSide];
+  const loserX = loser.x;
+  const winFaceX = fx.side === 'left' ? winner.x + PADDLE.w / 2 : winner.x - PADDLE.w / 2;
+
+  const FLY = 0.55;
+  const MELT = 1.4;
+
+  ctx.fillStyle = `rgba(4,7,16,${Math.min(0.5, t * 1.2)})`;
+  ctx.fillRect(0, 0, COURT.w, COURT.h);
+
+  ctx.fillStyle = '#0b1020';
+  ctx.fillRect(loserX - PADDLE.w / 2 - 2, loser.y - loser.h / 2 - 2, PADDLE.w + 4, loser.h + 4);
+
+  if (t < FLY) {
+    const p = t / FLY;
+    const bx = winFaceX + (loserX - winFaceX) * p;
+    const by = winner.y + (loser.y - winner.y) * p;
+    drawFireball(ctx, bx, by, BALL.r + p * 8);
+  }
+
+  const m = Math.max(0, t - FLY);
+  const mp = Math.min(1, m / MELT);
+  const topY = loser.y - loser.h / 2;
+  const solidH = Math.max(0, loser.h * (1 - mp));
+  const frontY = topY + solidH;
+
+  ctx.fillStyle = blend(loser.color, MOLTEN, mp * 0.7);
+  ctx.fillRect(loserX - PADDLE.w / 2, topY, PADDLE.w, solidH);
+
+  const cols = 4;
+  ctx.fillStyle = MOLTEN;
+  for (let i = 0; i < cols; i++) {
+    const cx = loserX - PADDLE.w / 2 + (i + 0.5) * (PADDLE.w / cols);
+    const lead = 0.5 + ((i * 7) % 5) / 5;
+    const bottom = Math.min(COURT.h - 4, frontY + (COURT.h - frontY) * Math.min(1, mp * lead));
+    ctx.fillRect(cx - 2, frontY, 4, Math.max(0, bottom - frontY));
+    ctx.beginPath();
+    ctx.arc(cx, bottom, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.fillStyle = MOLTEN;
+  ctx.beginPath();
+  ctx.ellipse(loserX, COURT.h - 4, 8 + mp * 60, 5 + mp * 4, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  banner();
+}
+
+// --- Fatality: "Paddle Split" ------------------------------------------------
+// The losing paddle is dragged to center, split in half, and explodes outward.
+function drawPaddleSplit(
+  ctx: CanvasRenderingContext2D,
+  s: StateMsg,
+  fx: { side: 'left' | 'right' },
+  t: number,
+  banner: () => void,
+) {
+  const loserSide = fx.side === 'left' ? 'right' : 'left';
+  const loser = s.paddles[loserSide];
+
+  const DRAG = 0.5;
+  const EXPLODE = 1.0;
+  const centerX = COURT.w / 2;
+
+  ctx.fillStyle = `rgba(4,7,16,${Math.min(0.5, t * 1.2)})`;
+  ctx.fillRect(0, 0, COURT.w, COURT.h);
+
+  // Erase original paddle
+  ctx.fillStyle = '#0b1020';
+  ctx.fillRect(loser.x - PADDLE.w / 2 - 2, loser.y - loser.h / 2 - 2, PADDLE.w + 4, loser.h + 4);
+
+  // Drag paddle to center
+  const dragP = Math.min(1, t / DRAG);
+  const px = loser.x + (centerX - loser.x) * dragP;
+  const py = loser.y;
+
+  if (t < DRAG) {
+    ctx.fillStyle = loser.color;
+    ctx.fillRect(px - PADDLE.w / 2, py - loser.h / 2, PADDLE.w, loser.h);
+  } else {
+    // Split and explode
+    const ep = Math.min(1, (t - DRAG) / EXPLODE);
+    const halfW = PADDLE.w / 2;
+    const spread = ep * 120;
+    const flyUp = ep * 80;
+
+    ctx.fillStyle = blend(loser.color, '#ff5a2a', ep * 0.5);
+    // Left half flies left and up
+    ctx.fillRect(px - halfW - spread, py - loser.h / 2 - flyUp, halfW, loser.h);
+    // Right half flies right and up
+    ctx.fillRect(px + spread, py - loser.h / 2 - flyUp, halfW, loser.h);
+
+    // Particles
+    for (let i = 0; i < 12; i++) {
+      const angle = (i / 12) * Math.PI * 2 + ep * 0.5;
+      const dist = ep * (40 + (i * 13) % 30);
+      const px2 = px + Math.cos(angle) * dist;
+      const py2 = py + Math.sin(angle) * dist - ep * 20;
+      ctx.fillStyle = i % 2 === 0 ? loser.color : '#ff5a2a';
+      ctx.beginPath();
+      ctx.arc(px2, py2, 3 + ep * 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  banner();
+}
+
+// --- Fatality: "Frost Shatter" (MK-inspired) ---------------------------------
+// The losing paddle freezes, cracks appear, then shatters into ice shards.
+function drawFrostShatter(
+  ctx: CanvasRenderingContext2D,
+  s: StateMsg,
+  fx: { side: 'left' | 'right' },
+  t: number,
+  banner: () => void,
+) {
+  const loserSide = fx.side === 'left' ? 'right' : 'left';
+  const loser = s.paddles[loserSide];
+  const loserX = loser.x;
+
+  const FREEZE = 0.6;
+  const SHATTER = 1.0;
+  const ICE = '#b0e0ff';
+
+  ctx.fillStyle = `rgba(4,7,16,${Math.min(0.5, t * 1.2)})`;
+  ctx.fillRect(0, 0, COURT.w, COURT.h);
+
+  ctx.fillStyle = '#0b1020';
+  ctx.fillRect(loserX - PADDLE.w / 2 - 2, loser.y - loser.h / 2 - 2, PADDLE.w + 4, loser.h + 4);
+
+  if (t < FREEZE) {
+    // Freeze phase: paddle turns icy
+    const fp = Math.min(1, t / FREEZE);
+    ctx.fillStyle = blend(loser.color, ICE, fp * 0.8);
+    ctx.fillRect(loserX - PADDLE.w / 2, loser.y - loser.h / 2, PADDLE.w, loser.h);
+
+    // Frost crystals forming
+    ctx.strokeStyle = `rgba(176, 224, 255, ${fp * 0.6})`;
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < 6; i++) {
+      const cx = loserX + (i - 2.5) * (PADDLE.w / 5);
+      const cy = loser.y - loser.h / 2 + ((i * 17) % loser.h);
+      const size = 4 + fp * 8;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - size);
+      ctx.lineTo(cx, cy + size);
+      ctx.moveTo(cx - size, cy);
+      ctx.lineTo(cx + size, cy);
+      ctx.moveTo(cx - size * 0.7, cy - size * 0.7);
+      ctx.lineTo(cx + size * 0.7, cy + size * 0.7);
+      ctx.moveTo(cx + size * 0.7, cy - size * 0.7);
+      ctx.lineTo(cx - size * 0.7, cy + size * 0.7);
+      ctx.stroke();
+    }
+  } else {
+    // Shatter phase
+    const sp = Math.min(1, (t - FREEZE) / SHATTER);
+
+    // Cracks
+    ctx.strokeStyle = `rgba(255, 255, 255, ${1 - sp})`;
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 8; i++) {
+      const startX = loserX + (i - 3.5) * (PADDLE.w / 7);
+      const startY = loser.y - loser.h / 2 + ((i * 11) % loser.h);
+      ctx.beginPath();
+      ctx.moveTo(startX, startY);
+      const endX = startX + (Math.random() - 0.5) * 60 * sp;
+      const endY = startY + (Math.random() - 0.5) * 60 * sp;
+      ctx.lineTo(endX, endY);
+      ctx.stroke();
+    }
+
+    // Ice shard debris flying outward
+    for (let i = 0; i < 15; i++) {
+      const angle = (i / 15) * Math.PI * 2 + sp * 0.3;
+      const dist = sp * (30 + (i * 19) % 50);
+      const sx = loserX + Math.cos(angle) * dist;
+      const sy = loser.y + Math.sin(angle) * dist - sp * 30;
+      const alpha = Math.max(0, 1 - sp * 1.2);
+      ctx.fillStyle = `rgba(176, 224, 255, ${alpha})`;
+      ctx.save();
+      ctx.translate(sx, sy);
+      ctx.rotate(sp * i);
+      ctx.fillRect(-3, -8, 6, 16);
+      ctx.restore();
+    }
+
+    // Remaining frozen paddle fading out
+    ctx.fillStyle = `rgba(176, 224, 255, ${Math.max(0, 1 - sp * 1.5)})`;
+    ctx.fillRect(loserX - PADDLE.w / 2, loser.y - loser.h / 2, PADDLE.w, loser.h);
+  }
+
+  banner();
 }
 
 function drawFireball(ctx: CanvasRenderingContext2D, x: number, y: number, r: number) {

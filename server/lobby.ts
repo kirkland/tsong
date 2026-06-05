@@ -16,6 +16,7 @@ import {
   StateMsg,
 } from '../shared/types';
 import { getLeaderboard, recordResult, updateName } from './db';
+import { READY_TIMEOUT, TICK_MS } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
 // emoji code points (pictographs, components, ZWJ, variation selectors, flags).
@@ -45,6 +46,7 @@ export class Lobby {
   private sides: Record<Side, WebSocket | null> = { left: null, right: null };
   private winnerName: string | null = null;
   private overHandled = false; // guards the one-time spot reopening when a match ends
+  private king: { side: Side; pid: string; nickname: string; ws: WebSocket } | null = null;
   // The winner is released to observer the instant the match ends, so we can't use the
   // side slots to authorize a finishing move — we remember who won by stable pid/side.
   private fatalityWinnerPid: string | null = null;
@@ -52,6 +54,9 @@ export class Lobby {
   private activeFatality: { side: Side; move: string } | null = null;
   private fatalityAt = 0; // ms timestamp the finishing move started (0 = none)
   private fatalitiesEnabled = false; // shared room-wide toggle (off for everyone by default)
+  private queue: WebSocket[] = []; // ordered spectators waiting to play
+  private ready: Record<Side, boolean> = { left: false, right: false };
+  private readyTimer = 0; // seconds remaining for ready-up; 0 = no timer active
   private leaderboard: LeaderboardRow[] = []; // cached standings, pushed to clients
   private chatLog: ChatLine[] = []; // recent chat, replayed to new connections
   private nextId = 1;
@@ -87,6 +92,7 @@ export class Lobby {
       from: conn.nickname,
       text: clean,
       player: conn.role === 'left' || conn.role === 'right',
+      color: conn.color,
     };
     this.chatLog.push(line);
     if (this.chatLog.length > CHAT_HISTORY) this.chatLog.shift();
@@ -124,6 +130,58 @@ export class Lobby {
     this.announce(`Booo, ${name} quit the game`);
   }
 
+  /** Join the spectator queue. */
+  queueJoin(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return;
+    if (this.queue.includes(ws)) return;
+    // Don't queue if already holding a paddle
+    if (this.sideOf(ws)) return;
+    this.queue.push(ws);
+  }
+
+  /** Leave the spectator queue. */
+  queueLeave(ws: WebSocket) {
+    const i = this.queue.indexOf(ws);
+    if (i !== -1) this.queue.splice(i, 1);
+  }
+
+  /** Auto-assign the next queued spectator to an open paddle spot. */
+  private claimFromQueue() {
+    while (this.queue.length > 0) {
+      const openSide = SIDES.find((s) => this.sides[s] === null);
+      if (!openSide) break;
+      const next = this.queue.shift()!;
+      const conn = this.conns.get(next);
+      if (!conn || !conn.nickname) continue; // stale entry
+      this.sides[openSide] = next;
+      conn.role = openSide;
+      conn.captured = false;
+      this.tell(next, { type: 'you', id: conn.id, role: openSide });
+    }
+  }
+
+  /** Toggle ready state for a player. */
+  setReady(ws: WebSocket) {
+    const side = this.sideOf(ws);
+    if (!side) return;
+    if (this.game.status !== 'over') return;
+    this.ready[side] = !this.ready[side];
+    // Start the ready timer when the first player readies up
+    if (this.ready[side] && this.readyTimer <= 0) {
+      this.readyTimer = READY_TIMEOUT;
+    }
+  }
+
+  /** The winner (king) declines to stay — releases their spot. */
+  kingExit(ws: WebSocket) {
+    if (!this.king || this.king.ws !== ws) return; // only the king can exit
+    const side = this.king.side;
+    this.king = null;
+    this.release(side);
+    if (this.game.status === 'over') this.game.toWaiting();
+  }
+
   /** "/powerup": drop a random power-up target onto the board. Live matches only. */
   spawnPowerup(ws: WebSocket) {
     const conn = this.conns.get(ws);
@@ -148,14 +206,25 @@ export class Lobby {
 
   claim(ws: WebSocket) {
     const conn = this.conns.get(ws);
-    if (!conn || !conn.nickname || conn.role !== 'observer') return; // must have joined first
+    if (!conn || !conn.nickname || conn.role !== 'observer') return;
+    // Remove from queue if they were in it
+    this.queueLeave(ws);
     const side = SIDES.find((s) => this.sides[s] === null);
-    if (!side) return; // no spot open
+    if (!side) return;
     this.sides[side] = ws;
     conn.role = side;
-    conn.captured = false; // must (re)capture the mouse before play starts
+    conn.captured = false;
     this.tell(ws, { type: 'you', id: conn.id, role: side });
-    if (this.sides.left && this.sides.right) this.game.start();
+    // Don't auto-start if both are filled — wait for ready-up if coming from an 'over' state
+    if (this.sides.left && this.sides.right) {
+      if (this.game.status === 'over') {
+        // Both spots filled after game: wait for ready-ups
+        this.ready = { left: false, right: false };
+        this.readyTimer = 0;
+      } else {
+        this.game.start();
+      }
+    }
     this.refreshPause();
   }
 
@@ -195,6 +264,8 @@ export class Lobby {
       this.sides[side] = null;
       if (this.game.status === 'playing') this.game.toWaiting();
     }
+    if (this.king && this.king.ws === ws) this.king = null;
+    this.queueLeave(ws);
     this.conns.delete(ws);
     this.refreshPause();
   }
@@ -212,18 +283,24 @@ export class Lobby {
             ? 'right'
             : 'left'
           : null;
-        // Capture both players before releasing (release nulls out the side slots).
         const winner = winnerSide ? this.connOn(winnerSide) : null;
         const loser = loserSide ? this.connOn(loserSide) : null;
         this.winnerName = winner?.nickname ?? null;
-        // Remember the winner so a fatality message can be authorized after release.
         this.fatalityWinnerPid = winner?.pid ?? null;
         this.fatalityWinnerSide = winnerSide;
         this.activeFatality = null;
-        for (const s of SIDES) this.release(s);
+        // Release the loser; winner stays as king
+        if (loserSide) this.release(loserSide);
+        if (winner && winnerSide) {
+          this.king = {
+            side: winnerSide,
+            pid: winner.pid,
+            nickname: winner.nickname,
+            ws: this.sides[winnerSide]!,
+          };
+        }
         this.overHandled = true;
 
-        // Record against stable identities (pids), storing the current display names.
         if (winner?.pid && loser?.pid) {
           recordResult(winner.pid, winner.nickname, loser.pid, loser.nickname)
             .then(() => this.refreshLeaderboard())
@@ -234,14 +311,38 @@ export class Lobby {
         // FATALITY screen clears and a fresh match can be started.
         this.activeFatality = null;
         this.game.toWaiting();
+      } else if (this.sides.left && this.sides.right) {
+        // Both spots filled after game: wait for ready-up
+        if (this.ready.left && this.ready.right) {
+          // Both ready: start the next match
+          this.ready = { left: false, right: false };
+          this.readyTimer = 0;
+          this.overHandled = false;
+          this.fatalityWinnerPid = null;
+          this.fatalityWinnerSide = null;
+          this.activeFatality = null;
+          this.fatalityAt = 0;
+          this.game.start();
+        } else if (this.readyTimer > 0) {
+          this.readyTimer -= TICK_MS / 1000;
+          if (this.readyTimer <= 0) {
+            // Timeout: release both spots
+            for (const s of SIDES) this.release(s);
+            this.ready = { left: false, right: false };
+            this.readyTimer = 0;
+            this.game.toWaiting();
+          }
+        }
       }
     } else {
       this.overHandled = false;
-      // Match no longer over (back to waiting/playing): clear the finishing-move window.
       this.fatalityWinnerPid = null;
       this.fatalityWinnerSide = null;
       this.activeFatality = null;
       this.fatalityAt = 0;
+      this.ready = { left: false, right: false };
+      this.readyTimer = 0;
+      if (this.game.status === 'playing') this.king = null;
     }
   }
 
@@ -302,11 +403,16 @@ export class Lobby {
       const conn = this.conns.get(ws);
       if (conn) {
         conn.role = 'observer';
-        conn.captured = false; // dropped pointer lock on becoming an observer
+        conn.captured = false;
         this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
       }
     }
     this.sides[side] = null;
+    this.ready[side] = false;
+    // Clear king if their side was released
+    if (this.king && this.king.side === side) this.king = null;
+    // Auto-claim from queue if someone is waiting
+    this.claimFromQueue();
   }
 
   private buildState(): StateMsg {
@@ -353,6 +459,9 @@ export class Lobby {
       fatalitiesEnabled: this.fatalitiesEnabled,
       fatality: this.game.status === 'over' ? this.activeFatality : null,
       watchers,
+      king: this.king?.nickname ?? null,
+      queue: this.queue.map((ws) => this.conns.get(ws)?.nickname ?? '').filter(Boolean),
+      ready: { ...this.ready },
     };
   }
 
