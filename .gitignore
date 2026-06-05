@@ -4,3 +4,4 @@ client/dist/
 .DS_Store
 *.swp
 .tsong-state.json
+CLAUDE.md
