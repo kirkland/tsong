@@ -11,6 +11,7 @@ export interface Commit {
   hash: string; // short hash
   subject: string; // commit message subject line
   date: string; // ISO commit date
+  url?: string; // GitHub link to the commit, when the origin remote is a GitHub repo
 }
 
 const COUNT = 30; // how many recent commits to surface
@@ -20,6 +21,46 @@ const SEP = '\x1f'; // unit separator — safe inside commit subjects
 let cache: Commit[] = [];
 let cachedAt = 0;
 let inflight: Promise<Commit[]> | null = null;
+let repoBase: string | null | undefined; // GitHub web base for the repo; undefined = not yet resolved
+
+// Turn an `origin` remote URL into the repo's GitHub web base, or null if it isn't a
+// GitHub remote. Handles https, scp-style (git@github.com:owner/repo.git), and custom SSH
+// host aliases (e.g. github.com.personal:owner/repo.git) — the host is always rebuilt as
+// github.com, so an alias still resolves correctly.
+function toGithubBase(remote: string): string | null {
+  if (!/github/i.test(remote)) return null;
+  const s = remote.trim().replace(/\.git$/, '');
+  let path: string | null = null;
+  if (/^https?:\/\//.test(s)) {
+    try {
+      path = new URL(s).pathname.replace(/^\//, '');
+    } catch {
+      return null;
+    }
+  } else {
+    // scp-like: [user@]host:owner/repo
+    const m = s.match(/^(?:[^@]+@)?[^:/]+:(.+)$/);
+    if (m) path = m[1];
+  }
+  const owner = path?.match(/([^/]+)\/([^/]+)$/);
+  return owner ? `https://github.com/${owner[1]}/${owner[2]}` : null;
+}
+
+// The repo's GitHub web base, resolved from `git remote get-url origin` and memoized
+// (it doesn't change while the process runs). null when there's no GitHub origin.
+async function getRepoBase(): Promise<string | null> {
+  if (repoBase !== undefined) return repoBase;
+  try {
+    const { stdout } = await execFileAsync('git', ['remote', 'get-url', 'origin'], {
+      cwd: process.cwd(),
+      timeout: 5000,
+    });
+    repoBase = toGithubBase(stdout);
+  } catch {
+    repoBase = null;
+  }
+  return repoBase;
+}
 
 function parse(stdout: string): Commit[] {
   return stdout
@@ -33,6 +74,7 @@ function parse(stdout: string): Commit[] {
 
 async function readGitLog(): Promise<Commit[]> {
   // Prefer `main` (what production deploys); fall back to HEAD when developing on a branch.
+  const base = await getRepoBase();
   for (const ref of ['main', 'HEAD']) {
     try {
       const { stdout } = await execFileAsync(
@@ -40,7 +82,9 @@ async function readGitLog(): Promise<Commit[]> {
         ['log', ref, '--no-merges', '-n', String(COUNT), `--pretty=format:%h${SEP}%s${SEP}%cI`],
         { cwd: process.cwd(), timeout: 5000 },
       );
-      return parse(stdout);
+      const commits = parse(stdout);
+      // GitHub resolves short hashes in commit URLs, so the abbreviated %h is fine here.
+      return base ? commits.map((c) => ({ ...c, url: `${base}/commit/${c.hash}` })) : commits;
     } catch {
       // try the next ref
     }
