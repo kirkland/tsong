@@ -22,6 +22,8 @@ import {
   MIRROR_TIME,
   GHOST_TIME,
   TINY_TIME,
+  BIG_BALL_TIME,
+  BIG_BALL_R,
   CURVE_SPIN,
   GRAVITY_ACCEL,
   TURBO_SPEED_MULT,
@@ -114,6 +116,7 @@ export class Game {
   mirrorTimer: Record<Side, number> = { left: 0, right: 0 };
   ghostTimer = 0;
   tinyTimer = 0;
+  bigBallTimer = 0;
   shielded: Record<Side, boolean> = { left: false, right: false };
 
   private serveTimer = 0;
@@ -229,7 +232,13 @@ export class Game {
     this.mirrorTimer = { left: 0, right: 0 };
     this.ghostTimer = 0;
     this.tinyTimer = 0;
+    this.bigBallTimer = 0;
     this.shielded = { left: false, right: false };
+  }
+
+  /** Current ball radius — enlarged while bigball power-up is active. */
+  ballR(): number {
+    return this.bigBallTimer > 0 ? BIG_BALL_R : BALL.r;
   }
 
   setTarget(side: Side, y: number) {
@@ -252,6 +261,7 @@ export class Game {
     this.mirrorTimer = { left: 0, right: 0 };
     this.ghostTimer = 0;
     this.tinyTimer = 0;
+    this.bigBallTimer = 0;
     this.curveHits = { left: 0, right: 0 };
     // Shield intentionally persists — an unused shield stays for the next point.
   }
@@ -287,6 +297,7 @@ export class Game {
     if (this.slowTimer > 0) this.slowTimer -= dt;
     if (this.ghostTimer > 0) this.ghostTimer -= dt;
     if (this.tinyTimer > 0) this.tinyTimer -= dt;
+    if (this.bigBallTimer > 0) this.bigBallTimer -= dt;
     for (const side of ['left', 'right'] as Side[]) {
       if (this.freezeTimer[side] > 0) this.freezeTimer[side] -= dt;
       if (this.blindTimer[side] > 0) this.blindTimer[side] -= dt;
@@ -349,12 +360,14 @@ export class Game {
     b.x += b.vx * dt * scale;
     b.y += b.vy * dt * scale;
 
+    const r = this.ballR();
+
     // Top / bottom walls
-    if (b.y - BALL.r < 0) {
-      b.y = BALL.r;
+    if (b.y - r < 0) {
+      b.y = r;
       b.vy = Math.abs(b.vy);
-    } else if (b.y + BALL.r > COURT.h) {
-      b.y = COURT.h - BALL.r;
+    } else if (b.y + r > COURT.h) {
+      b.y = COURT.h - r;
       b.vy = -Math.abs(b.vy);
     }
 
@@ -365,25 +378,25 @@ export class Game {
     const rightFace = this.faceX('right');
     if (
       b.vx < 0 &&
-      b.x - BALL.r <= leftFace &&
-      b.x - BALL.r > leftFace - 40 &&
-      Math.abs(b.y - this.paddleY.left) <= this.halfH('left') + BALL.r
+      b.x - r <= leftFace &&
+      b.x - r > leftFace - 40 &&
+      Math.abs(b.y - this.paddleY.left) <= this.halfH('left') + r
     ) {
       this.bounce('left', b);
     } else if (
       b.vx > 0 &&
-      b.x + BALL.r >= rightFace &&
-      b.x + BALL.r < rightFace + 40 &&
-      Math.abs(b.y - this.paddleY.right) <= this.halfH('right') + BALL.r
+      b.x + r >= rightFace &&
+      b.x + r < rightFace + 40 &&
+      Math.abs(b.y - this.paddleY.right) <= this.halfH('right') + r
     ) {
       this.bounce('right', b);
     }
 
     // Scoring — check shield before awarding the point.
-    if (b.x < -BALL.r) {
+    if (b.x < -r) {
       if (this.shielded.left) {
         // Shield absorbs the goal: bounce the ball back and clear the shield.
-        b.x = BALL.r;
+        b.x = r;
         b.vx = Math.abs(b.vx);
         b.spin = 0;
         this.shielded.left = false;
@@ -391,9 +404,9 @@ export class Game {
       }
       return 'right';
     }
-    if (b.x > COURT.w + BALL.r) {
+    if (b.x > COURT.w + r) {
       if (this.shielded.right) {
-        b.x = COURT.w - BALL.r;
+        b.x = COURT.w - r;
         b.vx = -Math.abs(b.vx);
         b.spin = 0;
         this.shielded.right = false;
@@ -442,7 +455,7 @@ export class Game {
   private checkTargetHit(prevX: number, prevY: number, b: Ball) {
     if (!this.target || !this.lastHit) return;
     const d = distToSegment(this.target.x, this.target.y, prevX, prevY, b.x, b.y);
-    if (d > TARGET.r + BALL.r) return;
+    if (d > TARGET.r + this.ballR()) return;
     this.grant(this.target.kind, this.lastHit);
     this.target = null;
     this.targetTimer = this.nextTargetDelay();
@@ -495,6 +508,9 @@ export class Game {
         this.ball.spin = 0;
         break;
       }
+      case 'bigball':
+        this.bigBallTimer = BIG_BALL_TIME;
+        break;
     }
   }
 
@@ -535,7 +551,7 @@ export class Game {
     }
 
     // Place the ball just off the (possibly moved) face so it can't re-trigger.
-    b.x = side === 'left' ? this.faceX('left') + BALL.r : this.faceX('right') - BALL.r;
+    b.x = side === 'left' ? this.faceX('left') + this.ballR() : this.faceX('right') - this.ballR();
     // Consume per-hit charges.
     if (this.growHits[side] > 0) this.growHits[side] -= 1;
     if (this.shrinkHits[side] > 0) this.shrinkHits[side] -= 1;

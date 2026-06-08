@@ -36,6 +36,8 @@ export const BLIND_TIME = 3; // seconds the opponent's view is obscured
 export const MIRROR_TIME = 3; // seconds the opponent's controls are inverted
 export const GHOST_TIME = 3; // seconds the ball is invisible
 export const TINY_TIME = 5; // seconds the ball is rendered tiny
+export const BIG_BALL_TIME = 6; // seconds the ball is enlarged
+export const BIG_BALL_R = 36; // enlarged ball radius (4× normal)
 export const CURVE_SPIN = 1.4; // spin (rad/s) applied to the ball on a curve hit
 export const GRAVITY_ACCEL = 220; // court units/sec² downward pull in gravity mode
 export const TURBO_SPEED_MULT = 1.5; // serve speed multiplier in turbo mode
@@ -63,7 +65,7 @@ export const TARGET = {
 //   warp   — ball teleports to a random mid-court position
 export const POWERUPS = [
   'grow', 'shrink', 'smash', 'slow', 'multi',
-  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp',
+  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball',
 ] as const;
 export type PowerupKind = (typeof POWERUPS)[number];
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
@@ -104,7 +106,7 @@ export type ClientMsg =
   | { type: 'paddle'; y: number } // desired paddle center Y, in court units
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
-  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean } // toggle game modes
+  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean } // toggle game modes
   | { type: 'fatality'; move: string } // winner-only, validated server-side
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
   | { type: 'forfeit' } // "/ff": leave your paddle spot mid-game (and get shamed)
@@ -160,6 +162,8 @@ export interface StateMsg {
   ready: { left: boolean; right: boolean }; // ready-up status when match is over
   ghostBall: boolean; // ball is currently invisible (ghost power-up)
   tinyBall: boolean; // ball is currently rendered tiny (tiny power-up)
+  bigBall: boolean; // ball is currently enlarged (bigball power-up)
+  streamerMode: boolean; // fake chat bots are spamming the chat
 }
 
 // Sent to a single connection whenever its own role changes (connect / claim / release).

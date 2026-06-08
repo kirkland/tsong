@@ -107,6 +107,7 @@ wss.on('connection', (ws: WebSocket) => {
           closing: typeof msg.closing === 'boolean' ? msg.closing : undefined,
           gravity: typeof msg.gravity === 'boolean' ? msg.gravity : undefined,
           turbo: typeof msg.turbo === 'boolean' ? msg.turbo : undefined,
+          streamer: typeof msg.streamer === 'boolean' ? msg.streamer : undefined,
         });
         break;
       case 'fatality':

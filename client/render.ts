@@ -1,6 +1,6 @@
 // Pure drawing: takes the latest server state and paints one frame. No game logic.
 
-import { COURT, PADDLE, BALL, TARGET, PowerupKind, StateMsg, Role } from '../shared/types';
+import { COURT, PADDLE, BALL, BIG_BALL_R, TARGET, PowerupKind, StateMsg, Role } from '../shared/types';
 
 export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 'observer') {
   // Court
@@ -47,7 +47,7 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
   drawPaddleEffects(ctx, s);
 
   // Ball(s) — colored by whichever paddle last hit them. Extra balls = multi power-up.
-  const ballR = s.tinyBall ? 3 : BALL.r;
+  const ballR = s.tinyBall ? 3 : s.bigBall ? BIG_BALL_R : BALL.r;
   ctx.globalAlpha = s.ghostBall ? 0.12 : 1;
   for (const b of [s.ball, ...s.extraBalls]) {
     ctx.fillStyle = b.color;
@@ -165,9 +165,10 @@ const TARGET_STYLE: Record<PowerupKind, { stroke: string; fill: string }> = {
   blind:  { stroke: '#9988bb', fill: 'rgba(153, 136, 187, 0.12)' }, // muted purple
   mirror: { stroke: '#ff7eb3', fill: 'rgba(255, 126, 179, 0.12)' }, // hot pink
   shield: { stroke: '#f5cc00', fill: 'rgba(245, 204,   0, 0.12)' }, // gold
-  ghost:  { stroke: '#c8beff', fill: 'rgba(200, 190, 255, 0.12)' }, // pale lavender
-  tiny:   { stroke: '#ff8c42', fill: 'rgba(255, 140,  66, 0.12)' }, // warm orange
-  warp:   { stroke: '#e040fb', fill: 'rgba(224,  64, 251, 0.12)' }, // magenta
+  ghost:   { stroke: '#c8beff', fill: 'rgba(200, 190, 255, 0.12)' }, // pale lavender
+  tiny:    { stroke: '#ff8c42', fill: 'rgba(255, 140,  66, 0.12)' }, // warm orange
+  warp:    { stroke: '#e040fb', fill: 'rgba(224,  64, 251, 0.12)' }, // magenta
+  bigball: { stroke: '#fb923c', fill: 'rgba(251, 146,  60, 0.14)' }, // deep orange
 };
 
 function drawTarget(ctx: CanvasRenderingContext2D, x: number, y: number, kind: PowerupKind) {
@@ -364,6 +365,15 @@ const GLYPHS: Record<PowerupKind, (ctx: CanvasRenderingContext2D, x: number, y: 
     ctx.stroke();
     ctx.beginPath();
     ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fill();
+  },
+  // bigball: a large filled circle with a small circle inside → "ball gets huge"
+  bigball(ctx, x, y) {
+    ctx.beginPath();
+    ctx.arc(x, y, 13, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x, y, 4, 0, Math.PI * 2);
     ctx.fill();
   },
 };

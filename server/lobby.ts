@@ -92,6 +92,12 @@ export class Lobby {
   private chatLog: ChatLine[] = []; // recent chat, replayed to new connections
   private nextId = 1;
 
+  // Streamer mode: fake chat bots spam the chat to distract players.
+  private streamerMode = false;
+  private streamerTick = 0; // ticks since last bot message
+  private streamerNextAt = 0; // tick count to fire next bot message
+  private streamerLastScore = { left: 0, right: 0 };
+
   // Restart resume: seats/king/queue a previous process held, keyed by stable pid,
   // waiting for those clients to reconnect and reclaim them (see restore/reattach).
   private pendingSides: Record<Side, SeatInfo | null> = { left: null, right: null };
@@ -303,12 +309,13 @@ export class Lobby {
   }
 
   // Any joined client may toggle game modes.
-  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean }) {
+  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean }) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return;
     if (opts.closing !== undefined) this.game.setClosing(opts.closing);
     if (opts.gravity !== undefined) this.game.setGravity(opts.gravity);
     if (opts.turbo !== undefined) this.game.setTurbo(opts.turbo);
+    if (opts.streamer !== undefined) this.streamerMode = opts.streamer;
   }
 
   remove(ws: WebSocket) {
@@ -413,6 +420,8 @@ export class Lobby {
     // Keep the pause flag honest every tick: a live match only advances once both
     // players have captured their mouse, no matter how the seats got filled.
     this.refreshPause();
+
+    if (this.streamerMode && this.game.status === 'playing') this.tickStreamer();
   }
 
   /** Flip the shared fatalities toggle for the whole room. Any joined user may change it. */
@@ -481,6 +490,52 @@ export class Lobby {
     for (const sock of this.conns.keys()) {
       if (sock.readyState === sock.OPEN) sock.send(data);
     }
+  }
+
+  /** Inject a fake chat message from a streamer bot (bypasses rate limiting). */
+  private botChat(from: string, text: string, color: string) {
+    const line: ChatLine = { from, text, player: false, color };
+    this.chatLog.push(line);
+    if (this.chatLog.length > CHAT_HISTORY) this.chatLog.shift();
+    const data = JSON.stringify({ type: 'chat', lines: [line] });
+    for (const sock of this.conns.keys()) {
+      if (sock.readyState === sock.OPEN) sock.send(data);
+    }
+  }
+
+  private tickStreamer() {
+    const score = this.game.score;
+    const last = this.streamerLastScore;
+
+    // Detect a goal — fire a burst of goal reactions.
+    if (score.left !== last.left || score.right !== last.right) {
+      const scorerSide = score.left > last.left ? 'left' : 'right';
+      const loserSide = scorerSide === 'left' ? 'right' : 'left';
+      const scorerName = this.nameOf(scorerSide) ?? scorerSide;
+      const count = 1 + Math.floor(Math.random() * 3);
+      for (let i = 0; i < count; i++) {
+        const bot = STREAMER_BOTS[Math.floor(Math.random() * STREAMER_BOTS.length)];
+        const msgs = Math.random() < 0.5 ? GOAL_REACTIONS_SCORER : GOAL_REACTIONS_LOSER;
+        const raw = msgs[Math.floor(Math.random() * msgs.length)];
+        const text = raw.replace('{scorer}', scorerName).replace('{loser}', this.nameOf(loserSide) ?? loserSide);
+        this.botChat(bot.name, text, bot.color);
+      }
+      this.streamerLastScore = { ...score };
+      // Schedule next random message a bit later so the goal burst stands out.
+      this.streamerNextAt = this.streamerTick + 180 + Math.floor(Math.random() * 120);
+      return;
+    }
+
+    this.streamerTick++;
+    if (this.streamerTick < this.streamerNextAt) return;
+
+    // Fire a random generic message.
+    const bot = STREAMER_BOTS[Math.floor(Math.random() * STREAMER_BOTS.length)];
+    const text = GENERIC_MSGS[Math.floor(Math.random() * GENERIC_MSGS.length)];
+    this.botChat(bot.name, text, bot.color);
+
+    // Schedule the next one: roughly 1–5 seconds at 60 tps.
+    this.streamerNextAt = this.streamerTick + 60 + Math.floor(Math.random() * 240);
   }
 
   private release(side: Side) {
@@ -563,6 +618,8 @@ export class Lobby {
       ready: { ...this.ready },
       ghostBall: this.game.ghostTimer > 0,
       tinyBall: this.game.tinyTimer > 0,
+      bigBall: this.game.bigBallTimer > 0,
+      streamerMode: this.streamerMode,
     };
   }
 
@@ -690,3 +747,67 @@ export class Lobby {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
   }
 }
+
+// --- Streamer mode bot data ---
+
+const STREAMER_BOTS: { name: string; color: string }[] = [
+  { name: 'xX_PongLord_Xx', color: '#a855f7' },
+  { name: 'TwitchMod42', color: '#22c55e' },
+  { name: 'pogchamp99', color: '#3b82f6' },
+  { name: 'NaCl_Shaker', color: '#94a3b8' },
+  { name: 'GamerMom2024', color: '#ec4899' },
+  { name: 'StreamSniper', color: '#f97316' },
+  { name: 'BackseatGamer', color: '#eab308' },
+  { name: 'JustASpectator', color: '#6b7280' },
+  { name: 'NoobDestroyer', color: '#ef4444' },
+  { name: 'BallWatcher9000', color: '#06b6d4' },
+  { name: 'RandomViewer123', color: '#84cc16' },
+  { name: 'CouchExpert', color: '#f59e0b' },
+];
+
+const GENERIC_MSGS: string[] = [
+  'KEKW', 'LUL', 'OMEGALUL', 'PogChamp', 'monkaS', 'Pog',
+  'clip that', 'no shot 💀', 'bro', 'chat is this real',
+  'this guy is actually good wait', 'nvm he\'s bad',
+  'L + ratio + skill issue', 'EZ PZ', 'gg ez',
+  'LETS GOOOO', 'how is that not a goal wtf', 'the lag is real',
+  'imagine losing at pong lmao', '🤣🤣🤣',
+  'HyperScroll HyperScroll HyperScroll',
+  'where is the ball going', 'bro missed again',
+  'this is so intense', 'my heart is literally racing',
+  'no way that missed', 'HOW???',
+  'chat spam the ball 🏓🏓🏓',
+  'left side diff', 'right side diff',
+  'what a save!', 'what a miss!', 'holy moly',
+  'I could do that with my eyes closed ngl',
+  'someone call 911 this is criminal',
+  'bro is throwing rn', 'they\'re cooked',
+  'touch grass challenge failed 💀',
+  'this is better than watching TV fr',
+  'widepeepoHappy', 'peepoSad', 'AYAYA',
+  'who taught him to play like this',
+  'just quit bro', 'uninstall',
+  'is this ping or just terrible',
+  'wait what happened', 'chat did u see that',
+  'first time viewer what is this game',
+  'my grandma plays better and she\'s dead',
+  'actual menace', 'certified goat', 'NAH BRO 💀',
+];
+
+const GOAL_REACTIONS_SCORER: string[] = [
+  'GG EZ NO DIFF', 'YESSSS GET REKT', 'LETS GO {scorer}!!!',
+  'that was a CANNON', 'clean af', 'POG {scorer}',
+  'OMEGALUL they didn\'t even try', 'GOTTEM',
+  '{scorer} is NOT missing', 'absolute cinema',
+  'CLIPPED THAT', 'W + ratio', '🎯🎯🎯',
+  '{scorer} DIFF', 'another one lol',
+];
+
+const GOAL_REACTIONS_LOSER: string[] = [
+  'NGL that was a skill issue', 'terrible defense rn',
+  '{loser} is lost 😂', 'how do you miss that bro',
+  'L + ratio + touch grass', 'that\'s an L for {loser}',
+  'bozo', 'bro fell off', 'unplayable',
+  '{loser} said "i got it" 💀', 'my eyes 😭',
+  'that hurt to watch', 'certified fumble',
+];

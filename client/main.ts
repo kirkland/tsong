@@ -38,6 +38,7 @@ const chatInput = document.getElementById('chatInput') as HTMLInputElement;
 const closingModeEl = document.getElementById('closingMode') as HTMLInputElement;
 const gravityModeEl = document.getElementById('gravityMode') as HTMLInputElement;
 const turboModeEl = document.getElementById('turboMode') as HTMLInputElement;
+const streamerModeEl = document.getElementById('streamerMode') as HTMLInputElement;
 const reactionsEl = document.getElementById('reactions') as HTMLDivElement;
 const recentReactionsEl = document.getElementById('recentReactions') as HTMLDivElement;
 const ballReactionEl = document.getElementById('ballReaction') as HTMLDivElement;
@@ -272,6 +273,9 @@ gravityModeEl.addEventListener('change', () =>
 turboModeEl.addEventListener('change', () =>
   net.send({ type: 'mode', turbo: turboModeEl.checked }),
 );
+streamerModeEl.addEventListener('change', () =>
+  net.send({ type: 'mode', streamer: streamerModeEl.checked }),
+);
 
 // --- slash commands ---
 // Typing "/" in chat pops up this menu of commands; each only appears when usable.
@@ -422,6 +426,7 @@ function enableChat() {
   closingModeEl.disabled = false;
   gravityModeEl.disabled = false;
   turboModeEl.disabled = false;
+  streamerModeEl.disabled = false;
   for (const btn of reactionsEl.querySelectorAll<HTMLButtonElement>('.reaction-btn')) {
     btn.disabled = false;
   }
@@ -1037,6 +1042,9 @@ function updateUI() {
   }
   if (document.activeElement !== turboModeEl && turboModeEl.checked !== state.turbo) {
     turboModeEl.checked = state.turbo;
+  }
+  if (document.activeElement !== streamerModeEl && streamerModeEl.checked !== state.streamerMode) {
+    streamerModeEl.checked = state.streamerMode;
   }
 
   // Keep the checkbox in sync with the shared setting (another player may have flipped it).
