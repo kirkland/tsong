@@ -876,6 +876,89 @@ if (remembered) {
   nick.focus();
 }
 
+// --- loading splash: a hype screen on first paint — lightning bolts, an explosion of
+// pong balls radiating from center, and rotating pro tips. Purely cosmetic; it dismisses
+// after a short beat, or instantly when the user clicks / presses a key. ---
+(() => {
+  const screen = document.getElementById('loadingScreen');
+  const ballsLayer = document.getElementById('loadBalls');
+  const tipText = document.getElementById('loadTipText');
+  if (!screen || !ballsLayer || !tipText) return;
+
+  const BALL_COLORS = ['#e8eefc', '#7da2ff', '#9fb0d8', '#3a6df0', '#ffd23f'];
+  const TIPS = [
+    'Click the board to capture your mouse — your paddle stays put until you do.',
+    'Press ↑/↓ or W/S to move, or just steer with your mouse.',
+    'The ball takes on the color of whoever last hit it.',
+    'Bounce the ball across a glowing target to grab its power-up.',
+    'Spectators: type /powerup in chat to drop a random power-up mid-rally.',
+    'Type /ff to forfeit the match… if you’re feeling cowardly.',
+    'Win a match to become King of the Court — then defend your streak.',
+    'Join the queue and you’ll auto-claim the next open paddle.',
+    'Open MODES for chaos: Closing Walls, Gravity, Turbo, Diamond Hands, Piñata.',
+    'Turn on Fatalities, then win a match to finish your opponent. ☠',
+  ];
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // One explosion of balls bursting outward from the center of the screen.
+  function burst(count: number) {
+    const reach = Math.hypot(window.innerWidth, window.innerHeight) / 2 + 40;
+    for (let i = 0; i < count; i++) {
+      const el = document.createElement('div');
+      el.className = 'load-ball';
+      const size = 8 + Math.random() * 16;
+      el.style.width = `${size}px`;
+      el.style.height = `${size}px`;
+      el.style.margin = `${-size / 2}px 0 0 ${-size / 2}px`;
+      el.style.background = BALL_COLORS[(Math.random() * BALL_COLORS.length) | 0];
+      ballsLayer!.append(el);
+      const ang = Math.random() * Math.PI * 2;
+      const dist = reach * (0.5 + Math.random() * 0.6);
+      const dx = Math.cos(ang) * dist;
+      const dy = Math.sin(ang) * dist;
+      const anim = el.animate(
+        [
+          { transform: 'translate(0, 0) scale(0.3)', opacity: 1 },
+          { transform: `translate(${dx}px, ${dy}px) scale(1)`, opacity: 0 },
+        ],
+        { duration: 800 + Math.random() * 700, easing: 'cubic-bezier(0.15, 0.6, 0.3, 1)' },
+      );
+      anim.onfinish = () => el.remove();
+      anim.oncancel = () => el.remove();
+    }
+  }
+
+  let tipIdx = (Math.random() * TIPS.length) | 0;
+  const showTip = () => {
+    tipText!.textContent = TIPS[tipIdx % TIPS.length];
+    tipIdx++;
+  };
+  showTip();
+
+  let burstTimer = 0;
+  let tipTimer = 0;
+  if (!reduce) {
+    burst(30);
+    burstTimer = window.setInterval(() => burst(18), 650);
+    tipTimer = window.setInterval(showTip, 1500);
+  }
+
+  let done = false;
+  function dismiss() {
+    if (done) return;
+    done = true;
+    clearInterval(burstTimer);
+    clearInterval(tipTimer);
+    screen!.classList.add('hiding');
+    setTimeout(() => screen!.remove(), 500);
+    window.removeEventListener('pointerdown', dismiss);
+    window.removeEventListener('keydown', dismiss);
+  }
+  window.setTimeout(dismiss, reduce ? 1200 : 2400);
+  window.addEventListener('pointerdown', dismiss);
+  window.addEventListener('keydown', dismiss);
+})();
+
 // --- mouse control ---
 // While holding a paddle, lock the pointer to the board so a quick flick can't send the
 // cursor out of the play area (which would freeze the paddle or land clicks on the chat
