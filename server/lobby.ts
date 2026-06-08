@@ -16,7 +16,7 @@ import {
   StateMsg,
 } from '../shared/types';
 import { getLeaderboard, recordResult, updateName } from './db';
-import { READY_TIMEOUT, TICK_MS } from '../shared/types';
+import { READY_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
 // emoji code points (pictographs, components, ZWJ, variation selectors, flags).
@@ -309,7 +309,7 @@ export class Lobby {
   }
 
   // Any joined client may toggle game modes.
-  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean }) {
+  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean }) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return;
     if (opts.closing !== undefined) this.game.setClosing(opts.closing);
@@ -317,6 +317,7 @@ export class Lobby {
     if (opts.turbo !== undefined) this.game.setTurbo(opts.turbo);
     if (opts.streamer !== undefined) this.streamerMode = opts.streamer;
     if (opts.diamond !== undefined) this.game.setDiamond(opts.diamond);
+    if (opts.pinata !== undefined) this.game.setPinata(opts.pinata);
   }
 
   remove(ws: WebSocket) {
@@ -557,6 +558,23 @@ export class Lobby {
     this.claimFromQueue();
   }
 
+  // Convert the piñata's internal state into the wire view: absolute positions for each
+  // stuck ball (surface angle rotated by the current spin), plus the one-frame burst pulse.
+  private pinataView(): StateMsg['pinataPos'] {
+    const p = this.game.pinataObj;
+    if (!p) return null;
+    return {
+      x: p.x,
+      y: p.y,
+      spin: p.spin,
+      stuck: p.stuck.map((s) => {
+        const a = s.angle + p.spin;
+        return { x: p.x + Math.cos(a) * PINATA.r, y: p.y + Math.sin(a) * PINATA.r };
+      }),
+      burst: this.game.pinataBurstFlash,
+    };
+  }
+
   private buildState(): StateMsg {
     const watchers: string[] = [];
     for (const c of this.conns.values()) {
@@ -613,6 +631,8 @@ export class Lobby {
       diamondPos: this.game.diamondBlock
         ? { x: this.game.diamondBlock.x, y: this.game.diamondBlock.y }
         : null,
+      pinata: this.game.pinata,
+      pinataPos: this.pinataView(),
       winner: this.game.status === 'over' ? this.winnerName : null,
       fatalitiesEnabled: this.fatalitiesEnabled,
       fatality: this.game.status === 'over' ? this.activeFatality : null,

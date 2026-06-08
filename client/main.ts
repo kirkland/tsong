@@ -40,6 +40,7 @@ const gravityModeEl = document.getElementById('gravityMode') as HTMLInputElement
 const turboModeEl = document.getElementById('turboMode') as HTMLInputElement;
 const streamerModeEl = document.getElementById('streamerMode') as HTMLInputElement;
 const diamondModeEl = document.getElementById('diamondMode') as HTMLInputElement;
+const pinataModeEl = document.getElementById('pinataMode') as HTMLInputElement;
 const reactionsEl = document.getElementById('reactions') as HTMLDivElement;
 const recentReactionsEl = document.getElementById('recentReactions') as HTMLDivElement;
 const ballReactionEl = document.getElementById('ballReaction') as HTMLDivElement;
@@ -280,6 +281,9 @@ streamerModeEl.addEventListener('change', () =>
 diamondModeEl.addEventListener('change', () =>
   net.send({ type: 'mode', diamond: diamondModeEl.checked }),
 );
+pinataModeEl.addEventListener('change', () =>
+  net.send({ type: 'mode', pinata: pinataModeEl.checked }),
+);
 
 // --- slash commands ---
 // Typing "/" in chat pops up this menu of commands; each only appears when usable.
@@ -432,6 +436,7 @@ function enableChat() {
   turboModeEl.disabled = false;
   streamerModeEl.disabled = false;
   diamondModeEl.disabled = false;
+  pinataModeEl.disabled = false;
   for (const btn of reactionsEl.querySelectorAll<HTMLButtonElement>('.reaction-btn')) {
     btn.disabled = false;
   }
@@ -1053,6 +1058,9 @@ function updateUI() {
   }
   if (document.activeElement !== diamondModeEl && diamondModeEl.checked !== state.diamond) {
     diamondModeEl.checked = state.diamond;
+  }
+  if (document.activeElement !== pinataModeEl && pinataModeEl.checked !== state.pinata) {
+    pinataModeEl.checked = state.pinata;
   }
 
   // Keep the checkbox in sync with the shared setting (another player may have flipped it).

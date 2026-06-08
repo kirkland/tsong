@@ -1,6 +1,6 @@
 // Pure drawing: takes the latest server state and paints one frame. No game logic.
 
-import { COURT, PADDLE, BALL, BIG_BALL_R, DIAMOND, TARGET, PowerupKind, StateMsg, Role } from '../shared/types';
+import { COURT, PADDLE, BALL, BIG_BALL_R, DIAMOND, PINATA, TARGET, PowerupKind, StateMsg, Role } from '../shared/types';
 
 export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 'observer') {
   // Court
@@ -22,6 +22,9 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
 
   // Diamond-hands obstacle (drawn under the ball/paddles so they read on top)
   if (s.diamondPos) drawDiamond(ctx, s.diamondPos.x, s.diamondPos.y);
+
+  // Piñata collector + the balls stuck to it (under the live ball/paddles)
+  if (s.pinataPos) drawPinata(ctx, s.pinataPos, s.ball.color);
 
   // Shield glow — a gold bar at the goal wall when a side has shield active.
   for (const side of ['left', 'right'] as const) {
@@ -153,6 +156,76 @@ function drawDiamond(ctx: CanvasRenderingContext2D, x: number, y: number) {
   ctx.stroke();
 
   ctx.restore();
+}
+
+// The piñata: a colorful beach ball that inflates as balls stick to it, then flashes a
+// bursting ring when it pops. Stuck balls cling to its surface; positions come from the
+// server. `ballColor` is the shared live-ball color so clinging balls match the rally.
+let pinataBurstAt = -1e9; // performance.now() of the last burst, for the pop animation
+function drawPinata(
+  ctx: CanvasRenderingContext2D,
+  p: NonNullable<StateMsg['pinataPos']>,
+  ballColor: string,
+) {
+  const now = performance.now();
+  if (p.burst) pinataBurstAt = now;
+  const fill = p.stuck.length;
+  const R = PINATA.r * (1 + fill * 0.06); // inflates with each ball it holds
+
+  ctx.save();
+  ctx.translate(p.x, p.y);
+
+  // Burst flash: a quick expanding white ring right after it pops.
+  const bt = (now - pinataBurstAt) / 340;
+  if (bt >= 0 && bt < 1) {
+    ctx.save();
+    ctx.globalAlpha = (1 - bt) * 0.85;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 7;
+    ctx.beginPath();
+    ctx.arc(0, 0, PINATA.r + bt * 110, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // Beach-ball body: colored wedges rotating with the piñata's spin, a white rim and hub.
+  ctx.save();
+  ctx.rotate(p.spin);
+  const colors = ['#ff5252', '#ffd23f', '#4dd964', '#3fa9ff', '#b066ff', '#ffffff'];
+  const seg = (Math.PI * 2) / colors.length;
+  ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+  ctx.shadowBlur = 12;
+  for (let i = 0; i < colors.length; i++) {
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.arc(0, 0, R, i * seg, (i + 1) * seg);
+    ctx.closePath();
+    ctx.fillStyle = colors[i];
+    ctx.fill();
+  }
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.92)';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.arc(0, 0, R, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(0, 0, R * 0.16, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  ctx.restore();
+
+  // Balls clinging to the surface (absolute positions from the server).
+  for (const b of p.stuck) {
+    ctx.fillStyle = ballColor;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, BALL.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.35)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
 }
 
 function drawPaddle(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {

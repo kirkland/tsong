@@ -48,6 +48,17 @@ export const DIAMOND = {
   r: 42, // half-diagonal, court units (vertices sit this far from center along each axis)
   speed: 150, // drift speed, court units / second
 } as const;
+
+// "Piñata" mode: a beach-ball collector drifts around the court. A ball that touches it
+// sticks to its surface and a fresh ball spawns into play; the moment a 5th ball would
+// stick, the piñata bursts and flings every stuck ball outward at once.
+export const PINATA = {
+  r: 40, // beach-ball radius, court units
+  speed: 130, // drift speed, court units / second
+  spin: 0.9, // visual rotation, rad / second
+  stickMax: 4, // balls held before the next contact (the 5th) bursts it
+  maxBalls: 10, // safety cap on live balls — don't spawn replacements beyond this
+} as const;
 export const TARGET = {
   r: 24, // target radius, court units
   minDelay: 6, // min seconds before a target (re)appears
@@ -112,7 +123,7 @@ export type ClientMsg =
   | { type: 'paddle'; y: number } // desired paddle center Y, in court units
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
-  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean } // toggle game modes
+  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean } // toggle game modes
   | { type: 'fatality'; move: string } // winner-only, validated server-side
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
   | { type: 'forfeit' } // "/ff": leave your paddle spot mid-game (and get shamed)
@@ -158,6 +169,11 @@ export interface StateMsg {
   // Live position of the diamond obstacle (diamond-hands mode), or null when none is on
   // the board. Center in court units; its size is the shared DIAMOND.r constant.
   diamondPos: { x: number; y: number } | null;
+  pinata: boolean; // whether "piñata" mode is armed
+  // Live piñata (beach-ball collector): center, current rotation, the balls stuck to its
+  // surface (absolute court positions), and a one-frame `burst` pulse the moment it pops.
+  // null when the mode is off or no match is running.
+  pinataPos: { x: number; y: number; spin: number; stuck: { x: number; y: number }[]; burst: boolean } | null;
   winner: string | null; // nickname of the winner when status === 'over'
   // Shared, room-wide toggle: when true, the match winner can perform a finishing move.
   // It's one setting for everyone (not per-user), so it rides along in the state.

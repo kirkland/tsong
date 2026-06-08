@@ -29,6 +29,7 @@ import {
   TURBO_SPEED_MULT,
   TURBO_SPEEDUP,
   DIAMOND,
+  PINATA,
   POWERUPS,
   TARGET,
   PowerupKind,
@@ -55,6 +56,18 @@ interface Ball {
   spin: number; // rad/s; positive = counter-clockwise; decays each tick
 }
 
+// The piñata collector: a drifting beach ball, its visual rotation, and the balls
+// currently clinging to its surface (each kept as a surface angle + the speed it carried,
+// so a burst can fling it back out with its own momentum).
+interface PinataObj {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  spin: number; // accumulated rotation, radians (visual; also rotates stuck balls)
+  stuck: { angle: number; speed: number }[];
+}
+
 // Everything needed to resume the simulation after a restart. Mirrors the Game's own
 // fields (including the private serve/target timers) so a saved match continues exactly
 // where it left off. `paused` is deliberately omitted — a resumed match always starts
@@ -70,6 +83,8 @@ export interface GameSnapshot {
   closing: boolean;
   diamond: boolean;
   diamondBlock: { x: number; y: number; vx: number; vy: number } | null;
+  pinata: boolean;
+  pinataObj: PinataObj | null;
   winnerSide: Side | null;
   lastHit: Side | null;
   target: { x: number; y: number; kind: PowerupKind } | null;
@@ -106,6 +121,11 @@ export class Game {
   diamond = false; // "diamond hands" mode armed; spawns a drifting diamond obstacle
   // The live diamond obstacle while diamond-hands mode is on during a match (else null).
   diamondBlock: { x: number; y: number; vx: number; vy: number } | null = null;
+  pinata = false; // "piñata" mode armed; spawns a drifting ball-collector
+  pinataObj: PinataObj | null = null; // the live piñata during a match (else null)
+  pinataBurstFlash = false; // set for the single tick a burst happens (drives a client pulse)
+  private pinataPendingSpawns = 0; // replacement balls owed this tick (one per ball stuck)
+  private pinataBurstPending = false; // a 5th ball stuck this tick → release everything
   winnerSide: Side | null = null;
   lastHit: Side | null = null; // side whose paddle last touched any ball (null until first hit)
   paused = false; // set by the lobby: freeze play until both players capture their mouse
@@ -142,6 +162,10 @@ export class Game {
       closing: this.closing,
       diamond: this.diamond,
       diamondBlock: this.diamondBlock ? { ...this.diamondBlock } : null,
+      pinata: this.pinata,
+      pinataObj: this.pinataObj
+        ? { ...this.pinataObj, stuck: this.pinataObj.stuck.map((s) => ({ ...s })) }
+        : null,
       winnerSide: this.winnerSide,
       lastHit: this.lastHit,
       target: this.target ? { ...this.target } : null,
@@ -167,6 +191,10 @@ export class Game {
     this.closing = s.closing;
     this.diamond = s.diamond ?? false;
     this.diamondBlock = s.diamondBlock ? { ...s.diamondBlock } : null;
+    this.pinata = s.pinata ?? false;
+    this.pinataObj = s.pinataObj
+      ? { ...s.pinataObj, stuck: (s.pinataObj.stuck ?? []).map((x) => ({ ...x })) }
+      : null;
     this.winnerSide = s.winnerSide;
     this.lastHit = s.lastHit;
     this.target = s.target ? { ...s.target } : null;
@@ -205,6 +233,9 @@ export class Game {
     // Diamond-hands mode: (re)spawn the drifting obstacle for the new match.
     if (this.diamond) this.spawnDiamond();
     else this.diamondBlock = null;
+    // Piñata mode: (re)spawn the collector for the new match.
+    if (this.pinata) this.spawnPinata();
+    else this.pinataObj = null;
     this.serve(Math.random() < 0.5 ? 1 : -1);
   }
 
@@ -253,6 +284,98 @@ export class Game {
     else if (d.y + DIAMOND.r > COURT.h) { d.y = COURT.h - DIAMOND.r; d.vy = -Math.abs(d.vy); }
   }
 
+  /** Arm / disarm piñata mode. Like diamond hands: takes effect immediately during a
+   *  live match (spawn on, remove off); otherwise it spawns at the next match start. */
+  setPinata(on: boolean) {
+    this.pinata = on;
+    if (on) {
+      if (this.status === 'playing' && !this.pinataObj) this.spawnPinata();
+    } else {
+      this.pinataObj = null;
+    }
+  }
+
+  // Drop the piñata onto the board at a random central spot, drifting in a random
+  // direction with an empty stuck list.
+  private spawnPinata() {
+    const angle = Math.random() * Math.PI * 2;
+    const pad = PINATA.r + 40;
+    this.pinataObj = {
+      x: COURT.w * 0.4 + Math.random() * COURT.w * 0.2,
+      y: pad + Math.random() * (COURT.h - 2 * pad),
+      vx: Math.cos(angle) * PINATA.speed,
+      vy: Math.sin(angle) * PINATA.speed,
+      spin: 0,
+      stuck: [],
+    };
+    this.pinataPendingSpawns = 0;
+    this.pinataBurstPending = false;
+  }
+
+  // Drift the piñata, spin it, and bounce it off the four walls (radius PINATA.r).
+  private movePinata(dt: number, scale: number) {
+    const p = this.pinataObj;
+    if (!p) return;
+    p.x += p.vx * dt * scale;
+    p.y += p.vy * dt * scale;
+    p.spin += PINATA.spin * dt;
+    if (p.x - PINATA.r < 0) { p.x = PINATA.r; p.vx = Math.abs(p.vx); }
+    else if (p.x + PINATA.r > COURT.w) { p.x = COURT.w - PINATA.r; p.vx = -Math.abs(p.vx); }
+    if (p.y - PINATA.r < 0) { p.y = PINATA.r; p.vy = Math.abs(p.vy); }
+    else if (p.y + PINATA.r > COURT.h) { p.y = COURT.h - PINATA.r; p.vy = -Math.abs(p.vy); }
+  }
+
+  // A ball just touched the piñata: stick it to the surface. Records the contact angle
+  // (relative to current rotation) and the ball's speed, then either owes a replacement
+  // ball (1st–4th) or flags a burst (the 5th). The ball itself is consumed by the caller.
+  private stickToPinata(b: Ball) {
+    const p = this.pinataObj!;
+    const angle = Math.atan2(b.y - p.y, b.x - p.x) - p.spin;
+    const speed = Math.max(Math.hypot(b.vx, b.vy), BALL.speed);
+    p.stuck.push({ angle, speed });
+    if (p.stuck.length > PINATA.stickMax) this.pinataBurstPending = true; // the 5th — pop it
+    else this.pinataPendingSpawns += 1; // 1st–4th — the piñata spits out a fresh ball
+  }
+
+  // After the per-ball step: emit replacement balls owed this tick and, on a burst, fling
+  // every stuck ball back out radially. Returns the new balls to fold into play. `liveCount`
+  // is the number already in play, so replacements respect the safety cap.
+  private applyPinata(liveCount: number): Ball[] {
+    const p = this.pinataObj;
+    if (!p) {
+      this.pinataPendingSpawns = 0;
+      this.pinataBurstPending = false;
+      return [];
+    }
+    const out: Ball[] = [];
+    let budget = PINATA.maxBalls - liveCount; // cap replacements (bursts ignore the cap)
+    while (this.pinataPendingSpawns > 0) {
+      this.pinataPendingSpawns -= 1;
+      if (budget > 0) { out.push(this.spawnFromPinata(Math.random() * Math.PI * 2, BALL.speed)); budget -= 1; }
+    }
+    if (this.pinataBurstPending) {
+      for (const s of p.stuck) out.push(this.spawnFromPinata(s.angle + p.spin, s.speed));
+      p.stuck = [];
+      this.pinataBurstPending = false;
+      this.pinataBurstFlash = true; // one-frame pulse for the client's pop animation
+    }
+    return out;
+  }
+
+  // Make a ball just outside the piñata's surface, heading outward along `angle` so it
+  // can't immediately re-stick.
+  private spawnFromPinata(angle: number, speed: number): Ball {
+    const p = this.pinataObj!;
+    const d = PINATA.r + this.ballR() + 6;
+    return {
+      x: p.x + Math.cos(angle) * d,
+      y: p.y + Math.sin(angle) * d,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      spin: 0,
+    };
+  }
+
   // Carom a ball off the diamond. The diamond is an L1 "circle" (|dx|+|dy| ≤ r), so its
   // faces are the four 45° lines; reflect the ball about the face of whichever quadrant
   // it's in. No-op when the ball is outside reach or already moving away (no trapping).
@@ -292,6 +415,9 @@ export class Game {
     this.lastHit = null;
     this.target = null;
     this.diamondBlock = null;
+    this.pinataObj = null;
+    this.pinataPendingSpawns = 0;
+    this.pinataBurstPending = false;
     this.clearPowerups();
   }
 
@@ -338,6 +464,10 @@ export class Game {
     this.bigBallTimer = 0;
     this.curveHits = { left: 0, right: 0 };
     // Shield intentionally persists — an unused shield stays for the next point.
+    // Piñata: drop anything stuck and clear pending effects; the collector keeps drifting.
+    if (this.pinataObj) this.pinataObj.stuck = [];
+    this.pinataPendingSpawns = 0;
+    this.pinataBurstPending = false;
   }
 
   private launch() {
@@ -348,6 +478,7 @@ export class Game {
   }
 
   tick(dt: number) {
+    this.pinataBurstFlash = false; // a burst this tick (if any) sets it back to true
     // Paddles ease toward their target each tick; frozen paddles don't move.
     const maxStep = PADDLE.speed * dt;
     for (const side of ['left', 'right'] as Side[]) {
@@ -365,6 +496,7 @@ export class Game {
     // The diamond-hands obstacle drifts continuously while the match is live — including
     // through the brief serve countdown — so it never visibly freezes between points.
     this.moveDiamond(dt, this.slowTimer > 0 ? SLOW_SCALE : 1);
+    this.movePinata(dt, this.slowTimer > 0 ? SLOW_SCALE : 1);
 
     if (this.serveTimer > 0) {
       this.serveTimer -= dt;
@@ -392,6 +524,7 @@ export class Game {
     let lastScorer: Side | null = null;
     for (const b of [this.ball, ...this.extraBalls]) {
       const scorer = this.stepBall(b, dt, scale);
+      if (scorer === 'consumed') continue; // stuck to the piñata — removed from play
       if (scorer) lastScorer = scorer; // remember who'd score, but don't award yet
       else survivors.push(b);
     }
@@ -401,7 +534,9 @@ export class Game {
     // A "multi" power-up claimed this tick appends new balls past extraBalls' original
     // length; keep them alongside the survivors (otherwise the new ball is discarded).
     const spawned = this.extraBalls.slice(prevExtras);
-    const live = [...survivors, ...spawned];
+    // Piñata: replacement balls for any that stuck, plus a burst's released balls.
+    const released = this.applyPinata(survivors.length + spawned.length);
+    const live = [...survivors, ...spawned, ...released];
 
     if (live.length > 0) {
       // Balls still in play: keep going, promoting one to the primary slot.
@@ -418,8 +553,8 @@ export class Game {
   }
 
   // Move one ball a tick: integrate, bounce off walls/paddles, claim the target, and
-  // return the scoring side if it left the court (else null).
-  private stepBall(b: Ball, dt: number, scale: number): Side | null {
+  // return the scoring side if it left the court, 'consumed' if the piñata ate it, else null.
+  private stepBall(b: Ball, dt: number, scale: number): Side | 'consumed' | null {
     // Spin (curve power-up): rotate velocity direction and decay.
     if (b.spin !== 0) {
       const speed = Math.hypot(b.vx, b.vy);
@@ -472,6 +607,16 @@ export class Game {
 
     // Diamond obstacle carom (diamond-hands mode); no-op when the mode is off.
     this.bounceDiamond(b);
+
+    // Piñata collector (piñata mode): a touch sticks the ball and removes it from play.
+    if (this.pinataObj) {
+      const pdx = b.x - this.pinataObj.x;
+      const pdy = b.y - this.pinataObj.y;
+      if (Math.hypot(pdx, pdy) <= PINATA.r + r) {
+        this.stickToPinata(b);
+        return 'consumed';
+      }
+    }
 
     // Scoring — check shield before awarding the point.
     if (b.x < -r) {
