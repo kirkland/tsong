@@ -62,6 +62,7 @@ Built by:
 - [Noam Molloy](https://github.com/noammolloy) (@noammolloy)
 - [Jay Srinivasan](https://github.com/jayyy-s) (@jayyy-s)
 - [Matt Beauvais](https://github.com/mattb102) (@mattb102)
+- [Fritz-Gerald Duverglas](https://github.com/fritztheritz) (@fritztheritz)
 - [Josiel](https://github.com/japonte21) (@japonte21)
 
 ## Code of conduct
