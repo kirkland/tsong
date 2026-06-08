@@ -1,6 +1,6 @@
 // Pure drawing: takes the latest server state and paints one frame. No game logic.
 
-import { COURT, PADDLE, BALL, BIG_BALL_R, TARGET, PowerupKind, StateMsg, Role } from '../shared/types';
+import { COURT, PADDLE, BALL, BIG_BALL_R, DIAMOND, TARGET, PowerupKind, StateMsg, Role } from '../shared/types';
 
 export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 'observer') {
   // Court
@@ -19,6 +19,9 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
 
   // Power-up target (drawn under the ball/paddles so they read on top)
   if (s.target) drawTarget(ctx, s.target.x, s.target.y, s.target.kind);
+
+  // Diamond-hands obstacle (drawn under the ball/paddles so they read on top)
+  if (s.diamondPos) drawDiamond(ctx, s.diamondPos.x, s.diamondPos.y);
 
   // Shield glow — a gold bar at the goal wall when a side has shield active.
   for (const side of ['left', 'right'] as const) {
@@ -98,6 +101,58 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
     fxStart = 0;
     fxKey = '';
   }
+}
+
+// The diamond-hands obstacle: a blue-and-white gem with faceted highlights and a glow.
+function drawDiamond(ctx: CanvasRenderingContext2D, x: number, y: number) {
+  const r = DIAMOND.r;
+  ctx.save();
+  ctx.translate(x, y);
+
+  // Body — a vertical blue gradient, with a soft blue glow.
+  ctx.beginPath();
+  ctx.moveTo(0, -r);
+  ctx.lineTo(r, 0);
+  ctx.lineTo(0, r);
+  ctx.lineTo(-r, 0);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, -r, 0, r);
+  grad.addColorStop(0, '#cfe0ff');
+  grad.addColorStop(0.5, '#3f6fe0');
+  grad.addColorStop(1, '#23409c');
+  ctx.shadowColor = '#5b8cff';
+  ctx.shadowBlur = 16;
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Bright white outline.
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = '#eef4ff';
+  ctx.lineWidth = 3;
+  ctx.stroke();
+
+  // Inner facet lines for a cut-gem look.
+  const g = r * 0.42; // girdle height (the diamond's widest cross-line)
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(-g, -g); // girdle
+  ctx.lineTo(g, -g);
+  ctx.moveTo(0, -r); // crown facets from the top point
+  ctx.lineTo(-g, -g);
+  ctx.moveTo(0, -r);
+  ctx.lineTo(g, -g);
+  ctx.moveTo(-r, 0); // crown facets from the side points
+  ctx.lineTo(-g, -g);
+  ctx.moveTo(r, 0);
+  ctx.lineTo(g, -g);
+  ctx.moveTo(-g, -g); // pavilion facets down to the bottom point
+  ctx.lineTo(0, r);
+  ctx.moveTo(g, -g);
+  ctx.lineTo(0, r);
+  ctx.stroke();
+
+  ctx.restore();
 }
 
 function drawPaddle(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {

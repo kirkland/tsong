@@ -309,13 +309,14 @@ export class Lobby {
   }
 
   // Any joined client may toggle game modes.
-  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean }) {
+  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean }) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return;
     if (opts.closing !== undefined) this.game.setClosing(opts.closing);
     if (opts.gravity !== undefined) this.game.setGravity(opts.gravity);
     if (opts.turbo !== undefined) this.game.setTurbo(opts.turbo);
     if (opts.streamer !== undefined) this.streamerMode = opts.streamer;
+    if (opts.diamond !== undefined) this.game.setDiamond(opts.diamond);
   }
 
   remove(ws: WebSocket) {
@@ -608,6 +609,10 @@ export class Lobby {
       closing: this.game.closing,
       gravity: this.game.gravity,
       turbo: this.game.turbo,
+      diamond: this.game.diamond,
+      diamondPos: this.game.diamondBlock
+        ? { x: this.game.diamondBlock.x, y: this.game.diamondBlock.y }
+        : null,
       winner: this.game.status === 'over' ? this.winnerName : null,
       fatalitiesEnabled: this.fatalitiesEnabled,
       fatality: this.game.status === 'over' ? this.activeFatality : null,

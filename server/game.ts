@@ -28,6 +28,7 @@ import {
   GRAVITY_ACCEL,
   TURBO_SPEED_MULT,
   TURBO_SPEEDUP,
+  DIAMOND,
   POWERUPS,
   TARGET,
   PowerupKind,
@@ -67,6 +68,8 @@ export interface GameSnapshot {
   score: { left: number; right: number };
   status: Status;
   closing: boolean;
+  diamond: boolean;
+  diamondBlock: { x: number; y: number; vx: number; vy: number } | null;
   winnerSide: Side | null;
   lastHit: Side | null;
   target: { x: number; y: number; kind: PowerupKind } | null;
@@ -100,6 +103,9 @@ export class Game {
   closing = false; // "closing walls" mode armed; applies from the next match start
   gravity = false; // constant downward pull bends ball trajectory
   turbo = false; // faster serve speed and steeper per-hit speedup
+  diamond = false; // "diamond hands" mode armed; spawns a drifting diamond obstacle
+  // The live diamond obstacle while diamond-hands mode is on during a match (else null).
+  diamondBlock: { x: number; y: number; vx: number; vy: number } | null = null;
   winnerSide: Side | null = null;
   lastHit: Side | null = null; // side whose paddle last touched any ball (null until first hit)
   paused = false; // set by the lobby: freeze play until both players capture their mouse
@@ -134,6 +140,8 @@ export class Game {
       score: { ...this.score },
       status: this.status,
       closing: this.closing,
+      diamond: this.diamond,
+      diamondBlock: this.diamondBlock ? { ...this.diamondBlock } : null,
       winnerSide: this.winnerSide,
       lastHit: this.lastHit,
       target: this.target ? { ...this.target } : null,
@@ -157,6 +165,8 @@ export class Game {
     this.score = { ...s.score };
     this.status = s.status;
     this.closing = s.closing;
+    this.diamond = s.diamond ?? false;
+    this.diamondBlock = s.diamondBlock ? { ...s.diamondBlock } : null;
     this.winnerSide = s.winnerSide;
     this.lastHit = s.lastHit;
     this.target = s.target ? { ...s.target } : null;
@@ -192,6 +202,9 @@ export class Game {
     this.target = null;
     this.targetTimer = this.nextTargetDelay();
     this.status = 'playing';
+    // Diamond-hands mode: (re)spawn the drifting obstacle for the new match.
+    if (this.diamond) this.spawnDiamond();
+    else this.diamondBlock = null;
     this.serve(Math.random() < 0.5 ? 1 : -1);
   }
 
@@ -203,6 +216,66 @@ export class Game {
 
   setGravity(on: boolean) { this.gravity = on; }
   setTurbo(on: boolean) { this.turbo = on; }
+
+  /** Arm / disarm diamond-hands mode. Toggling takes effect immediately during a live
+   *  match (spawn the diamond on, remove it off); otherwise it spawns at the next start. */
+  setDiamond(on: boolean) {
+    this.diamond = on;
+    if (on) {
+      if (this.status === 'playing' && !this.diamondBlock) this.spawnDiamond();
+    } else {
+      this.diamondBlock = null;
+    }
+  }
+
+  // Drop the diamond obstacle onto the board at a random central spot, drifting in a
+  // random direction. Kept clear of the very center so it doesn't sit on the serve point.
+  private spawnDiamond() {
+    const angle = Math.random() * Math.PI * 2;
+    const pad = DIAMOND.r + 40;
+    this.diamondBlock = {
+      x: COURT.w * 0.35 + Math.random() * COURT.w * 0.3,
+      y: pad + Math.random() * (COURT.h - 2 * pad),
+      vx: Math.cos(angle) * DIAMOND.speed,
+      vy: Math.sin(angle) * DIAMOND.speed,
+    };
+  }
+
+  // Drift the diamond and bounce it off the four walls (its vertices touch at ±r).
+  private moveDiamond(dt: number, scale: number) {
+    const d = this.diamondBlock;
+    if (!d) return;
+    d.x += d.vx * dt * scale;
+    d.y += d.vy * dt * scale;
+    if (d.x - DIAMOND.r < 0) { d.x = DIAMOND.r; d.vx = Math.abs(d.vx); }
+    else if (d.x + DIAMOND.r > COURT.w) { d.x = COURT.w - DIAMOND.r; d.vx = -Math.abs(d.vx); }
+    if (d.y - DIAMOND.r < 0) { d.y = DIAMOND.r; d.vy = Math.abs(d.vy); }
+    else if (d.y + DIAMOND.r > COURT.h) { d.y = COURT.h - DIAMOND.r; d.vy = -Math.abs(d.vy); }
+  }
+
+  // Carom a ball off the diamond. The diamond is an L1 "circle" (|dx|+|dy| ≤ r), so its
+  // faces are the four 45° lines; reflect the ball about the face of whichever quadrant
+  // it's in. No-op when the ball is outside reach or already moving away (no trapping).
+  private bounceDiamond(b: Ball) {
+    const d = this.diamondBlock;
+    if (!d) return;
+    const dx = b.x - d.x;
+    const dy = b.y - d.y;
+    const reach = DIAMOND.r + this.ballR() * Math.SQRT2; // L1 offset for the ball radius
+    const l1 = Math.abs(dx) + Math.abs(dy);
+    if (l1 > reach) return;
+    const inv = 1 / Math.SQRT2;
+    const nx = (Math.sign(dx) || 1) * inv; // outward face normal for this quadrant
+    const ny = (Math.sign(dy) || 1) * inv;
+    const vn = b.vx * nx + b.vy * ny;
+    if (vn >= 0) return; // moving away — don't yank it back
+    b.vx -= 2 * vn * nx; // reflect velocity about the face normal
+    b.vy -= 2 * vn * ny;
+    b.spin = 0; // a clean carom drops any curve spin
+    const push = (reach - l1) * inv; // shove the ball just outside the face
+    b.x += nx * push;
+    b.y += ny * push;
+  }
 
   /** X of a paddle's hitting face — its inner edge, which moves with the paddle. */
   private faceX(side: Side): number {
@@ -218,6 +291,7 @@ export class Game {
     this.extraBalls = [];
     this.lastHit = null;
     this.target = null;
+    this.diamondBlock = null;
     this.clearPowerups();
   }
 
@@ -287,6 +361,10 @@ export class Game {
     // Frozen while waiting for both players to capture their mouse. Paddles still ease
     // (above) but the ball, serve countdown and power-up timers all hold.
     if (this.paused) return;
+
+    // The diamond-hands obstacle drifts continuously while the match is live — including
+    // through the brief serve countdown — so it never visibly freezes between points.
+    this.moveDiamond(dt, this.slowTimer > 0 ? SLOW_SCALE : 1);
 
     if (this.serveTimer > 0) {
       this.serveTimer -= dt;
@@ -391,6 +469,9 @@ export class Game {
     ) {
       this.bounce('right', b);
     }
+
+    // Diamond obstacle carom (diamond-hands mode); no-op when the mode is off.
+    this.bounceDiamond(b);
 
     // Scoring — check shield before awarding the point.
     if (b.x < -r) {

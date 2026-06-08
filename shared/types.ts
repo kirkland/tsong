@@ -42,6 +42,12 @@ export const CURVE_SPIN = 1.4; // spin (rad/s) applied to the ball on a curve hi
 export const GRAVITY_ACCEL = 220; // court units/sec² downward pull in gravity mode
 export const TURBO_SPEED_MULT = 1.5; // serve speed multiplier in turbo mode
 export const TURBO_SPEEDUP = 1.1; // per-hit speedup in turbo mode (vs BALL.speedup = 1.05)
+// "Diamond hands" mode: a blue-and-white diamond drifts around the court (bouncing off
+// the walls) and the ball caroms off its 45° faces.
+export const DIAMOND = {
+  r: 42, // half-diagonal, court units (vertices sit this far from center along each axis)
+  speed: 150, // drift speed, court units / second
+} as const;
 export const TARGET = {
   r: 24, // target radius, court units
   minDelay: 6, // min seconds before a target (re)appears
@@ -106,7 +112,7 @@ export type ClientMsg =
   | { type: 'paddle'; y: number } // desired paddle center Y, in court units
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
-  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean } // toggle game modes
+  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean } // toggle game modes
   | { type: 'fatality'; move: string } // winner-only, validated server-side
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
   | { type: 'forfeit' } // "/ff": leave your paddle spot mid-game (and get shamed)
@@ -148,6 +154,10 @@ export interface StateMsg {
   closing: boolean; // whether "closing walls" mode is armed
   gravity: boolean; // whether gravity mode is active
   turbo: boolean; // whether turbo mode is active
+  diamond: boolean; // whether "diamond hands" mode is armed
+  // Live position of the diamond obstacle (diamond-hands mode), or null when none is on
+  // the board. Center in court units; its size is the shared DIAMOND.r constant.
+  diamondPos: { x: number; y: number } | null;
   winner: string | null; // nickname of the winner when status === 'over'
   // Shared, room-wide toggle: when true, the match winner can perform a finishing move.
   // It's one setting for everyone (not per-user), so it rides along in the state.
