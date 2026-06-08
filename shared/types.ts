@@ -80,9 +80,10 @@ export const TARGET = {
 //   ghost  — ball turns invisible for 3 s
 //   tiny   — ball shrinks to near-invisible size for 5 s
 //   warp   — ball teleports to a random mid-court position
+//   rotate — the entire court rotates 90° for the rest of the match
 export const POWERUPS = [
   'grow', 'shrink', 'smash', 'slow', 'multi',
-  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball',
+  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate',
 ] as const;
 export type PowerupKind = (typeof POWERUPS)[number];
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
@@ -169,6 +170,9 @@ export interface StateMsg {
   // Live position of the diamond obstacle (diamond-hands mode), or null when none is on
   // the board. Center in court units; its size is the shared DIAMOND.r constant.
   diamondPos: { x: number; y: number } | null;
+  // True once a "rotate" power-up has flipped the court 90° for the rest of the match.
+  // The whole game (paddles, ball, score) renders rotated and controls remap to match.
+  rotated: boolean;
   pinata: boolean; // whether "piñata" mode is armed
   // Live piñata (beach-ball collector): center, current rotation, the balls stuck to its
   // surface (absolute court positions), and a one-frame `burst` pulse the moment it pops.

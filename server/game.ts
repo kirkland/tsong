@@ -85,6 +85,7 @@ export interface GameSnapshot {
   diamondBlock: { x: number; y: number; vx: number; vy: number } | null;
   pinata: boolean;
   pinataObj: PinataObj | null;
+  rotated: boolean;
   winnerSide: Side | null;
   lastHit: Side | null;
   target: { x: number; y: number; kind: PowerupKind } | null;
@@ -144,6 +145,7 @@ export class Game {
   tinyTimer = 0;
   bigBallTimer = 0;
   shielded: Record<Side, boolean> = { left: false, right: false };
+  rotated = false; // "rotate" power-up: court is flipped 90° for the rest of the match
 
   private serveTimer = 0;
   private serveDir = 1; // +1 = launch toward right, -1 = toward left
@@ -166,6 +168,7 @@ export class Game {
       pinataObj: this.pinataObj
         ? { ...this.pinataObj, stuck: this.pinataObj.stuck.map((s) => ({ ...s })) }
         : null,
+      rotated: this.rotated,
       winnerSide: this.winnerSide,
       lastHit: this.lastHit,
       target: this.target ? { ...this.target } : null,
@@ -195,6 +198,7 @@ export class Game {
     this.pinataObj = s.pinataObj
       ? { ...s.pinataObj, stuck: (s.pinataObj.stuck ?? []).map((x) => ({ ...x })) }
       : null;
+    this.rotated = s.rotated ?? false;
     this.winnerSide = s.winnerSide;
     this.lastHit = s.lastHit;
     this.target = s.target ? { ...s.target } : null;
@@ -434,6 +438,7 @@ export class Game {
     this.tinyTimer = 0;
     this.bigBallTimer = 0;
     this.shielded = { left: false, right: false };
+    this.rotated = false; // a new match always starts un-rotated
   }
 
   /** Current ball radius — enlarged while bigball power-up is active. */
@@ -736,6 +741,11 @@ export class Game {
       }
       case 'bigball':
         this.bigBallTimer = BIG_BALL_TIME;
+        break;
+      case 'rotate':
+        // Whole-match effect: flip the court 90°. Persists across points (it's not reset
+        // by serve(), only by clearPowerups() at the next match start / return to lobby).
+        this.rotated = true;
         break;
     }
   }

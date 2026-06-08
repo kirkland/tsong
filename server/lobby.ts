@@ -631,6 +631,7 @@ export class Lobby {
       diamondPos: this.game.diamondBlock
         ? { x: this.game.diamondBlock.x, y: this.game.diamondBlock.y }
         : null,
+      rotated: this.game.rotated,
       pinata: this.game.pinata,
       pinataPos: this.pinataView(),
       winner: this.game.status === 'over' ? this.winnerName : null,

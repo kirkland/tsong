@@ -51,6 +51,13 @@
         background: #0b1020;
         cursor: none;
       }
+      /* "rotate" power-up: the court flips to portrait. Size by height so the tall court
+         still fits the viewport. */
+      #game.rotated {
+        width: auto;
+        height: min(82vh, 760px);
+        aspect-ratio: 500 / 800;
+      }
       #status {
         min-height: 22px;
         font-size: 18px;
@@ -1158,6 +1165,13 @@
               <div class="pu-info">
                 <span class="pu-name" style="color:#fb923c">bigball</span>
                 <span class="pu-desc">Ball grows to 4× size for 6 s</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="rotate" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#2ee6c9">rotate</span>
+                <span class="pu-desc">The whole court flips 90° for the rest of the match</span>
               </div>
             </div>
           </div>

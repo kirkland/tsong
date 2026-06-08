@@ -3,6 +3,12 @@
 import { COURT, PADDLE, BALL, BIG_BALL_R, DIAMOND, PINATA, TARGET, PowerupKind, StateMsg, Role } from '../shared/types';
 
 export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 'observer') {
+  // "rotate" power-up: flip the whole court 90° clockwise. Everything below draws in
+  // court coordinates as usual; the transform maps them into the (portrait) canvas, which
+  // main.ts has resized to COURT.h × COURT.w. Identity transform when un-rotated.
+  if (s.rotated) ctx.setTransform(0, 1, -1, 0, COURT.h, 0);
+  else ctx.setTransform(1, 0, 0, 1, 0, 0);
+
   // Court
   ctx.fillStyle = '#0b1020';
   ctx.fillRect(0, 0, COURT.w, COURT.h);
@@ -297,6 +303,7 @@ const TARGET_STYLE: Record<PowerupKind, { stroke: string; fill: string }> = {
   tiny:    { stroke: '#ff8c42', fill: 'rgba(255, 140,  66, 0.12)' }, // warm orange
   warp:    { stroke: '#e040fb', fill: 'rgba(224,  64, 251, 0.12)' }, // magenta
   bigball: { stroke: '#fb923c', fill: 'rgba(251, 146,  60, 0.14)' }, // deep orange
+  rotate:  { stroke: '#2ee6c9', fill: 'rgba( 46, 230, 201, 0.13)' }, // teal
 };
 
 function drawTarget(ctx: CanvasRenderingContext2D, x: number, y: number, kind: PowerupKind) {
@@ -503,6 +510,23 @@ const GLYPHS: Record<PowerupKind, (ctx: CanvasRenderingContext2D, x: number, y: 
     ctx.beginPath();
     ctx.arc(x, y, 4, 0, Math.PI * 2);
     ctx.fill();
+  },
+  // rotate: a circular arrow → "the whole court spins 90°"
+  rotate(ctx, x, y) {
+    const r = 11;
+    const start = -Math.PI / 2 + 0.6;
+    const end = start + Math.PI * 1.7;
+    ctx.beginPath();
+    ctx.arc(x, y, r, start, end);
+    ctx.stroke();
+    // Arrowhead at the arc's end, pointing along the tangent (clockwise).
+    const ex = x + Math.cos(end) * r, ey = y + Math.sin(end) * r;
+    const ta = end + Math.PI / 2;
+    ctx.beginPath();
+    ctx.moveTo(ex + Math.cos(ta - 0.5) * 6, ey + Math.sin(ta - 0.5) * 6);
+    ctx.lineTo(ex, ey);
+    ctx.lineTo(ex + Math.cos(ta + 0.5) * 6, ey + Math.sin(ta + 0.5) * 6);
+    ctx.stroke();
   },
 };
 

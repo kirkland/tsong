@@ -994,12 +994,20 @@ canvas.addEventListener('mousemove', (e) => {
   // The paddle only moves while the mouse is captured to the board.
   if (!isPlayer() || !pointerLocked) return;
   const r = canvas.getBoundingClientRect();
-  // Convert screen-pixel movement to court units (1:1 with what's drawn).
-  target = clampPaddle(target + e.movementY * (COURT.h / r.height));
+  // Convert screen-pixel movement to court units (1:1 with what's drawn). When the court
+  // is rotated 90°, the paddle slides horizontally on screen, so track movementX instead —
+  // moving the mouse right slides the paddle right (which is decreasing court-Y).
+  if (state?.rotated) {
+    target = clampPaddle(target - e.movementX * (COURT.h / r.width));
+  } else {
+    target = clampPaddle(target + e.movementY * (COURT.h / r.height));
+  }
 });
 
 // --- keyboard control ---
-const MOVE_KEYS = new Set(['arrowup', 'arrowdown', 'w', 's']);
+// Left/right (and A/D) are captured too: when the court is rotated 90° the paddle moves
+// horizontally, so those become the natural movement keys (see the loop below).
+const MOVE_KEYS = new Set(['arrowup', 'arrowdown', 'w', 's', 'arrowleft', 'arrowright', 'a', 'd']);
 window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement) return;
   if (overlay.style.display !== 'none') return;
@@ -1105,13 +1113,39 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !combosModal.hidden) closeCombos();
 });
 
+// Swap the canvas between landscape and portrait when the "rotate" power-up flips the
+// court. The internal resolution swaps to COURT.h × COURT.w (the render transform maps
+// court coords into it) and a CSS class switches the on-screen aspect ratio. Only touches
+// the DOM when the value actually changes.
+let canvasRotated = false;
+function applyCanvasRotation(rotated: boolean) {
+  if (rotated === canvasRotated) return;
+  canvasRotated = rotated;
+  if (rotated) {
+    canvas.width = COURT.h;
+    canvas.height = COURT.w;
+    canvas.classList.add('rotated');
+  } else {
+    canvas.width = COURT.w;
+    canvas.height = COURT.h;
+    canvas.classList.remove('rotated');
+  }
+}
+
 // --- main loop ---
 function loop(t: number) {
   // Paddle input (mouse and keyboard) only applies while the mouse is captured.
   if (isPlayer() && pointerLocked) {
     const step = PADDLE.speed / 60;
-    if (keys.has('arrowup') || keys.has('w')) target -= step;
-    if (keys.has('arrowdown') || keys.has('s')) target += step;
+    if (state?.rotated) {
+      // Court rotated 90°: the paddle slides horizontally, so right/left drive it
+      // (right on screen = decreasing court-Y). Up/down are ignored while rotated.
+      if (keys.has('arrowright') || keys.has('d')) target -= step;
+      if (keys.has('arrowleft') || keys.has('a')) target += step;
+    } else {
+      if (keys.has('arrowup') || keys.has('w')) target -= step;
+      if (keys.has('arrowdown') || keys.has('s')) target += step;
+    }
     target = Math.max(PADDLE.h / 2, Math.min(COURT.h - PADDLE.h / 2, target));
 
     // Send when it changed meaningfully, throttled to ~30/s.
@@ -1122,7 +1156,10 @@ function loop(t: number) {
     }
   }
 
-  if (state) draw(ctx, state, myRole);
+  if (state) {
+    applyCanvasRotation(state.rotated);
+    draw(ctx, state, myRole);
+  }
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
