@@ -275,7 +275,9 @@ export class Lobby {
     // Honor the requested side; otherwise auto-assign to the smaller team.
     const pick: Side =
       side ?? (this.teams.left.length <= this.teams.right.length ? 'left' : 'right');
-    if (this.teams[pick].length >= TEAM_MAX) return; // that side is full
+    // Sides only stack in layered-teams mode; otherwise it's classic one-per-side.
+    const cap = this.game.layered ? TEAM_MAX : 1;
+    if (this.teams[pick].length >= cap) return; // that side is full
     this.teams[pick].push(ws);
     conn.role = pick;
     conn.captured = false;
@@ -384,9 +386,11 @@ export class Lobby {
         }
         this.overHandled = true;
 
-        // The leaderboard tracks head-to-head records, so only true 1v1 results count.
-        if (winners.length === 1 && losers.length === 1 && winners[0].pid && losers[0].pid) {
-          recordResult(winners[0].pid, winners[0].nickname, losers[0].pid, losers[0].nickname)
+        // Every seated player's record counts: each winner gets a win, each loser a loss.
+        const winRefs = winners.filter((c) => c.pid).map((c) => ({ pid: c.pid, name: c.nickname }));
+        const loseRefs = losers.filter((c) => c.pid).map((c) => ({ pid: c.pid, name: c.nickname }));
+        if (winRefs.length && loseRefs.length) {
+          recordResult(winRefs, loseRefs)
             .then(() => this.refreshLeaderboard())
             .catch((e) => console.error('leaderboard update failed:', e));
         }

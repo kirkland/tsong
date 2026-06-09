@@ -24,6 +24,7 @@ const ctx = canvas.getContext('2d')!;
 const overlay = document.getElementById('overlay') as HTMLDivElement;
 const joinForm = document.getElementById('joinForm') as HTMLFormElement;
 const nick = document.getElementById('nick') as HTMLInputElement;
+const joinBtn = document.getElementById('join') as HTMLButtonElement;
 const joinLeftBtn = document.getElementById('joinLeft') as HTMLButtonElement;
 const joinRightBtn = document.getElementById('joinRight') as HTMLButtonElement;
 const queueBtn = document.getElementById('queueBtn') as HTMLButtonElement;
@@ -266,7 +267,10 @@ renameBtn.addEventListener('click', () => {
   nick.select();
 });
 
-// --- claim a paddle spot on your chosen side (multiple players may share a side) ---
+// --- claim a paddle spot ---
+// Classic mode: one auto-assigned button. Layered-teams mode: pick your side
+// (multiple players may share a side, staggered forward by join order).
+joinBtn.addEventListener('click', () => net.send({ type: 'claim' }));
 joinLeftBtn.addEventListener('click', () => net.send({ type: 'claim', side: 'left' }));
 joinRightBtn.addEventListener('click', () => net.send({ type: 'claim', side: 'right' }));
 
@@ -1279,15 +1283,20 @@ function updateUI() {
     readyBtn.style.display = 'none';
   }
 
-  // One join button per side; each shows its head count and hides when full.
+  // Side-pick buttons belong to layered-teams mode (each shows its head count and
+  // hides when full); classic mode gets the single auto-assign button instead.
   for (const [btn, side] of [
     [joinLeftBtn, 'left'],
     [joinRightBtn, 'right'],
   ] as [HTMLButtonElement, Side][]) {
     const n = state.paddles[side].players.length;
-    btn.style.display = myRole === 'observer' && n < TEAM_MAX ? 'inline-block' : 'none';
+    btn.style.display =
+      myRole === 'observer' && state.layered && n < TEAM_MAX ? 'inline-block' : 'none';
     btn.textContent = `Join ${side} (${n}/${TEAM_MAX})`;
   }
+  const spotOpen = !state.paddles.left.players.length || !state.paddles.right.players.length;
+  joinBtn.style.display =
+    myRole === 'observer' && !state.layered && spotOpen ? 'inline-block' : 'none';
   renameBtn.style.display = myName ? 'inline-block' : 'none';
 
   // Hidden once the pointer is captured (lock hides it natively anyway); visible while

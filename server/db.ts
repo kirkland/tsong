@@ -40,24 +40,30 @@ export async function initDb(): Promise<void> {
   console.log('leaderboard DB ready');
 }
 
-export async function recordResult(
-  winnerId: string,
-  winnerName: string,
-  loserId: string,
-  loserName: string,
-): Promise<void> {
+export interface PlayerRef {
+  pid: string;
+  name: string;
+}
+
+// Record a finished match: every player on the winning team gets a win, every player
+// on the losing team a loss (a 1v1 is just the one-per-side case).
+export async function recordResult(winners: PlayerRef[], losers: PlayerRef[]): Promise<void> {
   if (!pool) return;
   // Upsert by id; refresh the stored name to the latest nickname each time.
-  await pool.query(
-    `INSERT INTO players (id, name, wins) VALUES ($1, $2, 1)
-       ON CONFLICT (id) DO UPDATE SET wins = players.wins + 1, name = EXCLUDED.name`,
-    [winnerId, winnerName],
-  );
-  await pool.query(
-    `INSERT INTO players (id, name, losses) VALUES ($1, $2, 1)
-       ON CONFLICT (id) DO UPDATE SET losses = players.losses + 1, name = EXCLUDED.name`,
-    [loserId, loserName],
-  );
+  for (const w of winners) {
+    await pool.query(
+      `INSERT INTO players (id, name, wins) VALUES ($1, $2, 1)
+         ON CONFLICT (id) DO UPDATE SET wins = players.wins + 1, name = EXCLUDED.name`,
+      [w.pid, w.name],
+    );
+  }
+  for (const l of losers) {
+    await pool.query(
+      `INSERT INTO players (id, name, losses) VALUES ($1, $2, 1)
+         ON CONFLICT (id) DO UPDATE SET losses = players.losses + 1, name = EXCLUDED.name`,
+      [l.pid, l.name],
+    );
+  }
 }
 
 /** Update an existing player's display name (for renames). Returns rows changed. */
