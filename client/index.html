@@ -43,7 +43,7 @@
         color: #7da2ff;
       }
       #game {
-        width: min(90vw, 800px);
+        width: min(94vw, 1040px);
         height: auto;
         aspect-ratio: 800 / 500;
         border: 1px solid #2a3550;
@@ -53,7 +53,7 @@
       }
       /* 3D view container — same footprint as the 2D board; holds the Three.js canvas. */
       #game3d {
-        width: min(90vw, 800px);
+        width: min(94vw, 1040px);
         aspect-ratio: 800 / 500;
         border: 1px solid #2a3550;
         border-radius: 8px;
@@ -76,7 +76,7 @@
          still fits the viewport. */
       #game.rotated {
         width: auto;
-        height: min(82vh, 760px);
+        height: min(88vh, 900px);
         aspect-ratio: 500 / 800;
       }
       #status {
@@ -173,9 +173,9 @@
       }
       #chat {
         width: 300px;
-        /* Match the canvas height (width min(90vw,800px) at a 800/500 ratio) so the
+        /* Match the canvas height (width min(94vw,1040px) at a 800/500 ratio) so the
            chat box lines up top-and-bottom with the playing field. */
-        height: min(56.25vw, 500px);
+        height: min(58.75vw, 650px);
         display: flex;
         flex-direction: column;
         gap: 6px;
@@ -203,9 +203,9 @@
         gap: 2px;
       }
       /* On narrow screens, drop the chat below the game at full width. */
-      @media (max-width: 1100px) {
+      @media (max-width: 1400px) {
         #chat {
-          width: min(90vw, 800px);
+          width: min(94vw, 1040px);
           height: 240px;
         }
       }
@@ -239,7 +239,9 @@
         border: 1px solid #2a3550;
         border-radius: 8px;
         box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
-        overflow: hidden;
+        /* Long lists (e.g. /powerup's argument values) scroll instead of overflowing. */
+        max-height: 320px;
+        overflow-y: auto;
         z-index: 70;
       }
       #commandMenu[hidden] {
@@ -1205,6 +1207,15 @@
                 <span class="mode-desc">Teammates stagger forward toward mid-court</span>
               </span>
               <input type="checkbox" id="layeredMode" disabled />
+              <span class="mode-switch" aria-hidden="true"></span>
+            </label>
+            <label class="mode-option" title="Free-for-all on a polygon: up to 8 players, each gets a side (triangle, square, pentagon … octagon/stop sign). Slip past your edge and you're out — last one standing wins.">
+              <span class="mode-icon">🛑</span>
+              <span class="mode-text">
+                <span class="mode-name">Arena (free-for-all)</span>
+                <span class="mode-desc">3–8 players on a polygon; last one standing wins</span>
+              </span>
+              <input type="checkbox" id="arenaMode" disabled />
               <span class="mode-switch" aria-hidden="true"></span>
             </label>
             <label class="mode-option" title="Floods the chat with fake viewer bots to distract the players. 📺">

@@ -699,20 +699,21 @@ export class Game {
     return TARGET.minDelay + Math.random() * (TARGET.maxDelay - TARGET.minDelay);
   }
 
-  /** Force a random power-up onto the board now (the "/powerup" command). Live matches only. */
-  forceTarget(): boolean {
+  /** Force a power-up onto the board now (the "/powerup [name]" command) — the given
+   *  kind, or a random one when unnamed. Live matches only. */
+  forceTarget(kind?: PowerupKind): boolean {
     if (this.status !== 'playing') return false;
-    this.placeTarget();
+    this.placeTarget(kind);
     return true;
   }
 
-  // Drop a fresh random power-up target onto the board, replacing any current one.
-  private placeTarget() {
+  // Drop a fresh power-up target onto the board, replacing any current one.
+  private placeTarget(kind?: PowerupKind) {
     const margin = TARGET.r + 24; // keep it clear of the walls
     this.target = {
       x: COURT.w * 0.3 + Math.random() * COURT.w * 0.4, // central band, clear of paddles
       y: margin + Math.random() * (COURT.h - 2 * margin),
-      kind: POWERUPS[Math.floor(Math.random() * POWERUPS.length)],
+      kind: kind ?? POWERUPS[Math.floor(Math.random() * POWERUPS.length)],
     };
     this.targetTimer = TARGET.life;
   }

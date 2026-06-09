@@ -49,7 +49,7 @@ const server = http.createServer((req, res) => {
   if (req.url === '/api/status') {
     res.setHeader('content-type', 'application/json');
     res.setHeader('cache-control', 'no-cache');
-    res.end(JSON.stringify({ status: game.status, playing: game.status === 'playing' }));
+    res.end(JSON.stringify({ status: game.status, playing: lobby.isPlaying() }));
     return;
   }
   // Recent commit messages for the in-app CHANGELOG dropdown.
@@ -111,6 +111,7 @@ wss.on('connection', (ws: WebSocket) => {
           diamond: typeof msg.diamond === 'boolean' ? msg.diamond : undefined,
           pinata: typeof msg.pinata === 'boolean' ? msg.pinata : undefined,
           layered: typeof msg.layered === 'boolean' ? msg.layered : undefined,
+          arena: typeof msg.arena === 'boolean' ? msg.arena : undefined,
         });
         break;
       case 'fatality':
@@ -123,7 +124,7 @@ wss.on('connection', (ws: WebSocket) => {
         lobby.forfeit(ws);
         break;
       case 'spawnPowerup':
-        lobby.spawnPowerup(ws);
+        lobby.spawnPowerup(ws, typeof msg.kind === 'string' ? msg.kind : undefined);
         break;
       case 'capture':
         if (typeof msg.on === 'boolean') lobby.setCapture(ws, msg.on);
@@ -150,7 +151,7 @@ wss.on('connection', (ws: WebSocket) => {
 // Single authoritative loop: advance physics, reconcile spots, broadcast to everyone.
 const dt = TICK_MS / 1000;
 const loop = setInterval(() => {
-  game.tick(dt);
+  lobby.tick(dt);
   lobby.sync();
   lobby.broadcast();
 }, TICK_MS);

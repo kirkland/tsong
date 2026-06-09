@@ -3,15 +3,22 @@
 
 import type { WebSocket } from 'ws';
 import { Game } from './game';
+import { PolyGame } from './polygame';
 import {
   CHAT_HISTORY,
   CHAT_MAX_LEN,
   ChatLine,
   BALL_REACTION,
   COURT,
+  ARENA,
   FATALITY_MOVES,
   LeaderboardRow,
+  MAX_PLAYERS,
   PaddleState,
+  POWERUPS,
+  PowerupKind,
+  PolyPlayer,
+  PolyState,
   Role,
   ServerMsg,
   Side,
@@ -43,6 +50,7 @@ interface Conn {
 
 const SIDES: Side[] = ['left', 'right'];
 const FATALITY_DISPLAY_MS = 4500; // how long the finishing move holds before the lobby resets
+const POLY_OVER_SECS = 5; // how long the arena win screen lingers before the next round
 const RESUME_GRACE = 45; // seconds a resumed match waits for seated players to reconnect
 
 // What a seat / queue spot needs to be reclaimed by the same identity after a restart.
@@ -97,6 +105,16 @@ export class Lobby {
   private chatLog: ChatLine[] = []; // recent chat, replayed to new connections
   private nextId = 1;
 
+  // --- Arena (free-for-all polygon) mode ---
+  // A separate subsystem that runs alongside the classic duel. When arena mode is armed
+  // and a 3rd player wants in, the two duel players migrate onto the polygon and play
+  // continues there; drop back below 3 and they migrate back to the classic box. The duel
+  // Game/teams above are left completely untouched — `mode` decides which sim is live.
+  private arena = false; // shared toggle (off = classic only, caps the room at 2 players)
+  private mode: 'duel' | 'poly' = 'duel';
+  private arenaSeats: WebSocket[] = []; // ordered paddle holders while mode === 'poly'
+  private polyOverTimer = 0; // seconds the arena win screen lingers before the next round
+
   // Streamer mode: fake chat bots spam the chat to distract players.
   private streamerMode = false;
   private streamerTick = 0; // ticks since last bot message
@@ -110,7 +128,20 @@ export class Lobby {
   private pendingQueue: { pid: string; nickname: string }[] = [];
   private resumeGrace = 0; // seconds left to reclaim seats before abandoning the resume
 
+  private poly = new PolyGame();
+
   constructor(private game: Game) {}
+
+  /** Advance whichever simulation is live this tick (called by the server loop). */
+  tick(dt: number) {
+    if (this.mode === 'poly') this.poly.tick(dt);
+    else this.game.tick(dt);
+  }
+
+  /** Match status for the deploy gate (/api/status): true while a real rally is running. */
+  isPlaying(): boolean {
+    return this.mode === 'poly' ? this.poly.status === 'playing' : this.game.status === 'playing';
+  }
 
   add(ws: WebSocket) {
     const conn: Conn = {
@@ -140,7 +171,7 @@ export class Lobby {
     const line: ChatLine = {
       from: conn.nickname,
       text: clean,
-      player: conn.role === 'left' || conn.role === 'right',
+      player: conn.role !== 'observer',
       color: conn.color,
     };
     this.chatLog.push(line);
@@ -174,6 +205,16 @@ export class Lobby {
 
   /** "/ff": a player abandons their paddle mid-match and is publicly shamed for it. */
   forfeit(ws: WebSocket) {
+    // Arena: forfeiting just vacates your edge (and shames you); the round plays on.
+    if (this.mode === 'poly') {
+      if (!this.arenaSeats.includes(ws)) return;
+      const c = this.conns.get(ws);
+      const who = c?.nickname || 'someone';
+      if (c) this.echoCommand(c, '/ff');
+      this.arenaUnseat(ws);
+      this.announce(`Booo, ${who} quit the game`);
+      return;
+    }
     const side = this.sideOf(ws);
     if (!side) return; // only someone currently holding a paddle can forfeit
     const conn = this.conns.get(ws);
@@ -194,7 +235,7 @@ export class Lobby {
     if (!conn || !conn.nickname) return;
     if (this.queue.includes(ws)) return;
     // Don't queue if already holding a paddle
-    if (this.sideOf(ws)) return;
+    if (this.sideOf(ws) || this.arenaSeats.includes(ws)) return;
     this.queue.push(ws);
   }
 
@@ -204,8 +245,17 @@ export class Lobby {
     if (i !== -1) this.queue.splice(i, 1);
   }
 
-  /** Auto-assign the next queued spectator to a side left with no players. */
+  /** Auto-assign queued spectators to open seats (duel sides, or arena edges). */
   private claimFromQueue() {
+    if (this.mode === 'poly') {
+      while (this.queue.length > 0 && this.arenaSeats.length < MAX_PLAYERS) {
+        const next = this.queue.shift()!;
+        const conn = this.conns.get(next);
+        if (!conn || !conn.nickname) continue; // stale entry
+        this.arenaClaim(next);
+      }
+      return;
+    }
     while (this.queue.length > 0) {
       const openSide = SIDES.find((s) => this.teams[s].length === 0);
       if (!openSide) break;
@@ -218,10 +268,16 @@ export class Lobby {
       this.game.addPlayer(openSide, conn.id);
       this.tell(next, { type: 'you', id: conn.id, role: openSide });
     }
+    // Arena armed and the box is full with players still waiting → expand to a polygon.
+    if (this.arena && this.queue.length > 0 && this.teams.left.length && this.teams.right.length) {
+      this.migrateDuelToPoly();
+      this.claimFromQueue(); // now in poly mode — drains the rest onto the edges
+    }
   }
 
   /** Toggle ready state for a player. */
   setReady(ws: WebSocket) {
+    if (this.mode === 'poly') return; // arena restarts on its own timer, no ready-up
     const side = this.sideOf(ws);
     if (!side) return;
     if (this.game.status !== 'over') return;
@@ -241,13 +297,19 @@ export class Lobby {
     if (this.game.status === 'over') this.game.toWaiting();
   }
 
-  /** "/powerup": drop a random power-up target. Spectators only — a player in the
-   *  current match can't conjure power-ups for themselves. */
-  spawnPowerup(ws: WebSocket) {
+  /** "/powerup [name]": drop a power-up target — the named kind, or random when
+   *  unnamed. Spectators only — a player in the current match can't conjure
+   *  power-ups for themselves. */
+  spawnPowerup(ws: WebSocket, kind?: string) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return; // must have joined
-    if (this.sideOf(ws)) return; // not from someone currently holding a paddle
-    if (this.game.forceTarget()) this.echoCommand(conn, '/powerup');
+    if (this.sideOf(ws) || this.arenaSeats.includes(ws)) return; // not from a current player
+    // Only honor a name we know; anything else falls back to a random kind.
+    const k = kind && (POWERUPS as readonly string[]).includes(kind)
+      ? (kind as PowerupKind)
+      : undefined;
+    const placed = this.mode === 'poly' ? this.poly.forceTarget(k) : this.game.forceTarget(k);
+    if (placed) this.echoCommand(conn, k ? `/powerup ${k}` : '/powerup');
   }
 
   join(ws: WebSocket, nickname: string, pid: string, color?: string) {
@@ -272,6 +334,19 @@ export class Lobby {
     if (!conn || !conn.nickname || conn.role !== 'observer') return;
     // Remove from queue if they were in it
     this.queueLeave(ws);
+    // Arena mode: a 3rd player turns the box into a polygon. If we're already on the
+    // polygon, just take the next free edge; if the box is full, migrate then seat.
+    if (this.mode === 'poly') {
+      this.arenaClaim(ws);
+      this.refreshPause();
+      return;
+    }
+    if (this.arena && this.teams.left.length >= 1 && this.teams.right.length >= 1) {
+      this.migrateDuelToPoly();
+      this.arenaClaim(ws);
+      this.refreshPause();
+      return;
+    }
     // Honor the requested side; otherwise auto-assign to the smaller team.
     const pick: Side =
       side ?? (this.teams.left.length <= this.teams.right.length ? 'left' : 'right');
@@ -297,9 +372,15 @@ export class Lobby {
   }
 
   setPaddle(ws: WebSocket, y: number) {
-    const side = this.sideOf(ws);
     const conn = this.conns.get(ws);
-    if (side && conn) this.game.setTarget(side, conn.id, y);
+    if (!conn) return;
+    if (this.mode === 'poly') {
+      // In arena mode the wire `y` is the paddle's 1D offset along its edge.
+      if (this.arenaSeats.includes(ws)) this.poly.setTarget(conn.id, y);
+      return;
+    }
+    const side = this.sideOf(ws);
+    if (side) this.game.setTarget(side, conn.id, y);
   }
 
   // A player's mouse-capture (pointer lock) state changed. The match stays frozen until
@@ -317,11 +398,18 @@ export class Lobby {
   }
 
   private refreshPause() {
+    if (this.mode === 'poly') {
+      this.poly.paused = !(
+        this.arenaSeats.length > 0 &&
+        this.arenaSeats.every((ws) => this.conns.get(ws)?.captured ?? false)
+      );
+      return;
+    }
     this.game.paused = !(this.isCaptured('left') && this.isCaptured('right'));
   }
 
   // Any joined client may toggle game modes.
-  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean }) {
+  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean }) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return;
     if (opts.closing !== undefined) this.game.setClosing(opts.closing);
@@ -331,14 +419,127 @@ export class Lobby {
     if (opts.diamond !== undefined) this.game.setDiamond(opts.diamond);
     if (opts.pinata !== undefined) this.game.setPinata(opts.pinata);
     if (opts.layered !== undefined) this.game.setLayered(opts.layered);
+    if (opts.arena !== undefined) this.setArena(opts.arena);
+  }
+
+  /** Arm / disarm arena mode. Turning it off while a polygon match is live folds the
+   *  remaining players back down to the classic two-player box. */
+  private setArena(on: boolean) {
+    if (this.arena === on) return;
+    this.arena = on;
+    if (!on && this.mode === 'poly') this.migratePolyToDuel();
+  }
+
+  // Move the two duel players onto the polygon and switch to arena play. Called when a
+  // 3rd player wants in while arena mode is armed.
+  private migrateDuelToPoly() {
+    const duelPlayers = [...this.teams.left, ...this.teams.right];
+    // Tear down the duel match cleanly (king/ready/fatalities don't apply in the arena).
+    this.king = null;
+    this.endStreak();
+    this.ready = { left: false, right: false };
+    this.readyTimer = 0;
+    this.overHandled = false;
+    this.fatalityWinnerPid = null;
+    this.fatalityWinnerSide = null;
+    this.activeFatality = null;
+    this.fatalityAt = 0;
+    this.teams = { left: [], right: [] };
+    this.game.toWaiting();
+    this.game.players = { left: [], right: [] };
+    this.poly = new PolyGame();
+    this.arenaSeats = [];
+    for (const ws of duelPlayers) {
+      const c = this.conns.get(ws);
+      if (!c) continue;
+      this.arenaSeats.push(ws);
+      c.role = 'player';
+      c.captured = false;
+      this.poly.addPlayer(c.id);
+      this.tell(ws, { type: 'you', id: c.id, role: 'player' });
+    }
+    this.mode = 'poly';
+    this.polyOverTimer = 0;
+  }
+
+  // Fold the polygon back down to a classic box: the first two arena players become the
+  // duel's left/right, everyone else is released to observer.
+  private migratePolyToDuel() {
+    const seats = [...this.arenaSeats];
+    this.poly.toWaiting();
+    this.poly = new PolyGame();
+    this.arenaSeats = [];
+    this.mode = 'duel';
+    this.polyOverTimer = 0;
+    const sides: Side[] = ['left', 'right'];
+    seats.forEach((ws, i) => {
+      const c = this.conns.get(ws);
+      if (!c) return;
+      if (i < 2) {
+        const side = sides[i];
+        this.teams[side].push(ws);
+        c.role = side;
+        c.captured = false;
+        this.game.addPlayer(side, c.id);
+        this.tell(ws, { type: 'you', id: c.id, role: side });
+      } else {
+        c.role = 'observer';
+        c.captured = false;
+        this.tell(ws, { type: 'you', id: c.id, role: 'observer' });
+      }
+    });
+    if (this.teams.left.length && this.teams.right.length && this.game.status === 'waiting') {
+      this.game.start();
+    }
+  }
+
+  // Seat a player on the polygon (mode is already 'poly'). The shape grows live: an
+  // in-progress round reseeds (re-centers paddles + re-serves) so the new edge appears.
+  private arenaClaim(ws: WebSocket) {
+    if (this.arenaSeats.length >= MAX_PLAYERS) return; // arena full
+    if (this.arenaSeats.includes(ws)) return;
+    const conn = this.conns.get(ws);
+    if (!conn) return;
+    this.arenaSeats.push(ws);
+    conn.role = 'player';
+    conn.captured = false;
+    this.poly.addPlayer(conn.id);
+    this.tell(ws, { type: 'you', id: conn.id, role: 'player' });
+    if (this.poly.status === 'playing') this.poly.reseed();
+    else if (this.poly.status === 'waiting' && this.arenaSeats.length >= 3) this.poly.start();
+  }
+
+  /** A player left an arena seat (leave/forfeit/disconnect). Drop below 3 → back to a box. */
+  private arenaUnseat(ws: WebSocket) {
+    const i = this.arenaSeats.indexOf(ws);
+    if (i === -1) return;
+    this.arenaSeats.splice(i, 1);
+    const conn = this.conns.get(ws);
+    if (conn) {
+      this.poly.removePlayer(conn.id);
+      conn.role = 'observer';
+      conn.captured = false;
+      this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
+    }
+    if (this.arenaSeats.length >= 3) {
+      this.poly.reseed();
+      this.claimFromQueue();
+    } else {
+      // Not enough for a polygon anymore — collapse back to the classic two-player box.
+      this.migratePolyToDuel();
+    }
   }
 
   remove(ws: WebSocket) {
-    const side = this.sideOf(ws);
-    if (side) {
-      this.unseat(ws);
-      // The match only drops back to waiting if their whole team is gone.
-      if (this.game.status === 'playing' && this.teams[side].length === 0) this.game.toWaiting();
+    if (this.mode === 'poly' && this.arenaSeats.includes(ws)) {
+      this.arenaUnseat(ws);
+    } else {
+      const side = this.sideOf(ws);
+      if (side) {
+        this.unseat(ws);
+        // The match only drops back to waiting if their whole team is gone.
+        if (this.game.status === 'playing' && this.teams[side].length === 0) this.game.toWaiting();
+      }
     }
     if (this.king && this.king.ws === ws) this.king = null;
     if (this.conns.get(ws)?.pid === this.streakPid) this.endStreak(); // streak holder left
@@ -347,9 +548,55 @@ export class Lobby {
     this.refreshPause();
   }
 
-  /** Called every tick after game.tick(). Reopens both spots once a match ends. */
+  /** Called every tick after the active sim ticks. Routes to the live mode's bookkeeping. */
   sync() {
     this.expireResume();
+    if (this.mode === 'poly') this.polySync();
+    else this.duelSync();
+    // Keep the pause flag honest every tick.
+    this.refreshPause();
+    if (this.streamerMode && this.mode === 'duel' && this.game.status === 'playing') {
+      this.tickStreamer();
+    }
+  }
+
+  /** Arena bookkeeping: record results once on game-over, then auto-start the next round. */
+  private polySync() {
+    if (this.poly.status === 'over') {
+      if (this.polyOverTimer === 0) {
+        this.recordPolyResult();
+        this.polyOverTimer = POLY_OVER_SECS;
+      } else {
+        this.polyOverTimer -= TICK_MS / 1000;
+        if (this.polyOverTimer <= 0) {
+          this.polyOverTimer = 0;
+          if (this.arenaSeats.length >= 3) this.poly.start();
+          else this.migratePolyToDuel();
+        }
+      }
+    } else {
+      this.polyOverTimer = 0;
+      if (this.poly.status === 'waiting' && this.arenaSeats.length >= 3) this.poly.start();
+    }
+  }
+
+  // Record an arena round: the survivor gets a win, everyone else who was seated a loss.
+  private recordPolyResult() {
+    const winnerId = this.poly.winnerId;
+    const refs = this.arenaSeats
+      .map((ws) => this.conns.get(ws))
+      .filter((c): c is Conn => !!c && !!c.pid);
+    const winners = refs.filter((c) => c.id === winnerId).map((c) => ({ pid: c.pid, name: c.nickname }));
+    const losers = refs.filter((c) => c.id !== winnerId).map((c) => ({ pid: c.pid, name: c.nickname }));
+    if (winners.length && losers.length) {
+      recordResult(winners, losers)
+        .then(() => this.refreshLeaderboard())
+        .catch((e) => console.error('leaderboard update failed:', e));
+    }
+  }
+
+  /** Classic 1v1 bookkeeping. Reopens both spots once a match ends. */
+  private duelSync() {
     // Reopen both spots exactly once, when the match first ends. Doing this every
     // tick would re-release the next player the instant they claim a spot, making it
     // impossible to start a second game.
@@ -439,11 +686,6 @@ export class Lobby {
         this.game.start();
       }
     }
-    // Keep the pause flag honest every tick: a live match only advances once both
-    // players have captured their mouse, no matter how the seats got filled.
-    this.refreshPause();
-
-    if (this.streamerMode && this.game.status === 'playing') this.tickStreamer();
   }
 
   /** Flip the shared fatalities toggle for the whole room. Any joined user may change it. */
@@ -502,7 +744,7 @@ export class Lobby {
     const line: ChatLine = {
       from: conn.nickname,
       text,
-      player: conn.role === 'left' || conn.role === 'right',
+      player: conn.role !== 'observer',
       color: conn.color,
       command: true,
     };
@@ -609,8 +851,24 @@ export class Lobby {
     for (const c of this.conns.values()) {
       if (c.role === 'observer' && c.nickname) watchers.push(c.nickname);
     }
+    const poly = this.mode === 'poly';
+    // Gameplay fields come from whichever sim is live this tick.
+    const status = poly ? this.poly.status : this.game.status;
+    const ballSrc = poly ? this.poly.ball : this.game.ball;
+    const extraSrc = poly ? this.poly.extraBalls : this.game.extraBalls;
+    const targetSrc = poly ? this.poly.target : this.game.target;
+    const paused = poly ? this.poly.paused : this.game.paused;
+    const ghostBall = (poly ? this.poly.ghostTimer : this.game.ghostTimer) > 0;
+    const tinyBall = (poly ? this.poly.tinyTimer : this.game.tinyTimer) > 0;
+    const bigBall = (poly ? this.poly.bigBallTimer : this.game.bigBallTimer) > 0;
     const lastHit = this.game.lastHit;
-    const ballColor = lastHit ? this.colorOf(lastHit) : '#e8eefc';
+    const ballColor = poly
+      ? this.poly.lastHitId
+        ? this.colorOfId(this.poly.lastHitId)
+        : '#e8eefc'
+      : lastHit
+        ? this.colorOf(lastHit)
+        : '#e8eefc';
     const sideState = (side: Side): PaddleState => {
       const players = this.teams[side].map((ws) => {
         const c = this.conns.get(ws)!;
@@ -641,22 +899,24 @@ export class Lobby {
     return {
       type: 'state',
       ball: {
-        x: this.game.ball.x,
-        y: this.game.ball.y,
+        x: ballSrc.x,
+        y: ballSrc.y,
         // Take on the color of the paddle that last hit it; neutral until first touch.
         color: ballColor,
       },
-      extraBalls: this.game.extraBalls.map((b) => ({ x: b.x, y: b.y, color: ballColor })),
-      ballSpeed: Math.hypot(this.game.ball.vx, this.game.ball.vy),
+      extraBalls: extraSrc.map((b) => ({ x: b.x, y: b.y, color: ballColor })),
+      ballSpeed: Math.hypot(ballSrc.vx, ballSrc.vy),
       paddles: { left: sideState('left'), right: sideState('right') },
-      target: this.game.target
-        ? { x: this.game.target.x, y: this.game.target.y, kind: this.game.target.kind }
+      target: targetSrc
+        ? { x: targetSrc.x, y: targetSrc.y, kind: targetSrc.kind }
         : null,
-      score: { ...this.game.score },
-      status: this.game.status,
-      paused: this.game.status === 'playing' && this.game.paused,
+      score: poly ? { left: 0, right: 0 } : { ...this.game.score },
+      status,
+      paused: status === 'playing' && paused,
       closing: this.game.closing,
       layered: this.game.layered,
+      arena: this.arena,
+      poly: poly ? this.buildPolyState() : null,
       gravity: this.game.gravity,
       turbo: this.game.turbo,
       diamond: this.game.diamond,
@@ -665,20 +925,65 @@ export class Lobby {
         : null,
       rotated: this.game.rotated,
       pinata: this.game.pinata,
-      pinataPos: this.pinataView(),
-      winner: this.game.status === 'over' ? this.winnerName : null,
+      pinataPos: poly ? null : this.pinataView(),
+      winner: status === 'over' ? (poly ? this.polyWinnerName() : this.winnerName) : null,
       fatalitiesEnabled: this.fatalitiesEnabled,
-      fatality: this.game.status === 'over' ? this.activeFatality : null,
+      fatality: !poly && this.game.status === 'over' ? this.activeFatality : null,
       watchers,
-      king: this.king?.nickname ?? null,
-      kingWins: this.kingStreak,
+      king: poly ? null : this.king?.nickname ?? null,
+      kingWins: poly ? 0 : this.kingStreak,
       queue: this.queue.map((ws) => this.conns.get(ws)?.nickname ?? '').filter(Boolean),
       ready: { ...this.ready },
-      ghostBall: this.game.ghostTimer > 0,
-      tinyBall: this.game.tinyTimer > 0,
-      bigBall: this.game.bigBallTimer > 0,
+      ghostBall,
+      tinyBall,
+      bigBall,
       streamerMode: this.streamerMode,
     };
+  }
+
+  // Assemble the arena (polygon) view: geometry + each player's paddle, name and color.
+  private buildPolyState(): PolyState {
+    const verts = this.poly.verts();
+    const players: PolyPlayer[] = this.poly.players.map((p, i) => {
+      const info = this.poly.paddleInfo(i, verts);
+      const c = this.connById(p.id);
+      return {
+        id: p.id,
+        name: c?.nickname ?? '',
+        color: c?.color ?? '#e8eefc',
+        cx: info.cx,
+        cy: info.cy,
+        angle: info.angle,
+        len: info.len,
+        alive: p.alive,
+        shielded: p.shielded,
+        curveReady: p.curveHits > 0,
+      };
+    });
+    return {
+      n: this.poly.n,
+      cx: ARENA.cx,
+      cy: ARENA.cy,
+      verts,
+      players,
+      aliveCount: this.poly.aliveCount,
+      winner: this.poly.status === 'over' ? this.polyWinnerName() : null,
+      stopSign: this.poly.n === MAX_PLAYERS,
+    };
+  }
+
+  private connById(id: string): Conn | undefined {
+    for (const c of this.conns.values()) if (c.id === id) return c;
+    return undefined;
+  }
+
+  private colorOfId(id: string): string {
+    return this.connById(id)?.color ?? '#e8eefc';
+  }
+
+  private polyWinnerName(): string | null {
+    const id = this.poly.winnerId;
+    return id ? this.connById(id)?.nickname ?? null : null;
   }
 
   private nameOf(side: Side): string | null {
