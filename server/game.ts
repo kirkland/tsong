@@ -28,6 +28,7 @@ import {
   GRAVITY_ACCEL,
   TURBO_SPEED_MULT,
   TURBO_SPEEDUP,
+  LAYERED,
   DIAMOND,
   PINATA,
   POWERUPS,
@@ -89,6 +90,7 @@ export interface GameSnapshot {
   score: { left: number; right: number };
   status: Status;
   closing: boolean;
+  layered: boolean;
   diamond: boolean;
   diamondBlock: { x: number; y: number; vx: number; vy: number } | null;
   pinata: boolean;
@@ -126,6 +128,7 @@ export class Game {
   closing = false; // "closing walls" mode armed; applies from the next match start
   gravity = false; // constant downward pull bends ball trajectory
   turbo = false; // faster serve speed and steeper per-hit speedup
+  layered = false; // "layered teams" mode: teammates stagger forward by join order
   diamond = false; // "diamond hands" mode armed; spawns a drifting diamond obstacle
   // The live diamond obstacle while diamond-hands mode is on during a match (else null).
   diamondBlock: { x: number; y: number; vx: number; vy: number } | null = null;
@@ -167,6 +170,7 @@ export class Game {
       score: { ...this.score },
       status: this.status,
       closing: this.closing,
+      layered: this.layered,
       diamond: this.diamond,
       diamondBlock: this.diamondBlock ? { ...this.diamondBlock } : null,
       pinata: this.pinata,
@@ -197,6 +201,7 @@ export class Game {
     this.score = { ...s.score };
     this.status = s.status;
     this.closing = s.closing;
+    this.layered = s.layered ?? false;
     this.diamond = s.diamond ?? false;
     this.diamondBlock = s.diamondBlock ? { ...s.diamondBlock } : null;
     this.pinata = s.pinata ?? false;
@@ -278,6 +283,7 @@ export class Game {
 
   setGravity(on: boolean) { this.gravity = on; }
   setTurbo(on: boolean) { this.turbo = on; }
+  setLayered(on: boolean) { this.layered = on; } // positions are computed, so this applies live
 
   /** Arm / disarm diamond-hands mode. Toggling takes effect immediately during a live
    *  match (spawn the diamond on, remove it off); otherwise it spawns at the next start. */
@@ -431,11 +437,30 @@ export class Game {
     b.y += ny * push;
   }
 
-  /** X of a paddle's hitting face — its inner edge, which moves with the paddle. */
-  private faceX(side: Side): number {
-    return side === 'left'
-      ? this.paddleX.left + PADDLE.w / 2
-      : this.paddleX.right - PADDLE.w / 2;
+  /** Center X of the i-th paddle on a side. In layered mode each later joiner sits a
+   *  step further forward (toward mid-court), capped so no face crosses the middle.
+   *  Stacks with the closing-walls inset, which moves the whole team's base X. */
+  paddleXAt(side: Side, idx: number): number {
+    let x = this.paddleX[side];
+    if (this.layered && idx > 0) {
+      const maxX = COURT.w / 2 - LAYERED.cap - PADDLE.w / 2;
+      x = side === 'left'
+        ? Math.min(x + LAYERED.step * idx, maxX)
+        : Math.max(x - LAYERED.step * idx, COURT.w - maxX);
+    }
+    return x;
+  }
+
+  /** A seated player's current paddle center X, found by their connection id. */
+  paddleXOf(side: Side, id: string): number {
+    const i = this.players[side].findIndex((p) => p.id === id);
+    return i === -1 ? this.paddleX[side] : this.paddleXAt(side, i);
+  }
+
+  /** X of the i-th paddle's hitting face — its inner edge. */
+  private faceXAt(side: Side, idx: number): number {
+    const x = this.paddleXAt(side, idx);
+    return side === 'left' ? x + PADDLE.w / 2 : x - PADDLE.w / 2;
   }
 
   /** Park the simulation back in the lobby (e.g. a player left mid-match). */
@@ -622,16 +647,14 @@ export class Game {
 
     this.checkTargetHit(prevX, prevY, b);
 
-    // Paddle collisions — a side may field several paddles; bounce off the closest
-    // one (by center distance) that overlaps the ball.
-    const leftFace = this.faceX('left');
-    const rightFace = this.faceX('right');
-    if (b.vx < 0 && b.x - r <= leftFace && b.x - r > leftFace - 40) {
-      const hit = this.paddleAt('left', b.y, r);
-      if (hit) this.bounce('left', b, hit.y);
-    } else if (b.vx > 0 && b.x + r >= rightFace && b.x + r < rightFace + 40) {
-      const hit = this.paddleAt('right', b.y, r);
-      if (hit) this.bounce('right', b, hit.y);
+    // Paddle collisions — a side may field several paddles, and in layered mode they
+    // sit on different planes. Bounce off whichever face the ball is crossing.
+    if (b.vx < 0) {
+      const hit = this.paddleAt('left', b, r);
+      if (hit) this.bounce('left', b, hit.ent, hit.idx);
+    } else if (b.vx > 0) {
+      const hit = this.paddleAt('right', b, r);
+      if (hit) this.bounce('right', b, hit.ent, hit.idx);
     }
 
     // Diamond obstacle carom (diamond-hands mode); no-op when the mode is off.
@@ -793,20 +816,32 @@ export class Game {
     });
   }
 
-  // The paddle on `side` closest to ball-Y that overlaps it, or null if none does.
-  private paddleAt(side: Side, y: number, r: number): PaddleEnt | null {
+  // The paddle on `side` whose face the ball is currently crossing with Y overlap, or
+  // null if none. Layered teammates have distinct faces — the ball meets the most
+  // forward matching one first; same-plane ties go to the closest paddle center.
+  private paddleAt(side: Side, b: Ball, r: number): { ent: PaddleEnt; idx: number } | null {
     const reach = this.halfH(side) + r;
-    let best: PaddleEnt | null = null;
-    for (const p of this.players[side]) {
-      const d = Math.abs(y - p.y);
-      if (d <= reach && (!best || d < Math.abs(y - best.y))) best = p;
+    let best: { ent: PaddleEnt; idx: number; face: number } | null = null;
+    const team = this.players[side];
+    for (let i = 0; i < team.length; i++) {
+      const face = this.faceXAt(side, i);
+      const crossing =
+        side === 'left'
+          ? b.x - r <= face && b.x - r > face - 40
+          : b.x + r >= face && b.x + r < face + 40;
+      if (!crossing || Math.abs(b.y - team[i].y) > reach) continue;
+      const better =
+        !best ||
+        (side === 'left' ? face > best.face : face < best.face) ||
+        (face === best.face && Math.abs(b.y - team[i].y) < Math.abs(b.y - best.ent.y));
+      if (better) best = { ent: team[i], idx: i, face };
     }
-    return best;
+    return best ? { ent: best.ent, idx: best.idx } : null;
   }
 
-  private bounce(side: Side, b: Ball, paddleY: number) {
+  private bounce(side: Side, b: Ball, ent: PaddleEnt, idx: number) {
     this.lastHit = side;
-    const rel = clamp((b.y - paddleY) / this.halfH(side), -1, 1);
+    const rel = clamp((b.y - ent.y) / this.halfH(side), -1, 1);
     const speedup = this.turbo ? TURBO_SPEEDUP : BALL.speedup;
     let speed = Math.hypot(b.vx, b.vy) * speedup;
     if (this.smashHits[side] > 0) speed *= SMASH_BONUS;
@@ -821,8 +856,9 @@ export class Game {
       this.paddleX.right = clamp(this.paddleX.right - CLOSING.step, HOME_X.right - MAX_INSET, HOME_X.right);
     }
 
-    // Place the ball just off the (possibly moved) face so it can't re-trigger.
-    b.x = side === 'left' ? this.faceX('left') + this.ballR() : this.faceX('right') - this.ballR();
+    // Place the ball just off the hit paddle's (possibly moved) face so it can't re-trigger.
+    const face = this.faceXAt(side, idx);
+    b.x = side === 'left' ? face + this.ballR() : face - this.ballR();
     // Consume per-hit charges.
     if (this.growHits[side] > 0) this.growHits[side] -= 1;
     if (this.shrinkHits[side] > 0) this.shrinkHits[side] -= 1;

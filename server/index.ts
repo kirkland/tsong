@@ -110,6 +110,7 @@ wss.on('connection', (ws: WebSocket) => {
           streamer: typeof msg.streamer === 'boolean' ? msg.streamer : undefined,
           diamond: typeof msg.diamond === 'boolean' ? msg.diamond : undefined,
           pinata: typeof msg.pinata === 'boolean' ? msg.pinata : undefined,
+          layered: typeof msg.layered === 'boolean' ? msg.layered : undefined,
         });
         break;
       case 'fatality':

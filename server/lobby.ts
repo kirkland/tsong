@@ -319,7 +319,7 @@ export class Lobby {
   }
 
   // Any joined client may toggle game modes.
-  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean }) {
+  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean }) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return;
     if (opts.closing !== undefined) this.game.setClosing(opts.closing);
@@ -328,6 +328,7 @@ export class Lobby {
     if (opts.streamer !== undefined) this.streamerMode = opts.streamer;
     if (opts.diamond !== undefined) this.game.setDiamond(opts.diamond);
     if (opts.pinata !== undefined) this.game.setPinata(opts.pinata);
+    if (opts.layered !== undefined) this.game.setLayered(opts.layered);
   }
 
   remove(ws: WebSocket) {
@@ -611,6 +612,7 @@ export class Lobby {
         const c = this.conns.get(ws)!;
         return {
           id: c.id,
+          x: this.game.paddleXOf(side, c.id),
           y: this.game.paddleYOf(side, c.id) ?? COURT.h / 2,
           name: c.nickname,
           color: c.color,
@@ -650,6 +652,7 @@ export class Lobby {
       status: this.game.status,
       paused: this.game.status === 'playing' && this.game.paused,
       closing: this.game.closing,
+      layered: this.game.layered,
       gravity: this.game.gravity,
       turbo: this.game.turbo,
       diamond: this.game.diamond,

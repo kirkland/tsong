@@ -25,6 +25,13 @@ export const CLOSING = {
 
 export const WIN_SCORE = 3;
 export const TEAM_MAX = 4; // max players (paddles) per side
+
+// "Layered teams" mode: teammates don't share a plane — each later joiner plays a
+// step further forward (toward mid-court) than the one before, by join order.
+export const LAYERED = {
+  step: 70, // court units each teammate sits forward of the previous one
+  cap: 60, // closest a forward paddle face may get to mid-court
+} as const;
 export const PADDLE_BOOST = 1.5; // paddle height multiplier while "grow" is active
 export const PADDLE_SHRINK = 0.6; // opponent paddle height multiplier while "shrink" is active
 export const SMASH_BONUS = 1.35; // extra ball-speed multiplier applied on each "smash" hit
@@ -125,7 +132,7 @@ export type ClientMsg =
   | { type: 'paddle'; y: number } // desired paddle center Y, in court units
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
-  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean } // toggle game modes
+  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean } // toggle game modes
   | { type: 'fatality'; move: string } // winner-only, validated server-side
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
   | { type: 'forfeit' } // "/ff": leave your paddle spot mid-game (and get shamed)
@@ -139,10 +146,11 @@ export type ClientMsg =
 // --- Server -> Client ---
 
 // One seated player's own paddle within a side's team. Several players may share a
-// side (team mode); they share the side's X, height and power-up state, but each
-// drives their own paddle Y.
+// side (team mode); they share the side's height and power-up state, but each
+// drives their own paddle Y — and in layered mode, sits on their own X plane.
 export interface TeamPlayer {
   id: string; // per-connection id (matches YouMsg.id, so a client can find its own paddle)
+  x: number; // this player's paddle center X (staggered toward center in layered mode)
   y: number; // this player's paddle center Y in court units
   name: string;
   color: string;
@@ -179,6 +187,7 @@ export interface StateMsg {
   closing: boolean; // whether "closing walls" mode is armed
   gravity: boolean; // whether gravity mode is active
   turbo: boolean; // whether turbo mode is active
+  layered: boolean; // whether "layered teams" mode is active (teammates stagger forward)
   diamond: boolean; // whether "diamond hands" mode is armed
   // Live position of the diamond obstacle (diamond-hands mode), or null when none is on
   // the board. Center in court units; its size is the shared DIAMOND.r constant.

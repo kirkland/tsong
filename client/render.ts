@@ -56,7 +56,7 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
     if (p.players.length) {
       for (const pl of p.players) {
         ctx.fillStyle = pl.color;
-        drawPaddle(ctx, p.x, pl.y, p.h);
+        drawPaddle(ctx, pl.x, pl.y, p.h);
       }
     } else {
       ctx.fillStyle = p.color;
@@ -250,11 +250,11 @@ function drawPaddle(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: nu
 function drawPaddleEffects(ctx: CanvasRenderingContext2D, s: StateMsg) {
   for (const side of ['left', 'right'] as const) {
     const p = s.paddles[side];
-    const px = p.x;
     const hh = p.h / 2;
 
-    // Power-up state is team-wide, so every paddle on the side shows the effect.
-    for (const py of p.players.length ? p.players.map((pl) => pl.y) : [p.y]) {
+    // Power-up state is team-wide, so every paddle on the side shows the effect —
+    // each at its own position (layered mode staggers teammates' X).
+    for (const { x: px, y: py } of p.players.length ? p.players : [{ x: p.x, y: p.y }]) {
       // Frozen: ice-blue crosshatch lines across the paddle face.
       if (p.frozen) {
         ctx.save();
