@@ -52,6 +52,8 @@ const ballReactionEl = document.getElementById('ballReaction') as HTMLDivElement
 const reactionLayer = document.getElementById('reactionLayer') as HTMLDivElement;
 const fatalityCheck = document.getElementById('fatalityCheck') as HTMLInputElement;
 const combosBtn = document.getElementById('combosBtn') as HTMLButtonElement;
+const game3dEl = document.getElementById('game3d') as HTMLDivElement;
+const view3dBtn = document.getElementById('view3dBtn') as HTMLButtonElement;
 const combosModal = document.getElementById('combosModal') as HTMLDivElement;
 const combosCard = document.getElementById('combosCard') as HTMLDivElement;
 const combosClose = document.getElementById('combosClose') as HTMLButtonElement;
@@ -96,6 +98,11 @@ let myColor = '#e8eefc';
 let state: StateMsg | null = null;
 let ballColor = '#e8eefc'; // live pong-ball color, mirrored onto the ball reaction
 let joined = false; // true once the player has entered a nickname (gates reactions)
+
+// 3D view: off by default; Three.js + the renderer load only on first switch.
+let view3d = false;
+let renderer3d: import('./render3d').Renderer3D | null = null;
+let loading3d = false;
 
 let target = COURT.h / 2; // desired paddle center Y, court units
 let lastSent = -1;
@@ -1149,6 +1156,37 @@ function applyCanvasRotation(rotated: boolean) {
 }
 
 // --- main loop ---
+// --- 3D view toggle (lazy-loads Three.js on first use; the 2D path is untouched
+// until then, so default visitors never download or run any 3D code) ---
+async function setView3d(on: boolean) {
+  view3d = on;
+  document.body.classList.toggle('view-3d', on);
+  view3dBtn.setAttribute('aria-pressed', String(on));
+  game3dEl.hidden = !on;
+  if (on && !renderer3d && !loading3d) {
+    loading3d = true;
+    view3dBtn.textContent = '…';
+    try {
+      const mod = await import('./render3d');
+      renderer3d = mod.createRenderer(game3dEl);
+    } catch (e) {
+      console.error('3D view failed to load:', e);
+      view3d = false;
+      document.body.classList.remove('view-3d');
+      view3dBtn.setAttribute('aria-pressed', 'false');
+      game3dEl.hidden = true;
+    } finally {
+      loading3d = false;
+    }
+  }
+  view3dBtn.textContent = view3d ? '2D' : '3D';
+  if (view3d) renderer3d?.resize();
+}
+view3dBtn.addEventListener('click', () => void setView3d(!view3d));
+window.addEventListener('resize', () => {
+  if (view3d) renderer3d?.resize();
+});
+
 function loop(t: number) {
   // Paddle input (mouse and keyboard) only applies while the mouse is captured.
   if (isPlayer() && pointerLocked) {
@@ -1173,8 +1211,12 @@ function loop(t: number) {
   }
 
   if (state) {
-    applyCanvasRotation(state.rotated);
-    draw(ctx, state, myRole);
+    if (view3d && renderer3d) {
+      renderer3d.render(state);
+    } else {
+      applyCanvasRotation(state.rotated);
+      draw(ctx, state, myRole);
+    }
   }
   requestAnimationFrame(loop);
 }

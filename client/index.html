@@ -51,6 +51,27 @@
         background: #0b1020;
         cursor: none;
       }
+      /* 3D view container — same footprint as the 2D board; holds the Three.js canvas. */
+      #game3d {
+        width: min(90vw, 800px);
+        aspect-ratio: 800 / 500;
+        border: 1px solid #2a3550;
+        border-radius: 8px;
+        background: #060912;
+        overflow: hidden;
+      }
+      #game3d[hidden] {
+        display: none;
+      }
+      #game3d canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      /* When 3D is on, swap which board is shown. */
+      body.view-3d #game {
+        display: none;
+      }
       /* "rotate" power-up: the court flips to portrait. Size by height so the tall court
          still fits the viewport. */
       #game.rotated {
@@ -526,6 +547,26 @@
         display: flex;
         gap: 8px;
         align-items: flex-start;
+      }
+      /* 2D/3D view toggle — a pill button matching MODES / POWER-UPS. */
+      #view3dBtn {
+        font: inherit;
+        font-size: 12px;
+        letter-spacing: 1px;
+        padding: 7px 12px;
+        border-radius: 6px;
+        border: 1px solid #2a3550;
+        background: #0e1424;
+        color: #7da2ff;
+        cursor: pointer;
+      }
+      #view3dBtn:hover {
+        background: #18203a;
+      }
+      #view3dBtn[aria-pressed='true'] {
+        background: #3a6df0;
+        border-color: #3a6df0;
+        color: #fff;
       }
       /* Game modes dropdown — now inside #topLeft, so no longer fixed itself. */
       #gameModes {
@@ -1104,6 +1145,7 @@
       <div class="load-skip">click anywhere to skip</div>
     </div>
     <div id="topLeft">
+      <button id="view3dBtn" type="button" aria-pressed="false" title="Switch between the 2D and 3D view (3D loads on first use)">3D</button>
       <div id="gameModes">
         <button id="gameModesBtn" type="button" aria-expanded="false">
           MODES <span class="caret">▾</span>
@@ -1324,6 +1366,8 @@
     <div class="arena">
       <div id="stage">
         <canvas id="game" width="800" height="500"></canvas>
+        <!-- Three.js renders into this when 3D view is on; empty (and unused) otherwise. -->
+        <div id="game3d" hidden></div>
         <div id="status"></div>
         <div id="joinButtons">
           <button id="join" style="display: none">Join game</button>
