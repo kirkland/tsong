@@ -49,11 +49,20 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
   }
 
   // Paddles — X and height both come from the server, so "closing walls" mode and
-  // the grow/shrink power-ups render correctly.
-  ctx.fillStyle = s.paddles.left.color;
-  drawPaddle(ctx, s.paddles.left.x, s.paddles.left.y, s.paddles.left.h);
-  ctx.fillStyle = s.paddles.right.color;
-  drawPaddle(ctx, s.paddles.right.x, s.paddles.right.y, s.paddles.right.h);
+  // the grow/shrink power-ups render correctly. Each seated player draws their own
+  // paddle in their own color; an open side shows a neutral placeholder paddle.
+  for (const side of ['left', 'right'] as const) {
+    const p = s.paddles[side];
+    if (p.players.length) {
+      for (const pl of p.players) {
+        ctx.fillStyle = pl.color;
+        drawPaddle(ctx, p.x, pl.y, p.h);
+      }
+    } else {
+      ctx.fillStyle = p.color;
+      drawPaddle(ctx, p.x, p.y, p.h);
+    }
+  }
 
   // Paddle status overlays (frozen, mirrored, curve-ready).
   drawPaddleEffects(ctx, s);
@@ -242,46 +251,48 @@ function drawPaddleEffects(ctx: CanvasRenderingContext2D, s: StateMsg) {
   for (const side of ['left', 'right'] as const) {
     const p = s.paddles[side];
     const px = p.x;
-    const py = p.y;
     const hh = p.h / 2;
 
-    // Frozen: ice-blue crosshatch lines across the paddle face.
-    if (p.frozen) {
-      ctx.save();
-      ctx.strokeStyle = '#88d8f7';
-      ctx.lineWidth = 1.5;
-      ctx.globalAlpha = 0.7;
-      for (let dy = -hh + 6; dy < hh; dy += 10) {
-        ctx.beginPath();
-        ctx.moveTo(px - PADDLE.w / 2, py + dy);
-        ctx.lineTo(px + PADDLE.w / 2, py + dy);
-        ctx.stroke();
+    // Power-up state is team-wide, so every paddle on the side shows the effect.
+    for (const py of p.players.length ? p.players.map((pl) => pl.y) : [p.y]) {
+      // Frozen: ice-blue crosshatch lines across the paddle face.
+      if (p.frozen) {
+        ctx.save();
+        ctx.strokeStyle = '#88d8f7';
+        ctx.lineWidth = 1.5;
+        ctx.globalAlpha = 0.7;
+        for (let dy = -hh + 6; dy < hh; dy += 10) {
+          ctx.beginPath();
+          ctx.moveTo(px - PADDLE.w / 2, py + dy);
+          ctx.lineTo(px + PADDLE.w / 2, py + dy);
+          ctx.stroke();
+        }
+        ctx.restore();
       }
-      ctx.restore();
-    }
 
-    // Mirrored: ↕ indicator just outside the paddle.
-    if (p.mirrored) {
-      const ix = side === 'left' ? px + PADDLE.w / 2 + 10 : px - PADDLE.w / 2 - 10;
-      ctx.save();
-      ctx.fillStyle = '#ff7eb3';
-      ctx.font = 'bold 14px system-ui, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText('↕', ix, py);
-      ctx.restore();
-    }
+      // Mirrored: ↕ indicator just outside the paddle.
+      if (p.mirrored) {
+        const ix = side === 'left' ? px + PADDLE.w / 2 + 10 : px - PADDLE.w / 2 - 10;
+        ctx.save();
+        ctx.fillStyle = '#ff7eb3';
+        ctx.font = 'bold 14px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('↕', ix, py);
+        ctx.restore();
+      }
 
-    // Curve ready: a small arc indicator above the paddle.
-    if (p.curveReady) {
-      const ix = side === 'left' ? px + PADDLE.w / 2 + 10 : px - PADDLE.w / 2 - 10;
-      ctx.save();
-      ctx.strokeStyle = '#7ddc4a';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(ix, py - hh - 10, 6, Math.PI, 0);
-      ctx.stroke();
-      ctx.restore();
+      // Curve ready: a small arc indicator above the paddle.
+      if (p.curveReady) {
+        const ix = side === 'left' ? px + PADDLE.w / 2 + 10 : px - PADDLE.w / 2 - 10;
+        ctx.save();
+        ctx.strokeStyle = '#7ddc4a';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(ix, py - hh - 10, 6, Math.PI, 0);
+        ctx.stroke();
+        ctx.restore();
+      }
     }
   }
 }

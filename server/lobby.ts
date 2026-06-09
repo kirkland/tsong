@@ -8,12 +8,15 @@ import {
   CHAT_MAX_LEN,
   ChatLine,
   BALL_REACTION,
+  COURT,
   FATALITY_MOVES,
   LeaderboardRow,
+  PaddleState,
   Role,
   ServerMsg,
   Side,
   StateMsg,
+  TEAM_MAX,
 } from '../shared/types';
 import { getLeaderboard, recordResult, updateName } from './db';
 import { READY_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
@@ -47,13 +50,14 @@ interface SeatInfo {
   pid: string;
   nickname: string;
   color: string;
+  y: number; // paddle center Y at shutdown, restored on reattach
 }
 
 // Everything the lobby needs to put players back where they were after a restart.
 // Seats, king and queue are stored by stable pid (sockets don't survive a restart);
 // reconnecting clients reclaim them in join(). The rest is plain state.
 export interface LobbySnapshot {
-  sides: Record<Side, SeatInfo | null>;
+  sides: Record<Side, SeatInfo[]>;
   king: { side: Side; pid: string; nickname: string } | null;
   streakPid: string | null;
   kingStreak: number;
@@ -72,7 +76,8 @@ export interface LobbySnapshot {
 
 export class Lobby {
   private conns = new Map<WebSocket, Conn>();
-  private sides: Record<Side, WebSocket | null> = { left: null, right: null };
+  // Players seated on each side, in join order. Each has their own paddle in the Game.
+  private teams: Record<Side, WebSocket[]> = { left: [], right: [] };
   private winnerName: string | null = null;
   private overHandled = false; // guards the one-time spot reopening when a match ends
   private king: { side: Side; pid: string; nickname: string; ws: WebSocket } | null = null;
@@ -100,7 +105,7 @@ export class Lobby {
 
   // Restart resume: seats/king/queue a previous process held, keyed by stable pid,
   // waiting for those clients to reconnect and reclaim them (see restore/reattach).
-  private pendingSides: Record<Side, SeatInfo | null> = { left: null, right: null };
+  private pendingSides: Record<Side, SeatInfo[]> = { left: [], right: [] };
   private pendingKing: { side: Side; pid: string; nickname: string } | null = null;
   private pendingQueue: { pid: string; nickname: string }[] = [];
   private resumeGrace = 0; // seconds left to reclaim seats before abandoning the resume
@@ -175,9 +180,10 @@ export class Lobby {
     const name = conn?.nickname || 'someone';
     if (conn) this.echoCommand(conn, '/ff'); // show it in chat before they leave their spot
     if (conn?.pid === this.streakPid) this.endStreak(); // bailing forfeits the reign
-    // Vacate the spot (and drop a live match back to waiting), like a quiet leave...
-    this.release(side);
-    if (this.game.status === 'playing') this.game.toWaiting();
+    // Vacate the seat, like a quiet leave; the match only drops back to waiting if
+    // their whole team is now gone — teammates play on.
+    this.unseat(ws);
+    if (this.game.status === 'playing' && this.teams[side].length === 0) this.game.toWaiting();
     // ...but loudly, so everyone knows.
     this.announce(`Booo, ${name} quit the game`);
   }
@@ -198,17 +204,18 @@ export class Lobby {
     if (i !== -1) this.queue.splice(i, 1);
   }
 
-  /** Auto-assign the next queued spectator to an open paddle spot. */
+  /** Auto-assign the next queued spectator to a side left with no players. */
   private claimFromQueue() {
     while (this.queue.length > 0) {
-      const openSide = SIDES.find((s) => this.sides[s] === null);
+      const openSide = SIDES.find((s) => this.teams[s].length === 0);
       if (!openSide) break;
       const next = this.queue.shift()!;
       const conn = this.conns.get(next);
       if (!conn || !conn.nickname) continue; // stale entry
-      this.sides[openSide] = next;
+      this.teams[openSide].push(next);
       conn.role = openSide;
       conn.captured = false;
+      this.game.addPlayer(openSide, conn.id);
       this.tell(next, { type: 'you', id: conn.id, role: openSide });
     }
   }
@@ -228,10 +235,9 @@ export class Lobby {
   /** The winner (king) declines to stay — releases their spot. */
   kingExit(ws: WebSocket) {
     if (!this.king || this.king.ws !== ws) return; // only the king can exit
-    const side = this.king.side;
     this.king = null;
     this.endStreak(); // stepping down ends the reign
-    this.release(side);
+    this.unseat(ws);
     if (this.game.status === 'over') this.game.toWaiting();
   }
 
@@ -261,24 +267,27 @@ export class Lobby {
       .catch((e) => console.error('name update failed:', e));
   }
 
-  claim(ws: WebSocket) {
+  claim(ws: WebSocket, side?: Side) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || conn.role !== 'observer') return;
     // Remove from queue if they were in it
     this.queueLeave(ws);
-    const side = SIDES.find((s) => this.sides[s] === null);
-    if (!side) return;
-    this.sides[side] = ws;
-    conn.role = side;
+    // Honor the requested side; otherwise auto-assign to the smaller team.
+    const pick: Side =
+      side ?? (this.teams.left.length <= this.teams.right.length ? 'left' : 'right');
+    if (this.teams[pick].length >= TEAM_MAX) return; // that side is full
+    this.teams[pick].push(ws);
+    conn.role = pick;
     conn.captured = false;
-    this.tell(ws, { type: 'you', id: conn.id, role: side });
-    // Don't auto-start if both are filled — wait for ready-up if coming from an 'over' state
-    if (this.sides.left && this.sides.right) {
+    this.game.addPlayer(pick, conn.id);
+    this.tell(ws, { type: 'you', id: conn.id, role: pick });
+    // Joining mid-match just adds a paddle; otherwise start once both sides have
+    // someone — except after a game, where we wait for ready-ups.
+    if (this.teams.left.length && this.teams.right.length) {
       if (this.game.status === 'over') {
-        // Both spots filled after game: wait for ready-ups
         this.ready = { left: false, right: false };
         this.readyTimer = 0;
-      } else {
+      } else if (this.game.status === 'waiting') {
         this.game.start();
       }
     }
@@ -287,7 +296,8 @@ export class Lobby {
 
   setPaddle(ws: WebSocket, y: number) {
     const side = this.sideOf(ws);
-    if (side) this.game.setTarget(side, y);
+    const conn = this.conns.get(ws);
+    if (side && conn) this.game.setTarget(side, conn.id, y);
   }
 
   // A player's mouse-capture (pointer lock) state changed. The match stays frozen until
@@ -300,8 +310,8 @@ export class Lobby {
   }
 
   private isCaptured(side: Side): boolean {
-    const ws = this.sides[side];
-    return ws ? this.conns.get(ws)?.captured ?? false : false;
+    const team = this.teams[side];
+    return team.length > 0 && team.every((ws) => this.conns.get(ws)?.captured ?? false);
   }
 
   private refreshPause() {
@@ -323,8 +333,9 @@ export class Lobby {
   remove(ws: WebSocket) {
     const side = this.sideOf(ws);
     if (side) {
-      this.sides[side] = null;
-      if (this.game.status === 'playing') this.game.toWaiting();
+      this.unseat(ws);
+      // The match only drops back to waiting if their whole team is gone.
+      if (this.game.status === 'playing' && this.teams[side].length === 0) this.game.toWaiting();
     }
     if (this.king && this.king.ws === ws) this.king = null;
     if (this.conns.get(ws)?.pid === this.streakPid) this.endStreak(); // streak holder left
@@ -347,20 +358,23 @@ export class Lobby {
             ? 'right'
             : 'left'
           : null;
-        const winner = winnerSide ? this.connOn(winnerSide) : null;
-        const loser = loserSide ? this.connOn(loserSide) : null;
-        this.winnerName = winner?.nickname ?? null;
-        this.fatalityWinnerPid = winner?.pid ?? null;
-        this.fatalityWinnerSide = winnerSide;
+        const winners = winnerSide ? this.connsOn(winnerSide) : [];
+        const losers = loserSide ? this.connsOn(loserSide) : [];
+        this.winnerName = winners.length ? winners.map((c) => c.nickname).join(' & ') : null;
+        // Fatalities are a solo flourish: armed only when one player won the match.
+        this.fatalityWinnerPid = winners.length === 1 ? winners[0].pid : null;
+        this.fatalityWinnerSide = winners.length === 1 ? winnerSide : null;
         this.activeFatality = null;
-        // Release the loser; winner stays as king
+        // Release the losing team; winners stay seated.
         if (loserSide) this.release(loserSide);
-        if (winner && winnerSide) {
+        // King of the court is a 1v1 ritual — only a solo winner takes the throne.
+        if (winners.length === 1 && winnerSide) {
+          const winner = winners[0];
           this.king = {
             side: winnerSide,
             pid: winner.pid,
             nickname: winner.nickname,
-            ws: this.sides[winnerSide]!,
+            ws: this.teams[winnerSide][0],
           };
           // Win streak: extend it if the same player just defended their throne,
           // otherwise this is a fresh king with a streak of one.
@@ -369,8 +383,9 @@ export class Lobby {
         }
         this.overHandled = true;
 
-        if (winner?.pid && loser?.pid) {
-          recordResult(winner.pid, winner.nickname, loser.pid, loser.nickname)
+        // The leaderboard tracks head-to-head records, so only true 1v1 results count.
+        if (winners.length === 1 && losers.length === 1 && winners[0].pid && losers[0].pid) {
+          recordResult(winners[0].pid, winners[0].nickname, losers[0].pid, losers[0].nickname)
             .then(() => this.refreshLeaderboard())
             .catch((e) => console.error('leaderboard update failed:', e));
         }
@@ -379,7 +394,7 @@ export class Lobby {
         // FATALITY screen clears and a fresh match can be started.
         this.activeFatality = null;
         this.game.toWaiting();
-      } else if (this.sides.left && this.sides.right) {
+      } else if (this.teams.left.length && this.teams.right.length) {
         // Both spots filled after game: wait for ready-up
         if (this.ready.left && this.ready.right) {
           // Both ready: start the next match
@@ -412,10 +427,10 @@ export class Lobby {
       this.ready = { left: false, right: false };
       this.readyTimer = 0;
       if (this.game.status === 'playing') this.king = null;
-      // Catch-all: idle in the lobby with both spots filled (e.g. the queue auto-filled
+      // Catch-all: idle in the lobby with both sides manned (e.g. the queue auto-filled
       // a seat after a forfeit, a leave, or a ready-timeout). Kick off the match —
-      // otherwise it sits frozen in 'waiting' with two players present.
-      if (this.game.status === 'waiting' && this.sides.left && this.sides.right) {
+      // otherwise it sits frozen in 'waiting' with players present.
+      if (this.game.status === 'waiting' && this.teams.left.length && this.teams.right.length) {
         this.game.start();
       }
     }
@@ -540,22 +555,31 @@ export class Lobby {
     this.streamerNextAt = this.streamerTick + 60 + Math.floor(Math.random() * 240);
   }
 
-  private release(side: Side) {
-    const ws = this.sides[side];
-    if (ws) {
-      const conn = this.conns.get(ws);
-      if (conn) {
-        conn.role = 'observer';
-        conn.captured = false;
-        this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
-      }
+  /** Vacate one player's seat: drop their paddle and return them to observer. */
+  private unseat(ws: WebSocket) {
+    const side = this.sideOf(ws);
+    if (!side) return;
+    this.teams[side] = this.teams[side].filter((s) => s !== ws);
+    const conn = this.conns.get(ws);
+    if (conn) {
+      this.game.removePlayer(side, conn.id);
+      conn.role = 'observer';
+      conn.captured = false;
+      this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
     }
-    this.sides[side] = null;
+    if (this.king && this.king.ws === ws) this.king = null;
+    if (this.teams[side].length === 0) {
+      this.ready[side] = false;
+      // Auto-claim from queue if someone is waiting for an empty side
+      this.claimFromQueue();
+    }
+  }
+
+  /** Vacate every seat on a side (match end, ready timeout, abandoned resume). */
+  private release(side: Side) {
+    for (const ws of [...this.teams[side]]) this.unseat(ws);
     this.ready[side] = false;
-    // Clear king if their side was released
     if (this.king && this.king.side === side) this.king = null;
-    // Auto-claim from queue if someone is waiting
-    this.claimFromQueue();
   }
 
   // Convert the piñata's internal state into the wire view: absolute positions for each
@@ -582,6 +606,32 @@ export class Lobby {
     }
     const lastHit = this.game.lastHit;
     const ballColor = lastHit ? this.colorOf(lastHit) : '#e8eefc';
+    const sideState = (side: Side): PaddleState => {
+      const players = this.teams[side].map((ws) => {
+        const c = this.conns.get(ws)!;
+        return {
+          id: c.id,
+          y: this.game.paddleYOf(side, c.id) ?? COURT.h / 2,
+          name: c.nickname,
+          color: c.color,
+        };
+      });
+      return {
+        x: this.game.paddleX[side],
+        // Representative fields (first player, or neutral defaults when the side is
+        // open) — the fatality animations and the open-side placeholder use these.
+        y: players[0]?.y ?? COURT.h / 2,
+        name: players.length ? players.map((p) => p.name).join(' & ') : null,
+        color: players[0]?.color ?? '#e8eefc',
+        h: this.game.halfH(side) * 2,
+        frozen: this.game.freezeTimer[side] > 0,
+        mirrored: this.game.mirrorTimer[side] > 0,
+        shielded: this.game.shielded[side],
+        blinded: this.game.blindTimer[side] > 0,
+        curveReady: this.game.curveHits[side] > 0,
+        players,
+      };
+    };
     return {
       type: 'state',
       ball: {
@@ -592,32 +642,7 @@ export class Lobby {
       },
       extraBalls: this.game.extraBalls.map((b) => ({ x: b.x, y: b.y, color: ballColor })),
       ballSpeed: Math.hypot(this.game.ball.vx, this.game.ball.vy),
-      paddles: {
-        left: {
-          x: this.game.paddleX.left,
-          y: this.game.paddleY.left,
-          name: this.nameOf('left'),
-          color: this.colorOf('left'),
-          h: this.game.halfH('left') * 2,
-          frozen: this.game.freezeTimer.left > 0,
-          mirrored: this.game.mirrorTimer.left > 0,
-          shielded: this.game.shielded.left,
-          blinded: this.game.blindTimer.left > 0,
-          curveReady: this.game.curveHits.left > 0,
-        },
-        right: {
-          x: this.game.paddleX.right,
-          y: this.game.paddleY.right,
-          name: this.nameOf('right'),
-          color: this.colorOf('right'),
-          h: this.game.halfH('right') * 2,
-          frozen: this.game.freezeTimer.right > 0,
-          mirrored: this.game.mirrorTimer.right > 0,
-          shielded: this.game.shielded.right,
-          blinded: this.game.blindTimer.right > 0,
-          curveReady: this.game.curveHits.right > 0,
-        },
-      },
+      paddles: { left: sideState('left'), right: sideState('right') },
       target: this.game.target
         ? { x: this.game.target.x, y: this.game.target.y, kind: this.game.target.kind }
         : null,
@@ -650,23 +675,24 @@ export class Lobby {
   }
 
   private nameOf(side: Side): string | null {
-    const ws = this.sides[side];
-    return ws ? this.conns.get(ws)?.nickname ?? null : null;
+    const names = this.connsOn(side).map((c) => c.nickname);
+    return names.length ? names.join(' & ') : null;
   }
 
   private colorOf(side: Side): string {
-    const ws = this.sides[side];
-    return ws ? this.conns.get(ws)?.color ?? '#e8eefc' : '#e8eefc';
+    return this.connsOn(side)[0]?.color ?? '#e8eefc';
   }
 
-  private connOn(side: Side): Conn | null {
-    const ws = this.sides[side];
-    return ws ? this.conns.get(ws) ?? null : null;
+  private connsOn(side: Side): Conn[] {
+    return this.teams[side].flatMap((ws) => {
+      const c = this.conns.get(ws);
+      return c ? [c] : [];
+    });
   }
 
   private sideOf(ws: WebSocket): Side | null {
-    if (this.sides.left === ws) return 'left';
-    if (this.sides.right === ws) return 'right';
+    if (this.teams.left.includes(ws)) return 'left';
+    if (this.teams.right.includes(ws)) return 'right';
     return null;
   }
 
@@ -674,12 +700,17 @@ export class Lobby {
 
   /** Snapshot the lobby for persistence across a restart (paired with restore). */
   serialize(): LobbySnapshot {
-    const seat = (side: Side): SeatInfo | null => {
-      const c = this.connOn(side);
-      return c && c.pid ? { pid: c.pid, nickname: c.nickname, color: c.color } : null;
-    };
+    const seats = (side: Side): SeatInfo[] =>
+      this.connsOn(side)
+        .filter((c) => c.pid)
+        .map((c) => ({
+          pid: c.pid,
+          nickname: c.nickname,
+          color: c.color,
+          y: this.game.paddleYOf(side, c.id) ?? COURT.h / 2,
+        }));
     return {
-      sides: { left: seat('left'), right: seat('right') },
+      sides: { left: seats('left'), right: seats('right') },
       king: this.king
         ? { side: this.king.side, pid: this.king.pid, nickname: this.king.nickname }
         : null,
@@ -705,7 +736,8 @@ export class Lobby {
   /** Restore a snapshot after a restart. Seats/king/queue become pending reattachments
    *  that their clients reclaim by pid as they reconnect; the rest is set directly. */
   restore(s: LobbySnapshot) {
-    this.pendingSides = s.sides ?? { left: null, right: null };
+    const seatList = (v: unknown): SeatInfo[] => (Array.isArray(v) ? v : []);
+    this.pendingSides = { left: seatList(s.sides?.left), right: seatList(s.sides?.right) };
     this.pendingKing = s.king ?? null;
     this.pendingQueue = s.queue ?? [];
     this.streakPid = s.streakPid ?? null;
@@ -722,27 +754,32 @@ export class Lobby {
     this.chatLog = Array.isArray(s.chatLog) ? s.chatLog : [];
     // Give seated players a window to reconnect and reclaim their seats; if they don't,
     // expireResume() abandons the resume so the room isn't wedged on a frozen match.
-    if (this.pendingSides.left || this.pendingSides.right) this.resumeGrace = RESUME_GRACE;
+    if (this.pendingSides.left.length || this.pendingSides.right.length) {
+      this.resumeGrace = RESUME_GRACE;
+    }
   }
 
   /** On (re)join, reclaim any seat / king / queue spot this identity held pre-restart. */
   private reattach(ws: WebSocket, conn: Conn) {
     if (!conn.pid) return;
     for (const side of SIDES) {
-      const p = this.pendingSides[side];
-      if (p && p.pid === conn.pid && this.sides[side] === null) {
-        this.pendingSides[side] = null;
-        this.sides[side] = ws;
+      const i = this.pendingSides[side].findIndex((p) => p.pid === conn.pid);
+      if (i !== -1 && this.teams[side].length < TEAM_MAX) {
+        const [p] = this.pendingSides[side].splice(i, 1);
+        this.teams[side].push(ws);
         conn.role = side;
         conn.captured = false; // must re-capture the mouse to unfreeze the resumed match
         if (p.color) conn.color = p.color;
+        this.game.addPlayer(side, conn.id, p.y);
         this.tell(ws, { type: 'you', id: conn.id, role: side });
         // The reigning winner sits on their seat through the 'over' screen — restore it.
         if (this.pendingKing && this.pendingKing.pid === conn.pid) {
           this.king = { side, pid: conn.pid, nickname: conn.nickname, ws };
           this.pendingKing = null;
         }
-        if (!this.pendingSides.left && !this.pendingSides.right) this.resumeGrace = 0;
+        if (!this.pendingSides.left.length && !this.pendingSides.right.length) {
+          this.resumeGrace = 0;
+        }
         return;
       }
     }
@@ -759,8 +796,8 @@ export class Lobby {
     if (this.resumeGrace <= 0) return;
     this.resumeGrace -= TICK_MS / 1000;
     if (this.resumeGrace > 0) return;
-    if (this.pendingSides.left || this.pendingSides.right) {
-      this.pendingSides = { left: null, right: null };
+    if (this.pendingSides.left.length || this.pendingSides.right.length) {
+      this.pendingSides = { left: [], right: [] };
       this.pendingKing = null;
       for (const side of SIDES) this.release(side);
       this.king = null;

@@ -24,6 +24,7 @@ export const CLOSING = {
 } as const;
 
 export const WIN_SCORE = 3;
+export const TEAM_MAX = 4; // max players (paddles) per side
 export const PADDLE_BOOST = 1.5; // paddle height multiplier while "grow" is active
 export const PADDLE_SHRINK = 0.6; // opponent paddle height multiplier while "shrink" is active
 export const SMASH_BONUS = 1.35; // extra ball-speed multiplier applied on each "smash" hit
@@ -120,7 +121,7 @@ export type FatalityMove = (typeof FATALITY_MOVES)[number];
 export type ClientMsg =
   // pid = stable per-browser identity; color = chosen paddle color
   | { type: 'join'; nickname: string; pid: string; color?: string }
-  | { type: 'claim' }
+  | { type: 'claim'; side?: Side } // preferred side; omitted = auto-assign to the smaller team
   | { type: 'paddle'; y: number } // desired paddle center Y, in court units
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
@@ -136,17 +137,29 @@ export type ClientMsg =
   | { type: 'ready' }; // ready up for the next match
 
 // --- Server -> Client ---
+
+// One seated player's own paddle within a side's team. Several players may share a
+// side (team mode); they share the side's X, height and power-up state, but each
+// drives their own paddle Y.
+export interface TeamPlayer {
+  id: string; // per-connection id (matches YouMsg.id, so a client can find its own paddle)
+  y: number; // this player's paddle center Y in court units
+  name: string;
+  color: string;
+}
+
 export interface PaddleState {
   x: number; // paddle center X in court units (moves inward in "closing walls" mode)
-  y: number; // paddle center Y in court units
-  name: string | null; // nickname of the player on this side, or null if open
-  color: string; // hex color for rendering
+  y: number; // representative paddle Y (first player's, or court center when open) — kept for fatality animations
+  name: string | null; // joined nicknames of the players on this side, or null if open
+  color: string; // representative hex color (first player's)
   h: number; // current paddle height in court units (taller while powered up)
-  frozen: boolean; // paddle is temporarily immobile (freeze power-up)
+  frozen: boolean; // paddles are temporarily immobile (freeze power-up)
   mirrored: boolean; // up/down controls are inverted (mirror power-up)
   shielded: boolean; // next goal against this side is absorbed (shield power-up)
   blinded: boolean; // opponent's half of the court is obscured (blind power-up)
   curveReady: boolean; // next hit will put spin on the ball (curve power-up)
+  players: TeamPlayer[]; // every paddle on this side, one per seated player
 }
 
 export interface StateMsg {

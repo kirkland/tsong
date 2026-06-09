@@ -91,7 +91,7 @@ wss.on('connection', (ws: WebSocket) => {
         }
         break;
       case 'claim':
-        lobby.claim(ws);
+        lobby.claim(ws, msg.side === 'left' || msg.side === 'right' ? msg.side : undefined);
         break;
       case 'paddle':
         if (typeof msg.y === 'number' && Number.isFinite(msg.y)) lobby.setPaddle(ws, msg.y);

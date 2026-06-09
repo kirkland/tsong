@@ -11,7 +11,7 @@ const STATE_FILE = process.env.TSONG_STATE_FILE
   ? path.resolve(process.env.TSONG_STATE_FILE)
   : path.resolve(process.cwd(), '.tsong-state.json');
 
-const SNAPSHOT_VERSION = 1; // bump when the snapshot shape changes (old files are ignored)
+const SNAPSHOT_VERSION = 2; // bump when the snapshot shape changes (old files are ignored)
 const MAX_AGE_MS = 10 * 60 * 1000; // ignore snapshots older than this — stale to resume
 
 export interface Snapshot<G = unknown, L = unknown> {

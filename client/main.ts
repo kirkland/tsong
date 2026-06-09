@@ -12,8 +12,10 @@ import {
   ChatLine,
   LeaderboardRow,
   Role,
+  Side,
   StateMsg,
   PowerupKind,
+  TEAM_MAX,
 } from '../shared/types';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -22,7 +24,8 @@ const ctx = canvas.getContext('2d')!;
 const overlay = document.getElementById('overlay') as HTMLDivElement;
 const joinForm = document.getElementById('joinForm') as HTMLFormElement;
 const nick = document.getElementById('nick') as HTMLInputElement;
-const joinBtn = document.getElementById('join') as HTMLButtonElement;
+const joinLeftBtn = document.getElementById('joinLeft') as HTMLButtonElement;
+const joinRightBtn = document.getElementById('joinRight') as HTMLButtonElement;
 const queueBtn = document.getElementById('queueBtn') as HTMLButtonElement;
 const queueArea = document.getElementById('queueArea') as HTMLDivElement;
 const readyBtn = document.getElementById('readyBtn') as HTMLButtonElement;
@@ -85,6 +88,7 @@ const myPid = getCookie('tsong_pid') ?? (() => {
 })();
 
 let myRole: Role = 'observer';
+let myId = ''; // per-connection id from the server; identifies our own paddle in state
 let myName = '';
 let myColor = '#e8eefc';
 let state: StateMsg | null = null;
@@ -157,6 +161,7 @@ const net = connect(
   (msg) => {
     if (msg.type === 'you') {
       myRole = msg.role;
+      myId = msg.id;
       // Hand the cursor back when we're no longer holding a paddle (e.g. match ended).
       if (!isPlayer() && document.pointerLockElement === canvas) document.exitPointerLock();
     } else if (msg.type === 'state') {
@@ -218,7 +223,8 @@ const isPlayer = () => myRole === 'left' || myRole === 'right';
 // driving it (e.g. right after claiming a spot), so it doesn't snap on first input.
 function syncMyPaddleFromServer() {
   if (state && isPlayer() && lastSent < 0) {
-    target = state.paddles[myRole as 'left' | 'right'].y;
+    const mine = state.paddles[myRole as Side].players.find((p) => p.id === myId);
+    if (mine) target = mine.y;
   }
 }
 
@@ -259,8 +265,9 @@ renameBtn.addEventListener('click', () => {
   nick.select();
 });
 
-// --- claim a paddle spot ---
-joinBtn.addEventListener('click', () => net.send({ type: 'claim' }));
+// --- claim a paddle spot on your chosen side (multiple players may share a side) ---
+joinLeftBtn.addEventListener('click', () => net.send({ type: 'claim', side: 'left' }));
+joinRightBtn.addEventListener('click', () => net.send({ type: 'claim', side: 'right' }));
 
 // --- king exit: winner declines to stay ---
 kingStatusEl.addEventListener('click', () => net.send({ type: 'kingExit' }));
@@ -1216,7 +1223,7 @@ function updateUI() {
     if (isPlayer() && !pointerLocked)
       statusEl.textContent = '🖱 click the board to capture your mouse to start';
     else if (isPlayer())
-      statusEl.textContent = '⏸ waiting for the other player to capture their mouse…';
+      statusEl.textContent = '⏸ waiting for the other players to capture their mouse…';
     else statusEl.textContent = '⏸ paused — waiting for players to capture their mice';
   } else if (isPlayer() && !pointerLocked) {
     statusEl.textContent = '🖱 click the board to capture your mouse · Esc to release';
@@ -1264,8 +1271,15 @@ function updateUI() {
     readyBtn.style.display = 'none';
   }
 
-  const spotOpen = !state.paddles.left.name || !state.paddles.right.name;
-  joinBtn.style.display = myRole === 'observer' && spotOpen ? 'inline-block' : 'none';
+  // One join button per side; each shows its head count and hides when full.
+  for (const [btn, side] of [
+    [joinLeftBtn, 'left'],
+    [joinRightBtn, 'right'],
+  ] as [HTMLButtonElement, Side][]) {
+    const n = state.paddles[side].players.length;
+    btn.style.display = myRole === 'observer' && n < TEAM_MAX ? 'inline-block' : 'none';
+    btn.textContent = `Join ${side} (${n}/${TEAM_MAX})`;
+  }
   renameBtn.style.display = myName ? 'inline-block' : 'none';
 
   // Hidden once the pointer is captured (lock hides it natively anyway); visible while

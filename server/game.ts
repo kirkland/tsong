@@ -68,6 +68,14 @@ interface PinataObj {
   stuck: { angle: number; speed: number }[];
 }
 
+// One player's paddle. A side may field several (team mode); they share the side's
+// X, height and power-up state, but each eases toward its own target Y.
+export interface PaddleEnt {
+  id: string; // lobby connection id that drives this paddle
+  y: number;
+  targetY: number;
+}
+
 // Everything needed to resume the simulation after a restart. Mirrors the Game's own
 // fields (including the private serve/target timers) so a saved match continues exactly
 // where it left off. `paused` is deliberately omitted — a resumed match always starts
@@ -75,9 +83,9 @@ interface PinataObj {
 export interface GameSnapshot {
   ball: Ball;
   extraBalls: Ball[];
-  paddleY: Record<Side, number>;
+  // Per-player paddles are NOT stored here — their sockets don't survive a restart.
+  // The lobby snapshot keeps each seat's paddle Y and re-adds paddles on reattach.
   paddleX: Record<Side, number>;
-  targetY: Record<Side, number>;
   score: { left: number; right: number };
   status: Status;
   closing: boolean;
@@ -111,9 +119,8 @@ function distToSegment(px: number, py: number, ax: number, ay: number, bx: numbe
 export class Game {
   ball: Ball = { x: COURT.w / 2, y: COURT.h / 2, vx: 0, vy: 0, spin: 0 };
   extraBalls: Ball[] = []; // additional balls during a "multi" power-up
-  paddleY: Record<Side, number> = { left: COURT.h / 2, right: COURT.h / 2 };
+  players: Record<Side, PaddleEnt[]> = { left: [], right: [] }; // one paddle per seated player
   paddleX: Record<Side, number> = { ...HOME_X }; // current paddle center X (slides in closing mode)
-  targetY: Record<Side, number> = { left: COURT.h / 2, right: COURT.h / 2 };
   score = { left: 0, right: 0 };
   status: Status = 'waiting';
   closing = false; // "closing walls" mode armed; applies from the next match start
@@ -156,9 +163,7 @@ export class Game {
     return {
       ball: { ...this.ball },
       extraBalls: this.extraBalls.map((b) => ({ ...b })),
-      paddleY: { ...this.paddleY },
       paddleX: { ...this.paddleX },
-      targetY: { ...this.targetY },
       score: { ...this.score },
       status: this.status,
       closing: this.closing,
@@ -186,9 +191,9 @@ export class Game {
   restore(s: GameSnapshot) {
     this.ball = { ...s.ball, spin: s.ball.spin ?? 0 };
     this.extraBalls = s.extraBalls.map((b) => ({ ...b, spin: b.spin ?? 0 }));
-    this.paddleY = { ...s.paddleY };
+    // Paddles are re-added (with their saved Y) by the lobby as players reattach.
+    this.players = { left: [], right: [] };
     this.paddleX = { ...s.paddleX };
-    this.targetY = { ...s.targetY };
     this.score = { ...s.score };
     this.status = s.status;
     this.closing = s.closing;
@@ -223,13 +228,35 @@ export class Game {
     return h / 2;
   }
 
-  /** Begin a fresh match (called once both spots are filled). */
+  /** Seat a player on a side: give them their own paddle. */
+  addPlayer(side: Side, id: string, y = COURT.h / 2) {
+    if (this.players[side].some((p) => p.id === id)) return;
+    this.players[side].push({ id, y, targetY: y });
+  }
+
+  /** Remove a player's paddle (they left their seat). */
+  removePlayer(side: Side, id: string) {
+    this.players[side] = this.players[side].filter((p) => p.id !== id);
+  }
+
+  /** A seated player's current paddle Y, or null if they have no paddle. */
+  paddleYOf(side: Side, id: string): number | null {
+    return this.players[side].find((p) => p.id === id)?.y ?? null;
+  }
+
+  /** Begin a fresh match (called once both sides have at least one player). */
   start() {
     this.score = { left: 0, right: 0 };
     this.winnerSide = null;
-    this.paddleY = { left: COURT.h / 2, right: COURT.h / 2 };
+    // Spread each team's paddles evenly down the court so they don't start stacked.
+    for (const side of ['left', 'right'] as Side[]) {
+      const team = this.players[side];
+      team.forEach((p, i) => {
+        p.y = (COURT.h * (i + 1)) / (team.length + 1);
+        p.targetY = p.y;
+      });
+    }
     this.paddleX = { ...HOME_X }; // paddles always start at full width
-    this.targetY = { left: COURT.h / 2, right: COURT.h / 2 };
     this.clearPowerups();
     this.target = null;
     this.targetTimer = this.nextTargetDelay();
@@ -446,11 +473,13 @@ export class Game {
     return this.bigBallTimer > 0 ? BIG_BALL_R : BALL.r;
   }
 
-  setTarget(side: Side, y: number) {
+  setTarget(side: Side, id: string, y: number) {
+    const ent = this.players[side].find((p) => p.id === id);
+    if (!ent) return;
     const half = this.halfH(side);
     // Mirror power-up: invert the client's desired y so controls feel upside-down.
     const effective = this.mirrorTimer[side] > 0 ? COURT.h - y : y;
-    this.targetY[side] = clamp(effective, half, COURT.h - half);
+    ent.targetY = clamp(effective, half, COURT.h - half);
   }
 
   private serve(dir: number) {
@@ -488,8 +517,10 @@ export class Game {
     const maxStep = PADDLE.speed * dt;
     for (const side of ['left', 'right'] as Side[]) {
       if (this.freezeTimer[side] > 0) continue; // frozen — skip easing
-      const diff = this.targetY[side] - this.paddleY[side];
-      this.paddleY[side] += clamp(diff, -maxStep, maxStep);
+      for (const p of this.players[side]) {
+        const diff = p.targetY - p.y;
+        p.y += clamp(diff, -maxStep, maxStep);
+      }
     }
 
     if (this.status !== 'playing') return;
@@ -591,23 +622,16 @@ export class Game {
 
     this.checkTargetHit(prevX, prevY, b);
 
-    // Paddle collisions
+    // Paddle collisions — a side may field several paddles; bounce off the closest
+    // one (by center distance) that overlaps the ball.
     const leftFace = this.faceX('left');
     const rightFace = this.faceX('right');
-    if (
-      b.vx < 0 &&
-      b.x - r <= leftFace &&
-      b.x - r > leftFace - 40 &&
-      Math.abs(b.y - this.paddleY.left) <= this.halfH('left') + r
-    ) {
-      this.bounce('left', b);
-    } else if (
-      b.vx > 0 &&
-      b.x + r >= rightFace &&
-      b.x + r < rightFace + 40 &&
-      Math.abs(b.y - this.paddleY.right) <= this.halfH('right') + r
-    ) {
-      this.bounce('right', b);
+    if (b.vx < 0 && b.x - r <= leftFace && b.x - r > leftFace - 40) {
+      const hit = this.paddleAt('left', b.y, r);
+      if (hit) this.bounce('left', b, hit.y);
+    } else if (b.vx > 0 && b.x + r >= rightFace && b.x + r < rightFace + 40) {
+      const hit = this.paddleAt('right', b.y, r);
+      if (hit) this.bounce('right', b, hit.y);
     }
 
     // Diamond obstacle carom (diamond-hands mode); no-op when the mode is off.
@@ -769,9 +793,20 @@ export class Game {
     });
   }
 
-  private bounce(side: Side, b: Ball) {
+  // The paddle on `side` closest to ball-Y that overlaps it, or null if none does.
+  private paddleAt(side: Side, y: number, r: number): PaddleEnt | null {
+    const reach = this.halfH(side) + r;
+    let best: PaddleEnt | null = null;
+    for (const p of this.players[side]) {
+      const d = Math.abs(y - p.y);
+      if (d <= reach && (!best || d < Math.abs(y - best.y))) best = p;
+    }
+    return best;
+  }
+
+  private bounce(side: Side, b: Ball, paddleY: number) {
     this.lastHit = side;
-    const rel = clamp((b.y - this.paddleY[side]) / this.halfH(side), -1, 1);
+    const rel = clamp((b.y - paddleY) / this.halfH(side), -1, 1);
     const speedup = this.turbo ? TURBO_SPEEDUP : BALL.speedup;
     let speed = Math.hypot(b.vx, b.vy) * speedup;
     if (this.smashHits[side] > 0) speed *= SMASH_BONUS;
