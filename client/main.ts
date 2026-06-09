@@ -171,7 +171,14 @@ const net = connect(
       myId = msg.id;
       lastSent = -1; // force a re-sync of our paddle target from the next state
       // Hand the cursor back when we're no longer holding a paddle (e.g. match ended).
-      if (!isPlayer() && document.pointerLockElement === canvas) document.exitPointerLock();
+      if (!isPlayer() && document.pointerLockElement === canvas) {
+        document.exitPointerLock();
+      } else if (isPlayer() && pointerLocked) {
+        // Our role changed while still mouse-captured (e.g. migrated from the duel box
+        // onto the arena polygon). The server reset our capture flag, but no pointerlock
+        // event fired — so re-assert it, or the match stays frozen waiting on us.
+        net.send({ type: 'capture', on: true });
+      }
     } else if (msg.type === 'state') {
       // Play the "FINISH HIM!" sting once, the instant the match ends with fatalities
       // armed (the moment the prompt appears for the winner). Edge-triggered so it
