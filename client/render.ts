@@ -1,8 +1,15 @@
 // Pure drawing: takes the latest server state and paints one frame. No game logic.
 
-import { COURT, PADDLE, BALL, BIG_BALL_R, DIAMOND, PINATA, TARGET, PowerupKind, StateMsg, Role } from '../shared/types';
+import { COURT, PADDLE, BALL, BIG_BALL_R, DIAMOND, PINATA, TARGET, PowerupKind, StateMsg, PolyState, Role } from '../shared/types';
 
 export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 'observer') {
+  // Arena (free-for-all polygon) mode renders its own court entirely; bail out early.
+  if (s.poly) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    drawPoly(ctx, s, s.poly);
+    return;
+  }
+
   // "rotate" power-up: flip the whole court 90° clockwise. Everything below draws in
   // court coordinates as usual; the transform maps them into the (portrait) canvas, which
   // main.ts has resized to COURT.h × COURT.w. Identity transform when un-rotated.
@@ -118,6 +125,189 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
   } else {
     fxStart = 0;
     fxKey = '';
+  }
+}
+
+// --- Arena (free-for-all polygon) ---------------------------------------------
+// Each player owns one edge of a regular N-gon; their paddle slides along it. A ball
+// caroms around the inside; slip past a living edge and you're knocked out (your edge
+// becomes a solid wall). At 8 players the court is dressed up as a stop sign.
+function drawPoly(ctx: CanvasRenderingContext2D, s: StateMsg, poly: PolyState) {
+  ctx.fillStyle = '#0b1020';
+  ctx.fillRect(0, 0, COURT.w, COURT.h);
+
+  const { verts, players, n, stopSign } = poly;
+  if (!verts.length) return;
+
+  // Court face: a red stop-sign at 8 players, otherwise the usual deep-navy court.
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(verts[0].x, verts[0].y);
+  for (let i = 1; i < n; i++) ctx.lineTo(verts[i].x, verts[i].y);
+  ctx.closePath();
+  ctx.fillStyle = stopSign ? '#c8102e' : '#0e1530';
+  ctx.shadowColor = stopSign ? 'rgba(255,80,80,0.5)' : 'rgba(90,120,220,0.25)';
+  ctx.shadowBlur = 22;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  // Stop signs get the iconic thick white rim (doubled up); other courts a subtle edge.
+  ctx.strokeStyle = stopSign ? '#ffffff' : '#23335c';
+  ctx.lineWidth = stopSign ? 6 : 2.5;
+  ctx.stroke();
+  if (stopSign) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(verts[0].x, verts[0].y);
+    for (let i = 1; i < n; i++) ctx.lineTo(verts[i].x, verts[i].y);
+    ctx.closePath();
+    ctx.stroke();
+    // The word every stop sign needs.
+    ctx.fillStyle = 'rgba(255,255,255,0.16)';
+    ctx.font = 'bold 86px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('STOP', poly.cx, poly.cy);
+  }
+  ctx.restore();
+
+  // Eliminated edges read as solid walls; living edges carry the player's paddle.
+  for (let i = 0; i < n; i++) {
+    const a = verts[i];
+    const b = verts[(i + 1) % n];
+    const pl = players[i];
+    if (!pl) continue;
+    if (!pl.alive) {
+      ctx.save();
+      ctx.strokeStyle = stopSign ? '#7a0c1d' : '#39477a';
+      ctx.lineWidth = 8;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // Power-up target + ball(s), same look as the classic court.
+  if (s.target) drawTarget(ctx, s.target.x, s.target.y, s.target.kind);
+
+  // Paddles: a rounded bar lying along each living edge, in the player's color.
+  for (let i = 0; i < n; i++) {
+    const pl = players[i];
+    if (!pl || !pl.alive) continue;
+    drawPolyPaddle(ctx, poly, pl);
+  }
+
+  // Names, just outside each edge midpoint.
+  ctx.font = '14px system-ui, sans-serif';
+  ctx.textBaseline = 'middle';
+  for (let i = 0; i < n; i++) {
+    const pl = players[i];
+    if (!pl) continue;
+    const a = verts[i];
+    const b = verts[(i + 1) % n];
+    const mx = (a.x + b.x) / 2;
+    const my = (a.y + b.y) / 2;
+    // Outward direction = away from center.
+    let ox = mx - poly.cx;
+    let oy = my - poly.cy;
+    const ol = Math.hypot(ox, oy) || 1;
+    ox /= ol;
+    oy /= ol;
+    const tx = mx + ox * 18;
+    const ty = my + oy * 18;
+    ctx.fillStyle = pl.alive ? pl.color : '#5a648a';
+    ctx.textAlign = ox > 0.3 ? 'left' : ox < -0.3 ? 'right' : 'center';
+    ctx.fillText(pl.alive ? pl.name : `☠ ${pl.name}`, tx, ty);
+  }
+
+  // Ball(s).
+  const ballR = s.tinyBall ? 3 : s.bigBall ? BIG_BALL_R : BALL.r;
+  ctx.globalAlpha = s.ghostBall ? 0.12 : 1;
+  for (const ball of [s.ball, ...s.extraBalls]) {
+    ctx.fillStyle = ball.color;
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, ballR, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // Alive count, top-left; winner banner when the round is over.
+  ctx.fillStyle = '#9fb0d8';
+  ctx.font = '14px ui-monospace, monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(`${poly.aliveCount} / ${n} alive`, 14, 12);
+
+  if (s.status === 'over' && poly.winner) {
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = '#ffd23f';
+    ctx.font = 'bold 40px ui-monospace, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = '#ffd23f';
+    ctx.shadowBlur = 20;
+    ctx.fillText(`🏆 ${poly.winner}`, poly.cx, poly.cy);
+    ctx.restore();
+  }
+}
+
+// One arena paddle: a thick rounded bar straddling its edge, pushed inward, in the
+// player's color. Shows a gold glow when shielded and a curve tick when curve is armed.
+function drawPolyPaddle(ctx: CanvasRenderingContext2D, poly: PolyState, pl: PolyState['players'][number]) {
+  const dx = Math.cos(pl.angle);
+  const dy = Math.sin(pl.angle);
+  // Inward normal: toward the polygon center from the paddle's spot on the edge.
+  let nx = poly.cx - pl.cx;
+  let ny = poly.cy - pl.cy;
+  const nl = Math.hypot(nx, ny) || 1;
+  nx /= nl;
+  ny /= nl;
+  const half = pl.len / 2;
+  const t = PADDLE.w; // thickness, extending inward from the edge
+  const x1 = pl.cx - dx * half;
+  const y1 = pl.cy - dy * half;
+  const x2 = pl.cx + dx * half;
+  const y2 = pl.cy + dy * half;
+
+  ctx.save();
+  if (pl.shielded) {
+    ctx.shadowColor = '#f5cc00';
+    ctx.shadowBlur = 16;
+  }
+  ctx.fillStyle = pl.color;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.lineTo(x2 + nx * t, y2 + ny * t);
+  ctx.lineTo(x1 + nx * t, y1 + ny * t);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  if (pl.shielded) {
+    ctx.save();
+    ctx.strokeStyle = '#f5cc00';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    ctx.restore();
+  }
+  if (pl.curveReady) {
+    ctx.save();
+    ctx.strokeStyle = '#7ddc4a';
+    ctx.lineWidth = 2;
+    const mx = pl.cx + nx * (t + 8);
+    const my = pl.cy + ny * (t + 8);
+    ctx.beginPath();
+    ctx.arc(mx, my, 6, 0, Math.PI);
+    ctx.stroke();
+    ctx.restore();
   }
 }
 

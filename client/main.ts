@@ -7,6 +7,8 @@ import {
   COURT,
   PADDLE,
   BALL,
+  ARENA,
+  MAX_PLAYERS,
   REACTIONS,
   BALL_REACTION,
   ChatLine,
@@ -47,6 +49,7 @@ const streamerModeEl = document.getElementById('streamerMode') as HTMLInputEleme
 const diamondModeEl = document.getElementById('diamondMode') as HTMLInputElement;
 const pinataModeEl = document.getElementById('pinataMode') as HTMLInputElement;
 const layeredModeEl = document.getElementById('layeredMode') as HTMLInputElement;
+const arenaModeEl = document.getElementById('arenaMode') as HTMLInputElement;
 const reactionsEl = document.getElementById('reactions') as HTMLDivElement;
 const recentReactionsEl = document.getElementById('recentReactions') as HTMLDivElement;
 const ballReactionEl = document.getElementById('ballReaction') as HTMLDivElement;
@@ -98,7 +101,8 @@ let state: StateMsg | null = null;
 let ballColor = '#e8eefc'; // live pong-ball color, mirrored onto the ball reaction
 let joined = false; // true once the player has entered a nickname (gates reactions)
 
-let target = COURT.h / 2; // desired paddle center Y, court units
+let target = COURT.h / 2; // desired paddle center Y, court units (duel)
+let arenaTarget = 0; // desired paddle offset along my edge, court units (arena)
 let lastSent = -1;
 let lastSendAt = 0;
 const keys = new Set<string>();
@@ -165,6 +169,7 @@ const net = connect(
     if (msg.type === 'you') {
       myRole = msg.role;
       myId = msg.id;
+      lastSent = -1; // force a re-sync of our paddle target from the next state
       // Hand the cursor back when we're no longer holding a paddle (e.g. match ended).
       if (!isPlayer() && document.pointerLockElement === canvas) document.exitPointerLock();
     } else if (msg.type === 'state') {
@@ -220,13 +225,37 @@ const net = connect(
   },
 );
 
-const isPlayer = () => myRole === 'left' || myRole === 'right';
+const isPlayer = () => myRole === 'left' || myRole === 'right' || myRole === 'player';
+const inArena = () => myRole === 'player';
+
+// My paddle in the arena state (the polygon edge I own), or undefined.
+function myPolyPlayer(s: StateMsg) {
+  return s.poly?.players.find((p) => p.id === myId);
+}
+
+// Farthest my arena paddle may slide from its edge midpoint before overhanging a corner.
+function arenaMaxPos(s: StateMsg, len: number): number {
+  const n = s.poly?.n ?? 3;
+  return Math.max(0, ARENA.radius * Math.sin(Math.PI / n) - len / 2);
+}
 
 // Keep our local target aligned with the server's paddle when we're not the one
 // driving it (e.g. right after claiming a spot), so it doesn't snap on first input.
 function syncMyPaddleFromServer() {
-  if (state && isPlayer() && lastSent < 0) {
-    const mine = state.paddles[myRole as Side].players.find((p) => p.id === myId);
+  if (!state || !isPlayer() || lastSent >= 0) return;
+  if (state.poly) {
+    const mine = myPolyPlayer(state);
+    if (mine) {
+      // Recover the paddle's offset along its edge from its reported center.
+      const i = state.poly.players.indexOf(mine);
+      const a = state.poly.verts[i];
+      const b = state.poly.verts[(i + 1) % state.poly.n];
+      const mx = (a.x + b.x) / 2;
+      const my = (a.y + b.y) / 2;
+      arenaTarget = (mine.cx - mx) * Math.cos(mine.angle) + (mine.cy - my) * Math.sin(mine.angle);
+    }
+  } else if (myRole === 'left' || myRole === 'right') {
+    const mine = state.paddles[myRole].players.find((p) => p.id === myId);
     if (mine) target = mine.y;
   }
 }
@@ -299,6 +328,9 @@ pinataModeEl.addEventListener('change', () =>
 );
 layeredModeEl.addEventListener('change', () =>
   net.send({ type: 'mode', layered: layeredModeEl.checked }),
+);
+arenaModeEl.addEventListener('change', () =>
+  net.send({ type: 'mode', arena: arenaModeEl.checked }),
 );
 
 // --- slash commands ---
@@ -489,6 +521,7 @@ function enableChat() {
   diamondModeEl.disabled = false;
   pinataModeEl.disabled = false;
   layeredModeEl.disabled = false;
+  arenaModeEl.disabled = false;
   for (const btn of reactionsEl.querySelectorAll<HTMLButtonElement>('.reaction-btn')) {
     btn.disabled = false;
   }
@@ -1045,6 +1078,18 @@ document.addEventListener('pointerlockchange', () => {
 canvas.addEventListener('mousemove', (e) => {
   // The paddle only moves while the mouse is captured to the board.
   if (!isPlayer() || !pointerLocked) return;
+  // Arena: the paddle rides along its edge, so project mouse motion onto that edge.
+  if (inArena() && state?.poly) {
+    const me = myPolyPlayer(state);
+    if (!me) return;
+    const r = canvas.getBoundingClientRect();
+    const dx = e.movementX * (COURT.w / r.width);
+    const dy = e.movementY * (COURT.h / r.height);
+    const along = dx * Math.cos(me.angle) + dy * Math.sin(me.angle);
+    const max = arenaMaxPos(state, me.len);
+    arenaTarget = Math.max(-max, Math.min(max, arenaTarget + along));
+    return;
+  }
   const r = canvas.getBoundingClientRect();
   // Convert screen-pixel movement to court units (1:1 with what's drawn). When the court
   // is rotated 90°, the paddle slides horizontally on screen, so track movementX instead —
@@ -1081,6 +1126,7 @@ window.addEventListener('keyup', (e) => {
 function canFinish(): boolean {
   return (
     !!state &&
+    !state.poly && // arena is a free-for-all — no finishing moves
     state.fatalitiesEnabled &&
     state.status === 'over' &&
     !state.fatality &&
@@ -1186,8 +1232,32 @@ function applyCanvasRotation(rotated: boolean) {
 
 // --- main loop ---
 function loop(t: number) {
-  // Paddle input (mouse and keyboard) only applies while the mouse is captured.
-  if (isPlayer() && pointerLocked) {
+  // Arena: keyboard nudges the paddle along its edge (mouse handled in mousemove).
+  if (inArena() && pointerLocked && state?.poly) {
+    const me = myPolyPlayer(state);
+    if (me) {
+      const step = PADDLE.speed / 60;
+      // Screen-space intent from the arrow/WASD keys, projected onto the edge direction
+      // so the key that points along the edge slides the paddle that way.
+      let vx = 0;
+      let vy = 0;
+      if (keys.has('arrowleft') || keys.has('a')) vx -= 1;
+      if (keys.has('arrowright') || keys.has('d')) vx += 1;
+      if (keys.has('arrowup') || keys.has('w')) vy -= 1;
+      if (keys.has('arrowdown') || keys.has('s')) vy += 1;
+      const along = vx * Math.cos(me.angle) + vy * Math.sin(me.angle);
+      if (along !== 0) {
+        const max = arenaMaxPos(state, me.len);
+        arenaTarget = Math.max(-max, Math.min(max, arenaTarget + along * step));
+      }
+    }
+    if (Math.abs(arenaTarget - lastSent) > 0.5 && t - lastSendAt > 33) {
+      net.send({ type: 'paddle', y: arenaTarget });
+      lastSent = arenaTarget;
+      lastSendAt = t;
+    }
+  } else if (isPlayer() && pointerLocked) {
+    // Paddle input (mouse and keyboard) only applies while the mouse is captured.
     const step = PADDLE.speed / 60;
     if (state?.rotated) {
       // Court rotated 90°: the paddle slides horizontally, so right/left drive it
@@ -1248,6 +1318,9 @@ function updateUI() {
   }
   if (document.activeElement !== layeredModeEl && layeredModeEl.checked !== state.layered) {
     layeredModeEl.checked = state.layered;
+  }
+  if (document.activeElement !== arenaModeEl && arenaModeEl.checked !== state.arena) {
+    arenaModeEl.checked = state.arena;
   }
 
   // Keep the checkbox in sync with the shared setting (another player may have flipped it).
@@ -1311,8 +1384,9 @@ function updateUI() {
   // Reset inQueue if we left observer state (e.g. we claimed a spot)
   if (myRole !== 'observer') inQueue = false;
 
-  // Ready button when the match is over and you hold a paddle
-  if (state.status === 'over' && isPlayer()) {
+  // Ready button when the match is over and you hold a paddle (classic only — the arena
+  // restarts on its own timer).
+  if (state.status === 'over' && isPlayer() && !state.poly) {
     readyBtn.style.display = 'inline-block';
     readyBtn.textContent = state.ready[myRole as 'left' | 'right'] ? '✓ Ready' : 'Ready?';
   } else {
@@ -1320,19 +1394,23 @@ function updateUI() {
   }
 
   // Side-pick buttons belong to layered-teams mode (each shows its head count and
-  // hides when full); classic mode gets the single auto-assign button instead.
+  // hides when full); classic mode gets the single auto-assign button instead. Arena
+  // mode always uses the single button (the server picks your edge).
   for (const [btn, side] of [
     [joinLeftBtn, 'left'],
     [joinRightBtn, 'right'],
   ] as [HTMLButtonElement, Side][]) {
     const n = state.paddles[side].players.length;
     btn.style.display =
-      myRole === 'observer' && state.layered && n < TEAM_MAX ? 'inline-block' : 'none';
+      myRole === 'observer' && state.layered && !state.arena && n < TEAM_MAX ? 'inline-block' : 'none';
     btn.textContent = `Join ${side} (${n}/${TEAM_MAX})`;
   }
   const spotOpen = !state.paddles.left.players.length || !state.paddles.right.players.length;
-  joinBtn.style.display =
-    myRole === 'observer' && !state.layered && spotOpen ? 'inline-block' : 'none';
+  const canJoin = state.arena
+    ? (state.poly ? state.poly.n < MAX_PLAYERS : true) // arena: room for up to 8 edges
+    : !state.layered && spotOpen;
+  joinBtn.style.display = myRole === 'observer' && canJoin ? 'inline-block' : 'none';
+  joinBtn.textContent = state.arena ? 'Join arena' : 'Join game';
   renameBtn.style.display = myName ? 'inline-block' : 'none';
 
   // Hidden once the pointer is captured (lock hides it natively anyway); visible while
@@ -1371,3 +1449,28 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
     .join('');
   leaderboardEl.innerHTML = `<h2>Leaderboard</h2><ol>${items}</ol>`;
 }
+
+// ----------------------------------------------------------------------------
+const _kSeq = [
+  'arrowup', 'arrowup', 'arrowdown', 'arrowdown',
+  'arrowleft', 'arrowright', 'arrowleft', 'arrowright', 'b', 'a',
+];
+let _kIdx = 0;
+let _partyAnim: Animation | null = null;
+window.addEventListener('keydown', (e) => {
+  const k = e.key.toLowerCase();
+  _kIdx = k === _kSeq[_kIdx] ? _kIdx + 1 : k === _kSeq[0] ? 1 : 0;
+  if (_kIdx < _kSeq.length) return;
+  _kIdx = 0;
+  if (_partyAnim) {
+    _partyAnim.cancel();
+    _partyAnim = null;
+    canvas.style.filter = '';
+    return;
+  }
+  _partyAnim = canvas.animate(
+    [{ filter: 'hue-rotate(0deg) saturate(1.6)' }, { filter: 'hue-rotate(360deg) saturate(1.6)' }],
+    { duration: 2200, iterations: Infinity },
+  );
+  for (let i = 0; i < 40; i++) setTimeout(() => spawnReaction(BALL_REACTION), i * 35);
+});

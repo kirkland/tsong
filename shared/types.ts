@@ -26,6 +26,22 @@ export const CLOSING = {
 export const WIN_SCORE = 3;
 export const TEAM_MAX = 4; // max players (paddles) per side
 
+// "Arena" mode: a free-for-all on a regular polygon. Each player owns one edge; the
+// court grows a side per player (2 = the classic box, 3 = triangle, 4 = square, …,
+// 8 = octagon / stop sign). Last player standing wins (ball past your edge = out).
+export const MAX_PLAYERS = 8; // arena seat cap
+export const ARENA = {
+  cx: COURT.w / 2,
+  cy: COURT.h / 2,
+  radius: 210, // circumradius of the polygon, court units
+} as const;
+export const POLY_PADDLE_LEN = 84; // arena paddle length along its edge, court units
+// Power-ups that make sense in a free-for-all (per-player or global only — nothing that
+// targets a single "opponent", which is ambiguous with more than two players).
+export const POLY_POWERUPS = [
+  'grow', 'smash', 'slow', 'multi', 'curve', 'shield', 'ghost', 'tiny', 'warp', 'bigball',
+] as const;
+
 // "Layered teams" mode: teammates don't share a plane — each later joiner plays a
 // step further forward (toward mid-court) than the one before, by join order.
 export const LAYERED = {
@@ -104,7 +120,8 @@ export const SERVE_DELAY = 0.7; // seconds the ball pauses at center before laun
 export const READY_TIMEOUT = 15; // seconds to wait for both players to ready up before clearing spots
 
 export type Side = 'left' | 'right';
-export type Role = Side | 'observer';
+// 'player' is the arena (polygon) seat role — the client finds its own paddle by id.
+export type Role = Side | 'player' | 'observer';
 export type Status = 'waiting' | 'playing' | 'over';
 
 // Finishing moves the winner can perform during the 'over' window (opt-in, see the
@@ -132,7 +149,7 @@ export type ClientMsg =
   | { type: 'paddle'; y: number } // desired paddle center Y, in court units
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
-  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean } // toggle game modes
+  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean } // toggle game modes
   | { type: 'fatality'; move: string } // winner-only, validated server-side
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
   | { type: 'forfeit' } // "/ff": leave your paddle spot mid-game (and get shamed)
@@ -170,6 +187,35 @@ export interface PaddleState {
   players: TeamPlayer[]; // every paddle on this side, one per seated player
 }
 
+// One player's paddle in Arena (polygon) mode. The paddle rides along its edge of the
+// regular N-gon; `cx,cy` is its current center, `angle` the edge direction (for drawing
+// it rotated), `len` its current length (grows with the grow power-up).
+export interface PolyPlayer {
+  id: string;
+  name: string;
+  color: string;
+  cx: number;
+  cy: number;
+  angle: number; // edge direction, radians
+  len: number; // paddle length along the edge, court units
+  alive: boolean; // false once knocked out — its edge is now a solid wall
+  shielded: boolean; // next goal against this player is absorbed (shield power-up)
+  curveReady: boolean; // next hit puts spin on the ball (curve power-up)
+}
+
+// The live Arena (free-for-all polygon) view. Present on StateMsg only while arena mode
+// is driving a 3+ player match; null otherwise (the classic rectangular court renders).
+export interface PolyState {
+  n: number; // number of sides / seated players
+  cx: number; // polygon center
+  cy: number;
+  verts: { x: number; y: number }[]; // the n polygon vertices, in edge order
+  players: PolyPlayer[]; // one per edge, in vertex order (edge i spans vert i → i+1)
+  aliveCount: number;
+  winner: string | null; // last player standing, when the round is over
+  stopSign: boolean; // true at 8 players — render the court as a stop sign
+}
+
 export interface StateMsg {
   type: 'state';
   ball: { x: number; y: number; color: string }; // color = paddle that last hit it (neutral until first hit)
@@ -188,6 +234,9 @@ export interface StateMsg {
   gravity: boolean; // whether gravity mode is active
   turbo: boolean; // whether turbo mode is active
   layered: boolean; // whether "layered teams" mode is active (teammates stagger forward)
+  arena: boolean; // whether "arena" (free-for-all polygon) mode is armed
+  // Live arena view when a 3+ player free-for-all is running; null for the classic court.
+  poly: PolyState | null;
   diamond: boolean; // whether "diamond hands" mode is armed
   // Live position of the diamond obstacle (diamond-hands mode), or null when none is on
   // the board. Center in court units; its size is the shared DIAMOND.r constant.
