@@ -123,7 +123,7 @@ wss.on('connection', (ws: WebSocket) => {
         lobby.forfeit(ws);
         break;
       case 'spawnPowerup':
-        lobby.spawnPowerup(ws);
+        lobby.spawnPowerup(ws, typeof msg.kind === 'string' ? msg.kind : undefined);
         break;
       case 'capture':
         if (typeof msg.on === 'boolean') lobby.setCapture(ws, msg.on);

@@ -136,7 +136,7 @@ export type ClientMsg =
   | { type: 'fatality'; move: string } // winner-only, validated server-side
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
   | { type: 'forfeit' } // "/ff": leave your paddle spot mid-game (and get shamed)
-  | { type: 'spawnPowerup' } // "/powerup": spectators only — drop a random power-up target
+  | { type: 'spawnPowerup'; kind?: string } // "/powerup [name]": spectators only — drop a power-up target (random when unnamed)
   | { type: 'capture'; on: boolean } // whether this player's mouse is captured to the board
   | { type: 'kingExit' } // winner declines to stay as king of the court
   | { type: 'queueJoin' } // join the spectator queue

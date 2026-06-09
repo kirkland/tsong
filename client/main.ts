@@ -15,6 +15,7 @@ import {
   Side,
   StateMsg,
   PowerupKind,
+  POWERUPS,
   TEAM_MAX,
 } from '../shared/types';
 
@@ -307,7 +308,9 @@ interface ChatCommand {
   hint: string; // short description shown in the menu
   enabled: () => boolean; // whether it's currently usable (greyed out when false)
   disabledHint: string; // why it's unusable right now (shown greyed in its place)
-  run: () => void; // what it does when chosen
+  run: (arg?: string) => boolean | void; // what it does when chosen; false = rejected (keep the typed text)
+  argOptions?: () => string[]; // valid values for an optional argument (drives suggestions after a space)
+  argHint?: (arg: string) => string; // menu hint for one suggested argument value
 }
 
 const COMMANDS: ChatCommand[] = [
@@ -320,19 +323,43 @@ const COMMANDS: ChatCommand[] = [
   },
   {
     name: 'powerup',
-    hint: 'Spawn a random power-up',
+    hint: 'Spawn a power-up — add a name to pick one (e.g. /powerup smash)',
     enabled: () => !isPlayer() && state?.status === 'playing',
     disabledHint: 'spectators only, during a live match',
-    run: () => net.send({ type: 'spawnPowerup' }),
+    argOptions: () => [...POWERUPS],
+    argHint: (arg) => `Spawn the ${arg} power-up`,
+    run: (arg) => {
+      const kind = arg?.toLowerCase();
+      // An unknown name is rejected so the typo stays visible instead of silently
+      // spawning something random.
+      if (kind && !(POWERUPS as readonly string[]).includes(kind)) return false;
+      net.send({ type: 'spawnPowerup', kind });
+    },
   },
 ];
 
-// Every command whose name matches what's typed after "/", usable or not.
-function matchingCommands(): ChatCommand[] {
+// One row in the command menu: a command, optionally with a suggested argument value.
+interface MenuItem {
+  cmd: ChatCommand;
+  arg?: string;
+}
+
+// Menu rows for what's typed after "/": command names while the name is being typed;
+// once a space follows a known command, that command's argument values instead.
+function matchingItems(): MenuItem[] {
   const v = chatInput.value;
   if (!v.startsWith('/')) return [];
-  const prefix = v.slice(1).split(/\s+/)[0].toLowerCase();
-  return COMMANDS.filter((c) => c.name.startsWith(prefix));
+  const m = v.slice(1).match(/^(\S*)(\s+(.*))?$/);
+  if (!m) return [];
+  const name = m[1].toLowerCase();
+  if (m[2] !== undefined) {
+    const cmd = COMMANDS.find((c) => c.name === name);
+    const argPrefix = (m[3] ?? '').toLowerCase();
+    return (cmd?.argOptions?.() ?? [])
+      .filter((o) => o.startsWith(argPrefix))
+      .map((arg) => ({ cmd: cmd!, arg }));
+  }
+  return COMMANDS.filter((c) => c.name.startsWith(name)).map((cmd) => ({ cmd }));
 }
 
 const commandMenu = document.createElement('div');
@@ -340,43 +367,47 @@ commandMenu.id = 'commandMenu';
 commandMenu.hidden = true;
 chatForm.append(commandMenu);
 
-let menuCmds: ChatCommand[] = [];
+let menuItems: MenuItem[] = [];
 let menuIndex = 0;
 
 function renderCommandMenu() {
   commandMenu.replaceChildren();
   const hdr = document.createElement('div');
   hdr.className = 'cmd-hdr';
-  hdr.textContent = 'Commands';
+  hdr.textContent = menuItems[0]?.arg !== undefined ? `/${menuItems[0].cmd.name}` : 'Commands';
   commandMenu.append(hdr);
-  menuCmds.forEach((c, i) => {
-    const ok = c.enabled();
+  menuItems.forEach((item, i) => {
+    const ok = item.cmd.enabled();
     const row = document.createElement('div');
     row.className = 'cmd-row' + (i === menuIndex ? ' active' : '') + (ok ? '' : ' disabled');
     const name = document.createElement('span');
     name.className = 'cmd-name';
-    name.textContent = `/${c.name}`;
+    name.textContent = item.arg !== undefined ? item.arg : `/${item.cmd.name}`;
     const hint = document.createElement('span');
     hint.className = 'cmd-hint';
-    hint.textContent = ok ? c.hint : `${c.hint} — ${c.disabledHint}`;
+    const base =
+      item.arg !== undefined ? item.cmd.argHint?.(item.arg) ?? item.cmd.hint : item.cmd.hint;
+    hint.textContent = ok ? base : `${base} — ${item.cmd.disabledHint}`;
     row.append(name, hint);
     // mousedown (not click) so the input doesn't blur out from under the selection.
     // Always preventDefault to keep focus; runCommand ignores disabled commands.
     row.addEventListener('mousedown', (e) => {
       e.preventDefault();
-      runCommand(c);
+      runCommand(item);
     });
     commandMenu.append(row);
+    // Long lists scroll — keep the keyboard-highlighted row in view.
+    if (i === menuIndex) row.scrollIntoView({ block: 'nearest' });
   });
 }
 
 function refreshCommandMenu() {
-  menuCmds = joined ? matchingCommands() : [];
-  if (!menuCmds.length) {
+  menuItems = joined ? matchingItems() : [];
+  if (!menuItems.length) {
     commandMenu.hidden = true;
     return;
   }
-  if (menuIndex >= menuCmds.length) menuIndex = 0;
+  if (menuIndex >= menuItems.length) menuIndex = 0;
   renderCommandMenu();
   commandMenu.hidden = false;
 }
@@ -385,9 +416,9 @@ function closeCommandMenu() {
   commandMenu.hidden = true;
 }
 
-function runCommand(cmd: ChatCommand) {
-  if (!cmd.enabled()) return; // greyed out: leave the text so it's clear nothing happened
-  cmd.run();
+function runCommand(item: MenuItem) {
+  if (!item.cmd.enabled()) return; // greyed out: leave the text so it's clear nothing happened
+  if (item.cmd.run(item.arg) === false) return; // rejected (e.g. unknown power-up name)
   chatInput.value = '';
   closeCommandMenu();
 }
@@ -397,13 +428,13 @@ chatForm.addEventListener('submit', (e) => {
   e.preventDefault();
   const text = chatInput.value.trim();
   if (!text) return;
-  // A recognized "/command" runs (and is swallowed); unknown slash text falls through
-  // to chat. Enter with the menu open is handled in the keydown listener below.
+  // A recognized "/command [arg]" runs (and is swallowed); unknown slash text falls
+  // through to chat. Enter with the menu open is handled in the keydown listener below.
   if (text.startsWith('/')) {
-    const name = text.slice(1).split(/\s+/)[0].toLowerCase();
-    const cmd = COMMANDS.find((c) => c.name === name);
+    const [name, ...rest] = text.slice(1).split(/\s+/);
+    const cmd = COMMANDS.find((c) => c.name === name.toLowerCase());
     if (cmd) {
-      runCommand(cmd);
+      runCommand({ cmd, arg: rest.join(' ') || undefined });
       return;
     }
   }
@@ -418,20 +449,25 @@ chatInput.addEventListener('keydown', (e) => {
   if (commandMenu.hidden) return;
   if (e.key === 'ArrowDown') {
     e.preventDefault();
-    menuIndex = (menuIndex + 1) % menuCmds.length;
+    menuIndex = (menuIndex + 1) % menuItems.length;
     renderCommandMenu();
   } else if (e.key === 'ArrowUp') {
     e.preventDefault();
-    menuIndex = (menuIndex - 1 + menuCmds.length) % menuCmds.length;
+    menuIndex = (menuIndex - 1 + menuItems.length) % menuItems.length;
     renderCommandMenu();
   } else if (e.key === 'Enter') {
     // Run the highlighted command instead of submitting the raw text.
     e.preventDefault();
-    runCommand(menuCmds[menuIndex]);
+    runCommand(menuItems[menuIndex]);
   } else if (e.key === 'Tab') {
-    // Autocomplete the name without running it.
+    // Autocomplete without running: the highlighted argument value, or the command
+    // name — with a trailing space when it takes one, so its suggestions open up.
     e.preventDefault();
-    chatInput.value = `/${menuCmds[menuIndex].name}`;
+    const item = menuItems[menuIndex];
+    chatInput.value =
+      item.arg !== undefined
+        ? `/${item.cmd.name} ${item.arg}`
+        : `/${item.cmd.name}${item.cmd.argOptions ? ' ' : ''}`;
     refreshCommandMenu();
   } else if (e.key === 'Escape') {
     e.preventDefault();

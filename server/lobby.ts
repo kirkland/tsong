@@ -12,6 +12,8 @@ import {
   FATALITY_MOVES,
   LeaderboardRow,
   PaddleState,
+  POWERUPS,
+  PowerupKind,
   Role,
   ServerMsg,
   Side,
@@ -241,13 +243,18 @@ export class Lobby {
     if (this.game.status === 'over') this.game.toWaiting();
   }
 
-  /** "/powerup": drop a random power-up target. Spectators only — a player in the
-   *  current match can't conjure power-ups for themselves. */
-  spawnPowerup(ws: WebSocket) {
+  /** "/powerup [name]": drop a power-up target — the named kind, or random when
+   *  unnamed. Spectators only — a player in the current match can't conjure
+   *  power-ups for themselves. */
+  spawnPowerup(ws: WebSocket, kind?: string) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return; // must have joined
     if (this.sideOf(ws)) return; // not from someone currently holding a paddle
-    if (this.game.forceTarget()) this.echoCommand(conn, '/powerup');
+    // Only honor a name we know; anything else falls back to a random kind.
+    const k = kind && (POWERUPS as readonly string[]).includes(kind)
+      ? (kind as PowerupKind)
+      : undefined;
+    if (this.game.forceTarget(k)) this.echoCommand(conn, k ? `/powerup ${k}` : '/powerup');
   }
 
   join(ws: WebSocket, nickname: string, pid: string, color?: string) {
