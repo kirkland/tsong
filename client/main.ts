@@ -178,7 +178,7 @@ const net = connect(
       myId = msg.id;
       lastSent = -1; // force a re-sync of our paddle target from the next state
       // Hand the cursor back when we're no longer holding a paddle (e.g. match ended).
-      if (!isPlayer() && document.pointerLockElement === canvas) {
+      if (!isPlayer() && isBoard(document.pointerLockElement)) {
         document.exitPointerLock();
       } else if (isPlayer() && pointerLocked) {
         // Our role changed while still mouse-captured (e.g. migrated from the duel box
@@ -1078,25 +1078,23 @@ if (remembered) {
 let pointerLocked = false;
 const clampPaddle = (y: number) => Math.max(PADDLE.h / 2, Math.min(COURT.h - PADDLE.h / 2, y));
 
-canvas.addEventListener('click', () => {
-  if (isPlayer() && !pointerLocked) canvas.requestPointerLock();
-});
+// The "board" you capture the mouse to is the canvas in 2D and the 3D container in 3D
+// (the canvas is display:none in 3D, so it can neither be clicked nor receive mousemove).
+const boardEl = () => (view3d ? game3dEl : canvas);
+const isBoard = (el: Element | null) => el === canvas || el === game3dEl;
 
-document.addEventListener('pointerlockchange', () => {
-  pointerLocked = document.pointerLockElement === canvas;
-  // Tell the server: the match stays paused until both players have captured.
-  net.send({ type: 'capture', on: pointerLocked });
-  updateUI();
-});
+function onBoardClick() {
+  if (isPlayer() && !pointerLocked) boardEl().requestPointerLock();
+}
 
-canvas.addEventListener('mousemove', (e) => {
+function onBoardMouseMove(e: MouseEvent) {
   // The paddle only moves while the mouse is captured to the board.
   if (!isPlayer() || !pointerLocked) return;
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
   // Arena: the paddle rides along its edge, so project mouse motion onto that edge.
   if (inArena() && state?.poly) {
     const me = myPolyPlayer(state);
     if (!me) return;
-    const r = canvas.getBoundingClientRect();
     const dx = e.movementX * (COURT.w / r.width);
     const dy = e.movementY * (COURT.h / r.height);
     const along = dx * Math.cos(me.angle) + dy * Math.sin(me.angle);
@@ -1104,7 +1102,6 @@ canvas.addEventListener('mousemove', (e) => {
     arenaTarget = Math.max(-max, Math.min(max, arenaTarget + along));
     return;
   }
-  const r = canvas.getBoundingClientRect();
   // Convert screen-pixel movement to court units (1:1 with what's drawn). When the court
   // is rotated 90°, the paddle slides horizontally on screen, so track movementX instead —
   // moving the mouse right slides the paddle right (which is decreasing court-Y).
@@ -1113,6 +1110,18 @@ canvas.addEventListener('mousemove', (e) => {
   } else {
     target = clampPaddle(target + e.movementY * (COURT.h / r.height));
   }
+}
+
+canvas.addEventListener('click', onBoardClick);
+canvas.addEventListener('mousemove', onBoardMouseMove);
+game3dEl.addEventListener('click', onBoardClick);
+game3dEl.addEventListener('mousemove', onBoardMouseMove);
+
+document.addEventListener('pointerlockchange', () => {
+  pointerLocked = isBoard(document.pointerLockElement);
+  // Tell the server: the match stays paused until both players have captured.
+  net.send({ type: 'capture', on: pointerLocked });
+  updateUI();
 });
 
 // --- keyboard control ---
@@ -1465,6 +1474,7 @@ function updateUI() {
   // Hidden once the pointer is captured (lock hides it natively anyway); visible while
   // unlocked so a player can see where to click to capture, and for observers.
   canvas.style.cursor = isPlayer() && pointerLocked ? 'none' : 'default';
+  game3dEl.style.cursor = isPlayer() && pointerLocked ? 'none' : isPlayer() ? 'pointer' : 'default';
   watchersEl.textContent = state.watchers.length
     ? `Watching: ${state.watchers.join(', ')}`
     : '';
