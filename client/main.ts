@@ -847,6 +847,7 @@ function addChatLine(line: ChatLine) {
     chatLog.append(sep);
   }
   const row = document.createElement('div');
+  row.className = 'chat-row';
   const stamp = document.createElement('span');
   stamp.className = 'chatstamp';
   stamp.textContent = timeStr;
@@ -857,7 +858,10 @@ function addChatLine(line: ChatLine) {
   const body = document.createElement('span');
   body.className = line.command ? 'chattext chatcmd' : 'chattext';
   body.textContent = `: ${line.text}`;
-  row.append(stamp, who, body);
+  const content = document.createElement('span');
+  content.className = 'chatbody';
+  content.append(who, body);
+  row.append(stamp, content);
   chatLog.append(row);
   while (chatLog.childElementCount > 100) chatLog.firstElementChild!.remove();
   chatLog.scrollTop = chatLog.scrollHeight;

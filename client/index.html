@@ -237,13 +237,18 @@
         color: #4a5580;
         font-size: 11px;
         font-variant-numeric: tabular-nums;
-        margin-right: 4px;
+        width: 3.2em;
         flex-shrink: 0;
+        text-align: right;
       }
-      #chatlog > div:not(.chat-date-sep) {
+      .chat-row {
         display: flex;
         align-items: baseline;
-        gap: 3px;
+        gap: 6px;
+      }
+      .chatbody {
+        flex: 1;
+        min-width: 0;
       }
       #chatlog .chat-date-sep {
         text-align: center;
