@@ -118,6 +118,7 @@ export const TICK_MS = 1000 / 60;
 export const MAX_BOUNCE = Math.PI / 3; // steepest deflection off a paddle edge
 export const SERVE_DELAY = 0.7; // seconds the ball pauses at center before launching
 export const READY_TIMEOUT = 15; // seconds to wait for both players to ready up before clearing spots
+export const CAPTURE_TIMEOUT = 10; // seconds a laggard has to capture their mouse once an opponent is ready, before being benched
 
 export type Side = 'left' | 'right';
 // 'player' is the arena (polygon) seat role — the client finds its own paddle by id.
@@ -237,6 +238,10 @@ export interface StateMsg {
   // True while an in-progress match is frozen waiting for both players to capture
   // their mouse (pointer lock). The client overlays a "capture to play" prompt.
   paused: boolean;
+  // Seconds left for an un-captured player to grab their mouse before being benched,
+  // counting down only once another seated player is ready and waiting. null when no
+  // such countdown is running. The client surfaces it in the capture prompt.
+  captureCountdown: number | null;
   closing: boolean; // whether "closing walls" mode is armed
   gravity: boolean; // whether gravity mode is active
   turbo: boolean; // whether turbo mode is active

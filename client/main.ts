@@ -1476,12 +1476,24 @@ function updateUI() {
     else if (canFinish()) statusEl.textContent = '🔪 FINISH HIM!  ·  tap a combo (see Combos ▸)';
     else statusEl.textContent = state.winner ? `🏆 ${state.winner} wins!` : 'Game over';
   } else if (state.paused) {
-    // Match is frozen until both players capture their mouse.
+    // Match is frozen until both players capture their mouse. Once an opponent is ready,
+    // a laggard is on the clock (captureCountdown) before being benched.
+    const cd = state.captureCountdown;
     if (isPlayer() && !pointerLocked)
-      statusEl.textContent = '🖱 click the board to capture your mouse to start';
+      statusEl.textContent =
+        cd != null
+          ? `🖱 click the board NOW — ${cd}s to capture your mouse or you're benched!`
+          : '🖱 click the board to capture your mouse to start';
     else if (isPlayer())
-      statusEl.textContent = '⏸ waiting for the other players to capture their mouse…';
-    else statusEl.textContent = '⏸ paused — waiting for players to capture their mice';
+      statusEl.textContent =
+        cd != null
+          ? `⏳ waiting on the other player — ${cd}s before they're benched`
+          : '⏸ waiting for the other players to capture their mouse…';
+    else
+      statusEl.textContent =
+        cd != null
+          ? `⏳ waiting for players to capture — ${cd}s`
+          : '⏸ paused — waiting for players to capture their mice';
   } else if (isPlayer() && !pointerLocked) {
     statusEl.textContent = '🖱 click the board to capture your mouse · Esc to release';
   } else statusEl.textContent = '';

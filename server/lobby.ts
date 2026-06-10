@@ -27,7 +27,7 @@ import {
   TEAM_MAX,
 } from '../shared/types';
 import { getLeaderboard, recordResult, updateName } from './db';
-import { READY_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
+import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
 // emoji code points (pictographs, components, ZWJ, variation selectors, flags).
@@ -46,6 +46,7 @@ interface Conn {
   role: Role;
   color: string; // chosen paddle color
   captured: boolean; // mouse captured to the board (pointer lock); gates play start
+  captureDeadline: number; // seconds left to capture before being benched (0 = not counting)
   lastChatAt: number; // ms timestamp of last chat message (light rate limiting)
 }
 
@@ -102,6 +103,7 @@ export class Lobby {
   private queue: WebSocket[] = []; // ordered spectators waiting to play
   private ready: Record<Side, boolean> = { left: false, right: false };
   private readyTimer = 0; // seconds remaining for ready-up; 0 = no timer active
+  private captureCountdown = 0; // soonest pending bench-the-laggard timer, in seconds (0 = none running)
   private leaderboard: LeaderboardRow[] = []; // cached standings, pushed to clients
   private chatLog: ChatLine[] = []; // recent chat, replayed to new connections
   private nextId = 1;
@@ -169,6 +171,7 @@ export class Lobby {
       role: 'observer',
       color: '#e8eefc',
       captured: false,
+      captureDeadline: 0,
       lastChatAt: 0,
     };
     this.conns.set(ws, conn);
@@ -372,6 +375,7 @@ export class Lobby {
       role: side,
       color: BOT_COLOR,
       captured: true, // the bot is always "ready"; only the human must capture their mouse
+      captureDeadline: 0,
       lastChatAt: 0,
     };
     this.conns.set(ws, conn);
@@ -530,6 +534,60 @@ export class Lobby {
     this.game.paused = !(this.isCaptured('left') && this.isCaptured('right'));
   }
 
+  // Nobody should be held hostage by a seatmate who's gone AFK without capturing their
+  // mouse. Once a live match has at least one ready (captured) player, every still-
+  // un-captured player gets CAPTURE_TIMEOUT seconds to grab their mouse or be benched.
+  // Works for both the duel and the arena. The soonest pending timer drives the on-screen
+  // countdown; kicks are deferred until after the scan so we don't mutate seats mid-loop.
+  private enforceCaptureTimeout() {
+    const seated =
+      this.mode === 'poly'
+        ? [...this.arenaSeats]
+        : [...this.teams.left, ...this.teams.right];
+    const live = this.mode === 'poly' ? this.poly.status === 'playing' : this.game.status === 'playing';
+    const someCaptured = seated.some((ws) => this.conns.get(ws)?.captured);
+    const active = live && seated.length > 1 && someCaptured;
+
+    let soonest = 0;
+    const kick: WebSocket[] = [];
+    for (const ws of seated) {
+      const c = this.conns.get(ws);
+      if (!c) continue;
+      if (active && !c.captured) {
+        if (c.captureDeadline <= 0) c.captureDeadline = CAPTURE_TIMEOUT;
+        c.captureDeadline -= TICK_MS / 1000;
+        if (c.captureDeadline <= 0) {
+          c.captureDeadline = 0;
+          kick.push(ws);
+        } else if (soonest === 0 || c.captureDeadline < soonest) {
+          soonest = c.captureDeadline;
+        }
+      } else {
+        c.captureDeadline = 0; // captured, or no pressure — reset so they get a full window next time
+      }
+    }
+    this.captureCountdown = soonest;
+    for (const ws of kick) this.benchForCapture(ws);
+  }
+
+  // Pull an AFK player out of their seat for not capturing in time, with a public shaming.
+  private benchForCapture(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    const name = conn?.nickname || 'someone';
+    if (this.mode === 'poly') {
+      if (!this.arenaSeats.includes(ws)) return;
+      this.arenaUnseat(ws);
+    } else {
+      const side = this.sideOf(ws);
+      if (!side) return;
+      if (conn?.pid === this.streakPid) this.endStreak();
+      this.unseat(ws);
+      if (this.game.status === 'playing' && this.teams[side].length === 0) this.game.toWaiting();
+      this.cleanupBotIfAlone(); // a bot left alone after its human got benched should leave too
+    }
+    this.announce(`💤 ${name} took too long to grab the ball — benched!`);
+  }
+
   // Any joined client may toggle game modes.
   setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean }) {
     const conn = this.conns.get(ws);
@@ -677,6 +735,8 @@ export class Lobby {
     this.expireResume();
     if (this.mode === 'poly') this.polySync();
     else this.duelSync();
+    // Bench anyone holding up a live, ready opponent by not capturing their mouse.
+    this.enforceCaptureTimeout();
     // Keep the pause flag honest every tick.
     this.refreshPause();
     if (this.streamerMode && this.mode === 'duel' && this.game.status === 'playing') {
@@ -1075,6 +1135,10 @@ export class Lobby {
       score: poly ? { left: 0, right: 0 } : { ...this.game.score },
       status,
       paused: status === 'playing' && paused,
+      captureCountdown:
+        status === 'playing' && paused && this.captureCountdown > 0
+          ? Math.ceil(this.captureCountdown)
+          : null,
       closing: this.game.closing,
       layered: this.game.layered,
       arena: this.arena,
