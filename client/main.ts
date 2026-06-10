@@ -108,6 +108,9 @@ let joined = false; // true once the player has entered a nickname (gates reacti
 let view3d = false;
 let renderer3d: import('./render3d').Renderer3D | null = null;
 let loading3d = false;
+// Fatalities are 2D-canvas cinematics; in 3D view we surface them on the 2D board for
+// their duration (same footprint, so no layout jump), then drop back to 3D.
+let fatality2dActive = false;
 
 let target = COURT.h / 2; // desired paddle center Y, court units (duel)
 let arenaTarget = 0; // desired paddle offset along my edge, court units (arena)
@@ -1397,7 +1400,15 @@ function loop(t: number) {
   }
 
   if (state) {
-    if (view3d && renderer3d) {
+    // In 3D view, a fatality temporarily takes over the 2D board (the cinematics are 2D
+    // canvas effects that composite over the full court frame). Swap surfaces on the edge.
+    const showFatality2d = view3d && !!state.fatality;
+    if (showFatality2d !== fatality2dActive) {
+      fatality2dActive = showFatality2d;
+      document.body.classList.toggle('fatality-2d', showFatality2d);
+      if (!showFatality2d && view3d) renderer3d?.resize(); // re-sync the 3D canvas on return
+    }
+    if (view3d && renderer3d && !state.fatality) {
       renderer3d.render(state);
     } else {
       applyCanvasRotation(state.rotated);

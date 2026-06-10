@@ -72,6 +72,14 @@
       body.view-3d #game {
         display: none;
       }
+      /* A fatality is a 2D cinematic: while one plays in 3D view, surface the 2D board in
+         place of the 3D one (identical footprint, so no layout shift), then swap back. */
+      body.view-3d.fatality-2d #game {
+        display: block;
+      }
+      body.view-3d.fatality-2d #game3d {
+        display: none;
+      }
       /* "rotate" power-up: the court flips to portrait. Size by height so the tall court
          still fits the viewport. */
       #game.rotated {
