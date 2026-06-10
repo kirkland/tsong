@@ -11,7 +11,7 @@
 // fetches Three.js lazily and the default 2D bundle never references it. Keeping it out
 // of the Vite build also keeps the (small) production VPS from OOMing while bundling.
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js';
-import { COURT, PADDLE, BALL, BIG_BALL_R, TARGET, StateMsg } from '../shared/types';
+import { COURT, PADDLE, BALL, BIG_BALL_R, DIAMOND, PINATA, TARGET, PowerupKind, StateMsg } from '../shared/types';
 
 export interface Renderer3D {
   render(s: StateMsg): void;
@@ -23,6 +23,49 @@ const PADDLE_H = 22; // visual paddle height (the dimension that only exists in 
 const BALL_Y = 11; // height of ball centers above the floor (roughly mid-paddle)
 const wx = (x: number) => x - COURT.w / 2;
 const wz = (y: number) => y - COURT.h / 2;
+
+// Per-kind power-up target color (mirrors the 2D legend so the ring reads the same).
+const PU_COLOR: Record<PowerupKind, string> = {
+  grow: '#ffd166', shrink: '#ff6b6b', smash: '#ff922b', slow: '#4dd2ff', multi: '#b197fc',
+  freeze: '#74c0fc', curve: '#63e6be', blind: '#868e96', mirror: '#f783ac', shield: '#f5cc00',
+  ghost: '#c0c8e0', tiny: '#ffa94d', warp: '#9775fa', bigball: '#ffd43b', rotate: '#69db7c',
+};
+
+// A camera-facing text label drawn from a 2D canvas texture, used for scores, names and the
+// power-up kind. `widthWorld` sets its size in world units; the canvas is 2:1 so height is half.
+function makeLabel(widthWorld: number) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 256;
+  const c2d = canvas.getContext('2d')!;
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.anisotropy = 4;
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false }),
+  );
+  sprite.scale.set(widthWorld, widthWorld / 2, 1);
+  sprite.renderOrder = 10; // always read on top of the geometry
+  let last = '';
+  function set(text: string, color: string, px = 150) {
+    const key = `${text}|${color}|${px}`;
+    if (key === last) return; // only repaint the texture when the content changes
+    last = key;
+    c2d.clearRect(0, 0, canvas.width, canvas.height);
+    let f = px;
+    const font = (n: number) => `bold ${n}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+    c2d.font = font(f);
+    while (c2d.measureText(text).width > canvas.width * 0.92 && f > 18) c2d.font = font((f -= 8));
+    c2d.textAlign = 'center';
+    c2d.textBaseline = 'middle';
+    c2d.lineWidth = f * 0.16;
+    c2d.strokeStyle = 'rgba(0,0,0,0.7)';
+    c2d.strokeText(text, canvas.width / 2, canvas.height / 2);
+    c2d.fillStyle = color;
+    c2d.fillText(text, canvas.width / 2, canvas.height / 2);
+    tex.needsUpdate = true;
+  }
+  return { sprite, set };
+}
 
 export function createRenderer(container: HTMLElement): Renderer3D {
   const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -127,15 +170,66 @@ export function createRenderer(container: HTMLElement): Renderer3D {
     return m;
   }
 
-  // Power-up target: a slowly spinning glowing ring on the floor.
-  const target = new THREE.Mesh(
+  // Power-up target: a glowing ring over a translucent disc, tinted to the kind, with the
+  // kind name floating above it so it reads exactly like the 2D legend.
+  const targetGroup = new THREE.Group();
+  const targetRing = new THREE.Mesh(
     new THREE.TorusGeometry(TARGET.r, 4, 12, 32),
     new THREE.MeshStandardMaterial({ color: '#ffd166', emissive: '#7a5a10', roughness: 0.5 }),
   );
-  target.rotation.x = -Math.PI / 2;
-  target.position.y = 6;
-  target.visible = false;
-  world.add(target);
+  targetRing.rotation.x = -Math.PI / 2;
+  targetRing.position.y = 6;
+  const targetDisc = new THREE.Mesh(
+    new THREE.CircleGeometry(TARGET.r, 32),
+    new THREE.MeshBasicMaterial({ color: '#ffd166', transparent: true, opacity: 0.4, side: THREE.DoubleSide }),
+  );
+  targetDisc.rotation.x = -Math.PI / 2;
+  targetDisc.position.y = 3;
+  const targetLabel = makeLabel(120);
+  targetLabel.sprite.position.y = 54;
+  targetGroup.add(targetRing, targetDisc, targetLabel.sprite);
+  targetGroup.visible = false;
+  world.add(targetGroup);
+
+  // Diamond-hands obstacle: a faceted gem that drifts and spins.
+  const diamond = new THREE.Mesh(
+    new THREE.OctahedronGeometry(DIAMOND.r, 0),
+    new THREE.MeshStandardMaterial({ color: '#bcd6ff', emissive: '#24467f', metalness: 0.35, roughness: 0.12, flatShading: true }),
+  );
+  diamond.castShadow = true;
+  diamond.visible = false;
+  world.add(diamond);
+
+  // Piñata: a drifting beach ball that catches balls; the caught ones cling to its surface.
+  const pinata = new THREE.Mesh(
+    new THREE.SphereGeometry(PINATA.r, 28, 20),
+    new THREE.MeshStandardMaterial({ color: '#ff6abf', emissive: '#5a1038', emissiveIntensity: 0.4, roughness: 0.5 }),
+  );
+  pinata.castShadow = true;
+  pinata.visible = false;
+  world.add(pinata);
+  const stuckGeo = new THREE.SphereGeometry(BALL.r, 16, 12);
+  const stuckPool: THREE.Mesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>[] = [];
+  function getStuck(i: number) {
+    let m = stuckPool[i];
+    if (!m) {
+      m = new THREE.Mesh(stuckGeo, new THREE.MeshStandardMaterial({ color: '#e8eefc', roughness: 0.4 }));
+      world.add(m);
+      stuckPool[i] = m;
+    }
+    return m;
+  }
+
+  // Floating scoreboard (one digit per side, near the back edge) and per-side name labels.
+  const scoreL = makeLabel(86);
+  const scoreR = makeLabel(86);
+  scoreL.sprite.position.set(-80, 86, -200);
+  scoreR.sprite.position.set(80, 86, -200);
+  const nameL = makeLabel(230);
+  const nameR = makeLabel(230);
+  nameL.sprite.position.set(-232, 40, 214);
+  nameR.sprite.position.set(232, 40, 214);
+  world.add(scoreL.sprite, scoreR.sprite, nameL.sprite, nameR.sprite);
 
   const tmpColor = new THREE.Color();
 
@@ -173,14 +267,51 @@ export function createRenderer(container: HTMLElement): Renderer3D {
     });
     for (let i = balls.length; i < ballPool.length; i++) ballPool[i].visible = false;
 
-    // Power-up target.
+    // Power-up target — ring + disc + floating kind label, tinted to the kind.
     if (s.target) {
-      target.visible = true;
-      target.position.set(wx(s.target.x), 6, wz(s.target.y));
-      target.rotation.z += 0.03;
+      targetGroup.visible = true;
+      targetGroup.position.set(wx(s.target.x), 0, wz(s.target.y));
+      targetRing.rotation.z += 0.03;
+      const col = PU_COLOR[s.target.kind] ?? '#ffd166';
+      targetRing.material.color.set(col);
+      targetRing.material.emissive.set(tmpColor.set(col).multiplyScalar(0.4));
+      targetDisc.material.color.set(col);
+      targetLabel.set(s.target.kind, col, 84);
     } else {
-      target.visible = false;
+      targetGroup.visible = false;
     }
+
+    // Diamond-hands obstacle (diamond mode only).
+    if (s.diamondPos) {
+      diamond.visible = true;
+      diamond.position.set(wx(s.diamondPos.x), DIAMOND.r * 0.9, wz(s.diamondPos.y));
+      diamond.rotation.y += 0.02;
+    } else {
+      diamond.visible = false;
+    }
+
+    // Piñata collector + the balls clinging to it (piñata mode only).
+    if (s.pinataPos) {
+      pinata.visible = true;
+      pinata.position.set(wx(s.pinataPos.x), PINATA.r, wz(s.pinataPos.y));
+      pinata.rotation.y = s.pinataPos.spin;
+      pinata.material.emissiveIntensity = s.pinataPos.burst ? 2.2 : 0.4; // flash on a burst
+      s.pinataPos.stuck.forEach((st, i) => {
+        const m = getStuck(i);
+        m.visible = true;
+        m.position.set(wx(st.x), PINATA.r, wz(st.y));
+      });
+      for (let i = s.pinataPos.stuck.length; i < stuckPool.length; i++) stuckPool[i].visible = false;
+    } else {
+      pinata.visible = false;
+      for (const m of stuckPool) m.visible = false;
+    }
+
+    // Scoreboard + names.
+    scoreL.set(String(s.score.left), '#7da2ff', 150);
+    scoreR.set(String(s.score.right), '#7da2ff', 150);
+    nameL.set(s.paddles.left.name ?? '— open —', s.paddles.left.color ?? '#9fb0d8', 96);
+    nameR.set(s.paddles.right.name ?? '— open —', s.paddles.right.color ?? '#9fb0d8', 96);
 
     renderer.render(scene, camera);
   }
