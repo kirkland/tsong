@@ -149,6 +149,9 @@ wss.on('connection', (ws: WebSocket) => {
       case 'removeBot':
         lobby.removeBot(ws);
         break;
+      case 'ping':
+        lobby.ping(ws);
+        break;
     }
   });
 

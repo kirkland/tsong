@@ -194,6 +194,7 @@ export class Lobby {
       text: clean,
       player: conn.role !== 'observer',
       color: conn.color,
+      time: now,
     };
     this.chatLog.push(line);
     if (this.chatLog.length > CHAT_HISTORY) this.chatLog.shift();
@@ -222,6 +223,16 @@ export class Lobby {
   private endStreak() {
     this.streakPid = null;
     this.kingStreak = 0;
+  }
+
+  /** Someone wants attention — broadcast to everyone else. */
+  ping(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return;
+    const data = JSON.stringify({ type: 'ping', from: conn.nickname });
+    for (const sock of this.conns.keys()) {
+      if (sock !== ws && sock.readyState === sock.OPEN) sock.send(data);
+    }
   }
 
   /** "/ff": a player abandons their paddle mid-match and is publicly shamed for it. */
@@ -969,6 +980,7 @@ export class Lobby {
       player: conn.role !== 'observer',
       color: conn.color,
       command: true,
+      time: Date.now(),
     };
     this.chatLog.push(line);
     if (this.chatLog.length > CHAT_HISTORY) this.chatLog.shift();
@@ -980,7 +992,7 @@ export class Lobby {
 
   /** Inject a fake chat message from a streamer bot (bypasses rate limiting). */
   private botChat(from: string, text: string, color: string) {
-    const line: ChatLine = { from, text, player: false, color };
+    const line: ChatLine = { from, text, player: false, color, time: Date.now() };
     this.chatLog.push(line);
     if (this.chatLog.length > CHAT_HISTORY) this.chatLog.shift();
     const data = JSON.stringify({ type: 'chat', lines: [line] });

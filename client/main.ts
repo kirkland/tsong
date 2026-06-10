@@ -34,6 +34,7 @@ const joinRightBtn = document.getElementById('joinRight') as HTMLButtonElement;
 const queueBtn = document.getElementById('queueBtn') as HTMLButtonElement;
 const queueArea = document.getElementById('queueArea') as HTMLDivElement;
 const readyBtn = document.getElementById('readyBtn') as HTMLButtonElement;
+const pingBtn = document.getElementById('pingBtn') as HTMLButtonElement;
 const renameBtn = document.getElementById('rename') as HTMLButtonElement;
 const kingStatusEl = document.getElementById('kingStatus') as HTMLDivElement;
 const statusEl = document.getElementById('status') as HTMLDivElement;
@@ -144,6 +145,33 @@ const jsavSound = new Audio('/you-lose.mp3'); // JSAV only
 jsavSound.preload = 'auto';
 let prevStatus: StateMsg['status'] | null = null; // last seen status, to fire on the rising edge into 'over'
 let prevFatality = false; // whether a fatality was playing last frame, to fire music on the rising edge
+
+// Quiet notification beep for pings.
+function playPingSound() {
+  try {
+    const ac = new AudioContext();
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.15, ac.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.3);
+    osc.connect(gain);
+    gain.connect(ac.destination);
+    osc.start();
+    osc.stop(ac.currentTime + 0.3);
+  } catch {}
+}
+
+let pingTitleTimer: ReturnType<typeof setTimeout> | null = null;
+const ORIGINAL_TITLE = document.title;
+
+function onPing(from: string) {
+  playPingSound();
+  document.title = `🔔 ${from} pinged — ${ORIGINAL_TITLE}`;
+  if (pingTitleTimer) clearTimeout(pingTitleTimer);
+  pingTitleTimer = setTimeout(() => { document.title = ORIGINAL_TITLE; }, 5000);
+}
 let comboBuf: { k: string; t: number }[] = [];
 
 // Return the fatality move whose combo the recent keypresses just completed, or null.
@@ -181,6 +209,7 @@ const net = connect(
       myRole = msg.role;
       myId = msg.id;
       lastSent = -1; // force a re-sync of our paddle target from the next state
+      if (!isPlayer()) touchActive = false;
       // Hand the cursor back when we're no longer holding a paddle (e.g. match ended).
       if (!isPlayer() && isBoard(document.pointerLockElement)) {
         document.exitPointerLock();
@@ -231,12 +260,15 @@ const net = connect(
       spawnReaction(msg.emoji);
     } else if (msg.type === 'announce') {
       showAnnouncement(msg.text);
+    } else if (msg.type === 'ping') {
+      onPing(msg.from);
     }
   },
   () => {
     // The server replays recent chat history on every (re)connect. Clear the log first so
     // a reconnect (which keeps the page, and thus the old lines) doesn't duplicate them.
     chatLog.replaceChildren();
+    lastChatDate = '';
     if (myName) net.send({ type: 'join', nickname: myName, pid: myPid, color: myColor });
     // Re-assert capture state after a (re)connect so the server's view stays in sync.
     if (pointerLocked) net.send({ type: 'capture', on: true });
@@ -289,6 +321,9 @@ joinForm.addEventListener('submit', (e) => {
   overlay.style.display = 'none';
   enableChat();
 });
+
+// --- ping: notify everyone you want players ---
+pingBtn.addEventListener('click', () => net.send({ type: 'ping' }));
 
 // --- queue: join/leave the spectator queue ---
 let inQueue = false;
@@ -788,8 +823,34 @@ function spawnReaction(emoji: string) {
 }
 
 // textContent (not innerHTML) keeps user-supplied names/messages from injecting markup.
+let lastChatDate = '';
+const TZ = 'America/New_York';
+function formatChatTime(ms: number): string {
+  return new Date(ms).toLocaleTimeString('en-US', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false });
+}
+function formatChatDate(ms: number): string {
+  const d = new Date(ms);
+  const now = new Date();
+  const opts: Intl.DateTimeFormatOptions = { timeZone: TZ, month: 'short', day: 'numeric' };
+  if (d.getFullYear() !== now.getFullYear()) opts.year = 'numeric';
+  return d.toLocaleDateString('en-US', opts);
+}
 function addChatLine(line: ChatLine) {
+  const ts = line.time ?? Date.now();
+  const timeStr = formatChatTime(ts);
+  const dateStr = formatChatDate(ts);
+  if (dateStr !== lastChatDate) {
+    lastChatDate = dateStr;
+    const sep = document.createElement('div');
+    sep.className = 'chat-date-sep';
+    sep.textContent = dateStr;
+    chatLog.append(sep);
+  }
   const row = document.createElement('div');
+  row.className = 'chat-row';
+  const stamp = document.createElement('span');
+  stamp.className = 'chatstamp';
+  stamp.textContent = timeStr;
   const who = document.createElement('span');
   who.className = line.player ? 'chatfrom tag' : 'chatfrom';
   who.textContent = line.player ? `${line.from} (playing)` : line.from;
@@ -797,7 +858,10 @@ function addChatLine(line: ChatLine) {
   const body = document.createElement('span');
   body.className = line.command ? 'chattext chatcmd' : 'chattext';
   body.textContent = `: ${line.text}`;
-  row.append(who, body);
+  const content = document.createElement('span');
+  content.className = 'chatbody';
+  content.append(who, body);
+  row.append(stamp, content);
   chatLog.append(row);
   while (chatLog.childElementCount > 100) chatLog.firstElementChild!.remove();
   chatLog.scrollTop = chatLog.scrollHeight;
@@ -1321,6 +1385,96 @@ function applyCanvasRotation(rotated: boolean) {
 }
 
 // --- main loop ---
+// --- mobile tab bar ---
+const mobileTabs = document.getElementById('mobileTabs') as HTMLDivElement;
+function isMobileView(): boolean {
+  return window.getComputedStyle(mobileTabs).display !== 'none';
+}
+function resetMobileLayout() {
+  const stage = document.getElementById('stage') as HTMLDivElement;
+  const chat = document.getElementById('chat') as HTMLDivElement;
+  const lb = document.getElementById('leaderboard') as HTMLDivElement;
+  stage.style.display = '';
+  chat.style.display = '';
+  lb.style.display = '';
+}
+for (const btn of mobileTabs.querySelectorAll<HTMLButtonElement>('.mob-tab')) {
+  btn.addEventListener('click', () => {
+    if (!isMobileView()) return;
+    mobileTabs.querySelector('.active')?.classList.remove('active');
+    btn.classList.add('active');
+    const tab = btn.dataset.tab;
+    const stage = document.getElementById('stage') as HTMLDivElement;
+    const chat = document.getElementById('chat') as HTMLDivElement;
+    const lb = document.getElementById('leaderboard') as HTMLDivElement;
+    if (tab === 'play') {
+      stage.style.display = '';
+      chat.style.display = 'none';
+      lb.style.display = '';
+    } else if (tab === 'chat') {
+      stage.style.display = 'none';
+      chat.style.display = '';
+      lb.style.display = 'none';
+    } else if (tab === 'leaderboard') {
+      stage.style.display = 'none';
+      chat.style.display = 'none';
+      lb.style.display = '';
+    }
+  });
+}
+window.addEventListener('resize', () => {
+  if (!isMobileView()) resetMobileLayout();
+});
+// Initial mobile layout: show Play tab, hide others
+if (isMobileView()) {
+  const stage = document.getElementById('stage') as HTMLDivElement;
+  const chatEl = document.getElementById('chat') as HTMLDivElement;
+  const lb = document.getElementById('leaderboard') as HTMLDivElement;
+  stage.style.display = '';
+  chatEl.style.display = 'none';
+  lb.style.display = '';
+}
+
+// --- touch controls for paddle ---
+let touchActive = false;
+function onTouchStart() {
+  touchActive = true;
+  // On mobile, touch acts as capture (no pointer lock available)
+  if (isPlayer() && !pointerLocked) net.send({ type: 'capture', on: true });
+}
+function onTouchEnd() {
+  touchActive = false;
+}
+function onTouchMove(e: TouchEvent) {
+  if (!isPlayer()) return;
+  const el = e.currentTarget as HTMLElement;
+  const r = el.getBoundingClientRect();
+  const touch = e.touches[0];
+  if (!touch) return;
+  if (inArena() && state?.poly) {
+    const me = myPolyPlayer(state);
+    if (!me) return;
+    const cx = touch.clientX - r.left;
+    const cy = touch.clientY - r.top;
+    const dx = (cx / r.width) * COURT.w - me.cx;
+    const dy = (cy / r.height) * COURT.h - me.cy;
+    const along = dx * Math.cos(me.angle) + dy * Math.sin(me.angle);
+    const max = arenaMaxPos(state, me.len);
+    arenaTarget = Math.max(-max, Math.min(max, along));
+    return;
+  }
+  const relY = (touch.clientY - r.top) / r.height;
+  target = clampPaddle(relY * COURT.h);
+}
+canvas.addEventListener('touchstart', onTouchStart, { passive: true });
+canvas.addEventListener('touchmove', onTouchMove, { passive: true });
+canvas.addEventListener('touchend', onTouchEnd);
+canvas.addEventListener('touchcancel', onTouchEnd);
+game3dEl.addEventListener('touchstart', onTouchStart, { passive: true });
+game3dEl.addEventListener('touchmove', onTouchMove, { passive: true });
+game3dEl.addEventListener('touchend', onTouchEnd);
+game3dEl.addEventListener('touchcancel', onTouchEnd);
+
 // --- 3D view toggle (lazy-loads Three.js on first use; the 2D path is untouched
 // until then, so default visitors never download or run any 3D code) ---
 async function setView3d(on: boolean) {
@@ -1352,9 +1506,13 @@ window.addEventListener('resize', () => {
   if (view3d) renderer3d?.resize();
 });
 
+function canControl(): boolean {
+  return pointerLocked || touchActive;
+}
+
 function loop(t: number) {
   // Arena: keyboard nudges the paddle along its edge (mouse handled in mousemove).
-  if (inArena() && pointerLocked && state?.poly) {
+  if (inArena() && canControl() && state?.poly) {
     const me = myPolyPlayer(state);
     if (me) {
       const step = PADDLE.speed / 60;
@@ -1377,7 +1535,7 @@ function loop(t: number) {
       lastSent = arenaTarget;
       lastSendAt = t;
     }
-  } else if (isPlayer() && pointerLocked) {
+  } else if (isPlayer() && canControl()) {
     // Paddle input (mouse and keyboard) only applies while the mouse is captured.
     const step = PADDLE.speed / 60;
     if (state?.rotated) {
@@ -1560,6 +1718,7 @@ function updateUI() {
   joinBtn.style.display = myRole === 'observer' && canJoin ? 'inline-block' : 'none';
   joinBtn.textContent = state.arena ? 'Join arena' : 'Join game';
   renameBtn.style.display = myName ? 'inline-block' : 'none';
+  pingBtn.style.display = myName ? 'inline-block' : 'none';
 
   // Hidden once the pointer is captured (lock hides it natively anyway); visible while
   // unlocked so a player can see where to click to capture, and for observers.

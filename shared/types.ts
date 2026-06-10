@@ -166,7 +166,8 @@ export type ClientMsg =
   | { type: 'queueLeave' } // leave the spectator queue
   | { type: 'ready' } // ready up for the next match
   | { type: 'addBot'; level: BotLevel } // drop an AI opponent into the open duel side
-  | { type: 'removeBot' }; // kick the AI opponent
+  | { type: 'removeBot' }
+  | { type: 'ping' }; // kick the AI opponent
 
 // --- Server -> Client ---
 
@@ -305,6 +306,7 @@ export interface ChatLine {
   player: boolean; // true if the sender held a paddle when they sent it
   color: string; // hex color of the sender's name
   command?: boolean; // true if this line is a slash command someone ran (styled apart)
+  time: number; // epoch ms, set by the server
 }
 
 // One line for a live message; the full recent history on connect. Client appends.
@@ -325,6 +327,12 @@ export interface AnnounceMsg {
   text: string;
 }
 
+// A ping notification requesting attention: someone wants others to join the game.
+export interface PingMsg {
+  type: 'ping';
+  from: string;
+}
+
 // The default quick-reaction row, in display order.
 export const REACTIONS = ['🔥', '🎉', '🫵', '👍', '😂', '😮', '👏', '😡', '🖕'] as const;
 
@@ -338,4 +346,5 @@ export type ServerMsg =
   | LeaderboardMsg
   | ChatMsg
   | ReactionMsg
-  | AnnounceMsg;
+  | AnnounceMsg
+  | PingMsg;

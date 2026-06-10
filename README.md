@@ -9,11 +9,14 @@ live — and any observer can claim a paddle when a spot opens up. The match run
 - Real-time two-player Pong over WebSockets
 - Server owns the physics, ball, and score (no client can cheat)
 - Observers watch live and can **Join** an open paddle spot
-- Paddle control by **keyboard** (↑/↓ or W/S) or **mouse**
+- Paddle control by **keyboard** (↑/↓ or W/S), **mouse**, or **touch** (mobile)
 - First to 3 wins, then both spots reopen for a fresh match
 - Nicknames shown on the scoreboard and watcher list (remembered in a cookie)
 - Custom paddle colors chosen from a palette
 - Win–loss **leaderboard** persisted in Postgres
+- **Chat** with timestamps and date separators (shown in New York time)
+- **Ping** button to notify others when you're looking for players
+- **Mobile-friendly** layout with tabbed Play/Chat/Leaderboard sections
 
 ## Tech
 
