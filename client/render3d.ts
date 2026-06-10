@@ -11,7 +11,8 @@
 // fetches Three.js lazily and the default 2D bundle never references it. Keeping it out
 // of the Vite build also keeps the (small) production VPS from OOMing while bundling.
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js';
-import { COURT, PADDLE, BALL, BIG_BALL_R, DIAMOND, PINATA, TARGET, PowerupKind, StateMsg } from '../shared/types';
+import { COURT, PADDLE, BALL, BIG_BALL_R, DIAMOND, PINATA, POWERUPS, TARGET, PowerupKind, StateMsg } from '../shared/types';
+import { drawLegendIcon, drawDiamondIcon } from './render';
 
 export interface Renderer3D {
   render(s: StateMsg): void;
@@ -21,50 +22,87 @@ export interface Renderer3D {
 
 const PADDLE_H = 22; // visual paddle height (the dimension that only exists in 3D)
 const BALL_Y = 11; // height of ball centers above the floor (roughly mid-paddle)
+const PUCK_H = 12; // thickness of the power-up / diamond pucks
+const PUCK_Y = 16; // height the pucks float above the floor
 const wx = (x: number) => x - COURT.w / 2;
 const wz = (y: number) => y - COURT.h / 2;
 
-// Per-kind power-up target color (mirrors the 2D legend so the ring reads the same).
+// Per-kind power-up color (mirrors the 2D legend), used to tint each puck's rim.
 const PU_COLOR: Record<PowerupKind, string> = {
   grow: '#ffd166', shrink: '#ff6b6b', smash: '#ff922b', slow: '#4dd2ff', multi: '#b197fc',
   freeze: '#74c0fc', curve: '#63e6be', blind: '#868e96', mirror: '#f783ac', shield: '#f5cc00',
   ghost: '#c0c8e0', tiny: '#ffa94d', warp: '#9775fa', bigball: '#ffd43b', rotate: '#69db7c',
 };
 
-// A camera-facing text label drawn from a 2D canvas texture, used for scores, names and the
-// power-up kind. `widthWorld` sets its size in world units; the canvas is 2:1 so height is half.
-function makeLabel(widthWorld: number) {
+// Text painted flat onto the court floor (so it sits in the scene with real perspective —
+// "more 3D" than a billboard). `widthWorld` sizes it; the canvas is 4:1 so height is a
+// quarter. Lies on the floor with its top edge pointing away from the camera, so it reads
+// upright from the default view.
+function makeFloorText(widthWorld: number) {
   const canvas = document.createElement('canvas');
   canvas.width = 512;
-  canvas.height = 256;
+  canvas.height = 128;
   const c2d = canvas.getContext('2d')!;
   const tex = new THREE.CanvasTexture(canvas);
-  tex.anisotropy = 4;
-  const sprite = new THREE.Sprite(
-    new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false }),
+  tex.anisotropy = 8;
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(widthWorld, widthWorld / 4),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false }),
   );
-  sprite.scale.set(widthWorld, widthWorld / 2, 1);
-  sprite.renderOrder = 10; // always read on top of the geometry
+  mesh.rotation.x = -Math.PI / 2; // lie flat on the ice
+  mesh.position.y = 0.6; // just above the floor to avoid z-fighting
   let last = '';
-  function set(text: string, color: string, px = 150) {
+  function set(text: string, color: string, px = 96) {
     const key = `${text}|${color}|${px}`;
-    if (key === last) return; // only repaint the texture when the content changes
+    if (key === last) return; // only repaint when the content changes
     last = key;
     c2d.clearRect(0, 0, canvas.width, canvas.height);
     let f = px;
-    const font = (n: number) => `bold ${n}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+    const font = (n: number) => `900 ${n}px ui-monospace, SFMono-Regular, Menlo, monospace`;
     c2d.font = font(f);
-    while (c2d.measureText(text).width > canvas.width * 0.92 && f > 18) c2d.font = font((f -= 8));
+    while (c2d.measureText(text).width > canvas.width * 0.94 && f > 14) c2d.font = font((f -= 6));
     c2d.textAlign = 'center';
     c2d.textBaseline = 'middle';
-    c2d.lineWidth = f * 0.16;
-    c2d.strokeStyle = 'rgba(0,0,0,0.7)';
+    c2d.lineWidth = f * 0.18;
+    c2d.strokeStyle = 'rgba(0,0,0,0.85)'; // dark outline so it reads on the ice
     c2d.strokeText(text, canvas.width / 2, canvas.height / 2);
     c2d.fillStyle = color;
     c2d.fillText(text, canvas.width / 2, canvas.height / 2);
     tex.needsUpdate = true;
   }
-  return { sprite, set };
+  return { mesh, set };
+}
+
+// A round canvas texture for a puck top face: an opaque puck-dark disc with the 2D icon
+// (`paint` draws it, clearing first) composited on top, so transparent areas read as puck.
+function makePuckFaceTexture(paint: (c: HTMLCanvasElement) => void): THREE.CanvasTexture {
+  const size = 256;
+  const icon = document.createElement('canvas');
+  icon.width = icon.height = size;
+  paint(icon); // draws the icon on a transparent background
+  const face = document.createElement('canvas');
+  face.width = face.height = size;
+  const c = face.getContext('2d')!;
+  c.fillStyle = '#0c1222';
+  c.beginPath();
+  c.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+  c.fill();
+  c.drawImage(icon, 0, 0);
+  const tex = new THREE.CanvasTexture(face);
+  tex.anisotropy = 8;
+  return tex;
+}
+
+// Build a hockey-puck mesh: a short cylinder lying flat, the given top face, a tinted rim,
+// and a dark underside.
+function makePuck(radius: number, topTex: THREE.CanvasTexture, rim: string) {
+  const geo = new THREE.CylinderGeometry(radius, radius, PUCK_H, 56);
+  const side = new THREE.MeshStandardMaterial({ color: rim, roughness: 0.55, metalness: 0.1 });
+  const top = new THREE.MeshBasicMaterial({ map: topTex });
+  const bottom = new THREE.MeshStandardMaterial({ color: '#0a0e1c', roughness: 0.8 });
+  const mesh = new THREE.Mesh(geo, [side, top, bottom]); // groups: 0 side, 1 top cap, 2 bottom cap
+  mesh.castShadow = true;
+  return { mesh, side, top };
 }
 
 export function createRenderer(container: HTMLElement): Renderer3D {
@@ -170,35 +208,21 @@ export function createRenderer(container: HTMLElement): Renderer3D {
     return m;
   }
 
-  // Power-up target: a glowing ring over a translucent disc, tinted to the kind, with the
-  // kind name floating above it so it reads exactly like the 2D legend.
-  const targetGroup = new THREE.Group();
-  const targetRing = new THREE.Mesh(
-    new THREE.TorusGeometry(TARGET.r, 4, 12, 32),
-    new THREE.MeshStandardMaterial({ color: '#ffd166', emissive: '#7a5a10', roughness: 0.5 }),
-  );
-  targetRing.rotation.x = -Math.PI / 2;
-  targetRing.position.y = 6;
-  const targetDisc = new THREE.Mesh(
-    new THREE.CircleGeometry(TARGET.r, 32),
-    new THREE.MeshBasicMaterial({ color: '#ffd166', transparent: true, opacity: 0.4, side: THREE.DoubleSide }),
-  );
-  targetDisc.rotation.x = -Math.PI / 2;
-  targetDisc.position.y = 3;
-  const targetLabel = makeLabel(120);
-  targetLabel.sprite.position.y = 54;
-  targetGroup.add(targetRing, targetDisc, targetLabel.sprite);
-  targetGroup.visible = false;
-  world.add(targetGroup);
+  // Power-up target: a hockey puck with the 2D power-up icon on its top face. The kind
+  // changes, so pre-render every kind's face once and swap the top map / rim color.
+  const PU_TEX = Object.fromEntries(
+    POWERUPS.map((k) => [k, makePuckFaceTexture((c) => drawLegendIcon(c, k))]),
+  ) as Record<PowerupKind, THREE.CanvasTexture>;
+  const targetPuck = makePuck(TARGET.r, PU_TEX[POWERUPS[0]], PU_COLOR[POWERUPS[0]]);
+  targetPuck.mesh.position.y = PUCK_Y;
+  targetPuck.mesh.visible = false;
+  world.add(targetPuck.mesh);
 
-  // Diamond-hands obstacle: a faceted gem that drifts and spins.
-  const diamond = new THREE.Mesh(
-    new THREE.OctahedronGeometry(DIAMOND.r, 0),
-    new THREE.MeshStandardMaterial({ color: '#bcd6ff', emissive: '#24467f', metalness: 0.35, roughness: 0.12, flatShading: true }),
-  );
-  diamond.castShadow = true;
-  diamond.visible = false;
-  world.add(diamond);
+  // Diamond-hands obstacle: a puck with the 2D diamond logo on top.
+  const diamondPuck = makePuck(DIAMOND.r, makePuckFaceTexture(drawDiamondIcon), '#2a4a8a');
+  diamondPuck.mesh.position.y = PUCK_Y;
+  diamondPuck.mesh.visible = false;
+  world.add(diamondPuck.mesh);
 
   // Piñata: a drifting beach ball that catches balls; the caught ones cling to its surface.
   const pinata = new THREE.Mesh(
@@ -220,16 +244,16 @@ export function createRenderer(container: HTMLElement): Renderer3D {
     return m;
   }
 
-  // Floating scoreboard (one digit per side, near the back edge) and per-side name labels.
-  const scoreL = makeLabel(86);
-  const scoreR = makeLabel(86);
-  scoreL.sprite.position.set(-80, 86, -200);
-  scoreR.sprite.position.set(80, 86, -200);
-  const nameL = makeLabel(230);
-  const nameR = makeLabel(230);
-  nameL.sprite.position.set(-232, 40, 214);
-  nameR.sprite.position.set(232, 40, 214);
-  world.add(scoreL.sprite, scoreR.sprite, nameL.sprite, nameR.sprite);
+  // Scores painted big on the ice either side of center; names painted smaller at each end.
+  const scoreL = makeFloorText(150);
+  const scoreR = makeFloorText(150);
+  scoreL.mesh.position.set(-110, 0.6, -90);
+  scoreR.mesh.position.set(110, 0.6, -90);
+  const nameL = makeFloorText(150);
+  const nameR = makeFloorText(150);
+  nameL.mesh.position.set(-150, 0.6, 200);
+  nameR.mesh.position.set(150, 0.6, 200);
+  world.add(scoreL.mesh, scoreR.mesh, nameL.mesh, nameR.mesh);
 
   const tmpColor = new THREE.Color();
 
@@ -267,27 +291,22 @@ export function createRenderer(container: HTMLElement): Renderer3D {
     });
     for (let i = balls.length; i < ballPool.length; i++) ballPool[i].visible = false;
 
-    // Power-up target — ring + disc + floating kind label, tinted to the kind.
+    // Power-up target — a puck with the kind's 2D icon on top, rim tinted to the kind.
     if (s.target) {
-      targetGroup.visible = true;
-      targetGroup.position.set(wx(s.target.x), 0, wz(s.target.y));
-      targetRing.rotation.z += 0.03;
-      const col = PU_COLOR[s.target.kind] ?? '#ffd166';
-      targetRing.material.color.set(col);
-      targetRing.material.emissive.set(tmpColor.set(col).multiplyScalar(0.4));
-      targetDisc.material.color.set(col);
-      targetLabel.set(s.target.kind, col, 84);
+      targetPuck.mesh.visible = true;
+      targetPuck.mesh.position.set(wx(s.target.x), PUCK_Y, wz(s.target.y));
+      targetPuck.top.map = PU_TEX[s.target.kind];
+      targetPuck.side.color.set(PU_COLOR[s.target.kind] ?? '#ffd166');
     } else {
-      targetGroup.visible = false;
+      targetPuck.mesh.visible = false;
     }
 
-    // Diamond-hands obstacle (diamond mode only).
+    // Diamond-hands obstacle — a puck with the 2D diamond logo (diamond mode only).
     if (s.diamondPos) {
-      diamond.visible = true;
-      diamond.position.set(wx(s.diamondPos.x), DIAMOND.r * 0.9, wz(s.diamondPos.y));
-      diamond.rotation.y += 0.02;
+      diamondPuck.mesh.visible = true;
+      diamondPuck.mesh.position.set(wx(s.diamondPos.x), PUCK_Y, wz(s.diamondPos.y));
     } else {
-      diamond.visible = false;
+      diamondPuck.mesh.visible = false;
     }
 
     // Piñata collector + the balls clinging to it (piñata mode only).
@@ -307,11 +326,11 @@ export function createRenderer(container: HTMLElement): Renderer3D {
       for (const m of stuckPool) m.visible = false;
     }
 
-    // Scoreboard + names.
-    scoreL.set(String(s.score.left), '#7da2ff', 150);
-    scoreR.set(String(s.score.right), '#7da2ff', 150);
-    nameL.set(s.paddles.left.name ?? '— open —', s.paddles.left.color ?? '#9fb0d8', 96);
-    nameR.set(s.paddles.right.name ?? '— open —', s.paddles.right.color ?? '#9fb0d8', 96);
+    // Scores (big) and names (small) painted on the ice.
+    scoreL.set(String(s.score.left), '#7da2ff', 116);
+    scoreR.set(String(s.score.right), '#7da2ff', 116);
+    nameL.set(s.paddles.left.name ?? '— open —', s.paddles.left.color ?? '#9fb0d8', 60);
+    nameR.set(s.paddles.right.name ?? '— open —', s.paddles.right.color ?? '#9fb0d8', 60);
 
     renderer.render(scene, camera);
   }

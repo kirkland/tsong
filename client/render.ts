@@ -764,6 +764,20 @@ export function drawLegendIcon(canvas: HTMLCanvasElement, kind: PowerupKind) {
   ctx.restore();
 }
 
+// Draw the diamond-hands gem centered and scaled to fill a canvas (for the 3D puck face).
+export function drawDiamondIcon(canvas: HTMLCanvasElement) {
+  const ctx = canvas.getContext('2d')!;
+  const { width: w, height: h } = canvas;
+  const margin = 4;
+  const scale = (Math.min(w, h) / 2 - margin) / DIAMOND.r;
+  ctx.clearRect(0, 0, w, h);
+  ctx.save();
+  ctx.translate(w / 2, h / 2);
+  ctx.scale(scale, scale);
+  drawDiamond(ctx, 0, 0);
+  ctx.restore();
+}
+
 // --- Fatality animations ------------------------------------------------------
 // render is otherwise stateless, so we latch each animation's start time here.
 let fxStart = 0;
