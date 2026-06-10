@@ -727,17 +727,34 @@ export class Lobby {
     // A bot match is its own thing: never counts for the leaderboard, never crowns a king,
     // and the bot leaves once the result has been shown for a beat (win or lose).
     if (this.bot && this.game.status === 'over') {
+      const bot = this.bot;
       if (!this.overHandled) {
         const winnerSide = this.game.winnerSide;
         const winners = winnerSide ? this.connsOn(winnerSide) : [];
         this.winnerName = winners.length ? winners.map((c) => c.nickname).join(' & ') : null;
-        this.king = null;
+        this.king = null; // beating a bot never crowns a king
         this.endStreak();
-        this.fatalityWinnerPid = null;
-        this.fatalityWinnerSide = null;
+        // Fatalities are cosmetic (no leaderboard impact), so a human who beats a bot still
+        // gets to perform one. The bot itself never performs a finisher. Arm only when the
+        // winner is human (the bot has no pid).
+        const humanWinner = winners.find((c) => c.pid);
+        this.fatalityWinnerPid = humanWinner ? humanWinner.pid : null;
+        this.fatalityWinnerSide = humanWinner ? winnerSide : null;
         this.activeFatality = null;
+        // If the bot won, it taunts the human with a random finisher of its own (the bot
+        // has no client to tap a combo, so the server lands it). Fatalities must be armed.
+        if (!humanWinner && winnerSide === bot.side && this.fatalitiesEnabled) {
+          const move = FATALITY_MOVES[Math.floor(Math.random() * FATALITY_MOVES.length)];
+          this.activeFatality = { side: bot.side, move };
+          this.fatalityAt = Date.now();
+        }
         this.overHandled = true;
-        this.botOverTimer = BOT_OVER_SECS;
+        // Give a human winner a window to land their finisher; otherwise the bot just leaves
+        // (or lingers through its own finisher, handled below).
+        this.botOverTimer = this.fatalityWinnerSide ? BOT_FINISH_SECS : BOT_OVER_SECS;
+      } else if (this.activeFatality) {
+        // A finisher is playing — hold until its animation has run, then the bot leaves.
+        if (Date.now() - this.fatalityAt > FATALITY_DISPLAY_MS) this.removeBotInternal();
       } else {
         this.botOverTimer -= TICK_MS / 1000;
         if (this.botOverTimer <= 0) this.removeBotInternal(); // resets to waiting
@@ -1272,6 +1289,7 @@ export class Lobby {
 // --- AI opponent (bot) data ---
 
 const BOT_OVER_SECS = 4; // how long the win/lose screen holds before the bot leaves
+const BOT_FINISH_SECS = 10; // window for a human winner to land a fatality before the bot leaves
 
 interface BotCfg {
   react: number; // seconds between re-aims — the bot's reaction lag
