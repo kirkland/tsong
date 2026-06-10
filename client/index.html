@@ -233,6 +233,29 @@
         color: #c08bf0;
         font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       }
+      #chatlog .chatstamp {
+        color: #4a5580;
+        font-size: 11px;
+        font-variant-numeric: tabular-nums;
+        margin-right: 4px;
+        flex-shrink: 0;
+      }
+      #chatlog > div:not(.chat-date-sep) {
+        display: flex;
+        align-items: baseline;
+        gap: 3px;
+      }
+      #chatlog .chat-date-sep {
+        text-align: center;
+        font-size: 11px;
+        font-weight: 600;
+        color: #4a5580;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        padding: 6px 0 2px;
+        border-bottom: 1px solid #1c2640;
+        margin-bottom: 2px;
+      }
       #chatForm {
         display: flex;
         position: relative;
@@ -1223,6 +1246,120 @@
         .load-title, .load-bolts span { animation: none; }
         .load-bar-fill { animation: none; width: 100%; }
       }
+      /* Mobile tab bar: hidden on desktop, visible on mobile. */
+      #mobileTabs {
+        display: none;
+      }
+      @media (max-width: 768px) {
+        body {
+          gap: 8px;
+          padding: 0 6px;
+        }
+        #mobileTabs {
+          display: flex;
+          gap: 4px;
+          position: sticky;
+          top: 0;
+          z-index: 90;
+          background: #060912;
+          padding: 6px 0 4px;
+          width: 100%;
+          justify-content: center;
+        }
+        .mob-tab {
+          font: inherit;
+          font-size: 12px;
+          letter-spacing: 1px;
+          padding: 6px 16px;
+          border-radius: 20px;
+          border: 1px solid #2a3550;
+          background: #0e1424;
+          color: #6b7796;
+          cursor: pointer;
+          transition: background 0.15s, color 0.15s;
+        }
+        .mob-tab.active {
+          background: #3a6df0;
+          border-color: #3a6df0;
+          color: #fff;
+        }
+        h1 {
+          font-size: 14px;
+          letter-spacing: 1px;
+        }
+        .arena {
+          gap: 8px;
+          width: 100%;
+        }
+        #stage {
+          gap: 6px;
+          width: 100%;
+        }
+        #game, #game3d {
+          width: 100%;
+        }
+        #chat {
+          width: 100%;
+          height: 60vh;
+        }
+        #leaderboard {
+          width: 100%;
+        }
+        #topLeft {
+          top: 6px;
+          left: 6px;
+          gap: 4px;
+        }
+        #view3dBtn, #gameModesBtn, #powerupInfoBtn {
+          font-size: 10px;
+          padding: 4px 8px;
+        }
+        #changelog {
+          top: 6px;
+          right: 6px;
+        }
+        #changelogBtn {
+          font-size: 10px;
+          padding: 4px 8px;
+        }
+        #botControl {
+          bottom: 6px;
+          right: 6px;
+        }
+        #botBtn {
+          font-size: 10px;
+          padding: 4px 8px;
+        }
+        button {
+          padding: 6px 12px;
+          font-size: 13px;
+        }
+        #status {
+          font-size: 14px;
+          min-height: 18px;
+        }
+        #watchers {
+          font-size: 11px;
+          min-height: 14px;
+        }
+        #joinButtons {
+          display: flex;
+          gap: 6px;
+          flex-wrap: wrap;
+          justify-content: center;
+        }
+        #joinButtons button {
+          font-size: 12px;
+          padding: 5px 10px;
+        }
+        #queueArea {
+          font-size: 11px;
+        }
+        #pingBtn {
+          font-size: 11px;
+          padding: 3px 8px;
+        }
+      }
     </style>
   </head>
   <body>
@@ -1496,6 +1633,11 @@
         </div>
       </div>
     </div>
+    <div id="mobileTabs">
+      <button class="mob-tab active" data-tab="play">Play</button>
+      <button class="mob-tab" data-tab="chat">Chat</button>
+      <button class="mob-tab" data-tab="leaderboard">Leaderboard</button>
+    </div>
     <h1>T S O N G</h1>
     <div class="arena">
       <div id="stage">
@@ -1512,6 +1654,7 @@
         <div id="watchers"></div>
         <div id="queueArea" style="display: none; font-size: 13px; color: #6b7796;"></div>
         <button id="queueBtn" style="display: none; font-size: 12px; padding: 4px 10px;">Join queue</button>
+        <button id="pingBtn" style="display: none; font-size: 12px; padding: 4px 10px;">🔔 Ping</button>
         <button id="readyBtn" style="display: none">Ready</button>
         <button id="rename" class="link" style="display: none">change name</button>
         <div id="leaderboard"></div>
