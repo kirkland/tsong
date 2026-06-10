@@ -6,7 +6,11 @@
 // lighting and shadows. Coordinates map 1:1 from court units to world units, centered
 // on the origin (court x -> world x, court y -> world z, up = +y).
 
-import * as THREE from 'three';
+// Three.js is loaded from a CDN as an external module (not bundled). This whole file
+// is itself only dynamically imported when the player switches to 3D, so the browser
+// fetches Three.js lazily and the default 2D bundle never references it. Keeping it out
+// of the Vite build also keeps the (small) production VPS from OOMing while bundling.
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js';
 import { COURT, PADDLE, BALL, BIG_BALL_R, TARGET, StateMsg } from '../shared/types';
 
 export interface Renderer3D {
