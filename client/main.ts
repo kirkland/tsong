@@ -11,6 +11,7 @@ import {
   MAX_PLAYERS,
   REACTIONS,
   BALL_REACTION,
+  BotLevel,
   ChatLine,
   LeaderboardRow,
   Role,
@@ -866,6 +867,69 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !powerupInfoPanel.hidden) closePowerupInfo();
 });
 
+// --- Add/kick bot dropdown (bottom-right) ---
+// One button: a dropdown of difficulty levels when no bot is in play, or a one-click
+// "kick bot" when one is. Visibility/label are driven from state in updateUI().
+const botControl = document.getElementById('botControl') as HTMLDivElement;
+const botBtn = document.getElementById('botBtn') as HTMLButtonElement;
+const botPanel = document.getElementById('botPanel') as HTMLDivElement;
+
+function openBotPanel() {
+  botPanel.hidden = false;
+  botBtn.setAttribute('aria-expanded', 'true');
+}
+function closeBotPanel() {
+  botPanel.hidden = true;
+  botBtn.setAttribute('aria-expanded', 'false');
+}
+botBtn.addEventListener('click', () => {
+  // In "kick" mode the button is a direct action, not a dropdown trigger.
+  if (botBtn.classList.contains('kick')) {
+    net.send({ type: 'removeBot' });
+    return;
+  }
+  botPanel.hidden ? openBotPanel() : closeBotPanel();
+});
+for (const opt of botPanel.querySelectorAll<HTMLButtonElement>('.bot-option')) {
+  opt.addEventListener('click', () => {
+    net.send({ type: 'addBot', level: opt.dataset.level as BotLevel });
+    closeBotPanel();
+  });
+}
+document.addEventListener('click', (e) => {
+  if (botPanel.hidden) return;
+  const t = e.target as Node;
+  if (!botPanel.contains(t) && !botBtn.contains(t)) closeBotPanel();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !botPanel.hidden) closeBotPanel();
+});
+
+// Reflect the current bot state onto the button (label, mode, visibility). Cached so we
+// only touch the DOM when the situation actually changes.
+let lastBotState = '';
+function syncBotControl(s: StateMsg) {
+  const canBot = !s.poly && !s.arena; // duel only
+  const sideOpen = !s.paddles.left.players.length || !s.paddles.right.players.length;
+  const mode = !canBot ? 'hidden' : s.bot ? 'kick' : sideOpen ? 'add' : 'hidden';
+  if (mode === lastBotState) return;
+  lastBotState = mode;
+  if (mode === 'hidden') {
+    botControl.style.display = 'none';
+    closeBotPanel();
+    return;
+  }
+  botControl.style.display = 'block';
+  if (mode === 'kick') {
+    botBtn.classList.add('kick');
+    botBtn.textContent = 'KICK BOT 🤖';
+    closeBotPanel();
+  } else {
+    botBtn.classList.remove('kick');
+    botBtn.innerHTML = 'ADD BOT <span class="caret">▾</span>';
+  }
+}
+
 // --- CHANGELOG dropdown (top-right): recent commit messages on main ---
 const changelogBtn = document.getElementById('changelogBtn') as HTMLButtonElement;
 const changelogPanel = document.getElementById('changelogPanel') as HTMLDivElement;
@@ -1380,6 +1444,9 @@ function updateUI() {
   if (document.activeElement !== arenaModeEl && arenaModeEl.checked !== state.arena) {
     arenaModeEl.checked = state.arena;
   }
+
+  // Add/kick-bot button: show the right control for the current match state.
+  syncBotControl(state);
 
   // Keep the checkbox in sync with the shared setting (another player may have flipped it).
   fatalityCheck.checked = state.fatalitiesEnabled;

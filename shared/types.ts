@@ -141,6 +141,11 @@ export type Status = 'waiting' | 'playing' | 'over';
 export const FATALITY_MOVES = ['SCREEN_MELT', 'PADDLE_SPLIT', 'FROST_SHATTER', 'NOT_FOUND', 'SINGULARITY', 'PAC_CHOMP', 'JSAV'] as const;
 export type FatalityMove = (typeof FATALITY_MOVES)[number];
 
+// AI opponent difficulty. A bot fills one duel side; a match it plays never touches the
+// leaderboard, and the bot always leaves once the match ends (win or lose).
+export const BOT_LEVELS = ['easy', 'medium', 'hard'] as const;
+export type BotLevel = (typeof BOT_LEVELS)[number];
+
 // --- Client -> Server ---
 export type ClientMsg =
   // pid = stable per-browser identity; color = chosen paddle color
@@ -158,7 +163,9 @@ export type ClientMsg =
   | { type: 'kingExit' } // winner declines to stay as king of the court
   | { type: 'queueJoin' } // join the spectator queue
   | { type: 'queueLeave' } // leave the spectator queue
-  | { type: 'ready' }; // ready up for the next match
+  | { type: 'ready' } // ready up for the next match
+  | { type: 'addBot'; level: BotLevel } // drop an AI opponent into the open duel side
+  | { type: 'removeBot' }; // kick the AI opponent
 
 // --- Server -> Client ---
 
@@ -265,6 +272,7 @@ export interface StateMsg {
   tinyBall: boolean; // ball is currently rendered tiny (tiny power-up)
   bigBall: boolean; // ball is currently enlarged (bigball power-up)
   streamerMode: boolean; // fake chat bots are spamming the chat
+  bot: BotLevel | null; // difficulty of the AI opponent currently in the duel, or null
 }
 
 // Sent to a single connection whenever its own role changes (connect / claim / release).

@@ -9,6 +9,7 @@ import {
   CHAT_MAX_LEN,
   ChatLine,
   BALL_REACTION,
+  BotLevel,
   COURT,
   ARENA,
   FATALITY_MOVES,
@@ -115,6 +116,19 @@ export class Lobby {
   private arenaSeats: WebSocket[] = []; // ordered paddle holders while mode === 'poly'
   private polyOverTimer = 0; // seconds the arena win screen lingers before the next round
 
+  // AI opponent: a single bot that fills one duel side. It's a synthetic connection
+  // (no real socket, no pid) so a match it plays never counts for the leaderboard, and
+  // it's removed the moment the match ends — win or lose. Duel mode only.
+  private bot: {
+    ws: WebSocket;
+    side: Side;
+    id: string;
+    level: BotLevel;
+    reactTimer: number; // seconds until the bot re-aims (its reaction lag)
+    aimY: number; // current target Y the bot is steering toward
+  } | null = null;
+  private botOverTimer = 0; // seconds the post-match screen lingers before the bot leaves
+
   // Streamer mode: fake chat bots spam the chat to distract players.
   private streamerMode = false;
   private streamerTick = 0; // ticks since last bot message
@@ -134,8 +148,12 @@ export class Lobby {
 
   /** Advance whichever simulation is live this tick (called by the server loop). */
   tick(dt: number) {
-    if (this.mode === 'poly') this.poly.tick(dt);
-    else this.game.tick(dt);
+    if (this.mode === 'poly') {
+      this.poly.tick(dt);
+    } else {
+      this.steerBot(dt); // set the bot's paddle target before the sim eases paddles
+      this.game.tick(dt);
+    }
   }
 
   /** Match status for the deploy gate (/api/status): true while a real rally is running. */
@@ -225,6 +243,7 @@ export class Lobby {
     // their whole team is now gone — teammates play on.
     this.unseat(ws);
     if (this.game.status === 'playing' && this.teams[side].length === 0) this.game.toWaiting();
+    this.cleanupBotIfAlone(); // no point a bot playing on alone after its opponent bails
     // ...but loudly, so everyone knows.
     this.announce(`Booo, ${name} quit the game`);
   }
@@ -310,6 +329,109 @@ export class Lobby {
       : undefined;
     const placed = this.mode === 'poly' ? this.poly.forceTarget(k) : this.game.forceTarget(k);
     if (placed) this.echoCommand(conn, k ? `/powerup ${k}` : '/powerup');
+  }
+
+  /** "Add bot": drop an AI opponent into an open duel side. If the requester is an
+   *  observer, seat them first so it's a real 1v1 against the bot. Duel mode only. */
+  addBot(ws: WebSocket, level: BotLevel) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return;
+    if (this.mode === 'poly' || this.arena) return; // bots play the classic duel only
+    if (this.game.layered) return; // keep it a clean 1v1
+    if (this.bot) return; // one bot at a time
+    // Seat the requester on an open side first (so the bot actually has an opponent).
+    if (conn.role === 'observer') {
+      const openForHuman = SIDES.find((s) => this.teams[s].length === 0);
+      if (!openForHuman) return; // both sides taken by humans — no room
+      this.claim(ws, openForHuman);
+    }
+    const botSide = SIDES.find((s) => this.teams[s].length === 0);
+    if (!botSide) return; // no open side left for the bot
+    this.spawnBot(botSide, level);
+    // Both sides manned now — start the match if we were idle.
+    if (this.teams.left.length && this.teams.right.length && this.game.status === 'waiting') {
+      this.game.start();
+    }
+    this.refreshPause();
+  }
+
+  /** "Kick bot": remove the AI opponent (any joined player may do this). */
+  removeBot(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return;
+    this.removeBotInternal();
+  }
+
+  // Seat a synthetic bot connection on a side and start steering its paddle.
+  private spawnBot(side: Side, level: BotLevel) {
+    const ws = makeBotSocket();
+    const conn: Conn = {
+      id: String(this.nextId++),
+      pid: '', // no leaderboard identity — a match with a bot never counts
+      nickname: BOT_NAMES[level],
+      role: side,
+      color: BOT_COLOR,
+      captured: true, // the bot is always "ready"; only the human must capture their mouse
+      lastChatAt: 0,
+    };
+    this.conns.set(ws, conn);
+    this.teams[side].push(ws);
+    this.game.addPlayer(side, conn.id);
+    this.bot = { ws, side, id: conn.id, level, reactTimer: 0, aimY: COURT.h / 2 };
+  }
+
+  // Tear the bot out of its seat. A bot leaving never crowns a king and never leaves the
+  // duel frozen on an 'over' screen — it always returns the room to a clean waiting state.
+  private removeBotInternal() {
+    if (!this.bot) return;
+    const { ws, side, id } = this.bot;
+    this.bot = null;
+    this.botOverTimer = 0;
+    this.teams[side] = this.teams[side].filter((s) => s !== ws);
+    this.game.removePlayer(side, id);
+    this.conns.delete(ws);
+    this.king = null;
+    if (this.game.status !== 'waiting') {
+      this.overHandled = false;
+      this.winnerName = null;
+      this.game.toWaiting();
+    }
+    this.refreshPause();
+    this.claimFromQueue();
+  }
+
+  // Remove the bot if no human is seated alongside it anymore (its opponent left/forfeited).
+  private cleanupBotIfAlone() {
+    if (!this.bot) return;
+    const humanSeated = SIDES.some((s) =>
+      this.teams[s].some((ws) => ws !== this.bot!.ws && this.conns.has(ws)),
+    );
+    if (!humanSeated) this.removeBotInternal();
+  }
+
+  // Drive the bot's paddle: re-aim on its reaction clock, then steer toward that aim.
+  private steerBot(dt: number) {
+    if (!this.bot) return;
+    if (this.game.status !== 'playing' || this.game.paused) return;
+    const cfg = BOT_CFG[this.bot.level];
+    this.bot.reactTimer -= dt;
+    if (this.bot.reactTimer <= 0) {
+      this.bot.reactTimer = cfg.react;
+      this.bot.aimY = this.botAim(this.bot.side, cfg);
+    }
+    this.game.setTarget(this.bot.side, this.bot.id, this.bot.aimY);
+  }
+
+  // Where the bot wants its paddle. It only chases a ball heading its way (else it idles);
+  // a hard bot predicts the wall-bounced landing point, easier bots track the raw Y. A
+  // random error keeps every level beatable (bigger for easier bots).
+  private botAim(side: Side, cfg: BotCfg): number {
+    const ball = this.game.ball;
+    const approaching = side === 'left' ? ball.vx < 0 : ball.vx > 0;
+    if (!approaching) return cfg.idleCenter ? COURT.h / 2 : ball.y;
+    const faceX = this.game.paddleX[side];
+    const aim = cfg.predict ? botPredictY(ball, faceX) : ball.y;
+    return aim + (Math.random() * 2 - 1) * cfg.error;
   }
 
   join(ws: WebSocket, nickname: string, pid: string, color?: string) {
@@ -427,6 +549,7 @@ export class Lobby {
   private setArena(on: boolean) {
     if (this.arena === on) return;
     this.arena = on;
+    if (on) this.removeBotInternal(); // bots are a duel-only feature; clear before any migration
     if (!on && this.mode === 'poly') this.migratePolyToDuel();
   }
 
@@ -545,6 +668,7 @@ export class Lobby {
     if (this.conns.get(ws)?.pid === this.streakPid) this.endStreak(); // streak holder left
     this.queueLeave(ws);
     this.conns.delete(ws);
+    this.cleanupBotIfAlone(); // the bot's human opponent may have just left
     this.refreshPause();
   }
 
@@ -600,6 +724,27 @@ export class Lobby {
     // Reopen both spots exactly once, when the match first ends. Doing this every
     // tick would re-release the next player the instant they claim a spot, making it
     // impossible to start a second game.
+    // A bot match is its own thing: never counts for the leaderboard, never crowns a king,
+    // and the bot leaves once the result has been shown for a beat (win or lose).
+    if (this.bot && this.game.status === 'over') {
+      if (!this.overHandled) {
+        const winnerSide = this.game.winnerSide;
+        const winners = winnerSide ? this.connsOn(winnerSide) : [];
+        this.winnerName = winners.length ? winners.map((c) => c.nickname).join(' & ') : null;
+        this.king = null;
+        this.endStreak();
+        this.fatalityWinnerPid = null;
+        this.fatalityWinnerSide = null;
+        this.activeFatality = null;
+        this.overHandled = true;
+        this.botOverTimer = BOT_OVER_SECS;
+      } else {
+        this.botOverTimer -= TICK_MS / 1000;
+        if (this.botOverTimer <= 0) this.removeBotInternal(); // resets to waiting
+      }
+      return;
+    }
+
     if (this.game.status === 'over') {
       if (!this.overHandled) {
         const winnerSide = this.game.winnerSide;
@@ -938,6 +1083,7 @@ export class Lobby {
       tinyBall,
       bigBall,
       streamerMode: this.streamerMode,
+      bot: this.bot?.level ?? null,
     };
   }
 
@@ -1121,6 +1267,50 @@ export class Lobby {
   private tell(ws: WebSocket, msg: ServerMsg) {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
   }
+}
+
+// --- AI opponent (bot) data ---
+
+const BOT_OVER_SECS = 4; // how long the win/lose screen holds before the bot leaves
+
+interface BotCfg {
+  react: number; // seconds between re-aims — the bot's reaction lag
+  error: number; // ± random court-unit error added to its aim (bigger = easier)
+  predict: boolean; // true = predict the wall-bounced landing Y; false = track raw ball Y
+  idleCenter: boolean; // when the ball heads away, drift to center (true) or shadow it (false)
+}
+
+// Half a paddle is 45 court units, so an `error` near/above that misses often.
+const BOT_CFG: Record<BotLevel, BotCfg> = {
+  easy: { react: 0.3, error: 95, predict: false, idleCenter: true },
+  medium: { react: 0.14, error: 42, predict: false, idleCenter: true },
+  hard: { react: 0.05, error: 10, predict: true, idleCenter: false },
+};
+
+const BOT_NAMES: Record<BotLevel, string> = {
+  easy: '🤖 Bot (easy)',
+  medium: '🤖 Bot (medium)',
+  hard: '🤖 Bot (hard)',
+};
+const BOT_COLOR = '#9aa7c7';
+
+// Predict where a ball heading toward `faceX` will be in Y when it arrives, reflecting it
+// off the top/bottom walls (ignores gravity/spin — close enough, and keeps the bot fair).
+function botPredictY(ball: { x: number; y: number; vx: number; vy: number }, faceX: number): number {
+  if (ball.vx === 0) return ball.y;
+  const t = (faceX - ball.x) / ball.vx;
+  if (t <= 0) return ball.y; // already past the face / moving away
+  const span = 2 * COURT.h;
+  let y = ((((ball.y + ball.vy * t) % span) + span) % span);
+  if (y > COURT.h) y = span - y; // fold the reflection back into [0, COURT.h]
+  return y;
+}
+
+// A bot occupies a seat like any player, but has no real socket. This stand-in satisfies
+// the lobby's WebSocket-keyed bookkeeping; its readyState is never OPEN, so every
+// broadcast/tell loop simply skips it (the bot needs no messages).
+function makeBotSocket(): WebSocket {
+  return { readyState: 3, OPEN: 1, send() {}, close() {} } as unknown as WebSocket;
 }
 
 // --- Streamer mode bot data ---

@@ -917,6 +917,90 @@
         font-size: 13px;
         color: #6b7796;
       }
+      /* "Add bot" dropdown, pinned to the bottom-right corner; its panel opens upward. */
+      #botControl {
+        position: fixed;
+        bottom: 12px;
+        right: 12px;
+        z-index: 80;
+      }
+      #botBtn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font: inherit;
+        font-size: 12px;
+        letter-spacing: 1px;
+        padding: 7px 12px;
+        border-radius: 6px;
+        border: 1px solid #2a3550;
+        background: #0e1424;
+        color: #7da2ff;
+        cursor: pointer;
+      }
+      #botBtn:hover {
+        background: #18203a;
+      }
+      /* "Kick bot" state: a warmer, destructive look (no caret). */
+      #botBtn.kick {
+        color: #ff8fa3;
+        border-color: #5a2a36;
+      }
+      #botBtn.kick:hover {
+        background: #2a1620;
+      }
+      #botBtn .caret {
+        font-size: 14px;
+        transition: transform 0.15s;
+        transform: translateY(-0.15em);
+      }
+      #botBtn[aria-expanded='true'] .caret {
+        transform: translateY(-0.15em) rotate(180deg);
+      }
+      #botPanel {
+        position: absolute;
+        bottom: calc(100% + 6px);
+        right: 0;
+        width: min(86vw, 250px);
+        background: #0e1424;
+        border: 1px solid #2a3550;
+        border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+        padding: 6px 0 8px;
+      }
+      #botPanel[hidden] {
+        display: none;
+      }
+      #botPanel h3 {
+        font-size: 10px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        color: #6b7796;
+        margin: 0;
+        padding: 6px 10px 4px;
+      }
+      .bot-list {
+        display: flex;
+        flex-direction: column;
+      }
+      .bot-option {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        padding: 8px 10px;
+        background: none;
+        border: 0;
+        text-align: left;
+        cursor: pointer;
+        font: inherit;
+      }
+      .bot-option:nth-child(odd) {
+        background: #0b1020;
+      }
+      .bot-option:hover {
+        background: #18203a;
+      }
       /* Power-up info dropdown — sibling of #gameModes inside #topLeft. */
       #powerupInfo {
         position: relative;
@@ -1372,6 +1456,37 @@
         CHANGELOG <span class="caret">▾</span>
       </button>
       <div id="changelogPanel" hidden></div>
+    </div>
+    <div id="botControl" style="display: none">
+      <button id="botBtn" type="button" aria-expanded="false">
+        ADD BOT <span class="caret">▾</span>
+      </button>
+      <div id="botPanel" hidden>
+        <h3>Add a bot</h3>
+        <div class="bot-list">
+          <button class="bot-option" type="button" data-level="easy" title="A relaxed opponent — slow to react and wide of the ball.">
+            <span class="mode-icon">🌱</span>
+            <span class="mode-text">
+              <span class="mode-name">Easy</span>
+              <span class="mode-desc">Slow reactions, misses a lot</span>
+            </span>
+          </button>
+          <button class="bot-option" type="button" data-level="medium" title="A solid opponent — tracks the ball at a fair pace.">
+            <span class="mode-icon">⚙️</span>
+            <span class="mode-text">
+              <span class="mode-name">Medium</span>
+              <span class="mode-desc">Tracks the ball, the odd slip</span>
+            </span>
+          </button>
+          <button class="bot-option" type="button" data-level="hard" title="A ruthless opponent — predicts bounces and barely misses.">
+            <span class="mode-icon">🔥</span>
+            <span class="mode-text">
+              <span class="mode-name">Hard</span>
+              <span class="mode-desc">Predicts bounces, rarely misses</span>
+            </span>
+          </button>
+        </div>
+      </div>
     </div>
     <h1>T S O N G</h1>
     <div class="arena">

@@ -5,7 +5,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { WebSocketServer, WebSocket } from 'ws';
 import sirv from 'sirv';
-import { ClientMsg, TICK_MS } from '../shared/types';
+import { BOT_LEVELS, BotLevel, ClientMsg, TICK_MS } from '../shared/types';
 import { Game, GameSnapshot } from './game';
 import { Lobby, LobbySnapshot } from './lobby';
 import { initDb } from './db';
@@ -140,6 +140,14 @@ wss.on('connection', (ws: WebSocket) => {
         break;
       case 'ready':
         lobby.setReady(ws);
+        break;
+      case 'addBot':
+        if ((BOT_LEVELS as readonly string[]).includes(msg.level)) {
+          lobby.addBot(ws, msg.level as BotLevel);
+        }
+        break;
+      case 'removeBot':
+        lobby.removeBot(ws);
         break;
     }
   });
