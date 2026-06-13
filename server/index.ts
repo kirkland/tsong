@@ -152,6 +152,9 @@ wss.on('connection', (ws: WebSocket) => {
       case 'ping':
         lobby.ping(ws);
         break;
+      case 'setWinScore':
+        if (typeof msg.score === 'number') lobby.setWinScore(ws, msg.score);
+        break;
     }
   });
 

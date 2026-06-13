@@ -106,6 +106,7 @@ export interface GameSnapshot {
   serveTimer: number;
   serveDir: number;
   targetTimer: number;
+  winScore?: number;
 }
 
 // Shortest distance from point p to the segment a→b (for swept target hit-testing,
@@ -140,6 +141,7 @@ export class Game {
   winnerSide: Side | null = null;
   lastHit: Side | null = null; // side whose paddle last touched any ball (null until first hit)
   paused = false; // set by the lobby: freeze play until both players capture their mouse
+  winScore = WIN_SCORE; // first-to-N; configurable per-room (default: shared constant)
 
   // Power-ups. A target floats on the board; bouncing the ball over it grants its kind.
   target: { x: number; y: number; kind: PowerupKind } | null = null;
@@ -188,6 +190,7 @@ export class Game {
       serveTimer: this.serveTimer,
       serveDir: this.serveDir,
       targetTimer: this.targetTimer,
+      winScore: this.winScore,
     };
   }
 
@@ -219,6 +222,7 @@ export class Game {
     this.serveTimer = s.serveTimer;
     this.serveDir = s.serveDir;
     this.targetTimer = s.targetTimer;
+    this.winScore = s.winScore ?? WIN_SCORE;
     // The sockets that drove this match (and their mouse-capture) are gone after a
     // restart, so always resume frozen — the reattached players unfreeze it by
     // capturing their mice again, exactly like the normal start-of-match flow.
@@ -497,6 +501,8 @@ export class Game {
   ballR(): number {
     return this.bigBallTimer > 0 ? BIG_BALL_R : BALL.r;
   }
+
+  setWinScore(n: number) { this.winScore = Math.max(1, n); }
 
   setTarget(side: Side, id: string, y: number) {
     const ent = this.players[side].find((p) => p.id === id);
@@ -875,7 +881,7 @@ export class Game {
   // the next ball is handled by tick() once the court is clear of balls.
   private scorePoint(scorer: Side): boolean {
     this.score[scorer] += 1;
-    if (this.score[scorer] >= WIN_SCORE) {
+    if (this.score[scorer] >= this.winScore) {
       this.status = 'over';
       this.winnerSide = scorer;
       return true;

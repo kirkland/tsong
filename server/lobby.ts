@@ -599,6 +599,14 @@ export class Lobby {
     this.announce(`💤 ${name} took too long to grab the ball — benched!`);
   }
 
+  /** Change the first-to-N win score (3, 5, or 7). Any joined client may do this. */
+  setWinScore(ws: WebSocket, score: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return;
+    if (![3, 5, 7].includes(score)) return;
+    this.game.setWinScore(score);
+  }
+
   // Any joined client may toggle game modes.
   setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean }) {
     const conn = this.conns.get(ws);
@@ -1128,6 +1136,12 @@ export class Lobby {
         blinded: this.game.blindTimer[side] > 0,
         curveReady: this.game.curveHits[side] > 0,
         players,
+        freezeTimer: Math.max(0, this.game.freezeTimer[side]),
+        blindTimer: Math.max(0, this.game.blindTimer[side]),
+        mirrorTimer: Math.max(0, this.game.mirrorTimer[side]),
+        growHits: this.game.growHits[side],
+        shrinkHits: this.game.shrinkHits[side],
+        smashHits: this.game.smashHits[side],
       };
     };
     return {
@@ -1177,6 +1191,11 @@ export class Lobby {
       bigBall,
       streamerMode: this.streamerMode,
       bot: this.bot?.level ?? null,
+      slowTimer: Math.max(0, this.game.slowTimer),
+      ghostTimer: Math.max(0, this.game.ghostTimer),
+      tinyTimer: Math.max(0, this.game.tinyTimer),
+      bigBallTimer: Math.max(0, this.game.bigBallTimer),
+      winScore: this.game.winScore,
     };
   }
 

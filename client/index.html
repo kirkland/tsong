@@ -586,8 +586,8 @@
         gap: 8px;
         align-items: flex-start;
       }
-      /* 2D/3D view toggle — a pill button matching MODES / POWER-UPS. */
-      #view3dBtn {
+      /* 2D/3D view toggle + mute button — pill buttons matching MODES / POWER-UPS. */
+      #view3dBtn, #muteBtn {
         font: inherit;
         font-size: 12px;
         letter-spacing: 1px;
@@ -598,13 +598,17 @@
         color: #7da2ff;
         cursor: pointer;
       }
-      #view3dBtn:hover {
+      #view3dBtn:hover, #muteBtn:hover {
         background: #18203a;
       }
       #view3dBtn[aria-pressed='true'] {
         background: #3a6df0;
         border-color: #3a6df0;
         color: #fff;
+      }
+      #muteBtn[aria-pressed='true'] {
+        color: #6b7796;
+        border-color: #1c2640;
       }
       /* Game modes dropdown — now inside #topLeft, so no longer fixed itself. */
       #gameModes {
@@ -1124,6 +1128,60 @@
         font-size: 12px;
       }
 
+      /* Active power-up HUD: a row of small colored chips showing live timers/counts. */
+      #puHud {
+        min-height: 20px;
+        display: flex;
+        gap: 5px;
+        flex-wrap: wrap;
+        justify-content: center;
+        align-items: center;
+      }
+      .pu-chip {
+        font-size: 11px;
+        padding: 1px 7px;
+        border-radius: 10px;
+        border: 1px solid currentColor;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+        line-height: 1.6;
+      }
+      /* Win score selector in the modes panel. */
+      .win-score-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 10px;
+        border-top: 1px solid #1c2640;
+        margin-top: 2px;
+      }
+      .win-score-opts {
+        display: flex;
+        gap: 4px;
+        margin-left: auto;
+      }
+      .ws-btn {
+        font: inherit;
+        font-size: 12px;
+        font-weight: 700;
+        padding: 2px 9px;
+        border-radius: 5px;
+        border: 1px solid #2a3550;
+        background: #0b1020;
+        color: #9fb0d8;
+        cursor: pointer;
+        letter-spacing: 0.5px;
+        transition: background 0.1s, color 0.1s;
+      }
+      .ws-btn:hover {
+        background: #18203a;
+        color: #e8eefc;
+      }
+      .ws-btn.active {
+        background: #3a6df0;
+        border-color: #3a6df0;
+        color: #fff;
+      }
       /* --- loading splash: a hype screen on first paint (lightning + ball explosion + pro tips) --- */
       #loadingScreen {
         position: fixed;
@@ -1315,7 +1373,7 @@
           left: 6px;
           gap: 4px;
         }
-        #view3dBtn, #gameModesBtn, #powerupInfoBtn {
+        #view3dBtn, #muteBtn, #gameModesBtn, #powerupInfoBtn {
           font-size: 10px;
           padding: 4px 8px;
         }
@@ -1381,6 +1439,7 @@
       <div class="load-skip">click anywhere to skip</div>
     </div>
     <div id="topLeft">
+      <button id="muteBtn" type="button" aria-pressed="false" title="Toggle sound on/off (M)">🔊</button>
       <button id="view3dBtn" type="button" aria-pressed="false" title="Switch between the 2D and 3D view (3D loads on first use)">3D</button>
       <div id="gameModes">
         <button id="gameModesBtn" type="button" aria-expanded="false">
@@ -1472,6 +1531,18 @@
             </label>
           </div>
           <button id="combosBtn" type="button" hidden>📓 Fatality combos</button>
+          <div class="win-score-row">
+            <span class="mode-icon">🏆</span>
+            <span class="mode-text">
+              <span class="mode-name">Win score</span>
+              <span class="mode-desc">First to reach this wins</span>
+            </span>
+            <div class="win-score-opts" id="winScoreOpts">
+              <button class="ws-btn active" data-score="3" type="button" title="First to 3 wins">3</button>
+              <button class="ws-btn" data-score="5" type="button" title="First to 5 wins">5</button>
+              <button class="ws-btn" data-score="7" type="button" title="First to 7 wins">7</button>
+            </div>
+          </div>
         </div>
       </div>
       <div id="powerupInfo">
@@ -1650,6 +1721,7 @@
         <!-- Three.js renders into this when 3D view is on; empty (and unused) otherwise. -->
         <div id="game3d" hidden></div>
         <div id="status"></div>
+        <div id="puHud"></div>
         <div id="joinButtons">
           <button id="join" style="display: none">Join game</button>
           <button id="joinLeft" style="display: none">Join left</button>

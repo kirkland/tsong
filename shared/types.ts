@@ -167,7 +167,8 @@ export type ClientMsg =
   | { type: 'ready' } // ready up for the next match
   | { type: 'addBot'; level: BotLevel } // drop an AI opponent into the open duel side
   | { type: 'removeBot' }
-  | { type: 'ping' }; // kick the AI opponent
+  | { type: 'ping' } // kick the AI opponent
+  | { type: 'setWinScore'; score: number }; // change the first-to-N win score (room-wide)
 
 // --- Server -> Client ---
 
@@ -194,6 +195,13 @@ export interface PaddleState {
   blinded: boolean; // opponent's half of the court is obscured (blind power-up)
   curveReady: boolean; // next hit will put spin on the ball (curve power-up)
   players: TeamPlayer[]; // every paddle on this side, one per seated player
+  // Active power-up countdown values (0 when inactive). Drives the HUD timer display.
+  freezeTimer: number;
+  blindTimer: number;
+  mirrorTimer: number;
+  growHits: number;
+  shrinkHits: number;
+  smashHits: number;
 }
 
 // One player's paddle in Arena (polygon) mode. The paddle rides along its edge of the
@@ -279,6 +287,12 @@ export interface StateMsg {
   bigBall: boolean; // ball is currently enlarged (bigball power-up)
   streamerMode: boolean; // fake chat bots are spamming the chat
   bot: BotLevel | null; // difficulty of the AI opponent currently in the duel, or null
+  // Active ball-effect countdown values (seconds remaining; 0 when inactive).
+  slowTimer: number;
+  ghostTimer: number;
+  tinyTimer: number;
+  bigBallTimer: number;
+  winScore: number; // current first-to-N win score (room-wide setting)
 }
 
 // Sent to a single connection whenever its own role changes (connect / claim / release).

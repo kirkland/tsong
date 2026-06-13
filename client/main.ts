@@ -58,6 +58,9 @@ const ballReactionEl = document.getElementById('ballReaction') as HTMLDivElement
 const reactionLayer = document.getElementById('reactionLayer') as HTMLDivElement;
 const fatalityCheck = document.getElementById('fatalityCheck') as HTMLInputElement;
 const combosBtn = document.getElementById('combosBtn') as HTMLButtonElement;
+const muteBtn = document.getElementById('muteBtn') as HTMLButtonElement;
+const puHudEl = document.getElementById('puHud') as HTMLDivElement;
+const winScoreOpts = document.getElementById('winScoreOpts') as HTMLDivElement;
 const game3dEl = document.getElementById('game3d') as HTMLDivElement;
 const view3dBtn = document.getElementById('view3dBtn') as HTMLButtonElement;
 const combosModal = document.getElementById('combosModal') as HTMLDivElement;
@@ -74,6 +77,69 @@ function getCookie(name: string): string | null {
   const m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
   return m ? decodeURIComponent(m[1]) : null;
 }
+
+// --- mute toggle ---
+let muted = getCookie('tsong_muted') === '1';
+function applyMute() {
+  muteBtn.setAttribute('aria-pressed', String(muted));
+  muteBtn.textContent = muted ? '🔇' : '🔊';
+  finishSound.muted = muted;
+  pacmanSound.muted = muted;
+  jsavSound.muted = muted;
+}
+muteBtn.addEventListener('click', () => {
+  muted = !muted;
+  setCookie('tsong_muted', muted ? '1' : '0');
+  applyMute();
+});
+// M key toggles mute from anywhere (except when typing in an input)
+window.addEventListener('keydown', (e) => {
+  if (e.target instanceof HTMLInputElement) return;
+  if (e.key.toLowerCase() === 'm') {
+    muted = !muted;
+    setCookie('tsong_muted', muted ? '1' : '0');
+    applyMute();
+  }
+});
+
+// --- synthesized sound effects ---
+function playHitSound() {
+  if (muted) return;
+  try {
+    const ac = new AudioContext();
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.type = 'square';
+    osc.frequency.value = 300;
+    gain.gain.setValueAtTime(0.06, ac.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.035);
+    osc.connect(gain);
+    gain.connect(ac.destination);
+    osc.start();
+    osc.stop(ac.currentTime + 0.04);
+  } catch {}
+}
+function playScoreSound() {
+  if (muted) return;
+  try {
+    const ac = new AudioContext();
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(520, ac.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(260, ac.currentTime + 0.28);
+    gain.gain.setValueAtTime(0.14, ac.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.3);
+    osc.connect(gain);
+    gain.connect(ac.destination);
+    osc.start();
+    osc.stop(ac.currentTime + 0.32);
+  } catch {}
+}
+
+// Track previous state for detecting events client-side
+let prevBallColor = '#e8eefc';
+let prevScore = { left: 0, right: 0 };
 
 function selectSwatch(color: string) {
   for (const btn of colorPicker.querySelectorAll<HTMLButtonElement>('.swatch')) {
@@ -143,11 +209,14 @@ const pacmanSound = new Audio('/start-music.mp3'); // PAC_CHOMP only
 pacmanSound.preload = 'auto';
 const jsavSound = new Audio('/you-lose.mp3'); // JSAV only
 jsavSound.preload = 'auto';
+// Apply persisted mute state immediately (before applyMute() runs at definition time).
+applyMute();
 let prevStatus: StateMsg['status'] | null = null; // last seen status, to fire on the rising edge into 'over'
 let prevFatality = false; // whether a fatality was playing last frame, to fire music on the rising edge
 
 // Quiet notification beep for pings.
 function playPingSound() {
+  if (muted) return;
   try {
     const ac = new AudioContext();
     const osc = ac.createOscillator();
@@ -164,6 +233,7 @@ function playPingSound() {
 }
 
 let pingTitleTimer: ReturnType<typeof setTimeout> | null = null;
+let chatTitleTimer: ReturnType<typeof setTimeout> | null = null;
 const ORIGINAL_TITLE = document.title;
 
 function onPing(from: string) {
@@ -172,6 +242,21 @@ function onPing(from: string) {
   if (pingTitleTimer) clearTimeout(pingTitleTimer);
   pingTitleTimer = setTimeout(() => { document.title = ORIGINAL_TITLE; }, 5000);
 }
+
+function notifyChatTitle(from: string) {
+  document.title = `💬 ${from} — ${ORIGINAL_TITLE}`;
+  if (chatTitleTimer) clearTimeout(chatTitleTimer);
+  chatTitleTimer = setTimeout(() => { document.title = ORIGINAL_TITLE; }, 8000);
+}
+
+// Clear the chat notification the moment the user focuses the tab again.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && chatTitleTimer) {
+    clearTimeout(chatTitleTimer);
+    chatTitleTimer = null;
+    document.title = ORIGINAL_TITLE;
+  }
+});
 let comboBuf: { k: string; t: number }[] = [];
 
 // Return the fatality move whose combo the recent keypresses just completed, or null.
@@ -249,6 +334,13 @@ const net = connect(
       }
       prevFatality = fatalityActive;
       prevStatus = msg.status;
+      // Detect paddle hit (ball takes on new color) and score events for sound.
+      if (msg.status === 'playing' && !msg.paused) {
+        if (msg.ball.color !== '#e8eefc' && msg.ball.color !== prevBallColor) playHitSound();
+        if (msg.score.left > prevScore.left || msg.score.right > prevScore.right) playScoreSound();
+      }
+      prevBallColor = msg.ball.color;
+      prevScore = { ...msg.score };
       state = msg;
       syncMyPaddleFromServer();
       updateUI();
@@ -256,6 +348,11 @@ const net = connect(
       renderLeaderboard(msg.rows);
     } else if (msg.type === 'chat') {
       msg.lines.forEach(addChatLine);
+      // Notify via tab title for a single new message while the tab is backgrounded.
+      // History replays (length > 1) are excluded to avoid spurious notifications on connect.
+      if (msg.lines.length === 1 && document.hidden && msg.lines[0].from !== myName) {
+        notifyChatTitle(msg.lines[0].from);
+      }
     } else if (msg.type === 'reaction') {
       spawnReaction(msg.emoji);
     } else if (msg.type === 'announce') {
@@ -385,6 +482,14 @@ layeredModeEl.addEventListener('change', () =>
 arenaModeEl.addEventListener('change', () =>
   net.send({ type: 'mode', arena: arenaModeEl.checked }),
 );
+
+// --- win score selector ---
+for (const btn of winScoreOpts.querySelectorAll<HTMLButtonElement>('.ws-btn')) {
+  btn.addEventListener('click', () => {
+    const score = Number(btn.dataset.score);
+    net.send({ type: 'setWinScore', score });
+  });
+}
 
 // --- slash commands ---
 // Typing "/" in chat pops up this menu of commands; each only appears when usable.
@@ -559,6 +664,16 @@ chatInput.addEventListener('keydown', (e) => {
     closeCommandMenu();
   }
 });
+// Press T (while not playing / not pointer-locked) to focus the chat input.
+window.addEventListener('keydown', (e) => {
+  if (e.target instanceof HTMLInputElement) return;
+  if (overlay.style.display !== 'none') return;
+  if (e.key.toLowerCase() === 't' && !pointerLocked && joined) {
+    e.preventDefault();
+    chatInput.focus();
+  }
+});
+
 // Close the menu when focus/clicks leave the chat form.
 document.addEventListener('click', (e) => {
   if (!commandMenu.hidden && !chatForm.contains(e.target as Node)) closeCommandMenu();
@@ -1581,6 +1696,13 @@ requestAnimationFrame(loop);
 function updateUI() {
   if (!state) return;
 
+  renderPuHud(state);
+
+  // Sync win score buttons with the current room setting.
+  for (const btn of winScoreOpts.querySelectorAll<HTMLButtonElement>('.ws-btn')) {
+    btn.classList.toggle('active', Number(btn.dataset.score) === state.winScore);
+  }
+
   // Mirror the live ball color onto the ball reaction button.
   if (state.ball.color !== ballColor) {
     ballColor = state.ball.color;
@@ -1653,7 +1775,7 @@ function updateUI() {
           ? `⏳ waiting for players to capture — ${cd}s`
           : '⏸ paused — waiting for players to capture their mice';
   } else if (isPlayer() && !pointerLocked) {
-    statusEl.textContent = '🖱 click the board to capture your mouse · Esc to release';
+    statusEl.textContent = '🖱 click the board to capture · ↑/↓ or W/S to move · Esc to release';
   } else statusEl.textContent = '';
 
   // King of the court: show who's reigning and their win streak (to everyone); the
@@ -1727,6 +1849,42 @@ function updateUI() {
   watchersEl.textContent = state.watchers.length
     ? `Watching: ${state.watchers.join(', ')}`
     : '';
+}
+
+// --- active power-up HUD ---
+// Colors mirror the in-game target ring palette (TARGET_STYLE in render.ts).
+const PU_CHIP_COLOR: Record<string, string> = {
+  slow: '#7aa2ff', ghost: '#c8beff', tiny: '#ff8c42', bigball: '#fb923c',
+  freeze: '#88d8f7', blind: '#9988bb', mirror: '#ff7eb3',
+  grow: '#ffd166', shrink: '#5ad1e6', smash: '#ff6b3d',
+};
+
+function renderPuHud(s: StateMsg) {
+  const chips: string[] = [];
+  const t1 = (n: number) => `${n.toFixed(1)}s`;
+
+  if (s.slowTimer > 0)    chips.push(puChip('slow',    `slow ${t1(s.slowTimer)}`));
+  if (s.ghostTimer > 0)   chips.push(puChip('ghost',   `ghost ${t1(s.ghostTimer)}`));
+  if (s.tinyTimer > 0)    chips.push(puChip('tiny',    `tiny ${t1(s.tinyTimer)}`));
+  if (s.bigBallTimer > 0) chips.push(puChip('bigball', `bigball ${t1(s.bigBallTimer)}`));
+
+  for (const side of ['left', 'right'] as const) {
+    const p = s.paddles[side];
+    const tag = p.name ? p.name.split(' & ')[0].slice(0, 10) : side;
+    if (p.growHits > 0)    chips.push(puChip('grow',   `${tag} grow ×${p.growHits}`));
+    if (p.shrinkHits > 0)  chips.push(puChip('shrink', `${tag} shrink ×${p.shrinkHits}`));
+    if (p.smashHits > 0)   chips.push(puChip('smash',  `${tag} smash ×${p.smashHits}`));
+    if (p.freezeTimer > 0) chips.push(puChip('freeze', `${tag} frozen ${t1(p.freezeTimer)}`));
+    if (p.blindTimer > 0)  chips.push(puChip('blind',  `${tag} blind ${t1(p.blindTimer)}`));
+    if (p.mirrorTimer > 0) chips.push(puChip('mirror', `${tag} mirror ${t1(p.mirrorTimer)}`));
+  }
+
+  puHudEl.innerHTML = chips.join('');
+}
+
+function puChip(kind: string, label: string): string {
+  const color = PU_CHIP_COLOR[kind] ?? '#9fb0d8';
+  return `<span class="pu-chip" style="color:${color};border-color:${color}">${escapeHtml(label)}</span>`;
 }
 
 // Names come from arbitrary user input, so escape before inserting as HTML.
