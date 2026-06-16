@@ -112,6 +112,7 @@ wss.on('connection', (ws: WebSocket) => {
           pinata: typeof msg.pinata === 'boolean' ? msg.pinata : undefined,
           layered: typeof msg.layered === 'boolean' ? msg.layered : undefined,
           arena: typeof msg.arena === 'boolean' ? msg.arena : undefined,
+          viewMode: typeof msg.viewMode === 'string' ? msg.viewMode : undefined,
         });
         break;
       case 'fatality':
