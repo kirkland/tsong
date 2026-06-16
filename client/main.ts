@@ -1355,13 +1355,16 @@ function onBoardMouseMove(e: MouseEvent) {
     return;
   }
   // Convert screen-pixel movement to court units. In first-person the paddle appears
-  // left/right on screen, so movementX drives it; direction flips for the right side.
-  // When the court is rotated 90°, paddle slides horizontally too (movementX, same deal).
+  // left/right on screen so movementX drives it (direction flips for the right side).
+  // Cap movementX per event to avoid a mouse-acceleration spike clamping the paddle
+  // to an edge in a single frame and making it appear frozen.
+  // Rotated court: paddle slides horizontally too, same movementX logic.
   if (state?.rotated) {
     target = clampPaddle(target - e.movementX * (COURT.h / r.width));
   } else if (state?.viewMode === 'firstperson') {
     const sign = myRole === 'right' ? -1 : 1;
-    target = clampPaddle(target + sign * e.movementX * (COURT.h / r.width) * 1.5);
+    const dx = Math.max(-40, Math.min(40, e.movementX));
+    target = clampPaddle(target + sign * dx * (COURT.h / r.width) * 1.5);
   } else {
     target = clampPaddle(target + e.movementY * (COURT.h / r.height));
   }
@@ -1587,13 +1590,8 @@ function onTouchMove(e: TouchEvent) {
     arenaTarget = Math.max(-max, Math.min(max, along));
     return;
   }
-  if (state?.viewMode === 'firstperson') {
-    const relX = (touch.clientX - r.left) / r.width;
-    target = clampPaddle((myRole === 'right' ? 1 - relX : relX) * COURT.h);
-  } else {
-    const relY = (touch.clientY - r.top) / r.height;
-    target = clampPaddle(relY * COURT.h);
-  }
+  const relY = (touch.clientY - r.top) / r.height;
+  target = clampPaddle(relY * COURT.h);
 }
 canvas.addEventListener('touchstart', onTouchStart, { passive: true });
 canvas.addEventListener('touchmove', onTouchMove, { passive: true });
@@ -1658,18 +1656,27 @@ async function ensureRenderer3d() {
   }
 }
 
+let activeViewMode: 'normal' | '3d' | 'firstperson' = 'normal';
+
 function syncViewMode(viewMode: 'normal' | '3d' | 'firstperson') {
-  const is3d = viewMode !== 'normal';
-  document.body.classList.toggle('view-3d', is3d);
-  game3dEl.hidden = !is3d;
-  canvas.hidden = is3d;
-  // Sync the radio buttons to reflect server state.
-  viewModePanel.querySelectorAll<HTMLInputElement>('input[name="viewMode"]').forEach((r) => {
-    r.checked = r.value === viewMode;
-  });
-  // fpPicker is inside the panel; show it only for spectators in first-person.
-  fpPickerEl.hidden = !(viewMode === 'firstperson' && myRole === 'observer');
-  if (is3d) void ensureRenderer3d().then(() => renderer3d?.resize());
+  // Gate the heavy DOM work behind an actual change — this fires 60x/sec via state messages,
+  // and constant radio/.hidden writes can cause micro-focus events that drop pointer lock.
+  if (viewMode !== activeViewMode) {
+    activeViewMode = viewMode;
+    const is3d = viewMode !== 'normal';
+    document.body.classList.toggle('view-3d', is3d);
+    game3dEl.hidden = !is3d;
+    canvas.hidden = is3d;
+    viewModePanel.querySelectorAll<HTMLInputElement>('input[name="viewMode"]').forEach((r) => {
+      r.checked = r.value === viewMode;
+    });
+    fpPickerEl.hidden = !(viewMode === 'firstperson' && myRole === 'observer');
+    if (is3d && !renderer3d) void ensureRenderer3d().then(() => renderer3d?.resize());
+  }
+  // Lock the dropdown while a match is live so mid-rally view switches can't drop pointer lock.
+  const locked = state?.status === 'playing';
+  viewModeBtn.disabled = locked;
+  viewModeBtn.title = locked ? 'Cannot change view during a match' : '';
 }
 window.addEventListener('resize', () => {
   if (state?.viewMode !== 'normal') renderer3d?.resize();
@@ -1712,8 +1719,7 @@ function loop(t: number) {
       if (keys.has('arrowright') || keys.has('d')) target -= step;
       if (keys.has('arrowleft') || keys.has('a')) target += step;
     } else if (state?.viewMode === 'firstperson') {
-      // First-person: paddle appears left/right on screen, so left/right arrows drive it.
-      // Direction flips for the right-side player (their right is court-Y decreasing).
+      // First-person: left/right keys match screen direction; direction flips for right side.
       const sign = myRole === 'right' ? -1 : 1;
       if (keys.has('arrowright') || keys.has('d')) target += sign * step;
       if (keys.has('arrowleft') || keys.has('a')) target -= sign * step;

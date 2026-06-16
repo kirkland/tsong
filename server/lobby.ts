@@ -620,7 +620,8 @@ export class Lobby {
     if (opts.pinata !== undefined) this.game.setPinata(opts.pinata);
     if (opts.layered !== undefined) this.game.setLayered(opts.layered);
     if (opts.arena !== undefined) this.setArena(opts.arena);
-    if (opts.viewMode === 'normal' || opts.viewMode === '3d' || opts.viewMode === 'firstperson') {
+    // View mode is locked while a match is in progress to avoid disrupting players.
+    if ((opts.viewMode === 'normal' || opts.viewMode === '3d' || opts.viewMode === 'firstperson') && this.game.status !== 'playing') {
       this.viewMode = opts.viewMode;
     }
   }

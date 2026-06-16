@@ -621,7 +621,8 @@
         color: #7da2ff;
         cursor: pointer;
       }
-      #viewModeBtn:hover { background: #18203a; }
+      #viewModeBtn:hover:not(:disabled) { background: #18203a; }
+      #viewModeBtn:disabled { opacity: 0.45; cursor: not-allowed; }
       #viewModeBtn .caret {
         font-size: 14px;
         transition: transform 0.15s;
