@@ -15,7 +15,7 @@ import { COURT, PADDLE, BALL, BIG_BALL_R, DIAMOND, PINATA, POWERUPS, TARGET, Pow
 import { drawLegendIcon, drawDiamondIcon } from './render';
 
 export interface Renderer3D {
-  render(s: StateMsg): void;
+  render(s: StateMsg, fpSide?: 'left' | 'right' | null): void;
   resize(): void;
   dispose(): void;
 }
@@ -32,6 +32,7 @@ const PU_COLOR: Record<PowerupKind, string> = {
   grow: '#ffd166', shrink: '#ff6b6b', smash: '#ff922b', slow: '#4dd2ff', multi: '#b197fc',
   freeze: '#74c0fc', curve: '#63e6be', blind: '#868e96', mirror: '#f783ac', shield: '#f5cc00',
   ghost: '#c0c8e0', tiny: '#ffa94d', warp: '#9775fa', bigball: '#ffd43b', rotate: '#69db7c',
+  fritz: '#f59e0b',
 };
 
 // Text painted flat onto the court floor (so it sits in the scene with real perspective —
@@ -257,8 +258,23 @@ export function createRenderer(container: HTMLElement): Renderer3D {
 
   const tmpColor = new THREE.Color();
 
-  function render(s: StateMsg) {
+  function render(s: StateMsg, fpSide?: 'left' | 'right' | null) {
     world.rotation.y = s.rotated ? Math.PI / 2 : 0;
+
+    // First-person camera: position behind the watched side's paddle, looking down-court.
+    if (fpSide) {
+      const p = s.paddles[fpSide];
+      const avgY = p.players.length
+        ? p.players.reduce((sum, pl) => sum + pl.y, 0) / p.players.length
+        : COURT.h / 2;
+      const paddleX = fpSide === 'left' ? COURT.w * 0.04 : COURT.w * 0.96;
+      const behindX = fpSide === 'left' ? wx(paddleX) - 180 : wx(paddleX) + 180;
+      camera.position.set(behindX, 110, wz(avgY));
+      camera.lookAt(fpSide === 'left' ? wx(COURT.w * 0.7) : wx(COURT.w * 0.3), 50, wz(avgY));
+    } else {
+      camera.position.set(0, 540, 600);
+      camera.lookAt(0, 0, -10);
+    }
 
     // Paddles — one box per seated player, sized to that side's current height.
     let pi = 0;

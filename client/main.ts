@@ -171,10 +171,11 @@ let state: StateMsg | null = null;
 let ballColor = '#e8eefc'; // live pong-ball color, mirrored onto the ball reaction
 let joined = false; // true once the player has entered a nickname (gates reactions)
 
-// 3D view: off by default; Three.js + the renderer load only on first switch.
-let view3d = false;
+// 3D / first-person view: driven by server state (state.viewMode). Three.js loads lazily.
 let renderer3d: import('./render3d').Renderer3D | null = null;
 let loading3d = false;
+// Which side a spectator watches in first-person mode (doesn't affect players).
+let fpSide: 'left' | 'right' = 'left';
 // Fatalities are 2D-canvas cinematics; in 3D view we surface them on the 2D board for
 // their duration (same footprint, so no layout jump), then drop back to 3D.
 let fatality2dActive = false;
@@ -343,6 +344,7 @@ const net = connect(
       prevScore = { ...msg.score };
       state = msg;
       syncMyPaddleFromServer();
+      syncViewMode(msg.viewMode ?? 'normal');
       updateUI();
     } else if (msg.type === 'leaderboard') {
       renderLeaderboard(msg.rows);
@@ -1326,7 +1328,7 @@ const clampPaddle = (y: number) => Math.max(PADDLE.h / 2, Math.min(COURT.h - PAD
 
 // The "board" you capture the mouse to is the canvas in 2D and the 3D container in 3D
 // (the canvas is display:none in 3D, so it can neither be clicked nor receive mousemove).
-const boardEl = () => (view3d ? game3dEl : canvas);
+const boardEl = () => (state?.viewMode !== 'normal' ? game3dEl : canvas);
 const isBoard = (el: Element | null) => el === canvas || el === game3dEl;
 
 function onBoardClick() {
@@ -1592,33 +1594,64 @@ game3dEl.addEventListener('touchcancel', onTouchEnd);
 
 // --- 3D view toggle (lazy-loads Three.js on first use; the 2D path is untouched
 // until then, so default visitors never download or run any 3D code) ---
-async function setView3d(on: boolean) {
-  view3d = on;
-  document.body.classList.toggle('view-3d', on);
-  view3dBtn.setAttribute('aria-pressed', String(on));
-  game3dEl.hidden = !on;
-  if (on && !renderer3d && !loading3d) {
-    loading3d = true;
-    view3dBtn.textContent = '…';
-    try {
-      const mod = await import('./render3d');
-      renderer3d = mod.createRenderer(game3dEl);
-    } catch (e) {
-      console.error('3D view failed to load:', e);
-      view3d = false;
-      document.body.classList.remove('view-3d');
-      view3dBtn.setAttribute('aria-pressed', 'false');
-      game3dEl.hidden = true;
-    } finally {
-      loading3d = false;
-    }
-  }
-  view3dBtn.textContent = view3d ? '2D' : '3D';
-  if (view3d) renderer3d?.resize();
+// Cycle: normal → 3d → firstperson → normal. Sends to server so all clients switch together.
+function cycleViewMode() {
+  const cur = state?.viewMode ?? 'normal';
+  const next = cur === 'normal' ? '3d' : cur === '3d' ? 'firstperson' : 'normal';
+  net.send({ type: 'mode', viewMode: next });
 }
-view3dBtn.addEventListener('click', () => void setView3d(!view3d));
+view3dBtn.addEventListener('click', cycleViewMode);
+
+// Lazily load Three.js and ensure the renderer exists whenever a 3D mode is active.
+async function ensureRenderer3d() {
+  if (renderer3d || loading3d) return;
+  loading3d = true;
+  try {
+    const mod = await import('./render3d');
+    renderer3d = mod.createRenderer(game3dEl);
+    renderer3d.resize();
+  } catch (e) {
+    console.error('3D view failed to load:', e);
+  } finally {
+    loading3d = false;
+  }
+}
+
+// Spectator side picker shown in first-person mode.
+const fpPickerEl = (() => {
+  const el = document.createElement('div');
+  el.id = 'fp-picker';
+  el.style.cssText = 'position:absolute;bottom:12px;left:50%;transform:translateX(-50%);display:flex;gap:8px;z-index:10;';
+  el.hidden = true;
+  for (const side of ['left', 'right'] as const) {
+    const btn = document.createElement('button');
+    btn.textContent = side === 'left' ? '◀ Left' : 'Right ▶';
+    btn.style.cssText = 'padding:6px 14px;border-radius:6px;border:1px solid #444;background:#1a2035;color:#ccc;cursor:pointer;font-size:13px;';
+    btn.addEventListener('click', () => {
+      fpSide = side;
+      el.querySelectorAll('button').forEach((b, i) => {
+        (b as HTMLButtonElement).style.background = (['left', 'right'][i] === side) ? '#2d4070' : '#1a2035';
+      });
+    });
+    el.appendChild(btn);
+  }
+  (document.getElementById('gameWrap') ?? document.body).appendChild(el);
+  return el;
+})();
+
+function syncViewMode(viewMode: 'normal' | '3d' | 'firstperson') {
+  const is3d = viewMode !== 'normal';
+  document.body.classList.toggle('view-3d', is3d);
+  game3dEl.hidden = !is3d;
+  canvas.hidden = is3d;
+  view3dBtn.textContent = viewMode === 'normal' ? '3D' : viewMode === '3d' ? '1P' : '2D';
+  view3dBtn.setAttribute('aria-pressed', String(is3d));
+  // Show spectator side picker only in first-person mode for non-players.
+  fpPickerEl.hidden = !(viewMode === 'firstperson' && myRole === 'observer');
+  if (is3d) void ensureRenderer3d().then(() => renderer3d?.resize());
+}
 window.addEventListener('resize', () => {
-  if (view3d) renderer3d?.resize();
+  if (state?.viewMode !== 'normal') renderer3d?.resize();
 });
 
 function canControl(): boolean {
@@ -1675,14 +1708,17 @@ function loop(t: number) {
   if (state) {
     // In 3D view, a fatality temporarily takes over the 2D board (the cinematics are 2D
     // canvas effects that composite over the full court frame). Swap surfaces on the edge.
-    const showFatality2d = view3d && !!state.fatality;
+    const showFatality2d = state.viewMode !== 'normal' && !!state.fatality;
     if (showFatality2d !== fatality2dActive) {
       fatality2dActive = showFatality2d;
       document.body.classList.toggle('fatality-2d', showFatality2d);
-      if (!showFatality2d && view3d) renderer3d?.resize(); // re-sync the 3D canvas on return
+      if (!showFatality2d && state.viewMode !== 'normal') renderer3d?.resize();
     }
-    if (view3d && renderer3d && !state.fatality) {
-      renderer3d.render(state);
+    if (state.viewMode !== 'normal' && renderer3d && !state.fatality) {
+      const side = state.viewMode === 'firstperson'
+        ? (myRole !== 'observer' ? (myRole as 'left' | 'right') : fpSide)
+        : null;
+      renderer3d.render(state, side);
     } else {
       applyCanvasRotation(state.rotated);
       draw(ctx, state, myRole);

@@ -133,6 +133,7 @@ export class Lobby {
 
   // Streamer mode: fake chat bots spam the chat to distract players.
   private streamerMode = false;
+  private viewMode: 'normal' | '3d' | 'firstperson' = 'normal';
   private streamerTick = 0; // ticks since last bot message
   private streamerNextAt = 0; // tick count to fire next bot message
   private streamerLastScore = { left: 0, right: 0 };
@@ -608,7 +609,7 @@ export class Lobby {
   }
 
   // Any joined client may toggle game modes.
-  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean }) {
+  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string }) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return;
     if (opts.closing !== undefined) this.game.setClosing(opts.closing);
@@ -619,6 +620,9 @@ export class Lobby {
     if (opts.pinata !== undefined) this.game.setPinata(opts.pinata);
     if (opts.layered !== undefined) this.game.setLayered(opts.layered);
     if (opts.arena !== undefined) this.setArena(opts.arena);
+    if (opts.viewMode === 'normal' || opts.viewMode === '3d' || opts.viewMode === 'firstperson') {
+      this.viewMode = opts.viewMode;
+    }
   }
 
   /** Arm / disarm arena mode. Turning it off while a polygon match is live folds the
@@ -1177,6 +1181,7 @@ export class Lobby {
         : null,
       rotated: this.game.rotated,
       fritz: this.game.fritz,
+      viewMode: this.viewMode,
       pinata: this.game.pinata,
       pinataPos: poly ? null : this.pinataView(),
       winner: status === 'over' ? (poly ? this.polyWinnerName() : this.winnerName) : null,

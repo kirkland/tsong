@@ -266,6 +266,7 @@ export interface StateMsg {
   // The whole game (paddles, ball, score) renders rotated and controls remap to match.
   rotated: boolean;
   fritz: boolean; // "fritz" power-up: replaces the court background with fritz's photo for the point
+  viewMode: 'normal' | '3d' | 'firstperson'; // shared view mode — changes for every client at once
   pinata: boolean; // whether "piñata" mode is armed
   // Live piñata (beach-ball collector): center, current rotation, the balls stuck to its
   // surface (absolute court positions), and a one-frame `burst` pulse the moment it pops.
