@@ -157,7 +157,7 @@ export class Game {
   tinyTimer = 0;
   bigBallTimer = 0;
   shielded: Record<Side, boolean> = { left: false, right: false };
-  rotated = false; // "rotate" power-up: court is flipped 90° for the rest of the match
+  rotated = false; // "rotate" power-up: court is flipped 90° for the current point only
 
   private serveTimer = 0;
   private serveDir = 1; // +1 = launch toward right, -1 = toward left
@@ -528,6 +528,7 @@ export class Game {
     this.tinyTimer = 0;
     this.bigBallTimer = 0;
     this.curveHits = { left: 0, right: 0 };
+    this.rotated = false;
     // Shield intentionally persists — an unused shield stays for the next point.
     // Piñata: drop anything stuck and clear pending effects; the collector keeps drifting.
     if (this.pinataObj) this.pinataObj.stuck = [];
@@ -797,8 +798,7 @@ export class Game {
         this.bigBallTimer = BIG_BALL_TIME;
         break;
       case 'rotate':
-        // Whole-match effect: flip the court 90°. Persists across points (it's not reset
-        // by serve(), only by clearPowerups() at the next match start / return to lobby).
+        // Flip the court 90° for the current point only; resets on serve.
         this.rotated = true;
         break;
     }
