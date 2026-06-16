@@ -107,7 +107,7 @@ export const TARGET = {
 //   rotate — the entire court rotates 90° for the rest of the match
 export const POWERUPS = [
   'grow', 'shrink', 'smash', 'slow', 'multi',
-  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate',
+  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate', 'fritz',
 ] as const;
 export type PowerupKind = (typeof POWERUPS)[number];
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
@@ -265,6 +265,7 @@ export interface StateMsg {
   // True once a "rotate" power-up has flipped the court 90° for the rest of the match.
   // The whole game (paddles, ball, score) renders rotated and controls remap to match.
   rotated: boolean;
+  fritz: boolean; // "fritz" power-up: replaces the court background with fritz's photo for the point
   pinata: boolean; // whether "piñata" mode is armed
   // Live piñata (beach-ball collector): center, current rotation, the balls stuck to its
   // surface (absolute court positions), and a one-frame `burst` pulse the moment it pops.
