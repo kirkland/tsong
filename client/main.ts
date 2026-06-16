@@ -1908,7 +1908,7 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
     .map((r, i) => {
       return `<li><span class="rank">${i + 1}</span><span class="lbname">${escapeHtml(
         r.name,
-      )}</span><span class="rec">${r.wins}–${r.losses}</span><span class="pct">${r.elo ?? 1000}</span></li>`;
+      )}</span><span class="pct">${r.elo ?? 1000}</span></li>`;
     })
     .join('');
   leaderboardEl.innerHTML = `<h2>Leaderboard</h2><ol>${items}</ol>`;

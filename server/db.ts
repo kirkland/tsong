@@ -116,16 +116,12 @@ export async function updateName(id: string, name: string): Promise<number> {
 
 export async function getLeaderboard(): Promise<LeaderboardRow[]> {
   if (!pool) return [];
-  // Rank by ELO among players with enough games; players below the threshold follow.
   const { rows } = await pool.query(
     `SELECT name, wins, losses, elo
        FROM players
-      ORDER BY (wins + losses >= $1) DESC,
-               elo DESC,
-               wins DESC,
-               name ASC
-      LIMIT $2`,
-    [LEADERBOARD_MIN_GAMES, LEADERBOARD_SIZE],
+      ORDER BY elo DESC, name ASC
+      LIMIT $1`,
+    [LEADERBOARD_SIZE],
   );
   return rows.map((r) => ({ name: r.name, wins: r.wins, losses: r.losses, elo: r.elo }));
 }
