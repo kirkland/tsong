@@ -307,6 +307,7 @@ export interface LeaderboardRow {
   name: string;
   wins: number;
   losses: number;
+  elo: number;
 }
 
 // Broadcast on connect and whenever the standings change (after a match).
