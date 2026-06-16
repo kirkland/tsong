@@ -1046,6 +1046,100 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !gameModesPanel.hidden) closeGameModes();
 });
 
+// --- Tournament dropdown (top-left): create a bracket ---
+const tourneyBtn = document.getElementById('tourneyBtn') as HTMLButtonElement;
+const tourneyPanel = document.getElementById('tourneyPanel') as HTMLDivElement;
+const tournamentPanel = document.getElementById('tournamentPanel') as HTMLDivElement;
+const tournamentTitle = document.getElementById('tournamentTitle') as HTMLSpanElement;
+const tournamentBody = document.getElementById('tournamentBody') as HTMLDivElement;
+const tournamentJoinBtn = document.getElementById('tournamentJoinBtn') as HTMLButtonElement;
+const tournamentCancelBtn = document.getElementById('tournamentCancelBtn') as HTMLButtonElement;
+
+function closeTourney() {
+  tourneyPanel.hidden = true;
+  tourneyBtn.setAttribute('aria-expanded', 'false');
+}
+tourneyBtn.addEventListener('click', () => {
+  const open = tourneyPanel.hidden;
+  tourneyPanel.hidden = !open;
+  tourneyBtn.setAttribute('aria-expanded', String(open));
+});
+document.addEventListener('click', (e) => {
+  if (tourneyPanel.hidden) return;
+  const t = e.target as Node;
+  if (!tourneyPanel.contains(t) && !tourneyBtn.contains(t)) closeTourney();
+});
+for (const btn of tourneyPanel.querySelectorAll<HTMLButtonElement>('.tourney-size')) {
+  btn.addEventListener('click', () => {
+    net.send({ type: 'tournamentCreate', size: Number(btn.dataset.size) });
+    closeTourney();
+  });
+}
+tournamentJoinBtn.addEventListener('click', () => net.send({ type: 'tournamentJoin' }));
+tournamentCancelBtn.addEventListener('click', () => {
+  if (confirm('Cancel the current tournament?')) net.send({ type: 'tournamentCancel' });
+});
+
+// Render the live tournament panel from server state (signup slots, bracket, or champion).
+function renderTournament(t: StateMsg['tournament']) {
+  document.body.classList.toggle('tournament-on', !!t);
+  if (!t) {
+    tournamentPanel.hidden = true;
+    return;
+  }
+  tournamentPanel.hidden = false;
+
+  if (t.status === 'signup') {
+    const filled = t.slots.filter(Boolean).length;
+    tournamentTitle.textContent = `🏆 Tournament — ${filled}/${t.size} joined`;
+    const alreadyIn = t.slots.some((s) => s === myName);
+    tournamentJoinBtn.hidden = !(myRole === 'observer' && !alreadyIn && filled < t.size && joined);
+    tournamentBody.innerHTML =
+      `<div class="t-slots">` +
+      t.slots
+        .map((s, i) =>
+          s
+            ? `<div class="t-slot"><span class="t-seed">#${i + 1}</span>${escapeHtml(s)}</div>`
+            : `<div class="t-slot open"><span class="t-seed">#${i + 1}</span>open</div>`,
+        )
+        .join('') +
+      `</div>`;
+    return;
+  }
+
+  // active / done → render the bracket by round.
+  tournamentJoinBtn.hidden = true;
+  tournamentTitle.textContent = t.status === 'done' ? '🏆 Tournament — Final Results' : '🏆 Tournament';
+  const roundName = (r: number) => {
+    const fromEnd = t.rounds - 1 - r; // 0 = final
+    if (fromEnd === 0) return 'Final';
+    if (fromEnd === 1) return 'Semifinals';
+    if (fromEnd === 2) return 'Quarterfinals';
+    return `Round ${r + 1}`;
+  };
+  const player = (name: string | null, isWinner: boolean) => {
+    if (!name) return `<div class="t-player tbd">TBD</div>`;
+    return `<div class="t-player${isWinner ? ' winner' : ''}">${escapeHtml(name)}${isWinner ? ' ✓' : ''}</div>`;
+  };
+  let html = `<div class="t-bracket">`;
+  for (let r = 0; r < t.rounds; r++) {
+    const ms = t.matches.filter((m) => m.round === r);
+    html += `<div class="t-round"><div class="t-round-title">${roundName(r)}</div>`;
+    for (const m of ms) {
+      html += `<div class="t-match${m.live ? ' live' : ''}">` +
+        player(m.p1, m.winner != null && m.winner === m.p1) +
+        player(m.p2, m.winner != null && m.winner === m.p2) +
+        `</div>`;
+    }
+    html += `</div>`;
+  }
+  html += `</div>`;
+  if (t.status === 'done' && t.champion) {
+    html += `<div class="t-champion">🏆 ${escapeHtml(t.champion)} wins!</div>`;
+  }
+  tournamentBody.innerHTML = html;
+}
+
 // --- Power-ups dropdown (top-left, next to MODES): legend of all power-ups ---
 const powerupInfoBtn = document.getElementById('powerupInfoBtn') as HTMLButtonElement;
 const powerupInfoPanel = document.getElementById('powerupInfoPanel') as HTMLDivElement;
@@ -1780,6 +1874,7 @@ function updateUI() {
   if (!state) return;
 
   renderPuHud(state);
+  renderTournament(state.tournament);
 
   // Sync win score buttons with the current room setting.
   for (const btn of winScoreOpts.querySelectorAll<HTMLButtonElement>('.ws-btn')) {
