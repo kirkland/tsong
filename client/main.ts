@@ -1354,11 +1354,14 @@ function onBoardMouseMove(e: MouseEvent) {
     arenaTarget = Math.max(-max, Math.min(max, arenaTarget + along));
     return;
   }
-  // Convert screen-pixel movement to court units (1:1 with what's drawn). When the court
-  // is rotated 90°, the paddle slides horizontally on screen, so track movementX instead —
-  // moving the mouse right slides the paddle right (which is decreasing court-Y).
+  // Convert screen-pixel movement to court units. In first-person the paddle appears
+  // left/right on screen, so movementX drives it; direction flips for the right side.
+  // When the court is rotated 90°, paddle slides horizontally too (movementX, same deal).
   if (state?.rotated) {
     target = clampPaddle(target - e.movementX * (COURT.h / r.width));
+  } else if (state?.viewMode === 'firstperson') {
+    const sign = myRole === 'right' ? -1 : 1;
+    target = clampPaddle(target + sign * e.movementX * (COURT.h / r.width) * 1.5);
   } else {
     target = clampPaddle(target + e.movementY * (COURT.h / r.height));
   }
@@ -1584,8 +1587,13 @@ function onTouchMove(e: TouchEvent) {
     arenaTarget = Math.max(-max, Math.min(max, along));
     return;
   }
-  const relY = (touch.clientY - r.top) / r.height;
-  target = clampPaddle(relY * COURT.h);
+  if (state?.viewMode === 'firstperson') {
+    const relX = (touch.clientX - r.left) / r.width;
+    target = clampPaddle((myRole === 'right' ? 1 - relX : relX) * COURT.h);
+  } else {
+    const relY = (touch.clientY - r.top) / r.height;
+    target = clampPaddle(relY * COURT.h);
+  }
 }
 canvas.addEventListener('touchstart', onTouchStart, { passive: true });
 canvas.addEventListener('touchmove', onTouchMove, { passive: true });
@@ -1700,10 +1708,15 @@ function loop(t: number) {
     // Paddle input (mouse and keyboard) only applies while the mouse is captured.
     const step = PADDLE.speed / 60;
     if (state?.rotated) {
-      // Court rotated 90°: the paddle slides horizontally, so right/left drive it
-      // (right on screen = decreasing court-Y). Up/down are ignored while rotated.
+      // Court rotated 90°: paddle slides horizontally; right on screen = decreasing court-Y.
       if (keys.has('arrowright') || keys.has('d')) target -= step;
       if (keys.has('arrowleft') || keys.has('a')) target += step;
+    } else if (state?.viewMode === 'firstperson') {
+      // First-person: paddle appears left/right on screen, so left/right arrows drive it.
+      // Direction flips for the right-side player (their right is court-Y decreasing).
+      const sign = myRole === 'right' ? -1 : 1;
+      if (keys.has('arrowright') || keys.has('d')) target += sign * step;
+      if (keys.has('arrowleft') || keys.has('a')) target -= sign * step;
     } else {
       if (keys.has('arrowup') || keys.has('w')) target -= step;
       if (keys.has('arrowdown') || keys.has('s')) target += step;
