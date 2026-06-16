@@ -96,6 +96,7 @@ export interface GameSnapshot {
   pinata: boolean;
   pinataObj: PinataObj | null;
   rotated: boolean;
+  fritz?: boolean;
   winnerSide: Side | null;
   lastHit: Side | null;
   target: { x: number; y: number; kind: PowerupKind } | null;
@@ -158,6 +159,7 @@ export class Game {
   bigBallTimer = 0;
   shielded: Record<Side, boolean> = { left: false, right: false };
   rotated = false; // "rotate" power-up: court is flipped 90° for the current point only
+  fritz = false; // "fritz" power-up: replaces background with fritz's photo for the point
 
   private serveTimer = 0;
   private serveDir = 1; // +1 = launch toward right, -1 = toward left
@@ -180,6 +182,7 @@ export class Game {
         ? { ...this.pinataObj, stuck: this.pinataObj.stuck.map((s) => ({ ...s })) }
         : null,
       rotated: this.rotated,
+      fritz: this.fritz,
       winnerSide: this.winnerSide,
       lastHit: this.lastHit,
       target: this.target ? { ...this.target } : null,
@@ -212,6 +215,7 @@ export class Game {
       ? { ...s.pinataObj, stuck: (s.pinataObj.stuck ?? []).map((x) => ({ ...x })) }
       : null;
     this.rotated = s.rotated ?? false;
+    this.fritz = s.fritz ?? false;
     this.winnerSide = s.winnerSide;
     this.lastHit = s.lastHit;
     this.target = s.target ? { ...s.target } : null;
@@ -529,6 +533,7 @@ export class Game {
     this.bigBallTimer = 0;
     this.curveHits = { left: 0, right: 0 };
     this.rotated = false;
+    this.fritz = false;
     // Shield intentionally persists — an unused shield stays for the next point.
     // Piñata: drop anything stuck and clear pending effects; the collector keeps drifting.
     if (this.pinataObj) this.pinataObj.stuck = [];
@@ -800,6 +805,9 @@ export class Game {
       case 'rotate':
         // Flip the court 90° for the current point only; resets on serve.
         this.rotated = true;
+        break;
+      case 'fritz':
+        this.fritz = true;
         break;
     }
   }

@@ -1176,6 +1176,7 @@ export class Lobby {
         ? { x: this.game.diamondBlock.x, y: this.game.diamondBlock.y }
         : null,
       rotated: this.game.rotated,
+      fritz: this.game.fritz,
       pinata: this.game.pinata,
       pinataPos: poly ? null : this.pinataView(),
       winner: status === 'over' ? (poly ? this.polyWinnerName() : this.winnerName) : null,

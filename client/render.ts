@@ -2,6 +2,9 @@
 
 import { COURT, PADDLE, BALL, BIG_BALL_R, DIAMOND, PINATA, TARGET, PowerupKind, StateMsg, PolyState, Role } from '../shared/types';
 
+const fritzImg = new Image();
+fritzImg.src = '/fritz.jpg';
+
 export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 'observer') {
   // Arena (free-for-all polygon) mode renders its own court entirely; bail out early.
   if (s.poly) {
@@ -17,8 +20,12 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
   else ctx.setTransform(1, 0, 0, 1, 0, 0);
 
   // Court
-  ctx.fillStyle = '#0b1020';
-  ctx.fillRect(0, 0, COURT.w, COURT.h);
+  if (s.fritz && fritzImg.complete && fritzImg.naturalWidth > 0) {
+    ctx.drawImage(fritzImg, 0, 0, COURT.w, COURT.h);
+  } else {
+    ctx.fillStyle = '#0b1020';
+    ctx.fillRect(0, 0, COURT.w, COURT.h);
+  }
 
   // Center line
   ctx.strokeStyle = '#222e4a';
@@ -505,6 +512,7 @@ const TARGET_STYLE: Record<PowerupKind, { stroke: string; fill: string }> = {
   warp:    { stroke: '#e040fb', fill: 'rgba(224,  64, 251, 0.12)' }, // magenta
   bigball: { stroke: '#fb923c', fill: 'rgba(251, 146,  60, 0.14)' }, // deep orange
   rotate:  { stroke: '#2ee6c9', fill: 'rgba( 46, 230, 201, 0.13)' }, // teal
+  fritz:   { stroke: '#f59e0b', fill: 'rgba(245, 158,  11, 0.13)' }, // amber
 };
 
 function drawTarget(ctx: CanvasRenderingContext2D, x: number, y: number, kind: PowerupKind) {
@@ -711,6 +719,24 @@ const GLYPHS: Record<PowerupKind, (ctx: CanvasRenderingContext2D, x: number, y: 
     ctx.beginPath();
     ctx.arc(x, y, 4, 0, Math.PI * 2);
     ctx.fill();
+  },
+  // fritz: a smiley face → "fritz takes over the background"
+  fritz(ctx, x, y) {
+    // Head
+    ctx.beginPath();
+    ctx.arc(x, y, 10, 0, Math.PI * 2);
+    ctx.stroke();
+    // Eyes
+    ctx.beginPath();
+    ctx.arc(x - 3.5, y - 3, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(x + 3.5, y - 3, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+    // Smile
+    ctx.beginPath();
+    ctx.arc(x, y + 1, 5, 0.2, Math.PI - 0.2);
+    ctx.stroke();
   },
   // rotate: a circular arrow → "the whole court spins 90°"
   rotate(ctx, x, y) {
