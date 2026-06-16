@@ -62,7 +62,11 @@ const muteBtn = document.getElementById('muteBtn') as HTMLButtonElement;
 const puHudEl = document.getElementById('puHud') as HTMLDivElement;
 const winScoreOpts = document.getElementById('winScoreOpts') as HTMLDivElement;
 const game3dEl = document.getElementById('game3d') as HTMLDivElement;
-const view3dBtn = document.getElementById('view3dBtn') as HTMLButtonElement;
+const viewModeBtn = document.getElementById('viewModeBtn') as HTMLButtonElement;
+const viewModePanel = document.getElementById('viewModePanel') as HTMLDivElement;
+const fpPickerEl = document.getElementById('fpPicker') as HTMLDivElement;
+const fpLeftBtn = document.getElementById('fpLeft') as HTMLButtonElement;
+const fpRightBtn = document.getElementById('fpRight') as HTMLButtonElement;
 const combosModal = document.getElementById('combosModal') as HTMLDivElement;
 const combosCard = document.getElementById('combosCard') as HTMLDivElement;
 const combosClose = document.getElementById('combosClose') as HTMLButtonElement;
@@ -1592,15 +1596,44 @@ game3dEl.addEventListener('touchmove', onTouchMove, { passive: true });
 game3dEl.addEventListener('touchend', onTouchEnd);
 game3dEl.addEventListener('touchcancel', onTouchEnd);
 
-// --- 3D view toggle (lazy-loads Three.js on first use; the 2D path is untouched
-// until then, so default visitors never download or run any 3D code) ---
-// Cycle: normal → 3d → firstperson → normal. Sends to server so all clients switch together.
-function cycleViewMode() {
-  const cur = state?.viewMode ?? 'normal';
-  const next = cur === 'normal' ? '3d' : cur === '3d' ? 'firstperson' : 'normal';
-  net.send({ type: 'mode', viewMode: next });
-}
-view3dBtn.addEventListener('click', cycleViewMode);
+// --- View mode dropdown (lazy-loads Three.js on first use) ---
+// Open/close the panel.
+viewModeBtn.addEventListener('click', () => {
+  const open = viewModePanel.hidden;
+  viewModePanel.hidden = !open;
+  viewModeBtn.setAttribute('aria-expanded', String(open));
+});
+// Close when clicking outside.
+document.addEventListener('click', (e) => {
+  if (!viewModePanel.hidden && !viewModeBtn.closest('#viewMode')?.contains(e.target as Node)) {
+    viewModePanel.hidden = true;
+    viewModeBtn.setAttribute('aria-expanded', 'false');
+  }
+});
+// Radio buttons send mode to server.
+viewModePanel.querySelectorAll<HTMLInputElement>('input[name="viewMode"]').forEach((radio) => {
+  radio.addEventListener('change', () => {
+    if (radio.checked) {
+      net.send({ type: 'mode', viewMode: radio.value });
+      // Keep panel open only when first-person is selected (fpPicker needs to be accessible).
+      if (radio.value !== 'firstperson') {
+        viewModePanel.hidden = true;
+        viewModeBtn.setAttribute('aria-expanded', 'false');
+      }
+    }
+  });
+});
+// Left/right picker for spectators in first-person mode.
+fpLeftBtn.addEventListener('click', () => {
+  fpSide = 'left';
+  fpLeftBtn.classList.add('active');
+  fpRightBtn.classList.remove('active');
+});
+fpRightBtn.addEventListener('click', () => {
+  fpSide = 'right';
+  fpRightBtn.classList.add('active');
+  fpLeftBtn.classList.remove('active');
+});
 
 // Lazily load Three.js and ensure the renderer exists whenever a 3D mode is active.
 async function ensureRenderer3d() {
@@ -1617,36 +1650,16 @@ async function ensureRenderer3d() {
   }
 }
 
-// Spectator side picker shown in first-person mode.
-const fpPickerEl = (() => {
-  const el = document.createElement('div');
-  el.id = 'fp-picker';
-  el.style.cssText = 'position:absolute;bottom:12px;left:50%;transform:translateX(-50%);display:flex;gap:8px;z-index:10;';
-  el.hidden = true;
-  for (const side of ['left', 'right'] as const) {
-    const btn = document.createElement('button');
-    btn.textContent = side === 'left' ? '◀ Left' : 'Right ▶';
-    btn.style.cssText = 'padding:6px 14px;border-radius:6px;border:1px solid #444;background:#1a2035;color:#ccc;cursor:pointer;font-size:13px;';
-    btn.addEventListener('click', () => {
-      fpSide = side;
-      el.querySelectorAll('button').forEach((b, i) => {
-        (b as HTMLButtonElement).style.background = (['left', 'right'][i] === side) ? '#2d4070' : '#1a2035';
-      });
-    });
-    el.appendChild(btn);
-  }
-  (document.getElementById('gameWrap') ?? document.body).appendChild(el);
-  return el;
-})();
-
 function syncViewMode(viewMode: 'normal' | '3d' | 'firstperson') {
   const is3d = viewMode !== 'normal';
   document.body.classList.toggle('view-3d', is3d);
   game3dEl.hidden = !is3d;
   canvas.hidden = is3d;
-  view3dBtn.textContent = viewMode === 'normal' ? '3D' : viewMode === '3d' ? '1P' : '2D';
-  view3dBtn.setAttribute('aria-pressed', String(is3d));
-  // Show spectator side picker only in first-person mode for non-players.
+  // Sync the radio buttons to reflect server state.
+  viewModePanel.querySelectorAll<HTMLInputElement>('input[name="viewMode"]').forEach((r) => {
+    r.checked = r.value === viewMode;
+  });
+  // fpPicker is inside the panel; show it only for spectators in first-person.
   fpPickerEl.hidden = !(viewMode === 'firstperson' && myRole === 'observer');
   if (is3d) void ensureRenderer3d().then(() => renderer3d?.resize());
 }

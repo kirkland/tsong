@@ -270,7 +270,9 @@ export function createRenderer(container: HTMLElement): Renderer3D {
       const paddleX = fpSide === 'left' ? COURT.w * 0.04 : COURT.w * 0.96;
       const behindX = fpSide === 'left' ? wx(paddleX) - 180 : wx(paddleX) + 180;
       camera.position.set(behindX, 110, wz(avgY));
-      camera.lookAt(fpSide === 'left' ? wx(COURT.w * 0.7) : wx(COURT.w * 0.3), 50, wz(avgY));
+      // lookAt uses Z=0 (center-line) so the camera rotates as the paddle moves side-to-side
+      // rather than just translating, making the view feel responsive.
+      camera.lookAt(fpSide === 'left' ? wx(COURT.w * 0.7) : wx(COURT.w * 0.3), 30, 0);
     } else {
       camera.position.set(0, 540, 600);
       camera.lookAt(0, 0, -10);
