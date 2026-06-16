@@ -90,6 +90,7 @@ function applyMute() {
   finishSound.muted = muted;
   pacmanSound.muted = muted;
   jsavSound.muted = muted;
+  discoSound.muted = muted;
 }
 muteBtn.addEventListener('click', () => {
   muted = !muted;
@@ -214,10 +215,14 @@ const pacmanSound = new Audio('/start-music.mp3'); // PAC_CHOMP only
 pacmanSound.preload = 'auto';
 const jsavSound = new Audio('/you-lose.mp3'); // JSAV only
 jsavSound.preload = 'auto';
+const discoSound = new Audio('/disco.mp3'); // plays while the disco powerup is active
+discoSound.preload = 'auto';
+discoSound.loop = true;
 // Apply persisted mute state immediately (before applyMute() runs at definition time).
 applyMute();
 let prevStatus: StateMsg['status'] | null = null; // last seen status, to fire on the rising edge into 'over'
 let prevFatality = false; // whether a fatality was playing last frame, to fire music on the rising edge
+let prevDisco = false; // rising-edge detection for disco sound
 
 // Quiet notification beep for pings.
 function playPingSound() {
@@ -339,6 +344,16 @@ const net = connect(
       }
       prevFatality = fatalityActive;
       prevStatus = msg.status;
+      // Disco music: plays for the duration of the powerup, stops when the point ends.
+      const discoActive = !!msg.disco;
+      if (discoActive && !prevDisco) {
+        discoSound.currentTime = 0;
+        discoSound.play().catch(() => {});
+      } else if (!discoActive && prevDisco) {
+        discoSound.pause();
+        discoSound.currentTime = 0;
+      }
+      prevDisco = discoActive;
       // Detect paddle hit (ball takes on new color) and score events for sound.
       if (msg.status === 'playing' && !msg.paused) {
         if (msg.ball.color !== '#e8eefc' && msg.ball.color !== prevBallColor) playHitSound();

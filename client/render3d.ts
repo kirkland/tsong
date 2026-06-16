@@ -33,6 +33,7 @@ const PU_COLOR: Record<PowerupKind, string> = {
   freeze: '#74c0fc', curve: '#63e6be', blind: '#868e96', mirror: '#f783ac', shield: '#f5cc00',
   ghost: '#c0c8e0', tiny: '#ffa94d', warp: '#9775fa', bigball: '#ffd43b', rotate: '#69db7c',
   fritz: '#f59e0b',
+  disco: '#e040fb',
 };
 
 // Text painted flat onto the court floor (so it sits in the scene with real perspective —
@@ -121,6 +122,35 @@ export function createRenderer(container: HTMLElement): Renderer3D {
   // floor and use it as the scene backdrop, so in first-person you're surrounded by Fritz.
   const fritzTex = new THREE.TextureLoader().load('/fritz.jpg');
   fritzTex.colorSpace = THREE.SRGBColorSpace;
+
+  // --- Disco power-up objects (3D/FP only) ---
+  // Chrome disco ball that drops from the ceiling when the powerup fires.
+  const discoBallMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(30, 20, 16),
+    new THREE.MeshStandardMaterial({ color: '#e8eaf6', metalness: 0.95, roughness: 0.04 }),
+  );
+  discoBallMesh.position.set(0, 600, 0);
+  discoBallMesh.visible = false;
+  scene.add(discoBallMesh); // in scene (not world) so rotate powerup doesn't spin it
+
+  // Five colored point lights that orbit the ball to cast moving patches around the court.
+  const DISCO_COLORS = ['#ff2266', '#2299ff', '#22ff88', '#ffcc00', '#cc44ff'];
+  const discoLights = DISCO_COLORS.map((color) => {
+    const l = new THREE.PointLight(color, 0, 1100, 1.6);
+    scene.add(l);
+    return l;
+  });
+
+  // Dance-floor canvas texture — an 8×8 checkerboard that cycles through hues each frame.
+  const danceCanvas = document.createElement('canvas');
+  danceCanvas.width = 512;
+  danceCanvas.height = 512;
+  const danceCtx = danceCanvas.getContext('2d')!;
+  const danceTex = new THREE.CanvasTexture(danceCanvas);
+  danceTex.colorSpace = THREE.SRGBColorSpace;
+
+  let discoOn = false;
+  let discoStartTime = 0;
 
   const camera = new THREE.PerspectiveCamera(48, 1.6, 1, 5000);
   camera.position.set(0, 540, 600);
@@ -263,17 +293,72 @@ export function createRenderer(container: HTMLElement): Renderer3D {
   const tmpColor = new THREE.Color();
 
   let fritzOn = false;
+  function applyFloor() {
+    // Disco beats fritz for the floor; fritz still wins for the scene backdrop.
+    floorMat.map = discoOn ? danceTex : fritzOn ? fritzTex : null;
+    floorMat.color.set(discoOn || fritzOn ? '#ffffff' : '#0b1020');
+    floorMat.needsUpdate = true;
+    scene.background = fritzOn && !discoOn ? fritzTex : DEFAULT_BG;
+  }
+
   function render(s: StateMsg, fpSide?: 'left' | 'right' | null) {
     world.rotation.y = s.rotated ? Math.PI / 2 : 0;
 
     // Fritz power-up: paint the photo across the court floor and the scene backdrop.
-    // Toggle only on change so we're not reassigning materials every frame.
     if (!!s.fritz !== fritzOn) {
       fritzOn = !!s.fritz;
-      floorMat.map = fritzOn ? fritzTex : null;
-      floorMat.color.set(fritzOn ? '#ffffff' : '#0b1020');
-      floorMat.needsUpdate = true;
-      scene.background = fritzOn ? fritzTex : DEFAULT_BG;
+      applyFloor();
+    }
+
+    // Disco power-up: chrome ball drops, dance floor, orbiting coloured lights.
+    if (!!s.disco !== discoOn) {
+      discoOn = !!s.disco;
+      if (discoOn) {
+        discoBallMesh.position.set(0, 600, 0);
+        discoBallMesh.visible = true;
+        discoStartTime = performance.now();
+      } else {
+        discoBallMesh.visible = false;
+        discoLights.forEach((l) => { l.intensity = 0; });
+      }
+      applyFloor();
+    }
+    if (discoOn) {
+      const elapsed = (performance.now() - discoStartTime) / 1000;
+      // Ease the ball down from y=600 to y=130 over 1.5 s (cubic ease-out).
+      const t = Math.min(1, elapsed / 1.5);
+      const eased = 1 - Math.pow(1 - t, 3);
+      discoBallMesh.position.y = 600 + (130 - 600) * eased;
+      // Gentle bob once it arrives.
+      if (t >= 1) discoBallMesh.position.y = 130 + Math.sin(elapsed * 1.8) * 8;
+      discoBallMesh.rotation.y = elapsed * 0.9;
+
+      // Orbit lights around the ball at staggered angles and heights.
+      const by = discoBallMesh.position.y;
+      discoLights.forEach((l, i) => {
+        const angle = elapsed * (0.7 + i * 0.12) + (i / DISCO_COLORS.length) * Math.PI * 2;
+        const radius = 280 + i * 25;
+        l.position.set(Math.cos(angle) * radius, by + Math.sin(elapsed * 1.1 + i) * 90, Math.sin(angle) * radius);
+        l.intensity = 3.5;
+      });
+
+      // Animate the dance-floor checkerboard — shift hue per cell per frame.
+      const cell = 64;
+      for (let row = 0; row < 8; row++) {
+        for (let col = 0; col < 8; col++) {
+          const hue = ((row * 42 + col * 27 + elapsed * 90) % 360);
+          const bright = 35 + ((row + col + Math.floor(elapsed * 5)) % 2) * 25;
+          danceCtx.fillStyle = `hsl(${hue},100%,${bright}%)`;
+          danceCtx.fillRect(col * cell, row * cell, cell, cell);
+        }
+      }
+      danceCtx.strokeStyle = 'rgba(0,0,0,0.35)';
+      danceCtx.lineWidth = 2;
+      for (let i = 0; i <= 8; i++) {
+        danceCtx.beginPath(); danceCtx.moveTo(i * cell, 0); danceCtx.lineTo(i * cell, 512); danceCtx.stroke();
+        danceCtx.beginPath(); danceCtx.moveTo(0, i * cell); danceCtx.lineTo(512, i * cell); danceCtx.stroke();
+      }
+      danceTex.needsUpdate = true;
     }
 
     // First-person camera: position behind the watched side's paddle, looking down-court.

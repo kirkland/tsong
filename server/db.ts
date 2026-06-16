@@ -119,6 +119,7 @@ export async function getLeaderboard(): Promise<LeaderboardRow[]> {
   const { rows } = await pool.query(
     `SELECT name, wins, losses, elo
        FROM players
+      WHERE wins + losses > 0
       ORDER BY elo DESC, name ASC
       LIMIT $1`,
     [LEADERBOARD_SIZE],
