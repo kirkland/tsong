@@ -586,8 +586,8 @@
         gap: 8px;
         align-items: flex-start;
       }
-      /* 2D/3D view toggle + mute button — pill buttons matching MODES / POWER-UPS. */
-      #view3dBtn, #muteBtn {
+      /* Mute button */
+      #muteBtn {
         font: inherit;
         font-size: 12px;
         letter-spacing: 1px;
@@ -598,17 +598,106 @@
         color: #7da2ff;
         cursor: pointer;
       }
-      #view3dBtn:hover, #muteBtn:hover {
-        background: #18203a;
-      }
-      #view3dBtn[aria-pressed='true'] {
-        background: #3a6df0;
-        border-color: #3a6df0;
-        color: #fff;
-      }
+      #muteBtn:hover { background: #18203a; }
       #muteBtn[aria-pressed='true'] {
         color: #6b7796;
         border-color: #1c2640;
+      }
+      /* View mode dropdown */
+      #viewMode {
+        position: relative;
+      }
+      #viewModeBtn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font: inherit;
+        font-size: 12px;
+        letter-spacing: 1px;
+        padding: 7px 12px;
+        border-radius: 6px;
+        border: 1px solid #2a3550;
+        background: #0e1424;
+        color: #7da2ff;
+        cursor: pointer;
+      }
+      #viewModeBtn:hover { background: #18203a; }
+      #viewModeBtn .caret {
+        font-size: 14px;
+        transition: transform 0.15s;
+        transform: translateY(-0.15em);
+      }
+      #viewModeBtn[aria-expanded='true'] .caret {
+        transform: translateY(-0.15em) rotate(180deg);
+      }
+      #viewModePanel {
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 0;
+        width: 210px;
+        background: #0e1424;
+        border: 1px solid #2a3550;
+        border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55);
+        padding: 6px 0 8px;
+        z-index: 50;
+      }
+      #viewModePanel[hidden] { display: none; }
+      #viewModePanel h3 {
+        font-size: 10px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        color: #6b7796;
+        margin: 0;
+        padding: 6px 10px 4px;
+      }
+      #viewModePanel .vm-option {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 7px 12px;
+        cursor: pointer;
+        user-select: none;
+      }
+      #viewModePanel .vm-option:nth-child(odd) { background: #0b1020; }
+      #viewModePanel .vm-option:hover { background: #18203a; }
+      #viewModePanel .vm-option input { position:absolute; opacity:0; width:0; height:0; margin:0; }
+      .vm-dot {
+        flex-shrink: 0;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        border: 2px solid #2a3550;
+        background: #1c2640;
+        transition: background 0.15s, border-color 0.15s;
+      }
+      .vm-option input:checked ~ .vm-dot {
+        background: #3a6df0;
+        border-color: #3a6df0;
+      }
+      .vm-label { font-size: 12px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: #cdd7f5; }
+      /* Left/Right picker shown inside panel when first-person is active */
+      #fpPicker {
+        display: flex;
+        gap: 6px;
+        padding: 6px 12px 2px;
+      }
+      #fpPicker[hidden] { display: none; }
+      #fpPicker button {
+        flex: 1;
+        font: inherit;
+        font-size: 11px;
+        padding: 4px 8px;
+        border-radius: 5px;
+        border: 1px solid #2a3550;
+        background: #1a2035;
+        color: #8693b3;
+        cursor: pointer;
+      }
+      #fpPicker button.active {
+        background: #2d4070;
+        border-color: #3a6df0;
+        color: #cdd7f5;
       }
       /* Game modes dropdown — now inside #topLeft, so no longer fixed itself. */
       #gameModes {
@@ -1373,7 +1462,7 @@
           left: 6px;
           gap: 4px;
         }
-        #view3dBtn, #muteBtn, #gameModesBtn, #powerupInfoBtn {
+        #viewModeBtn, #muteBtn, #gameModesBtn, #powerupInfoBtn {
           font-size: 10px;
           padding: 4px 8px;
         }
@@ -1440,7 +1529,31 @@
     </div>
     <div id="topLeft">
       <button id="muteBtn" type="button" aria-pressed="false" title="Toggle sound on/off (M)">🔊</button>
-      <button id="view3dBtn" type="button" aria-pressed="false" title="Switch between the 2D and 3D view (3D loads on first use)">3D</button>
+      <div id="viewMode">
+        <button id="viewModeBtn" type="button" aria-expanded="false">VIEW <span class="caret">▾</span></button>
+        <div id="viewModePanel" hidden>
+          <h3>View</h3>
+          <label class="vm-option">
+            <input type="radio" name="viewMode" value="normal" checked />
+            <span class="vm-dot"></span>
+            <span class="vm-label">2D</span>
+          </label>
+          <label class="vm-option">
+            <input type="radio" name="viewMode" value="3d" />
+            <span class="vm-dot"></span>
+            <span class="vm-label">3D</span>
+          </label>
+          <label class="vm-option">
+            <input type="radio" name="viewMode" value="firstperson" />
+            <span class="vm-dot"></span>
+            <span class="vm-label">First Person</span>
+          </label>
+          <div id="fpPicker" hidden>
+            <button id="fpLeft" class="active" type="button">◀ Left</button>
+            <button id="fpRight" type="button">Right ▶</button>
+          </div>
+        </div>
+      </div>
       <div id="gameModes">
         <button id="gameModesBtn" type="button" aria-expanded="false">
           MODES <span class="caret">▾</span>
