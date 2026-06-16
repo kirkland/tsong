@@ -1182,6 +1182,7 @@ export class Lobby {
         : null,
       rotated: this.game.rotated,
       fritz: this.game.fritz,
+      disco: this.game.disco,
       viewMode: this.viewMode,
       pinata: this.game.pinata,
       pinataPos: poly ? null : this.pinataView(),

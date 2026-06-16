@@ -513,6 +513,7 @@ const TARGET_STYLE: Record<PowerupKind, { stroke: string; fill: string }> = {
   bigball: { stroke: '#fb923c', fill: 'rgba(251, 146,  60, 0.14)' }, // deep orange
   rotate:  { stroke: '#2ee6c9', fill: 'rgba( 46, 230, 201, 0.13)' }, // teal
   fritz:   { stroke: '#f59e0b', fill: 'rgba(245, 158,  11, 0.13)' }, // amber
+  disco:   { stroke: '#e040fb', fill: 'rgba(224,  64, 251, 0.14)' }, // neon magenta
 };
 
 function drawTarget(ctx: CanvasRenderingContext2D, x: number, y: number, kind: PowerupKind) {
@@ -737,6 +738,19 @@ const GLYPHS: Record<PowerupKind, (ctx: CanvasRenderingContext2D, x: number, y: 
     ctx.beginPath();
     ctx.arc(x, y + 1, 5, 0.2, Math.PI - 0.2);
     ctx.stroke();
+  },
+  // disco: a circle with radiating lines → disco ball
+  disco(ctx, x, y) {
+    ctx.beginPath();
+    ctx.arc(x, y, 9, 0, Math.PI * 2);
+    ctx.stroke();
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(x + Math.cos(a) * 5, y + Math.sin(a) * 5);
+      ctx.lineTo(x + Math.cos(a) * 13, y + Math.sin(a) * 13);
+      ctx.stroke();
+    }
   },
   // rotate: a circular arrow → "the whole court spins 90°"
   rotate(ctx, x, y) {

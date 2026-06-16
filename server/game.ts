@@ -97,6 +97,7 @@ export interface GameSnapshot {
   pinataObj: PinataObj | null;
   rotated: boolean;
   fritz?: boolean;
+  disco?: boolean;
   winnerSide: Side | null;
   lastHit: Side | null;
   target: { x: number; y: number; kind: PowerupKind } | null;
@@ -160,6 +161,7 @@ export class Game {
   shielded: Record<Side, boolean> = { left: false, right: false };
   rotated = false; // "rotate" power-up: court is flipped 90° for the current point only
   fritz = false; // "fritz" power-up: replaces background with fritz's photo for the point
+  disco = false; // "disco" power-up: 3D disco ball, dance floor, colored lights for the point
 
   private serveTimer = 0;
   private serveDir = 1; // +1 = launch toward right, -1 = toward left
@@ -183,6 +185,7 @@ export class Game {
         : null,
       rotated: this.rotated,
       fritz: this.fritz,
+      disco: this.disco,
       winnerSide: this.winnerSide,
       lastHit: this.lastHit,
       target: this.target ? { ...this.target } : null,
@@ -216,6 +219,7 @@ export class Game {
       : null;
     this.rotated = s.rotated ?? false;
     this.fritz = s.fritz ?? false;
+    this.disco = s.disco ?? false;
     this.winnerSide = s.winnerSide;
     this.lastHit = s.lastHit;
     this.target = s.target ? { ...s.target } : null;
@@ -534,6 +538,7 @@ export class Game {
     this.curveHits = { left: 0, right: 0 };
     this.rotated = false;
     this.fritz = false;
+    this.disco = false;
     // Shield intentionally persists — an unused shield stays for the next point.
     // Piñata: drop anything stuck and clear pending effects; the collector keeps drifting.
     if (this.pinataObj) this.pinataObj.stuck = [];
@@ -808,6 +813,9 @@ export class Game {
         break;
       case 'fritz':
         this.fritz = true;
+        break;
+      case 'disco':
+        this.disco = true;
         break;
     }
   }
