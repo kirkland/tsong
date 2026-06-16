@@ -623,6 +623,17 @@ export class Lobby {
     // View mode is locked while a match is in progress to avoid disrupting players.
     if ((opts.viewMode === 'normal' || opts.viewMode === '3d' || opts.viewMode === 'firstperson') && this.game.status !== 'playing') {
       this.viewMode = opts.viewMode;
+      this.syncPowerupPool();
+    }
+  }
+
+  /** Sync which powerups are eligible based on the current view mode.
+   *  rotate is 2D-only; disco is 3D/FP-only. */
+  private syncPowerupPool() {
+    if (this.viewMode === 'normal') {
+      this.game.setExcludedPowerups(['disco']);
+    } else {
+      this.game.setExcludedPowerups(['rotate']);
     }
   }
 
@@ -1330,6 +1341,7 @@ export class Lobby {
     this.winnerName = s.winnerName ?? null;
     this.overHandled = !!s.overHandled;
     this.chatLog = Array.isArray(s.chatLog) ? s.chatLog : [];
+    this.syncPowerupPool();
     // Give seated players a window to reconnect and reclaim their seats; if they don't,
     // expireResume() abandons the resume so the room isn't wedged on a frozen match.
     if (this.pendingSides.left.length || this.pendingSides.right.length) {
