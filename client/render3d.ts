@@ -114,7 +114,13 @@ export function createRenderer(container: HTMLElement): Renderer3D {
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color('#060912');
+  const DEFAULT_BG = new THREE.Color('#060912');
+  scene.background = DEFAULT_BG;
+
+  // Fritz power-up texture, loaded once. While fritz is active we paint it onto the court
+  // floor and use it as the scene backdrop, so in first-person you're surrounded by Fritz.
+  const fritzTex = new THREE.TextureLoader().load('/fritz.jpg');
+  fritzTex.colorSpace = THREE.SRGBColorSpace;
 
   const camera = new THREE.PerspectiveCamera(48, 1.6, 1, 5000);
   camera.position.set(0, 540, 600);
@@ -141,10 +147,8 @@ export function createRenderer(container: HTMLElement): Renderer3D {
   world.add(sun.target); // target defaults to origin (court center)
 
   // --- static court ---
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(COURT.w, COURT.h),
-    new THREE.MeshStandardMaterial({ color: '#0b1020', roughness: 0.95, metalness: 0.0 }),
-  );
+  const floorMat = new THREE.MeshStandardMaterial({ color: '#0b1020', roughness: 0.95, metalness: 0.0 });
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(COURT.w, COURT.h), floorMat);
   floor.rotation.x = -Math.PI / 2;
   floor.receiveShadow = true;
   world.add(floor);
@@ -258,8 +262,19 @@ export function createRenderer(container: HTMLElement): Renderer3D {
 
   const tmpColor = new THREE.Color();
 
+  let fritzOn = false;
   function render(s: StateMsg, fpSide?: 'left' | 'right' | null) {
     world.rotation.y = s.rotated ? Math.PI / 2 : 0;
+
+    // Fritz power-up: paint the photo across the court floor and the scene backdrop.
+    // Toggle only on change so we're not reassigning materials every frame.
+    if (!!s.fritz !== fritzOn) {
+      fritzOn = !!s.fritz;
+      floorMat.map = fritzOn ? fritzTex : null;
+      floorMat.color.set(fritzOn ? '#ffffff' : '#0b1020');
+      floorMat.needsUpdate = true;
+      scene.background = fritzOn ? fritzTex : DEFAULT_BG;
+    }
 
     // First-person camera: position behind the watched side's paddle, looking down-court.
     if (fpSide) {
