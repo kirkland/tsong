@@ -1354,16 +1354,15 @@ function onBoardMouseMove(e: MouseEvent) {
     arenaTarget = Math.max(-max, Math.min(max, arenaTarget + along));
     return;
   }
-  // Convert screen-pixel movement to court units. In first-person the paddle appears
-  // left/right on screen, so movementX drives it; direction flips for the right side.
-  // When the court is rotated 90°, paddle slides horizontally too (movementX, same deal).
+  // Convert screen-pixel movement to court units. When the court is rotated 90° the
+  // paddle slides horizontally on screen, so movementX drives it instead of movementY.
+  // First-person uses movementY too (same as 2D — up/down mouse = up/down paddle) but
+  // at 1.5× speed since the perspective compresses the apparent travel distance.
   if (state?.rotated) {
     target = clampPaddle(target - e.movementX * (COURT.h / r.width));
-  } else if (state?.viewMode === 'firstperson') {
-    const sign = myRole === 'right' ? -1 : 1;
-    target = clampPaddle(target + sign * e.movementX * (COURT.h / r.width) * 1.5);
   } else {
-    target = clampPaddle(target + e.movementY * (COURT.h / r.height));
+    const speed = state?.viewMode === 'firstperson' ? 1.5 : 1;
+    target = clampPaddle(target + e.movementY * (COURT.h / r.height) * speed);
   }
 }
 
@@ -1587,13 +1586,8 @@ function onTouchMove(e: TouchEvent) {
     arenaTarget = Math.max(-max, Math.min(max, along));
     return;
   }
-  if (state?.viewMode === 'firstperson') {
-    const relX = (touch.clientX - r.left) / r.width;
-    target = clampPaddle((myRole === 'right' ? 1 - relX : relX) * COURT.h);
-  } else {
-    const relY = (touch.clientY - r.top) / r.height;
-    target = clampPaddle(relY * COURT.h);
-  }
+  const relY = (touch.clientY - r.top) / r.height;
+  target = clampPaddle(relY * COURT.h);
 }
 canvas.addEventListener('touchstart', onTouchStart, { passive: true });
 canvas.addEventListener('touchmove', onTouchMove, { passive: true });
@@ -1669,7 +1663,11 @@ function syncViewMode(viewMode: 'normal' | '3d' | 'firstperson') {
   });
   // fpPicker is inside the panel; show it only for spectators in first-person.
   fpPickerEl.hidden = !(viewMode === 'firstperson' && myRole === 'observer');
-  if (is3d) void ensureRenderer3d().then(() => renderer3d?.resize());
+  // Lock the dropdown while a match is live so it can't disrupt players mid-point.
+  const locked = state?.status === 'playing';
+  viewModeBtn.disabled = locked;
+  viewModeBtn.title = locked ? 'Cannot change view during a match' : '';
+  if (is3d && !renderer3d) void ensureRenderer3d().then(() => renderer3d?.resize());
 }
 window.addEventListener('resize', () => {
   if (state?.viewMode !== 'normal') renderer3d?.resize();
@@ -1711,12 +1709,6 @@ function loop(t: number) {
       // Court rotated 90°: paddle slides horizontally; right on screen = decreasing court-Y.
       if (keys.has('arrowright') || keys.has('d')) target -= step;
       if (keys.has('arrowleft') || keys.has('a')) target += step;
-    } else if (state?.viewMode === 'firstperson') {
-      // First-person: paddle appears left/right on screen, so left/right arrows drive it.
-      // Direction flips for the right-side player (their right is court-Y decreasing).
-      const sign = myRole === 'right' ? -1 : 1;
-      if (keys.has('arrowright') || keys.has('d')) target += sign * step;
-      if (keys.has('arrowleft') || keys.has('a')) target -= sign * step;
     } else {
       if (keys.has('arrowup') || keys.has('w')) target -= step;
       if (keys.has('arrowdown') || keys.has('s')) target += step;
