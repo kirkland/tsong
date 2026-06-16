@@ -1906,11 +1906,9 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
   }
   const items = rows
     .map((r, i) => {
-      const games = r.wins + r.losses;
-      const pct = games ? Math.round((r.wins / games) * 100) : 0;
       return `<li><span class="rank">${i + 1}</span><span class="lbname">${escapeHtml(
         r.name,
-      )}</span><span class="rec">${r.wins}–${r.losses}</span><span class="pct">${pct}%</span></li>`;
+      )}</span><span class="rec">${r.wins}–${r.losses}</span><span class="pct">${r.elo ?? 1000}</span></li>`;
     })
     .join('');
   leaderboardEl.innerHTML = `<h2>Leaderboard</h2><ol>${items}</ol>`;
