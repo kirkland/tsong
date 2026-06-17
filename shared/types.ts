@@ -236,6 +236,7 @@ export interface PolyState {
 export interface StateMsg {
   type: 'state';
   ball: { x: number; y: number; color: string }; // color = paddle that last hit it (neutral until first hit)
+  hitSeq: number; // increments on every paddle contact (both sides); client plays sound on change
   // Extra balls in play during a "multi" power-up; empty the rest of the time.
   extraBalls: { x: number; y: number; color: string }[];
   ballSpeed: number; // current ball speed, court units / second

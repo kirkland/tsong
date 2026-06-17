@@ -152,6 +152,7 @@ export class Game {
   private pinataBurstPending = false; // a 5th ball stuck this tick → release everything
   winnerSide: Side | null = null;
   lastHit: Side | null = null; // side whose paddle last touched any ball (null until first hit)
+  hitSeq = 0; // incremented on every paddle bounce so clients can detect same-side repeat hits
   paused = false; // set by the lobby: freeze play until both players capture their mouse
   winScore = WIN_SCORE; // first-to-N; configurable per-room (default: shared constant)
 
@@ -895,6 +896,7 @@ export class Game {
 
   private bounce(side: Side, b: Ball, ent: PaddleEnt, idx: number) {
     this.lastHit = side;
+    this.hitSeq++;
     const rel = clamp((b.y - ent.y) / this.halfH(side), -1, 1);
     const speedup = this.turbo ? TURBO_SPEEDUP : BALL.speedup;
     let speed = Math.hypot(b.vx, b.vy) * speedup;

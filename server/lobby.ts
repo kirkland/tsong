@@ -1157,6 +1157,7 @@ export class Lobby {
         // Take on the color of the paddle that last hit it; neutral until first touch.
         color: ballColor,
       },
+      hitSeq: poly ? this.poly.hitSeq : this.game.hitSeq,
       extraBalls: extraSrc.map((b) => ({ x: b.x, y: b.y, color: ballColor })),
       ballSpeed: Math.hypot(ballSrc.vx, ballSrc.vy),
       paddles: { left: sideState('left'), right: sideState('right') },

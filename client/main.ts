@@ -228,6 +228,7 @@ let prevStatus: StateMsg['status'] | null = null; // last seen status, to fire o
 let prevFatality = false; // whether a fatality was playing last frame, to fire music on the rising edge
 let prevDisco = false; // rising-edge detection for disco sound
 let prevTarget: StateMsg['target'] | undefined = undefined; // detect powerup pickup for flash
+let prevHitSeq = -1; // detect any paddle contact (both sides, including same-side repeats)
 
 // Quiet notification beep for pings.
 function playPingSound() {
@@ -359,11 +360,12 @@ const net = connect(
         discoSound.currentTime = 0;
       }
       prevDisco = discoActive;
-      // Detect paddle hit (ball takes on new color) and score events for sound.
+      // Detect paddle hit and score events for sound.
       if (msg.status === 'playing' && !msg.paused) {
-        if (msg.ball.color !== '#e8eefc' && msg.ball.color !== prevBallColor) playHitSound();
+        if (msg.hitSeq !== prevHitSeq) playHitSound();
         if (msg.score.left > prevScore.left || msg.score.right > prevScore.right) playScoreSound();
       }
+      prevHitSeq = msg.hitSeq;
       prevBallColor = msg.ball.color;
       prevScore = { ...msg.score };
       // Detect powerup pickup: target was present last frame, gone this frame.
