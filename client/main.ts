@@ -75,6 +75,9 @@ const combosModal = document.getElementById('combosModal') as HTMLDivElement;
 const combosCard = document.getElementById('combosCard') as HTMLDivElement;
 const combosClose = document.getElementById('combosClose') as HTMLButtonElement;
 const combosList = document.getElementById('combosList') as HTMLDivElement;
+const mobileControlsEl = document.getElementById('mobileControls') as HTMLDivElement;
+const mobUpBtn = document.getElementById('mobUp') as HTMLButtonElement;
+const mobDownBtn = document.getElementById('mobDown') as HTMLButtonElement;
 
 // Cookies (not localStorage, per request); ~1 year, scoped to the site.
 const YEAR = 60 * 60 * 24 * 365;
@@ -194,6 +197,12 @@ let arenaTarget = 0; // desired paddle offset along my edge, court units (arena)
 let lastSent = -1;
 let lastSendAt = 0;
 const keys = new Set<string>();
+// Mobile touch state: once the player taps the board we consider them "captured"
+// (pointer lock is unavailable on mobile). Unlike touchActive, this stays true
+// between individual taps so the game doesn't think they've un-captured.
+let mobileCaptured = false;
+let mobileUpHeld = false;
+let mobileDownHeld = false;
 
 // --- fatalities (opt-in finishing move for the match winner) ---
 // Each finisher has its own arrow combo so the winner can pick which one to perform.
@@ -310,7 +319,7 @@ const net = connect(
       myRole = msg.role;
       myId = msg.id;
       lastSent = -1; // force a re-sync of our paddle target from the next state
-      if (!isPlayer()) touchActive = false;
+      if (!isPlayer()) { touchActive = false; mobileCaptured = false; }
       // Hand the cursor back when we're no longer holding a paddle (e.g. match ended).
       if (!isPlayer() && isBoard(document.pointerLockElement)) {
         document.exitPointerLock();
@@ -1649,8 +1658,12 @@ if (isMobileView()) {
 let touchActive = false;
 function onTouchStart() {
   touchActive = true;
-  // On mobile, touch acts as capture (no pointer lock available)
-  if (isPlayer() && !pointerLocked) net.send({ type: 'capture', on: true });
+  if (isPlayer() && !pointerLocked) {
+    // First touch captures the player (like clicking the board on desktop).
+    // mobileCaptured stays true between taps so the server doesn't re-pause.
+    if (!mobileCaptured) mobileCaptured = true;
+    net.send({ type: 'capture', on: true });
+  }
 }
 function onTouchEnd() {
   touchActive = false;
@@ -1684,6 +1697,27 @@ game3dEl.addEventListener('touchstart', onTouchStart, { passive: true });
 game3dEl.addEventListener('touchmove', onTouchMove, { passive: true });
 game3dEl.addEventListener('touchend', onTouchEnd);
 game3dEl.addEventListener('touchcancel', onTouchEnd);
+
+// Mobile ▲/▼ buttons: hold to move the paddle continuously. Uses pointer events so
+// the button stays responsive even if the finger slides off the element.
+for (const [btn, dir] of [[mobUpBtn, 'up'], [mobDownBtn, 'down']] as [HTMLButtonElement, 'up' | 'down'][]) {
+  btn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    btn.setPointerCapture(e.pointerId);
+    if (dir === 'up') mobileUpHeld = true; else mobileDownHeld = true;
+    btn.classList.add('held');
+    if (isPlayer() && !mobileCaptured) {
+      mobileCaptured = true;
+      net.send({ type: 'capture', on: true });
+    }
+  });
+  const release = () => {
+    if (dir === 'up') mobileUpHeld = false; else mobileDownHeld = false;
+    btn.classList.remove('held');
+  };
+  btn.addEventListener('pointerup', release);
+  btn.addEventListener('pointercancel', release);
+}
 
 // --- View mode dropdown (lazy-loads Three.js on first use) ---
 // Open/close the panel.
@@ -1766,7 +1800,7 @@ window.addEventListener('resize', () => {
 });
 
 function canControl(): boolean {
-  return pointerLocked || touchActive;
+  return pointerLocked || touchActive || mobileCaptured;
 }
 
 function loop(t: number) {
@@ -1815,8 +1849,8 @@ function loop(t: number) {
       if (keys.has('arrowright') || keys.has('d')) target += sign * step;
       if (keys.has('arrowleft') || keys.has('a')) target -= sign * step;
     } else {
-      if (keys.has('arrowup') || keys.has('w')) target -= step;
-      if (keys.has('arrowdown') || keys.has('s')) target += step;
+      if (keys.has('arrowup') || keys.has('w') || mobileUpHeld) target -= step;
+      if (keys.has('arrowdown') || keys.has('s') || mobileDownHeld) target += step;
     }
     target = Math.max(PADDLE.h / 2, Math.min(COURT.h - PADDLE.h / 2, target));
 
@@ -1915,26 +1949,31 @@ function updateUI() {
     else if (canFinish()) statusEl.textContent = '🔪 FINISH HIM!  ·  tap a combo (see Combos ▸)';
     else statusEl.textContent = state.winner ? `🏆 ${state.winner} wins!` : 'Game over';
   } else if (state.paused) {
-    // Match is frozen until both players capture their mouse. Once an opponent is ready,
-    // a laggard is on the clock (captureCountdown) before being benched.
+    // Match is frozen until both players capture their mouse/touch. Once an opponent is
+    // ready, a laggard is on the clock (captureCountdown) before being benched.
     const cd = state.captureCountdown;
-    if (isPlayer() && !pointerLocked)
-      statusEl.textContent =
-        cd != null
-          ? `🖱 click the board NOW — ${cd}s to capture your mouse or you're benched!`
-          : '🖱 click the board to capture your mouse to start';
-    else if (isPlayer())
+    const mob = isMobileView();
+    if (isPlayer() && !pointerLocked && !mobileCaptured) {
+      // Player hasn't tapped/clicked yet — show capture prompt appropriate to their device.
+      statusEl.textContent = mob
+        ? (cd != null ? `👆 tap the board — ${cd}s or you're benched!` : '👆 tap the board to start')
+        : (cd != null ? `🖱 click the board NOW — ${cd}s to capture your mouse or you're benched!` : '🖱 click the board to capture your mouse to start');
+    } else if (isPlayer())
       statusEl.textContent =
         cd != null
           ? `⏳ waiting on the other player — ${cd}s before they're benched`
-          : '⏸ waiting for the other players to capture their mouse…';
+          : '⏸ waiting for the other players…';
     else
       statusEl.textContent =
         cd != null
           ? `⏳ waiting for players to capture — ${cd}s`
           : '⏸ paused — waiting for players to capture their mice';
   } else if (isPlayer() && !pointerLocked) {
-    statusEl.textContent = '🖱 click the board to capture · ↑/↓ or W/S to move · Esc to release';
+    // Playing but mouse/pointer isn't locked. On mobile this is expected (no pointer lock),
+    // so suppress the desktop capture prompt; the ▲▼ buttons provide the control hint.
+    statusEl.textContent = isMobileView()
+      ? ''
+      : '🖱 click the board to capture · ↑/↓ or W/S to move · Esc to release';
   } else statusEl.textContent = '';
 
   // King of the court: show who's reigning and their win streak (to everyone); the
@@ -2007,6 +2046,14 @@ function updateUI() {
   joinBtn.textContent = state.arena ? 'Join arena' : 'Join game';
   renameBtn.style.display = myName ? 'inline-block' : 'none';
   pingBtn.style.display = myName ? 'inline-block' : 'none';
+
+  // Mobile ▲/▼ buttons: visible while the player is in a live match in duel mode.
+  // Hidden in arena mode (paddle direction isn't vertical), during waiting/over states,
+  // and on desktop (the media query enforces that, but guard in JS too).
+  mobileControlsEl.classList.toggle(
+    'show',
+    isMobileView() && isPlayer() && !state.poly && state.status === 'playing',
+  );
 
   // Hidden once the pointer is captured (lock hides it natively anyway); visible while
   // unlocked so a player can see where to click to capture, and for observers.
