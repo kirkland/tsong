@@ -1531,8 +1531,14 @@ function applyCanvasRotation(rotated: number) {
   const portrait = rotated === 1 || rotated === 3;
   canvas.width  = portrait ? COURT.h : COURT.w;
   canvas.height = portrait ? COURT.w : COURT.h;
-  if (portrait) canvas.classList.add('rotated');
-  else canvas.classList.remove('rotated');
+  if (portrait) {
+    canvas.classList.add('rotated');
+    game3dEl.classList.add('rotated');
+  } else {
+    canvas.classList.remove('rotated');
+    game3dEl.classList.remove('rotated');
+  }
+  renderer3d?.resize();
 }
 
 // --- main loop ---
@@ -1778,13 +1784,13 @@ function loop(t: number) {
       document.body.classList.toggle('fatality-2d', showFatality2d);
       if (!showFatality2d && state.viewMode !== 'normal') renderer3d?.resize();
     }
+    applyCanvasRotation(state.rotated);
     if (state.viewMode !== 'normal' && renderer3d && !state.fatality) {
       const side = state.viewMode === 'firstperson'
         ? (myRole !== 'observer' ? (myRole as 'left' | 'right') : fpSide)
         : null;
       renderer3d.render(state, side);
     } else {
-      applyCanvasRotation(state.rotated);
       draw(ctx, state, myRole);
     }
   }

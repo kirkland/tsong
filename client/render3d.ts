@@ -302,7 +302,7 @@ export function createRenderer(container: HTMLElement): Renderer3D {
   }
 
   function render(s: StateMsg, fpSide?: 'left' | 'right' | null) {
-    world.rotation.y = s.rotated ? Math.PI / 2 : 0;
+    world.rotation.y = s.rotated * (Math.PI / 2);
 
     // Fritz power-up: paint the photo across the court floor and the scene backdrop.
     if (!!s.fritz !== fritzOn) {

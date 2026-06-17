@@ -81,8 +81,8 @@
         display: none;
       }
       /* "rotate" power-up: the court flips to portrait. Size by height so the tall court
-         still fits the viewport. */
-      #game.rotated {
+         still fits the viewport. Applies to both the 2D canvas and the 3D container. */
+      #game.rotated, #game3d.rotated {
         width: auto;
         height: min(88vh, 900px);
         aspect-ratio: 500 / 800;
