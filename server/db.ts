@@ -42,6 +42,8 @@ export async function initDb(): Promise<void> {
   await pool.query(`
     ALTER TABLE players ADD COLUMN IF NOT EXISTS elo INTEGER NOT NULL DEFAULT 500
   `);
+  // Reset any players still at the old default of 1000 to the new default of 500.
+  await pool.query(`UPDATE players SET elo = 500 WHERE elo = 1000`);
   console.log('leaderboard DB ready');
 }
 
