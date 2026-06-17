@@ -1451,7 +1451,7 @@ export class Lobby {
       bigBallTimer: Math.max(0, this.game.bigBallTimer),
       winScore: this.game.winScore,
       tournament: this.tournament ? this.tournament.view(this.liveMatchId) : null,
-      projectiles: this.game.projectiles.map((p) => ({ x: p.x, y: p.y, color: this.colorOf(p.side) })),
+      projectiles: this.game.projectiles.map((p) => ({ x: p.x, y: p.y, vx: p.vx, vy: p.vy, color: '#39ff14' })),
     };
   }
 

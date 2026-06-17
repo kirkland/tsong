@@ -503,15 +503,49 @@ function drawBlaster(ctx: CanvasRenderingContext2D, s: StateMsg) {
     ctx.stroke();
     ctx.restore();
   }
-  // Projectiles — bright glowing bullets in the firing side's color.
+  // Projectiles — a bright green laser bolt with a fading trail behind it, oriented along
+  // its travel direction.
   for (const pr of s.projectiles) {
+    const sp = Math.hypot(pr.vx, pr.vy) || 1;
+    const ux = pr.vx / sp;
+    const uy = pr.vy / sp;
+    const boltLen = 26; // length of the bright core bolt
+    const trailLen = 64; // how far the fading trail reaches behind
+    // tip slightly ahead of center, tail behind
+    const tipX = pr.x + ux * boltLen * 0.5;
+    const tipY = pr.y + uy * boltLen * 0.5;
+    const tailX = pr.x - ux * boltLen * 0.5;
+    const tailY = pr.y - uy * boltLen * 0.5;
     ctx.save();
-    ctx.fillStyle = pr.color;
-    ctx.shadowColor = pr.color;
-    ctx.shadowBlur = 12;
+    ctx.lineCap = 'round';
+    // Trail: a gradient fading to transparent behind the bolt.
+    const tx = pr.x - ux * trailLen;
+    const ty = pr.y - uy * trailLen;
+    const grad = ctx.createLinearGradient(tipX, tipY, tx, ty);
+    grad.addColorStop(0, 'rgba(57,255,20,0.55)');
+    grad.addColorStop(1, 'rgba(57,255,20,0)');
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = BLASTER.r * 1.2;
     ctx.beginPath();
-    ctx.arc(pr.x, pr.y, BLASTER.r, 0, Math.PI * 2);
-    ctx.fill();
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(tx, ty);
+    ctx.stroke();
+    // Bright glowing core bolt.
+    ctx.shadowColor = '#39ff14';
+    ctx.shadowBlur = 14;
+    ctx.strokeStyle = '#aaffa0';
+    ctx.lineWidth = BLASTER.r * 0.9;
+    ctx.beginPath();
+    ctx.moveTo(tailX, tailY);
+    ctx.lineTo(tipX, tipY);
+    ctx.stroke();
+    ctx.strokeStyle = '#39ff14';
+    ctx.lineWidth = BLASTER.r * 1.8;
+    ctx.globalAlpha = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(tailX, tailY);
+    ctx.lineTo(tipX, tipY);
+    ctx.stroke();
     ctx.restore();
   }
 }

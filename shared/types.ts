@@ -315,8 +315,9 @@ export interface StateMsg {
   bigBallTimer: number;
   winScore: number; // current first-to-N win score (room-wide setting)
   tournament: TournamentView | null; // live single-elimination bracket, or null when none
-  // Blaster projectiles in flight; color is the firing side's paddle color.
-  projectiles: { x: number; y: number; color: string }[];
+  // Blaster projectiles in flight. vx/vy give the travel direction so the client can draw
+  // an oriented laser bolt + trail. color is the laser color (bright green).
+  projectiles: { x: number; y: number; vx: number; vy: number; color: string }[];
 }
 
 // One match node in the bracket, as sent to clients for rendering.
