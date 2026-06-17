@@ -3,7 +3,7 @@
 // simply empty, so the rest of the app runs unchanged.
 
 import pg from 'pg';
-import { LeaderboardRow, LEADERBOARD_MIN_GAMES, LEADERBOARD_SIZE } from '../shared/types';
+import { LeaderboardRow, LEADERBOARD_SIZE } from '../shared/types';
 
 let pool: pg.Pool | null = null;
 

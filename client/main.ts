@@ -150,7 +150,6 @@ function playScoreSound() {
 }
 
 // Track previous state for detecting events client-side
-let prevBallColor = '#e8eefc';
 let prevScore = { left: 0, right: 0 };
 
 function selectSwatch(color: string) {
@@ -375,7 +374,6 @@ const net = connect(
         if (msg.score.left > prevScore.left || msg.score.right > prevScore.right) playScoreSound();
       }
       prevHitSeq = msg.hitSeq;
-      prevBallColor = msg.ball.color;
       prevScore = { ...msg.score };
       // Detect powerup pickup: target was present last frame, gone this frame.
       if (prevTarget && !msg.target) showPowerupFlash(prevTarget.kind, prevTarget.x, prevTarget.y);
