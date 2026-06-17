@@ -81,8 +81,8 @@
         display: none;
       }
       /* "rotate" power-up: the court flips to portrait. Size by height so the tall court
-         still fits the viewport. */
-      #game.rotated {
+         still fits the viewport. Applies to both the 2D canvas and the 3D container. */
+      #game.rotated, #game3d.rotated {
         width: auto;
         height: min(88vh, 900px);
         aspect-ratio: 500 / 800;
@@ -241,6 +241,7 @@
         flex-shrink: 0;
         text-align: right;
       }
+      #chat.hide-timestamps .chatstamp { display: none; }
       .chat-row {
         display: flex;
         align-items: baseline;
@@ -484,6 +485,19 @@
         pointer-events: none;
         z-index: 50;
       }
+      /* Power-up pickup flash: name pops at the target location then floats up. */
+      .powerup-flash {
+        position: fixed;
+        transform: translate(-50%, -50%);
+        font-size: 15px;
+        font-weight: 800;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        text-shadow: 0 2px 8px rgba(0,0,0,0.8);
+        pointer-events: none;
+        user-select: none;
+        will-change: transform, opacity;
+      }
       /* Big transient center-screen banner (e.g. a forfeit callout). */
       .announce-banner {
         position: fixed;
@@ -636,6 +650,8 @@
         top: calc(100% + 6px);
         left: 0;
         width: 210px;
+        max-height: 70vh;
+        overflow-y: auto;
         background: #0e1424;
         border: 1px solid #2a3550;
         border-radius: 8px;
@@ -837,6 +853,8 @@
         top: calc(100% + 6px);
         left: 0;
         width: min(86vw, 280px);
+        max-height: 70vh;
+        overflow-y: auto;
         background: #0e1424;
         border: 1px solid #2a3550;
         border-radius: 8px;
@@ -1195,6 +1213,8 @@
         bottom: calc(100% + 6px);
         right: 0;
         width: min(86vw, 250px);
+        max-height: 70vh;
+        overflow-y: auto;
         background: #0e1424;
         border: 1px solid #2a3550;
         border-radius: 8px;
@@ -1268,6 +1288,8 @@
         top: calc(100% + 6px);
         left: 0;
         width: min(86vw, 270px);
+        max-height: 70vh;
+        overflow-y: auto;
         background: #0e1424;
         border: 1px solid #2a3550;
         border-radius: 8px;
@@ -1501,6 +1523,42 @@
       @media (prefers-reduced-motion: reduce) {
         .load-title, .load-bolts span { animation: none; }
         .load-bar-fill { animation: none; width: 100%; }
+      }
+      /* Mobile paddle control buttons — ▲/▼, shown below the board on small screens. */
+      #mobileControls {
+        display: none;
+        gap: 16px;
+        justify-content: center;
+        align-items: center;
+        padding: 2px 0;
+      }
+      #mobileControls.show {
+        display: flex;
+      }
+      .mob-paddle-btn {
+        width: 86px;
+        height: 64px;
+        font-size: 26px;
+        border-radius: 14px;
+        border: 1px solid #2a3550;
+        background: #0e1424;
+        color: #7da2ff;
+        cursor: pointer;
+        user-select: none;
+        -webkit-user-select: none;
+        touch-action: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 0.1s;
+      }
+      .mob-paddle-btn:active, .mob-paddle-btn.held {
+        background: rgba(58, 109, 240, 0.22);
+        border-color: #3a6df0;
+      }
+      /* Force-hide on desktop regardless of JS class */
+      @media (min-width: 769px) {
+        #mobileControls { display: none !important; }
       }
       /* Mobile tab bar: hidden on desktop, visible on mobile. */
       #mobileTabs {
@@ -1981,6 +2039,10 @@
         <!-- Three.js renders into this when 3D view is on; empty (and unused) otherwise. -->
         <div id="game3d" hidden></div>
         <div id="status"></div>
+        <div id="mobileControls">
+          <button id="mobUp" class="mob-paddle-btn" type="button" aria-label="Move paddle up">▲</button>
+          <button id="mobDown" class="mob-paddle-btn" type="button" aria-label="Move paddle down">▼</button>
+        </div>
         <div id="puHud"></div>
         <div id="joinButtons">
           <button id="join" style="display: none">Join game</button>
@@ -1993,12 +2055,16 @@
         <button id="queueBtn" style="display: none; font-size: 12px; padding: 4px 10px;">Join queue</button>
         <button id="pingBtn" style="display: none; font-size: 12px; padding: 4px 10px;">🔔 Ping</button>
         <button id="readyBtn" style="display: none">Ready</button>
+        <button id="rematchBtn" style="display: none">🔄 Rematch</button>
         <button id="rename" class="link" style="display: none">change name</button>
         <div id="leaderboard"></div>
       </div>
 
       <div id="chat">
-        <h2>Chat</h2>
+        <h2>Chat
+          <label style="font-size:12px;font-weight:normal;color:#4a5580;cursor:pointer;margin-left:6px;"><input type="checkbox" id="hideCmds" style="vertical-align:middle;margin-right:3px;">hide commands</label>
+          <label style="font-size:12px;font-weight:normal;color:#4a5580;cursor:pointer;margin-left:6px;"><input type="checkbox" id="hideTimestamps" style="vertical-align:middle;margin-right:3px;">hide times</label>
+        </h2>
         <div id="chatlog"></div>
         <form id="chatForm">
           <input id="chatInput" maxlength="200" placeholder="say something…" autocomplete="off" disabled />

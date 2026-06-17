@@ -96,7 +96,7 @@ export interface GameSnapshot {
   diamondBlock: { x: number; y: number; vx: number; vy: number } | null;
   pinata: boolean;
   pinataObj: PinataObj | null;
-  rotated: boolean;
+  rotated: number;
   fritz?: boolean;
   disco?: boolean;
   winnerSide: Side | null;
@@ -105,7 +105,17 @@ export interface GameSnapshot {
   growHits: Record<Side, number>;
   shrinkHits: Record<Side, number>;
   smashHits: Record<Side, number>;
+  curveHits: Record<Side, number>;
   slowTimer: number;
+  freezeTimer: Record<Side, number>;
+  blindTimer: Record<Side, number>;
+  mirrorTimer: Record<Side, number>;
+  ghostTimer: number;
+  tinyTimer: number;
+  bigBallTimer: number;
+  shielded: Record<Side, boolean>;
+  pinataPendingSpawns: number;
+  pinataBurstPending: boolean;
   serveTimer: number;
   serveDir: number;
   targetTimer: number;
@@ -143,6 +153,7 @@ export class Game {
   private pinataBurstPending = false; // a 5th ball stuck this tick → release everything
   winnerSide: Side | null = null;
   lastHit: Side | null = null; // side whose paddle last touched any ball (null until first hit)
+  hitSeq = 0; // incremented on every paddle bounce so clients can detect same-side repeat hits
   paused = false; // set by the lobby: freeze play until both players capture their mouse
   winScore = WIN_SCORE; // first-to-N; configurable per-room (default: shared constant)
 
@@ -160,7 +171,7 @@ export class Game {
   tinyTimer = 0;
   bigBallTimer = 0;
   shielded: Record<Side, boolean> = { left: false, right: false };
-  rotated = false; // "rotate" power-up: court is flipped 90° for the current point only
+  rotated = 0; // "rotate" power-up: quarter-turns CW this point (0–3); resets each serve
   fritz = false; // "fritz" power-up: replaces background with fritz's photo for the point
   disco = false; // "disco" power-up: 3D disco ball, dance floor, colored lights for the point
   // "Blaster": shots each side holds, projectiles in flight, and how long each paddle is locked.
@@ -203,7 +214,17 @@ export class Game {
       growHits: { ...this.growHits },
       shrinkHits: { ...this.shrinkHits },
       smashHits: { ...this.smashHits },
+      curveHits: { ...this.curveHits },
       slowTimer: this.slowTimer,
+      freezeTimer: { ...this.freezeTimer },
+      blindTimer: { ...this.blindTimer },
+      mirrorTimer: { ...this.mirrorTimer },
+      ghostTimer: this.ghostTimer,
+      tinyTimer: this.tinyTimer,
+      bigBallTimer: this.bigBallTimer,
+      shielded: { ...this.shielded },
+      pinataPendingSpawns: this.pinataPendingSpawns,
+      pinataBurstPending: this.pinataBurstPending,
       serveTimer: this.serveTimer,
       serveDir: this.serveDir,
       targetTimer: this.targetTimer,
@@ -228,7 +249,7 @@ export class Game {
     this.pinataObj = s.pinataObj
       ? { ...s.pinataObj, stuck: (s.pinataObj.stuck ?? []).map((x) => ({ ...x })) }
       : null;
-    this.rotated = s.rotated ?? false;
+    this.rotated = typeof s.rotated === 'number' ? s.rotated : (s.rotated ? 1 : 0);
     this.fritz = s.fritz ?? false;
     this.disco = s.disco ?? false;
     this.winnerSide = s.winnerSide;
@@ -237,7 +258,17 @@ export class Game {
     this.growHits = { ...s.growHits };
     this.shrinkHits = { ...s.shrinkHits };
     this.smashHits = { ...s.smashHits };
+    this.curveHits = s.curveHits ? { ...s.curveHits } : { left: 0, right: 0 };
     this.slowTimer = s.slowTimer;
+    this.freezeTimer = s.freezeTimer ? { ...s.freezeTimer } : { left: 0, right: 0 };
+    this.blindTimer = s.blindTimer ? { ...s.blindTimer } : { left: 0, right: 0 };
+    this.mirrorTimer = s.mirrorTimer ? { ...s.mirrorTimer } : { left: 0, right: 0 };
+    this.ghostTimer = s.ghostTimer ?? 0;
+    this.tinyTimer = s.tinyTimer ?? 0;
+    this.bigBallTimer = s.bigBallTimer ?? 0;
+    this.shielded = s.shielded ? { ...s.shielded } : { left: false, right: false };
+    this.pinataPendingSpawns = s.pinataPendingSpawns ?? 0;
+    this.pinataBurstPending = s.pinataBurstPending ?? false;
     this.serveTimer = s.serveTimer;
     this.serveDir = s.serveDir;
     this.targetTimer = s.targetTimer;
@@ -513,7 +544,7 @@ export class Game {
     this.tinyTimer = 0;
     this.bigBallTimer = 0;
     this.shielded = { left: false, right: false };
-    this.rotated = false; // a new match always starts un-rotated
+    this.rotated = 0; // a new match always starts un-rotated
     this.blasterAmmo = { left: 0, right: 0 };
     this.disabledTimer = { left: 0, right: 0 };
     this.projectiles = [];
@@ -550,7 +581,7 @@ export class Game {
     this.tinyTimer = 0;
     this.bigBallTimer = 0;
     this.curveHits = { left: 0, right: 0 };
-    this.rotated = false;
+    this.rotated = 0;
     this.fritz = false;
     this.disco = false;
     this.blasterAmmo = { left: 0, right: 0 };
@@ -646,6 +677,7 @@ export class Game {
         this.extraBalls = []; // match over
         return;
       }
+      if (this.closing) this.paddleX = { ...HOME_X };
       this.serve(lastScorer === 'left' ? 1 : -1);
     }
   }
@@ -831,8 +863,8 @@ export class Game {
         this.bigBallTimer = BIG_BALL_TIME;
         break;
       case 'rotate':
-        // Flip the court 90° for the current point only; resets on serve.
-        this.rotated = true;
+        // Each pickup adds 90° CW; 4 wraps back to 0 (full circle = normal).
+        this.rotated = (this.rotated + 1) % 4;
         break;
       case 'fritz':
         this.fritz = true;
@@ -940,6 +972,7 @@ export class Game {
 
   private bounce(side: Side, b: Ball, ent: PaddleEnt, idx: number) {
     this.lastHit = side;
+    this.hitSeq++;
     const rel = clamp((b.y - ent.y) / this.halfH(side), -1, 1);
     const speedup = this.turbo ? TURBO_SPEEDUP : BALL.speedup;
     let speed = Math.hypot(b.vx, b.vy) * speedup;

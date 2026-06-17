@@ -33,9 +33,9 @@ export const MAX_PLAYERS = 8; // arena seat cap
 export const ARENA = {
   cx: COURT.w / 2,
   cy: COURT.h / 2,
-  radius: 236, // circumradius of the polygon, court units (near-fills the 500-tall court)
+  radius: 260, // circumradius of the polygon, court units (near-fills the 500-tall court)
 } as const;
-export const POLY_PADDLE_LEN = 84; // arena paddle length along its edge, court units
+export const POLY_PADDLE_LEN = 64; // arena paddle length along its edge, court units
 // Power-ups that make sense in a free-for-all (per-player or global only — nothing that
 // targets a single "opponent", which is ambiguous with more than two players).
 export const POLY_POWERUPS = [
@@ -165,7 +165,7 @@ export type ClientMsg =
   | { type: 'paddle'; y: number } // desired paddle center Y, in court units
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
-  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean } // toggle game modes
+  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string } // toggle game modes
   | { type: 'fatality'; move: string } // winner-only, validated server-side
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
   | { type: 'forfeit' } // "/ff": leave your paddle spot mid-game (and get shamed)
@@ -253,6 +253,7 @@ export interface PolyState {
 export interface StateMsg {
   type: 'state';
   ball: { x: number; y: number; color: string }; // color = paddle that last hit it (neutral until first hit)
+  hitSeq: number; // increments on every paddle contact (both sides); client plays sound on change
   // Extra balls in play during a "multi" power-up; empty the rest of the time.
   extraBalls: { x: number; y: number; color: string }[];
   ballSpeed: number; // current ball speed, court units / second
@@ -279,9 +280,9 @@ export interface StateMsg {
   // Live position of the diamond obstacle (diamond-hands mode), or null when none is on
   // the board. Center in court units; its size is the shared DIAMOND.r constant.
   diamondPos: { x: number; y: number } | null;
-  // True once a "rotate" power-up has flipped the court 90° for the rest of the match.
-  // The whole game (paddles, ball, score) renders rotated and controls remap to match.
-  rotated: boolean;
+  // Number of "rotate" power-ups collected this point (0–3). Each adds 90° CW.
+  // Resets to 0 on each new serve; 4 wraps back to 0 (full circle = no rotation).
+  rotated: number;
   fritz: boolean; // "fritz" power-up: replaces the court background with fritz's photo for the point
   disco: boolean; // "disco" power-up: 3D disco ball drops, dance floor, colored lights (3D/FP only)
   viewMode: 'normal' | '3d' | 'firstperson'; // shared view mode — changes for every client at once

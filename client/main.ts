@@ -35,6 +35,7 @@ const joinRightBtn = document.getElementById('joinRight') as HTMLButtonElement;
 const queueBtn = document.getElementById('queueBtn') as HTMLButtonElement;
 const queueArea = document.getElementById('queueArea') as HTMLDivElement;
 const readyBtn = document.getElementById('readyBtn') as HTMLButtonElement;
+const rematchBtn = document.getElementById('rematchBtn') as HTMLButtonElement;
 const pingBtn = document.getElementById('pingBtn') as HTMLButtonElement;
 const renameBtn = document.getElementById('rename') as HTMLButtonElement;
 const kingStatusEl = document.getElementById('kingStatus') as HTMLDivElement;
@@ -43,8 +44,11 @@ const watchersEl = document.getElementById('watchers') as HTMLDivElement;
 const leaderboardEl = document.getElementById('leaderboard') as HTMLDivElement;
 const colorPicker = document.getElementById('colorPicker') as HTMLDivElement;
 const chatLog = document.getElementById('chatlog') as HTMLDivElement;
+const chatEl = document.getElementById('chat') as HTMLDivElement;
 const chatForm = document.getElementById('chatForm') as HTMLFormElement;
 const chatInput = document.getElementById('chatInput') as HTMLInputElement;
+const hideCmdsEl = document.getElementById('hideCmds') as HTMLInputElement;
+const hideTimestampsEl = document.getElementById('hideTimestamps') as HTMLInputElement;
 const closingModeEl = document.getElementById('closingMode') as HTMLInputElement;
 const gravityModeEl = document.getElementById('gravityMode') as HTMLInputElement;
 const turboModeEl = document.getElementById('turboMode') as HTMLInputElement;
@@ -72,6 +76,9 @@ const combosModal = document.getElementById('combosModal') as HTMLDivElement;
 const combosCard = document.getElementById('combosCard') as HTMLDivElement;
 const combosClose = document.getElementById('combosClose') as HTMLButtonElement;
 const combosList = document.getElementById('combosList') as HTMLDivElement;
+const mobileControlsEl = document.getElementById('mobileControls') as HTMLDivElement;
+const mobUpBtn = document.getElementById('mobUp') as HTMLButtonElement;
+const mobDownBtn = document.getElementById('mobDown') as HTMLButtonElement;
 
 // Cookies (not localStorage, per request); ~1 year, scoped to the site.
 const YEAR = 60 * 60 * 24 * 365;
@@ -145,7 +152,6 @@ function playScoreSound() {
 }
 
 // Track previous state for detecting events client-side
-let prevBallColor = '#e8eefc';
 let prevScore = { left: 0, right: 0 };
 
 function selectSwatch(color: string) {
@@ -194,6 +200,12 @@ let aimAngle = 0;
 let lastSent = -1;
 let lastSendAt = 0;
 const keys = new Set<string>();
+// Mobile touch state: once the player taps the board we consider them "captured"
+// (pointer lock is unavailable on mobile). Unlike touchActive, this stays true
+// between individual taps so the game doesn't think they've un-captured.
+let mobileCaptured = false;
+let mobileUpHeld = false;
+let mobileDownHeld = false;
 
 // --- fatalities (opt-in finishing move for the match winner) ---
 // Each finisher has its own arrow combo so the winner can pick which one to perform.
@@ -230,6 +242,8 @@ let prevStatus: StateMsg['status'] | null = null; // last seen status, to fire o
 let prevFatality = false; // whether a fatality was playing last frame, to fire music on the rising edge
 let prevDisco = false; // rising-edge detection for disco sound
 let prevProjCount = 0; // last seen projectile count, to fire the gunshot on a new shot
+let prevTarget: StateMsg['target'] | undefined = undefined; // detect powerup pickup for flash
+let prevHitSeq = -1; // detect any paddle contact (both sides, including same-side repeats)
 
 // Quiet notification beep for pings.
 function playPingSound() {
@@ -257,13 +271,13 @@ function onPing(from: string) {
   playPingSound();
   document.title = `🔔 ${from} pinged — ${ORIGINAL_TITLE}`;
   if (pingTitleTimer) clearTimeout(pingTitleTimer);
-  pingTitleTimer = setTimeout(() => { document.title = ORIGINAL_TITLE; }, 5000);
+  pingTitleTimer = setTimeout(() => { pingTitleTimer = null; document.title = ORIGINAL_TITLE; }, 5000);
 }
 
 function notifyChatTitle(from: string) {
   document.title = `💬 ${from} — ${ORIGINAL_TITLE}`;
   if (chatTitleTimer) clearTimeout(chatTitleTimer);
-  chatTitleTimer = setTimeout(() => { document.title = ORIGINAL_TITLE; }, 8000);
+  chatTitleTimer = setTimeout(() => { chatTitleTimer = null; document.title = ORIGINAL_TITLE; }, 8000);
 }
 
 // Clear the chat notification the moment the user focuses the tab again.
@@ -311,7 +325,7 @@ const net = connect(
       myRole = msg.role;
       myId = msg.id;
       lastSent = -1; // force a re-sync of our paddle target from the next state
-      if (!isPlayer()) touchActive = false;
+      if (!isPlayer()) { touchActive = false; mobileCaptured = false; }
       // Hand the cursor back when we're no longer holding a paddle (e.g. match ended).
       if (!isPlayer() && isBoard(document.pointerLockElement)) {
         document.exitPointerLock();
@@ -368,13 +382,16 @@ const net = connect(
         blasterSound.play().catch(() => {});
       }
       prevProjCount = projCount;
-      // Detect paddle hit (ball takes on new color) and score events for sound.
+      // Detect paddle hit and score events for sound.
       if (msg.status === 'playing' && !msg.paused) {
-        if (msg.ball.color !== '#e8eefc' && msg.ball.color !== prevBallColor) playHitSound();
+        if (msg.hitSeq !== prevHitSeq) playHitSound();
         if (msg.score.left > prevScore.left || msg.score.right > prevScore.right) playScoreSound();
       }
-      prevBallColor = msg.ball.color;
+      prevHitSeq = msg.hitSeq;
       prevScore = { ...msg.score };
+      // Detect powerup pickup: target was present last frame, gone this frame.
+      if (prevTarget && !msg.target) showPowerupFlash(prevTarget.kind, prevTarget.x, prevTarget.y);
+      prevTarget = msg.target ?? null;
       state = msg;
       syncMyPaddleFromServer();
       syncViewMode(msg.viewMode ?? 'normal');
@@ -472,7 +489,15 @@ queueBtn.addEventListener('click', () => {
 });
 
 // --- ready up for the next match ---
-readyBtn.addEventListener('click', () => net.send({ type: 'ready' }));
+function sendReady() { net.send({ type: 'ready' }); }
+readyBtn.addEventListener('click', sendReady);
+rematchBtn.addEventListener('click', () => {
+  // Rematch = both sides ready up immediately. Just send ready for yourself;
+  // the server handles the two-sided handshake as normal.
+  net.send({ type: 'ready' });
+  rematchBtn.textContent = '✓ Waiting…';
+  rematchBtn.disabled = true;
+});
 
 // --- change name: reopen the prompt pre-filled with the current name ---
 renameBtn.addEventListener('click', () => {
@@ -706,6 +731,11 @@ window.addEventListener('keydown', (e) => {
   if (e.key.toLowerCase() === 't' && !pointerLocked && joined) {
     e.preventDefault();
     chatInput.focus();
+  }
+  // Space or Enter triggers ready-up when the button is visible and not pointer-locked.
+  if ((e.key === ' ' || e.key === 'Enter') && !pointerLocked && readyBtn.style.display !== 'none') {
+    e.preventDefault();
+    sendReady();
   }
 });
 
@@ -986,6 +1016,7 @@ function formatChatDate(ms: number): string {
   return d.toLocaleDateString('en-US', opts);
 }
 function addChatLine(line: ChatLine) {
+  if (line.command && hideCmdsEl.checked) return;
   const ts = line.time ?? Date.now();
   const timeStr = formatChatTime(ts);
   const dateStr = formatChatDate(ts);
@@ -997,7 +1028,7 @@ function addChatLine(line: ChatLine) {
     chatLog.append(sep);
   }
   const row = document.createElement('div');
-  row.className = 'chat-row';
+  row.className = line.command ? 'chat-row chat-row-cmd' : 'chat-row';
   const stamp = document.createElement('span');
   stamp.className = 'chatstamp';
   stamp.textContent = timeStr;
@@ -1017,11 +1048,49 @@ function addChatLine(line: ChatLine) {
   chatLog.scrollTop = chatLog.scrollHeight;
 }
 
+hideCmdsEl.addEventListener('change', () => {
+  const hide = hideCmdsEl.checked;
+  for (const row of chatLog.querySelectorAll<HTMLElement>('.chat-row-cmd')) {
+    row.style.display = hide ? 'none' : '';
+  }
+});
+
+hideTimestampsEl.addEventListener('change', () => {
+  chatEl.classList.toggle('hide-timestamps', hideTimestampsEl.checked);
+});
+
+// Small name-pop at the court location where a power-up was just collected.
+function showPowerupFlash(kind: string, cx: number, cy: number) {
+  const boardEl = state?.viewMode !== 'normal' ? game3dEl : canvas;
+  const r = boardEl.getBoundingClientRect();
+  const scaleX = r.width / COURT.w;
+  const scaleY = r.height / COURT.h;
+  const el = document.createElement('div');
+  el.className = 'powerup-flash';
+  el.textContent = kind.toUpperCase();
+  el.style.color = PU_CHIP_COLOR[kind] ?? '#fff';
+  el.style.left = `${r.left + cx * scaleX}px`;
+  el.style.top  = `${r.top  + cy * scaleY}px`;
+  reactionLayer.append(el);
+  const anim = el.animate(
+    [
+      { opacity: 0,   transform: 'translate(-50%, -50%) scale(0.6)' },
+      { opacity: 1,   transform: 'translate(-50%, -80%) scale(1.1)', offset: 0.2 },
+      { opacity: 1,   transform: 'translate(-50%, -120%) scale(1)',  offset: 0.6 },
+      { opacity: 0,   transform: 'translate(-50%, -160%) scale(0.9)' },
+    ],
+    { duration: 900, easing: 'ease-out' },
+  );
+  anim.onfinish = () => el.remove();
+  anim.oncancel = () => el.remove();
+}
+
 // A big, transient banner across the middle of the screen (e.g. someone forfeits).
-function showAnnouncement(text: string) {
+function showAnnouncement(text: string, color?: string) {
   const el = document.createElement('div');
   el.className = 'announce-banner';
   el.textContent = text;
+  if (color) el.style.color = color;
   reactionLayer.append(el);
   const anim = el.animate(
     [
@@ -1480,7 +1549,8 @@ function onBoardMouseMove(e: MouseEvent) {
   // Blaster aim: while armed, steer the shot with whichever mouse axis isn't driving the
   // paddle (movementX normally; movementY when the paddle rides the X axis — rotated / FP).
   if (myAmmo() > 0) {
-    const paddleUsesX = !!state?.rotated || state?.viewMode === 'firstperson';
+    // Paddle rides the X axis on a quarter/three-quarter turn or in first-person; aim with the other axis.
+    const paddleUsesX = state?.rotated === 1 || state?.rotated === 3 || state?.viewMode === 'firstperson';
     const d = paddleUsesX ? e.movementY : e.movementX;
     aimAngle = Math.max(-BLASTER.maxAngle, Math.min(BLASTER.maxAngle, aimAngle + d * 0.004));
   }
@@ -1489,8 +1559,12 @@ function onBoardMouseMove(e: MouseEvent) {
   // Cap movementX per event to avoid a mouse-acceleration spike clamping the paddle
   // to an edge in a single frame and making it appear frozen.
   // Rotated court: paddle slides horizontally too, same movementX logic.
-  if (state?.rotated) {
+  if (state?.rotated === 1) {
     target = clampPaddle(target - e.movementX * (COURT.h / r.width));
+  } else if (state?.rotated === 2) {
+    target = clampPaddle(target - e.movementY * (COURT.h / r.height));
+  } else if (state?.rotated === 3) {
+    target = clampPaddle(target + e.movementX * (COURT.h / r.width));
   } else if (state?.viewMode === 'firstperson') {
     const sign = myRole === 'right' ? -1 : 1;
     const dx = Math.max(-40, Math.min(40, e.movementX));
@@ -1643,19 +1717,21 @@ window.addEventListener('keydown', (e) => {
 // court. The internal resolution swaps to COURT.h × COURT.w (the render transform maps
 // court coords into it) and a CSS class switches the on-screen aspect ratio. Only touches
 // the DOM when the value actually changes.
-let canvasRotated = false;
-function applyCanvasRotation(rotated: boolean) {
+let canvasRotated = 0;
+function applyCanvasRotation(rotated: number) {
   if (rotated === canvasRotated) return;
   canvasRotated = rotated;
-  if (rotated) {
-    canvas.width = COURT.h;
-    canvas.height = COURT.w;
+  const portrait = rotated === 1 || rotated === 3;
+  canvas.width  = portrait ? COURT.h : COURT.w;
+  canvas.height = portrait ? COURT.w : COURT.h;
+  if (portrait) {
     canvas.classList.add('rotated');
+    game3dEl.classList.add('rotated');
   } else {
-    canvas.width = COURT.w;
-    canvas.height = COURT.h;
     canvas.classList.remove('rotated');
+    game3dEl.classList.remove('rotated');
   }
+  renderer3d?.resize();
 }
 
 // --- main loop ---
@@ -1713,8 +1789,12 @@ if (isMobileView()) {
 let touchActive = false;
 function onTouchStart() {
   touchActive = true;
-  // On mobile, touch acts as capture (no pointer lock available)
-  if (isPlayer() && !pointerLocked) net.send({ type: 'capture', on: true });
+  if (isPlayer() && !pointerLocked) {
+    // First touch captures the player (like clicking the board on desktop).
+    // mobileCaptured stays true between taps so the server doesn't re-pause.
+    if (!mobileCaptured) mobileCaptured = true;
+    net.send({ type: 'capture', on: true });
+  }
 }
 function onTouchEnd() {
   touchActive = false;
@@ -1748,6 +1828,27 @@ game3dEl.addEventListener('touchstart', onTouchStart, { passive: true });
 game3dEl.addEventListener('touchmove', onTouchMove, { passive: true });
 game3dEl.addEventListener('touchend', onTouchEnd);
 game3dEl.addEventListener('touchcancel', onTouchEnd);
+
+// Mobile ▲/▼ buttons: hold to move the paddle continuously. Uses pointer events so
+// the button stays responsive even if the finger slides off the element.
+for (const [btn, dir] of [[mobUpBtn, 'up'], [mobDownBtn, 'down']] as [HTMLButtonElement, 'up' | 'down'][]) {
+  btn.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    btn.setPointerCapture(e.pointerId);
+    if (dir === 'up') mobileUpHeld = true; else mobileDownHeld = true;
+    btn.classList.add('held');
+    if (isPlayer() && !mobileCaptured) {
+      mobileCaptured = true;
+      net.send({ type: 'capture', on: true });
+    }
+  });
+  const release = () => {
+    if (dir === 'up') mobileUpHeld = false; else mobileDownHeld = false;
+    btn.classList.remove('held');
+  };
+  btn.addEventListener('pointerup', release);
+  btn.addEventListener('pointercancel', release);
+}
 
 // --- View mode dropdown (lazy-loads Three.js on first use) ---
 // Open/close the panel.
@@ -1830,7 +1931,7 @@ window.addEventListener('resize', () => {
 });
 
 function canControl(): boolean {
-  return pointerLocked || touchActive;
+  return pointerLocked || touchActive || mobileCaptured;
 }
 
 function loop(t: number) {
@@ -1861,18 +1962,26 @@ function loop(t: number) {
   } else if (isPlayer() && canControl()) {
     // Paddle input (mouse and keyboard) only applies while the mouse is captured.
     const step = PADDLE.speed / 60;
-    if (state?.rotated) {
-      // Court rotated 90°: paddle slides horizontally; right on screen = decreasing court-Y.
+    if (state?.rotated === 1) {
+      // 90° CW: paddle horizontal; right on screen = decreasing court-Y.
       if (keys.has('arrowright') || keys.has('d')) target -= step;
       if (keys.has('arrowleft') || keys.has('a')) target += step;
+    } else if (state?.rotated === 2) {
+      // 180°: court upside-down; controls inverted vertically.
+      if (keys.has('arrowup') || keys.has('w')) target += step;
+      if (keys.has('arrowdown') || keys.has('s')) target -= step;
+    } else if (state?.rotated === 3) {
+      // 270° CW: paddle horizontal; right on screen = increasing court-Y.
+      if (keys.has('arrowright') || keys.has('d')) target += step;
+      if (keys.has('arrowleft') || keys.has('a')) target -= step;
     } else if (state?.viewMode === 'firstperson') {
       // First-person: left/right keys match screen direction; direction flips for right side.
       const sign = myRole === 'right' ? -1 : 1;
       if (keys.has('arrowright') || keys.has('d')) target += sign * step;
       if (keys.has('arrowleft') || keys.has('a')) target -= sign * step;
     } else {
-      if (keys.has('arrowup') || keys.has('w')) target -= step;
-      if (keys.has('arrowdown') || keys.has('s')) target += step;
+      if (keys.has('arrowup') || keys.has('w') || mobileUpHeld) target -= step;
+      if (keys.has('arrowdown') || keys.has('s') || mobileDownHeld) target += step;
     }
     target = Math.max(PADDLE.h / 2, Math.min(COURT.h - PADDLE.h / 2, target));
 
@@ -1899,13 +2008,13 @@ function loop(t: number) {
       document.body.classList.toggle('fatality-2d', showFatality2d);
       if (!showFatality2d && state.viewMode !== 'normal') renderer3d?.resize();
     }
+    applyCanvasRotation(state.rotated);
     if (state.viewMode !== 'normal' && renderer3d && !state.fatality) {
       const side = state.viewMode === 'firstperson'
         ? (myRole !== 'observer' ? (myRole as 'left' | 'right') : fpSide)
         : null;
       renderer3d.render(state, side, aim);
     } else {
-      applyCanvasRotation(state.rotated);
       draw(ctx, state, myRole);
     }
   }
@@ -1978,26 +2087,31 @@ function updateUI() {
     else if (canFinish()) statusEl.textContent = '🔪 FINISH HIM!  ·  tap a combo (see Combos ▸)';
     else statusEl.textContent = state.winner ? `🏆 ${state.winner} wins!` : 'Game over';
   } else if (state.paused) {
-    // Match is frozen until both players capture their mouse. Once an opponent is ready,
-    // a laggard is on the clock (captureCountdown) before being benched.
+    // Match is frozen until both players capture their mouse/touch. Once an opponent is
+    // ready, a laggard is on the clock (captureCountdown) before being benched.
     const cd = state.captureCountdown;
-    if (isPlayer() && !pointerLocked)
-      statusEl.textContent =
-        cd != null
-          ? `🖱 click the board NOW — ${cd}s to capture your mouse or you're benched!`
-          : '🖱 click the board to capture your mouse to start';
-    else if (isPlayer())
+    const mob = isMobileView();
+    if (isPlayer() && !pointerLocked && !mobileCaptured) {
+      // Player hasn't tapped/clicked yet — show capture prompt appropriate to their device.
+      statusEl.textContent = mob
+        ? (cd != null ? `👆 tap the board — ${cd}s or you're benched!` : '👆 tap the board to start')
+        : (cd != null ? `🖱 click the board NOW — ${cd}s to capture your mouse or you're benched!` : '🖱 click the board to capture your mouse to start');
+    } else if (isPlayer())
       statusEl.textContent =
         cd != null
           ? `⏳ waiting on the other player — ${cd}s before they're benched`
-          : '⏸ waiting for the other players to capture their mouse…';
+          : '⏸ waiting for the other players…';
     else
       statusEl.textContent =
         cd != null
           ? `⏳ waiting for players to capture — ${cd}s`
           : '⏸ paused — waiting for players to capture their mice';
   } else if (isPlayer() && !pointerLocked) {
-    statusEl.textContent = '🖱 click the board to capture · ↑/↓ or W/S to move · Esc to release';
+    // Playing but mouse/pointer isn't locked. On mobile this is expected (no pointer lock),
+    // so suppress the desktop capture prompt; the ▲▼ buttons provide the control hint.
+    statusEl.textContent = isMobileView()
+      ? ''
+      : '🖱 click the board to capture · ↑/↓ or W/S to move · Esc to release';
   } else statusEl.textContent = '';
 
   // King of the court: show who's reigning and their win streak (to everyone); the
@@ -2034,13 +2148,20 @@ function updateUI() {
   // Reset inQueue if we left observer state (e.g. we claimed a spot)
   if (myRole !== 'observer') inQueue = false;
 
-  // Ready button when the match is over and you hold a paddle (classic only — the arena
-  // restarts on its own timer).
+  // Ready / Rematch buttons when the match is over and you hold a paddle (classic only).
   if (state.status === 'over' && isPlayer() && !state.poly) {
+    const alreadyReady = state.ready[myRole as 'left' | 'right'];
     readyBtn.style.display = 'inline-block';
-    readyBtn.textContent = state.ready[myRole as 'left' | 'right'] ? '✓ Ready' : 'Ready?';
+    readyBtn.textContent = alreadyReady ? '✓ Ready' : 'Ready?';
+    rematchBtn.style.display = 'inline-block';
+    if (!alreadyReady) {
+      rematchBtn.textContent = '🔄 Rematch';
+      rematchBtn.disabled = false;
+    }
   } else {
     readyBtn.style.display = 'none';
+    rematchBtn.style.display = 'none';
+    rematchBtn.disabled = false;
   }
 
   // Side-pick buttons belong to layered-teams mode (each shows its head count and
@@ -2064,6 +2185,14 @@ function updateUI() {
   renameBtn.style.display = myName ? 'inline-block' : 'none';
   pingBtn.style.display = myName ? 'inline-block' : 'none';
 
+  // Mobile ▲/▼ buttons: visible while the player is in a live match in duel mode.
+  // Hidden in arena mode (paddle direction isn't vertical), during waiting/over states,
+  // and on desktop (the media query enforces that, but guard in JS too).
+  mobileControlsEl.classList.toggle(
+    'show',
+    isMobileView() && isPlayer() && !state.poly && state.status === 'playing',
+  );
+
   // Hidden once the pointer is captured (lock hides it natively anyway); visible while
   // unlocked so a player can see where to click to capture, and for observers.
   canvas.style.cursor = isPlayer() && pointerLocked ? 'none' : 'default';
@@ -2071,6 +2200,21 @@ function updateUI() {
   watchersEl.textContent = state.watchers.length
     ? `Watching: ${state.watchers.join(', ')}`
     : '';
+
+  // Update page title with live headcount so other tabs show match activity.
+  const playerNames = [
+    ...state.paddles.left.players.map((p) => p.name),
+    ...state.paddles.right.players.map((p) => p.name),
+  ].filter(Boolean);
+  const watching = state.watchers.length;
+  if (playerNames.length >= 2) {
+    const vs = playerNames.slice(0, 2).join(' vs ');
+    document.title = watching
+      ? `${vs} · ${watching} watching — TSONG`
+      : `${vs} — TSONG`;
+  } else if (!pingTitleTimer && !chatTitleTimer) {
+    document.title = ORIGINAL_TITLE;
+  }
 }
 
 // --- active power-up HUD ---
@@ -2123,16 +2267,40 @@ for (const canvas of document.querySelectorAll<HTMLCanvasElement>('.pu-icon')) {
   drawLegendIcon(canvas, canvas.dataset.kind as PowerupKind);
 }
 
+// Track each player's last-known ELO so we can show a delta when it changes.
+const prevElo = new Map<string, number>();
+
 function renderLeaderboard(rows: LeaderboardRow[]) {
   if (!rows.length) {
     leaderboardEl.innerHTML = '';
     return;
   }
+
+  // Detect ELO changes for our own name and show a delta banner.
+  // Only fire when the match is freshly over — not on the initial connect load.
+  if (myName && prevStatus === 'over') {
+    const mine = rows.find((r) => r.name === myName);
+    if (mine) {
+      const prev = prevElo.get(myName);
+      if (prev !== undefined && mine.elo !== prev) {
+        const delta = mine.elo - prev;
+        const sign = delta > 0 ? '+' : '';
+        const color = delta > 0 ? '#4ade80' : '#f87171';
+        showAnnouncement(`${sign}${delta} ELO`, color);
+      }
+      prevElo.set(myName, mine.elo);
+    }
+  } else if (myName) {
+    // Seed on first load so we have a baseline.
+    const mine = rows.find((r) => r.name === myName);
+    if (mine && !prevElo.has(myName)) prevElo.set(myName, mine.elo);
+  }
+
   const items = rows
     .map((r, i) => {
       return `<li><span class="rank">${i + 1}</span><span class="lbname">${escapeHtml(
         r.name,
-      )}</span><span class="pct">${r.elo ?? 1000}</span></li>`;
+      )}</span><span class="pct">${r.elo ?? 500}</span></li>`;
     })
     .join('');
   leaderboardEl.innerHTML = `<h2>Leaderboard</h2><ol>${items}</ol>`;

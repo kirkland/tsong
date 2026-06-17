@@ -82,6 +82,7 @@ export class PolyGame {
   status: Status = 'waiting';
   paused = false; // frozen until every seated player has captured their mouse
   lastHitId: string | null = null; // id of the player whose paddle last touched a ball
+  hitSeq = 0; // incremented on every paddle bounce
   winnerId: string | null = null; // last player standing, when status === 'over'
 
   // Power-up target on the board; bouncing a ball over it grants its kind to the last hitter.
@@ -371,6 +372,7 @@ export class PolyGame {
       if (Math.abs(s - ent.pos) <= half + r) {
         // Paddle hit: reflect off the edge normal with English from the contact offset.
         this.lastHitId = ent.id;
+        this.hitSeq++;
         const rel = clamp((s - ent.pos) / half, -1, 1);
         let speed = Math.hypot(b.vx, b.vy) * BALL.speedup;
         if (ent.smashHits > 0) speed *= SMASH_BONUS;
@@ -459,7 +461,10 @@ export class PolyGame {
   }
 
   private grant(kind: PowerupKind, id: string) {
-    const ent = this.players.find((p) => p.id === id);
+    const alive = this.players.filter((p) => p.alive);
+    // If the last-hitter already disconnected, fall back to a random alive player.
+    const ent = this.players.find((p) => p.id === id)
+      ?? alive[Math.floor(Math.random() * alive.length)];
     switch (kind) {
       case 'grow':
         if (ent) ent.growHits = POWERUP_HITS;
