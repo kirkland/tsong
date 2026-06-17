@@ -11,11 +11,13 @@
 // fetches Three.js lazily and the default 2D bundle never references it. Keeping it out
 // of the Vite build also keeps the (small) production VPS from OOMing while bundling.
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js';
-import { COURT, PADDLE, BALL, BIG_BALL_R, DIAMOND, PINATA, POWERUPS, TARGET, PowerupKind, StateMsg } from '../shared/types';
+import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, POWERUPS, TARGET, PowerupKind, Side, StateMsg } from '../shared/types';
 import { drawLegendIcon, drawDiamondIcon } from './render';
 
+export interface BlasterAim { side: Side; angle: number; }
+
 export interface Renderer3D {
-  render(s: StateMsg, fpSide?: 'left' | 'right' | null): void;
+  render(s: StateMsg, fpSide?: 'left' | 'right' | null, aim?: BlasterAim | null): void;
   resize(): void;
   dispose(): void;
 }
@@ -34,6 +36,7 @@ const PU_COLOR: Record<PowerupKind, string> = {
   ghost: '#c0c8e0', tiny: '#ffa94d', warp: '#9775fa', bigball: '#ffd43b', rotate: '#69db7c',
   fritz: '#f59e0b',
   disco: '#e040fb',
+  blaster: '#ff4d4d',
 };
 
 // Text painted flat onto the court floor (so it sits in the scene with real perspective —
@@ -243,6 +246,27 @@ export function createRenderer(container: HTMLElement): Renderer3D {
     return m;
   }
 
+  // Blaster projectiles: small emissive spheres pooled like balls.
+  const projGeo = new THREE.SphereGeometry(BLASTER.r, 16, 12);
+  const projPool: THREE.Mesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>[] = [];
+  function getProjectile(i: number) {
+    let m = projPool[i];
+    if (!m) {
+      m = new THREE.Mesh(projGeo, new THREE.MeshStandardMaterial({ emissiveIntensity: 1 }));
+      world.add(m);
+      projPool[i] = m;
+    }
+    return m;
+  }
+
+  // Local player's aim line — a thin tube the armed player sees pointing where they'll shoot.
+  const aimLine = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+    new THREE.LineBasicMaterial({ color: '#ff8888', transparent: true, opacity: 0.7 }),
+  );
+  aimLine.visible = false;
+  world.add(aimLine);
+
   // Power-up target: a hockey puck with the 2D power-up icon on its top face. The kind
   // changes, so pre-render every kind's face once and swap the top map / rim color.
   const PU_TEX = Object.fromEntries(
@@ -301,7 +325,7 @@ export function createRenderer(container: HTMLElement): Renderer3D {
     scene.background = fritzOn && !discoOn ? fritzTex : DEFAULT_BG;
   }
 
-  function render(s: StateMsg, fpSide?: 'left' | 'right' | null) {
+  function render(s: StateMsg, fpSide?: 'left' | 'right' | null, aim?: BlasterAim | null) {
     world.rotation.y = s.rotated * (Math.PI / 2);
 
     // Fritz power-up: paint the photo across the court floor and the scene backdrop.
@@ -386,9 +410,11 @@ export function createRenderer(container: HTMLElement): Renderer3D {
         m.visible = true;
         m.position.set(wx(pl.x), PADDLE_H / 2, wz(pl.y));
         m.scale.z = p.h;
-        m.material.color.set(pl.color);
-        m.material.emissive.set(pl.color);
-        m.material.emissiveIntensity = p.frozen ? 0.05 : 0.22;
+        // Blaster-locked paddles go gray and flicker; otherwise the player's color.
+        const locked = p.disabled;
+        m.material.color.set(locked ? '#555a66' : pl.color);
+        m.material.emissive.set(locked ? '#ff3030' : pl.color);
+        m.material.emissiveIntensity = locked ? 0.25 + 0.2 * Math.abs(Math.sin(Date.now() / 90)) : p.frozen ? 0.05 : 0.22;
         m.material.opacity = 1;
       }
     }
@@ -406,6 +432,33 @@ export function createRenderer(container: HTMLElement): Renderer3D {
       m.material.emissive.set(tmpColor.set(b.color).multiplyScalar(0.4));
     });
     for (let i = balls.length; i < ballPool.length; i++) ballPool[i].visible = false;
+
+    // Blaster projectiles — glowing bullets in the firing side's color.
+    s.projectiles.forEach((pr, i) => {
+      const m = getProjectile(i);
+      m.visible = true;
+      m.position.set(wx(pr.x), BALL_Y, wz(pr.y));
+      m.material.color.set(pr.color);
+      m.material.emissive.set(pr.color);
+    });
+    for (let i = s.projectiles.length; i < projPool.length; i++) projPool[i].visible = false;
+
+    // Aim line for the local armed player.
+    if (aim) {
+      const p = s.paddles[aim.side];
+      const dir = aim.side === 'left' ? 1 : -1;
+      const ox = p.x + dir * (PADDLE.w / 2 + 2);
+      const len = 170;
+      const ex = ox + dir * Math.cos(aim.angle) * len;
+      const ey = p.y + Math.sin(aim.angle) * len;
+      aimLine.visible = true;
+      (aimLine.geometry as THREE.BufferGeometry).setFromPoints([
+        new THREE.Vector3(wx(ox), BALL_Y, wz(p.y)),
+        new THREE.Vector3(wx(ex), BALL_Y, wz(ey)),
+      ]);
+    } else {
+      aimLine.visible = false;
+    }
 
     // Power-up target — a puck with the kind's 2D icon on top, rim tinted to the kind.
     if (s.target) {

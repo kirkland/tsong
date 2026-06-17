@@ -2,11 +2,12 @@
 // and the Join button. Input is only sent when this client holds a paddle.
 
 import { connect } from './net';
-import { draw, drawLegendIcon } from './render';
+import { draw, drawLegendIcon, setBlasterAim } from './render';
 import {
   COURT,
   PADDLE,
   BALL,
+  BLASTER,
   ARENA,
   MAX_PLAYERS,
   REACTIONS,
@@ -98,6 +99,7 @@ function applyMute() {
   pacmanSound.muted = muted;
   jsavSound.muted = muted;
   discoSound.muted = muted;
+  blasterSound.muted = muted;
 }
 muteBtn.addEventListener('click', () => {
   muted = !muted;
@@ -193,6 +195,8 @@ let fatality2dActive = false;
 
 let target = COURT.h / 2; // desired paddle center Y, court units (duel)
 let arenaTarget = 0; // desired paddle offset along my edge, court units (arena)
+// Blaster: the local player's current aim angle (vertical deflection off straight-across).
+let aimAngle = 0;
 let lastSent = -1;
 let lastSendAt = 0;
 const keys = new Set<string>();
@@ -230,11 +234,14 @@ jsavSound.preload = 'auto';
 const discoSound = new Audio('/disco.mp3'); // plays while the disco powerup is active
 discoSound.preload = 'auto';
 discoSound.loop = true;
+const blasterSound = new Audio('/blaster.mp3'); // gunshot when the blaster fires
+blasterSound.preload = 'auto';
 // Apply persisted mute state immediately (before applyMute() runs at definition time).
 applyMute();
 let prevStatus: StateMsg['status'] | null = null; // last seen status, to fire on the rising edge into 'over'
 let prevFatality = false; // whether a fatality was playing last frame, to fire music on the rising edge
 let prevDisco = false; // rising-edge detection for disco sound
+let prevProjCount = 0; // last seen projectile count, to fire the gunshot on a new shot
 let prevTarget: StateMsg['target'] | undefined = undefined; // detect powerup pickup for flash
 let prevHitSeq = -1; // detect any paddle contact (both sides, including same-side repeats)
 
@@ -368,6 +375,13 @@ const net = connect(
         discoSound.currentTime = 0;
       }
       prevDisco = discoActive;
+      // Gunshot on every new blaster projectile (heard by shooter, opponent and spectators).
+      const projCount = msg.projectiles.length;
+      if (projCount > prevProjCount) {
+        blasterSound.currentTime = 0;
+        blasterSound.play().catch(() => {});
+      }
+      prevProjCount = projCount;
       // Detect paddle hit and score events for sound.
       if (msg.status === 'playing' && !msg.paused) {
         if (msg.hitSeq !== prevHitSeq) playHitSound();
@@ -1532,6 +1546,14 @@ function onBoardMouseMove(e: MouseEvent) {
     arenaTarget = Math.max(-max, Math.min(max, arenaTarget + along));
     return;
   }
+  // Blaster aim: while armed, steer the shot with whichever mouse axis isn't driving the
+  // paddle (movementX normally; movementY when the paddle rides the X axis — rotated / FP).
+  if (myAmmo() > 0) {
+    // Paddle rides the X axis on a quarter/three-quarter turn or in first-person; aim with the other axis.
+    const paddleUsesX = state?.rotated === 1 || state?.rotated === 3 || state?.viewMode === 'firstperson';
+    const d = paddleUsesX ? e.movementY : e.movementX;
+    aimAngle = Math.max(-BLASTER.maxAngle, Math.min(BLASTER.maxAngle, aimAngle + d * 0.004));
+  }
   // Convert screen-pixel movement to court units. In first-person the paddle appears
   // left/right on screen so movementX drives it (direction flips for the right side).
   // Cap movementX per event to avoid a mouse-acceleration spike clamping the paddle
@@ -1552,10 +1574,27 @@ function onBoardMouseMove(e: MouseEvent) {
   }
 }
 
+// My duel side ('left'/'right'), or null when spectating / in the arena.
+function myDuelSide(): 'left' | 'right' | null {
+  return myRole === 'left' || myRole === 'right' ? myRole : null;
+}
+// How many blaster shots my paddle is currently holding.
+function myAmmo(): number {
+  const s = myDuelSide();
+  return s && state ? state.paddles[s].ammo ?? 0 : 0;
+}
+// Fire the blaster (a mouse click while captured and armed). Server validates ammo.
+function fireBlaster() {
+  if (!pointerLocked || myAmmo() <= 0) return;
+  net.send({ type: 'fire', angle: aimAngle });
+}
+
 canvas.addEventListener('click', onBoardClick);
 canvas.addEventListener('mousemove', onBoardMouseMove);
+canvas.addEventListener('mousedown', fireBlaster);
 game3dEl.addEventListener('click', onBoardClick);
 game3dEl.addEventListener('mousemove', onBoardMouseMove);
+game3dEl.addEventListener('mousedown', fireBlaster);
 
 document.addEventListener('pointerlockchange', () => {
   pointerLocked = isBoard(document.pointerLockElement);
@@ -1954,6 +1993,12 @@ function loop(t: number) {
     }
   }
 
+  // Feed the local blaster aim to the renderers (null when not holding the power-up).
+  const armedSide = myAmmo() > 0 ? myDuelSide() : null;
+  if (!armedSide) aimAngle = 0; // reset so the next pickup starts aiming straight across
+  const aim = armedSide ? { side: armedSide, angle: aimAngle } : null;
+  setBlasterAim(aim);
+
   if (state) {
     // In 3D view, a fatality temporarily takes over the 2D board (the cinematics are 2D
     // canvas effects that composite over the full court frame). Swap surfaces on the edge.
@@ -1968,7 +2013,7 @@ function loop(t: number) {
       const side = state.viewMode === 'firstperson'
         ? (myRole !== 'observer' ? (myRole as 'left' | 'right') : fpSide)
         : null;
-      renderer3d.render(state, side);
+      renderer3d.render(state, side, aim);
     } else {
       draw(ctx, state, myRole);
     }
@@ -2177,7 +2222,7 @@ function updateUI() {
 const PU_CHIP_COLOR: Record<string, string> = {
   slow: '#7aa2ff', ghost: '#c8beff', tiny: '#ff8c42', bigball: '#fb923c',
   freeze: '#88d8f7', blind: '#9988bb', mirror: '#ff7eb3',
-  grow: '#ffd166', shrink: '#5ad1e6', smash: '#ff6b3d',
+  grow: '#ffd166', shrink: '#5ad1e6', smash: '#ff6b3d', blaster: '#ff4d4d',
 };
 
 function renderPuHud(s: StateMsg) {
@@ -2198,6 +2243,8 @@ function renderPuHud(s: StateMsg) {
     if (p.freezeTimer > 0) chips.push(puChip('freeze', `${tag} frozen ${t1(p.freezeTimer)}`));
     if (p.blindTimer > 0)  chips.push(puChip('blind',  `${tag} blind ${t1(p.blindTimer)}`));
     if (p.mirrorTimer > 0) chips.push(puChip('mirror', `${tag} mirror ${t1(p.mirrorTimer)}`));
+    if (p.ammo > 0)        chips.push(puChip('blaster', `${tag} 🔫 ×${p.ammo} — click to fire`));
+    if (p.disabled)        chips.push(puChip('blaster', `${tag} ⚡ disabled`));
   }
 
   puHudEl.innerHTML = chips.join('');

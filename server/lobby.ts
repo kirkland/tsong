@@ -710,6 +710,13 @@ export class Lobby {
     this.refreshPause();
   }
 
+  /** Blaster: fire a projectile from this player's paddle at the given aim angle. */
+  fire(ws: WebSocket, angle: number) {
+    if (this.mode === 'poly') return; // duel-only power-up
+    const side = this.sideOf(ws);
+    if (side) this.game.fire(side, angle);
+  }
+
   setPaddle(ws: WebSocket, y: number) {
     const conn = this.conns.get(ws);
     if (!conn) return;
@@ -832,9 +839,9 @@ export class Lobby {
    *  rotate is 2D-only; disco is 3D/FP-only. */
   private syncPowerupPool() {
     if (this.viewMode === 'normal') {
-      this.game.setExcludedPowerups(['disco']);
+      this.game.setExcludedPowerups(['disco']); // disco's effect only shows in 3D
     } else {
-      this.game.setExcludedPowerups(['rotate']);
+      this.game.setExcludedPowerups(['rotate']); // court flip only makes sense in 2D
     }
   }
 
@@ -1369,6 +1376,8 @@ export class Lobby {
         shielded: this.game.shielded[side],
         blinded: this.game.blindTimer[side] > 0,
         curveReady: this.game.curveHits[side] > 0,
+        disabled: this.game.disabledTimer[side] > 0,
+        ammo: this.game.blasterAmmo[side],
         players,
         freezeTimer: Math.max(0, this.game.freezeTimer[side]),
         blindTimer: Math.max(0, this.game.blindTimer[side]),
@@ -1435,6 +1444,7 @@ export class Lobby {
       bigBallTimer: Math.max(0, this.game.bigBallTimer),
       winScore: this.game.winScore,
       tournament: this.tournament ? this.tournament.view(this.liveMatchId) : null,
+      projectiles: this.game.projectiles.map((p) => ({ x: p.x, y: p.y, color: this.colorOf(p.side) })),
     };
   }
 

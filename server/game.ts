@@ -24,6 +24,7 @@ import {
   TINY_TIME,
   BIG_BALL_TIME,
   BIG_BALL_R,
+  BLASTER,
   CURVE_SPIN,
   GRAVITY_ACCEL,
   TURBO_SPEED_MULT,
@@ -173,6 +174,10 @@ export class Game {
   rotated = 0; // "rotate" power-up: quarter-turns CW this point (0–3); resets each serve
   fritz = false; // "fritz" power-up: replaces background with fritz's photo for the point
   disco = false; // "disco" power-up: 3D disco ball, dance floor, colored lights for the point
+  // "Blaster": shots each side holds, projectiles in flight, and how long each paddle is locked.
+  blasterAmmo: Record<Side, number> = { left: 0, right: 0 };
+  disabledTimer: Record<Side, number> = { left: 0, right: 0 };
+  projectiles: { side: Side; x: number; y: number; vx: number; vy: number; life: number }[] = [];
   private excludedPowerups: Set<PowerupKind> = new Set(['disco']); // disco off in 2D by default
 
   /** Called by Lobby whenever the shared viewMode changes. */
@@ -540,6 +545,9 @@ export class Game {
     this.bigBallTimer = 0;
     this.shielded = { left: false, right: false };
     this.rotated = 0; // a new match always starts un-rotated
+    this.blasterAmmo = { left: 0, right: 0 };
+    this.disabledTimer = { left: 0, right: 0 };
+    this.projectiles = [];
   }
 
   /** Current ball radius — enlarged while bigball power-up is active. */
@@ -576,6 +584,9 @@ export class Game {
     this.rotated = 0;
     this.fritz = false;
     this.disco = false;
+    this.blasterAmmo = { left: 0, right: 0 };
+    this.disabledTimer = { left: 0, right: 0 };
+    this.projectiles = [];
     // Shield intentionally persists — an unused shield stays for the next point.
     // Piñata: drop anything stuck and clear pending effects; the collector keeps drifting.
     if (this.pinataObj) this.pinataObj.stuck = [];
@@ -595,7 +606,7 @@ export class Game {
     // Paddles ease toward their target each tick; frozen paddles don't move.
     const maxStep = PADDLE.speed * dt;
     for (const side of ['left', 'right'] as Side[]) {
-      if (this.freezeTimer[side] > 0) continue; // frozen — skip easing
+      if (this.freezeTimer[side] > 0 || this.disabledTimer[side] > 0) continue; // frozen / blaster-locked — skip easing
       for (const p of this.players[side]) {
         const diff = p.targetY - p.y;
         p.y += clamp(diff, -maxStep, maxStep);
@@ -625,9 +636,12 @@ export class Game {
     if (this.bigBallTimer > 0) this.bigBallTimer -= dt;
     for (const side of ['left', 'right'] as Side[]) {
       if (this.freezeTimer[side] > 0) this.freezeTimer[side] -= dt;
+      if (this.disabledTimer[side] > 0) this.disabledTimer[side] -= dt;
       if (this.blindTimer[side] > 0) this.blindTimer[side] -= dt;
       if (this.mirrorTimer[side] > 0) this.mirrorTimer[side] -= dt;
     }
+    // Blaster projectiles fly on their own clock (not slowed by the slow power-up).
+    this.moveProjectiles(dt);
     const scale = this.slowTimer > 0 ? SLOW_SCALE : 1;
 
     // Advance every ball. A ball that leaves the court just drops out of play — NO point
@@ -858,6 +872,59 @@ export class Game {
       case 'disco':
         this.disco = true;
         break;
+      case 'blaster':
+        this.blasterAmmo[side] = BLASTER.ammo;
+        break;
+    }
+  }
+
+  /** Blaster: fire a projectile from this side's paddle at the given vertical aim angle
+   *  (radians, clamped to the aim cone). Forward is toward the opponent. No-op without ammo. */
+  fire(side: Side, angle: number) {
+    if (this.status !== 'playing' || this.paused) return;
+    if (this.blasterAmmo[side] <= 0) return;
+    const ent = this.players[side][0];
+    if (!ent) return;
+    const a = clamp(angle, -BLASTER.maxAngle, BLASTER.maxAngle);
+    const dir = side === 'left' ? 1 : -1;
+    // Launch just off the paddle's inner face so it doesn't immediately self-collide.
+    const faceX = this.paddleX[side] + dir * (PADDLE.w / 2 + BLASTER.r + 1);
+    this.blasterAmmo[side] -= 1;
+    this.projectiles.push({
+      side,
+      x: faceX,
+      y: ent.y,
+      vx: dir * BLASTER.speed * Math.cos(a),
+      vy: BLASTER.speed * Math.sin(a),
+      life: BLASTER.life,
+    });
+  }
+
+  /** Advance projectiles: bounce off top/bottom, lock a paddle on hit, expire off-court. */
+  private moveProjectiles(dt: number) {
+    const r = BLASTER.r;
+    for (let i = this.projectiles.length - 1; i >= 0; i--) {
+      const p = this.projectiles[i];
+      p.life -= dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      // Bounce off the top/bottom walls so angled shots stay in play.
+      if (p.y < r) { p.y = r; p.vy = Math.abs(p.vy); }
+      else if (p.y > COURT.h - r) { p.y = COURT.h - r; p.vy = -Math.abs(p.vy); }
+      // Hit the opponent's paddle? (rectangle around its center)
+      const opp = other(p.side);
+      const ent = this.players[opp][0];
+      if (ent) {
+        const halfH = this.halfH(opp);
+        const cx = this.paddleX[opp];
+        if (Math.abs(p.x - cx) <= PADDLE.w / 2 + r && Math.abs(p.y - ent.y) <= halfH + r) {
+          this.disabledTimer[opp] = BLASTER.disable;
+          this.projectiles.splice(i, 1);
+          continue;
+        }
+      }
+      // Off the court (past either wall) or fizzled out.
+      if (p.life <= 0 || p.x < -20 || p.x > COURT.w + 20) this.projectiles.splice(i, 1);
     }
   }
 
