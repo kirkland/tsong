@@ -262,9 +262,9 @@ export interface StateMsg {
   // Live position of the diamond obstacle (diamond-hands mode), or null when none is on
   // the board. Center in court units; its size is the shared DIAMOND.r constant.
   diamondPos: { x: number; y: number } | null;
-  // True once a "rotate" power-up has flipped the court 90° for the rest of the match.
-  // The whole game (paddles, ball, score) renders rotated and controls remap to match.
-  rotated: boolean;
+  // Number of "rotate" power-ups collected this point (0–3). Each adds 90° CW.
+  // Resets to 0 on each new serve; 4 wraps back to 0 (full circle = no rotation).
+  rotated: number;
   fritz: boolean; // "fritz" power-up: replaces the court background with fritz's photo for the point
   disco: boolean; // "disco" power-up: 3D disco ball drops, dance floor, colored lights (3D/FP only)
   viewMode: 'normal' | '3d' | 'firstperson'; // shared view mode — changes for every client at once

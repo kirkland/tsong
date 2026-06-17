@@ -1383,8 +1383,12 @@ function onBoardMouseMove(e: MouseEvent) {
   // Cap movementX per event to avoid a mouse-acceleration spike clamping the paddle
   // to an edge in a single frame and making it appear frozen.
   // Rotated court: paddle slides horizontally too, same movementX logic.
-  if (state?.rotated) {
+  if (state?.rotated === 1) {
     target = clampPaddle(target - e.movementX * (COURT.h / r.width));
+  } else if (state?.rotated === 2) {
+    target = clampPaddle(target - e.movementY * (COURT.h / r.height));
+  } else if (state?.rotated === 3) {
+    target = clampPaddle(target + e.movementX * (COURT.h / r.width));
   } else if (state?.viewMode === 'firstperson') {
     const sign = myRole === 'right' ? -1 : 1;
     const dx = Math.max(-40, Math.min(40, e.movementX));
@@ -1520,19 +1524,15 @@ window.addEventListener('keydown', (e) => {
 // court. The internal resolution swaps to COURT.h × COURT.w (the render transform maps
 // court coords into it) and a CSS class switches the on-screen aspect ratio. Only touches
 // the DOM when the value actually changes.
-let canvasRotated = false;
-function applyCanvasRotation(rotated: boolean) {
+let canvasRotated = 0;
+function applyCanvasRotation(rotated: number) {
   if (rotated === canvasRotated) return;
   canvasRotated = rotated;
-  if (rotated) {
-    canvas.width = COURT.h;
-    canvas.height = COURT.w;
-    canvas.classList.add('rotated');
-  } else {
-    canvas.width = COURT.w;
-    canvas.height = COURT.h;
-    canvas.classList.remove('rotated');
-  }
+  const portrait = rotated === 1 || rotated === 3;
+  canvas.width  = portrait ? COURT.h : COURT.w;
+  canvas.height = portrait ? COURT.w : COURT.h;
+  if (portrait) canvas.classList.add('rotated');
+  else canvas.classList.remove('rotated');
 }
 
 // --- main loop ---
@@ -1738,10 +1738,18 @@ function loop(t: number) {
   } else if (isPlayer() && canControl()) {
     // Paddle input (mouse and keyboard) only applies while the mouse is captured.
     const step = PADDLE.speed / 60;
-    if (state?.rotated) {
-      // Court rotated 90°: paddle slides horizontally; right on screen = decreasing court-Y.
+    if (state?.rotated === 1) {
+      // 90° CW: paddle horizontal; right on screen = decreasing court-Y.
       if (keys.has('arrowright') || keys.has('d')) target -= step;
       if (keys.has('arrowleft') || keys.has('a')) target += step;
+    } else if (state?.rotated === 2) {
+      // 180°: court upside-down; controls inverted vertically.
+      if (keys.has('arrowup') || keys.has('w')) target += step;
+      if (keys.has('arrowdown') || keys.has('s')) target -= step;
+    } else if (state?.rotated === 3) {
+      // 270° CW: paddle horizontal; right on screen = increasing court-Y.
+      if (keys.has('arrowright') || keys.has('d')) target += step;
+      if (keys.has('arrowleft') || keys.has('a')) target -= step;
     } else if (state?.viewMode === 'firstperson') {
       // First-person: left/right keys match screen direction; direction flips for right side.
       const sign = myRole === 'right' ? -1 : 1;

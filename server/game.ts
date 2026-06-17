@@ -95,7 +95,7 @@ export interface GameSnapshot {
   diamondBlock: { x: number; y: number; vx: number; vy: number } | null;
   pinata: boolean;
   pinataObj: PinataObj | null;
-  rotated: boolean;
+  rotated: number;
   fritz?: boolean;
   disco?: boolean;
   winnerSide: Side | null;
@@ -159,7 +159,7 @@ export class Game {
   tinyTimer = 0;
   bigBallTimer = 0;
   shielded: Record<Side, boolean> = { left: false, right: false };
-  rotated = false; // "rotate" power-up: court is flipped 90° for the current point only
+  rotated = 0; // "rotate" power-up: quarter-turns CW this point (0–3); resets each serve
   fritz = false; // "fritz" power-up: replaces background with fritz's photo for the point
   disco = false; // "disco" power-up: 3D disco ball, dance floor, colored lights for the point
 
@@ -217,7 +217,7 @@ export class Game {
     this.pinataObj = s.pinataObj
       ? { ...s.pinataObj, stuck: (s.pinataObj.stuck ?? []).map((x) => ({ ...x })) }
       : null;
-    this.rotated = s.rotated ?? false;
+    this.rotated = typeof s.rotated === 'number' ? s.rotated : (s.rotated ? 1 : 0);
     this.fritz = s.fritz ?? false;
     this.disco = s.disco ?? false;
     this.winnerSide = s.winnerSide;
@@ -502,7 +502,7 @@ export class Game {
     this.tinyTimer = 0;
     this.bigBallTimer = 0;
     this.shielded = { left: false, right: false };
-    this.rotated = false; // a new match always starts un-rotated
+    this.rotated = 0; // a new match always starts un-rotated
   }
 
   /** Current ball radius — enlarged while bigball power-up is active. */
@@ -536,7 +536,7 @@ export class Game {
     this.tinyTimer = 0;
     this.bigBallTimer = 0;
     this.curveHits = { left: 0, right: 0 };
-    this.rotated = false;
+    this.rotated = 0;
     this.fritz = false;
     this.disco = false;
     // Shield intentionally persists — an unused shield stays for the next point.
@@ -809,8 +809,8 @@ export class Game {
         this.bigBallTimer = BIG_BALL_TIME;
         break;
       case 'rotate':
-        // Flip the court 90° for the current point only; resets on serve.
-        this.rotated = true;
+        // Each pickup adds 90° CW; 4 wraps back to 0 (full circle = normal).
+        this.rotated = (this.rotated + 1) % 4;
         break;
       case 'fritz':
         this.fritz = true;

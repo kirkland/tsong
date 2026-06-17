@@ -13,11 +13,12 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
     return;
   }
 
-  // "rotate" power-up: flip the whole court 90° clockwise. Everything below draws in
-  // court coordinates as usual; the transform maps them into the (portrait) canvas, which
-  // main.ts has resized to COURT.h × COURT.w. Identity transform when un-rotated.
-  if (s.rotated) ctx.setTransform(0, 1, -1, 0, COURT.h, 0);
-  else ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // "rotate" power-up: each pickup adds 90° CW. Transforms map court coords into the
+  // canvas (portrait for 90°/270°, landscape for 0°/180°).
+  if      (s.rotated === 1) ctx.setTransform(0,  1, -1,  0, COURT.h,  0);       // 90° CW
+  else if (s.rotated === 2) ctx.setTransform(-1, 0,  0, -1, COURT.w,  COURT.h); // 180°
+  else if (s.rotated === 3) ctx.setTransform(0, -1,  1,  0, 0,        COURT.w); // 270° CW
+  else                      ctx.setTransform(1,  0,  0,  1, 0,        0);       // 0° (normal)
 
   // Court
   if (s.fritz && fritzImg.complete && fritzImg.naturalWidth > 0) {
