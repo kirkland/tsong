@@ -1137,6 +1137,11 @@ const tournamentTitle = document.getElementById('tournamentTitle') as HTMLSpanEl
 const tournamentBody = document.getElementById('tournamentBody') as HTMLDivElement;
 const tournamentJoinBtn = document.getElementById('tournamentJoinBtn') as HTMLButtonElement;
 const tournamentCancelBtn = document.getElementById('tournamentCancelBtn') as HTMLButtonElement;
+const tournamentCollapseBtn = document.getElementById('tournamentCollapseBtn') as HTMLButtonElement;
+// Bracket fold state: auto-collapses out of the way once a match is actually being played,
+// so it stops covering the board; the user can toggle it to peek at any time.
+let bracketCollapsed = false;
+let lastTourneyPhase = '';
 
 function closeTourney() {
   tourneyPanel.hidden = true;
@@ -1162,15 +1167,33 @@ tournamentJoinBtn.addEventListener('click', () => net.send({ type: 'tournamentJo
 tournamentCancelBtn.addEventListener('click', () => {
   if (confirm('Cancel the current tournament?')) net.send({ type: 'tournamentCancel' });
 });
+tournamentCollapseBtn.addEventListener('click', () => {
+  bracketCollapsed = !bracketCollapsed;
+  if (state) renderTournament(state.tournament);
+});
 
 // Render the live tournament panel from server state (signup slots, bracket, or champion).
 function renderTournament(t: StateMsg['tournament']) {
   document.body.classList.toggle('tournament-on', !!t);
   if (!t) {
     tournamentPanel.hidden = true;
+    lastTourneyPhase = '';
     return;
   }
   tournamentPanel.hidden = false;
+
+  // Auto-fold the bracket once a match is actually being played so it stops covering the
+  // board; auto-unfold during signup, between matches, and on the champion screen. A manual
+  // toggle sticks until the phase changes again.
+  const live = t.status === 'active' && state?.status === 'playing';
+  const phase = `${t.status}:${live ? 'live' : 'idle'}`;
+  if (phase !== lastTourneyPhase) {
+    lastTourneyPhase = phase;
+    bracketCollapsed = live;
+  }
+  tournamentCollapseBtn.hidden = t.status === 'signup'; // nothing to fold during signup
+  tournamentCollapseBtn.textContent = bracketCollapsed ? '▸' : '▾';
+  tournamentBody.hidden = bracketCollapsed && t.status !== 'signup';
 
   if (t.status === 'signup') {
     const filled = t.slots.filter(Boolean).length;
@@ -1192,7 +1215,13 @@ function renderTournament(t: StateMsg['tournament']) {
 
   // active / done → render the bracket by round.
   tournamentJoinBtn.hidden = true;
-  tournamentTitle.textContent = t.status === 'done' ? '🏆 Tournament — Final Results' : '🏆 Tournament';
+  const liveMatch = t.matches.find((m) => m.live);
+  tournamentTitle.textContent =
+    t.status === 'done'
+      ? `🏆 Champion: ${t.champion ?? '—'}`
+      : liveMatch && liveMatch.p1 && liveMatch.p2
+        ? `🏆 ${liveMatch.p1} vs ${liveMatch.p2}`
+        : '🏆 Tournament';
   const roundName = (r: number) => {
     const fromEnd = t.rounds - 1 - r; // 0 = final
     if (fromEnd === 0) return 'Final';

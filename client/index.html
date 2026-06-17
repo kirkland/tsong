@@ -759,26 +759,37 @@
         border-radius: 6px; border: 1px solid #2a3550; background: #1a2035; color: #ffd166; cursor: pointer;
       }
       .tourney-size:hover { background: #2d4070; border-color: #3a6df0; }
-      /* Live bracket / signup panel */
+      /* Live bracket / signup panel — pinned to the top edge so it stays clear of the board.
+         While a match is live it collapses to just the slim header bar. */
       #tournamentPanel {
         position: fixed;
-        top: 56px;
+        top: 6px;
         left: 50%;
         transform: translateX(-50%);
         max-width: 92vw;
+        max-height: 80vh;
+        overflow: auto;
         background: rgba(10,14,28,0.96);
         border: 1px solid #2a3550;
         border-radius: 10px;
         box-shadow: 0 12px 36px rgba(0,0,0,0.6);
-        padding: 10px 14px 14px;
+        padding: 8px 12px;
         z-index: 60;
         color: #cdd7f5;
       }
       #tournamentPanel[hidden] { display: none; }
       #tournamentHead {
-        display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
+        display: flex; align-items: center; gap: 10px;
       }
-      #tournamentTitle { font-size: 13px; font-weight: 700; letter-spacing: 0.5px; color: #ffd166; flex: 1; }
+      #tournamentBody { margin-top: 10px; }
+      #tournamentBody[hidden] { display: none; }
+      #tournamentTitle { font-size: 13px; font-weight: 700; letter-spacing: 0.5px; color: #ffd166; flex: 1; white-space: nowrap; }
+      #tournamentCollapseBtn {
+        font: inherit; font-size: 12px; padding: 4px 9px; border-radius: 6px;
+        border: 1px solid #2a3550; background: #1a2035; color: #8693b3; cursor: pointer;
+      }
+      #tournamentCollapseBtn:hover { background: #18203a; color: #cdd7f5; }
+      #tournamentCollapseBtn[hidden] { display: none; }
       #tournamentJoinBtn {
         font: inherit; font-size: 12px; font-weight: 700; padding: 5px 12px; border-radius: 6px;
         border: 1px solid #3a6df0; background: #2d4070; color: #fff; cursor: pointer;
@@ -1975,6 +1986,7 @@
       <div id="tournamentHead">
         <span id="tournamentTitle">Tournament</span>
         <button id="tournamentJoinBtn" type="button" hidden>Join</button>
+        <button id="tournamentCollapseBtn" type="button" title="Show/hide the bracket">▾</button>
         <button id="tournamentCancelBtn" type="button" title="Cancel the tournament">✕</button>
       </div>
       <div id="tournamentBody"></div>
