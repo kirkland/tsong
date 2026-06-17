@@ -459,7 +459,10 @@ export class PolyGame {
   }
 
   private grant(kind: PowerupKind, id: string) {
-    const ent = this.players.find((p) => p.id === id);
+    const alive = this.players.filter((p) => p.alive);
+    // If the last-hitter already disconnected, fall back to a random alive player.
+    const ent = this.players.find((p) => p.id === id)
+      ?? alive[Math.floor(Math.random() * alive.length)];
     switch (kind) {
       case 'grow':
         if (ent) ent.growHits = POWERUP_HITS;

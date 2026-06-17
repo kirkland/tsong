@@ -104,7 +104,17 @@ export interface GameSnapshot {
   growHits: Record<Side, number>;
   shrinkHits: Record<Side, number>;
   smashHits: Record<Side, number>;
+  curveHits: Record<Side, number>;
   slowTimer: number;
+  freezeTimer: Record<Side, number>;
+  blindTimer: Record<Side, number>;
+  mirrorTimer: Record<Side, number>;
+  ghostTimer: number;
+  tinyTimer: number;
+  bigBallTimer: number;
+  shielded: Record<Side, boolean>;
+  pinataPendingSpawns: number;
+  pinataBurstPending: boolean;
   serveTimer: number;
   serveDir: number;
   targetTimer: number;
@@ -192,7 +202,17 @@ export class Game {
       growHits: { ...this.growHits },
       shrinkHits: { ...this.shrinkHits },
       smashHits: { ...this.smashHits },
+      curveHits: { ...this.curveHits },
       slowTimer: this.slowTimer,
+      freezeTimer: { ...this.freezeTimer },
+      blindTimer: { ...this.blindTimer },
+      mirrorTimer: { ...this.mirrorTimer },
+      ghostTimer: this.ghostTimer,
+      tinyTimer: this.tinyTimer,
+      bigBallTimer: this.bigBallTimer,
+      shielded: { ...this.shielded },
+      pinataPendingSpawns: this.pinataPendingSpawns,
+      pinataBurstPending: this.pinataBurstPending,
       serveTimer: this.serveTimer,
       serveDir: this.serveDir,
       targetTimer: this.targetTimer,
@@ -226,7 +246,17 @@ export class Game {
     this.growHits = { ...s.growHits };
     this.shrinkHits = { ...s.shrinkHits };
     this.smashHits = { ...s.smashHits };
+    this.curveHits = s.curveHits ? { ...s.curveHits } : { left: 0, right: 0 };
     this.slowTimer = s.slowTimer;
+    this.freezeTimer = s.freezeTimer ? { ...s.freezeTimer } : { left: 0, right: 0 };
+    this.blindTimer = s.blindTimer ? { ...s.blindTimer } : { left: 0, right: 0 };
+    this.mirrorTimer = s.mirrorTimer ? { ...s.mirrorTimer } : { left: 0, right: 0 };
+    this.ghostTimer = s.ghostTimer ?? 0;
+    this.tinyTimer = s.tinyTimer ?? 0;
+    this.bigBallTimer = s.bigBallTimer ?? 0;
+    this.shielded = s.shielded ? { ...s.shielded } : { left: false, right: false };
+    this.pinataPendingSpawns = s.pinataPendingSpawns ?? 0;
+    this.pinataBurstPending = s.pinataBurstPending ?? false;
     this.serveTimer = s.serveTimer;
     this.serveDir = s.serveDir;
     this.targetTimer = s.targetTimer;
