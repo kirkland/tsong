@@ -626,6 +626,7 @@ export class Game {
         this.extraBalls = []; // match over
         return;
       }
+      if (this.closing) this.paddleX = { ...HOME_X };
       this.serve(lastScorer === 'left' ? 1 : -1);
     }
   }
