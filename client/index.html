@@ -619,6 +619,19 @@
         cursor: pointer;
       }
       #muteBtn:hover { background: #18203a; }
+      #doomBtn {
+        font: inherit;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        padding: 7px 12px;
+        border-radius: 6px;
+        border: 1px solid #5a2230;
+        background: #1a0e12;
+        color: #ff5c5c;
+        cursor: pointer;
+      }
+      #doomBtn:hover { background: #2a1218; color: #ff8a8a; }
       #muteBtn[aria-pressed='true'] {
         color: #6b7796;
         border-color: #1c2640;
@@ -1708,6 +1721,7 @@
     </div>
     <div id="topLeft">
       <button id="muteBtn" type="button" aria-pressed="false" title="Toggle sound on/off (M)">🔊</button>
+      <button id="doomBtn" type="button" title="Rip and tear (a hidden DOOM minigame)">😈 DOOM</button>
       <div id="viewMode">
         <button id="viewModeBtn" type="button" aria-expanded="false">VIEW <span class="caret">▾</span></button>
         <div id="viewModePanel" hidden>
