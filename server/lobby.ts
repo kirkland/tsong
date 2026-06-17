@@ -56,6 +56,7 @@ const FATALITY_DISPLAY_MS = 4500; // how long the finishing move holds before th
 const POLY_OVER_SECS = 5; // how long the arena win screen lingers before the next round
 const RESUME_GRACE = 45; // seconds a resumed match waits for seated players to reconnect
 const TOURNEY_INTER_MS = 5000; // pause between tournament matches so the result can be read
+const TOURNEY_DONE_MS = 12000; // how long the champion screen lingers before the tournament tears down
 
 // What a seat / queue spot needs to be reclaimed by the same identity after a restart.
 interface SeatInfo {
@@ -524,7 +525,7 @@ export class Lobby {
   /** Tournament bookkeeping each tick: advance the bracket when a match ends. */
   private tournamentSync() {
     const t = this.tournament;
-    if (!t || t.status !== 'active') return; // signup waits for joins; done stays on the board
+    if (!t || t.status === 'signup') return; // signup just waits for joins
     if (this.game.status !== 'over') return;
 
     if (!this.overHandled) {
@@ -545,14 +546,20 @@ export class Lobby {
           .then(() => this.refreshLeaderboard())
           .catch((e) => console.error('leaderboard update failed:', e));
       }
-      this.tourneyInterMs = TOURNEY_INTER_MS; // hold the result a beat before the next match
+      // Hold the champion screen longer than a between-match break, then tear down.
+      this.tourneyInterMs = t.status === 'done' ? TOURNEY_DONE_MS : TOURNEY_INTER_MS;
       return;
     }
 
-    // Counting down the interstitial between matches.
-    if (t.status === 'done') return; // champion crowned — leave the final frozen on the board
+    // Counting down: either to the next match, or to the end of the whole tournament.
     this.tourneyInterMs -= TICK_MS;
-    if (this.tourneyInterMs <= 0) this.seatTournamentMatch();
+    if (this.tourneyInterMs <= 0) {
+      if (t.status === 'done') {
+        this.endTournament(`🏆 ${t.champion?.name ?? 'Someone'} is the champion!`);
+      } else {
+        this.seatTournamentMatch();
+      }
+    }
   }
 
   /** A participant disconnected or forfeited — advance their opponent and re-seat if needed. */
