@@ -246,17 +246,31 @@ export function createRenderer(container: HTMLElement): Renderer3D {
     return m;
   }
 
-  // Blaster projectiles: small emissive spheres pooled like balls.
-  const projGeo = new THREE.SphereGeometry(BLASTER.r, 16, 12);
-  const projPool: THREE.Mesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>[] = [];
+  // Blaster projectiles: a bright green laser bolt (a glowing cylinder oriented along its
+  // travel direction) with a tapered, fading trail behind it. Pooled as little groups.
+  const LASER_GREEN = '#39ff14';
+  const boltGeo = new THREE.CylinderGeometry(BLASTER.r * 0.7, BLASTER.r * 0.7, 34, 8);
+  const trailGeo = new THREE.CylinderGeometry(BLASTER.r * 0.15, BLASTER.r * 1.0, 90, 8);
+  const UP = new THREE.Vector3(0, 1, 0);
+  const projPool: THREE.Group[] = [];
   function getProjectile(i: number) {
-    let m = projPool[i];
-    if (!m) {
-      m = new THREE.Mesh(projGeo, new THREE.MeshStandardMaterial({ emissiveIntensity: 1 }));
-      world.add(m);
-      projPool[i] = m;
+    let g = projPool[i];
+    if (!g) {
+      g = new THREE.Group();
+      const bolt = new THREE.Mesh(
+        boltGeo,
+        new THREE.MeshStandardMaterial({ color: '#ccffc0', emissive: LASER_GREEN, emissiveIntensity: 1.4 }),
+      );
+      const trail = new THREE.Mesh(
+        trailGeo,
+        new THREE.MeshBasicMaterial({ color: LASER_GREEN, transparent: true, opacity: 0.35 }),
+      );
+      trail.position.y = -52; // sits behind the bolt along the group's local +Y (travel dir)
+      g.add(bolt, trail);
+      world.add(g);
+      projPool[i] = g;
     }
-    return m;
+    return g;
   }
 
   // Local player's aim line — a thin tube the armed player sees pointing where they'll shoot.
@@ -315,6 +329,7 @@ export function createRenderer(container: HTMLElement): Renderer3D {
   world.add(scoreL.mesh, scoreR.mesh, nameL.mesh, nameR.mesh);
 
   const tmpColor = new THREE.Color();
+  const tmpVec = new THREE.Vector3();
 
   let fritzOn = false;
   function applyFloor() {
@@ -433,13 +448,15 @@ export function createRenderer(container: HTMLElement): Renderer3D {
     });
     for (let i = balls.length; i < ballPool.length; i++) ballPool[i].visible = false;
 
-    // Blaster projectiles — glowing bullets in the firing side's color.
+    // Blaster projectiles — bright green laser bolts oriented along their travel direction.
     s.projectiles.forEach((pr, i) => {
-      const m = getProjectile(i);
-      m.visible = true;
-      m.position.set(wx(pr.x), BALL_Y, wz(pr.y));
-      m.material.color.set(pr.color);
-      m.material.emissive.set(pr.color);
+      const g = getProjectile(i);
+      g.visible = true;
+      g.position.set(wx(pr.x), BALL_Y, wz(pr.y));
+      const sp = Math.hypot(pr.vx, pr.vy) || 1;
+      // Court velocity (vx, vy) maps to world (x, z); align the group's +Y with travel dir.
+      const dir = tmpVec.set(pr.vx / sp, 0, pr.vy / sp);
+      g.quaternion.setFromUnitVectors(UP, dir);
     });
     for (let i = s.projectiles.length; i < projPool.length; i++) projPool[i].visible = false;
 
