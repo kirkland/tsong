@@ -168,6 +168,9 @@ wss.on('connection', (ws: WebSocket) => {
       case 'tournamentCancel':
         lobby.tournamentCancel(ws);
         break;
+      case 'fire':
+        if (typeof msg.angle === 'number' && Number.isFinite(msg.angle)) lobby.fire(ws, msg.angle);
+        break;
     }
   });
 

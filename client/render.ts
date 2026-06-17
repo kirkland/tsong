@@ -1,9 +1,16 @@
 // Pure drawing: takes the latest server state and paints one frame. No game logic.
 
-import { COURT, PADDLE, BALL, BIG_BALL_R, DIAMOND, PINATA, TARGET, PowerupKind, StateMsg, PolyState, Role } from '../shared/types';
+import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, TARGET, PowerupKind, StateMsg, PolyState, Role, Side } from '../shared/types';
 
 const fritzImg = new Image();
 fritzImg.src = '/fritz.jpg';
+
+// The local player's live blaster aim, set by main.ts while they hold the power-up.
+// Drives the on-court aim line so they can see where a shot will go.
+let blasterAim: { side: Side; angle: number } | null = null;
+export function setBlasterAim(aim: { side: Side; angle: number } | null) {
+  blasterAim = aim;
+}
 
 export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 'observer') {
   // Arena (free-for-all polygon) mode renders its own court entirely; bail out early.
@@ -69,14 +76,18 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
     const p = s.paddles[side];
     if (p.players.length) {
       for (const pl of p.players) {
-        ctx.fillStyle = pl.color;
+        ctx.fillStyle = p.disabled ? '#555a66' : pl.color; // blaster-locked paddles go gray
         drawPaddle(ctx, pl.x, pl.y, p.h);
       }
     } else {
       ctx.fillStyle = p.color;
       drawPaddle(ctx, p.x, p.y, p.h);
     }
+    if (p.disabled) drawDisabled(ctx, p.x, p.y, p.h);
   }
+
+  // Blaster: the local player's aim line, then every projectile in flight.
+  drawBlaster(ctx, s);
 
   // Paddle status overlays (frozen, mirrored, curve-ready).
   drawPaddleEffects(ctx, s);
@@ -444,6 +455,66 @@ function drawPaddle(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: nu
   ctx.fillRect(cx - PADDLE.w / 2, cy - h / 2, PADDLE.w, h);
 }
 
+// A "locked" marker over a paddle disabled by a blaster hit (gray sparks + ⚡).
+function drawDisabled(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  ctx.strokeStyle = '#ff5c5c';
+  ctx.lineWidth = 2;
+  ctx.globalAlpha = 0.5 + 0.5 * Math.abs(Math.sin(Date.now() / 90)); // flicker
+  ctx.strokeRect(cx - PADDLE.w / 2 - 3, cy - h / 2 - 3, PADDLE.w + 6, h + 6);
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = '#ffd166';
+  ctx.font = 'bold 18px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('⚡', cx, cy);
+  ctx.restore();
+}
+
+// Blaster: the local player's aim line plus every projectile currently in flight.
+function drawBlaster(ctx: CanvasRenderingContext2D, s: StateMsg) {
+  // Aim line for whoever is locally holding the blaster (set by main.ts).
+  if (blasterAim) {
+    const p = s.paddles[blasterAim.side];
+    const dir = blasterAim.side === 'left' ? 1 : -1;
+    const ox = p.x + dir * (PADDLE.w / 2 + 2);
+    const len = 150;
+    const ex = ox + dir * Math.cos(blasterAim.angle) * len;
+    const ey = p.y + Math.sin(blasterAim.angle) * len;
+    ctx.save();
+    ctx.strokeStyle = p.color;
+    ctx.globalAlpha = 0.5;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 6]);
+    ctx.beginPath();
+    ctx.moveTo(ox, p.y);
+    ctx.lineTo(ex, ey);
+    ctx.stroke();
+    // Arrowhead.
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 0.85;
+    const a = Math.atan2(ey - p.y, ex - ox);
+    ctx.beginPath();
+    ctx.moveTo(ex, ey);
+    ctx.lineTo(ex - Math.cos(a - 0.4) * 10, ey - Math.sin(a - 0.4) * 10);
+    ctx.moveTo(ex, ey);
+    ctx.lineTo(ex - Math.cos(a + 0.4) * 10, ey - Math.sin(a + 0.4) * 10);
+    ctx.stroke();
+    ctx.restore();
+  }
+  // Projectiles — bright glowing bullets in the firing side's color.
+  for (const pr of s.projectiles) {
+    ctx.save();
+    ctx.fillStyle = pr.color;
+    ctx.shadowColor = pr.color;
+    ctx.shadowBlur = 12;
+    ctx.beginPath();
+    ctx.arc(pr.x, pr.y, BLASTER.r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
 function drawPaddleEffects(ctx: CanvasRenderingContext2D, s: StateMsg) {
   for (const side of ['left', 'right'] as const) {
     const p = s.paddles[side];
@@ -514,6 +585,7 @@ const TARGET_STYLE: Record<PowerupKind, { stroke: string; fill: string }> = {
   rotate:  { stroke: '#2ee6c9', fill: 'rgba( 46, 230, 201, 0.13)' }, // teal
   fritz:   { stroke: '#f59e0b', fill: 'rgba(245, 158,  11, 0.13)' }, // amber
   disco:   { stroke: '#e040fb', fill: 'rgba(224,  64, 251, 0.14)' }, // neon magenta
+  blaster: { stroke: '#ff4d4d', fill: 'rgba(255,  77,  77, 0.14)' }, // red
 };
 
 function drawTarget(ctx: CanvasRenderingContext2D, x: number, y: number, kind: PowerupKind) {
@@ -751,6 +823,21 @@ const GLYPHS: Record<PowerupKind, (ctx: CanvasRenderingContext2D, x: number, y: 
       ctx.lineTo(x + Math.cos(a) * 13, y + Math.sin(a) * 13);
       ctx.stroke();
     }
+  },
+  // blaster: a little bullet/arrow flying right → "fire a projectile to disable a paddle"
+  blaster(ctx, x, y) {
+    // shaft
+    ctx.beginPath();
+    ctx.moveTo(x - 11, y);
+    ctx.lineTo(x + 7, y);
+    ctx.stroke();
+    // arrowhead
+    ctx.beginPath();
+    ctx.moveTo(x + 11, y);
+    ctx.lineTo(x + 3, y - 5);
+    ctx.lineTo(x + 3, y + 5);
+    ctx.closePath();
+    ctx.fill();
   },
   // rotate: a circular arrow → "the whole court spins 90°"
   rotate(ctx, x, y) {

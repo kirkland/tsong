@@ -62,6 +62,16 @@ export const GHOST_TIME = 3; // seconds the ball is invisible
 export const TINY_TIME = 5; // seconds the ball is rendered tiny
 export const BIG_BALL_TIME = 6; // seconds the ball is enlarged
 export const BIG_BALL_R = 36; // enlarged ball radius (4× normal)
+// "Blaster" power-up: collect it for a few shots, then click to fire an aimable projectile.
+// A hit temporarily disables (locks) the opponent's paddle. 2D-only (mouse-aimed).
+export const BLASTER = {
+  ammo: 2, // shots granted per pickup
+  speed: 720, // projectile speed, court units / second
+  r: 7, // projectile radius
+  life: 2.2, // seconds a projectile lives before fizzling
+  disable: 2.5, // seconds the hit paddle is locked
+  maxAngle: Math.PI / 3, // ± aim cone off straight-across
+} as const;
 export const CURVE_SPIN = 1.4; // spin (rad/s) applied to the ball on a curve hit
 export const GRAVITY_ACCEL = 220; // court units/sec² downward pull in gravity mode
 export const TURBO_SPEED_MULT = 1.5; // serve speed multiplier in turbo mode
@@ -107,7 +117,7 @@ export const TARGET = {
 //   rotate — the entire court rotates 90° for the rest of the match
 export const POWERUPS = [
   'grow', 'shrink', 'smash', 'slow', 'multi',
-  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate', 'fritz', 'disco',
+  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate', 'fritz', 'disco', 'blaster',
 ] as const;
 export type PowerupKind = (typeof POWERUPS)[number];
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
@@ -172,7 +182,8 @@ export type ClientMsg =
   | { type: 'tournamentCreate'; size: number } // set up a bracket of the given size (4 or 8)
   | { type: 'tournamentJoin' } // take the next open signup slot
   | { type: 'tournamentLeave' } // give up your signup slot
-  | { type: 'tournamentCancel' }; // tear down the current tournament
+  | { type: 'tournamentCancel' } // tear down the current tournament
+  | { type: 'fire'; angle: number }; // blaster power-up: fire a projectile at this vertical aim angle
 
 // --- Server -> Client ---
 
@@ -198,6 +209,8 @@ export interface PaddleState {
   shielded: boolean; // next goal against this side is absorbed (shield power-up)
   blinded: boolean; // opponent's half of the court is obscured (blind power-up)
   curveReady: boolean; // next hit will put spin on the ball (curve power-up)
+  disabled: boolean; // paddle is locked by a blaster hit (can't move)
+  ammo: number; // blaster shots this side currently holds (0 = none)
   players: TeamPlayer[]; // every paddle on this side, one per seated player
   // Active power-up countdown values (0 when inactive). Drives the HUD timer display.
   freezeTimer: number;
@@ -301,6 +314,8 @@ export interface StateMsg {
   bigBallTimer: number;
   winScore: number; // current first-to-N win score (room-wide setting)
   tournament: TournamentView | null; // live single-elimination bracket, or null when none
+  // Blaster projectiles in flight; color is the firing side's paddle color.
+  projectiles: { x: number; y: number; color: string }[];
 }
 
 // One match node in the bracket, as sent to clients for rendering.
