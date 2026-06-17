@@ -1122,6 +1122,17 @@ function showPowerupFlash(kind: string, cx: number, cy: number) {
   anim.oncancel = () => el.remove();
 }
 
+// --- DOOM minigame (lazy-loaded, fully self-contained; never touches the Pong state) ---
+const doomBtn = document.getElementById('doomBtn') as HTMLButtonElement;
+doomBtn.addEventListener('click', async () => {
+  try {
+    const mod = await import('./doom');
+    mod.startDoom();
+  } catch (e) {
+    console.error('DOOM failed to load:', e);
+  }
+});
+
 // A big, transient banner across the middle of the screen (e.g. someone forfeits).
 function showAnnouncement(text: string, color?: string) {
   const el = document.createElement('div');
