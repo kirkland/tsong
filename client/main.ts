@@ -34,6 +34,7 @@ const joinRightBtn = document.getElementById('joinRight') as HTMLButtonElement;
 const queueBtn = document.getElementById('queueBtn') as HTMLButtonElement;
 const queueArea = document.getElementById('queueArea') as HTMLDivElement;
 const readyBtn = document.getElementById('readyBtn') as HTMLButtonElement;
+const rematchBtn = document.getElementById('rematchBtn') as HTMLButtonElement;
 const pingBtn = document.getElementById('pingBtn') as HTMLButtonElement;
 const renameBtn = document.getElementById('rename') as HTMLButtonElement;
 const kingStatusEl = document.getElementById('kingStatus') as HTMLDivElement;
@@ -42,9 +43,11 @@ const watchersEl = document.getElementById('watchers') as HTMLDivElement;
 const leaderboardEl = document.getElementById('leaderboard') as HTMLDivElement;
 const colorPicker = document.getElementById('colorPicker') as HTMLDivElement;
 const chatLog = document.getElementById('chatlog') as HTMLDivElement;
+const chatEl = document.getElementById('chat') as HTMLDivElement;
 const chatForm = document.getElementById('chatForm') as HTMLFormElement;
 const chatInput = document.getElementById('chatInput') as HTMLInputElement;
 const hideCmdsEl = document.getElementById('hideCmds') as HTMLInputElement;
+const hideTimestampsEl = document.getElementById('hideTimestamps') as HTMLInputElement;
 const closingModeEl = document.getElementById('closingMode') as HTMLInputElement;
 const gravityModeEl = document.getElementById('gravityMode') as HTMLInputElement;
 const turboModeEl = document.getElementById('turboMode') as HTMLInputElement;
@@ -224,6 +227,7 @@ applyMute();
 let prevStatus: StateMsg['status'] | null = null; // last seen status, to fire on the rising edge into 'over'
 let prevFatality = false; // whether a fatality was playing last frame, to fire music on the rising edge
 let prevDisco = false; // rising-edge detection for disco sound
+let prevTarget: StateMsg['target'] | undefined = undefined; // detect powerup pickup for flash
 
 // Quiet notification beep for pings.
 function playPingSound() {
@@ -251,13 +255,13 @@ function onPing(from: string) {
   playPingSound();
   document.title = `🔔 ${from} pinged — ${ORIGINAL_TITLE}`;
   if (pingTitleTimer) clearTimeout(pingTitleTimer);
-  pingTitleTimer = setTimeout(() => { document.title = ORIGINAL_TITLE; }, 5000);
+  pingTitleTimer = setTimeout(() => { pingTitleTimer = null; document.title = ORIGINAL_TITLE; }, 5000);
 }
 
 function notifyChatTitle(from: string) {
   document.title = `💬 ${from} — ${ORIGINAL_TITLE}`;
   if (chatTitleTimer) clearTimeout(chatTitleTimer);
-  chatTitleTimer = setTimeout(() => { document.title = ORIGINAL_TITLE; }, 8000);
+  chatTitleTimer = setTimeout(() => { chatTitleTimer = null; document.title = ORIGINAL_TITLE; }, 8000);
 }
 
 // Clear the chat notification the moment the user focuses the tab again.
@@ -362,6 +366,9 @@ const net = connect(
       }
       prevBallColor = msg.ball.color;
       prevScore = { ...msg.score };
+      // Detect powerup pickup: target was present last frame, gone this frame.
+      if (prevTarget && !msg.target) showPowerupFlash(prevTarget.kind, prevTarget.x, prevTarget.y);
+      prevTarget = msg.target ?? null;
       state = msg;
       syncMyPaddleFromServer();
       syncViewMode(msg.viewMode ?? 'normal');
@@ -459,7 +466,15 @@ queueBtn.addEventListener('click', () => {
 });
 
 // --- ready up for the next match ---
-readyBtn.addEventListener('click', () => net.send({ type: 'ready' }));
+function sendReady() { net.send({ type: 'ready' }); }
+readyBtn.addEventListener('click', sendReady);
+rematchBtn.addEventListener('click', () => {
+  // Rematch = both sides ready up immediately. Just send ready for yourself;
+  // the server handles the two-sided handshake as normal.
+  net.send({ type: 'ready' });
+  rematchBtn.textContent = '✓ Waiting…';
+  rematchBtn.disabled = true;
+});
 
 // --- change name: reopen the prompt pre-filled with the current name ---
 renameBtn.addEventListener('click', () => {
@@ -693,6 +708,11 @@ window.addEventListener('keydown', (e) => {
   if (e.key.toLowerCase() === 't' && !pointerLocked && joined) {
     e.preventDefault();
     chatInput.focus();
+  }
+  // Space or Enter triggers ready-up when the button is visible and not pointer-locked.
+  if ((e.key === ' ' || e.key === 'Enter') && !pointerLocked && readyBtn.style.display !== 'none') {
+    e.preventDefault();
+    sendReady();
   }
 });
 
@@ -1012,11 +1032,42 @@ hideCmdsEl.addEventListener('change', () => {
   }
 });
 
+hideTimestampsEl.addEventListener('change', () => {
+  chatEl.classList.toggle('hide-timestamps', hideTimestampsEl.checked);
+});
+
+// Small name-pop at the court location where a power-up was just collected.
+function showPowerupFlash(kind: string, cx: number, cy: number) {
+  const boardEl = state?.viewMode !== 'normal' ? game3dEl : canvas;
+  const r = boardEl.getBoundingClientRect();
+  const scaleX = r.width / COURT.w;
+  const scaleY = r.height / COURT.h;
+  const el = document.createElement('div');
+  el.className = 'powerup-flash';
+  el.textContent = kind.toUpperCase();
+  el.style.color = PU_CHIP_COLOR[kind] ?? '#fff';
+  el.style.left = `${r.left + cx * scaleX}px`;
+  el.style.top  = `${r.top  + cy * scaleY}px`;
+  reactionLayer.append(el);
+  const anim = el.animate(
+    [
+      { opacity: 0,   transform: 'translate(-50%, -50%) scale(0.6)' },
+      { opacity: 1,   transform: 'translate(-50%, -80%) scale(1.1)', offset: 0.2 },
+      { opacity: 1,   transform: 'translate(-50%, -120%) scale(1)',  offset: 0.6 },
+      { opacity: 0,   transform: 'translate(-50%, -160%) scale(0.9)' },
+    ],
+    { duration: 900, easing: 'ease-out' },
+  );
+  anim.onfinish = () => el.remove();
+  anim.oncancel = () => el.remove();
+}
+
 // A big, transient banner across the middle of the screen (e.g. someone forfeits).
-function showAnnouncement(text: string) {
+function showAnnouncement(text: string, color?: string) {
   const el = document.createElement('div');
   el.className = 'announce-banner';
   el.textContent = text;
+  if (color) el.style.color = color;
   reactionLayer.append(el);
   const anim = el.animate(
     [
@@ -1918,13 +1969,20 @@ function updateUI() {
   // Reset inQueue if we left observer state (e.g. we claimed a spot)
   if (myRole !== 'observer') inQueue = false;
 
-  // Ready button when the match is over and you hold a paddle (classic only — the arena
-  // restarts on its own timer).
+  // Ready / Rematch buttons when the match is over and you hold a paddle (classic only).
   if (state.status === 'over' && isPlayer() && !state.poly) {
+    const alreadyReady = state.ready[myRole as 'left' | 'right'];
     readyBtn.style.display = 'inline-block';
-    readyBtn.textContent = state.ready[myRole as 'left' | 'right'] ? '✓ Ready' : 'Ready?';
+    readyBtn.textContent = alreadyReady ? '✓ Ready' : 'Ready?';
+    rematchBtn.style.display = 'inline-block';
+    if (!alreadyReady) {
+      rematchBtn.textContent = '🔄 Rematch';
+      rematchBtn.disabled = false;
+    }
   } else {
     readyBtn.style.display = 'none';
+    rematchBtn.style.display = 'none';
+    rematchBtn.disabled = false;
   }
 
   // Side-pick buttons belong to layered-teams mode (each shows its head count and
@@ -1955,6 +2013,21 @@ function updateUI() {
   watchersEl.textContent = state.watchers.length
     ? `Watching: ${state.watchers.join(', ')}`
     : '';
+
+  // Update page title with live headcount so other tabs show match activity.
+  const playerNames = [
+    ...state.paddles.left.players.map((p) => p.name),
+    ...state.paddles.right.players.map((p) => p.name),
+  ].filter(Boolean);
+  const watching = state.watchers.length;
+  if (playerNames.length >= 2) {
+    const vs = playerNames.slice(0, 2).join(' vs ');
+    document.title = watching
+      ? `${vs} · ${watching} watching — TSONG`
+      : `${vs} — TSONG`;
+  } else if (!pingTitleTimer && !chatTitleTimer) {
+    document.title = ORIGINAL_TITLE;
+  }
 }
 
 // --- active power-up HUD ---
@@ -2005,16 +2078,40 @@ for (const canvas of document.querySelectorAll<HTMLCanvasElement>('.pu-icon')) {
   drawLegendIcon(canvas, canvas.dataset.kind as PowerupKind);
 }
 
+// Track each player's last-known ELO so we can show a delta when it changes.
+const prevElo = new Map<string, number>();
+
 function renderLeaderboard(rows: LeaderboardRow[]) {
   if (!rows.length) {
     leaderboardEl.innerHTML = '';
     return;
   }
+
+  // Detect ELO changes for our own name and show a delta banner.
+  // Only fire when the match is freshly over — not on the initial connect load.
+  if (myName && prevStatus === 'over') {
+    const mine = rows.find((r) => r.name === myName);
+    if (mine) {
+      const prev = prevElo.get(myName);
+      if (prev !== undefined && mine.elo !== prev) {
+        const delta = mine.elo - prev;
+        const sign = delta > 0 ? '+' : '';
+        const color = delta > 0 ? '#4ade80' : '#f87171';
+        showAnnouncement(`${sign}${delta} ELO`, color);
+      }
+      prevElo.set(myName, mine.elo);
+    }
+  } else if (myName) {
+    // Seed on first load so we have a baseline.
+    const mine = rows.find((r) => r.name === myName);
+    if (mine && !prevElo.has(myName)) prevElo.set(myName, mine.elo);
+  }
+
   const items = rows
     .map((r, i) => {
       return `<li><span class="rank">${i + 1}</span><span class="lbname">${escapeHtml(
         r.name,
-      )}</span><span class="pct">${r.elo ?? 1000}</span></li>`;
+      )}</span><span class="pct">${r.elo ?? 500}</span></li>`;
     })
     .join('');
   leaderboardEl.innerHTML = `<h2>Leaderboard</h2><ol>${items}</ol>`;

@@ -241,6 +241,7 @@
         flex-shrink: 0;
         text-align: right;
       }
+      #chat.hide-timestamps .chatstamp { display: none; }
       .chat-row {
         display: flex;
         align-items: baseline;
@@ -483,6 +484,19 @@
         overflow: hidden;
         pointer-events: none;
         z-index: 50;
+      }
+      /* Power-up pickup flash: name pops at the target location then floats up. */
+      .powerup-flash {
+        position: fixed;
+        transform: translate(-50%, -50%);
+        font-size: 15px;
+        font-weight: 800;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        text-shadow: 0 2px 8px rgba(0,0,0,0.8);
+        pointer-events: none;
+        user-select: none;
+        will-change: transform, opacity;
       }
       /* Big transient center-screen banner (e.g. a forfeit callout). */
       .announce-banner {
@@ -1861,12 +1875,16 @@
         <button id="queueBtn" style="display: none; font-size: 12px; padding: 4px 10px;">Join queue</button>
         <button id="pingBtn" style="display: none; font-size: 12px; padding: 4px 10px;">🔔 Ping</button>
         <button id="readyBtn" style="display: none">Ready</button>
+        <button id="rematchBtn" style="display: none">🔄 Rematch</button>
         <button id="rename" class="link" style="display: none">change name</button>
         <div id="leaderboard"></div>
       </div>
 
       <div id="chat">
-        <h2>Chat <label id="hideCmdsLabel" style="font-size:12px;font-weight:normal;color:#4a5580;cursor:pointer;"><input type="checkbox" id="hideCmds" style="vertical-align:middle;margin-right:3px;">hide commands</label></h2>
+        <h2>Chat
+          <label style="font-size:12px;font-weight:normal;color:#4a5580;cursor:pointer;margin-left:6px;"><input type="checkbox" id="hideCmds" style="vertical-align:middle;margin-right:3px;">hide commands</label>
+          <label style="font-size:12px;font-weight:normal;color:#4a5580;cursor:pointer;margin-left:6px;"><input type="checkbox" id="hideTimestamps" style="vertical-align:middle;margin-right:3px;">hide times</label>
+        </h2>
         <div id="chatlog"></div>
         <form id="chatForm">
           <input id="chatInput" maxlength="200" placeholder="say something…" autocomplete="off" disabled />
