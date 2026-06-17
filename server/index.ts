@@ -156,6 +156,18 @@ wss.on('connection', (ws: WebSocket) => {
       case 'setWinScore':
         if (typeof msg.score === 'number') lobby.setWinScore(ws, msg.score);
         break;
+      case 'tournamentCreate':
+        if (typeof msg.size === 'number') lobby.tournamentCreate(ws, msg.size);
+        break;
+      case 'tournamentJoin':
+        lobby.tournamentJoin(ws);
+        break;
+      case 'tournamentLeave':
+        lobby.tournamentLeave(ws);
+        break;
+      case 'tournamentCancel':
+        lobby.tournamentCancel(ws);
+        break;
     }
   });
 

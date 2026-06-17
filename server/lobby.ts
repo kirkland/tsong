@@ -4,6 +4,7 @@
 import type { WebSocket } from 'ws';
 import { Game } from './game';
 import { PolyGame } from './polygame';
+import { Tournament, Participant } from './tournament';
 import {
   CHAT_HISTORY,
   CHAT_MAX_LEN,
@@ -54,6 +55,7 @@ const SIDES: Side[] = ['left', 'right'];
 const FATALITY_DISPLAY_MS = 4500; // how long the finishing move holds before the lobby resets
 const POLY_OVER_SECS = 5; // how long the arena win screen lingers before the next round
 const RESUME_GRACE = 45; // seconds a resumed match waits for seated players to reconnect
+const TOURNEY_INTER_MS = 5000; // pause between tournament matches so the result can be read
 
 // What a seat / queue spot needs to be reclaimed by the same identity after a restart.
 interface SeatInfo {
@@ -147,6 +149,13 @@ export class Lobby {
 
   private poly = new PolyGame();
 
+  // --- Tournament (single-elimination bracket) ---
+  // When set, the lobby is running a bracket: it seats each match's two players into the
+  // duel in turn, and king-of-hill / queue / bots are all suspended until it ends.
+  private tournament: Tournament | null = null;
+  private liveMatchId: number | null = null; // bracket match currently on the court
+  private tourneyInterMs = 0; // ms left on the "next match" interstitial between games
+
   constructor(private game: Game) {}
 
   /** Advance whichever simulation is live this tick (called by the server loop). */
@@ -238,6 +247,15 @@ export class Lobby {
 
   /** "/ff": a player abandons their paddle mid-match and is publicly shamed for it. */
   forfeit(ws: WebSocket) {
+    // Tournament: forfeiting hands the current match to your opponent and advances the bracket.
+    if (this.tournament) {
+      const conn = this.conns.get(ws);
+      if (!conn || !this.sideOf(ws)) return; // only a seated tournament player can forfeit
+      this.echoCommand(conn, '/ff');
+      this.announce(`Booo, ${conn.nickname} forfeited their match`);
+      this.onTournamentParticipantGone(conn.pid);
+      return;
+    }
     // Arena: forfeiting just vacates your edge (and shames you); the round plays on.
     if (this.mode === 'poly') {
       if (!this.arenaSeats.includes(ws)) return;
@@ -267,6 +285,7 @@ export class Lobby {
   queueJoin(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return;
+    if (this.tournament) return; // no spectator queue while a bracket is running
     if (this.queue.includes(ws)) return;
     // Don't queue if already holding a paddle
     if (this.sideOf(ws) || this.arenaSeats.includes(ws)) return;
@@ -281,6 +300,7 @@ export class Lobby {
 
   /** Auto-assign queued spectators to open seats (duel sides, or arena edges). */
   private claimFromQueue() {
+    if (this.tournament) return; // seats are bracket-controlled during a tournament
     if (this.mode === 'poly') {
       while (this.queue.length > 0 && this.arenaSeats.length < MAX_PLAYERS) {
         const next = this.queue.shift()!;
@@ -351,6 +371,7 @@ export class Lobby {
   addBot(ws: WebSocket, level: BotLevel) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return;
+    if (this.tournament) return; // no bots during a tournament
     if (this.mode === 'poly' || this.arena) return; // bots play the classic duel only
     if (this.game.layered) return; // keep it a clean 1v1
     if (this.bot) return; // one bot at a time
@@ -375,6 +396,185 @@ export class Lobby {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return;
     this.removeBotInternal();
+  }
+
+  // --- Tournament ---
+
+  /** Set up a fresh signup bracket of the given size (4 or 6). */
+  tournamentCreate(ws: WebSocket, size: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return;
+    if (this.tournament) return; // one at a time
+    if (this.mode === 'poly' || this.arena) return; // duel-only feature
+    if (size !== 4 && size !== 8) return;
+    // Clear the court so signup starts from a clean slate.
+    this.removeBotInternal();
+    for (const s of SIDES) this.release(s);
+    this.king = null;
+    this.endStreak();
+    if (this.game.status !== 'waiting') this.game.toWaiting();
+    this.tournament = new Tournament(size);
+    this.liveMatchId = null;
+    this.tourneyInterMs = 0;
+    this.announce(`🏆 ${conn.nickname} started a ${size}-player tournament — join a slot!`);
+  }
+
+  /** Take the next open signup slot. */
+  tournamentJoin(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    const t = this.tournament;
+    if (!t || t.status !== 'signup') return;
+    if (this.sideOf(ws)) return; // can't be mid-match and in signup
+    const p: Participant = { pid: conn.pid, name: conn.nickname };
+    if (!t.join(p)) return;
+    this.announce(`${conn.nickname} joined the tournament (${t.filledCount()}/${t.size})`);
+    // Full house → build the bracket and seat the first match.
+    if (t.isFull()) {
+      t.start();
+      this.announce('🏆 Bracket set — let the games begin!');
+      this.seatTournamentMatch();
+    }
+  }
+
+  /** Give up a signup slot. */
+  tournamentLeave(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !this.tournament) return;
+    this.tournament.leave(conn.pid);
+  }
+
+  /** Tear down the current tournament entirely. */
+  tournamentCancel(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !this.tournament) return;
+    this.endTournament(`Tournament cancelled by ${conn.nickname}.`);
+  }
+
+  private endTournament(message?: string) {
+    if (!this.tournament) return;
+    this.tournament = null;
+    this.liveMatchId = null;
+    this.tourneyInterMs = 0;
+    for (const s of SIDES) this.release(s);
+    if (this.game.status !== 'waiting') this.game.toWaiting();
+    if (message) this.announce(message);
+  }
+
+  private wsOfPid(pid: string): WebSocket | undefined {
+    if (!pid) return undefined;
+    for (const [ws, c] of this.conns) {
+      if (c.pid === pid) return ws;
+    }
+    return undefined;
+  }
+
+  /** Seat the current bracket match's two players into the duel (or resolve walkovers). */
+  private seatTournamentMatch() {
+    const t = this.tournament;
+    if (!t) return;
+    for (const s of SIDES) this.release(s);
+    this.liveMatchId = null;
+    this.overHandled = false;
+
+    let m = t.currentMatch();
+    // Resolve any walkovers (a participant who has disconnected) before seating a live match.
+    while (m) {
+      const ws1 = m.p1 ? this.wsOfPid(m.p1.pid) : undefined;
+      const ws2 = m.p2 ? this.wsOfPid(m.p2.pid) : undefined;
+      if (ws1 && ws2) break; // a real, playable match
+      // One or both players are gone — award the walkover and look at the next match.
+      if (m.p1 && !ws1 && m.p2) t.reportWinner(m.id, m.p2.pid);
+      else if (m.p2 && !ws2 && m.p1) t.reportWinner(m.id, m.p1.pid);
+      else if (m.p1 && !ws1) t.forfeitPid(m.p1.pid);
+      else if (m.p2 && !ws2) t.forfeitPid(m.p2.pid);
+      m = t.currentMatch();
+    }
+
+    if (!m) {
+      // No playable match left. Either the bracket finished or everyone bailed.
+      if (t.status === 'done') {
+        this.announce(`🏆 ${t.champion?.name ?? 'Someone'} wins the tournament!`);
+      } else {
+        this.endTournament('Tournament ended — not enough players left.');
+      }
+      return;
+    }
+
+    const ws1 = this.wsOfPid(m.p1!.pid)!;
+    const ws2 = this.wsOfPid(m.p2!.pid)!;
+    this.seatFor(ws1, 'left');
+    this.seatFor(ws2, 'right');
+    this.liveMatchId = m.id;
+    this.game.start(); // paused until both capture their mouse (refreshPause handles it)
+    this.announce(`🏆 Now playing: ${m.p1!.name} vs ${m.p2!.name}`);
+  }
+
+  /** Force-seat a specific connection on a side (used by the tournament seater). */
+  private seatFor(ws: WebSocket, side: Side) {
+    const conn = this.conns.get(ws);
+    if (!conn) return;
+    conn.role = side;
+    conn.captured = false;
+    this.teams[side].push(ws);
+    this.game.addPlayer(side, conn.id);
+    this.tell(ws, { type: 'you', id: conn.id, role: side });
+  }
+
+  /** Tournament bookkeeping each tick: advance the bracket when a match ends. */
+  private tournamentSync() {
+    const t = this.tournament;
+    if (!t || t.status !== 'active') return; // signup waits for joins; done stays on the board
+    if (this.game.status !== 'over') return;
+
+    if (!this.overHandled) {
+      this.overHandled = true;
+      const winnerSide = this.game.winnerSide;
+      const loserSide: Side | null = winnerSide ? (winnerSide === 'left' ? 'right' : 'left') : null;
+      const winners = winnerSide ? this.connsOn(winnerSide) : [];
+      const losers = loserSide ? this.connsOn(loserSide) : [];
+      this.winnerName = winners.length ? winners[0].nickname : null;
+      if (this.liveMatchId !== null && winners[0]?.pid) {
+        t.reportWinner(this.liveMatchId, winners[0].pid);
+      }
+      // Tournament games are real 1v1s — count them for the leaderboard.
+      const winRefs = winners.filter((c) => c.pid).map((c) => ({ pid: c.pid, name: c.nickname }));
+      const loseRefs = losers.filter((c) => c.pid).map((c) => ({ pid: c.pid, name: c.nickname }));
+      if (winRefs.length && loseRefs.length) {
+        recordResult(winRefs, loseRefs)
+          .then(() => this.refreshLeaderboard())
+          .catch((e) => console.error('leaderboard update failed:', e));
+      }
+      this.tourneyInterMs = TOURNEY_INTER_MS; // hold the result a beat before the next match
+      return;
+    }
+
+    // Counting down the interstitial between matches.
+    if (t.status === 'done') return; // champion crowned — leave the final frozen on the board
+    this.tourneyInterMs -= TICK_MS;
+    if (this.tourneyInterMs <= 0) this.seatTournamentMatch();
+  }
+
+  /** A participant disconnected or forfeited — advance their opponent and re-seat if needed. */
+  private onTournamentParticipantGone(pid: string) {
+    const t = this.tournament;
+    if (!t) return;
+    if (t.status === 'signup') {
+      t.leave(pid);
+      return;
+    }
+    if (t.status !== 'active') return;
+    // Is this player in the match currently on the court?
+    const seatedWs = this.wsOfPid(pid);
+    const wasLive =
+      this.liveMatchId !== null && !!seatedWs &&
+      (this.teams.left.includes(seatedWs) || this.teams.right.includes(seatedWs));
+    t.forfeitPid(pid);
+    if (wasLive) {
+      // The live match is now decided by walkover — drop it and seat the next one.
+      this.winnerName = null;
+      this.seatTournamentMatch();
+    }
   }
 
   // Seat a synthetic bot connection on a side and start steering its paddle.
@@ -470,6 +670,7 @@ export class Lobby {
   claim(ws: WebSocket, side?: Side) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || conn.role !== 'observer') return;
+    if (this.tournament) return; // seats are bracket-controlled during a tournament
     // Remove from queue if they were in it
     this.queueLeave(ws);
     // Arena mode: a 3rd player turns the box into a polygon. If we're already on the
@@ -623,12 +824,24 @@ export class Lobby {
     // View mode is locked while a match is in progress to avoid disrupting players.
     if ((opts.viewMode === 'normal' || opts.viewMode === '3d' || opts.viewMode === 'firstperson') && this.game.status !== 'playing') {
       this.viewMode = opts.viewMode;
+      this.syncPowerupPool();
+    }
+  }
+
+  /** Sync which powerups are eligible based on the current view mode.
+   *  rotate is 2D-only; disco is 3D/FP-only. */
+  private syncPowerupPool() {
+    if (this.viewMode === 'normal') {
+      this.game.setExcludedPowerups(['disco']);
+    } else {
+      this.game.setExcludedPowerups(['rotate']);
     }
   }
 
   /** Arm / disarm arena mode. Turning it off while a polygon match is live folds the
    *  remaining players back down to the classic two-player box. */
   private setArena(on: boolean) {
+    if (this.tournament) return; // arena is disabled during a tournament
     if (this.arena === on) return;
     this.arena = on;
     if (on) this.removeBotInternal(); // bots are a duel-only feature; clear before any migration
@@ -736,6 +949,20 @@ export class Lobby {
   }
 
   remove(ws: WebSocket) {
+    const leavingPid = this.conns.get(ws)?.pid ?? '';
+    // Tournament participant left: advance their opponent / free their slot before the
+    // generic seat teardown below (which would lose the bracket context).
+    const inTournament = !!this.tournament && !!leavingPid && this.tournament.hasPid(leavingPid);
+    if (inTournament) {
+      this.onTournamentParticipantGone(leavingPid);
+      if (this.tournament) { // still running after the forfeit
+        if (this.king && this.king.ws === ws) this.king = null;
+        this.queueLeave(ws);
+        this.conns.delete(ws);
+        this.refreshPause();
+        return;
+      }
+    }
     if (this.mode === 'poly' && this.arenaSeats.includes(ws)) {
       this.arenaUnseat(ws);
     } else {
@@ -757,10 +984,12 @@ export class Lobby {
   /** Called every tick after the active sim ticks. Routes to the live mode's bookkeeping. */
   sync() {
     this.expireResume();
-    if (this.mode === 'poly') this.polySync();
+    if (this.tournament) this.tournamentSync();
+    else if (this.mode === 'poly') this.polySync();
     else this.duelSync();
     // Bench anyone holding up a live, ready opponent by not capturing their mouse.
-    this.enforceCaptureTimeout();
+    // (Suspended during a tournament — benching a seated player would break the bracket.)
+    if (!this.tournament) this.enforceCaptureTimeout();
     // Keep the pause flag honest every tick.
     this.refreshPause();
     if (this.streamerMode && this.mode === 'duel' && this.game.status === 'playing') {
@@ -1205,6 +1434,7 @@ export class Lobby {
       tinyTimer: Math.max(0, this.game.tinyTimer),
       bigBallTimer: Math.max(0, this.game.bigBallTimer),
       winScore: this.game.winScore,
+      tournament: this.tournament ? this.tournament.view(this.liveMatchId) : null,
     };
   }
 
@@ -1331,6 +1561,7 @@ export class Lobby {
     this.winnerName = s.winnerName ?? null;
     this.overHandled = !!s.overHandled;
     this.chatLog = Array.isArray(s.chatLog) ? s.chatLog : [];
+    this.syncPowerupPool();
     // Give seated players a window to reconnect and reclaim their seats; if they don't,
     // expireResume() abandons the resume so the room isn't wedged on a frozen match.
     if (this.pendingSides.left.length || this.pendingSides.right.length) {

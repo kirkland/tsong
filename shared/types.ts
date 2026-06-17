@@ -168,7 +168,11 @@ export type ClientMsg =
   | { type: 'addBot'; level: BotLevel } // drop an AI opponent into the open duel side
   | { type: 'removeBot' }
   | { type: 'ping' } // kick the AI opponent
-  | { type: 'setWinScore'; score: number }; // change the first-to-N win score (room-wide)
+  | { type: 'setWinScore'; score: number } // change the first-to-N win score (room-wide)
+  | { type: 'tournamentCreate'; size: number } // set up a bracket of the given size (4 or 8)
+  | { type: 'tournamentJoin' } // take the next open signup slot
+  | { type: 'tournamentLeave' } // give up your signup slot
+  | { type: 'tournamentCancel' }; // tear down the current tournament
 
 // --- Server -> Client ---
 
@@ -297,6 +301,27 @@ export interface StateMsg {
   tinyTimer: number;
   bigBallTimer: number;
   winScore: number; // current first-to-N win score (room-wide setting)
+  tournament: TournamentView | null; // live single-elimination bracket, or null when none
+}
+
+// One match node in the bracket, as sent to clients for rendering.
+export interface TournamentMatchView {
+  id: number;
+  round: number; // 0 = first round played; higher = later rounds (final is the max)
+  p1: string | null; // participant nickname, or null if not yet determined
+  p2: string | null;
+  winner: string | null; // nickname of the winner, or null if not played yet
+  live: boolean; // true for the match currently being played on the court
+}
+
+// The whole tournament as broadcast to every client.
+export interface TournamentView {
+  status: 'signup' | 'active' | 'done';
+  size: number; // 4 or 8
+  slots: (string | null)[]; // signup slots in seed order; null = open (signup phase)
+  matches: TournamentMatchView[];
+  rounds: number; // total number of rounds (so the client can label/lay them out)
+  champion: string | null; // nickname of the winner once status === 'done'
 }
 
 // Sent to a single connection whenever its own role changes (connect / claim / release).

@@ -173,6 +173,12 @@ export class Game {
   rotated = 0; // "rotate" power-up: quarter-turns CW this point (0–3); resets each serve
   fritz = false; // "fritz" power-up: replaces background with fritz's photo for the point
   disco = false; // "disco" power-up: 3D disco ball, dance floor, colored lights for the point
+  private excludedPowerups: Set<PowerupKind> = new Set(['disco']); // disco off in 2D by default
+
+  /** Called by Lobby whenever the shared viewMode changes. */
+  setExcludedPowerups(excluded: PowerupKind[]) {
+    this.excludedPowerups = new Set(excluded);
+  }
 
   private serveTimer = 0;
   private serveDir = 1; // +1 = launch toward right, -1 = toward left
@@ -762,7 +768,10 @@ export class Game {
     this.target = {
       x: COURT.w * 0.3 + Math.random() * COURT.w * 0.4, // central band, clear of paddles
       y: margin + Math.random() * (COURT.h - 2 * margin),
-      kind: kind ?? POWERUPS[Math.floor(Math.random() * POWERUPS.length)],
+      kind: kind ?? (() => {
+        const pool = POWERUPS.filter((k) => !this.excludedPowerups.has(k));
+        return pool[Math.floor(Math.random() * pool.length)];
+      })(),
     };
     this.targetTimer = TARGET.life;
   }
