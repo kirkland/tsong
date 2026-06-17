@@ -2,9 +2,8 @@
 // is running; it drives which two players are seated in the duel for each match, and the
 // Lobby reports the winner back here to advance the bracket.
 //
-// Seeding is by signup order (slot 0 is seed 1, etc.). Only 4- and 6-player brackets are
-// supported. The 6-player bracket gives the top two seeds a first-round bye, so the bracket
-// always resolves to a clean final.
+// Seeding is by signup order (slot 0 is seed 1, etc.). Only 4- and 8-player brackets are
+// supported — both clean powers of two, so every player plays in the first round (no byes).
 
 import { TournamentMatchView, TournamentView } from '../shared/types';
 
@@ -35,7 +34,7 @@ export class Tournament {
   champion: Participant | null = null;
 
   constructor(size: number) {
-    this.size = size === 6 ? 6 : 4;
+    this.size = size === 8 ? 8 : 4;
     this.slots = new Array(this.size).fill(null);
   }
 
@@ -76,7 +75,7 @@ export class Tournament {
   start(): void {
     if (this.status !== 'signup' || !this.isFull()) return;
     const p = this.slots.map((s) => s!); // all filled
-    this.matches = this.size === 4 ? buildBracket4(p) : buildBracket6(p);
+    this.matches = this.size === 4 ? buildBracket4(p) : buildBracket8(p);
     this.rounds = Math.max(...this.matches.map((m) => m.round)) + 1;
     this.status = 'active';
   }
@@ -158,18 +157,18 @@ function buildBracket4(p: Participant[]): MatchNode[] {
   ];
 }
 
-// 6-player: seeds 1 & 2 get a first-round bye.
-//   M0: seed3 v seed6  → semi M2 slot 2
-//   M1: seed4 v seed5  → semi M3 slot 2
-//   M2: seed1 v winner(M0)  → final slot 1
-//   M3: seed2 v winner(M1)  → final slot 2
-//   M4: final
-function buildBracket6(p: Participant[]): MatchNode[] {
+// 8-player: standard bracket, everyone plays in the first round (no byes).
+//   Quarterfinals: M0..M3   → semis M4/M5
+//   Semifinals:    M4, M5   → final M6
+//   Final:         M6
+function buildBracket8(p: Participant[]): MatchNode[] {
   return [
-    { id: 0, round: 0, p1: p[2], p2: p[5], winner: null, feeds: { match: 2, slot: 2 } },
-    { id: 1, round: 0, p1: p[3], p2: p[4], winner: null, feeds: { match: 3, slot: 2 } },
-    { id: 2, round: 1, p1: p[0], p2: null, winner: null, feeds: { match: 4, slot: 1 } },
-    { id: 3, round: 1, p1: p[1], p2: null, winner: null, feeds: { match: 4, slot: 2 } },
-    { id: 4, round: 2, p1: null, p2: null, winner: null, feeds: null },
+    { id: 0, round: 0, p1: p[0], p2: p[1], winner: null, feeds: { match: 4, slot: 1 } },
+    { id: 1, round: 0, p1: p[2], p2: p[3], winner: null, feeds: { match: 4, slot: 2 } },
+    { id: 2, round: 0, p1: p[4], p2: p[5], winner: null, feeds: { match: 5, slot: 1 } },
+    { id: 3, round: 0, p1: p[6], p2: p[7], winner: null, feeds: { match: 5, slot: 2 } },
+    { id: 4, round: 1, p1: null, p2: null, winner: null, feeds: { match: 6, slot: 1 } },
+    { id: 5, round: 1, p1: null, p2: null, winner: null, feeds: { match: 6, slot: 2 } },
+    { id: 6, round: 2, p1: null, p2: null, winner: null, feeds: null },
   ];
 }

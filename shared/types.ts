@@ -169,7 +169,7 @@ export type ClientMsg =
   | { type: 'removeBot' }
   | { type: 'ping' } // kick the AI opponent
   | { type: 'setWinScore'; score: number } // change the first-to-N win score (room-wide)
-  | { type: 'tournamentCreate'; size: number } // set up a bracket of the given size (4 or 6)
+  | { type: 'tournamentCreate'; size: number } // set up a bracket of the given size (4 or 8)
   | { type: 'tournamentJoin' } // take the next open signup slot
   | { type: 'tournamentLeave' } // give up your signup slot
   | { type: 'tournamentCancel' }; // tear down the current tournament
@@ -316,7 +316,7 @@ export interface TournamentMatchView {
 // The whole tournament as broadcast to every client.
 export interface TournamentView {
   status: 'signup' | 'active' | 'done';
-  size: number; // 4 or 6
+  size: number; // 4 or 8
   slots: (string | null)[]; // signup slots in seed order; null = open (signup phase)
   matches: TournamentMatchView[];
   rounds: number; // total number of rounds (so the client can label/lay them out)

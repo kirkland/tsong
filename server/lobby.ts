@@ -406,7 +406,7 @@ export class Lobby {
     if (!conn || !conn.nickname) return;
     if (this.tournament) return; // one at a time
     if (this.mode === 'poly' || this.arena) return; // duel-only feature
-    if (size !== 4 && size !== 6) return;
+    if (size !== 4 && size !== 8) return;
     // Clear the court so signup starts from a clean slate.
     this.removeBotInternal();
     for (const s of SIDES) this.release(s);
