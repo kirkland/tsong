@@ -675,10 +675,19 @@ function runCommand(item: MenuItem) {
 }
 
 // --- chat ---
+// Terminal-style chat history: Up/Down in the chat box cycle through messages you've sent.
+const chatHistory: string[] = [];
+let histIndex = -1; // -1 = editing a fresh line; otherwise an index into chatHistory
+let histDraft = ''; // the in-progress line stashed when you start scrolling back
+
 chatForm.addEventListener('submit', (e) => {
   e.preventDefault();
   const text = chatInput.value.trim();
   if (!text) return;
+  // Remember it for Up-arrow recall (skip consecutive duplicates), and reset the cursor.
+  if (chatHistory[chatHistory.length - 1] !== text) chatHistory.push(text);
+  histIndex = -1;
+  histDraft = '';
   // A recognized "/command [arg]" runs (and is swallowed); unknown slash text falls
   // through to chat. Enter with the menu open is handled in the keydown listener below.
   if (text.startsWith('/')) {
@@ -694,10 +703,37 @@ chatForm.addEventListener('submit', (e) => {
   closeCommandMenu();
 });
 
-chatInput.addEventListener('input', refreshCommandMenu);
+chatInput.addEventListener('input', () => {
+  histIndex = -1; // manual edits start a fresh line again
+  refreshCommandMenu();
+});
 chatInput.addEventListener('focus', refreshCommandMenu);
 chatInput.addEventListener('keydown', (e) => {
-  if (commandMenu.hidden) return;
+  // With the command menu closed, Up/Down recall previously sent messages (terminal-style).
+  if (commandMenu.hidden) {
+    if (e.key === 'ArrowUp' && chatHistory.length) {
+      e.preventDefault();
+      if (histIndex === -1) {
+        histDraft = chatInput.value;
+        histIndex = chatHistory.length - 1;
+      } else if (histIndex > 0) {
+        histIndex--;
+      }
+      chatInput.value = chatHistory[histIndex];
+      chatInput.setSelectionRange(chatInput.value.length, chatInput.value.length);
+    } else if (e.key === 'ArrowDown' && histIndex !== -1) {
+      e.preventDefault();
+      if (histIndex < chatHistory.length - 1) {
+        histIndex++;
+        chatInput.value = chatHistory[histIndex];
+      } else {
+        histIndex = -1;
+        chatInput.value = histDraft;
+      }
+      chatInput.setSelectionRange(chatInput.value.length, chatInput.value.length);
+    }
+    return;
+  }
   if (e.key === 'ArrowDown') {
     e.preventDefault();
     menuIndex = (menuIndex + 1) % menuItems.length;
