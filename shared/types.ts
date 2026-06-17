@@ -149,7 +149,9 @@ export type Status = 'waiting' | 'playing' | 'over';
 // pellets across the court to the frozen loser, eats it, then balloons and bursts.
 // JSAV: the losing paddle becomes Jsav's face, which stretches vertically and
 // inflates ever bigger and wider until it swallows the whole court.
-export const FATALITY_MOVES = ['SCREEN_MELT', 'PADDLE_SPLIT', 'FROST_SHATTER', 'NOT_FOUND', 'SINGULARITY', 'PAC_CHOMP', 'JSAV'] as const;
+// MONITOR_BREAK: the ball rockets into the screen, the whole court erupts in smoke, and
+// a cracked-glass overlay drops over everything as if the physical monitor just shattered.
+export const FATALITY_MOVES = ['SCREEN_MELT', 'PADDLE_SPLIT', 'FROST_SHATTER', 'NOT_FOUND', 'SINGULARITY', 'PAC_CHOMP', 'JSAV', 'MONITOR_BREAK'] as const;
 export type FatalityMove = (typeof FATALITY_MOVES)[number];
 
 // AI opponent difficulty. A bot fills one duel side; a match it plays never touches the

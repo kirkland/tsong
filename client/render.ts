@@ -952,6 +952,12 @@ const jsavImg = new Image();
 jsavImg.src = '/jsav.jpg';
 const jsavReady = () => jsavImg.complete && jsavImg.naturalWidth > 0;
 
+// Cracked-glass overlay (transparent PNG), used by the MONITOR_BREAK fatality. Its 8:5
+// aspect matches the court, so it stretches edge-to-edge with no distortion.
+const crackedImg = new Image();
+crackedImg.src = '/cracked-glass.png';
+const crackedReady = () => crackedImg.complete && crackedImg.naturalWidth > 0;
+
 function drawFatality(
   ctx: CanvasRenderingContext2D,
   s: StateMsg,
@@ -989,6 +995,9 @@ function drawFatality(
       break;
     case 'JSAV':
       drawJsavStretch(ctx, s, fx, t, banner);
+      break;
+    case 'MONITOR_BREAK':
+      drawMonitorBreak(ctx, s, fx, t, banner);
       break;
   }
 }
@@ -2435,6 +2444,166 @@ function drawJsavStretch(
   }
 
   banner();
+}
+
+// --- Fatality: "Monitor Break" ----------------------------------------------
+// The ball screams into the screen, the court detonates in a billow of smoke, and a
+// cracked-glass overlay snaps over everything as if the player's physical monitor just
+// shattered. Render is stateless, so every particle is derived from its index (a cheap
+// hash) plus the elapsed time `t` — no per-frame bookkeeping.
+function hash01(i: number, salt: number): number {
+  const x = Math.sin(i * 12.9898 + salt * 78.233) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+function drawMonitorBreak(
+  ctx: CanvasRenderingContext2D,
+  s: StateMsg,
+  fx: { side: 'left' | 'right' },
+  t: number,
+  banner: () => void,
+) {
+  const winner = s.paddles[fx.side];
+  const winFaceX = fx.side === 'left' ? winner.x + PADDLE.w / 2 : winner.x - PADDLE.w / 2;
+
+  // The winner lobs a smoke grenade that skips off the walls a couple of times and comes
+  // to rest dead centre — where it detonates. Detonation point is the grenade's rest spot.
+  const TOSS = 1.0; // grenade flight + bounces before it goes off
+  const impactX = COURT.w / 2;
+  const impactY = COURT.h / 2;
+
+  const m = t - TOSS; // seconds since detonation (negative while the grenade is airborne)
+
+  if (m < 0) {
+    // Grenade in flight: a tumbling canister leaking a trail of smoke as it bounces.
+    ctx.save();
+    for (let k = 7; k >= 1; k--) {
+      const tk = t - k * 0.05;
+      if (tk < 0) continue;
+      const past = grenadeAt(tk, winFaceX, winner.y, TOSS);
+      const al = 0.16 * (1 - k / 8);
+      const r = 7 + k * 5;
+      const g = ctx.createRadialGradient(past.x, past.y, 1, past.x, past.y, r);
+      g.addColorStop(0, `rgba(150,152,158,${al})`);
+      g.addColorStop(1, 'rgba(150,152,158,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(past.x, past.y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const cur = grenadeAt(t, winFaceX, winner.y, TOSS);
+    drawGrenade(ctx, cur.x, cur.y, 9, t);
+    ctx.restore();
+    banner();
+    return;
+  }
+
+  // --- the smash ---
+  ctx.save();
+  // Violent screen-shake that decays over ~0.6s; applied to the smoke + glass layers.
+  const shake = 18 * Math.exp(-m * 5);
+  ctx.translate(Math.sin(t * 91) * shake, Math.cos(t * 83) * shake);
+
+  // Blinding white flash at the moment of impact, gone in ~0.16s.
+  const flash = Math.max(0, 1 - m / 0.16);
+  if (flash > 0) {
+    ctx.fillStyle = `rgba(255,255,255,${flash})`;
+    ctx.fillRect(-40, -40, COURT.w + 80, COURT.h + 80);
+  }
+
+  // The "dead" screen behind the smoke goes near-black.
+  ctx.fillStyle = `rgba(5,6,12,${Math.min(0.82, m * 2.2)})`;
+  ctx.fillRect(-40, -40, COURT.w + 80, COURT.h + 80);
+
+  // Billowing smoke: puffs fired radially from the impact, easing outward, swelling and
+  // drifting upward as they fade. Staggered births keep it rolling rather than popping.
+  const PUFFS = 46;
+  for (let i = 0; i < PUFFS; i++) {
+    const age = m - hash01(i, 3) * 0.18;
+    if (age <= 0) continue;
+    const ang = hash01(i, 1) * Math.PI * 2;
+    const spd = 110 + hash01(i, 2) * 280;
+    const dist = spd * (1 - Math.exp(-age * 2.6)); // ease-out drift
+    const px = impactX + Math.cos(ang) * dist;
+    const py = impactY + Math.sin(ang) * dist - age * 46; // smoke rises
+    const r = 24 + age * 130 + hash01(i, 4) * 34;
+    const al = Math.max(0, 0.55 * (1 - age / 2.4));
+    if (al <= 0) continue;
+    const tone = 96 + Math.floor(hash01(i, 5) * 48);
+    const g = ctx.createRadialGradient(px, py, 1, px, py, r);
+    g.addColorStop(0, `rgba(${tone},${tone},${tone + 8},${al})`);
+    g.addColorStop(0.6, `rgba(${tone - 30},${tone - 30},${tone - 22},${al * 0.5})`);
+    g.addColorStop(1, 'rgba(40,40,48,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // The shattered monitor glass drops over the whole picture, snapping in right at the
+  // impact (hidden under the flash) and holding for the rest of the finisher.
+  const glassA = Math.min(1, m / 0.1);
+  if (crackedReady()) {
+    ctx.globalAlpha = glassA;
+    ctx.drawImage(crackedImg, 0, 0, COURT.w, COURT.h);
+    ctx.globalAlpha = 1;
+  } else {
+    // Fallback if the PNG hasn't loaded: a few bright radial crack lines.
+    ctx.strokeStyle = `rgba(220,235,255,${glassA})`;
+    ctx.lineWidth = 2;
+    for (let i = 0; i < 12; i++) {
+      const a = (i / 12) * Math.PI * 2 + hash01(i, 7);
+      const len = 240 + hash01(i, 8) * 260;
+      ctx.beginPath();
+      ctx.moveTo(impactX, impactY);
+      ctx.lineTo(impactX + Math.cos(a) * len, impactY + Math.sin(a) * len);
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
+
+  banner();
+}
+
+// Analytic path for the lobbed smoke grenade: it eases horizontally from the winner's
+// paddle to court centre while a decaying triangle wave bounces it off the top/bottom
+// walls (like the ball) a couple of times, settling to rest at centre by t = dur.
+function grenadeAt(t: number, x0: number, y0: number, dur: number) {
+  const cx = COURT.w / 2;
+  const cy = COURT.h / 2;
+  const u = Math.min(1, Math.max(0, t / dur));
+  const x = x0 + (cx - x0) * (1 - Math.pow(1 - u, 2.4)); // ease-out to centre
+  // Triangle wave gives the sharp "bounce" corners; envelope shrinks it to rest at cy.
+  const tri = (p: number) => 2 * Math.abs(2 * (p - Math.floor(p + 0.5))) - 1;
+  const env = Math.pow(1 - u, 0.7);
+  const base = y0 + (cy - y0) * u; // launch height drifts toward centre
+  const y = base + env * (cy - 16) * tri(u * 2.5);
+  return { x, y };
+}
+
+// A little olive grenade: shaded body, metal spoon/cap, and a sputtering fuse spark.
+function drawGrenade(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, t: number) {
+  ctx.save();
+  const body = ctx.createRadialGradient(x - r * 0.35, y - r * 0.35, 1, x, y, r);
+  body.addColorStop(0, '#6b7d45');
+  body.addColorStop(1, '#2b3318');
+  ctx.fillStyle = body;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+  // pin cap on top
+  ctx.fillStyle = '#9a9a9a';
+  ctx.fillRect(x - 2, y - r - 4, 4, 5);
+  // fuse spark
+  const fl = 0.6 + 0.4 * Math.sin(t * 40);
+  const sg = ctx.createRadialGradient(x, y - r - 5, 0, x, y - r - 5, 6 * fl);
+  sg.addColorStop(0, 'rgba(255,240,180,0.95)');
+  sg.addColorStop(1, 'rgba(255,150,40,0)');
+  ctx.fillStyle = sg;
+  ctx.beginPath();
+  ctx.arc(x, y - r - 5, 6 * fl, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 function drawFireball(ctx: CanvasRenderingContext2D, x: number, y: number, r: number) {
