@@ -35,12 +35,12 @@ export async function initDb(): Promise<void> {
       name   TEXT NOT NULL,
       wins   INTEGER NOT NULL DEFAULT 0,
       losses INTEGER NOT NULL DEFAULT 0,
-      elo    INTEGER NOT NULL DEFAULT 1000
+      elo    INTEGER NOT NULL DEFAULT 500
     )
   `);
   // Add elo column to existing tables that predate this migration.
   await pool.query(`
-    ALTER TABLE players ADD COLUMN IF NOT EXISTS elo INTEGER NOT NULL DEFAULT 1000
+    ALTER TABLE players ADD COLUMN IF NOT EXISTS elo INTEGER NOT NULL DEFAULT 500
   `);
   console.log('leaderboard DB ready');
 }
@@ -51,7 +51,7 @@ export interface PlayerRef {
 }
 
 const ELO_K = 32;
-const ELO_DEFAULT = 1000;
+const ELO_DEFAULT = 500;
 
 function expectedScore(ratingA: number, ratingB: number): number {
   return 1 / (1 + Math.pow(10, (ratingB - ratingA) / 400));
