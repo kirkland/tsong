@@ -33,9 +33,9 @@ export const MAX_PLAYERS = 8; // arena seat cap
 export const ARENA = {
   cx: COURT.w / 2,
   cy: COURT.h / 2,
-  radius: 236, // circumradius of the polygon, court units (near-fills the 500-tall court)
+  radius: 260, // circumradius of the polygon, court units (near-fills the 500-tall court)
 } as const;
-export const POLY_PADDLE_LEN = 84; // arena paddle length along its edge, court units
+export const POLY_PADDLE_LEN = 64; // arena paddle length along its edge, court units
 // Power-ups that make sense in a free-for-all (per-player or global only — nothing that
 // targets a single "opponent", which is ambiguous with more than two players).
 export const POLY_POWERUPS = [
