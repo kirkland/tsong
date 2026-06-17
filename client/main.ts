@@ -44,6 +44,7 @@ const colorPicker = document.getElementById('colorPicker') as HTMLDivElement;
 const chatLog = document.getElementById('chatlog') as HTMLDivElement;
 const chatForm = document.getElementById('chatForm') as HTMLFormElement;
 const chatInput = document.getElementById('chatInput') as HTMLInputElement;
+const hideCmdsEl = document.getElementById('hideCmds') as HTMLInputElement;
 const closingModeEl = document.getElementById('closingMode') as HTMLInputElement;
 const gravityModeEl = document.getElementById('gravityMode') as HTMLInputElement;
 const turboModeEl = document.getElementById('turboMode') as HTMLInputElement;
@@ -972,6 +973,7 @@ function formatChatDate(ms: number): string {
   return d.toLocaleDateString('en-US', opts);
 }
 function addChatLine(line: ChatLine) {
+  if (line.command && hideCmdsEl.checked) return;
   const ts = line.time ?? Date.now();
   const timeStr = formatChatTime(ts);
   const dateStr = formatChatDate(ts);
@@ -983,7 +985,7 @@ function addChatLine(line: ChatLine) {
     chatLog.append(sep);
   }
   const row = document.createElement('div');
-  row.className = 'chat-row';
+  row.className = line.command ? 'chat-row chat-row-cmd' : 'chat-row';
   const stamp = document.createElement('span');
   stamp.className = 'chatstamp';
   stamp.textContent = timeStr;
@@ -1002,6 +1004,13 @@ function addChatLine(line: ChatLine) {
   while (chatLog.childElementCount > 100) chatLog.firstElementChild!.remove();
   chatLog.scrollTop = chatLog.scrollHeight;
 }
+
+hideCmdsEl.addEventListener('change', () => {
+  const hide = hideCmdsEl.checked;
+  for (const row of chatLog.querySelectorAll<HTMLElement>('.chat-row-cmd')) {
+    row.style.display = hide ? 'none' : '';
+  }
+});
 
 // A big, transient banner across the middle of the screen (e.g. someone forfeits).
 function showAnnouncement(text: string) {
