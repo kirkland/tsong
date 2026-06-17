@@ -35,6 +35,7 @@
         flex-direction: column;
         align-items: center;
         gap: 14px;
+        position: relative; /* anchor the fatality 2D-canvas overlay (see fatality-2d rules) */
       }
       h1 {
         margin: 0;
@@ -72,13 +73,18 @@
       body.view-3d #game {
         display: none;
       }
-      /* A fatality is a 2D cinematic: while one plays in 3D view, surface the 2D board in
-         place of the 3D one (identical footprint, so no layout shift), then swap back. */
+      /* A fatality is a 2D cinematic: while one plays in 3D view, surface the 2D board by
+         overlaying it ON TOP of the (still-present) 3D board. We deliberately do NOT hide
+         #game3d with display:none — that would release the winner's pointer lock and freeze
+         their paddle for the next match. The opaque 2D canvas simply covers it, then we swap
+         back by hiding the overlay again. */
       body.view-3d.fatality-2d #game {
         display: block;
-      }
-      body.view-3d.fatality-2d #game3d {
-        display: none;
+        position: absolute;
+        top: 0;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 5;
       }
       /* "rotate" power-up: the court flips to portrait. Size by height so the tall court
          still fits the viewport. Applies to both the 2D canvas and the 3D container. */
