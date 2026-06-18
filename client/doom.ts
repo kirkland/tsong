@@ -65,8 +65,10 @@ export interface DoomNet {
   join(): void;
   leave(): void;
   relay(data: unknown): void;
-  submitScore(round: number, coop: boolean): void; // record the round reached on a run's end
+  // Record the round reached on a run's end. For co-op, `label` is the combined team name.
+  submitScore(round: number, coop: boolean, label?: string): void;
   scores(): { solo: DoomScore[]; coop: DoomScore[] }; // latest high-round leaderboards
+  name(): string; // this client's display name
 }
 
 // The running instance feeds server messages back to itself through these module-level hooks,
@@ -238,6 +240,7 @@ export function startDoom(net: DoomNet): void {
   let myFireSeq = 0; // counts our shots (guest uses this to tell the host to fire)
   let lastGuestFireSeq = 0; // host: last processed guest shot
   let guestIn: GuestInput = { forward: 0, strafe: 0, angle: 0, fireSeq: 0 };
+  let partnerName = ''; // co-op: the other player's name (host learns it via relay)
   const zBuffer = new Float32Array(W);
 
   const me = (): Player => players[selfIdx];
@@ -381,11 +384,17 @@ export function startDoom(net: DoomNet): void {
 
   // Submit the round reached once, the moment the run ends.
   function maybeSubmitScore() {
-    if (over === 'dead' && !scoreSubmitted) {
-      scoreSubmitted = true;
-      doomBest = Math.max(doomBest, round);
-      net.submitScore(round, mode !== 'solo');
+    if (over !== 'dead' || scoreSubmitted) return;
+    scoreSubmitted = true;
+    doomBest = Math.max(doomBest, round);
+    if (mode === 'solo') {
+      net.submitScore(round, false);
+    } else if (mode === 'host') {
+      // One combined team entry, e.g. "Julian and Matt" (sorted so order doesn't matter).
+      const names = [net.name(), partnerName || 'partner'].sort((a, b) => a.localeCompare(b));
+      net.submitScore(round, true, `${names[0]} and ${names[1]}`);
     }
+    // The guest doesn't submit — the host records the shared team score for both.
   }
 
   // --- per-mode update ---
@@ -612,6 +621,9 @@ export function startDoom(net: DoomNet): void {
     round = 1; kills = 0; over = null; myAngle = 0; scoreSubmitted = false; betweenTimer = 0;
     enemies = slot === 0 ? spawnEnemiesForRound(round, players) : [];
     lastGuestFireSeq = 0; guestIn = { forward: 0, strafe: 0, angle: 0, fireSeq: 0 };
+    partnerName = '';
+    // Tell the host our name so it can record the combined team score on game over.
+    if (mode === 'guest') net.relay({ t: 'name', name: net.name() });
     menu.style.display = 'none';
   }
   function restartSolo() {
@@ -637,7 +649,9 @@ export function startDoom(net: DoomNet): void {
     },
     relay: (d) => {
       const msg = d as { t?: string } & Record<string, unknown>;
-      if (mode === 'host' && msg.t === 'in') {
+      if (mode === 'host' && msg.t === 'name') {
+        partnerName = String((msg as { name: unknown }).name ?? '').slice(0, 20);
+      } else if (mode === 'host' && msg.t === 'in') {
         guestIn = {
           forward: Number((msg as { forward: number }).forward) || 0,
           strafe: Number((msg as { strafe: number }).strafe) || 0,

@@ -1158,8 +1158,9 @@ doomBtn.addEventListener('click', async () => {
       join: () => net.send({ type: 'doomJoin' }),
       leave: () => net.send({ type: 'doomLeave' }),
       relay: (data) => net.send({ type: 'doomRelay', data }),
-      submitScore: (round, coop) => net.send({ type: 'doomScore', round, coop }),
+      submitScore: (round, coop, label) => net.send({ type: 'doomScore', round, coop, name: label }),
       scores: () => doomScores,
+      name: () => myName,
     });
   } catch (e) {
     console.error('DOOM failed to load:', e);

@@ -450,12 +450,23 @@ export class Lobby {
     }
   }
 
-  /** Record a finished DOOM run (best round per player per mode). */
-  doomScore(ws: WebSocket, round: number, coop: boolean) {
+  /** Record a finished DOOM run. Solo is keyed per player; co-op is one combined team
+   *  entry keyed by the team label (so a pair shares a single row). */
+  doomScore(ws: WebSocket, round: number, coop: boolean, name?: string) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     if (!Number.isFinite(round) || round < 1) return;
-    recordDoomScore(conn.pid, conn.nickname, coop, Math.floor(round))
+    const r = Math.floor(round);
+    let key: string, label: string;
+    if (coop) {
+      label = (name ?? '').trim().slice(0, 60);
+      if (!label) return; // co-op needs the combined team name
+      key = `team:${label.toLowerCase()}`;
+    } else {
+      key = conn.pid;
+      label = conn.nickname;
+    }
+    recordDoomScore(key, label, coop, r)
       .then(() => this.refreshDoomLeaderboards())
       .catch((e) => console.error('doom score save failed:', e));
   }
