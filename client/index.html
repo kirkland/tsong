@@ -1347,8 +1347,28 @@
         align-items: center;
         gap: 10px;
         padding: 4px 10px;
+        cursor: pointer;
       }
       .pu-row:nth-child(odd) {
+        background: #0b1020;
+      }
+      .pu-row:hover {
+        background: #1b2546;
+      }
+      .pu-row:active {
+        background: #26336a;
+      }
+      /* When power-ups can't be spawned (you're a player, or no live match), the rows
+         are just a legend — dim the click affordance so it doesn't look interactive. */
+      #powerupInfoPanel.legend-only .pu-row {
+        cursor: default;
+      }
+      #powerupInfoPanel.legend-only .pu-row:hover,
+      #powerupInfoPanel.legend-only .pu-row:active {
+        background: inherit;
+      }
+      #powerupInfoPanel.legend-only .pu-row:nth-child(odd):hover,
+      #powerupInfoPanel.legend-only .pu-row:nth-child(odd):active {
         background: #0b1020;
       }
       .pu-icon {

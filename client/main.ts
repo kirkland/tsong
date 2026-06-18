@@ -1316,7 +1316,28 @@ function renderTournament(t: StateMsg['tournament']) {
 const powerupInfoBtn = document.getElementById('powerupInfoBtn') as HTMLButtonElement;
 const powerupInfoPanel = document.getElementById('powerupInfoPanel') as HTMLDivElement;
 
+// Spawning from the dropdown follows the same rule as the /powerup command:
+// only a spectator can drop one, and only while a match is live.
+const canSpawnPowerup = () => !isPlayer() && state?.status === 'playing';
+
+// Each legend row doubles as a spawn button: clicking it drops that power-up,
+// just like typing `/powerup <kind>`. When you can't spawn, the panel is a plain
+// legend (the `.legend-only` class dims the click affordance).
+function syncPowerupSpawnability() {
+  powerupInfoPanel.classList.toggle('legend-only', !canSpawnPowerup());
+}
+for (const row of powerupInfoPanel.querySelectorAll<HTMLDivElement>('.pu-row')) {
+  const kind = row.querySelector<HTMLCanvasElement>('.pu-icon')?.dataset.kind;
+  if (!kind) continue;
+  row.title = `Spawn the ${kind} power-up`;
+  row.addEventListener('click', () => {
+    if (!canSpawnPowerup()) return;
+    net.send({ type: 'spawnPowerup', kind });
+  });
+}
+
 function openPowerupInfo() {
+  syncPowerupSpawnability();
   powerupInfoPanel.hidden = false;
   powerupInfoBtn.setAttribute('aria-expanded', 'true');
 }
@@ -2117,6 +2138,7 @@ function updateUI() {
 
   renderPuHud(state);
   renderTournament(state.tournament);
+  if (!powerupInfoPanel.hidden) syncPowerupSpawnability();
 
   // Sync win score buttons with the current room setting.
   for (const btn of winScoreOpts.querySelectorAll<HTMLButtonElement>('.ws-btn')) {
