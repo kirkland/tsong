@@ -900,7 +900,7 @@ export class Game {
         this.earthquake = true;
         break;
       case 'coins':
-        // Transient economy reward — the lobby reads this and pays the side 5 coins.
+        // Transient economy reward — the lobby reads this and pays the side 1 coin.
         this.coinGrant = side;
         break;
       case 'blaster':
