@@ -25,11 +25,12 @@ import {
   Role,
   ServerMsg,
   Side,
+  SPIN_SEGMENTS,
   StateMsg,
   TEAM_MAX,
 } from '../shared/types';
 import { getLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
-  getWallet, buyItem, equipItem, addCoins, spendCoins } from './db';
+  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, DAILY_SPIN_MS } from './db';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
@@ -54,6 +55,12 @@ interface Conn {
   // Cached wallet/cosmetics (loaded from the DB on join). Purely cosmetic — never affects play.
   hat: string | null;
   skin: string | null;
+}
+
+// Epoch ms when the daily spin is next available (0 = available now).
+function nextSpinAt(lastSpin: number): number {
+  const next = (lastSpin || 0) + DAILY_SPIN_MS;
+  return next > Date.now() ? next : 0;
 }
 
 const SIDES: Side[] = ['left', 'right'];
@@ -790,7 +797,7 @@ export class Lobby {
         if (!c) return;
         c.hat = w.hat;
         c.skin = w.skin;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, bet: this.betView(ws) });
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, bet: this.betView(ws), nextSpinAt: nextSpinAt(w.lastSpin) });
       })
       .catch((e) => console.error('wallet load failed:', e));
   }
@@ -804,7 +811,7 @@ export class Lobby {
         const c = this.conns.get(ws);
         if (!c) return;
         c.hat = w.hat; c.skin = w.skin;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, bet: this.betView(ws) });
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, bet: this.betView(ws), nextSpinAt: nextSpinAt(w.lastSpin) });
       })
       .catch((e) => console.error('wallet send failed:', e));
   }
@@ -850,6 +857,42 @@ export class Lobby {
         this.sendWallet(ws);
       })
       .catch((e) => console.error('shop equip failed:', e));
+  }
+
+  // --- Daily spin (one reward every 24h) ---
+
+  /** Claim the daily spin. Atomically gated to once per 24h; rolls a weighted wheel segment.
+   *  Odds decrease as value increases (segments: 1/2/3/5/10/20 coins, hat, skin). */
+  dailySpin(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    claimSpin(conn.pid, conn.nickname, Date.now())
+      .then(async (ok) => {
+        if (!ok) { this.sendWallet(ws); return; } // not available yet (or no DB)
+        const owned = (await getWallet(conn.pid)).owned;
+        const hasUnowned = (slot: 'hat' | 'skin') => COSMETICS.some((c) => c.slot === slot && !owned.includes(c.id));
+        // Weights index-aligned to SPIN_SEGMENTS [1,2,3,5,10,20,hat,skin]; rarer as value rises.
+        const weights = [36, 24, 16, 11, 6, 2, 3, 2];
+        // Drop a cosmetic segment if the player already owns everything in that slot.
+        if (!hasUnowned('hat')) weights[6] = 0;
+        if (!hasUnowned('skin')) weights[7] = 0;
+        const total = weights.reduce((a, b) => a + b, 0);
+        let roll = Math.random() * total;
+        let seg = 0;
+        for (let i = 0; i < weights.length; i++) { roll -= weights[i]; if (roll < 0) { seg = i; break; } }
+        const def = SPIN_SEGMENTS[seg];
+        if (def.kind === 'coins') {
+          await addCoins(conn.pid, conn.nickname, def.value);
+          this.tell(ws, { type: 'spinResult', segment: seg, reward: { kind: 'coins', amount: def.value } });
+        } else {
+          const avail = COSMETICS.filter((c) => c.slot === def.kind && !owned.includes(c.id));
+          const item = avail[Math.floor(Math.random() * avail.length)];
+          await grantItem(conn.pid, conn.nickname, item.id);
+          this.tell(ws, { type: 'spinResult', segment: seg, reward: { kind: 'item', item: item.id, name: item.name } });
+        }
+        this.sendWallet(ws);
+      })
+      .catch((e) => console.error('daily spin failed:', e));
   }
 
   // --- Gambling ---

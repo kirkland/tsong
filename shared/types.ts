@@ -230,7 +230,8 @@ export type ClientMsg =
   | { type: 'doomReward' } // grant the player 1 coin (killed the DOOM minion boss)
   | { type: 'shopBuy'; item: string } // buy a cosmetic from the shop
   | { type: 'shopEquip'; slot: 'hat' | 'skin'; item: string | null } // equip (item) or unequip (null) a cosmetic
-  | { type: 'bet'; side: Side; amount: number }; // spectator wagers coins on a side of the live duel
+  | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
+  | { type: 'dailySpin' }; // claim the once-per-24h reward spin
 
 // --- Server -> Client ---
 
@@ -485,7 +486,8 @@ export type ServerMsg =
   | DoomRelayMsg
   | DoomEndMsg
   | DoomLeaderboardMsg
-  | WalletMsg;
+  | WalletMsg
+  | SpinResultMsg;
 
 // A player's private wallet + cosmetics + active bet, sent only to that client.
 export interface WalletMsg {
@@ -495,6 +497,29 @@ export interface WalletMsg {
   hat: string | null; // equipped hat
   skin: string | null; // equipped skin
   bet: { side: Side; amount: number } | null; // current wager on the live duel, if any
+  nextSpinAt: number; // epoch ms when the daily spin is next available (0 = available now)
+}
+
+// The daily-spin wheel segments, in display order. Shared so the client wheel and the
+// server roll agree on the layout. Higher-value segments have lower odds (weights live
+// server-side). hat/skin award a random unowned cosmetic of that slot.
+export const SPIN_SEGMENTS = [
+  { label: '1 🪙', kind: 'coins', value: 1 },
+  { label: '2 🪙', kind: 'coins', value: 2 },
+  { label: '3 🪙', kind: 'coins', value: 3 },
+  { label: '5 🪙', kind: 'coins', value: 5 },
+  { label: '10 🪙', kind: 'coins', value: 10 },
+  { label: '20 🪙', kind: 'coins', value: 20 },
+  { label: '🎩 Hat', kind: 'hat', value: 0 },
+  { label: '🎨 Skin', kind: 'skin', value: 0 },
+] as const;
+
+// Result of a daily spin, sent to the spinning client so it can land the wheel on `segment`
+// (an index into SPIN_SEGMENTS) and celebrate the prize.
+export interface SpinResultMsg {
+  type: 'spinResult';
+  segment: number;
+  reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string };
 }
 
 // Co-op DOOM lobby status (2 slots). `slot` is which slot this client holds (0 = host,
