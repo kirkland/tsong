@@ -117,7 +117,7 @@ export const TARGET = {
 //   rotate — the entire court rotates 90° for the rest of the match
 export const POWERUPS = [
   'grow', 'shrink', 'smash', 'slow', 'multi',
-  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate', 'fritz', 'disco', 'blaster', 'minion',
+  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate', 'fritz', 'disco', 'blaster', 'minion', 'earthquake',
 ] as const;
 export type PowerupKind = (typeof POWERUPS)[number];
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
@@ -292,6 +292,7 @@ export interface StateMsg {
   fritz: boolean; // "fritz" power-up: replaces the court background with fritz's photo for the point
   disco: boolean; // "disco" power-up: 3D disco ball drops, dance floor, colored lights (3D/FP only)
   minion: boolean; // "minion" power-up: both paddles are drawn as a minion for the point
+  earthquake: boolean; // "earthquake" power-up: court shakes and the ball jitters for the point
   viewMode: 'normal' | '3d' | 'firstperson'; // shared view mode — changes for every client at once
   pinata: boolean; // whether "piñata" mode is armed
   // Live piñata (beach-ball collector): center, current rotation, the balls stuck to its
@@ -341,6 +342,7 @@ export interface TournamentMatchView {
 export interface TournamentView {
   status: 'signup' | 'active' | 'done';
   size: number; // 4 or 8
+  creator: string; // nickname of whoever set it up (only they may cancel it)
   slots: (string | null)[]; // signup slots in seed order; null = open (signup phase)
   matches: TournamentMatchView[];
   rounds: number; // total number of rounds (so the client can label/lay them out)

@@ -38,6 +38,7 @@ const PU_COLOR: Record<PowerupKind, string> = {
   disco: '#e040fb',
   blaster: '#ff4d4d',
   minion: '#ffd21e',
+  earthquake: '#b07a3a',
 };
 
 // Text painted flat onto the court floor (so it sits in the scene with real perspective —

@@ -1276,6 +1276,8 @@ function renderTournament(t: StateMsg['tournament']) {
   tournamentCollapseBtn.hidden = t.status === 'signup'; // nothing to fold during signup
   tournamentCollapseBtn.textContent = bracketCollapsed ? '▸' : '▾';
   tournamentBody.hidden = bracketCollapsed && t.status !== 'signup';
+  // Only the creator sees the cancel (✕) button — keeps a random spectator from nuking it.
+  tournamentCancelBtn.hidden = t.creator !== myName;
 
   if (t.status === 'signup') {
     const filled = t.slots.filter(Boolean).length;
@@ -1866,6 +1868,24 @@ function applyCanvasRotation(rotated: number) {
   renderer3d?.resize();
 }
 
+// Earthquake power-up: jiggle the whole board element while the point is live. Independent
+// of the canvas draw transforms (and pointer lock survives a CSS transform).
+let quakeOn = false;
+function applyQuake(on: boolean) {
+  if (on) {
+    const dx = (Math.random() * 2 - 1) * 7;
+    const dy = (Math.random() * 2 - 1) * 7;
+    const active = boardEl();
+    active.style.transform = `translate(${dx}px, ${dy}px)`;
+    (active === canvas ? game3dEl : canvas).style.transform = '';
+    quakeOn = true;
+  } else if (quakeOn) {
+    canvas.style.transform = '';
+    game3dEl.style.transform = '';
+    quakeOn = false;
+  }
+}
+
 // --- main loop ---
 // --- mobile tab bar ---
 const mobileTabs = document.getElementById('mobileTabs') as HTMLDivElement;
@@ -2141,6 +2161,7 @@ function loop(t: number) {
       if (!showFatality2d && state.viewMode !== 'normal') renderer3d?.resize();
     }
     applyCanvasRotation(state.rotated);
+    applyQuake(!!state.earthquake && state.status === 'playing');
     if (state.viewMode !== 'normal' && renderer3d && !state.fatality) {
       const side = state.viewMode === 'firstperson'
         ? (myRole !== 'observer' ? (myRole as 'left' | 'right') : fpSide)
