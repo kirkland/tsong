@@ -44,7 +44,43 @@ export async function initDb(): Promise<void> {
   `);
   // Reset any players still at the old default of 1000 to the new default of 500.
   await pool.query(`UPDATE players SET elo = 500 WHERE elo = 1000`);
+  // DOOM minigame high scores — best round reached, per player, per mode (solo / co-op).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS doom_scores (
+      pid   TEXT NOT NULL,
+      name  TEXT NOT NULL,
+      coop  BOOLEAN NOT NULL,
+      round INTEGER NOT NULL DEFAULT 1,
+      PRIMARY KEY (pid, coop)
+    )
+  `);
   console.log('leaderboard DB ready');
+}
+
+export interface DoomScoreRow { name: string; round: number; }
+
+// Record a DOOM run: keep only each player's best round for that mode.
+export async function recordDoomScore(pid: string, name: string, coop: boolean, round: number): Promise<void> {
+  if (!pool || !pid) return;
+  await pool.query(
+    `INSERT INTO doom_scores (pid, name, coop, round) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (pid, coop) DO UPDATE
+       SET round = GREATEST(doom_scores.round, EXCLUDED.round), name = EXCLUDED.name`,
+    [pid, name, coop, round],
+  );
+}
+
+// Top rounds for each mode.
+export async function getDoomLeaderboards(): Promise<{ solo: DoomScoreRow[]; coop: DoomScoreRow[] }> {
+  if (!pool) return { solo: [], coop: [] };
+  const fetchMode = async (coop: boolean): Promise<DoomScoreRow[]> => {
+    const { rows } = await pool!.query(
+      `SELECT name, round FROM doom_scores WHERE coop = $1 ORDER BY round DESC, name ASC LIMIT 10`,
+      [coop],
+    );
+    return rows.map((r) => ({ name: r.name, round: r.round }));
+  };
+  return { solo: await fetchMode(false), coop: await fetchMode(true) };
 }
 
 export interface PlayerRef {

@@ -100,6 +100,7 @@ function applyMute() {
   jsavSound.muted = muted;
   discoSound.muted = muted;
   blasterSound.muted = muted;
+  minionSound.muted = muted;
 }
 muteBtn.addEventListener('click', () => {
   muted = !muted;
@@ -237,11 +238,15 @@ discoSound.preload = 'auto';
 discoSound.loop = true;
 const blasterSound = new Audio('/blaster.mp3'); // gunshot when the blaster fires
 blasterSound.preload = 'auto';
+const minionSound = new Audio('/minion-laugh.mp3'); // loops while the minion powerup is active
+minionSound.preload = 'auto';
+minionSound.loop = true;
 // Apply persisted mute state immediately (before applyMute() runs at definition time).
 applyMute();
 let prevStatus: StateMsg['status'] | null = null; // last seen status, to fire on the rising edge into 'over'
 let prevFatality = false; // whether a fatality was playing last frame, to fire music on the rising edge
 let prevDisco = false; // rising-edge detection for disco sound
+let prevMinion = false; // rising-edge detection for minion laugh loop
 let prevProjCount = 0; // last seen projectile count, to fire the gunshot on a new shot
 let prevTarget: StateMsg['target'] | undefined = undefined; // detect powerup pickup for flash
 let prevHitSeq = -1; // detect any paddle contact (both sides, including same-side repeats)
@@ -376,6 +381,16 @@ const net = connect(
         discoSound.currentTime = 0;
       }
       prevDisco = discoActive;
+      // Minion laugh: loops while the minion powerup is active, stops when the point ends.
+      const minionActive = !!msg.minion;
+      if (minionActive && !prevMinion) {
+        minionSound.currentTime = 0;
+        minionSound.play().catch(() => {});
+      } else if (!minionActive && prevMinion) {
+        minionSound.pause();
+        minionSound.currentTime = 0;
+      }
+      prevMinion = minionActive;
       // Gunshot on every new blaster projectile (heard by shooter, opponent and spectators).
       const projCount = msg.projectiles.length;
       if (projCount > prevProjCount) {
@@ -418,6 +433,8 @@ const net = connect(
       doomMod?.feedDoomRelay(msg.data);
     } else if (msg.type === 'doomEnd') {
       doomMod?.feedDoomEnd(msg.reason);
+    } else if (msg.type === 'doomLeaderboard') {
+      doomScores = { solo: msg.solo, coop: msg.coop };
     }
   },
   () => {
@@ -1132,6 +1149,8 @@ function showPowerupFlash(kind: string, cx: number, cy: number) {
 // uses the server only as a 2-slot lobby + opaque relay (doom* messages, routed below). ---
 const doomBtn = document.getElementById('doomBtn') as HTMLButtonElement;
 let doomMod: typeof import('./doom') | null = null;
+// Latest DOOM high-round leaderboards (solo / co-op), pushed by the server.
+let doomScores: { solo: Array<{ name: string; round: number }>; coop: Array<{ name: string; round: number }> } = { solo: [], coop: [] };
 doomBtn.addEventListener('click', async () => {
   try {
     doomMod = await import('./doom');
@@ -1139,6 +1158,8 @@ doomBtn.addEventListener('click', async () => {
       join: () => net.send({ type: 'doomJoin' }),
       leave: () => net.send({ type: 'doomLeave' }),
       relay: (data) => net.send({ type: 'doomRelay', data }),
+      submitScore: (round, coop) => net.send({ type: 'doomScore', round, coop }),
+      scores: () => doomScores,
     });
   } catch (e) {
     console.error('DOOM failed to load:', e);
