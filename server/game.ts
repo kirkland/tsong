@@ -99,6 +99,7 @@ export interface GameSnapshot {
   rotated: number;
   fritz?: boolean;
   disco?: boolean;
+  minion?: boolean;
   winnerSide: Side | null;
   lastHit: Side | null;
   target: { x: number; y: number; kind: PowerupKind } | null;
@@ -174,6 +175,7 @@ export class Game {
   rotated = 0; // "rotate" power-up: quarter-turns CW this point (0–3); resets each serve
   fritz = false; // "fritz" power-up: replaces background with fritz's photo for the point
   disco = false; // "disco" power-up: 3D disco ball, dance floor, colored lights for the point
+  minion = false; // "minion" power-up: both paddles are drawn as a minion for the point
   // "Blaster": shots each side holds, projectiles in flight, and how long each paddle is locked.
   blasterAmmo: Record<Side, number> = { left: 0, right: 0 };
   disabledTimer: Record<Side, number> = { left: 0, right: 0 };
@@ -208,6 +210,7 @@ export class Game {
       rotated: this.rotated,
       fritz: this.fritz,
       disco: this.disco,
+      minion: this.minion,
       winnerSide: this.winnerSide,
       lastHit: this.lastHit,
       target: this.target ? { ...this.target } : null,
@@ -252,6 +255,7 @@ export class Game {
     this.rotated = typeof s.rotated === 'number' ? s.rotated : (s.rotated ? 1 : 0);
     this.fritz = s.fritz ?? false;
     this.disco = s.disco ?? false;
+    this.minion = s.minion ?? false;
     this.winnerSide = s.winnerSide;
     this.lastHit = s.lastHit;
     this.target = s.target ? { ...s.target } : null;
@@ -584,6 +588,7 @@ export class Game {
     this.rotated = 0;
     this.fritz = false;
     this.disco = false;
+    this.minion = false;
     this.blasterAmmo = { left: 0, right: 0 };
     this.disabledTimer = { left: 0, right: 0 };
     this.projectiles = [];
@@ -871,6 +876,9 @@ export class Game {
         break;
       case 'disco':
         this.disco = true;
+        break;
+      case 'minion':
+        this.minion = true;
         break;
       case 'blaster':
         this.blasterAmmo[side] = BLASTER.ammo;

@@ -37,6 +37,7 @@ const PU_COLOR: Record<PowerupKind, string> = {
   fritz: '#f59e0b',
   disco: '#e040fb',
   blaster: '#ff4d4d',
+  minion: '#ffd21e',
 };
 
 // Text painted flat onto the court floor (so it sits in the scene with real perspective —
@@ -125,6 +126,20 @@ export function createRenderer(container: HTMLElement): Renderer3D {
   // floor and use it as the scene backdrop, so in first-person you're surrounded by Fritz.
   const fritzTex = new THREE.TextureLoader().load('/fritz.jpg');
   fritzTex.colorSpace = THREE.SRGBColorSpace;
+
+  // Minion power-up: a camera-facing billboard at each paddle (replaces the box for the point).
+  const minionTex = new THREE.TextureLoader().load('/minion.png');
+  minionTex.colorSpace = THREE.SRGBColorSpace;
+  const minionSprites: THREE.Sprite[] = [];
+  function getMinionSprite(i: number): THREE.Sprite {
+    let s = minionSprites[i];
+    if (!s) {
+      s = new THREE.Sprite(new THREE.SpriteMaterial({ map: minionTex, transparent: true }));
+      scene.add(s);
+      minionSprites[i] = s;
+    }
+    return s;
+  }
 
   // --- Disco power-up objects (3D/FP only) ---
   // Chrome disco ball that drops from the ceiling when the powerup fires.
@@ -417,10 +432,22 @@ export function createRenderer(container: HTMLElement): Renderer3D {
 
     // Paddles — one box per seated player, sized to that side's current height.
     let pi = 0;
+    let mi = 0; // minion-sprite index
+    const minionAspect = (minionTex.image && (minionTex.image as HTMLImageElement).naturalWidth)
+      ? (minionTex.image as HTMLImageElement).naturalWidth / (minionTex.image as HTMLImageElement).naturalHeight
+      : 1.31;
     for (const side of ['left', 'right'] as const) {
       const p = s.paddles[side];
       const list = p.players.length ? p.players : [];
       for (const pl of list) {
+        if (s.minion) {
+          // Replace the box with a camera-facing minion billboard, sized to the paddle height.
+          const sp = getMinionSprite(mi++);
+          sp.visible = true;
+          sp.scale.set(p.h * minionAspect, p.h, 1);
+          sp.position.set(wx(pl.x), p.h / 2, wz(pl.y));
+          continue;
+        }
         const m = getPaddle(pi++);
         m.visible = true;
         m.position.set(wx(pl.x), PADDLE_H / 2, wz(pl.y));
@@ -434,6 +461,7 @@ export function createRenderer(container: HTMLElement): Renderer3D {
       }
     }
     for (let i = pi; i < paddlePool.length; i++) paddlePool[i].visible = false;
+    for (let i = mi; i < minionSprites.length; i++) minionSprites[i].visible = false;
 
     // Balls — main ball plus any "multi" extras; radius follows tiny/bigball power-ups.
     const ballR = s.tinyBall ? 3 : s.bigBall ? BIG_BALL_R : BALL.r;
