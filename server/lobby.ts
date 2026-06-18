@@ -655,6 +655,14 @@ export class Lobby {
           .catch((e) => console.error('leaderboard update failed:', e));
       }
       this.settleBets(winnerSide); // pay out spectator wagers on this match
+      // Winning the championship pays coins equal to the field size (4 or 8).
+      if (t.status === 'done' && winners[0]?.pid) {
+        const champ = winners[0];
+        addCoins(champ.pid, champ.nickname, t.size)
+          .then(() => this.refreshWalletsFor([champ]))
+          .catch((e) => console.error('tournament prize failed:', e));
+        this.announce(`🏆 ${champ.nickname} won the tournament — ${t.size} coins!`);
+      }
       // Hold the champion screen longer than a between-match break, then tear down.
       this.tourneyInterMs = t.status === 'done' ? TOURNEY_DONE_MS : TOURNEY_INTER_MS;
       return;
