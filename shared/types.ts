@@ -189,7 +189,7 @@ export type ClientMsg =
   | { type: 'doomJoin' } // take a slot in the 2-player co-op DOOM lobby
   | { type: 'doomLeave' } // leave the co-op DOOM lobby / game
   | { type: 'doomRelay'; data: unknown } // forward an opaque DOOM payload to the co-op partner
-  | { type: 'doomScore'; round: number; coop: boolean }; // record a DOOM run's reached round
+  | { type: 'doomScore'; round: number; coop: boolean; name?: string }; // record a DOOM run's reached round (name = combined team label for co-op)
 
 // --- Server -> Client ---
 

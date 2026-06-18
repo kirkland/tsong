@@ -181,7 +181,9 @@ wss.on('connection', (ws: WebSocket) => {
         lobby.doomRelay(ws, msg.data);
         break;
       case 'doomScore':
-        if (typeof msg.round === 'number' && typeof msg.coop === 'boolean') lobby.doomScore(ws, msg.round, msg.coop);
+        if (typeof msg.round === 'number' && typeof msg.coop === 'boolean') {
+          lobby.doomScore(ws, msg.round, msg.coop, typeof msg.name === 'string' ? msg.name : undefined);
+        }
         break;
     }
   });

@@ -54,6 +54,9 @@ export async function initDb(): Promise<void> {
       PRIMARY KEY (pid, coop)
     )
   `);
+  // Co-op scores used to be recorded per-player; they're now one combined team entry keyed
+  // "team:<a> and <b>". Drop any legacy per-player co-op rows so the board only shows pairs.
+  await pool.query(`DELETE FROM doom_scores WHERE coop = TRUE AND pid NOT LIKE 'team:%'`);
   console.log('leaderboard DB ready');
 }
 
