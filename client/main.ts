@@ -102,6 +102,7 @@ function applyMute() {
   discoSound.muted = muted;
   blasterSound.muted = muted;
   minionSound.muted = muted;
+  chaChing.muted = muted;
 }
 muteBtn.addEventListener('click', () => {
   muted = !muted;
@@ -242,6 +243,9 @@ blasterSound.preload = 'auto';
 const minionSound = new Audio('/minion-laugh.mp3'); // loops while the minion powerup is active
 minionSound.preload = 'auto';
 minionSound.loop = true;
+const chaChing = new Audio('/chaching.mp3'); // coin powerup pickup + shop purchases
+chaChing.preload = 'auto';
+function playChaChing() { try { chaChing.currentTime = 0; void chaChing.play(); } catch { /* ignore */ } }
 // Apply persisted mute state immediately (before applyMute() runs at definition time).
 applyMute();
 let prevStatus: StateMsg['status'] | null = null; // last seen status, to fire on the rising edge into 'over'
@@ -407,7 +411,10 @@ const net = connect(
       prevHitSeq = msg.hitSeq;
       prevScore = { ...msg.score };
       // Detect powerup pickup: target was present last frame, gone this frame.
-      if (prevTarget && !msg.target) showPowerupFlash(prevTarget.kind, prevTarget.x, prevTarget.y);
+      if (prevTarget && !msg.target) {
+        showPowerupFlash(prevTarget.kind, prevTarget.x, prevTarget.y);
+        if (prevTarget.kind === 'coins') playChaChing(); // 5-coin grab
+      }
       prevTarget = msg.target ?? null;
       state = msg;
       syncMyPaddleFromServer();
@@ -1176,11 +1183,16 @@ doomBtn.addEventListener('click', async () => {
 let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; bet: { side: Side; amount: number } | null } =
   { coins: 0, owned: [], hat: null, skin: null, bet: null };
 let betAmount = 1;
+let shopTab: 'hat' | 'skin' = 'hat';
 const shopBtn = document.getElementById('shopBtn') as HTMLButtonElement;
 const shopPanel = document.getElementById('shopPanel') as HTMLDivElement;
 const coinCount = document.getElementById('coinCount') as HTMLSpanElement;
 const shopCoins = document.getElementById('shopCoins') as HTMLSpanElement;
 const shopItems = document.getElementById('shopItems') as HTMLDivElement;
+const tabHats = document.getElementById('tabHats') as HTMLButtonElement;
+const tabSkins = document.getElementById('tabSkins') as HTMLButtonElement;
+tabHats.addEventListener('click', () => { shopTab = 'hat'; tabHats.classList.add('active'); tabSkins.classList.remove('active'); renderShop(); });
+tabSkins.addEventListener('click', () => { shopTab = 'skin'; tabSkins.classList.add('active'); tabHats.classList.remove('active'); renderShop(); });
 const betSection = document.getElementById('betSection') as HTMLDivElement;
 const betAmountEl = document.getElementById('betAmount') as HTMLSpanElement;
 const betStatus = document.getElementById('betStatus') as HTMLDivElement;
@@ -1203,6 +1215,7 @@ function renderShop() {
   shopCoins.textContent = String(wallet.coins);
   shopItems.innerHTML = '';
   for (const item of COSMETICS) {
+    if (item.slot !== shopTab) continue; // show only the active tab's items
     const owned = wallet.owned.includes(item.id);
     const equipped = (item.slot === 'hat' ? wallet.hat : wallet.skin) === item.id;
     const row = document.createElement('div');
@@ -1215,7 +1228,7 @@ function renderShop() {
     if (!owned) {
       btn.textContent = 'Buy';
       btn.disabled = wallet.coins < item.price;
-      btn.onclick = () => net.send({ type: 'shopBuy', item: item.id });
+      btn.onclick = () => { net.send({ type: 'shopBuy', item: item.id }); playChaChing(); };
     } else {
       btn.textContent = equipped ? 'Unequip' : 'Equip';
       if (equipped) btn.classList.add('equipped');

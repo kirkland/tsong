@@ -178,6 +178,7 @@ export class Game {
   disco = false; // "disco" power-up: 3D disco ball, dance floor, colored lights for the point
   minion = false; // "minion" power-up: both paddles are drawn as a minion for the point
   earthquake = false; // "earthquake" power-up: court shakes and the ball jitters for the point
+  coinGrant: Side | null = null; // transient: side that just collected the "coins" power-up (lobby pays out)
   // "Blaster": shots each side holds, projectiles in flight, and how long each paddle is locked.
   blasterAmmo: Record<Side, number> = { left: 0, right: 0 };
   disabledTimer: Record<Side, number> = { left: 0, right: 0 };
@@ -897,6 +898,10 @@ export class Game {
         break;
       case 'earthquake':
         this.earthquake = true;
+        break;
+      case 'coins':
+        // Transient economy reward — the lobby reads this and pays the side 5 coins.
+        this.coinGrant = side;
         break;
       case 'blaster':
         this.blasterAmmo[side] = BLASTER.ammo;

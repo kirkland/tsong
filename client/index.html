@@ -650,6 +650,13 @@
         font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
         color: #6b7796; margin: 8px 0 6px;
       }
+      #shopTabs { display: flex; gap: 6px; margin-bottom: 6px; }
+      .shop-tab {
+        flex: 1; font: inherit; font-size: 11px; font-weight: 700; padding: 5px 0; border-radius: 5px;
+        border: 1px solid #2a3550; background: #11182c; color: #8693b3; cursor: pointer;
+      }
+      .shop-tab.active { background: #2d4070; border-color: #3a6df0; color: #fff; }
+      #shopItems { max-height: 46vh; overflow-y: auto; }
       .shop-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
       .shop-row .shop-name { flex: 1; font-size: 12px; color: #cdd7f5; }
       .shop-row button {
@@ -1763,6 +1770,10 @@
         <button id="shopBtn" type="button" aria-expanded="false" title="Coins, cosmetics & betting">🪙 <span id="coinCount">0</span></button>
         <div id="shopPanel" hidden>
           <h3>Shop · <span id="shopCoins">0</span> 🪙</h3>
+          <div id="shopTabs">
+            <button id="tabHats" class="shop-tab active" type="button">Hats</button>
+            <button id="tabSkins" class="shop-tab" type="button">Skins</button>
+          </div>
           <div id="shopItems"></div>
           <div id="betSection" hidden>
             <h3>Bet on the match</h3>
@@ -2064,6 +2075,13 @@
               <div class="pu-info">
                 <span class="pu-name" style="color:#b07a3a">earthquake</span>
                 <span class="pu-desc">The court shakes and the ball wobbles for the point</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="coins" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#ffcf33">coins</span>
+                <span class="pu-desc">Grab it to earn 5 coins</span>
               </div>
             </div>
           </div>

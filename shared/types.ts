@@ -117,7 +117,7 @@ export const TARGET = {
 //   rotate — the entire court rotates 90° for the rest of the match
 export const POWERUPS = [
   'grow', 'shrink', 'smash', 'slow', 'multi',
-  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate', 'fritz', 'disco', 'blaster', 'minion', 'earthquake',
+  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate', 'fritz', 'disco', 'blaster', 'minion', 'earthquake', 'coins',
 ] as const;
 export type PowerupKind = (typeof POWERUPS)[number];
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
@@ -132,9 +132,31 @@ export interface CosmeticItem {
   slot: 'hat' | 'skin';
   price: number;
 }
+// Static cosmetics cost 10 coins; animated ones cost 20.
 export const COSMETICS: readonly CosmeticItem[] = [
-  { id: 'tophat', name: 'Top Hat', slot: 'hat', price: 5 },
-  { id: 'rainbow', name: 'Rainbow Skin', slot: 'skin', price: 10 },
+  // Hats
+  { id: 'tophat', name: 'Top Hat', slot: 'hat', price: 10 },
+  { id: 'crown', name: 'Crown', slot: 'hat', price: 10 },
+  { id: 'party', name: 'Party Hat', slot: 'hat', price: 10 },
+  { id: 'halo', name: 'Halo', slot: 'hat', price: 20 }, // animated
+  { id: 'cowboy', name: 'Cowboy Hat', slot: 'hat', price: 10 },
+  { id: 'wizard', name: 'Wizard Hat', slot: 'hat', price: 10 },
+  { id: 'horns', name: 'Devil Horns', slot: 'hat', price: 10 },
+  { id: 'gradcap', name: 'Grad Cap', slot: 'hat', price: 10 },
+  { id: 'flame', name: 'Flame', slot: 'hat', price: 20 }, // animated
+  { id: 'helmet', name: 'Helmet', slot: 'hat', price: 10 },
+  { id: 'antennae', name: 'Bug Antennae', slot: 'hat', price: 20 }, // animated
+  // Skins
+  { id: 'rainbow', name: 'Rainbow', slot: 'skin', price: 10 },
+  { id: 'gold', name: 'Gold', slot: 'skin', price: 20 }, // animated
+  { id: 'chrome', name: 'Chrome', slot: 'skin', price: 20 }, // animated
+  { id: 'galaxy', name: 'Galaxy', slot: 'skin', price: 20 }, // animated
+  { id: 'lava', name: 'Lava', slot: 'skin', price: 20 }, // animated
+  { id: 'ice', name: 'Ice', slot: 'skin', price: 10 },
+  { id: 'camo', name: 'Camo', slot: 'skin', price: 10 },
+  { id: 'neon', name: 'Neon', slot: 'skin', price: 20 }, // animated
+  { id: 'stripes', name: 'Stripes', slot: 'skin', price: 10 },
+  { id: 'glitch', name: 'Glitch', slot: 'skin', price: 20 }, // animated
 ] as const;
 export const CHAT_MAX_LEN = 200; // max characters per chat message
 export const CHAT_HISTORY = 50; // recent messages kept/sent to new joiners
