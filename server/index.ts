@@ -219,6 +219,22 @@ wss.on('connection', (ws: WebSocket) => {
           lobby.doomScore(ws, msg.round, msg.coop, typeof msg.name === 'string' ? msg.name : undefined);
         }
         break;
+      case 'shopBuy':
+        if (typeof msg.item === 'string') lobby.shopBuy(ws, msg.item);
+        break;
+      case 'shopEquip':
+        if ((msg.slot === 'hat' || msg.slot === 'skin') && (msg.item === null || typeof msg.item === 'string')) {
+          lobby.shopEquip(ws, msg.slot, msg.item);
+        }
+        break;
+      case 'bet':
+        if ((msg.side === 'left' || msg.side === 'right') && typeof msg.amount === 'number') {
+          lobby.bet(ws, msg.side, msg.amount);
+        }
+        break;
+      case 'doomReward':
+        lobby.doomReward(ws);
+        break;
     }
   });
 

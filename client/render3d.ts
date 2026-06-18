@@ -39,6 +39,7 @@ const PU_COLOR: Record<PowerupKind, string> = {
   blaster: '#ff4d4d',
   minion: '#ffd21e',
   earthquake: '#b07a3a',
+  coins: '#ffcf33',
 };
 
 // Text painted flat onto the court floor (so it sits in the scene with real perspective —
@@ -233,6 +234,43 @@ export function createRenderer(container: HTMLElement): Renderer3D {
   const paddlePool: THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>[] = [];
   const ballGeo = new THREE.SphereGeometry(1, 28, 20); // scaled to each ball's radius
   const ballPool: THREE.Mesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>[] = [];
+
+  // Cosmetic hats: a pooled little hat-group sat atop a paddle. Currently one generic
+  // top-hat shape is shown for any equipped hat; extend HAT3D for per-item 3D looks.
+  const hatPool: THREE.Group[] = [];
+  function getHat(i: number): THREE.Group {
+    let g = hatPool[i];
+    if (!g) {
+      g = new THREE.Group();
+      const brim = new THREE.Mesh(new THREE.CylinderGeometry(PADDLE.w * 0.9, PADDLE.w * 0.9, 1.5, 16),
+        new THREE.MeshStandardMaterial({ color: '#15171c' }));
+      const crown = new THREE.Mesh(new THREE.CylinderGeometry(PADDLE.w * 0.55, PADDLE.w * 0.55, 12, 16),
+        new THREE.MeshStandardMaterial({ color: '#15171c' }));
+      crown.position.y = 6.5;
+      g.add(brim, crown);
+      world.add(g);
+      hatPool[i] = g;
+    }
+    return g;
+  }
+  // Skin renderers (extend with more skins later). `t` is a time seed for animated skins.
+  const SKIN3D: Record<string, (mat: THREE.MeshStandardMaterial, t: number) => void> = {
+    rainbow: (mat, t) => { const c = new THREE.Color().setHSL((t * 0.0004) % 1, 0.9, 0.55); mat.color.copy(c); mat.emissive.copy(c); },
+    gold: (mat) => { mat.color.set('#ffd23f'); mat.emissive.set('#5a4500'); },
+    chrome: (mat) => { mat.color.set('#e5e7eb'); mat.emissive.set('#222'); },
+    galaxy: (mat, t) => { const c = new THREE.Color().setHSL(0.72, 0.7, 0.35 + 0.1 * Math.sin(t / 400)); mat.color.copy(c); mat.emissive.set('#1b1448'); },
+    lava: (mat, t) => { const g = 0.4 + 0.3 * Math.sin(t / 250); mat.color.setRGB(1, g, 0.1); mat.emissive.setRGB(0.6, 0.1, 0); },
+    ice: (mat) => { mat.color.set('#dff3ff'); mat.emissive.set('#3a6b8a'); },
+    camo: (mat) => { mat.color.set('#6b7d3a'); mat.emissive.set('#1a200c'); },
+    neon: (mat, t) => { const p = 0.4 + 0.4 * Math.sin(t / 200); mat.color.set('#0a0a12'); mat.emissive.setRGB(0.2 * p, p, 0.08 * p); },
+    stripes: (mat) => { mat.color.set('#f4c20d'); mat.emissive.set('#222'); },
+    glitch: (mat, t) => { const c = new THREE.Color(['#ff003c', '#00fff0', '#b16bff'][Math.floor(t / 80) % 3]); mat.color.copy(c); mat.emissive.copy(c).multiplyScalar(0.4); },
+  };
+  // Per-hat tint for the generic 3D hat shape (2D has fully distinct art).
+  const HAT3D_COLOR: Record<string, string> = {
+    tophat: '#15171c', crown: '#ffd23f', party: '#ff7eb3', halo: '#ffe066', cowboy: '#8a5a2b',
+    wizard: '#3b2e7e', horns: '#c0392b', gradcap: '#15171c', flame: '#ff5a1c', helmet: '#5a7d3a', antennae: '#2a2a33',
+  };
 
   function getPaddle(i: number) {
     let m = paddlePool[i];
@@ -434,6 +472,7 @@ export function createRenderer(container: HTMLElement): Renderer3D {
     // Paddles — one box per seated player, sized to that side's current height.
     let pi = 0;
     let mi = 0; // minion-sprite index
+    let hi = 0; // hat-mesh index
     const minionAspect = (minionTex.image && (minionTex.image as HTMLImageElement).naturalWidth)
       ? (minionTex.image as HTMLImageElement).naturalWidth / (minionTex.image as HTMLImageElement).naturalHeight
       : 1.31;
@@ -453,16 +492,32 @@ export function createRenderer(container: HTMLElement): Renderer3D {
         m.visible = true;
         m.position.set(wx(pl.x), PADDLE_H / 2, wz(pl.y));
         m.scale.z = p.h;
-        // Blaster-locked paddles go gray and flicker; otherwise the player's color.
+        // Blaster-locked paddles go gray and flicker; otherwise the cosmetic skin or color.
         const locked = p.disabled;
-        m.material.color.set(locked ? '#555a66' : pl.color);
-        m.material.emissive.set(locked ? '#ff3030' : pl.color);
+        const skinFn = !locked && pl.skin ? SKIN3D[pl.skin] : undefined;
+        if (skinFn) {
+          skinFn(m.material, Date.now());
+        } else {
+          m.material.color.set(locked ? '#555a66' : pl.color);
+          m.material.emissive.set(locked ? '#ff3030' : pl.color);
+        }
         m.material.emissiveIntensity = locked ? 0.25 + 0.2 * Math.abs(Math.sin(Date.now() / 90)) : p.frozen ? 0.05 : 0.22;
         m.material.opacity = 1;
+        // Cosmetic hat sits on top of the paddle box (generic shape, tinted per hat).
+        if (pl.hat) {
+          const hat = getHat(hi++);
+          hat.visible = true;
+          hat.position.set(wx(pl.x), PADDLE_H + 1, wz(pl.y));
+          const col = HAT3D_COLOR[pl.hat] ?? '#15171c';
+          for (const child of hat.children) {
+            ((child as THREE.Mesh).material as THREE.MeshStandardMaterial).color.set(col);
+          }
+        }
       }
     }
     for (let i = pi; i < paddlePool.length; i++) paddlePool[i].visible = false;
     for (let i = mi; i < minionSprites.length; i++) minionSprites[i].visible = false;
+    for (let i = hi; i < hatPool.length; i++) hatPool[i].visible = false;
 
     // Balls — main ball plus any "multi" extras; radius follows tiny/bigball power-ups.
     const ballR = s.tinyBall ? 3 : s.bigBall ? BIG_BALL_R : BALL.r;

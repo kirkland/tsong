@@ -85,8 +85,16 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
         if (minionOn) {
           drawMinionPaddle(ctx, pl.x, pl.y, p.h);
         } else {
-          ctx.fillStyle = p.disabled ? '#555a66' : pl.color; // blaster-locked paddles go gray
-          drawPaddle(ctx, pl.x, pl.y, p.h);
+          // Cosmetic skin (a registered renderer) or solid color; locked paddles go gray.
+          const skinFn = !p.disabled && pl.skin ? SKIN_RENDERERS[pl.skin] : undefined;
+          if (skinFn) {
+            skinFn(ctx, pl.x, pl.y, p.h);
+          } else {
+            ctx.fillStyle = p.disabled ? '#555a66' : pl.color;
+            drawPaddle(ctx, pl.x, pl.y, p.h);
+          }
+          const hatFn = pl.hat ? HAT_RENDERERS[pl.hat] : undefined;
+          if (hatFn) hatFn(ctx, pl.x, pl.y, p.h);
         }
       }
     } else if (minionOn) {
@@ -467,6 +475,311 @@ function drawPaddle(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: nu
   ctx.fillRect(cx - PADDLE.w / 2, cy - h / 2, PADDLE.w, h);
 }
 
+// Cosmetic "rainbow" skin: fill the paddle with a vertical rainbow gradient. Visual only.
+function fillRainbow(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  const g = ctx.createLinearGradient(0, top, 0, top + h);
+  const stops = ['#ff3b30', '#ff9500', '#ffd60a', '#34c759', '#0a84ff', '#5e5ce6', '#bf5af2'];
+  stops.forEach((c, i) => g.addColorStop(i / (stops.length - 1), c));
+  ctx.fillStyle = g;
+  ctx.fillRect(cx - PADDLE.w / 2, top, PADDLE.w, h);
+}
+
+// Cosmetic registries — add new skins/hats here (id must match shared/types COSMETICS).
+// Each draws purely visual decoration on the paddle; none affect the ball's collision.
+type CosmeticDraw = (ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) => void;
+const SKIN_RENDERERS: Record<string, CosmeticDraw> = {
+  rainbow: fillRainbow,
+  gold: fillGold,
+  chrome: fillChrome,
+  galaxy: fillGalaxy,
+  lava: fillLava,
+  ice: fillIce,
+  camo: fillCamo,
+  neon: fillNeon,
+  stripes: fillStripes,
+  glitch: fillGlitch,
+};
+const HAT_RENDERERS: Record<string, CosmeticDraw> = {
+  tophat: drawTopHat,
+  crown: drawCrown,
+  party: drawParty,
+  halo: drawHalo,
+  cowboy: drawCowboy,
+  wizard: drawWizard,
+  horns: drawHorns,
+  gradcap: drawGradCap,
+  flame: drawFlame,
+  helmet: drawHelmet,
+  antennae: drawAntennae,
+};
+
+// Cosmetic "top hat": a little hat perched at the top end of the paddle. Visual only.
+function drawTopHat(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  const brimW = PADDLE.w + 12;
+  const crownW = PADDLE.w + 2;
+  const crownH = 12;
+  const brimH = 3;
+  ctx.save();
+  ctx.fillStyle = '#15171c';
+  // brim sits just above the paddle's top edge
+  ctx.fillRect(cx - brimW / 2, top - brimH, brimW, brimH);
+  // crown
+  ctx.fillRect(cx - crownW / 2, top - brimH - crownH, crownW, crownH);
+  // red band
+  ctx.fillStyle = '#c0392b';
+  ctx.fillRect(cx - crownW / 2, top - brimH - 4, crownW, 3);
+  ctx.restore();
+}
+
+// --- additional cosmetic hats (all original procedural art; visual only) ---
+function drawCrown(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2, w = PADDLE.w + 8, x = cx - w / 2, base = top - 2, ch = 11;
+  ctx.save();
+  ctx.fillStyle = '#ffd23f';
+  ctx.beginPath();
+  ctx.moveTo(x, base);
+  ctx.lineTo(x, base - ch * 0.6);
+  ctx.lineTo(x + w * 0.25, base - 2);
+  ctx.lineTo(x + w * 0.5, base - ch);
+  ctx.lineTo(x + w * 0.75, base - 2);
+  ctx.lineTo(x + w, base - ch * 0.6);
+  ctx.lineTo(x + w, base);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#ff4d6d';
+  ctx.fillRect(x + w * 0.46, base - ch - 2, 3, 3);
+  ctx.restore();
+}
+function drawParty(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  ctx.save();
+  ctx.fillStyle = '#ff7eb3';
+  ctx.beginPath();
+  ctx.moveTo(cx, top - 18);
+  ctx.lineTo(cx - 8, top);
+  ctx.lineTo(cx + 8, top);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#7dd3fc';
+  for (let i = 0; i < 3; i++) ctx.fillRect(cx - 6 + i * 5, top - 12 + i * 3, 2.5, 2.5);
+  ctx.fillStyle = '#ffe066';
+  ctx.beginPath(); ctx.arc(cx, top - 18, 2.5, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+function drawHalo(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const bob = Math.sin(Date.now() / 300) * 2;
+  const top = cy - h / 2 - 8 + bob;
+  ctx.save();
+  ctx.strokeStyle = '#ffe066';
+  ctx.shadowColor = '#ffe066';
+  ctx.shadowBlur = 8;
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.ellipse(cx, top, PADDLE.w * 0.7, 3.2, 0, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+function drawCowboy(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2, brimW = PADDLE.w + 16;
+  ctx.save();
+  ctx.fillStyle = '#8a5a2b';
+  ctx.beginPath();
+  ctx.ellipse(cx, top - 2, brimW / 2, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#704821';
+  ctx.fillRect(cx - (PADDLE.w) / 2, top - 11, PADDLE.w, 9);
+  ctx.restore();
+}
+function drawWizard(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  ctx.save();
+  ctx.fillStyle = '#3b2e7e';
+  ctx.beginPath();
+  ctx.moveTo(cx, top - 22);
+  ctx.lineTo(cx - 9, top);
+  ctx.lineTo(cx + 9, top);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#ffe066';
+  ctx.fillRect(cx - 1, top - 12, 2, 2);
+  ctx.fillRect(cx + 3, top - 7, 2, 2);
+  ctx.fillRect(cx - 4, top - 5, 2, 2);
+  ctx.restore();
+}
+function drawHorns(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  ctx.save();
+  ctx.fillStyle = '#c0392b';
+  for (const dir of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(cx + dir * 4, top);
+    ctx.quadraticCurveTo(cx + dir * 10, top - 4, cx + dir * 9, top - 11);
+    ctx.quadraticCurveTo(cx + dir * 5, top - 5, cx + dir * 1, top);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+function drawGradCap(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  ctx.save();
+  ctx.fillStyle = '#15171c';
+  ctx.fillRect(cx - PADDLE.w / 2, top - 7, PADDLE.w, 5); // band
+  ctx.beginPath();
+  ctx.moveTo(cx, top - 14);
+  ctx.lineTo(cx - 12, top - 8);
+  ctx.lineTo(cx, top - 4);
+  ctx.lineTo(cx + 12, top - 8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.strokeStyle = '#ffd23f';
+  ctx.beginPath(); ctx.moveTo(cx + 10, top - 8); ctx.lineTo(cx + 10, top + 1); ctx.stroke();
+  ctx.restore();
+}
+function drawFlame(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  const t = Date.now() / 90;
+  ctx.save();
+  for (let i = 0; i < 3; i++) {
+    const sway = Math.sin(t + i) * 2;
+    const fh = 14 - i * 4;
+    ctx.fillStyle = i === 0 ? '#ff4d1c' : i === 1 ? '#ff922b' : '#ffe066';
+    ctx.beginPath();
+    ctx.moveTo(cx - 5 + i, top);
+    ctx.quadraticCurveTo(cx + sway, top - fh, cx + 5 - i, top);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+function drawHelmet(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  ctx.save();
+  ctx.fillStyle = '#5a7d3a';
+  ctx.beginPath();
+  ctx.arc(cx, top, PADDLE.w * 0.7, Math.PI, 0);
+  ctx.fill();
+  ctx.fillRect(cx - PADDLE.w * 0.7, top - 1, PADDLE.w * 1.4, 2);
+  ctx.restore();
+}
+function drawAntennae(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  const wob = Math.sin(Date.now() / 200) * 2;
+  ctx.save();
+  ctx.strokeStyle = '#2a2a33';
+  ctx.lineWidth = 1.5;
+  for (const dir of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(cx + dir * 3, top);
+    ctx.quadraticCurveTo(cx + dir * 6, top - 8, cx + dir * 8 + wob * dir, top - 14);
+    ctx.stroke();
+    ctx.fillStyle = '#ff5c5c';
+    ctx.beginPath(); ctx.arc(cx + dir * 8 + wob * dir, top - 15, 2.4, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+// --- additional cosmetic skins (fill the paddle rect; some animated; visual only) ---
+function paddleRect(cx: number, cy: number, h: number) {
+  return { x: cx - PADDLE.w / 2, y: cy - h / 2, w: PADDLE.w, h };
+}
+function fillGold(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const r = paddleRect(cx, cy, h);
+  const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  g.addColorStop(0, '#9a7d1a'); g.addColorStop(0.5, '#ffe066'); g.addColorStop(1, '#9a7d1a');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // moving glint
+  const gy = r.y + ((Date.now() / 12) % (r.h + 20)) - 10;
+  ctx.save(); ctx.globalAlpha = 0.7; ctx.fillStyle = '#fffbe6';
+  ctx.fillRect(r.x, gy, r.w, 4); ctx.restore();
+}
+function fillChrome(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const r = paddleRect(cx, cy, h);
+  const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  g.addColorStop(0, '#6b7280'); g.addColorStop(0.5, '#e5e7eb'); g.addColorStop(1, '#6b7280');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  const gy = r.y + ((Date.now() / 8) % (r.h + 30)) - 15;
+  ctx.save(); ctx.globalAlpha = 0.6; ctx.fillStyle = '#fff';
+  ctx.fillRect(r.x, gy, r.w, 6); ctx.restore();
+}
+function fillGalaxy(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const r = paddleRect(cx, cy, h);
+  const g = ctx.createLinearGradient(0, r.y, 0, r.y + r.h);
+  g.addColorStop(0, '#1b1448'); g.addColorStop(0.5, '#3a1a6b'); g.addColorStop(1, '#0b1030');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.fillStyle = '#fff';
+  for (let i = 0; i < 7; i++) {
+    const sx = r.x + ((i * 977) % r.w);
+    const sy = r.y + ((i * 613) % r.h);
+    const tw = 0.4 + 0.6 * Math.abs(Math.sin(Date.now() / 400 + i));
+    ctx.globalAlpha = tw; ctx.fillRect(sx, sy, 1.5, 1.5);
+  }
+  ctx.globalAlpha = 1;
+}
+function fillLava(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 300;
+  ctx.fillStyle = '#3a0d05'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  for (let i = 0; i < 5; i++) {
+    const yy = r.y + (i + 0.5) * (r.h / 5);
+    const glow = 0.5 + 0.5 * Math.sin(t + i);
+    ctx.fillStyle = `rgb(255,${(80 + glow * 100) | 0},20)`;
+    ctx.fillRect(r.x, yy - 2, r.w, 3);
+  }
+}
+function fillIce(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const r = paddleRect(cx, cy, h);
+  const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  g.addColorStop(0, '#7fb8d8'); g.addColorStop(0.5, '#dff3ff'); g.addColorStop(1, '#7fb8d8');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(r.x + r.w * 0.5, r.y); ctx.lineTo(r.x + r.w * 0.3, r.y + r.h * 0.5); ctx.lineTo(r.x + r.w * 0.6, r.y + r.h);
+  ctx.stroke();
+}
+function fillCamo(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const r = paddleRect(cx, cy, h);
+  ctx.fillStyle = '#4b5320'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  const blobs = ['#6b7d3a', '#2f3417', '#8a9a5b'];
+  for (let i = 0; i < 6; i++) {
+    ctx.fillStyle = blobs[i % blobs.length];
+    const bx = r.x + ((i * 53) % r.w);
+    const by = r.y + ((i * 97) % r.h);
+    ctx.beginPath(); ctx.ellipse(bx, by, 4, 5, 0, 0, Math.PI * 2); ctx.fill();
+  }
+}
+function fillNeon(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const r = paddleRect(cx, cy, h);
+  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 200);
+  ctx.fillStyle = '#0a0a12'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.save();
+  ctx.strokeStyle = '#39ff14'; ctx.shadowColor = '#39ff14'; ctx.shadowBlur = 6 + pulse * 8;
+  ctx.lineWidth = 2; ctx.globalAlpha = 0.6 + pulse * 0.4;
+  ctx.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
+  ctx.restore();
+}
+function fillStripes(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const r = paddleRect(cx, cy, h);
+  ctx.fillStyle = '#f4c20d'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.fillStyle = '#1a1a1a';
+  for (let yy = r.y; yy < r.y + r.h; yy += 10) ctx.fillRect(r.x, yy, r.w, 5);
+}
+function fillGlitch(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const r = paddleRect(cx, cy, h);
+  ctx.fillStyle = '#101018'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  const t = Math.floor(Date.now() / 80);
+  for (let i = 0; i < 5; i++) {
+    const yy = r.y + (((i * 71 + t * 13) % r.h));
+    const sh = ((t + i) % 3) - 1; // -1,0,1 horizontal shift
+    ctx.fillStyle = ['#ff003c', '#00fff0', '#b16bff'][(t + i) % 3];
+    ctx.globalAlpha = 0.8;
+    ctx.fillRect(r.x + sh * 2, yy, r.w, 2);
+  }
+  ctx.globalAlpha = 1;
+}
+
 // "minion" power-up: draw the minion image centered on the paddle, sized to the paddle's
 // current height (so it stays roughly paddle-sized) with the image's own aspect ratio.
 function drawMinionPaddle(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
@@ -643,6 +956,7 @@ const TARGET_STYLE: Record<PowerupKind, { stroke: string; fill: string }> = {
   blaster: { stroke: '#ff4d4d', fill: 'rgba(255,  77,  77, 0.14)' }, // red
   minion:  { stroke: '#ffd21e', fill: 'rgba(255, 210,  30, 0.16)' }, // minion yellow
   earthquake: { stroke: '#b07a3a', fill: 'rgba(176, 122,  58, 0.16)' }, // dusty brown
+  coins:   { stroke: '#ffcf33', fill: 'rgba(255, 207,  51, 0.18)' }, // gold
 };
 
 function drawTarget(ctx: CanvasRenderingContext2D, x: number, y: number, kind: PowerupKind) {
@@ -929,6 +1243,16 @@ const GLYPHS: Record<PowerupKind, (ctx: CanvasRenderingContext2D, x: number, y: 
     ctx.lineTo(x + 7, y);
     ctx.lineTo(x + 12, y);
     ctx.stroke();
+  },
+  // coins: a coin with a star → "grab 5 coins"
+  coins(ctx, x, y) {
+    ctx.beginPath();
+    ctx.arc(x, y, 10, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(x, y, 5.5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillRect(x - 1, y - 5.5, 2, 11); // simple coin mark
   },
   // rotate: a circular arrow → "the whole court spins 90°"
   rotate(ctx, x, y) {

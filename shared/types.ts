@@ -117,11 +117,47 @@ export const TARGET = {
 //   rotate — the entire court rotates 90° for the rest of the match
 export const POWERUPS = [
   'grow', 'shrink', 'smash', 'slow', 'multi',
-  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate', 'fritz', 'disco', 'blaster', 'minion', 'earthquake',
+  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate', 'fritz', 'disco', 'blaster', 'minion', 'earthquake', 'coins',
 ] as const;
 export type PowerupKind = (typeof POWERUPS)[number];
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
 export const LEADERBOARD_SIZE = 10;
+
+// Cosmetic shop. Purely visual — equipped items are drawn on the paddle but never affect
+// the ball's collision (the hitbox is always the plain paddle rectangle). You earn 1 coin
+// per match win and can spend coins here. `slot` is mutually exclusive per player.
+export interface CosmeticItem {
+  id: string;
+  name: string;
+  slot: 'hat' | 'skin';
+  price: number;
+}
+// Static cosmetics cost 10 coins; animated ones cost 20.
+export const COSMETICS: readonly CosmeticItem[] = [
+  // Hats
+  { id: 'tophat', name: 'Top Hat', slot: 'hat', price: 10 },
+  { id: 'crown', name: 'Crown', slot: 'hat', price: 10 },
+  { id: 'party', name: 'Party Hat', slot: 'hat', price: 10 },
+  { id: 'halo', name: 'Halo', slot: 'hat', price: 20 }, // animated
+  { id: 'cowboy', name: 'Cowboy Hat', slot: 'hat', price: 10 },
+  { id: 'wizard', name: 'Wizard Hat', slot: 'hat', price: 10 },
+  { id: 'horns', name: 'Devil Horns', slot: 'hat', price: 10 },
+  { id: 'gradcap', name: 'Grad Cap', slot: 'hat', price: 10 },
+  { id: 'flame', name: 'Flame', slot: 'hat', price: 20 }, // animated
+  { id: 'helmet', name: 'Helmet', slot: 'hat', price: 10 },
+  { id: 'antennae', name: 'Bug Antennae', slot: 'hat', price: 20 }, // animated
+  // Skins
+  { id: 'rainbow', name: 'Rainbow', slot: 'skin', price: 10 },
+  { id: 'gold', name: 'Gold', slot: 'skin', price: 20 }, // animated
+  { id: 'chrome', name: 'Chrome', slot: 'skin', price: 20 }, // animated
+  { id: 'galaxy', name: 'Galaxy', slot: 'skin', price: 20 }, // animated
+  { id: 'lava', name: 'Lava', slot: 'skin', price: 20 }, // animated
+  { id: 'ice', name: 'Ice', slot: 'skin', price: 10 },
+  { id: 'camo', name: 'Camo', slot: 'skin', price: 10 },
+  { id: 'neon', name: 'Neon', slot: 'skin', price: 20 }, // animated
+  { id: 'stripes', name: 'Stripes', slot: 'skin', price: 10 },
+  { id: 'glitch', name: 'Glitch', slot: 'skin', price: 20 }, // animated
+] as const;
 export const CHAT_MAX_LEN = 200; // max characters per chat message
 export const CHAT_HISTORY = 50; // recent messages kept/sent to new joiners
 export const TICK_MS = 1000 / 60;
@@ -190,7 +226,11 @@ export type ClientMsg =
   | { type: 'doomJoin' } // take a slot in the 2-player co-op DOOM lobby
   | { type: 'doomLeave' } // leave the co-op DOOM lobby / game
   | { type: 'doomRelay'; data: unknown } // forward an opaque DOOM payload to the co-op partner
-  | { type: 'doomScore'; round: number; coop: boolean; name?: string }; // record a DOOM run's reached round (name = combined team label for co-op)
+  | { type: 'doomScore'; round: number; coop: boolean; name?: string } // record a DOOM run's reached round (name = combined team label for co-op)
+  | { type: 'doomReward' } // grant the player 1 coin (killed the DOOM minion boss)
+  | { type: 'shopBuy'; item: string } // buy a cosmetic from the shop
+  | { type: 'shopEquip'; slot: 'hat' | 'skin'; item: string | null } // equip (item) or unequip (null) a cosmetic
+  | { type: 'bet'; side: Side; amount: number }; // spectator wagers coins on a side of the live duel
 
 // --- Server -> Client ---
 
@@ -203,6 +243,8 @@ export interface TeamPlayer {
   y: number; // this player's paddle center Y in court units
   name: string;
   color: string;
+  hat?: string | null; // equipped cosmetic hat (purely visual — no collision)
+  skin?: string | null; // equipped cosmetic skin (purely visual — no collision)
 }
 
 export interface PaddleState {
@@ -442,7 +484,18 @@ export type ServerMsg =
   | DoomLobbyMsg
   | DoomRelayMsg
   | DoomEndMsg
-  | DoomLeaderboardMsg;
+  | DoomLeaderboardMsg
+  | WalletMsg;
+
+// A player's private wallet + cosmetics + active bet, sent only to that client.
+export interface WalletMsg {
+  type: 'wallet';
+  coins: number;
+  owned: string[]; // item ids owned
+  hat: string | null; // equipped hat
+  skin: string | null; // equipped skin
+  bet: { side: Side; amount: number } | null; // current wager on the live duel, if any
+}
 
 // Co-op DOOM lobby status (2 slots). `slot` is which slot this client holds (0 = host,
 // 1 = guest, null = not in it). When status flips to 'playing', slot 0 is the authority.

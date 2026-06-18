@@ -632,6 +632,49 @@
         cursor: pointer;
       }
       #doomBtn:hover { background: #2a1218; color: #ff8a8a; }
+      /* Coin balance + shop dropdown */
+      #shop { position: relative; }
+      #shopBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #5a4a1a;
+        background: #1a1608; color: #ffd166; cursor: pointer;
+      }
+      #shopBtn:hover { background: #2a2410; }
+      #shopPanel {
+        position: absolute; top: calc(100% + 6px); left: 0; width: 250px;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #shopPanel[hidden] { display: none; }
+      #shopPanel h3 {
+        font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+        color: #6b7796; margin: 8px 0 6px;
+      }
+      #shopTabs { display: flex; gap: 6px; margin-bottom: 6px; }
+      .shop-tab {
+        flex: 1; font: inherit; font-size: 11px; font-weight: 700; padding: 5px 0; border-radius: 5px;
+        border: 1px solid #2a3550; background: #11182c; color: #8693b3; cursor: pointer;
+      }
+      .shop-tab.active { background: #2d4070; border-color: #3a6df0; color: #fff; }
+      #shopItems { max-height: 46vh; overflow-y: auto; }
+      .shop-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+      .shop-row .shop-name { flex: 1; font-size: 12px; color: #cdd7f5; }
+      .shop-row button {
+        font: inherit; font-size: 11px; font-weight: 700; padding: 4px 9px; border-radius: 5px;
+        border: 1px solid #2a3550; background: #1a2035; color: #9fb0d8; cursor: pointer;
+      }
+      .shop-row button:hover:not(:disabled) { background: #2d4070; color: #fff; }
+      .shop-row button:disabled { opacity: 0.45; cursor: default; }
+      .shop-row button.equipped { background: #2d4070; border-color: #3a6df0; color: #fff; }
+      #betSection[hidden] { display: none; }
+      .bet-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+      .bet-row button {
+        font: inherit; font-size: 12px; padding: 4px 9px; border-radius: 5px;
+        border: 1px solid #2a3550; background: #1a2035; color: #cdd7f5; cursor: pointer;
+      }
+      .bet-row button:hover { background: #2d4070; }
+      #betAmount { min-width: 20px; text-align: center; font-weight: 700; color: #ffd166; }
+      #betStatus { font-size: 11px; color: #6ee7a8; margin-top: 6px; min-height: 14px; }
       #muteBtn[aria-pressed='true'] {
         color: #6b7796;
         border-color: #1c2640;
@@ -1816,6 +1859,28 @@
     <div id="topLeft">
       <button id="muteBtn" type="button" aria-pressed="false" title="Toggle sound on/off (M)">🔊</button>
       <button id="doomBtn" type="button" title="Rip and tear (a hidden DOOM minigame)">😈 DOOM</button>
+      <div id="shop">
+        <button id="shopBtn" type="button" aria-expanded="false" title="Coins, cosmetics & betting">🪙 <span id="coinCount">0</span></button>
+        <div id="shopPanel" hidden>
+          <h3>Shop · <span id="shopCoins">0</span> 🪙</h3>
+          <div id="shopTabs">
+            <button id="tabHats" class="shop-tab active" type="button">Hats</button>
+            <button id="tabSkins" class="shop-tab" type="button">Skins</button>
+          </div>
+          <div id="shopItems"></div>
+          <div id="betSection" hidden>
+            <h3>Bet on the match</h3>
+            <div class="bet-row">
+              <button id="betMinus" type="button">−</button>
+              <span id="betAmount">1</span>
+              <button id="betPlus" type="button">+</button>
+              <button id="betLeft" type="button">◀ Left</button>
+              <button id="betRight" type="button">Right ▶</button>
+            </div>
+            <div id="betStatus"></div>
+          </div>
+        </div>
+      </div>
       <div id="viewMode">
         <button id="viewModeBtn" type="button" aria-expanded="false">VIEW <span class="caret">▾</span></button>
         <div id="viewModePanel" hidden>
@@ -2103,6 +2168,13 @@
               <div class="pu-info">
                 <span class="pu-name" style="color:#b07a3a">earthquake</span>
                 <span class="pu-desc">The court shakes and the ball wobbles for the point</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="coins" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#ffcf33">coins</span>
+                <span class="pu-desc">Grab it to earn 5 coins</span>
               </div>
             </div>
           </div>

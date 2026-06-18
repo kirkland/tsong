@@ -11,6 +11,7 @@ import {
   ChatLine,
   BALL_REACTION,
   BotLevel,
+  COSMETICS,
   COURT,
   ARENA,
   FATALITY_MOVES,
@@ -27,7 +28,8 @@ import {
   StateMsg,
   TEAM_MAX,
 } from '../shared/types';
-import { getLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow } from './db';
+import { getLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
+  getWallet, buyItem, equipItem, addCoins } from './db';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
@@ -49,6 +51,9 @@ interface Conn {
   captured: boolean; // mouse captured to the board (pointer lock); gates play start
   captureDeadline: number; // seconds left to capture before being benched (0 = not counting)
   lastChatAt: number; // ms timestamp of last chat message (light rate limiting)
+  // Cached wallet/cosmetics (loaded from the DB on join). Purely cosmetic — never affects play.
+  hat: string | null;
+  skin: string | null;
 }
 
 const SIDES: Side[] = ['left', 'right'];
@@ -155,6 +160,9 @@ export class Lobby {
   // duel in turn, and king-of-hill / queue / bots are all suspended until it ends.
   private tournament: Tournament | null = null;
   private tournamentCreatorPid = ''; // only the creator may cancel the tournament
+  // Spectator wagers on the current duel: pid -> { side, amount }. Coins are escrowed when
+  // the bet is placed and paid out 2× on a correct call when the match ends.
+  private bets = new Map<string, { side: Side; amount: number; ws: WebSocket; name: string }>();
   private liveMatchId: number | null = null; // bracket match currently on the court
   private tourneyInterMs = 0; // ms left on the "next match" interstitial between games
 
@@ -185,6 +193,8 @@ export class Lobby {
       captured: false,
       captureDeadline: 0,
       lastChatAt: 0,
+      hat: null,
+      skin: null,
     };
     this.conns.set(ws, conn);
     this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
@@ -424,6 +434,15 @@ export class Lobby {
     this.broadcastDoomLobby();
   }
 
+  /** Grant 1 coin for killing the DOOM minion boss. */
+  doomReward(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    addCoins(conn.pid, conn.nickname, 1)
+      .then(() => this.sendWallet(ws))
+      .catch((e) => console.error('doom reward failed:', e));
+  }
+
   /** Forward an opaque DOOM payload to the co-op partner. */
   doomRelay(ws: WebSocket, data: unknown) {
     if (!this.doomSlots.includes(ws)) return;
@@ -625,9 +644,10 @@ export class Lobby {
       const loseRefs = losers.filter((c) => c.pid).map((c) => ({ pid: c.pid, name: c.nickname }));
       if (winRefs.length && loseRefs.length) {
         recordResult(winRefs, loseRefs)
-          .then(() => this.refreshLeaderboard())
+          .then(() => { this.refreshLeaderboard(); this.refreshWalletsFor(winners); })
           .catch((e) => console.error('leaderboard update failed:', e));
       }
+      this.settleBets(winnerSide); // pay out spectator wagers on this match
       // Hold the champion screen longer than a between-match break, then tear down.
       this.tourneyInterMs = t.status === 'done' ? TOURNEY_DONE_MS : TOURNEY_INTER_MS;
       return;
@@ -678,6 +698,8 @@ export class Lobby {
       captured: true, // the bot is always "ready"; only the human must capture their mouse
       captureDeadline: 0,
       lastChatAt: 0,
+      hat: null,
+      skin: null,
     };
     this.conns.set(ws, conn);
     this.teams[side].push(ws);
@@ -754,6 +776,138 @@ export class Lobby {
         if (changed) this.refreshLeaderboard();
       })
       .catch((e) => console.error('name update failed:', e));
+    // Load this player's wallet/cosmetics and push it to them.
+    this.loadWallet(ws);
+  }
+
+  /** Load a connection's wallet from the DB into memory and send it to that client. */
+  private loadWallet(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    getWallet(conn.pid)
+      .then((w) => {
+        const c = this.conns.get(ws);
+        if (!c) return;
+        c.hat = w.hat;
+        c.skin = w.skin;
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, bet: this.betView(ws) });
+      })
+      .catch((e) => console.error('wallet load failed:', e));
+  }
+
+  /** Push the freshest wallet (re-read from DB) to a client; also refreshes cached cosmetics. */
+  private sendWallet(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    getWallet(conn.pid)
+      .then((w) => {
+        const c = this.conns.get(ws);
+        if (!c) return;
+        c.hat = w.hat; c.skin = w.skin;
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, bet: this.betView(ws) });
+      })
+      .catch((e) => console.error('wallet send failed:', e));
+  }
+
+  /** Re-send wallets to a set of connections (e.g. winners who just earned a coin). */
+  private refreshWalletsFor(conns: Conn[]) {
+    for (const c of conns) {
+      const ws = this.wsOfConn(c);
+      if (ws) this.sendWallet(ws);
+    }
+  }
+  private wsOfConn(conn: Conn): WebSocket | undefined {
+    for (const [ws, c] of this.conns) if (c === conn) return ws;
+    return undefined;
+  }
+
+  // --- Shop (cosmetics) ---
+
+  /** Buy a cosmetic from the shop, spending coins. Cosmetics are visual-only. */
+  shopBuy(ws: WebSocket, item: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    const cosmetic = COSMETICS.find((c) => c.id === item);
+    if (!cosmetic) return;
+    buyItem(conn.pid, conn.nickname, cosmetic.id, cosmetic.price)
+      .then((w) => { if (w) this.sendWallet(ws); })
+      .catch((e) => console.error('shop buy failed:', e));
+  }
+
+  /** Equip (item) or unequip (null) a cosmetic in its slot. */
+  shopEquip(ws: WebSocket, slot: 'hat' | 'skin', item: string | null) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    if (item !== null) {
+      const cosmetic = COSMETICS.find((c) => c.id === item);
+      if (!cosmetic || cosmetic.slot !== slot) return; // item must exist and match the slot
+    }
+    equipItem(conn.pid, slot, item)
+      .then((w) => {
+        if (!w) return;
+        const c = this.conns.get(ws);
+        if (c) { c.hat = w.hat; c.skin = w.skin; }
+        this.sendWallet(ws);
+      })
+      .catch((e) => console.error('shop equip failed:', e));
+  }
+
+  // --- Gambling ---
+
+  private betView(ws: WebSocket): { side: Side; amount: number } | null {
+    const conn = this.conns.get(ws);
+    if (!conn) return null;
+    const b = this.bets.get(conn.pid);
+    return b ? { side: b.side, amount: b.amount } : null;
+  }
+
+  /** Place a wager on a side of the live duel (spectators only). Coins are escrowed now. */
+  bet(ws: WebSocket, side: Side, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    if (this.mode !== 'duel' || this.game.status !== 'playing') return; // only on a live duel
+    if (this.sideOf(ws)) return; // players can't bet on their own match
+    if (this.bets.has(conn.pid)) return; // one wager per match
+    const amt = Math.floor(amount);
+    if (!Number.isFinite(amt) || amt < 1) return;
+    // Escrow the stake; the DB enforces you can't go negative (returns null if too poor).
+    addCoins(conn.pid, conn.nickname, -amt)
+      .then((w) => {
+        if (!w) return; // insufficient coins
+        this.bets.set(conn.pid, { side, amount: amt, ws, name: conn.nickname });
+        this.sendWallet(ws);
+        this.announce(`🎲 ${conn.nickname} bet ${amt} on ${side}`);
+      })
+      .catch((e) => console.error('bet failed:', e));
+  }
+
+  /** Settle all open wagers against the winning side: correct calls pay 2×. */
+  private settleBets(winnerSide: Side | null) {
+    if (this.bets.size === 0) return;
+    const pending = [...this.bets.values()];
+    this.bets.clear();
+    for (const b of pending) {
+      if (winnerSide && b.side === winnerSide) {
+        addCoins(this.conns.get(b.ws)?.pid ?? b.name, b.name, b.amount * 2)
+          .then(() => { if (this.conns.has(b.ws)) this.sendWallet(b.ws); })
+          .catch((e) => console.error('payout failed:', e));
+      } else {
+        // Lost (or no winner) — stake already escrowed; just refresh their wallet view.
+        if (this.conns.has(b.ws)) this.sendWallet(b.ws);
+      }
+    }
+  }
+
+  /** Refund all open wagers (match abandoned with no result). */
+  private refundBets() {
+    if (this.bets.size === 0) return;
+    const pending = [...this.bets.values()];
+    this.bets.clear();
+    for (const b of pending) {
+      addCoins(this.conns.get(b.ws)?.pid ?? b.name, b.name, b.amount)
+        .then(() => { if (this.conns.has(b.ws)) this.sendWallet(b.ws); })
+        .catch((e) => console.error('refund failed:', e));
+    }
   }
 
   claim(ws: WebSocket, side?: Side) {
@@ -1081,6 +1235,19 @@ export class Lobby {
   /** Called every tick after the active sim ticks. Routes to the live mode's bookkeeping. */
   sync() {
     this.expireResume();
+    // "coins" power-up: pay the collecting side 5 coins, once.
+    if (this.game.coinGrant) {
+      const side = this.game.coinGrant;
+      this.game.coinGrant = null;
+      for (const c of this.connsOn(side)) {
+        if (!c.pid) continue;
+        const w = this.wsOfConn(c);
+        addCoins(c.pid, c.nickname, 5).then(() => { if (w) this.sendWallet(w); }).catch(() => {});
+      }
+    }
+    // Safety: if a duel was abandoned (back to 'waiting' with no result) or we slid into
+    // arena mode, refund any open wagers so escrowed coins are never lost.
+    if (this.bets.size && (this.mode === 'poly' || this.game.status === 'waiting')) this.refundBets();
     if (this.tournament) this.tournamentSync();
     else if (this.mode === 'poly') this.polySync();
     else this.duelSync();
@@ -1120,11 +1287,12 @@ export class Lobby {
     const refs = this.arenaSeats
       .map((ws) => this.conns.get(ws))
       .filter((c): c is Conn => !!c && !!c.pid);
-    const winners = refs.filter((c) => c.id === winnerId).map((c) => ({ pid: c.pid, name: c.nickname }));
+    const winnerConns = refs.filter((c) => c.id === winnerId);
+    const winners = winnerConns.map((c) => ({ pid: c.pid, name: c.nickname }));
     const losers = refs.filter((c) => c.id !== winnerId).map((c) => ({ pid: c.pid, name: c.nickname }));
     if (winners.length && losers.length) {
       recordResult(winners, losers)
-        .then(() => this.refreshLeaderboard())
+        .then(() => { this.refreshLeaderboard(); this.refreshWalletsFor(winnerConns); })
         .catch((e) => console.error('leaderboard update failed:', e));
     }
   }
@@ -1210,9 +1378,10 @@ export class Lobby {
         const loseRefs = losers.filter((c) => c.pid).map((c) => ({ pid: c.pid, name: c.nickname }));
         if (winRefs.length && loseRefs.length) {
           recordResult(winRefs, loseRefs)
-            .then(() => this.refreshLeaderboard())
+            .then(() => { this.refreshLeaderboard(); this.refreshWalletsFor(winners); })
             .catch((e) => console.error('leaderboard update failed:', e));
         }
+        this.settleBets(winnerSide); // pay out spectator wagers on this match
       } else if (this.activeFatality && Date.now() - this.fatalityAt > FATALITY_DISPLAY_MS) {
         // Once the finishing move has played out, return to the lobby so the frozen
         // FATALITY screen clears and a fresh match can be started.
@@ -1451,6 +1620,8 @@ export class Lobby {
           y: this.game.paddleYOf(side, c.id) ?? COURT.h / 2,
           name: c.nickname,
           color: c.color,
+          hat: c.hat,
+          skin: c.skin,
         };
       });
       return {

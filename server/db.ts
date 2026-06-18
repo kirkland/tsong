@@ -44,6 +44,11 @@ export async function initDb(): Promise<void> {
   `);
   // Reset any players still at the old default of 1000 to the new default of 500.
   await pool.query(`UPDATE players SET elo = 500 WHERE elo = 1000`);
+  // Wallet + cosmetics: coins (1 per win), owned items (comma list), and equipped hat/skin.
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS coins INTEGER NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS owned TEXT NOT NULL DEFAULT ''`);
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS hat TEXT`);
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS skin TEXT`);
   // DOOM minigame high scores — best round reached, per player, per mode (solo / co-op).
   await pool.query(`
     CREATE TABLE IF NOT EXISTS doom_scores (
@@ -114,11 +119,11 @@ export async function recordResult(winners: PlayerRef[], losers: PlayerRef[]): P
 
   const allPids = [...winners, ...losers].map((p) => p.pid);
 
-  // Upsert all players so they exist before we read ELO.
+  // Upsert all players so they exist before we read ELO. Each winner also earns 1 coin.
   for (const w of winners) {
     await pool.query(
-      `INSERT INTO players (id, name, wins) VALUES ($1, $2, 1)
-         ON CONFLICT (id) DO UPDATE SET wins = players.wins + 1, name = EXCLUDED.name`,
+      `INSERT INTO players (id, name, wins, coins) VALUES ($1, $2, 1, 1)
+         ON CONFLICT (id) DO UPDATE SET wins = players.wins + 1, coins = players.coins + 1, name = EXCLUDED.name`,
       [w.pid, w.name],
     );
   }
@@ -161,6 +166,76 @@ export async function updateName(id: string, name: string): Promise<number> {
   if (!pool) return 0;
   const res = await pool.query(`UPDATE players SET name = $2 WHERE id = $1`, [id, name]);
   return res.rowCount ?? 0;
+}
+
+// --- Wallet & cosmetics ---
+export interface Wallet {
+  coins: number;
+  owned: string[]; // item ids the player owns
+  hat: string | null; // equipped hat item id
+  skin: string | null; // equipped skin item id
+}
+const EMPTY_WALLET: Wallet = { coins: 0, owned: [], hat: null, skin: null };
+
+function rowToWallet(r: { coins: number; owned: string; hat: string | null; skin: string | null }): Wallet {
+  return {
+    coins: r.coins,
+    owned: (r.owned || '').split(',').filter(Boolean),
+    hat: r.hat ?? null,
+    skin: r.skin ?? null,
+  };
+}
+
+/** Read a player's wallet (coins + owned items + equipped cosmetics). */
+export async function getWallet(pid: string): Promise<Wallet> {
+  if (!pool || !pid) return { ...EMPTY_WALLET };
+  const { rows } = await pool.query(`SELECT coins, owned, hat, skin FROM players WHERE id = $1`, [pid]);
+  return rows.length ? rowToWallet(rows[0]) : { ...EMPTY_WALLET };
+}
+
+/** Buy an item: deducts the price and adds it to `owned` (no-op if already owned or too poor).
+ *  Returns the updated wallet (or null if the purchase didn't happen). */
+export async function buyItem(pid: string, name: string, item: string, price: number): Promise<Wallet | null> {
+  if (!pool || !pid) return null;
+  // Ensure the row exists, then attempt the purchase atomically-ish.
+  await pool.query(
+    `INSERT INTO players (id, name) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name`,
+    [pid, name],
+  );
+  const cur = await getWallet(pid);
+  if (cur.owned.includes(item) || cur.coins < price) return null;
+  const owned = [...cur.owned, item].join(',');
+  const { rows } = await pool.query(
+    `UPDATE players SET coins = coins - $2, owned = $3 WHERE id = $1 AND coins >= $2
+       RETURNING coins, owned, hat, skin`,
+    [pid, price, owned],
+  );
+  return rows.length ? rowToWallet(rows[0]) : null;
+}
+
+/** Equip (or unequip with item=null) a cosmetic in a slot. Only equips owned items. */
+export async function equipItem(pid: string, slot: 'hat' | 'skin', item: string | null): Promise<Wallet | null> {
+  if (!pool || !pid) return null;
+  const cur = await getWallet(pid);
+  if (item !== null && !cur.owned.includes(item)) return null; // can't equip what you don't own
+  const col = slot === 'hat' ? 'hat' : 'skin';
+  const { rows } = await pool.query(
+    `UPDATE players SET ${col} = $2 WHERE id = $1 RETURNING coins, owned, hat, skin`,
+    [pid, item],
+  );
+  return rows.length ? rowToWallet(rows[0]) : null;
+}
+
+/** Add (or subtract) coins for a player; used for gambling payouts/escrow. Returns new wallet. */
+export async function addCoins(pid: string, name: string, delta: number): Promise<Wallet | null> {
+  if (!pool || !pid) return null;
+  const { rows } = await pool.query(
+    `INSERT INTO players (id, name, coins) VALUES ($1, $2, GREATEST(0, $3))
+       ON CONFLICT (id) DO UPDATE SET coins = GREATEST(0, players.coins + $3), name = EXCLUDED.name
+       RETURNING coins, owned, hat, skin`,
+    [pid, name, delta],
+  );
+  return rows.length ? rowToWallet(rows[0]) : null;
 }
 
 export async function getLeaderboard(): Promise<LeaderboardRow[]> {
