@@ -107,7 +107,7 @@ export class Lobby {
   private fatalityWinnerSide: Side | null = null;
   private activeFatality: { side: Side; move: string } | null = null;
   private fatalityAt = 0; // ms timestamp the finishing move started (0 = none)
-  private fatalitiesEnabled = false; // shared room-wide toggle (off for everyone by default)
+  private fatalitiesEnabled = true; // always on — finishers can't be disabled
   private queue: WebSocket[] = []; // ordered spectators waiting to play
   private ready: Record<Side, boolean> = { left: false, right: false };
   private readyTimer = 0; // seconds remaining for ready-up; 0 = no timer active
@@ -1431,10 +1431,10 @@ export class Lobby {
   }
 
   /** Flip the shared fatalities toggle for the whole room. Any joined user may change it. */
-  setFatalities(ws: WebSocket, enabled: boolean) {
+  setFatalities(ws: WebSocket, _enabled: boolean) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return; // must have joined
-    this.fatalitiesEnabled = enabled;
+    this.fatalitiesEnabled = true; // fatalities are permanently on — disabling is not allowed
   }
 
   /**
@@ -1829,7 +1829,7 @@ export class Lobby {
     this.fatalityWinnerSide = s.fatalityWinnerSide ?? null;
     this.activeFatality = s.activeFatality ?? null;
     this.fatalityAt = s.fatalityAt ?? 0;
-    this.fatalitiesEnabled = !!s.fatalitiesEnabled;
+    this.fatalitiesEnabled = true; // always on, regardless of any older snapshot
     this.ready = s.ready ?? { left: false, right: false };
     this.readyTimer = s.readyTimer ?? 0;
     this.winnerName = s.winnerName ?? null;
