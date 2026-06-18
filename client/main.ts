@@ -498,7 +498,7 @@ const net = connect(
       wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, bet: msg.bet, nextSpinAt: msg.nextSpinAt };
       renderShop();
     } else if (msg.type === 'spinResult') {
-      celebrateSpin(msg.reward);
+      celebrateSpin(msg.reward, msg.segment);
     }
   },
   () => {
