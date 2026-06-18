@@ -180,6 +180,7 @@ export type ClientMsg =
   | { type: 'addBot'; level: BotLevel } // drop an AI opponent into the open duel side
   | { type: 'removeBot' }
   | { type: 'ping' } // kick the AI opponent
+  | { type: 'rtt'; t: number } // latency probe: the server echoes `t` back untouched so the client can measure round-trip time
   | { type: 'setWinScore'; score: number } // change the first-to-N win score (room-wide)
   | { type: 'tournamentCreate'; size: number } // set up a bracket of the given size (4 or 8)
   | { type: 'tournamentJoin' } // take the next open signup slot
@@ -402,6 +403,26 @@ export interface PingMsg {
   from: string;
 }
 
+// A snapshot of the authoritative loop's health, sampled over a rolling window. The
+// loop must hold 60 Hz; if a tick's work overruns its budget the whole room lags at
+// once, so these numbers are the server-side smoking gun. Ride along on the rtt echo.
+export interface TickHealth {
+  tps: number; // achieved ticks/second (target ~60)
+  busyAvg: number; // average ms of work per tick
+  busyMax: number; // worst single tick's work time in the window, ms
+  slowPct: number; // % of ticks whose work overran the TICK_MS budget
+}
+
+// Echo of a client's latency probe: `t` is the client's own timestamp, returned
+// unchanged so the client can compute (now - t) = round-trip time. Carries no server
+// state — purely a client-side network-health readout. `tick` piggybacks the server's
+// current tick-loop health so the client can show it without any per-frame overhead.
+export interface RttMsg {
+  type: 'rtt';
+  t: number;
+  tick?: TickHealth;
+}
+
 // The default quick-reaction row, in display order.
 export const REACTIONS = ['🔥', '🎉', '🫵', '👍', '😂', '😮', '👏', '😡', '🖕'] as const;
 
@@ -417,6 +438,7 @@ export type ServerMsg =
   | ReactionMsg
   | AnnounceMsg
   | PingMsg
+  | RttMsg
   | DoomLobbyMsg
   | DoomRelayMsg
   | DoomEndMsg
