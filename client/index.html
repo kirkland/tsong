@@ -692,6 +692,23 @@
       .bet-row button:hover { background: #2d4070; }
       #betAmount { min-width: 20px; text-align: center; font-weight: 700; color: #ffd166; }
       #betStatus { font-size: 11px; color: #6ee7a8; margin-top: 6px; min-height: 14px; }
+      /* Public bet board under the court */
+      #betBoard {
+        display: flex; gap: 10px; width: min(94vw, 1040px); font: 700 12px ui-monospace, monospace;
+      }
+      #betBoard[hidden] { display: none; }
+      #betBoard .bet-col {
+        flex: 1; background: #0e1424; border: 1px solid #2a3550; border-radius: 8px; padding: 6px 10px;
+      }
+      #betBoard .bet-col h4 {
+        margin: 0 0 4px; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; color: #ffd166;
+      }
+      #betBoard .bet-col.left h4 { color: #7da2ff; }
+      #betBoard .bet-col.right h4 { color: #ff7eb3; }
+      #betBoard .bet-line { display: flex; justify-content: space-between; gap: 8px; color: #cdd7f5; }
+      #betBoard .bet-line .amt { color: #ffd166; }
+      #betBoard .bet-empty { color: #6b7796; font-weight: 400; }
+      #betBoard .bet-total { margin-top: 4px; border-top: 1px solid #1c2640; padding-top: 3px; color: #9fb0d8; }
       #muteBtn[aria-pressed='true'] {
         color: #6b7796;
         border-color: #1c2640;
@@ -2283,6 +2300,7 @@
         <canvas id="game" width="800" height="500"></canvas>
         <!-- Three.js renders into this when 3D view is on; empty (and unused) otherwise. -->
         <div id="game3d" hidden></div>
+        <div id="betBoard" hidden></div>
         <div id="status"></div>
         <div id="mobileControls">
           <button id="mobUp" class="mob-paddle-btn" type="button" aria-label="Move paddle up">▲</button>

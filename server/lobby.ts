@@ -897,6 +897,13 @@ export class Lobby {
 
   // --- Gambling ---
 
+  /** Public view of all current wagers, grouped by side (for the on-screen bet board). */
+  private betBoard(): StateMsg['bets'] {
+    const board: StateMsg['bets'] = { left: [], right: [] };
+    for (const b of this.bets.values()) board[b.side].push({ name: b.name, amount: b.amount });
+    return board;
+  }
+
   private betView(ws: WebSocket): { side: Side; amount: number } | null {
     const conn = this.conns.get(ws);
     if (!conn) return null;
@@ -1753,6 +1760,7 @@ export class Lobby {
       winScore: this.game.winScore,
       tournament: this.tournament ? this.tournament.view(this.liveMatchId) : null,
       projectiles: this.game.projectiles.map((p) => ({ x: p.x, y: p.y, vx: p.vx, vy: p.vy, color: '#39ff14' })),
+      bets: this.betBoard(),
     };
   }
 

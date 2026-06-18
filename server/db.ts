@@ -71,6 +71,12 @@ export async function initDb(): Promise<void> {
     await pool.query(`DELETE FROM doom_scores`);
     await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('reset_boss_v1', now()::text)`);
   }
+  // One-time: clear everyone's daily-spin cooldown so they can all spin again.
+  const spinReset = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'spin_reset_v1'`);
+  if (spinReset.rowCount === 0) {
+    await pool.query(`UPDATE players SET last_spin = 0`);
+    await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('spin_reset_v1', now()::text)`);
+  }
   console.log('leaderboard DB ready');
 }
 

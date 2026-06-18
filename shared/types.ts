@@ -367,6 +367,9 @@ export interface StateMsg {
   bigBallTimer: number;
   winScore: number; // current first-to-N win score (room-wide setting)
   tournament: TournamentView | null; // live single-elimination bracket, or null when none
+  // Public wagers on the current duel, grouped by side (name + stake), so everyone can see
+  // who bet on whom. Empty arrays when there are no bets.
+  bets: { left: Array<{ name: string; amount: number }>; right: Array<{ name: string; amount: number }> };
   // Blaster projectiles in flight. vx/vy give the travel direction so the client can draw
   // an oriented laser bolt + trail. color is the laser color (bright green).
   projectiles: { x: number; y: number; vx: number; vy: number; color: string }[];
