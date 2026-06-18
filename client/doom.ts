@@ -60,10 +60,13 @@ interface Enemy {
 interface GuestInput { forward: number; strafe: number; angle: number; fireSeq: number; }
 
 // Networking hook into the host websocket (provided by main.ts).
+export interface DoomScore { name: string; round: number; }
 export interface DoomNet {
   join(): void;
   leave(): void;
   relay(data: unknown): void;
+  submitScore(round: number, coop: boolean): void; // record the round reached on a run's end
+  scores(): { solo: DoomScore[]; coop: DoomScore[] }; // latest high-round leaderboards
 }
 
 // The running instance feeds server messages back to itself through these module-level hooks,
@@ -77,15 +80,37 @@ export function feedDoomLobby(m: { status: string; filled: number; slot: number 
 export function feedDoomRelay(d: unknown) { handlers?.relay(d); }
 export function feedDoomEnd(reason: string) { handlers?.end(reason); }
 
-const SPAWN: Array<{ x: number; y: number }> = [
-  { x: 8.5, y: 2.5 }, { x: 13.5, y: 5.5 }, { x: 2.5, y: 8.5 },
-  { x: 13.5, y: 9.5 }, { x: 8.5, y: 13.5 }, { x: 2.5, y: 13.5 },
-];
-function freshEnemies(): Enemy[] {
-  return SPAWN.map((p) => ({ x: p.x, y: p.y, hp: 2, alive: true, flash: 0, attackCd: 0 }));
+// Survival rounds: each round spawns more (and slightly tougher) enemies at random open
+// cells, kept clear of the players' spawn corner.
+function enemyCountFor(round: number): number { return 3 + (round - 1) * 2; }
+function enemyHpFor(round: number): number { return 2 + Math.floor((round - 1) / 4); }
+function enemySpeedFor(round: number): number { return Math.min(1.3 + (round - 1) * 0.1, 2.6); }
+
+function spawnEnemiesForRound(round: number, players: Player[]): Enemy[] {
+  const out: Enemy[] = [];
+  const n = enemyCountFor(round);
+  const hp = enemyHpFor(round);
+  let guard = 0;
+  while (out.length < n && guard++ < 2000) {
+    const mx = 1 + Math.floor(Math.random() * (MAP_W - 2));
+    const my = 1 + Math.floor(Math.random() * (MAP_H - 2));
+    if (isWall(mx, my)) continue;
+    const x = mx + 0.5, y = my + 0.5;
+    // keep new enemies a few tiles away from every living player
+    if (players.some((p) => p.alive && Math.hypot(p.x - x, p.y - y) < 4)) continue;
+    out.push({ x, y, hp, alive: true, flash: 0, attackCd: 0 });
+  }
+  return out;
 }
 function freshPlayer(x: number, y: number): Player {
-  return { x, y, angle: 0, health: 100, ammo: 80, alive: true, flash: 0 };
+  return { x, y, angle: 0, health: 100, ammo: 60, alive: true, flash: 0 };
+}
+
+let doomBest = 0; // best round this client has reached this session (for the menu)
+
+
+function escapeText(s: string): string {
+  return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
 }
 
 let doomOpen = false;
@@ -172,14 +197,36 @@ export function startDoom(net: DoomNet): void {
   menu.append(menuTitle, menuMsg, btnRow);
   overlay.appendChild(menu);
 
+  // High-round leaderboards (solo + co-op), filled live from net.scores(). Shown on the
+  // menu and again on the game-over screen, so it sits on the overlay (above the menu).
+  const boards = document.createElement('div');
+  boards.style.cssText =
+    'position:absolute;left:0;right:0;bottom:8vh;display:none;gap:48px;justify-content:center;' +
+    'color:#cdd7f5;font:700 14px ui-monospace,monospace;pointer-events:none;text-shadow:1px 1px 0 #000;';
+  overlay.appendChild(boards);
+
+  function boardHtml(heading: string, rows: DoomScore[]): string {
+    const items = rows.slice(0, 5).map((r, i) =>
+      `<div style="display:flex;justify-content:space-between;gap:16px">` +
+      `<span>${i + 1}. ${escapeText(r.name)}</span><span style="color:#ffd166">R${r.round}</span></div>`,
+    ).join('') || '<div style="color:#6b7796">no runs yet</div>';
+    return `<div><div style="color:#ff7a7a;margin-bottom:6px">${heading}</div>${items}</div>`;
+  }
+  function renderBoards() {
+    const s = net.scores();
+    boards.innerHTML = boardHtml('SOLO · TOP ROUNDS', s.solo) + boardHtml('CO-OP · TOP ROUNDS', s.coop);
+  }
+
   document.body.appendChild(overlay);
 
   // --- world state ---
   let players: Player[] = [];
   let enemies: Enemy[] = [];
   let kills = 0;
-  let totalEnemies = SPAWN.length;
-  let over: 'win' | 'dead' | null = null;
+  let round = 1;
+  let betweenTimer = 0; // seconds of the "ROUND N" intermission remaining (0 = fighting)
+  let over: 'dead' | null = null; // survival mode: you only ever lose
+  let scoreSubmitted = false;
 
   // local input / feedback
   const keys = new Set<string>();
@@ -297,7 +344,7 @@ export function startDoom(net: DoomNet): void {
       }
       if (!target) continue;
       if (td > 1.1) {
-        const sp = 1.3 * dt;
+        const sp = enemySpeedFor(round) * dt;
         const dx = (target.x - e.x) / td, dy = (target.y - e.y) / td;
         if (!isWall(Math.floor(e.x + dx * sp), Math.floor(e.y))) e.x += dx * sp;
         if (!isWall(Math.floor(e.x), Math.floor(e.y + dy * sp))) e.y += dy * sp;
@@ -309,10 +356,36 @@ export function startDoom(net: DoomNet): void {
     }
   }
 
-  function checkOutcome() {
+  // Authority round logic: clear the wave → brief intermission → spawn a bigger next wave.
+  // You only ever lose (when every marine is down). Runs on solo + host.
+  function stepRounds(dt: number) {
     if (over) return;
-    if (kills >= totalEnemies) over = 'win';
-    else if (players.every((p) => !p.alive)) over = 'dead';
+    if (players.every((p) => !p.alive)) { over = 'dead'; return; }
+    if (betweenTimer > 0) {
+      betweenTimer -= dt;
+      if (betweenTimer <= 0) { enemies = spawnEnemiesForRound(round, players); betweenTimer = 0; }
+      return;
+    }
+    if (enemies.every((e) => !e.alive)) {
+      // Wave cleared — advance, reward survivors, and queue the next wave.
+      round++;
+      betweenTimer = 2.2;
+      enemies = [];
+      for (const p of players) {
+        if (!p.alive) continue;
+        p.health = Math.min(100, p.health + 20);
+        p.ammo += 25;
+      }
+    }
+  }
+
+  // Submit the round reached once, the moment the run ends.
+  function maybeSubmitScore() {
+    if (over === 'dead' && !scoreSubmitted) {
+      scoreSubmitted = true;
+      doomBest = Math.max(doomBest, round);
+      net.submitScore(round, mode !== 'solo');
+    }
   }
 
   // --- per-mode update ---
@@ -326,8 +399,9 @@ export function startDoom(net: DoomNet): void {
         if (keys.has('arrowleft')) myAngle -= 2.6 * dt;
         if (keys.has('arrowright')) myAngle += 2.6 * dt;
         stepEnemies(dt);
-        checkOutcome();
+        stepRounds(dt);
       }
+      maybeSubmitScore();
     } else if (mode === 'host') {
       if (!over) {
         players[0].angle = myAngle;
@@ -343,8 +417,9 @@ export function startDoom(net: DoomNet): void {
           if (players[1].alive && players[1].ammo > 0) { players[1].ammo--; fireFrom(players[1]); }
         }
         stepEnemies(dt);
-        checkOutcome();
+        stepRounds(dt);
       }
+      maybeSubmitScore();
       // stream a snapshot to the guest ~20/s
       netAccum += dt;
       if (netAccum >= 0.05) {
@@ -353,7 +428,7 @@ export function startDoom(net: DoomNet): void {
           t: 'st',
           players: players.map((p) => ({ x: p.x, y: p.y, angle: p.angle, health: p.health, ammo: p.ammo, alive: p.alive, flash: p.flash })),
           enemies: enemies.map((e) => ({ x: e.x, y: e.y, alive: e.alive, flash: e.flash })),
-          kills, over,
+          round, between: betweenTimer > 0, over,
         });
       }
     } else if (mode === 'guest') {
@@ -366,6 +441,7 @@ export function startDoom(net: DoomNet): void {
         netAccum = 0;
         net.relay({ t: 'in', forward, strafe, angle: myAngle, fireSeq: myFireSeq });
       }
+      maybeSubmitScore(); // round/over arrive via the host snapshot
     }
     if (muzzle > 0) muzzle -= dt;
     if (hurt > 0) hurt -= dt;
@@ -491,36 +567,56 @@ export function startDoom(net: DoomNet): void {
   }
 
   function syncHud() {
-    if (mode === 'menu' || mode === 'wait') { hud.style.display = 'none'; banner.style.display = 'none'; return; }
+    // Leaderboards are visible on the menu and on the game-over screen.
+    const showBoards = mode === 'menu' || over === 'dead';
+    boards.style.display = showBoards ? 'flex' : 'none';
+    if (showBoards) renderBoards();
+    if (mode === 'menu' || mode === 'wait') {
+      hud.style.display = 'none'; banner.style.display = 'none';
+      if (mode === 'menu') menu.style.display = 'flex';
+      return;
+    }
+    const alive = enemies.filter((e) => e.alive).length;
     hud.style.display = 'flex';
     const p = me();
     healthEl.textContent = `♥ ${Math.max(0, Math.round(p.health))}`;
     ammoEl.textContent = `▮ ${p.ammo}`;
-    killsEl.textContent = `☠ ${kills}/${totalEnemies}`;
-    if (over === 'win') { banner.textContent = mode === 'solo' ? '🏆 LEVEL CLEAR\npress R' : '🏆 LEVEL CLEAR\nESC to quit'; banner.style.color = '#ffd166'; banner.style.display = 'flex'; }
-    else if (over === 'dead') { banner.textContent = mode === 'solo' ? 'YOU DIED\npress R' : 'YOU DIED\nESC to quit'; banner.style.color = '#ff2d2d'; banner.style.display = 'flex'; }
-    else banner.style.display = 'none';
+    killsEl.textContent = betweenTimer > 0 ? `ROUND ${round} ▸` : `ROUND ${round} · ${alive} left`;
+    if (over === 'dead') {
+      banner.textContent = `GAME OVER\nReached round ${round}\n${mode === 'solo' ? 'press R to retry · ' : ''}ESC to quit`;
+      banner.style.color = '#ff2d2d';
+      banner.style.fontSize = '40px';
+      banner.style.display = 'flex';
+    } else if (betweenTimer > 0) {
+      banner.textContent = `ROUND ${round}`;
+      banner.style.color = '#ffd166';
+      banner.style.fontSize = '56px';
+      banner.style.display = 'flex';
+    } else {
+      banner.style.display = 'none';
+    }
   }
 
   // --- mode transitions ---
   function startSolo() {
     mode = 'solo'; selfIdx = 0;
     players = [freshPlayer(2.5, 2.5)];
-    enemies = freshEnemies(); totalEnemies = enemies.length; kills = 0; over = null; myAngle = 0;
+    round = 1; kills = 0; over = null; myAngle = 0; scoreSubmitted = false; betweenTimer = 0;
+    enemies = spawnEnemiesForRound(round, players);
     menu.style.display = 'none';
   }
   function startCoop(slot: number) {
     selfIdx = slot;
     mode = slot === 0 ? 'host' : 'guest';
     players = [freshPlayer(2.5, 2.5), freshPlayer(3.5, 2.5)];
-    enemies = freshEnemies(); totalEnemies = enemies.length; kills = 0; over = null; myAngle = 0;
+    round = 1; kills = 0; over = null; myAngle = 0; scoreSubmitted = false; betweenTimer = 0;
+    enemies = slot === 0 ? spawnEnemiesForRound(round, players) : [];
     lastGuestFireSeq = 0; guestIn = { forward: 0, strafe: 0, angle: 0, fireSeq: 0 };
     menu.style.display = 'none';
   }
   function restartSolo() {
     if (mode !== 'solo') return;
-    players = [freshPlayer(2.5, 2.5)];
-    enemies = freshEnemies(); kills = 0; over = null; myAngle = 0;
+    startSolo();
   }
 
   soloBtn.onclick = () => startSolo();
@@ -551,12 +647,12 @@ export function startDoom(net: DoomNet): void {
       } else if (mode === 'guest' && msg.t === 'st') {
         const st = msg as unknown as {
           players: Player[]; enemies: Array<{ x: number; y: number; alive: boolean; flash: number }>;
-          kills: number; over: 'win' | 'dead' | null;
+          round: number; between: boolean; over: 'dead' | null;
         };
         players = st.players.map((p) => ({ ...p }));
         // keep enemy hp/attackCd fields the guest doesn't use; just mirror position/alive/flash
         enemies = st.enemies.map((e) => ({ x: e.x, y: e.y, hp: 1, alive: e.alive, flash: e.flash, attackCd: 0 }));
-        kills = st.kills; over = st.over;
+        round = st.round; betweenTimer = st.between ? 1 : 0; over = st.over;
         if (over === 'dead' && players[selfIdx] && !players[selfIdx].alive) hurt = Math.max(hurt, 0.2);
       }
     },

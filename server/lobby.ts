@@ -27,7 +27,7 @@ import {
   StateMsg,
   TEAM_MAX,
 } from '../shared/types';
-import { getLeaderboard, recordResult, updateName } from './db';
+import { getLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow } from './db';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
@@ -188,6 +188,7 @@ export class Lobby {
     this.conns.set(ws, conn);
     this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
     this.tell(ws, { type: 'leaderboard', rows: this.leaderboard });
+    this.tell(ws, { type: 'doomLeaderboard', solo: this.doomBoards.solo, coop: this.doomBoards.coop });
     if (this.chatLog.length) this.tell(ws, { type: 'chat', lines: this.chatLog });
   }
 
@@ -435,6 +436,28 @@ export class Lobby {
     this.doomSlots.forEach((ws, i) => {
       this.tell(ws, { type: 'doomLobby', status, filled: this.doomSlots.length, slot: i });
     });
+  }
+
+  // DOOM high-round leaderboards (solo + co-op), cached and pushed to clients.
+  private doomBoards: { solo: DoomScoreRow[]; coop: DoomScoreRow[] } = { solo: [], coop: [] };
+
+  /** Reload the DOOM leaderboards from the DB and push them to everyone. */
+  async refreshDoomLeaderboards() {
+    this.doomBoards = await getDoomLeaderboards();
+    const msg = JSON.stringify({ type: 'doomLeaderboard', ...this.doomBoards });
+    for (const sock of this.conns.keys()) {
+      if (sock.readyState === sock.OPEN) sock.send(msg);
+    }
+  }
+
+  /** Record a finished DOOM run (best round per player per mode). */
+  doomScore(ws: WebSocket, round: number, coop: boolean) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    if (!Number.isFinite(round) || round < 1) return;
+    recordDoomScore(conn.pid, conn.nickname, coop, Math.floor(round))
+      .then(() => this.refreshDoomLeaderboards())
+      .catch((e) => console.error('doom score save failed:', e));
   }
 
   /** "Kick bot": remove the AI opponent (any joined player may do this). */

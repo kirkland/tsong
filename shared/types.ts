@@ -188,7 +188,8 @@ export type ClientMsg =
   | { type: 'fire'; angle: number } // blaster power-up: fire a projectile at this vertical aim angle
   | { type: 'doomJoin' } // take a slot in the 2-player co-op DOOM lobby
   | { type: 'doomLeave' } // leave the co-op DOOM lobby / game
-  | { type: 'doomRelay'; data: unknown }; // forward an opaque DOOM payload to the co-op partner
+  | { type: 'doomRelay'; data: unknown } // forward an opaque DOOM payload to the co-op partner
+  | { type: 'doomScore'; round: number; coop: boolean }; // record a DOOM run's reached round
 
 // --- Server -> Client ---
 
@@ -416,7 +417,8 @@ export type ServerMsg =
   | PingMsg
   | DoomLobbyMsg
   | DoomRelayMsg
-  | DoomEndMsg;
+  | DoomEndMsg
+  | DoomLeaderboardMsg;
 
 // Co-op DOOM lobby status (2 slots). `slot` is which slot this client holds (0 = host,
 // 1 = guest, null = not in it). When status flips to 'playing', slot 0 is the authority.
@@ -435,4 +437,10 @@ export interface DoomRelayMsg {
 export interface DoomEndMsg {
   type: 'doomEnd';
   reason: string;
+}
+// High-round leaderboards for the DOOM minigame (separate solo / co-op tables).
+export interface DoomLeaderboardMsg {
+  type: 'doomLeaderboard';
+  solo: Array<{ name: string; round: number }>;
+  coop: Array<{ name: string; round: number }>;
 }
