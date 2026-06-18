@@ -29,7 +29,7 @@ import {
   TEAM_MAX,
 } from '../shared/types';
 import { getLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
-  getWallet, buyItem, equipItem, addCoins } from './db';
+  getWallet, buyItem, equipItem, addCoins, spendCoins } from './db';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
@@ -866,14 +866,15 @@ export class Lobby {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     if (this.mode !== 'duel' || this.game.status !== 'playing') return; // only on a live duel
+    if (this.game.score.left !== 0 || this.game.score.right !== 0) return; // only before the first point
     if (this.sideOf(ws)) return; // players can't bet on their own match
     if (this.bets.has(conn.pid)) return; // one wager per match
     const amt = Math.floor(amount);
     if (!Number.isFinite(amt) || amt < 1) return;
-    // Escrow the stake; the DB enforces you can't go negative (returns null if too poor).
-    addCoins(conn.pid, conn.nickname, -amt)
+    // Escrow the stake atomically — spendCoins returns null if they can't actually afford it.
+    spendCoins(conn.pid, amt)
       .then((w) => {
-        if (!w) return; // insufficient coins
+        if (!w) { this.sendWallet(ws); return; } // insufficient coins — refresh their view, no bet
         this.bets.set(conn.pid, { side, amount: amt, ws, name: conn.nickname });
         this.sendWallet(ws);
         this.announce(`🎲 ${conn.nickname} bet ${amt} on ${side}`);

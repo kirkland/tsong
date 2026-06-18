@@ -793,29 +793,32 @@ export class Game {
    *  kind, or a random one when unnamed. Live matches only. */
   forceTarget(kind?: PowerupKind): boolean {
     if (this.status !== 'playing') return false;
-    this.placeTarget(kind);
+    // "coins" can't be conjured manually — it only appears on the random auto-spawn roll.
+    this.placeTarget(kind === 'coins' ? undefined : kind);
     return true;
   }
 
-  // Drop a fresh power-up target onto the board, replacing any current one.
+  // Drop a fresh power-up target onto the board, replacing any current one. A given `kind`
+  // is honored as-is; otherwise a random kind is chosen, never "coins" (that has its own roll).
   private placeTarget(kind?: PowerupKind) {
     const margin = TARGET.r + 24; // keep it clear of the walls
     this.target = {
       x: COURT.w * 0.3 + Math.random() * COURT.w * 0.4, // central band, clear of paddles
       y: margin + Math.random() * (COURT.h - 2 * margin),
       kind: kind ?? (() => {
-        const pool = POWERUPS.filter((k) => !this.excludedPowerups.has(k));
+        const pool = POWERUPS.filter((k) => k !== 'coins' && !this.excludedPowerups.has(k));
         return pool[Math.floor(Math.random() * pool.length)];
       })(),
     };
     this.targetTimer = TARGET.life;
   }
 
-  // Spawn or expire the power-up target on its own timer.
+  // Spawn or expire the power-up target on its own timer. Each auto-spawn has a 15% chance
+  // to be the "coins" reward (the only way coins appears).
   private updateTargetTimer(dt: number) {
     this.targetTimer -= dt;
     if (!this.target) {
-      if (this.targetTimer <= 0) this.placeTarget();
+      if (this.targetTimer <= 0) this.placeTarget(Math.random() < 0.15 ? 'coins' : undefined);
     } else if (this.targetTimer <= 0) {
       this.target = null; // unclaimed; vanish and schedule the next one
       this.targetTimer = this.nextTargetDelay();

@@ -1286,19 +1286,33 @@ function renderShop() {
     row.appendChild(btn);
     shopItems.appendChild(row);
   }
-  // Betting: only while spectating a live duel.
-  const canBet = !!state && state.status === 'playing' && !state.poly && myRole === 'observer';
-  betSection.hidden = !canBet;
-  betAmountEl.textContent = String(betAmount);
-  betStatus.textContent = wallet.bet
-    ? `You bet ${wallet.bet.amount} on ${wallet.bet.side}.`
-    : '';
+  syncBetSection();
 }
 
-document.getElementById('betMinus')!.addEventListener('click', () => { betAmount = Math.max(1, betAmount - 1); renderShop(); });
-document.getElementById('betPlus')!.addEventListener('click', () => { betAmount = Math.min(wallet.coins || 1, betAmount + 1); renderShop(); });
-document.getElementById('betLeft')!.addEventListener('click', () => net.send({ type: 'bet', side: 'left', amount: betAmount }));
-document.getElementById('betRight')!.addEventListener('click', () => net.send({ type: 'bet', side: 'right', amount: betAmount }));
+// Lightweight: only updates the betting section (no item-list rebuild). Safe to call every
+// tick — rebuilding the item DOM each frame was eating Buy clicks.
+function syncBetSection() {
+  const canBet = !!state && state.status === 'playing' && !state.poly && myRole === 'observer'
+    && state.score.left === 0 && state.score.right === 0; // only before the first point
+  betSection.hidden = !canBet;
+  // Clamp the stake to what you actually have, and disable betting if you can't afford it
+  // or already have a wager down.
+  betAmount = Math.max(1, Math.min(betAmount, Math.max(1, wallet.coins)));
+  betAmountEl.textContent = String(betAmount);
+  const affordable = wallet.coins >= betAmount && !wallet.bet;
+  betLeftBtn.disabled = !affordable;
+  betRightBtn.disabled = !affordable;
+  betStatus.textContent = wallet.bet
+    ? `You bet ${wallet.bet.amount} on ${wallet.bet.side}.`
+    : wallet.coins < betAmount ? 'Not enough coins.' : '';
+}
+
+const betLeftBtn = document.getElementById('betLeft') as HTMLButtonElement;
+const betRightBtn = document.getElementById('betRight') as HTMLButtonElement;
+document.getElementById('betMinus')!.addEventListener('click', () => { betAmount = Math.max(1, betAmount - 1); syncBetSection(); });
+document.getElementById('betPlus')!.addEventListener('click', () => { betAmount = Math.min(wallet.coins || 1, betAmount + 1); syncBetSection(); });
+betLeftBtn.addEventListener('click', () => net.send({ type: 'bet', side: 'left', amount: betAmount }));
+betRightBtn.addEventListener('click', () => net.send({ type: 'bet', side: 'right', amount: betAmount }));
 
 // A big, transient banner across the middle of the screen (e.g. someone forfeits).
 function showAnnouncement(text: string, color?: string) {
@@ -2396,7 +2410,7 @@ function updateUI() {
 
   renderPuHud(state);
   renderTournament(state.tournament);
-  if (!shopPanel.hidden) renderShop(); // keep the betting section in sync with match state
+  if (!shopPanel.hidden) syncBetSection(); // light per-tick update (don't rebuild the item list — it eats clicks)
   if (!powerupInfoPanel.hidden) syncPowerupSpawnability();
 
   // Sync win score buttons with the current room setting.

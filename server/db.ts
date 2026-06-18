@@ -226,7 +226,19 @@ export async function equipItem(pid: string, slot: 'hat' | 'skin', item: string 
   return rows.length ? rowToWallet(rows[0]) : null;
 }
 
-/** Add (or subtract) coins for a player; used for gambling payouts/escrow. Returns new wallet. */
+/** Spend coins (e.g. escrow a bet). Fails — returns null — if the player can't afford it,
+ *  so callers must NOT proceed when null is returned. */
+export async function spendCoins(pid: string, amount: number): Promise<Wallet | null> {
+  if (!pool || !pid || amount <= 0) return null;
+  const { rows } = await pool.query(
+    `UPDATE players SET coins = coins - $2 WHERE id = $1 AND coins >= $2
+       RETURNING coins, owned, hat, skin`,
+    [pid, amount],
+  );
+  return rows.length ? rowToWallet(rows[0]) : null;
+}
+
+/** Add (or subtract) coins for a player; used for gambling payouts/refunds. Returns new wallet. */
 export async function addCoins(pid: string, name: string, delta: number): Promise<Wallet | null> {
   if (!pool || !pid) return null;
   const { rows } = await pool.query(
