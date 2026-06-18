@@ -32,6 +32,11 @@ const MAP_H = MAP.length;
 const W = 320;
 const H = 200;
 
+// The boss is drawn as the minion image (the same one used by the minion power-up).
+const bossImg = new Image();
+bossImg.src = '/minion.png';
+const isBossRound = (round: number): boolean => round % 5 === 0;
+
 function isWall(mx: number, my: number): boolean {
   if (mx < 0 || my < 0 || mx >= MAP_W || my >= MAP_H) return true;
   return MAP[my][mx] !== '.';
@@ -56,6 +61,7 @@ interface Player {
 }
 interface Enemy {
   x: number; y: number; hp: number; alive: boolean; flash: number; attackCd: number;
+  boss?: boolean; maxHp?: number; // boss-round minion: big, tanky, hits hard
 }
 interface GuestInput { forward: number; strafe: number; angle: number; fireSeq: number; }
 
@@ -92,19 +98,39 @@ function enemyCountFor(round: number): number { return 3 + (round - 1) * 2; }
 function enemyHpFor(round: number): number { return 2 + Math.floor((round - 1) / 4); }
 function enemySpeedFor(round: number): number { return Math.min(1.3 + (round - 1) * 0.1, 2.6); }
 
-function spawnEnemiesForRound(round: number, players: Player[]): Enemy[] {
-  const out: Enemy[] = [];
-  const n = enemyCountFor(round);
-  const hp = enemyHpFor(round);
+function randomOpenCell(players: Player[], minDist: number): { x: number; y: number } {
   let guard = 0;
-  while (out.length < n && guard++ < 2000) {
+  while (guard++ < 2000) {
     const mx = 1 + Math.floor(Math.random() * (MAP_W - 2));
     const my = 1 + Math.floor(Math.random() * (MAP_H - 2));
     if (isWall(mx, my)) continue;
     const x = mx + 0.5, y = my + 0.5;
-    // keep new enemies a few tiles away from every living player
-    if (players.some((p) => p.alive && Math.hypot(p.x - x, p.y - y) < 4)) continue;
-    out.push({ x, y, hp, alive: true, flash: 0, attackCd: 0 });
+    if (players.some((p) => p.alive && Math.hypot(p.x - x, p.y - y) < minDist)) continue;
+    return { x, y };
+  }
+  return { x: MAP_W / 2, y: MAP_H / 2 };
+}
+
+function spawnEnemiesForRound(round: number, players: Player[]): Enemy[] {
+  // Every 5th round is a minion BOSS battle: one big, tanky, hard-hitting minion plus a
+  // handful of regular adds. Tougher than any normal wave.
+  if (isBossRound(round)) {
+    const out: Enemy[] = [];
+    const bossPos = randomOpenCell(players, 6);
+    const bossHp = 18 + round * 2; // a real bullet-sponge (e.g. ~28 at round 5, ~38 at round 10)
+    out.push({ ...bossPos, hp: bossHp, maxHp: bossHp, alive: true, flash: 0, attackCd: 0, boss: true });
+    const adds = 2 + Math.floor(round / 5); // a few imps alongside the boss
+    const hp = enemyHpFor(round);
+    for (let i = 0; i < adds; i++) {
+      out.push({ ...randomOpenCell(players, 4), hp, alive: true, flash: 0, attackCd: 0 });
+    }
+    return out;
+  }
+  const out: Enemy[] = [];
+  const n = enemyCountFor(round);
+  const hp = enemyHpFor(round);
+  for (let i = 0; i < n; i++) {
+    out.push({ ...randomOpenCell(players, 4), hp, alive: true, flash: 0, attackCd: 0 });
   }
   return out;
 }
@@ -254,6 +280,8 @@ export function startDoom(net: DoomNet): void {
   // --- audio ---
   let audio: AudioContext | null = null;
   const ac = () => (audio ??= new AudioContext());
+  const bossLaugh = new Audio('/minion-laugh.mp3'); // the boss cackles every time it's shot
+  function laughSound() { try { bossLaugh.currentTime = 0; void bossLaugh.play(); } catch { /* ignore */ } }
   function shotSound() {
     try {
       const a = ac();
@@ -310,6 +338,7 @@ export function startDoom(net: DoomNet): void {
     if (best) {
       best.hp -= 1;
       best.flash = 0.12;
+      if (best.boss) laughSound(); // the boss cackles every time it's hit
       if (best.hp <= 0) {
         best.alive = false; kills++; deathSound();
         // Drop an ammo pack only when someone's running low (and not every time).
@@ -381,13 +410,15 @@ export function startDoom(net: DoomNet): void {
         if (d < td) { td = d; target = p; }
       }
       if (!target) continue;
-      if (td > 1.1) {
-        const sp = enemySpeedFor(round) * dt;
+      const reach = e.boss ? 1.4 : 1.1; // the boss is bigger, so it strikes from a bit further
+      if (td > reach) {
+        const sp = (e.boss ? enemySpeedFor(round) * 0.9 : enemySpeedFor(round)) * dt;
         const dx = (target.x - e.x) / td, dy = (target.y - e.y) / td;
         if (!isWall(Math.floor(e.x + dx * sp), Math.floor(e.y))) e.x += dx * sp;
         if (!isWall(Math.floor(e.x), Math.floor(e.y + dy * sp))) e.y += dy * sp;
       } else if (e.attackCd <= 0) {
-        target.health -= 9; e.attackCd = 1.1;
+        target.health -= e.boss ? 22 : 9; // the boss hits much harder
+        e.attackCd = e.boss ? 0.9 : 1.1;
         if (target === me()) hurt = 0.25;
         if (target.health <= 0) { target.health = 0; target.alive = false; }
       }
@@ -407,7 +438,7 @@ export function startDoom(net: DoomNet): void {
     if (enemies.every((e) => !e.alive)) {
       // Wave cleared — advance, reward survivors, and queue the next wave.
       round++;
-      betweenTimer = 2.2;
+      betweenTimer = isBossRound(round) ? 3.2 : 2.2; // longer "get ready" before a boss
       enemies = [];
       for (const p of players) {
         if (!p.alive) continue;
@@ -473,7 +504,7 @@ export function startDoom(net: DoomNet): void {
         net.relay({
           t: 'st',
           players: players.map((p) => ({ x: p.x, y: p.y, angle: p.angle, health: p.health, ammo: p.ammo, alive: p.alive, flash: p.flash })),
-          enemies: enemies.map((e) => ({ x: e.x, y: e.y, alive: e.alive, flash: e.flash })),
+          enemies: enemies.map((e) => ({ x: e.x, y: e.y, alive: e.alive, flash: e.flash, boss: !!e.boss, hpFrac: e.maxHp ? e.hp / e.maxHp : 1 })),
           drops: drops.map((d) => ({ x: d.x, y: d.y })),
           round, between: betweenTimer > 0, over,
         });
@@ -537,9 +568,9 @@ export function startDoom(net: DoomNet): void {
       ctx.fillRect(x, start, 1, end - start + 1);
     }
 
-    // Sprites: enemies (imps) + the partner marine, billboarded with z-buffer occlusion.
-    const sprites: Array<{ x: number; y: number; kind: 'imp' | 'marine' | 'ammo'; flash: boolean }> = [];
-    for (const e of enemies) if (e.alive) sprites.push({ x: e.x, y: e.y, kind: 'imp', flash: e.flash > 0 });
+    // Sprites: enemies (imps / boss) + the partner marine, billboarded with z-buffer occlusion.
+    const sprites: Array<{ x: number; y: number; kind: 'imp' | 'marine' | 'ammo' | 'boss'; flash: boolean }> = [];
+    for (const e of enemies) if (e.alive) sprites.push({ x: e.x, y: e.y, kind: e.boss ? 'boss' : 'imp', flash: e.flash > 0 });
     for (const d of drops) sprites.push({ x: d.x, y: d.y, kind: 'ammo', flash: false });
     const mate = partner();
     if (mate && mate.alive) sprites.push({ x: mate.x, y: mate.y, kind: 'marine', flash: false });
@@ -559,12 +590,42 @@ export function startDoom(net: DoomNet): void {
       if (d.tY >= zBuffer[col]) continue;
       if (d.s.kind === 'imp') drawImp(screenX, size, d.s.flash);
       else if (d.s.kind === 'ammo') drawAmmo(screenX, size);
+      else if (d.s.kind === 'boss') drawBoss(screenX, size, d.s.flash);
       else drawMarine(screenX, size);
     }
 
     drawGun();
     drawCrosshair();
+    drawBossBar();
     if (hurt > 0) { ctx.fillStyle = `rgba(180,0,0,${Math.min(0.5, hurt * 1.6)})`; ctx.fillRect(0, 0, W, H); }
+  }
+
+  // The boss minion: the minion image drawn big (≈1.7× a normal sprite), flashing white on hit.
+  function drawBoss(cx: number, size: number, flash: boolean) {
+    const h = Math.min(size * 1.7, H * 1.95);
+    const aspect = bossImg.complete && bossImg.naturalWidth ? bossImg.naturalWidth / bossImg.naturalHeight : 1.3;
+    const w = h * aspect;
+    const top = H / 2 - h / 2;
+    const left = cx - w / 2;
+    if (bossImg.complete && bossImg.naturalWidth) {
+      ctx.drawImage(bossImg, left, top, w, h);
+      if (flash) { ctx.save(); ctx.globalAlpha = 0.4; ctx.fillStyle = '#fff'; ctx.fillRect(left, top, w, h); ctx.restore(); }
+    } else {
+      drawImp(cx, size * 1.7, flash); // fallback until the image loads
+    }
+  }
+
+  // A boss health bar across the top of the screen while the boss minion is alive.
+  function drawBossBar() {
+    const boss = enemies.find((e) => e.alive && e.boss);
+    if (!boss) return;
+    const frac = Math.max(0, Math.min(1, boss.maxHp ? boss.hp / boss.maxHp : 1));
+    const bw = W * 0.6, bh = 8, bx = (W - bw) / 2, by = 16;
+    ctx.fillStyle = '#000'; ctx.fillRect(bx - 2, by - 2, bw + 4, bh + 4);
+    ctx.fillStyle = '#3a0d0d'; ctx.fillRect(bx, by, bw, bh);
+    ctx.fillStyle = '#ffd21e'; ctx.fillRect(bx, by, bw * frac, bh);
+    ctx.fillStyle = '#fff'; ctx.font = '8px ui-monospace,monospace'; ctx.textAlign = 'center';
+    ctx.fillText('MINION BOSS', W / 2, by - 4);
   }
 
   function drawImp(cx: number, size: number, flash: boolean) {
@@ -646,16 +707,17 @@ export function startDoom(net: DoomNet): void {
     const p = me();
     healthEl.textContent = `♥ ${Math.max(0, Math.round(p.health))}`;
     ammoEl.textContent = `▮ ${p.ammo}`;
-    killsEl.textContent = betweenTimer > 0 ? `ROUND ${round} ▸` : `ROUND ${round} · ${alive} left`;
+    const bossTag = isBossRound(round) ? ' (BOSS BATTLE)' : '';
+    killsEl.textContent = betweenTimer > 0 ? `ROUND ${round}${bossTag} ▸` : `ROUND ${round}${bossTag} · ${alive} left`;
     if (over === 'dead') {
       banner.textContent = `GAME OVER\nReached round ${round}\n${mode === 'solo' ? 'press R to retry · ' : ''}ESC to quit`;
       banner.style.color = '#ff2d2d';
       banner.style.fontSize = '40px';
       banner.style.display = 'flex';
     } else if (betweenTimer > 0) {
-      banner.textContent = `ROUND ${round}`;
-      banner.style.color = '#ffd166';
-      banner.style.fontSize = '56px';
+      banner.textContent = isBossRound(round) ? `ROUND ${round}\nBOSS BATTLE` : `ROUND ${round}`;
+      banner.style.color = isBossRound(round) ? '#ffd21e' : '#ffd166';
+      banner.style.fontSize = isBossRound(round) ? '44px' : '56px';
       banner.style.display = 'flex';
     } else {
       banner.style.display = 'none';
@@ -718,13 +780,15 @@ export function startDoom(net: DoomNet): void {
         };
       } else if (mode === 'guest' && msg.t === 'st') {
         const st = msg as unknown as {
-          players: Player[]; enemies: Array<{ x: number; y: number; alive: boolean; flash: number }>;
+          players: Player[]; enemies: Array<{ x: number; y: number; alive: boolean; flash: number; boss?: boolean; hpFrac?: number }>;
           drops?: Array<{ x: number; y: number }>;
           round: number; between: boolean; over: 'dead' | null;
         };
         players = st.players.map((p) => ({ ...p }));
-        // keep enemy hp/attackCd fields the guest doesn't use; just mirror position/alive/flash
-        enemies = st.enemies.map((e) => ({ x: e.x, y: e.y, hp: 1, alive: e.alive, flash: e.flash, attackCd: 0 }));
+        // Mirror position/alive/flash + boss flag; store hpFrac as hp/maxHp so the bar reads right.
+        enemies = st.enemies.map((e) => ({
+          x: e.x, y: e.y, hp: e.hpFrac ?? 1, maxHp: 1, alive: e.alive, flash: e.flash, attackCd: 0, boss: e.boss,
+        }));
         drops = (st.drops ?? []).map((d) => ({ x: d.x, y: d.y }));
         round = st.round; betweenTimer = st.between ? 1 : 0; over = st.over;
         if (over === 'dead' && players[selfIdx] && !players[selfIdx].alive) hurt = Math.max(hurt, 0.2);

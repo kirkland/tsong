@@ -57,6 +57,14 @@ export async function initDb(): Promise<void> {
   // Co-op scores used to be recorded per-player; they're now one combined team entry keyed
   // "team:<a> and <b>". Drop any legacy per-player co-op rows so the board only shows pairs.
   await pool.query(`DELETE FROM doom_scores WHERE coop = TRUE AND pid NOT LIKE 'team:%'`);
+  // One-time wipe: scores recorded before boss-battle rounds existed are no longer
+  // comparable, so clear the whole board once (gated by a meta flag so it runs just once).
+  await pool.query(`CREATE TABLE IF NOT EXISTS doom_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)`);
+  const reset = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'reset_boss_v1'`);
+  if (reset.rowCount === 0) {
+    await pool.query(`DELETE FROM doom_scores`);
+    await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('reset_boss_v1', now()::text)`);
+  }
   console.log('leaderboard DB ready');
 }
 
