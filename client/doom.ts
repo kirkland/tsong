@@ -111,7 +111,7 @@ const PICKUP_RADIUS = 0.6; // how close you must get to grab a drop (grid units)
 
 // Survival rounds: each round spawns more (and slightly tougher) enemies at random open
 // cells, kept clear of the players' spawn corner.
-function enemyCountFor(round: number): number { return 3 + (round - 1) * 2; }
+function enemyCountFor(round: number): number { return 3 + Math.floor((round - 1) * 1.5); }
 function enemyHpFor(round: number): number { return 2 + Math.floor((round - 1) / 4); }
 function enemySpeedFor(round: number): number { return Math.min(1.3 + (round - 1) * 0.1, 2.6); }
 
