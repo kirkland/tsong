@@ -21,6 +21,7 @@ import {
   PowerupKind,
   POWERUPS,
   TEAM_MAX,
+  COSMETICS,
 } from '../shared/types';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -435,6 +436,9 @@ const net = connect(
       doomMod?.feedDoomEnd(msg.reason);
     } else if (msg.type === 'doomLeaderboard') {
       doomScores = { solo: msg.solo, coop: msg.coop };
+    } else if (msg.type === 'wallet') {
+      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, bet: msg.bet };
+      renderShop();
     }
   },
   () => {
@@ -1161,11 +1165,78 @@ doomBtn.addEventListener('click', async () => {
       submitScore: (round, coop, label) => net.send({ type: 'doomScore', round, coop, name: label }),
       scores: () => doomScores,
       name: () => myName,
+      awardCoin: () => net.send({ type: 'doomReward' }),
     });
   } catch (e) {
     console.error('DOOM failed to load:', e);
   }
 });
+
+// --- Coins, cosmetics shop & betting ---
+let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; bet: { side: Side; amount: number } | null } =
+  { coins: 0, owned: [], hat: null, skin: null, bet: null };
+let betAmount = 1;
+const shopBtn = document.getElementById('shopBtn') as HTMLButtonElement;
+const shopPanel = document.getElementById('shopPanel') as HTMLDivElement;
+const coinCount = document.getElementById('coinCount') as HTMLSpanElement;
+const shopCoins = document.getElementById('shopCoins') as HTMLSpanElement;
+const shopItems = document.getElementById('shopItems') as HTMLDivElement;
+const betSection = document.getElementById('betSection') as HTMLDivElement;
+const betAmountEl = document.getElementById('betAmount') as HTMLSpanElement;
+const betStatus = document.getElementById('betStatus') as HTMLDivElement;
+
+shopBtn.addEventListener('click', () => {
+  const open = shopPanel.hidden;
+  shopPanel.hidden = !open;
+  shopBtn.setAttribute('aria-expanded', String(open));
+  if (open) renderShop();
+});
+document.addEventListener('click', (e) => {
+  if (shopPanel.hidden) return;
+  const t = e.target as Node;
+  if (!shopPanel.contains(t) && !shopBtn.contains(t)) { shopPanel.hidden = true; shopBtn.setAttribute('aria-expanded', 'false'); }
+});
+
+// Build the shop rows (buy / equip / unequip) + the betting section from the current wallet.
+function renderShop() {
+  coinCount.textContent = String(wallet.coins);
+  shopCoins.textContent = String(wallet.coins);
+  shopItems.innerHTML = '';
+  for (const item of COSMETICS) {
+    const owned = wallet.owned.includes(item.id);
+    const equipped = (item.slot === 'hat' ? wallet.hat : wallet.skin) === item.id;
+    const row = document.createElement('div');
+    row.className = 'shop-row';
+    const name = document.createElement('span');
+    name.className = 'shop-name';
+    name.textContent = owned ? item.name : `${item.name} · ${item.price}🪙`;
+    row.appendChild(name);
+    const btn = document.createElement('button');
+    if (!owned) {
+      btn.textContent = 'Buy';
+      btn.disabled = wallet.coins < item.price;
+      btn.onclick = () => net.send({ type: 'shopBuy', item: item.id });
+    } else {
+      btn.textContent = equipped ? 'Unequip' : 'Equip';
+      if (equipped) btn.classList.add('equipped');
+      btn.onclick = () => net.send({ type: 'shopEquip', slot: item.slot, item: equipped ? null : item.id });
+    }
+    row.appendChild(btn);
+    shopItems.appendChild(row);
+  }
+  // Betting: only while spectating a live duel.
+  const canBet = !!state && state.status === 'playing' && !state.poly && myRole === 'observer';
+  betSection.hidden = !canBet;
+  betAmountEl.textContent = String(betAmount);
+  betStatus.textContent = wallet.bet
+    ? `You bet ${wallet.bet.amount} on ${wallet.bet.side}.`
+    : '';
+}
+
+document.getElementById('betMinus')!.addEventListener('click', () => { betAmount = Math.max(1, betAmount - 1); renderShop(); });
+document.getElementById('betPlus')!.addEventListener('click', () => { betAmount = Math.min(wallet.coins || 1, betAmount + 1); renderShop(); });
+document.getElementById('betLeft')!.addEventListener('click', () => net.send({ type: 'bet', side: 'left', amount: betAmount }));
+document.getElementById('betRight')!.addEventListener('click', () => net.send({ type: 'bet', side: 'right', amount: betAmount }));
 
 // A big, transient banner across the middle of the screen (e.g. someone forfeits).
 function showAnnouncement(text: string, color?: string) {
@@ -2160,6 +2231,7 @@ function updateUI() {
 
   renderPuHud(state);
   renderTournament(state.tournament);
+  if (!shopPanel.hidden) renderShop(); // keep the betting section in sync with match state
 
   // Sync win score buttons with the current room setting.
   for (const btn of winScoreOpts.querySelectorAll<HTMLButtonElement>('.ws-btn')) {

@@ -79,6 +79,7 @@ export interface DoomNet {
   submitScore(round: number, coop: boolean, label?: string): void;
   scores(): { solo: DoomScore[]; coop: DoomScore[] }; // latest high-round leaderboards
   name(): string; // this client's display name
+  awardCoin(): void; // grant this player 1 coin (for killing the minion boss)
 }
 
 // The running instance feeds server messages back to itself through these module-level hooks,
@@ -892,6 +893,7 @@ export function startDoom(net: DoomNet): void {
   // --- loop + teardown ---
   let raf = 0;
   let last = performance.now();
+  let prevBossAlive = false; // edge-detect the minion boss dying to award a coin
   function loop(now: number) {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
@@ -899,6 +901,10 @@ export function startDoom(net: DoomNet): void {
     render();
     syncHud();
     syncBossMusic();
+    // Award a coin the moment the minion boss dies (each participant gets one).
+    const bossAlive = enemies.some((e) => e.boss && e.alive);
+    if (prevBossAlive && !bossAlive) net.awardCoin();
+    prevBossAlive = bossAlive;
     raf = requestAnimationFrame(loop);
   }
   raf = requestAnimationFrame(loop);

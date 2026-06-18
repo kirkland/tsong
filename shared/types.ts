@@ -122,6 +122,20 @@ export const POWERUPS = [
 export type PowerupKind = (typeof POWERUPS)[number];
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
 export const LEADERBOARD_SIZE = 10;
+
+// Cosmetic shop. Purely visual — equipped items are drawn on the paddle but never affect
+// the ball's collision (the hitbox is always the plain paddle rectangle). You earn 1 coin
+// per match win and can spend coins here. `slot` is mutually exclusive per player.
+export interface CosmeticItem {
+  id: string;
+  name: string;
+  slot: 'hat' | 'skin';
+  price: number;
+}
+export const COSMETICS: readonly CosmeticItem[] = [
+  { id: 'tophat', name: 'Top Hat', slot: 'hat', price: 5 },
+  { id: 'rainbow', name: 'Rainbow Skin', slot: 'skin', price: 10 },
+] as const;
 export const CHAT_MAX_LEN = 200; // max characters per chat message
 export const CHAT_HISTORY = 50; // recent messages kept/sent to new joiners
 export const TICK_MS = 1000 / 60;
@@ -189,7 +203,11 @@ export type ClientMsg =
   | { type: 'doomJoin' } // take a slot in the 2-player co-op DOOM lobby
   | { type: 'doomLeave' } // leave the co-op DOOM lobby / game
   | { type: 'doomRelay'; data: unknown } // forward an opaque DOOM payload to the co-op partner
-  | { type: 'doomScore'; round: number; coop: boolean; name?: string }; // record a DOOM run's reached round (name = combined team label for co-op)
+  | { type: 'doomScore'; round: number; coop: boolean; name?: string } // record a DOOM run's reached round (name = combined team label for co-op)
+  | { type: 'doomReward' } // grant the player 1 coin (killed the DOOM minion boss)
+  | { type: 'shopBuy'; item: string } // buy a cosmetic from the shop
+  | { type: 'shopEquip'; slot: 'hat' | 'skin'; item: string | null } // equip (item) or unequip (null) a cosmetic
+  | { type: 'bet'; side: Side; amount: number }; // spectator wagers coins on a side of the live duel
 
 // --- Server -> Client ---
 
@@ -202,6 +220,8 @@ export interface TeamPlayer {
   y: number; // this player's paddle center Y in court units
   name: string;
   color: string;
+  hat?: string | null; // equipped cosmetic hat (purely visual — no collision)
+  skin?: string | null; // equipped cosmetic skin (purely visual — no collision)
 }
 
 export interface PaddleState {
@@ -420,7 +440,18 @@ export type ServerMsg =
   | DoomLobbyMsg
   | DoomRelayMsg
   | DoomEndMsg
-  | DoomLeaderboardMsg;
+  | DoomLeaderboardMsg
+  | WalletMsg;
+
+// A player's private wallet + cosmetics + active bet, sent only to that client.
+export interface WalletMsg {
+  type: 'wallet';
+  coins: number;
+  owned: string[]; // item ids owned
+  hat: string | null; // equipped hat
+  skin: string | null; // equipped skin
+  bet: { side: Side; amount: number } | null; // current wager on the live duel, if any
+}
 
 // Co-op DOOM lobby status (2 slots). `slot` is which slot this client holds (0 = host,
 // 1 = guest, null = not in it). When status flips to 'playing', slot 0 is the authority.

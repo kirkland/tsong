@@ -85,8 +85,16 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
         if (minionOn) {
           drawMinionPaddle(ctx, pl.x, pl.y, p.h);
         } else {
-          ctx.fillStyle = p.disabled ? '#555a66' : pl.color; // blaster-locked paddles go gray
-          drawPaddle(ctx, pl.x, pl.y, p.h);
+          // Cosmetic skin (a registered renderer) or solid color; locked paddles go gray.
+          const skinFn = !p.disabled && pl.skin ? SKIN_RENDERERS[pl.skin] : undefined;
+          if (skinFn) {
+            skinFn(ctx, pl.x, pl.y, p.h);
+          } else {
+            ctx.fillStyle = p.disabled ? '#555a66' : pl.color;
+            drawPaddle(ctx, pl.x, pl.y, p.h);
+          }
+          const hatFn = pl.hat ? HAT_RENDERERS[pl.hat] : undefined;
+          if (hatFn) hatFn(ctx, pl.x, pl.y, p.h);
         }
       }
     } else if (minionOn) {
@@ -465,6 +473,45 @@ function drawPinata(
 
 function drawPaddle(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
   ctx.fillRect(cx - PADDLE.w / 2, cy - h / 2, PADDLE.w, h);
+}
+
+// Cosmetic "rainbow" skin: fill the paddle with a vertical rainbow gradient. Visual only.
+function fillRainbow(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  const g = ctx.createLinearGradient(0, top, 0, top + h);
+  const stops = ['#ff3b30', '#ff9500', '#ffd60a', '#34c759', '#0a84ff', '#5e5ce6', '#bf5af2'];
+  stops.forEach((c, i) => g.addColorStop(i / (stops.length - 1), c));
+  ctx.fillStyle = g;
+  ctx.fillRect(cx - PADDLE.w / 2, top, PADDLE.w, h);
+}
+
+// Cosmetic registries — add new skins/hats here (id must match shared/types COSMETICS).
+// Each draws purely visual decoration on the paddle; none affect the ball's collision.
+type CosmeticDraw = (ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) => void;
+const SKIN_RENDERERS: Record<string, CosmeticDraw> = {
+  rainbow: fillRainbow,
+};
+const HAT_RENDERERS: Record<string, CosmeticDraw> = {
+  tophat: drawTopHat,
+};
+
+// Cosmetic "top hat": a little hat perched at the top end of the paddle. Visual only.
+function drawTopHat(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  const brimW = PADDLE.w + 12;
+  const crownW = PADDLE.w + 2;
+  const crownH = 12;
+  const brimH = 3;
+  ctx.save();
+  ctx.fillStyle = '#15171c';
+  // brim sits just above the paddle's top edge
+  ctx.fillRect(cx - brimW / 2, top - brimH, brimW, brimH);
+  // crown
+  ctx.fillRect(cx - crownW / 2, top - brimH - crownH, crownW, crownH);
+  // red band
+  ctx.fillStyle = '#c0392b';
+  ctx.fillRect(cx - crownW / 2, top - brimH - 4, crownW, 3);
+  ctx.restore();
 }
 
 // "minion" power-up: draw the minion image centered on the paddle, sized to the paddle's
