@@ -252,7 +252,22 @@ export function startDoom(net: DoomNet): void {
   const cancelWaitBtn = mkBtn('CANCEL');
   cancelWaitBtn.style.display = 'none';
   btnRow.append(soloBtn, coopBtn, cancelWaitBtn);
-  menu.append(menuTitle, menuMsg, btnRow);
+  // Controls + boss/drop legend, shown on the start menu.
+  const menuInfo = document.createElement('div');
+  menuInfo.style.cssText =
+    'max-width:520px;font:600 13px ui-monospace,monospace;color:#9fb0d8;line-height:1.7;text-align:center;';
+  menuInfo.innerHTML =
+    '<div style="color:#cdd7f5;font-weight:700;margin-bottom:4px">CONTROLS</div>' +
+    'WASD move · A/D strafe · mouse or ←/→ turn · click to shoot · <b>SPACE</b> to throw a grenade · ESC quit' +
+    '<div style="color:#cdd7f5;font-weight:700;margin:12px 0 4px">SURVIVE THE ROUNDS</div>' +
+    'Each round spawns more (and tougher) enemies. Clear them all to advance. Special enemies show up on a schedule:' +
+    '<div style="margin-top:8px;text-align:left;display:inline-block">' +
+    '<div><span style="color:#ffd21e">😈 Minion BOSS</span> — every 5th round. Huge, tanky, hits hard (with its own health bar). <b>Kill it for a coin.</b></div>' +
+    '<div><span style="color:#f59e0b">🧍 Fritz</span> — every 3rd round. A beefy mini-boss. <b>Drops a full-health pack.</b></div>' +
+    '<div><span style="color:#63e6be">🧍 Jsav</span> — every 2nd round. A beefy mini-boss. <b>Drops a grenade.</b></div>' +
+    '</div>' +
+    '<div style="margin-top:10px;color:#8693b3">Low on ammo? Regular kills drop ammo when you need it. Co-op: you both share the round &amp; high-score.</div>';
+  menu.append(menuTitle, menuMsg, btnRow, menuInfo);
   overlay.appendChild(menu);
 
   // High-round leaderboards (solo + co-op), filled live from net.scores(). Shown on the
