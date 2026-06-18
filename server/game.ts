@@ -101,6 +101,7 @@ export interface GameSnapshot {
   disco?: boolean;
   minion?: boolean;
   earthquake?: boolean;
+  blackout?: boolean; bullettime?: boolean; vortex?: boolean; glitch?: boolean; smoke?: boolean; tilt?: boolean;
   winnerSide: Side | null;
   lastHit: Side | null;
   target: { x: number; y: number; kind: PowerupKind } | null;
@@ -178,6 +179,7 @@ export class Game {
   disco = false; // "disco" power-up: 3D disco ball, dance floor, colored lights for the point
   minion = false; // "minion" power-up: both paddles are drawn as a minion for the point
   earthquake = false; // "earthquake" power-up: court shakes and the ball jitters for the point
+  blackout = false; bullettime = false; vortex = false; glitch = false; smoke = false; tilt = false; // screen-effect power-ups (per point)
   coinGrant: Side | null = null; // transient: side that just collected the "coins" power-up (lobby pays out)
   // "Blaster": shots each side holds, projectiles in flight, and how long each paddle is locked.
   blasterAmmo: Record<Side, number> = { left: 0, right: 0 };
@@ -215,6 +217,8 @@ export class Game {
       disco: this.disco,
       minion: this.minion,
       earthquake: this.earthquake,
+      blackout: this.blackout, bullettime: this.bullettime, vortex: this.vortex,
+      glitch: this.glitch, smoke: this.smoke, tilt: this.tilt,
       winnerSide: this.winnerSide,
       lastHit: this.lastHit,
       target: this.target ? { ...this.target } : null,
@@ -261,6 +265,8 @@ export class Game {
     this.disco = s.disco ?? false;
     this.minion = s.minion ?? false;
     this.earthquake = s.earthquake ?? false;
+    this.blackout = s.blackout ?? false; this.bullettime = s.bullettime ?? false; this.vortex = s.vortex ?? false;
+    this.glitch = s.glitch ?? false; this.smoke = s.smoke ?? false; this.tilt = s.tilt ?? false;
     this.winnerSide = s.winnerSide;
     this.lastHit = s.lastHit;
     this.target = s.target ? { ...s.target } : null;
@@ -595,6 +601,8 @@ export class Game {
     this.disco = false;
     this.minion = false;
     this.earthquake = false;
+    this.blackout = false; this.bullettime = false; this.vortex = false;
+    this.glitch = false; this.smoke = false; this.tilt = false;
     this.blasterAmmo = { left: 0, right: 0 };
     this.disabledTimer = { left: 0, right: 0 };
     this.projectiles = [];
@@ -653,7 +661,7 @@ export class Game {
     }
     // Blaster projectiles fly on their own clock (not slowed by the slow power-up).
     this.moveProjectiles(dt);
-    const scale = this.slowTimer > 0 ? SLOW_SCALE : 1;
+    const scale = (this.slowTimer > 0 ? SLOW_SCALE : 1) * (this.bullettime ? 0.45 : 1);
 
     // Advance every ball. A ball that leaves the court just drops out of play — NO point
     // is scored while other balls remain, so during multi-ball one ball going out never
@@ -718,6 +726,13 @@ export class Game {
       const nvy = b.vx * sin + b.vy * cos;
       b.vx = nvx; b.vy = nvy;
     }
+    // Vortex: gently pull the ball toward court center, so its path spirals inward.
+    if (this.vortex) {
+      b.vx += (COURT.w / 2 - b.x) * 0.9 * dt;
+      b.vy += (COURT.h / 2 - b.y) * 0.9 * dt;
+    }
+    // Tilt: the court leans, so the ball rolls steadily downward (a mild extra gravity).
+    if (this.tilt) b.vy += 150 * dt * scale;
 
     const prevX = b.x;
     const prevY = b.y;
@@ -901,6 +916,24 @@ export class Game {
         break;
       case 'earthquake':
         this.earthquake = true;
+        break;
+      case 'blackout':
+        this.blackout = true;
+        break;
+      case 'bullettime':
+        this.bullettime = true;
+        break;
+      case 'vortex':
+        this.vortex = true;
+        break;
+      case 'glitch':
+        this.glitch = true;
+        break;
+      case 'smoke':
+        this.smoke = true;
+        break;
+      case 'tilt':
+        this.tilt = true;
         break;
       case 'coins':
         // Transient economy reward — the lobby reads this and pays the side 1 coin.
