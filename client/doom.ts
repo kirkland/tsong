@@ -199,6 +199,39 @@ export function startDoom(net: DoomNet): void {
   ctx.imageSmoothingEnabled = false;
   overlay.appendChild(canvas);
 
+  // Procedurally generated starry-night ceiling (built once, blitted each frame). A black
+  // sky scattered with stars of varying size/brightness in mostly blue-white with a few
+  // warm ones, plus a couple of soft glowing bright stars — evokes a clear night sky.
+  const sky = document.createElement('canvas');
+  sky.width = W; sky.height = H / 2;
+  (() => {
+    const sc = sky.getContext('2d')!;
+    sc.fillStyle = '#04060d';
+    sc.fillRect(0, 0, W, H / 2);
+    const palette = ['#ffffff', '#cfe0ff', '#9fc0ff', '#bfe0ff', '#fff0d0', '#ffd0a0', '#ffb0b0'];
+    for (let i = 0; i < 420; i++) {
+      const x = Math.random() * W;
+      const y = Math.random() * (H / 2);
+      const b = 0.3 + Math.random() * 0.7;
+      sc.globalAlpha = b;
+      sc.fillStyle = palette[(Math.random() * (Math.random() < 0.8 ? 4 : palette.length)) | 0];
+      sc.fillRect(x, y, Math.random() < 0.15 ? 2 : 1, 1);
+    }
+    // A handful of bright glowing stars.
+    for (let i = 0; i < 6; i++) {
+      const x = Math.random() * W;
+      const y = Math.random() * (H / 2);
+      const g = sc.createRadialGradient(x, y, 0, x, y, 3.5);
+      const col = palette[(Math.random() * palette.length) | 0];
+      g.addColorStop(0, col);
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      sc.globalAlpha = 1;
+      sc.fillStyle = g;
+      sc.fillRect(x - 4, y - 4, 8, 8);
+    }
+    sc.globalAlpha = 1;
+  })();
+
   const hud = document.createElement('div');
   hud.style.cssText =
     'position:absolute;left:0;right:0;bottom:calc(6vh - 6px);display:flex;gap:28px;' +
@@ -659,7 +692,7 @@ export function startDoom(net: DoomNet): void {
     const vx = viewer.x, vy = viewer.y;
     const va = mode === 'guest' ? myAngle : viewer.angle; // guest predicts its own heading
 
-    ctx.fillStyle = '#2a2a33'; ctx.fillRect(0, 0, W, H / 2);
+    ctx.drawImage(sky, 0, 0); // starry-night ceiling
     ctx.fillStyle = '#3a2e26'; ctx.fillRect(0, H / 2, W, H / 2);
 
     const dirX = Math.cos(va), dirY = Math.sin(va);
