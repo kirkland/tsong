@@ -235,6 +235,9 @@ wss.on('connection', (ws: WebSocket) => {
       case 'doomReward':
         lobby.doomReward(ws);
         break;
+      case 'dailySpin':
+        lobby.dailySpin(ws);
+        break;
     }
   });
 

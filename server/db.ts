@@ -49,6 +49,7 @@ export async function initDb(): Promise<void> {
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS owned TEXT NOT NULL DEFAULT ''`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS hat TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS skin TEXT`);
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_spin BIGINT NOT NULL DEFAULT 0`);
   // DOOM minigame high scores — best round reached, per player, per mode (solo / co-op).
   await pool.query(`
     CREATE TABLE IF NOT EXISTS doom_scores (
@@ -169,28 +170,59 @@ export async function updateName(id: string, name: string): Promise<number> {
 }
 
 // --- Wallet & cosmetics ---
+export const DAILY_SPIN_MS = 24 * 60 * 60 * 1000; // a spin every 24 hours
 export interface Wallet {
   coins: number;
   owned: string[]; // item ids the player owns
   hat: string | null; // equipped hat item id
   skin: string | null; // equipped skin item id
+  lastSpin: number; // epoch ms of the last daily spin (0 = never)
 }
-const EMPTY_WALLET: Wallet = { coins: 0, owned: [], hat: null, skin: null };
+const EMPTY_WALLET: Wallet = { coins: 0, owned: [], hat: null, skin: null, lastSpin: 0 };
 
-function rowToWallet(r: { coins: number; owned: string; hat: string | null; skin: string | null }): Wallet {
+function rowToWallet(r: { coins: number; owned: string; hat: string | null; skin: string | null; last_spin?: string | number }): Wallet {
   return {
     coins: r.coins,
     owned: (r.owned || '').split(',').filter(Boolean),
     hat: r.hat ?? null,
     skin: r.skin ?? null,
+    lastSpin: Number(r.last_spin ?? 0),
   };
 }
 
-/** Read a player's wallet (coins + owned items + equipped cosmetics). */
+/** Read a player's wallet (coins + owned items + equipped cosmetics + last spin). */
 export async function getWallet(pid: string): Promise<Wallet> {
   if (!pool || !pid) return { ...EMPTY_WALLET };
-  const { rows } = await pool.query(`SELECT coins, owned, hat, skin FROM players WHERE id = $1`, [pid]);
+  const { rows } = await pool.query(`SELECT coins, owned, hat, skin, last_spin FROM players WHERE id = $1`, [pid]);
   return rows.length ? rowToWallet(rows[0]) : { ...EMPTY_WALLET };
+}
+
+/** Atomically claim the daily spin: stamps last_spin=now only if 24h have passed. Returns
+ *  true if the claim succeeded (caller then rolls + applies the reward). */
+export async function claimSpin(pid: string, name: string, nowMs: number): Promise<boolean> {
+  if (!pool || !pid) return false;
+  await pool.query(
+    `INSERT INTO players (id, name) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name`,
+    [pid, name],
+  );
+  const res = await pool.query(
+    `UPDATE players SET last_spin = $2 WHERE id = $1 AND $2 - last_spin >= $3`,
+    [pid, nowMs, DAILY_SPIN_MS],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+/** Grant an item for free (daily-spin prize). No-op if already owned. Returns updated wallet. */
+export async function grantItem(pid: string, name: string, item: string): Promise<Wallet | null> {
+  if (!pool || !pid) return null;
+  const cur = await getWallet(pid);
+  if (cur.owned.includes(item)) return cur;
+  const owned = [...cur.owned, item].join(',');
+  const { rows } = await pool.query(
+    `UPDATE players SET owned = $2 WHERE id = $1 RETURNING coins, owned, hat, skin, last_spin`,
+    [pid, owned],
+  );
+  return rows.length ? rowToWallet(rows[0]) : null;
 }
 
 /** Buy an item: deducts the price and adds it to `owned` (no-op if already owned or too poor).

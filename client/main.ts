@@ -22,6 +22,7 @@ import {
   POWERUPS,
   TEAM_MAX,
   COSMETICS,
+  SPIN_SEGMENTS,
   TickHealth,
 } from '../shared/types';
 
@@ -104,6 +105,7 @@ function applyMute() {
   blasterSound.muted = muted;
   minionSound.muted = muted;
   chaChing.muted = muted;
+  yaySound.muted = muted;
 }
 muteBtn.addEventListener('click', () => {
   muted = !muted;
@@ -247,6 +249,9 @@ minionSound.loop = true;
 const chaChing = new Audio('/chaching.mp3'); // coin powerup pickup + shop purchases
 chaChing.preload = 'auto';
 function playChaChing() { try { chaChing.currentTime = 0; void chaChing.play(); } catch { /* ignore */ } }
+const yaySound = new Audio('/yay.mp3'); // daily-spin prize celebration
+yaySound.preload = 'auto';
+function playYay() { try { yaySound.currentTime = 0; void yaySound.play(); } catch { /* ignore */ } }
 // Apply persisted mute state immediately (before applyMute() runs at definition time).
 applyMute();
 let prevStatus: StateMsg['status'] | null = null; // last seen status, to fire on the rising edge into 'over'
@@ -490,8 +495,10 @@ const net = connect(
     } else if (msg.type === 'doomLeaderboard') {
       doomScores = { solo: msg.solo, coop: msg.coop };
     } else if (msg.type === 'wallet') {
-      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, bet: msg.bet };
+      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, bet: msg.bet, nextSpinAt: msg.nextSpinAt };
       renderShop();
+    } else if (msg.type === 'spinResult') {
+      celebrateSpin(msg.reward);
     }
   },
   () => {
@@ -1229,8 +1236,8 @@ doomBtn.addEventListener('click', async () => {
 });
 
 // --- Coins, cosmetics shop & betting ---
-let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; bet: { side: Side; amount: number } | null } =
-  { coins: 0, owned: [], hat: null, skin: null, bet: null };
+let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; bet: { side: Side; amount: number } | null; nextSpinAt: number } =
+  { coins: 0, owned: [], hat: null, skin: null, bet: null, nextSpinAt: 0 };
 let betAmount = 1;
 let shopTab: 'hat' | 'skin' = 'hat';
 const shopBtn = document.getElementById('shopBtn') as HTMLButtonElement;
@@ -1242,6 +1249,14 @@ const tabHats = document.getElementById('tabHats') as HTMLButtonElement;
 const tabSkins = document.getElementById('tabSkins') as HTMLButtonElement;
 tabHats.addEventListener('click', () => { shopTab = 'hat'; tabHats.classList.add('active'); tabSkins.classList.remove('active'); renderShop(); });
 tabSkins.addEventListener('click', () => { shopTab = 'skin'; tabSkins.classList.add('active'); tabHats.classList.remove('active'); renderShop(); });
+const spinBtn = document.getElementById('spinBtn') as HTMLButtonElement;
+let spinning = false; // a spin animation is currently playing
+spinBtn.addEventListener('click', () => {
+  if (spinning || (wallet.nextSpinAt && wallet.nextSpinAt > Date.now())) return;
+  spinning = true;
+  spinBtn.disabled = true;
+  net.send({ type: 'dailySpin' });
+});
 const betSection = document.getElementById('betSection') as HTMLDivElement;
 const betAmountEl = document.getElementById('betAmount') as HTMLSpanElement;
 const betStatus = document.getElementById('betStatus') as HTMLDivElement;
@@ -1262,6 +1277,7 @@ document.addEventListener('click', (e) => {
 function renderShop() {
   coinCount.textContent = String(wallet.coins);
   shopCoins.textContent = String(wallet.coins);
+  updateSpinButton();
   shopItems.innerHTML = '';
   for (const item of COSMETICS) {
     if (item.slot !== shopTab) continue; // show only the active tab's items
@@ -1314,6 +1330,98 @@ document.getElementById('betMinus')!.addEventListener('click', () => { betAmount
 document.getElementById('betPlus')!.addEventListener('click', () => { betAmount = Math.min(wallet.coins || 1, betAmount + 1); syncBetSection(); });
 betLeftBtn.addEventListener('click', () => net.send({ type: 'bet', side: 'left', amount: betAmount }));
 betRightBtn.addEventListener('click', () => net.send({ type: 'bet', side: 'right', amount: betAmount }));
+
+// Daily-spin button: bright pink + flashing when a spin is ready; otherwise a live countdown.
+function updateSpinButton() {
+  if (spinning) { spinBtn.textContent = '🎰 Spinning…'; spinBtn.disabled = true; spinBtn.classList.remove('ready'); return; }
+  const ms = wallet.nextSpinAt - Date.now();
+  const ready = !wallet.nextSpinAt || ms <= 0;
+  spinBtn.disabled = !ready;
+  spinBtn.classList.toggle('ready', ready);
+  if (ready) {
+    spinBtn.textContent = '🎰 DAILY SPIN — FREE!';
+  } else {
+    const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+    spinBtn.textContent = `🎰 Next spin in ${h}h ${m}m`;
+  }
+}
+setInterval(updateSpinButton, 1000);
+
+// The spinning reel: a horizontal strip of the wheel segments that scrolls and eases to a
+// stop with the won segment under the center pointer, then reveals the prize + plays "yay".
+function celebrateSpin(reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string }, segment: number) {
+  const CW = 104; // card width incl. gap
+  const VIS = 5;  // visible cards
+  const VW = CW * VIS;
+  const colors = ['#ff5c5c', '#ffd166', '#6ee7a8', '#7da2ff', '#e040fb', '#ff922b', '#4dd2ff', '#b197fc'];
+
+  const back = document.createElement('div');
+  back.style.cssText =
+    'position:fixed;inset:0;z-index:10000;display:flex;flex-direction:column;align-items:center;' +
+    'justify-content:center;gap:18px;background:rgba(4,6,13,0.88);';
+  const heading = document.createElement('div');
+  heading.textContent = '🎰 DAILY SPIN';
+  heading.style.cssText = 'font:900 30px ui-monospace,monospace;color:#ff5cc8;text-shadow:0 2px 0 #000;';
+  const viewport = document.createElement('div');
+  viewport.style.cssText =
+    `position:relative;width:${VW}px;max-width:92vw;height:96px;overflow:hidden;border-radius:12px;` +
+    'border:2px solid #ff5cc8;background:#0a0e1c;box-shadow:0 0 24px rgba(255,92,200,0.4);';
+  const strip = document.createElement('div');
+  strip.style.cssText = 'position:absolute;top:8px;left:0;display:flex;will-change:transform;';
+  const LOOPS = 16;
+  for (let i = 0; i < LOOPS * SPIN_SEGMENTS.length; i++) {
+    const seg = SPIN_SEGMENTS[i % SPIN_SEGMENTS.length];
+    const card = document.createElement('div');
+    card.style.cssText =
+      `flex:0 0 ${CW - 8}px;margin:0 4px;height:80px;border-radius:10px;display:flex;align-items:center;` +
+      `justify-content:center;text-align:center;font:800 16px ui-monospace,monospace;color:#1a1020;` +
+      `background:${colors[i % SPIN_SEGMENTS.length]};`;
+    card.textContent = seg.label;
+    strip.appendChild(card);
+  }
+  viewport.appendChild(strip);
+  // center pointer
+  const pointer = document.createElement('div');
+  pointer.style.cssText =
+    `position:absolute;top:0;bottom:0;left:${VW / 2 - 2}px;width:4px;background:#fff;` +
+    'box-shadow:0 0 8px #fff;pointer-events:none;';
+  viewport.appendChild(pointer);
+  const prize = document.createElement('div');
+  prize.style.cssText = 'font:800 20px ui-monospace,monospace;color:#ffd166;min-height:24px;text-align:center;';
+  back.append(heading, viewport, prize);
+  document.body.appendChild(back);
+
+  // Land the chosen segment, many loops in, centered under the pointer.
+  const landIndex = (LOOPS - 3) * SPIN_SEGMENTS.length + segment;
+  const startX = -(2 * SPIN_SEGMENTS.length + segment) * CW + (VW / 2 - CW / 2);
+  const endX = -(landIndex * CW) + (VW / 2 - CW / 2);
+  strip.style.transform = `translateX(${startX}px)`;
+  // Force a reflow so the transition runs from startX.
+  void strip.offsetWidth;
+  strip.style.transition = 'transform 4s cubic-bezier(0.16, 0.84, 0.12, 1)';
+  strip.style.transform = `translateX(${endX}px)`;
+
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    spinning = false;
+    updateSpinButton();
+    playYay();
+    prize.textContent = reward.kind === 'coins' ? `You won ${reward.amount} 🪙!` : `You won a free ${reward.name}! 🎉`;
+    // brief confetti-ish flash on the viewport
+    viewport.style.boxShadow = '0 0 40px rgba(255,209,102,0.8)';
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = 'Nice!';
+    closeBtn.style.cssText =
+      'font:800 15px ui-monospace,monospace;padding:9px 26px;border-radius:8px;cursor:pointer;' +
+      'border:none;background:#ff5cc8;color:#1a1020;';
+    closeBtn.addEventListener('click', () => back.remove());
+    back.appendChild(closeBtn);
+  };
+  strip.addEventListener('transitionend', finish, { once: true });
+  setTimeout(finish, 4500); // safety net if transitionend doesn't fire
+}
 
 // A big, transient banner across the middle of the screen (e.g. someone forfeits).
 function showAnnouncement(text: string, color?: string) {
