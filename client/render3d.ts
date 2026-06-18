@@ -40,6 +40,7 @@ const PU_COLOR: Record<PowerupKind, string> = {
   minion: '#ffd21e',
   earthquake: '#b07a3a',
   coins: '#ffcf33',
+  blackout: '#9aa0b0', bullettime: '#5aa0ff', vortex: '#b97cff', glitch: '#00fff0', smoke: '#c8c8d2', tilt: '#ffa94d',
 };
 
 // Text painted flat onto the court floor (so it sits in the scene with real perspective —

@@ -957,6 +957,12 @@ const TARGET_STYLE: Record<PowerupKind, { stroke: string; fill: string }> = {
   minion:  { stroke: '#ffd21e', fill: 'rgba(255, 210,  30, 0.16)' }, // minion yellow
   earthquake: { stroke: '#b07a3a', fill: 'rgba(176, 122,  58, 0.16)' }, // dusty brown
   coins:   { stroke: '#ffcf33', fill: 'rgba(255, 207,  51, 0.18)' }, // gold
+  blackout:   { stroke: '#9aa0b0', fill: 'rgba(20, 22, 30, 0.4)' }, // dark
+  bullettime: { stroke: '#5aa0ff', fill: 'rgba(40, 90, 220, 0.16)' }, // blue
+  vortex:     { stroke: '#b97cff', fill: 'rgba(180, 120, 255, 0.16)' }, // purple
+  glitch:     { stroke: '#00fff0', fill: 'rgba(0, 255, 240, 0.14)' }, // cyan
+  smoke:      { stroke: '#c8c8d2', fill: 'rgba(190, 190, 200, 0.16)' }, // grey
+  tilt:       { stroke: '#ffa94d', fill: 'rgba(255, 169, 77, 0.14)' }, // amber
 };
 
 function drawTarget(ctx: CanvasRenderingContext2D, x: number, y: number, kind: PowerupKind) {
@@ -1253,6 +1259,44 @@ const GLYPHS: Record<PowerupKind, (ctx: CanvasRenderingContext2D, x: number, y: 
     ctx.arc(x, y, 5.5, 0, Math.PI * 2);
     ctx.stroke();
     ctx.fillRect(x - 1, y - 5.5, 2, 11); // simple coin mark
+  },
+  // blackout: a half-shaded circle → "the lights go out"
+  blackout(ctx, x, y) {
+    ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y, 11, -Math.PI / 2, Math.PI / 2); ctx.fill();
+  },
+  // bullettime: a clock with a slowed hand → "time slows"
+  bullettime(ctx, x, y) {
+    ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y - 7); ctx.moveTo(x, y); ctx.lineTo(x + 5, y + 2); ctx.stroke();
+  },
+  // vortex: a spiral → "swirl"
+  vortex(ctx, x, y) {
+    ctx.beginPath();
+    for (let a = 0; a < Math.PI * 4; a += 0.3) {
+      const r = a * 1.0;
+      const px = x + Math.cos(a) * r, py = y + Math.sin(a) * r;
+      if (a === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+  },
+  // glitch: offset jagged bars → "TV static"
+  glitch(ctx, x, y) {
+    ctx.fillRect(x - 11, y - 7, 14, 3);
+    ctx.fillRect(x - 6, y - 1, 16, 3);
+    ctx.fillRect(x - 10, y + 5, 12, 3);
+  },
+  // smoke: stacked puffs → "smoke bomb"
+  smoke(ctx, x, y) {
+    ctx.beginPath(); ctx.arc(x - 4, y + 2, 5, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x + 4, y + 1, 6, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y - 5, 5, 0, Math.PI * 2); ctx.stroke();
+  },
+  // tilt: a tilted square → "the court leans"
+  tilt(ctx, x, y) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(0.4);
+    ctx.strokeRect(-9, -9, 18, 18);
+    ctx.restore();
   },
   // rotate: a circular arrow → "the whole court spins 90°"
   rotate(ctx, x, y) {

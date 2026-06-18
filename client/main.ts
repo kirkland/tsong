@@ -2254,32 +2254,47 @@ function applyCanvasRotation(rotated: number) {
   const portrait = rotated === 1 || rotated === 3;
   canvas.width  = portrait ? COURT.h : COURT.w;
   canvas.height = portrait ? COURT.w : COURT.h;
-  if (portrait) {
-    canvas.classList.add('rotated');
-    game3dEl.classList.add('rotated');
-  } else {
-    canvas.classList.remove('rotated');
-    game3dEl.classList.remove('rotated');
-  }
+  canvas.classList.toggle('rotated', portrait);
+  game3dEl.classList.toggle('rotated', portrait);
+  screenFx.classList.toggle('rotated', portrait);
   renderer3d?.resize();
 }
 
 // Earthquake power-up: jiggle the whole board element while the point is live. Independent
 // of the canvas draw transforms (and pointer lock survives a CSS transform).
-let quakeOn = false;
-function applyQuake(on: boolean) {
-  if (on) {
-    const dx = (Math.random() * 2 - 1) * 7;
-    const dy = (Math.random() * 2 - 1) * 7;
+// Apply the screen-effect power-ups (earthquake/tilt transform the board element; the rest
+// toggle overlay layers). All view-agnostic: works the same in 2D, 3D and first-person.
+const screenFx = document.getElementById('screenFx') as HTMLDivElement;
+const fxBlackout = screenFx.querySelector('.fx-blackout') as HTMLElement;
+const fxBullet = screenFx.querySelector('.fx-bullet') as HTMLElement;
+const fxVortex = screenFx.querySelector('.fx-vortex') as HTMLElement;
+const fxGlitch = screenFx.querySelector('.fx-glitch') as HTMLElement;
+const fxSmoke = screenFx.querySelector('.fx-smoke') as HTMLElement;
+let boardFxOn = false;
+function applyScreenFx(s: StateMsg) {
+  const live = s.status === 'playing';
+  // Board transform: earthquake shake + tilt perspective, combined.
+  const quake = live && s.earthquake;
+  const tilt = live && s.tilt;
+  if (quake || tilt) {
+    const dx = quake ? (Math.random() * 2 - 1) * 7 : 0;
+    const dy = quake ? (Math.random() * 2 - 1) * 7 : 0;
+    const t = `${tilt ? 'perspective(640px) rotateX(16deg)' : ''} translate(${dx}px, ${dy}px)`.trim();
     const active = boardEl();
-    active.style.transform = `translate(${dx}px, ${dy}px)`;
+    active.style.transform = t;
     (active === canvas ? game3dEl : canvas).style.transform = '';
-    quakeOn = true;
-  } else if (quakeOn) {
+    boardFxOn = true;
+  } else if (boardFxOn) {
     canvas.style.transform = '';
     game3dEl.style.transform = '';
-    quakeOn = false;
+    boardFxOn = false;
   }
+  // Overlay layers.
+  fxBlackout.classList.toggle('on', live && s.blackout);
+  fxBullet.classList.toggle('on', live && s.bullettime);
+  fxVortex.classList.toggle('on', live && s.vortex);
+  fxGlitch.classList.toggle('on', live && s.glitch);
+  fxSmoke.classList.toggle('on', live && s.smoke);
 }
 
 // --- main loop ---
@@ -2558,7 +2573,7 @@ function loop(t: number) {
       if (!showFatality2d && state.viewMode !== 'normal') renderer3d?.resize();
     }
     applyCanvasRotation(state.rotated);
-    applyQuake(!!state.earthquake && state.status === 'playing');
+    applyScreenFx(state);
     if (state.viewMode !== 'normal' && renderer3d && !state.fatality) {
       const side = state.viewMode === 'firstperson'
         ? (myRole !== 'observer' ? (myRole as 'left' | 'right') : fpSide)

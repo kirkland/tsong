@@ -1737,6 +1737,8 @@ export class Lobby {
       disco: this.game.disco,
       minion: this.game.minion,
       earthquake: this.game.earthquake,
+      blackout: this.game.blackout, bullettime: this.game.bullettime, vortex: this.game.vortex,
+      glitch: this.game.glitch, smoke: this.game.smoke, tilt: this.game.tilt,
       viewMode: this.viewMode,
       pinata: this.game.pinata,
       pinataPos: poly ? null : this.pinataView(),
