@@ -27,14 +27,16 @@ export type TournamentStatus = 'signup' | 'active' | 'done';
 export class Tournament {
   status: TournamentStatus = 'signup';
   readonly size: number;
+  readonly creator: string; // nickname of whoever set it up (only they may cancel it)
   // Signup slots in seed order; filled as players join.
   private slots: (Participant | null)[];
   private matches: MatchNode[] = [];
   rounds = 0;
   champion: Participant | null = null;
 
-  constructor(size: number) {
+  constructor(size: number, creator: string) {
     this.size = size === 8 ? 8 : 4;
+    this.creator = creator;
     this.slots = new Array(this.size).fill(null);
   }
 
@@ -137,6 +139,7 @@ export class Tournament {
     return {
       status: this.status,
       size: this.size,
+      creator: this.creator,
       slots: this.slots.map((s) => s?.name ?? null),
       matches,
       rounds: this.rounds,

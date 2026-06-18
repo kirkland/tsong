@@ -342,6 +342,7 @@ export interface TournamentMatchView {
 export interface TournamentView {
   status: 'signup' | 'active' | 'done';
   size: number; // 4 or 8
+  creator: string; // nickname of whoever set it up (only they may cancel it)
   slots: (string | null)[]; // signup slots in seed order; null = open (signup phase)
   matches: TournamentMatchView[];
   rounds: number; // total number of rounds (so the client can label/lay them out)

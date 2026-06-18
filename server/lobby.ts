@@ -154,6 +154,7 @@ export class Lobby {
   // When set, the lobby is running a bracket: it seats each match's two players into the
   // duel in turn, and king-of-hill / queue / bots are all suspended until it ends.
   private tournament: Tournament | null = null;
+  private tournamentCreatorPid = ''; // only the creator may cancel the tournament
   private liveMatchId: number | null = null; // bracket match currently on the court
   private tourneyInterMs = 0; // ms left on the "next match" interstitial between games
 
@@ -493,7 +494,8 @@ export class Lobby {
     this.king = null;
     this.endStreak();
     if (this.game.status !== 'waiting') this.game.toWaiting();
-    this.tournament = new Tournament(size);
+    this.tournament = new Tournament(size, conn.nickname);
+    this.tournamentCreatorPid = conn.pid;
     this.liveMatchId = null;
     this.tourneyInterMs = 0;
     this.announce(`🏆 ${conn.nickname} started a ${size}-player tournament — join a slot!`);
@@ -524,10 +526,11 @@ export class Lobby {
     this.tournament.leave(conn.pid);
   }
 
-  /** Tear down the current tournament entirely. */
+  /** Tear down the current tournament — only the player who created it may do so. */
   tournamentCancel(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !this.tournament) return;
+    if (conn.pid !== this.tournamentCreatorPid) return; // only the creator can cancel
     this.endTournament(`Tournament cancelled by ${conn.nickname}.`);
   }
 

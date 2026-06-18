@@ -1276,6 +1276,8 @@ function renderTournament(t: StateMsg['tournament']) {
   tournamentCollapseBtn.hidden = t.status === 'signup'; // nothing to fold during signup
   tournamentCollapseBtn.textContent = bracketCollapsed ? '▸' : '▾';
   tournamentBody.hidden = bracketCollapsed && t.status !== 'signup';
+  // Only the creator sees the cancel (✕) button — keeps a random spectator from nuking it.
+  tournamentCancelBtn.hidden = t.creator !== myName;
 
   if (t.status === 'signup') {
     const filled = t.slots.filter(Boolean).length;
