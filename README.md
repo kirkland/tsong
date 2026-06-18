@@ -57,6 +57,38 @@ The win–loss leaderboard is stored in Postgres via the `DATABASE_URL` env var.
   the app service with a variable `DATABASE_URL = ${{Postgres.DATABASE_URL}}`. The app
   uses the internal connection (no SSL); the public proxy host enables SSL automatically.
 
+## Contributing
+
+Want to hack on tsong? Welcome! 🏓
+
+1. **Ask to be added as a contributor.** [Open an issue](https://github.com/kirkland/tsong/issues/new)
+   requesting collaborator access (include your GitHub username). Once a maintainer adds
+   you, you can push branches and open pull requests directly.
+2. **Clone with your personal GitHub account.** If your work laptop is set up with a
+   different (work) GitHub account, configure an SSH host alias so Git uses your
+   personal key for this repo. Add this to `~/.ssh/config`:
+
+   ```ssh-config
+   Host github.com.personal
+     HostName github.com
+     IdentityFile ~/.ssh/id_rsa_personal
+   ```
+
+   Then clone (and set your remote) using the alias as the host:
+
+   ```bash
+   git clone git@github.com.personal:kirkland/tsong.git
+   ```
+
+   If you already cloned with the regular host, repoint the remote:
+
+   ```bash
+   git remote set-url origin git@github.com.personal:kirkland/tsong.git
+   ```
+
+3. **Make it more fun.** See the [code of conduct](./CODE_OF_CONDUCT.md) — every change
+   should leave the game more fun than it was.
+
 ## Contributors
 
 Built by:

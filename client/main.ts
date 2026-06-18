@@ -22,6 +22,7 @@ import {
   POWERUPS,
   TEAM_MAX,
   COSMETICS,
+  TickHealth,
 } from '../shared/types';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -330,6 +331,48 @@ colorPicker.addEventListener('click', (e) => {
   }
 });
 
+// --- latency probe ---------------------------------------------------------
+// Round-trip time is measured by sending the server a timestamped `rtt` frame; it
+// echoes the timestamp straight back and we diff it against our own clock. Purely a
+// client-side health readout (surfaced behind the NET debug toggle); it never touches
+// gameplay or the server's authoritative state. renderDebug() is defined with the rest
+// of the debug UI below — it's hoisted, and never runs before module init completes.
+const RTT_WINDOW = 20; // recent samples kept for the rolling average / max
+const rttSamples: number[] = [];
+let lastRtt = 0;
+function recordRtt(ms: number) {
+  if (!Number.isFinite(ms) || ms < 0) return;
+  lastRtt = ms;
+  rttSamples.push(ms);
+  if (rttSamples.length > RTT_WINDOW) rttSamples.shift();
+  renderDebug();
+}
+
+// Latest server tick-loop health, as reported on the rtt echo (null until the first reply).
+let serverTick: TickHealth | null = null;
+
+// Client frame-rate sampler: the render loop tallies frames into one-second buckets; a
+// sustained dip below ~50 fps means this player's own machine/browser is struggling
+// (distinct from a network problem). We keep a rolling window so we can show the worst
+// recent second, where stutter actually lives.
+const FPS_WINDOW = 30; // one-second readings kept (~30 s of history)
+const fpsSamples: number[] = [];
+let lastFps = 0;
+let fpsFrames = 0; // frames counted in the current bucket
+let fpsBucketStart = 0; // timestamp (loop's DOMHighResTimeStamp) the bucket opened
+function sampleFps(t: number) {
+  if (fpsBucketStart === 0) { fpsBucketStart = t; return; }
+  fpsFrames++;
+  const span = t - fpsBucketStart;
+  if (span < 1000) return;
+  lastFps = (fpsFrames * 1000) / span;
+  fpsFrames = 0;
+  fpsBucketStart = t;
+  fpsSamples.push(lastFps);
+  if (fpsSamples.length > FPS_WINDOW) fpsSamples.shift();
+  renderDebug();
+}
+
 const net = connect(
   (msg) => {
     if (msg.type === 'you') {
@@ -435,6 +478,9 @@ const net = connect(
       showAnnouncement(msg.text);
     } else if (msg.type === 'ping') {
       onPing(msg.from);
+    } else if (msg.type === 'rtt') {
+      if (msg.tick) serverTick = msg.tick;
+      recordRtt(performance.now() - msg.t);
     } else if (msg.type === 'doomLobby') {
       doomMod?.feedDoomLobby(msg);
     } else if (msg.type === 'doomRelay') {
@@ -456,6 +502,9 @@ const net = connect(
     if (myName) net.send({ type: 'join', nickname: myName, pid: myPid, color: myColor });
     // Re-assert capture state after a (re)connect so the server's view stays in sync.
     if (pointerLocked) net.send({ type: 'capture', on: true });
+    // Take a fresh latency reading the instant we're (re)connected, rather than waiting
+    // out the probe interval below.
+    net.send({ type: 'rtt', t: performance.now() });
   },
 );
 
@@ -1424,7 +1473,28 @@ function renderTournament(t: StateMsg['tournament']) {
 const powerupInfoBtn = document.getElementById('powerupInfoBtn') as HTMLButtonElement;
 const powerupInfoPanel = document.getElementById('powerupInfoPanel') as HTMLDivElement;
 
+// Spawning from the dropdown follows the same rule as the /powerup command:
+// only a spectator can drop one, and only while a match is live.
+const canSpawnPowerup = () => !isPlayer() && state?.status === 'playing';
+
+// Each legend row doubles as a spawn button: clicking it drops that power-up,
+// just like typing `/powerup <kind>`. When you can't spawn, the panel is a plain
+// legend (the `.legend-only` class dims the click affordance).
+function syncPowerupSpawnability() {
+  powerupInfoPanel.classList.toggle('legend-only', !canSpawnPowerup());
+}
+for (const row of powerupInfoPanel.querySelectorAll<HTMLDivElement>('.pu-row')) {
+  const kind = row.querySelector<HTMLCanvasElement>('.pu-icon')?.dataset.kind;
+  if (!kind) continue;
+  row.title = `Spawn the ${kind} power-up`;
+  row.addEventListener('click', () => {
+    if (!canSpawnPowerup()) return;
+    net.send({ type: 'spawnPowerup', kind });
+  });
+}
+
 function openPowerupInfo() {
+  syncPowerupSpawnability();
   powerupInfoPanel.hidden = false;
   powerupInfoBtn.setAttribute('aria-expanded', 'true');
 }
@@ -1514,6 +1584,7 @@ const changelogPanel = document.getElementById('changelogPanel') as HTMLDivEleme
 interface Commit {
   hash: string;
   subject: string;
+  author: string;
   date: string;
   url?: string; // GitHub link to the commit, when available
 }
@@ -1565,6 +1636,7 @@ async function loadChangelog() {
       subject.textContent = c.subject;
       const meta = document.createElement('div');
       meta.className = 'changelog-meta';
+      const tail = `${timeAgo(c.date)}${c.author ? ` · ${c.author}` : ''}`;
       if (c.url) {
         // Link the short hash to the commit on GitHub; open in a new tab.
         const link = document.createElement('a');
@@ -1573,9 +1645,9 @@ async function loadChangelog() {
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
         link.textContent = c.hash;
-        meta.append(link, document.createTextNode(` · ${timeAgo(c.date)}`));
+        meta.append(link, document.createTextNode(` · ${tail}`));
       } else {
-        meta.textContent = `${c.hash} · ${timeAgo(c.date)}`;
+        meta.textContent = `${c.hash} · ${tail}`;
       }
       item.append(subject, meta);
       changelogPanel.append(item);
@@ -1610,6 +1682,85 @@ document.addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !changelogPanel.hidden) closeChangelog();
 });
+
+// --- NET debug readout: live performance stats, hidden behind a corner toggle ---
+// Three things together answer "are players seeing good performance?": round-trip
+// latency (the network), client FPS (this player's machine), and server tick health
+// (the shared simulation). Each is colored green/amber/red by how it actually feels.
+const debugBtn = document.getElementById('debugBtn') as HTMLButtonElement;
+const debugPanel = document.getElementById('debugPanel') as HTMLDivElement;
+const dbgPing = document.getElementById('dbgPing') as HTMLSpanElement;
+const dbgPingStats = document.getElementById('dbgPingStats') as HTMLSpanElement;
+const dbgFps = document.getElementById('dbgFps') as HTMLSpanElement;
+const dbgFpsMin = document.getElementById('dbgFpsMin') as HTMLSpanElement;
+const dbgTps = document.getElementById('dbgTps') as HTMLSpanElement;
+const dbgTick = document.getElementById('dbgTick') as HTMLSpanElement;
+
+const GOOD = '#6ee7a8';
+const WARN = '#ffd166';
+const BAD = '#ff6b6b';
+// Latency: snappy under 60 ms, noticeable under 140, laggy beyond (the rule of thumb for
+// real-time control feeling responsive).
+const rttColor = (ms: number) => (ms < 60 ? GOOD : ms < 140 ? WARN : BAD);
+// Frame rate: smooth at/above ~55, choppy under ~40 (higher = better, so the test flips).
+const fpsColor = (fps: number) => (fps >= 55 ? GOOD : fps >= 40 ? WARN : BAD);
+// Tick rate: the loop targets 60; under ~58 it's slipping, under ~50 it's clearly behind.
+const tpsColor = (tps: number) => (tps >= 58 ? GOOD : tps >= 50 ? WARN : BAD);
+
+function setStat(el: HTMLSpanElement, text: string, color: string) {
+  el.textContent = text;
+  el.style.color = color;
+}
+function renderDebug() {
+  if (debugPanel.hidden) return; // only paint while the panel is open
+
+  // Network — round-trip latency.
+  if (rttSamples.length === 0) {
+    setStat(dbgPing, '—', '#cdd7f5');
+    dbgPingStats.textContent = '—';
+  } else {
+    const avg = rttSamples.reduce((a, b) => a + b, 0) / rttSamples.length;
+    const max = Math.max(...rttSamples);
+    setStat(dbgPing, `${Math.round(lastRtt)} ms`, rttColor(lastRtt));
+    dbgPingStats.textContent = `${Math.round(avg)} / ${Math.round(max)} ms`;
+  }
+
+  // Client — render frame rate (current + worst recent second).
+  if (fpsSamples.length === 0) {
+    setStat(dbgFps, '—', '#cdd7f5');
+    setStat(dbgFpsMin, '—', '#cdd7f5');
+  } else {
+    const min = Math.min(...fpsSamples);
+    setStat(dbgFps, String(Math.round(lastFps)), fpsColor(lastFps));
+    setStat(dbgFpsMin, String(Math.round(min)), fpsColor(min));
+  }
+
+  // Server — authoritative tick-loop health (reported on the rtt echo).
+  if (!serverTick) {
+    setStat(dbgTps, '—', '#cdd7f5');
+    dbgTick.textContent = '—';
+  } else {
+    setStat(dbgTps, `${serverTick.tps} tps`, tpsColor(serverTick.tps));
+    dbgTick.textContent = `${serverTick.busyAvg} ms · ${serverTick.slowPct}% slow`;
+    dbgTick.style.color = serverTick.slowPct < 5 ? GOOD : serverTick.slowPct < 20 ? WARN : BAD;
+  }
+}
+function openDebug() {
+  debugPanel.hidden = false;
+  debugBtn.setAttribute('aria-expanded', 'true');
+  renderDebug();
+}
+function closeDebug() {
+  debugPanel.hidden = true;
+  debugBtn.setAttribute('aria-expanded', 'false');
+}
+debugBtn.addEventListener('click', () => (debugPanel.hidden ? openDebug() : closeDebug()));
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !debugPanel.hidden) closeDebug();
+});
+// Probe latency on a steady cadence while the socket is up. net.send() is a no-op when
+// disconnected, so a dropped connection just pauses the readout until it's back.
+setInterval(() => net.send({ type: 'rtt', t: performance.now() }), 2000);
 
 // --- startup: a remembered nickname skips the prompt (the actual join is sent in
 // the onOpen handler once the socket connects). ---
@@ -2150,6 +2301,7 @@ function canControl(): boolean {
 }
 
 function loop(t: number) {
+  sampleFps(t);
   // Arena: keyboard nudges the paddle along its edge (mouse handled in mousemove).
   if (inArena() && canControl() && state?.poly) {
     const me = myPolyPlayer(state);
@@ -2245,6 +2397,7 @@ function updateUI() {
   renderPuHud(state);
   renderTournament(state.tournament);
   if (!shopPanel.hidden) renderShop(); // keep the betting section in sync with match state
+  if (!powerupInfoPanel.hidden) syncPowerupSpawnability();
 
   // Sync win score buttons with the current room setting.
   for (const btn of winScoreOpts.querySelectorAll<HTMLButtonElement>('.ws-btn')) {

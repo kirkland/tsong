@@ -10,6 +10,7 @@ const execFileAsync = promisify(execFile);
 export interface Commit {
   hash: string; // short hash
   subject: string; // commit message subject line
+  author: string; // commit author name
   date: string; // ISO commit date
   url?: string; // GitHub link to the commit, when the origin remote is a GitHub repo
 }
@@ -67,8 +68,8 @@ function parse(stdout: string): Commit[] {
     .split('\n')
     .filter(Boolean)
     .map((line) => {
-      const [hash, subject, date] = line.split(SEP);
-      return { hash, subject, date };
+      const [hash, subject, author, date] = line.split(SEP);
+      return { hash, subject, author, date };
     });
 }
 
@@ -79,7 +80,7 @@ async function readGitLog(): Promise<Commit[]> {
     try {
       const { stdout } = await execFileAsync(
         'git',
-        ['log', ref, '--no-merges', '-n', String(COUNT), `--pretty=format:%h${SEP}%s${SEP}%cI`],
+        ['log', ref, '--no-merges', '-n', String(COUNT), `--pretty=format:%h${SEP}%s${SEP}%an${SEP}%cI`],
         { cwd: process.cwd(), timeout: 5000 },
       );
       const commits = parse(stdout);

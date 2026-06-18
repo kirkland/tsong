@@ -3,9 +3,10 @@
 
 import http from 'node:http';
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { WebSocketServer, WebSocket } from 'ws';
 import sirv from 'sirv';
-import { BOT_LEVELS, BotLevel, ClientMsg, TICK_MS } from '../shared/types';
+import { BOT_LEVELS, BotLevel, ClientMsg, TICK_MS, TickHealth } from '../shared/types';
 import { Game, GameSnapshot } from './game';
 import { Lobby, LobbySnapshot } from './lobby';
 import { initDb } from './db';
@@ -71,6 +72,32 @@ const server = http.createServer((req, res) => {
     res.end('Not found');
   });
 });
+
+// --- tick-health monitor ---------------------------------------------------------------
+// The authoritative loop must hold 60 Hz; if a tick's work overruns its 16.7 ms budget the
+// whole room feels laggy at once. We sample each tick's work time and the achieved tick rate
+// so the health can be surfaced to clients (it rides along on the rtt echo) and loudly logged
+// when the loop falls behind. tickHealth() is read by the connection handler below — it's a
+// hoisted declaration, and the state it reads is initialized before any socket connects.
+const TICK_WINDOW = 300; // per-tick work samples kept for the rolling stats (~5 s at 60 Hz)
+const tickWork: number[] = []; // recent per-tick work durations, ms
+let achievedTps = 60; // most recently measured ticks/second
+let rateWindowStart = performance.now();
+let rateWindowTicks = 0;
+let lastSlowLog = 0; // throttle the "running behind" warnings
+
+function tickHealth(): TickHealth {
+  if (tickWork.length === 0) return { tps: achievedTps, busyAvg: 0, busyMax: 0, slowPct: 0 };
+  const busyAvg = tickWork.reduce((a, b) => a + b, 0) / tickWork.length;
+  const busyMax = Math.max(...tickWork);
+  const slow = tickWork.filter((d) => d > TICK_MS).length;
+  return {
+    tps: Math.round(achievedTps * 10) / 10,
+    busyAvg: Math.round(busyAvg * 100) / 100,
+    busyMax: Math.round(busyMax * 100) / 100,
+    slowPct: Math.round((slow / tickWork.length) * 1000) / 10,
+  };
+}
 
 const wss = new WebSocketServer({ server, path: '/ws' });
 
@@ -153,6 +180,13 @@ wss.on('connection', (ws: WebSocket) => {
       case 'ping':
         lobby.ping(ws);
         break;
+      case 'rtt':
+        // Latency probe: bounce the client's own timestamp straight back, untouched, so
+        // it can measure round-trip time. Pure echo — no lobby/authoritative state involved.
+        if (typeof msg.t === 'number' && Number.isFinite(msg.t) && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'rtt', t: msg.t, tick: tickHealth() }));
+        }
+        break;
       case 'setWinScore':
         if (typeof msg.score === 'number') lobby.setWinScore(ws, msg.score);
         break;
@@ -211,9 +245,31 @@ wss.on('connection', (ws: WebSocket) => {
 // Single authoritative loop: advance physics, reconcile spots, broadcast to everyone.
 const dt = TICK_MS / 1000;
 const loop = setInterval(() => {
+  const t0 = performance.now();
   lobby.tick(dt);
   lobby.sync();
   lobby.broadcast();
+  const work = performance.now() - t0;
+
+  // Sample this tick's work time and, once a second, the achieved tick rate. A rate that
+  // sags below ~60 Hz means the loop can't keep up (work overrun and/or event-loop lag).
+  tickWork.push(work);
+  if (tickWork.length > TICK_WINDOW) tickWork.shift();
+  rateWindowTicks++;
+  const elapsed = t0 - rateWindowStart;
+  if (elapsed >= 1000) {
+    achievedTps = (rateWindowTicks * 1000) / elapsed;
+    rateWindowStart = t0;
+    rateWindowTicks = 0;
+    const h = tickHealth();
+    if ((h.tps < 55 || h.slowPct > 10) && t0 - lastSlowLog > 10000) {
+      lastSlowLog = t0;
+      console.warn(
+        `[tick] running behind — ${h.tps} tps, work avg ${h.busyAvg}ms / max ${h.busyMax}ms, ` +
+          `${h.slowPct}% over the ${TICK_MS.toFixed(1)}ms budget`,
+      );
+    }
+  }
 }, TICK_MS);
 
 server.listen(PORT, () => {
