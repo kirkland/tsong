@@ -43,10 +43,10 @@ const jsavImg = new Image();
 jsavImg.src = '/jsav.jpg';
 const isBossRound = (round: number): boolean => round % 5 === 0;
 // Grenade: thrown with space, flies forward, then explodes for big area damage.
-const GRENADE_SPEED = 7;   // tiles / second
-const GRENADE_FUSE = 0.85; // seconds before it detonates
-const GRENADE_RADIUS = 2.6; // blast radius, tiles
-const GRENADE_DMG = 6;     // damage to every enemy in the blast
+const GRENADE_SPEED = 5.5; // tiles / second (a short lob — drops just in front of you)
+const GRENADE_FUSE = 0.5;  // seconds before it detonates (≈ a couple tiles out)
+const GRENADE_RADIUS = 4;  // blast radius, tiles (big)
+const GRENADE_BOSS_DMG = 10; // damage dealt to bosses/mini-bosses (regulars are instakilled)
 
 function isWall(mx: number, my: number): boolean {
   if (mx < 0 || my < 0 || mx >= MAP_W || my >= MAP_H) return true;
@@ -492,8 +492,14 @@ export function startDoom(net: DoomNet): void {
     for (const e of enemies) {
       if (!e.alive) continue;
       if (Math.hypot(e.x - x, e.y - y) <= GRENADE_RADIUS) {
-        e.hp -= GRENADE_DMG; e.flash = 0.15;
-        if (e.hp <= 0) killEnemy(e);
+        e.flash = 0.15;
+        if (e.boss || e.fritz || e.jsav) {
+          // Bosses & mini-bosses just take a big chunk of damage.
+          e.hp -= GRENADE_BOSS_DMG;
+          if (e.hp <= 0) killEnemy(e);
+        } else {
+          killEnemy(e); // regular enemies are instakilled by the blast
+        }
       }
     }
   }
