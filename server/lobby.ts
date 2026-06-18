@@ -1235,14 +1235,14 @@ export class Lobby {
   /** Called every tick after the active sim ticks. Routes to the live mode's bookkeeping. */
   sync() {
     this.expireResume();
-    // "coins" power-up: pay the collecting side 5 coins, once.
+    // "coins" power-up: pay the collecting side 1 coin, once.
     if (this.game.coinGrant) {
       const side = this.game.coinGrant;
       this.game.coinGrant = null;
       for (const c of this.connsOn(side)) {
         if (!c.pid) continue;
         const w = this.wsOfConn(c);
-        addCoins(c.pid, c.nickname, 5).then(() => { if (w) this.sendWallet(w); }).catch(() => {});
+        addCoins(c.pid, c.nickname, 1).then(() => { if (w) this.sendWallet(w); }).catch(() => {});
       }
     }
     // Safety: if a duel was abandoned (back to 'waiting' with no result) or we slid into
