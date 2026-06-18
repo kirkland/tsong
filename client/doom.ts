@@ -111,7 +111,7 @@ const PICKUP_RADIUS = 0.6; // how close you must get to grab a drop (grid units)
 
 // Survival rounds: each round spawns more (and slightly tougher) enemies at random open
 // cells, kept clear of the players' spawn corner.
-function enemyCountFor(round: number): number { return 3 + (round - 1) * 2; }
+function enemyCountFor(round: number): number { return 3 + Math.floor((round - 1) * 1.5); }
 function enemyHpFor(round: number): number { return 2 + Math.floor((round - 1) / 4); }
 function enemySpeedFor(round: number): number { return Math.min(1.3 + (round - 1) * 0.1, 2.6); }
 
@@ -244,6 +244,20 @@ export function startDoom(net: DoomNet): void {
   hud.append(healthEl, ammoEl, killsEl);
   overlay.appendChild(hud);
 
+  // Co-op: a small buddy health bar in the top-left so you can watch your partner.
+  const buddyBar = document.createElement('div');
+  buddyBar.style.cssText =
+    'position:absolute;top:14px;left:14px;display:none;flex-direction:column;gap:3px;' +
+    'font:700 12px ui-monospace,monospace;color:#9fd8a0;text-shadow:1px 1px 0 #000;pointer-events:none;';
+  const buddyLabel = document.createElement('div');
+  const buddyTrack = document.createElement('div');
+  buddyTrack.style.cssText = 'width:120px;height:8px;background:#2a120f;border:1px solid #000;border-radius:3px;overflow:hidden;';
+  const buddyFill = document.createElement('div');
+  buddyFill.style.cssText = 'height:100%;width:100%;background:#3a7d44;';
+  buddyTrack.appendChild(buddyFill);
+  buddyBar.append(buddyLabel, buddyTrack);
+  overlay.appendChild(buddyBar);
+
   const title = document.createElement('div');
   title.style.cssText =
     'position:absolute;top:14px;left:0;right:0;text-align:center;font:700 14px ui-monospace,monospace;' +
@@ -346,6 +360,7 @@ export function startDoom(net: DoomNet): void {
   let myAngle = 0;
   let muzzle = 0;
   let hurt = 0;
+  let prevHealth = 100; // detect any drop in my own health to flash red (works for the guest too)
   let gunRecoil = 0;
   let bob = 0;
   let myFireSeq = 0; // counts our shots (guest uses this to tell the host to fire)
@@ -678,6 +693,11 @@ export function startDoom(net: DoomNet): void {
       }
       maybeSubmitScore(); // round/over arrive via the host snapshot
     }
+    // Flash red whenever my own health drops (covers the guest, whose health arrives via
+    // snapshot rather than the local sim).
+    const myHp = players[selfIdx]?.health ?? prevHealth;
+    if (myHp < prevHealth) hurt = Math.max(hurt, 0.5);
+    prevHealth = myHp;
     // Fade explosion flashes on every client.
     for (let i = blasts.length - 1; i >= 0; i--) { blasts[i].t -= dt; if (blasts[i].t <= 0) blasts.splice(i, 1); }
     if (muzzle > 0) muzzle -= dt;
@@ -765,7 +785,18 @@ export function startDoom(net: DoomNet): void {
     drawGun();
     drawCrosshair();
     drawBossBar();
-    if (hurt > 0) { ctx.fillStyle = `rgba(180,0,0,${Math.min(0.5, hurt * 1.6)})`; ctx.fillRect(0, 0, W, H); }
+    if (hurt > 0) {
+      // A brighter full-screen wash plus a stronger red vignette around the edges so a hit
+      // really reads as "you're taking damage".
+      const a = Math.min(0.65, hurt * 1.6);
+      ctx.fillStyle = `rgba(200,0,0,${a * 0.55})`;
+      ctx.fillRect(0, 0, W, H);
+      const vg = ctx.createRadialGradient(W / 2, H / 2, H * 0.25, W / 2, H / 2, W * 0.6);
+      vg.addColorStop(0, 'rgba(200,0,0,0)');
+      vg.addColorStop(1, `rgba(170,0,0,${a})`);
+      ctx.fillStyle = vg;
+      ctx.fillRect(0, 0, W, H);
+    }
   }
 
   // The boss minion: the minion image drawn big (≈1.7× a normal sprite), flashing white on hit.
@@ -938,7 +969,7 @@ export function startDoom(net: DoomNet): void {
     boards.style.display = showBoards ? 'flex' : 'none';
     if (showBoards) renderBoards();
     if (mode === 'menu' || mode === 'wait') {
-      hud.style.display = 'none'; banner.style.display = 'none';
+      hud.style.display = 'none'; banner.style.display = 'none'; buddyBar.style.display = 'none';
       if (mode === 'menu') menu.style.display = 'flex';
       return;
     }
@@ -947,6 +978,17 @@ export function startDoom(net: DoomNet): void {
     const p = me();
     healthEl.textContent = `♥ ${Math.max(0, Math.round(p.health))}`;
     ammoEl.textContent = `▮ ${p.ammo}${p.grenades > 0 ? `   💣 ${p.grenades}` : ''}`;
+    // Co-op: show the buddy's health bar (top-left).
+    const mate = partner();
+    if (mate) {
+      buddyBar.style.display = 'flex';
+      const hp = Math.max(0, Math.round(mate.health));
+      buddyLabel.textContent = mate.alive ? `BUDDY ♥ ${hp}` : 'BUDDY ☠ down';
+      buddyFill.style.width = `${mate.alive ? hp : 0}%`;
+      buddyFill.style.background = hp > 50 ? '#3a7d44' : hp > 20 ? '#c8a000' : '#c0392b';
+    } else {
+      buddyBar.style.display = 'none';
+    }
     const bossTag = isBossRound(round) ? ' (BOSS BATTLE)' : '';
     killsEl.textContent = betweenTimer > 0 ? `ROUND ${round}${bossTag} ▸` : `ROUND ${round}${bossTag} · ${alive} left`;
     if (over === 'dead') {
