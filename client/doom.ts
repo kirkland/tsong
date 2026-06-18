@@ -873,7 +873,7 @@ export function startDoom(net: DoomNet): void {
     if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'w', 'a', 's', 'd', ' '].includes(k)) {
       e.preventDefault(); e.stopImmediatePropagation();
     }
-    if (k === ' ') localFire();
+    // Shooting is mouse-click only (spacebar rapid-fire was being abused).
     keys.add(k);
   };
   const onKeyUp = (e: KeyboardEvent) => { keys.delete(e.key.toLowerCase()); e.stopImmediatePropagation(); };
