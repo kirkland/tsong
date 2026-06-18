@@ -100,6 +100,7 @@ export interface GameSnapshot {
   fritz?: boolean;
   disco?: boolean;
   minion?: boolean;
+  earthquake?: boolean;
   winnerSide: Side | null;
   lastHit: Side | null;
   target: { x: number; y: number; kind: PowerupKind } | null;
@@ -176,6 +177,7 @@ export class Game {
   fritz = false; // "fritz" power-up: replaces background with fritz's photo for the point
   disco = false; // "disco" power-up: 3D disco ball, dance floor, colored lights for the point
   minion = false; // "minion" power-up: both paddles are drawn as a minion for the point
+  earthquake = false; // "earthquake" power-up: court shakes and the ball jitters for the point
   // "Blaster": shots each side holds, projectiles in flight, and how long each paddle is locked.
   blasterAmmo: Record<Side, number> = { left: 0, right: 0 };
   disabledTimer: Record<Side, number> = { left: 0, right: 0 };
@@ -211,6 +213,7 @@ export class Game {
       fritz: this.fritz,
       disco: this.disco,
       minion: this.minion,
+      earthquake: this.earthquake,
       winnerSide: this.winnerSide,
       lastHit: this.lastHit,
       target: this.target ? { ...this.target } : null,
@@ -256,6 +259,7 @@ export class Game {
     this.fritz = s.fritz ?? false;
     this.disco = s.disco ?? false;
     this.minion = s.minion ?? false;
+    this.earthquake = s.earthquake ?? false;
     this.winnerSide = s.winnerSide;
     this.lastHit = s.lastHit;
     this.target = s.target ? { ...s.target } : null;
@@ -589,6 +593,7 @@ export class Game {
     this.fritz = false;
     this.disco = false;
     this.minion = false;
+    this.earthquake = false;
     this.blasterAmmo = { left: 0, right: 0 };
     this.disabledTimer = { left: 0, right: 0 };
     this.projectiles = [];
@@ -702,6 +707,16 @@ export class Game {
 
     // Gravity: accelerate downward before integrating position.
     if (this.gravity) b.vy += GRAVITY_ACCEL * dt * scale;
+
+    // Earthquake: jitter the ball's heading a touch each tick so it wobbles unpredictably
+    // (speed preserved — only the direction shakes).
+    if (this.earthquake) {
+      const a = (Math.random() * 2 - 1) * 3.5 * dt; // small per-tick angle nudge
+      const cos = Math.cos(a), sin = Math.sin(a);
+      const nvx = b.vx * cos - b.vy * sin;
+      const nvy = b.vx * sin + b.vy * cos;
+      b.vx = nvx; b.vy = nvy;
+    }
 
     const prevX = b.x;
     const prevY = b.y;
@@ -879,6 +894,9 @@ export class Game {
         break;
       case 'minion':
         this.minion = true;
+        break;
+      case 'earthquake':
+        this.earthquake = true;
         break;
       case 'blaster':
         this.blasterAmmo[side] = BLASTER.ammo;

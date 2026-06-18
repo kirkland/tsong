@@ -1510,6 +1510,7 @@ export class Lobby {
       fritz: this.game.fritz,
       disco: this.game.disco,
       minion: this.game.minion,
+      earthquake: this.game.earthquake,
       viewMode: this.viewMode,
       pinata: this.game.pinata,
       pinataPos: poly ? null : this.pinataView(),

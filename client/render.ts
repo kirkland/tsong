@@ -642,6 +642,7 @@ const TARGET_STYLE: Record<PowerupKind, { stroke: string; fill: string }> = {
   disco:   { stroke: '#e040fb', fill: 'rgba(224,  64, 251, 0.14)' }, // neon magenta
   blaster: { stroke: '#ff4d4d', fill: 'rgba(255,  77,  77, 0.14)' }, // red
   minion:  { stroke: '#ffd21e', fill: 'rgba(255, 210,  30, 0.16)' }, // minion yellow
+  earthquake: { stroke: '#b07a3a', fill: 'rgba(176, 122,  58, 0.16)' }, // dusty brown
 };
 
 function drawTarget(ctx: CanvasRenderingContext2D, x: number, y: number, kind: PowerupKind) {
@@ -915,6 +916,18 @@ const GLYPHS: Record<PowerupKind, (ctx: CanvasRenderingContext2D, x: number, y: 
     ctx.lineTo(x - 6, y - 1);
     ctx.moveTo(x + 6, y - 1);
     ctx.lineTo(x + 11, y - 1);
+    ctx.stroke();
+  },
+  // earthquake: a jagged seismograph line → "the court shakes"
+  earthquake(ctx, x, y) {
+    ctx.beginPath();
+    ctx.moveTo(x - 12, y);
+    ctx.lineTo(x - 7, y);
+    ctx.lineTo(x - 4, y - 8);
+    ctx.lineTo(x, y + 9);
+    ctx.lineTo(x + 4, y - 6);
+    ctx.lineTo(x + 7, y);
+    ctx.lineTo(x + 12, y);
     ctx.stroke();
   },
   // rotate: a circular arrow → "the whole court spins 90°"
