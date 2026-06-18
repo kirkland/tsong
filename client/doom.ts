@@ -35,6 +35,9 @@ const H = 200;
 // The boss is drawn as the minion image (the same one used by the minion power-up).
 const bossImg = new Image();
 bossImg.src = '/minion.png';
+// The round-3 mini-boss is drawn with the fritz photo.
+const fritzImg = new Image();
+fritzImg.src = '/fritz.jpg';
 const isBossRound = (round: number): boolean => round % 5 === 0;
 
 function isWall(mx: number, my: number): boolean {
@@ -62,6 +65,7 @@ interface Player {
 interface Enemy {
   x: number; y: number; hp: number; alive: boolean; flash: number; attackCd: number;
   boss?: boolean; maxHp?: number; // boss-round minion: big, tanky, hits hard
+  fritz?: boolean; // round-3 mini-boss drawn with the fritz photo
 }
 interface GuestInput { forward: number; strafe: number; angle: number; fireSeq: number; }
 
@@ -119,7 +123,7 @@ function spawnEnemiesForRound(round: number, players: Player[]): Enemy[] {
     const bossPos = randomOpenCell(players, 6);
     const bossHp = 18 + round * 2; // a real bullet-sponge (e.g. ~28 at round 5, ~38 at round 10)
     out.push({ ...bossPos, hp: bossHp, maxHp: bossHp, alive: true, flash: 0, attackCd: 0, boss: true });
-    const adds = 2 + Math.floor(round / 5); // a few imps alongside the boss
+    const adds = 1 + Math.floor(round / 10); // just a couple imps alongside the boss
     const hp = enemyHpFor(round);
     for (let i = 0; i < adds; i++) {
       out.push({ ...randomOpenCell(players, 4), hp, alive: true, flash: 0, attackCd: 0 });
@@ -131,6 +135,12 @@ function spawnEnemiesForRound(round: number, players: Player[]): Enemy[] {
   const hp = enemyHpFor(round);
   for (let i = 0; i < n; i++) {
     out.push({ ...randomOpenCell(players, 4), hp, alive: true, flash: 0, attackCd: 0 });
+  }
+  // Every 3rd round: promote one enemy to a FRITZ mini-boss — tankier and hits a bit harder.
+  // Killing it drops a full-health pack (see fireFrom).
+  if (round % 3 === 0 && out.length) {
+    const fhp = 10;
+    out[0] = { ...out[0], hp: fhp, maxHp: fhp, fritz: true };
   }
   return out;
 }
@@ -259,7 +269,8 @@ export function startDoom(net: DoomNet): void {
   let betweenTimer = 0; // seconds of the "ROUND N" intermission remaining (0 = fighting)
   let over: 'dead' | null = null; // survival mode: you only ever lose
   let scoreSubmitted = false;
-  let drops: Array<{ x: number; y: number }> = []; // ammo packs dropped by slain enemies
+  // Pickups dropped by slain enemies: ammo crates (when low) and full-health packs (fritz).
+  let drops: Array<{ x: number; y: number; kind: 'ammo' | 'health' }> = [];
 
   // local input / feedback
   const keys = new Set<string>();
@@ -282,6 +293,16 @@ export function startDoom(net: DoomNet): void {
   const ac = () => (audio ??= new AudioContext());
   const bossLaugh = new Audio('/minion-laugh.mp3'); // the boss cackles every time it's shot
   function laughSound() { try { bossLaugh.currentTime = 0; void bossLaugh.play(); } catch { /* ignore */ } }
+  const bossMusic = new Audio('/disco.mp3'); // loops during boss-fight rounds
+  bossMusic.loop = true;
+  let bossMusicOn = false;
+  // Start/stop the boss music to match whether a live boss round is in progress.
+  function syncBossMusic() {
+    const want = isBossRound(round) && !over && betweenTimer <= 0
+      && (mode === 'solo' || mode === 'host' || mode === 'guest');
+    if (want && !bossMusicOn) { bossMusicOn = true; try { bossMusic.currentTime = 0; void bossMusic.play(); } catch { /* ignore */ } }
+    else if (!want && bossMusicOn) { bossMusicOn = false; bossMusic.pause(); }
+  }
   function shotSound() {
     try {
       const a = ac();
@@ -341,9 +362,14 @@ export function startDoom(net: DoomNet): void {
       if (best.boss) laughSound(); // the boss cackles every time it's hit
       if (best.hp <= 0) {
         best.alive = false; kills++; deathSound();
-        // Drop an ammo pack only when someone's running low (and not every time).
-        const someoneLow = players.some((pl) => pl.alive && pl.ammo < LOW_AMMO);
-        if (someoneLow && Math.random() < 0.6) drops.push({ x: best.x, y: best.y });
+        if (best.fritz) {
+          // The fritz mini-boss always drops a full-health pack.
+          drops.push({ x: best.x, y: best.y, kind: 'health' });
+        } else {
+          // Regular kills drop an ammo pack only when someone's running low (and not always).
+          const someoneLow = players.some((pl) => pl.alive && pl.ammo < LOW_AMMO);
+          if (someoneLow && Math.random() < 0.6) drops.push({ x: best.x, y: best.y, kind: 'ammo' });
+        }
       }
     }
   }
@@ -389,7 +415,8 @@ export function startDoom(net: DoomNet): void {
       const d = drops[i];
       const grabber = players.find((p) => p.alive && Math.hypot(p.x - d.x, p.y - d.y) < PICKUP_RADIUS);
       if (grabber) {
-        grabber.ammo += AMMO_PER_PICKUP;
+        if (d.kind === 'health') grabber.health = 100; // fritz pack = full heal
+        else grabber.ammo += AMMO_PER_PICKUP;
         drops.splice(i, 1);
         if (grabber === me()) pickupSound();
       }
@@ -417,7 +444,7 @@ export function startDoom(net: DoomNet): void {
         if (!isWall(Math.floor(e.x + dx * sp), Math.floor(e.y))) e.x += dx * sp;
         if (!isWall(Math.floor(e.x), Math.floor(e.y + dy * sp))) e.y += dy * sp;
       } else if (e.attackCd <= 0) {
-        target.health -= e.boss ? 22 : 9; // the boss hits much harder
+        target.health -= e.boss ? 22 : e.fritz ? 14 : 9; // boss hits hardest, fritz a bit harder
         e.attackCd = e.boss ? 0.9 : 1.1;
         if (target === me()) hurt = 0.25;
         if (target.health <= 0) { target.health = 0; target.alive = false; }
@@ -504,8 +531,8 @@ export function startDoom(net: DoomNet): void {
         net.relay({
           t: 'st',
           players: players.map((p) => ({ x: p.x, y: p.y, angle: p.angle, health: p.health, ammo: p.ammo, alive: p.alive, flash: p.flash })),
-          enemies: enemies.map((e) => ({ x: e.x, y: e.y, alive: e.alive, flash: e.flash, boss: !!e.boss, hpFrac: e.maxHp ? e.hp / e.maxHp : 1 })),
-          drops: drops.map((d) => ({ x: d.x, y: d.y })),
+          enemies: enemies.map((e) => ({ x: e.x, y: e.y, alive: e.alive, flash: e.flash, boss: !!e.boss, fritz: !!e.fritz, hpFrac: e.maxHp ? e.hp / e.maxHp : 1 })),
+          drops: drops.map((d) => ({ x: d.x, y: d.y, kind: d.kind })),
           round, between: betweenTimer > 0, over,
         });
       }
@@ -568,10 +595,10 @@ export function startDoom(net: DoomNet): void {
       ctx.fillRect(x, start, 1, end - start + 1);
     }
 
-    // Sprites: enemies (imps / boss) + the partner marine, billboarded with z-buffer occlusion.
-    const sprites: Array<{ x: number; y: number; kind: 'imp' | 'marine' | 'ammo' | 'boss'; flash: boolean }> = [];
-    for (const e of enemies) if (e.alive) sprites.push({ x: e.x, y: e.y, kind: e.boss ? 'boss' : 'imp', flash: e.flash > 0 });
-    for (const d of drops) sprites.push({ x: d.x, y: d.y, kind: 'ammo', flash: false });
+    // Sprites: enemies (imps / boss / fritz) + the partner marine, billboarded with z-buffer occlusion.
+    const sprites: Array<{ x: number; y: number; kind: 'imp' | 'marine' | 'ammo' | 'health' | 'boss' | 'fritz'; flash: boolean }> = [];
+    for (const e of enemies) if (e.alive) sprites.push({ x: e.x, y: e.y, kind: e.boss ? 'boss' : e.fritz ? 'fritz' : 'imp', flash: e.flash > 0 });
+    for (const d of drops) sprites.push({ x: d.x, y: d.y, kind: d.kind, flash: false });
     const mate = partner();
     if (mate && mate.alive) sprites.push({ x: mate.x, y: mate.y, kind: 'marine', flash: false });
 
@@ -590,7 +617,9 @@ export function startDoom(net: DoomNet): void {
       if (d.tY >= zBuffer[col]) continue;
       if (d.s.kind === 'imp') drawImp(screenX, size, d.s.flash);
       else if (d.s.kind === 'ammo') drawAmmo(screenX, size);
+      else if (d.s.kind === 'health') drawHealth(screenX, size);
       else if (d.s.kind === 'boss') drawBoss(screenX, size, d.s.flash);
+      else if (d.s.kind === 'fritz') drawFritz(screenX, size, d.s.flash);
       else drawMarine(screenX, size);
     }
 
@@ -612,6 +641,21 @@ export function startDoom(net: DoomNet): void {
       if (flash) { ctx.save(); ctx.globalAlpha = 0.4; ctx.fillStyle = '#fff'; ctx.fillRect(left, top, w, h); ctx.restore(); }
     } else {
       drawImp(cx, size * 1.7, flash); // fallback until the image loads
+    }
+  }
+
+  // The round-3 fritz mini-boss: the fritz photo drawn a bit bigger than an imp.
+  function drawFritz(cx: number, size: number, flash: boolean) {
+    const h = Math.min(size * 1.35, H * 1.6);
+    const aspect = fritzImg.complete && fritzImg.naturalWidth ? fritzImg.naturalWidth / fritzImg.naturalHeight : 0.75;
+    const w = h * aspect;
+    const top = H / 2 - h / 2;
+    const left = cx - w / 2;
+    if (fritzImg.complete && fritzImg.naturalWidth) {
+      ctx.drawImage(fritzImg, left, top, w, h);
+      if (flash) { ctx.save(); ctx.globalAlpha = 0.4; ctx.fillStyle = '#fff'; ctx.fillRect(left, top, w, h); ctx.restore(); }
+    } else {
+      drawImp(cx, size * 1.35, flash); // fallback until the image loads
     }
   }
 
@@ -670,6 +714,23 @@ export function startDoom(net: DoomNet): void {
     ctx.fillStyle = '#c8b400'; // yellow band
     ctx.fillRect(left, top + boxH * 0.4, boxW, boxH * 0.22);
     ctx.strokeStyle = '#16210f';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(left, top, boxW, boxH);
+  }
+
+  // A health pack (medkit) on the floor: a white box with a red cross.
+  function drawHealth(cx: number, size: number) {
+    const boxH = Math.min(size, H * 1.4) * 0.3;
+    const boxW = boxH;
+    const bottom = H / 2 + Math.min(size, H * 1.4) / 2;
+    const top = bottom - boxH;
+    const left = cx - boxW / 2;
+    ctx.fillStyle = '#f4f4f4';
+    ctx.fillRect(left, top, boxW, boxH);
+    ctx.fillStyle = '#e23b3b'; // red cross
+    ctx.fillRect(left + boxW * 0.42, top + boxH * 0.18, boxW * 0.16, boxH * 0.64);
+    ctx.fillRect(left + boxW * 0.18, top + boxH * 0.42, boxW * 0.64, boxH * 0.16);
+    ctx.strokeStyle = '#999';
     ctx.lineWidth = 1;
     ctx.strokeRect(left, top, boxW, boxH);
   }
@@ -780,16 +841,16 @@ export function startDoom(net: DoomNet): void {
         };
       } else if (mode === 'guest' && msg.t === 'st') {
         const st = msg as unknown as {
-          players: Player[]; enemies: Array<{ x: number; y: number; alive: boolean; flash: number; boss?: boolean; hpFrac?: number }>;
-          drops?: Array<{ x: number; y: number }>;
+          players: Player[]; enemies: Array<{ x: number; y: number; alive: boolean; flash: number; boss?: boolean; fritz?: boolean; hpFrac?: number }>;
+          drops?: Array<{ x: number; y: number; kind?: 'ammo' | 'health' }>;
           round: number; between: boolean; over: 'dead' | null;
         };
         players = st.players.map((p) => ({ ...p }));
         // Mirror position/alive/flash + boss flag; store hpFrac as hp/maxHp so the bar reads right.
         enemies = st.enemies.map((e) => ({
-          x: e.x, y: e.y, hp: e.hpFrac ?? 1, maxHp: 1, alive: e.alive, flash: e.flash, attackCd: 0, boss: e.boss,
+          x: e.x, y: e.y, hp: e.hpFrac ?? 1, maxHp: 1, alive: e.alive, flash: e.flash, attackCd: 0, boss: e.boss, fritz: e.fritz,
         }));
-        drops = (st.drops ?? []).map((d) => ({ x: d.x, y: d.y }));
+        drops = (st.drops ?? []).map((d) => ({ x: d.x, y: d.y, kind: d.kind ?? 'ammo' }));
         round = st.round; betweenTimer = st.between ? 1 : 0; over = st.over;
         if (over === 'dead' && players[selfIdx] && !players[selfIdx].alive) hurt = Math.max(hurt, 0.2);
       }
@@ -837,6 +898,7 @@ export function startDoom(net: DoomNet): void {
     if (mode !== 'menu' && mode !== 'wait' && mode !== 'ended') update(dt);
     render();
     syncHud();
+    syncBossMusic();
     raf = requestAnimationFrame(loop);
   }
   raf = requestAnimationFrame(loop);
@@ -851,6 +913,7 @@ export function startDoom(net: DoomNet): void {
     if (document.pointerLockElement === canvas) document.exitPointerLock();
     if (mode === 'wait' || mode === 'host' || mode === 'guest') net.leave();
     handlers = null;
+    bossMusic.pause();
     audio?.close().catch(() => {});
     overlay.remove();
   }
