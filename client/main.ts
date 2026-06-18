@@ -1293,6 +1293,7 @@ function renderShop() {
 // tick — rebuilding the item DOM each frame was eating Buy clicks.
 function syncBetSection() {
   const canBet = !!state && state.status === 'playing' && !state.poly && myRole === 'observer'
+    && !state.bot // no betting on bot matches
     && state.score.left === 0 && state.score.right === 0; // only before the first point
   betSection.hidden = !canBet;
   // Clamp the stake to what you actually have, and disable betting if you can't afford it

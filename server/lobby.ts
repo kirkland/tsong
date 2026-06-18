@@ -866,6 +866,7 @@ export class Lobby {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     if (this.mode !== 'duel' || this.game.status !== 'playing') return; // only on a live duel
+    if (this.bot) return; // no betting on matches involving a bot
     if (this.game.score.left !== 0 || this.game.score.right !== 0) return; // only before the first point
     if (this.sideOf(ws)) return; // players can't bet on their own match
     if (this.bets.has(conn.pid)) return; // one wager per match
