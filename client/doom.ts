@@ -102,9 +102,11 @@ export function startDoom(net: DoomNet): void {
   // --- DOM ---
   const overlay = document.createElement('div');
   overlay.id = 'doomOverlay';
+  // Note: no global cursor:none — the menu needs a visible pointer to click SOLO/CO-OP.
+  // During play the mouse is pointer-locked (hidden by the browser) anyway.
   overlay.style.cssText =
     'position:fixed;inset:0;z-index:9999;background:#000;display:flex;align-items:center;' +
-    'justify-content:center;flex-direction:column;cursor:none;font-family:ui-monospace,monospace;';
+    'justify-content:center;flex-direction:column;font-family:ui-monospace,monospace;';
 
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;

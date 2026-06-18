@@ -4,6 +4,10 @@ import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, TARGET, Powe
 
 const fritzImg = new Image();
 fritzImg.src = '/fritz.jpg';
+// "minion" power-up: both paddles are drawn as this image for the point.
+const minionImg = new Image();
+minionImg.src = '/minion.png';
+const minionReady = () => minionImg.complete && minionImg.naturalWidth > 0;
 
 // The local player's live blaster aim, set by main.ts while they hold the power-up.
 // Drives the on-court aim line so they can see where a shot will go.
@@ -73,13 +77,20 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
   // Paddles — X and height both come from the server, so "closing walls" mode and
   // the grow/shrink power-ups render correctly. Each seated player draws their own
   // paddle in their own color; an open side shows a neutral placeholder paddle.
+  const minionOn = s.minion && minionReady();
   for (const side of ['left', 'right'] as const) {
     const p = s.paddles[side];
     if (p.players.length) {
       for (const pl of p.players) {
-        ctx.fillStyle = p.disabled ? '#555a66' : pl.color; // blaster-locked paddles go gray
-        drawPaddle(ctx, pl.x, pl.y, p.h);
+        if (minionOn) {
+          drawMinionPaddle(ctx, pl.x, pl.y, p.h);
+        } else {
+          ctx.fillStyle = p.disabled ? '#555a66' : pl.color; // blaster-locked paddles go gray
+          drawPaddle(ctx, pl.x, pl.y, p.h);
+        }
       }
+    } else if (minionOn) {
+      drawMinionPaddle(ctx, p.x, p.y, p.h);
     } else {
       ctx.fillStyle = p.color;
       drawPaddle(ctx, p.x, p.y, p.h);
@@ -456,6 +467,15 @@ function drawPaddle(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: nu
   ctx.fillRect(cx - PADDLE.w / 2, cy - h / 2, PADDLE.w, h);
 }
 
+// "minion" power-up: draw the minion image centered on the paddle, sized to the paddle's
+// current height (so it stays roughly paddle-sized) with the image's own aspect ratio.
+function drawMinionPaddle(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const aspect = minionImg.naturalWidth / minionImg.naturalHeight;
+  const dh = h;
+  const dw = dh * aspect;
+  ctx.drawImage(minionImg, cx - dw / 2, cy - dh / 2, dw, dh);
+}
+
 // A "locked" marker over a paddle disabled by a blaster hit (gray sparks + ⚡).
 function drawDisabled(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
   ctx.save();
@@ -621,6 +641,7 @@ const TARGET_STYLE: Record<PowerupKind, { stroke: string; fill: string }> = {
   fritz:   { stroke: '#f59e0b', fill: 'rgba(245, 158,  11, 0.13)' }, // amber
   disco:   { stroke: '#e040fb', fill: 'rgba(224,  64, 251, 0.14)' }, // neon magenta
   blaster: { stroke: '#ff4d4d', fill: 'rgba(255,  77,  77, 0.14)' }, // red
+  minion:  { stroke: '#ffd21e', fill: 'rgba(255, 210,  30, 0.16)' }, // minion yellow
 };
 
 function drawTarget(ctx: CanvasRenderingContext2D, x: number, y: number, kind: PowerupKind) {
@@ -873,6 +894,28 @@ const GLYPHS: Record<PowerupKind, (ctx: CanvasRenderingContext2D, x: number, y: 
     ctx.lineTo(x + 3, y + 5);
     ctx.closePath();
     ctx.fill();
+  },
+  // minion: a one-eyed goggle head → "both paddles become a minion"
+  minion(ctx, x, y) {
+    // head outline
+    ctx.beginPath();
+    ctx.arc(x, y, 11, 0, Math.PI * 2);
+    ctx.stroke();
+    // goggle ring
+    ctx.beginPath();
+    ctx.arc(x, y - 1, 6, 0, Math.PI * 2);
+    ctx.stroke();
+    // pupil
+    ctx.beginPath();
+    ctx.arc(x, y - 1, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+    // strap
+    ctx.beginPath();
+    ctx.moveTo(x - 11, y - 1);
+    ctx.lineTo(x - 6, y - 1);
+    ctx.moveTo(x + 6, y - 1);
+    ctx.lineTo(x + 11, y - 1);
+    ctx.stroke();
   },
   // rotate: a circular arrow → "the whole court spins 90°"
   rotate(ctx, x, y) {

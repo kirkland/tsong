@@ -1475,6 +1475,7 @@ export class Lobby {
       rotated: this.game.rotated,
       fritz: this.game.fritz,
       disco: this.game.disco,
+      minion: this.game.minion,
       viewMode: this.viewMode,
       pinata: this.game.pinata,
       pinataPos: poly ? null : this.pinataView(),
