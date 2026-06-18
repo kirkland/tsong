@@ -1396,10 +1396,12 @@ function celebrateSpin(reward: { kind: 'coins'; amount: number } | { kind: 'item
   const startX = -(2 * SPIN_SEGMENTS.length + segment) * CW + (VW / 2 - CW / 2);
   const endX = -(landIndex * CW) + (VW / 2 - CW / 2);
   strip.style.transform = `translateX(${startX}px)`;
-  // Force a reflow so the transition runs from startX.
-  void strip.offsetWidth;
-  strip.style.transition = 'transform 4s cubic-bezier(0.16, 0.84, 0.12, 1)';
-  strip.style.transform = `translateX(${endX}px)`;
+  // Wait for the start frame to actually paint, then apply the transition to the end — a
+  // double-rAF is reliable where a synchronous reflow can get coalesced away (no animation).
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    strip.style.transition = 'transform 4s cubic-bezier(0.16, 0.84, 0.12, 1)';
+    strip.style.transform = `translateX(${endX}px)`;
+  }));
 
   let done = false;
   const finish = () => {
@@ -1509,6 +1511,27 @@ tournamentCollapseBtn.addEventListener('click', () => {
   bracketCollapsed = !bracketCollapsed;
   if (state) renderTournament(state.tournament);
 });
+
+// Public bet board under the court: who bet how much on each side.
+const betBoard = document.getElementById('betBoard') as HTMLDivElement;
+function renderBetBoard(s: StateMsg) {
+  const b = s.bets;
+  const any = b.left.length || b.right.length;
+  // Show only during a (non-arena) duel when there are wagers.
+  betBoard.hidden = !any || !!s.poly;
+  if (betBoard.hidden) return;
+  const col = (side: 'left' | 'right') => {
+    const list = b[side];
+    const total = list.reduce((a, x) => a + x.amount, 0);
+    const lines = list.length
+      ? list.map((x) => `<div class="bet-line"><span>${escapeHtml(x.name)}</span><span class="amt">${x.amount}🪙</span></div>`).join('')
+      : '<div class="bet-empty">no bets</div>';
+    const label = side === 'left' ? (s.paddles.left.name ?? 'Left') : (s.paddles.right.name ?? 'Right');
+    return `<div class="bet-col ${side}"><h4>${escapeHtml(label)}</h4>${lines}` +
+      (total ? `<div class="bet-total">total ${total}🪙</div>` : '') + `</div>`;
+  };
+  betBoard.innerHTML = col('left') + col('right');
+}
 
 // Render the live tournament panel from server state (signup slots, bracket, or champion).
 function renderTournament(t: StateMsg['tournament']) {
@@ -2555,6 +2578,7 @@ function updateUI() {
 
   renderPuHud(state);
   renderTournament(state.tournament);
+  renderBetBoard(state);
   if (!shopPanel.hidden) syncBetSection(); // light per-tick update (don't rebuild the item list — it eats clicks)
   if (!powerupInfoPanel.hidden) syncPowerupSpawnability();
 
