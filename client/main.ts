@@ -1449,6 +1449,7 @@ const changelogPanel = document.getElementById('changelogPanel') as HTMLDivEleme
 interface Commit {
   hash: string;
   subject: string;
+  author: string;
   date: string;
   url?: string; // GitHub link to the commit, when available
 }
@@ -1500,6 +1501,7 @@ async function loadChangelog() {
       subject.textContent = c.subject;
       const meta = document.createElement('div');
       meta.className = 'changelog-meta';
+      const tail = `${timeAgo(c.date)}${c.author ? ` · ${c.author}` : ''}`;
       if (c.url) {
         // Link the short hash to the commit on GitHub; open in a new tab.
         const link = document.createElement('a');
@@ -1508,9 +1510,9 @@ async function loadChangelog() {
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
         link.textContent = c.hash;
-        meta.append(link, document.createTextNode(` · ${timeAgo(c.date)}`));
+        meta.append(link, document.createTextNode(` · ${tail}`));
       } else {
-        meta.textContent = `${c.hash} · ${timeAgo(c.date)}`;
+        meta.textContent = `${c.hash} · ${tail}`;
       }
       item.append(subject, meta);
       changelogPanel.append(item);
