@@ -185,7 +185,10 @@ export type ClientMsg =
   | { type: 'tournamentJoin' } // take the next open signup slot
   | { type: 'tournamentLeave' } // give up your signup slot
   | { type: 'tournamentCancel' } // tear down the current tournament
-  | { type: 'fire'; angle: number }; // blaster power-up: fire a projectile at this vertical aim angle
+  | { type: 'fire'; angle: number } // blaster power-up: fire a projectile at this vertical aim angle
+  | { type: 'doomJoin' } // take a slot in the 2-player co-op DOOM lobby
+  | { type: 'doomLeave' } // leave the co-op DOOM lobby / game
+  | { type: 'doomRelay'; data: unknown }; // forward an opaque DOOM payload to the co-op partner
 
 // --- Server -> Client ---
 
@@ -409,4 +412,26 @@ export type ServerMsg =
   | ChatMsg
   | ReactionMsg
   | AnnounceMsg
-  | PingMsg;
+  | PingMsg
+  | DoomLobbyMsg
+  | DoomRelayMsg
+  | DoomEndMsg;
+
+// Co-op DOOM lobby status (2 slots). `slot` is which slot this client holds (0 = host,
+// 1 = guest, null = not in it). When status flips to 'playing', slot 0 is the authority.
+export interface DoomLobbyMsg {
+  type: 'doomLobby';
+  status: 'signup' | 'playing';
+  filled: number; // slots taken (0–2)
+  slot: number | null; // this client's slot, or null if not joined
+}
+// An opaque payload relayed from the co-op partner (host state snapshot / guest input).
+export interface DoomRelayMsg {
+  type: 'doomRelay';
+  data: unknown;
+}
+// The co-op session ended (partner left/disconnected).
+export interface DoomEndMsg {
+  type: 'doomEnd';
+  reason: string;
+}

@@ -412,6 +412,12 @@ const net = connect(
       showAnnouncement(msg.text);
     } else if (msg.type === 'ping') {
       onPing(msg.from);
+    } else if (msg.type === 'doomLobby') {
+      doomMod?.feedDoomLobby(msg);
+    } else if (msg.type === 'doomRelay') {
+      doomMod?.feedDoomRelay(msg.data);
+    } else if (msg.type === 'doomEnd') {
+      doomMod?.feedDoomEnd(msg.reason);
     }
   },
   () => {
@@ -1122,12 +1128,18 @@ function showPowerupFlash(kind: string, cx: number, cy: number) {
   anim.oncancel = () => el.remove();
 }
 
-// --- DOOM minigame (lazy-loaded, fully self-contained; never touches the Pong state) ---
+// --- DOOM minigame (lazy-loaded, self-contained). Solo runs entirely client-side; co-op
+// uses the server only as a 2-slot lobby + opaque relay (doom* messages, routed below). ---
 const doomBtn = document.getElementById('doomBtn') as HTMLButtonElement;
+let doomMod: typeof import('./doom') | null = null;
 doomBtn.addEventListener('click', async () => {
   try {
-    const mod = await import('./doom');
-    mod.startDoom();
+    doomMod = await import('./doom');
+    doomMod.startDoom({
+      join: () => net.send({ type: 'doomJoin' }),
+      leave: () => net.send({ type: 'doomLeave' }),
+      relay: (data) => net.send({ type: 'doomRelay', data }),
+    });
   } catch (e) {
     console.error('DOOM failed to load:', e);
   }

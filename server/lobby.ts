@@ -392,6 +392,51 @@ export class Lobby {
     this.refreshPause();
   }
 
+  // --- Co-op DOOM ---
+  // A tiny 2-slot lobby + opaque relay. The DOOM game itself runs on the clients
+  // (slot 0 is the authority); the server only matchmakes the pair and forwards their
+  // messages, so none of the Pong game state is involved.
+  private doomSlots: WebSocket[] = [];
+
+  /** Take a slot in the co-op DOOM lobby (max 2). Starts the session once both are filled. */
+  doomJoin(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return;
+    if (this.doomSlots.includes(ws) || this.doomSlots.length >= 2) return;
+    this.doomSlots.push(ws);
+    this.broadcastDoomLobby();
+  }
+
+  /** Leave the co-op DOOM lobby/game; if a session was live, tell the partner it ended. */
+  doomLeave(ws: WebSocket) {
+    const i = this.doomSlots.indexOf(ws);
+    if (i === -1) return;
+    const wasPlaying = this.doomSlots.length === 2;
+    this.doomSlots.splice(i, 1);
+    if (wasPlaying) {
+      for (const other of this.doomSlots) {
+        this.tell(other, { type: 'doomEnd', reason: 'Your co-op partner left.' });
+      }
+      this.doomSlots = [];
+    }
+    this.broadcastDoomLobby();
+  }
+
+  /** Forward an opaque DOOM payload to the co-op partner. */
+  doomRelay(ws: WebSocket, data: unknown) {
+    if (!this.doomSlots.includes(ws)) return;
+    for (const other of this.doomSlots) {
+      if (other !== ws) this.tell(other, { type: 'doomRelay', data });
+    }
+  }
+
+  private broadcastDoomLobby() {
+    const status = this.doomSlots.length === 2 ? 'playing' : 'signup';
+    this.doomSlots.forEach((ws, i) => {
+      this.tell(ws, { type: 'doomLobby', status, filled: this.doomSlots.length, slot: i });
+    });
+  }
+
   /** "Kick bot": remove the AI opponent (any joined player may do this). */
   removeBot(ws: WebSocket) {
     const conn = this.conns.get(ws);
@@ -963,6 +1008,7 @@ export class Lobby {
   }
 
   remove(ws: WebSocket) {
+    this.doomLeave(ws); // drop any co-op DOOM slot (and notify the partner)
     const leavingPid = this.conns.get(ws)?.pid ?? '';
     // Tournament participant left: advance their opponent / free their slot before the
     // generic seat teardown below (which would lose the bracket context).

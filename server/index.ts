@@ -171,6 +171,15 @@ wss.on('connection', (ws: WebSocket) => {
       case 'fire':
         if (typeof msg.angle === 'number' && Number.isFinite(msg.angle)) lobby.fire(ws, msg.angle);
         break;
+      case 'doomJoin':
+        lobby.doomJoin(ws);
+        break;
+      case 'doomLeave':
+        lobby.doomLeave(ws);
+        break;
+      case 'doomRelay':
+        lobby.doomRelay(ws, msg.data);
+        break;
     }
   });
 
