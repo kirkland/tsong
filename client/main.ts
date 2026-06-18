@@ -1293,6 +1293,7 @@ function renderShop() {
 // tick — rebuilding the item DOM each frame was eating Buy clicks.
 function syncBetSection() {
   const canBet = !!state && state.status === 'playing' && !state.poly && myRole === 'observer'
+    && !state.bot // no betting on bot matches
     && state.score.left === 0 && state.score.right === 0; // only before the first point
   betSection.hidden = !canBet;
   // Clamp the stake to what you actually have, and disable betting if you can't afford it
@@ -2020,9 +2021,45 @@ window.addEventListener('keydown', (e) => {
 // --- fatalities toggle (shared room-wide setting, not per-user) ---
 // The checkbox just requests a change; the server owns the value and broadcasts it to
 // everyone in `state.fatalitiesEnabled`, which is what updateUI() renders the box from.
+// Fatalities are permanently ON. Trying to turn them off just gets you mocked.
+const FATALITY_MOCKS = [
+  "Turn off fatalities? What are you, allergic to fun?",
+  "lol no. Finishers stay ON, coward.",
+  "Aww, does the wittle baby not like a finishing move?",
+  "Denied. Embrace the violence. 🔪",
+  "Nice try. Real ones leave fatalities ON.",
+  "You can't handle the FATALITY, can you?",
+  "Imagine playing pong without finishers. Couldn't be you.",
+];
 fatalityCheck.addEventListener('change', () => {
-  net.send({ type: 'setFatalities', enabled: fatalityCheck.checked });
+  if (!fatalityCheck.checked) {
+    fatalityCheck.checked = true; // snap it back on
+    showFatalityMock(FATALITY_MOCKS[Math.floor(Math.random() * FATALITY_MOCKS.length)]);
+  }
 });
+
+// A little mocking popup, shown when someone dares to un-check fatalities.
+function showFatalityMock(text: string) {
+  const back = document.createElement('div');
+  back.style.cssText =
+    'position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;' +
+    'background:rgba(0,0,0,0.55);';
+  const card = document.createElement('div');
+  card.style.cssText =
+    'max-width:360px;margin:20px;padding:22px 24px;border-radius:12px;background:#1a0e12;' +
+    'border:1px solid #5a2230;box-shadow:0 12px 40px rgba(0,0,0,0.6);text-align:center;' +
+    'font:700 16px ui-monospace,monospace;color:#ff8a8a;';
+  card.innerHTML =
+    '<div style="font-size:40px;margin-bottom:8px">☠️😂</div>' +
+    `<div style="line-height:1.5">${escapeHtml(text)}</div>` +
+    '<button style="margin-top:18px;font:700 14px ui-monospace,monospace;padding:8px 20px;' +
+    'border-radius:8px;border:1px solid #5a2230;background:#2a1218;color:#ff7a7a;cursor:pointer">Fine, leave them ON</button>';
+  const close = () => back.remove();
+  card.querySelector('button')!.addEventListener('click', close);
+  back.addEventListener('click', (e) => { if (e.target === back) close(); });
+  back.appendChild(card);
+  document.body.appendChild(back);
+}
 
 // --- fatality combos reference modal ---
 // Built once from FATALITIES so adding a finisher there auto-lists it here. Keys render
