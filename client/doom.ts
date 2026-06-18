@@ -82,6 +82,10 @@ export function feedDoomLobby(m: { status: string; filled: number; slot: number 
 export function feedDoomRelay(d: unknown) { handlers?.relay(d); }
 export function feedDoomEnd(reason: string) { handlers?.end(reason); }
 
+const LOW_AMMO = 25; // slain enemies only drop ammo while a player is below this
+const AMMO_PER_PICKUP = 20; // ammo gained from walking over a drop
+const PICKUP_RADIUS = 0.6; // how close you must get to grab a drop (grid units)
+
 // Survival rounds: each round spawns more (and slightly tougher) enemies at random open
 // cells, kept clear of the players' spawn corner.
 function enemyCountFor(round: number): number { return 3 + (round - 1) * 2; }
@@ -229,6 +233,7 @@ export function startDoom(net: DoomNet): void {
   let betweenTimer = 0; // seconds of the "ROUND N" intermission remaining (0 = fighting)
   let over: 'dead' | null = null; // survival mode: you only ever lose
   let scoreSubmitted = false;
+  let drops: Array<{ x: number; y: number }> = []; // ammo packs dropped by slain enemies
 
   // local input / feedback
   const keys = new Set<string>();
@@ -272,6 +277,18 @@ export function startDoom(net: DoomNet): void {
       o.connect(g); g.connect(a.destination); o.start(); o.stop(a.currentTime + 0.34);
     } catch { /* ignore */ }
   }
+  function pickupSound() {
+    try {
+      const a = ac();
+      const o = a.createOscillator(); const g = a.createGain();
+      o.type = 'square';
+      o.frequency.setValueAtTime(440, a.currentTime);
+      o.frequency.exponentialRampToValueAtTime(880, a.currentTime + 0.1);
+      g.gain.setValueAtTime(0.18, a.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, a.currentTime + 0.14);
+      o.connect(g); g.connect(a.destination); o.start(); o.stop(a.currentTime + 0.16);
+    } catch { /* ignore */ }
+  }
 
   // --- hitscan: a shot from player p down its facing angle hits the nearest, unobstructed enemy ---
   function fireFrom(p: Player) {
@@ -293,7 +310,12 @@ export function startDoom(net: DoomNet): void {
     if (best) {
       best.hp -= 1;
       best.flash = 0.12;
-      if (best.hp <= 0) { best.alive = false; kills++; deathSound(); }
+      if (best.hp <= 0) {
+        best.alive = false; kills++; deathSound();
+        // Drop an ammo pack only when someone's running low (and not every time).
+        const someoneLow = players.some((pl) => pl.alive && pl.ammo < LOW_AMMO);
+        if (someoneLow && Math.random() < 0.6) drops.push({ x: best.x, y: best.y });
+      }
     }
   }
 
@@ -330,6 +352,19 @@ export function startDoom(net: DoomNet): void {
     const nx = p.x + (dirX * forward - dirY * strafe) * sp;
     const ny = p.y + (dirY * forward + dirX * strafe) * sp;
     moveWithCollision(p, nx, ny);
+  }
+
+  // Walk-over ammo pickups (authority only: solo + host). Local pickups beep.
+  function collectDrops() {
+    for (let i = drops.length - 1; i >= 0; i--) {
+      const d = drops[i];
+      const grabber = players.find((p) => p.alive && Math.hypot(p.x - d.x, p.y - d.y) < PICKUP_RADIUS);
+      if (grabber) {
+        grabber.ammo += AMMO_PER_PICKUP;
+        drops.splice(i, 1);
+        if (grabber === me()) pickupSound();
+      }
+    }
   }
 
   // Enemy AI (authority only: solo + host). Each enemy hunts the nearest alive marine.
@@ -408,6 +443,7 @@ export function startDoom(net: DoomNet): void {
         if (keys.has('arrowleft')) myAngle -= 2.6 * dt;
         if (keys.has('arrowright')) myAngle += 2.6 * dt;
         stepEnemies(dt);
+        collectDrops();
         stepRounds(dt);
       }
       maybeSubmitScore();
@@ -426,6 +462,7 @@ export function startDoom(net: DoomNet): void {
           if (players[1].alive && players[1].ammo > 0) { players[1].ammo--; fireFrom(players[1]); }
         }
         stepEnemies(dt);
+        collectDrops();
         stepRounds(dt);
       }
       maybeSubmitScore();
@@ -437,6 +474,7 @@ export function startDoom(net: DoomNet): void {
           t: 'st',
           players: players.map((p) => ({ x: p.x, y: p.y, angle: p.angle, health: p.health, ammo: p.ammo, alive: p.alive, flash: p.flash })),
           enemies: enemies.map((e) => ({ x: e.x, y: e.y, alive: e.alive, flash: e.flash })),
+          drops: drops.map((d) => ({ x: d.x, y: d.y })),
           round, between: betweenTimer > 0, over,
         });
       }
@@ -500,8 +538,9 @@ export function startDoom(net: DoomNet): void {
     }
 
     // Sprites: enemies (imps) + the partner marine, billboarded with z-buffer occlusion.
-    const sprites: Array<{ x: number; y: number; kind: 'imp' | 'marine'; flash: boolean }> = [];
+    const sprites: Array<{ x: number; y: number; kind: 'imp' | 'marine' | 'ammo'; flash: boolean }> = [];
     for (const e of enemies) if (e.alive) sprites.push({ x: e.x, y: e.y, kind: 'imp', flash: e.flash > 0 });
+    for (const d of drops) sprites.push({ x: d.x, y: d.y, kind: 'ammo', flash: false });
     const mate = partner();
     if (mate && mate.alive) sprites.push({ x: mate.x, y: mate.y, kind: 'marine', flash: false });
 
@@ -519,6 +558,7 @@ export function startDoom(net: DoomNet): void {
       const col = Math.max(0, Math.min(W - 1, Math.floor(screenX)));
       if (d.tY >= zBuffer[col]) continue;
       if (d.s.kind === 'imp') drawImp(screenX, size, d.s.flash);
+      else if (d.s.kind === 'ammo') drawAmmo(screenX, size);
       else drawMarine(screenX, size);
     }
 
@@ -555,6 +595,22 @@ export function startDoom(net: DoomNet): void {
     ctx.fillRect(left + w * 0.3, top + h * 0.12, w * 0.4, h * 0.3);
     ctx.fillStyle = '#1d3b22';
     ctx.fillRect(left + w * 0.34, top + h * 0.2, w * 0.32, h * 0.08); // visor
+  }
+
+  // A small ammo box that sits on the floor (drawn near the bottom of its screen footprint).
+  function drawAmmo(cx: number, size: number) {
+    const boxH = Math.min(size, H * 1.4) * 0.28;
+    const boxW = boxH * 1.3;
+    const bottom = H / 2 + Math.min(size, H * 1.4) / 2; // floor line for this distance
+    const top = bottom - boxH;
+    const left = cx - boxW / 2;
+    ctx.fillStyle = '#3d5a2a'; // olive crate
+    ctx.fillRect(left, top, boxW, boxH);
+    ctx.fillStyle = '#c8b400'; // yellow band
+    ctx.fillRect(left, top + boxH * 0.4, boxW, boxH * 0.22);
+    ctx.strokeStyle = '#16210f';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(left, top, boxW, boxH);
   }
 
   function drawGun() {
@@ -611,6 +667,7 @@ export function startDoom(net: DoomNet): void {
     mode = 'solo'; selfIdx = 0;
     players = [freshPlayer(2.5, 2.5)];
     round = 1; kills = 0; over = null; myAngle = 0; scoreSubmitted = false; betweenTimer = 0;
+    drops = [];
     enemies = spawnEnemiesForRound(round, players);
     menu.style.display = 'none';
   }
@@ -619,6 +676,7 @@ export function startDoom(net: DoomNet): void {
     mode = slot === 0 ? 'host' : 'guest';
     players = [freshPlayer(2.5, 2.5), freshPlayer(3.5, 2.5)];
     round = 1; kills = 0; over = null; myAngle = 0; scoreSubmitted = false; betweenTimer = 0;
+    drops = [];
     enemies = slot === 0 ? spawnEnemiesForRound(round, players) : [];
     lastGuestFireSeq = 0; guestIn = { forward: 0, strafe: 0, angle: 0, fireSeq: 0 };
     partnerName = '';
@@ -661,11 +719,13 @@ export function startDoom(net: DoomNet): void {
       } else if (mode === 'guest' && msg.t === 'st') {
         const st = msg as unknown as {
           players: Player[]; enemies: Array<{ x: number; y: number; alive: boolean; flash: number }>;
+          drops?: Array<{ x: number; y: number }>;
           round: number; between: boolean; over: 'dead' | null;
         };
         players = st.players.map((p) => ({ ...p }));
         // keep enemy hp/attackCd fields the guest doesn't use; just mirror position/alive/flash
         enemies = st.enemies.map((e) => ({ x: e.x, y: e.y, hp: 1, alive: e.alive, flash: e.flash, attackCd: 0 }));
+        drops = (st.drops ?? []).map((d) => ({ x: d.x, y: d.y }));
         round = st.round; betweenTimer = st.between ? 1 : 0; over = st.over;
         if (over === 'dead' && players[selfIdx] && !players[selfIdx].alive) hurt = Math.max(hurt, 0.2);
       }
