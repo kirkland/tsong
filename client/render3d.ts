@@ -235,23 +235,107 @@ export function createRenderer(container: HTMLElement): Renderer3D {
   const ballGeo = new THREE.SphereGeometry(1, 28, 20); // scaled to each ball's radius
   const ballPool: THREE.Mesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>[] = [];
 
-  // Cosmetic hats: a pooled little hat-group sat atop a paddle. Currently one generic
-  // top-hat shape is shown for any equipped hat; extend HAT3D for per-item 3D looks.
-  const hatPool: THREE.Group[] = [];
-  function getHat(i: number): THREE.Group {
-    let g = hatPool[i];
-    if (!g) {
-      g = new THREE.Group();
-      const brim = new THREE.Mesh(new THREE.CylinderGeometry(PADDLE.w * 0.9, PADDLE.w * 0.9, 1.5, 16),
-        new THREE.MeshStandardMaterial({ color: '#15171c' }));
-      const crown = new THREE.Mesh(new THREE.CylinderGeometry(PADDLE.w * 0.55, PADDLE.w * 0.55, 12, 16),
-        new THREE.MeshStandardMaterial({ color: '#15171c' }));
-      crown.position.y = 6.5;
-      g.add(brim, crown);
-      world.add(g);
-      hatPool[i] = g;
+  // Cosmetic hats — each id builds a distinct little 3D model from primitives, sat atop a
+  // paddle. Slots are pooled and rebuilt only when the worn hat changes.
+  const mat = (color: string, emissive = '#000') => new THREE.MeshStandardMaterial({ color, emissive, roughness: 0.6 });
+  function buildHat(id: string): THREE.Group {
+    const g = new THREE.Group();
+    const W = PADDLE.w; // ~14
+    switch (id) {
+      case 'tophat': {
+        g.add(mesh(new THREE.CylinderGeometry(W * 0.9, W * 0.9, 1.6, 18), mat('#15171c'), 0));
+        g.add(mesh(new THREE.CylinderGeometry(W * 0.55, W * 0.55, 12, 18), mat('#15171c'), 6.5));
+        g.add(mesh(new THREE.CylinderGeometry(W * 0.56, W * 0.56, 2.5, 18), mat('#c0392b'), 2.5));
+        break;
+      }
+      case 'crown': {
+        g.add(mesh(new THREE.CylinderGeometry(W * 0.7, W * 0.7, 6, 18), mat('#ffd23f', '#5a4500'), 3));
+        for (let i = 0; i < 6; i++) {
+          const a = (i / 6) * Math.PI * 2;
+          const spike = mesh(new THREE.ConeGeometry(1.6, 6, 8), mat('#ffd23f', '#5a4500'), 8);
+          spike.position.x = Math.cos(a) * W * 0.7; spike.position.z = Math.sin(a) * W * 0.7;
+          g.add(spike);
+        }
+        g.add(mesh(new THREE.SphereGeometry(2, 12, 10), mat('#ff4d6d', '#400'), 9)); // jewel
+        break;
+      }
+      case 'party': {
+        g.add(mesh(new THREE.ConeGeometry(W * 0.6, 16, 20), mat('#ff7eb3'), 8));
+        g.add(mesh(new THREE.SphereGeometry(2.4, 12, 10), mat('#ffe066', '#664'), 16));
+        break;
+      }
+      case 'halo': {
+        const ring = mesh(new THREE.TorusGeometry(W * 0.7, 1.4, 10, 24), mat('#ffe066', '#aa8800'), 9);
+        ring.rotation.x = Math.PI / 2;
+        g.add(ring);
+        break;
+      }
+      case 'cowboy': {
+        g.add(mesh(new THREE.CylinderGeometry(W * 1.1, W * 1.1, 1.4, 22), mat('#8a5a2b'), 0.5));
+        g.add(mesh(new THREE.CylinderGeometry(W * 0.5, W * 0.6, 9, 18), mat('#704821'), 5));
+        break;
+      }
+      case 'wizard': {
+        g.add(mesh(new THREE.ConeGeometry(W * 0.62, 22, 20), mat('#3b2e7e', '#150f33'), 11));
+        g.add(mesh(new THREE.SphereGeometry(1.6, 10, 8), mat('#ffe066', '#664'), 22));
+        break;
+      }
+      case 'horns': {
+        for (const dir of [-1, 1]) {
+          const horn = mesh(new THREE.ConeGeometry(2.4, 9, 10), mat('#c0392b', '#300'), 4);
+          horn.position.x = dir * 5; horn.rotation.z = dir * -0.5;
+          g.add(horn);
+        }
+        break;
+      }
+      case 'gradcap': {
+        g.add(mesh(new THREE.CylinderGeometry(W * 0.5, W * 0.5, 4, 16), mat('#15171c'), 2));
+        g.add(mesh(new THREE.BoxGeometry(W * 1.5, 1.5, W * 1.5), mat('#15171c'), 4.5));
+        const tassel = mesh(new THREE.CylinderGeometry(0.4, 0.4, 7, 6), mat('#ffd23f', '#553'), 2);
+        tassel.position.x = W * 0.7; g.add(tassel);
+        break;
+      }
+      case 'flame': {
+        g.add(mesh(new THREE.ConeGeometry(5, 16, 10), mat('#ff5a1c', '#ff3000'), 8));
+        g.add(mesh(new THREE.ConeGeometry(2.6, 9, 8), mat('#ffe066', '#aa6600'), 7));
+        break;
+      }
+      case 'helmet': {
+        const dome = mesh(new THREE.SphereGeometry(W * 0.75, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2), mat('#5a7d3a', '#1a200c'), 0);
+        g.add(dome);
+        break;
+      }
+      case 'antennae': {
+        for (const dir of [-1, 1]) {
+          const stalk = mesh(new THREE.CylinderGeometry(0.5, 0.5, 10, 6), mat('#2a2a33'), 5);
+          stalk.position.x = dir * 4; stalk.rotation.z = dir * -0.3;
+          g.add(stalk);
+          const ball = mesh(new THREE.SphereGeometry(2, 12, 10), mat('#ff5c5c', '#400'), 10);
+          ball.position.x = dir * 6.5; g.add(ball);
+        }
+        break;
+      }
+      default:
+        g.add(mesh(new THREE.CylinderGeometry(W * 0.55, W * 0.55, 12, 16), mat('#15171c'), 6.5));
     }
     return g;
+  }
+  function mesh(geo: THREE.BufferGeometry, material: THREE.Material, y: number): THREE.Mesh {
+    const m = new THREE.Mesh(geo, material);
+    m.position.y = y;
+    return m;
+  }
+  // Pool of hat slots; each remembers which hat id it currently shows and rebuilds on change.
+  const hatPool: { group: THREE.Group; id: string }[] = [];
+  function getHat(i: number, id: string): THREE.Group {
+    let slot = hatPool[i];
+    if (!slot) { slot = { group: new THREE.Group(), id: '' }; world.add(slot.group); hatPool[i] = slot; }
+    if (slot.id !== id) {
+      for (const c of [...slot.group.children]) slot.group.remove(c);
+      slot.group.add(...buildHat(id).children);
+      slot.id = id;
+    }
+    return slot.group;
   }
   // Skin renderers (extend with more skins later). `t` is a time seed for animated skins.
   const SKIN3D: Record<string, (mat: THREE.MeshStandardMaterial, t: number) => void> = {
@@ -265,11 +349,6 @@ export function createRenderer(container: HTMLElement): Renderer3D {
     neon: (mat, t) => { const p = 0.4 + 0.4 * Math.sin(t / 200); mat.color.set('#0a0a12'); mat.emissive.setRGB(0.2 * p, p, 0.08 * p); },
     stripes: (mat) => { mat.color.set('#f4c20d'); mat.emissive.set('#222'); },
     glitch: (mat, t) => { const c = new THREE.Color(['#ff003c', '#00fff0', '#b16bff'][Math.floor(t / 80) % 3]); mat.color.copy(c); mat.emissive.copy(c).multiplyScalar(0.4); },
-  };
-  // Per-hat tint for the generic 3D hat shape (2D has fully distinct art).
-  const HAT3D_COLOR: Record<string, string> = {
-    tophat: '#15171c', crown: '#ffd23f', party: '#ff7eb3', halo: '#ffe066', cowboy: '#8a5a2b',
-    wizard: '#3b2e7e', horns: '#c0392b', gradcap: '#15171c', flame: '#ff5a1c', helmet: '#5a7d3a', antennae: '#2a2a33',
   };
 
   function getPaddle(i: number) {
@@ -503,15 +582,14 @@ export function createRenderer(container: HTMLElement): Renderer3D {
         }
         m.material.emissiveIntensity = locked ? 0.25 + 0.2 * Math.abs(Math.sin(Date.now() / 90)) : p.frozen ? 0.05 : 0.22;
         m.material.opacity = 1;
-        // Cosmetic hat sits on top of the paddle box (generic shape, tinted per hat).
+        // Cosmetic hat sits on top of the paddle box (distinct 3D model per hat).
         if (pl.hat) {
-          const hat = getHat(hi++);
+          const hat = getHat(hi++, pl.hat);
           hat.visible = true;
-          hat.position.set(wx(pl.x), PADDLE_H + 1, wz(pl.y));
-          const col = HAT3D_COLOR[pl.hat] ?? '#15171c';
-          for (const child of hat.children) {
-            ((child as THREE.Mesh).material as THREE.MeshStandardMaterial).color.set(col);
-          }
+          const bob = pl.hat === 'halo' ? 4 + Math.sin(Date.now() / 300) * 2 : 1;
+          hat.position.set(wx(pl.x), PADDLE_H + bob, wz(pl.y));
+          if (pl.hat === 'flame') hat.scale.setScalar(0.9 + 0.15 * Math.abs(Math.sin(Date.now() / 120)));
+          else hat.scale.setScalar(1);
         }
       }
     }
