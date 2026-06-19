@@ -319,10 +319,18 @@ server.listen(PORT, () => {
 // synchronous and fast; we then stop the loop and close the server, with a short hard cap
 // in case sockets linger.
 let shuttingDown = false;
-function shutdown(signal: string) {
+async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`${signal} received — saving state and shutting down`);
+  // Refund open wagers before exit: bets aren't part of the snapshot, so otherwise the coins
+  // escrowed at bet time would vanish across the restart. Cap the wait so a slow/down DB can't
+  // stall the deploy — the bets Map is cleared synchronously, so nothing double-settles even if
+  // a refund write times out.
+  await Promise.race([
+    lobby.refundOpenBets().catch((e) => console.error('bet refund on shutdown failed:', e)),
+    new Promise((resolve) => setTimeout(resolve, 800).unref()),
+  ]);
   saveSnapshot(game.serialize(), lobby.serialize());
   clearInterval(loop);
   server.close(() => process.exit(0));

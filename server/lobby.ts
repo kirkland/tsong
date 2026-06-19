@@ -936,30 +936,44 @@ export class Lobby {
   /** Settle all open wagers against the winning side: correct calls pay 2×. */
   private settleBets(winnerSide: Side | null) {
     if (this.bets.size === 0) return;
+    // No winning side (an abnormal end with no result) — nobody called it wrong, so return
+    // every stake rather than pocketing it.
+    if (!winnerSide) { void this.refundBets(); return; }
     const pending = [...this.bets.values()];
     this.bets.clear();
     for (const b of pending) {
-      if (winnerSide && b.side === winnerSide) {
+      if (b.side === winnerSide) {
         addCoins(this.conns.get(b.ws)?.pid ?? b.name, b.name, b.amount * 2)
           .then(() => { if (this.conns.has(b.ws)) this.sendWallet(b.ws); })
           .catch((e) => console.error('payout failed:', e));
       } else {
-        // Lost (or no winner) — stake already escrowed; just refresh their wallet view.
+        // Lost — stake was escrowed at bet time; just refresh their wallet view.
         if (this.conns.has(b.ws)) this.sendWallet(b.ws);
       }
     }
   }
 
-  /** Refund all open wagers (match abandoned with no result). */
-  private refundBets() {
-    if (this.bets.size === 0) return;
+  /** Refund all open wagers (match abandoned with no result, or a graceful shutdown).
+   *  Returns once every refund has been written to the DB, so a caller that needs the coins
+   *  made whole before exiting can await it; fire-and-forget callers can ignore the promise. */
+  private refundBets(): Promise<void> {
+    if (this.bets.size === 0) return Promise.resolve();
     const pending = [...this.bets.values()];
     this.bets.clear();
-    for (const b of pending) {
+    return Promise.all(pending.map((b) =>
       addCoins(this.conns.get(b.ws)?.pid ?? b.name, b.name, b.amount)
         .then(() => { if (this.conns.has(b.ws)) this.sendWallet(b.ws); })
-        .catch((e) => console.error('refund failed:', e));
-    }
+        .catch((e) => console.error('refund failed:', e)),
+    )).then(() => undefined);
+  }
+
+  /** Refund any open wagers ahead of a graceful shutdown. Bets live only in memory — they're
+   *  not part of the snapshot — so without this the coins escrowed at bet time would be lost
+   *  across a restart: neither paid out nor returned. The notice rides the chat log, which IS
+   *  snapshotted, so reconnecting spectators see why their stake came back. */
+  refundOpenBets(): Promise<void> {
+    if (this.bets.size > 0) this.announce('🎲 Open bets refunded — server restarting.');
+    return this.refundBets();
   }
 
   claim(ws: WebSocket, side?: Side) {
