@@ -125,16 +125,6 @@ export async function initDb(): Promise<void> {
     await pool.query(`DELETE FROM stock_holdings`);
     await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('stock_rebase_v2', now()::text)`);
   }
-  // One-time: the whole coin economy was scaled ×100 (COIN_SCALE) so the stock market works in
-  // whole coins. Multiply every existing balance by 100, and rebase the market — old prices/
-  // positions were priced at base 1, but the base is now 100, so clear both for a clean start.
-  const coinScale = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'coin_scale_100x_v1'`);
-  if (coinScale.rowCount === 0) {
-    await pool.query(`UPDATE players SET coins = coins * 100`);
-    await pool.query(`DELETE FROM stock_prices`);
-    await pool.query(`DELETE FROM stock_holdings`);
-    await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('coin_scale_100x_v1', now()::text)`);
-  }
   console.log('leaderboard DB ready');
 }
 
@@ -184,12 +174,11 @@ export async function recordResult(winners: PlayerRef[], losers: PlayerRef[]): P
 
   const allPids = [...winners, ...losers].map((p) => p.pid);
 
-  // Upsert all players so they exist before we read ELO. Each winner also earns 100 coins
-  // (1 win reward × COIN_SCALE — the whole economy is scaled ×100).
+  // Upsert all players so they exist before we read ELO. Each winner also earns 1 coin.
   for (const w of winners) {
     await pool.query(
-      `INSERT INTO players (id, name, wins, coins) VALUES ($1, $2, 1, 100)
-         ON CONFLICT (id) DO UPDATE SET wins = players.wins + 1, coins = players.coins + 100, name = EXCLUDED.name`,
+      `INSERT INTO players (id, name, wins, coins) VALUES ($1, $2, 1, 1)
+         ON CONFLICT (id) DO UPDATE SET wins = players.wins + 1, coins = players.coins + 1, name = EXCLUDED.name`,
       [w.pid, w.name],
     );
   }
@@ -525,25 +514,18 @@ export async function repayLoan(pid: string): Promise<{ wallet: Wallet } | null>
   return { wallet };
 }
 
-/** Enforce the deadline on every loan due at/before `nowMs`: Davis takes EVERYTHING — zero the
- *  wallet, wipe all stock positions, AND strip every cosmetic (owned items + equipped hat/skin)
- *  — then clear the debt. Returns the affected pids so the caller can refresh anyone connected. */
+/** Enforce the deadline on every loan due at/before `nowMs`: zero those players' wallets, wipe
+ *  all their stock positions, and clear the debt. Returns the affected pids so the caller can
+ *  refresh anyone who's connected. */
 export async function collectDefaultedLoans(nowMs: number): Promise<string[]> {
   if (!pool) return [];
   const { rows } = await pool.query(`SELECT pid FROM loans WHERE due_at <= $1`, [nowMs]);
   const pids = rows.map((r) => r.pid as string);
   if (!pids.length) return [];
-  await pool.query(`UPDATE players SET coins = 0, owned = '', hat = NULL, skin = NULL WHERE id = ANY($1)`, [pids]);
+  await pool.query(`UPDATE players SET coins = 0 WHERE id = ANY($1)`, [pids]);
   await pool.query(`DELETE FROM stock_holdings WHERE pid = ANY($1)`, [pids]);
   await pool.query(`DELETE FROM loans WHERE pid = ANY($1)`, [pids]);
   return pids;
-}
-
-/** Daily housekeeping: drop persisted price-board rows for any coin no longer listed, so the
- *  saved board doesn't accumulate stale values. Live (in-memory) prices are untouched. */
-export async function pruneStaleStockPrices(validCoinIds: string[]): Promise<void> {
-  if (!pool || !validCoinIds.length) return;
-  await pool.query(`DELETE FROM stock_prices WHERE coin <> ALL($1)`, [validCoinIds]);
 }
 
 export async function getLeaderboard(): Promise<LeaderboardRow[]> {
