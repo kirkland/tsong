@@ -1568,6 +1568,9 @@ marketBtn.addEventListener('click', () => {
 document.addEventListener('click', (e) => {
   if (marketPanel.hidden) return;
   const t = e.target as Node;
+  // A click that removed its own target from the DOM (e.g. a re-render) lands here with a
+  // detached node, which is "not contained" — ignore it so the panel doesn't snap shut.
+  if (t instanceof Node && !t.isConnected) return;
   if (!marketPanel.contains(t) && !marketBtn.contains(t)) { marketPanel.hidden = true; marketBtn.setAttribute('aria-expanded', 'false'); }
 });
 
@@ -1620,17 +1623,25 @@ function renderMarket() {
     investAmt.set(stock.id, amt);
     const minus = document.createElement('button');
     minus.textContent = '−';
-    minus.onclick = () => { investAmt.set(stock.id, Math.max(1, (investAmt.get(stock.id) ?? 1) - 1)); renderMarket(); };
     const amtEl = document.createElement('span');
     amtEl.className = 'coin-amt';
     amtEl.textContent = String(amt);
     const plus = document.createElement('button');
     plus.textContent = '+';
-    plus.onclick = () => { investAmt.set(stock.id, Math.min(wallet.coins || 1, (investAmt.get(stock.id) ?? 1) + 1)); renderMarket(); };
     const invest = document.createElement('button');
     invest.textContent = 'Invest';
     invest.disabled = wallet.coins < amt;
     invest.onclick = () => { net.send({ type: 'stockInvest', coin: stock.id, amount: investAmt.get(stock.id) ?? 1 }); playChaChing(); };
+    // Step the amount in place (don't re-render) — rebuilding the row would detach the very
+    // button that was clicked and trip the click-outside handler, closing the whole panel.
+    const setAmt = (v: number) => {
+      const clamped = Math.max(1, Math.min(v, Math.max(1, wallet.coins)));
+      investAmt.set(stock.id, clamped);
+      amtEl.textContent = String(clamped);
+      invest.disabled = wallet.coins < clamped;
+    };
+    minus.onclick = () => setAmt((investAmt.get(stock.id) ?? 1) - 1);
+    plus.onclick = () => setAmt((investAmt.get(stock.id) ?? 1) + 1);
     buy.append(minus, amtEl, plus, invest);
     actions.appendChild(buy);
 
