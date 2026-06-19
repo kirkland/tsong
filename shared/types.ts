@@ -260,6 +260,8 @@ export type ClientMsg =
   | { type: 'dailySpin' } // claim the once-per-24h reward spin
   | { type: 'stockInvest'; coin: string; amount: number } // sink `amount` coins into a crypto at the current price
   | { type: 'stockCashOut'; coin: string } // sell the entire holding in a crypto for floor(worth) coins
+  | { type: 'getLoan'; amount: number } // borrow `amount` coins from Davis (owe 1.5× back by the daily reset)
+  | { type: 'repayLoan' } // pay Davis the full 1.5× owed and clear the loan
   | { type: 'migrate'; oldPid: string }; // one-time: merge a UUID guest account into the signed-in Google account
 
 // --- Server -> Client ---
@@ -537,6 +539,7 @@ export type ServerMsg =
   | DoomLeaderboardMsg
   | WalletMsg
   | StockMsg
+  | LoanMsg
   | SpinResultMsg;
 
 // A player's private wallet + cosmetics + active bet, sent only to that client.
@@ -550,6 +553,15 @@ export interface WalletMsg {
   // it was placed at. Empty when you have none.
   bets: Array<{ side: Side; amount: number; odds: number }>;
   nextSpinAt: number; // epoch ms when the daily spin is next available (0 = available now)
+}
+
+// A player's private loan status, sent only to that client (on join and after any loan
+// change). `loan` is null when they owe Davis nothing. Borrow N coins now; owe `owed`
+// (= ceil(1.5 × N), Davis rounds up) back by `dueAt` (the next daily market reset). Miss the
+// deadline and Davis zeroes your wallet AND wipes every stock position.
+export interface LoanMsg {
+  type: 'loan';
+  loan: { amount: number; owed: number; dueAt: number } | null;
 }
 
 // The daily-spin wheel segments, in display order. Shared so the client wheel and the

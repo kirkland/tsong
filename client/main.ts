@@ -544,12 +544,18 @@ const net = connect(
       wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, bets: msg.bets, nextSpinAt: msg.nextSpinAt };
       renderShop();
       if (!marketPanel.hidden) renderMarket(); // coin balance gates the Invest buttons
+      if (!loanPanel.hidden && loan) renderLoan(); // balance gates the Pay button
     } else if (msg.type === 'stocks') {
       market = { prices: msg.prices, holdings: msg.holdings, history: msg.history, nextUpdateAt: msg.nextUpdateAt };
       if (!marketPanel.hidden) renderMarket();
       updateMarketTimer();
     } else if (msg.type === 'spinResult') {
       celebrateSpin(msg.reward, msg.segment);
+    } else if (msg.type === 'loan') {
+      loan = msg.loan;
+      // Taking/repaying resets the conversation; collecting (loan→null) drops back to the intro.
+      if (!loan) loanStep = 'intro';
+      if (!loanPanel.hidden) renderLoan();
     }
   },
   () => {
@@ -1749,6 +1755,149 @@ function updateMarketTimer() {
   marketTimer.textContent = `next move in ${m}:${String(s).padStart(2, '0')}`;
 }
 setInterval(updateMarketTimer, 1000);
+
+// --- Davis's loans (top-left): borrow coins, owe 1.5× by the daily reset ---
+// The server owns the loan; we render the latest `loan` state and fire getLoan/repayLoan.
+// `loanStep` is local conversation state: 'intro' (Davis offers) → 'amount' (pick how much).
+// Once you hold a loan, the panel always shows the repay view regardless of step.
+const loanBtn = document.getElementById('loanBtn') as HTMLButtonElement;
+const loanPanel = document.getElementById('loanPanel') as HTMLDivElement;
+const loanImg = document.getElementById('loanImg') as HTMLImageElement;
+const loanBody = document.getElementById('loanBody') as HTMLDivElement;
+let loan: { amount: number; owed: number; dueAt: number } | null = null;
+let loanStep: 'intro' | 'amount' = 'intro';
+
+// Davis Clarke mannerisms — one is picked per panel open for flavor.
+const DAVIS_QUOTES = [
+  "It's a bad day to be an Excel spreadsheet.",
+  "Keep grinding — the grind doesn't stop.",
+  "Some people want it to happen. We make it happen.",
+  "No such thing as a day off. Only a day on.",
+  "Pain is just weakness leaving the wallet.",
+  "You miss 100% of the loans you don't take.",
+];
+let davisQuote = DAVIS_QUOTES[0];
+
+// Davis's three faces, by stage of the conversation. (Files live in client/public.)
+const DAVIS_INTRO = '/davis_at_citizens.jpg';
+const DAVIS_AMOUNT = '/davis_marathon.png';
+const DAVIS_OWED = '/davis_glasses.jpg';
+
+function fmtCountdown(ms: number): string {
+  if (ms <= 0) return 'any moment now';
+  const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+  if (h > 0) return `${h}h ${m}m`;
+  const s = Math.floor((ms % 60000) / 1000);
+  return `${m}m ${String(s).padStart(2, '0')}s`;
+}
+
+function renderLoan() {
+  loanBody.innerHTML = '';
+  // You owe Davis — always show the repay view (his sunglasses are on; he means business).
+  if (loan) {
+    loanImg.src = DAVIS_OWED;
+    const due = loan.dueAt - Date.now();
+    loanBody.innerHTML =
+      `<div class="loan-line">You borrowed <b>${loan.amount}</b>🪙. Davis wants <span class="loan-owe">${loan.owed}🪙</span> back.</div>` +
+      `<div class="loan-due">Due at the daily market reset · <b>${fmtCountdown(due)}</b> left. Miss it and he takes <b>everything</b> — coins and stocks.</div>`;
+    const actions = document.createElement('div');
+    actions.className = 'loan-actions';
+    const pay = document.createElement('button');
+    pay.className = 'loan-pay';
+    pay.textContent = `Pay ${loan.owed}🪙`;
+    pay.disabled = wallet.coins < loan.owed;
+    pay.title = pay.disabled ? "You can't cover the full repayment yet." : '';
+    pay.onclick = () => { net.send({ type: 'repayLoan' }); playChaChing(); };
+    const close = document.createElement('button');
+    close.textContent = 'Not yet';
+    close.onclick = closeLoan;
+    actions.append(pay, close);
+    loanBody.appendChild(actions);
+    return;
+  }
+
+  // No loan: 'amount' step (pick how much) or 'intro' (Davis offers).
+  if (loanStep === 'amount') {
+    loanImg.src = DAVIS_AMOUNT;
+    loanBody.innerHTML = `<div class="loan-line">How much you need? I'll want <b>1.5×</b> back by end of day. Don't make it weird.</div>`;
+    const row = document.createElement('div');
+    row.className = 'loan-amt-row';
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '1';
+    input.step = '1';
+    input.value = '100';
+    input.setAttribute('inputmode', 'numeric');
+    row.appendChild(input);
+    loanBody.appendChild(row);
+    const owe = document.createElement('div');
+    owe.className = 'loan-due';
+    const previewOwed = (v: number) => Math.ceil(Math.max(0, Math.floor(v || 0)) * 1.5);
+    const refreshOwe = () => { owe.textContent = `You'll owe Davis ${previewOwed(Number(input.value))}🪙.`; };
+    refreshOwe();
+    input.addEventListener('input', refreshOwe);
+    loanBody.appendChild(owe);
+    const actions = document.createElement('div');
+    actions.className = 'loan-actions';
+    const borrow = document.createElement('button');
+    borrow.className = 'loan-yes';
+    borrow.textContent = 'Borrow';
+    borrow.onclick = () => {
+      const amt = Math.floor(Number(input.value));
+      if (!Number.isFinite(amt) || amt < 1) return;
+      net.send({ type: 'getLoan', amount: amt });
+      playChaChing();
+    };
+    const back = document.createElement('button');
+    back.textContent = 'Back';
+    back.onclick = () => { loanStep = 'intro'; renderLoan(); };
+    actions.append(borrow, back);
+    loanBody.appendChild(actions);
+    return;
+  }
+
+  // Intro: Davis at Citizens, offering a loan.
+  loanImg.src = DAVIS_INTRO;
+  loanBody.innerHTML =
+    `<div class="loan-quote">"${davisQuote}"</div>` +
+    `<div class="loan-line">Davis here. Cash flow tight? I can spot you some coins — pay me back <b>1.5×</b> by the daily reset. Would you like a loan?</div>`;
+  const actions = document.createElement('div');
+  actions.className = 'loan-actions';
+  const yes = document.createElement('button');
+  yes.className = 'loan-yes';
+  yes.textContent = 'Yes';
+  yes.onclick = () => { loanStep = 'amount'; renderLoan(); };
+  const no = document.createElement('button');
+  no.textContent = 'No';
+  no.onclick = closeLoan;
+  actions.append(yes, no);
+  loanBody.appendChild(actions);
+}
+
+function closeLoan() {
+  loanPanel.hidden = true;
+  loanBtn.setAttribute('aria-expanded', 'false');
+}
+
+loanBtn.addEventListener('click', () => {
+  const open = loanPanel.hidden;
+  loanPanel.hidden = !open;
+  loanBtn.setAttribute('aria-expanded', String(open));
+  if (open) {
+    davisQuote = DAVIS_QUOTES[Math.floor(Math.random() * DAVIS_QUOTES.length)];
+    loanStep = 'intro';
+    renderLoan();
+  }
+});
+// Live-refresh the due countdown (and re-gate the Pay button on balance) while open.
+setInterval(() => { if (!loanPanel.hidden && loan) renderLoan(); }, 1000);
+// Click-outside closes the panel (mirrors the market panel behavior).
+document.addEventListener('click', (e) => {
+  if (loanPanel.hidden) return;
+  const t = e.target as Node;
+  if (t instanceof Node && !t.isConnected) return;
+  if (!loanPanel.contains(t) && !loanBtn.contains(t)) closeLoan();
+});
 
 // --- Game Modes dropdown (top-left): game mode toggles ---
 const gameModesBtn = document.getElementById('gameModesBtn') as HTMLButtonElement;
