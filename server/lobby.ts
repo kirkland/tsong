@@ -1112,7 +1112,7 @@ export class Lobby {
   }
 
   // Any joined client may toggle game modes.
-  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string }) {
+  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean }) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return;
     if (opts.closing !== undefined) this.game.setClosing(opts.closing);
@@ -1123,6 +1123,9 @@ export class Lobby {
     if (opts.pinata !== undefined) this.game.setPinata(opts.pinata);
     if (opts.layered !== undefined) this.game.setLayered(opts.layered);
     if (opts.arena !== undefined) this.setArena(opts.arena);
+    if (opts.breakout !== undefined) this.game.setBreakout(opts.breakout);
+    if (opts.fog !== undefined) this.game.setFog(opts.fog);
+    if (opts.portal !== undefined) this.game.setPortal(opts.portal);
     // View mode is locked while a match is in progress to avoid disrupting players.
     if ((opts.viewMode === 'normal' || opts.viewMode === '3d' || opts.viewMode === 'firstperson') && this.game.status !== 'playing') {
       this.viewMode = opts.viewMode;
@@ -1763,6 +1766,10 @@ export class Lobby {
       tournament: this.tournament ? this.tournament.view(this.liveMatchId) : null,
       projectiles: this.game.projectiles.map((p) => ({ x: p.x, y: p.y, vx: p.vx, vy: p.vy, color: '#39ff14' })),
       bets: this.betBoard(),
+      breakout: this.game.breakout,
+      bricks: this.game.breakout ? [...this.game.brickAlive] : null,
+      fog: this.game.fog,
+      portal: this.game.portal,
     };
   }
 

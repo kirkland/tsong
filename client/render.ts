@@ -1,6 +1,6 @@
 // Pure drawing: takes the latest server state and paints one frame. No game logic.
 
-import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, TARGET, PowerupKind, StateMsg, PolyState, Role, Side } from '../shared/types';
+import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, TARGET, BREAKOUT, PowerupKind, StateMsg, PolyState, Role, Side } from '../shared/types';
 
 const fritzImg = new Image();
 fritzImg.src = '/fritz.jpg';
@@ -112,10 +112,25 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
   // Paddle status overlays (frozen, mirrored, curve-ready).
   drawPaddleEffects(ctx, s);
 
+  // Breakout bricks — drawn behind the ball so the ball visually smashes through them.
+  if (s.breakout && s.bricks) drawBricks(ctx, s.bricks);
+
+  // Portal wall rings — subtle glow on the top and bottom walls when active.
+  if (s.portal) drawPortalWalls(ctx);
+
   // Ball(s) — colored by whichever paddle last hit them. Extra balls = multi power-up.
   const ballR = s.tinyBall ? 3 : s.bigBall ? BIG_BALL_R : BALL.r;
-  ctx.globalAlpha = s.ghostBall ? 0.12 : 1;
   for (const b of [s.ball, ...s.extraBalls]) {
+    // Fog of war: hide the ball in mid-court (>120px from either paddle face).
+    let alpha = s.ghostBall ? 0.12 : 1;
+    if (s.fog && !s.ghostBall) {
+      const distLeft  = b.x - s.paddles.left.x;
+      const distRight = s.paddles.right.x - b.x;
+      const nearest = Math.min(distLeft, distRight);
+      if (nearest > 120) alpha = 0;
+      else if (nearest > 60) alpha = 1 - (nearest - 60) / 60;
+    }
+    ctx.globalAlpha = alpha;
     ctx.fillStyle = b.color;
     ctx.beginPath();
     ctx.arc(b.x, b.y, ballR, 0, Math.PI * 2);
@@ -345,6 +360,58 @@ function drawPolyPaddle(ctx: CanvasRenderingContext2D, poly: PolyState, pl: Poly
     ctx.beginPath();
     ctx.arc(mx, my, 6, 0, Math.PI);
     ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// Breakout mode: draw the surviving bricks in the center of the court.
+// Each row gets a distinct hue; destroyed bricks are skipped.
+const BRICK_HUES = [200, 140, 40, 0]; // blue, green, amber, red (top → bottom)
+
+function drawBricks(ctx: CanvasRenderingContext2D, bricks: boolean[]) {
+  const { cols, rows, w, h, gap, left, top } = BREAKOUT;
+  for (let row = 0; row < rows; row++) {
+    const hue = BRICK_HUES[row % BRICK_HUES.length];
+    for (let col = 0; col < cols; col++) {
+      const idx = row * cols + col;
+      if (!bricks[idx]) continue;
+      const bx = left + col * (w + gap);
+      const by = top  + row * (h + gap);
+      // Body
+      ctx.fillStyle = `hsl(${hue}, 70%, 45%)`;
+      ctx.beginPath();
+      (ctx as CanvasRenderingContext2D & { roundRect?: (...a: unknown[]) => void }).roundRect?.(bx, by, w, h, 3) ?? ctx.rect(bx, by, w, h);
+      ctx.fill();
+      // Bright top-left highlight
+      ctx.fillStyle = `hsla(${hue}, 80%, 78%, 0.5)`;
+      ctx.fillRect(bx + 2, by + 2, w - 4, 4);
+      // Dark bottom edge shadow
+      ctx.fillStyle = `hsla(${hue}, 50%, 20%, 0.45)`;
+      ctx.fillRect(bx + 2, by + h - 4, w - 4, 3);
+    }
+  }
+}
+
+// Portal walls mode: draw glowing rings on the top and bottom walls.
+function drawPortalWalls(ctx: CanvasRenderingContext2D) {
+  const t = performance.now() / 1000;
+  for (const wallY of [0, COURT.h]) {
+    const ySign = wallY === 0 ? 1 : -1;
+    const pulse = 0.55 + 0.45 * Math.sin(t * 3 + (wallY === 0 ? 0 : Math.PI));
+    ctx.save();
+    // Glow
+    ctx.shadowBlur = 24 * pulse;
+    ctx.shadowColor = `hsla(270, 90%, 70%, ${pulse})`;
+    ctx.strokeStyle = `hsla(270, 90%, 75%, ${0.55 + 0.45 * pulse})`;
+    ctx.lineWidth = 3;
+    // Three staggered ovals along the wall
+    for (let i = 0; i < 3; i++) {
+      const cx = COURT.w * (0.25 + i * 0.25);
+      const cy = wallY + ySign * 6;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, 36, 8, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 }

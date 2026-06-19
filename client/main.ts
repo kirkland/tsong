@@ -60,6 +60,9 @@ const diamondModeEl = document.getElementById('diamondMode') as HTMLInputElement
 const pinataModeEl = document.getElementById('pinataMode') as HTMLInputElement;
 const layeredModeEl = document.getElementById('layeredMode') as HTMLInputElement;
 const arenaModeEl = document.getElementById('arenaMode') as HTMLInputElement;
+const breakoutModeEl = document.getElementById('breakoutMode') as HTMLInputElement;
+const fogModeEl = document.getElementById('fogMode') as HTMLInputElement;
+const portalModeEl = document.getElementById('portalMode') as HTMLInputElement;
 const reactionsEl = document.getElementById('reactions') as HTMLDivElement;
 const recentReactionsEl = document.getElementById('recentReactions') as HTMLDivElement;
 const ballReactionEl = document.getElementById('ballReaction') as HTMLDivElement;
@@ -633,6 +636,15 @@ layeredModeEl.addEventListener('change', () =>
 arenaModeEl.addEventListener('change', () =>
   net.send({ type: 'mode', arena: arenaModeEl.checked }),
 );
+breakoutModeEl.addEventListener('change', () =>
+  net.send({ type: 'mode', breakout: breakoutModeEl.checked }),
+);
+fogModeEl.addEventListener('change', () =>
+  net.send({ type: 'mode', fog: fogModeEl.checked }),
+);
+portalModeEl.addEventListener('change', () =>
+  net.send({ type: 'mode', portal: portalModeEl.checked }),
+);
 
 // --- win score selector ---
 for (const btn of winScoreOpts.querySelectorAll<HTMLButtonElement>('.ws-btn')) {
@@ -882,6 +894,9 @@ function enableChat() {
   pinataModeEl.disabled = false;
   layeredModeEl.disabled = false;
   arenaModeEl.disabled = false;
+  breakoutModeEl.disabled = false;
+  fogModeEl.disabled = false;
+  portalModeEl.disabled = false;
   for (const btn of reactionsEl.querySelectorAll<HTMLButtonElement>('.reaction-btn')) {
     btn.disabled = false;
   }
@@ -2648,6 +2663,15 @@ function updateUI() {
   }
   if (document.activeElement !== arenaModeEl && arenaModeEl.checked !== state.arena) {
     arenaModeEl.checked = state.arena;
+  }
+  if (document.activeElement !== breakoutModeEl && breakoutModeEl.checked !== state.breakout) {
+    breakoutModeEl.checked = state.breakout;
+  }
+  if (document.activeElement !== fogModeEl && fogModeEl.checked !== state.fog) {
+    fogModeEl.checked = state.fog;
+  }
+  if (document.activeElement !== portalModeEl && portalModeEl.checked !== state.portal) {
+    portalModeEl.checked = state.portal;
   }
 
   // Add/kick-bot button: show the right control for the current match state.

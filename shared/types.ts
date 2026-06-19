@@ -73,6 +73,19 @@ export const BLASTER = {
   maxAngle: Math.PI / 3, // ± aim cone off straight-across
 } as const;
 export const CURVE_SPIN = 1.4; // spin (rad/s) applied to the ball on a curve hit
+// "Breakout" mode: a grid of destructible bricks sits in the center of the court.
+// Grid: 7 cols × 4 rows of 36×18 bricks with 5-unit gaps.
+// Total 28 bricks. Grid is centred in the 800×500 court.
+export const BREAKOUT = {
+  cols: 7,
+  rows: 4,
+  w: 36,   // brick width, court units
+  h: 18,   // brick height, court units
+  gap: 5,  // gap between bricks
+  left: 259,    // (800 - 7*41 + 5) / 2
+  top:  206.5,  // (500 - 4*23 + 5) / 2
+} as const;
+
 export const GRAVITY_ACCEL = 220; // court units/sec² downward pull in gravity mode
 export const TURBO_SPEED_MULT = 1.5; // serve speed multiplier in turbo mode
 export const TURBO_SPEEDUP = 1.1; // per-hit speedup in turbo mode (vs BALL.speedup = 1.05)
@@ -213,7 +226,7 @@ export type ClientMsg =
   | { type: 'paddle'; y: number } // desired paddle center Y, in court units
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
-  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string } // toggle game modes
+  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean } // toggle game modes
   | { type: 'fatality'; move: string } // winner-only, validated server-side
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
   | { type: 'forfeit' } // "/ff": leave your paddle spot mid-game (and get shamed)
@@ -359,6 +372,12 @@ export interface StateMsg {
   // surface (absolute court positions), and a one-frame `burst` pulse the moment it pops.
   // null when the mode is off or no match is running.
   pinataPos: { x: number; y: number; spin: number; stuck: { x: number; y: number }[]; burst: boolean } | null;
+  breakout: boolean; // whether "breakout" mode is armed
+  // Which bricks are still alive (true = alive). Length = BREAKOUT.cols × BREAKOUT.rows.
+  // null when breakout mode is off.
+  bricks: boolean[] | null;
+  fog: boolean;    // "fog of war": ball invisible except close to either paddle
+  portal: boolean; // "portal walls": top/bottom walls teleport the ball to a random Y
   winner: string | null; // nickname of the winner when status === 'over'
   // Shared, room-wide toggle: when true, the match winner can perform a finishing move.
   // It's one setting for everyone (not per-user), so it rides along in the state.
