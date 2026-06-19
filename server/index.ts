@@ -140,6 +140,9 @@ wss.on('connection', (ws: WebSocket) => {
           layered: typeof msg.layered === 'boolean' ? msg.layered : undefined,
           arena: typeof msg.arena === 'boolean' ? msg.arena : undefined,
           viewMode: typeof msg.viewMode === 'string' ? msg.viewMode : undefined,
+          breakout: typeof msg.breakout === 'boolean' ? msg.breakout : undefined,
+          fog: typeof msg.fog === 'boolean' ? msg.fog : undefined,
+          portal: typeof msg.portal === 'boolean' ? msg.portal : undefined,
         });
         break;
       case 'fatality':
