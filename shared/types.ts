@@ -568,17 +568,17 @@ export const SPIN_SEGMENTS = [
 // Five fictional "cryptocurrencies" you can sink coins into. Each has a global price that
 // random-walks every STOCK_UPDATE_MS (shared by everyone — it's one market). Investing N
 // coins at price P buys N/P "shares"; cashing out pays floor(shares × currentPrice) coins
-// and closes the whole position. `base` is the starting/mean-reversion price; `img` is the
-// coin's logo under client/public.
+// and closes the whole position. `base` is the starting price (the market then drifts up
+// from there); `img` is the coin's logo under client/public.
 export const STOCKS = [
-  { id: 'kenny', name: 'Kenny Kawaguchi inc.', ticker: 'KENNY', img: '/kennykawaguchi.png', base: 100 },
-  { id: 'chugs', name: 'BadlandsChugs', ticker: 'CHUG', img: '/badlandschugs.jpg', base: 100 },
-  { id: 'davis', name: 'Davis Clarke Coin', ticker: 'DAVIS', img: '/davisclarke.jpg', base: 100 },
-  { id: 'otto', name: 'OTTO', ticker: 'OTTO', img: '/otto.webp', base: 100 },
-  { id: 'bacon', name: 'Bacon Roll', ticker: 'BACON', img: '/baconroll.png', base: 100 },
+  { id: 'kenny', name: 'Kenny Kawaguchi inc.', ticker: 'KENNY', img: '/kennykawaguchi.png', base: 1 },
+  { id: 'chugs', name: 'BadlandsChugs', ticker: 'CHUG', img: '/badlandschugs.jpg', base: 1 },
+  { id: 'davis', name: 'Davis Clarke Coin', ticker: 'DAVIS', img: '/davisclarke.jpg', base: 1 },
+  { id: 'otto', name: 'OTTO', ticker: 'OTTO', img: '/otto.webp', base: 1 },
+  { id: 'bacon', name: 'Bacon Roll', ticker: 'BACON', img: '/baconroll.png', base: 1 },
 ] as const;
 export type StockId = (typeof STOCKS)[number]['id'];
-export const STOCK_UPDATE_MS = 5 * 60 * 1000; // prices re-roll every 5 minutes
+export const STOCK_UPDATE_MS = 30 * 1000; // prices re-roll every 30 seconds
 
 // A player's private market view: the global price board plus that player's own positions.
 // Sent on join, after every trade, and to everyone when prices re-roll.
