@@ -276,7 +276,11 @@ export function startDoom(net: DoomNet): void {
   const menu = document.createElement('div');
   menu.style.cssText =
     'position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;' +
-    'justify-content:center;gap:22px;background:rgba(0,0,0,0.85);';
+    // `safe center` + scroll: stays centered when it fits, but falls back to top-anchored
+    // scrolling (never clipping/overlapping) when the legend + leaderboards are taller than
+    // the viewport.
+    'justify-content:safe center;gap:22px;padding:3vh 16px;overflow-y:auto;' +
+    'background:rgba(0,0,0,0.85);';
   const menuTitle = document.createElement('div');
   menuTitle.textContent = '😈 DOOM';
   menuTitle.style.cssText = 'font:900 64px ui-monospace,monospace;color:#ff2d2d;text-shadow:4px 4px 0 #300;';
@@ -317,12 +321,15 @@ export function startDoom(net: DoomNet): void {
   menu.append(menuTitle, menuMsg, btnRow, menuInfo);
   overlay.appendChild(menu);
 
-  // High-round leaderboards (solo + co-op), filled live from net.scores(). Shown on the
-  // menu and again on the game-over screen, so it sits on the overlay (above the menu).
+  // High-round leaderboards (solo + co-op), filled live from net.scores(). Shown on the start
+  // menu (in the menu's normal flow, so they can't overlap the legend) and again on the
+  // game-over screen (floating at the bottom of the overlay). syncHud() reparents/repositions
+  // between those two contexts on mode transitions.
+  const BOARDS_COMMON =
+    'gap:48px;justify-content:center;color:#cdd7f5;font:700 14px ui-monospace,monospace;' +
+    'pointer-events:none;text-shadow:1px 1px 0 #000;';
   const boards = document.createElement('div');
-  boards.style.cssText =
-    'position:absolute;left:0;right:0;bottom:8vh;display:none;gap:48px;justify-content:center;' +
-    'color:#cdd7f5;font:700 14px ui-monospace,monospace;pointer-events:none;text-shadow:1px 1px 0 #000;';
+  boards.style.cssText = 'position:absolute;left:0;right:0;bottom:8vh;display:none;' + BOARDS_COMMON;
   overlay.appendChild(boards);
 
   function boardHtml(heading: string, rows: DoomScore[]): string {
@@ -973,7 +980,19 @@ export function startDoom(net: DoomNet): void {
     // Leaderboards are visible on the menu and on the game-over screen.
     const showBoards = mode === 'menu' || over === 'dead';
     boards.style.display = showBoards ? 'flex' : 'none';
-    if (showBoards) renderBoards();
+    if (showBoards) {
+      // On the start menu the boards live in the menu's flow (so they stack below the legend
+      // instead of overlapping it); on game-over they float at the bottom of the overlay. Only
+      // touch the DOM on an actual context switch, since this runs every frame.
+      if (mode === 'menu' && boards.parentElement !== menu) {
+        menu.appendChild(boards);
+        boards.style.cssText = 'position:static;margin-top:4px;display:flex;' + BOARDS_COMMON;
+      } else if (mode !== 'menu' && boards.parentElement !== overlay) {
+        overlay.appendChild(boards);
+        boards.style.cssText = 'position:absolute;left:0;right:0;bottom:8vh;display:flex;' + BOARDS_COMMON;
+      }
+      renderBoards();
+    }
     if (mode === 'menu' || mode === 'wait') {
       hud.style.display = 'none'; banner.style.display = 'none'; buddyBar.style.display = 'none';
       if (mode === 'menu') menu.style.display = 'flex';
