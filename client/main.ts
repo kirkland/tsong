@@ -525,7 +525,7 @@ const net = connect(
     } else if (msg.type === 'reaction') {
       spawnReaction(msg.emoji);
     } else if (msg.type === 'announce') {
-      showAnnouncement(msg.text);
+      showAnnouncement(msg.text, { toast: msg.toast });
     } else if (msg.type === 'ping') {
       onPing(msg.from);
     } else if (msg.type === 'rtt') {
@@ -1520,12 +1520,14 @@ function celebrateSpin(reward: { kind: 'coins'; amount: number } | { kind: 'item
   setTimeout(finish, 4500); // safety net if transitionend doesn't fire
 }
 
-// A big, transient banner across the middle of the screen (e.g. someone forfeits).
-function showAnnouncement(text: string, color?: string) {
+// A transient notice. By default a big center-screen banner (e.g. a forfeit); `toast: true`
+// shows a small, stacking corner toast instead (betting activity, bet results).
+function showAnnouncement(text: string, opts?: { color?: string; toast?: boolean }) {
+  if (opts?.toast) { showToast(text); return; }
   const el = document.createElement('div');
   el.className = 'announce-banner';
   el.textContent = text;
-  if (color) el.style.color = color;
+  if (opts?.color) el.style.color = opts.color;
   reactionLayer.append(el);
   const anim = el.animate(
     [
@@ -1535,6 +1537,26 @@ function showAnnouncement(text: string, color?: string) {
       { opacity: 0, transform: 'translate(-50%, -50%) scale(1.12)' },
     ],
     { duration: 3200, easing: 'ease-out' },
+  );
+  anim.onfinish = () => el.remove();
+  anim.oncancel = () => el.remove();
+}
+
+// Small, unobtrusive toast in the bottom-right corner; multiple stack and auto-dismiss.
+const toastLayer = document.getElementById('toastLayer') as HTMLDivElement;
+function showToast(text: string) {
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = text;
+  toastLayer.append(el);
+  const anim = el.animate(
+    [
+      { opacity: 0, transform: 'translateY(8px)' },
+      { opacity: 1, transform: 'translateY(0)', offset: 0.08 },
+      { opacity: 1, transform: 'translateY(0)', offset: 0.82 },
+      { opacity: 0, transform: 'translateY(-4px)' },
+    ],
+    { duration: 3400, easing: 'ease-out' },
   );
   anim.onfinish = () => el.remove();
   anim.oncancel = () => el.remove();
@@ -3142,7 +3164,7 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
         const delta = mine.elo - prev;
         const sign = delta > 0 ? '+' : '';
         const color = delta > 0 ? '#4ade80' : '#f87171';
-        showAnnouncement(`${sign}${delta} ELO`, color);
+        showAnnouncement(`${sign}${delta} ELO`, { color });
       }
       prevElo.set(myName, mine.elo);
     }
