@@ -1010,7 +1010,7 @@ export class Game {
         this.tilt = true;
         break;
       case 'coins':
-        // Transient economy reward — the lobby reads this and pays the side 1 coin.
+        // Transient economy reward — the lobby reads this and pays the side 100 coins.
         this.coinGrant = side;
         break;
       case 'blaster':

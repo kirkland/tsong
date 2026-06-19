@@ -137,6 +137,12 @@ export type PowerupKind = (typeof POWERUPS)[number];
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
 export const LEADERBOARD_SIZE = 10;
 
+// Money is whole coins, scaled ×100 so the stock market has integer room for percentage moves
+// (a 1% move on a 100-coin stock = 1 coin) instead of needing fractional cents. Every coin
+// amount in the game — rewards, store prices, stock base prices, spin payouts — lives in these
+// units. (Bumping this does NOT retro-scale existing data; that's a one-time DB migration.)
+export const COIN_SCALE = 100;
+
 // Cosmetic shop. Purely visual — equipped items are drawn on the paddle but never affect
 // the ball's collision (the hitbox is always the plain paddle rectangle). You earn 1 coin
 // per match win and can spend coins here. `slot` is mutually exclusive per player.
@@ -146,41 +152,41 @@ export interface CosmeticItem {
   slot: 'hat' | 'skin';
   price: number;
 }
-// Static cosmetics cost 10 coins; animated ones cost 20.
+// Static cosmetics cost 1000 coins; animated ones cost 2000 (10×/20× the COIN_SCALE base).
 export const COSMETICS: readonly CosmeticItem[] = [
   // Hats
-  { id: 'tophat', name: 'Top Hat', slot: 'hat', price: 10 },
-  { id: 'crown', name: 'Crown', slot: 'hat', price: 10 },
-  { id: 'party', name: 'Party Hat', slot: 'hat', price: 10 },
-  { id: 'halo', name: 'Halo', slot: 'hat', price: 20 }, // animated
-  { id: 'cowboy', name: 'Cowboy Hat', slot: 'hat', price: 10 },
-  { id: 'wizard', name: 'Wizard Hat', slot: 'hat', price: 10 },
-  { id: 'horns', name: 'Devil Horns', slot: 'hat', price: 10 },
-  { id: 'gradcap', name: 'Grad Cap', slot: 'hat', price: 10 },
-  { id: 'flame', name: 'Flame', slot: 'hat', price: 20 }, // animated
-  { id: 'helmet', name: 'Helmet', slot: 'hat', price: 10 },
-  { id: 'antennae', name: 'Bug Antennae', slot: 'hat', price: 20 }, // animated
-  { id: 'mohawk', name: 'Mohawk', slot: 'hat', price: 10 },
-  { id: 'bow', name: 'Bow', slot: 'hat', price: 10 },
-  { id: 'pirate', name: 'Pirate Hat', slot: 'hat', price: 10 },
-  { id: 'santa', name: 'Santa Hat', slot: 'hat', price: 10 },
-  { id: 'headphones', name: 'Headphones', slot: 'hat', price: 20 }, // animated
+  { id: 'tophat', name: 'Top Hat', slot: 'hat', price: 1000 },
+  { id: 'crown', name: 'Crown', slot: 'hat', price: 1000 },
+  { id: 'party', name: 'Party Hat', slot: 'hat', price: 1000 },
+  { id: 'halo', name: 'Halo', slot: 'hat', price: 2000 }, // animated
+  { id: 'cowboy', name: 'Cowboy Hat', slot: 'hat', price: 1000 },
+  { id: 'wizard', name: 'Wizard Hat', slot: 'hat', price: 1000 },
+  { id: 'horns', name: 'Devil Horns', slot: 'hat', price: 1000 },
+  { id: 'gradcap', name: 'Grad Cap', slot: 'hat', price: 1000 },
+  { id: 'flame', name: 'Flame', slot: 'hat', price: 2000 }, // animated
+  { id: 'helmet', name: 'Helmet', slot: 'hat', price: 1000 },
+  { id: 'antennae', name: 'Bug Antennae', slot: 'hat', price: 2000 }, // animated
+  { id: 'mohawk', name: 'Mohawk', slot: 'hat', price: 1000 },
+  { id: 'bow', name: 'Bow', slot: 'hat', price: 1000 },
+  { id: 'pirate', name: 'Pirate Hat', slot: 'hat', price: 1000 },
+  { id: 'santa', name: 'Santa Hat', slot: 'hat', price: 1000 },
+  { id: 'headphones', name: 'Headphones', slot: 'hat', price: 2000 }, // animated
   // Skins
-  { id: 'rainbow', name: 'Rainbow', slot: 'skin', price: 10 },
-  { id: 'gold', name: 'Gold', slot: 'skin', price: 20 }, // animated
-  { id: 'chrome', name: 'Chrome', slot: 'skin', price: 20 }, // animated
-  { id: 'galaxy', name: 'Galaxy', slot: 'skin', price: 20 }, // animated
-  { id: 'lava', name: 'Lava', slot: 'skin', price: 20 }, // animated
-  { id: 'ice', name: 'Ice', slot: 'skin', price: 10 },
-  { id: 'camo', name: 'Camo', slot: 'skin', price: 10 },
-  { id: 'neon', name: 'Neon', slot: 'skin', price: 20 }, // animated
-  { id: 'stripes', name: 'Stripes', slot: 'skin', price: 10 },
-  { id: 'glitch', name: 'Glitch', slot: 'skin', price: 20 }, // animated
-  { id: 'toxic', name: 'Toxic', slot: 'skin', price: 20 }, // animated
-  { id: 'plasma', name: 'Plasma', slot: 'skin', price: 20 }, // animated
-  { id: 'wood', name: 'Wood', slot: 'skin', price: 10 },
-  { id: 'hologram', name: 'Hologram', slot: 'skin', price: 20 }, // animated
-  { id: 'venom', name: 'Venom', slot: 'skin', price: 20 }, // animated
+  { id: 'rainbow', name: 'Rainbow', slot: 'skin', price: 1000 },
+  { id: 'gold', name: 'Gold', slot: 'skin', price: 2000 }, // animated
+  { id: 'chrome', name: 'Chrome', slot: 'skin', price: 2000 }, // animated
+  { id: 'galaxy', name: 'Galaxy', slot: 'skin', price: 2000 }, // animated
+  { id: 'lava', name: 'Lava', slot: 'skin', price: 2000 }, // animated
+  { id: 'ice', name: 'Ice', slot: 'skin', price: 1000 },
+  { id: 'camo', name: 'Camo', slot: 'skin', price: 1000 },
+  { id: 'neon', name: 'Neon', slot: 'skin', price: 2000 }, // animated
+  { id: 'stripes', name: 'Stripes', slot: 'skin', price: 1000 },
+  { id: 'glitch', name: 'Glitch', slot: 'skin', price: 2000 }, // animated
+  { id: 'toxic', name: 'Toxic', slot: 'skin', price: 2000 }, // animated
+  { id: 'plasma', name: 'Plasma', slot: 'skin', price: 2000 }, // animated
+  { id: 'wood', name: 'Wood', slot: 'skin', price: 1000 },
+  { id: 'hologram', name: 'Hologram', slot: 'skin', price: 2000 }, // animated
+  { id: 'venom', name: 'Venom', slot: 'skin', price: 2000 }, // animated
 ] as const;
 export const CHAT_MAX_LEN = 200; // max characters per chat message
 export const CHAT_HISTORY = 50; // recent messages kept/sent to new joiners
@@ -568,12 +574,12 @@ export interface LoanMsg {
 // server roll agree on the layout. Higher-value segments have lower odds (weights live
 // server-side). hat/skin award a random unowned cosmetic of that slot.
 export const SPIN_SEGMENTS = [
-  { label: '1 🪙', kind: 'coins', value: 1 },
-  { label: '2 🪙', kind: 'coins', value: 2 },
-  { label: '3 🪙', kind: 'coins', value: 3 },
-  { label: '5 🪙', kind: 'coins', value: 5 },
-  { label: '10 🪙', kind: 'coins', value: 10 },
-  { label: '20 🪙', kind: 'coins', value: 20 },
+  { label: '100 🪙', kind: 'coins', value: 100 },
+  { label: '200 🪙', kind: 'coins', value: 200 },
+  { label: '300 🪙', kind: 'coins', value: 300 },
+  { label: '500 🪙', kind: 'coins', value: 500 },
+  { label: '1000 🪙', kind: 'coins', value: 1000 },
+  { label: '2000 🪙', kind: 'coins', value: 2000 },
   { label: '🎩 Hat', kind: 'hat', value: 0 },
   { label: '🎨 Skin', kind: 'skin', value: 0 },
 ] as const;
@@ -581,15 +587,15 @@ export const SPIN_SEGMENTS = [
 // --- Stock market (joke crypto exchange) ---
 // Five fictional "cryptocurrencies" you can sink coins into. Each has a global price that
 // random-walks every STOCK_UPDATE_MS (shared by everyone — it's one market). Investing N
-// coins at price P buys N/P "shares"; cashing out pays floor(shares × currentPrice) coins
-// and closes the whole position. `base` is the starting price (the market then drifts up
-// from there); `img` is the coin's logo under client/public.
+// coins at price P buys N/P "shares"; cashing out pays round(shares × currentPrice) coins
+// and closes the whole position. `base` is the starting price — 100 (= COIN_SCALE), so 1%
+// price moves are whole coins — and the market drifts up from there; `img` is the logo.
 export const STOCKS = [
-  { id: 'kenny', name: 'Kenny Kawaguchi', ticker: 'KENNY', img: '/kennykawaguchi.png', base: 1 },
-  { id: 'chugs', name: 'BadlandsChugs', ticker: 'CHUG', img: '/badlandschugs.jpg', base: 1 },
-  { id: 'davis', name: 'Davis Clarke Coin', ticker: 'DAVIS', img: '/davisclarke.jpg', base: 1 },
-  { id: 'otto', name: 'OTTO', ticker: 'OTTO', img: '/otto.webp', base: 1 },
-  { id: 'bacon', name: 'Bacon Roll', ticker: 'BACON', img: '/baconroll.png', base: 1 },
+  { id: 'kenny', name: 'Kenny Kawaguchi', ticker: 'KENNY', img: '/kennykawaguchi.png', base: 100 },
+  { id: 'chugs', name: 'BadlandsChugs', ticker: 'CHUG', img: '/badlandschugs.jpg', base: 100 },
+  { id: 'davis', name: 'Davis Clarke Coin', ticker: 'DAVIS', img: '/davisclarke.jpg', base: 100 },
+  { id: 'otto', name: 'OTTO', ticker: 'OTTO', img: '/otto.webp', base: 100 },
+  { id: 'bacon', name: 'Bacon Roll', ticker: 'BACON', img: '/baconroll.png', base: 100 },
 ] as const;
 export type StockId = (typeof STOCKS)[number]['id'];
 export const STOCK_UPDATE_MS = 30 * 1000; // prices re-roll every 30 seconds

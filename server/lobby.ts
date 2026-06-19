@@ -26,6 +26,7 @@ import {
   ServerMsg,
   Side,
   SPIN_SEGMENTS,
+  COIN_SCALE,
   StateMsg,
   STOCKS,
   STOCK_UPDATE_MS,
@@ -37,7 +38,7 @@ import { getLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeade
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, DAILY_SPIN_MS,
   getHoldings, investStock, cashOutStock, getStockPrices, saveStockPrices,
   getStockCrashAt, setStockCrashAt,
-  getLoan, takeLoan, repayLoan, collectDefaultedLoans } from './db';
+  getLoan, takeLoan, repayLoan, collectDefaultedLoans, pruneStaleStockPrices } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
 
@@ -79,6 +80,46 @@ function rollPrice(price: number, base: number): number {
   if (Math.random() < 0.08) g += (Math.random() * 2 - 1) * 0.18; // occasional bigger swing
   const np = price * drift * Math.exp(g);
   return Math.round(Math.max(base / 100, Math.min(np, base * 1_000)) * 100) / 100;
+}
+
+// The daily market event (loan collection + possible crash) fires at 5:00pm America/New_York.
+const DAILY_EVENT_HOUR_ET = 17; // 5pm Eastern
+const EASTERN_TZ = 'America/New_York';
+
+// How far (ms) the given instant's America/New_York wall-clock leads UTC — handles EST/EDT.
+function easternOffsetMs(epoch: number): number {
+  const p = new Intl.DateTimeFormat('en-US', {
+    timeZone: EASTERN_TZ, hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(new Date(epoch));
+  const g = (t: string) => Number(p.find((x) => x.type === t)!.value);
+  const asIfUtc = Date.UTC(g('year'), g('month') - 1, g('day'), g('hour'), g('minute'), g('second'));
+  return asIfUtc - epoch;
+}
+
+// Epoch ms of the next 5:00pm Eastern strictly after `from` (DST-aware).
+function nextDailyEventAt(from: number): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: EASTERN_TZ, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date(from));
+  const g = (t: string) => Number(parts.find((x) => x.type === t)!.value);
+  // 5pm ET on a given Eastern calendar day, as epoch ms: midday is never near a DST flip, so
+  // the offset at "17:00 treated as UTC" equals the real Eastern offset that day.
+  const at5pm = (y: number, m: number, d: number) => {
+    const naiveUtc = Date.UTC(y, m - 1, d, DAILY_EVENT_HOUR_ET, 0, 0);
+    return naiveUtc - easternOffsetMs(naiveUtc);
+  };
+  let when = at5pm(g('year'), g('month'), g('day'));
+  if (when <= from) {
+    const t = new Date(from + 24 * 60 * 60 * 1000);
+    const p2 = new Intl.DateTimeFormat('en-US', {
+      timeZone: EASTERN_TZ, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(t);
+    const g2 = (k: string) => Number(p2.find((x) => x.type === k)!.value);
+    when = at5pm(g2('year'), g2('month'), g2('day'));
+  }
+  return when;
 }
 
 // Epoch ms when the daily spin is next available (0 = available now).
@@ -204,9 +245,10 @@ export class Lobby {
     STOCKS.map((s) => [s.id, { price: s.base, prev: s.base }] as [string, { price: number; prev: number }]),
   );
   private nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS;
-  // Epoch ms of the next daily market reset (every 24h): all prices snap back to base and
-  // holdings revalue at the new price. Hydrated from / persisted to the DB so it survives
-  // restarts. 0 until scheduled (loadStockPrices schedules one if none is saved).
+  // Epoch ms of the next daily market event (5pm Eastern): Davis collects on defaulters and,
+  // if anyone defaulted, a coin flip may crash (reset) the market. Prices do NOT reset on a
+  // schedule otherwise. Persisted to the DB so it survives restarts; re-derived from 5pm ET
+  // on boot if the saved value is stale.
   private nextStockCrashAt = 0;
   // Per-coin price history for the graphs (in-memory only) — one series per timeframe, each
   // sampled at its own cadence (see STOCK_HISTORY). Seeded with the current price so a graph
@@ -488,11 +530,11 @@ export class Lobby {
     this.broadcastDoomLobby();
   }
 
-  /** Grant 1 coin for killing the DOOM minion boss. */
+  /** Grant the DOOM minion-boss reward (1 win-unit × COIN_SCALE = 100 coins). */
   doomReward(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
-    addCoins(conn.pid, conn.nickname, 1)
+    addCoins(conn.pid, conn.nickname, COIN_SCALE)
       .then(() => this.sendWallet(ws))
       .catch((e) => console.error('doom reward failed:', e));
   }
@@ -961,38 +1003,42 @@ export class Lobby {
       this.stockHist['1h'].set(s.id, [seed]);
       this.stockHist['1d'].set(s.id, [seed]);
     }
-    // Resume the reset schedule, but only if it's a sane daily-cadence time still ahead of us
-    // and within ~24h. A lapsed time — or a stale far-future one left by the old 5–7 day crash
-    // schedule — gets re-booked fresh (so we never wait days, and never reset the instant we
-    // boot).
-    const crashAt = await getStockCrashAt().catch(() => 0);
-    const dayMs = 24 * 60 * 60 * 1000;
-    if (crashAt > Date.now() && crashAt <= Date.now() + dayMs + 60_000) this.nextStockCrashAt = crashAt;
+    // The daily event is deterministic (next 5pm ET), so just (re)book it. A persisted value is
+    // honored only if it's still ahead of us and no later than the next 5pm ET — otherwise it's
+    // stale (server was down across an event, or left by the old 24h schedule) and we re-book.
+    const saved = await getStockCrashAt().catch(() => 0);
+    const next5pm = nextDailyEventAt(Date.now());
+    if (saved > Date.now() && saved <= next5pm) this.nextStockCrashAt = saved;
     else this.scheduleNextCrash();
   }
 
-  /** Book the next daily market reset (24h out) and persist it. */
+  /** Book the next daily market event (next 5pm Eastern) and persist it. */
   private scheduleNextCrash() {
-    this.nextStockCrashAt = Date.now() + 24 * 60 * 60 * 1000; // every 24h
-    setStockCrashAt(this.nextStockCrashAt).catch((e) => console.error('reset schedule save failed:', e));
+    this.nextStockCrashAt = nextDailyEventAt(Date.now());
+    setStockCrashAt(this.nextStockCrashAt).catch((e) => console.error('daily-event schedule save failed:', e));
   }
 
-  /** Daily market reset: every coin snaps back to its base price (1). Holdings are left
-   *  untouched — they simply revalue at the new price (worth = floor(shares × 1)) — so a reset
-   *  wipes the day's gains. Books the next reset, then alerts + repushes to all. */
-  private crashMarket() {
+  /** The 5pm-Eastern daily event. The market no longer resets on a schedule; instead Davis
+   *  collects on every overdue loan, and IF anyone defaulted there's a 50% chance the whole
+   *  market crashes (resets to base). Also books the next event and prunes stale DB rows. */
+  private runDailyEvent() {
+    this.scheduleNextCrash(); // book the next 5pm ET first, so the tick doesn't re-fire
+    // Housekeeping: drop persisted price rows for any de-listed coin (live prices untouched).
+    pruneStaleStockPrices(STOCKS.map((s) => s.id)).catch((e) => console.error('stock prune failed:', e));
+    this.collectLoans();
+  }
+
+  /** Crash the market: every coin snaps back to its base price (1). Holdings are left untouched —
+   *  they simply revalue at the new price (worth = round(shares × 1)). Persists + repushes to all. */
+  private crashMarketPrices() {
     for (const s of STOCKS) {
       const cur = this.stockPrices.get(s.id) ?? { price: s.base, prev: s.base };
-      this.stockPrices.set(s.id, { price: s.base, prev: cur.price }); // prev = pre-reset price, so the drop shows
+      this.stockPrices.set(s.id, { price: s.base, prev: cur.price }); // prev = pre-crash price, so the drop shows
     }
     this.nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS; // give the fresh prices a full window
-    this.recordStockHistory(); // the reset itself is a history point (the cliff edge)
+    this.recordStockHistory(); // the crash itself is a history point (the cliff edge)
     saveStockPrices(this.priceBoard()).catch((e) => console.error('stock price save failed:', e));
-    this.scheduleNextCrash();
-    // End of day: Davis collects on anyone who didn't repay their loan (wallet + holdings wiped),
-    // BEFORE we push the fresh market so defaulters see the damage in the same beat.
-    this.collectLoans();
-    this.announce('🔄 DAILY MARKET RESET — every coin is back to 1.00 🪙. Holdings revalued; fresh day, fresh start!');
+    this.announce('💥 MARKET CRASH — a defaulted loan torched it. Every coin is back to 1.00 🪙.');
     for (const ws of this.conns.keys()) this.sendStocks(ws);
   }
 
@@ -1097,20 +1143,20 @@ export class Lobby {
       .catch((e) => console.error('loan send failed:', e));
   }
 
-  /** Borrow `amount` coins from Davis, due (at 1.5×) by the next daily market reset. */
+  /** Borrow `amount` coins from Davis, due (at 1.5×) by the next 5pm-Eastern event. */
   getLoanFor(ws: WebSocket, amount: number) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     const amt = Math.floor(amount);
     if (!Number.isFinite(amt) || amt < 1) return; // positive whole coins only
-    // Deadline is the next daily reset; if one somehow isn't booked, fall back to 24h out.
-    const dueAt = this.nextStockCrashAt || Date.now() + 24 * 60 * 60 * 1000;
+    // Deadline is the next 5pm ET event; if one somehow isn't booked, derive it fresh.
+    const dueAt = this.nextStockCrashAt || nextDailyEventAt(Date.now());
     takeLoan(conn.pid, conn.nickname, amt, dueAt)
       .then((res) => {
         if (!res) { this.sendLoan(ws); return; } // already had a loan / rejected — just refresh
         this.sendWallet(ws);
         this.sendLoan(ws);
-        this.notify(ws, `💸 Davis fronted you ${amt}🪙 — bring back ${res.loan.owed}🪙 by the daily reset. Keep grinding.`);
+        this.notify(ws, `💸 Davis fronted you ${amt}🪙 — bring back ${res.loan.owed}🪙 by 5pm Eastern. Keep grinding.`);
       })
       .catch((e) => console.error('loan failed:', e));
   }
@@ -1129,33 +1175,36 @@ export class Lobby {
       .catch((e) => console.error('loan repay failed:', e));
   }
 
-  /** Collect on every overdue loan: zero the wallet + wipe stock positions for anyone who didn't
-   *  repay in time. Called from the daily reset. Refreshes + notifies any defaulter still online. */
+  /** Collect on every overdue loan: Davis takes everything (coins, stocks, AND cosmetics) from
+   *  anyone who didn't repay in time. Then, if there WAS at least one defaulter, a 50% coin flip
+   *  decides whether the whole market crashes (resets to base). Refreshes/notifies defaulters. */
   private collectLoans() {
     collectDefaultedLoans(Date.now())
       .then((pids) => {
-        if (!pids.length) return;
+        if (!pids.length) return; // nobody defaulted → no collection, no crash
         const hit = new Set(pids);
         for (const ws of this.conns.keys()) {
           const conn = this.conns.get(ws);
           if (!conn?.pid || !hit.has(conn.pid)) continue;
-          this.sendWallet(ws);
+          this.sendWallet(ws); // also refreshes cached hat/skin (now stripped)
           this.sendStocks(ws);
           this.sendLoan(ws);
-          this.notify(ws, `🕶️ Davis came to collect — you didn't repay, so he took everything. Bad day to be an Excel spreadsheet.`);
+          this.notify(ws, `🕶️ Davis came to collect — you didn't repay, so he took everything: coins, stocks, and cosmetics. Bad day to be an Excel spreadsheet.`);
         }
+        // A defaulted loan has a 50% chance of crashing the market for everyone.
+        if (Math.random() < 0.5) this.crashMarketPrices();
       })
       .catch((e) => console.error('loan collection failed:', e));
   }
 
   /** Re-roll every coin's price when the re-roll window elapses, persist the board, and push
-   *  the fresh (revalued) market to every connected client. Also fires the periodic market
-   *  crash when its time arrives. Cheap to call every tick. */
+   *  the fresh market to every connected client. Also fires the 5pm-ET daily event (loan
+   *  collection + possible crash) when its time arrives. Cheap to call every tick. */
   private tickStocks() {
-    // A crash takes precedence and resets everything itself, so handle it first and bail.
+    // The daily event runs first when due; it reschedules itself and may crash the market.
     if (this.nextStockCrashAt && Date.now() >= this.nextStockCrashAt) {
-      this.crashMarket();
-      return;
+      this.runDailyEvent();
+      // fall through: keep rolling prices this tick unless the window hasn't elapsed
     }
     if (Date.now() < this.nextStockUpdateAt) return;
     this.nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS;
@@ -1627,14 +1676,14 @@ export class Lobby {
   sync() {
     this.expireResume();
     this.tickStocks(); // re-roll crypto prices when the 5-minute window elapses
-    // "coins" power-up: pay the collecting side 1 coin, once.
+    // "coins" power-up: pay the collecting side 100 coins (1 × COIN_SCALE), once.
     if (this.game.coinGrant) {
       const side = this.game.coinGrant;
       this.game.coinGrant = null;
       for (const c of this.connsOn(side)) {
         if (!c.pid) continue;
         const w = this.wsOfConn(c);
-        addCoins(c.pid, c.nickname, 1).then(() => { if (w) this.sendWallet(w); }).catch(() => {});
+        addCoins(c.pid, c.nickname, COIN_SCALE).then(() => { if (w) this.sendWallet(w); }).catch(() => {});
       }
     }
     // Safety: if a duel was abandoned (back to 'waiting' with no result) or we slid into
