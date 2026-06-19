@@ -36,7 +36,8 @@ import {
 import { getLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, DAILY_SPIN_MS,
   getHoldings, investStock, cashOutStock, getStockPrices, saveStockPrices,
-  getStockCrashAt, setStockCrashAt } from './db';
+  getStockCrashAt, setStockCrashAt,
+  getLoan, takeLoan, repayLoan, collectDefaultedLoans } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
 
@@ -833,6 +834,8 @@ export class Lobby {
     this.loadWallet(ws);
     // Send the stock market: global price board + this player's positions.
     this.sendStocks(ws);
+    // Send their loan status (so the Get Loan panel knows whether they owe Davis).
+    this.sendLoan(ws);
   }
 
   /** Load a connection's wallet from the DB into memory and send it to that client. */
@@ -986,6 +989,9 @@ export class Lobby {
     this.recordStockHistory(); // the reset itself is a history point (the cliff edge)
     saveStockPrices(this.priceBoard()).catch((e) => console.error('stock price save failed:', e));
     this.scheduleNextCrash();
+    // End of day: Davis collects on anyone who didn't repay their loan (wallet + holdings wiped),
+    // BEFORE we push the fresh market so defaulters see the damage in the same beat.
+    this.collectLoans();
     this.announce('🔄 DAILY MARKET RESET — every coin is back to 1.00 🪙. Holdings revalued; fresh day, fresh start!');
     for (const ws of this.conns.keys()) this.sendStocks(ws);
   }
@@ -1078,6 +1084,68 @@ export class Lobby {
         this.sendStocks(ws);
       })
       .catch((e) => console.error('stock cash-out failed:', e));
+  }
+
+  // --- Davis's loans ---
+
+  /** Push a client their current loan status (null = no debt). */
+  private sendLoan(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    getLoan(conn.pid)
+      .then((loan) => { if (this.conns.has(ws)) this.tell(ws, { type: 'loan', loan }); })
+      .catch((e) => console.error('loan send failed:', e));
+  }
+
+  /** Borrow `amount` coins from Davis, due (at 1.5×) by the next daily market reset. */
+  getLoanFor(ws: WebSocket, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    const amt = Math.floor(amount);
+    if (!Number.isFinite(amt) || amt < 1) return; // positive whole coins only
+    // Deadline is the next daily reset; if one somehow isn't booked, fall back to 24h out.
+    const dueAt = this.nextStockCrashAt || Date.now() + 24 * 60 * 60 * 1000;
+    takeLoan(conn.pid, conn.nickname, amt, dueAt)
+      .then((res) => {
+        if (!res) { this.sendLoan(ws); return; } // already had a loan / rejected — just refresh
+        this.sendWallet(ws);
+        this.sendLoan(ws);
+        this.notify(ws, `💸 Davis fronted you ${amt}🪙 — bring back ${res.loan.owed}🪙 by the daily reset. Keep grinding.`);
+      })
+      .catch((e) => console.error('loan failed:', e));
+  }
+
+  /** Repay Davis the full 1.5× owed and clear the loan. */
+  repayLoanFor(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    repayLoan(conn.pid)
+      .then((res) => {
+        if (!res) { this.sendWallet(ws); this.sendLoan(ws); return; } // no loan or couldn't afford it
+        this.sendWallet(ws);
+        this.sendLoan(ws);
+        this.notify(ws, `🤝 Loan settled. Davis respects the hustle.`);
+      })
+      .catch((e) => console.error('loan repay failed:', e));
+  }
+
+  /** Collect on every overdue loan: zero the wallet + wipe stock positions for anyone who didn't
+   *  repay in time. Called from the daily reset. Refreshes + notifies any defaulter still online. */
+  private collectLoans() {
+    collectDefaultedLoans(Date.now())
+      .then((pids) => {
+        if (!pids.length) return;
+        const hit = new Set(pids);
+        for (const ws of this.conns.keys()) {
+          const conn = this.conns.get(ws);
+          if (!conn?.pid || !hit.has(conn.pid)) continue;
+          this.sendWallet(ws);
+          this.sendStocks(ws);
+          this.sendLoan(ws);
+          this.notify(ws, `🕶️ Davis came to collect — you didn't repay, so he took everything. Bad day to be an Excel spreadsheet.`);
+        }
+      })
+      .catch((e) => console.error('loan collection failed:', e));
   }
 
   /** Re-roll every coin's price when the re-roll window elapses, persist the board, and push
