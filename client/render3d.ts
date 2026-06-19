@@ -144,6 +144,21 @@ export function createRenderer(container: HTMLElement): Renderer3D {
     return s;
   }
 
+  // In first-person, the minion power-up uses Otto: a taller billboard stretched to the
+  // paddle's full width and ~3× the paddle box height, so you "become" the paddle.
+  const ottoTex = new THREE.TextureLoader().load('/otto.webp');
+  ottoTex.colorSpace = THREE.SRGBColorSpace;
+  const ottoSprites: THREE.Sprite[] = [];
+  function getOttoSprite(i: number): THREE.Sprite {
+    let s = ottoSprites[i];
+    if (!s) {
+      s = new THREE.Sprite(new THREE.SpriteMaterial({ map: ottoTex, transparent: true }));
+      scene.add(s);
+      ottoSprites[i] = s;
+    }
+    return s;
+  }
+
   // --- Disco power-up objects (3D/FP only) ---
   // Chrome disco ball that drops from the ceiling when the powerup fires.
   const discoBallMesh = new THREE.Mesh(
@@ -552,6 +567,7 @@ export function createRenderer(container: HTMLElement): Renderer3D {
     // Paddles — one box per seated player, sized to that side's current height.
     let pi = 0;
     let mi = 0; // minion-sprite index
+    let oi = 0; // otto-sprite index (first-person minion)
     let hi = 0; // hat-mesh index
     const minionAspect = (minionTex.image && (minionTex.image as HTMLImageElement).naturalWidth)
       ? (minionTex.image as HTMLImageElement).naturalWidth / (minionTex.image as HTMLImageElement).naturalHeight
@@ -561,11 +577,21 @@ export function createRenderer(container: HTMLElement): Renderer3D {
       const list = p.players.length ? p.players : [];
       for (const pl of list) {
         if (s.minion) {
-          // Replace the box with a camera-facing minion billboard, sized to the paddle height.
-          const sp = getMinionSprite(mi++);
-          sp.visible = true;
-          sp.scale.set(p.h * minionAspect, p.h, 1);
-          sp.position.set(wx(pl.x), p.h / 2, wz(pl.y));
+          if (fpSide) {
+            // First-person: Otto becomes the paddle — stretched to the paddle's full width
+            // and ~3× the paddle box height, standing on the floor.
+            const ottoH = PADDLE_H * 3;
+            const sp = getOttoSprite(oi++);
+            sp.visible = true;
+            sp.scale.set(p.h, ottoH, 1);
+            sp.position.set(wx(pl.x), ottoH / 2, wz(pl.y));
+          } else {
+            // Replace the box with a camera-facing minion billboard, sized to the paddle height.
+            const sp = getMinionSprite(mi++);
+            sp.visible = true;
+            sp.scale.set(p.h * minionAspect, p.h, 1);
+            sp.position.set(wx(pl.x), p.h / 2, wz(pl.y));
+          }
           continue;
         }
         const m = getPaddle(pi++);
@@ -596,6 +622,7 @@ export function createRenderer(container: HTMLElement): Renderer3D {
     }
     for (let i = pi; i < paddlePool.length; i++) paddlePool[i].visible = false;
     for (let i = mi; i < minionSprites.length; i++) minionSprites[i].visible = false;
+    for (let i = oi; i < ottoSprites.length; i++) ottoSprites[i].visible = false;
     for (let i = hi; i < hatPool.length; i++) hatPool[i].group.visible = false;
 
     // Balls — main ball plus any "multi" extras; radius follows tiny/bigball power-ups.
