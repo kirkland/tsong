@@ -514,25 +514,18 @@ export async function repayLoan(pid: string): Promise<{ wallet: Wallet } | null>
   return { wallet };
 }
 
-/** Enforce the deadline on every loan due at/before `nowMs`: Davis takes EVERYTHING — zero the
- *  wallet, wipe all stock positions, AND strip every cosmetic (owned items + equipped hat/skin)
- *  — then clear the debt. Returns the affected pids so the caller can refresh anyone connected. */
+/** Enforce the deadline on every loan due at/before `nowMs`: zero those players' wallets, wipe
+ *  all their stock positions, and clear the debt. Returns the affected pids so the caller can
+ *  refresh anyone who's connected. */
 export async function collectDefaultedLoans(nowMs: number): Promise<string[]> {
   if (!pool) return [];
   const { rows } = await pool.query(`SELECT pid FROM loans WHERE due_at <= $1`, [nowMs]);
   const pids = rows.map((r) => r.pid as string);
   if (!pids.length) return [];
-  await pool.query(`UPDATE players SET coins = 0, owned = '', hat = NULL, skin = NULL WHERE id = ANY($1)`, [pids]);
+  await pool.query(`UPDATE players SET coins = 0 WHERE id = ANY($1)`, [pids]);
   await pool.query(`DELETE FROM stock_holdings WHERE pid = ANY($1)`, [pids]);
   await pool.query(`DELETE FROM loans WHERE pid = ANY($1)`, [pids]);
   return pids;
-}
-
-/** Daily housekeeping: drop persisted price-board rows for any coin no longer listed, so the
- *  saved board doesn't accumulate stale values. Live (in-memory) prices are untouched. */
-export async function pruneStaleStockPrices(validCoinIds: string[]): Promise<void> {
-  if (!pool || !validCoinIds.length) return;
-  await pool.query(`DELETE FROM stock_prices WHERE coin <> ALL($1)`, [validCoinIds]);
 }
 
 export async function getLeaderboard(): Promise<LeaderboardRow[]> {
