@@ -40,6 +40,7 @@ const queueBtn = document.getElementById('queueBtn') as HTMLButtonElement;
 const queueArea = document.getElementById('queueArea') as HTMLDivElement;
 const readyBtn = document.getElementById('readyBtn') as HTMLButtonElement;
 const rematchBtn = document.getElementById('rematchBtn') as HTMLButtonElement;
+const quitBtn = document.getElementById('quitBtn') as HTMLButtonElement;
 const pingBtn = document.getElementById('pingBtn') as HTMLButtonElement;
 const renameBtn = document.getElementById('rename') as HTMLButtonElement;
 const kingStatusEl = document.getElementById('kingStatus') as HTMLDivElement;
@@ -655,6 +656,9 @@ renameBtn.addEventListener('click', () => {
 joinBtn.addEventListener('click', () => net.send({ type: 'claim' }));
 joinLeftBtn.addEventListener('click', () => net.send({ type: 'claim', side: 'left' }));
 joinRightBtn.addEventListener('click', () => net.send({ type: 'claim', side: 'right' }));
+
+// --- quit game: vacate your paddle spot (the side reverts to "— open —") ---
+quitBtn.addEventListener('click', () => net.send({ type: 'forfeit' }));
 
 // --- king exit: winner declines to stay ---
 kingStatusEl.addEventListener('click', () => net.send({ type: 'kingExit' }));
@@ -3070,6 +3074,9 @@ function updateUI() {
   joinBtn.textContent = state.arena ? 'Join arena' : 'Join game';
   renameBtn.style.display = myName ? 'inline-block' : 'none';
   pingBtn.style.display = myName ? 'inline-block' : 'none';
+  // Quit game: only while you hold a paddle. Forfeiting vacates your seat, so the
+  // side reverts to "— open —" for everyone.
+  quitBtn.style.display = isPlayer() ? 'inline-block' : 'none';
 
   // Mobile ▲/▼ buttons: visible while the player is in a live match in duel mode.
   // Hidden in arena mode (paddle direction isn't vertical), during waiting/over states,
