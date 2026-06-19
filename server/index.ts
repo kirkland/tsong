@@ -271,6 +271,12 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'stockCashOut':
         if (typeof msg.coin === 'string') lobby.stockCashOut(ws, msg.coin);
         break;
+      case 'getLoan':
+        if (typeof msg.amount === 'number') lobby.getLoanFor(ws, msg.amount);
+        break;
+      case 'repayLoan':
+        lobby.repayLoanFor(ws);
+        break;
       case 'migrate': {
         // Only honour the request if the socket is authenticated — prevents spoofing.
         const authSession = wsSessions.get(ws);

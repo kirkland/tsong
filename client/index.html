@@ -817,6 +817,48 @@
       .coin-graph { display: block; width: 100%; height: 26px; margin-top: 4px; }
       #marketNote { font-size: 10px; color: #5a647e; margin-top: 8px; line-height: 1.4; }
       #marketList { max-height: 56vh; overflow-y: auto; }
+      /* Davis's loan shark dropdown (sibling of #market in #topLeft) */
+      #loan { position: relative; }
+      #loanBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #6b4a1f;
+        background: #1a1208; color: #e0b05f; cursor: pointer;
+      }
+      #loanBtn:hover { background: #2a1c10; }
+      #loanPanel {
+        position: absolute; top: calc(100% + 6px); left: 0; width: 300px;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #loanPanel[hidden] { display: none; }
+      #loanPanel h3 {
+        font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+        color: #6b7796; margin: 8px 0 6px;
+      }
+      #loanImg {
+        display: block; width: 100%; height: 150px; object-fit: cover;
+        border-radius: 6px; background: #060912; margin-bottom: 8px;
+      }
+      #loanBody { font-size: 12px; color: #c3cae0; line-height: 1.45; }
+      .loan-quote { color: #e0b05f; font-style: italic; margin-bottom: 8px; }
+      .loan-line { margin-bottom: 8px; }
+      .loan-owe { color: #ff9a6b; font-weight: 700; }
+      .loan-due { font-size: 11px; color: #6b7796; margin-bottom: 8px; }
+      .loan-actions { display: flex; gap: 6px; margin-top: 4px; }
+      .loan-actions button {
+        flex: 1; font: inherit; font-size: 12px; font-weight: 700; padding: 7px 0; border-radius: 6px;
+        border: 1px solid #2a3550; background: #11182c; color: #c3cae0; cursor: pointer;
+      }
+      .loan-actions button:hover:not(:disabled) { background: #1a2238; }
+      .loan-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+      .loan-actions button.loan-yes, .loan-actions button.loan-pay {
+        border-color: #1f5a3a; background: #0a1a12; color: #5fe0a0;
+      }
+      .loan-amt-row { display: flex; align-items: center; gap: 6px; margin: 8px 0; }
+      .loan-amt-row input {
+        flex: 1; font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 6px;
+        border: 1px solid #2a3550; background: #060912; color: #fff; min-width: 0;
+      }
       .coin-row {
         display: grid; grid-template-columns: 34px 1fr auto; gap: 8px; align-items: center;
         padding: 7px 0; border-top: 1px solid #1c2640;
@@ -1986,7 +2028,7 @@
           left: 6px;
           gap: 4px;
         }
-        #viewModeBtn, #muteBtn, #gameModesBtn, #powerupInfoBtn, #marketBtn {
+        #viewModeBtn, #muteBtn, #gameModesBtn, #powerupInfoBtn, #marketBtn, #loanBtn {
           font-size: 10px;
           padding: 4px 8px;
         }
@@ -2078,6 +2120,14 @@
           </div>
           <div id="marketList"></div>
           <div id="marketNote">Prices update every 30s and drift up over the day. Your position's worth tracks the price; cashing out pays it rounded down to whole coins. ⚠️ Every 24h the market <b>RESETS</b> to 1.00 and holdings revalue at the bottom — cash out before the daily reset.</div>
+        </div>
+      </div>
+      <div id="loan">
+        <button id="loanBtn" type="button" aria-expanded="false" title="Borrow coins from Davis — pay back 1.5× by the daily reset">💸 Get Loan</button>
+        <div id="loanPanel" hidden>
+          <h3>Davis @ Citizens</h3>
+          <img id="loanImg" alt="Davis Clarke" />
+          <div id="loanBody"></div>
         </div>
       </div>
       <div id="viewMode">

@@ -69,6 +69,17 @@ export async function initDb(): Promise<void> {
       prev  DOUBLE PRECISION NOT NULL
     )
   `);
+  // Davis's loan book: at most one open loan per player (PK on pid). `amount` is the principal
+  // borrowed, `owed` is the 1.5× to repay, `due_at` is the epoch-ms deadline (the next daily
+  // market reset). Default on the deadline = wallet zeroed + all stock positions wiped.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS loans (
+      pid    TEXT PRIMARY KEY,
+      amount DOUBLE PRECISION NOT NULL,
+      owed   DOUBLE PRECISION NOT NULL,
+      due_at BIGINT NOT NULL
+    )
+  `);
   // DOOM minigame high scores — best round reached, per player, per mode (solo / co-op).
   await pool.query(`
     CREATE TABLE IF NOT EXISTS doom_scores (
@@ -460,6 +471,59 @@ export async function setStockCrashAt(ts: number): Promise<void> {
        ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
     [String(ts)],
   );
+}
+
+// --- Davis's loans ---
+export interface Loan { amount: number; owed: number; dueAt: number; }
+
+/** Read a player's open loan, or null if they owe nothing (or no DB). */
+export async function getLoan(pid: string): Promise<Loan | null> {
+  if (!pool || !pid) return null;
+  const { rows } = await pool.query(`SELECT amount, owed, due_at FROM loans WHERE pid = $1`, [pid]);
+  if (!rows.length) return null;
+  return { amount: Number(rows[0].amount), owed: Number(rows[0].owed), dueAt: Number(rows[0].due_at) };
+}
+
+/** Take out a loan: borrow `amount` coins (credited to the wallet) against owing ceil(1.5×amount)
+ *  back by `dueAt`. Fails — returns null — if the player already has an open loan or the amount
+ *  isn't a positive whole number. Returns the new wallet + loan on success. */
+export async function takeLoan(pid: string, name: string, amount: number, dueAt: number): Promise<{ wallet: Wallet; loan: Loan } | null> {
+  if (!pool || !pid) return null;
+  const principal = Math.floor(amount);
+  if (!Number.isFinite(principal) || principal < 1) return null;
+  if (await getLoan(pid)) return null; // one loan at a time
+  const owed = Math.ceil(principal * 1.5); // Davis rounds up, naturally
+  // Record the debt first; the PK on pid makes a duplicate insert throw rather than double-lend.
+  await pool.query(`INSERT INTO loans (pid, amount, owed, due_at) VALUES ($1, $2, $3, $4)`, [pid, principal, owed, dueAt]);
+  const wallet = await addCoins(pid, name, principal);
+  if (!wallet) return null;
+  return { wallet, loan: { amount: principal, owed, dueAt } };
+}
+
+/** Repay a loan in full: spends the whole `owed` amount and clears the debt. Fails — returns
+ *  null — if there's no loan or the player can't afford the full repayment (loan untouched). */
+export async function repayLoan(pid: string): Promise<{ wallet: Wallet } | null> {
+  if (!pool || !pid) return null;
+  const loan = await getLoan(pid);
+  if (!loan) return null;
+  const wallet = await spendCoins(pid, loan.owed); // null if they can't cover it
+  if (!wallet) return null;
+  await pool.query(`DELETE FROM loans WHERE pid = $1`, [pid]);
+  return { wallet };
+}
+
+/** Enforce the deadline on every loan due at/before `nowMs`: zero those players' wallets, wipe
+ *  all their stock positions, and clear the debt. Returns the affected pids so the caller can
+ *  refresh anyone who's connected. */
+export async function collectDefaultedLoans(nowMs: number): Promise<string[]> {
+  if (!pool) return [];
+  const { rows } = await pool.query(`SELECT pid FROM loans WHERE due_at <= $1`, [nowMs]);
+  const pids = rows.map((r) => r.pid as string);
+  if (!pids.length) return [];
+  await pool.query(`UPDATE players SET coins = 0 WHERE id = ANY($1)`, [pids]);
+  await pool.query(`DELETE FROM stock_holdings WHERE pid = ANY($1)`, [pids]);
+  await pool.query(`DELETE FROM loans WHERE pid = ANY($1)`, [pids]);
+  return pids;
 }
 
 export async function getLeaderboard(): Promise<LeaderboardRow[]> {
