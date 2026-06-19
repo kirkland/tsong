@@ -1756,7 +1756,7 @@ function updateMarketTimer() {
 }
 setInterval(updateMarketTimer, 1000);
 
-// --- Davis's loans (top-left): borrow coins, owe 1.5× by 5pm Eastern ---
+// --- Davis's loans (top-left): borrow coins, owe 1.5× by the daily reset ---
 // The server owns the loan; we render the latest `loan` state and fire getLoan/repayLoan.
 // `loanStep` is local conversation state: 'intro' (Davis offers) → 'amount' (pick how much).
 // Once you hold a loan, the panel always shows the repay view regardless of step.
@@ -1794,7 +1794,7 @@ function renderLoan() {
     const due = loan.dueAt - Date.now();
     loanBody.innerHTML =
       `<div class="loan-line">You borrowed <b>${loan.amount}</b>🪙. Davis wants <span class="loan-owe">${loan.owed}🪙</span> back.</div>` +
-      `<div class="loan-due">Due at 5pm Eastern · <b>${fmtCountdown(due)}</b> left. Miss it and he takes <b>everything</b> — coins, stocks, and cosmetics.</div>`;
+      `<div class="loan-due">Due at the daily market reset · <b>${fmtCountdown(due)}</b> left. Miss it and he takes <b>everything</b> — coins and stocks.</div>`;
     const actions = document.createElement('div');
     actions.className = 'loan-actions';
     const pay = document.createElement('button');
@@ -1855,7 +1855,7 @@ function renderLoan() {
   loanImg.src = DAVIS_INTRO;
   loanBody.innerHTML =
     `<div class="loan-quote">"${davisQuote}"</div>` +
-    `<div class="loan-line">I can spot you some coins — pay me back <b>1.5×</b> by 5pm Eastern. Would you like a loan?</div>`;
+    `<div class="loan-line">I can spot you some coins — pay me back <b>1.5×</b> by the daily reset. Would you like a loan?</div>`;
   const actions = document.createElement('div');
   actions.className = 'loan-actions';
   const yes = document.createElement('button');
