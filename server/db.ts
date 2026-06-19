@@ -125,6 +125,16 @@ export async function initDb(): Promise<void> {
     await pool.query(`DELETE FROM stock_holdings`);
     await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('stock_rebase_v2', now()::text)`);
   }
+  // One-time: the whole coin economy was scaled ×100 (COIN_SCALE) so the stock market works in
+  // whole coins. Multiply every existing balance by 100, and rebase the market — old prices/
+  // positions were priced at base 1, but the base is now 100, so clear both for a clean start.
+  const coinScale = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'coin_scale_100x_v1'`);
+  if (coinScale.rowCount === 0) {
+    await pool.query(`UPDATE players SET coins = coins * 100`);
+    await pool.query(`DELETE FROM stock_prices`);
+    await pool.query(`DELETE FROM stock_holdings`);
+    await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('coin_scale_100x_v1', now()::text)`);
+  }
   console.log('leaderboard DB ready');
 }
 
@@ -174,11 +184,12 @@ export async function recordResult(winners: PlayerRef[], losers: PlayerRef[]): P
 
   const allPids = [...winners, ...losers].map((p) => p.pid);
 
-  // Upsert all players so they exist before we read ELO. Each winner also earns 1 coin.
+  // Upsert all players so they exist before we read ELO. Each winner also earns 100 coins
+  // (1 win reward × COIN_SCALE — the whole economy is scaled ×100).
   for (const w of winners) {
     await pool.query(
-      `INSERT INTO players (id, name, wins, coins) VALUES ($1, $2, 1, 1)
-         ON CONFLICT (id) DO UPDATE SET wins = players.wins + 1, coins = players.coins + 1, name = EXCLUDED.name`,
+      `INSERT INTO players (id, name, wins, coins) VALUES ($1, $2, 1, 100)
+         ON CONFLICT (id) DO UPDATE SET wins = players.wins + 1, coins = players.coins + 100, name = EXCLUDED.name`,
       [w.pid, w.name],
     );
   }
