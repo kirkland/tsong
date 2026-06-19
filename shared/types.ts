@@ -211,7 +211,9 @@ export type Status = 'waiting' | 'playing' | 'over';
 // inflates ever bigger and wider until it swallows the whole court.
 // MONITOR_BREAK: the ball rockets into the screen, the whole court erupts in smoke, and
 // a cracked-glass overlay drops over everything as if the physical monitor just shattered.
-export const FATALITY_MOVES = ['SCREEN_MELT', 'PADDLE_SPLIT', 'FROST_SHATTER', 'NOT_FOUND', 'SINGULARITY', 'PAC_CHOMP', 'JSAV', 'MONITOR_BREAK'] as const;
+// AVERY: the screen snaps to black and Avery's face slams in full-frame, jittering, as a
+// jumpscare sting blares — a sudden in-your-face scare rather than a slow build.
+export const FATALITY_MOVES = ['SCREEN_MELT', 'PADDLE_SPLIT', 'FROST_SHATTER', 'NOT_FOUND', 'SINGULARITY', 'PAC_CHOMP', 'JSAV', 'MONITOR_BREAK', 'AVERY'] as const;
 export type FatalityMove = (typeof FATALITY_MOVES)[number];
 
 // AI opponent difficulty. A bot fills one duel side; a match it plays never touches the
