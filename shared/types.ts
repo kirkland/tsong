@@ -73,17 +73,17 @@ export const BLASTER = {
   maxAngle: Math.PI / 3, // ± aim cone off straight-across
 } as const;
 export const CURVE_SPIN = 1.4; // spin (rad/s) applied to the ball on a curve hit
-// "Breakout" mode: a vertical wall of bricks runs down the centre of the court.
-// 3 columns × 22 rows of 18×18 bricks with 4-unit gaps.
-// Total 66 bricks. Wall is centred at x=400 in the 800×500 court.
+// "Breakout" mode: a single column of bricks runs down the centre of the court.
+// 1 column × 22 rows of 18×18 bricks with 4-unit gaps.
+// Total 22 bricks. Wall is centred at x=400 in the 800×500 court.
 // Ball phases through the wall until the first paddle hit (lastHit !== null).
 export const BREAKOUT = {
-  cols: 3,
+  cols: 1,
   rows: 22,
   w: 18,   // brick width, court units
   h: 18,   // brick height, court units
   gap: 4,  // gap between bricks
-  left: 369,   // (800 - (3*22 - 4)) / 2  →  (800-62)/2
+  left: 391,   // (800 - 18) / 2
   top:  10,    // (500 - (22*22 - 4)) / 2  →  (500-480)/2
 } as const;
 
