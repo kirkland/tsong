@@ -481,10 +481,12 @@ export interface ReactionMsg {
   emoji: string;
 }
 
-// A one-off big center-screen banner (e.g. a forfeit). Transient; not replayed.
+// A one-off transient notice. By default a big center-screen banner (e.g. a forfeit);
+// `toast: true` renders a small unobtrusive corner toast instead (e.g. betting activity).
 export interface AnnounceMsg {
   type: 'announce';
   text: string;
+  toast?: boolean;
 }
 
 // A ping notification requesting attention: someone wants others to join the game.

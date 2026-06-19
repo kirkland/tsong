@@ -1077,7 +1077,7 @@ export class Lobby {
         if (!w) { this.sendWallet(ws); return; } // insufficient coins — refresh their view, no bet
         this.bets.push({ pid, side, amount: amt, ws, name, odds });
         this.sendWallet(ws);
-        this.announce(`🎲 ${name} bet ${amt} on ${side} @ ${odds.toFixed(2)}×`);
+        this.announce(`🎲 ${name} bet ${amt} on ${side} @ ${odds.toFixed(2)}×`, true);
       })
       .catch((e) => console.error('bet failed:', e));
   }
@@ -1094,11 +1094,18 @@ export class Lobby {
       if (b.side === winnerSide) {
         const payout = Math.max(b.amount, Math.round(b.amount * b.odds)); // never pay below stake
         addCoins(this.conns.get(b.ws)?.pid ?? b.pid, b.name, payout)
-          .then(() => { if (this.conns.has(b.ws)) this.sendWallet(b.ws); })
+          .then(() => {
+            if (!this.conns.has(b.ws)) return;
+            this.sendWallet(b.ws);
+            this.notify(b.ws, `🎲 ${b.side} won — your ${b.amount}🪙 bet pays ${payout}🪙 (+${payout - b.amount})`);
+          })
           .catch((e) => console.error('payout failed:', e));
       } else {
-        // Lost — stake was escrowed at bet time; just refresh their wallet view.
-        if (this.conns.has(b.ws)) this.sendWallet(b.ws);
+        // Lost — stake was escrowed at bet time; just refresh their wallet view + tell them.
+        if (this.conns.has(b.ws)) {
+          this.sendWallet(b.ws);
+          this.notify(b.ws, `🎲 ${winnerSide} won — your ${b.amount}🪙 bet on ${b.side} lost`);
+        }
       }
     }
   }
@@ -1112,7 +1119,11 @@ export class Lobby {
     this.bets = [];
     return Promise.all(pending.map((b) =>
       addCoins(this.conns.get(b.ws)?.pid ?? b.pid, b.name, b.amount)
-        .then(() => { if (this.conns.has(b.ws)) this.sendWallet(b.ws); })
+        .then(() => {
+          if (!this.conns.has(b.ws)) return;
+          this.sendWallet(b.ws);
+          this.notify(b.ws, `🎲 Bet refunded: ${b.amount}🪙`);
+        })
         .catch((e) => console.error('refund failed:', e)),
     )).then(() => undefined);
   }
@@ -1697,11 +1708,16 @@ export class Lobby {
   // --- internals ---
 
   /** Fan a big center-screen banner out to every client (transient, not kept). */
-  private announce(text: string) {
-    const data = JSON.stringify({ type: 'announce', text });
+  private announce(text: string, toast = false) {
+    const data = JSON.stringify({ type: 'announce', text, toast });
     for (const sock of this.conns.keys()) {
       if (sock.readyState === sock.OPEN) sock.send(data);
     }
+  }
+
+  /** A small personal toast to a single connection (e.g. a bet result). */
+  private notify(ws: WebSocket, text: string) {
+    this.tell(ws, { type: 'announce', text, toast: true });
   }
 
   /** Echo a slash command into chat (styled apart on the client) so it's visible to all. */
