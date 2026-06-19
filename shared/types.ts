@@ -571,11 +571,11 @@ export const SPIN_SEGMENTS = [
 // and closes the whole position. `base` is the starting price (the market then drifts up
 // from there); `img` is the coin's logo under client/public.
 export const STOCKS = [
-  { id: 'kenny', name: 'Kenny Kawaguchi inc.', ticker: 'KENNY', img: '/kennykawaguchi.png', base: 100 },
-  { id: 'chugs', name: 'BadlandsChugs', ticker: 'CHUG', img: '/badlandschugs.jpg', base: 100 },
-  { id: 'davis', name: 'Davis Clarke Coin', ticker: 'DAVIS', img: '/davisclarke.jpg', base: 100 },
-  { id: 'otto', name: 'OTTO', ticker: 'OTTO', img: '/otto.webp', base: 100 },
-  { id: 'bacon', name: 'Bacon Roll', ticker: 'BACON', img: '/baconroll.png', base: 100 },
+  { id: 'kenny', name: 'Kenny Kawaguchi inc.', ticker: 'KENNY', img: '/kennykawaguchi.png', base: 1 },
+  { id: 'chugs', name: 'BadlandsChugs', ticker: 'CHUG', img: '/badlandschugs.jpg', base: 1 },
+  { id: 'davis', name: 'Davis Clarke Coin', ticker: 'DAVIS', img: '/davisclarke.jpg', base: 1 },
+  { id: 'otto', name: 'OTTO', ticker: 'OTTO', img: '/otto.webp', base: 1 },
+  { id: 'bacon', name: 'Bacon Roll', ticker: 'BACON', img: '/baconroll.png', base: 1 },
 ] as const;
 export type StockId = (typeof STOCKS)[number]['id'];
 export const STOCK_UPDATE_MS = 30 * 1000; // prices re-roll every 30 seconds

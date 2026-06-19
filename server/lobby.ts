@@ -66,16 +66,17 @@ interface Conn {
 // much. The market trends UP: a steady drift doubles the *typical* price about once an hour
 // (derived from the re-roll interval, so it holds at any cadence). The noise sits in log
 // space (symmetric, so it doesn't drag the typical trajectory below the drift): usually
-// ±~12% per tick, with a 1-in-10 chance of a wild swing on top. Clamped to [1, base×1e6] and
-// rounded to cents. Because the drift always nudges the price, it never sits still — so the
-// %-change readout is never stuck at 0.0%.
+// ±~12% per tick, with a 1-in-10 chance of a wild swing on top. Clamped to
+// [base/100, base×1e6] and rounded to cents (so it can dip below the starting price for real
+// downside, but never to zero). Because the drift always nudges the price, it never sits
+// still — so the %-change readout is never stuck at 0.0%.
 function rollPrice(price: number, base: number): number {
   const ticksPerHour = 3_600_000 / STOCK_UPDATE_MS;
   const drift = Math.pow(2, 1 / ticksPerHour); // typical ×2 per hour
   let g = (Math.random() * 2 - 1) * 0.12; // ±12% jitter (log space)
   if (Math.random() < 0.1) g += (Math.random() * 2 - 1) * 0.45; // occasional big swing
   const np = price * drift * Math.exp(g);
-  return Math.round(Math.max(1, Math.min(np, base * 1_000_000)) * 100) / 100;
+  return Math.round(Math.max(base / 100, Math.min(np, base * 1_000_000)) * 100) / 100;
 }
 
 // Epoch ms when the daily spin is next available (0 = available now).
