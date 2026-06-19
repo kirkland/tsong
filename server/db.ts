@@ -419,15 +419,17 @@ export async function investStock(pid: string, _name: string, coin: string, amou
   return wallet;
 }
 
-/** Cash out the entire position in `coin` at the given price: pays floor(shares × price)
- *  coins, deletes the holding, and returns the new wallet plus the payout. Returns null if
- *  the player holds nothing in that coin. */
+/** Cash out the entire position in `coin` at the given price: pays round(shares × price)
+ *  coins, deletes the holding, and returns the new wallet plus the payout. Rounds to the
+ *  NEAREST whole coin — worth ≥ x.5 rounds up, below rounds down (a 1-coin buy at 0.96 or
+ *  0.55 cashes out for 1; at 0.40 it rounds to 0). Returns null if the player holds nothing
+ *  in that coin. */
 export async function cashOutStock(pid: string, name: string, coin: string, price: number): Promise<{ wallet: Wallet; payout: number } | null> {
   if (!pool || !pid) return null;
   const { rows } = await pool.query(`SELECT shares FROM stock_holdings WHERE pid = $1 AND coin = $2`, [pid, coin]);
   if (!rows.length || Number(rows[0].shares) <= 0) return null;
   const shares = Number(rows[0].shares);
-  const payout = Math.floor(shares * price);
+  const payout = Math.round(shares * price);
   await pool.query(`DELETE FROM stock_holdings WHERE pid = $1 AND coin = $2`, [pid, coin]);
   // addCoins with a 0 delta still returns the (unchanged) wallet, so a wiped-out position
   // still resolves cleanly.
