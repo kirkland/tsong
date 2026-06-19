@@ -1568,7 +1568,7 @@ function showToast(text: string) {
 type Market = {
   prices: { id: string; price: number; prev: number }[];
   holdings: { id: string; shares: number; cost: number; worth: number }[];
-  history: { id: string; recent: number[]; daily: number[] }[];
+  history: { id: string; series: { '5m': number[]; '1h': number[]; '1d': number[] } }[];
   nextUpdateAt: number;
 };
 let market: Market = { prices: [], holdings: [], history: [], nextUpdateAt: 0 };
@@ -1623,13 +1623,11 @@ function drawSparkline(cv: HTMLCanvasElement, pts: number[]) {
   ctx2.stroke();
 }
 
-// The price series to plot for a coin at the current timeframe.
+// The price series to plot for a coin at the current timeframe (each timeframe is its own
+// server-side series, sampled at its own cadence — see STOCK_HISTORY).
 function seriesFor(id: string): number[] {
   const h = market.history.find((x) => x.id === id);
-  if (!h) return [];
-  if (graphTf === '1d') return h.daily;
-  if (graphTf === '5m') return h.recent.slice(-10); // last ~5 min of 30s samples
-  return h.recent; // '1h'
+  return h ? h.series[graphTf] ?? [] : [];
 }
 document.addEventListener('click', (e) => {
   if (marketPanel.hidden) return;
@@ -1647,8 +1645,16 @@ function renderMarket() {
     const p = market.prices.find((x) => x.id === stock.id);
     const hold = market.holdings.find((x) => x.id === stock.id);
     const price = p?.price ?? stock.base;
-    const prev = p?.prev ?? price;
-    const pct = prev > 0 ? ((price - prev) / prev) * 100 : 0;
+    // Headline % is the move over the SELECTED timeframe (first → last of the visible graph),
+    // so it changes when you switch Minutes / Hour / Day — not a static per-tick number.
+    const series = seriesFor(stock.id);
+    const last = series.length ? series[series.length - 1] : price;
+    const first = series.length >= 2 ? series[0] : last;
+    const pct = first > 0 ? ((last - first) / first) * 100 : 0;
+    // A position's live worth = shares × current price (fractional, so it moves smoothly);
+    // cashing out pays it floored to whole coins.
+    const rawWorth = hold ? hold.shares * price : 0;
+    const cashOut = Math.floor(rawWorth);
 
     const row = document.createElement('div');
     row.className = 'coin-row';
@@ -1674,14 +1680,16 @@ function renderMarket() {
     if (hold) {
       const pos = document.createElement('div');
       pos.className = 'coin-pos';
-      const plClass = hold.worth > hold.cost ? 'pl-up' : hold.worth < hold.cost ? 'pl-down' : '';
-      pos.innerHTML = `held: ${hold.cost}🪙 → worth <span class="${plClass}">${hold.worth}🪙</span>`;
+      const plPct = hold.cost > 0 ? (rawWorth / hold.cost - 1) * 100 : 0;
+      const plClass = plPct > 0.05 ? 'pl-up' : plPct < -0.05 ? 'pl-down' : '';
+      const sign = plPct >= 0 ? '+' : '';
+      pos.innerHTML = `${hold.cost}🪙 in → <span class="${plClass}">${rawWorth.toFixed(2)}🪙 (${sign}${plPct.toFixed(0)}%)</span> · cash out ${cashOut}`;
       main.appendChild(pos);
     }
     const graph = document.createElement('canvas');
     graph.className = 'coin-graph';
-    graph.width = 132; graph.height = 26;
-    drawSparkline(graph, seriesFor(stock.id));
+    graph.width = 176; graph.height = 26;
+    drawSparkline(graph, series);
     main.appendChild(graph);
     row.appendChild(main);
 
@@ -1718,7 +1726,7 @@ function renderMarket() {
 
     const cash = document.createElement('button');
     cash.className = 'coin-cash';
-    cash.textContent = hold ? `Cash out ${hold.worth}🪙` : 'Cash out';
+    cash.textContent = hold ? `Cash out ${cashOut}🪙` : 'Cash out';
     cash.disabled = !hold;
     cash.onclick = () => { net.send({ type: 'stockCashOut', coin: stock.id }); playChaChing(); };
     actions.appendChild(cash);

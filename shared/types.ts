@@ -581,11 +581,19 @@ export const STOCKS = [
 ] as const;
 export type StockId = (typeof STOCKS)[number]['id'];
 export const STOCK_UPDATE_MS = 30 * 1000; // prices re-roll every 30 seconds
-// Per-coin price-history buffers for the little graphs. `recent` holds one sample per re-roll
-// (30s) capped at 120 ≈ 1 hour — the 5-minute view is its last 10 points, the 1-hour view is
-// the whole thing. `daily` is sampled every `dailyEvery` re-rolls (≈5 min) capped at 288 ≈ 1
-// day. History lives in server memory only (not persisted), so it refills after a restart.
-export const STOCK_HISTORY = { recentCap: 120, dailyCap: 288, dailyEvery: 10, fiveMinPoints: 10 } as const;
+// Per-coin price-history buffers for the little graphs — one independent series per
+// timeframe so each view has its own resolution and span (no overlap/aliasing). `everyTicks`
+// is how many re-rolls (30s each) between samples; `cap` is how many points to keep:
+//   5m → sample every re-roll (30s), 10 points  = 5 minutes
+//   1h → sample every 4 re-rolls (2 min), 30 points = 1 hour
+//   1d → sample every 60 re-rolls (30 min), 48 points = 1 day
+// History lives in server memory only (not persisted), so it refills after a restart.
+export const STOCK_HISTORY = {
+  '5m': { everyTicks: 1, cap: 10 },
+  '1h': { everyTicks: 4, cap: 30 },
+  '1d': { everyTicks: 60, cap: 48 },
+} as const;
+export type StockTf = keyof typeof STOCK_HISTORY; // '5m' | '1h' | '1d'
 
 // A player's private market view: the global price board plus that player's own positions.
 // Sent on join, after every trade, and to everyone when prices re-roll.
@@ -598,9 +606,9 @@ export interface StockMsg {
   // `cost` is the total coins poured in (cost basis); `worth` is floor(shares × price) — the
   // coins they'd get if they cashed out right now.
   holdings: { id: string; shares: number; cost: number; worth: number }[];
-  // Price history for the per-coin graphs, in STOCKS order. `recent` = 30s samples (≤1h),
-  // `daily` = ~5-min samples (≤1 day). Oldest first.
-  history: { id: string; recent: number[]; daily: number[] }[];
+  // Price history for the per-coin graphs, in STOCKS order — one array per timeframe (oldest
+  // first). See STOCK_HISTORY for the cadence/length of each series.
+  history: { id: string; series: { '5m': number[]; '1h': number[]; '1d': number[] } }[];
   nextUpdateAt: number; // epoch ms when prices next re-roll
 }
 

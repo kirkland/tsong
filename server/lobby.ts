@@ -65,20 +65,19 @@ interface Conn {
 }
 
 // One step of a crypto's price random walk. Pure RNG — never tied to who invested or how
-// much. The market trends UP: a steady drift doubles the *typical* price about once an hour
-// (derived from the re-roll interval, so it holds at any cadence). The noise sits in log
-// space (symmetric, so it doesn't drag the typical trajectory below the drift): usually
-// ±~12% per tick, with a 1-in-10 chance of a wild swing on top. Clamped to
-// [base/100, base×1e6] and rounded to cents (so it can dip below the starting price for real
-// downside, but never to zero). Because the drift always nudges the price, it never sits
-// still — so the %-change readout is never stuck at 0.0%.
+// much. The market trends UP at a *calm* pace: a steady drift doubles the typical price about
+// once a DAY (derived from the re-roll interval, so it holds at any cadence), which keeps the
+// numbers human-readable (~1–3) between the daily resets. The noise sits in log space
+// (symmetric, so it doesn't drag the typical trajectory below the drift): usually ±~5% per
+// tick, with a 1-in-12 chance of a bigger swing on top. Clamped to [base/100, base×1000] and
+// rounded to cents (so it can dip below the starting price for real downside, never to zero).
 function rollPrice(price: number, base: number): number {
-  const ticksPerHour = 3_600_000 / STOCK_UPDATE_MS;
-  const drift = Math.pow(2, 1 / ticksPerHour); // typical ×2 per hour
-  let g = (Math.random() * 2 - 1) * 0.12; // ±12% jitter (log space)
-  if (Math.random() < 0.1) g += (Math.random() * 2 - 1) * 0.45; // occasional big swing
+  const ticksPerDay = 86_400_000 / STOCK_UPDATE_MS;
+  const drift = Math.pow(2, 1 / ticksPerDay); // typical ×2 per day — a gentle climb
+  let g = (Math.random() * 2 - 1) * 0.05; // ±5% jitter (log space)
+  if (Math.random() < 0.08) g += (Math.random() * 2 - 1) * 0.18; // occasional bigger swing
   const np = price * drift * Math.exp(g);
-  return Math.round(Math.max(base / 100, Math.min(np, base * 1_000_000)) * 100) / 100;
+  return Math.round(Math.max(base / 100, Math.min(np, base * 1_000)) * 100) / 100;
 }
 
 // Epoch ms when the daily spin is next available (0 = available now).
@@ -204,16 +203,19 @@ export class Lobby {
     STOCKS.map((s) => [s.id, { price: s.base, prev: s.base }] as [string, { price: number; prev: number }]),
   );
   private nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS;
-  // Epoch ms of the next market crash (every 5–7 days): all prices snap back to base and
+  // Epoch ms of the next daily market reset (every 24h): all prices snap back to base and
   // holdings revalue at the new price. Hydrated from / persisted to the DB so it survives
   // restarts. 0 until scheduled (loadStockPrices schedules one if none is saved).
   private nextStockCrashAt = 0;
-  // Per-coin price history for the graphs (in-memory only). `recent` = one sample per re-roll
-  // (≤1h), `daily` = one sample every STOCK_HISTORY.dailyEvery re-rolls (≤1 day). Seeded with
-  // the current price so a graph is never empty.
-  private stockHistRecent = new Map<string, number[]>(STOCKS.map((s) => [s.id, [s.base]] as [string, number[]]));
-  private stockHistDaily = new Map<string, number[]>(STOCKS.map((s) => [s.id, [s.base]] as [string, number[]]));
-  private stockHistTick = 0; // re-roll counter, to decide when to sample the daily series
+  // Per-coin price history for the graphs (in-memory only) — one series per timeframe, each
+  // sampled at its own cadence (see STOCK_HISTORY). Seeded with the current price so a graph
+  // is never empty.
+  private stockHist: Record<'5m' | '1h' | '1d', Map<string, number[]>> = {
+    '5m': new Map(STOCKS.map((s) => [s.id, [s.base]] as [string, number[]])),
+    '1h': new Map(STOCKS.map((s) => [s.id, [s.base]] as [string, number[]])),
+    '1d': new Map(STOCKS.map((s) => [s.id, [s.base]] as [string, number[]])),
+  };
+  private stockHistTick = 0; // re-roll counter, to decide which series to sample each tick
   private liveMatchId: number | null = null; // bracket match currently on the court
   private tourneyInterMs = 0; // ms left on the "next match" interstitial between games
 
@@ -952,36 +954,39 @@ export class Lobby {
       if (row && row.price > 0) this.stockPrices.set(s.id, { price: row.price, prev: row.prev });
       // Seed the (empty, in-memory) graph history with the resumed price.
       const seed = this.stockPrices.get(s.id)?.price ?? s.base;
-      this.stockHistRecent.set(s.id, [seed]);
-      this.stockHistDaily.set(s.id, [seed]);
+      this.stockHist['5m'].set(s.id, [seed]);
+      this.stockHist['1h'].set(s.id, [seed]);
+      this.stockHist['1d'].set(s.id, [seed]);
     }
-    // Resume the crash schedule; if none is saved (or it lapsed while we were down), book a
-    // fresh one rather than crashing the instant we boot.
+    // Resume the reset schedule, but only if it's a sane daily-cadence time still ahead of us
+    // and within ~24h. A lapsed time — or a stale far-future one left by the old 5–7 day crash
+    // schedule — gets re-booked fresh (so we never wait days, and never reset the instant we
+    // boot).
     const crashAt = await getStockCrashAt().catch(() => 0);
-    if (crashAt > Date.now()) this.nextStockCrashAt = crashAt;
+    const dayMs = 24 * 60 * 60 * 1000;
+    if (crashAt > Date.now() && crashAt <= Date.now() + dayMs + 60_000) this.nextStockCrashAt = crashAt;
     else this.scheduleNextCrash();
   }
 
-  /** Book the next market crash 5–7 days out and persist it. */
+  /** Book the next daily market reset (24h out) and persist it. */
   private scheduleNextCrash() {
-    const days = 5 + Math.random() * 2; // 5–7 days
-    this.nextStockCrashAt = Date.now() + days * 24 * 60 * 60 * 1000;
-    setStockCrashAt(this.nextStockCrashAt).catch((e) => console.error('crash schedule save failed:', e));
+    this.nextStockCrashAt = Date.now() + 24 * 60 * 60 * 1000; // every 24h
+    setStockCrashAt(this.nextStockCrashAt).catch((e) => console.error('reset schedule save failed:', e));
   }
 
-  /** Market crash: every coin snaps back to its base price (1). Holdings are left untouched —
-   *  they simply revalue at the new price (worth = floor(shares × 1)) — so a crash burns most
-   *  holders without bailing anyone out. Books the next crash, then alerts + repushes to all. */
+  /** Daily market reset: every coin snaps back to its base price (1). Holdings are left
+   *  untouched — they simply revalue at the new price (worth = floor(shares × 1)) — so a reset
+   *  wipes the day's gains. Books the next reset, then alerts + repushes to all. */
   private crashMarket() {
     for (const s of STOCKS) {
       const cur = this.stockPrices.get(s.id) ?? { price: s.base, prev: s.base };
-      this.stockPrices.set(s.id, { price: s.base, prev: cur.price }); // prev = pre-crash price, so the drop shows
+      this.stockPrices.set(s.id, { price: s.base, prev: cur.price }); // prev = pre-reset price, so the drop shows
     }
     this.nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS; // give the fresh prices a full window
-    this.recordStockHistory(); // the crash itself is a history point (the cliff edge)
+    this.recordStockHistory(); // the reset itself is a history point (the cliff edge)
     saveStockPrices(this.priceBoard()).catch((e) => console.error('stock price save failed:', e));
     this.scheduleNextCrash();
-    this.announce('📉 MARKET CRASH! Every coin just reset to 1.00 🪙 — holdings revalued, fortunes wiped.');
+    this.announce('🔄 DAILY MARKET RESET — every coin is back to 1.00 🪙. Holdings revalued; fresh day, fresh start!');
     for (const ws of this.conns.keys()) this.sendStocks(ws);
   }
 
@@ -993,31 +998,32 @@ export class Lobby {
     });
   }
 
-  /** The per-coin graph history, in STOCKS order. */
-  private historyBoard(): { id: string; recent: number[]; daily: number[] }[] {
+  /** The per-coin graph history (all three timeframes), in STOCKS order. */
+  private historyBoard(): { id: string; series: { '5m': number[]; '1h': number[]; '1d': number[] } }[] {
     return STOCKS.map((s) => ({
       id: s.id,
-      recent: this.stockHistRecent.get(s.id) ?? [],
-      daily: this.stockHistDaily.get(s.id) ?? [],
+      series: {
+        '5m': this.stockHist['5m'].get(s.id) ?? [],
+        '1h': this.stockHist['1h'].get(s.id) ?? [],
+        '1d': this.stockHist['1d'].get(s.id) ?? [],
+      },
     }));
   }
 
-  /** Record the current price into the graph history (call once per re-roll / crash). The
-   *  `recent` series samples every call; the `daily` series every dailyEvery calls. */
+  /** Record the current price into each graph series (call once per re-roll / reset). Each
+   *  timeframe samples at its own cadence: 5m every tick, 1h every 4, 1d every 60. */
   private recordStockHistory() {
     this.stockHistTick++;
-    const sampleDaily = this.stockHistTick % STOCK_HISTORY.dailyEvery === 0;
-    for (const s of STOCKS) {
-      const price = this.stockPrices.get(s.id)?.price ?? s.base;
-      const recent = this.stockHistRecent.get(s.id) ?? [];
-      recent.push(price);
-      while (recent.length > STOCK_HISTORY.recentCap) recent.shift();
-      this.stockHistRecent.set(s.id, recent);
-      if (sampleDaily) {
-        const daily = this.stockHistDaily.get(s.id) ?? [];
-        daily.push(price);
-        while (daily.length > STOCK_HISTORY.dailyCap) daily.shift();
-        this.stockHistDaily.set(s.id, daily);
+    for (const tf of ['5m', '1h', '1d'] as const) {
+      if (this.stockHistTick % STOCK_HISTORY[tf].everyTicks !== 0) continue;
+      const cap = STOCK_HISTORY[tf].cap;
+      const map = this.stockHist[tf];
+      for (const s of STOCKS) {
+        const price = this.stockPrices.get(s.id)?.price ?? s.base;
+        const arr = map.get(s.id) ?? [];
+        arr.push(price);
+        while (arr.length > cap) arr.shift();
+        map.set(s.id, arr);
       }
     }
   }
