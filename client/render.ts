@@ -1957,6 +1957,11 @@ const crackedImg = new Image();
 crackedImg.src = '/cracked-glass.png';
 const crackedReady = () => crackedImg.complete && crackedImg.naturalWidth > 0;
 
+// Avery's face, used by the AVERY jumpscare fatality. Loaded once; drawn only once ready.
+const averyImg = new Image();
+averyImg.src = '/avery.webp';
+const averyReady = () => averyImg.complete && averyImg.naturalWidth > 0;
+
 function drawFatality(
   ctx: CanvasRenderingContext2D,
   s: StateMsg,
@@ -1997,6 +2002,9 @@ function drawFatality(
       break;
     case 'MONITOR_BREAK':
       drawMonitorBreak(ctx, s, fx, t, banner);
+      break;
+    case 'AVERY':
+      drawAvery(ctx, s, fx, t, banner);
       break;
   }
 }
@@ -3440,6 +3448,62 @@ function drawJsavStretch(
     // Fallback if the image hasn't loaded: a stretching colored block.
     ctx.fillStyle = loser.color;
     ctx.fillRect(sx - w / 2, sy - h / 2, w, h);
+  }
+
+  banner();
+}
+
+// --- Fatality: "Avery" (jumpscare) ------------------------------------------
+// No slow build: the court snaps to black and Avery's face slams in full-frame,
+// jittering violently in sync with a jumpscare sting. A sudden in-your-face scare.
+function drawAvery(
+  ctx: CanvasRenderingContext2D,
+  _s: StateMsg,
+  _fx: { side: 'left' | 'right' },
+  t: number,
+  banner: () => void,
+) {
+  // Hard cut to black behind everything.
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, COURT.w, COURT.h);
+
+  // A brief beat of darkness, then the face is just THERE — no ease-in.
+  const LURK = 0.12; // seconds of black before the scare lands
+  if (t < LURK) {
+    banner();
+    return;
+  }
+
+  const e = t - LURK;
+  // Slam in slightly oversized, then settle — overshoot reads as a pounce.
+  const pop = 1.18 - Math.min(0.18, e * 0.9);
+  // Violent jitter that eases off as the scare holds.
+  const shakeAmt = Math.max(0, 14 - e * 10);
+  const sx = Math.sin(t * 83) * shakeAmt;
+  const sy = Math.cos(t * 71) * shakeAmt;
+
+  // Cover the whole court (slightly beyond, so the shake never bares an edge).
+  const w = COURT.w * pop * 1.12;
+  const h = COURT.h * pop * 1.12;
+  const cx = COURT.w / 2 + sx;
+  const cy = COURT.h / 2 + sy;
+
+  if (averyReady()) {
+    ctx.drawImage(averyImg, cx - w / 2, cy - h / 2, w, h);
+  } else {
+    // Fallback if the image hasn't loaded: a screaming red flash.
+    ctx.fillStyle = '#b00010';
+    ctx.fillRect(0, 0, COURT.w, COURT.h);
+  }
+
+  // A red strobe over the first instant for that flashbulb-of-terror punch.
+  const flash = Math.max(0, 0.5 - e * 2);
+  if (flash > 0) {
+    ctx.save();
+    ctx.globalAlpha = flash;
+    ctx.fillStyle = '#ff0000';
+    ctx.fillRect(0, 0, COURT.w, COURT.h);
+    ctx.restore();
   }
 
   banner();

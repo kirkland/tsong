@@ -262,6 +262,7 @@ const FATALITIES = [
   { move: 'PAC_CHOMP', label: 'Pac-Man', seq: ['arrowup', 'arrowdown', 'arrowup'], hint: '↑↓↑', desc: 'You become a yellow Pac-Man and waka-waka down a trail of ping-pong pellets to the frozen loser, devour them, then balloon up and burst.' },
   { move: 'JSAV', label: 'Jsav', seq: ['arrowup', 'arrowdown', 'arrowdown'], hint: '↑↓↓', desc: "The loser becomes Jsav, whose face stretches taller and inflates ever bigger and wider until it swallows the whole court." },
   { move: 'MONITOR_BREAK', label: 'Smash', seq: ['arrowdown', 'arrowup', 'arrowup'], hint: '↓↑↑', desc: 'The ball rockets into the screen, the court erupts in smoke, and the glass shatters as if your monitor just broke.' },
+  { move: 'AVERY', label: 'Avery', seq: ['arrowleft', 'arrowleft', 'arrowright'], hint: '←←→', desc: "The screen snaps to black and Avery's face slams in full-frame, jittering, as a jumpscare blares. Don't say we didn't warn you." },
 ] as const;
 const COMBO_KEYS = new Set(FATALITIES.flatMap((f) => f.seq as readonly string[]));
 const COMBO_WINDOW_MS = 1500; // presses older than this are forgotten
@@ -276,6 +277,8 @@ const pacmanSound = new Audio('/start-music.mp3'); // PAC_CHOMP only
 pacmanSound.preload = 'auto';
 const jsavSound = new Audio('/you-lose.mp3'); // JSAV only
 jsavSound.preload = 'auto';
+const averySound = new Audio('/jumpscare.mp3'); // AVERY only
+averySound.preload = 'auto';
 const discoSound = new Audio('/disco.mp3'); // plays while the disco powerup is active
 discoSound.preload = 'auto';
 discoSound.loop = true;
@@ -448,6 +451,7 @@ const net = connect(
         const track =
           msg.fatality?.move === 'JSAV' ? jsavSound
           : msg.fatality?.move === 'PAC_CHOMP' ? pacmanSound
+          : msg.fatality?.move === 'AVERY' ? averySound
           : null;
         if (track) {
           finishSound.pause(); // hand off from the "FINISH HIM!" sting to the sound
@@ -459,6 +463,8 @@ const net = connect(
         pacmanSound.currentTime = 0;
         jsavSound.pause();
         jsavSound.currentTime = 0;
+        averySound.pause();
+        averySound.currentTime = 0;
       }
       prevFatality = fatalityActive;
       prevStatus = msg.status;
@@ -2257,7 +2263,7 @@ function showFatalityMock(text: string) {
 // --- fatality combos reference modal ---
 // Built once from FATALITIES so adding a finisher there auto-lists it here. Keys render
 // as little ↑/↓ keycaps; the description explains what each finisher does.
-const ARROW: Record<string, string> = { arrowup: '↑', arrowdown: '↓' };
+const ARROW: Record<string, string> = { arrowup: '↑', arrowdown: '↓', arrowleft: '←', arrowright: '→' };
 function buildCombosList() {
   combosList.replaceChildren();
   for (const f of FATALITIES) {
