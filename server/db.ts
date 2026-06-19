@@ -106,6 +106,14 @@ export async function initDb(): Promise<void> {
     await pool.query(`DELETE FROM stock_holdings`);
     await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('stock_rebase_v1', now()::text)`);
   }
+  // One-time: the price model changed to a calm daily-reset curve. Old prices ballooned under
+  // the previous fast-growth model, so clear the board + positions once for a clean start at 1.
+  const stockRebase2 = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'stock_rebase_v2'`);
+  if (stockRebase2.rowCount === 0) {
+    await pool.query(`DELETE FROM stock_prices`);
+    await pool.query(`DELETE FROM stock_holdings`);
+    await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('stock_rebase_v2', now()::text)`);
+  }
   console.log('leaderboard DB ready');
 }
 
