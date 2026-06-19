@@ -526,6 +526,11 @@ const SKIN_RENDERERS: Record<string, CosmeticDraw> = {
   neon: fillNeon,
   stripes: fillStripes,
   glitch: fillGlitch,
+  toxic: fillToxic,
+  plasma: fillPlasma,
+  wood: fillWood,
+  hologram: fillHologram,
+  venom: fillVenom,
 };
 // Draw a live skin/hat preview onto a small canvas element (used in the shop UI).
 // The canvas is scaled so the paddle fills it, then the skin is applied at full quality.
@@ -576,6 +581,11 @@ const HAT_RENDERERS: Record<string, CosmeticDraw> = {
   flame: drawFlame,
   helmet: drawHelmet,
   antennae: drawAntennae,
+  mohawk: drawMohawk,
+  bow: drawBow,
+  pirate: drawPirate,
+  santa: drawSanta,
+  headphones: drawHeadphones,
 };
 
 // Cosmetic "top hat": a little hat perched at the top end of the paddle. Visual only.
@@ -741,6 +751,121 @@ function drawAntennae(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: 
     ctx.stroke();
     ctx.fillStyle = '#ff5c5c';
     ctx.beginPath(); ctx.arc(cx + dir * 8 + wob * dir, top - 15, 2.4, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawMohawk(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  ctx.save();
+  const colors = ['#ff3b30', '#ff9500', '#ffd60a', '#34c759', '#0a84ff', '#bf5af2'];
+  const spikes = 5;
+  const sw = PADDLE.w / spikes;
+  for (let i = 0; i < spikes; i++) {
+    const sx = cx - PADDLE.w / 2 + sw * i + sw / 2;
+    const sh = 8 + (i % 2) * 6 + (i === 2 ? 4 : 0);
+    ctx.fillStyle = colors[i % colors.length];
+    ctx.beginPath();
+    ctx.moveTo(sx - sw * 0.4, top);
+    ctx.lineTo(sx, top - sh);
+    ctx.lineTo(sx + sw * 0.4, top);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+function drawBow(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2 - 3;
+  ctx.save();
+  ctx.fillStyle = '#ff5c9e';
+  // Left loop
+  ctx.beginPath();
+  ctx.ellipse(cx - 6, top - 5, 6, 4, -0.4, 0, Math.PI * 2);
+  ctx.fill();
+  // Right loop
+  ctx.beginPath();
+  ctx.ellipse(cx + 6, top - 5, 6, 4, 0.4, 0, Math.PI * 2);
+  ctx.fill();
+  // Tails
+  ctx.beginPath();
+  ctx.moveTo(cx, top - 4);
+  ctx.quadraticCurveTo(cx - 8, top + 2, cx - 10, top + 5);
+  ctx.lineTo(cx - 7, top + 5);
+  ctx.quadraticCurveTo(cx - 5, top + 2, cx, top - 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx, top - 4);
+  ctx.quadraticCurveTo(cx + 8, top + 2, cx + 10, top + 5);
+  ctx.lineTo(cx + 7, top + 5);
+  ctx.quadraticCurveTo(cx + 5, top + 2, cx, top - 2);
+  ctx.fill();
+  // Centre knot
+  ctx.fillStyle = '#ff2d7c';
+  ctx.beginPath(); ctx.ellipse(cx, top - 4, 2.5, 2.5, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+function drawPirate(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  const brimW = PADDLE.w + 14;
+  ctx.save();
+  // Brim
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.ellipse(cx, top - 1, brimW / 2, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Main hat body (tricorn outline shape)
+  ctx.beginPath();
+  ctx.moveTo(cx - brimW / 2, top - 1);
+  ctx.lineTo(cx - 4, top - 16);
+  ctx.lineTo(cx, top - 18);
+  ctx.lineTo(cx + 4, top - 16);
+  ctx.lineTo(cx + brimW / 2, top - 1);
+  ctx.closePath();
+  ctx.fill();
+  // Skull & crossbones
+  ctx.fillStyle = '#e8e8e8';
+  ctx.beginPath(); ctx.arc(cx, top - 10, 3, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#e8e8e8'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(cx - 3, top - 7); ctx.lineTo(cx + 3, top - 13); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx + 3, top - 7); ctx.lineTo(cx - 3, top - 13); ctx.stroke();
+  ctx.restore();
+}
+function drawSanta(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  ctx.save();
+  // White brim band
+  ctx.fillStyle = '#e8e8e8';
+  ctx.fillRect(cx - PADDLE.w / 2 - 2, top - 5, PADDLE.w + 4, 4);
+  // Red hat body tapering to a point offset right
+  ctx.fillStyle = '#d42b2b';
+  ctx.beginPath();
+  ctx.moveTo(cx - PADDLE.w / 2 - 2, top - 4);
+  ctx.lineTo(cx + PADDLE.w / 2 + 2, top - 4);
+  ctx.lineTo(cx + 6, top - 20);
+  ctx.closePath();
+  ctx.fill();
+  // White pom-pom
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.arc(cx + 6, top - 20, 3, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+function drawHeadphones(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 120);
+  ctx.save();
+  // Arc headband
+  ctx.strokeStyle = '#2a2a35';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.arc(cx, top - 4, PADDLE.w * 0.7, Math.PI, 0);
+  ctx.stroke();
+  // Ear cups — animate their glow
+  const cupColor = `hsl(${250 + pulse * 40},80%,${45 + pulse * 20}%)`;
+  ctx.fillStyle = cupColor;
+  ctx.shadowColor = cupColor; ctx.shadowBlur = 4 + pulse * 6;
+  for (const dir of [-1, 1]) {
+    const ex = cx + dir * PADDLE.w * 0.7;
+    ctx.beginPath(); ctx.ellipse(ex, top - 4, 3.5, 4.5, 0, 0, Math.PI * 2); ctx.fill();
   }
   ctx.restore();
 }
@@ -989,6 +1114,171 @@ function fillGlitch(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: nu
     ctx.fillRect(r.x, yy, r.w, 1);
   }
   ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+function fillToxic(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 350;
+  // Dark sludge base
+  const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  g.addColorStop(0,   '#0a1a04');
+  g.addColorStop(0.5, '#152805');
+  g.addColorStop(1,   '#0a1a04');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Pulsing radioactive glow from center
+  const pulse = 0.35 + 0.35 * Math.sin(t * 1.8);
+  const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, r.h * 0.45);
+  core.addColorStop(0, `rgba(120,255,30,${0.25 + pulse})`);
+  core.addColorStop(0.5, `rgba(60,200,10,${0.10 + pulse * 0.5})`);
+  core.addColorStop(1, 'rgba(20,80,0,0)');
+  ctx.fillStyle = core; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Floating bubble circles
+  for (let i = 0; i < 6; i++) {
+    const phase = t * 0.6 + i * 1.1;
+    const bx = r.x + 2 + ((i * 317) % (r.w - 4));
+    const by = r.y + r.h - 4 - ((((phase * 18) + i * 11) % (r.h - 8)));
+    const br = 1.5 + (i % 3) * 0.8;
+    const alpha = 0.4 + 0.5 * Math.abs(Math.sin(phase));
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = '#7fff20'; ctx.lineWidth = 0.8;
+    ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  // Bright hazard-yellow edge stripe
+  const edge = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  edge.addColorStop(0, 'rgba(180,255,0,0.5)');
+  edge.addColorStop(0.5, 'rgba(180,255,0,0.05)');
+  edge.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = edge; ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.restore();
+}
+function fillPlasma(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 200;
+  // Dark base
+  ctx.fillStyle = '#07000f'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Electric arc paths that shift over time
+  const arcColors = ['#c06fff', '#60c0ff', '#e040ff'];
+  for (let i = 0; i < 4; i++) {
+    const yStart = r.y + (i / 3) * r.h;
+    const yEnd = r.y + ((i + 1) / 3) * r.h;
+    const midY = (yStart + yEnd) / 2 + Math.sin(t + i * 1.5) * (r.h / 8);
+    const jitter = Math.cos(t * 1.7 + i) * 3;
+    ctx.beginPath();
+    ctx.moveTo(r.x, yStart);
+    ctx.quadraticCurveTo(r.x + r.w / 2 + jitter, midY, r.x + r.w, yEnd);
+    ctx.strokeStyle = arcColors[i % arcColors.length];
+    ctx.shadowColor = arcColors[i % arcColors.length];
+    ctx.shadowBlur = 5 + Math.abs(Math.sin(t + i)) * 8;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.6 + 0.4 * Math.abs(Math.sin(t * 0.9 + i));
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+  // Central bright core
+  const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, r.h * 0.3);
+  core.addColorStop(0, 'rgba(200,100,255,0.35)');
+  core.addColorStop(1, 'rgba(80,0,180,0)');
+  ctx.fillStyle = core; ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.restore();
+}
+function fillWood(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  // Warm wood base
+  const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  g.addColorStop(0,    '#5c3317');
+  g.addColorStop(0.4,  '#8b4513');
+  g.addColorStop(0.6,  '#a0522d');
+  g.addColorStop(1,    '#5c3317');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Wood grain lines
+  const grains = [
+    [0.15, 0.08], [0.30, 0.12], [0.45, 0.06], [0.60, 0.14],
+    [0.75, 0.09], [0.88, 0.11], [0.22, 0.05], [0.53, 0.10],
+  ];
+  ctx.strokeStyle = 'rgba(40,15,5,0.45)'; ctx.lineWidth = 0.8;
+  for (const [fy, curve] of grains) {
+    const y = r.y + fy * r.h;
+    ctx.beginPath();
+    ctx.moveTo(r.x, y);
+    ctx.quadraticCurveTo(cx, y + curve * r.h * 2, r.x + r.w, y + curve * r.h);
+    ctx.stroke();
+  }
+  // Subtle highlight for wood sheen
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
+}
+function fillHologram(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 600;
+  // Shift hue over time for iridescent effect
+  const hue = (t * 60) % 360;
+  ctx.fillStyle = `hsl(${hue},70%,8%)`; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Three overlapping colour bands that scroll and shift
+  for (let i = 0; i < 3; i++) {
+    const bandHue = (hue + i * 120) % 360;
+    const yOff = ((t * 40 + i * r.h / 3) % r.h);
+    const band = ctx.createLinearGradient(0, r.y + yOff, 0, r.y + yOff + r.h * 0.4);
+    band.addColorStop(0, `hsla(${bandHue},100%,70%,0)`);
+    band.addColorStop(0.4, `hsla(${bandHue},100%,70%,0.28)`);
+    band.addColorStop(1, `hsla(${bandHue},100%,70%,0)`);
+    ctx.fillStyle = band; ctx.fillRect(r.x, r.y, r.w, r.h);
+  }
+  // Scanline grid for a holographic panel look
+  for (let yy = r.y; yy < r.y + r.h; yy += 4) {
+    ctx.globalAlpha = 0.12;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(r.x, yy, r.w, 1);
+  }
+  ctx.globalAlpha = 1;
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
+}
+function fillVenom(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 250;
+  // Black base with slight purple tint
+  const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  g.addColorStop(0,   '#0a000f');
+  g.addColorStop(0.4, '#140018');
+  g.addColorStop(0.6, '#100012');
+  g.addColorStop(1,   '#0a000f');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Green drip strands that fall down
+  for (let i = 0; i < 4; i++) {
+    const dx = r.x + 2 + (i / 3) * (r.w - 4);
+    const dripLen = r.h * (0.3 + 0.25 * Math.abs(Math.sin(t * 0.5 + i)));
+    const dripY = r.y + ((t * 25 + i * 20) % (r.h + 20));
+    const drip = ctx.createLinearGradient(0, dripY - 4, 0, dripY + dripLen);
+    drip.addColorStop(0, 'rgba(20,255,60,0)');
+    drip.addColorStop(0.2, 'rgba(20,255,60,0.9)');
+    drip.addColorStop(1, 'rgba(20,255,60,0)');
+    ctx.strokeStyle = drip; ctx.lineWidth = 1.2;
+    ctx.globalAlpha = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(dx, dripY);
+    ctx.lineTo(dx + Math.sin(t + i) * 1.5, dripY + dripLen);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  // Venomous green glow at edges
+  const glow = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  glow.addColorStop(0, 'rgba(30,255,70,0.35)');
+  glow.addColorStop(0.3, 'rgba(30,255,70,0)');
+  glow.addColorStop(0.7, 'rgba(30,255,70,0)');
+  glow.addColorStop(1, 'rgba(30,255,70,0.35)');
+  ctx.fillStyle = glow; ctx.fillRect(r.x, r.y, r.w, r.h);
   ctx.restore();
 }
 

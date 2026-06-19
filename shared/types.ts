@@ -146,6 +146,11 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'flame', name: 'Flame', slot: 'hat', price: 20 }, // animated
   { id: 'helmet', name: 'Helmet', slot: 'hat', price: 10 },
   { id: 'antennae', name: 'Bug Antennae', slot: 'hat', price: 20 }, // animated
+  { id: 'mohawk', name: 'Mohawk', slot: 'hat', price: 10 },
+  { id: 'bow', name: 'Bow', slot: 'hat', price: 10 },
+  { id: 'pirate', name: 'Pirate Hat', slot: 'hat', price: 10 },
+  { id: 'santa', name: 'Santa Hat', slot: 'hat', price: 10 },
+  { id: 'headphones', name: 'Headphones', slot: 'hat', price: 20 }, // animated
   // Skins
   { id: 'rainbow', name: 'Rainbow', slot: 'skin', price: 10 },
   { id: 'gold', name: 'Gold', slot: 'skin', price: 20 }, // animated
@@ -157,6 +162,11 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'neon', name: 'Neon', slot: 'skin', price: 20 }, // animated
   { id: 'stripes', name: 'Stripes', slot: 'skin', price: 10 },
   { id: 'glitch', name: 'Glitch', slot: 'skin', price: 20 }, // animated
+  { id: 'toxic', name: 'Toxic', slot: 'skin', price: 20 }, // animated
+  { id: 'plasma', name: 'Plasma', slot: 'skin', price: 20 }, // animated
+  { id: 'wood', name: 'Wood', slot: 'skin', price: 10 },
+  { id: 'hologram', name: 'Hologram', slot: 'skin', price: 20 }, // animated
+  { id: 'venom', name: 'Venom', slot: 'skin', price: 20 }, // animated
 ] as const;
 export const CHAT_MAX_LEN = 200; // max characters per chat message
 export const CHAT_HISTORY = 50; // recent messages kept/sent to new joiners
