@@ -1309,6 +1309,8 @@ doomBtn.addEventListener('click', async () => {
 });
 
 // --- Coins, cosmetics shop & betting ---
+// Money is fractional, tracked to the cent — always show coin balances/values to the hundredth.
+const fmtCoins = (n: number) => n.toFixed(2);
 let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number } =
   { coins: 0, owned: [], hat: null, skin: null, bets: [], nextSpinAt: 0 };
 let betAmount = 1;
@@ -1355,8 +1357,8 @@ document.addEventListener('click', (e) => {
 const shopPreviewCanvases: { canvas: HTMLCanvasElement; id: string; slot: 'hat' | 'skin' }[] = [];
 
 function renderShop() {
-  coinCount.textContent = String(wallet.coins);
-  shopCoins.textContent = String(wallet.coins);
+  coinCount.textContent = fmtCoins(wallet.coins);
+  shopCoins.textContent = fmtCoins(wallet.coins);
   updateSpinButton();
   shopItems.innerHTML = '';
   shopPreviewCanvases.length = 0;
@@ -1400,8 +1402,9 @@ function syncBetSection() {
   const canBet = !!state && state.status === 'playing' && !state.poly && myRole === 'observer' && !state.bot;
   betSection.hidden = !canBet;
   if (!canBet || !state) return;
-  // Clamp the stake to what you actually have.
-  betAmount = Math.max(1, Math.min(betAmount, Math.max(1, wallet.coins)));
+  // Clamp the stake to what you actually have. Wagers are whole coins (the server floors the
+  // stake), so the ceiling is your floored balance.
+  betAmount = Math.max(1, Math.min(betAmount, Math.max(1, Math.floor(wallet.coins))));
   betAmountEl.textContent = String(betAmount);
   // Side labels + live odds on the buttons.
   const odds = state.odds; // { left, right } | null
@@ -1432,7 +1435,7 @@ function syncBetSection() {
 const betLeftBtn = document.getElementById('betLeft') as HTMLButtonElement;
 const betRightBtn = document.getElementById('betRight') as HTMLButtonElement;
 document.getElementById('betMinus')!.addEventListener('click', () => { betAmount = Math.max(1, betAmount - 1); syncBetSection(); });
-document.getElementById('betPlus')!.addEventListener('click', () => { betAmount = Math.min(wallet.coins || 1, betAmount + 1); syncBetSection(); });
+document.getElementById('betPlus')!.addEventListener('click', () => { betAmount = Math.min(Math.floor(wallet.coins) || 1, betAmount + 1); syncBetSection(); });
 betLeftBtn.addEventListener('click', () => net.send({ type: 'bet', side: 'left', amount: betAmount }));
 betRightBtn.addEventListener('click', () => net.send({ type: 'bet', side: 'right', amount: betAmount }));
 
@@ -1573,7 +1576,7 @@ function showToast(text: string) {
 
 // --- Crypto market dropdown (top-left): invest coins into 5 joke cryptos ---
 // The server owns the global price board and each player's positions; we just render the
-// latest `stocks` message and fire invest/cash-out requests. `worth` is the floored cash-out
+// latest `stocks` message and fire invest/cash-out requests. `worth` is the to-the-cent cash-out
 // value the server sends, so the number we show is exactly what you'd receive.
 type Market = {
   prices: { id: string; price: number; prev: number }[];
@@ -1649,7 +1652,7 @@ document.addEventListener('click', (e) => {
 });
 
 function renderMarket() {
-  marketCoins.textContent = String(wallet.coins);
+  marketCoins.textContent = fmtCoins(wallet.coins);
   marketList.innerHTML = '';
   for (const stock of STOCKS) {
     const p = market.prices.find((x) => x.id === stock.id);
@@ -1662,9 +1665,9 @@ function renderMarket() {
     const first = series.length >= 2 ? series[0] : last;
     const pct = first > 0 ? ((last - first) / first) * 100 : 0;
     // A position's live worth = shares × current price (fractional, so it moves smoothly);
-    // cashing out pays it floored to whole coins.
+    // cashing out pays it rounded to the cent.
     const rawWorth = hold ? hold.shares * price : 0;
-    const cashOut = Math.floor(rawWorth);
+    const cashOut = Math.round(rawWorth * 100) / 100;
 
     const row = document.createElement('div');
     row.className = 'coin-row';
@@ -1693,7 +1696,7 @@ function renderMarket() {
       const plPct = hold.cost > 0 ? (rawWorth / hold.cost - 1) * 100 : 0;
       const plClass = plPct > 0.05 ? 'pl-up' : plPct < -0.05 ? 'pl-down' : '';
       const sign = plPct >= 0 ? '+' : '';
-      pos.innerHTML = `${hold.cost}🪙 in → <span class="${plClass}">${rawWorth.toFixed(2)}🪙 (${sign}${plPct.toFixed(0)}%)</span> · cash out ${cashOut}`;
+      pos.innerHTML = `${fmtCoins(hold.cost)}🪙 in → <span class="${plClass}">${fmtCoins(rawWorth)}🪙 (${sign}${plPct.toFixed(0)}%)</span> · cash out ${fmtCoins(cashOut)}`;
       main.appendChild(pos);
     }
     const graph = document.createElement('canvas');
@@ -1707,14 +1710,15 @@ function renderMarket() {
     actions.className = 'coin-actions';
     const buy = document.createElement('div');
     buy.className = 'coin-buy';
+    // Invest anything from a cent up to your whole (fractional) balance.
     let amt = investAmt.get(stock.id) ?? 1;
-    amt = Math.max(1, Math.min(amt, Math.max(1, wallet.coins)));
+    amt = Math.round(Math.max(0.01, Math.min(amt, Math.max(0.01, wallet.coins))) * 100) / 100;
     investAmt.set(stock.id, amt);
     const minus = document.createElement('button');
     minus.textContent = '−';
     const amtEl = document.createElement('span');
     amtEl.className = 'coin-amt';
-    amtEl.textContent = String(amt);
+    amtEl.textContent = fmtCoins(amt);
     const plus = document.createElement('button');
     plus.textContent = '+';
     const invest = document.createElement('button');
@@ -1724,9 +1728,9 @@ function renderMarket() {
     // Step the amount in place (don't re-render) — rebuilding the row would detach the very
     // button that was clicked and trip the click-outside handler, closing the whole panel.
     const setAmt = (v: number) => {
-      const clamped = Math.max(1, Math.min(v, Math.max(1, wallet.coins)));
+      const clamped = Math.round(Math.max(0.01, Math.min(v, Math.max(0.01, wallet.coins))) * 100) / 100;
       investAmt.set(stock.id, clamped);
-      amtEl.textContent = String(clamped);
+      amtEl.textContent = fmtCoins(clamped);
       invest.disabled = wallet.coins < clamped;
     };
     minus.onclick = () => setAmt((investAmt.get(stock.id) ?? 1) - 1);
@@ -1736,7 +1740,7 @@ function renderMarket() {
 
     const cash = document.createElement('button');
     cash.className = 'coin-cash';
-    cash.textContent = hold ? `Cash out ${cashOut}🪙` : 'Cash out';
+    cash.textContent = hold ? `Cash out ${fmtCoins(cashOut)}🪙` : 'Cash out';
     cash.disabled = !hold;
     cash.onclick = () => { net.send({ type: 'stockCashOut', coin: stock.id }); playChaChing(); };
     actions.appendChild(cash);
