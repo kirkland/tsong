@@ -1767,13 +1767,8 @@ const loanBody = document.getElementById('loanBody') as HTMLDivElement;
 let loan: { amount: number; owed: number; dueAt: number } | null = null;
 let loanStep: 'intro' | 'amount' = 'intro';
 
-// Davis Clarke mannerisms — one is picked per panel open for flavor.
+// Davis Clarke mannerism shown on the intro.
 const DAVIS_QUOTES = [
-  "It's a bad day to be an Excel spreadsheet.",
-  "Keep grinding — the grind doesn't stop.",
-  "Some people want it to happen. We make it happen.",
-  "No such thing as a day off. Only a day on.",
-  "Pain is just weakness leaving the wallet.",
   "You miss 100% of the loans you don't take.",
 ];
 let davisQuote = DAVIS_QUOTES[0];
@@ -1819,14 +1814,14 @@ function renderLoan() {
   // No loan: 'amount' step (pick how much) or 'intro' (Davis offers).
   if (loanStep === 'amount') {
     loanImg.src = DAVIS_AMOUNT;
-    loanBody.innerHTML = `<div class="loan-line">How much you need? I'll want <b>1.5×</b> back by end of day. Don't make it weird.</div>`;
+    loanBody.innerHTML = `<div class="loan-line">I respect a fellow heavy hitter. How much you need? I'll want <b>1.5×</b> back by end of day.</div>`;
     const row = document.createElement('div');
     row.className = 'loan-amt-row';
     const input = document.createElement('input');
     input.type = 'number';
     input.min = '1';
     input.step = '1';
-    input.value = '100';
+    input.value = '5';
     input.setAttribute('inputmode', 'numeric');
     row.appendChild(input);
     loanBody.appendChild(row);
@@ -1860,7 +1855,7 @@ function renderLoan() {
   loanImg.src = DAVIS_INTRO;
   loanBody.innerHTML =
     `<div class="loan-quote">"${davisQuote}"</div>` +
-    `<div class="loan-line">Davis here. Cash flow tight? I can spot you some coins — pay me back <b>1.5×</b> by the daily reset. Would you like a loan?</div>`;
+    `<div class="loan-line">I can spot you some coins — pay me back <b>1.5×</b> by the daily reset. Would you like a loan?</div>`;
   const actions = document.createElement('div');
   actions.className = 'loan-actions';
   const yes = document.createElement('button');
