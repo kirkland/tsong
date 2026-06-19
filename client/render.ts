@@ -127,8 +127,8 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
       const distLeft  = b.x - s.paddles.left.x;
       const distRight = s.paddles.right.x - b.x;
       const nearest = Math.min(distLeft, distRight);
-      if (nearest > 120) alpha = 0;
-      else if (nearest > 60) alpha = 1 - (nearest - 60) / 60;
+      if (nearest > 240) alpha = 0;
+      else if (nearest > 120) alpha = 1 - (nearest - 120) / 120;
     }
     ctx.globalAlpha = alpha;
     ctx.fillStyle = b.color;
