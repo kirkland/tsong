@@ -195,6 +195,7 @@ fetch('/auth/me')
   .then((r) => r.json() as Promise<AuthMe>)
   .then((data) => {
     if (data.pid) {
+      const oldPid = myPid; // UUID that was active before we knew the Google pid
       myPid = data.pid;
       if (!getCookie('tsong_nick') && !nick.value) nick.value = data.name ?? '';
       authChip.hidden = false;
@@ -204,11 +205,20 @@ fetch('/auth/me')
       out.href = '/auth/logout';
       out.textContent = 'Sign out';
       authChip.append(label, out);
+      // If the player has an existing UUID account, migrate it into the Google account.
+      // Send after join so the server's conn.pid is already set when the wallet refresh arrives.
+      if (oldPid && oldPid !== myPid && !oldPid.startsWith('g:')) {
+        const doMigrate = () => net.send({ type: 'migrate', oldPid });
+        // If already joined, fire immediately; otherwise wait until after the join message.
+        if (myName) doMigrate(); else pendingMigrate = doMigrate;
+      }
     } else if (data.oauthEnabled) {
       signInLink.hidden = false;
     }
   })
   .catch(() => { /* OAuth not configured or network error — guest mode continues as-is */ });
+
+let pendingMigrate: (() => void) | null = null; // fired once, right after the first join message
 
 let myRole: Role = 'observer';
 let myId = ''; // per-connection id from the server; identifies our own paddle in state
@@ -586,6 +596,7 @@ joinForm.addEventListener('submit', (e) => {
   setCookie('tsong_color', myColor);
   // repeat join = rename; pid keeps the leaderboard identity stable
   net.send({ type: 'join', nickname: myName, pid: myPid, color: myColor });
+  if (pendingMigrate) { pendingMigrate(); pendingMigrate = null; }
   overlay.style.display = 'none';
   enableChat();
 });

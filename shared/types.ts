@@ -255,7 +255,8 @@ export type ClientMsg =
   | { type: 'shopBuy'; item: string } // buy a cosmetic from the shop
   | { type: 'shopEquip'; slot: 'hat' | 'skin'; item: string | null } // equip (item) or unequip (null) a cosmetic
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
-  | { type: 'dailySpin' }; // claim the once-per-24h reward spin
+  | { type: 'dailySpin' } // claim the once-per-24h reward spin
+  | { type: 'migrate'; oldPid: string }; // one-time: merge a UUID guest account into the signed-in Google account
 
 // --- Server -> Client ---
 

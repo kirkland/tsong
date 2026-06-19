@@ -290,6 +290,34 @@ export async function addCoins(pid: string, name: string, delta: number): Promis
   return rows.length ? rowToWallet(rows[0]) : null;
 }
 
+/** Merge a guest UUID account into a Google account: add stats, transfer cosmetics,
+ *  then delete the old row. No-op if the pids are the same or oldPid doesn't exist. */
+export async function migratePlayer(oldPid: string, newPid: string): Promise<void> {
+  if (!pool || !oldPid || !newPid || oldPid === newPid) return;
+  const { rows } = await pool.query<{ wins: number; losses: number; elo: number; coins: number; owned: string; hat: string | null; skin: string | null }>(
+    `SELECT wins, losses, elo, coins, owned, hat, skin FROM players WHERE id = $1`,
+    [oldPid],
+  );
+  if (!rows.length) return; // nothing to migrate
+  const old = rows[0];
+  // Merge: add wins/losses/coins; take the higher ELO; union owned items; keep Google hat/skin unless unset.
+  await pool.query(
+    `UPDATE players SET
+       wins   = wins   + $2,
+       losses = losses + $3,
+       elo    = GREATEST(elo, $4),
+       coins  = coins  + $5,
+       owned  = CASE WHEN owned = '' THEN $6 ELSE
+                  CASE WHEN $6 = '' THEN owned ELSE owned || ',' || $6 END
+                END,
+       hat    = COALESCE(hat, $7),
+       skin   = COALESCE(skin, $8)
+     WHERE id = $1`,
+    [newPid, old.wins, old.losses, old.elo, old.coins, old.owned, old.hat, old.skin],
+  );
+  await pool.query(`DELETE FROM players WHERE id = $1`, [oldPid]);
+}
+
 /** Create or update a player row — used by the OAuth callback to ensure the row exists. */
 export async function upsertPlayer(pid: string, name: string, email?: string): Promise<void> {
   if (!pool || !pid) return;

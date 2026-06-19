@@ -10,7 +10,7 @@ import sirv from 'sirv';
 import { BOT_LEVELS, BotLevel, ClientMsg, TICK_MS, TickHealth } from '../shared/types';
 import { Game, GameSnapshot } from './game';
 import { Lobby, LobbySnapshot } from './lobby';
-import { initDb } from './db';
+import { initDb, migratePlayer } from './db';
 import { getChangelog } from './changelog';
 import { loadSnapshot, saveSnapshot } from './persist';
 import {
@@ -263,6 +263,16 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'dailySpin':
         lobby.dailySpin(ws);
         break;
+      case 'migrate': {
+        // Only honour the request if the socket is authenticated — prevents spoofing.
+        const authSession = wsSessions.get(ws);
+        if (authSession && typeof msg.oldPid === 'string' && msg.oldPid !== authSession.pid) {
+          migratePlayer(msg.oldPid, authSession.pid)
+            .then(() => lobby.sendWallet(ws))
+            .catch((e) => console.error('account migration failed:', e));
+        }
+        break;
+      }
     }
   });
 

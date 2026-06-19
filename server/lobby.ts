@@ -803,7 +803,7 @@ export class Lobby {
   }
 
   /** Push the freshest wallet (re-read from DB) to a client; also refreshes cached cosmetics. */
-  private sendWallet(ws: WebSocket) {
+  sendWallet(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.pid) return;
     getWallet(conn.pid)
