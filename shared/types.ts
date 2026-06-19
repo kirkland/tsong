@@ -407,6 +407,9 @@ export interface StateMsg {
   // Public wagers on the current duel, grouped by side (name + stake), so everyone can see
   // who bet on whom. Empty arrays when there are no bets.
   bets: { left: Array<{ name: string; amount: number }>; right: Array<{ name: string; amount: number }> };
+  // Live fair decimal odds for each side (Elo + current score), or null when betting isn't
+  // open. A spectator's payout on a winning call is stake × the odds shown when they bet.
+  odds: { left: number; right: number } | null;
   // Blaster projectiles in flight. vx/vy give the travel direction so the client can draw
   // an oriented laser bolt + trail. color is the laser color (bright green).
   projectiles: { x: number; y: number; vx: number; vy: number; color: string }[];
@@ -536,7 +539,9 @@ export interface WalletMsg {
   owned: string[]; // item ids owned
   hat: string | null; // equipped hat
   skin: string | null; // equipped skin
-  bet: { side: Side; amount: number } | null; // current wager on the live duel, if any
+  // Your open wagers on the live duel (multiple allowed in live betting); each locks the odds
+  // it was placed at. Empty when you have none.
+  bets: Array<{ side: Side; amount: number; odds: number }>;
   nextSpinAt: number; // epoch ms when the daily spin is next available (0 = available now)
 }
 

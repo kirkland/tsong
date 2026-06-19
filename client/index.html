@@ -731,15 +731,30 @@
       .shop-row button:hover:not(:disabled) { background: #2d4070; color: #fff; }
       .shop-row button:disabled { opacity: 0.45; cursor: default; }
       .shop-row button.equipped { background: #2d4070; border-color: #3a6df0; color: #fff; }
+      /* Spectator betting panel, under the court (visible to observers during a live duel). */
+      #betSection {
+        width: min(94vw, 1040px); margin: 0 auto 6px; padding: 8px 12px;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        display: flex; flex-direction: column; align-items: center; gap: 6px;
+      }
       #betSection[hidden] { display: none; }
-      .bet-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+      #betSection .bet-head {
+        font: 700 11px ui-monospace, monospace; letter-spacing: 1px; text-transform: uppercase; color: #6b7796;
+      }
+      .bet-row { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
       .bet-row button {
-        font: inherit; font-size: 12px; padding: 4px 9px; border-radius: 5px;
+        font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 5px;
         border: 1px solid #2a3550; background: #1a2035; color: #cdd7f5; cursor: pointer;
       }
-      .bet-row button:hover { background: #2d4070; }
+      .bet-row button:hover:not(:disabled) { background: #2d4070; }
+      .bet-row button:disabled { opacity: 0.45; cursor: default; }
+      .bet-side { font-weight: 700; min-width: 132px; }
+      #betLeft { color: #9ec1ff; }
+      #betRight { color: #ffadd2; }
+      .bet-side b { color: #ffd166; font-weight: 800; }
+      .bet-stake { display: flex; align-items: center; gap: 6px; }
       #betAmount { min-width: 20px; text-align: center; font-weight: 700; color: #ffd166; }
-      #betStatus { font-size: 11px; color: #6ee7a8; margin-top: 6px; min-height: 14px; }
+      #betStatus { font-size: 11px; color: #6ee7a8; min-height: 14px; text-align: center; }
       /* Public bet board under the court */
       #betBoard {
         display: flex; gap: 10px; width: min(94vw, 1040px); font: 700 12px ui-monospace, monospace;
@@ -753,6 +768,7 @@
       }
       #betBoard .bet-col.left h4 { color: #7da2ff; }
       #betBoard .bet-col.right h4 { color: #ff7eb3; }
+      #betBoard .bet-odds { color: #ffd166; }
       #betBoard .bet-line { display: flex; justify-content: space-between; gap: 8px; color: #cdd7f5; }
       #betBoard .bet-line .amt { color: #ffd166; }
       #betBoard .bet-empty { color: #6b7796; font-weight: 400; }
@@ -1977,17 +1993,6 @@
             <button id="tabSkins" class="shop-tab" type="button">Skins</button>
           </div>
           <div id="shopItems"></div>
-          <div id="betSection" hidden>
-            <h3>Bet on the match</h3>
-            <div class="bet-row">
-              <button id="betMinus" type="button">−</button>
-              <span id="betAmount">1</span>
-              <button id="betPlus" type="button">+</button>
-              <button id="betLeft" type="button">◀ Left</button>
-              <button id="betRight" type="button">Right ▶</button>
-            </div>
-            <div id="betStatus"></div>
-          </div>
         </div>
       </div>
       <div id="viewMode">
@@ -2451,6 +2456,21 @@
           <div class="fx fx-vortex"></div>
           <div class="fx fx-glitch"></div>
           <div class="fx fx-smoke"></div>
+        </div>
+        <!-- Spectator betting (live odds). Shown automatically to observers during a live duel. -->
+        <div id="betSection" hidden>
+          <div class="bet-head">🎲 Bet on the match · live odds</div>
+          <div class="bet-row">
+            <button id="betLeft" type="button" class="bet-side">◀ <span id="betLeftName">Left</span> <b id="betLeftOdds">—</b></button>
+            <div class="bet-stake">
+              <button id="betMinus" type="button">−</button>
+              <span id="betAmount">1</span>
+              <button id="betPlus" type="button">+</button>
+              <span class="bet-coin">🪙</span>
+            </div>
+            <button id="betRight" type="button" class="bet-side"><span id="betRightName">Right</span> <b id="betRightOdds">—</b> ▶</button>
+          </div>
+          <div id="betStatus"></div>
         </div>
         <div id="betBoard" hidden></div>
         <div id="status"></div>

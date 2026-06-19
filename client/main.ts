@@ -533,7 +533,7 @@ const net = connect(
     } else if (msg.type === 'doomLeaderboard') {
       doomScores = { solo: msg.solo, coop: msg.coop };
     } else if (msg.type === 'wallet') {
-      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, bet: msg.bet, nextSpinAt: msg.nextSpinAt };
+      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, bets: msg.bets, nextSpinAt: msg.nextSpinAt };
       renderShop();
     } else if (msg.type === 'spinResult') {
       celebrateSpin(msg.reward, msg.segment);
@@ -1287,8 +1287,8 @@ doomBtn.addEventListener('click', async () => {
 });
 
 // --- Coins, cosmetics shop & betting ---
-let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; bet: { side: Side; amount: number } | null; nextSpinAt: number } =
-  { coins: 0, owned: [], hat: null, skin: null, bet: null, nextSpinAt: 0 };
+let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number } =
+  { coins: 0, owned: [], hat: null, skin: null, bets: [], nextSpinAt: 0 };
 let betAmount = 1;
 let shopTab: 'hat' | 'skin' = 'hat';
 const shopBtn = document.getElementById('shopBtn') as HTMLButtonElement;
@@ -1311,6 +1311,10 @@ spinBtn.addEventListener('click', () => {
 const betSection = document.getElementById('betSection') as HTMLDivElement;
 const betAmountEl = document.getElementById('betAmount') as HTMLSpanElement;
 const betStatus = document.getElementById('betStatus') as HTMLDivElement;
+const betLeftName = document.getElementById('betLeftName') as HTMLSpanElement;
+const betRightName = document.getElementById('betRightName') as HTMLSpanElement;
+const betLeftOdds = document.getElementById('betLeftOdds') as HTMLElement;
+const betRightOdds = document.getElementById('betRightOdds') as HTMLElement;
 
 shopBtn.addEventListener('click', () => {
   const open = shopPanel.hidden;
@@ -1370,20 +1374,37 @@ function renderShop() {
 // Lightweight: only updates the betting section (no item-list rebuild). Safe to call every
 // tick — rebuilding the item DOM each frame was eating Buy clicks.
 function syncBetSection() {
-  const canBet = !!state && state.status === 'playing' && !state.poly && myRole === 'observer'
-    && !state.bot // no betting on bot matches
-    && state.score.left === 0 && state.score.right === 0; // only before the first point
+  // Live betting: open to spectators any time a (non-arena, non-bot) duel is in play.
+  const canBet = !!state && state.status === 'playing' && !state.poly && myRole === 'observer' && !state.bot;
   betSection.hidden = !canBet;
-  // Clamp the stake to what you actually have, and disable betting if you can't afford it
-  // or already have a wager down.
+  if (!canBet || !state) return;
+  // Clamp the stake to what you actually have.
   betAmount = Math.max(1, Math.min(betAmount, Math.max(1, wallet.coins)));
   betAmountEl.textContent = String(betAmount);
-  const affordable = wallet.coins >= betAmount && !wallet.bet;
+  // Side labels + live odds on the buttons.
+  const odds = state.odds; // { left, right } | null
+  betLeftName.textContent = state.paddles.left.name ?? 'Left';
+  betRightName.textContent = state.paddles.right.name ?? 'Right';
+  betLeftOdds.textContent = odds ? `${odds.left.toFixed(2)}×` : '—';
+  betRightOdds.textContent = odds ? `${odds.right.toFixed(2)}×` : '—';
+  // Multiple bets are allowed in live betting — only gate on affordability.
+  const affordable = wallet.coins >= betAmount;
   betLeftBtn.disabled = !affordable;
   betRightBtn.disabled = !affordable;
-  betStatus.textContent = wallet.bet
-    ? `You bet ${wallet.bet.amount} on ${wallet.bet.side}.`
-    : wallet.coins < betAmount ? 'Not enough coins.' : '';
+  // Status line: show your open wagers (with their locked payouts) or a payout preview.
+  const payout = (amt: number, o: number) => Math.max(amt, Math.round(amt * o));
+  if (wallet.bets.length) {
+    const mine = wallet.bets
+      .map((b) => `${b.amount}🪙 on ${b.side} @ ${b.odds.toFixed(2)}× → ${payout(b.amount, b.odds)}🪙`)
+      .join('  ·  ');
+    betStatus.textContent = `Your bets: ${mine}`;
+  } else if (wallet.coins < betAmount) {
+    betStatus.textContent = 'Not enough coins.';
+  } else if (odds) {
+    betStatus.textContent = `${betAmount}🪙 wins ${payout(betAmount, odds.left)}🪙 (left) / ${payout(betAmount, odds.right)}🪙 (right)`;
+  } else {
+    betStatus.textContent = '';
+  }
 }
 
 const betLeftBtn = document.getElementById('betLeft') as HTMLButtonElement;
@@ -1589,7 +1610,8 @@ function renderBetBoard(s: StateMsg) {
       ? list.map((x) => `<div class="bet-line"><span>${escapeHtml(x.name)}</span><span class="amt">${x.amount}🪙</span></div>`).join('')
       : '<div class="bet-empty">no bets</div>';
     const label = side === 'left' ? (s.paddles.left.name ?? 'Left') : (s.paddles.right.name ?? 'Right');
-    return `<div class="bet-col ${side}"><h4>${escapeHtml(label)}</h4>${lines}` +
+    const odds = s.odds ? ` <span class="bet-odds">${s.odds[side].toFixed(2)}×</span>` : '';
+    return `<div class="bet-col ${side}"><h4>${escapeHtml(label)}${odds}</h4>${lines}` +
       (total ? `<div class="bet-total">total ${total}🪙</div>` : '') + `</div>`;
   };
   betBoard.innerHTML = col('left') + col('right');
