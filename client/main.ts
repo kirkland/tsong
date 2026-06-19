@@ -2,7 +2,7 @@
 // and the Join button. Input is only sent when this client holds a paddle.
 
 import { connect } from './net';
-import { draw, drawLegendIcon, setBlasterAim } from './render';
+import { draw, drawLegendIcon, setBlasterAim, drawCosmeticPreview } from './render';
 import {
   COURT,
   PADDLE,
@@ -1274,17 +1274,28 @@ document.addEventListener('click', (e) => {
 });
 
 // Build the shop rows (buy / equip / unequip) + the betting section from the current wallet.
+// Keep track of preview canvases so the animation loop can repaint them.
+const shopPreviewCanvases: { canvas: HTMLCanvasElement; id: string; slot: 'hat' | 'skin' }[] = [];
+
 function renderShop() {
   coinCount.textContent = String(wallet.coins);
   shopCoins.textContent = String(wallet.coins);
   updateSpinButton();
   shopItems.innerHTML = '';
+  shopPreviewCanvases.length = 0;
   for (const item of COSMETICS) {
     if (item.slot !== shopTab) continue; // show only the active tab's items
     const owned = wallet.owned.includes(item.id);
     const equipped = (item.slot === 'hat' ? wallet.hat : wallet.skin) === item.id;
     const row = document.createElement('div');
     row.className = 'shop-row';
+    // Tiny live-rendered preview canvas
+    const preview = document.createElement('canvas') as HTMLCanvasElement;
+    preview.width = 28; preview.height = 52;
+    preview.className = 'shop-preview';
+    drawCosmeticPreview(preview, item.id, item.slot);
+    shopPreviewCanvases.push({ canvas: preview, id: item.id, slot: item.slot });
+    row.appendChild(preview);
     const name = document.createElement('span');
     name.className = 'shop-name';
     name.textContent = owned ? item.name : `${item.name} · ${item.price}🪙`;
@@ -2594,7 +2605,11 @@ function updateUI() {
   renderPuHud(state);
   renderTournament(state.tournament);
   renderBetBoard(state);
-  if (!shopPanel.hidden) syncBetSection(); // light per-tick update (don't rebuild the item list — it eats clicks)
+  if (!shopPanel.hidden) {
+    syncBetSection(); // light per-tick update (don't rebuild the item list — it eats clicks)
+    // Repaint animated skin previews every frame while the shop is open
+    for (const { canvas, id, slot } of shopPreviewCanvases) drawCosmeticPreview(canvas, id, slot);
+  }
   if (!powerupInfoPanel.hidden) syncPowerupSpawnability();
 
   // Sync win score buttons with the current room setting.

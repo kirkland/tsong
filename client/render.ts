@@ -475,14 +475,41 @@ function drawPaddle(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: nu
   ctx.fillRect(cx - PADDLE.w / 2, cy - h / 2, PADDLE.w, h);
 }
 
-// Cosmetic "rainbow" skin: fill the paddle with a vertical rainbow gradient. Visual only.
+// Clip context to the paddle's rounded-pill shape so all skin fills stay within clean edges.
+function clipPaddle(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const x = cx - PADDLE.w / 2, y = cy - h / 2, r = PADDLE.w / 2;
+  ctx.beginPath();
+  ctx.roundRect(x, y, PADDLE.w, h, r);
+  ctx.clip();
+}
+
+// Subtle inner-edge highlight painted over every skin to add a sense of depth.
+function skinHighlight(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const x = cx - PADDLE.w / 2, y = cy - h / 2;
+  const hi = ctx.createLinearGradient(x, 0, x + PADDLE.w, 0);
+  hi.addColorStop(0, 'rgba(255,255,255,0.30)');
+  hi.addColorStop(0.35, 'rgba(255,255,255,0.08)');
+  hi.addColorStop(1, 'rgba(0,0,0,0.20)');
+  ctx.fillStyle = hi;
+  ctx.fillRect(x, y, PADDLE.w, h);
+}
+
+// Cosmetic "rainbow" skin — animated: colours scroll down the paddle over time.
 function fillRainbow(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
   const top = cy - h / 2;
-  const g = ctx.createLinearGradient(0, top, 0, top + h);
-  const stops = ['#ff3b30', '#ff9500', '#ffd60a', '#34c759', '#0a84ff', '#5e5ce6', '#bf5af2'];
-  stops.forEach((c, i) => g.addColorStop(i / (stops.length - 1), c));
-  ctx.fillStyle = g;
-  ctx.fillRect(cx - PADDLE.w / 2, top, PADDLE.w, h);
+  const offset = (Date.now() / 10) % h;
+  // draw twice so the scrolling loop wraps seamlessly
+  for (const dy of [0, h]) {
+    const g = ctx.createLinearGradient(0, top - offset + dy, 0, top - offset + dy + h);
+    ['#ff3b30', '#ff9500', '#ffd60a', '#34c759', '#0a84ff', '#5e5ce6', '#bf5af2', '#ff3b30']
+      .forEach((c, i, a) => g.addColorStop(i / (a.length - 1), c));
+    ctx.fillStyle = g;
+    ctx.fillRect(cx - PADDLE.w / 2, top, PADDLE.w, h);
+  }
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
 }
 
 // Cosmetic registries — add new skins/hats here (id must match shared/types COSMETICS).
@@ -500,6 +527,43 @@ const SKIN_RENDERERS: Record<string, CosmeticDraw> = {
   stripes: fillStripes,
   glitch: fillGlitch,
 };
+// Draw a live skin/hat preview onto a small canvas element (used in the shop UI).
+// The canvas is scaled so the paddle fills it, then the skin is applied at full quality.
+export function drawCosmeticPreview(canvas: HTMLCanvasElement, id: string, slot: 'hat' | 'skin') {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  // Court-coordinate paddle
+  const pH = PADDLE.h * 0.7; // slightly shorter so caps show
+  const scale = H / (pH + PADDLE.w * 2); // fit vertically with some headroom for hats
+  ctx.save();
+  ctx.translate(W / 2, H / 2);
+  ctx.scale(scale, scale);
+  const cx = 0, cy = 0, h = pH;
+  if (slot === 'skin') {
+    const fn = SKIN_RENDERERS[id];
+    if (fn) {
+      fn(ctx, cx, cy, h);
+    } else {
+      ctx.fillStyle = '#3a6df0';
+      ctx.save(); clipPaddle(ctx, cx, cy, h);
+      ctx.fillRect(cx - PADDLE.w / 2, cy - h / 2, PADDLE.w, h);
+      ctx.restore();
+    }
+  } else {
+    // Draw a plain blue paddle then the hat on top
+    ctx.fillStyle = '#3a6df0';
+    ctx.save(); clipPaddle(ctx, cx, cy, h);
+    ctx.fillRect(cx - PADDLE.w / 2, cy - h / 2, PADDLE.w, h);
+    ctx.restore();
+    skinHighlight(ctx, cx, cy, h);
+    const fn = HAT_RENDERERS[id];
+    if (fn) fn(ctx, cx, cy, h);
+  }
+  ctx.restore();
+}
+
 const HAT_RENDERERS: Record<string, CosmeticDraw> = {
   tophat: drawTopHat,
   crown: drawCrown,
@@ -686,98 +750,246 @@ function paddleRect(cx: number, cy: number, h: number) {
   return { x: cx - PADDLE.w / 2, y: cy - h / 2, w: PADDLE.w, h };
 }
 function fillGold(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
   const r = paddleRect(cx, cy, h);
+  // Base: warm gold gradient across the width
   const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
-  g.addColorStop(0, '#9a7d1a'); g.addColorStop(0.5, '#ffe066'); g.addColorStop(1, '#9a7d1a');
+  g.addColorStop(0,   '#7a5c10');
+  g.addColorStop(0.3, '#e8c840');
+  g.addColorStop(0.5, '#fff2a0');
+  g.addColorStop(0.7, '#e8c840');
+  g.addColorStop(1,   '#7a5c10');
   ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
-  // moving glint
-  const gy = r.y + ((Date.now() / 12) % (r.h + 20)) - 10;
-  ctx.save(); ctx.globalAlpha = 0.7; ctx.fillStyle = '#fffbe6';
-  ctx.fillRect(r.x, gy, r.w, 4); ctx.restore();
+  // Animated diagonal glint that sweeps top-to-bottom
+  const t = (Date.now() / 700) % 1;
+  const gy = r.y - 20 + (r.h + 40) * t;
+  const glint = ctx.createLinearGradient(0, gy - 8, 0, gy + 8);
+  glint.addColorStop(0, 'rgba(255,255,230,0)');
+  glint.addColorStop(0.5, 'rgba(255,255,230,0.85)');
+  glint.addColorStop(1, 'rgba(255,255,230,0)');
+  ctx.fillStyle = glint; ctx.fillRect(r.x, r.y, r.w, r.h);
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
 }
 function fillChrome(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
   const r = paddleRect(cx, cy, h);
+  // Multi-band metallic reflection
   const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
-  g.addColorStop(0, '#6b7280'); g.addColorStop(0.5, '#e5e7eb'); g.addColorStop(1, '#6b7280');
+  g.addColorStop(0,    '#3d4147');
+  g.addColorStop(0.25, '#b0b8c8');
+  g.addColorStop(0.45, '#f0f4f8');
+  g.addColorStop(0.55, '#ffffff');
+  g.addColorStop(0.75, '#b0b8c8');
+  g.addColorStop(1,    '#3d4147');
   ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
-  const gy = r.y + ((Date.now() / 8) % (r.h + 30)) - 15;
-  ctx.save(); ctx.globalAlpha = 0.6; ctx.fillStyle = '#fff';
-  ctx.fillRect(r.x, gy, r.w, 6); ctx.restore();
+  // Fast bright scan sweep
+  const t = (Date.now() / 500) % 1;
+  const sy = r.y - 10 + (r.h + 20) * t;
+  const sweep = ctx.createLinearGradient(0, sy - 10, 0, sy + 10);
+  sweep.addColorStop(0, 'rgba(255,255,255,0)');
+  sweep.addColorStop(0.5, 'rgba(255,255,255,0.70)');
+  sweep.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sweep; ctx.fillRect(r.x, r.y, r.w, r.h);
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
 }
 function fillGalaxy(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
   const r = paddleRect(cx, cy, h);
+  // Deep space gradient
   const g = ctx.createLinearGradient(0, r.y, 0, r.y + r.h);
-  g.addColorStop(0, '#1b1448'); g.addColorStop(0.5, '#3a1a6b'); g.addColorStop(1, '#0b1030');
+  g.addColorStop(0,    '#0d0b2a');
+  g.addColorStop(0.35, '#1e0e4a');
+  g.addColorStop(0.65, '#2a0d5e');
+  g.addColorStop(1,    '#050820');
   ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
-  ctx.fillStyle = '#fff';
-  for (let i = 0; i < 7; i++) {
-    const sx = r.x + ((i * 977) % r.w);
-    const sy = r.y + ((i * 613) % r.h);
-    const tw = 0.4 + 0.6 * Math.abs(Math.sin(Date.now() / 400 + i));
-    ctx.globalAlpha = tw; ctx.fillRect(sx, sy, 1.5, 1.5);
+  // Nebula tint
+  const neb = ctx.createRadialGradient(cx, cy, 1, cx, cy, r.h * 0.4);
+  neb.addColorStop(0, 'rgba(120,60,200,0.35)');
+  neb.addColorStop(1, 'rgba(60,20,120,0)');
+  ctx.fillStyle = neb; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Twinkling stars
+  const now = Date.now();
+  for (let i = 0; i < 18; i++) {
+    const sx = r.x + ((i * 1973 + 7) % (r.w * 10)) / 10;
+    const sy = r.y + ((i * 1031 + 3) % (r.h * 10)) / 10;
+    const twinkle = 0.3 + 0.7 * Math.abs(Math.sin(now / 300 + i * 1.7));
+    ctx.globalAlpha = twinkle;
+    ctx.fillStyle = i % 3 === 0 ? '#c0aaff' : i % 3 === 1 ? '#aaddff' : '#ffffff';
+    const sz = i % 5 === 0 ? 2 : 1;
+    ctx.fillRect(sx, sy, sz, sz);
   }
   ctx.globalAlpha = 1;
+  ctx.restore();
 }
 function fillLava(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
   const r = paddleRect(cx, cy, h);
-  const t = Date.now() / 300;
-  ctx.fillStyle = '#3a0d05'; ctx.fillRect(r.x, r.y, r.w, r.h);
-  for (let i = 0; i < 5; i++) {
-    const yy = r.y + (i + 0.5) * (r.h / 5);
-    const glow = 0.5 + 0.5 * Math.sin(t + i);
-    ctx.fillStyle = `rgb(255,${(80 + glow * 100) | 0},20)`;
-    ctx.fillRect(r.x, yy - 2, r.w, 3);
+  const t = Date.now() / 400;
+  // Dark volcanic base
+  ctx.fillStyle = '#200500'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Flowing lava bands with sinusoidal intensity
+  for (let i = 0; i < 8; i++) {
+    const yFrac = (i / 7);
+    const yy = r.y + yFrac * r.h;
+    const phase = t + i * 0.9;
+    const intensity = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(phase));
+    const red = (180 + intensity * 75) | 0;
+    const grn = (20 + intensity * 80) | 0;
+    const band = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+    band.addColorStop(0,   `rgba(${red},${grn},0,0)`);
+    band.addColorStop(0.3, `rgba(${red},${grn},0,${intensity * 0.9})`);
+    band.addColorStop(0.7, `rgba(${red},${grn},0,${intensity * 0.9})`);
+    band.addColorStop(1,   `rgba(${red},${grn},0,0)`);
+    ctx.fillStyle = band;
+    ctx.fillRect(r.x, yy - 3, r.w, 5 + intensity * 4);
   }
+  // Bright core hotspot
+  const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, h * 0.25);
+  core.addColorStop(0, 'rgba(255,200,80,0.4)');
+  core.addColorStop(1, 'rgba(255,60,0,0)');
+  ctx.fillStyle = core; ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.restore();
 }
 function fillIce(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
   const r = paddleRect(cx, cy, h);
+  // Crystalline blue-white gradient
   const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
-  g.addColorStop(0, '#7fb8d8'); g.addColorStop(0.5, '#dff3ff'); g.addColorStop(1, '#7fb8d8');
+  g.addColorStop(0,    '#5ba8cc');
+  g.addColorStop(0.35, '#b8e4f8');
+  g.addColorStop(0.55, '#eef9ff');
+  g.addColorStop(0.75, '#b8e4f8');
+  g.addColorStop(1,    '#5ba8cc');
   ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
-  ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(r.x + r.w * 0.5, r.y); ctx.lineTo(r.x + r.w * 0.3, r.y + r.h * 0.5); ctx.lineTo(r.x + r.w * 0.6, r.y + r.h);
-  ctx.stroke();
+  // Crystal facet lines radiating from center
+  ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = 0.8;
+  const mx = cx, my = cy;
+  const angles = [Math.PI / 5, Math.PI * 2 / 5, Math.PI * 3 / 5, Math.PI * 4 / 5];
+  for (const a of angles) {
+    const len = h * 0.55;
+    ctx.beginPath();
+    ctx.moveTo(mx + Math.cos(a) * 2, my + Math.sin(a) * 2);
+    ctx.lineTo(mx + Math.cos(a) * len, my + Math.sin(a) * len);
+    ctx.moveTo(mx - Math.cos(a) * 2, my - Math.sin(a) * 2);
+    ctx.lineTo(mx - Math.cos(a) * len, my - Math.sin(a) * len);
+    ctx.stroke();
+  }
+  // Shimmer at top
+  const shimmer = 0.5 + 0.5 * Math.sin(Date.now() / 500);
+  const sh = ctx.createLinearGradient(0, r.y, 0, r.y + r.h * 0.3);
+  sh.addColorStop(0, `rgba(255,255,255,${shimmer * 0.45})`);
+  sh.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sh; ctx.fillRect(r.x, r.y, r.w, r.h);
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
 }
 function fillCamo(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
   const r = paddleRect(cx, cy, h);
-  ctx.fillStyle = '#4b5320'; ctx.fillRect(r.x, r.y, r.w, r.h);
-  const blobs = ['#6b7d3a', '#2f3417', '#8a9a5b'];
-  for (let i = 0; i < 6; i++) {
-    ctx.fillStyle = blobs[i % blobs.length];
-    const bx = r.x + ((i * 53) % r.w);
-    const by = r.y + ((i * 97) % r.h);
-    ctx.beginPath(); ctx.ellipse(bx, by, 4, 5, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#4a5425'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Organic camo blobs using randomised-but-stable positions
+  const palette = ['#2e3514', '#6b7a30', '#8a9a52', '#3a4218'];
+  const seeds = [[3, 0.15, 0.12], [5, 0.55, 0.25], [7, 0.3, 0.55],
+                 [11, 0.7, 0.42], [13, 0.1, 0.72], [2, 0.85, 0.15],
+                 [17, 0.45, 0.82], [19, 0.65, 0.68], [23, 0.2, 0.38]];
+  for (let i = 0; i < seeds.length; i++) {
+    const [pi, fx, fy] = seeds[i];
+    ctx.fillStyle = palette[pi % palette.length];
+    const bx = r.x + fx * r.w;
+    const by = r.y + fy * r.h;
+    ctx.beginPath();
+    ctx.ellipse(bx, by, 3 + (pi % 3), 4 + (pi % 4), (pi * 0.6), 0, Math.PI * 2);
+    ctx.fill();
   }
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
 }
 function fillNeon(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
-  const r = paddleRect(cx, cy, h);
-  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 200);
-  ctx.fillStyle = '#0a0a12'; ctx.fillRect(r.x, r.y, r.w, r.h);
   ctx.save();
-  ctx.strokeStyle = '#39ff14'; ctx.shadowColor = '#39ff14'; ctx.shadowBlur = 6 + pulse * 8;
-  ctx.lineWidth = 2; ctx.globalAlpha = 0.6 + pulse * 0.4;
-  ctx.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
+  clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 180);
+  // Dark interior that glows faintly
+  ctx.fillStyle = '#030810'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  const inner = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  inner.addColorStop(0,   'rgba(0,255,80,0)');
+  inner.addColorStop(0.4, `rgba(0,255,80,${0.08 + pulse * 0.10})`);
+  inner.addColorStop(0.6, `rgba(0,255,80,${0.08 + pulse * 0.10})`);
+  inner.addColorStop(1,   'rgba(0,255,80,0)');
+  ctx.fillStyle = inner; ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.restore();
+  // Outer glow — drawn WITHOUT clip so shadowBlur bleeds outside the paddle edges
+  ctx.save();
+  const glowAlpha = 0.55 + pulse * 0.45;
+  ctx.strokeStyle = `rgba(0,255,80,${glowAlpha})`;
+  ctx.shadowColor = '#00ff50';
+  ctx.shadowBlur = 10 + pulse * 14;
+  ctx.lineWidth = 1.5;
+  const rad = PADDLE.w / 2;
+  ctx.beginPath();
+  ctx.roundRect(r.x, r.y, r.w, r.h, rad);
+  ctx.stroke();
   ctx.restore();
 }
 function fillStripes(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
   const r = paddleRect(cx, cy, h);
-  ctx.fillStyle = '#f4c20d'; ctx.fillRect(r.x, r.y, r.w, r.h);
-  ctx.fillStyle = '#1a1a1a';
-  for (let yy = r.y; yy < r.y + r.h; yy += 10) ctx.fillRect(r.x, yy, r.w, 5);
+  ctx.fillStyle = '#f5c518'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Animated diagonal stripes
+  const offset = (Date.now() / 30) % 16;
+  ctx.fillStyle = '#111';
+  for (let d = -r.h; d < r.h + r.w; d += 16) {
+    ctx.beginPath();
+    ctx.moveTo(r.x, r.y + d + offset);
+    ctx.lineTo(r.x + r.w, r.y + d + offset - r.w);
+    ctx.lineTo(r.x + r.w, r.y + d + offset - r.w + 8);
+    ctx.lineTo(r.x, r.y + d + offset + 8);
+    ctx.closePath();
+    ctx.fill();
+  }
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
 }
 function fillGlitch(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
   const r = paddleRect(cx, cy, h);
-  ctx.fillStyle = '#101018'; ctx.fillRect(r.x, r.y, r.w, r.h);
-  const t = Math.floor(Date.now() / 80);
-  for (let i = 0; i < 5; i++) {
-    const yy = r.y + (((i * 71 + t * 13) % r.h));
-    const sh = ((t + i) % 3) - 1; // -1,0,1 horizontal shift
-    ctx.fillStyle = ['#ff003c', '#00fff0', '#b16bff'][(t + i) % 3];
-    ctx.globalAlpha = 0.8;
-    ctx.fillRect(r.x + sh * 2, yy, r.w, 2);
+  ctx.fillStyle = '#0a0a14'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  const t = Math.floor(Date.now() / 60);
+  // RGB channel slices — each colour is shifted slightly horizontally
+  const channels: [string, number][] = [['#ff003c', -2], ['#00e5ff', 1], ['#b14fff', 0]];
+  for (let i = 0; i < 9; i++) {
+    const yy = r.y + (((i * 97 + t * 17) % (r.h * 4)) / 4);
+    const bh = 2 + (i % 3);
+    const [col, shift] = channels[(t + i) % 3];
+    ctx.globalAlpha = 0.55 + 0.45 * ((t + i) % 2);
+    ctx.fillStyle = col;
+    ctx.fillRect(r.x + shift, yy, r.w, bh);
+  }
+  // Occasional bright full-height flash on a single channel
+  if (t % 7 === 0) {
+    ctx.globalAlpha = 0.15;
+    ctx.fillStyle = '#00e5ff';
+    ctx.fillRect(r.x, r.y, r.w, r.h);
   }
   ctx.globalAlpha = 1;
+  // Scanline overlay
+  for (let yy = r.y; yy < r.y + r.h; yy += 3) {
+    ctx.globalAlpha = 0.08;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(r.x, yy, r.w, 1);
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
 }
 
 // "minion" power-up: draw the minion image centered on the paddle, sized to the paddle's
