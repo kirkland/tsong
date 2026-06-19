@@ -437,6 +437,23 @@ export async function saveStockPrices(prices: { id: string; price: number; prev:
   }
 }
 
+/** Read the scheduled epoch-ms of the next market crash (0 if never scheduled / no DB). */
+export async function getStockCrashAt(): Promise<number> {
+  if (!pool) return 0;
+  const { rows } = await pool.query(`SELECT v FROM doom_meta WHERE k = 'stock_next_crash'`);
+  return rows.length ? Number(rows[0].v) || 0 : 0;
+}
+
+/** Persist when the next market crash is due, so the schedule survives restarts. */
+export async function setStockCrashAt(ts: number): Promise<void> {
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO doom_meta (k, v) VALUES ('stock_next_crash', $1)
+       ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+    [String(ts)],
+  );
+}
+
 export async function getLeaderboard(): Promise<LeaderboardRow[]> {
   if (!pool) return [];
   const { rows } = await pool.query(

@@ -34,7 +34,8 @@ import {
 } from '../shared/types';
 import { getLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, DAILY_SPIN_MS,
-  getHoldings, investStock, cashOutStock, getStockPrices, saveStockPrices } from './db';
+  getHoldings, investStock, cashOutStock, getStockPrices, saveStockPrices,
+  getStockCrashAt, setStockCrashAt } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
 
@@ -202,6 +203,10 @@ export class Lobby {
     STOCKS.map((s) => [s.id, { price: s.base, prev: s.base }] as [string, { price: number; prev: number }]),
   );
   private nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS;
+  // Epoch ms of the next market crash (every 5–7 days): all prices snap back to base and
+  // holdings revalue at the new price. Hydrated from / persisted to the DB so it survives
+  // restarts. 0 until scheduled (loadStockPrices schedules one if none is saved).
+  private nextStockCrashAt = 0;
   private liveMatchId: number | null = null; // bracket match currently on the court
   private tourneyInterMs = 0; // ms left on the "next match" interstitial between games
 
@@ -931,13 +936,41 @@ export class Lobby {
 
   // --- Stock market ---
 
-  /** Hydrate the global price board from the DB (call once after initDb). No-op without a DB. */
+  /** Hydrate the global price board + the next-crash schedule from the DB (call once after
+   *  initDb). No-op on prices without a DB; the crash is still scheduled in memory. */
   async loadStockPrices() {
     const saved = await getStockPrices();
     for (const s of STOCKS) {
       const row = saved[s.id];
       if (row && row.price > 0) this.stockPrices.set(s.id, { price: row.price, prev: row.prev });
     }
+    // Resume the crash schedule; if none is saved (or it lapsed while we were down), book a
+    // fresh one rather than crashing the instant we boot.
+    const crashAt = await getStockCrashAt().catch(() => 0);
+    if (crashAt > Date.now()) this.nextStockCrashAt = crashAt;
+    else this.scheduleNextCrash();
+  }
+
+  /** Book the next market crash 5–7 days out and persist it. */
+  private scheduleNextCrash() {
+    const days = 5 + Math.random() * 2; // 5–7 days
+    this.nextStockCrashAt = Date.now() + days * 24 * 60 * 60 * 1000;
+    setStockCrashAt(this.nextStockCrashAt).catch((e) => console.error('crash schedule save failed:', e));
+  }
+
+  /** Market crash: every coin snaps back to its base price (1). Holdings are left untouched —
+   *  they simply revalue at the new price (worth = floor(shares × 1)) — so a crash burns most
+   *  holders without bailing anyone out. Books the next crash, then alerts + repushes to all. */
+  private crashMarket() {
+    for (const s of STOCKS) {
+      const cur = this.stockPrices.get(s.id) ?? { price: s.base, prev: s.base };
+      this.stockPrices.set(s.id, { price: s.base, prev: cur.price }); // prev = pre-crash price, so the drop shows
+    }
+    this.nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS; // give the fresh prices a full window
+    saveStockPrices(this.priceBoard()).catch((e) => console.error('stock price save failed:', e));
+    this.scheduleNextCrash();
+    this.announce('📉 MARKET CRASH! Every coin just reset to 1.00 🪙 — holdings revalued, fortunes wiped.');
+    for (const ws of this.conns.keys()) this.sendStocks(ws);
   }
 
   /** The global price board, in STOCKS order. */
@@ -999,9 +1032,15 @@ export class Lobby {
       .catch((e) => console.error('stock cash-out failed:', e));
   }
 
-  /** Re-roll every coin's price when the 5-minute window elapses, persist the board, and push
-   *  the fresh (revalued) market to every connected client. Cheap to call every tick. */
+  /** Re-roll every coin's price when the re-roll window elapses, persist the board, and push
+   *  the fresh (revalued) market to every connected client. Also fires the periodic market
+   *  crash when its time arrives. Cheap to call every tick. */
   private tickStocks() {
+    // A crash takes precedence and resets everything itself, so handle it first and bail.
+    if (this.nextStockCrashAt && Date.now() >= this.nextStockCrashAt) {
+      this.crashMarket();
+      return;
+    }
     if (Date.now() < this.nextStockUpdateAt) return;
     this.nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS;
     for (const s of STOCKS) {
