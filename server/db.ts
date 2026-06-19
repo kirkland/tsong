@@ -7,10 +7,6 @@ import { LeaderboardRow, LEADERBOARD_SIZE } from '../shared/types';
 
 let pool: pg.Pool | null = null;
 
-// Money is tracked to the cent. Round any coin amount to the nearest hundredth before it
-// touches the wallet so floating-point drift never leaks fractions finer than a cent.
-const roundCents = (n: number): number => Math.round(n * 100) / 100;
-
 // Railway's internal connection (*.railway.internal) and localhost don't use TLS;
 // the public proxy host does. Enable a permissive SSL only for the latter.
 function sslFor(url: string): pg.PoolConfig['ssl'] {
@@ -49,8 +45,7 @@ export async function initDb(): Promise<void> {
   // Reset any players still at the old default of 1000 to the new default of 500.
   await pool.query(`UPDATE players SET elo = 500 WHERE elo = 1000`);
   // Wallet + cosmetics: coins (1 per win), owned items (comma list), and equipped hat/skin.
-  // `coins` is fractional (to the cent) so stock-market payouts don't lose value to flooring.
-  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS coins DOUBLE PRECISION NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS coins INTEGER NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS owned TEXT NOT NULL DEFAULT ''`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS hat TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS skin TEXT`);
@@ -63,7 +58,7 @@ export async function initDb(): Promise<void> {
       pid    TEXT NOT NULL,
       coin   TEXT NOT NULL,
       shares DOUBLE PRECISION NOT NULL DEFAULT 0,
-      cost   DOUBLE PRECISION NOT NULL DEFAULT 0,
+      cost   INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (pid, coin)
     )
   `);
@@ -129,15 +124,6 @@ export async function initDb(): Promise<void> {
     await pool.query(`DELETE FROM stock_prices`);
     await pool.query(`DELETE FROM stock_holdings`);
     await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('stock_rebase_v2', now()::text)`);
-  }
-  // One-time: coins (and a holding's cost basis) became fractional — money is now tracked to
-  // the cent so the stock market makes sense at small amounts. Widen the legacy INTEGER
-  // columns to DOUBLE PRECISION. Gated so the (table-rewriting) ALTER runs just once.
-  const coinFrac = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'coins_fractional_v1'`);
-  if (coinFrac.rowCount === 0) {
-    await pool.query(`ALTER TABLE players ALTER COLUMN coins TYPE DOUBLE PRECISION`);
-    await pool.query(`ALTER TABLE stock_holdings ALTER COLUMN cost TYPE DOUBLE PRECISION`);
-    await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('coins_fractional_v1', now()::text)`);
   }
   console.log('leaderboard DB ready');
 }
@@ -250,7 +236,7 @@ const EMPTY_WALLET: Wallet = { coins: 0, owned: [], hat: null, skin: null, lastS
 
 function rowToWallet(r: { coins: number; owned: string; hat: string | null; skin: string | null; last_spin?: string | number }): Wallet {
   return {
-    coins: roundCents(Number(r.coins)),
+    coins: r.coins,
     owned: (r.owned || '').split(',').filter(Boolean),
     hat: r.hat ?? null,
     skin: r.skin ?? null,
@@ -319,7 +305,7 @@ export async function buyItem(pid: string, name: string, item: string, price: nu
   if (cur.owned.includes(item) || cur.coins < price) return null;
   const owned = [...cur.owned, item].join(',');
   const { rows } = await pool.query(
-    `UPDATE players SET coins = ROUND((coins - $2)::numeric, 2), owned = $3 WHERE id = $1 AND coins >= $2
+    `UPDATE players SET coins = coins - $2, owned = $3 WHERE id = $1 AND coins >= $2
        RETURNING coins, owned, hat, skin`,
     [pid, price, owned],
   );
@@ -342,12 +328,11 @@ export async function equipItem(pid: string, slot: 'hat' | 'skin', item: string 
 /** Spend coins (e.g. escrow a bet). Fails — returns null — if the player can't afford it,
  *  so callers must NOT proceed when null is returned. */
 export async function spendCoins(pid: string, amount: number): Promise<Wallet | null> {
-  const amt = roundCents(amount);
-  if (!pool || !pid || amt <= 0) return null;
+  if (!pool || !pid || amount <= 0) return null;
   const { rows } = await pool.query(
-    `UPDATE players SET coins = ROUND((coins - $2)::numeric, 2) WHERE id = $1 AND coins >= $2
+    `UPDATE players SET coins = coins - $2 WHERE id = $1 AND coins >= $2
        RETURNING coins, owned, hat, skin`,
-    [pid, amt],
+    [pid, amount],
   );
   return rows.length ? rowToWallet(rows[0]) : null;
 }
@@ -355,12 +340,11 @@ export async function spendCoins(pid: string, amount: number): Promise<Wallet | 
 /** Add (or subtract) coins for a player; used for gambling payouts/refunds. Returns new wallet. */
 export async function addCoins(pid: string, name: string, delta: number): Promise<Wallet | null> {
   if (!pool || !pid) return null;
-  const d = roundCents(delta);
   const { rows } = await pool.query(
     `INSERT INTO players (id, name, coins) VALUES ($1, $2, GREATEST(0, $3))
-       ON CONFLICT (id) DO UPDATE SET coins = ROUND(GREATEST(0, players.coins + $3)::numeric, 2), name = EXCLUDED.name
+       ON CONFLICT (id) DO UPDATE SET coins = GREATEST(0, players.coins + $3), name = EXCLUDED.name
        RETURNING coins, owned, hat, skin`,
-    [pid, name, d],
+    [pid, name, delta],
   );
   return rows.length ? rowToWallet(rows[0]) : null;
 }
@@ -420,31 +404,30 @@ export async function getHoldings(pid: string): Promise<Record<string, Holding>>
  *  null — if the player can't afford it) and adds amount/price shares to the position,
  *  pooling with any existing holding. Returns the updated wallet on success. */
 export async function investStock(pid: string, _name: string, coin: string, amount: number, price: number): Promise<Wallet | null> {
-  const amt = roundCents(amount);
-  if (!pool || !pid || amt <= 0 || !(price > 0)) return null;
+  if (!pool || !pid || amount <= 0 || !(price > 0)) return null;
   // Escrow the coins first; bail out untouched if the balance isn't there.
-  const wallet = await spendCoins(pid, amt);
+  const wallet = await spendCoins(pid, amount);
   if (!wallet) return null;
-  const shares = amt / price;
+  const shares = amount / price;
   await pool.query(
     `INSERT INTO stock_holdings (pid, coin, shares, cost) VALUES ($1, $2, $3, $4)
        ON CONFLICT (pid, coin) DO UPDATE
        SET shares = stock_holdings.shares + EXCLUDED.shares,
            cost   = stock_holdings.cost   + EXCLUDED.cost`,
-    [pid, coin, shares, amt],
+    [pid, coin, shares, Math.floor(amount)],
   );
   return wallet;
 }
 
-/** Cash out the entire position in `coin` at the given price: pays shares × price coins
- *  (rounded to the cent), deletes the holding, and returns the new wallet plus the payout.
- *  Returns null if the player holds nothing in that coin. */
+/** Cash out the entire position in `coin` at the given price: pays floor(shares × price)
+ *  coins, deletes the holding, and returns the new wallet plus the payout. Returns null if
+ *  the player holds nothing in that coin. */
 export async function cashOutStock(pid: string, name: string, coin: string, price: number): Promise<{ wallet: Wallet; payout: number } | null> {
   if (!pool || !pid) return null;
   const { rows } = await pool.query(`SELECT shares FROM stock_holdings WHERE pid = $1 AND coin = $2`, [pid, coin]);
   if (!rows.length || Number(rows[0].shares) <= 0) return null;
   const shares = Number(rows[0].shares);
-  const payout = roundCents(shares * price);
+  const payout = Math.floor(shares * price);
   await pool.query(`DELETE FROM stock_holdings WHERE pid = $1 AND coin = $2`, [pid, coin]);
   // addCoins with a 0 delta still returns the (unchanged) wallet, so a wiped-out position
   // still resolves cleanly.
