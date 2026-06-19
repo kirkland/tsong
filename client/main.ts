@@ -507,7 +507,7 @@ const net = connect(
       // Detect powerup pickup: target was present last frame, gone this frame.
       if (prevTarget && !msg.target) {
         showPowerupFlash(prevTarget.kind, prevTarget.x, prevTarget.y);
-        if (prevTarget.kind === 'coins') playChaChing(); // coin grab
+        if (prevTarget.kind === 'coins') playChaChing(); // 5-coin grab
       }
       prevTarget = msg.target ?? null;
       state = msg;
@@ -1311,7 +1311,7 @@ doomBtn.addEventListener('click', async () => {
 // --- Coins, cosmetics shop & betting ---
 let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number } =
   { coins: 0, owned: [], hat: null, skin: null, bets: [], nextSpinAt: 0 };
-let betAmount = 100; // default wager (economy is scaled ×100); min is still 1
+let betAmount = 1;
 let shopTab: 'hat' | 'skin' = 'hat';
 const shopBtn = document.getElementById('shopBtn') as HTMLButtonElement;
 const shopPanel = document.getElementById('shopPanel') as HTMLDivElement;
@@ -1707,7 +1707,7 @@ function renderMarket() {
     actions.className = 'coin-actions';
     const buy = document.createElement('div');
     buy.className = 'coin-buy';
-    let amt = investAmt.get(stock.id) ?? 100;
+    let amt = investAmt.get(stock.id) ?? 1;
     amt = Math.max(1, Math.min(amt, Math.max(1, wallet.coins)));
     investAmt.set(stock.id, amt);
     const minus = document.createElement('button');
@@ -1720,7 +1720,7 @@ function renderMarket() {
     const invest = document.createElement('button');
     invest.textContent = 'Invest';
     invest.disabled = wallet.coins < amt;
-    invest.onclick = () => { net.send({ type: 'stockInvest', coin: stock.id, amount: investAmt.get(stock.id) ?? 100 }); playChaChing(); };
+    invest.onclick = () => { net.send({ type: 'stockInvest', coin: stock.id, amount: investAmt.get(stock.id) ?? 1 }); playChaChing(); };
     // Step the amount in place (don't re-render) — rebuilding the row would detach the very
     // button that was clicked and trip the click-outside handler, closing the whole panel.
     const setAmt = (v: number) => {
@@ -1729,8 +1729,8 @@ function renderMarket() {
       amtEl.textContent = String(clamped);
       invest.disabled = wallet.coins < clamped;
     };
-    minus.onclick = () => setAmt((investAmt.get(stock.id) ?? 100) - 1);
-    plus.onclick = () => setAmt((investAmt.get(stock.id) ?? 100) + 1);
+    minus.onclick = () => setAmt((investAmt.get(stock.id) ?? 1) - 1);
+    plus.onclick = () => setAmt((investAmt.get(stock.id) ?? 1) + 1);
     buy.append(minus, amtEl, plus, invest);
     actions.appendChild(buy);
 
@@ -1756,7 +1756,7 @@ function updateMarketTimer() {
 }
 setInterval(updateMarketTimer, 1000);
 
-// --- Davis's loans (top-left): borrow coins, owe 1.5× by 5pm Eastern ---
+// --- Davis's loans (top-left): borrow coins, owe 1.5× by the daily reset ---
 // The server owns the loan; we render the latest `loan` state and fire getLoan/repayLoan.
 // `loanStep` is local conversation state: 'intro' (Davis offers) → 'amount' (pick how much).
 // Once you hold a loan, the panel always shows the repay view regardless of step.
@@ -1794,7 +1794,7 @@ function renderLoan() {
     const due = loan.dueAt - Date.now();
     loanBody.innerHTML =
       `<div class="loan-line">You borrowed <b>${loan.amount}</b>🪙. Davis wants <span class="loan-owe">${loan.owed}🪙</span> back.</div>` +
-      `<div class="loan-due">Due at 5pm Eastern · <b>${fmtCountdown(due)}</b> left. Miss it and he takes <b>everything</b> — coins, stocks, and cosmetics.</div>`;
+      `<div class="loan-due">Due at the daily market reset · <b>${fmtCountdown(due)}</b> left. Miss it and he takes <b>everything</b> — coins and stocks.</div>`;
     const actions = document.createElement('div');
     actions.className = 'loan-actions';
     const pay = document.createElement('button');
@@ -1821,7 +1821,7 @@ function renderLoan() {
     input.type = 'number';
     input.min = '1';
     input.step = '1';
-    input.value = '500';
+    input.value = '5';
     input.setAttribute('inputmode', 'numeric');
     row.appendChild(input);
     loanBody.appendChild(row);
@@ -1855,7 +1855,7 @@ function renderLoan() {
   loanImg.src = DAVIS_INTRO;
   loanBody.innerHTML =
     `<div class="loan-quote">"${davisQuote}"</div>` +
-    `<div class="loan-line">I can spot you some coins — pay me back <b>1.5×</b> by 5pm Eastern. Would you like a loan?</div>`;
+    `<div class="loan-line">I can spot you some coins — pay me back <b>1.5×</b> by the daily reset. Would you like a loan?</div>`;
   const actions = document.createElement('div');
   actions.className = 'loan-actions';
   const yes = document.createElement('button');
