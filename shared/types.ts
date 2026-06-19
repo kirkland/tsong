@@ -258,8 +258,8 @@ export type ClientMsg =
   | { type: 'shopEquip'; slot: 'hat' | 'skin'; item: string | null } // equip (item) or unequip (null) a cosmetic
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
   | { type: 'dailySpin' } // claim the once-per-24h reward spin
-  | { type: 'stockInvest'; coin: string; amount: number } // sink `amount` coins into a crypto at the current price
-  | { type: 'stockCashOut'; coin: string } // sell the entire holding in a crypto for floor(worth) coins
+  | { type: 'stockInvest'; coin: string; amount: number } // sink `amount` coins (fractional, to the cent) into a crypto at the current price
+  | { type: 'stockCashOut'; coin: string } // sell the entire holding in a crypto for its worth (shares × price, to the cent)
   | { type: 'migrate'; oldPid: string }; // one-time: merge a UUID guest account into the signed-in Google account
 
 // --- Server -> Client ---
@@ -569,8 +569,8 @@ export const SPIN_SEGMENTS = [
 // --- Stock market (joke crypto exchange) ---
 // Five fictional "cryptocurrencies" you can sink coins into. Each has a global price that
 // random-walks every STOCK_UPDATE_MS (shared by everyone — it's one market). Investing N
-// coins at price P buys N/P "shares"; cashing out pays floor(shares × currentPrice) coins
-// and closes the whole position. `base` is the starting price (the market then drifts up
+// coins at price P buys N/P "shares"; cashing out pays shares × currentPrice coins (rounded
+// to the cent) and closes the whole position. `base` is the starting price (the market drifts up
 // from there); `img` is the coin's logo under client/public.
 export const STOCKS = [
   { id: 'kenny', name: 'Kenny Kawaguchi', ticker: 'KENNY', img: '/kennykawaguchi.png', base: 1 },
@@ -603,8 +603,8 @@ export interface StockMsg {
   // %-change readout); `price` is the live one.
   prices: { id: string; price: number; prev: number }[];
   // This player's open positions (only coins they actually hold). `shares` is fractional;
-  // `cost` is the total coins poured in (cost basis); `worth` is floor(shares × price) — the
-  // coins they'd get if they cashed out right now.
+  // `cost` is the total coins poured in (cost basis, to the cent); `worth` is shares × price
+  // rounded to the cent — the coins they'd get if they cashed out right now.
   holdings: { id: string; shares: number; cost: number; worth: number }[];
   // Price history for the per-coin graphs, in STOCKS order — one array per timeframe (oldest
   // first). See STOCK_HISTORY for the cadence/length of each series.
