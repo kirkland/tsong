@@ -11,6 +11,9 @@
       }
       body {
         margin: 0;
+        /* Top padding clears the fixed toolbar (VIEW/MODES/POWER-UPS/CHANGELOG)
+           which sits at top: 12px with ~30px button height. */
+        padding-top: 52px;
         min-height: 100vh;
         display: flex;
         flex-direction: column;
@@ -216,11 +219,21 @@
         flex-direction: column;
         gap: 2px;
       }
-      /* On narrow screens, drop the chat below the game at full width. */
+      /* On narrow screens, drop the chat below the game at full width.
+         Height is viewport-proportional so the chatlog stays usable. */
       @media (max-width: 1400px) {
         #chat {
           width: min(94vw, 1040px);
-          height: 240px;
+          height: clamp(200px, 32vh, 320px);
+        }
+      }
+
+      /* Stacked layout (769–1399px): cap the canvas so it never takes more than
+         ~55vh of vertical space, leaving room for the chat below.
+         88 = 55 × (800/500) — converts the height cap to a width cap via aspect ratio. */
+      @media (max-width: 1399px) and (min-width: 769px) {
+        #game, #game3d {
+          width: min(94vw, 1040px, 88vh);
         }
       }
       #chatlog .chatfrom {
@@ -1793,6 +1806,8 @@
         body {
           gap: 8px;
           padding: 0 6px;
+          /* The sticky tab bar handles top clearance; no extra padding needed. */
+          padding-top: 0;
         }
         #mobileTabs {
           display: flex;

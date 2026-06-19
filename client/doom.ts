@@ -365,7 +365,7 @@ export function startDoom(net: DoomNet): void {
   let bob = 0;
   let myFireSeq = 0; // counts our shots (guest uses this to tell the host to fire)
   let lastGuestFireSeq = 0; // host: last processed guest shot
-  let guestIn: GuestInput = { forward: 0, strafe: 0, angle: 0, fireSeq: 0 };
+  let guestIn: GuestInput = { forward: 0, strafe: 0, angle: 0, fireSeq: 0, grenadeSeq: 0 };
   let partnerName = ''; // co-op: the other player's name (host learns it via relay)
   const zBuffer = new Float32Array(W);
 

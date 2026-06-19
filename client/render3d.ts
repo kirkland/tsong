@@ -596,7 +596,7 @@ export function createRenderer(container: HTMLElement): Renderer3D {
     }
     for (let i = pi; i < paddlePool.length; i++) paddlePool[i].visible = false;
     for (let i = mi; i < minionSprites.length; i++) minionSprites[i].visible = false;
-    for (let i = hi; i < hatPool.length; i++) hatPool[i].visible = false;
+    for (let i = hi; i < hatPool.length; i++) hatPool[i].group.visible = false;
 
     // Balls — main ball plus any "multi" extras; radius follows tiny/bigball power-ups.
     const ballR = s.tinyBall ? 3 : s.bigBall ? BIG_BALL_R : BALL.r;

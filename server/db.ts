@@ -220,7 +220,7 @@ export async function claimSpin(pid: string, name: string, nowMs: number): Promi
 }
 
 /** Grant an item for free (daily-spin prize). No-op if already owned. Returns updated wallet. */
-export async function grantItem(pid: string, name: string, item: string): Promise<Wallet | null> {
+export async function grantItem(pid: string, _name: string, item: string): Promise<Wallet | null> {
   if (!pool || !pid) return null;
   const cur = await getWallet(pid);
   if (cur.owned.includes(item)) return cur;
