@@ -544,7 +544,7 @@ const net = connect(
       renderShop();
       if (!marketPanel.hidden) renderMarket(); // coin balance gates the Invest buttons
     } else if (msg.type === 'stocks') {
-      market = { prices: msg.prices, holdings: msg.holdings, nextUpdateAt: msg.nextUpdateAt };
+      market = { prices: msg.prices, holdings: msg.holdings, history: msg.history, nextUpdateAt: msg.nextUpdateAt };
       if (!marketPanel.hidden) renderMarket();
       updateMarketTimer();
     } else if (msg.type === 'spinResult') {
@@ -1547,9 +1547,10 @@ function showAnnouncement(text: string, color?: string) {
 type Market = {
   prices: { id: string; price: number; prev: number }[];
   holdings: { id: string; shares: number; cost: number; worth: number }[];
+  history: { id: string; recent: number[]; daily: number[] }[];
   nextUpdateAt: number;
 };
-let market: Market = { prices: [], holdings: [], nextUpdateAt: 0 };
+let market: Market = { prices: [], holdings: [], history: [], nextUpdateAt: 0 };
 const marketBtn = document.getElementById('marketBtn') as HTMLButtonElement;
 const marketPanel = document.getElementById('marketPanel') as HTMLDivElement;
 const marketCoins = document.getElementById('marketCoins') as HTMLSpanElement;
@@ -1558,6 +1559,9 @@ const marketList = document.getElementById('marketList') as HTMLDivElement;
 // Per-coin "amount to invest" steppers, kept across re-renders so the value doesn't reset
 // when prices re-roll. Defaults to 1.
 const investAmt = new Map<string, number>();
+// Which timeframe the little graphs show — shared across all coins. '5m' = last 10 recent
+// samples, '1h' = the whole recent series, '1d' = the daily series.
+let graphTf: '5m' | '1h' | '1d' = '1h';
 
 marketBtn.addEventListener('click', () => {
   const open = marketPanel.hidden;
@@ -1565,6 +1569,47 @@ marketBtn.addEventListener('click', () => {
   marketBtn.setAttribute('aria-expanded', String(open));
   if (open) renderMarket();
 });
+// Timeframe toggle (delegated, since the buttons live in the static panel header).
+document.getElementById('marketGraphTf')?.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-tf]');
+  if (!btn) return;
+  graphTf = btn.dataset.tf as '5m' | '1h' | '1d';
+  document.querySelectorAll('#marketGraphTf button').forEach((b) => b.classList.toggle('active', b === btn));
+  renderMarket();
+});
+
+// Draw a tiny sparkline of `pts` into `cv`. Flat/scarce data → a faint baseline. Colored by
+// net change over the window (green up, red down).
+function drawSparkline(cv: HTMLCanvasElement, pts: number[]) {
+  const ctx2 = cv.getContext('2d');
+  if (!ctx2) return;
+  const w = cv.width, h = cv.height, pad = 2;
+  ctx2.clearRect(0, 0, w, h);
+  if (pts.length < 2) {
+    ctx2.strokeStyle = '#2a3550';
+    ctx2.beginPath(); ctx2.moveTo(pad, h / 2); ctx2.lineTo(w - pad, h / 2); ctx2.stroke();
+    return;
+  }
+  let lo = Math.min(...pts), hi = Math.max(...pts);
+  if (hi - lo < 1e-9) { lo -= 1; hi += 1; } // flat line → center it
+  const up = pts[pts.length - 1] >= pts[0];
+  const x = (i: number) => pad + (i / (pts.length - 1)) * (w - 2 * pad);
+  const y = (v: number) => h - pad - ((v - lo) / (hi - lo)) * (h - 2 * pad);
+  ctx2.strokeStyle = up ? '#6ee7a8' : '#ff7a7a';
+  ctx2.lineWidth = 1.5;
+  ctx2.beginPath();
+  pts.forEach((v, i) => (i ? ctx2.lineTo(x(i), y(v)) : ctx2.moveTo(x(i), y(v))));
+  ctx2.stroke();
+}
+
+// The price series to plot for a coin at the current timeframe.
+function seriesFor(id: string): number[] {
+  const h = market.history.find((x) => x.id === id);
+  if (!h) return [];
+  if (graphTf === '1d') return h.daily;
+  if (graphTf === '5m') return h.recent.slice(-10); // last ~5 min of 30s samples
+  return h.recent; // '1h'
+}
 document.addEventListener('click', (e) => {
   if (marketPanel.hidden) return;
   const t = e.target as Node;
@@ -1612,6 +1657,11 @@ function renderMarket() {
       pos.innerHTML = `held: ${hold.cost}🪙 → worth <span class="${plClass}">${hold.worth}🪙</span>`;
       main.appendChild(pos);
     }
+    const graph = document.createElement('canvas');
+    graph.className = 'coin-graph';
+    graph.width = 132; graph.height = 26;
+    drawSparkline(graph, seriesFor(stock.id));
+    main.appendChild(graph);
     row.appendChild(main);
 
     const actions = document.createElement('div');

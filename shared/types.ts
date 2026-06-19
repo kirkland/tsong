@@ -571,7 +571,7 @@ export const SPIN_SEGMENTS = [
 // and closes the whole position. `base` is the starting price (the market then drifts up
 // from there); `img` is the coin's logo under client/public.
 export const STOCKS = [
-  { id: 'kenny', name: 'Kenny Kawaguchi inc.', ticker: 'KENNY', img: '/kennykawaguchi.png', base: 1 },
+  { id: 'kenny', name: 'Kenny Kawaguchi', ticker: 'KENNY', img: '/kennykawaguchi.png', base: 1 },
   { id: 'chugs', name: 'BadlandsChugs', ticker: 'CHUG', img: '/badlandschugs.jpg', base: 1 },
   { id: 'davis', name: 'Davis Clarke Coin', ticker: 'DAVIS', img: '/davisclarke.jpg', base: 1 },
   { id: 'otto', name: 'OTTO', ticker: 'OTTO', img: '/otto.webp', base: 1 },
@@ -579,6 +579,11 @@ export const STOCKS = [
 ] as const;
 export type StockId = (typeof STOCKS)[number]['id'];
 export const STOCK_UPDATE_MS = 30 * 1000; // prices re-roll every 30 seconds
+// Per-coin price-history buffers for the little graphs. `recent` holds one sample per re-roll
+// (30s) capped at 120 ≈ 1 hour — the 5-minute view is its last 10 points, the 1-hour view is
+// the whole thing. `daily` is sampled every `dailyEvery` re-rolls (≈5 min) capped at 288 ≈ 1
+// day. History lives in server memory only (not persisted), so it refills after a restart.
+export const STOCK_HISTORY = { recentCap: 120, dailyCap: 288, dailyEvery: 10, fiveMinPoints: 10 } as const;
 
 // A player's private market view: the global price board plus that player's own positions.
 // Sent on join, after every trade, and to everyone when prices re-roll.
@@ -591,6 +596,9 @@ export interface StockMsg {
   // `cost` is the total coins poured in (cost basis); `worth` is floor(shares × price) — the
   // coins they'd get if they cashed out right now.
   holdings: { id: string; shares: number; cost: number; worth: number }[];
+  // Price history for the per-coin graphs, in STOCKS order. `recent` = 30s samples (≤1h),
+  // `daily` = ~5-min samples (≤1 day). Oldest first.
+  history: { id: string; recent: number[]; daily: number[] }[];
   nextUpdateAt: number; // epoch ms when prices next re-roll
 }
 
