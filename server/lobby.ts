@@ -28,9 +28,11 @@ import {
   SPIN_SEGMENTS,
   StateMsg,
   TEAM_MAX,
+  WalletMsg,
 } from '../shared/types';
 import { getLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
-  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, DAILY_SPIN_MS } from './db';
+  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, DAILY_SPIN_MS } from './db';
+import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
@@ -167,9 +169,12 @@ export class Lobby {
   // duel in turn, and king-of-hill / queue / bots are all suspended until it ends.
   private tournament: Tournament | null = null;
   private tournamentCreatorPid = ''; // only the creator may cancel the tournament
-  // Spectator wagers on the current duel: pid -> { side, amount }. Coins are escrowed when
-  // the bet is placed and paid out 2× on a correct call when the match ends.
-  private bets = new Map<string, { side: Side; amount: number; ws: WebSocket; name: string }>();
+  // Spectator wagers on the current duel. Coins are escrowed when the bet is placed and paid
+  // out stake × the odds locked at that moment on a correct call when the match ends. Live
+  // betting allows multiple wagers per spectator, so this is a flat list (keyed loosely by pid).
+  private bets: Array<{ pid: string; side: Side; amount: number; ws: WebSocket; name: string; odds: number }> = [];
+  private pointProb = 0.5; // per-point P(left wins), from seated players' blended Elo; set per match
+  private oddsReady = false; // has the odds model been computed for the current live duel?
   private liveMatchId: number | null = null; // bracket match currently on the court
   private tourneyInterMs = 0; // ms left on the "next match" interstitial between games
 
@@ -797,7 +802,7 @@ export class Lobby {
         if (!c) return;
         c.hat = w.hat;
         c.skin = w.skin;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, bet: this.betView(ws), nextSpinAt: nextSpinAt(w.lastSpin) });
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin) });
       })
       .catch((e) => console.error('wallet load failed:', e));
   }
@@ -811,7 +816,7 @@ export class Lobby {
         const c = this.conns.get(ws);
         if (!c) return;
         c.hat = w.hat; c.skin = w.skin;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, bet: this.betView(ws), nextSpinAt: nextSpinAt(w.lastSpin) });
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin) });
       })
       .catch((e) => console.error('wallet send failed:', e));
   }
@@ -900,66 +905,118 @@ export class Lobby {
   /** Public view of all current wagers, grouped by side (for the on-screen bet board). */
   private betBoard(): StateMsg['bets'] {
     const board: StateMsg['bets'] = { left: [], right: [] };
-    for (const b of this.bets.values()) board[b.side].push({ name: b.name, amount: b.amount });
+    for (const b of this.bets) board[b.side].push({ name: b.name, amount: b.amount });
     return board;
   }
 
-  private betView(ws: WebSocket): { side: Side; amount: number } | null {
+  /** A spectator's own open wagers (with locked odds), for their wallet view. */
+  private betsView(ws: WebSocket): WalletMsg['bets'] {
     const conn = this.conns.get(ws);
-    if (!conn) return null;
-    const b = this.bets.get(conn.pid);
-    return b ? { side: b.side, amount: b.amount } : null;
+    if (!conn) return [];
+    return this.bets
+      .filter((b) => b.pid === conn.pid)
+      .map((b) => ({ side: b.side, amount: b.amount, odds: b.odds }));
   }
 
-  /** Place a wager on a side of the live duel (spectators only). Coins are escrowed now. */
+  /** Recompute the per-point win probability from the seated players' blended Elo. Run once when
+   *  a duel starts; until it resolves (and whenever the DB is unavailable) odds stay even. */
+  private async refreshOddsModel(): Promise<void> {
+    const pidsOf = (side: Side) =>
+      this.connsOn(side).map((c) => c.pid).filter((p): p is string => !!p);
+    const leftPids = pidsOf('left');
+    const rightPids = pidsOf('right');
+    const winScore = this.game.winScore;
+    try {
+      const elos = await getElos([...leftPids, ...rightPids]);
+      const sideElo = (pids: string[]) => {
+        if (pids.length === 0) return 500;
+        const blended = pids.map((pid) => {
+          const e = elos.get(pid);
+          return e ? blendElo(e.elo, e.games) : 500; // unknown player → neutral
+        });
+        return blended.reduce((a, b) => a + b, 0) / blended.length;
+      };
+      this.pointProb = perPointProb(sideElo(leftPids), sideElo(rightPids), winScore);
+    } catch (e) {
+      console.error('odds model refresh failed:', e);
+      this.pointProb = 0.5;
+    }
+  }
+
+  /** Live fair decimal odds for the current duel score, from the cached per-point prob. */
+  private currentOdds(): { left: number; right: number } {
+    return liveOdds(this.pointProb, this.game.winScore, this.game.score.left, this.game.score.right);
+  }
+
+  /** Whether wagers can be placed/quoted right now: a live, human-vs-human duel. */
+  private bettingOpen(): boolean {
+    return this.mode === 'duel' && !this.bot && this.game.status === 'playing';
+  }
+
+  /** Place a wager on a side of the live duel (spectators only), locking in the current odds.
+   *  Live betting: allowed any time the duel is live, and a spectator may place several. */
   bet(ws: WebSocket, side: Side, amount: number) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
-    if (this.mode !== 'duel' || this.game.status !== 'playing') return; // only on a live duel
-    if (this.bot) return; // no betting on matches involving a bot
-    if (this.game.score.left !== 0 || this.game.score.right !== 0) return; // only before the first point
+    if (!this.bettingOpen()) return; // live, non-bot duel only
     if (this.sideOf(ws)) return; // players can't bet on their own match
-    if (this.bets.has(conn.pid)) return; // one wager per match
     const amt = Math.floor(amount);
     if (!Number.isFinite(amt) || amt < 1) return;
+    const odds = this.currentOdds()[side]; // lock the odds shown at this instant
+    const { pid, nickname: name } = conn;
     // Escrow the stake atomically — spendCoins returns null if they can't actually afford it.
-    spendCoins(conn.pid, amt)
+    spendCoins(pid, amt)
       .then((w) => {
         if (!w) { this.sendWallet(ws); return; } // insufficient coins — refresh their view, no bet
-        this.bets.set(conn.pid, { side, amount: amt, ws, name: conn.nickname });
+        this.bets.push({ pid, side, amount: amt, ws, name, odds });
         this.sendWallet(ws);
-        this.announce(`🎲 ${conn.nickname} bet ${amt} on ${side}`);
+        this.announce(`🎲 ${name} bet ${amt} on ${side} @ ${odds.toFixed(2)}×`);
       })
       .catch((e) => console.error('bet failed:', e));
   }
 
-  /** Settle all open wagers against the winning side: correct calls pay 2×. */
+  /** Settle all open wagers against the winning side: correct calls pay stake × locked odds. */
   private settleBets(winnerSide: Side | null) {
-    if (this.bets.size === 0) return;
-    const pending = [...this.bets.values()];
-    this.bets.clear();
+    if (this.bets.length === 0) return;
+    // No winning side (an abnormal end with no result) — nobody called it wrong, so return
+    // every stake rather than pocketing it.
+    if (!winnerSide) { void this.refundBets(); return; }
+    const pending = this.bets;
+    this.bets = [];
     for (const b of pending) {
-      if (winnerSide && b.side === winnerSide) {
-        addCoins(this.conns.get(b.ws)?.pid ?? b.name, b.name, b.amount * 2)
+      if (b.side === winnerSide) {
+        const payout = Math.max(b.amount, Math.round(b.amount * b.odds)); // never pay below stake
+        addCoins(this.conns.get(b.ws)?.pid ?? b.pid, b.name, payout)
           .then(() => { if (this.conns.has(b.ws)) this.sendWallet(b.ws); })
           .catch((e) => console.error('payout failed:', e));
       } else {
-        // Lost (or no winner) — stake already escrowed; just refresh their wallet view.
+        // Lost — stake was escrowed at bet time; just refresh their wallet view.
         if (this.conns.has(b.ws)) this.sendWallet(b.ws);
       }
     }
   }
 
-  /** Refund all open wagers (match abandoned with no result). */
-  private refundBets() {
-    if (this.bets.size === 0) return;
-    const pending = [...this.bets.values()];
-    this.bets.clear();
-    for (const b of pending) {
-      addCoins(this.conns.get(b.ws)?.pid ?? b.name, b.name, b.amount)
+  /** Refund all open wagers (match abandoned with no result, or a graceful shutdown).
+   *  Returns once every refund has been written to the DB, so a caller that needs the coins
+   *  made whole before exiting can await it; fire-and-forget callers can ignore the promise. */
+  private refundBets(): Promise<void> {
+    if (this.bets.length === 0) return Promise.resolve();
+    const pending = this.bets;
+    this.bets = [];
+    return Promise.all(pending.map((b) =>
+      addCoins(this.conns.get(b.ws)?.pid ?? b.pid, b.name, b.amount)
         .then(() => { if (this.conns.has(b.ws)) this.sendWallet(b.ws); })
-        .catch((e) => console.error('refund failed:', e));
-    }
+        .catch((e) => console.error('refund failed:', e)),
+    )).then(() => undefined);
+  }
+
+  /** Refund any open wagers ahead of a graceful shutdown. Bets live only in memory — they're
+   *  not part of the snapshot — so without this the coins escrowed at bet time would be lost
+   *  across a restart: neither paid out nor returned. The notice rides the chat log, which IS
+   *  snapshotted, so reconnecting spectators see why their stake came back. */
+  refundOpenBets(): Promise<void> {
+    if (this.bets.length > 0) this.announce('🎲 Open bets refunded — server restarting.');
+    return this.refundBets();
   }
 
   claim(ws: WebSocket, side?: Side) {
@@ -1302,7 +1359,11 @@ export class Lobby {
     }
     // Safety: if a duel was abandoned (back to 'waiting' with no result) or we slid into
     // arena mode, refund any open wagers so escrowed coins are never lost.
-    if (this.bets.size && (this.mode === 'poly' || this.game.status === 'waiting')) this.refundBets();
+    if (this.bets.length && (this.mode === 'poly' || this.game.status === 'waiting')) this.refundBets();
+    // Compute the Elo odds model once when a fresh duel goes live; clear it when betting closes.
+    const live = this.bettingOpen();
+    if (live && !this.oddsReady) { this.oddsReady = true; void this.refreshOddsModel(); }
+    else if (!live) { this.oddsReady = false; this.pointProb = 0.5; }
     if (this.tournament) this.tournamentSync();
     else if (this.mode === 'poly') this.polySync();
     else this.duelSync();
@@ -1766,6 +1827,7 @@ export class Lobby {
       tournament: this.tournament ? this.tournament.view(this.liveMatchId) : null,
       projectiles: this.game.projectiles.map((p) => ({ x: p.x, y: p.y, vx: p.vx, vy: p.vy, color: '#39ff14' })),
       bets: this.betBoard(),
+      odds: this.bettingOpen() ? this.currentOdds() : null,
       breakout: this.game.breakout,
       bricks: this.game.breakout ? [...this.game.brickAlive] : null,
       fog: this.game.fog,

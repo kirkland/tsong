@@ -198,6 +198,19 @@ function rowToWallet(r: { coins: number; owned: string; hat: string | null; skin
   };
 }
 
+/** Read Elo + games-played for a set of players (for the betting odds model). Missing players
+ *  (or no DB) simply aren't in the returned map — the caller treats them as neutral. */
+export async function getElos(pids: string[]): Promise<Map<string, { elo: number; games: number }>> {
+  const out = new Map<string, { elo: number; games: number }>();
+  if (!pool || pids.length === 0) return out;
+  const { rows } = await pool.query<{ id: string; elo: number; wins: number; losses: number }>(
+    `SELECT id, elo, wins, losses FROM players WHERE id = ANY($1)`,
+    [pids],
+  );
+  for (const r of rows) out.set(r.id, { elo: r.elo, games: r.wins + r.losses });
+  return out;
+}
+
 /** Read a player's wallet (coins + owned items + equipped cosmetics + last spin). */
 export async function getWallet(pid: string): Promise<Wallet> {
   if (!pool || !pid) return { ...EMPTY_WALLET };
