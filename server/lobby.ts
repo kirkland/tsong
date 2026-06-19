@@ -978,7 +978,7 @@ export class Lobby {
   }
 
   /** Daily market reset: every coin snaps back to its base price (1). Holdings are left
-   *  untouched — they simply revalue at the new price (worth = shares × 1, to the cent) — so a reset
+   *  untouched — they simply revalue at the new price (worth = floor(shares × 1)) — so a reset
    *  wipes the day's gains. Books the next reset, then alerts + repushes to all. */
   private crashMarket() {
     for (const s of STOCKS) {
@@ -1045,7 +1045,7 @@ export class Lobby {
         if (!this.conns.has(ws)) return;
         const holdings = Object.entries(h).map(([id, hd]) => {
           const price = this.stockPrices.get(id)?.price ?? 0;
-          return { id, shares: hd.shares, cost: hd.cost, worth: Math.round(hd.shares * price * 100) / 100 };
+          return { id, shares: hd.shares, cost: hd.cost, worth: Math.floor(hd.shares * price) };
         });
         this.tell(ws, { type: 'stocks', prices, holdings, history, nextUpdateAt: this.nextStockUpdateAt });
       })
@@ -1057,8 +1057,8 @@ export class Lobby {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     if (!STOCKS.some((s) => s.id === coin)) return; // unknown coin
-    const amt = Math.round(amount * 100) / 100;
-    if (!Number.isFinite(amt) || amt < 0.01) return; // at least one cent
+    const amt = Math.floor(amount);
+    if (!Number.isFinite(amt) || amt < 1) return; // positive whole coins only
     const price = this.stockPrices.get(coin)?.price;
     if (!price || !(price > 0)) return;
     investStock(conn.pid, conn.nickname, coin, amt, price)
@@ -1070,7 +1070,7 @@ export class Lobby {
       .catch((e) => console.error('stock invest failed:', e));
   }
 
-  /** Cash out the whole position in a crypto for its current worth (shares × price, to the cent). */
+  /** Cash out the whole position in a crypto for floor(current worth) coins. */
   stockCashOut(ws: WebSocket, coin: string) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
