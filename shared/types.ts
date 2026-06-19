@@ -258,6 +258,8 @@ export type ClientMsg =
   | { type: 'shopEquip'; slot: 'hat' | 'skin'; item: string | null } // equip (item) or unequip (null) a cosmetic
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
   | { type: 'dailySpin' } // claim the once-per-24h reward spin
+  | { type: 'stockInvest'; coin: string; amount: number } // sink `amount` coins into a crypto at the current price
+  | { type: 'stockCashOut'; coin: string } // sell the entire holding in a crypto for floor(worth) coins
   | { type: 'migrate'; oldPid: string }; // one-time: merge a UUID guest account into the signed-in Google account
 
 // --- Server -> Client ---
@@ -532,6 +534,7 @@ export type ServerMsg =
   | DoomEndMsg
   | DoomLeaderboardMsg
   | WalletMsg
+  | StockMsg
   | SpinResultMsg;
 
 // A player's private wallet + cosmetics + active bet, sent only to that client.
@@ -560,6 +563,36 @@ export const SPIN_SEGMENTS = [
   { label: '🎩 Hat', kind: 'hat', value: 0 },
   { label: '🎨 Skin', kind: 'skin', value: 0 },
 ] as const;
+
+// --- Stock market (joke crypto exchange) ---
+// Five fictional "cryptocurrencies" you can sink coins into. Each has a global price that
+// random-walks every STOCK_UPDATE_MS (shared by everyone — it's one market). Investing N
+// coins at price P buys N/P "shares"; cashing out pays floor(shares × currentPrice) coins
+// and closes the whole position. `base` is the starting/mean-reversion price; `img` is the
+// coin's logo under client/public.
+export const STOCKS = [
+  { id: 'kenny', name: 'Kenny Kawaguchi inc.', ticker: 'KENNY', img: '/kennykawaguchi.png', base: 100 },
+  { id: 'chugs', name: 'BadlandsChugs', ticker: 'CHUG', img: '/badlandschugs.jpg', base: 100 },
+  { id: 'davis', name: 'Davis Clarke Coin', ticker: 'DAVIS', img: '/davisclarke.jpg', base: 100 },
+  { id: 'otto', name: 'OTTO', ticker: 'OTTO', img: '/otto.webp', base: 100 },
+  { id: 'bacon', name: 'Bacon Roll', ticker: 'BACON', img: '/baconroll.png', base: 100 },
+] as const;
+export type StockId = (typeof STOCKS)[number]['id'];
+export const STOCK_UPDATE_MS = 5 * 60 * 1000; // prices re-roll every 5 minutes
+
+// A player's private market view: the global price board plus that player's own positions.
+// Sent on join, after every trade, and to everyone when prices re-roll.
+export interface StockMsg {
+  type: 'stocks';
+  // Global price board, in STOCKS order. `prev` is the price at the previous re-roll (for the
+  // %-change readout); `price` is the live one.
+  prices: { id: string; price: number; prev: number }[];
+  // This player's open positions (only coins they actually hold). `shares` is fractional;
+  // `cost` is the total coins poured in (cost basis); `worth` is floor(shares × price) — the
+  // coins they'd get if they cashed out right now.
+  holdings: { id: string; shares: number; cost: number; worth: number }[];
+  nextUpdateAt: number; // epoch ms when prices next re-roll
+}
 
 // Result of a daily spin, sent to the spinning client so it can land the wheel on `segment`
 // (an index into SPIN_SEGMENTS) and celebrate the prize.

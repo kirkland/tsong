@@ -27,11 +27,14 @@ import {
   Side,
   SPIN_SEGMENTS,
   StateMsg,
+  STOCKS,
+  STOCK_UPDATE_MS,
   TEAM_MAX,
   WalletMsg,
 } from '../shared/types';
 import { getLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
-  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, DAILY_SPIN_MS } from './db';
+  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, DAILY_SPIN_MS,
+  getHoldings, investStock, cashOutStock, getStockPrices, saveStockPrices } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
 
@@ -57,6 +60,18 @@ interface Conn {
   // Cached wallet/cosmetics (loaded from the DB on join). Purely cosmetic — never affects play.
   hat: string | null;
   skin: string | null;
+}
+
+// One step of a crypto's price random walk (wild/degen flavor): ±20% on a normal tick, an
+// ~8% chance of a big pump/crash on top, and a gentle pull back toward the coin's base so
+// prices neither flatline at the floor nor run away to infinity. Result is clamped to
+// [1, base×100] and rounded to cents.
+function rollPrice(price: number, base: number): number {
+  let factor = 1 + (Math.random() * 2 - 1) * 0.2;
+  if (Math.random() < 0.08) factor *= 0.5 + Math.random() * 1.4; // 0.5×–1.9× shock
+  const pull = Math.pow(base / price, 0.04); // mild mean reversion
+  const np = price * factor * pull;
+  return Math.round(Math.max(1, Math.min(np, base * 100)) * 100) / 100;
 }
 
 // Epoch ms when the daily spin is next available (0 = available now).
@@ -175,6 +190,13 @@ export class Lobby {
   private bets: Array<{ pid: string; side: Side; amount: number; ws: WebSocket; name: string; odds: number }> = [];
   private pointProb = 0.5; // per-point P(left wins), from seated players' blended Elo; set per match
   private oddsReady = false; // has the odds model been computed for the current live duel?
+  // --- Stock market: one global price board, shared by everyone. `prev` is the price at the
+  // last re-roll (for %-change display). Seeded to each coin's base; hydrated from the DB on
+  // startup (loadStockPrices) so it resumes across restarts. Re-rolls every STOCK_UPDATE_MS.
+  private stockPrices = new Map<string, { price: number; prev: number }>(
+    STOCKS.map((s) => [s.id, { price: s.base, prev: s.base }] as [string, { price: number; prev: number }]),
+  );
+  private nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS;
   private liveMatchId: number | null = null; // bracket match currently on the court
   private tourneyInterMs = 0; // ms left on the "next match" interstitial between games
 
@@ -790,6 +812,8 @@ export class Lobby {
       .catch((e) => console.error('name update failed:', e));
     // Load this player's wallet/cosmetics and push it to them.
     this.loadWallet(ws);
+    // Send the stock market: global price board + this player's positions.
+    this.sendStocks(ws);
   }
 
   /** Load a connection's wallet from the DB into memory and send it to that client. */
@@ -898,6 +922,89 @@ export class Lobby {
         this.sendWallet(ws);
       })
       .catch((e) => console.error('daily spin failed:', e));
+  }
+
+  // --- Stock market ---
+
+  /** Hydrate the global price board from the DB (call once after initDb). No-op without a DB. */
+  async loadStockPrices() {
+    const saved = await getStockPrices();
+    for (const s of STOCKS) {
+      const row = saved[s.id];
+      if (row && row.price > 0) this.stockPrices.set(s.id, { price: row.price, prev: row.prev });
+    }
+  }
+
+  /** The global price board, in STOCKS order. */
+  private priceBoard(): { id: string; price: number; prev: number }[] {
+    return STOCKS.map((s) => {
+      const p = this.stockPrices.get(s.id) ?? { price: s.base, prev: s.base };
+      return { id: s.id, price: p.price, prev: p.prev };
+    });
+  }
+
+  /** Send a client the price board plus its own positions (revalued at the live price). */
+  sendStocks(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    const prices = this.priceBoard();
+    getHoldings(conn.pid)
+      .then((h) => {
+        if (!this.conns.has(ws)) return;
+        const holdings = Object.entries(h).map(([id, hd]) => {
+          const price = this.stockPrices.get(id)?.price ?? 0;
+          return { id, shares: hd.shares, cost: hd.cost, worth: Math.floor(hd.shares * price) };
+        });
+        this.tell(ws, { type: 'stocks', prices, holdings, nextUpdateAt: this.nextStockUpdateAt });
+      })
+      .catch((e) => console.error('stocks send failed:', e));
+  }
+
+  /** Invest coins into a crypto at its current price. Coins are escrowed into shares. */
+  stockInvest(ws: WebSocket, coin: string, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    if (!STOCKS.some((s) => s.id === coin)) return; // unknown coin
+    const amt = Math.floor(amount);
+    if (!Number.isFinite(amt) || amt < 1) return; // positive whole coins only
+    const price = this.stockPrices.get(coin)?.price;
+    if (!price || !(price > 0)) return;
+    investStock(conn.pid, conn.nickname, coin, amt, price)
+      .then((w) => {
+        if (!w) { this.sendStocks(ws); return; } // couldn't afford — just refresh the view
+        this.sendWallet(ws);
+        this.sendStocks(ws);
+      })
+      .catch((e) => console.error('stock invest failed:', e));
+  }
+
+  /** Cash out the whole position in a crypto for floor(current worth) coins. */
+  stockCashOut(ws: WebSocket, coin: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    if (!STOCKS.some((s) => s.id === coin)) return;
+    const price = this.stockPrices.get(coin)?.price;
+    if (!price || !(price > 0)) return;
+    cashOutStock(conn.pid, conn.nickname, coin, price)
+      .then((res) => {
+        if (!res) { this.sendStocks(ws); return; } // held nothing in that coin
+        this.sendWallet(ws);
+        this.sendStocks(ws);
+      })
+      .catch((e) => console.error('stock cash-out failed:', e));
+  }
+
+  /** Re-roll every coin's price when the 5-minute window elapses, persist the board, and push
+   *  the fresh (revalued) market to every connected client. Cheap to call every tick. */
+  private tickStocks() {
+    if (Date.now() < this.nextStockUpdateAt) return;
+    this.nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS;
+    for (const s of STOCKS) {
+      const cur = this.stockPrices.get(s.id) ?? { price: s.base, prev: s.base };
+      this.stockPrices.set(s.id, { price: rollPrice(cur.price, s.base), prev: cur.price });
+    }
+    saveStockPrices(this.priceBoard()).catch((e) => console.error('stock price save failed:', e));
+    for (const ws of this.conns.keys()) this.sendStocks(ws);
   }
 
   // --- Gambling ---
@@ -1347,6 +1454,7 @@ export class Lobby {
   /** Called every tick after the active sim ticks. Routes to the live mode's bookkeeping. */
   sync() {
     this.expireResume();
+    this.tickStocks(); // re-roll crypto prices when the 5-minute window elapses
     // "coins" power-up: pay the collecting side 1 coin, once.
     if (this.game.coinGrant) {
       const side = this.game.coinGrant;
