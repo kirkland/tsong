@@ -568,6 +568,14 @@
         width: min(86vw, 280px);
         text-align: center;
       }
+      #authArea {
+        margin-top: 10px;
+        font-size: 12px;
+        color: #6a7f9a;
+        text-align: center;
+      }
+      #authArea a { color: #7da2ff; text-decoration: none; }
+      #authArea a:hover { text-decoration: underline; }
       #joinForm input {
         font: inherit;
         padding: 10px 12px;
@@ -2475,6 +2483,10 @@
         </div>
         <button type="submit">Enter</button>
       </form>
+      <div id="authArea">
+        <div id="authChip" hidden></div>
+        <a id="signInLink" href="/auth/google" hidden>Sign in with Google to save progress</a>
+      </div>
     </div>
 
     <script type="module" src="./main.ts"></script>

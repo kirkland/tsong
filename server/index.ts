@@ -1,6 +1,7 @@
 // HTTP + WebSocket entry point. In production it also serves the built client from
 // client/dist so the page and the WebSocket share a single origin.
 
+import 'dotenv/config';
 import http from 'node:http';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -12,6 +13,10 @@ import { Lobby, LobbySnapshot } from './lobby';
 import { initDb } from './db';
 import { getChangelog } from './changelog';
 import { loadSnapshot, saveSnapshot } from './persist';
+import {
+  handleAuthGoogle, handleAuthCallback, handleAuthMe, handleLogout, parseSession,
+} from './auth';
+import type { AuthSession } from './auth';
 
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -67,6 +72,16 @@ const server = http.createServer((req, res) => {
       });
     return;
   }
+  if (req.url === '/auth/google') { handleAuthGoogle(req, res); return; }
+  if (req.url === '/auth/me')     { handleAuthMe(req, res);     return; }
+  if (req.url === '/auth/logout') { handleLogout(req, res);     return; }
+  if (req.url?.startsWith('/auth/google/callback')) {
+    handleAuthCallback(req, res).catch(() => {
+      res.writeHead(302, { Location: '/?auth_error=1' });
+      res.end();
+    });
+    return;
+  }
   serveStatic(req, res, () => {
     res.statusCode = 404;
     res.end('Not found');
@@ -101,7 +116,12 @@ function tickHealth(): TickHealth {
 
 const wss = new WebSocketServer({ server, path: '/ws' });
 
-wss.on('connection', (ws: WebSocket) => {
+// Authenticated sessions keyed by socket (auto-cleaned when the socket is GC'd).
+const wsSessions = new WeakMap<WebSocket, AuthSession>();
+
+wss.on('connection', (ws: WebSocket, req) => {
+  const session = parseSession(req.headers.cookie as string | undefined);
+  if (session) wsSessions.set(ws, session);
   lobby.add(ws);
 
   ws.on('message', (raw) => {
@@ -114,7 +134,9 @@ wss.on('connection', (ws: WebSocket) => {
     switch (msg?.type) {
       case 'join':
         if (typeof msg.nickname === 'string' && typeof msg.pid === 'string') {
-          lobby.join(ws, msg.nickname, msg.pid, typeof msg.color === 'string' ? msg.color : undefined);
+          // Authenticated users get their stable Google pid regardless of what the client sends.
+          const pid = wsSessions.get(ws)?.pid ?? msg.pid;
+          lobby.join(ws, msg.nickname, pid, typeof msg.color === 'string' ? msg.color : undefined);
         }
         break;
       case 'claim':

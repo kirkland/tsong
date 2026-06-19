@@ -50,6 +50,7 @@ export async function initDb(): Promise<void> {
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS hat TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS skin TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_spin BIGINT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS email TEXT`);
   // DOOM minigame high scores — best round reached, per player, per mode (solo / co-op).
   await pool.query(`
     CREATE TABLE IF NOT EXISTS doom_scores (
@@ -287,6 +288,17 @@ export async function addCoins(pid: string, name: string, delta: number): Promis
     [pid, name, delta],
   );
   return rows.length ? rowToWallet(rows[0]) : null;
+}
+
+/** Create or update a player row — used by the OAuth callback to ensure the row exists. */
+export async function upsertPlayer(pid: string, name: string, email?: string): Promise<void> {
+  if (!pool || !pid) return;
+  await pool.query(
+    `INSERT INTO players (id, name, email) VALUES ($1, $2, $3)
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name,
+         email = COALESCE(EXCLUDED.email, players.email)`,
+    [pid, name, email ?? null],
+  );
 }
 
 export async function getLeaderboard(): Promise<LeaderboardRow[]> {

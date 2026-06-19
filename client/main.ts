@@ -179,11 +179,36 @@ function makeId(): string {
     return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
   });
 }
-const myPid = getCookie('tsong_pid') ?? (() => {
+// `let` so a Google login can upgrade it to the stable g:xxx pid at runtime.
+let myPid = getCookie('tsong_pid') ?? (() => {
   const id = makeId();
   setCookie('tsong_pid', id);
   return id;
 })();
+
+// --- Google auth chip ---
+const authChip    = document.getElementById('authChip')    as HTMLDivElement;
+const signInLink  = document.getElementById('signInLink')  as HTMLAnchorElement;
+
+interface AuthMe { pid?: string; name?: string; email?: string; oauthEnabled?: boolean; }
+fetch('/auth/me')
+  .then((r) => r.json() as Promise<AuthMe>)
+  .then((data) => {
+    if (data.pid) {
+      myPid = data.pid;
+      if (!getCookie('tsong_nick') && !nick.value) nick.value = data.name ?? '';
+      authChip.hidden = false;
+      authChip.replaceChildren();
+      const label = document.createTextNode(`Signed in as ${data.name ?? data.email ?? ''} · `);
+      const out = document.createElement('a');
+      out.href = '/auth/logout';
+      out.textContent = 'Sign out';
+      authChip.append(label, out);
+    } else if (data.oauthEnabled) {
+      signInLink.hidden = false;
+    }
+  })
+  .catch(() => { /* OAuth not configured or network error — guest mode continues as-is */ });
 
 let myRole: Role = 'observer';
 let myId = ''; // per-connection id from the server; identifies our own paddle in state
