@@ -504,6 +504,29 @@
         pointer-events: none;
         z-index: 50;
       }
+      /* Small stacking toasts (bottom-right): betting activity + bet results. */
+      #toastLayer {
+        position: fixed;
+        right: 14px;
+        bottom: 14px;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 6px;
+        pointer-events: none;
+        z-index: 60;
+      }
+      #toastLayer .toast {
+        background: rgba(14, 20, 36, 0.95);
+        border: 1px solid #2a3550;
+        border-radius: 8px;
+        padding: 7px 12px;
+        font: 700 13px ui-monospace, monospace;
+        color: #cdd7f5;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+        max-width: 320px;
+        will-change: transform, opacity;
+      }
       /* Power-up pickup flash: name pops at the target location then floats up. */
       .powerup-flash {
         position: fixed;
@@ -2580,6 +2603,7 @@
     </div>
 
     <div id="reactionLayer" aria-hidden="true"></div>
+    <div id="toastLayer" aria-hidden="true"></div>
 
     <div id="overlay">
       <form id="joinForm">
