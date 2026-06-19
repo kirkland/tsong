@@ -1543,23 +1543,22 @@ function showAnnouncement(text: string, opts?: { color?: string; toast?: boolean
 }
 
 // Small, unobtrusive toast in the bottom-right corner; multiple stack and auto-dismiss.
-const toastLayer = document.getElementById('toastLayer') as HTMLDivElement;
+// Rolling "Recent bets" log in the chat column: keeps the last few bet events (placements +
+// results) on screen, newest on top, instead of flashing away — so you can glance back at what
+// just happened.
+const betLogList = document.getElementById('betLogList') as HTMLDivElement;
+const BET_LOG_MAX = 5;
 function showToast(text: string) {
+  betLogList.querySelector('.bet-log-empty')?.remove();
   const el = document.createElement('div');
-  el.className = 'toast';
+  el.className = 'bet-log-entry';
   el.textContent = text;
-  toastLayer.append(el);
-  const anim = el.animate(
-    [
-      { opacity: 0, transform: 'translateY(8px)' },
-      { opacity: 1, transform: 'translateY(0)', offset: 0.08 },
-      { opacity: 1, transform: 'translateY(0)', offset: 0.82 },
-      { opacity: 0, transform: 'translateY(-4px)' },
-    ],
-    { duration: 3400, easing: 'ease-out' },
+  betLogList.prepend(el); // newest on top
+  while (betLogList.children.length > BET_LOG_MAX) betLogList.lastElementChild?.remove();
+  el.animate(
+    [{ opacity: 0, transform: 'translateX(10px)' }, { opacity: 1, transform: 'translateX(0)' }],
+    { duration: 240, easing: 'ease-out' },
   );
-  anim.onfinish = () => el.remove();
-  anim.oncancel = () => el.remove();
 }
 
 // --- Crypto market dropdown (top-left): invest coins into 5 joke cryptos ---
