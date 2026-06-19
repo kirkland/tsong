@@ -259,7 +259,7 @@ export type ClientMsg =
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
   | { type: 'dailySpin' } // claim the once-per-24h reward spin
   | { type: 'stockInvest'; coin: string; amount: number } // sink `amount` coins into a crypto at the current price
-  | { type: 'stockCashOut'; coin: string } // sell the entire holding in a crypto for floor(worth) coins
+  | { type: 'stockCashOut'; coin: string } // sell the entire holding in a crypto for round(worth) coins (nearest)
   | { type: 'getLoan'; amount: number } // borrow `amount` coins from Davis (owe 1.5× back by the daily reset)
   | { type: 'repayLoan' } // pay Davis the full 1.5× owed and clear the loan
   | { type: 'migrate'; oldPid: string }; // one-time: merge a UUID guest account into the signed-in Google account

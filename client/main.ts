@@ -1573,8 +1573,8 @@ function showToast(text: string) {
 
 // --- Crypto market dropdown (top-left): invest coins into 5 joke cryptos ---
 // The server owns the global price board and each player's positions; we just render the
-// latest `stocks` message and fire invest/cash-out requests. `worth` is the floored cash-out
-// value the server sends, so the number we show is exactly what you'd receive.
+// latest `stocks` message and fire invest/cash-out requests. The cash-out number we show is
+// round(worth) — nearest whole coin — exactly what the server pays out.
 type Market = {
   prices: { id: string; price: number; prev: number }[];
   holdings: { id: string; shares: number; cost: number; worth: number }[];
@@ -1662,9 +1662,9 @@ function renderMarket() {
     const first = series.length >= 2 ? series[0] : last;
     const pct = first > 0 ? ((last - first) / first) * 100 : 0;
     // A position's live worth = shares × current price (fractional, so it moves smoothly);
-    // cashing out pays it floored to whole coins.
+    // cashing out pays it rounded to the nearest whole coin (≥ x.5 up, below down).
     const rawWorth = hold ? hold.shares * price : 0;
-    const cashOut = Math.floor(rawWorth);
+    const cashOut = Math.round(rawWorth);
 
     const row = document.createElement('div');
     row.className = 'coin-row';
