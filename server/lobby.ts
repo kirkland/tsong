@@ -29,6 +29,7 @@ import {
   StateMsg,
   STOCKS,
   STOCK_UPDATE_MS,
+  STOCK_HISTORY,
   TEAM_MAX,
   WalletMsg,
 } from '../shared/types';
@@ -207,6 +208,12 @@ export class Lobby {
   // holdings revalue at the new price. Hydrated from / persisted to the DB so it survives
   // restarts. 0 until scheduled (loadStockPrices schedules one if none is saved).
   private nextStockCrashAt = 0;
+  // Per-coin price history for the graphs (in-memory only). `recent` = one sample per re-roll
+  // (≤1h), `daily` = one sample every STOCK_HISTORY.dailyEvery re-rolls (≤1 day). Seeded with
+  // the current price so a graph is never empty.
+  private stockHistRecent = new Map<string, number[]>(STOCKS.map((s) => [s.id, [s.base]] as [string, number[]]));
+  private stockHistDaily = new Map<string, number[]>(STOCKS.map((s) => [s.id, [s.base]] as [string, number[]]));
+  private stockHistTick = 0; // re-roll counter, to decide when to sample the daily series
   private liveMatchId: number | null = null; // bracket match currently on the court
   private tourneyInterMs = 0; // ms left on the "next match" interstitial between games
 
@@ -943,6 +950,10 @@ export class Lobby {
     for (const s of STOCKS) {
       const row = saved[s.id];
       if (row && row.price > 0) this.stockPrices.set(s.id, { price: row.price, prev: row.prev });
+      // Seed the (empty, in-memory) graph history with the resumed price.
+      const seed = this.stockPrices.get(s.id)?.price ?? s.base;
+      this.stockHistRecent.set(s.id, [seed]);
+      this.stockHistDaily.set(s.id, [seed]);
     }
     // Resume the crash schedule; if none is saved (or it lapsed while we were down), book a
     // fresh one rather than crashing the instant we boot.
@@ -967,6 +978,7 @@ export class Lobby {
       this.stockPrices.set(s.id, { price: s.base, prev: cur.price }); // prev = pre-crash price, so the drop shows
     }
     this.nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS; // give the fresh prices a full window
+    this.recordStockHistory(); // the crash itself is a history point (the cliff edge)
     saveStockPrices(this.priceBoard()).catch((e) => console.error('stock price save failed:', e));
     this.scheduleNextCrash();
     this.announce('📉 MARKET CRASH! Every coin just reset to 1.00 🪙 — holdings revalued, fortunes wiped.');
@@ -981,11 +993,41 @@ export class Lobby {
     });
   }
 
-  /** Send a client the price board plus its own positions (revalued at the live price). */
+  /** The per-coin graph history, in STOCKS order. */
+  private historyBoard(): { id: string; recent: number[]; daily: number[] }[] {
+    return STOCKS.map((s) => ({
+      id: s.id,
+      recent: this.stockHistRecent.get(s.id) ?? [],
+      daily: this.stockHistDaily.get(s.id) ?? [],
+    }));
+  }
+
+  /** Record the current price into the graph history (call once per re-roll / crash). The
+   *  `recent` series samples every call; the `daily` series every dailyEvery calls. */
+  private recordStockHistory() {
+    this.stockHistTick++;
+    const sampleDaily = this.stockHistTick % STOCK_HISTORY.dailyEvery === 0;
+    for (const s of STOCKS) {
+      const price = this.stockPrices.get(s.id)?.price ?? s.base;
+      const recent = this.stockHistRecent.get(s.id) ?? [];
+      recent.push(price);
+      while (recent.length > STOCK_HISTORY.recentCap) recent.shift();
+      this.stockHistRecent.set(s.id, recent);
+      if (sampleDaily) {
+        const daily = this.stockHistDaily.get(s.id) ?? [];
+        daily.push(price);
+        while (daily.length > STOCK_HISTORY.dailyCap) daily.shift();
+        this.stockHistDaily.set(s.id, daily);
+      }
+    }
+  }
+
+  /** Send a client the price board, its own positions (revalued live), and graph history. */
   sendStocks(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.pid) return;
     const prices = this.priceBoard();
+    const history = this.historyBoard();
     getHoldings(conn.pid)
       .then((h) => {
         if (!this.conns.has(ws)) return;
@@ -993,7 +1035,7 @@ export class Lobby {
           const price = this.stockPrices.get(id)?.price ?? 0;
           return { id, shares: hd.shares, cost: hd.cost, worth: Math.floor(hd.shares * price) };
         });
-        this.tell(ws, { type: 'stocks', prices, holdings, nextUpdateAt: this.nextStockUpdateAt });
+        this.tell(ws, { type: 'stocks', prices, holdings, history, nextUpdateAt: this.nextStockUpdateAt });
       })
       .catch((e) => console.error('stocks send failed:', e));
   }
@@ -1047,6 +1089,7 @@ export class Lobby {
       const cur = this.stockPrices.get(s.id) ?? { price: s.base, prev: s.base };
       this.stockPrices.set(s.id, { price: rollPrice(cur.price, s.base), prev: cur.price });
     }
+    this.recordStockHistory();
     saveStockPrices(this.priceBoard()).catch((e) => console.error('stock price save failed:', e));
     for (const ws of this.conns.keys()) this.sendStocks(ws);
   }

@@ -792,6 +792,13 @@
         color: #6b7796; margin: 8px 0 6px;
       }
       #marketTimer { font-size: 11px; color: #6b7796; margin-bottom: 8px; }
+      #marketGraphTf { display: flex; gap: 4px; margin-bottom: 8px; }
+      #marketGraphTf button {
+        flex: 1; font: inherit; font-size: 10px; font-weight: 700; padding: 3px 0; border-radius: 5px;
+        border: 1px solid #2a3550; background: #11182c; color: #8693b3; cursor: pointer;
+      }
+      #marketGraphTf button.active { background: #2d4070; border-color: #3a6df0; color: #fff; }
+      .coin-graph { display: block; width: 100%; height: 26px; margin-top: 4px; }
       #marketNote { font-size: 10px; color: #5a647e; margin-top: 8px; line-height: 1.4; }
       #marketList { max-height: 56vh; overflow-y: auto; }
       .coin-row {
@@ -2048,6 +2055,11 @@
         <div id="marketPanel" hidden>
           <h3>Crypto Market · <span id="marketCoins">0</span> 🪙</h3>
           <div id="marketTimer">next move in —</div>
+          <div id="marketGraphTf">
+            <button type="button" data-tf="5m">5m</button>
+            <button type="button" data-tf="1h" class="active">1h</button>
+            <button type="button" data-tf="1d">1d</button>
+          </div>
           <div id="marketList"></div>
           <div id="marketNote">Prices move every 30s and trend up over time. Cashing out sells your whole position and pays the worth, rounded down. ⚠️ Every 5–7 days the market <b>CRASHES</b>: all prices snap back to 1.00 and your holdings revalue at the bottom. Cash out before then.</div>
         </div>
