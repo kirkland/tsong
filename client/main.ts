@@ -23,6 +23,7 @@ import {
   TEAM_MAX,
   COSMETICS,
   SPIN_SEGMENTS,
+  STOCKS,
   TickHealth,
 } from '../shared/types';
 
@@ -541,6 +542,11 @@ const net = connect(
     } else if (msg.type === 'wallet') {
       wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, bets: msg.bets, nextSpinAt: msg.nextSpinAt };
       renderShop();
+      if (!marketPanel.hidden) renderMarket(); // coin balance gates the Invest buttons
+    } else if (msg.type === 'stocks') {
+      market = { prices: msg.prices, holdings: msg.holdings, nextUpdateAt: msg.nextUpdateAt };
+      if (!marketPanel.hidden) renderMarket();
+      updateMarketTimer();
     } else if (msg.type === 'spinResult') {
       celebrateSpin(msg.reward, msg.segment);
     }
@@ -1533,6 +1539,122 @@ function showAnnouncement(text: string, color?: string) {
   anim.onfinish = () => el.remove();
   anim.oncancel = () => el.remove();
 }
+
+// --- Crypto market dropdown (top-left): invest coins into 5 joke cryptos ---
+// The server owns the global price board and each player's positions; we just render the
+// latest `stocks` message and fire invest/cash-out requests. `worth` is the floored cash-out
+// value the server sends, so the number we show is exactly what you'd receive.
+type Market = {
+  prices: { id: string; price: number; prev: number }[];
+  holdings: { id: string; shares: number; cost: number; worth: number }[];
+  nextUpdateAt: number;
+};
+let market: Market = { prices: [], holdings: [], nextUpdateAt: 0 };
+const marketBtn = document.getElementById('marketBtn') as HTMLButtonElement;
+const marketPanel = document.getElementById('marketPanel') as HTMLDivElement;
+const marketCoins = document.getElementById('marketCoins') as HTMLSpanElement;
+const marketTimer = document.getElementById('marketTimer') as HTMLDivElement;
+const marketList = document.getElementById('marketList') as HTMLDivElement;
+// Per-coin "amount to invest" steppers, kept across re-renders so the value doesn't reset
+// when prices re-roll. Defaults to 1.
+const investAmt = new Map<string, number>();
+
+marketBtn.addEventListener('click', () => {
+  const open = marketPanel.hidden;
+  marketPanel.hidden = !open;
+  marketBtn.setAttribute('aria-expanded', String(open));
+  if (open) renderMarket();
+});
+document.addEventListener('click', (e) => {
+  if (marketPanel.hidden) return;
+  const t = e.target as Node;
+  if (!marketPanel.contains(t) && !marketBtn.contains(t)) { marketPanel.hidden = true; marketBtn.setAttribute('aria-expanded', 'false'); }
+});
+
+function renderMarket() {
+  marketCoins.textContent = String(wallet.coins);
+  marketList.innerHTML = '';
+  for (const stock of STOCKS) {
+    const p = market.prices.find((x) => x.id === stock.id);
+    const hold = market.holdings.find((x) => x.id === stock.id);
+    const price = p?.price ?? stock.base;
+    const prev = p?.prev ?? price;
+    const pct = prev > 0 ? ((price - prev) / prev) * 100 : 0;
+
+    const row = document.createElement('div');
+    row.className = 'coin-row';
+
+    const logo = document.createElement('img');
+    logo.className = 'coin-logo';
+    logo.src = stock.img;
+    logo.alt = stock.name;
+    row.appendChild(logo);
+
+    const main = document.createElement('div');
+    main.className = 'coin-main';
+    const name = document.createElement('div');
+    name.className = 'coin-name';
+    name.textContent = stock.name;
+    main.appendChild(name);
+    const priceLine = document.createElement('div');
+    priceLine.className = 'coin-price';
+    const dir = pct > 0.01 ? 'up' : pct < -0.01 ? 'down' : 'flat';
+    const arrow = dir === 'up' ? '▲' : dir === 'down' ? '▼' : '•';
+    priceLine.innerHTML = `${price.toFixed(2)} 🪙<span class="coin-chg ${dir}">${arrow} ${Math.abs(pct).toFixed(1)}%</span>`;
+    main.appendChild(priceLine);
+    if (hold) {
+      const pos = document.createElement('div');
+      pos.className = 'coin-pos';
+      const plClass = hold.worth > hold.cost ? 'pl-up' : hold.worth < hold.cost ? 'pl-down' : '';
+      pos.innerHTML = `held: ${hold.cost}🪙 → worth <span class="${plClass}">${hold.worth}🪙</span>`;
+      main.appendChild(pos);
+    }
+    row.appendChild(main);
+
+    const actions = document.createElement('div');
+    actions.className = 'coin-actions';
+    const buy = document.createElement('div');
+    buy.className = 'coin-buy';
+    let amt = investAmt.get(stock.id) ?? 1;
+    amt = Math.max(1, Math.min(amt, Math.max(1, wallet.coins)));
+    investAmt.set(stock.id, amt);
+    const minus = document.createElement('button');
+    minus.textContent = '−';
+    minus.onclick = () => { investAmt.set(stock.id, Math.max(1, (investAmt.get(stock.id) ?? 1) - 1)); renderMarket(); };
+    const amtEl = document.createElement('span');
+    amtEl.className = 'coin-amt';
+    amtEl.textContent = String(amt);
+    const plus = document.createElement('button');
+    plus.textContent = '+';
+    plus.onclick = () => { investAmt.set(stock.id, Math.min(wallet.coins || 1, (investAmt.get(stock.id) ?? 1) + 1)); renderMarket(); };
+    const invest = document.createElement('button');
+    invest.textContent = 'Invest';
+    invest.disabled = wallet.coins < amt;
+    invest.onclick = () => { net.send({ type: 'stockInvest', coin: stock.id, amount: investAmt.get(stock.id) ?? 1 }); playChaChing(); };
+    buy.append(minus, amtEl, plus, invest);
+    actions.appendChild(buy);
+
+    const cash = document.createElement('button');
+    cash.className = 'coin-cash';
+    cash.textContent = hold ? `Cash out ${hold.worth}🪙` : 'Cash out';
+    cash.disabled = !hold;
+    cash.onclick = () => { net.send({ type: 'stockCashOut', coin: stock.id }); playChaChing(); };
+    actions.appendChild(cash);
+
+    row.appendChild(actions);
+    marketList.appendChild(row);
+  }
+}
+
+// Live countdown to the next price re-roll (the panel can stay open across a move).
+function updateMarketTimer() {
+  if (marketPanel.hidden) return;
+  const ms = market.nextUpdateAt - Date.now();
+  if (!market.nextUpdateAt || ms <= 0) { marketTimer.textContent = 'next move: any moment…'; return; }
+  const m = Math.floor(ms / 60000), s = Math.floor((ms % 60000) / 1000);
+  marketTimer.textContent = `next move in ${m}:${String(s).padStart(2, '0')}`;
+}
+setInterval(updateMarketTimer, 1000);
 
 // --- Game Modes dropdown (top-left): game mode toggles ---
 const gameModesBtn = document.getElementById('gameModesBtn') as HTMLButtonElement;

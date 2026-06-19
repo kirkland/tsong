@@ -51,6 +51,24 @@ export async function initDb(): Promise<void> {
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS skin TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_spin BIGINT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS email TEXT`);
+  // Stock market: per-player positions (fractional shares + coins-invested cost basis),
+  // keyed by player + coin id; and the global price board (one row per coin).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS stock_holdings (
+      pid    TEXT NOT NULL,
+      coin   TEXT NOT NULL,
+      shares DOUBLE PRECISION NOT NULL DEFAULT 0,
+      cost   INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (pid, coin)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS stock_prices (
+      coin  TEXT PRIMARY KEY,
+      price DOUBLE PRECISION NOT NULL,
+      prev  DOUBLE PRECISION NOT NULL
+    )
+  `);
   // DOOM minigame high scores — best round reached, per player, per mode (solo / co-op).
   await pool.query(`
     CREATE TABLE IF NOT EXISTS doom_scores (
@@ -340,6 +358,74 @@ export async function upsertPlayer(pid: string, name: string, email?: string): P
          email = COALESCE(EXCLUDED.email, players.email)`,
     [pid, name, email ?? null],
   );
+}
+
+// --- Stock market ---
+export interface Holding { shares: number; cost: number; }
+
+/** Read all of a player's open stock positions, keyed by coin id. */
+export async function getHoldings(pid: string): Promise<Record<string, Holding>> {
+  if (!pool || !pid) return {};
+  const { rows } = await pool.query(`SELECT coin, shares, cost FROM stock_holdings WHERE pid = $1 AND shares > 0`, [pid]);
+  const out: Record<string, Holding> = {};
+  for (const r of rows) out[r.coin] = { shares: Number(r.shares), cost: Number(r.cost) };
+  return out;
+}
+
+/** Invest `amount` coins into `coin` at the given price: deducts the coins (fails — returns
+ *  null — if the player can't afford it) and adds amount/price shares to the position,
+ *  pooling with any existing holding. Returns the updated wallet on success. */
+export async function investStock(pid: string, _name: string, coin: string, amount: number, price: number): Promise<Wallet | null> {
+  if (!pool || !pid || amount <= 0 || !(price > 0)) return null;
+  // Escrow the coins first; bail out untouched if the balance isn't there.
+  const wallet = await spendCoins(pid, amount);
+  if (!wallet) return null;
+  const shares = amount / price;
+  await pool.query(
+    `INSERT INTO stock_holdings (pid, coin, shares, cost) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (pid, coin) DO UPDATE
+       SET shares = stock_holdings.shares + EXCLUDED.shares,
+           cost   = stock_holdings.cost   + EXCLUDED.cost`,
+    [pid, coin, shares, Math.floor(amount)],
+  );
+  return wallet;
+}
+
+/** Cash out the entire position in `coin` at the given price: pays floor(shares × price)
+ *  coins, deletes the holding, and returns the new wallet plus the payout. Returns null if
+ *  the player holds nothing in that coin. */
+export async function cashOutStock(pid: string, name: string, coin: string, price: number): Promise<{ wallet: Wallet; payout: number } | null> {
+  if (!pool || !pid) return null;
+  const { rows } = await pool.query(`SELECT shares FROM stock_holdings WHERE pid = $1 AND coin = $2`, [pid, coin]);
+  if (!rows.length || Number(rows[0].shares) <= 0) return null;
+  const shares = Number(rows[0].shares);
+  const payout = Math.floor(shares * price);
+  await pool.query(`DELETE FROM stock_holdings WHERE pid = $1 AND coin = $2`, [pid, coin]);
+  // addCoins with a 0 delta still returns the (unchanged) wallet, so a wiped-out position
+  // still resolves cleanly.
+  const wallet = (await addCoins(pid, name, payout)) ?? (await getWallet(pid));
+  return { wallet, payout };
+}
+
+/** Load the persisted global price board (empty if never saved / no DB). */
+export async function getStockPrices(): Promise<Record<string, { price: number; prev: number }>> {
+  if (!pool) return {};
+  const { rows } = await pool.query(`SELECT coin, price, prev FROM stock_prices`);
+  const out: Record<string, { price: number; prev: number }> = {};
+  for (const r of rows) out[r.coin] = { price: Number(r.price), prev: Number(r.prev) };
+  return out;
+}
+
+/** Persist the global price board so the market resumes where it left off after a restart. */
+export async function saveStockPrices(prices: { id: string; price: number; prev: number }[]): Promise<void> {
+  if (!pool) return;
+  for (const p of prices) {
+    await pool.query(
+      `INSERT INTO stock_prices (coin, price, prev) VALUES ($1, $2, $3)
+         ON CONFLICT (coin) DO UPDATE SET price = EXCLUDED.price, prev = EXCLUDED.prev`,
+      [p.id, p.price, p.prev],
+    );
+  }
 }
 
 export async function getLeaderboard(): Promise<LeaderboardRow[]> {
