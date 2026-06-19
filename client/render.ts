@@ -113,7 +113,7 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
   drawPaddleEffects(ctx, s);
 
   // Breakout bricks — drawn behind the ball so the ball visually smashes through them.
-  if (s.breakout && s.bricks) drawBricks(ctx, s.bricks);
+  if (s.breakout && s.bricks) drawBricks(ctx, s.bricks, s.ballSpeed);
 
   // Portal wall rings — subtle glow on the top and bottom walls when active.
   if (s.portal) drawPortalWalls(ctx);
@@ -364,32 +364,38 @@ function drawPolyPaddle(ctx: CanvasRenderingContext2D, poly: PolyState, pl: Poly
   }
 }
 
-// Breakout mode: draw the surviving bricks in the center of the court.
-// Each row gets a distinct hue; destroyed bricks are skipped.
-const BRICK_HUES = [200, 140, 40, 0]; // blue, green, amber, red (top → bottom)
+// Breakout mode: draw the surviving bricks as a vertical wall down the centre.
+// Colour cycles in bands of 4 rows: blue → teal → amber → red (top → bottom).
+const BRICK_HUES = [210, 170, 35, 0];
 
-function drawBricks(ctx: CanvasRenderingContext2D, bricks: boolean[]) {
+function drawBricks(ctx: CanvasRenderingContext2D, bricks: boolean[], ballSpeed: number) {
   const { cols, rows, w, h, gap, left, top } = BREAKOUT;
+  // Before the first paddle hit the ball phases through — signal that with a
+  // ghostly low-opacity render so players know the wall is "warming up".
+  const phasing = ballSpeed === 0;
+  ctx.save();
+  ctx.globalAlpha = phasing ? 0.28 : 1;
   for (let row = 0; row < rows; row++) {
-    const hue = BRICK_HUES[row % BRICK_HUES.length];
+    const hue = BRICK_HUES[Math.floor(row / 2) % BRICK_HUES.length];
     for (let col = 0; col < cols; col++) {
       const idx = row * cols + col;
       if (!bricks[idx]) continue;
       const bx = left + col * (w + gap);
       const by = top  + row * (h + gap);
       // Body
-      ctx.fillStyle = `hsl(${hue}, 70%, 45%)`;
+      ctx.fillStyle = `hsl(${hue}, 68%, 42%)`;
       ctx.beginPath();
       (ctx as CanvasRenderingContext2D & { roundRect?: (...a: unknown[]) => void }).roundRect?.(bx, by, w, h, 3) ?? ctx.rect(bx, by, w, h);
       ctx.fill();
-      // Bright top-left highlight
-      ctx.fillStyle = `hsla(${hue}, 80%, 78%, 0.5)`;
-      ctx.fillRect(bx + 2, by + 2, w - 4, 4);
-      // Dark bottom edge shadow
-      ctx.fillStyle = `hsla(${hue}, 50%, 20%, 0.45)`;
-      ctx.fillRect(bx + 2, by + h - 4, w - 4, 3);
+      // Top-left highlight
+      ctx.fillStyle = `hsla(${hue}, 75%, 75%, 0.50)`;
+      ctx.fillRect(bx + 2, by + 2, w - 4, 3);
+      // Bottom shadow
+      ctx.fillStyle = `hsla(${hue}, 45%, 18%, 0.45)`;
+      ctx.fillRect(bx + 2, by + h - 3, w - 4, 3);
     }
   }
+  ctx.restore();
 }
 
 // Portal walls mode: draw glowing rings on the top and bottom walls.

@@ -793,7 +793,9 @@ export class Game {
     }
 
     // Breakout: check ball against surviving bricks.
-    if (this.breakout && this.brickAlive.length > 0) {
+    // Phase through the wall until the first paddle hit so the ball doesn't
+    // spawn inside the wall and immediately destroy bricks on serve.
+    if (this.breakout && this.brickAlive.length > 0 && this.lastHit !== null) {
       const { cols, rows, w, h, gap, left, top } = BREAKOUT;
       outer: for (let row = 0; row < rows; row++) {
         for (let col = 0; col < cols; col++) {
