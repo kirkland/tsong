@@ -836,7 +836,10 @@
         color: #6b7796; margin: 8px 0 6px;
       }
       #loanImg {
-        display: block; width: 100%; height: 150px; object-fit: cover;
+        /* Davis's photos are a mix of portrait (intro/amount) and landscape (owed). `cover` at a
+           fixed height cropped the portraits — cutting off his forehead / showing only the middle.
+           `contain` with a capped height shows each one whole; the dark bg fills any letterbox. */
+        display: block; width: 100%; max-height: 260px; object-fit: contain;
         border-radius: 6px; background: #060912; margin-bottom: 8px;
       }
       #loanBody { font-size: 12px; color: #c3cae0; line-height: 1.45; }
