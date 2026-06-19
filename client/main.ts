@@ -2678,8 +2678,10 @@ function updateUI() {
   renderPuHud(state);
   renderTournament(state.tournament);
   renderBetBoard(state);
+  // The bet panel lives under the court (not in the shop), so it must refresh every frame —
+  // otherwise live odds, seat changes, and your placed bets only update on a page reload.
+  syncBetSection();
   if (!shopPanel.hidden) {
-    syncBetSection(); // light per-tick update (don't rebuild the item list — it eats clicks)
     // Repaint animated skin previews every frame while the shop is open
     for (const { canvas, id, slot } of shopPreviewCanvases) drawCosmeticPreview(canvas, id, slot);
   }
