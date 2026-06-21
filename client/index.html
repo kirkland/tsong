@@ -919,12 +919,14 @@
       .rl-chip:hover { background: #1a2238; }
       .rl-chip.active { background: #ffd166; border-color: #ffd166; color: #1a1020; }
       #rouletteBoard { display: flex; flex-direction: column; gap: 3px; }
+      /* The whole felt: 0 gutter column on the left, then the 12 number columns. */
+      .rl-table { display: grid; grid-template-columns: auto repeat(12, 1fr); gap: 3px; }
       .rl-zero {
-        font: inherit; font-size: 12px; font-weight: 700; padding: 5px; border-radius: 5px;
+        font: inherit; font-size: 13px; font-weight: 700; padding: 0 9px; border-radius: 5px;
         border: 1px solid #1f5a3a; background: #0a2417; color: #6ee7a8; cursor: pointer; position: relative;
+        display: flex; align-items: center; justify-content: center;
       }
       .rl-zero:hover { background: #0f3422; }
-      .rl-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 3px; }
       .rl-num {
         font: 700 11px ui-monospace, monospace; padding: 5px 0; border-radius: 4px;
         border: 1px solid transparent; color: #fff; cursor: pointer; text-align: center; position: relative;
@@ -933,7 +935,6 @@
       .rl-num.red:hover { background: #d62c46; }
       .rl-num.black { background: #21283c; }
       .rl-num.black:hover { background: #2f3950; }
-      .rl-outs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; margin-top: 2px; }
       .rl-out {
         font: inherit; font-size: 11px; font-weight: 700; padding: 6px 0; border-radius: 5px;
         border: 1px solid #2a3550; background: #11182c; color: #cdd7f5; cursor: pointer; position: relative;
@@ -2247,6 +2248,8 @@
             <button class="rl-chip" data-chip="10" type="button">10</button>
             <button class="rl-chip" data-chip="25" type="button">25</button>
             <button class="rl-chip" data-chip="100" type="button">100</button>
+            <button class="rl-chip" data-chip="500" type="button">500</button>
+            <button class="rl-chip" data-chip="1000" type="button">1000</button>
           </div>
           <!-- Betting board: 0, the 1–36 grid, then the outside bets. Built by client/roulette.ts. -->
           <div id="rouletteBoard"></div>
