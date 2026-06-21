@@ -549,6 +549,7 @@ const net = connect(
       market = { prices: msg.prices, holdings: msg.holdings, history: msg.history, nextUpdateAt: msg.nextUpdateAt };
       if (!marketPanel.hidden) renderMarket();
       updateMarketTimer();
+      renderStability(msg.stability);
     } else if (msg.type === 'spinResult') {
       celebrateSpin(msg.reward, msg.segment);
     } else if (msg.type === 'loan') {
@@ -1756,7 +1757,27 @@ function updateMarketTimer() {
 }
 setInterval(updateMarketTimer, 1000);
 
-// --- Davis's loans (top-left): borrow coins, owe 1.5× by the daily reset ---
+// --- Market Stability bar (top of the chat column) ---
+// Fills with the total unpaid (defaulted) loan debt; at 100% the whole market crashes. The
+// server sends the latest pool on every `stocks` message (join, trades, re-rolls, collection).
+const marketStability = document.getElementById('marketStability') as HTMLDivElement;
+const msFill = document.getElementById('msFill') as HTMLDivElement;
+const msPct = document.getElementById('msPct') as HTMLSpanElement;
+const msInfo = document.getElementById('msInfo') as HTMLButtonElement;
+const msInfoPop = document.getElementById('msInfoPop') as HTMLDivElement;
+msInfo.addEventListener('click', () => { msInfoPop.hidden = !msInfoPop.hidden; });
+function renderStability(s: { unpaid: number; threshold: number } | undefined) {
+  if (!s || !(s.threshold > 0)) return;
+  marketStability.hidden = false;
+  const frac = Math.max(0, Math.min(1, s.unpaid / s.threshold));
+  const pct = Math.round(frac * 100);
+  msFill.style.width = `${frac * 100}%`;
+  // Green (stable) → red (about to crash) as the bar fills.
+  msFill.style.backgroundColor = `hsl(${Math.round(140 * (1 - frac))} 70% 52%)`;
+  msPct.textContent = `${Math.round(s.unpaid).toLocaleString()} / ${s.threshold.toLocaleString()} 🪙 · ${pct}%`;
+}
+
+// --- Davis's loans (top-left): borrow coins, owe 1.5× by the daily 5pm collection ---
 // The server owns the loan; we render the latest `loan` state and fire getLoan/repayLoan.
 // `loanStep` is local conversation state: 'intro' (Davis offers) → 'amount' (pick how much).
 // Once you hold a loan, the panel always shows the repay view regardless of step.
@@ -1794,7 +1815,7 @@ function renderLoan() {
     const due = loan.dueAt - Date.now();
     loanBody.innerHTML =
       `<div class="loan-line">You borrowed <b>${loan.amount}</b>🪙. Davis wants <span class="loan-owe">${loan.owed}🪙</span> back.</div>` +
-      `<div class="loan-due">Due at the daily market reset · <b>${fmtCountdown(due)}</b> left. Miss it and he takes <b>everything</b> — coins, stocks, and cosmetics.</div>`;
+      `<div class="loan-due">Due by <b>5pm</b> · <b>${fmtCountdown(due)}</b> left. Miss it and he takes <b>everything</b> — coins, stocks, and cosmetics — and your unpaid debt destabilizes the whole market.</div>`;
     const actions = document.createElement('div');
     actions.className = 'loan-actions';
     const pay = document.createElement('button');
@@ -1814,7 +1835,7 @@ function renderLoan() {
   // No loan: 'amount' step (pick how much) or 'intro' (Davis offers).
   if (loanStep === 'amount') {
     loanImg.src = DAVIS_AMOUNT;
-    loanBody.innerHTML = `<div class="loan-line">I respect a fellow heavy hitter. How much you need? I'll want <b>1.5×</b> back by end of day.</div>`;
+    loanBody.innerHTML = `<div class="loan-line">I respect a fellow heavy hitter. How much you need? I'll want <b>1.5×</b> back by <b>5pm</b>.</div>`;
     const row = document.createElement('div');
     row.className = 'loan-amt-row';
     const input = document.createElement('input');
@@ -1834,7 +1855,7 @@ function renderLoan() {
     loanBody.appendChild(owe);
     const warn = document.createElement('div');
     warn.className = 'loan-warn';
-    warn.innerHTML = `⚠️ If you don't repay by the daily market reset, Davis takes <b>EVERYTHING</b> — your coins, your stocks, and every cosmetic you own. No mercy.`;
+    warn.innerHTML = `⚠️ If you don't repay by <b>5pm</b>, Davis takes <b>EVERYTHING</b> — your coins, your stocks, and every cosmetic you own — and your unpaid debt destabilizes the market for everyone. No mercy.`;
     loanBody.appendChild(warn);
     const actions = document.createElement('div');
     actions.className = 'loan-actions';
@@ -1859,7 +1880,7 @@ function renderLoan() {
   loanImg.src = DAVIS_INTRO;
   loanBody.innerHTML =
     `<div class="loan-quote">"${davisQuote}"</div>` +
-    `<div class="loan-line">I can spot you some coins — pay me back <b>1.5×</b> by the daily reset. Would you like a loan?</div>`;
+    `<div class="loan-line">I can spot you some coins — pay me back <b>1.5×</b> by <b>5pm</b>. Would you like a loan?</div>`;
   const actions = document.createElement('div');
   actions.className = 'loan-actions';
   const yes = document.createElement('button');

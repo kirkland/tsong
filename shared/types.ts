@@ -266,7 +266,7 @@ export type ClientMsg =
   | { type: 'dailySpin' } // claim the once-per-24h reward spin
   | { type: 'stockInvest'; coin: string; amount: number } // sink `amount` coins into a crypto at the current price
   | { type: 'stockCashOut'; coin: string } // sell the entire holding in a crypto for round(worth) coins (nearest)
-  | { type: 'getLoan'; amount: number } // borrow `amount` coins from Davis (owe 1.5× back by the daily reset)
+  | { type: 'getLoan'; amount: number } // borrow `amount` coins from Davis (owe 1.5× back by the daily 5pm collection)
   | { type: 'repayLoan' } // pay Davis the full 1.5× owed and clear the loan
   | { type: 'migrate'; oldPid: string }; // one-time: merge a UUID guest account into the signed-in Google account
 
@@ -563,8 +563,9 @@ export interface WalletMsg {
 
 // A player's private loan status, sent only to that client (on join and after any loan
 // change). `loan` is null when they owe Davis nothing. Borrow N coins now; owe `owed`
-// (= ceil(1.5 × N), Davis rounds up) back by `dueAt` (the next daily market reset). Miss the
-// deadline and Davis zeroes your wallet AND wipes every stock position.
+// (= ceil(1.5 × N), Davis rounds up) back by `dueAt` (the next daily 5pm collection). Miss the
+// deadline and Davis zeroes your wallet AND wipes every stock position — and your unpaid debt is
+// added to the market-instability pool (see MARKET_INSTABILITY_THRESHOLD).
 export interface LoanMsg {
   type: 'loan';
   loan: { amount: number; owed: number; dueAt: number } | null;
@@ -599,6 +600,12 @@ export const STOCKS = [
 ] as const;
 export type StockId = (typeof STOCKS)[number]['id'];
 export const STOCK_UPDATE_MS = 30 * 1000; // prices re-roll every 30 seconds
+// Market stability: the market no longer resets on a daily timer. Instead, each day's loan
+// collection adds every defaulter's unpaid debt (the 1.5× `owed`) to a global instability
+// pool. When that pool reaches MARKET_INSTABILITY_THRESHOLD coins, the whole market crashes
+// (every coin snaps back to base) for EVERYONE and the pool resets to 0. The "Market Stability"
+// bar shows pool / threshold.
+export const MARKET_INSTABILITY_THRESHOLD = 10000;
 // Per-coin price-history buffers for the little graphs — one independent series per
 // timeframe so each view has its own resolution and span (no overlap/aliasing). `everyTicks`
 // is how many re-rolls (30s each) between samples; `cap` is how many points to keep:
@@ -628,6 +635,9 @@ export interface StockMsg {
   // first). See STOCK_HISTORY for the cadence/length of each series.
   history: { id: string; series: { '5m': number[]; '1h': number[]; '1d': number[] } }[];
   nextUpdateAt: number; // epoch ms when prices next re-roll
+  // Global market-stability pool: `unpaid` is the running total of defaulted loan debt, `threshold`
+  // is where it triggers a market-wide crash (MARKET_INSTABILITY_THRESHOLD). Drives the bar.
+  stability: { unpaid: number; threshold: number };
 }
 
 // Result of a daily spin, sent to the spinning client so it can land the wheel on `segment`
