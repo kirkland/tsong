@@ -36,11 +36,15 @@ export interface RouletteHandle {
   setCoins(n: number): void;
   /** Land the wheel on the server's rolled number and settle up the on-screen state. */
   onResult(msg: { number: number; staked: number; payout: number }): void;
+  /** True while a spin's wheel animation is still running (the result isn't revealed yet). */
+  isSpinning(): boolean;
 }
 
 export function initRoulette(opts: {
   send: (bets: RouletteBet[]) => void;
   playWin?: () => void;
+  /** Called when a spin's animation finishes — the moment it's safe to reveal the settled wallet. */
+  onSettled?: () => void;
 }): RouletteHandle {
   const btn = document.getElementById('rouletteBtn') as HTMLButtonElement;
   const panel = document.getElementById('roulettePanel') as HTMLDivElement;
@@ -317,6 +321,7 @@ export function initRoulette(opts: {
       bets.clear();
       coinsEl.textContent = String(coins); // reveal the settled balance (stake out, winnings in)
       syncBadges(); // also re-gates the spin button against the new balance
+      opts.onSettled?.(); // wheel has landed — safe to reveal the settled wallet elsewhere now
     });
   }
 
@@ -355,5 +360,6 @@ export function initRoulette(opts: {
       if (!spinning) { coinsEl.textContent = String(n); syncBadges(); }
     },
     onResult,
+    isSpinning: () => spinning,
   };
 }
