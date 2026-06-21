@@ -664,7 +664,7 @@ export const ROULETTE_WHEEL: readonly number[] = [
   0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10,
   5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26,
 ];
-export const ROULETTE_MAX_TOTAL = 1000; // most coins that may be staked across all bets on one spin
+export const ROULETTE_MAX_TOTAL = 10000; // most coins that may be staked across all bets on one spin
 
 // The bet kinds offered. `straight` needs a target `number` (0–36); the rest are the
 // classic "outside" bets. The value is the profit-to-stake ratio — a winning bet returns

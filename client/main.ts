@@ -1723,23 +1723,36 @@ function renderMarket() {
     investAmt.set(stock.id, amt);
     const minus = document.createElement('button');
     minus.textContent = '−';
-    const amtEl = document.createElement('span');
+    // Typable amount: the player can key in any number, or nudge it with −/+. Defaults to 100.
+    const amtEl = document.createElement('input');
+    amtEl.type = 'number';
+    amtEl.min = '1';
+    amtEl.step = '1';
     amtEl.className = 'coin-amt';
-    amtEl.textContent = String(amt);
+    amtEl.setAttribute('inputmode', 'numeric');
+    amtEl.value = String(amt);
     const plus = document.createElement('button');
     plus.textContent = '+';
     const invest = document.createElement('button');
     invest.textContent = 'Invest';
     invest.disabled = wallet.coins < amt;
     invest.onclick = () => { net.send({ type: 'stockInvest', coin: stock.id, amount: investAmt.get(stock.id) ?? 100 }); playChaChing(); };
-    // Step the amount in place (don't re-render) — rebuilding the row would detach the very
+    // Step/commit the amount in place (don't re-render) — rebuilding the row would detach the very
     // button that was clicked and trip the click-outside handler, closing the whole panel.
     const setAmt = (v: number) => {
       const clamped = Math.max(1, Math.min(v, Math.max(1, wallet.coins)));
       investAmt.set(stock.id, clamped);
-      amtEl.textContent = String(clamped);
+      amtEl.value = String(clamped);
       invest.disabled = wallet.coins < clamped;
     };
+    // Track what they type live (so Invest gates correctly); normalize/clamp on commit (blur/Enter).
+    amtEl.addEventListener('input', () => {
+      const v = Math.floor(Number(amtEl.value));
+      const valid = Number.isFinite(v) && v >= 1;
+      investAmt.set(stock.id, valid ? v : 1);
+      invest.disabled = !valid || wallet.coins < v;
+    });
+    amtEl.addEventListener('change', () => setAmt(Math.floor(Number(amtEl.value)) || 1));
     minus.onclick = () => setAmt((investAmt.get(stock.id) ?? 100) - 1);
     plus.onclick = () => setAmt((investAmt.get(stock.id) ?? 100) + 1);
     buy.append(minus, amtEl, plus, invest);

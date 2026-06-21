@@ -66,57 +66,65 @@ export function initRoulette(opts: {
   const cap = () => Math.min(ROULETTE_MAX_TOTAL, coins);
 
   // --- Build the betting board once ---
+  // Standard casino felt: the green 0 sits on the left spanning all three number rows, then 1–36
+  // fill 12 columns × 3 rows in the classic column-major order (top 3,6,…,36 / middle 2,5,…,35 /
+  // bottom 1,4,…,34). Dozens and even-money bets sit underneath, aligned to the 12 number columns.
+  // Numbers keep their true red/black via ROULETTE_RED, so the familiar pattern reads correctly.
   function buildBoard() {
     board.innerHTML = '';
     cells.clear();
+
+    const table = document.createElement('div');
+    table.className = 'rl-table';
 
     const zero = document.createElement('button');
     zero.type = 'button';
     zero.className = 'rl-zero';
     zero.textContent = '0';
+    zero.style.gridColumn = '1';
+    zero.style.gridRow = '1 / span 3';
     bindCell(zero, straightKey(0));
-    board.appendChild(zero);
+    table.appendChild(zero);
 
-    // 1–36 in three rows of twelve (top row 1..12, etc.), matching a real layout closely
-    // enough to read. We lay it out row-major as a single 12-col grid of 3 rows.
-    const grid = document.createElement('div');
-    grid.className = 'rl-grid';
     for (let row = 0; row < 3; row++) {
       for (let col = 0; col < 12; col++) {
-        const n = row * 12 + col + 1;
+        const n = col * 3 + (3 - row); // column-major: top row 3,6,…; middle 2,5,…; bottom 1,4,…
         const c = document.createElement('button');
         c.type = 'button';
         c.className = `rl-num ${ROULETTE_RED.has(n) ? 'red' : 'black'}`;
         c.textContent = String(n);
+        c.style.gridColumn = String(col + 2);
+        c.style.gridRow = String(row + 1);
         bindCell(c, straightKey(n));
-        grid.appendChild(c);
+        table.appendChild(c);
       }
     }
-    board.appendChild(grid);
 
-    const dozens = document.createElement('div');
-    dozens.className = 'rl-outs';
-    for (const d of DOZENS) {
+    // Dozens: each spans 4 of the 12 number columns, on the row just below the grid.
+    DOZENS.forEach((d, i) => {
       const c = document.createElement('button');
       c.type = 'button';
       c.className = 'rl-out';
       c.textContent = d.label;
+      c.style.gridColumn = `${2 + i * 4} / span 4`;
+      c.style.gridRow = '4';
       bindCell(c, d.kind);
-      dozens.appendChild(c);
-    }
-    board.appendChild(dozens);
+      table.appendChild(c);
+    });
 
-    const outs = document.createElement('div');
-    outs.className = 'rl-outs';
-    for (const o of OUTSIDE) {
+    // Even-money bets: each spans 2 columns, on the bottom row.
+    OUTSIDE.forEach((o, i) => {
       const c = document.createElement('button');
       c.type = 'button';
       c.className = `rl-out ${o.cls ?? ''}`.trim();
       c.textContent = o.label;
+      c.style.gridColumn = `${2 + i * 2} / span 2`;
+      c.style.gridRow = '5';
       bindCell(c, o.kind);
-      outs.appendChild(c);
-    }
-    board.appendChild(outs);
+      table.appendChild(c);
+    });
+
+    board.appendChild(table);
   }
 
   // Wire a board cell: left-click stakes the current chip; right-click clears that cell.
@@ -279,6 +287,9 @@ export function initRoulette(opts: {
     clearBtn.disabled = true;
     resultEl.textContent = 'Spinning…';
     resultEl.className = '';
+    // Optimistically deduct the stake from the on-screen total now; the settled balance (incl.
+    // any winnings) is revealed when the wheel finishes, not the instant the server replies.
+    coinsEl.textContent = String(coins - total);
     opts.send(slate);
   }
 
@@ -304,6 +315,7 @@ export function initRoulette(opts: {
         resultEl.textContent = `💀 ${n} ${color} — lost ${msg.staked} 🪙`;
       }
       bets.clear();
+      coinsEl.textContent = String(coins); // reveal the settled balance (stake out, winnings in)
       syncBadges(); // also re-gates the spin button against the new balance
     });
   }
@@ -338,9 +350,9 @@ export function initRoulette(opts: {
   return {
     setCoins(n: number) {
       coins = n;
-      coinsEl.textContent = String(n);
-      // A balance change can make the current slate unaffordable; re-gate the spin button.
-      if (!spinning) syncBadges();
+      // During a spin we keep the optimistic (post-stake) total on screen so the settled balance
+      // isn't revealed before the wheel lands — onResult reveals it when the animation finishes.
+      if (!spinning) { coinsEl.textContent = String(n); syncBadges(); }
     },
     onResult,
   };
