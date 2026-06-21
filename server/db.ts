@@ -562,6 +562,14 @@ export async function takeLoan(pid: string, name: string, amount: number, dueAt:
   return { wallet, loan: { amount: principal, owed, dueAt } };
 }
 
+/** Snap any open loan whose deadline sits later than `dueAt` back to it. Used on boot when the
+ *  daily collection moved to a fixed 5pm: loans booked under the old rolling-24h deadline get
+ *  pulled to the next 5pm so their countdown is correct. Never extends a loan that's due sooner. */
+export async function realignLoansToDeadline(dueAt: number): Promise<void> {
+  if (!pool) return;
+  await pool.query(`UPDATE loans SET due_at = $1 WHERE due_at > $1`, [dueAt]);
+}
+
 /** Repay a loan in full: spends the whole `owed` amount and clears the debt. Fails — returns
  *  null — if there's no loan or the player can't afford the full repayment (loan untouched). */
 export async function repayLoan(pid: string): Promise<{ wallet: Wallet } | null> {

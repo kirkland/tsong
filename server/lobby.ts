@@ -43,8 +43,8 @@ import {
 import { getLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, DAILY_SPIN_MS,
   getHoldings, investStock, cashOutStock, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
-  getStockCrashAt, setStockCrashAt, getMarketInstability, setMarketInstability,
-  getLoan, takeLoan, repayLoan, collectDefaultedLoans } from './db';
+  setStockCrashAt, getMarketInstability, setMarketInstability,
+  getLoan, takeLoan, repayLoan, collectDefaultedLoans, realignLoansToDeadline } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
 
@@ -86,6 +86,24 @@ function rollPrice(price: number, base: number): number {
   if (Math.random() < 0.08) g += (Math.random() * 2 - 1) * 0.18; // occasional bigger swing
   const np = price * drift * Math.exp(g);
   return Math.round(Math.max(base / 100, Math.min(np, base * 1_000)) * 100) / 100;
+}
+
+// Epoch-ms of the next 5:00pm America/New_York from `nowMs`. DST-aware via Intl: we read the
+// current NY wall-clock time and add however many seconds remain until 17:00 there (rolling to
+// tomorrow once 5pm has passed). Pure arithmetic on the formatted parts — no timezone-Date
+// construction — so it can't throw on a bad offset; worst case on a DST-transition day it's off
+// by an hour, which is harmless for a daily game deadline.
+function nextFivePmEtMs(nowMs: number): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour12: false,
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(new Date(nowMs));
+  const val = (t: string) => Number(parts.find((p) => p.type === t)?.value) || 0;
+  const secsNow = (val('hour') % 24) * 3600 + val('minute') * 60 + val('second');
+  const target = 17 * 3600; // 5:00pm
+  let delta = target - secsNow;
+  if (delta <= 0) delta += 24 * 3600; // already past 5pm in NY → the next one is tomorrow
+  return nowMs + delta * 1000;
 }
 
 // Epoch ms when the daily spin is next available (0 = available now).
@@ -211,10 +229,10 @@ export class Lobby {
     STOCKS.map((s) => [s.id, { price: s.base, prev: s.base }] as [string, { price: number; prev: number }]),
   );
   private nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS;
-  // Epoch ms of the next daily loan-collection event (every 24h). At this tick Davis collects on
-  // overdue loans and each defaulter's unpaid debt is added to the instability pool; the market
-  // only crashes when that pool fills (see runDailyCollection). Hydrated from / persisted to the
-  // DB so it survives restarts. 0 until scheduled (loadStockPrices schedules one if none saved).
+  // Epoch ms of the next daily loan-collection event — the next 5:00pm America/New_York. At this
+  // tick Davis collects on overdue loans and each defaulter's unpaid debt is added to the
+  // instability pool; the market only crashes when that pool fills (see runDailyCollection).
+  // (Re)booked to the next 5pm on each boot. 0 until scheduled.
   private nextStockCrashAt = 0;
   // Running market-instability pool (coins of defaulted loan debt accumulated since the last
   // crash). Hydrated from the DB on boot. When it reaches MARKET_INSTABILITY_THRESHOLD the
@@ -1015,21 +1033,18 @@ export class Lobby {
         this.stockHist[tf].set(s.id, capped.length ? capped : [seed]);
       }
     }
-    // Resume the reset schedule, but only if it's a sane daily-cadence time still ahead of us
-    // and within ~24h. A lapsed time — or a stale far-future one left by the old 5–7 day crash
-    // schedule — gets re-booked fresh (so we never wait days, and never reset the instant we
-    // boot).
-    const crashAt = await getStockCrashAt().catch(() => 0);
-    const dayMs = 24 * 60 * 60 * 1000;
-    if (crashAt > Date.now() && crashAt <= Date.now() + dayMs + 60_000) this.nextStockCrashAt = crashAt;
-    else this.scheduleNextCollect();
+    // The collection fires at the next 5pm ET — a deterministic time — so just (re)book it on
+    // boot rather than resuming a stored timestamp. Then pull any open loan still booked under the
+    // old rolling-24h deadline back to this 5pm, so existing loans show the correct countdown too.
+    this.scheduleNextCollect();
+    realignLoansToDeadline(this.nextStockCrashAt).catch((e) => console.error('loan deadline realign failed:', e));
     // Resume the instability pool so the stability bar (and crash trigger) survive restarts.
     this.marketInstability = await getMarketInstability().catch(() => 0);
   }
 
-  /** Book the next daily loan-collection event (24h out) and persist it. */
+  /** Book the next daily loan-collection event — the next 5:00pm America/New_York — and persist it. */
   private scheduleNextCollect() {
-    this.nextStockCrashAt = Date.now() + 24 * 60 * 60 * 1000; // every 24h
+    this.nextStockCrashAt = nextFivePmEtMs(Date.now());
     setStockCrashAt(this.nextStockCrashAt).catch((e) => console.error('collection schedule save failed:', e));
   }
 
@@ -1198,8 +1213,8 @@ export class Lobby {
     if (!conn || !conn.nickname || !conn.pid) return;
     const amt = Math.floor(amount);
     if (!Number.isFinite(amt) || amt < 1) return; // positive whole coins only
-    // Deadline is the next daily collection; if one somehow isn't booked, fall back to 24h out.
-    const dueAt = this.nextStockCrashAt || Date.now() + 24 * 60 * 60 * 1000;
+    // Deadline is the next daily 5pm collection; if one somehow isn't booked, compute it directly.
+    const dueAt = this.nextStockCrashAt || nextFivePmEtMs(Date.now());
     takeLoan(conn.pid, conn.nickname, amt, dueAt)
       .then((res) => {
         if (!res) { this.sendLoan(ws); return; } // already had a loan / rejected — just refresh
