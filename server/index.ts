@@ -277,6 +277,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'repayLoan':
         lobby.repayLoanFor(ws);
         break;
+      case 'roulette':
+        if (Array.isArray(msg.bets)) lobby.roulette(ws, msg.bets);
+        break;
       case 'migrate': {
         // Only honour the request if the socket is authenticated — prevents spoofing.
         const authSession = wsSessions.get(ws);

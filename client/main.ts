@@ -2,6 +2,7 @@
 // and the Join button. Input is only sent when this client holds a paddle.
 
 import { connect } from './net';
+import { initRoulette } from './roulette';
 import { draw, drawLegendIcon, setBlasterAim, drawCosmeticPreview } from './render';
 import {
   COURT,
@@ -543,6 +544,7 @@ const net = connect(
     } else if (msg.type === 'wallet') {
       wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, bets: msg.bets, nextSpinAt: msg.nextSpinAt };
       renderShop();
+      rouletteHandle.setCoins(msg.coins);
       if (!marketPanel.hidden) renderMarket(); // coin balance gates the Invest buttons
       if (!loanPanel.hidden && loan) renderLoan(); // balance gates the Pay button
     } else if (msg.type === 'stocks') {
@@ -552,6 +554,8 @@ const net = connect(
       renderStability(msg.stability);
     } else if (msg.type === 'spinResult') {
       celebrateSpin(msg.reward, msg.segment);
+    } else if (msg.type === 'rouletteResult') {
+      rouletteHandle.onResult(msg);
     } else if (msg.type === 'loan') {
       loan = msg.loan;
       // Taking/repaying resets the conversation; collecting (loan→null) drops back to the intro.
@@ -572,6 +576,12 @@ const net = connect(
     net.send({ type: 'rtt', t: performance.now() });
   },
 );
+
+// Roulette panel (top-left): bets are settled server-side; this just drives the wheel UI.
+const rouletteHandle = initRoulette({
+  send: (bets) => net.send({ type: 'roulette', bets }),
+  playWin: playYay,
+});
 
 const isPlayer = () => myRole === 'left' || myRole === 'right' || myRole === 'player';
 const inArena = () => myRole === 'player';

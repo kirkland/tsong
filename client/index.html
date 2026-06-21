@@ -882,6 +882,85 @@
         flex: 1; font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 6px;
         border: 1px solid #2a3550; background: #060912; color: #fff; min-width: 0;
       }
+      /* Roulette dropdown (sibling of #loan in #topLeft) */
+      #roulette { position: relative; }
+      #rouletteBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #5a1f2e;
+        background: #1a0810; color: #ff6b9d; cursor: pointer;
+      }
+      #rouletteBtn:hover { background: #2a1018; }
+      #roulettePanel {
+        position: absolute; top: calc(100% + 6px); left: 0; width: 340px;
+        max-height: 84vh; overflow-y: auto;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #roulettePanel[hidden] { display: none; }
+      #roulettePanel h3 {
+        font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+        color: #6b7796; margin: 8px 0 6px;
+      }
+      #rouletteWheelWrap {
+        display: flex; flex-direction: column; align-items: center; gap: 4px; margin-bottom: 8px;
+      }
+      #rouletteWheel { display: block; }
+      #rouletteResult { font: 800 14px ui-monospace, monospace; min-height: 18px; text-align: center; color: #cdd7f5; }
+      #rouletteResult .rl-win { color: #6ee7a8; }
+      #rouletteResult .rl-lose { color: #ff7a7a; }
+      #rouletteChips {
+        display: flex; align-items: center; gap: 5px; margin-bottom: 8px; flex-wrap: wrap;
+      }
+      .rl-chips-label { font-size: 11px; color: #6b7796; margin-right: 2px; }
+      .rl-chip {
+        font: inherit; font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 14px;
+        border: 1px solid #2a3550; background: #11182c; color: #ffd166; cursor: pointer;
+      }
+      .rl-chip:hover { background: #1a2238; }
+      .rl-chip.active { background: #ffd166; border-color: #ffd166; color: #1a1020; }
+      #rouletteBoard { display: flex; flex-direction: column; gap: 3px; }
+      .rl-zero {
+        font: inherit; font-size: 12px; font-weight: 700; padding: 5px; border-radius: 5px;
+        border: 1px solid #1f5a3a; background: #0a2417; color: #6ee7a8; cursor: pointer; position: relative;
+      }
+      .rl-zero:hover { background: #0f3422; }
+      .rl-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 3px; }
+      .rl-num {
+        font: 700 11px ui-monospace, monospace; padding: 5px 0; border-radius: 4px;
+        border: 1px solid transparent; color: #fff; cursor: pointer; text-align: center; position: relative;
+      }
+      .rl-num.red { background: #b6243a; }
+      .rl-num.red:hover { background: #d62c46; }
+      .rl-num.black { background: #21283c; }
+      .rl-num.black:hover { background: #2f3950; }
+      .rl-outs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 3px; margin-top: 2px; }
+      .rl-out {
+        font: inherit; font-size: 11px; font-weight: 700; padding: 6px 0; border-radius: 5px;
+        border: 1px solid #2a3550; background: #11182c; color: #cdd7f5; cursor: pointer; position: relative;
+      }
+      .rl-out:hover { background: #1a2238; }
+      .rl-out.red-out { color: #ff7a8f; }
+      .rl-out.black-out { color: #aab4cc; }
+      /* A chip stake badge pinned to a bet cell. */
+      .rl-stake-badge {
+        position: absolute; top: -5px; right: -4px; min-width: 15px; height: 15px; padding: 0 3px;
+        border-radius: 8px; background: #ffd166; color: #1a1020; border: 1px solid #1a1020;
+        font: 800 9px ui-monospace, monospace; line-height: 15px; text-align: center; pointer-events: none;
+      }
+      #rouletteFoot {
+        display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px;
+      }
+      #rouletteStake { font: 700 12px ui-monospace, monospace; color: #ffd166; }
+      .rl-foot-btns { display: flex; gap: 6px; }
+      #rouletteClear, #rouletteSpin {
+        font: inherit; font-size: 12px; font-weight: 700; padding: 6px 14px; border-radius: 6px; cursor: pointer;
+      }
+      #rouletteClear { border: 1px solid #2a3550; background: #11182c; color: #9fb0d8; }
+      #rouletteClear:hover { background: #1a2238; }
+      #rouletteSpin { border: none; background: #ff2db7; color: #1a1020; text-shadow: 0 1px 0 rgba(255,255,255,0.4); }
+      #rouletteSpin:hover:not(:disabled) { filter: brightness(1.1); }
+      #rouletteSpin:disabled { opacity: 0.45; cursor: default; }
+      #rouletteNote { font-size: 10px; color: #5a647e; margin-top: 8px; line-height: 1.4; }
       .coin-row {
         display: grid; grid-template-columns: 34px 1fr auto; gap: 8px; align-items: center;
         padding: 7px 0; border-top: 1px solid #1c2640;
@@ -2051,7 +2130,7 @@
           left: 6px;
           gap: 4px;
         }
-        #viewModeBtn, #muteBtn, #gameModesBtn, #powerupInfoBtn, #marketBtn, #loanBtn {
+        #viewModeBtn, #muteBtn, #gameModesBtn, #powerupInfoBtn, #marketBtn, #loanBtn, #rouletteBtn {
           font-size: 10px;
           padding: 4px 8px;
         }
@@ -2151,6 +2230,34 @@
           <h3>Davis @ Citizens</h3>
           <img id="loanImg" alt="Davis Clarke" />
           <div id="loanBody"></div>
+        </div>
+      </div>
+      <div id="roulette">
+        <button id="rouletteBtn" type="button" aria-expanded="false" title="Play roulette — bet coins on the wheel">🎡 Roulette</button>
+        <div id="roulettePanel" hidden>
+          <h3>Roulette · <span id="rouletteCoins">0</span> 🪙</h3>
+          <div id="rouletteWheelWrap">
+            <canvas id="rouletteWheel" width="220" height="220"></canvas>
+            <div id="rouletteResult"></div>
+          </div>
+          <div id="rouletteChips">
+            <span class="rl-chips-label">Chip</span>
+            <button class="rl-chip active" data-chip="1" type="button">1</button>
+            <button class="rl-chip" data-chip="5" type="button">5</button>
+            <button class="rl-chip" data-chip="10" type="button">10</button>
+            <button class="rl-chip" data-chip="25" type="button">25</button>
+            <button class="rl-chip" data-chip="100" type="button">100</button>
+          </div>
+          <!-- Betting board: 0, the 1–36 grid, then the outside bets. Built by client/roulette.ts. -->
+          <div id="rouletteBoard"></div>
+          <div id="rouletteFoot">
+            <span id="rouletteStake">Staked: 0 🪙</span>
+            <div class="rl-foot-btns">
+              <button id="rouletteClear" type="button">Clear</button>
+              <button id="rouletteSpin" type="button" disabled>Spin</button>
+            </div>
+          </div>
+          <div id="rouletteNote">Single-zero wheel. Straight number pays 35:1, dozens 2:1, red/black/odd/even/half 1:1. The green 0 is the house edge. Pick a chip, click the board to stake, then Spin.</div>
         </div>
       </div>
       <div id="viewMode">
