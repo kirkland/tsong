@@ -486,6 +486,24 @@ export async function setStockCrashAt(ts: number): Promise<void> {
   );
 }
 
+/** Read the running market-instability pool (total defaulted-loan debt since the last crash).
+ *  0 if never set / no DB. Drives the "Market Stability" bar and the crash trigger. */
+export async function getMarketInstability(): Promise<number> {
+  if (!pool) return 0;
+  const { rows } = await pool.query(`SELECT v FROM doom_meta WHERE k = 'market_instability'`);
+  return rows.length ? Number(rows[0].v) || 0 : 0;
+}
+
+/** Persist the market-instability pool so it survives restarts. */
+export async function setMarketInstability(n: number): Promise<void> {
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO doom_meta (k, v) VALUES ('market_instability', $1)
+       ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+    [String(n)],
+  );
+}
+
 // --- Davis's loans ---
 export interface Loan { amount: number; owed: number; dueAt: number; }
 
@@ -527,17 +545,19 @@ export async function repayLoan(pid: string): Promise<{ wallet: Wallet } | null>
 
 /** Enforce the deadline on every loan due at/before `nowMs`: Davis takes EVERYTHING from those
  *  players — zero their wallets, strip every cosmetic (clear owned items + unequip hat/skin),
- *  wipe all their stock positions, and clear the debt. Returns the affected pids so the caller
- *  can refresh anyone who's connected. */
-export async function collectDefaultedLoans(nowMs: number): Promise<string[]> {
-  if (!pool) return [];
-  const { rows } = await pool.query(`SELECT pid FROM loans WHERE due_at <= $1`, [nowMs]);
+ *  wipe all their stock positions, and clear the debt. Returns the affected pids (so the caller
+ *  can refresh anyone connected) plus `totalOwed` — the sum of every defaulter's unpaid 1.5×
+ *  debt, which the caller feeds into the market-instability pool. */
+export async function collectDefaultedLoans(nowMs: number): Promise<{ pids: string[]; totalOwed: number }> {
+  if (!pool) return { pids: [], totalOwed: 0 };
+  const { rows } = await pool.query(`SELECT pid, owed FROM loans WHERE due_at <= $1`, [nowMs]);
   const pids = rows.map((r) => r.pid as string);
-  if (!pids.length) return [];
+  if (!pids.length) return { pids: [], totalOwed: 0 };
+  const totalOwed = rows.reduce((sum, r) => sum + (Number(r.owed) || 0), 0);
   await pool.query(`UPDATE players SET coins = 0, owned = '', hat = NULL, skin = NULL WHERE id = ANY($1)`, [pids]);
   await pool.query(`DELETE FROM stock_holdings WHERE pid = ANY($1)`, [pids]);
   await pool.query(`DELETE FROM loans WHERE pid = ANY($1)`, [pids]);
-  return pids;
+  return { pids, totalOwed };
 }
 
 export async function getLeaderboard(): Promise<LeaderboardRow[]> {

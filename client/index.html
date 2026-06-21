@@ -205,6 +205,21 @@
         text-align: center;
         margin: 0 0 2px;
       }
+      /* Market Stability bar — sits at the top of the chat column. Fills (green→red) as unpaid
+         loans accumulate; at 100% the market crashes for everyone. */
+      #marketStability { position: relative; background: #0e1424; border: 1px solid #1c2640; border-radius: 6px; padding: 7px 9px; }
+      #marketStability .ms-head { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+      #marketStability .ms-title { font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase; color: #7da2ff; font-weight: 700; }
+      #msInfo { background: none; border: none; color: #4a5580; cursor: pointer; font-size: 13px; line-height: 1; padding: 0; }
+      #msInfo:hover { color: #7da2ff; }
+      #marketStability .ms-pct { margin-left: auto; font-size: 11px; color: #8a93ac; font-variant-numeric: tabular-nums; }
+      #marketStability .ms-track { height: 8px; background: #11182c; border-radius: 5px; overflow: hidden; }
+      #msFill { height: 100%; width: 0%; border-radius: 5px; background: #3ad17a; transition: width 0.4s ease, background-color 0.4s ease; }
+      #msInfoPop {
+        margin-top: 7px; font-size: 11px; line-height: 1.45; color: #c3cae0;
+        background: #11182c; border: 1px solid #2a3550; border-radius: 6px; padding: 7px 9px;
+      }
+      #msInfoPop b { color: #e0b05f; }
       #chatlog {
         flex: 1;
         min-height: 0;
@@ -2640,6 +2655,21 @@
       </div>
 
       <div id="chat">
+        <div id="marketStability" hidden>
+          <div class="ms-head">
+            <span class="ms-title">Market Stability</span>
+            <button id="msInfo" type="button" aria-label="What is market stability?">&#9432;</button>
+            <span id="msPct" class="ms-pct"></span>
+          </div>
+          <div class="ms-track"><div id="msFill"></div></div>
+          <div id="msInfoPop" hidden>
+            Every day at <b>5pm</b>, Davis collects on overdue loans. Each unpaid debt is added to this
+            bar. The market no longer resets on a daily timer &mdash; instead, once unpaid loans reach
+            <b>10,000&#129689;</b> this bar fills and the <b>entire stock market crashes</b> (every coin
+            snaps back to base) for <b>everyone</b>, then the bar resets. Pay your loans on time to keep
+            the market stable.
+          </div>
+        </div>
         <h2>Chat
           <label style="font-size:12px;font-weight:normal;color:#4a5580;cursor:pointer;margin-left:6px;"><input type="checkbox" id="hideCmds" style="vertical-align:middle;margin-right:3px;">hide commands</label>
           <label style="font-size:12px;font-weight:normal;color:#4a5580;cursor:pointer;margin-left:6px;"><input type="checkbox" id="hideTimestamps" style="vertical-align:middle;margin-right:3px;">hide times</label>

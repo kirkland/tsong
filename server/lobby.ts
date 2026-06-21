@@ -31,13 +31,14 @@ import {
   STOCKS,
   STOCK_UPDATE_MS,
   STOCK_HISTORY,
+  MARKET_INSTABILITY_THRESHOLD,
   TEAM_MAX,
   WalletMsg,
 } from '../shared/types';
 import { getLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, DAILY_SPIN_MS,
   getHoldings, investStock, cashOutStock, getStockPrices, saveStockPrices,
-  getStockCrashAt, setStockCrashAt,
+  getStockCrashAt, setStockCrashAt, getMarketInstability, setMarketInstability,
   getLoan, takeLoan, repayLoan, collectDefaultedLoans } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
@@ -205,10 +206,15 @@ export class Lobby {
     STOCKS.map((s) => [s.id, { price: s.base, prev: s.base }] as [string, { price: number; prev: number }]),
   );
   private nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS;
-  // Epoch ms of the next daily market reset (every 24h): all prices snap back to base and
-  // holdings revalue at the new price. Hydrated from / persisted to the DB so it survives
-  // restarts. 0 until scheduled (loadStockPrices schedules one if none is saved).
+  // Epoch ms of the next daily loan-collection event (every 24h). At this tick Davis collects on
+  // overdue loans and each defaulter's unpaid debt is added to the instability pool; the market
+  // only crashes when that pool fills (see runDailyCollection). Hydrated from / persisted to the
+  // DB so it survives restarts. 0 until scheduled (loadStockPrices schedules one if none saved).
   private nextStockCrashAt = 0;
+  // Running market-instability pool (coins of defaulted loan debt accumulated since the last
+  // crash). Hydrated from the DB on boot. When it reaches MARKET_INSTABILITY_THRESHOLD the
+  // market crashes for everyone and this resets to 0. Surfaced to clients as the stability bar.
+  private marketInstability = 0;
   // Per-coin price history for the graphs (in-memory only) — one series per timeframe, each
   // sampled at its own cadence (see STOCK_HISTORY). Seeded with the current price so a graph
   // is never empty.
@@ -969,32 +975,69 @@ export class Lobby {
     const crashAt = await getStockCrashAt().catch(() => 0);
     const dayMs = 24 * 60 * 60 * 1000;
     if (crashAt > Date.now() && crashAt <= Date.now() + dayMs + 60_000) this.nextStockCrashAt = crashAt;
-    else this.scheduleNextCrash();
+    else this.scheduleNextCollect();
+    // Resume the instability pool so the stability bar (and crash trigger) survive restarts.
+    this.marketInstability = await getMarketInstability().catch(() => 0);
   }
 
-  /** Book the next daily market reset (24h out) and persist it. */
-  private scheduleNextCrash() {
+  /** Book the next daily loan-collection event (24h out) and persist it. */
+  private scheduleNextCollect() {
     this.nextStockCrashAt = Date.now() + 24 * 60 * 60 * 1000; // every 24h
-    setStockCrashAt(this.nextStockCrashAt).catch((e) => console.error('reset schedule save failed:', e));
+    setStockCrashAt(this.nextStockCrashAt).catch((e) => console.error('collection schedule save failed:', e));
   }
 
-  /** Daily market reset: every coin snaps back to its base price (1). Holdings are left
-   *  untouched — they simply revalue at the new price (worth = floor(shares × 1)) — so a reset
-   *  wipes the day's gains. Books the next reset, then alerts + repushes to all. */
-  private crashMarket() {
+  /** The stability pool as a 0–100% reading of MARKET_INSTABILITY_THRESHOLD (for announcements). */
+  private stabilityPct(): number {
+    return Math.min(100, Math.round((this.marketInstability / MARKET_INSTABILITY_THRESHOLD) * 100));
+  }
+
+  /** Market crash: every coin snaps back to its base price. Holdings are left untouched — they
+   *  simply revalue at the new price (worth = floor(shares × base)) — so a crash wipes the gains.
+   *  Pure price effect; the caller handles scheduling, the instability pool, and announcing. */
+  private resetMarket() {
     for (const s of STOCKS) {
       const cur = this.stockPrices.get(s.id) ?? { price: s.base, prev: s.base };
-      this.stockPrices.set(s.id, { price: s.base, prev: cur.price }); // prev = pre-reset price, so the drop shows
+      this.stockPrices.set(s.id, { price: s.base, prev: cur.price }); // prev = pre-crash price, so the drop shows
     }
     this.nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS; // give the fresh prices a full window
-    this.recordStockHistory(); // the reset itself is a history point (the cliff edge)
+    this.recordStockHistory(); // the crash itself is a history point (the cliff edge)
     saveStockPrices(this.priceBoard()).catch((e) => console.error('stock price save failed:', e));
-    this.scheduleNextCrash();
-    // End of day: Davis collects on anyone who didn't repay their loan (wallet + holdings wiped),
-    // BEFORE we push the fresh market so defaulters see the damage in the same beat.
-    this.collectLoans();
-    this.announce('🔄 DAILY MARKET RESET — every coin is back to 1.00 🪙. Holdings revalued; fresh day, fresh start!');
-    for (const ws of this.conns.keys()) this.sendStocks(ws);
+  }
+
+  /** The daily event (replaces the old fixed daily reset): Davis collects on every overdue loan,
+   *  and each defaulter's unpaid 1.5× debt is added to the market-instability pool. The market no
+   *  longer resets on a timer — it crashes for EVERYONE only once the pool fills the threshold, at
+   *  which point the pool resets to 0. Books the next event, then refreshes/announces and repushes. */
+  private runDailyCollection() {
+    this.scheduleNextCollect(); // book the next daily event immediately (so we never re-fire next tick)
+    collectDefaultedLoans(Date.now())
+      .then(({ pids, totalOwed }) => {
+        // Refresh + notify any defaulter still online (wallet/stocks/loan all just changed).
+        const hit = new Set(pids);
+        for (const ws of this.conns.keys()) {
+          const conn = this.conns.get(ws);
+          if (!conn?.pid || !hit.has(conn.pid)) continue;
+          this.sendWallet(ws);
+          this.sendStocks(ws);
+          this.sendLoan(ws);
+          this.notify(ws, `🕶️ Davis came to collect — you didn't repay, so he took everything. Bad day to be an Excel spreadsheet.`);
+        }
+        // Defaulted debt destabilizes the market for everyone.
+        if (totalOwed > 0) {
+          this.marketInstability += totalOwed;
+          setMarketInstability(this.marketInstability).catch((e) => console.error('instability save failed:', e));
+          this.announce(`💸 Davis collected ${Math.round(totalOwed)}🪙 in unpaid loans — market stability is at ${this.stabilityPct()}%.`);
+        }
+        // Crash only when the pool fills — this is now the sole market-reset trigger.
+        if (this.marketInstability >= MARKET_INSTABILITY_THRESHOLD) {
+          this.resetMarket();
+          this.marketInstability = 0;
+          setMarketInstability(0).catch((e) => console.error('instability save failed:', e));
+          this.announce('🔄 MARKET CRASH — unpaid loans hit 100% instability! Every coin is back to base 🪙. Holdings revalued, stability reset. Fresh start!');
+        }
+        for (const ws of this.conns.keys()) this.sendStocks(ws);
+      })
+      .catch((e) => console.error('daily collection failed:', e));
   }
 
   /** The global price board, in STOCKS order. */
@@ -1048,7 +1091,10 @@ export class Lobby {
           const price = this.stockPrices.get(id)?.price ?? 0;
           return { id, shares: hd.shares, cost: hd.cost, worth: Math.floor(hd.shares * price) };
         });
-        this.tell(ws, { type: 'stocks', prices, holdings, history, nextUpdateAt: this.nextStockUpdateAt });
+        this.tell(ws, {
+          type: 'stocks', prices, holdings, history, nextUpdateAt: this.nextStockUpdateAt,
+          stability: { unpaid: this.marketInstability, threshold: MARKET_INSTABILITY_THRESHOLD },
+        });
       })
       .catch((e) => console.error('stocks send failed:', e));
   }
@@ -1098,20 +1144,20 @@ export class Lobby {
       .catch((e) => console.error('loan send failed:', e));
   }
 
-  /** Borrow `amount` coins from Davis, due (at 1.5×) by the next daily market reset. */
+  /** Borrow `amount` coins from Davis, due (at 1.5×) by the next daily 5pm collection. */
   getLoanFor(ws: WebSocket, amount: number) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     const amt = Math.floor(amount);
     if (!Number.isFinite(amt) || amt < 1) return; // positive whole coins only
-    // Deadline is the next daily reset; if one somehow isn't booked, fall back to 24h out.
+    // Deadline is the next daily collection; if one somehow isn't booked, fall back to 24h out.
     const dueAt = this.nextStockCrashAt || Date.now() + 24 * 60 * 60 * 1000;
     takeLoan(conn.pid, conn.nickname, amt, dueAt)
       .then((res) => {
         if (!res) { this.sendLoan(ws); return; } // already had a loan / rejected — just refresh
         this.sendWallet(ws);
         this.sendLoan(ws);
-        this.notify(ws, `💸 Davis fronted you ${amt}🪙 — bring back ${res.loan.owed}🪙 by the daily reset. Keep grinding.`);
+        this.notify(ws, `💸 Davis fronted you ${amt}🪙 — bring back ${res.loan.owed}🪙 by 5pm. Miss it and the market takes the hit. Keep grinding.`);
       })
       .catch((e) => console.error('loan failed:', e));
   }
@@ -1130,33 +1176,14 @@ export class Lobby {
       .catch((e) => console.error('loan repay failed:', e));
   }
 
-  /** Collect on every overdue loan: zero the wallet, strip cosmetics (owned + equipped hat/skin),
-   *  and wipe stock positions for anyone who didn't repay in time. Called from the daily reset.
-   *  Refreshes + notifies any defaulter still online (sendWallet also clears their cached hat/skin). */
-  private collectLoans() {
-    collectDefaultedLoans(Date.now())
-      .then((pids) => {
-        if (!pids.length) return;
-        const hit = new Set(pids);
-        for (const ws of this.conns.keys()) {
-          const conn = this.conns.get(ws);
-          if (!conn?.pid || !hit.has(conn.pid)) continue;
-          this.sendWallet(ws);
-          this.sendStocks(ws);
-          this.sendLoan(ws);
-          this.notify(ws, `🕶️ Davis came to collect — you didn't repay, so he took everything. Bad day to be an Excel spreadsheet.`);
-        }
-      })
-      .catch((e) => console.error('loan collection failed:', e));
-  }
-
   /** Re-roll every coin's price when the re-roll window elapses, persist the board, and push
-   *  the fresh (revalued) market to every connected client. Also fires the periodic market
-   *  crash when its time arrives. Cheap to call every tick. */
+   *  the fresh (revalued) market to every connected client. Also fires the daily loan-collection
+   *  event when its time arrives. Cheap to call every tick. */
   private tickStocks() {
-    // A crash takes precedence and resets everything itself, so handle it first and bail.
+    // The daily collection takes precedence (it may crash + repush the market itself), so handle
+    // it first and bail.
     if (this.nextStockCrashAt && Date.now() >= this.nextStockCrashAt) {
-      this.crashMarket();
+      this.runDailyCollection();
       return;
     }
     if (Date.now() < this.nextStockUpdateAt) return;
