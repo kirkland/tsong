@@ -543,10 +543,11 @@ const net = connect(
       doomScores = { solo: msg.solo, coop: msg.coop };
     } else if (msg.type === 'wallet') {
       wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, bets: msg.bets, nextSpinAt: msg.nextSpinAt };
-      renderShop();
       rouletteHandle.setCoins(msg.coins);
-      if (!marketPanel.hidden) renderMarket(); // coin balance gates the Invest buttons
-      if (!loanPanel.hidden && loan) renderLoan(); // balance gates the Pay button
+      // During a roulette spin, hold every coin-total display (toolbar tab, shop, market) at its
+      // pre-result value until the wheel lands — otherwise the settled balance reveals the outcome
+      // before the animation finishes. The roulette `onSettled` callback runs refreshWallet then.
+      if (!rouletteHandle.isSpinning()) refreshWallet();
     } else if (msg.type === 'stocks') {
       market = { prices: msg.prices, holdings: msg.holdings, history: msg.history, nextUpdateAt: msg.nextUpdateAt };
       if (!marketPanel.hidden) renderMarket();
@@ -577,10 +578,20 @@ const net = connect(
   },
 );
 
+// Repaint every coin-total display from the current wallet (toolbar tab, shop, open market/loan
+// panels). Held back during a roulette spin so the result isn't revealed before the wheel lands.
+function refreshWallet() {
+  renderShop();
+  if (!marketPanel.hidden) renderMarket(); // coin balance gates the Invest buttons
+  if (!loanPanel.hidden && loan) renderLoan(); // balance gates the Pay button
+}
+
 // Roulette panel (top-left): bets are settled server-side; this just drives the wheel UI.
 const rouletteHandle = initRoulette({
   send: (bets) => net.send({ type: 'roulette', bets }),
   playWin: playYay,
+  // Fires when the wheel finishes; reveal the settled balance everywhere now, not mid-spin.
+  onSettled: refreshWallet,
 });
 
 const isPlayer = () => myRole === 'left' || myRole === 'right' || myRole === 'player';
