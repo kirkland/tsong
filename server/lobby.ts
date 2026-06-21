@@ -42,7 +42,7 @@ import {
 } from '../shared/types';
 import { getLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, DAILY_SPIN_MS,
-  getHoldings, investStock, cashOutStock, getStockPrices, saveStockPrices,
+  getHoldings, investStock, cashOutStock, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
   getStockCrashAt, setStockCrashAt, getMarketInstability, setMarketInstability,
   getLoan, takeLoan, repayLoan, collectDefaultedLoans } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
@@ -1001,14 +1001,19 @@ export class Lobby {
    *  initDb). No-op on prices without a DB; the crash is still scheduled in memory. */
   async loadStockPrices() {
     const saved = await getStockPrices();
+    const savedHist = await getStockHistory().catch(() => ({} as Record<string, { '5m': number[]; '1h': number[]; '1d': number[] }>));
     for (const s of STOCKS) {
       const row = saved[s.id];
       if (row && row.price > 0) this.stockPrices.set(s.id, { price: row.price, prev: row.prev });
-      // Seed the (empty, in-memory) graph history with the resumed price.
+      // Restore the graph history from the DB so the graphs survive restarts; if there's none (or
+      // it's unusable), seed each series with the single resumed price so a graph is never empty.
       const seed = this.stockPrices.get(s.id)?.price ?? s.base;
-      this.stockHist['5m'].set(s.id, [seed]);
-      this.stockHist['1h'].set(s.id, [seed]);
-      this.stockHist['1d'].set(s.id, [seed]);
+      const h = savedHist[s.id];
+      for (const tf of ['5m', '1h', '1d'] as const) {
+        const arr = Array.isArray(h?.[tf]) ? h![tf].filter((n) => typeof n === 'number' && Number.isFinite(n)) : [];
+        const capped = arr.slice(-STOCK_HISTORY[tf].cap);
+        this.stockHist[tf].set(s.id, capped.length ? capped : [seed]);
+      }
     }
     // Resume the reset schedule, but only if it's a sane daily-cadence time still ahead of us
     // and within ~24h. A lapsed time — or a stale far-future one left by the old 5–7 day crash
@@ -1044,6 +1049,7 @@ export class Lobby {
     this.nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS; // give the fresh prices a full window
     this.recordStockHistory(); // the crash itself is a history point (the cliff edge)
     saveStockPrices(this.priceBoard()).catch((e) => console.error('stock price save failed:', e));
+    saveStockHistory(this.historyBoard()).catch((e) => console.error('stock history save failed:', e));
   }
 
   /** The daily event (replaces the old fixed daily reset): Davis collects on every overdue loan,
@@ -1236,6 +1242,7 @@ export class Lobby {
     }
     this.recordStockHistory();
     saveStockPrices(this.priceBoard()).catch((e) => console.error('stock price save failed:', e));
+    saveStockHistory(this.historyBoard()).catch((e) => console.error('stock history save failed:', e));
     for (const ws of this.conns.keys()) this.sendStocks(ws);
   }
 
