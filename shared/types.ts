@@ -268,6 +268,7 @@ export type ClientMsg =
   | { type: 'stockCashOut'; coin: string } // sell the entire holding in a crypto for round(worth) coins (nearest)
   | { type: 'getLoan'; amount: number } // borrow `amount` coins from Davis (owe 1.5× back by the daily reset)
   | { type: 'repayLoan' } // pay Davis the full 1.5× owed and clear the loan
+  | { type: 'roulette'; bets: RouletteBet[] } // stake coins on a single spin of the casino wheel
   | { type: 'migrate'; oldPid: string }; // one-time: merge a UUID guest account into the signed-in Google account
 
 // --- Server -> Client ---
@@ -546,7 +547,8 @@ export type ServerMsg =
   | WalletMsg
   | StockMsg
   | LoanMsg
-  | SpinResultMsg;
+  | SpinResultMsg
+  | RouletteResultMsg;
 
 // A player's private wallet + cosmetics + active bet, sent only to that client.
 export interface WalletMsg {
@@ -636,6 +638,63 @@ export interface SpinResultMsg {
   type: 'spinResult';
   segment: number;
   reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string };
+}
+
+// --- Roulette (single-zero European wheel) ---
+// A casino roulette table: stake coins on where the ball lands on a 0–36 wheel. The wheel
+// is the European single-zero layout, so the lone green 0 gives the house its edge. The
+// server is authoritative — it rolls the number, settles every bet, and adjusts the wallet.
+
+// The 18 red pockets (the other 18 of 1–36 are black; 0 is green). Standard layout.
+export const ROULETTE_RED: ReadonlySet<number> = new Set([
+  1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36,
+]);
+// Pocket order around the physical European wheel, clockwise from 0 (for the visual spin).
+export const ROULETTE_WHEEL: readonly number[] = [
+  0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10,
+  5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26,
+];
+export const ROULETTE_MAX_TOTAL = 1000; // most coins that may be staked across all bets on one spin
+
+// The bet kinds offered. `straight` needs a target `number` (0–36); the rest are the
+// classic "outside" bets. The value is the profit-to-stake ratio — a winning bet returns
+// the stake plus stake × ratio (so straight pays 35:1, dozens 2:1, even-money 1:1).
+export type RouletteBetKind =
+  | 'straight' | 'red' | 'black' | 'odd' | 'even' | 'low' | 'high' | 'dozen1' | 'dozen2' | 'dozen3';
+export const ROULETTE_PAYOUTS: Record<RouletteBetKind, number> = {
+  straight: 35, red: 1, black: 1, odd: 1, even: 1, low: 1, high: 1, dozen1: 2, dozen2: 2, dozen3: 2,
+};
+export interface RouletteBet {
+  kind: RouletteBetKind;
+  amount: number; // coins staked on this bet (positive whole number)
+  number?: number; // target pocket 0–36, only for a `straight` bet
+}
+
+// Does `bet` win when the ball lands on `win` (0–36)? Shared so the server settles and the
+// client previews/highlights with identical rules.
+export function rouletteWins(bet: RouletteBet, win: number): boolean {
+  switch (bet.kind) {
+    case 'straight': return bet.number === win;
+    case 'red': return ROULETTE_RED.has(win);
+    case 'black': return win !== 0 && !ROULETTE_RED.has(win);
+    case 'odd': return win !== 0 && win % 2 === 1;
+    case 'even': return win !== 0 && win % 2 === 0;
+    case 'low': return win >= 1 && win <= 18;
+    case 'high': return win >= 19 && win <= 36;
+    case 'dozen1': return win >= 1 && win <= 12;
+    case 'dozen2': return win >= 13 && win <= 24;
+    case 'dozen3': return win >= 25 && win <= 36;
+  }
+}
+
+// Result of one spin, sent to the spinning client so it can land the wheel on `number` and
+// settle up. `payout` is the total coins returned (stake + winnings on every winning bet;
+// 0 when everything lost); `staked` is what was put down.
+export interface RouletteResultMsg {
+  type: 'rouletteResult';
+  number: number; // winning pocket, 0–36
+  staked: number; // total coins wagered this spin
+  payout: number; // total coins paid back (0 if all bets lost)
 }
 
 // Co-op DOOM lobby status (2 slots). `slot` is which slot this client holds (0 = host,

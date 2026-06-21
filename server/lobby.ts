@@ -27,6 +27,11 @@ import {
   Side,
   SPIN_SEGMENTS,
   COIN_SCALE,
+  ROULETTE_PAYOUTS,
+  ROULETTE_MAX_TOTAL,
+  RouletteBet,
+  RouletteBetKind,
+  rouletteWins,
   StateMsg,
   STOCKS,
   STOCK_UPDATE_MS,
@@ -945,6 +950,43 @@ export class Lobby {
         this.sendWallet(ws);
       })
       .catch((e) => console.error('daily spin failed:', e));
+  }
+
+  // --- Roulette (casino wheel) ---
+
+  /** Settle one spin of the roulette wheel. Validates the bets, escrows the total stake,
+   *  rolls a single-zero (0–36) wheel, pays back the stake + winnings on every winning bet,
+   *  and reports the landing number + payout so the client can land its wheel and celebrate. */
+  roulette(ws: WebSocket, bets: RouletteBet[]) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    // Validate the slate: a sane number of well-formed bets, total within the cap.
+    if (!Array.isArray(bets) || bets.length === 0 || bets.length > 60) { this.sendWallet(ws); return; }
+    let total = 0;
+    for (const b of bets) {
+      if (!b || typeof b.amount !== 'number' || !Number.isInteger(b.amount) || b.amount <= 0) { this.sendWallet(ws); return; }
+      if (!(b.kind in ROULETTE_PAYOUTS)) { this.sendWallet(ws); return; }
+      if (b.kind === 'straight' &&
+          (typeof b.number !== 'number' || !Number.isInteger(b.number) || b.number < 0 || b.number > 36)) {
+        this.sendWallet(ws); return;
+      }
+      total += b.amount;
+    }
+    if (total <= 0 || total > ROULETTE_MAX_TOTAL) { this.sendWallet(ws); return; }
+    // Escrow the whole stake up front; if it doesn't clear, the player can't afford it.
+    spendCoins(conn.pid, total)
+      .then(async (w) => {
+        if (!w) { this.sendWallet(ws); return; } // insufficient coins (or no DB) — nothing wagered
+        const win = Math.floor(Math.random() * 37); // 0–36, single zero
+        let payout = 0;
+        for (const b of bets) {
+          if (rouletteWins(b, win)) payout += b.amount * (ROULETTE_PAYOUTS[b.kind as RouletteBetKind] + 1);
+        }
+        if (payout > 0) await addCoins(conn.pid, conn.nickname, payout);
+        this.tell(ws, { type: 'rouletteResult', number: win, staked: total, payout });
+        this.sendWallet(ws);
+      })
+      .catch((e) => console.error('roulette failed:', e));
   }
 
   // --- Stock market ---
