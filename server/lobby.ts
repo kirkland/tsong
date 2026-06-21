@@ -26,6 +26,7 @@ import {
   ServerMsg,
   Side,
   SPIN_SEGMENTS,
+  COIN_SCALE,
   StateMsg,
   STOCKS,
   STOCK_UPDATE_MS,
@@ -488,11 +489,11 @@ export class Lobby {
     this.broadcastDoomLobby();
   }
 
-  /** Grant 1 coin for killing the DOOM minion boss. */
+  /** Grant the DOOM minion-boss reward (1 win-unit × COIN_SCALE = 100 coins). */
   doomReward(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
-    addCoins(conn.pid, conn.nickname, 1)
+    addCoins(conn.pid, conn.nickname, COIN_SCALE)
       .then(() => this.sendWallet(ws))
       .catch((e) => console.error('doom reward failed:', e));
   }
@@ -1627,14 +1628,14 @@ export class Lobby {
   sync() {
     this.expireResume();
     this.tickStocks(); // re-roll crypto prices when the 5-minute window elapses
-    // "coins" power-up: pay the collecting side 1 coin, once.
+    // "coins" power-up: pay the collecting side 100 coins (1 × COIN_SCALE), once.
     if (this.game.coinGrant) {
       const side = this.game.coinGrant;
       this.game.coinGrant = null;
       for (const c of this.connsOn(side)) {
         if (!c.pid) continue;
         const w = this.wsOfConn(c);
-        addCoins(c.pid, c.nickname, 1).then(() => { if (w) this.sendWallet(w); }).catch(() => {});
+        addCoins(c.pid, c.nickname, COIN_SCALE).then(() => { if (w) this.sendWallet(w); }).catch(() => {});
       }
     }
     // Safety: if a duel was abandoned (back to 'waiting' with no result) or we slid into
