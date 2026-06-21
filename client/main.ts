@@ -1794,7 +1794,7 @@ function renderLoan() {
     const due = loan.dueAt - Date.now();
     loanBody.innerHTML =
       `<div class="loan-line">You borrowed <b>${loan.amount}</b>🪙. Davis wants <span class="loan-owe">${loan.owed}🪙</span> back.</div>` +
-      `<div class="loan-due">Due at the daily market reset · <b>${fmtCountdown(due)}</b> left. Miss it and he takes <b>everything</b> — coins and stocks.</div>`;
+      `<div class="loan-due">Due at the daily market reset · <b>${fmtCountdown(due)}</b> left. Miss it and he takes <b>everything</b> — coins, stocks, and cosmetics.</div>`;
     const actions = document.createElement('div');
     actions.className = 'loan-actions';
     const pay = document.createElement('button');
@@ -1832,6 +1832,10 @@ function renderLoan() {
     refreshOwe();
     input.addEventListener('input', refreshOwe);
     loanBody.appendChild(owe);
+    const warn = document.createElement('div');
+    warn.className = 'loan-warn';
+    warn.innerHTML = `⚠️ If you don't repay by the daily market reset, Davis takes <b>EVERYTHING</b> — your coins, your stocks, and every cosmetic you own. No mercy.`;
+    loanBody.appendChild(warn);
     const actions = document.createElement('div');
     actions.className = 'loan-actions';
     const borrow = document.createElement('button');

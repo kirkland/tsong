@@ -1130,8 +1130,9 @@ export class Lobby {
       .catch((e) => console.error('loan repay failed:', e));
   }
 
-  /** Collect on every overdue loan: zero the wallet + wipe stock positions for anyone who didn't
-   *  repay in time. Called from the daily reset. Refreshes + notifies any defaulter still online. */
+  /** Collect on every overdue loan: zero the wallet, strip cosmetics (owned + equipped hat/skin),
+   *  and wipe stock positions for anyone who didn't repay in time. Called from the daily reset.
+   *  Refreshes + notifies any defaulter still online (sendWallet also clears their cached hat/skin). */
   private collectLoans() {
     collectDefaultedLoans(Date.now())
       .then((pids) => {
