@@ -986,7 +986,12 @@
       }
       .coin-buy button:hover:not(:disabled), .coin-actions > button:hover:not(:disabled) { background: #2d4070; color: #fff; }
       .coin-buy button:disabled, .coin-actions > button:disabled { opacity: 0.45; cursor: default; }
-      .coin-amt { min-width: 18px; text-align: center; font-weight: 700; color: #ffd166; font-size: 11px; }
+      .coin-amt {
+        width: 56px; text-align: center; font-weight: 700; color: #ffd166; font-size: 11px;
+        background: #0b1120; border: 1px solid #2a3550; border-radius: 5px; padding: 3px 4px;
+        font-family: ui-monospace, monospace; -moz-appearance: textfield;
+      }
+      .coin-amt::-webkit-outer-spin-button, .coin-amt::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
       .coin-cash { border-color: #1f5a3a !important; background: #0e2419 !important; color: #5fe0a0 !important; }
       .coin-cash:hover:not(:disabled) { background: #14361f !important; }
       /* Screen-effect power-up overlays (sit over the board in any view) */
