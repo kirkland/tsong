@@ -1832,6 +1832,10 @@ function renderLoan() {
     refreshOwe();
     input.addEventListener('input', refreshOwe);
     loanBody.appendChild(owe);
+    const warn = document.createElement('div');
+    warn.className = 'loan-warn';
+    warn.innerHTML = `⚠️ If you don't repay by the daily market reset, Davis takes <b>EVERYTHING</b> — your coins, your stocks, and every cosmetic you own. No mercy.`;
+    loanBody.appendChild(warn);
     const actions = document.createElement('div');
     actions.className = 'loan-actions';
     const borrow = document.createElement('button');
