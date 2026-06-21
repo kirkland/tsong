@@ -469,6 +469,37 @@ export async function saveStockPrices(prices: { id: string; price: number; prev:
   }
 }
 
+// The graph history is the per-coin price series (5m/1h/1d). It used to live only in server
+// memory, so every restart/deploy wiped the graphs. We persist the whole board as one small
+// JSON blob in doom_meta (a single row, rewritten in place — never grows) so the graphs survive
+// restarts. The series are already length-capped (see STOCK_HISTORY), so the blob stays a few KB.
+type StockSeries = { '5m': number[]; '1h': number[]; '1d': number[] };
+
+/** Load the persisted graph history (empty if never saved / no DB / unreadable). */
+export async function getStockHistory(): Promise<Record<string, StockSeries>> {
+  if (!pool) return {};
+  try {
+    const { rows } = await pool.query(`SELECT v FROM doom_meta WHERE k = 'stock_history'`);
+    if (!rows.length) return {};
+    const parsed = JSON.parse(rows[0].v);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {}; // malformed row → fall back to a fresh (re-seeded) history, never crash boot
+  }
+}
+
+/** Persist the graph history as one JSON row (upsert in place). */
+export async function saveStockHistory(history: { id: string; series: StockSeries }[]): Promise<void> {
+  if (!pool) return;
+  const board: Record<string, StockSeries> = {};
+  for (const h of history) board[h.id] = h.series;
+  await pool.query(
+    `INSERT INTO doom_meta (k, v) VALUES ('stock_history', $1)
+       ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+    [JSON.stringify(board)],
+  );
+}
+
 /** Read the scheduled epoch-ms of the next market crash (0 if never scheduled / no DB). */
 export async function getStockCrashAt(): Promise<number> {
   if (!pool) return 0;
