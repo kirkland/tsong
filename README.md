@@ -100,6 +100,7 @@ Built by:
 - [Fritz-Gerald Duverglas](https://github.com/fritztheritz) (@fritztheritz)
 - [Josiel](https://github.com/japonte21) (@japonte21)
 - [JSav](https://github.com/julianwsavini) (@julianwsavini)
+- [Clarence Ong](https://github.com/clarencegabrielong) (@clarencegabrielong)
 
 ## Code of conduct
 
