@@ -173,10 +173,17 @@ Mid-phase taunts (fire as one-shot VN-style toast overlays at score milestones; 
 
 ---
 
+## SCORING
+**Arcade score = (total points scored − total points allowed) × 1000**, summed across every
+match in the run (a rough early loss can go negative). The leaderboard keeps each player's best.
+
+**Completion reward:** a first-ever full clear of Davis grants a one-time **2500 coins**
+(server-side, gated so replays don't farm it).
+
 ## SCORE SCREEN (post-run, win or lose)
 Not dialogue — UI. Shows:
-- Per-stage: base (scales with stage) + win-margin bonus + speed bonus
-- Running total → **FINAL SCORE**
+- Total points scored − points allowed → **FINAL SCORE** (×1000)
+- "+2500 coins" banner on a first clear
 - Your rank on the campaign leaderboard
 - Buttons: **Retry** / **Quit**
 - `[start-music.mp3]` loop returns

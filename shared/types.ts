@@ -260,6 +260,7 @@ export type ClientMsg =
   | { type: 'doomRelay'; data: unknown } // forward an opaque DOOM payload to the co-op partner
   | { type: 'doomScore'; round: number; coop: boolean; name?: string } // record a DOOM run's reached round (name = combined team label for co-op)
   | { type: 'doomReward' } // grant the player 1 coin (killed the DOOM minion boss)
+  | { type: 'campaignScore'; score: number; stage: number; won: boolean } // record a campaign run (arcade score, furthest stage, whether Davis fell)
   | { type: 'shopBuy'; item: string } // buy a cosmetic from the shop
   | { type: 'shopEquip'; slot: 'hat' | 'skin'; item: string | null } // equip (item) or unequip (null) a cosmetic
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
@@ -587,6 +588,7 @@ export type ServerMsg =
   | DoomRelayMsg
   | DoomEndMsg
   | DoomLeaderboardMsg
+  | CampaignLeaderboardMsg
   | WalletMsg
   | StockMsg
   | LoanMsg
@@ -775,3 +777,12 @@ export interface DoomLeaderboardMsg {
   solo: Array<{ name: string; round: number }>;
   coop: Array<{ name: string; round: number }>;
 }
+
+// Campaign ("Davis Collects") high scores. One row per player (best arcade score kept).
+// `stage` is the furthest stage reached (1–5); `won` marks a full clear of Davis.
+export interface CampaignScoreRow { name: string; score: number; stage: number; won: boolean; }
+export interface CampaignLeaderboardMsg {
+  type: 'campaignLeaderboard';
+  rows: CampaignScoreRow[];
+}
+export const CAMPAIGN_STAGE_COUNT = 5;
