@@ -16,6 +16,8 @@ import {
   ARENA,
   FATALITY_MOVES,
   LeaderboardRow,
+  NetWorthRow,
+  BalanceSheetHolding,
   MAX_PLAYERS,
   PaddleState,
   POWERUPS,
@@ -26,11 +28,26 @@ import {
   ServerMsg,
   Side,
   SPIN_SEGMENTS,
+  COIN_SCALE,
+  ROULETTE_PAYOUTS,
+  ROULETTE_MAX_TOTAL,
+  RouletteBet,
+  RouletteBetKind,
+  rouletteWins,
   StateMsg,
+  STOCKS,
+  STOCK_UPDATE_MS,
+  STOCK_HISTORY,
+  MARKET_INSTABILITY_THRESHOLD,
   TEAM_MAX,
+  WalletMsg,
 } from '../shared/types';
-import { getLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
-  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, addBonusSpin, useBonusSpin, DAILY_SPIN_MS } from './db';
+import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
+  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, DAILY_SPIN_MS,
+  getHoldings, investStock, cashOutStock, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
+  setStockCrashAt, getMarketInstability, setMarketInstability,
+  getLoan, takeLoan, repayLoan, collectDefaultedLoans, realignLoansToDeadline } from './db';
+import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
@@ -55,6 +72,40 @@ interface Conn {
   // Cached wallet/cosmetics (loaded from the DB on join). Purely cosmetic — never affects play.
   hat: string | null;
   skin: string | null;
+}
+
+// One step of a crypto's price random walk. Pure RNG — never tied to who invested or how
+// much. The market trends UP at a *calm* pace: a steady drift doubles the typical price about
+// once a DAY (derived from the re-roll interval, so it holds at any cadence), which keeps the
+// numbers human-readable (~1–3) between the daily resets. The noise sits in log space
+// (symmetric, so it doesn't drag the typical trajectory below the drift): usually ±~5% per
+// tick, with a 1-in-12 chance of a bigger swing on top. Clamped to [base/100, base×1000] and
+// rounded to cents (so it can dip below the starting price for real downside, never to zero).
+function rollPrice(price: number, base: number): number {
+  const ticksPerDay = 86_400_000 / STOCK_UPDATE_MS;
+  const drift = Math.pow(2, 1 / ticksPerDay); // typical ×2 per day — a gentle climb
+  let g = (Math.random() * 2 - 1) * 0.05; // ±5% jitter (log space)
+  if (Math.random() < 0.08) g += (Math.random() * 2 - 1) * 0.18; // occasional bigger swing
+  const np = price * drift * Math.exp(g);
+  return Math.round(Math.max(base / 100, Math.min(np, base * 1_000)) * 100) / 100;
+}
+
+// Epoch-ms of the next 5:00pm America/New_York from `nowMs`. DST-aware via Intl: we read the
+// current NY wall-clock time and add however many seconds remain until 17:00 there (rolling to
+// tomorrow once 5pm has passed). Pure arithmetic on the formatted parts — no timezone-Date
+// construction — so it can't throw on a bad offset; worst case on a DST-transition day it's off
+// by an hour, which is harmless for a daily game deadline.
+function nextFivePmEtMs(nowMs: number): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour12: false,
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(new Date(nowMs));
+  const val = (t: string) => Number(parts.find((p) => p.type === t)?.value) || 0;
+  const secsNow = (val('hour') % 24) * 3600 + val('minute') * 60 + val('second');
+  const target = 17 * 3600; // 5:00pm
+  let delta = target - secsNow;
+  if (delta <= 0) delta += 24 * 3600; // already past 5pm in NY → the next one is tomorrow
+  return nowMs + delta * 1000;
 }
 
 // Epoch ms when the daily spin is next available (0 = available now).
@@ -120,6 +171,8 @@ export class Lobby {
   private readyTimer = 0; // seconds remaining for ready-up; 0 = no timer active
   private captureCountdown = 0; // soonest pending bench-the-laggard timer, in seconds (0 = none running)
   private leaderboard: LeaderboardRow[] = []; // cached standings, pushed to clients
+  private netWorth: NetWorthRow[] = []; // cached net-worth board (coins + holdings − debt)
+  private netWorthPids: string[] = []; // pid per net-worth row (server-only; resolves a rank → player)
   private chatLog: ChatLine[] = []; // recent chat, replayed to new connections
   private nextId = 1;
 
@@ -167,9 +220,37 @@ export class Lobby {
   // duel in turn, and king-of-hill / queue / bots are all suspended until it ends.
   private tournament: Tournament | null = null;
   private tournamentCreatorPid = ''; // only the creator may cancel the tournament
-  // Spectator wagers on the current duel: pid -> { side, amount }. Coins are escrowed when
-  // the bet is placed and paid out 2× on a correct call when the match ends.
-  private bets = new Map<string, { side: Side; amount: number; ws: WebSocket; name: string }>();
+  // Spectator wagers on the current duel. Coins are escrowed when the bet is placed and paid
+  // out stake × the odds locked at that moment on a correct call when the match ends. Live
+  // betting allows multiple wagers per spectator, so this is a flat list (keyed loosely by pid).
+  private bets: Array<{ pid: string; side: Side; amount: number; ws: WebSocket; name: string; odds: number }> = [];
+  private pointProb = 0.5; // per-point P(left wins), from seated players' blended Elo; set per match
+  private oddsReady = false; // has the odds model been computed for the current live duel?
+  // --- Stock market: one global price board, shared by everyone. `prev` is the price at the
+  // last re-roll (for %-change display). Seeded to each coin's base; hydrated from the DB on
+  // startup (loadStockPrices) so it resumes across restarts. Re-rolls every STOCK_UPDATE_MS.
+  private stockPrices = new Map<string, { price: number; prev: number }>(
+    STOCKS.map((s) => [s.id, { price: s.base, prev: s.base }] as [string, { price: number; prev: number }]),
+  );
+  private nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS;
+  // Epoch ms of the next daily loan-collection event — the next 5:00pm America/New_York. At this
+  // tick Davis collects on overdue loans and each defaulter's unpaid debt is added to the
+  // instability pool; the market only crashes when that pool fills (see runDailyCollection).
+  // (Re)booked to the next 5pm on each boot. 0 until scheduled.
+  private nextStockCrashAt = 0;
+  // Running market-instability pool (coins of defaulted loan debt accumulated since the last
+  // crash). Hydrated from the DB on boot. When it reaches MARKET_INSTABILITY_THRESHOLD the
+  // market crashes for everyone and this resets to 0. Surfaced to clients as the stability bar.
+  private marketInstability = 0;
+  // Per-coin price history for the graphs (in-memory only) — one series per timeframe, each
+  // sampled at its own cadence (see STOCK_HISTORY). Seeded with the current price so a graph
+  // is never empty.
+  private stockHist: Record<'5m' | '1h' | '1d', Map<string, number[]>> = {
+    '5m': new Map(STOCKS.map((s) => [s.id, [s.base]] as [string, number[]])),
+    '1h': new Map(STOCKS.map((s) => [s.id, [s.base]] as [string, number[]])),
+    '1d': new Map(STOCKS.map((s) => [s.id, [s.base]] as [string, number[]])),
+  };
+  private stockHistTick = 0; // re-roll counter, to decide which series to sample each tick
   private liveMatchId: number | null = null; // bracket match currently on the court
   private tourneyInterMs = 0; // ms left on the "next match" interstitial between games
 
@@ -206,6 +287,7 @@ export class Lobby {
     this.conns.set(ws, conn);
     this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
     this.tell(ws, { type: 'leaderboard', rows: this.leaderboard });
+    this.tell(ws, { type: 'netWorth', rows: this.netWorth });
     this.tell(ws, { type: 'doomLeaderboard', solo: this.doomBoards.solo, coop: this.doomBoards.coop });
     if (this.chatLog.length) this.tell(ws, { type: 'chat', lines: this.chatLog });
   }
@@ -441,11 +523,11 @@ export class Lobby {
     this.broadcastDoomLobby();
   }
 
-  /** Grant 100 coins for killing the DOOM minion boss. */
+  /** Grant the DOOM minion-boss reward (1 win-unit × COIN_SCALE = 100 coins). */
   doomReward(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
-    addCoins(conn.pid, conn.nickname, 100)
+    addCoins(conn.pid, conn.nickname, COIN_SCALE)
       .then(() => this.sendWallet(ws))
       .catch((e) => console.error('doom reward failed:', e));
   }
@@ -659,7 +741,7 @@ export class Lobby {
       // plus a free bonus wheel spin (usable even while the daily spin is on cooldown).
       if (t.status === 'done' && winners[0]?.pid) {
         const champ = winners[0];
-        const prize = t.size * 100;
+        const prize = t.size * COIN_SCALE;
         Promise.all([
           addCoins(champ.pid, champ.nickname, prize),
           addBonusSpin(champ.pid, champ.nickname),
@@ -798,6 +880,10 @@ export class Lobby {
       .catch((e) => console.error('name update failed:', e));
     // Load this player's wallet/cosmetics and push it to them.
     this.loadWallet(ws);
+    // Send the stock market: global price board + this player's positions.
+    this.sendStocks(ws);
+    // Send their loan status (so the Get Loan panel knows whether they owe Davis).
+    this.sendLoan(ws);
   }
 
   /** Load a connection's wallet from the DB into memory and send it to that client. */
@@ -810,13 +896,13 @@ export class Lobby {
         if (!c) return;
         c.hat = w.hat;
         c.skin = w.skin;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, bet: this.betView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet load failed:', e));
   }
 
   /** Push the freshest wallet (re-read from DB) to a client; also refreshes cached cosmetics. */
-  private sendWallet(ws: WebSocket) {
+  sendWallet(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.pid) return;
     getWallet(conn.pid)
@@ -824,7 +910,7 @@ export class Lobby {
         const c = this.conns.get(ws);
         if (!c) return;
         c.hat = w.hat; c.skin = w.skin;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, bet: this.betView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet send failed:', e));
   }
@@ -914,71 +1000,425 @@ export class Lobby {
       .catch((e) => console.error('daily spin failed:', e));
   }
 
+  // --- Roulette (casino wheel) ---
+
+  /** Settle one spin of the roulette wheel. Validates the bets, escrows the total stake,
+   *  rolls a single-zero (0–36) wheel, pays back the stake + winnings on every winning bet,
+   *  and reports the landing number + payout so the client can land its wheel and celebrate. */
+  roulette(ws: WebSocket, bets: RouletteBet[]) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    // Validate the slate: a sane number of well-formed bets, total within the cap.
+    if (!Array.isArray(bets) || bets.length === 0 || bets.length > 60) { this.sendWallet(ws); return; }
+    let total = 0;
+    for (const b of bets) {
+      if (!b || typeof b.amount !== 'number' || !Number.isInteger(b.amount) || b.amount <= 0) { this.sendWallet(ws); return; }
+      if (!(b.kind in ROULETTE_PAYOUTS)) { this.sendWallet(ws); return; }
+      if (b.kind === 'straight' &&
+          (typeof b.number !== 'number' || !Number.isInteger(b.number) || b.number < 0 || b.number > 36)) {
+        this.sendWallet(ws); return;
+      }
+      total += b.amount;
+    }
+    if (total <= 0 || total > ROULETTE_MAX_TOTAL) { this.sendWallet(ws); return; }
+    // Escrow the whole stake up front; if it doesn't clear, the player can't afford it.
+    spendCoins(conn.pid, total)
+      .then(async (w) => {
+        if (!w) { this.sendWallet(ws); return; } // insufficient coins (or no DB) — nothing wagered
+        const win = Math.floor(Math.random() * 37); // 0–36, single zero
+        let payout = 0;
+        for (const b of bets) {
+          if (rouletteWins(b, win)) payout += b.amount * (ROULETTE_PAYOUTS[b.kind as RouletteBetKind] + 1);
+        }
+        if (payout > 0) await addCoins(conn.pid, conn.nickname, payout);
+        this.tell(ws, { type: 'rouletteResult', number: win, staked: total, payout });
+        this.sendWallet(ws);
+      })
+      .catch((e) => console.error('roulette failed:', e));
+  }
+
+  // --- Stock market ---
+
+  /** Hydrate the global price board + the next-crash schedule from the DB (call once after
+   *  initDb). No-op on prices without a DB; the crash is still scheduled in memory. */
+  async loadStockPrices() {
+    const saved = await getStockPrices();
+    const savedHist = await getStockHistory().catch(() => ({} as Record<string, { '5m': number[]; '1h': number[]; '1d': number[] }>));
+    for (const s of STOCKS) {
+      const row = saved[s.id];
+      if (row && row.price > 0) this.stockPrices.set(s.id, { price: row.price, prev: row.prev });
+      // Restore the graph history from the DB so the graphs survive restarts; if there's none (or
+      // it's unusable), seed each series with the single resumed price so a graph is never empty.
+      const seed = this.stockPrices.get(s.id)?.price ?? s.base;
+      const h = savedHist[s.id];
+      for (const tf of ['5m', '1h', '1d'] as const) {
+        const arr = Array.isArray(h?.[tf]) ? h![tf].filter((n) => typeof n === 'number' && Number.isFinite(n)) : [];
+        const capped = arr.slice(-STOCK_HISTORY[tf].cap);
+        this.stockHist[tf].set(s.id, capped.length ? capped : [seed]);
+      }
+    }
+    // The collection fires at the next 5pm ET — a deterministic time — so just (re)book it on
+    // boot rather than resuming a stored timestamp. Then pull any open loan still booked under the
+    // old rolling-24h deadline back to this 5pm, so existing loans show the correct countdown too.
+    this.scheduleNextCollect();
+    realignLoansToDeadline(this.nextStockCrashAt).catch((e) => console.error('loan deadline realign failed:', e));
+    // Resume the instability pool so the stability bar (and crash trigger) survive restarts.
+    this.marketInstability = await getMarketInstability().catch(() => 0);
+  }
+
+  /** Book the next daily loan-collection event — the next 5:00pm America/New_York — and persist it. */
+  private scheduleNextCollect() {
+    this.nextStockCrashAt = nextFivePmEtMs(Date.now());
+    setStockCrashAt(this.nextStockCrashAt).catch((e) => console.error('collection schedule save failed:', e));
+  }
+
+  /** The stability pool as a 0–100% reading of MARKET_INSTABILITY_THRESHOLD (for announcements). */
+  private stabilityPct(): number {
+    return Math.min(100, Math.round((this.marketInstability / MARKET_INSTABILITY_THRESHOLD) * 100));
+  }
+
+  /** Market crash: every coin snaps back to its base price. Holdings are left untouched — they
+   *  simply revalue at the new price (worth = floor(shares × base)) — so a crash wipes the gains.
+   *  Pure price effect; the caller handles scheduling, the instability pool, and announcing. */
+  private resetMarket() {
+    for (const s of STOCKS) {
+      const cur = this.stockPrices.get(s.id) ?? { price: s.base, prev: s.base };
+      this.stockPrices.set(s.id, { price: s.base, prev: cur.price }); // prev = pre-crash price, so the drop shows
+    }
+    this.nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS; // give the fresh prices a full window
+    this.recordStockHistory(); // the crash itself is a history point (the cliff edge)
+    saveStockPrices(this.priceBoard()).catch((e) => console.error('stock price save failed:', e));
+    saveStockHistory(this.historyBoard()).catch((e) => console.error('stock history save failed:', e));
+  }
+
+  /** The daily event (replaces the old fixed daily reset): Davis collects on every overdue loan,
+   *  and each defaulter's unpaid 1.5× debt is added to the market-instability pool. The market no
+   *  longer resets on a timer — it crashes for EVERYONE only once the pool fills the threshold, at
+   *  which point the pool resets to 0. Books the next event, then refreshes/announces and repushes. */
+  private runDailyCollection() {
+    this.scheduleNextCollect(); // book the next daily event immediately (so we never re-fire next tick)
+    collectDefaultedLoans(Date.now())
+      .then(({ pids, totalOwed }) => {
+        // Refresh + notify any defaulter still online (wallet/stocks/loan all just changed).
+        const hit = new Set(pids);
+        for (const ws of this.conns.keys()) {
+          const conn = this.conns.get(ws);
+          if (!conn?.pid || !hit.has(conn.pid)) continue;
+          this.sendWallet(ws);
+          this.sendStocks(ws);
+          this.sendLoan(ws);
+          this.notify(ws, `🕶️ Davis came to collect — you didn't repay, so he took everything. Bad day to be an Excel spreadsheet.`);
+        }
+        // Defaulted debt destabilizes the market for everyone.
+        if (totalOwed > 0) {
+          this.marketInstability += totalOwed;
+          setMarketInstability(this.marketInstability).catch((e) => console.error('instability save failed:', e));
+          this.announce(`💸 Davis collected ${Math.round(totalOwed)}🪙 in unpaid loans — market stability is at ${this.stabilityPct()}%.`);
+        }
+        // Crash only when the pool fills — this is now the sole market-reset trigger.
+        if (this.marketInstability >= MARKET_INSTABILITY_THRESHOLD) {
+          this.resetMarket();
+          this.marketInstability = 0;
+          setMarketInstability(0).catch((e) => console.error('instability save failed:', e));
+          this.announce('🔄 MARKET CRASH — unpaid loans hit 100% instability! Every coin is back to base 🪙. Holdings revalued, stability reset. Fresh start!');
+        }
+        for (const ws of this.conns.keys()) this.sendStocks(ws);
+        // Wallets zeroed, holdings wiped, maybe a full crash — the net-worth board moved a lot.
+        this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
+      })
+      .catch((e) => console.error('daily collection failed:', e));
+  }
+
+  /** The global price board, in STOCKS order. */
+  private priceBoard(): { id: string; price: number; prev: number }[] {
+    return STOCKS.map((s) => {
+      const p = this.stockPrices.get(s.id) ?? { price: s.base, prev: s.base };
+      return { id: s.id, price: p.price, prev: p.prev };
+    });
+  }
+
+  /** The per-coin graph history (all three timeframes), in STOCKS order. */
+  private historyBoard(): { id: string; series: { '5m': number[]; '1h': number[]; '1d': number[] } }[] {
+    return STOCKS.map((s) => ({
+      id: s.id,
+      series: {
+        '5m': this.stockHist['5m'].get(s.id) ?? [],
+        '1h': this.stockHist['1h'].get(s.id) ?? [],
+        '1d': this.stockHist['1d'].get(s.id) ?? [],
+      },
+    }));
+  }
+
+  /** Record the current price into each graph series (call once per re-roll / reset). Each
+   *  timeframe samples at its own cadence: 5m every tick, 1h every 4, 1d every 60. */
+  private recordStockHistory() {
+    this.stockHistTick++;
+    for (const tf of ['5m', '1h', '1d'] as const) {
+      if (this.stockHistTick % STOCK_HISTORY[tf].everyTicks !== 0) continue;
+      const cap = STOCK_HISTORY[tf].cap;
+      const map = this.stockHist[tf];
+      for (const s of STOCKS) {
+        const price = this.stockPrices.get(s.id)?.price ?? s.base;
+        const arr = map.get(s.id) ?? [];
+        arr.push(price);
+        while (arr.length > cap) arr.shift();
+        map.set(s.id, arr);
+      }
+    }
+  }
+
+  /** Send a client the price board, its own positions (revalued live), and graph history. */
+  sendStocks(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    const prices = this.priceBoard();
+    const history = this.historyBoard();
+    getHoldings(conn.pid)
+      .then((h) => {
+        if (!this.conns.has(ws)) return;
+        const holdings = Object.entries(h).map(([id, hd]) => {
+          const price = this.stockPrices.get(id)?.price ?? 0;
+          return { id, shares: hd.shares, cost: hd.cost, worth: Math.floor(hd.shares * price) };
+        });
+        this.tell(ws, {
+          type: 'stocks', prices, holdings, history, nextUpdateAt: this.nextStockUpdateAt,
+          stability: { unpaid: this.marketInstability, threshold: MARKET_INSTABILITY_THRESHOLD },
+        });
+      })
+      .catch((e) => console.error('stocks send failed:', e));
+  }
+
+  /** Invest coins into a crypto at its current price. Coins are escrowed into shares. */
+  stockInvest(ws: WebSocket, coin: string, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    if (!STOCKS.some((s) => s.id === coin)) return; // unknown coin
+    const amt = Math.floor(amount);
+    if (!Number.isFinite(amt) || amt < 1) return; // positive whole coins only
+    const price = this.stockPrices.get(coin)?.price;
+    if (!price || !(price > 0)) return;
+    investStock(conn.pid, conn.nickname, coin, amt, price)
+      .then((w) => {
+        if (!w) { this.sendStocks(ws); return; } // couldn't afford — just refresh the view
+        this.sendWallet(ws);
+        this.sendStocks(ws);
+      })
+      .catch((e) => console.error('stock invest failed:', e));
+  }
+
+  /** Cash out the whole position in a crypto for floor(current worth) coins. */
+  stockCashOut(ws: WebSocket, coin: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    if (!STOCKS.some((s) => s.id === coin)) return;
+    const price = this.stockPrices.get(coin)?.price;
+    if (!price || !(price > 0)) return;
+    cashOutStock(conn.pid, conn.nickname, coin, price)
+      .then((res) => {
+        if (!res) { this.sendStocks(ws); return; } // held nothing in that coin
+        this.sendWallet(ws);
+        this.sendStocks(ws);
+      })
+      .catch((e) => console.error('stock cash-out failed:', e));
+  }
+
+  // --- Davis's loans ---
+
+  /** Push a client their current loan status (null = no debt). */
+  private sendLoan(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    getLoan(conn.pid)
+      .then((loan) => { if (this.conns.has(ws)) this.tell(ws, { type: 'loan', loan }); })
+      .catch((e) => console.error('loan send failed:', e));
+  }
+
+  /** Borrow `amount` coins from Davis, due (at 1.5×) by the next daily 5pm collection. */
+  getLoanFor(ws: WebSocket, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    const amt = Math.floor(amount);
+    if (!Number.isFinite(amt) || amt < 1) return; // positive whole coins only
+    // Deadline is the next daily 5pm collection; if one somehow isn't booked, compute it directly.
+    const dueAt = this.nextStockCrashAt || nextFivePmEtMs(Date.now());
+    takeLoan(conn.pid, conn.nickname, amt, dueAt)
+      .then((res) => {
+        if (!res) { this.sendLoan(ws); return; } // already had a loan / rejected — just refresh
+        this.sendWallet(ws);
+        this.sendLoan(ws);
+        this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
+        this.notify(ws, `💸 Davis fronted you ${amt}🪙 — bring back ${res.loan.owed}🪙 by 5pm. Miss it and the market takes the hit. Keep grinding.`);
+      })
+      .catch((e) => console.error('loan failed:', e));
+  }
+
+  /** Repay Davis the full 1.5× owed and clear the loan. */
+  repayLoanFor(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    repayLoan(conn.pid)
+      .then((res) => {
+        if (!res) { this.sendWallet(ws); this.sendLoan(ws); return; } // no loan or couldn't afford it
+        this.sendWallet(ws);
+        this.sendLoan(ws);
+        this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
+        this.notify(ws, `🤝 Loan settled. Davis respects the hustle.`);
+      })
+      .catch((e) => console.error('loan repay failed:', e));
+  }
+
+  /** Re-roll every coin's price when the re-roll window elapses, persist the board, and push
+   *  the fresh (revalued) market to every connected client. Also fires the daily loan-collection
+   *  event when its time arrives. Cheap to call every tick. */
+  private tickStocks() {
+    // The daily collection takes precedence (it may crash + repush the market itself), so handle
+    // it first and bail.
+    if (this.nextStockCrashAt && Date.now() >= this.nextStockCrashAt) {
+      this.runDailyCollection();
+      return;
+    }
+    if (Date.now() < this.nextStockUpdateAt) return;
+    this.nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS;
+    for (const s of STOCKS) {
+      const cur = this.stockPrices.get(s.id) ?? { price: s.base, prev: s.base };
+      this.stockPrices.set(s.id, { price: rollPrice(cur.price, s.base), prev: cur.price });
+    }
+    this.recordStockHistory();
+    saveStockPrices(this.priceBoard()).catch((e) => console.error('stock price save failed:', e));
+    saveStockHistory(this.historyBoard()).catch((e) => console.error('stock history save failed:', e));
+    for (const ws of this.conns.keys()) this.sendStocks(ws);
+    // Holdings just revalued, so the net-worth standings shifted too.
+    this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
+  }
+
   // --- Gambling ---
 
   /** Public view of all current wagers, grouped by side (for the on-screen bet board). */
   private betBoard(): StateMsg['bets'] {
     const board: StateMsg['bets'] = { left: [], right: [] };
-    for (const b of this.bets.values()) board[b.side].push({ name: b.name, amount: b.amount });
+    for (const b of this.bets) board[b.side].push({ name: b.name, amount: b.amount });
     return board;
   }
 
-  private betView(ws: WebSocket): { side: Side; amount: number } | null {
+  /** A spectator's own open wagers (with locked odds), for their wallet view. */
+  private betsView(ws: WebSocket): WalletMsg['bets'] {
     const conn = this.conns.get(ws);
-    if (!conn) return null;
-    const b = this.bets.get(conn.pid);
-    return b ? { side: b.side, amount: b.amount } : null;
+    if (!conn) return [];
+    return this.bets
+      .filter((b) => b.pid === conn.pid)
+      .map((b) => ({ side: b.side, amount: b.amount, odds: b.odds }));
   }
 
-  /** Place a wager on a side of the live duel (spectators only). Coins are escrowed now. */
+  /** Recompute the per-point win probability from the seated players' blended Elo. Run once when
+   *  a duel starts; until it resolves (and whenever the DB is unavailable) odds stay even. */
+  private async refreshOddsModel(): Promise<void> {
+    const pidsOf = (side: Side) =>
+      this.connsOn(side).map((c) => c.pid).filter((p): p is string => !!p);
+    const leftPids = pidsOf('left');
+    const rightPids = pidsOf('right');
+    const winScore = this.game.winScore;
+    try {
+      const elos = await getElos([...leftPids, ...rightPids]);
+      const sideElo = (pids: string[]) => {
+        if (pids.length === 0) return 500;
+        const blended = pids.map((pid) => {
+          const e = elos.get(pid);
+          return e ? blendElo(e.elo, e.games) : 500; // unknown player → neutral
+        });
+        return blended.reduce((a, b) => a + b, 0) / blended.length;
+      };
+      this.pointProb = perPointProb(sideElo(leftPids), sideElo(rightPids), winScore);
+    } catch (e) {
+      console.error('odds model refresh failed:', e);
+      this.pointProb = 0.5;
+    }
+  }
+
+  /** Live fair decimal odds for the current duel score, from the cached per-point prob. */
+  private currentOdds(): { left: number; right: number } {
+    return liveOdds(this.pointProb, this.game.winScore, this.game.score.left, this.game.score.right);
+  }
+
+  /** Whether wagers can be placed/quoted right now: a live, human-vs-human duel. */
+  private bettingOpen(): boolean {
+    return this.mode === 'duel' && !this.bot && this.game.status === 'playing';
+  }
+
+  /** Place a wager on a side of the live duel (spectators only), locking in the current odds.
+   *  Live betting: allowed any time the duel is live, and a spectator may place several. */
   bet(ws: WebSocket, side: Side, amount: number) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
-    if (this.mode !== 'duel' || this.game.status !== 'playing') return; // only on a live duel
-    if (this.bot) return; // no betting on matches involving a bot
-    if (this.game.score.left !== 0 || this.game.score.right !== 0) return; // only before the first point
+    if (!this.bettingOpen()) return; // live, non-bot duel only
     if (this.sideOf(ws)) return; // players can't bet on their own match
-    if (this.bets.has(conn.pid)) return; // one wager per match
     const amt = Math.floor(amount);
     if (!Number.isFinite(amt) || amt < 1) return;
+    const odds = this.currentOdds()[side]; // lock the odds shown at this instant
+    const { pid, nickname: name } = conn;
     // Escrow the stake atomically — spendCoins returns null if they can't actually afford it.
-    spendCoins(conn.pid, amt)
+    spendCoins(pid, amt)
       .then((w) => {
         if (!w) { this.sendWallet(ws); return; } // insufficient coins — refresh their view, no bet
-        this.bets.set(conn.pid, { side, amount: amt, ws, name: conn.nickname });
+        this.bets.push({ pid, side, amount: amt, ws, name, odds });
         this.sendWallet(ws);
-        this.announce(`🎲 ${conn.nickname} bet ${amt} on ${side}`);
+        this.announce(`🎲 ${name} bet ${amt} on ${side} @ ${odds.toFixed(2)}×`, true);
       })
       .catch((e) => console.error('bet failed:', e));
   }
 
-  /** Settle all open wagers against the winning side: correct calls pay 2×. */
+  /** Settle all open wagers against the winning side: correct calls pay stake × locked odds. */
   private settleBets(winnerSide: Side | null) {
-    if (this.bets.size === 0) return;
-    const pending = [...this.bets.values()];
-    this.bets.clear();
+    if (this.bets.length === 0) return;
+    // No winning side (an abnormal end with no result) — nobody called it wrong, so return
+    // every stake rather than pocketing it.
+    if (!winnerSide) { void this.refundBets(); return; }
+    const pending = this.bets;
+    this.bets = [];
     for (const b of pending) {
-      if (winnerSide && b.side === winnerSide) {
-        addCoins(this.conns.get(b.ws)?.pid ?? b.name, b.name, b.amount * 2)
-          .then(() => { if (this.conns.has(b.ws)) this.sendWallet(b.ws); })
+      if (b.side === winnerSide) {
+        const payout = Math.max(b.amount, Math.round(b.amount * b.odds)); // never pay below stake
+        addCoins(this.conns.get(b.ws)?.pid ?? b.pid, b.name, payout)
+          .then(() => {
+            if (!this.conns.has(b.ws)) return;
+            this.sendWallet(b.ws);
+            this.notify(b.ws, `🎲 ${b.side} won — your ${b.amount}🪙 bet pays ${payout}🪙 (+${payout - b.amount})`);
+          })
           .catch((e) => console.error('payout failed:', e));
       } else {
-        // Lost (or no winner) — stake already escrowed; just refresh their wallet view.
-        if (this.conns.has(b.ws)) this.sendWallet(b.ws);
+        // Lost — stake was escrowed at bet time; just refresh their wallet view + tell them.
+        if (this.conns.has(b.ws)) {
+          this.sendWallet(b.ws);
+          this.notify(b.ws, `🎲 ${winnerSide} won — your ${b.amount}🪙 bet on ${b.side} lost`);
+        }
       }
     }
   }
 
-  /** Refund all open wagers (match abandoned with no result). */
-  private refundBets() {
-    if (this.bets.size === 0) return;
-    const pending = [...this.bets.values()];
-    this.bets.clear();
-    for (const b of pending) {
-      addCoins(this.conns.get(b.ws)?.pid ?? b.name, b.name, b.amount)
-        .then(() => { if (this.conns.has(b.ws)) this.sendWallet(b.ws); })
-        .catch((e) => console.error('refund failed:', e));
-    }
+  /** Refund all open wagers (match abandoned with no result, or a graceful shutdown).
+   *  Returns once every refund has been written to the DB, so a caller that needs the coins
+   *  made whole before exiting can await it; fire-and-forget callers can ignore the promise. */
+  private refundBets(): Promise<void> {
+    if (this.bets.length === 0) return Promise.resolve();
+    const pending = this.bets;
+    this.bets = [];
+    return Promise.all(pending.map((b) =>
+      addCoins(this.conns.get(b.ws)?.pid ?? b.pid, b.name, b.amount)
+        .then(() => {
+          if (!this.conns.has(b.ws)) return;
+          this.sendWallet(b.ws);
+          this.notify(b.ws, `🎲 Bet refunded: ${b.amount}🪙`);
+        })
+        .catch((e) => console.error('refund failed:', e)),
+    )).then(() => undefined);
+  }
+
+  /** Refund any open wagers ahead of a graceful shutdown. Bets live only in memory — they're
+   *  not part of the snapshot — so without this the coins escrowed at bet time would be lost
+   *  across a restart: neither paid out nor returned. The notice rides the chat log, which IS
+   *  snapshotted, so reconnecting spectators see why their stake came back. */
+  refundOpenBets(): Promise<void> {
+    if (this.bets.length > 0) this.announce('🎲 Open bets refunded — server restarting.');
+    return this.refundBets();
   }
 
   claim(ws: WebSocket, side?: Side) {
@@ -1131,7 +1571,7 @@ export class Lobby {
   }
 
   // Any joined client may toggle game modes.
-  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string }) {
+  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean }) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return;
     if (opts.closing !== undefined) this.game.setClosing(opts.closing);
@@ -1142,6 +1582,9 @@ export class Lobby {
     if (opts.pinata !== undefined) this.game.setPinata(opts.pinata);
     if (opts.layered !== undefined) this.game.setLayered(opts.layered);
     if (opts.arena !== undefined) this.setArena(opts.arena);
+    if (opts.breakout !== undefined) this.game.setBreakout(opts.breakout);
+    if (opts.fog !== undefined) this.game.setFog(opts.fog);
+    if (opts.portal !== undefined) this.game.setPortal(opts.portal);
     // View mode is locked while a match is in progress to avoid disrupting players.
     if ((opts.viewMode === 'normal' || opts.viewMode === '3d' || opts.viewMode === 'firstperson') && this.game.status !== 'playing') {
       this.viewMode = opts.viewMode;
@@ -1306,19 +1749,24 @@ export class Lobby {
   /** Called every tick after the active sim ticks. Routes to the live mode's bookkeeping. */
   sync() {
     this.expireResume();
-    // "coins" power-up: pay the collecting side 100 coins, once.
+    this.tickStocks(); // re-roll crypto prices when the 5-minute window elapses
+    // "coins" power-up: pay the collecting side 100 coins (1 × COIN_SCALE), once.
     if (this.game.coinGrant) {
       const side = this.game.coinGrant;
       this.game.coinGrant = null;
       for (const c of this.connsOn(side)) {
         if (!c.pid) continue;
         const w = this.wsOfConn(c);
-        addCoins(c.pid, c.nickname, 100).then(() => { if (w) this.sendWallet(w); }).catch(() => {});
+        addCoins(c.pid, c.nickname, COIN_SCALE).then(() => { if (w) this.sendWallet(w); }).catch(() => {});
       }
     }
     // Safety: if a duel was abandoned (back to 'waiting' with no result) or we slid into
     // arena mode, refund any open wagers so escrowed coins are never lost.
-    if (this.bets.size && (this.mode === 'poly' || this.game.status === 'waiting')) this.refundBets();
+    if (this.bets.length && (this.mode === 'poly' || this.game.status === 'waiting')) this.refundBets();
+    // Compute the Elo odds model once when a fresh duel goes live; clear it when betting closes.
+    const live = this.bettingOpen();
+    if (live && !this.oddsReady) { this.oddsReady = true; void this.refreshOddsModel(); }
+    else if (!live) { this.oddsReady = false; this.pointProb = 0.5; }
     if (this.tournament) this.tournamentSync();
     else if (this.mode === 'poly') this.polySync();
     else this.duelSync();
@@ -1531,6 +1979,47 @@ export class Lobby {
     for (const ws of this.conns.keys()) {
       if (ws.readyState === ws.OPEN) ws.send(data);
     }
+    // Net worth tracks the same population, so refresh it on the same beat.
+    this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
+  }
+
+  /** Recompute the Net Worth board (coins + live holdings − debt) and push it to everyone.
+   *  The pid of each row is cached locally (never sent to clients — it's the identity key) so a
+   *  later balance-sheet request can resolve a board rank back to a player. */
+  async refreshNetWorth() {
+    const full = await getNetWorthLeaderboard();
+    this.netWorthPids = full.map((r) => r.pid);
+    this.netWorth = full.map(({ pid: _pid, ...row }) => row);
+    const data = JSON.stringify({ type: 'netWorth', rows: this.netWorth });
+    for (const ws of this.conns.keys()) {
+      if (ws.readyState === ws.OPEN) ws.send(data);
+    }
+  }
+
+  /** Build and send the balance sheet for the player at `rank` on the current net-worth board:
+   *  liquid coins, every open stock position valued at the live price, and any debt to Davis.
+   *  Public info (the board already shows net/coins/debt) — no pid ever leaves the server. */
+  async sendBalanceSheet(ws: WebSocket, rank: number) {
+    if (!Number.isInteger(rank) || rank < 0 || rank >= this.netWorthPids.length) return;
+    const pid = this.netWorthPids[rank];
+    const name = this.netWorth[rank]?.name ?? '???';
+    const [wallet, holdings, loan] = await Promise.all([getWallet(pid), getHoldings(pid), getLoan(pid)]);
+    const rows: BalanceSheetHolding[] = [];
+    let stockValue = 0;
+    for (const s of STOCKS) {
+      const h = holdings[s.id];
+      if (!h || h.shares <= 0) continue;
+      const price = this.stockPrices.get(s.id)?.price ?? s.base;
+      const value = Math.round(h.shares * price);
+      stockValue += value;
+      rows.push({ coin: s.name, ticker: s.ticker, shares: h.shares, price, value });
+    }
+    const owed = loan?.owed ?? 0;
+    const net = wallet.coins + stockValue - owed;
+    this.tell(ws, {
+      type: 'balanceSheet', rank, name,
+      coins: wallet.coins, holdings: rows, stockValue, loan: owed, net,
+    });
   }
 
   broadcast() {
@@ -1544,11 +2033,16 @@ export class Lobby {
   // --- internals ---
 
   /** Fan a big center-screen banner out to every client (transient, not kept). */
-  private announce(text: string) {
-    const data = JSON.stringify({ type: 'announce', text });
+  private announce(text: string, toast = false) {
+    const data = JSON.stringify({ type: 'announce', text, toast });
     for (const sock of this.conns.keys()) {
       if (sock.readyState === sock.OPEN) sock.send(data);
     }
+  }
+
+  /** A small personal toast to a single connection (e.g. a bet result). */
+  private notify(ws: WebSocket, text: string) {
+    this.tell(ws, { type: 'announce', text, toast: true });
   }
 
   /** Echo a slash command into chat (styled apart on the client) so it's visible to all. */
@@ -1756,6 +2250,8 @@ export class Lobby {
       disco: this.game.disco,
       minion: this.game.minion,
       earthquake: this.game.earthquake,
+      blackout: this.game.blackout, bullettime: this.game.bullettime, vortex: this.game.vortex,
+      glitch: this.game.glitch, smoke: this.game.smoke, tilt: this.game.tilt,
       viewMode: this.viewMode,
       pinata: this.game.pinata,
       pinataPos: poly ? null : this.pinataView(),
@@ -1780,6 +2276,11 @@ export class Lobby {
       tournament: this.tournament ? this.tournament.view(this.liveMatchId) : null,
       projectiles: this.game.projectiles.map((p) => ({ x: p.x, y: p.y, vx: p.vx, vy: p.vy, color: '#39ff14' })),
       bets: this.betBoard(),
+      odds: this.bettingOpen() ? this.currentOdds() : null,
+      breakout: this.game.breakout,
+      bricks: this.game.breakout ? [...this.game.brickAlive] : null,
+      fog: this.game.fog,
+      portal: this.game.portal,
     };
   }
 
@@ -2113,6 +2614,49 @@ const GENERIC_MSGS: string[] = [
   'hyperchad gameplay fr fr',
   'okay that one was kinda clean tho',
   'THE DISRESPECT',
+  'this game goes HARD no cap',
+  'bro queued pong and chose violence',
+  'I forgor how to breathe watching this',
+  'stream is popping OFF rn',
+  'why am I so invested in a pong match',
+  'chat we need more hype emotes for this',
+  'my heart cannot take this much longer',
+  'okay i was rooting against them but that was clean',
+  'the AUDACITY',
+  'I told my friend about this stream and now we\'re both here',
+  'did anyone else just scream',
+  'this is the most stressed I\'ve been since my last exam',
+  'bro is speedrunning my blood pressure',
+  'THE MOMENTUM SHIFT',
+  'new meta just dropped',
+  'galaxy brain play or complete accident, we may never know',
+  'the villain arc started this point',
+  'this is actually cinema',
+  'i need a moment',
+  'okay okay okay okay OKAY',
+  'NOT THE COMEBACK ARC',
+  'game diff btw',
+  'both of them said "no defense allowed"',
+  'this rally is giving me PTSD',
+  'court side seats for the collapse of the century',
+  'chat I need to lie down',
+  'the disrespect is criminal fr',
+  'nobody tell them how good they are',
+  'the SPIN on that ball 😭',
+  'chat we are witnessing history',
+  'how is the score even that close right now',
+  'average Tuesday on this stream',
+  'this would never happen in a real sport',
+  'bro plays like he has 8 monitors',
+  'the physics are not on their side today',
+  'I\'ve seen better AI',
+  'nah they actually cooked that',
+  'wait are they good or are the others bad',
+  'stream quality: excellent. player quality: debatable',
+  'tell me you never practiced without telling me',
+  'i joined 10 seconds ago what is happening',
+  'absolute mayhem in the court',
+  'the commentators would be LOSING IT rn',
 ];
 
 const GOAL_REACTIONS_SCORER: string[] = [
@@ -2138,6 +2682,24 @@ const GOAL_REACTIONS_SCORER: string[] = [
   'W + no diff + {scorer} diff',
   'the ball said "let me help you win"',
   'textbook execution',
+  'THAT\'S CINEMA RIGHT THERE',
+  'chat moment of the year candidate',
+  'not a single person on earth defending that',
+  '{scorer} said "this is my court"',
+  'someone put that in the highlight reel',
+  'the precision 🎯',
+  'ZERO chance that was intentional and i don\'t care',
+  '{scorer} is NOT human',
+  'bro is speed running the scoreboard',
+  '{scorer} ate and left zero crumbs',
+  'physics teacher would be proud',
+  'angle on that was ILLEGAL',
+  'i felt that in my soul',
+  '{scorer} just ended the debate',
+  'that ball had a GPS fr',
+  'THE SPEED. THE ANGLE. THE AUDACITY.',
+  'chat we need a replay button',
+  'they said "skill issue" with their hands',
 ];
 
 const GOAL_REACTIONS_LOSER: string[] = [
@@ -2161,4 +2723,23 @@ const GOAL_REACTIONS_LOSER: string[] = [
   'the paddle is not your friend today',
   'log off and think about what you did',
   'skill issue speedrun any%',
+  '{loser} forgot they were playing',
+  'chat is this a cry for help',
+  'the FREEZE on {loser}\'s paddle 😭',
+  'reaction time: nonexistent',
+  '{loser} saw the ball and chose to ignore it',
+  'that\'s a throw, a genuine throw',
+  'bro really said "i\'ll get the next one"',
+  'the paddle moved... the wrong way',
+  '{loser} is fighting the controller AND losing',
+  'average {loser} gameplay',
+  'i\'ve seen better defense from a cardboard box',
+  'chat pour one out for {loser}',
+  'that moment when you peak and fall in the same second',
+  'certified not it moment',
+  'the audacity to miss THAT',
+  'no thoughts, head empty, missed the ball',
+  'bro the ball was RIGHT THERE',
+  '{loser} said "my body is not ready"',
+  'technically they moved so that counts as trying',
 ];

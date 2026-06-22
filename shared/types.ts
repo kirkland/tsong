@@ -73,6 +73,20 @@ export const BLASTER = {
   maxAngle: Math.PI / 3, // ± aim cone off straight-across
 } as const;
 export const CURVE_SPIN = 1.4; // spin (rad/s) applied to the ball on a curve hit
+// "Breakout" mode: a single column of bricks runs down the centre of the court.
+// 1 column × 22 rows of 18×18 bricks with 4-unit gaps.
+// Total 22 bricks. Wall is centred at x=400 in the 800×500 court.
+// Ball phases through the wall until the first paddle hit (lastHit !== null).
+export const BREAKOUT = {
+  cols: 1,
+  rows: 22,
+  w: 18,   // brick width, court units
+  h: 18,   // brick height, court units
+  gap: 4,  // gap between bricks
+  left: 391,   // (800 - 18) / 2
+  top:  10,    // (500 - (22*22 - 4)) / 2  →  (500-480)/2
+} as const;
+
 export const GRAVITY_ACCEL = 220; // court units/sec² downward pull in gravity mode
 export const TURBO_SPEED_MULT = 1.5; // serve speed multiplier in turbo mode
 export const TURBO_SPEEDUP = 1.1; // per-hit speedup in turbo mode (vs BALL.speedup = 1.05)
@@ -117,11 +131,17 @@ export const TARGET = {
 //   rotate — the entire court rotates 90° for the rest of the match
 export const POWERUPS = [
   'grow', 'shrink', 'smash', 'slow', 'multi',
-  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate', 'fritz', 'disco', 'blaster', 'minion', 'earthquake', 'coins',
+  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate', 'fritz', 'disco', 'blaster', 'minion', 'earthquake', 'coins', 'blackout', 'bullettime', 'vortex', 'glitch', 'smoke', 'tilt',
 ] as const;
 export type PowerupKind = (typeof POWERUPS)[number];
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
 export const LEADERBOARD_SIZE = 10;
+
+// Money is whole coins, scaled ×100 so the stock market has integer room for percentage moves
+// (a 1% move on a 100-coin stock = 1 coin) instead of needing fractional cents. Every coin
+// amount in the game — rewards, store prices, stock base prices, spin payouts — lives in these
+// units. (Bumping this does NOT retro-scale existing data; that's a one-time DB migration.)
+export const COIN_SCALE = 100;
 
 // Cosmetic shop. Purely visual — equipped items are drawn on the paddle but never affect
 // the ball's collision (the hitbox is always the plain paddle rectangle). You earn 1 coin
@@ -132,31 +152,41 @@ export interface CosmeticItem {
   slot: 'hat' | 'skin';
   price: number;
 }
-// Static cosmetics cost 10 coins; animated ones cost 20.
+// Static cosmetics cost 1000 coins; animated ones cost 2000 (10×/20× the COIN_SCALE base).
 export const COSMETICS: readonly CosmeticItem[] = [
   // Hats
-  { id: 'tophat', name: 'Top Hat', slot: 'hat', price: 10 },
-  { id: 'crown', name: 'Crown', slot: 'hat', price: 10 },
-  { id: 'party', name: 'Party Hat', slot: 'hat', price: 10 },
-  { id: 'halo', name: 'Halo', slot: 'hat', price: 20 }, // animated
-  { id: 'cowboy', name: 'Cowboy Hat', slot: 'hat', price: 10 },
-  { id: 'wizard', name: 'Wizard Hat', slot: 'hat', price: 10 },
-  { id: 'horns', name: 'Devil Horns', slot: 'hat', price: 10 },
-  { id: 'gradcap', name: 'Grad Cap', slot: 'hat', price: 10 },
-  { id: 'flame', name: 'Flame', slot: 'hat', price: 20 }, // animated
-  { id: 'helmet', name: 'Helmet', slot: 'hat', price: 10 },
-  { id: 'antennae', name: 'Bug Antennae', slot: 'hat', price: 20 }, // animated
+  { id: 'tophat', name: 'Top Hat', slot: 'hat', price: 1000 },
+  { id: 'crown', name: 'Crown', slot: 'hat', price: 1000 },
+  { id: 'party', name: 'Party Hat', slot: 'hat', price: 1000 },
+  { id: 'halo', name: 'Halo', slot: 'hat', price: 2000 }, // animated
+  { id: 'cowboy', name: 'Cowboy Hat', slot: 'hat', price: 1000 },
+  { id: 'wizard', name: 'Wizard Hat', slot: 'hat', price: 1000 },
+  { id: 'horns', name: 'Devil Horns', slot: 'hat', price: 1000 },
+  { id: 'gradcap', name: 'Grad Cap', slot: 'hat', price: 1000 },
+  { id: 'flame', name: 'Flame', slot: 'hat', price: 2000 }, // animated
+  { id: 'helmet', name: 'Helmet', slot: 'hat', price: 1000 },
+  { id: 'antennae', name: 'Bug Antennae', slot: 'hat', price: 2000 }, // animated
+  { id: 'mohawk', name: 'Mohawk', slot: 'hat', price: 1000 },
+  { id: 'bow', name: 'Bow', slot: 'hat', price: 1000 },
+  { id: 'pirate', name: 'Pirate Hat', slot: 'hat', price: 1000 },
+  { id: 'santa', name: 'Santa Hat', slot: 'hat', price: 1000 },
+  { id: 'headphones', name: 'Headphones', slot: 'hat', price: 2000 }, // animated
   // Skins
-  { id: 'rainbow', name: 'Rainbow', slot: 'skin', price: 10 },
-  { id: 'gold', name: 'Gold', slot: 'skin', price: 20 }, // animated
-  { id: 'chrome', name: 'Chrome', slot: 'skin', price: 20 }, // animated
-  { id: 'galaxy', name: 'Galaxy', slot: 'skin', price: 20 }, // animated
-  { id: 'lava', name: 'Lava', slot: 'skin', price: 20 }, // animated
-  { id: 'ice', name: 'Ice', slot: 'skin', price: 10 },
-  { id: 'camo', name: 'Camo', slot: 'skin', price: 10 },
-  { id: 'neon', name: 'Neon', slot: 'skin', price: 20 }, // animated
-  { id: 'stripes', name: 'Stripes', slot: 'skin', price: 10 },
-  { id: 'glitch', name: 'Glitch', slot: 'skin', price: 20 }, // animated
+  { id: 'rainbow', name: 'Rainbow', slot: 'skin', price: 1000 },
+  { id: 'gold', name: 'Gold', slot: 'skin', price: 2000 }, // animated
+  { id: 'chrome', name: 'Chrome', slot: 'skin', price: 2000 }, // animated
+  { id: 'galaxy', name: 'Galaxy', slot: 'skin', price: 2000 }, // animated
+  { id: 'lava', name: 'Lava', slot: 'skin', price: 2000 }, // animated
+  { id: 'ice', name: 'Ice', slot: 'skin', price: 1000 },
+  { id: 'camo', name: 'Camo', slot: 'skin', price: 1000 },
+  { id: 'neon', name: 'Neon', slot: 'skin', price: 2000 }, // animated
+  { id: 'stripes', name: 'Stripes', slot: 'skin', price: 1000 },
+  { id: 'glitch', name: 'Glitch', slot: 'skin', price: 2000 }, // animated
+  { id: 'toxic', name: 'Toxic', slot: 'skin', price: 2000 }, // animated
+  { id: 'plasma', name: 'Plasma', slot: 'skin', price: 2000 }, // animated
+  { id: 'wood', name: 'Wood', slot: 'skin', price: 1000 },
+  { id: 'hologram', name: 'Hologram', slot: 'skin', price: 2000 }, // animated
+  { id: 'venom', name: 'Venom', slot: 'skin', price: 2000 }, // animated
 ] as const;
 export const CHAT_MAX_LEN = 200; // max characters per chat message
 export const CHAT_HISTORY = 50; // recent messages kept/sent to new joiners
@@ -187,7 +217,9 @@ export type Status = 'waiting' | 'playing' | 'over';
 // inflates ever bigger and wider until it swallows the whole court.
 // MONITOR_BREAK: the ball rockets into the screen, the whole court erupts in smoke, and
 // a cracked-glass overlay drops over everything as if the physical monitor just shattered.
-export const FATALITY_MOVES = ['SCREEN_MELT', 'PADDLE_SPLIT', 'FROST_SHATTER', 'NOT_FOUND', 'SINGULARITY', 'PAC_CHOMP', 'JSAV', 'MONITOR_BREAK'] as const;
+// AVERY: the screen snaps to black and Avery's face slams in full-frame, jittering, as a
+// jumpscare sting blares — a sudden in-your-face scare rather than a slow build.
+export const FATALITY_MOVES = ['SCREEN_MELT', 'PADDLE_SPLIT', 'FROST_SHATTER', 'NOT_FOUND', 'SINGULARITY', 'PAC_CHOMP', 'JSAV', 'MONITOR_BREAK', 'AVERY'] as const;
 export type FatalityMove = (typeof FATALITY_MOVES)[number];
 
 // AI opponent difficulty. A bot fills one duel side; a match it plays never touches the
@@ -203,7 +235,7 @@ export type ClientMsg =
   | { type: 'paddle'; y: number } // desired paddle center Y, in court units
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
-  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string } // toggle game modes
+  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean } // toggle game modes
   | { type: 'fatality'; move: string } // winner-only, validated server-side
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
   | { type: 'forfeit' } // "/ff": leave your paddle spot mid-game (and get shamed)
@@ -231,7 +263,14 @@ export type ClientMsg =
   | { type: 'shopBuy'; item: string } // buy a cosmetic from the shop
   | { type: 'shopEquip'; slot: 'hat' | 'skin'; item: string | null } // equip (item) or unequip (null) a cosmetic
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
-  | { type: 'dailySpin' }; // claim the once-per-24h reward spin
+  | { type: 'dailySpin' } // claim the once-per-24h reward spin
+  | { type: 'stockInvest'; coin: string; amount: number } // sink `amount` coins into a crypto at the current price
+  | { type: 'stockCashOut'; coin: string } // sell the entire holding in a crypto for round(worth) coins (nearest)
+  | { type: 'getLoan'; amount: number } // borrow `amount` coins from Davis (owe 1.5× back by the daily 5pm collection)
+  | { type: 'repayLoan' } // pay Davis the full 1.5× owed and clear the loan
+  | { type: 'roulette'; bets: RouletteBet[] } // stake coins on a single spin of the casino wheel
+  | { type: 'balanceSheetReq'; rank: number } // peek at a net-worth board player's balance sheet (by current rank)
+  | { type: 'migrate'; oldPid: string }; // one-time: merge a UUID guest account into the signed-in Google account
 
 // --- Server -> Client ---
 
@@ -337,12 +376,24 @@ export interface StateMsg {
   disco: boolean; // "disco" power-up: 3D disco ball drops, dance floor, colored lights (3D/FP only)
   minion: boolean; // "minion" power-up: both paddles are drawn as a minion for the point
   earthquake: boolean; // "earthquake" power-up: court shakes and the ball jitters for the point
+  blackout: boolean; // "blackout": heavy dark vignette obscures the court
+  bullettime: boolean; // "bullet time": ball slows + blue tint
+  vortex: boolean; // "vortex": swirling overlay + ball pulled toward center
+  glitch: boolean; // "glitch": TV-static / RGB-split overlay
+  smoke: boolean; // "smoke bomb": drifting smoke clouds obscure the court
+  tilt: boolean; // "tilt": court tilts in perspective + ball rolls downward
   viewMode: 'normal' | '3d' | 'firstperson'; // shared view mode — changes for every client at once
   pinata: boolean; // whether "piñata" mode is armed
   // Live piñata (beach-ball collector): center, current rotation, the balls stuck to its
   // surface (absolute court positions), and a one-frame `burst` pulse the moment it pops.
   // null when the mode is off or no match is running.
   pinataPos: { x: number; y: number; spin: number; stuck: { x: number; y: number }[]; burst: boolean } | null;
+  breakout: boolean; // whether "breakout" mode is armed
+  // Which bricks are still alive (true = alive). Length = BREAKOUT.cols × BREAKOUT.rows.
+  // null when breakout mode is off.
+  bricks: boolean[] | null;
+  fog: boolean;    // "fog of war": ball invisible except close to either paddle
+  portal: boolean; // "portal walls": top/bottom walls teleport the ball to a random Y
   winner: string | null; // nickname of the winner when status === 'over'
   // Shared, room-wide toggle: when true, the match winner can perform a finishing move.
   // It's one setting for everyone (not per-user), so it rides along in the state.
@@ -370,6 +421,9 @@ export interface StateMsg {
   // Public wagers on the current duel, grouped by side (name + stake), so everyone can see
   // who bet on whom. Empty arrays when there are no bets.
   bets: { left: Array<{ name: string; amount: number }>; right: Array<{ name: string; amount: number }> };
+  // Live fair decimal odds for each side (Elo + current score), or null when betting isn't
+  // open. A spectator's payout on a winning call is stake × the odds shown when they bet.
+  odds: { left: number; right: number } | null;
   // Blaster projectiles in flight. vx/vy give the travel direction so the client can draw
   // an oriented laser bolt + trail. color is the laser color (bright green).
   projectiles: { x: number; y: number; vx: number; vy: number; color: string }[];
@@ -416,6 +470,46 @@ export interface LeaderboardMsg {
   rows: LeaderboardRow[];
 }
 
+// One row of the Net Worth board: total liquid + invested coins, net of any
+// debt owed to Davis. `net` = coins + (stock holdings at live price) − loan owed,
+// and can go negative when a loan outweighs the assets behind it.
+export interface NetWorthRow {
+  name: string;
+  net: number;   // coins + holdings value − loan owed
+  coins: number; // liquid coins (wallet)
+  loan: number;  // outstanding debt owed to Davis (0 if none)
+}
+
+// Broadcast alongside the leaderboard and whenever the economy shifts (matches,
+// stock re-rolls, loans, the daily collection).
+export interface NetWorthMsg {
+  type: 'netWorth';
+  rows: NetWorthRow[];
+}
+
+// One line item on a player's balance sheet: an open stock position valued live.
+export interface BalanceSheetHolding {
+  coin: string;   // display name (e.g. "Davis Clarke Coin")
+  ticker: string; // short ticker (e.g. "DAVIS")
+  shares: number; // fractional shares held
+  price: number;  // current price per share
+  value: number;  // shares × price, rounded to whole coins
+}
+
+// Server → client: a public balance sheet for the player at `rank` on the net-worth
+// board — coins on hand, every stock position valued live, and any debt to Davis.
+// Sent in response to a balanceSheetReq (clicking a net-worth row).
+export interface BalanceSheetMsg {
+  type: 'balanceSheet';
+  rank: number;
+  name: string;
+  coins: number;                    // liquid coins
+  holdings: BalanceSheetHolding[];  // stock positions (empty if none)
+  stockValue: number;               // total live value of all holdings
+  loan: number;                     // outstanding debt owed to Davis (0 if none)
+  net: number;                      // coins + stockValue − loan
+}
+
 export interface ChatLine {
   from: string;
   text: string;
@@ -437,10 +531,12 @@ export interface ReactionMsg {
   emoji: string;
 }
 
-// A one-off big center-screen banner (e.g. a forfeit). Transient; not replayed.
+// A one-off transient notice. By default a big center-screen banner (e.g. a forfeit);
+// `toast: true` renders a small unobtrusive corner toast instead (e.g. betting activity).
 export interface AnnounceMsg {
   type: 'announce';
   text: string;
+  toast?: boolean;
 }
 
 // A ping notification requesting attention: someone wants others to join the game.
@@ -480,6 +576,8 @@ export type ServerMsg =
   | YouMsg
   | StateMsg
   | LeaderboardMsg
+  | NetWorthMsg
+  | BalanceSheetMsg
   | ChatMsg
   | ReactionMsg
   | AnnounceMsg
@@ -490,7 +588,10 @@ export type ServerMsg =
   | DoomEndMsg
   | DoomLeaderboardMsg
   | WalletMsg
-  | SpinResultMsg;
+  | StockMsg
+  | LoanMsg
+  | SpinResultMsg
+  | RouletteResultMsg;
 
 // A player's private wallet + cosmetics + active bet, sent only to that client.
 export interface WalletMsg {
@@ -499,24 +600,91 @@ export interface WalletMsg {
   owned: string[]; // item ids owned
   hat: string | null; // equipped hat
   skin: string | null; // equipped skin
-  bet: { side: Side; amount: number } | null; // current wager on the live duel, if any
+  // Your open wagers on the live duel (multiple allowed in live betting); each locks the odds
+  // it was placed at. Empty when you have none.
+  bets: Array<{ side: Side; amount: number; odds: number }>;
   nextSpinAt: number; // epoch ms when the daily spin is next available (0 = available now)
   bonusSpins: number; // banked free spins (e.g. from winning a tournament); bypass the cooldown
+}
+
+// A player's private loan status, sent only to that client (on join and after any loan
+// change). `loan` is null when they owe Davis nothing. Borrow N coins now; owe `owed`
+// (= ceil(1.5 × N), Davis rounds up) back by `dueAt` (the next daily 5pm collection). Miss the
+// deadline and Davis zeroes your wallet AND wipes every stock position — and your unpaid debt is
+// added to the market-instability pool (see MARKET_INSTABILITY_THRESHOLD).
+export interface LoanMsg {
+  type: 'loan';
+  loan: { amount: number; owed: number; dueAt: number } | null;
 }
 
 // The daily-spin wheel segments, in display order. Shared so the client wheel and the
 // server roll agree on the layout. Higher-value segments have lower odds (weights live
 // server-side). hat/skin award a random unowned cosmetic of that slot.
 export const SPIN_SEGMENTS = [
-  { label: '1 🪙', kind: 'coins', value: 1 },
-  { label: '2 🪙', kind: 'coins', value: 2 },
-  { label: '3 🪙', kind: 'coins', value: 3 },
-  { label: '5 🪙', kind: 'coins', value: 5 },
-  { label: '10 🪙', kind: 'coins', value: 10 },
-  { label: '20 🪙', kind: 'coins', value: 20 },
+  { label: '100 🪙', kind: 'coins', value: 100 },
+  { label: '200 🪙', kind: 'coins', value: 200 },
+  { label: '300 🪙', kind: 'coins', value: 300 },
+  { label: '500 🪙', kind: 'coins', value: 500 },
+  { label: '1000 🪙', kind: 'coins', value: 1000 },
+  { label: '2000 🪙', kind: 'coins', value: 2000 },
   { label: '🎩 Hat', kind: 'hat', value: 0 },
   { label: '🎨 Skin', kind: 'skin', value: 0 },
 ] as const;
+
+// --- Stock market (joke crypto exchange) ---
+// Five fictional "cryptocurrencies" you can sink coins into. Each has a global price that
+// random-walks every STOCK_UPDATE_MS (shared by everyone — it's one market). Investing N
+// coins at price P buys N/P "shares"; cashing out pays round(shares × currentPrice) coins
+// and closes the whole position. `base` is the starting price — 100 (= COIN_SCALE), so 1%
+// price moves are whole coins — and the market drifts up from there; `img` is the logo.
+export const STOCKS = [
+  { id: 'kenny', name: 'Kenny Kawaguchi', ticker: 'KENNY', img: '/kennykawaguchi.png', base: 100 },
+  { id: 'chugs', name: 'BadlandsChugs', ticker: 'CHUG', img: '/badlandschugs.jpg', base: 100 },
+  { id: 'davis', name: 'Davis Clarke Coin', ticker: 'DAVIS', img: '/davisclarke.jpg', base: 100 },
+  { id: 'otto', name: 'OTTO', ticker: 'OTTO', img: '/otto.webp', base: 100 },
+  { id: 'bacon', name: 'Bacon Roll', ticker: 'BACON', img: '/baconroll.png', base: 100 },
+] as const;
+export type StockId = (typeof STOCKS)[number]['id'];
+export const STOCK_UPDATE_MS = 30 * 1000; // prices re-roll every 30 seconds
+// Market stability: the market no longer resets on a daily timer. Instead, each day's loan
+// collection adds every defaulter's unpaid debt (the 1.5× `owed`) to a global instability
+// pool. When that pool reaches MARKET_INSTABILITY_THRESHOLD coins, the whole market crashes
+// (every coin snaps back to base) for EVERYONE and the pool resets to 0. The "Market Stability"
+// bar shows pool / threshold.
+export const MARKET_INSTABILITY_THRESHOLD = 10000;
+// Per-coin price-history buffers for the little graphs — one independent series per
+// timeframe so each view has its own resolution and span (no overlap/aliasing). `everyTicks`
+// is how many re-rolls (30s each) between samples; `cap` is how many points to keep:
+//   5m → sample every re-roll (30s), 10 points  = 5 minutes
+//   1h → sample every 4 re-rolls (2 min), 30 points = 1 hour
+//   1d → sample every 60 re-rolls (30 min), 48 points = 1 day
+// History lives in server memory only (not persisted), so it refills after a restart.
+export const STOCK_HISTORY = {
+  '5m': { everyTicks: 1, cap: 10 },
+  '1h': { everyTicks: 4, cap: 30 },
+  '1d': { everyTicks: 60, cap: 48 },
+} as const;
+export type StockTf = keyof typeof STOCK_HISTORY; // '5m' | '1h' | '1d'
+
+// A player's private market view: the global price board plus that player's own positions.
+// Sent on join, after every trade, and to everyone when prices re-roll.
+export interface StockMsg {
+  type: 'stocks';
+  // Global price board, in STOCKS order. `prev` is the price at the previous re-roll (for the
+  // %-change readout); `price` is the live one.
+  prices: { id: string; price: number; prev: number }[];
+  // This player's open positions (only coins they actually hold). `shares` is fractional;
+  // `cost` is the total coins poured in (cost basis); `worth` is floor(shares × price) — the
+  // coins they'd get if they cashed out right now.
+  holdings: { id: string; shares: number; cost: number; worth: number }[];
+  // Price history for the per-coin graphs, in STOCKS order — one array per timeframe (oldest
+  // first). See STOCK_HISTORY for the cadence/length of each series.
+  history: { id: string; series: { '5m': number[]; '1h': number[]; '1d': number[] } }[];
+  nextUpdateAt: number; // epoch ms when prices next re-roll
+  // Global market-stability pool: `unpaid` is the running total of defaulted loan debt, `threshold`
+  // is where it triggers a market-wide crash (MARKET_INSTABILITY_THRESHOLD). Drives the bar.
+  stability: { unpaid: number; threshold: number };
+}
 
 // Result of a daily spin, sent to the spinning client so it can land the wheel on `segment`
 // (an index into SPIN_SEGMENTS) and celebrate the prize.
@@ -524,6 +692,63 @@ export interface SpinResultMsg {
   type: 'spinResult';
   segment: number;
   reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string };
+}
+
+// --- Roulette (single-zero European wheel) ---
+// A casino roulette table: stake coins on where the ball lands on a 0–36 wheel. The wheel
+// is the European single-zero layout, so the lone green 0 gives the house its edge. The
+// server is authoritative — it rolls the number, settles every bet, and adjusts the wallet.
+
+// The 18 red pockets (the other 18 of 1–36 are black; 0 is green). Standard layout.
+export const ROULETTE_RED: ReadonlySet<number> = new Set([
+  1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36,
+]);
+// Pocket order around the physical European wheel, clockwise from 0 (for the visual spin).
+export const ROULETTE_WHEEL: readonly number[] = [
+  0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10,
+  5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26,
+];
+export const ROULETTE_MAX_TOTAL = 10000; // most coins that may be staked across all bets on one spin
+
+// The bet kinds offered. `straight` needs a target `number` (0–36); the rest are the
+// classic "outside" bets. The value is the profit-to-stake ratio — a winning bet returns
+// the stake plus stake × ratio (so straight pays 35:1, dozens 2:1, even-money 1:1).
+export type RouletteBetKind =
+  | 'straight' | 'red' | 'black' | 'odd' | 'even' | 'low' | 'high' | 'dozen1' | 'dozen2' | 'dozen3';
+export const ROULETTE_PAYOUTS: Record<RouletteBetKind, number> = {
+  straight: 35, red: 1, black: 1, odd: 1, even: 1, low: 1, high: 1, dozen1: 2, dozen2: 2, dozen3: 2,
+};
+export interface RouletteBet {
+  kind: RouletteBetKind;
+  amount: number; // coins staked on this bet (positive whole number)
+  number?: number; // target pocket 0–36, only for a `straight` bet
+}
+
+// Does `bet` win when the ball lands on `win` (0–36)? Shared so the server settles and the
+// client previews/highlights with identical rules.
+export function rouletteWins(bet: RouletteBet, win: number): boolean {
+  switch (bet.kind) {
+    case 'straight': return bet.number === win;
+    case 'red': return ROULETTE_RED.has(win);
+    case 'black': return win !== 0 && !ROULETTE_RED.has(win);
+    case 'odd': return win !== 0 && win % 2 === 1;
+    case 'even': return win !== 0 && win % 2 === 0;
+    case 'low': return win >= 1 && win <= 18;
+    case 'high': return win >= 19 && win <= 36;
+    case 'dozen1': return win >= 1 && win <= 12;
+    case 'dozen2': return win >= 13 && win <= 24;
+    case 'dozen3': return win >= 25 && win <= 36;
+  }
+}
+
+// Result of one spin, sent to the spinning client so it can land the wheel on `number` and
+// settle up. `payout` is the total coins returned (stake + winnings on every winning bet;
+// 0 when everything lost); `staked` is what was put down.
+export interface RouletteResultMsg {
+  type: 'rouletteResult';
+  number: number; // winning pocket, 0–36
+  staked: number; // total coins wagered this spin
+  payout: number; // total coins paid back (0 if all bets lost)
 }
 
 // Co-op DOOM lobby status (2 slots). `slot` is which slot this client holds (0 = host,

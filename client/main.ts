@@ -2,7 +2,8 @@
 // and the Join button. Input is only sent when this client holds a paddle.
 
 import { connect } from './net';
-import { draw, drawLegendIcon, setBlasterAim } from './render';
+import { initRoulette } from './roulette';
+import { draw, drawLegendIcon, setBlasterAim, drawCosmeticPreview } from './render';
 import {
   COURT,
   PADDLE,
@@ -15,6 +16,8 @@ import {
   BotLevel,
   ChatLine,
   LeaderboardRow,
+  NetWorthRow,
+  BalanceSheetMsg,
   Role,
   Side,
   StateMsg,
@@ -23,6 +26,7 @@ import {
   TEAM_MAX,
   COSMETICS,
   SPIN_SEGMENTS,
+  STOCKS,
   TickHealth,
 } from '../shared/types';
 
@@ -39,12 +43,14 @@ const queueBtn = document.getElementById('queueBtn') as HTMLButtonElement;
 const queueArea = document.getElementById('queueArea') as HTMLDivElement;
 const readyBtn = document.getElementById('readyBtn') as HTMLButtonElement;
 const rematchBtn = document.getElementById('rematchBtn') as HTMLButtonElement;
+const quitBtn = document.getElementById('quitBtn') as HTMLButtonElement;
 const pingBtn = document.getElementById('pingBtn') as HTMLButtonElement;
 const renameBtn = document.getElementById('rename') as HTMLButtonElement;
 const kingStatusEl = document.getElementById('kingStatus') as HTMLDivElement;
 const statusEl = document.getElementById('status') as HTMLDivElement;
 const watchersEl = document.getElementById('watchers') as HTMLDivElement;
 const leaderboardEl = document.getElementById('leaderboard') as HTMLDivElement;
+const netWorthEl = document.getElementById('netWorth') as HTMLDivElement;
 const colorPicker = document.getElementById('colorPicker') as HTMLDivElement;
 const chatLog = document.getElementById('chatlog') as HTMLDivElement;
 const chatEl = document.getElementById('chat') as HTMLDivElement;
@@ -60,6 +66,9 @@ const diamondModeEl = document.getElementById('diamondMode') as HTMLInputElement
 const pinataModeEl = document.getElementById('pinataMode') as HTMLInputElement;
 const layeredModeEl = document.getElementById('layeredMode') as HTMLInputElement;
 const arenaModeEl = document.getElementById('arenaMode') as HTMLInputElement;
+const breakoutModeEl = document.getElementById('breakoutMode') as HTMLInputElement;
+const fogModeEl = document.getElementById('fogMode') as HTMLInputElement;
+const portalModeEl = document.getElementById('portalMode') as HTMLInputElement;
 const reactionsEl = document.getElementById('reactions') as HTMLDivElement;
 const recentReactionsEl = document.getElementById('recentReactions') as HTMLDivElement;
 const ballReactionEl = document.getElementById('ballReaction') as HTMLDivElement;
@@ -79,6 +88,11 @@ const combosModal = document.getElementById('combosModal') as HTMLDivElement;
 const combosCard = document.getElementById('combosCard') as HTMLDivElement;
 const combosClose = document.getElementById('combosClose') as HTMLButtonElement;
 const combosList = document.getElementById('combosList') as HTMLDivElement;
+const balanceModal = document.getElementById('balanceModal') as HTMLDivElement;
+const balanceCard = document.getElementById('balanceCard') as HTMLDivElement;
+const balanceClose = document.getElementById('balanceClose') as HTMLButtonElement;
+const balanceName = document.getElementById('balanceName') as HTMLSpanElement;
+const balanceBody = document.getElementById('balanceBody') as HTMLDivElement;
 const mobileControlsEl = document.getElementById('mobileControls') as HTMLDivElement;
 const mobUpBtn = document.getElementById('mobUp') as HTMLButtonElement;
 const mobDownBtn = document.getElementById('mobDown') as HTMLButtonElement;
@@ -101,6 +115,7 @@ function applyMute() {
   finishSound.muted = muted;
   pacmanSound.muted = muted;
   jsavSound.muted = muted;
+  averySound.muted = muted;
   discoSound.muted = muted;
   blasterSound.muted = muted;
   minionSound.muted = muted;
@@ -176,11 +191,46 @@ function makeId(): string {
     return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
   });
 }
-const myPid = getCookie('tsong_pid') ?? (() => {
+// `let` so a Google login can upgrade it to the stable g:xxx pid at runtime.
+let myPid = getCookie('tsong_pid') ?? (() => {
   const id = makeId();
   setCookie('tsong_pid', id);
   return id;
 })();
+
+// --- Google auth chip ---
+const authChip    = document.getElementById('authChip')    as HTMLDivElement;
+const signInLink  = document.getElementById('signInLink')  as HTMLAnchorElement;
+
+interface AuthMe { pid?: string; name?: string; email?: string; oauthEnabled?: boolean; }
+fetch('/auth/me')
+  .then((r) => r.json() as Promise<AuthMe>)
+  .then((data) => {
+    if (data.pid) {
+      const oldPid = myPid; // UUID that was active before we knew the Google pid
+      myPid = data.pid;
+      if (!getCookie('tsong_nick') && !nick.value) nick.value = data.name ?? '';
+      authChip.hidden = false;
+      authChip.replaceChildren();
+      const label = document.createTextNode(`Signed in as ${data.name ?? data.email ?? ''} · `);
+      const out = document.createElement('a');
+      out.href = '/auth/logout';
+      out.textContent = 'Sign out';
+      authChip.append(label, out);
+      // If the player has an existing UUID account, migrate it into the Google account.
+      // Send after join so the server's conn.pid is already set when the wallet refresh arrives.
+      if (oldPid && oldPid !== myPid && !oldPid.startsWith('g:')) {
+        const doMigrate = () => net.send({ type: 'migrate', oldPid });
+        // If already joined, fire immediately; otherwise wait until after the join message.
+        if (myName) doMigrate(); else pendingMigrate = doMigrate;
+      }
+    } else if (data.oauthEnabled) {
+      signInLink.hidden = false;
+    }
+  })
+  .catch(() => { /* OAuth not configured or network error — guest mode continues as-is */ });
+
+let pendingMigrate: (() => void) | null = null; // fired once, right after the first join message
 
 let myRole: Role = 'observer';
 let myId = ''; // per-connection id from the server; identifies our own paddle in state
@@ -224,6 +274,7 @@ const FATALITIES = [
   { move: 'PAC_CHOMP', label: 'Pac-Man', seq: ['arrowup', 'arrowdown', 'arrowup'], hint: '↑↓↑', desc: 'You become a yellow Pac-Man and waka-waka down a trail of ping-pong pellets to the frozen loser, devour them, then balloon up and burst.' },
   { move: 'JSAV', label: 'Jsav', seq: ['arrowup', 'arrowdown', 'arrowdown'], hint: '↑↓↓', desc: "The loser becomes Jsav, whose face stretches taller and inflates ever bigger and wider until it swallows the whole court." },
   { move: 'MONITOR_BREAK', label: 'Smash', seq: ['arrowdown', 'arrowup', 'arrowup'], hint: '↓↑↑', desc: 'The ball rockets into the screen, the court erupts in smoke, and the glass shatters as if your monitor just broke.' },
+  { move: 'AVERY', label: 'Avery', seq: ['arrowleft', 'arrowleft', 'arrowright'], hint: '←←→', desc: "The screen snaps to black and Avery's face slams in full-frame, jittering, as a jumpscare blares. Don't say we didn't warn you." },
 ] as const;
 const COMBO_KEYS = new Set(FATALITIES.flatMap((f) => f.seq as readonly string[]));
 const COMBO_WINDOW_MS = 1500; // presses older than this are forgotten
@@ -238,6 +289,8 @@ const pacmanSound = new Audio('/start-music.mp3'); // PAC_CHOMP only
 pacmanSound.preload = 'auto';
 const jsavSound = new Audio('/you-lose.mp3'); // JSAV only
 jsavSound.preload = 'auto';
+const averySound = new Audio('/jumpscare.mp3'); // AVERY only
+averySound.preload = 'auto';
 const discoSound = new Audio('/disco.mp3'); // plays while the disco powerup is active
 discoSound.preload = 'auto';
 discoSound.loop = true;
@@ -410,6 +463,7 @@ const net = connect(
         const track =
           msg.fatality?.move === 'JSAV' ? jsavSound
           : msg.fatality?.move === 'PAC_CHOMP' ? pacmanSound
+          : msg.fatality?.move === 'AVERY' ? averySound
           : null;
         if (track) {
           finishSound.pause(); // hand off from the "FINISH HIM!" sting to the sound
@@ -421,6 +475,8 @@ const net = connect(
         pacmanSound.currentTime = 0;
         jsavSound.pause();
         jsavSound.currentTime = 0;
+        averySound.pause();
+        averySound.currentTime = 0;
       }
       prevFatality = fatalityActive;
       prevStatus = msg.status;
@@ -461,7 +517,7 @@ const net = connect(
       // Detect powerup pickup: target was present last frame, gone this frame.
       if (prevTarget && !msg.target) {
         showPowerupFlash(prevTarget.kind, prevTarget.x, prevTarget.y);
-        if (prevTarget.kind === 'coins') playChaChing(); // 5-coin grab
+        if (prevTarget.kind === 'coins') playChaChing(); // coin grab
       }
       prevTarget = msg.target ?? null;
       state = msg;
@@ -470,6 +526,10 @@ const net = connect(
       updateUI();
     } else if (msg.type === 'leaderboard') {
       renderLeaderboard(msg.rows);
+    } else if (msg.type === 'netWorth') {
+      renderNetWorth(msg.rows);
+    } else if (msg.type === 'balanceSheet') {
+      showBalanceSheet(msg);
     } else if (msg.type === 'chat') {
       msg.lines.forEach(addChatLine);
       // Notify via tab title for a single new message while the tab is backgrounded.
@@ -480,7 +540,7 @@ const net = connect(
     } else if (msg.type === 'reaction') {
       spawnReaction(msg.emoji);
     } else if (msg.type === 'announce') {
-      showAnnouncement(msg.text);
+      showAnnouncement(msg.text, { toast: msg.toast });
     } else if (msg.type === 'ping') {
       onPing(msg.from);
     } else if (msg.type === 'rtt') {
@@ -495,10 +555,26 @@ const net = connect(
     } else if (msg.type === 'doomLeaderboard') {
       doomScores = { solo: msg.solo, coop: msg.coop };
     } else if (msg.type === 'wallet') {
-      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, bet: msg.bet, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
-      renderShop();
+      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
+      rouletteHandle.setCoins(msg.coins);
+      // During a roulette spin, hold every coin-total display (toolbar tab, shop, market) at its
+      // pre-result value until the wheel lands — otherwise the settled balance reveals the outcome
+      // before the animation finishes. The roulette `onSettled` callback runs refreshWallet then.
+      if (!rouletteHandle.isSpinning()) refreshWallet();
+    } else if (msg.type === 'stocks') {
+      market = { prices: msg.prices, holdings: msg.holdings, history: msg.history, nextUpdateAt: msg.nextUpdateAt };
+      if (!marketPanel.hidden) renderMarket();
+      updateMarketTimer();
+      renderStability(msg.stability);
     } else if (msg.type === 'spinResult') {
       celebrateSpin(msg.reward, msg.segment);
+    } else if (msg.type === 'rouletteResult') {
+      rouletteHandle.onResult(msg);
+    } else if (msg.type === 'loan') {
+      loan = msg.loan;
+      // Taking/repaying resets the conversation; collecting (loan→null) drops back to the intro.
+      if (!loan) loanStep = 'intro';
+      if (!loanPanel.hidden) renderLoan();
     }
   },
   () => {
@@ -514,6 +590,22 @@ const net = connect(
     net.send({ type: 'rtt', t: performance.now() });
   },
 );
+
+// Repaint every coin-total display from the current wallet (toolbar tab, shop, open market/loan
+// panels). Held back during a roulette spin so the result isn't revealed before the wheel lands.
+function refreshWallet() {
+  renderShop();
+  if (!marketPanel.hidden) renderMarket(); // coin balance gates the Invest buttons
+  if (!loanPanel.hidden && loan) renderLoan(); // balance gates the Pay button
+}
+
+// Roulette panel (top-left): bets are settled server-side; this just drives the wheel UI.
+const rouletteHandle = initRoulette({
+  send: (bets) => net.send({ type: 'roulette', bets }),
+  playWin: playYay,
+  // Fires when the wheel finishes; reveal the settled balance everywhere now, not mid-spin.
+  onSettled: refreshWallet,
+});
 
 const isPlayer = () => myRole === 'left' || myRole === 'right' || myRole === 'player';
 const inArena = () => myRole === 'player';
@@ -558,6 +650,7 @@ joinForm.addEventListener('submit', (e) => {
   setCookie('tsong_color', myColor);
   // repeat join = rename; pid keeps the leaderboard identity stable
   net.send({ type: 'join', nickname: myName, pid: myPid, color: myColor });
+  if (pendingMigrate) { pendingMigrate(); pendingMigrate = null; }
   overlay.style.display = 'none';
   enableChat();
 });
@@ -605,6 +698,9 @@ joinBtn.addEventListener('click', () => net.send({ type: 'claim' }));
 joinLeftBtn.addEventListener('click', () => net.send({ type: 'claim', side: 'left' }));
 joinRightBtn.addEventListener('click', () => net.send({ type: 'claim', side: 'right' }));
 
+// --- quit game: vacate your paddle spot (the side reverts to "— open —") ---
+quitBtn.addEventListener('click', () => net.send({ type: 'forfeit' }));
+
 // --- king exit: winner declines to stay ---
 kingStatusEl.addEventListener('click', () => net.send({ type: 'kingExit' }));
 
@@ -632,6 +728,15 @@ layeredModeEl.addEventListener('change', () =>
 );
 arenaModeEl.addEventListener('change', () =>
   net.send({ type: 'mode', arena: arenaModeEl.checked }),
+);
+breakoutModeEl.addEventListener('change', () =>
+  net.send({ type: 'mode', breakout: breakoutModeEl.checked }),
+);
+fogModeEl.addEventListener('change', () =>
+  net.send({ type: 'mode', fog: fogModeEl.checked }),
+);
+portalModeEl.addEventListener('change', () =>
+  net.send({ type: 'mode', portal: portalModeEl.checked }),
 );
 
 // --- win score selector ---
@@ -882,6 +987,9 @@ function enableChat() {
   pinataModeEl.disabled = false;
   layeredModeEl.disabled = false;
   arenaModeEl.disabled = false;
+  breakoutModeEl.disabled = false;
+  fogModeEl.disabled = false;
+  portalModeEl.disabled = false;
   for (const btn of reactionsEl.querySelectorAll<HTMLButtonElement>('.reaction-btn')) {
     btn.disabled = false;
   }
@@ -1236,9 +1344,9 @@ doomBtn.addEventListener('click', async () => {
 });
 
 // --- Coins, cosmetics shop & betting ---
-let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; bet: { side: Side; amount: number } | null; nextSpinAt: number; bonusSpins: number } =
-  { coins: 0, owned: [], hat: null, skin: null, bet: null, nextSpinAt: 0, bonusSpins: 0 };
-let betAmount = 1;
+let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
+  { coins: 0, owned: [], hat: null, skin: null, bets: [], nextSpinAt: 0, bonusSpins: 0 };
+let betAmount = 100; // default wager (economy is scaled ×100); min is still 1
 let shopTab: 'hat' | 'skin' = 'hat';
 const shopBtn = document.getElementById('shopBtn') as HTMLButtonElement;
 const shopPanel = document.getElementById('shopPanel') as HTMLDivElement;
@@ -1261,6 +1369,10 @@ spinBtn.addEventListener('click', () => {
 const betSection = document.getElementById('betSection') as HTMLDivElement;
 const betAmountEl = document.getElementById('betAmount') as HTMLSpanElement;
 const betStatus = document.getElementById('betStatus') as HTMLDivElement;
+const betLeftName = document.getElementById('betLeftName') as HTMLSpanElement;
+const betRightName = document.getElementById('betRightName') as HTMLSpanElement;
+const betLeftOdds = document.getElementById('betLeftOdds') as HTMLElement;
+const betRightOdds = document.getElementById('betRightOdds') as HTMLElement;
 
 shopBtn.addEventListener('click', () => {
   const open = shopPanel.hidden;
@@ -1275,17 +1387,28 @@ document.addEventListener('click', (e) => {
 });
 
 // Build the shop rows (buy / equip / unequip) + the betting section from the current wallet.
+// Keep track of preview canvases so the animation loop can repaint them.
+const shopPreviewCanvases: { canvas: HTMLCanvasElement; id: string; slot: 'hat' | 'skin' }[] = [];
+
 function renderShop() {
   coinCount.textContent = String(wallet.coins);
   shopCoins.textContent = String(wallet.coins);
   updateSpinButton();
   shopItems.innerHTML = '';
+  shopPreviewCanvases.length = 0;
   for (const item of COSMETICS) {
     if (item.slot !== shopTab) continue; // show only the active tab's items
     const owned = wallet.owned.includes(item.id);
     const equipped = (item.slot === 'hat' ? wallet.hat : wallet.skin) === item.id;
     const row = document.createElement('div');
     row.className = 'shop-row';
+    // Tiny live-rendered preview canvas
+    const preview = document.createElement('canvas') as HTMLCanvasElement;
+    preview.width = 28; preview.height = 52;
+    preview.className = 'shop-preview';
+    drawCosmeticPreview(preview, item.id, item.slot);
+    shopPreviewCanvases.push({ canvas: preview, id: item.id, slot: item.slot });
+    row.appendChild(preview);
     const name = document.createElement('span');
     name.className = 'shop-name';
     name.textContent = owned ? item.name : `${item.name} · ${item.price}🪙`;
@@ -1309,20 +1432,37 @@ function renderShop() {
 // Lightweight: only updates the betting section (no item-list rebuild). Safe to call every
 // tick — rebuilding the item DOM each frame was eating Buy clicks.
 function syncBetSection() {
-  const canBet = !!state && state.status === 'playing' && !state.poly && myRole === 'observer'
-    && !state.bot // no betting on bot matches
-    && state.score.left === 0 && state.score.right === 0; // only before the first point
+  // Live betting: open to spectators any time a (non-arena, non-bot) duel is in play.
+  const canBet = !!state && state.status === 'playing' && !state.poly && myRole === 'observer' && !state.bot;
   betSection.hidden = !canBet;
-  // Clamp the stake to what you actually have, and disable betting if you can't afford it
-  // or already have a wager down.
+  if (!canBet || !state) return;
+  // Clamp the stake to what you actually have.
   betAmount = Math.max(1, Math.min(betAmount, Math.max(1, wallet.coins)));
   betAmountEl.textContent = String(betAmount);
-  const affordable = wallet.coins >= betAmount && !wallet.bet;
+  // Side labels + live odds on the buttons.
+  const odds = state.odds; // { left, right } | null
+  betLeftName.textContent = state.paddles.left.name ?? 'Left';
+  betRightName.textContent = state.paddles.right.name ?? 'Right';
+  betLeftOdds.textContent = odds ? `${odds.left.toFixed(2)}×` : '—';
+  betRightOdds.textContent = odds ? `${odds.right.toFixed(2)}×` : '—';
+  // Multiple bets are allowed in live betting — only gate on affordability.
+  const affordable = wallet.coins >= betAmount;
   betLeftBtn.disabled = !affordable;
   betRightBtn.disabled = !affordable;
-  betStatus.textContent = wallet.bet
-    ? `You bet ${wallet.bet.amount} on ${wallet.bet.side}.`
-    : wallet.coins < betAmount ? 'Not enough coins.' : '';
+  // Status line: show your open wagers (with their locked payouts) or a payout preview.
+  const payout = (amt: number, o: number) => Math.max(amt, Math.round(amt * o));
+  if (wallet.bets.length) {
+    const mine = wallet.bets
+      .map((b) => `${b.amount}🪙 on ${b.side} @ ${b.odds.toFixed(2)}× → ${payout(b.amount, b.odds)}🪙`)
+      .join('  ·  ');
+    betStatus.textContent = `Your bets: ${mine}`;
+  } else if (wallet.coins < betAmount) {
+    betStatus.textContent = 'Not enough coins.';
+  } else if (odds) {
+    betStatus.textContent = `${betAmount}🪙 wins ${payout(betAmount, odds.left)}🪙 (left) / ${payout(betAmount, odds.right)}🪙 (right)`;
+  } else {
+    betStatus.textContent = '';
+  }
 }
 
 const betLeftBtn = document.getElementById('betLeft') as HTMLButtonElement;
@@ -1431,12 +1571,14 @@ function celebrateSpin(reward: { kind: 'coins'; amount: number } | { kind: 'item
   setTimeout(finish, 4500); // safety net if transitionend doesn't fire
 }
 
-// A big, transient banner across the middle of the screen (e.g. someone forfeits).
-function showAnnouncement(text: string, color?: string) {
+// A transient notice. By default a big center-screen banner (e.g. a forfeit); `toast: true`
+// shows a small, stacking corner toast instead (betting activity, bet results).
+function showAnnouncement(text: string, opts?: { color?: string; toast?: boolean }) {
+  if (opts?.toast) { showToast(text); return; }
   const el = document.createElement('div');
   el.className = 'announce-banner';
   el.textContent = text;
-  if (color) el.style.color = color;
+  if (opts?.color) el.style.color = opts.color;
   reactionLayer.append(el);
   const anim = el.animate(
     [
@@ -1450,6 +1592,385 @@ function showAnnouncement(text: string, color?: string) {
   anim.onfinish = () => el.remove();
   anim.oncancel = () => el.remove();
 }
+
+// Small, unobtrusive toast in the bottom-right corner; multiple stack and auto-dismiss.
+// Rolling "Recent bets" log in the chat column: keeps the last few bet events (placements +
+// results) on screen, newest on top, instead of flashing away — so you can glance back at what
+// just happened.
+const betLogList = document.getElementById('betLogList') as HTMLDivElement;
+const BET_LOG_MAX = 5;
+function showToast(text: string) {
+  betLogList.querySelector('.bet-log-empty')?.remove();
+  const el = document.createElement('div');
+  el.className = 'bet-log-entry';
+  el.textContent = text;
+  betLogList.prepend(el); // newest on top
+  while (betLogList.children.length > BET_LOG_MAX) betLogList.lastElementChild?.remove();
+  el.animate(
+    [{ opacity: 0, transform: 'translateX(10px)' }, { opacity: 1, transform: 'translateX(0)' }],
+    { duration: 240, easing: 'ease-out' },
+  );
+}
+
+// --- Crypto market dropdown (top-left): invest coins into 5 joke cryptos ---
+// The server owns the global price board and each player's positions; we just render the
+// latest `stocks` message and fire invest/cash-out requests. The cash-out number we show is
+// round(worth) — nearest whole coin — exactly what the server pays out.
+type Market = {
+  prices: { id: string; price: number; prev: number }[];
+  holdings: { id: string; shares: number; cost: number; worth: number }[];
+  history: { id: string; series: { '5m': number[]; '1h': number[]; '1d': number[] } }[];
+  nextUpdateAt: number;
+};
+let market: Market = { prices: [], holdings: [], history: [], nextUpdateAt: 0 };
+const marketBtn = document.getElementById('marketBtn') as HTMLButtonElement;
+const marketPanel = document.getElementById('marketPanel') as HTMLDivElement;
+const marketCoins = document.getElementById('marketCoins') as HTMLSpanElement;
+const marketTimer = document.getElementById('marketTimer') as HTMLDivElement;
+const marketList = document.getElementById('marketList') as HTMLDivElement;
+// Per-coin "amount to invest" steppers, kept across re-renders so the value doesn't reset
+// when prices re-roll. Defaults to 1.
+const investAmt = new Map<string, number>();
+// Which timeframe the little graphs show — shared across all coins. '5m' = last 10 recent
+// samples, '1h' = the whole recent series, '1d' = the daily series.
+let graphTf: '5m' | '1h' | '1d' = '1h';
+
+marketBtn.addEventListener('click', () => {
+  const open = marketPanel.hidden;
+  marketPanel.hidden = !open;
+  marketBtn.setAttribute('aria-expanded', String(open));
+  if (open) renderMarket();
+});
+// Timeframe toggle (delegated, since the buttons live in the static panel header).
+document.getElementById('marketGraphTf')?.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-tf]');
+  if (!btn) return;
+  graphTf = btn.dataset.tf as '5m' | '1h' | '1d';
+  document.querySelectorAll('#marketGraphTf button').forEach((b) => b.classList.toggle('active', b === btn));
+  renderMarket();
+});
+
+// Draw a tiny sparkline of `pts` into `cv`. Flat/scarce data → a faint baseline. Colored by
+// net change over the window (green up, red down).
+function drawSparkline(cv: HTMLCanvasElement, pts: number[]) {
+  const ctx2 = cv.getContext('2d');
+  if (!ctx2) return;
+  const w = cv.width, h = cv.height, pad = 2;
+  ctx2.clearRect(0, 0, w, h);
+  if (pts.length < 2) {
+    ctx2.strokeStyle = '#2a3550';
+    ctx2.beginPath(); ctx2.moveTo(pad, h / 2); ctx2.lineTo(w - pad, h / 2); ctx2.stroke();
+    return;
+  }
+  let lo = Math.min(...pts), hi = Math.max(...pts);
+  if (hi - lo < 1e-9) { lo -= 1; hi += 1; } // flat line → center it
+  const up = pts[pts.length - 1] >= pts[0];
+  const x = (i: number) => pad + (i / (pts.length - 1)) * (w - 2 * pad);
+  const y = (v: number) => h - pad - ((v - lo) / (hi - lo)) * (h - 2 * pad);
+  ctx2.strokeStyle = up ? '#6ee7a8' : '#ff7a7a';
+  ctx2.lineWidth = 1.5;
+  ctx2.beginPath();
+  pts.forEach((v, i) => (i ? ctx2.lineTo(x(i), y(v)) : ctx2.moveTo(x(i), y(v))));
+  ctx2.stroke();
+}
+
+// The price series to plot for a coin at the current timeframe (each timeframe is its own
+// server-side series, sampled at its own cadence — see STOCK_HISTORY).
+function seriesFor(id: string): number[] {
+  const h = market.history.find((x) => x.id === id);
+  return h ? h.series[graphTf] ?? [] : [];
+}
+document.addEventListener('click', (e) => {
+  if (marketPanel.hidden) return;
+  const t = e.target as Node;
+  // A click that removed its own target from the DOM (e.g. a re-render) lands here with a
+  // detached node, which is "not contained" — ignore it so the panel doesn't snap shut.
+  if (t instanceof Node && !t.isConnected) return;
+  if (!marketPanel.contains(t) && !marketBtn.contains(t)) { marketPanel.hidden = true; marketBtn.setAttribute('aria-expanded', 'false'); }
+});
+
+function renderMarket() {
+  marketCoins.textContent = String(wallet.coins);
+  marketList.innerHTML = '';
+  for (const stock of STOCKS) {
+    const p = market.prices.find((x) => x.id === stock.id);
+    const hold = market.holdings.find((x) => x.id === stock.id);
+    const price = p?.price ?? stock.base;
+    // Headline % is the move over the SELECTED timeframe (first → last of the visible graph),
+    // so it changes when you switch Minutes / Hour / Day — not a static per-tick number.
+    const series = seriesFor(stock.id);
+    const last = series.length ? series[series.length - 1] : price;
+    const first = series.length >= 2 ? series[0] : last;
+    const pct = first > 0 ? ((last - first) / first) * 100 : 0;
+    // A position's live worth = shares × current price (fractional, so it moves smoothly);
+    // cashing out pays it rounded to the nearest whole coin (≥ x.5 up, below down).
+    const rawWorth = hold ? hold.shares * price : 0;
+    const cashOut = Math.round(rawWorth);
+
+    const row = document.createElement('div');
+    row.className = 'coin-row';
+
+    const logo = document.createElement('img');
+    logo.className = 'coin-logo';
+    logo.src = stock.img;
+    logo.alt = stock.name;
+    row.appendChild(logo);
+
+    const main = document.createElement('div');
+    main.className = 'coin-main';
+    const name = document.createElement('div');
+    name.className = 'coin-name';
+    name.textContent = stock.name;
+    main.appendChild(name);
+    const priceLine = document.createElement('div');
+    priceLine.className = 'coin-price';
+    const dir = pct > 0.01 ? 'up' : pct < -0.01 ? 'down' : 'flat';
+    const arrow = dir === 'up' ? '▲' : dir === 'down' ? '▼' : '•';
+    priceLine.innerHTML = `${price.toFixed(2)} 🪙<span class="coin-chg ${dir}">${arrow} ${Math.abs(pct).toFixed(1)}%</span>`;
+    main.appendChild(priceLine);
+    if (hold) {
+      const pos = document.createElement('div');
+      pos.className = 'coin-pos';
+      const plPct = hold.cost > 0 ? (rawWorth / hold.cost - 1) * 100 : 0;
+      const plClass = plPct > 0.05 ? 'pl-up' : plPct < -0.05 ? 'pl-down' : '';
+      const sign = plPct >= 0 ? '+' : '';
+      pos.innerHTML = `${hold.cost}🪙 in → <span class="${plClass}">${rawWorth.toFixed(2)}🪙 (${sign}${plPct.toFixed(0)}%)</span> · cash out ${cashOut}`;
+      main.appendChild(pos);
+    }
+    const graph = document.createElement('canvas');
+    graph.className = 'coin-graph';
+    graph.width = 176; graph.height = 26;
+    drawSparkline(graph, series);
+    main.appendChild(graph);
+    row.appendChild(main);
+
+    const actions = document.createElement('div');
+    actions.className = 'coin-actions';
+    const buy = document.createElement('div');
+    buy.className = 'coin-buy';
+    let amt = investAmt.get(stock.id) ?? 100;
+    amt = Math.max(1, Math.min(amt, Math.max(1, wallet.coins)));
+    investAmt.set(stock.id, amt);
+    const minus = document.createElement('button');
+    minus.textContent = '−';
+    // Typable amount: the player can key in any number, or nudge it with −/+. Defaults to 100.
+    const amtEl = document.createElement('input');
+    amtEl.type = 'number';
+    amtEl.min = '1';
+    amtEl.step = '1';
+    amtEl.className = 'coin-amt';
+    amtEl.setAttribute('inputmode', 'numeric');
+    amtEl.value = String(amt);
+    const plus = document.createElement('button');
+    plus.textContent = '+';
+    const invest = document.createElement('button');
+    invest.textContent = 'Invest';
+    invest.disabled = wallet.coins < amt;
+    invest.onclick = () => { net.send({ type: 'stockInvest', coin: stock.id, amount: investAmt.get(stock.id) ?? 100 }); playChaChing(); };
+    // Step/commit the amount in place (don't re-render) — rebuilding the row would detach the very
+    // button that was clicked and trip the click-outside handler, closing the whole panel.
+    const setAmt = (v: number) => {
+      const clamped = Math.max(1, Math.min(v, Math.max(1, wallet.coins)));
+      investAmt.set(stock.id, clamped);
+      amtEl.value = String(clamped);
+      invest.disabled = wallet.coins < clamped;
+    };
+    // Track what they type live (so Invest gates correctly); normalize/clamp on commit (blur/Enter).
+    amtEl.addEventListener('input', () => {
+      const v = Math.floor(Number(amtEl.value));
+      const valid = Number.isFinite(v) && v >= 1;
+      investAmt.set(stock.id, valid ? v : 1);
+      invest.disabled = !valid || wallet.coins < v;
+    });
+    amtEl.addEventListener('change', () => setAmt(Math.floor(Number(amtEl.value)) || 1));
+    minus.onclick = () => setAmt((investAmt.get(stock.id) ?? 100) - 1);
+    plus.onclick = () => setAmt((investAmt.get(stock.id) ?? 100) + 1);
+    buy.append(minus, amtEl, plus, invest);
+    actions.appendChild(buy);
+
+    const cash = document.createElement('button');
+    cash.className = 'coin-cash';
+    cash.textContent = hold ? `Cash out ${cashOut}🪙` : 'Cash out';
+    cash.disabled = !hold;
+    cash.onclick = () => { net.send({ type: 'stockCashOut', coin: stock.id }); playChaChing(); };
+    actions.appendChild(cash);
+
+    row.appendChild(actions);
+    marketList.appendChild(row);
+  }
+}
+
+// Live countdown to the next price re-roll (the panel can stay open across a move).
+function updateMarketTimer() {
+  if (marketPanel.hidden) return;
+  const ms = market.nextUpdateAt - Date.now();
+  if (!market.nextUpdateAt || ms <= 0) { marketTimer.textContent = 'next move: any moment…'; return; }
+  const m = Math.floor(ms / 60000), s = Math.floor((ms % 60000) / 1000);
+  marketTimer.textContent = `next move in ${m}:${String(s).padStart(2, '0')}`;
+}
+setInterval(updateMarketTimer, 1000);
+
+// --- Market Stability bar (top of the chat column) ---
+// Fills with the total unpaid (defaulted) loan debt; at 100% the whole market crashes. The
+// server sends the latest pool on every `stocks` message (join, trades, re-rolls, collection).
+const marketStability = document.getElementById('marketStability') as HTMLDivElement;
+const msFill = document.getElementById('msFill') as HTMLDivElement;
+const msPct = document.getElementById('msPct') as HTMLSpanElement;
+const msInfo = document.getElementById('msInfo') as HTMLButtonElement;
+const msInfoPop = document.getElementById('msInfoPop') as HTMLDivElement;
+msInfo.addEventListener('click', () => { msInfoPop.hidden = !msInfoPop.hidden; });
+function renderStability(s: { unpaid: number; threshold: number } | undefined) {
+  if (!s || !(s.threshold > 0)) return;
+  marketStability.hidden = false;
+  const frac = Math.max(0, Math.min(1, s.unpaid / s.threshold));
+  const pct = Math.round(frac * 100);
+  msFill.style.width = `${frac * 100}%`;
+  // Green (stable) → red (about to crash) as the bar fills.
+  msFill.style.backgroundColor = `hsl(${Math.round(140 * (1 - frac))} 70% 52%)`;
+  msPct.textContent = `${Math.round(s.unpaid).toLocaleString()} / ${s.threshold.toLocaleString()} 🪙 · ${pct}%`;
+}
+
+// --- Davis's loans (top-left): borrow coins, owe 1.5× by the daily 5pm collection ---
+// The server owns the loan; we render the latest `loan` state and fire getLoan/repayLoan.
+// `loanStep` is local conversation state: 'intro' (Davis offers) → 'amount' (pick how much).
+// Once you hold a loan, the panel always shows the repay view regardless of step.
+const loanBtn = document.getElementById('loanBtn') as HTMLButtonElement;
+const loanPanel = document.getElementById('loanPanel') as HTMLDivElement;
+const loanImg = document.getElementById('loanImg') as HTMLImageElement;
+const loanBody = document.getElementById('loanBody') as HTMLDivElement;
+let loan: { amount: number; owed: number; dueAt: number } | null = null;
+let loanStep: 'intro' | 'amount' = 'intro';
+
+// Davis Clarke mannerism shown on the intro.
+const DAVIS_QUOTES = [
+  "You miss 100% of the loans you don't take.",
+];
+let davisQuote = DAVIS_QUOTES[0];
+
+// Davis's three faces, by stage of the conversation. (Files live in client/public.)
+const DAVIS_INTRO = '/davis_at_citizens.jpg';
+const DAVIS_AMOUNT = '/davis_marathon.png';
+const DAVIS_OWED = '/davis_glasses.jpg';
+
+function fmtCountdown(ms: number): string {
+  if (ms <= 0) return 'any moment now';
+  const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+  if (h > 0) return `${h}h ${m}m`;
+  const s = Math.floor((ms % 60000) / 1000);
+  return `${m}m ${String(s).padStart(2, '0')}s`;
+}
+
+function renderLoan() {
+  loanBody.innerHTML = '';
+  // You owe Davis — always show the repay view (his sunglasses are on; he means business).
+  if (loan) {
+    loanImg.src = DAVIS_OWED;
+    const due = loan.dueAt - Date.now();
+    loanBody.innerHTML =
+      `<div class="loan-line">You borrowed <b>${loan.amount}</b>🪙. Davis wants <span class="loan-owe">${loan.owed}🪙</span> back.</div>` +
+      `<div class="loan-due">Due by <b>5pm</b> · <b>${fmtCountdown(due)}</b> left. Miss it and he takes <b>everything</b> — coins, stocks, and cosmetics — and your unpaid debt destabilizes the whole market.</div>`;
+    const actions = document.createElement('div');
+    actions.className = 'loan-actions';
+    const pay = document.createElement('button');
+    pay.className = 'loan-pay';
+    pay.textContent = `Pay ${loan.owed}🪙`;
+    pay.disabled = wallet.coins < loan.owed;
+    pay.title = pay.disabled ? "You can't cover the full repayment yet." : '';
+    pay.onclick = () => { net.send({ type: 'repayLoan' }); playChaChing(); };
+    const close = document.createElement('button');
+    close.textContent = 'Not yet';
+    close.onclick = closeLoan;
+    actions.append(pay, close);
+    loanBody.appendChild(actions);
+    return;
+  }
+
+  // No loan: 'amount' step (pick how much) or 'intro' (Davis offers).
+  if (loanStep === 'amount') {
+    loanImg.src = DAVIS_AMOUNT;
+    loanBody.innerHTML = `<div class="loan-line">I respect a fellow heavy hitter. How much you need? I'll want <b>1.5×</b> back by <b>5pm</b>.</div>`;
+    const row = document.createElement('div');
+    row.className = 'loan-amt-row';
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '1';
+    input.step = '1';
+    input.value = '500';
+    input.setAttribute('inputmode', 'numeric');
+    row.appendChild(input);
+    loanBody.appendChild(row);
+    const owe = document.createElement('div');
+    owe.className = 'loan-due';
+    const previewOwed = (v: number) => Math.ceil(Math.max(0, Math.floor(v || 0)) * 1.5);
+    const refreshOwe = () => { owe.textContent = `You'll owe Davis ${previewOwed(Number(input.value))}🪙.`; };
+    refreshOwe();
+    input.addEventListener('input', refreshOwe);
+    loanBody.appendChild(owe);
+    const warn = document.createElement('div');
+    warn.className = 'loan-warn';
+    warn.innerHTML = `⚠️ If you don't repay by <b>5pm</b>, Davis takes <b>EVERYTHING</b> — your coins, your stocks, and every cosmetic you own — and your unpaid debt destabilizes the market for everyone. No mercy.`;
+    loanBody.appendChild(warn);
+    const actions = document.createElement('div');
+    actions.className = 'loan-actions';
+    const borrow = document.createElement('button');
+    borrow.className = 'loan-yes';
+    borrow.textContent = 'Borrow';
+    borrow.onclick = () => {
+      const amt = Math.floor(Number(input.value));
+      if (!Number.isFinite(amt) || amt < 1) return;
+      net.send({ type: 'getLoan', amount: amt });
+      playChaChing();
+    };
+    const back = document.createElement('button');
+    back.textContent = 'Back';
+    back.onclick = () => { loanStep = 'intro'; renderLoan(); };
+    actions.append(borrow, back);
+    loanBody.appendChild(actions);
+    return;
+  }
+
+  // Intro: Davis at Citizens, offering a loan.
+  loanImg.src = DAVIS_INTRO;
+  loanBody.innerHTML =
+    `<div class="loan-quote">"${davisQuote}"</div>` +
+    `<div class="loan-line">I can spot you some coins — pay me back <b>1.5×</b> by <b>5pm</b>. Would you like a loan?</div>`;
+  const actions = document.createElement('div');
+  actions.className = 'loan-actions';
+  const yes = document.createElement('button');
+  yes.className = 'loan-yes';
+  yes.textContent = 'Yes';
+  yes.onclick = () => { loanStep = 'amount'; renderLoan(); };
+  const no = document.createElement('button');
+  no.textContent = 'No';
+  no.onclick = closeLoan;
+  actions.append(yes, no);
+  loanBody.appendChild(actions);
+}
+
+function closeLoan() {
+  loanPanel.hidden = true;
+  loanBtn.setAttribute('aria-expanded', 'false');
+}
+
+loanBtn.addEventListener('click', () => {
+  const open = loanPanel.hidden;
+  loanPanel.hidden = !open;
+  loanBtn.setAttribute('aria-expanded', String(open));
+  if (open) {
+    davisQuote = DAVIS_QUOTES[Math.floor(Math.random() * DAVIS_QUOTES.length)];
+    loanStep = 'intro';
+    renderLoan();
+  }
+});
+// Live-refresh the due countdown (and re-gate the Pay button on balance) while open.
+setInterval(() => { if (!loanPanel.hidden && loan) renderLoan(); }, 1000);
+// Click-outside closes the panel (mirrors the market panel behavior).
+document.addEventListener('click', (e) => {
+  if (loanPanel.hidden) return;
+  const t = e.target as Node;
+  if (t instanceof Node && !t.isConnected) return;
+  if (!loanPanel.contains(t) && !loanBtn.contains(t)) closeLoan();
+});
 
 // --- Game Modes dropdown (top-left): game mode toggles ---
 const gameModesBtn = document.getElementById('gameModesBtn') as HTMLButtonElement;
@@ -1533,7 +2054,8 @@ function renderBetBoard(s: StateMsg) {
       ? list.map((x) => `<div class="bet-line"><span>${escapeHtml(x.name)}</span><span class="amt">${x.amount}🪙</span></div>`).join('')
       : '<div class="bet-empty">no bets</div>';
     const label = side === 'left' ? (s.paddles.left.name ?? 'Left') : (s.paddles.right.name ?? 'Right');
-    return `<div class="bet-col ${side}"><h4>${escapeHtml(label)}</h4>${lines}` +
+    const odds = s.odds ? ` <span class="bet-odds">${s.odds[side].toFixed(2)}×</span>` : '';
+    return `<div class="bet-col ${side}"><h4>${escapeHtml(label)}${odds}</h4>${lines}` +
       (total ? `<div class="bet-total">total ${total}🪙</div>` : '') + `</div>`;
   };
   betBoard.innerHTML = col('left') + col('right');
@@ -2009,7 +2531,7 @@ if (remembered) {
     window.removeEventListener('pointerdown', dismiss);
     window.removeEventListener('keydown', dismiss);
   }
-  window.setTimeout(dismiss, reduce ? 1200 : 2400);
+  window.setTimeout(dismiss, reduce ? 600 : 1200);
   window.addEventListener('pointerdown', dismiss);
   window.addEventListener('keydown', dismiss);
 })();
@@ -2201,7 +2723,7 @@ function showFatalityMock(text: string) {
 // --- fatality combos reference modal ---
 // Built once from FATALITIES so adding a finisher there auto-lists it here. Keys render
 // as little ↑/↓ keycaps; the description explains what each finisher does.
-const ARROW: Record<string, string> = { arrowup: '↑', arrowdown: '↓' };
+const ARROW: Record<string, string> = { arrowup: '↑', arrowdown: '↓', arrowleft: '←', arrowright: '→' };
 function buildCombosList() {
   combosList.replaceChildren();
   for (const f of FATALITIES) {
@@ -2260,32 +2782,47 @@ function applyCanvasRotation(rotated: number) {
   const portrait = rotated === 1 || rotated === 3;
   canvas.width  = portrait ? COURT.h : COURT.w;
   canvas.height = portrait ? COURT.w : COURT.h;
-  if (portrait) {
-    canvas.classList.add('rotated');
-    game3dEl.classList.add('rotated');
-  } else {
-    canvas.classList.remove('rotated');
-    game3dEl.classList.remove('rotated');
-  }
+  canvas.classList.toggle('rotated', portrait);
+  game3dEl.classList.toggle('rotated', portrait);
+  screenFx.classList.toggle('rotated', portrait);
   renderer3d?.resize();
 }
 
 // Earthquake power-up: jiggle the whole board element while the point is live. Independent
 // of the canvas draw transforms (and pointer lock survives a CSS transform).
-let quakeOn = false;
-function applyQuake(on: boolean) {
-  if (on) {
-    const dx = (Math.random() * 2 - 1) * 7;
-    const dy = (Math.random() * 2 - 1) * 7;
+// Apply the screen-effect power-ups (earthquake/tilt transform the board element; the rest
+// toggle overlay layers). All view-agnostic: works the same in 2D, 3D and first-person.
+const screenFx = document.getElementById('screenFx') as HTMLDivElement;
+const fxBlackout = screenFx.querySelector('.fx-blackout') as HTMLElement;
+const fxBullet = screenFx.querySelector('.fx-bullet') as HTMLElement;
+const fxVortex = screenFx.querySelector('.fx-vortex') as HTMLElement;
+const fxGlitch = screenFx.querySelector('.fx-glitch') as HTMLElement;
+const fxSmoke = screenFx.querySelector('.fx-smoke') as HTMLElement;
+let boardFxOn = false;
+function applyScreenFx(s: StateMsg) {
+  const live = s.status === 'playing';
+  // Board transform: earthquake shake + tilt perspective, combined.
+  const quake = live && s.earthquake;
+  const tilt = live && s.tilt;
+  if (quake || tilt) {
+    const dx = quake ? (Math.random() * 2 - 1) * 7 : 0;
+    const dy = quake ? (Math.random() * 2 - 1) * 7 : 0;
+    const t = `${tilt ? 'perspective(640px) rotateX(16deg)' : ''} translate(${dx}px, ${dy}px)`.trim();
     const active = boardEl();
-    active.style.transform = `translate(${dx}px, ${dy}px)`;
+    active.style.transform = t;
     (active === canvas ? game3dEl : canvas).style.transform = '';
-    quakeOn = true;
-  } else if (quakeOn) {
+    boardFxOn = true;
+  } else if (boardFxOn) {
     canvas.style.transform = '';
     game3dEl.style.transform = '';
-    quakeOn = false;
+    boardFxOn = false;
   }
+  // Overlay layers.
+  fxBlackout.classList.toggle('on', live && s.blackout);
+  fxBullet.classList.toggle('on', live && s.bullettime);
+  fxVortex.classList.toggle('on', live && s.vortex);
+  fxGlitch.classList.toggle('on', live && s.glitch);
+  fxSmoke.classList.toggle('on', live && s.smoke);
 }
 
 // --- main loop ---
@@ -2298,9 +2835,11 @@ function resetMobileLayout() {
   const stage = document.getElementById('stage') as HTMLDivElement;
   const chat = document.getElementById('chat') as HTMLDivElement;
   const lb = document.getElementById('leaderboard') as HTMLDivElement;
+  const nw = document.getElementById('netWorth') as HTMLDivElement;
   stage.style.display = '';
   chat.style.display = '';
   lb.style.display = '';
+  nw.style.display = '';
 }
 for (const btn of mobileTabs.querySelectorAll<HTMLButtonElement>('.mob-tab')) {
   btn.addEventListener('click', () => {
@@ -2311,18 +2850,22 @@ for (const btn of mobileTabs.querySelectorAll<HTMLButtonElement>('.mob-tab')) {
     const stage = document.getElementById('stage') as HTMLDivElement;
     const chat = document.getElementById('chat') as HTMLDivElement;
     const lb = document.getElementById('leaderboard') as HTMLDivElement;
+    const nw = document.getElementById('netWorth') as HTMLDivElement;
     if (tab === 'play') {
       stage.style.display = '';
       chat.style.display = 'none';
       lb.style.display = '';
+      nw.style.display = '';
     } else if (tab === 'chat') {
       stage.style.display = 'none';
       chat.style.display = '';
       lb.style.display = 'none';
+      nw.style.display = 'none';
     } else if (tab === 'leaderboard') {
       stage.style.display = 'none';
       chat.style.display = 'none';
       lb.style.display = '';
+      nw.style.display = '';
     }
   });
 }
@@ -2334,9 +2877,11 @@ if (isMobileView()) {
   const stage = document.getElementById('stage') as HTMLDivElement;
   const chatEl = document.getElementById('chat') as HTMLDivElement;
   const lb = document.getElementById('leaderboard') as HTMLDivElement;
+  const nw = document.getElementById('netWorth') as HTMLDivElement;
   stage.style.display = '';
   chatEl.style.display = 'none';
   lb.style.display = '';
+  nw.style.display = '';
 }
 
 // --- touch controls for paddle ---
@@ -2564,7 +3109,7 @@ function loop(t: number) {
       if (!showFatality2d && state.viewMode !== 'normal') renderer3d?.resize();
     }
     applyCanvasRotation(state.rotated);
-    applyQuake(!!state.earthquake && state.status === 'playing');
+    applyScreenFx(state);
     if (state.viewMode !== 'normal' && renderer3d && !state.fatality) {
       const side = state.viewMode === 'firstperson'
         ? (myRole !== 'observer' ? (myRole as 'left' | 'right') : fpSide)
@@ -2585,7 +3130,13 @@ function updateUI() {
   renderPuHud(state);
   renderTournament(state.tournament);
   renderBetBoard(state);
-  if (!shopPanel.hidden) syncBetSection(); // light per-tick update (don't rebuild the item list — it eats clicks)
+  // The bet panel lives under the court (not in the shop), so it must refresh every frame —
+  // otherwise live odds, seat changes, and your placed bets only update on a page reload.
+  syncBetSection();
+  if (!shopPanel.hidden) {
+    // Repaint animated skin previews every frame while the shop is open
+    for (const { canvas, id, slot } of shopPreviewCanvases) drawCosmeticPreview(canvas, id, slot);
+  }
   if (!powerupInfoPanel.hidden) syncPowerupSpawnability();
 
   // Sync win score buttons with the current room setting.
@@ -2624,6 +3175,15 @@ function updateUI() {
   }
   if (document.activeElement !== arenaModeEl && arenaModeEl.checked !== state.arena) {
     arenaModeEl.checked = state.arena;
+  }
+  if (document.activeElement !== breakoutModeEl && breakoutModeEl.checked !== state.breakout) {
+    breakoutModeEl.checked = state.breakout;
+  }
+  if (document.activeElement !== fogModeEl && fogModeEl.checked !== state.fog) {
+    fogModeEl.checked = state.fog;
+  }
+  if (document.activeElement !== portalModeEl && portalModeEl.checked !== state.portal) {
+    portalModeEl.checked = state.portal;
   }
 
   // Add/kick-bot button: show the right control for the current match state.
@@ -2743,6 +3303,9 @@ function updateUI() {
   joinBtn.textContent = state.arena ? 'Join arena' : 'Join game';
   renameBtn.style.display = myName ? 'inline-block' : 'none';
   pingBtn.style.display = myName ? 'inline-block' : 'none';
+  // Quit game: only while you hold a paddle. Forfeiting vacates your seat, so the
+  // side reverts to "— open —" for everyone.
+  quitBtn.style.display = isPlayer() ? 'inline-block' : 'none';
 
   // Mobile ▲/▼ buttons: visible while the player is in a live match in duel mode.
   // Hidden in arena mode (paddle direction isn't vertical), during waiting/over states,
@@ -2845,7 +3408,7 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
         const delta = mine.elo - prev;
         const sign = delta > 0 ? '+' : '';
         const color = delta > 0 ? '#4ade80' : '#f87171';
-        showAnnouncement(`${sign}${delta} ELO`, color);
+        showAnnouncement(`${sign}${delta} ELO`, { color });
       }
       prevElo.set(myName, mine.elo);
     }
@@ -2864,6 +3427,83 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
     .join('');
   leaderboardEl.innerHTML = `<h2>Leaderboard</h2><ol>${items}</ol>`;
 }
+
+// The Net Worth board: coins + live stock holdings − debt owed to Davis. The
+// richest player wears a 👑; anyone underwater (debt > assets) shows in red with
+// the amount they still owe. Ranks the whole economy, not just match wins.
+function renderNetWorth(rows: NetWorthRow[]) {
+  if (!rows.length) {
+    netWorthEl.innerHTML = '';
+    return;
+  }
+  const items = rows
+    .map((r, i) => {
+      const crown = i === 0 ? '👑 ' : '';
+      const broke = r.net < 0 ? ' broke' : '';
+      const debt = r.loan > 0 ? `<span class="debt"> 🔻${r.loan}</span>` : '';
+      return `<li data-rank="${i}" title="View balance sheet"><span class="rank">${i + 1}</span><span class="lbname">${crown}${escapeHtml(
+        r.name,
+      )}${debt}</span><span class="worth${broke}">${r.net}🪙</span></li>`;
+    })
+    .join('');
+  netWorthEl.innerHTML = `<h2>💰 Net Worth</h2><ol>${items}</ol>`;
+}
+
+// Click a Net Worth row to ask the server for that player's balance sheet (resolved by
+// rank — the index into the board the server last sent). Event-delegated so it survives
+// every re-render.
+netWorthEl.addEventListener('click', (e) => {
+  const li = (e.target as HTMLElement).closest('li[data-rank]') as HTMLElement | null;
+  if (!li) return;
+  const rank = Number(li.dataset.rank);
+  if (Number.isInteger(rank)) net.send({ type: 'balanceSheetReq', rank });
+});
+
+// Render and open the balance-sheet modal from a server response.
+function showBalanceSheet(msg: BalanceSheetMsg) {
+  balanceName.textContent = `💰 ${msg.name}`;
+  const rows: string[] = [];
+  rows.push(
+    `<div class="bs-row"><span class="bs-label">Coins on hand</span><span class="bs-val">${msg.coins}🪙</span></div>`,
+  );
+  rows.push(`<div class="bs-section">Stock holdings</div>`);
+  if (msg.holdings.length) {
+    for (const h of msg.holdings) {
+      rows.push(
+        `<div class="bs-row"><span class="bs-label">${escapeHtml(h.ticker)} ` +
+          `<span class="bs-sub">${h.shares.toFixed(2)} sh @ ${Math.round(h.price)}🪙</span></span>` +
+          `<span class="bs-val">${h.value}🪙</span></div>`,
+      );
+    }
+    rows.push(
+      `<div class="bs-row"><span class="bs-label">Stock subtotal</span><span class="bs-val">${msg.stockValue}🪙</span></div>`,
+    );
+  } else {
+    rows.push(`<div class="bs-empty">No open positions.</div>`);
+  }
+  if (msg.loan > 0) {
+    rows.push(
+      `<div class="bs-row bs-debt"><span class="bs-label">Owed to Davis</span><span class="bs-val">−${msg.loan}🪙</span></div>`,
+    );
+  }
+  rows.push(`<hr class="bs-divider" />`);
+  const broke = msg.net < 0 ? ' bs-broke' : '';
+  rows.push(
+    `<div class="bs-row bs-total${broke}"><span class="bs-label">Net worth</span><span class="bs-val">${msg.net}🪙</span></div>`,
+  );
+  balanceBody.innerHTML = rows.join('');
+  balanceModal.hidden = false;
+}
+function closeBalanceSheet() {
+  balanceModal.hidden = true;
+}
+balanceClose.addEventListener('click', closeBalanceSheet);
+balanceModal.addEventListener('click', (e) => {
+  if (!balanceCard.contains(e.target as Node)) closeBalanceSheet();
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !balanceModal.hidden) closeBalanceSheet();
+});
 
 // ----------------------------------------------------------------------------
 const _kSeq = [

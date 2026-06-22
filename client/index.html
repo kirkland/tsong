@@ -11,6 +11,9 @@
       }
       body {
         margin: 0;
+        /* Top padding clears the fixed toolbar (VIEW/MODES/POWER-UPS/CHANGELOG)
+           which sits at top: 12px with ~30px button height. */
+        padding-top: 52px;
         min-height: 100vh;
         display: flex;
         flex-direction: column;
@@ -143,8 +146,19 @@
       #readyBtn:disabled {
         opacity: 0.5;
       }
+      /* The two standings boards sit side by side, wrapping to a stack when narrow. */
+      #boards {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        align-items: flex-start;
+        gap: 16px;
+        width: 100%;
+      }
       #leaderboard {
-        width: min(90vw, 360px);
+        flex: 1 1 280px;
+        max-width: 360px;
+        min-width: 260px;
         font-size: 14px;
       }
       #leaderboard h2 {
@@ -185,6 +199,65 @@
         color: #7da2ff;
         text-align: right;
       }
+      /* Net Worth board — same column look as the leaderboard, gold accents.
+         coins + live stock holdings − debt owed to Davis. */
+      #netWorth {
+        flex: 1 1 280px;
+        max-width: 360px;
+        min-width: 260px;
+        font-size: 14px;
+      }
+      #netWorth li {
+        cursor: pointer;
+      }
+      #netWorth li:hover {
+        background: #18203a;
+      }
+      #netWorth h2 {
+        font-size: 13px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        color: #ffd23f;
+        text-align: center;
+        margin: 8px 0 6px;
+      }
+      #netWorth ol {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      #netWorth li {
+        display: grid;
+        grid-template-columns: 22px 1fr auto;
+        gap: 10px;
+        align-items: baseline;
+        padding: 4px 10px;
+        border-radius: 4px;
+      }
+      #netWorth li:nth-child(odd) {
+        background: #0e1424;
+      }
+      #netWorth .rank {
+        color: #6b7796;
+      }
+      #netWorth .lbname {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #netWorth .worth {
+        color: #ffd23f;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      #netWorth .worth.broke {
+        color: #f87171; /* underwater — debt outweighs assets */
+      }
+      #netWorth .debt {
+        color: #f87171;
+        font-size: 11px;
+        opacity: 0.85;
+      }
       #chat {
         width: 300px;
         /* Match the canvas height (width min(94vw,1040px) at a 800/500 ratio) so the
@@ -202,6 +275,21 @@
         text-align: center;
         margin: 0 0 2px;
       }
+      /* Market Stability bar — sits at the top of the chat column. Fills (green→red) as unpaid
+         loans accumulate; at 100% the market crashes for everyone. */
+      #marketStability { position: relative; background: #0e1424; border: 1px solid #1c2640; border-radius: 6px; padding: 7px 9px; }
+      #marketStability .ms-head { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+      #marketStability .ms-title { font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase; color: #7da2ff; font-weight: 700; }
+      #msInfo { background: none; border: none; color: #4a5580; cursor: pointer; font-size: 13px; line-height: 1; padding: 0; }
+      #msInfo:hover { color: #7da2ff; }
+      #marketStability .ms-pct { margin-left: auto; font-size: 11px; color: #8a93ac; font-variant-numeric: tabular-nums; }
+      #marketStability .ms-track { height: 8px; background: #11182c; border-radius: 5px; overflow: hidden; }
+      #msFill { height: 100%; width: 0%; border-radius: 5px; background: #3ad17a; transition: width 0.4s ease, background-color 0.4s ease; }
+      #msInfoPop {
+        margin-top: 7px; font-size: 11px; line-height: 1.45; color: #c3cae0;
+        background: #11182c; border: 1px solid #2a3550; border-radius: 6px; padding: 7px 9px;
+      }
+      #msInfoPop b { color: #e0b05f; }
       #chatlog {
         flex: 1;
         min-height: 0;
@@ -216,11 +304,21 @@
         flex-direction: column;
         gap: 2px;
       }
-      /* On narrow screens, drop the chat below the game at full width. */
+      /* On narrow screens, drop the chat below the game at full width.
+         Height is viewport-proportional so the chatlog stays usable. */
       @media (max-width: 1400px) {
         #chat {
           width: min(94vw, 1040px);
-          height: 240px;
+          height: clamp(200px, 32vh, 320px);
+        }
+      }
+
+      /* Stacked layout (769–1399px): cap the canvas so it never takes more than
+         ~55vh of vertical space, leaving room for the chat below.
+         88 = 55 × (800/500) — converts the height cap to a width cap via aspect ratio. */
+      @media (max-width: 1399px) and (min-width: 769px) {
+        #game, #game3d {
+          width: min(94vw, 1040px, 88vh);
         }
       }
       #chatlog .chatfrom {
@@ -491,6 +589,22 @@
         pointer-events: none;
         z-index: 50;
       }
+      /* "Recent bets" log, pinned at the bottom of the chat column (betting activity + results). */
+      #betLog { display: flex; flex-direction: column; gap: 4px; }
+      #betLog h2 {
+        font-size: 11px; letter-spacing: 1px; text-transform: uppercase;
+        color: #7da2ff; text-align: center; margin: 2px 0 0;
+      }
+      #betLogList {
+        display: flex; flex-direction: column; gap: 4px;
+        max-height: 128px; overflow-y: auto;
+        background: #0e1424; border: 1px solid #1c2640; border-radius: 6px; padding: 6px 8px;
+      }
+      #betLogList .bet-log-entry {
+        font: 700 12px ui-monospace, monospace; color: #cdd7f5; line-height: 1.35;
+        will-change: transform, opacity;
+      }
+      #betLogList .bet-log-empty { font: 400 12px ui-monospace, monospace; color: #4a5580; }
       /* Power-up pickup flash: name pops at the target location then floats up. */
       .powerup-flash {
         position: fixed;
@@ -554,6 +668,40 @@
         align-items: stretch;
         width: min(86vw, 280px);
         text-align: center;
+      }
+      #authArea {
+        margin-top: 4px;
+        display: flex;
+        justify-content: center;
+      }
+      #authChip {
+        font-size: 12px;
+        color: #6a7f9a;
+      }
+      #authChip a { color: #7da2ff; text-decoration: none; }
+      #authChip a:hover { text-decoration: underline; }
+      #signInLink {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 16px;
+        border-radius: 6px;
+        background: #fff;
+        color: #3c4043;
+        font: 500 13px / 1 'Google Sans', ui-sans-serif, system-ui, sans-serif;
+        text-decoration: none;
+        border: 1px solid #dadce0;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.35);
+        transition: box-shadow 0.15s, background 0.15s;
+        white-space: nowrap;
+      }
+      #signInLink:hover {
+        background: #f8f9fa;
+        box-shadow: 0 2px 6px rgba(0,0,0,0.45);
+      }
+      #signInLink:active {
+        background: #f1f3f4;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.3);
       }
       #joinForm input {
         font: inherit;
@@ -675,6 +823,7 @@
       .shop-tab.active { background: #2d4070; border-color: #3a6df0; color: #fff; }
       #shopItems { max-height: 46vh; overflow-y: auto; }
       .shop-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+      .shop-preview { flex-shrink: 0; border-radius: 4px; background: #060912; }
       .shop-row .shop-name { flex: 1; font-size: 12px; color: #cdd7f5; }
       .shop-row button {
         font: inherit; font-size: 11px; font-weight: 700; padding: 4px 9px; border-radius: 5px;
@@ -683,15 +832,30 @@
       .shop-row button:hover:not(:disabled) { background: #2d4070; color: #fff; }
       .shop-row button:disabled { opacity: 0.45; cursor: default; }
       .shop-row button.equipped { background: #2d4070; border-color: #3a6df0; color: #fff; }
+      /* Spectator betting panel, under the court (visible to observers during a live duel). */
+      #betSection {
+        width: min(94vw, 1040px); margin: 0 auto 6px; padding: 8px 12px;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        display: flex; flex-direction: column; align-items: center; gap: 6px;
+      }
       #betSection[hidden] { display: none; }
-      .bet-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+      #betSection .bet-head {
+        font: 700 11px ui-monospace, monospace; letter-spacing: 1px; text-transform: uppercase; color: #6b7796;
+      }
+      .bet-row { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
       .bet-row button {
-        font: inherit; font-size: 12px; padding: 4px 9px; border-radius: 5px;
+        font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 5px;
         border: 1px solid #2a3550; background: #1a2035; color: #cdd7f5; cursor: pointer;
       }
-      .bet-row button:hover { background: #2d4070; }
+      .bet-row button:hover:not(:disabled) { background: #2d4070; }
+      .bet-row button:disabled { opacity: 0.45; cursor: default; }
+      .bet-side { font-weight: 700; min-width: 132px; }
+      #betLeft { color: #9ec1ff; }
+      #betRight { color: #ffadd2; }
+      .bet-side b { color: #ffd166; font-weight: 800; }
+      .bet-stake { display: flex; align-items: center; gap: 6px; }
       #betAmount { min-width: 20px; text-align: center; font-weight: 700; color: #ffd166; }
-      #betStatus { font-size: 11px; color: #6ee7a8; margin-top: 6px; min-height: 14px; }
+      #betStatus { font-size: 11px; color: #6ee7a8; min-height: 14px; text-align: center; }
       /* Public bet board under the court */
       #betBoard {
         display: flex; gap: 10px; width: min(94vw, 1040px); font: 700 12px ui-monospace, monospace;
@@ -705,10 +869,225 @@
       }
       #betBoard .bet-col.left h4 { color: #7da2ff; }
       #betBoard .bet-col.right h4 { color: #ff7eb3; }
+      #betBoard .bet-odds { color: #ffd166; }
       #betBoard .bet-line { display: flex; justify-content: space-between; gap: 8px; color: #cdd7f5; }
       #betBoard .bet-line .amt { color: #ffd166; }
       #betBoard .bet-empty { color: #6b7796; font-weight: 400; }
       #betBoard .bet-total { margin-top: 4px; border-top: 1px solid #1c2640; padding-top: 3px; color: #9fb0d8; }
+      /* Crypto market dropdown (sibling of #shop in #topLeft) */
+      #market { position: relative; }
+      #marketBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #1f5a3a;
+        background: #0a1a12; color: #5fe0a0; cursor: pointer;
+      }
+      #marketBtn:hover { background: #102a1c; }
+      #marketPanel {
+        position: absolute; top: calc(100% + 6px); left: 0; width: 360px;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #marketPanel[hidden] { display: none; }
+      #marketPanel h3 {
+        font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+        color: #6b7796; margin: 8px 0 6px;
+      }
+      #marketTimer { font-size: 11px; color: #6b7796; margin-bottom: 8px; }
+      #marketGraphTf { display: flex; gap: 4px; margin-bottom: 8px; }
+      #marketGraphTf button {
+        flex: 1; font: inherit; font-size: 10px; font-weight: 700; padding: 3px 0; border-radius: 5px;
+        border: 1px solid #2a3550; background: #11182c; color: #8693b3; cursor: pointer;
+      }
+      #marketGraphTf button.active { background: #2d4070; border-color: #3a6df0; color: #fff; }
+      .coin-graph { display: block; width: 100%; height: 26px; margin-top: 4px; }
+      #marketNote { font-size: 10px; color: #5a647e; margin-top: 8px; line-height: 1.4; }
+      #marketList { max-height: 56vh; overflow-y: auto; }
+      /* Davis's loan shark dropdown (sibling of #market in #topLeft) */
+      #loan { position: relative; }
+      #loanBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #6b4a1f;
+        background: #1a1208; color: #e0b05f; cursor: pointer;
+      }
+      #loanBtn:hover { background: #2a1c10; }
+      #loanPanel {
+        position: absolute; top: calc(100% + 6px); left: 0; width: 300px;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #loanPanel[hidden] { display: none; }
+      #loanPanel h3 {
+        font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+        color: #6b7796; margin: 8px 0 6px;
+      }
+      #loanImg {
+        /* Davis's photos are a mix of portrait (intro/amount) and landscape (owed). `cover` at a
+           fixed height cropped the portraits — cutting off his forehead / showing only the middle.
+           `contain` with a capped height shows each one whole; the dark bg fills any letterbox. */
+        display: block; width: 100%; max-height: 260px; object-fit: contain;
+        border-radius: 6px; background: #060912; margin-bottom: 8px;
+      }
+      #loanBody { font-size: 12px; color: #c3cae0; line-height: 1.45; }
+      .loan-quote { color: #e0b05f; font-style: italic; margin-bottom: 8px; }
+      .loan-line { margin-bottom: 8px; }
+      .loan-owe { color: #ff9a6b; font-weight: 700; }
+      .loan-due { font-size: 11px; color: #6b7796; margin-bottom: 8px; }
+      .loan-warn {
+        font-size: 11px; line-height: 1.4; color: #ffb4a0; background: #2a1411;
+        border: 1px solid #6b2a1f; border-radius: 6px; padding: 7px 9px; margin-bottom: 8px;
+      }
+      .loan-warn b { color: #ff7a5c; }
+      .loan-actions { display: flex; gap: 6px; margin-top: 4px; }
+      .loan-actions button {
+        flex: 1; font: inherit; font-size: 12px; font-weight: 700; padding: 7px 0; border-radius: 6px;
+        border: 1px solid #2a3550; background: #11182c; color: #c3cae0; cursor: pointer;
+      }
+      .loan-actions button:hover:not(:disabled) { background: #1a2238; }
+      .loan-actions button:disabled { opacity: 0.45; cursor: not-allowed; }
+      .loan-actions button.loan-yes, .loan-actions button.loan-pay {
+        border-color: #1f5a3a; background: #0a1a12; color: #5fe0a0;
+      }
+      .loan-amt-row { display: flex; align-items: center; gap: 6px; margin: 8px 0; }
+      .loan-amt-row input {
+        flex: 1; font: inherit; font-size: 13px; padding: 6px 8px; border-radius: 6px;
+        border: 1px solid #2a3550; background: #060912; color: #fff; min-width: 0;
+      }
+      /* Roulette dropdown (sibling of #loan in #topLeft) */
+      #roulette { position: relative; }
+      #rouletteBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #5a1f2e;
+        background: #1a0810; color: #ff6b9d; cursor: pointer;
+      }
+      #rouletteBtn:hover { background: #2a1018; }
+      #roulettePanel {
+        position: absolute; top: calc(100% + 6px); left: 0; width: 340px;
+        max-height: 84vh; overflow-y: auto;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #roulettePanel[hidden] { display: none; }
+      #roulettePanel h3 {
+        font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+        color: #6b7796; margin: 8px 0 6px;
+      }
+      #rouletteWheelWrap {
+        display: flex; flex-direction: column; align-items: center; gap: 4px; margin-bottom: 8px;
+      }
+      #rouletteWheel { display: block; }
+      #rouletteResult { font: 800 14px ui-monospace, monospace; min-height: 18px; text-align: center; color: #cdd7f5; }
+      #rouletteResult .rl-win { color: #6ee7a8; }
+      #rouletteResult .rl-lose { color: #ff7a7a; }
+      #rouletteChips {
+        display: flex; align-items: center; gap: 5px; margin-bottom: 8px; flex-wrap: wrap;
+      }
+      .rl-chips-label { font-size: 11px; color: #6b7796; margin-right: 2px; }
+      .rl-chip {
+        font: inherit; font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 14px;
+        border: 1px solid #2a3550; background: #11182c; color: #ffd166; cursor: pointer;
+      }
+      .rl-chip:hover { background: #1a2238; }
+      .rl-chip.active { background: #ffd166; border-color: #ffd166; color: #1a1020; }
+      #rouletteBoard { display: flex; flex-direction: column; gap: 3px; }
+      /* The whole felt: 0 gutter column on the left, then the 12 number columns. */
+      .rl-table { display: grid; grid-template-columns: auto repeat(12, 1fr); gap: 3px; }
+      .rl-zero {
+        font: inherit; font-size: 13px; font-weight: 700; padding: 0 9px; border-radius: 5px;
+        border: 1px solid #1f5a3a; background: #0a2417; color: #6ee7a8; cursor: pointer; position: relative;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .rl-zero:hover { background: #0f3422; }
+      .rl-num {
+        font: 700 11px ui-monospace, monospace; padding: 5px 0; border-radius: 4px;
+        border: 1px solid transparent; color: #fff; cursor: pointer; text-align: center; position: relative;
+      }
+      .rl-num.red { background: #b6243a; }
+      .rl-num.red:hover { background: #d62c46; }
+      .rl-num.black { background: #21283c; }
+      .rl-num.black:hover { background: #2f3950; }
+      .rl-out {
+        font: inherit; font-size: 11px; font-weight: 700; padding: 6px 0; border-radius: 5px;
+        border: 1px solid #2a3550; background: #11182c; color: #cdd7f5; cursor: pointer; position: relative;
+      }
+      .rl-out:hover { background: #1a2238; }
+      .rl-out.red-out { color: #ff7a8f; }
+      .rl-out.black-out { color: #aab4cc; }
+      /* A chip stake badge pinned to a bet cell. */
+      .rl-stake-badge {
+        position: absolute; top: -5px; right: -4px; min-width: 15px; height: 15px; padding: 0 3px;
+        border-radius: 8px; background: #ffd166; color: #1a1020; border: 1px solid #1a1020;
+        font: 800 9px ui-monospace, monospace; line-height: 15px; text-align: center; pointer-events: none;
+      }
+      #rouletteFoot {
+        display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 10px;
+      }
+      #rouletteStake { font: 700 12px ui-monospace, monospace; color: #ffd166; }
+      .rl-foot-btns { display: flex; gap: 6px; }
+      #rouletteClear, #rouletteSpin {
+        font: inherit; font-size: 12px; font-weight: 700; padding: 6px 14px; border-radius: 6px; cursor: pointer;
+      }
+      #rouletteClear { border: 1px solid #2a3550; background: #11182c; color: #9fb0d8; }
+      #rouletteClear:hover { background: #1a2238; }
+      #rouletteSpin { border: none; background: #ff2db7; color: #1a1020; text-shadow: 0 1px 0 rgba(255,255,255,0.4); }
+      #rouletteSpin:hover:not(:disabled) { filter: brightness(1.1); }
+      #rouletteSpin:disabled { opacity: 0.45; cursor: default; }
+      #rouletteNote { font-size: 10px; color: #5a647e; margin-top: 8px; line-height: 1.4; }
+      .coin-row {
+        display: grid; grid-template-columns: 34px 1fr auto; gap: 8px; align-items: center;
+        padding: 7px 0; border-top: 1px solid #1c2640;
+      }
+      .coin-row:first-child { border-top: none; }
+      .coin-logo { width: 34px; height: 34px; border-radius: 6px; object-fit: cover; background: #060912; }
+      .coin-main { min-width: 0; }
+      .coin-name { font-size: 12px; font-weight: 700; color: #cdd7f5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .coin-price { font-size: 11px; color: #9fb0d8; }
+      .coin-chg { font-weight: 700; margin-left: 4px; }
+      .coin-chg.up { color: #6ee7a8; }
+      .coin-chg.down { color: #ff7a7a; }
+      .coin-chg.flat { color: #6b7796; }
+      .coin-pos { font-size: 11px; color: #ffd166; margin-top: 2px; }
+      .coin-pos .pl-up { color: #6ee7a8; }
+      .coin-pos .pl-down { color: #ff7a7a; }
+      .coin-actions { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
+      .coin-buy { display: flex; align-items: center; gap: 3px; }
+      .coin-buy button, .coin-actions > button {
+        font: inherit; font-size: 11px; font-weight: 700; padding: 3px 7px; border-radius: 5px;
+        border: 1px solid #2a3550; background: #1a2035; color: #9fb0d8; cursor: pointer;
+      }
+      .coin-buy button:hover:not(:disabled), .coin-actions > button:hover:not(:disabled) { background: #2d4070; color: #fff; }
+      .coin-buy button:disabled, .coin-actions > button:disabled { opacity: 0.45; cursor: default; }
+      .coin-amt {
+        width: 56px; text-align: center; font-weight: 700; color: #ffd166; font-size: 11px;
+        background: #0b1120; border: 1px solid #2a3550; border-radius: 5px; padding: 3px 4px;
+        font-family: ui-monospace, monospace; -moz-appearance: textfield;
+      }
+      .coin-amt::-webkit-outer-spin-button, .coin-amt::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+      .coin-cash { border-color: #1f5a3a !important; background: #0e2419 !important; color: #5fe0a0 !important; }
+      .coin-cash:hover:not(:disabled) { background: #14361f !important; }
+      /* Screen-effect power-up overlays (sit over the board in any view) */
+      #screenFx {
+        position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+        width: min(94vw, 1040px); aspect-ratio: 8 / 5; border-radius: 8px; overflow: hidden;
+        pointer-events: none; z-index: 6;
+      }
+      #screenFx.rotated { width: auto; height: min(88vh, 900px); aspect-ratio: 500 / 800; }
+      #screenFx .fx { position: absolute; inset: 0; display: none; }
+      #screenFx .fx.on { display: block; }
+      .fx-blackout { background: radial-gradient(ellipse at center, rgba(0,0,0,0) 16%, rgba(0,0,0,0.5) 44%, rgba(0,0,0,0.96) 74%); animation: fxPulse 2.6s ease-in-out infinite; }
+      @keyframes fxPulse { 0%,100% { opacity: 0.85; } 50% { opacity: 1; } }
+      .fx-bullet { background: rgba(40,90,220,0.22); box-shadow: inset 0 0 120px rgba(20,40,160,0.6); }
+      .fx-vortex { background: conic-gradient(from 0deg, rgba(180,120,255,0), rgba(180,120,255,0.28), rgba(120,200,255,0), rgba(180,120,255,0.28), rgba(180,120,255,0)); animation: fxSpin 2.2s linear infinite; mix-blend-mode: screen; }
+      @keyframes fxSpin { to { transform: rotate(360deg); } }
+      .fx-glitch { background: repeating-linear-gradient(0deg, rgba(0,0,0,0) 0 2px, rgba(0,0,0,0.28) 2px 4px); mix-blend-mode: overlay; animation: fxGlitch 0.16s steps(2) infinite; }
+      @keyframes fxGlitch { 0% { transform: translateX(-2px); filter: hue-rotate(0deg); } 50% { transform: translateX(2px); filter: hue-rotate(120deg); } 100% { transform: translateX(-1px); } }
+      .fx-smoke {
+        background:
+          radial-gradient(circle at 20% 60%, rgba(185,185,195,0.55), transparent 36%),
+          radial-gradient(circle at 58% 38%, rgba(205,205,215,0.5), transparent 42%),
+          radial-gradient(circle at 82% 72%, rgba(165,165,175,0.5), transparent 36%);
+        background-size: 200% 200%; animation: fxSmoke 9s linear infinite;
+      }
+      @keyframes fxSmoke { from { background-position: 0% 0%; } to { background-position: 100% 60%; } }
       #muteBtn[aria-pressed='true'] {
         color: #6b7796;
         border-color: #1c2640;
@@ -1194,6 +1573,118 @@
         font-size: 11px;
         color: #6b7796;
         text-align: center;
+      }
+      /* Balance-sheet modal — opened by clicking a Net Worth row. Reuses the combos
+         modal's centered-card look with gold accents to match the net-worth board. */
+      #balanceModal {
+        position: fixed;
+        inset: 0;
+        z-index: 120;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(4, 7, 16, 0.72);
+      }
+      #balanceModal[hidden] {
+        display: none;
+      }
+      #balanceCard {
+        width: min(92vw, 380px);
+        max-height: 80vh;
+        overflow-y: auto;
+        background: #0e1424;
+        border: 1px solid #3a3320;
+        border-radius: 12px;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
+        padding: 16px 18px 18px;
+      }
+      #balanceHead {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        color: #ffd23f;
+        margin-bottom: 12px;
+      }
+      #balanceName {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #balanceClose {
+        font: inherit;
+        font-size: 15px;
+        line-height: 1;
+        flex: 0 0 auto;
+        padding: 4px 8px;
+        border-radius: 6px;
+        border: 1px solid #2a3550;
+        background: #0e1424;
+        color: #9fb0d8;
+        cursor: pointer;
+      }
+      #balanceClose:hover {
+        background: #18203a;
+        color: #e8eefc;
+      }
+      .bs-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+        align-items: baseline;
+        padding: 6px 0;
+        font-size: 14px;
+      }
+      .bs-row .bs-label {
+        color: #9fb0d8;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .bs-row .bs-val {
+        color: #cdd7f5;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .bs-row .bs-sub {
+        color: #6b7796;
+        font-size: 11px;
+      }
+      .bs-section {
+        margin: 10px 0 2px;
+        font-size: 11px;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        color: #7da2ff;
+      }
+      .bs-divider {
+        border: none;
+        border-top: 1px solid #1f2940;
+        margin: 10px 0;
+      }
+      .bs-row.bs-debt .bs-val {
+        color: #f87171;
+      }
+      .bs-row.bs-total {
+        font-weight: 700;
+        font-size: 15px;
+      }
+      .bs-row.bs-total .bs-label {
+        color: #e8eefc;
+      }
+      .bs-row.bs-total .bs-val {
+        color: #ffd23f;
+      }
+      .bs-row.bs-total.bs-broke .bs-val {
+        color: #f87171;
+      }
+      .bs-empty {
+        color: #6b7796;
+        font-size: 12px;
+        padding: 4px 0;
       }
       /* CHANGELOG dropdown, pinned to the top-right corner. */
       #changelog {
@@ -1769,6 +2260,8 @@
         body {
           gap: 8px;
           padding: 0 6px;
+          /* The sticky tab bar handles top clearance; no extra padding needed. */
+          padding-top: 0;
         }
         #mobileTabs {
           display: flex;
@@ -1825,7 +2318,7 @@
           left: 6px;
           gap: 4px;
         }
-        #viewModeBtn, #muteBtn, #gameModesBtn, #powerupInfoBtn {
+        #viewModeBtn, #muteBtn, #gameModesBtn, #powerupInfoBtn, #marketBtn, #loanBtn, #rouletteBtn {
           font-size: 10px;
           padding: 4px 8px;
         }
@@ -1903,17 +2396,58 @@
             <button id="tabSkins" class="shop-tab" type="button">Skins</button>
           </div>
           <div id="shopItems"></div>
-          <div id="betSection" hidden>
-            <h3>Bet on the match</h3>
-            <div class="bet-row">
-              <button id="betMinus" type="button">−</button>
-              <span id="betAmount">1</span>
-              <button id="betPlus" type="button">+</button>
-              <button id="betLeft" type="button">◀ Left</button>
-              <button id="betRight" type="button">Right ▶</button>
-            </div>
-            <div id="betStatus"></div>
+        </div>
+      </div>
+      <div id="market">
+        <button id="marketBtn" type="button" aria-expanded="false" title="Invest coins in joke cryptos">📈 Market</button>
+        <div id="marketPanel" hidden>
+          <h3>Crypto Market · <span id="marketCoins">0</span> 🪙</h3>
+          <div id="marketTimer">next move in —</div>
+          <div id="marketGraphTf">
+            <button type="button" data-tf="5m">5m</button>
+            <button type="button" data-tf="1h" class="active">1h</button>
+            <button type="button" data-tf="1d">1d</button>
           </div>
+          <div id="marketList"></div>
+          <div id="marketNote">Prices update every 30s and drift up over the day. Your position's worth tracks the price; cashing out pays it rounded down to whole coins. ⚠️ Every 24h the market <b>RESETS</b> to 1.00 and holdings revalue at the bottom — cash out before the daily reset.</div>
+        </div>
+      </div>
+      <div id="loan">
+        <button id="loanBtn" type="button" aria-expanded="false" title="Borrow coins from Davis — pay back 1.5× by the daily reset">💸 Get Loan</button>
+        <div id="loanPanel" hidden>
+          <h3>Davis @ Citizens</h3>
+          <img id="loanImg" alt="Davis Clarke" />
+          <div id="loanBody"></div>
+        </div>
+      </div>
+      <div id="roulette">
+        <button id="rouletteBtn" type="button" aria-expanded="false" title="Play roulette — bet coins on the wheel">🎡 Roulette</button>
+        <div id="roulettePanel" hidden>
+          <h3>Roulette · <span id="rouletteCoins">0</span> 🪙</h3>
+          <div id="rouletteWheelWrap">
+            <canvas id="rouletteWheel" width="220" height="220"></canvas>
+            <div id="rouletteResult"></div>
+          </div>
+          <div id="rouletteChips">
+            <span class="rl-chips-label">Chip</span>
+            <button class="rl-chip active" data-chip="1" type="button">1</button>
+            <button class="rl-chip" data-chip="5" type="button">5</button>
+            <button class="rl-chip" data-chip="10" type="button">10</button>
+            <button class="rl-chip" data-chip="25" type="button">25</button>
+            <button class="rl-chip" data-chip="100" type="button">100</button>
+            <button class="rl-chip" data-chip="500" type="button">500</button>
+            <button class="rl-chip" data-chip="1000" type="button">1000</button>
+          </div>
+          <!-- Betting board: 0, the 1–36 grid, then the outside bets. Built by client/roulette.ts. -->
+          <div id="rouletteBoard"></div>
+          <div id="rouletteFoot">
+            <span id="rouletteStake">Staked: 0 🪙</span>
+            <div class="rl-foot-btns">
+              <button id="rouletteClear" type="button">Clear</button>
+              <button id="rouletteSpin" type="button" disabled>Spin</button>
+            </div>
+          </div>
+          <div id="rouletteNote">Single-zero wheel. Straight number pays 35:1, dozens 2:1, red/black/odd/even/half 1:1. The green 0 is the house edge. Pick a chip, click the board to stake, then Spin.</div>
         </div>
       </div>
       <div id="viewMode">
@@ -2009,6 +2543,33 @@
                 <span class="mode-desc">3–8 players on a polygon; last one standing wins</span>
               </span>
               <input type="checkbox" id="arenaMode" disabled />
+              <span class="mode-switch" aria-hidden="true"></span>
+            </label>
+            <label class="mode-option" title="A grid of destructible bricks fills the center of the court. Ball chips through them each point.">
+              <span class="mode-icon">🧩</span>
+              <span class="mode-text">
+                <span class="mode-name">Breakout</span>
+                <span class="mode-desc">Brick grid across the center — smash them all</span>
+              </span>
+              <input type="checkbox" id="breakoutMode" disabled />
+              <span class="mode-switch" aria-hidden="true"></span>
+            </label>
+            <label class="mode-option" title="The ball vanishes while in mid-court — you only see it near the paddles.">
+              <span class="mode-icon">🌫️</span>
+              <span class="mode-text">
+                <span class="mode-name">Fog of War</span>
+                <span class="mode-desc">Ball disappears in the middle of the court</span>
+              </span>
+              <input type="checkbox" id="fogMode" disabled />
+              <span class="mode-switch" aria-hidden="true"></span>
+            </label>
+            <label class="mode-option" title="Top and bottom walls become portals — the ball exits one side and reappears on the other.">
+              <span class="mode-icon">🌀</span>
+              <span class="mode-text">
+                <span class="mode-name">Portal Walls</span>
+                <span class="mode-desc">Top/bottom walls teleport the ball to the opposite side</span>
+              </span>
+              <input type="checkbox" id="portalMode" disabled />
               <span class="mode-switch" aria-hidden="true"></span>
             </label>
             <label class="mode-option" title="Floods the chat with fake viewer bots to distract the players. 📺">
@@ -2212,6 +2773,48 @@
                 <span class="pu-desc">Grab it to earn 100 coins</span>
               </div>
             </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="blackout" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#9aa0b0">blackout</span>
+                <span class="pu-desc">The court goes dark for the point</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="bullettime" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#5aa0ff">bullet time</span>
+                <span class="pu-desc">Everything slows down with a blue tint</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="vortex" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#b97cff">vortex</span>
+                <span class="pu-desc">A swirl pulls the ball toward center</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="glitch" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#00fff0">glitch</span>
+                <span class="pu-desc">TV-static glitches over the court</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="smoke" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#c8c8d2">smoke</span>
+                <span class="pu-desc">Drifting smoke clouds obscure the court</span>
+              </div>
+            </div>
+            <div class="pu-row">
+              <canvas class="pu-icon" data-kind="tilt" width="40" height="40"></canvas>
+              <div class="pu-info">
+                <span class="pu-name" style="color:#ffa94d">tilt</span>
+                <span class="pu-desc">The court leans and the ball rolls downhill</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -2235,6 +2838,15 @@
         </div>
         <div id="combosList"></div>
         <p id="combosFoot">Win a match, then tap the arrow combo to perform that finisher.</p>
+      </div>
+    </div>
+    <div id="balanceModal" hidden>
+      <div id="balanceCard" role="dialog" aria-modal="true" aria-label="Balance sheet">
+        <div id="balanceHead">
+          <span id="balanceName">Balance Sheet</span>
+          <button id="balanceClose" type="button" aria-label="Close">✕</button>
+        </div>
+        <div id="balanceBody"></div>
       </div>
     </div>
     <div id="changelog">
@@ -2300,6 +2912,30 @@
         <canvas id="game" width="800" height="500"></canvas>
         <!-- Three.js renders into this when 3D view is on; empty (and unused) otherwise. -->
         <div id="game3d" hidden></div>
+        <!-- Screen-effect overlay (blackout/bullet-time/vortex/glitch/smoke power-ups). Sits over
+             the board in any view; layers are toggled by main.ts. Never intercepts input. -->
+        <div id="screenFx" aria-hidden="true">
+          <div class="fx fx-blackout"></div>
+          <div class="fx fx-bullet"></div>
+          <div class="fx fx-vortex"></div>
+          <div class="fx fx-glitch"></div>
+          <div class="fx fx-smoke"></div>
+        </div>
+        <!-- Spectator betting (live odds). Shown automatically to observers during a live duel. -->
+        <div id="betSection" hidden>
+          <div class="bet-head">🎲 Bet on the match · live odds</div>
+          <div class="bet-row">
+            <button id="betLeft" type="button" class="bet-side">◀ <span id="betLeftName">Left</span> <b id="betLeftOdds">—</b></button>
+            <div class="bet-stake">
+              <button id="betMinus" type="button">−</button>
+              <span id="betAmount">1</span>
+              <button id="betPlus" type="button">+</button>
+              <span class="bet-coin">🪙</span>
+            </div>
+            <button id="betRight" type="button" class="bet-side"><span id="betRightName">Right</span> <b id="betRightOdds">—</b> ▶</button>
+          </div>
+          <div id="betStatus"></div>
+        </div>
         <div id="betBoard" hidden></div>
         <div id="status"></div>
         <div id="mobileControls">
@@ -2319,11 +2955,30 @@
         <button id="pingBtn" style="display: none; font-size: 12px; padding: 4px 10px;">🔔 Ping</button>
         <button id="readyBtn" style="display: none">Ready</button>
         <button id="rematchBtn" style="display: none">🔄 Rematch</button>
+        <button id="quitBtn" style="display: none; font-size: 12px; padding: 4px 10px;">🚪 Quit game</button>
         <button id="rename" class="link" style="display: none">change name</button>
-        <div id="leaderboard"></div>
+        <div id="boards">
+          <div id="leaderboard"></div>
+          <div id="netWorth"></div>
+        </div>
       </div>
 
       <div id="chat">
+        <div id="marketStability" hidden>
+          <div class="ms-head">
+            <span class="ms-title">Market Stability</span>
+            <button id="msInfo" type="button" aria-label="What is market stability?">&#9432;</button>
+            <span id="msPct" class="ms-pct"></span>
+          </div>
+          <div class="ms-track"><div id="msFill"></div></div>
+          <div id="msInfoPop" hidden>
+            Every day at <b>5pm</b>, Davis collects on overdue loans. Each unpaid debt is added to this
+            bar. The market no longer resets on a daily timer &mdash; instead, once unpaid loans reach
+            <b>10,000&#129689;</b> this bar fills and the <b>entire stock market crashes</b> (every coin
+            snaps back to base) for <b>everyone</b>, then the bar resets. Pay your loans on time to keep
+            the market stable.
+          </div>
+        </div>
         <h2>Chat
           <label style="font-size:12px;font-weight:normal;color:#4a5580;cursor:pointer;margin-left:6px;"><input type="checkbox" id="hideCmds" style="vertical-align:middle;margin-right:3px;">hide commands</label>
           <label style="font-size:12px;font-weight:normal;color:#4a5580;cursor:pointer;margin-left:6px;"><input type="checkbox" id="hideTimestamps" style="vertical-align:middle;margin-right:3px;">hide times</label>
@@ -2335,6 +2990,10 @@
         <div id="reactions"></div>
         <div id="recentReactions"></div>
         <div id="ballReaction"></div>
+        <div id="betLog">
+          <h2>🎲 Recent bets</h2>
+          <div id="betLogList"><div class="bet-log-empty">No bets yet.</div></div>
+        </div>
       </div>
     </div>
 
@@ -2356,6 +3015,13 @@
           <button id="randomColor" type="button" class="swatch random" title="Random color">🎲</button>
         </div>
         <button type="submit">Enter</button>
+        <div id="authArea">
+          <div id="authChip" hidden></div>
+          <a id="signInLink" href="/auth/google" hidden>
+            <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.615z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.707A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.707V4.961H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.039l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.961L3.964 7.293C4.672 5.163 6.656 3.58 9 3.58z"/></svg>
+            Sign in with Google
+          </a>
+        </div>
       </form>
     </div>
 

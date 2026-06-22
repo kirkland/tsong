@@ -99,6 +99,7 @@ Built by:
 - [Matt Beauvais](https://github.com/mattb102) (@mattb102)
 - [Fritz-Gerald Duverglas](https://github.com/fritztheritz) (@fritztheritz)
 - [Josiel](https://github.com/japonte21) (@japonte21)
+- [JSav](https://github.com/julianwsavini) (@julianwsavini)
 
 ## Code of conduct
 

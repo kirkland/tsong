@@ -14,6 +14,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "dotenv": "^17.4.2",
+    "google-auth-library": "^10.7.0",
+    "jsonwebtoken": "^9.0.3",
     "pg": "^8.13.1",
     "sirv": "^2.0.4",
     "three": "^0.184.0",
@@ -23,6 +26,7 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^20.14.0",
     "@types/pg": "^8.11.10",
     "@types/three": "^0.184.1",

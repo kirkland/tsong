@@ -34,6 +34,7 @@ import {
   PINATA,
   POWERUPS,
   TARGET,
+  BREAKOUT,
   PowerupKind,
   Side,
   Status,
@@ -101,6 +102,11 @@ export interface GameSnapshot {
   disco?: boolean;
   minion?: boolean;
   earthquake?: boolean;
+  blackout?: boolean; bullettime?: boolean; vortex?: boolean; glitch?: boolean; smoke?: boolean; tilt?: boolean;
+  breakout?: boolean;
+  brickAlive?: boolean[];
+  fog?: boolean;
+  portal?: boolean;
   winnerSide: Side | null;
   lastHit: Side | null;
   target: { x: number; y: number; kind: PowerupKind } | null;
@@ -150,6 +156,10 @@ export class Game {
   diamondBlock: { x: number; y: number; vx: number; vy: number } | null = null;
   pinata = false; // "piñata" mode armed; spawns a drifting ball-collector
   pinataObj: PinataObj | null = null; // the live piñata during a match (else null)
+  breakout = false; // "breakout" mode: destructible bricks across the centre of the court
+  brickAlive: boolean[] = []; // which of the 28 bricks are still standing this point
+  fog = false;    // "fog of war": server passes flag; visibility computed client-side
+  portal = false; // "portal walls": top/bottom walls teleport instead of bounce
   pinataBurstFlash = false; // set for the single tick a burst happens (drives a client pulse)
   private pinataPendingSpawns = 0; // replacement balls owed this tick (one per ball stuck)
   private pinataBurstPending = false; // a 5th ball stuck this tick → release everything
@@ -178,6 +188,7 @@ export class Game {
   disco = false; // "disco" power-up: 3D disco ball, dance floor, colored lights for the point
   minion = false; // "minion" power-up: both paddles are drawn as a minion for the point
   earthquake = false; // "earthquake" power-up: court shakes and the ball jitters for the point
+  blackout = false; bullettime = false; vortex = false; glitch = false; smoke = false; tilt = false; // screen-effect power-ups (per point)
   coinGrant: Side | null = null; // transient: side that just collected the "coins" power-up (lobby pays out)
   // "Blaster": shots each side holds, projectiles in flight, and how long each paddle is locked.
   blasterAmmo: Record<Side, number> = { left: 0, right: 0 };
@@ -215,6 +226,8 @@ export class Game {
       disco: this.disco,
       minion: this.minion,
       earthquake: this.earthquake,
+      blackout: this.blackout, bullettime: this.bullettime, vortex: this.vortex,
+      glitch: this.glitch, smoke: this.smoke, tilt: this.tilt,
       winnerSide: this.winnerSide,
       lastHit: this.lastHit,
       target: this.target ? { ...this.target } : null,
@@ -236,6 +249,10 @@ export class Game {
       serveDir: this.serveDir,
       targetTimer: this.targetTimer,
       winScore: this.winScore,
+      breakout: this.breakout,
+      brickAlive: [...this.brickAlive],
+      fog: this.fog,
+      portal: this.portal,
     };
   }
 
@@ -261,6 +278,12 @@ export class Game {
     this.disco = s.disco ?? false;
     this.minion = s.minion ?? false;
     this.earthquake = s.earthquake ?? false;
+    this.blackout = s.blackout ?? false; this.bullettime = s.bullettime ?? false; this.vortex = s.vortex ?? false;
+    this.glitch = s.glitch ?? false; this.smoke = s.smoke ?? false; this.tilt = s.tilt ?? false;
+    this.breakout = s.breakout ?? false;
+    this.brickAlive = s.brickAlive ? [...s.brickAlive] : this.freshBricks();
+    this.fog = s.fog ?? false;
+    this.portal = s.portal ?? false;
     this.winnerSide = s.winnerSide;
     this.lastHit = s.lastHit;
     this.target = s.target ? { ...s.target } : null;
@@ -411,6 +434,19 @@ export class Game {
     this.pinataPendingSpawns = 0;
     this.pinataBurstPending = false;
   }
+
+  private freshBricks(): boolean[] {
+    return new Array(BREAKOUT.cols * BREAKOUT.rows).fill(true);
+  }
+
+  setBreakout(on: boolean) {
+    this.breakout = on;
+    if (on) this.brickAlive = this.freshBricks();
+    else    this.brickAlive = [];
+  }
+
+  setFog(on: boolean)    { this.fog = on; }
+  setPortal(on: boolean) { this.portal = on; }
 
   // Drift the piñata, spin it, and bounce it off the four walls (radius PINATA.r).
   private movePinata(dt: number, scale: number) {
@@ -595,6 +631,8 @@ export class Game {
     this.disco = false;
     this.minion = false;
     this.earthquake = false;
+    this.blackout = false; this.bullettime = false; this.vortex = false;
+    this.glitch = false; this.smoke = false; this.tilt = false;
     this.blasterAmmo = { left: 0, right: 0 };
     this.disabledTimer = { left: 0, right: 0 };
     this.projectiles = [];
@@ -603,6 +641,8 @@ export class Game {
     if (this.pinataObj) this.pinataObj.stuck = [];
     this.pinataPendingSpawns = 0;
     this.pinataBurstPending = false;
+    // Breakout: reset the brick grid for each new point.
+    if (this.breakout) this.brickAlive = this.freshBricks();
   }
 
   private launch() {
@@ -653,7 +693,7 @@ export class Game {
     }
     // Blaster projectiles fly on their own clock (not slowed by the slow power-up).
     this.moveProjectiles(dt);
-    const scale = this.slowTimer > 0 ? SLOW_SCALE : 1;
+    const scale = (this.slowTimer > 0 ? SLOW_SCALE : 1) * (this.bullettime ? 0.45 : 1);
 
     // Advance every ball. A ball that leaves the court just drops out of play — NO point
     // is scored while other balls remain, so during multi-ball one ball going out never
@@ -718,6 +758,13 @@ export class Game {
       const nvy = b.vx * sin + b.vy * cos;
       b.vx = nvx; b.vy = nvy;
     }
+    // Vortex: gently pull the ball toward court center, so its path spirals inward.
+    if (this.vortex) {
+      b.vx += (COURT.w / 2 - b.x) * 0.9 * dt;
+      b.vy += (COURT.h / 2 - b.y) * 0.9 * dt;
+    }
+    // Tilt: the court leans, so the ball rolls steadily downward (a mild extra gravity).
+    if (this.tilt) b.vy += 150 * dt * scale;
 
     const prevX = b.x;
     const prevY = b.y;
@@ -726,13 +773,55 @@ export class Game {
 
     const r = this.ballR();
 
-    // Top / bottom walls
+    // Top / bottom walls — portal mode teleports instead of bouncing.
     if (b.y - r < 0) {
-      b.y = r;
-      b.vy = Math.abs(b.vy);
+      if (this.portal) {
+        b.y = COURT.h - r - 1;
+        b.vy = -Math.abs(b.vy); // exits from the bottom heading upward
+      } else {
+        b.y = r;
+        b.vy = Math.abs(b.vy);
+      }
     } else if (b.y + r > COURT.h) {
-      b.y = COURT.h - r;
-      b.vy = -Math.abs(b.vy);
+      if (this.portal) {
+        b.y = r + 1;
+        b.vy = Math.abs(b.vy); // exits from the top heading downward
+      } else {
+        b.y = COURT.h - r;
+        b.vy = -Math.abs(b.vy);
+      }
+    }
+
+    // Breakout: check ball against surviving bricks.
+    // Phase through the wall until the first paddle hit so the ball doesn't
+    // spawn inside the wall and immediately destroy bricks on serve.
+    if (this.breakout && this.brickAlive.length > 0 && this.lastHit !== null) {
+      const { cols, rows, w, h, gap, left, top } = BREAKOUT;
+      outer: for (let row = 0; row < rows; row++) {
+        for (let col = 0; col < cols; col++) {
+          const idx = row * cols + col;
+          if (!this.brickAlive[idx]) continue;
+          const bx = left + col * (w + gap);
+          const by = top  + row * (h + gap);
+          // AABB overlap test, expanded by ball radius on each side.
+          if (b.x + r > bx && b.x - r < bx + w && b.y + r > by && b.y - r < by + h) {
+            this.brickAlive[idx] = false;
+            // Reflect on the axis with the smaller overlap (face that was hit first).
+            const overlapLeft  = (b.x + r) - bx;
+            const overlapRight = (bx + w) - (b.x - r);
+            const overlapTop   = (b.y + r) - by;
+            const overlapBot   = (by + h)  - (b.y - r);
+            const minH = Math.min(overlapLeft, overlapRight);
+            const minV = Math.min(overlapTop, overlapBot);
+            if (minH < minV) {
+              b.vx = overlapLeft < overlapRight ? -Math.abs(b.vx) : Math.abs(b.vx);
+            } else {
+              b.vy = overlapTop < overlapBot ? -Math.abs(b.vy) : Math.abs(b.vy);
+            }
+            break outer; // one brick per step to avoid tunnelling through a seam
+          }
+        }
+      }
     }
 
     this.checkTargetHit(prevX, prevY, b);
@@ -901,6 +990,24 @@ export class Game {
         break;
       case 'earthquake':
         this.earthquake = true;
+        break;
+      case 'blackout':
+        this.blackout = true;
+        break;
+      case 'bullettime':
+        this.bullettime = true;
+        break;
+      case 'vortex':
+        this.vortex = true;
+        break;
+      case 'glitch':
+        this.glitch = true;
+        break;
+      case 'smoke':
+        this.smoke = true;
+        break;
+      case 'tilt':
+        this.tilt = true;
         break;
       case 'coins':
         // Transient economy reward — the lobby reads this and pays the side 100 coins.

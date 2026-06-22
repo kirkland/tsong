@@ -1,6 +1,6 @@
 // Pure drawing: takes the latest server state and paints one frame. No game logic.
 
-import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, TARGET, PowerupKind, StateMsg, PolyState, Role, Side } from '../shared/types';
+import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, TARGET, BREAKOUT, PowerupKind, StateMsg, PolyState, Role, Side } from '../shared/types';
 
 const fritzImg = new Image();
 fritzImg.src = '/fritz.jpg';
@@ -112,10 +112,25 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
   // Paddle status overlays (frozen, mirrored, curve-ready).
   drawPaddleEffects(ctx, s);
 
+  // Breakout bricks — drawn behind the ball so the ball visually smashes through them.
+  if (s.breakout && s.bricks) drawBricks(ctx, s.bricks, s.ballSpeed);
+
+  // Portal wall rings — subtle glow on the top and bottom walls when active.
+  if (s.portal) drawPortalWalls(ctx);
+
   // Ball(s) — colored by whichever paddle last hit them. Extra balls = multi power-up.
   const ballR = s.tinyBall ? 3 : s.bigBall ? BIG_BALL_R : BALL.r;
-  ctx.globalAlpha = s.ghostBall ? 0.12 : 1;
   for (const b of [s.ball, ...s.extraBalls]) {
+    // Fog of war: hide the ball in mid-court (>120px from either paddle face).
+    let alpha = s.ghostBall ? 0.12 : 1;
+    if (s.fog && !s.ghostBall) {
+      const distLeft  = b.x - s.paddles.left.x;
+      const distRight = s.paddles.right.x - b.x;
+      const nearest = Math.min(distLeft, distRight);
+      if (nearest > 240) alpha = 0;
+      else if (nearest > 120) alpha = 1 - (nearest - 120) / 120;
+    }
+    ctx.globalAlpha = alpha;
     ctx.fillStyle = b.color;
     ctx.beginPath();
     ctx.arc(b.x, b.y, ballR, 0, Math.PI * 2);
@@ -349,6 +364,64 @@ function drawPolyPaddle(ctx: CanvasRenderingContext2D, poly: PolyState, pl: Poly
   }
 }
 
+// Breakout mode: draw the surviving bricks as a vertical wall down the centre.
+// Colour cycles in bands of 4 rows: blue → teal → amber → red (top → bottom).
+const BRICK_HUES = [210, 170, 35, 0];
+
+function drawBricks(ctx: CanvasRenderingContext2D, bricks: boolean[], ballSpeed: number) {
+  const { cols, rows, w, h, gap, left, top } = BREAKOUT;
+  // Before the first paddle hit the ball phases through — signal that with a
+  // ghostly low-opacity render so players know the wall is "warming up".
+  const phasing = ballSpeed === 0;
+  ctx.save();
+  ctx.globalAlpha = phasing ? 0.28 : 1;
+  for (let row = 0; row < rows; row++) {
+    const hue = BRICK_HUES[Math.floor(row / 2) % BRICK_HUES.length];
+    for (let col = 0; col < cols; col++) {
+      const idx = row * cols + col;
+      if (!bricks[idx]) continue;
+      const bx = left + col * (w + gap);
+      const by = top  + row * (h + gap);
+      // Body
+      ctx.fillStyle = `hsl(${hue}, 68%, 42%)`;
+      ctx.beginPath();
+      (ctx as CanvasRenderingContext2D & { roundRect?: (...a: unknown[]) => void }).roundRect?.(bx, by, w, h, 3) ?? ctx.rect(bx, by, w, h);
+      ctx.fill();
+      // Top-left highlight
+      ctx.fillStyle = `hsla(${hue}, 75%, 75%, 0.50)`;
+      ctx.fillRect(bx + 2, by + 2, w - 4, 3);
+      // Bottom shadow
+      ctx.fillStyle = `hsla(${hue}, 45%, 18%, 0.45)`;
+      ctx.fillRect(bx + 2, by + h - 3, w - 4, 3);
+    }
+  }
+  ctx.restore();
+}
+
+// Portal walls mode: draw glowing rings on the top and bottom walls.
+function drawPortalWalls(ctx: CanvasRenderingContext2D) {
+  const t = performance.now() / 1000;
+  for (const wallY of [0, COURT.h]) {
+    const ySign = wallY === 0 ? 1 : -1;
+    const pulse = 0.55 + 0.45 * Math.sin(t * 3 + (wallY === 0 ? 0 : Math.PI));
+    ctx.save();
+    // Glow
+    ctx.shadowBlur = 24 * pulse;
+    ctx.shadowColor = `hsla(270, 90%, 70%, ${pulse})`;
+    ctx.strokeStyle = `hsla(270, 90%, 75%, ${0.55 + 0.45 * pulse})`;
+    ctx.lineWidth = 3;
+    // Three staggered ovals along the wall
+    for (let i = 0; i < 3; i++) {
+      const cx = COURT.w * (0.25 + i * 0.25);
+      const cy = wallY + ySign * 6;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, 36, 8, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+}
+
 // The diamond-hands obstacle: a blue-and-white gem with faceted highlights and a glow.
 function drawDiamond(ctx: CanvasRenderingContext2D, x: number, y: number) {
   const r = DIAMOND.r;
@@ -475,14 +548,41 @@ function drawPaddle(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: nu
   ctx.fillRect(cx - PADDLE.w / 2, cy - h / 2, PADDLE.w, h);
 }
 
-// Cosmetic "rainbow" skin: fill the paddle with a vertical rainbow gradient. Visual only.
+// Clip context to the paddle's rounded-pill shape so all skin fills stay within clean edges.
+function clipPaddle(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const x = cx - PADDLE.w / 2, y = cy - h / 2, r = PADDLE.w / 2;
+  ctx.beginPath();
+  ctx.roundRect(x, y, PADDLE.w, h, r);
+  ctx.clip();
+}
+
+// Subtle inner-edge highlight painted over every skin to add a sense of depth.
+function skinHighlight(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const x = cx - PADDLE.w / 2, y = cy - h / 2;
+  const hi = ctx.createLinearGradient(x, 0, x + PADDLE.w, 0);
+  hi.addColorStop(0, 'rgba(255,255,255,0.30)');
+  hi.addColorStop(0.35, 'rgba(255,255,255,0.08)');
+  hi.addColorStop(1, 'rgba(0,0,0,0.20)');
+  ctx.fillStyle = hi;
+  ctx.fillRect(x, y, PADDLE.w, h);
+}
+
+// Cosmetic "rainbow" skin — animated: colours scroll down the paddle over time.
 function fillRainbow(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
   const top = cy - h / 2;
-  const g = ctx.createLinearGradient(0, top, 0, top + h);
-  const stops = ['#ff3b30', '#ff9500', '#ffd60a', '#34c759', '#0a84ff', '#5e5ce6', '#bf5af2'];
-  stops.forEach((c, i) => g.addColorStop(i / (stops.length - 1), c));
-  ctx.fillStyle = g;
-  ctx.fillRect(cx - PADDLE.w / 2, top, PADDLE.w, h);
+  const offset = (Date.now() / 10) % h;
+  // draw twice so the scrolling loop wraps seamlessly
+  for (const dy of [0, h]) {
+    const g = ctx.createLinearGradient(0, top - offset + dy, 0, top - offset + dy + h);
+    ['#ff3b30', '#ff9500', '#ffd60a', '#34c759', '#0a84ff', '#5e5ce6', '#bf5af2', '#ff3b30']
+      .forEach((c, i, a) => g.addColorStop(i / (a.length - 1), c));
+    ctx.fillStyle = g;
+    ctx.fillRect(cx - PADDLE.w / 2, top, PADDLE.w, h);
+  }
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
 }
 
 // Cosmetic registries — add new skins/hats here (id must match shared/types COSMETICS).
@@ -499,7 +599,49 @@ const SKIN_RENDERERS: Record<string, CosmeticDraw> = {
   neon: fillNeon,
   stripes: fillStripes,
   glitch: fillGlitch,
+  toxic: fillToxic,
+  plasma: fillPlasma,
+  wood: fillWood,
+  hologram: fillHologram,
+  venom: fillVenom,
 };
+// Draw a live skin/hat preview onto a small canvas element (used in the shop UI).
+// The canvas is scaled so the paddle fills it, then the skin is applied at full quality.
+export function drawCosmeticPreview(canvas: HTMLCanvasElement, id: string, slot: 'hat' | 'skin') {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  // Court-coordinate paddle
+  const pH = PADDLE.h * 0.7; // slightly shorter so caps show
+  const scale = H / (pH + PADDLE.w * 2); // fit vertically with some headroom for hats
+  ctx.save();
+  ctx.translate(W / 2, H / 2);
+  ctx.scale(scale, scale);
+  const cx = 0, cy = 0, h = pH;
+  if (slot === 'skin') {
+    const fn = SKIN_RENDERERS[id];
+    if (fn) {
+      fn(ctx, cx, cy, h);
+    } else {
+      ctx.fillStyle = '#3a6df0';
+      ctx.save(); clipPaddle(ctx, cx, cy, h);
+      ctx.fillRect(cx - PADDLE.w / 2, cy - h / 2, PADDLE.w, h);
+      ctx.restore();
+    }
+  } else {
+    // Draw a plain blue paddle then the hat on top
+    ctx.fillStyle = '#3a6df0';
+    ctx.save(); clipPaddle(ctx, cx, cy, h);
+    ctx.fillRect(cx - PADDLE.w / 2, cy - h / 2, PADDLE.w, h);
+    ctx.restore();
+    skinHighlight(ctx, cx, cy, h);
+    const fn = HAT_RENDERERS[id];
+    if (fn) fn(ctx, cx, cy, h);
+  }
+  ctx.restore();
+}
+
 const HAT_RENDERERS: Record<string, CosmeticDraw> = {
   tophat: drawTopHat,
   crown: drawCrown,
@@ -512,6 +654,11 @@ const HAT_RENDERERS: Record<string, CosmeticDraw> = {
   flame: drawFlame,
   helmet: drawHelmet,
   antennae: drawAntennae,
+  mohawk: drawMohawk,
+  bow: drawBow,
+  pirate: drawPirate,
+  santa: drawSanta,
+  headphones: drawHeadphones,
 };
 
 // Cosmetic "top hat": a little hat perched at the top end of the paddle. Visual only.
@@ -681,103 +828,531 @@ function drawAntennae(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: 
   ctx.restore();
 }
 
+function drawMohawk(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  ctx.save();
+  const colors = ['#ff3b30', '#ff9500', '#ffd60a', '#34c759', '#0a84ff', '#bf5af2'];
+  const spikes = 5;
+  const sw = PADDLE.w / spikes;
+  for (let i = 0; i < spikes; i++) {
+    const sx = cx - PADDLE.w / 2 + sw * i + sw / 2;
+    const sh = 8 + (i % 2) * 6 + (i === 2 ? 4 : 0);
+    ctx.fillStyle = colors[i % colors.length];
+    ctx.beginPath();
+    ctx.moveTo(sx - sw * 0.4, top);
+    ctx.lineTo(sx, top - sh);
+    ctx.lineTo(sx + sw * 0.4, top);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.restore();
+}
+function drawBow(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2 - 3;
+  ctx.save();
+  ctx.fillStyle = '#ff5c9e';
+  // Left loop
+  ctx.beginPath();
+  ctx.ellipse(cx - 6, top - 5, 6, 4, -0.4, 0, Math.PI * 2);
+  ctx.fill();
+  // Right loop
+  ctx.beginPath();
+  ctx.ellipse(cx + 6, top - 5, 6, 4, 0.4, 0, Math.PI * 2);
+  ctx.fill();
+  // Tails
+  ctx.beginPath();
+  ctx.moveTo(cx, top - 4);
+  ctx.quadraticCurveTo(cx - 8, top + 2, cx - 10, top + 5);
+  ctx.lineTo(cx - 7, top + 5);
+  ctx.quadraticCurveTo(cx - 5, top + 2, cx, top - 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx, top - 4);
+  ctx.quadraticCurveTo(cx + 8, top + 2, cx + 10, top + 5);
+  ctx.lineTo(cx + 7, top + 5);
+  ctx.quadraticCurveTo(cx + 5, top + 2, cx, top - 2);
+  ctx.fill();
+  // Centre knot
+  ctx.fillStyle = '#ff2d7c';
+  ctx.beginPath(); ctx.ellipse(cx, top - 4, 2.5, 2.5, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+function drawPirate(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  const brimW = PADDLE.w + 14;
+  ctx.save();
+  // Brim
+  ctx.fillStyle = '#1a1a1a';
+  ctx.beginPath();
+  ctx.ellipse(cx, top - 1, brimW / 2, 3, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // Main hat body (tricorn outline shape)
+  ctx.beginPath();
+  ctx.moveTo(cx - brimW / 2, top - 1);
+  ctx.lineTo(cx - 4, top - 16);
+  ctx.lineTo(cx, top - 18);
+  ctx.lineTo(cx + 4, top - 16);
+  ctx.lineTo(cx + brimW / 2, top - 1);
+  ctx.closePath();
+  ctx.fill();
+  // Skull & crossbones
+  ctx.fillStyle = '#e8e8e8';
+  ctx.beginPath(); ctx.arc(cx, top - 10, 3, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#e8e8e8'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(cx - 3, top - 7); ctx.lineTo(cx + 3, top - 13); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx + 3, top - 7); ctx.lineTo(cx - 3, top - 13); ctx.stroke();
+  ctx.restore();
+}
+function drawSanta(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  ctx.save();
+  // White brim band
+  ctx.fillStyle = '#e8e8e8';
+  ctx.fillRect(cx - PADDLE.w / 2 - 2, top - 5, PADDLE.w + 4, 4);
+  // Red hat body tapering to a point offset right
+  ctx.fillStyle = '#d42b2b';
+  ctx.beginPath();
+  ctx.moveTo(cx - PADDLE.w / 2 - 2, top - 4);
+  ctx.lineTo(cx + PADDLE.w / 2 + 2, top - 4);
+  ctx.lineTo(cx + 6, top - 20);
+  ctx.closePath();
+  ctx.fill();
+  // White pom-pom
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath(); ctx.arc(cx + 6, top - 20, 3, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+function drawHeadphones(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 120);
+  ctx.save();
+  // Arc headband
+  ctx.strokeStyle = '#2a2a35';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.arc(cx, top - 4, PADDLE.w * 0.7, Math.PI, 0);
+  ctx.stroke();
+  // Ear cups — animate their glow
+  const cupColor = `hsl(${250 + pulse * 40},80%,${45 + pulse * 20}%)`;
+  ctx.fillStyle = cupColor;
+  ctx.shadowColor = cupColor; ctx.shadowBlur = 4 + pulse * 6;
+  for (const dir of [-1, 1]) {
+    const ex = cx + dir * PADDLE.w * 0.7;
+    ctx.beginPath(); ctx.ellipse(ex, top - 4, 3.5, 4.5, 0, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+
 // --- additional cosmetic skins (fill the paddle rect; some animated; visual only) ---
 function paddleRect(cx: number, cy: number, h: number) {
   return { x: cx - PADDLE.w / 2, y: cy - h / 2, w: PADDLE.w, h };
 }
 function fillGold(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
   const r = paddleRect(cx, cy, h);
+  // Base: warm gold gradient across the width
   const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
-  g.addColorStop(0, '#9a7d1a'); g.addColorStop(0.5, '#ffe066'); g.addColorStop(1, '#9a7d1a');
+  g.addColorStop(0,   '#7a5c10');
+  g.addColorStop(0.3, '#e8c840');
+  g.addColorStop(0.5, '#fff2a0');
+  g.addColorStop(0.7, '#e8c840');
+  g.addColorStop(1,   '#7a5c10');
   ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
-  // moving glint
-  const gy = r.y + ((Date.now() / 12) % (r.h + 20)) - 10;
-  ctx.save(); ctx.globalAlpha = 0.7; ctx.fillStyle = '#fffbe6';
-  ctx.fillRect(r.x, gy, r.w, 4); ctx.restore();
+  // Animated diagonal glint that sweeps top-to-bottom
+  const t = (Date.now() / 700) % 1;
+  const gy = r.y - 20 + (r.h + 40) * t;
+  const glint = ctx.createLinearGradient(0, gy - 8, 0, gy + 8);
+  glint.addColorStop(0, 'rgba(255,255,230,0)');
+  glint.addColorStop(0.5, 'rgba(255,255,230,0.85)');
+  glint.addColorStop(1, 'rgba(255,255,230,0)');
+  ctx.fillStyle = glint; ctx.fillRect(r.x, r.y, r.w, r.h);
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
 }
 function fillChrome(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
   const r = paddleRect(cx, cy, h);
+  // Multi-band metallic reflection
   const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
-  g.addColorStop(0, '#6b7280'); g.addColorStop(0.5, '#e5e7eb'); g.addColorStop(1, '#6b7280');
+  g.addColorStop(0,    '#3d4147');
+  g.addColorStop(0.25, '#b0b8c8');
+  g.addColorStop(0.45, '#f0f4f8');
+  g.addColorStop(0.55, '#ffffff');
+  g.addColorStop(0.75, '#b0b8c8');
+  g.addColorStop(1,    '#3d4147');
   ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
-  const gy = r.y + ((Date.now() / 8) % (r.h + 30)) - 15;
-  ctx.save(); ctx.globalAlpha = 0.6; ctx.fillStyle = '#fff';
-  ctx.fillRect(r.x, gy, r.w, 6); ctx.restore();
+  // Fast bright scan sweep
+  const t = (Date.now() / 500) % 1;
+  const sy = r.y - 10 + (r.h + 20) * t;
+  const sweep = ctx.createLinearGradient(0, sy - 10, 0, sy + 10);
+  sweep.addColorStop(0, 'rgba(255,255,255,0)');
+  sweep.addColorStop(0.5, 'rgba(255,255,255,0.70)');
+  sweep.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sweep; ctx.fillRect(r.x, r.y, r.w, r.h);
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
 }
 function fillGalaxy(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
   const r = paddleRect(cx, cy, h);
+  // Deep space gradient
   const g = ctx.createLinearGradient(0, r.y, 0, r.y + r.h);
-  g.addColorStop(0, '#1b1448'); g.addColorStop(0.5, '#3a1a6b'); g.addColorStop(1, '#0b1030');
+  g.addColorStop(0,    '#0d0b2a');
+  g.addColorStop(0.35, '#1e0e4a');
+  g.addColorStop(0.65, '#2a0d5e');
+  g.addColorStop(1,    '#050820');
   ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
-  ctx.fillStyle = '#fff';
-  for (let i = 0; i < 7; i++) {
-    const sx = r.x + ((i * 977) % r.w);
-    const sy = r.y + ((i * 613) % r.h);
-    const tw = 0.4 + 0.6 * Math.abs(Math.sin(Date.now() / 400 + i));
-    ctx.globalAlpha = tw; ctx.fillRect(sx, sy, 1.5, 1.5);
+  // Nebula tint
+  const neb = ctx.createRadialGradient(cx, cy, 1, cx, cy, r.h * 0.4);
+  neb.addColorStop(0, 'rgba(120,60,200,0.35)');
+  neb.addColorStop(1, 'rgba(60,20,120,0)');
+  ctx.fillStyle = neb; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Twinkling stars
+  const now = Date.now();
+  for (let i = 0; i < 18; i++) {
+    const sx = r.x + ((i * 1973 + 7) % (r.w * 10)) / 10;
+    const sy = r.y + ((i * 1031 + 3) % (r.h * 10)) / 10;
+    const twinkle = 0.3 + 0.7 * Math.abs(Math.sin(now / 300 + i * 1.7));
+    ctx.globalAlpha = twinkle;
+    ctx.fillStyle = i % 3 === 0 ? '#c0aaff' : i % 3 === 1 ? '#aaddff' : '#ffffff';
+    const sz = i % 5 === 0 ? 2 : 1;
+    ctx.fillRect(sx, sy, sz, sz);
   }
   ctx.globalAlpha = 1;
+  ctx.restore();
 }
 function fillLava(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
   const r = paddleRect(cx, cy, h);
-  const t = Date.now() / 300;
-  ctx.fillStyle = '#3a0d05'; ctx.fillRect(r.x, r.y, r.w, r.h);
-  for (let i = 0; i < 5; i++) {
-    const yy = r.y + (i + 0.5) * (r.h / 5);
-    const glow = 0.5 + 0.5 * Math.sin(t + i);
-    ctx.fillStyle = `rgb(255,${(80 + glow * 100) | 0},20)`;
-    ctx.fillRect(r.x, yy - 2, r.w, 3);
+  const t = Date.now() / 400;
+  // Dark volcanic base
+  ctx.fillStyle = '#200500'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Flowing lava bands with sinusoidal intensity
+  for (let i = 0; i < 8; i++) {
+    const yFrac = (i / 7);
+    const yy = r.y + yFrac * r.h;
+    const phase = t + i * 0.9;
+    const intensity = 0.4 + 0.6 * (0.5 + 0.5 * Math.sin(phase));
+    const red = (180 + intensity * 75) | 0;
+    const grn = (20 + intensity * 80) | 0;
+    const band = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+    band.addColorStop(0,   `rgba(${red},${grn},0,0)`);
+    band.addColorStop(0.3, `rgba(${red},${grn},0,${intensity * 0.9})`);
+    band.addColorStop(0.7, `rgba(${red},${grn},0,${intensity * 0.9})`);
+    band.addColorStop(1,   `rgba(${red},${grn},0,0)`);
+    ctx.fillStyle = band;
+    ctx.fillRect(r.x, yy - 3, r.w, 5 + intensity * 4);
   }
+  // Bright core hotspot
+  const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, h * 0.25);
+  core.addColorStop(0, 'rgba(255,200,80,0.4)');
+  core.addColorStop(1, 'rgba(255,60,0,0)');
+  ctx.fillStyle = core; ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.restore();
 }
 function fillIce(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
   const r = paddleRect(cx, cy, h);
+  // Crystalline blue-white gradient
   const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
-  g.addColorStop(0, '#7fb8d8'); g.addColorStop(0.5, '#dff3ff'); g.addColorStop(1, '#7fb8d8');
+  g.addColorStop(0,    '#5ba8cc');
+  g.addColorStop(0.35, '#b8e4f8');
+  g.addColorStop(0.55, '#eef9ff');
+  g.addColorStop(0.75, '#b8e4f8');
+  g.addColorStop(1,    '#5ba8cc');
   ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
-  ctx.strokeStyle = 'rgba(255,255,255,0.6)'; ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(r.x + r.w * 0.5, r.y); ctx.lineTo(r.x + r.w * 0.3, r.y + r.h * 0.5); ctx.lineTo(r.x + r.w * 0.6, r.y + r.h);
-  ctx.stroke();
+  // Crystal facet lines radiating from center
+  ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = 0.8;
+  const mx = cx, my = cy;
+  const angles = [Math.PI / 5, Math.PI * 2 / 5, Math.PI * 3 / 5, Math.PI * 4 / 5];
+  for (const a of angles) {
+    const len = h * 0.55;
+    ctx.beginPath();
+    ctx.moveTo(mx + Math.cos(a) * 2, my + Math.sin(a) * 2);
+    ctx.lineTo(mx + Math.cos(a) * len, my + Math.sin(a) * len);
+    ctx.moveTo(mx - Math.cos(a) * 2, my - Math.sin(a) * 2);
+    ctx.lineTo(mx - Math.cos(a) * len, my - Math.sin(a) * len);
+    ctx.stroke();
+  }
+  // Shimmer at top
+  const shimmer = 0.5 + 0.5 * Math.sin(Date.now() / 500);
+  const sh = ctx.createLinearGradient(0, r.y, 0, r.y + r.h * 0.3);
+  sh.addColorStop(0, `rgba(255,255,255,${shimmer * 0.45})`);
+  sh.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sh; ctx.fillRect(r.x, r.y, r.w, r.h);
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
 }
 function fillCamo(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
   const r = paddleRect(cx, cy, h);
-  ctx.fillStyle = '#4b5320'; ctx.fillRect(r.x, r.y, r.w, r.h);
-  const blobs = ['#6b7d3a', '#2f3417', '#8a9a5b'];
-  for (let i = 0; i < 6; i++) {
-    ctx.fillStyle = blobs[i % blobs.length];
-    const bx = r.x + ((i * 53) % r.w);
-    const by = r.y + ((i * 97) % r.h);
-    ctx.beginPath(); ctx.ellipse(bx, by, 4, 5, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#4a5425'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Organic camo blobs using randomised-but-stable positions
+  const palette = ['#2e3514', '#6b7a30', '#8a9a52', '#3a4218'];
+  const seeds = [[3, 0.15, 0.12], [5, 0.55, 0.25], [7, 0.3, 0.55],
+                 [11, 0.7, 0.42], [13, 0.1, 0.72], [2, 0.85, 0.15],
+                 [17, 0.45, 0.82], [19, 0.65, 0.68], [23, 0.2, 0.38]];
+  for (let i = 0; i < seeds.length; i++) {
+    const [pi, fx, fy] = seeds[i];
+    ctx.fillStyle = palette[pi % palette.length];
+    const bx = r.x + fx * r.w;
+    const by = r.y + fy * r.h;
+    ctx.beginPath();
+    ctx.ellipse(bx, by, 3 + (pi % 3), 4 + (pi % 4), (pi * 0.6), 0, Math.PI * 2);
+    ctx.fill();
   }
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
 }
 function fillNeon(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
-  const r = paddleRect(cx, cy, h);
-  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 200);
-  ctx.fillStyle = '#0a0a12'; ctx.fillRect(r.x, r.y, r.w, r.h);
   ctx.save();
-  ctx.strokeStyle = '#39ff14'; ctx.shadowColor = '#39ff14'; ctx.shadowBlur = 6 + pulse * 8;
-  ctx.lineWidth = 2; ctx.globalAlpha = 0.6 + pulse * 0.4;
-  ctx.strokeRect(r.x + 1, r.y + 1, r.w - 2, r.h - 2);
+  clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 180);
+  // Dark interior that glows faintly
+  ctx.fillStyle = '#030810'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  const inner = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  inner.addColorStop(0,   'rgba(0,255,80,0)');
+  inner.addColorStop(0.4, `rgba(0,255,80,${0.08 + pulse * 0.10})`);
+  inner.addColorStop(0.6, `rgba(0,255,80,${0.08 + pulse * 0.10})`);
+  inner.addColorStop(1,   'rgba(0,255,80,0)');
+  ctx.fillStyle = inner; ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.restore();
+  // Outer glow — drawn WITHOUT clip so shadowBlur bleeds outside the paddle edges
+  ctx.save();
+  const glowAlpha = 0.55 + pulse * 0.45;
+  ctx.strokeStyle = `rgba(0,255,80,${glowAlpha})`;
+  ctx.shadowColor = '#00ff50';
+  ctx.shadowBlur = 10 + pulse * 14;
+  ctx.lineWidth = 1.5;
+  const rad = PADDLE.w / 2;
+  ctx.beginPath();
+  ctx.roundRect(r.x, r.y, r.w, r.h, rad);
+  ctx.stroke();
   ctx.restore();
 }
 function fillStripes(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
   const r = paddleRect(cx, cy, h);
-  ctx.fillStyle = '#f4c20d'; ctx.fillRect(r.x, r.y, r.w, r.h);
-  ctx.fillStyle = '#1a1a1a';
-  for (let yy = r.y; yy < r.y + r.h; yy += 10) ctx.fillRect(r.x, yy, r.w, 5);
+  ctx.fillStyle = '#f5c518'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Animated diagonal stripes
+  const offset = (Date.now() / 30) % 16;
+  ctx.fillStyle = '#111';
+  for (let d = -r.h; d < r.h + r.w; d += 16) {
+    ctx.beginPath();
+    ctx.moveTo(r.x, r.y + d + offset);
+    ctx.lineTo(r.x + r.w, r.y + d + offset - r.w);
+    ctx.lineTo(r.x + r.w, r.y + d + offset - r.w + 8);
+    ctx.lineTo(r.x, r.y + d + offset + 8);
+    ctx.closePath();
+    ctx.fill();
+  }
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
 }
 function fillGlitch(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
   const r = paddleRect(cx, cy, h);
-  ctx.fillStyle = '#101018'; ctx.fillRect(r.x, r.y, r.w, r.h);
-  const t = Math.floor(Date.now() / 80);
-  for (let i = 0; i < 5; i++) {
-    const yy = r.y + (((i * 71 + t * 13) % r.h));
-    const sh = ((t + i) % 3) - 1; // -1,0,1 horizontal shift
-    ctx.fillStyle = ['#ff003c', '#00fff0', '#b16bff'][(t + i) % 3];
-    ctx.globalAlpha = 0.8;
-    ctx.fillRect(r.x + sh * 2, yy, r.w, 2);
+  ctx.fillStyle = '#0a0a14'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  const t = Math.floor(Date.now() / 60);
+  // RGB channel slices — each colour is shifted slightly horizontally
+  const channels: [string, number][] = [['#ff003c', -2], ['#00e5ff', 1], ['#b14fff', 0]];
+  for (let i = 0; i < 9; i++) {
+    const yy = r.y + (((i * 97 + t * 17) % (r.h * 4)) / 4);
+    const bh = 2 + (i % 3);
+    const [col, shift] = channels[(t + i) % 3];
+    ctx.globalAlpha = 0.55 + 0.45 * ((t + i) % 2);
+    ctx.fillStyle = col;
+    ctx.fillRect(r.x + shift, yy, r.w, bh);
+  }
+  // Occasional bright full-height flash on a single channel
+  if (t % 7 === 0) {
+    ctx.globalAlpha = 0.15;
+    ctx.fillStyle = '#00e5ff';
+    ctx.fillRect(r.x, r.y, r.w, r.h);
   }
   ctx.globalAlpha = 1;
+  // Scanline overlay
+  for (let yy = r.y; yy < r.y + r.h; yy += 3) {
+    ctx.globalAlpha = 0.08;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(r.x, yy, r.w, 1);
+  }
+  ctx.globalAlpha = 1;
+  ctx.restore();
+}
+
+function fillToxic(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 350;
+  // Dark sludge base
+  const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  g.addColorStop(0,   '#0a1a04');
+  g.addColorStop(0.5, '#152805');
+  g.addColorStop(1,   '#0a1a04');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Pulsing radioactive glow from center
+  const pulse = 0.35 + 0.35 * Math.sin(t * 1.8);
+  const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, r.h * 0.45);
+  core.addColorStop(0, `rgba(120,255,30,${0.25 + pulse})`);
+  core.addColorStop(0.5, `rgba(60,200,10,${0.10 + pulse * 0.5})`);
+  core.addColorStop(1, 'rgba(20,80,0,0)');
+  ctx.fillStyle = core; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Floating bubble circles
+  for (let i = 0; i < 6; i++) {
+    const phase = t * 0.6 + i * 1.1;
+    const bx = r.x + 2 + ((i * 317) % (r.w - 4));
+    const by = r.y + r.h - 4 - ((((phase * 18) + i * 11) % (r.h - 8)));
+    const br = 1.5 + (i % 3) * 0.8;
+    const alpha = 0.4 + 0.5 * Math.abs(Math.sin(phase));
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = '#7fff20'; ctx.lineWidth = 0.8;
+    ctx.beginPath(); ctx.arc(bx, by, br, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  // Bright hazard-yellow edge stripe
+  const edge = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  edge.addColorStop(0, 'rgba(180,255,0,0.5)');
+  edge.addColorStop(0.5, 'rgba(180,255,0,0.05)');
+  edge.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = edge; ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.restore();
+}
+function fillPlasma(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 200;
+  // Dark base
+  ctx.fillStyle = '#07000f'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Electric arc paths that shift over time
+  const arcColors = ['#c06fff', '#60c0ff', '#e040ff'];
+  for (let i = 0; i < 4; i++) {
+    const yStart = r.y + (i / 3) * r.h;
+    const yEnd = r.y + ((i + 1) / 3) * r.h;
+    const midY = (yStart + yEnd) / 2 + Math.sin(t + i * 1.5) * (r.h / 8);
+    const jitter = Math.cos(t * 1.7 + i) * 3;
+    ctx.beginPath();
+    ctx.moveTo(r.x, yStart);
+    ctx.quadraticCurveTo(r.x + r.w / 2 + jitter, midY, r.x + r.w, yEnd);
+    ctx.strokeStyle = arcColors[i % arcColors.length];
+    ctx.shadowColor = arcColors[i % arcColors.length];
+    ctx.shadowBlur = 5 + Math.abs(Math.sin(t + i)) * 8;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.6 + 0.4 * Math.abs(Math.sin(t * 0.9 + i));
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+  // Central bright core
+  const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, r.h * 0.3);
+  core.addColorStop(0, 'rgba(200,100,255,0.35)');
+  core.addColorStop(1, 'rgba(80,0,180,0)');
+  ctx.fillStyle = core; ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.restore();
+}
+function fillWood(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  // Warm wood base
+  const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  g.addColorStop(0,    '#5c3317');
+  g.addColorStop(0.4,  '#8b4513');
+  g.addColorStop(0.6,  '#a0522d');
+  g.addColorStop(1,    '#5c3317');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Wood grain lines
+  const grains = [
+    [0.15, 0.08], [0.30, 0.12], [0.45, 0.06], [0.60, 0.14],
+    [0.75, 0.09], [0.88, 0.11], [0.22, 0.05], [0.53, 0.10],
+  ];
+  ctx.strokeStyle = 'rgba(40,15,5,0.45)'; ctx.lineWidth = 0.8;
+  for (const [fy, curve] of grains) {
+    const y = r.y + fy * r.h;
+    ctx.beginPath();
+    ctx.moveTo(r.x, y);
+    ctx.quadraticCurveTo(cx, y + curve * r.h * 2, r.x + r.w, y + curve * r.h);
+    ctx.stroke();
+  }
+  // Subtle highlight for wood sheen
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
+}
+function fillHologram(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 600;
+  // Shift hue over time for iridescent effect
+  const hue = (t * 60) % 360;
+  ctx.fillStyle = `hsl(${hue},70%,8%)`; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Three overlapping colour bands that scroll and shift
+  for (let i = 0; i < 3; i++) {
+    const bandHue = (hue + i * 120) % 360;
+    const yOff = ((t * 40 + i * r.h / 3) % r.h);
+    const band = ctx.createLinearGradient(0, r.y + yOff, 0, r.y + yOff + r.h * 0.4);
+    band.addColorStop(0, `hsla(${bandHue},100%,70%,0)`);
+    band.addColorStop(0.4, `hsla(${bandHue},100%,70%,0.28)`);
+    band.addColorStop(1, `hsla(${bandHue},100%,70%,0)`);
+    ctx.fillStyle = band; ctx.fillRect(r.x, r.y, r.w, r.h);
+  }
+  // Scanline grid for a holographic panel look
+  for (let yy = r.y; yy < r.y + r.h; yy += 4) {
+    ctx.globalAlpha = 0.12;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(r.x, yy, r.w, 1);
+  }
+  ctx.globalAlpha = 1;
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
+}
+function fillVenom(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 250;
+  // Black base with slight purple tint
+  const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  g.addColorStop(0,   '#0a000f');
+  g.addColorStop(0.4, '#140018');
+  g.addColorStop(0.6, '#100012');
+  g.addColorStop(1,   '#0a000f');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Green drip strands that fall down
+  for (let i = 0; i < 4; i++) {
+    const dx = r.x + 2 + (i / 3) * (r.w - 4);
+    const dripLen = r.h * (0.3 + 0.25 * Math.abs(Math.sin(t * 0.5 + i)));
+    const dripY = r.y + ((t * 25 + i * 20) % (r.h + 20));
+    const drip = ctx.createLinearGradient(0, dripY - 4, 0, dripY + dripLen);
+    drip.addColorStop(0, 'rgba(20,255,60,0)');
+    drip.addColorStop(0.2, 'rgba(20,255,60,0.9)');
+    drip.addColorStop(1, 'rgba(20,255,60,0)');
+    ctx.strokeStyle = drip; ctx.lineWidth = 1.2;
+    ctx.globalAlpha = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(dx, dripY);
+    ctx.lineTo(dx + Math.sin(t + i) * 1.5, dripY + dripLen);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+  // Venomous green glow at edges
+  const glow = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  glow.addColorStop(0, 'rgba(30,255,70,0.35)');
+  glow.addColorStop(0.3, 'rgba(30,255,70,0)');
+  glow.addColorStop(0.7, 'rgba(30,255,70,0)');
+  glow.addColorStop(1, 'rgba(30,255,70,0.35)');
+  ctx.fillStyle = glow; ctx.fillRect(r.x, r.y, r.w, r.h);
+  ctx.restore();
 }
 
 // "minion" power-up: draw the minion image centered on the paddle, sized to the paddle's
@@ -957,6 +1532,12 @@ const TARGET_STYLE: Record<PowerupKind, { stroke: string; fill: string }> = {
   minion:  { stroke: '#ffd21e', fill: 'rgba(255, 210,  30, 0.16)' }, // minion yellow
   earthquake: { stroke: '#b07a3a', fill: 'rgba(176, 122,  58, 0.16)' }, // dusty brown
   coins:   { stroke: '#ffcf33', fill: 'rgba(255, 207,  51, 0.18)' }, // gold
+  blackout:   { stroke: '#9aa0b0', fill: 'rgba(20, 22, 30, 0.4)' }, // dark
+  bullettime: { stroke: '#5aa0ff', fill: 'rgba(40, 90, 220, 0.16)' }, // blue
+  vortex:     { stroke: '#b97cff', fill: 'rgba(180, 120, 255, 0.16)' }, // purple
+  glitch:     { stroke: '#00fff0', fill: 'rgba(0, 255, 240, 0.14)' }, // cyan
+  smoke:      { stroke: '#c8c8d2', fill: 'rgba(190, 190, 200, 0.16)' }, // grey
+  tilt:       { stroke: '#ffa94d', fill: 'rgba(255, 169, 77, 0.14)' }, // amber
 };
 
 function drawTarget(ctx: CanvasRenderingContext2D, x: number, y: number, kind: PowerupKind) {
@@ -1254,6 +1835,44 @@ const GLYPHS: Record<PowerupKind, (ctx: CanvasRenderingContext2D, x: number, y: 
     ctx.stroke();
     ctx.fillRect(x - 1, y - 5.5, 2, 11); // simple coin mark
   },
+  // blackout: a half-shaded circle → "the lights go out"
+  blackout(ctx, x, y) {
+    ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y, 11, -Math.PI / 2, Math.PI / 2); ctx.fill();
+  },
+  // bullettime: a clock with a slowed hand → "time slows"
+  bullettime(ctx, x, y) {
+    ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y - 7); ctx.moveTo(x, y); ctx.lineTo(x + 5, y + 2); ctx.stroke();
+  },
+  // vortex: a spiral → "swirl"
+  vortex(ctx, x, y) {
+    ctx.beginPath();
+    for (let a = 0; a < Math.PI * 4; a += 0.3) {
+      const r = a * 1.0;
+      const px = x + Math.cos(a) * r, py = y + Math.sin(a) * r;
+      if (a === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+  },
+  // glitch: offset jagged bars → "TV static"
+  glitch(ctx, x, y) {
+    ctx.fillRect(x - 11, y - 7, 14, 3);
+    ctx.fillRect(x - 6, y - 1, 16, 3);
+    ctx.fillRect(x - 10, y + 5, 12, 3);
+  },
+  // smoke: stacked puffs → "smoke bomb"
+  smoke(ctx, x, y) {
+    ctx.beginPath(); ctx.arc(x - 4, y + 2, 5, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x + 4, y + 1, 6, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y - 5, 5, 0, Math.PI * 2); ctx.stroke();
+  },
+  // tilt: a tilted square → "the court leans"
+  tilt(ctx, x, y) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(0.4);
+    ctx.strokeRect(-9, -9, 18, 18);
+    ctx.restore();
+  },
   // rotate: a circular arrow → "the whole court spins 90°"
   rotate(ctx, x, y) {
     const r = 11;
@@ -1338,6 +1957,11 @@ const crackedImg = new Image();
 crackedImg.src = '/cracked-glass.png';
 const crackedReady = () => crackedImg.complete && crackedImg.naturalWidth > 0;
 
+// Avery's face, used by the AVERY jumpscare fatality. Loaded once; drawn only once ready.
+const averyImg = new Image();
+averyImg.src = '/avery.webp';
+const averyReady = () => averyImg.complete && averyImg.naturalWidth > 0;
+
 function drawFatality(
   ctx: CanvasRenderingContext2D,
   s: StateMsg,
@@ -1378,6 +2002,9 @@ function drawFatality(
       break;
     case 'MONITOR_BREAK':
       drawMonitorBreak(ctx, s, fx, t, banner);
+      break;
+    case 'AVERY':
+      drawAvery(ctx, s, fx, t, banner);
       break;
   }
 }
@@ -2821,6 +3448,62 @@ function drawJsavStretch(
     // Fallback if the image hasn't loaded: a stretching colored block.
     ctx.fillStyle = loser.color;
     ctx.fillRect(sx - w / 2, sy - h / 2, w, h);
+  }
+
+  banner();
+}
+
+// --- Fatality: "Avery" (jumpscare) ------------------------------------------
+// No slow build: the court snaps to black and Avery's face slams in full-frame,
+// jittering violently in sync with a jumpscare sting. A sudden in-your-face scare.
+function drawAvery(
+  ctx: CanvasRenderingContext2D,
+  _s: StateMsg,
+  _fx: { side: 'left' | 'right' },
+  t: number,
+  banner: () => void,
+) {
+  // Hard cut to black behind everything.
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, COURT.w, COURT.h);
+
+  // A brief beat of darkness, then the face is just THERE — no ease-in.
+  const LURK = 0.12; // seconds of black before the scare lands
+  if (t < LURK) {
+    banner();
+    return;
+  }
+
+  const e = t - LURK;
+  // Slam in slightly oversized, then settle — overshoot reads as a pounce.
+  const pop = 1.18 - Math.min(0.18, e * 0.9);
+  // Violent jitter that eases off as the scare holds.
+  const shakeAmt = Math.max(0, 14 - e * 10);
+  const sx = Math.sin(t * 83) * shakeAmt;
+  const sy = Math.cos(t * 71) * shakeAmt;
+
+  // Cover the whole court (slightly beyond, so the shake never bares an edge).
+  const w = COURT.w * pop * 1.12;
+  const h = COURT.h * pop * 1.12;
+  const cx = COURT.w / 2 + sx;
+  const cy = COURT.h / 2 + sy;
+
+  if (averyReady()) {
+    ctx.drawImage(averyImg, cx - w / 2, cy - h / 2, w, h);
+  } else {
+    // Fallback if the image hasn't loaded: a screaming red flash.
+    ctx.fillStyle = '#b00010';
+    ctx.fillRect(0, 0, COURT.w, COURT.h);
+  }
+
+  // A red strobe over the first instant for that flashbulb-of-terror punch.
+  const flash = Math.max(0, 0.5 - e * 2);
+  if (flash > 0) {
+    ctx.save();
+    ctx.globalAlpha = flash;
+    ctx.fillStyle = '#ff0000';
+    ctx.fillRect(0, 0, COURT.w, COURT.h);
+    ctx.restore();
   }
 
   banner();

@@ -1,6 +1,7 @@
 // HTTP + WebSocket entry point. In production it also serves the built client from
 // client/dist so the page and the WebSocket share a single origin.
 
+import 'dotenv/config';
 import http from 'node:http';
 import path from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -9,9 +10,13 @@ import sirv from 'sirv';
 import { BOT_LEVELS, BotLevel, ClientMsg, TICK_MS, TickHealth } from '../shared/types';
 import { Game, GameSnapshot } from './game';
 import { Lobby, LobbySnapshot } from './lobby';
-import { initDb } from './db';
+import { initDb, migratePlayer } from './db';
 import { getChangelog } from './changelog';
 import { loadSnapshot, saveSnapshot } from './persist';
+import {
+  handleAuthGoogle, handleAuthCallback, handleAuthMe, handleLogout, parseSession,
+} from './auth';
+import type { AuthSession } from './auth';
 
 const PORT = Number(process.env.PORT ?? 3000);
 
@@ -35,7 +40,7 @@ if (snap) {
 // Bring up the leaderboard DB and prime the cache. The server starts serving
 // immediately; standings populate once the DB is ready (no-op without DATABASE_URL).
 initDb()
-  .then(() => Promise.all([lobby.refreshLeaderboard(), lobby.refreshDoomLeaderboards()]))
+  .then(() => Promise.all([lobby.refreshLeaderboard(), lobby.refreshDoomLeaderboards(), lobby.loadStockPrices()]))
   .catch((e) => console.error('DB init failed:', e));
 
 // Static client (only exists after `npm run build`; harmless in dev where Vite serves it).
@@ -65,6 +70,16 @@ const server = http.createServer((req, res) => {
         res.statusCode = 500;
         res.end('{"commits":[]}');
       });
+    return;
+  }
+  if (req.url === '/auth/google') { handleAuthGoogle(req, res); return; }
+  if (req.url === '/auth/me')     { handleAuthMe(req, res);     return; }
+  if (req.url === '/auth/logout') { handleLogout(req, res);     return; }
+  if (req.url?.startsWith('/auth/google/callback')) {
+    handleAuthCallback(req, res).catch(() => {
+      res.writeHead(302, { Location: '/?auth_error=1' });
+      res.end();
+    });
     return;
   }
   serveStatic(req, res, () => {
@@ -101,7 +116,12 @@ function tickHealth(): TickHealth {
 
 const wss = new WebSocketServer({ server, path: '/ws' });
 
-wss.on('connection', (ws: WebSocket) => {
+// Authenticated sessions keyed by socket (auto-cleaned when the socket is GC'd).
+const wsSessions = new WeakMap<WebSocket, AuthSession>();
+
+wss.on('connection', (ws: WebSocket, req) => {
+  const session = parseSession(req.headers.cookie as string | undefined);
+  if (session) wsSessions.set(ws, session);
   lobby.add(ws);
 
   ws.on('message', (raw) => {
@@ -114,7 +134,9 @@ wss.on('connection', (ws: WebSocket) => {
     switch (msg?.type) {
       case 'join':
         if (typeof msg.nickname === 'string' && typeof msg.pid === 'string') {
-          lobby.join(ws, msg.nickname, msg.pid, typeof msg.color === 'string' ? msg.color : undefined);
+          // Authenticated users get their stable Google pid regardless of what the client sends.
+          const pid = wsSessions.get(ws)?.pid ?? msg.pid;
+          lobby.join(ws, msg.nickname, pid, typeof msg.color === 'string' ? msg.color : undefined);
         }
         break;
       case 'claim':
@@ -140,6 +162,9 @@ wss.on('connection', (ws: WebSocket) => {
           layered: typeof msg.layered === 'boolean' ? msg.layered : undefined,
           arena: typeof msg.arena === 'boolean' ? msg.arena : undefined,
           viewMode: typeof msg.viewMode === 'string' ? msg.viewMode : undefined,
+          breakout: typeof msg.breakout === 'boolean' ? msg.breakout : undefined,
+          fog: typeof msg.fog === 'boolean' ? msg.fog : undefined,
+          portal: typeof msg.portal === 'boolean' ? msg.portal : undefined,
         });
         break;
       case 'fatality':
@@ -238,6 +263,36 @@ wss.on('connection', (ws: WebSocket) => {
       case 'dailySpin':
         lobby.dailySpin(ws);
         break;
+      case 'stockInvest':
+        if (typeof msg.coin === 'string' && typeof msg.amount === 'number') {
+          lobby.stockInvest(ws, msg.coin, msg.amount);
+        }
+        break;
+      case 'stockCashOut':
+        if (typeof msg.coin === 'string') lobby.stockCashOut(ws, msg.coin);
+        break;
+      case 'getLoan':
+        if (typeof msg.amount === 'number') lobby.getLoanFor(ws, msg.amount);
+        break;
+      case 'repayLoan':
+        lobby.repayLoanFor(ws);
+        break;
+      case 'roulette':
+        if (Array.isArray(msg.bets)) lobby.roulette(ws, msg.bets);
+        break;
+      case 'balanceSheetReq':
+        if (typeof msg.rank === 'number') lobby.sendBalanceSheet(ws, msg.rank);
+        break;
+      case 'migrate': {
+        // Only honour the request if the socket is authenticated — prevents spoofing.
+        const authSession = wsSessions.get(ws);
+        if (authSession && typeof msg.oldPid === 'string' && msg.oldPid !== authSession.pid) {
+          migratePlayer(msg.oldPid, authSession.pid)
+            .then(() => lobby.sendWallet(ws))
+            .catch((e) => console.error('account migration failed:', e));
+        }
+        break;
+      }
     }
   });
 
@@ -284,10 +339,18 @@ server.listen(PORT, () => {
 // synchronous and fast; we then stop the loop and close the server, with a short hard cap
 // in case sockets linger.
 let shuttingDown = false;
-function shutdown(signal: string) {
+async function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`${signal} received — saving state and shutting down`);
+  // Refund open wagers before exit: bets aren't part of the snapshot, so otherwise the coins
+  // escrowed at bet time would vanish across the restart. Cap the wait so a slow/down DB can't
+  // stall the deploy — the bets Map is cleared synchronously, so nothing double-settles even if
+  // a refund write times out.
+  await Promise.race([
+    lobby.refundOpenBets().catch((e) => console.error('bet refund on shutdown failed:', e)),
+    new Promise((resolve) => setTimeout(resolve, 800).unref()),
+  ]);
   saveSnapshot(game.serialize(), lobby.serialize());
   clearInterval(loop);
   server.close(() => process.exit(0));
