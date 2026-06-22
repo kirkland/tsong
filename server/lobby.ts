@@ -41,8 +41,10 @@ import {
   MARKET_INSTABILITY_THRESHOLD,
   TEAM_MAX,
   WalletMsg,
+  CampaignScoreRow,
 } from '../shared/types';
 import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
+  recordCampaignScore, getCampaignLeaderboard,
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, DAILY_SPIN_MS,
   getHoldings, investStock, cashOutStock, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
   setStockCrashAt, getMarketInstability, setMarketInstability,
@@ -289,6 +291,7 @@ export class Lobby {
     this.tell(ws, { type: 'leaderboard', rows: this.leaderboard });
     this.tell(ws, { type: 'netWorth', rows: this.netWorth });
     this.tell(ws, { type: 'doomLeaderboard', solo: this.doomBoards.solo, coop: this.doomBoards.coop });
+    this.tell(ws, { type: 'campaignLeaderboard', rows: this.campaignBoard });
     if (this.chatLog.length) this.tell(ws, { type: 'chat', lines: this.chatLog });
   }
 
@@ -549,6 +552,7 @@ export class Lobby {
 
   // DOOM high-round leaderboards (solo + co-op), cached and pushed to clients.
   private doomBoards: { solo: DoomScoreRow[]; coop: DoomScoreRow[] } = { solo: [], coop: [] };
+  private campaignBoard: CampaignScoreRow[] = [];
 
   /** Reload the DOOM leaderboards from the DB and push them to everyone. */
   async refreshDoomLeaderboards() {
@@ -578,6 +582,37 @@ export class Lobby {
     recordDoomScore(key, label, coop, r)
       .then(() => this.refreshDoomLeaderboards())
       .catch((e) => console.error('doom score save failed:', e));
+  }
+
+  /** Reload the campaign leaderboard from the DB and push it to everyone. */
+  async refreshCampaignLeaderboards() {
+    this.campaignBoard = await getCampaignLeaderboard();
+    const msg = JSON.stringify({ type: 'campaignLeaderboard', rows: this.campaignBoard });
+    for (const sock of this.conns.keys()) {
+      if (sock.readyState === sock.OPEN) sock.send(msg);
+    }
+  }
+
+  /** Record a finished campaign run (arcade score = (points scored − points allowed) × 1000,
+   *  so a rough loss can go negative). Keyed per player; best score is kept. A first-ever full
+   *  clear of Davis grants a one-time 2500-coin bonus. */
+  campaignScore(ws: WebSocket, score: number, stage: number, won: boolean) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    if (!Number.isFinite(score)) return;
+    if (!Number.isFinite(stage) || stage < 1) return;
+    const pid = conn.pid, nick = conn.nickname;
+    recordCampaignScore(pid, nick, score, stage, won)
+      .then((firstClear) => {
+        this.refreshCampaignLeaderboards();
+        if (firstClear) {
+          addCoins(pid, nick, CAMPAIGN_CLEAR_BONUS)
+            .then(() => this.sendWallet(ws))
+            .catch((e) => console.error('campaign clear bonus failed:', e));
+          this.announce(`🏆 ${nick} cleared Davis Collects — +${CAMPAIGN_CLEAR_BONUS} coins!`);
+        }
+      })
+      .catch((e) => console.error('campaign score save failed:', e));
   }
 
   /** "Kick bot": remove the AI opponent (any joined player may do this). */
@@ -2469,6 +2504,7 @@ export class Lobby {
 
 // --- AI opponent (bot) data ---
 
+const CAMPAIGN_CLEAR_BONUS = 2500; // one-time coin reward for a first-ever full clear of the campaign
 const BOT_OVER_SECS = 4; // how long the win/lose screen holds before the bot leaves
 const BOT_FINISH_SECS = 10; // window for a human winner to land a fatality before the bot leaves
 

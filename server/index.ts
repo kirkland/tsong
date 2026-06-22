@@ -40,7 +40,7 @@ if (snap) {
 // Bring up the leaderboard DB and prime the cache. The server starts serving
 // immediately; standings populate once the DB is ready (no-op without DATABASE_URL).
 initDb()
-  .then(() => Promise.all([lobby.refreshLeaderboard(), lobby.refreshDoomLeaderboards(), lobby.loadStockPrices()]))
+  .then(() => Promise.all([lobby.refreshLeaderboard(), lobby.refreshDoomLeaderboards(), lobby.refreshCampaignLeaderboards(), lobby.loadStockPrices()]))
   .catch((e) => console.error('DB init failed:', e));
 
 // Static client (only exists after `npm run build`; harmless in dev where Vite serves it).
@@ -259,6 +259,11 @@ wss.on('connection', (ws: WebSocket, req) => {
         break;
       case 'doomReward':
         lobby.doomReward(ws);
+        break;
+      case 'campaignScore':
+        if (typeof msg.score === 'number' && typeof msg.stage === 'number' && typeof msg.won === 'boolean') {
+          lobby.campaignScore(ws, msg.score, msg.stage, msg.won);
+        }
         break;
       case 'dailySpin':
         lobby.dailySpin(ws);

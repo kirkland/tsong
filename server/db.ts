@@ -3,7 +3,7 @@
 // simply empty, so the rest of the app runs unchanged.
 
 import pg from 'pg';
-import { LeaderboardRow, NetWorthRow, LEADERBOARD_SIZE } from '../shared/types';
+import { LeaderboardRow, NetWorthRow, LEADERBOARD_SIZE, CampaignScoreRow } from '../shared/types';
 
 let pool: pg.Pool | null = null;
 
@@ -91,6 +91,16 @@ export async function initDb(): Promise<void> {
       PRIMARY KEY (pid, coop)
     )
   `);
+  // Campaign ("Davis Collects") arcade scores — one row per player, best score kept.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS campaign_scores (
+      pid   TEXT PRIMARY KEY,
+      name  TEXT NOT NULL,
+      score INTEGER NOT NULL DEFAULT 0,
+      stage INTEGER NOT NULL DEFAULT 1,
+      won   BOOLEAN NOT NULL DEFAULT FALSE
+    )
+  `);
   // Co-op scores used to be recorded per-player; they're now one combined team entry keyed
   // "team:<a> and <b>". Drop any legacy per-player co-op rows so the board only shows pairs.
   await pool.query(`DELETE FROM doom_scores WHERE coop = TRUE AND pid NOT LIKE 'team:%'`);
@@ -163,6 +173,34 @@ export async function getDoomLeaderboards(): Promise<{ solo: DoomScoreRow[]; coo
     return rows.map((r) => ({ name: r.name, round: r.round }));
   };
   return { solo: await fetchMode(false), coop: await fetchMode(true) };
+}
+
+// Record a campaign run: keep only each player's best arcade score (and the stage/won that
+// went with it). A higher score replaces the row; ties keep the existing. Returns true when
+// this run is the player's FIRST-EVER full clear (so the caller grants the one-time coin bonus).
+export async function recordCampaignScore(pid: string, name: string, score: number, stage: number, won: boolean): Promise<boolean> {
+  if (!pool || !pid) return false;
+  const prior = await pool.query(`SELECT won FROM campaign_scores WHERE pid = $1`, [pid]);
+  const alreadyWon = prior.rows.length ? Boolean(prior.rows[0].won) : false;
+  await pool.query(
+    `INSERT INTO campaign_scores (pid, name, score, stage, won) VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (pid) DO UPDATE
+       SET name = EXCLUDED.name,
+           score = GREATEST(campaign_scores.score, EXCLUDED.score),
+           stage = CASE WHEN EXCLUDED.score > campaign_scores.score THEN EXCLUDED.stage ELSE campaign_scores.stage END,
+           won   = campaign_scores.won OR EXCLUDED.won`,
+    [pid, name, Math.floor(score), Math.floor(stage), won],
+  );
+  return won && !alreadyWon;
+}
+
+// Top campaign arcade scores.
+export async function getCampaignLeaderboard(): Promise<CampaignScoreRow[]> {
+  if (!pool) return [];
+  const { rows } = await pool.query(
+    `SELECT name, score, stage, won FROM campaign_scores ORDER BY score DESC, name ASC LIMIT 10`,
+  );
+  return rows.map((r) => ({ name: r.name, score: r.score, stage: r.stage, won: r.won }));
 }
 
 export interface PlayerRef {

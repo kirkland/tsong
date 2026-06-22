@@ -554,6 +554,8 @@ const net = connect(
       doomMod?.feedDoomEnd(msg.reason);
     } else if (msg.type === 'doomLeaderboard') {
       doomScores = { solo: msg.solo, coop: msg.coop };
+    } else if (msg.type === 'campaignLeaderboard') {
+      campaignScores = msg.rows;
     } else if (msg.type === 'wallet') {
       wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
       rouletteHandle.setCoins(msg.coins);
@@ -1340,6 +1342,24 @@ doomBtn.addEventListener('click', async () => {
     });
   } catch (e) {
     console.error('DOOM failed to load:', e);
+  }
+});
+
+// --- Campaign ("Davis Collects", lazy-loaded, self-contained). Runs its own 2D Pong + VN;
+// the server is used only to persist arcade scores (campaignScore / campaignLeaderboard). ---
+const campaignBtn = document.getElementById('campaignBtn') as HTMLButtonElement;
+// Latest campaign leaderboard, pushed by the server.
+let campaignScores: import('../shared/types').CampaignScoreRow[] = [];
+campaignBtn.addEventListener('click', async () => {
+  try {
+    const mod = await import('./campaign');
+    mod.startCampaign({
+      submitScore: (score, stage, won) => net.send({ type: 'campaignScore', score, stage, won }),
+      leaderboard: () => campaignScores,
+      name: () => myName,
+    });
+  } catch (e) {
+    console.error('Campaign failed to load:', e);
   }
 });
 
