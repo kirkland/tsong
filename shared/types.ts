@@ -501,6 +501,7 @@ export interface WalletMsg {
   skin: string | null; // equipped skin
   bet: { side: Side; amount: number } | null; // current wager on the live duel, if any
   nextSpinAt: number; // epoch ms when the daily spin is next available (0 = available now)
+  bonusSpins: number; // banked free spins (e.g. from winning a tournament); bypass the cooldown
 }
 
 // The daily-spin wheel segments, in display order. Shared so the client wheel and the

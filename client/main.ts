@@ -495,7 +495,7 @@ const net = connect(
     } else if (msg.type === 'doomLeaderboard') {
       doomScores = { solo: msg.solo, coop: msg.coop };
     } else if (msg.type === 'wallet') {
-      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, bet: msg.bet, nextSpinAt: msg.nextSpinAt };
+      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, bet: msg.bet, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
       renderShop();
     } else if (msg.type === 'spinResult') {
       celebrateSpin(msg.reward, msg.segment);
@@ -1236,8 +1236,8 @@ doomBtn.addEventListener('click', async () => {
 });
 
 // --- Coins, cosmetics shop & betting ---
-let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; bet: { side: Side; amount: number } | null; nextSpinAt: number } =
-  { coins: 0, owned: [], hat: null, skin: null, bet: null, nextSpinAt: 0 };
+let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; bet: { side: Side; amount: number } | null; nextSpinAt: number; bonusSpins: number } =
+  { coins: 0, owned: [], hat: null, skin: null, bet: null, nextSpinAt: 0, bonusSpins: 0 };
 let betAmount = 1;
 let shopTab: 'hat' | 'skin' = 'hat';
 const shopBtn = document.getElementById('shopBtn') as HTMLButtonElement;
@@ -1252,7 +1252,8 @@ tabSkins.addEventListener('click', () => { shopTab = 'skin'; tabSkins.classList.
 const spinBtn = document.getElementById('spinBtn') as HTMLButtonElement;
 let spinning = false; // a spin animation is currently playing
 spinBtn.addEventListener('click', () => {
-  if (spinning || (wallet.nextSpinAt && wallet.nextSpinAt > Date.now())) return;
+  const onCooldown = !!wallet.nextSpinAt && wallet.nextSpinAt > Date.now();
+  if (spinning || (onCooldown && wallet.bonusSpins <= 0)) return;
   spinning = true;
   spinBtn.disabled = true;
   net.send({ type: 'dailySpin' });
@@ -1335,10 +1336,15 @@ betRightBtn.addEventListener('click', () => net.send({ type: 'bet', side: 'right
 function updateSpinButton() {
   if (spinning) { spinBtn.textContent = '🎰 Spinning…'; spinBtn.disabled = true; spinBtn.classList.remove('ready'); return; }
   const ms = wallet.nextSpinAt - Date.now();
-  const ready = !wallet.nextSpinAt || ms <= 0;
+  const dailyReady = !wallet.nextSpinAt || ms <= 0;
+  const bonus = wallet.bonusSpins > 0;
+  const ready = dailyReady || bonus;
   spinBtn.disabled = !ready;
   spinBtn.classList.toggle('ready', ready);
-  if (ready) {
+  if (bonus) {
+    // Bonus spins (from tournament wins) take priority and ignore the daily cooldown.
+    spinBtn.textContent = wallet.bonusSpins > 1 ? `🏆 BONUS SPIN! (${wallet.bonusSpins})` : '🏆 BONUS SPIN!';
+  } else if (dailyReady) {
     spinBtn.textContent = '🎰 DAILY SPIN — FREE!';
   } else {
     const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
