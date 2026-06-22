@@ -137,7 +137,7 @@ export const CAMPAIGN_STAGES: CampaignStage[] = [
       { text: 'Okay. Whatever you owe him — don’t let him tell you the number.' },
       { text: 'Once you hear it... it’s real.' },
       { text: 'Wait. Take this — a blaster. Click to fire; a hit locks his paddle for a few seconds.' },
-      { text: 'Thirty shots. That’s all I could skim from his books. Use them sparingly — they won’t last three rounds if you waste them.', sfx: '/blaster.mp3' },
+      { text: 'Forty-five shots. That’s all I could skim from his books. Use them sparingly — they won’t last three rounds if you waste them.', sfx: '/blaster.mp3' },
     ],
   },
   {
@@ -822,7 +822,7 @@ async function runCampaign(ctx: RunCtx, close: () => void) {
     clear();
     await vn(ctx, stage.name, isDavis ? '/davisclarke.jpg' : stage.portrait, stage.defeat);
     if (cancelled()) return;
-    if (stage.id === 'avery') ammo = 30; // Avery hands over the blaster before Davis
+    if (stage.id === 'avery') ammo = 45; // Avery hands over the blaster before Davis
   }
 
   if (cancelled()) return;
