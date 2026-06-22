@@ -126,7 +126,7 @@ export const CAMPAIGN_STAGES: CampaignStage[] = [
     fx: 'smoke',
     mods: { fog: true },
     winScore: 3,
-    bot: { react: 0.10, error: 26, predict: true, idleCenter: false },
+    bot: { react: 0.13, error: 40, predict: true, idleCenter: false },
     intro: [
       { text: "You shouldn't have made it this far. Listen— listen to me." },
       { text: 'Nobody pays Davis off. You win, you lose, doesn’t matter— the debt always—' },
