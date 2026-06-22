@@ -670,7 +670,7 @@ export function startCampaign(net: CampaignNet): void {
     'display:flex;align-items:center;justify-content:center;flex-direction:column;' +
     "font-family:ui-monospace,monospace;color:#ffd166;overflow:hidden;";
 
-  const menuMusic = sound('/start-music.mp3', true, 0.5);
+  const menuMusic = sound('/disco.mp3', true, 0.5);
   let currentStop: (() => void) | null = null;
   const token = { cancelled: false };
   const ctx: RunCtx = { overlay, net, token, setStop: (s) => { currentStop = s; } };
@@ -715,7 +715,7 @@ function match(ctx: RunCtx, opts: MatchOpts): Promise<MatchResult> {
 function renderTitle(ctx: RunCtx, close: () => void) {
   const { overlay } = ctx;
   overlay.innerHTML = '';
-  const menu = sound('/start-music.mp3', true, 0.5);
+  const menu = sound('/disco.mp3', true, 0.5);
   menu.play().catch(() => { /* gated until gesture */ });
 
   const card = document.createElement('div');
@@ -835,7 +835,7 @@ async function runCampaign(ctx: RunCtx, close: () => void) {
 function renderResult(ctx: RunCtx, close: () => void, s: RunSummary) {
   const { overlay } = ctx;
   overlay.innerHTML = '';
-  const menu = sound('/start-music.mp3', true, 0.5);
+  const menu = sound('/disco.mp3', true, 0.5);
   menu.currentTime = 0; menu.play().catch(() => { /* ignore */ });
 
   const card = document.createElement('div');
