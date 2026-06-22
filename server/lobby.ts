@@ -43,7 +43,7 @@ import {
   WalletMsg,
 } from '../shared/types';
 import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
-  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, DAILY_SPIN_MS,
+  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, DAILY_SPIN_MS,
   getHoldings, investStock, cashOutStock, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
   setStockCrashAt, getMarketInstability, setMarketInstability,
   getLoan, takeLoan, repayLoan, collectDefaultedLoans, realignLoansToDeadline } from './db';
@@ -737,6 +737,19 @@ export class Lobby {
           .catch((e) => console.error('leaderboard update failed:', e));
       }
       this.settleBets(winnerSide); // pay out spectator wagers on this match
+      // Winning the championship pays 100 coins per player in the field (400 or 800),
+      // plus a free bonus wheel spin (usable even while the daily spin is on cooldown).
+      if (t.status === 'done' && winners[0]?.pid) {
+        const champ = winners[0];
+        const prize = t.size * COIN_SCALE;
+        Promise.all([
+          addCoins(champ.pid, champ.nickname, prize),
+          addBonusSpin(champ.pid, champ.nickname),
+        ])
+          .then(() => this.refreshWalletsFor([champ]))
+          .catch((e) => console.error('tournament prize failed:', e));
+        this.announce(`🏆 ${champ.nickname} won the tournament — ${prize} coins + a bonus spin!`);
+      }
       // Hold the champion screen longer than a between-match break, then tear down.
       this.tourneyInterMs = t.status === 'done' ? TOURNEY_DONE_MS : TOURNEY_INTER_MS;
       return;
@@ -883,7 +896,7 @@ export class Lobby {
         if (!c) return;
         c.hat = w.hat;
         c.skin = w.skin;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin) });
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet load failed:', e));
   }
@@ -897,7 +910,7 @@ export class Lobby {
         const c = this.conns.get(ws);
         if (!c) return;
         c.hat = w.hat; c.skin = w.skin;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin) });
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet send failed:', e));
   }
@@ -947,14 +960,20 @@ export class Lobby {
 
   // --- Daily spin (one reward every 24h) ---
 
-  /** Claim the daily spin. Atomically gated to once per 24h; rolls a weighted wheel segment.
-   *  Odds decrease as value increases (segments: 1/2/3/5/10/20 coins, hat, skin). */
+  /** Claim a spin. Bonus spins (from tournament wins) are consumed first and bypass the
+   *  24h cooldown; otherwise the daily spin is atomically gated to once per 24h. Rolls a
+   *  weighted wheel segment — odds decrease as value increases (1/2/3/5/10/20 coins, hat, skin). */
   dailySpin(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
-    claimSpin(conn.pid, conn.nickname, Date.now())
-      .then(async (ok) => {
-        if (!ok) { this.sendWallet(ws); return; } // not available yet (or no DB)
+    const pid = conn.pid, nick = conn.nickname;
+    // Spend a bonus spin if one is banked; only fall back to the daily 24h claim otherwise.
+    useBonusSpin(pid)
+      .then(async (usedBonus) => {
+        if (!usedBonus) {
+          const ok = await claimSpin(pid, nick, Date.now());
+          if (!ok) { this.sendWallet(ws); return; } // not available yet (or no DB)
+        }
         const owned = (await getWallet(conn.pid)).owned;
         const hasUnowned = (slot: 'hat' | 'skin') => COSMETICS.some((c) => c.slot === slot && !owned.includes(c.id));
         // Weights index-aligned to SPIN_SEGMENTS [1,2,3,5,10,20,hat,skin]; rarer as value rises.

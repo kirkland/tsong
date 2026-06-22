@@ -50,6 +50,7 @@ export async function initDb(): Promise<void> {
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS hat TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS skin TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_spin BIGINT NOT NULL DEFAULT 0`);
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS bonus_spins INTEGER NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS email TEXT`);
   // Stock market: per-player positions (fractional shares + coins-invested cost basis),
   // keyed by player + coin id; and the global price board (one row per coin).
@@ -242,16 +243,18 @@ export interface Wallet {
   hat: string | null; // equipped hat item id
   skin: string | null; // equipped skin item id
   lastSpin: number; // epoch ms of the last daily spin (0 = never)
+  bonusSpins: number; // free extra wheel spins (e.g. from winning a tournament)
 }
-const EMPTY_WALLET: Wallet = { coins: 0, owned: [], hat: null, skin: null, lastSpin: 0 };
+const EMPTY_WALLET: Wallet = { coins: 0, owned: [], hat: null, skin: null, lastSpin: 0, bonusSpins: 0 };
 
-function rowToWallet(r: { coins: number; owned: string; hat: string | null; skin: string | null; last_spin?: string | number }): Wallet {
+function rowToWallet(r: { coins: number; owned: string; hat: string | null; skin: string | null; last_spin?: string | number; bonus_spins?: number }): Wallet {
   return {
     coins: r.coins,
     owned: (r.owned || '').split(',').filter(Boolean),
     hat: r.hat ?? null,
     skin: r.skin ?? null,
     lastSpin: Number(r.last_spin ?? 0),
+    bonusSpins: Number(r.bonus_spins ?? 0),
   };
 }
 
@@ -268,11 +271,28 @@ export async function getElos(pids: string[]): Promise<Map<string, { elo: number
   return out;
 }
 
-/** Read a player's wallet (coins + owned items + equipped cosmetics + last spin). */
+/** Read a player's wallet (coins + owned items + equipped cosmetics + spin state). */
 export async function getWallet(pid: string): Promise<Wallet> {
   if (!pool || !pid) return { ...EMPTY_WALLET };
-  const { rows } = await pool.query(`SELECT coins, owned, hat, skin, last_spin FROM players WHERE id = $1`, [pid]);
+  const { rows } = await pool.query(`SELECT coins, owned, hat, skin, last_spin, bonus_spins FROM players WHERE id = $1`, [pid]);
   return rows.length ? rowToWallet(rows[0]) : { ...EMPTY_WALLET };
+}
+
+/** Give a player a free bonus wheel spin (tournament reward). */
+export async function addBonusSpin(pid: string, name: string): Promise<void> {
+  if (!pool || !pid) return;
+  await pool.query(
+    `INSERT INTO players (id, name, bonus_spins) VALUES ($1, $2, 1)
+       ON CONFLICT (id) DO UPDATE SET bonus_spins = players.bonus_spins + 1, name = EXCLUDED.name`,
+    [pid, name],
+  );
+}
+
+/** Consume one bonus spin if available (atomic). Returns true if one was spent. */
+export async function useBonusSpin(pid: string): Promise<boolean> {
+  if (!pool || !pid) return false;
+  const res = await pool.query(`UPDATE players SET bonus_spins = bonus_spins - 1 WHERE id = $1 AND bonus_spins > 0`, [pid]);
+  return (res.rowCount ?? 0) > 0;
 }
 
 /** Atomically claim the daily spin: stamps last_spin=now only if 24h have passed. Returns

@@ -604,6 +604,7 @@ export interface WalletMsg {
   // it was placed at. Empty when you have none.
   bets: Array<{ side: Side; amount: number; odds: number }>;
   nextSpinAt: number; // epoch ms when the daily spin is next available (0 = available now)
+  bonusSpins: number; // banked free spins (e.g. from winning a tournament); bypass the cooldown
 }
 
 // A player's private loan status, sent only to that client (on join and after any loan
