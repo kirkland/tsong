@@ -365,21 +365,28 @@ export function playMatch(host: HTMLElement, opts: MatchOpts, onEnd: (r: MatchRe
     if (serveTimer > 0) { serveTimer -= dt; return; }
 
     if (opts.mods.gravity) ball.vy += GRAVITY * dt;
+    const px = ball.x, py = ball.y; // pre-move position, for swept collision
     ball.x += ball.vx * dt;
     ball.y += ball.vy * dt;
+
+    // Paddle collisions (swept): if the ball crossed a paddle's contact plane this frame,
+    // interpolate the Y at the crossing and bounce there. This can't tunnel even at high
+    // speed, unlike a point-in-slab test. Contact planes sit one ball-radius off each face.
+    const leftFace = MARGIN + PADDLE_W / 2 + BALL_R;
+    const rightFace = CW - MARGIN - PADDLE_W / 2 - BALL_R;
+    if (ball.vx < 0 && px > leftFace && ball.x <= leftFace) {
+      const t = (px - leftFace) / (px - ball.x || 1);
+      const yc = py + (ball.y - py) * t;
+      if (Math.abs(yc - playerY) < PADDLE_H / 2 + BALL_R) bounce(playerY, 1);
+    } else if (ball.vx > 0 && px < rightFace && ball.x >= rightFace) {
+      const t = (rightFace - px) / (ball.x - px || 1);
+      const yc = py + (ball.y - py) * t;
+      if (Math.abs(yc - botY) < PADDLE_H / 2 + BALL_R) bounce(botY, -1);
+    }
 
     // Top / bottom walls.
     if (ball.y < BALL_R) { ball.y = BALL_R; ball.vy = Math.abs(ball.vy); }
     if (ball.y > CH - BALL_R) { ball.y = CH - BALL_R; ball.vy = -Math.abs(ball.vy); }
-
-    // Player paddle (left).
-    if (ball.vx < 0 && ball.x - BALL_R < MARGIN + PADDLE_W / 2 && ball.x > MARGIN) {
-      if (Math.abs(ball.y - playerY) < PADDLE_H / 2 + BALL_R) bounce(playerY, 1);
-    }
-    // Bot paddle (right).
-    if (ball.vx > 0 && ball.x + BALL_R > CW - MARGIN - PADDLE_W / 2 && ball.x < CW - MARGIN) {
-      if (Math.abs(ball.y - botY) < PADDLE_H / 2 + BALL_R) bounce(botY, -1);
-    }
 
     // Scoring.
     if (ball.x < -BALL_R) { oScore++; afterPoint(); }
