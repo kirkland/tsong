@@ -107,6 +107,7 @@ function applyMute() {
   finishSound.muted = muted;
   pacmanSound.muted = muted;
   jsavSound.muted = muted;
+  averySound.muted = muted;
   discoSound.muted = muted;
   blasterSound.muted = muted;
   minionSound.muted = muted;
