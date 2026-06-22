@@ -73,6 +73,13 @@ export const BLASTER = {
   maxAngle: Math.PI / 3, // ± aim cone off straight-across
 } as const;
 export const CURVE_SPIN = 1.4; // spin (rad/s) applied to the ball on a curve hit
+// "Roam" power-up: your paddle is freed from its wall and may push into the playing area
+// along the other axis (mouse left/right, or ←/→ keys). It lasts until you hit the ball
+// twice, then eases back home. Leaving your wall exposes your goal — a real gamble.
+export const ROAM = {
+  hits: 2,        // paddle hits before roaming ends and the paddle eases home
+  maxInset: 300,  // furthest the paddle center may push inward from its wall, court units
+} as const;
 // "Breakout" mode: a single column of bricks runs down the centre of the court.
 // 1 column × 22 rows of 18×18 bricks with 4-unit gaps.
 // Total 22 bricks. Wall is centred at x=400 in the 800×500 court.
@@ -129,9 +136,10 @@ export const TARGET = {
 //   tiny   — ball shrinks to near-invisible size for 5 s
 //   warp   — ball teleports to a random mid-court position
 //   rotate — the entire court rotates 90° for the rest of the match
+//   roam   — your paddle leaves its wall and roams into the court until you hit twice
 export const POWERUPS = [
   'grow', 'shrink', 'smash', 'slow', 'multi',
-  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate', 'fritz', 'disco', 'blaster', 'minion', 'earthquake', 'coins', 'blackout', 'bullettime', 'vortex', 'glitch', 'smoke', 'tilt',
+  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate', 'fritz', 'disco', 'blaster', 'minion', 'earthquake', 'coins', 'blackout', 'bullettime', 'vortex', 'glitch', 'smoke', 'tilt', 'roam',
 ] as const;
 export type PowerupKind = (typeof POWERUPS)[number];
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
@@ -249,7 +257,7 @@ export type ClientMsg =
   // pid = stable per-browser identity; color = chosen paddle color
   | { type: 'join'; nickname: string; pid: string; color?: string }
   | { type: 'claim'; side?: Side } // preferred side; omitted = auto-assign to the smaller team
-  | { type: 'paddle'; y: number } // desired paddle center Y, in court units
+  | { type: 'paddle'; y: number; x?: number } // desired paddle center Y (and, while roaming, inward inset X), court units
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
   | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean } // toggle game modes
@@ -327,6 +335,7 @@ export interface PaddleState {
   growHits: number;
   shrinkHits: number;
   smashHits: number;
+  roamHits: number; // paddle hits left on the "roam" power-up (0 when not roaming)
 }
 
 // One player's paddle in Arena (polygon) mode. The paddle rides along its edge of the

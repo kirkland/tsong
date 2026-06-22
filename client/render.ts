@@ -1611,6 +1611,7 @@ const TARGET_STYLE: Record<PowerupKind, { stroke: string; fill: string }> = {
   glitch:     { stroke: '#00fff0', fill: 'rgba(0, 255, 240, 0.14)' }, // cyan
   smoke:      { stroke: '#c8c8d2', fill: 'rgba(190, 190, 200, 0.16)' }, // grey
   tilt:       { stroke: '#ffa94d', fill: 'rgba(255, 169, 77, 0.14)' }, // amber
+  roam:       { stroke: '#4ade80', fill: 'rgba(74, 222, 128, 0.14)' }, // green
 };
 
 function drawTarget(ctx: CanvasRenderingContext2D, x: number, y: number, kind: PowerupKind) {
@@ -1945,6 +1946,21 @@ const GLYPHS: Record<PowerupKind, (ctx: CanvasRenderingContext2D, x: number, y: 
     ctx.save(); ctx.translate(x, y); ctx.rotate(0.4);
     ctx.strokeRect(-9, -9, 18, 18);
     ctx.restore();
+  },
+  // roam: a paddle bar with a horizontal arrow → "your paddle breaks free sideways"
+  roam(ctx, x, y) {
+    const bh = TARGET.r - 2;
+    ctx.fillRect(x - 11, y - bh / 2, 4, bh); // the freed paddle, at the wall
+    // arrow pointing into the court (to the right)
+    ctx.beginPath();
+    ctx.moveTo(x - 4, y);
+    ctx.lineTo(x + 9, y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x + 3, y - 5);
+    ctx.lineTo(x + 9, y);
+    ctx.lineTo(x + 3, y + 5);
+    ctx.stroke();
   },
   // rotate: a circular arrow → "the whole court spins 90°"
   rotate(ctx, x, y) {

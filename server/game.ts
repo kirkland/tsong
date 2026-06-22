@@ -26,6 +26,7 @@ import {
   BIG_BALL_R,
   BLASTER,
   CURVE_SPIN,
+  ROAM,
   GRAVITY_ACCEL,
   TURBO_SPEED_MULT,
   TURBO_SPEEDUP,
@@ -114,6 +115,9 @@ export interface GameSnapshot {
   shrinkHits: Record<Side, number>;
   smashHits: Record<Side, number>;
   curveHits: Record<Side, number>;
+  roamHits?: Record<Side, number>;
+  roamX?: Record<Side, number>;
+  roamTargetX?: Record<Side, number>;
   slowTimer: number;
   freezeTimer: Record<Side, number>;
   blindTimer: Record<Side, number>;
@@ -175,6 +179,11 @@ export class Game {
   shrinkHits: Record<Side, number> = { left: 0, right: 0 };
   smashHits: Record<Side, number> = { left: 0, right: 0 };
   curveHits: Record<Side, number> = { left: 0, right: 0 };
+  // "Roam": hits left on the freed-paddle power-up, plus the current and desired inward
+  // inset (court units) the paddle has pushed off its wall toward center.
+  roamHits: Record<Side, number> = { left: 0, right: 0 };
+  roamX: Record<Side, number> = { left: 0, right: 0 };
+  roamTargetX: Record<Side, number> = { left: 0, right: 0 };
   slowTimer = 0;
   freezeTimer: Record<Side, number> = { left: 0, right: 0 };
   blindTimer: Record<Side, number> = { left: 0, right: 0 };
@@ -235,6 +244,9 @@ export class Game {
       shrinkHits: { ...this.shrinkHits },
       smashHits: { ...this.smashHits },
       curveHits: { ...this.curveHits },
+      roamHits: { ...this.roamHits },
+      roamX: { ...this.roamX },
+      roamTargetX: { ...this.roamTargetX },
       slowTimer: this.slowTimer,
       freezeTimer: { ...this.freezeTimer },
       blindTimer: { ...this.blindTimer },
@@ -291,6 +303,9 @@ export class Game {
     this.shrinkHits = { ...s.shrinkHits };
     this.smashHits = { ...s.smashHits };
     this.curveHits = s.curveHits ? { ...s.curveHits } : { left: 0, right: 0 };
+    this.roamHits = s.roamHits ? { ...s.roamHits } : { left: 0, right: 0 };
+    this.roamX = s.roamX ? { ...s.roamX } : { left: 0, right: 0 };
+    this.roamTargetX = s.roamTargetX ? { ...s.roamTargetX } : { left: 0, right: 0 };
     this.slowTimer = s.slowTimer;
     this.freezeTimer = s.freezeTimer ? { ...s.freezeTimer } : { left: 0, right: 0 };
     this.blindTimer = s.blindTimer ? { ...s.blindTimer } : { left: 0, right: 0 };
@@ -547,6 +562,8 @@ export class Game {
         ? Math.min(x + LAYERED.step * idx, maxX)
         : Math.max(x - LAYERED.step * idx, COURT.w - maxX);
     }
+    // "Roam" power-up: the freed paddle has pushed `roamX` units inward off its wall.
+    if (this.roamX[side] > 0) x += side === 'left' ? this.roamX[side] : -this.roamX[side];
     return x;
   }
 
@@ -581,6 +598,9 @@ export class Game {
     this.shrinkHits = { left: 0, right: 0 };
     this.smashHits = { left: 0, right: 0 };
     this.curveHits = { left: 0, right: 0 };
+    this.roamHits = { left: 0, right: 0 };
+    this.roamX = { left: 0, right: 0 };
+    this.roamTargetX = { left: 0, right: 0 };
     this.slowTimer = 0;
     this.freezeTimer = { left: 0, right: 0 };
     this.blindTimer = { left: 0, right: 0 };
@@ -602,13 +622,17 @@ export class Game {
 
   setWinScore(n: number) { this.winScore = Math.max(1, n); }
 
-  setTarget(side: Side, id: string, y: number) {
+  setTarget(side: Side, id: string, y: number, x?: number) {
     const ent = this.players[side].find((p) => p.id === id);
     if (!ent) return;
     const half = this.halfH(side);
     // Mirror power-up: invert the client's desired y so controls feel upside-down.
     const effective = this.mirrorTimer[side] > 0 ? COURT.h - y : y;
     ent.targetY = clamp(effective, half, COURT.h - half);
+    // Roam power-up: the client also sends a desired inward inset off the wall.
+    if (typeof x === 'number' && Number.isFinite(x) && this.roamHits[side] > 0) {
+      this.roamTargetX[side] = clamp(x, 0, ROAM.maxInset);
+    }
   }
 
   private serve(dir: number) {
@@ -662,6 +686,11 @@ export class Game {
         const diff = p.targetY - p.y;
         p.y += clamp(diff, -maxStep, maxStep);
       }
+      // Roam: ease the paddle's inward inset toward its target. Once the power-up's hits
+      // are spent the target is pinned home (0) so the paddle drifts back to its wall.
+      if (this.roamHits[side] <= 0) this.roamTargetX[side] = 0;
+      const dx = this.roamTargetX[side] - this.roamX[side];
+      if (dx !== 0) this.roamX[side] = clamp(this.roamX[side] + clamp(dx, -maxStep, maxStep), 0, ROAM.maxInset);
     }
 
     if (this.status !== 'playing') return;
@@ -936,6 +965,9 @@ export class Game {
       case 'smash':
         this.smashHits[side] = POWERUP_HITS;
         break;
+      case 'roam':
+        this.roamHits[side] = ROAM.hits;
+        break;
       case 'slow':
         this.slowTimer = SLOW_TIME;
         break;
@@ -1136,6 +1168,9 @@ export class Game {
     if (this.growHits[side] > 0) this.growHits[side] -= 1;
     if (this.shrinkHits[side] > 0) this.shrinkHits[side] -= 1;
     if (this.smashHits[side] > 0) this.smashHits[side] -= 1;
+    // Roam: every hit by the freed side burns a charge; when it runs out the paddle
+    // eases home (the easing loop pins roamTargetX to 0 once roamHits hits 0).
+    if (this.roamHits[side] > 0) this.roamHits[side] -= 1;
     if (this.curveHits[side] > 0) {
       // Spin direction based on hit position: top half curves one way, bottom the other.
       b.spin = CURVE_SPIN * (rel >= 0 ? 1 : -1);

@@ -9,6 +9,7 @@ import {
   PADDLE,
   BALL,
   BLASTER,
+  ROAM,
   ARENA,
   MAX_PLAYERS,
   REACTIONS,
@@ -251,9 +252,11 @@ let fatality2dActive = false;
 
 let target = COURT.h / 2; // desired paddle center Y, court units (duel)
 let arenaTarget = 0; // desired paddle offset along my edge, court units (arena)
+let targetX = 0; // desired inward inset off my wall while "roam" is active, court units (duel)
 // Blaster: the local player's current aim angle (vertical deflection off straight-across).
 let aimAngle = 0;
 let lastSent = -1;
+let lastSentX = 0;
 let lastSendAt = 0;
 const keys = new Set<string>();
 // Mobile touch state: once the player taps the board we consider them "captured"
@@ -2580,6 +2583,7 @@ if (remembered) {
 // position over the canvas, and click the board to (re)capture the mouse.
 let pointerLocked = false;
 const clampPaddle = (y: number) => Math.max(PADDLE.h / 2, Math.min(COURT.h - PADDLE.h / 2, y));
+const clampRoam = (x: number) => Math.max(0, Math.min(ROAM.maxInset, x));
 
 // The "board" you capture the mouse to is the canvas in 2D and the 3D container in 3D
 // (the canvas is display:none in 3D, so it can neither be clicked nor receive mousemove).
@@ -2630,6 +2634,12 @@ function onBoardMouseMove(e: MouseEvent) {
     target = clampPaddle(target + sign * dx * (COURT.h / r.width) * 1.5);
   } else {
     target = clampPaddle(target + e.movementY * (COURT.h / r.height));
+    // Roam power-up: the otherwise-unused horizontal axis pushes the paddle into the
+    // court. Moving toward center (right for left side, left for right side) extends it.
+    if (myRoamHits() > 0 && myAmmo() <= 0) {
+      const sign = myRole === 'right' ? -1 : 1;
+      targetX = clampRoam(targetX + sign * e.movementX * (COURT.w / r.width));
+    }
   }
 }
 
@@ -2641,6 +2651,11 @@ function myDuelSide(): 'left' | 'right' | null {
 function myAmmo(): number {
   const s = myDuelSide();
   return s && state ? state.paddles[s].ammo ?? 0 : 0;
+}
+// Hits left on my "roam" power-up (>0 means my paddle can push into the court).
+function myRoamHits(): number {
+  const s = myDuelSide();
+  return s && state ? state.paddles[s].roamHits ?? 0 : 0;
 }
 // Fire the blaster (a mouse click while captured and armed). Server validates ammo.
 function fireBlaster() {
@@ -3119,13 +3134,24 @@ function loop(t: number) {
     } else {
       if (keys.has('arrowup') || keys.has('w') || mobileUpHeld) target -= step;
       if (keys.has('arrowdown') || keys.has('s') || mobileDownHeld) target += step;
+      // Roam power-up: ←/→ push the freed paddle into the court (toward center) and back.
+      if (myRoamHits() > 0) {
+        const sign = myRole === 'right' ? -1 : 1;
+        if (keys.has('arrowright') || keys.has('d')) targetX = clampRoam(targetX + sign * step);
+        if (keys.has('arrowleft') || keys.has('a')) targetX = clampRoam(targetX - sign * step);
+      }
     }
     target = Math.max(PADDLE.h / 2, Math.min(COURT.h - PADDLE.h / 2, target));
+    // Once roaming ends, relax the local inset so the next pickup starts at the wall.
+    if (myRoamHits() <= 0) targetX = 0;
 
-    // Send when it changed meaningfully, throttled to ~30/s.
-    if (Math.abs(target - lastSent) > 0.5 && t - lastSendAt > 33) {
-      net.send({ type: 'paddle', y: target });
+    // Send when Y (or, while roaming, the inset X) changed meaningfully, throttled to ~30/s.
+    const roaming = myRoamHits() > 0;
+    const changed = Math.abs(target - lastSent) > 0.5 || (roaming && Math.abs(targetX - lastSentX) > 0.5);
+    if (changed && t - lastSendAt > 33) {
+      net.send(roaming ? { type: 'paddle', y: target, x: targetX } : { type: 'paddle', y: target });
       lastSent = target;
+      lastSentX = targetX;
       lastSendAt = t;
     }
   }
@@ -3382,6 +3408,7 @@ const PU_CHIP_COLOR: Record<string, string> = {
   slow: '#7aa2ff', ghost: '#c8beff', tiny: '#ff8c42', bigball: '#fb923c',
   freeze: '#88d8f7', blind: '#9988bb', mirror: '#ff7eb3',
   grow: '#ffd166', shrink: '#5ad1e6', smash: '#ff6b3d', blaster: '#ff4d4d',
+  roam: '#4ade80',
 };
 
 function renderPuHud(s: StateMsg) {
@@ -3399,6 +3426,7 @@ function renderPuHud(s: StateMsg) {
     if (p.growHits > 0)    chips.push(puChip('grow',   `${tag} grow ×${p.growHits}`));
     if (p.shrinkHits > 0)  chips.push(puChip('shrink', `${tag} shrink ×${p.shrinkHits}`));
     if (p.smashHits > 0)   chips.push(puChip('smash',  `${tag} smash ×${p.smashHits}`));
+    if (p.roamHits > 0)    chips.push(puChip('roam',   `${tag} roam ×${p.roamHits}`));
     if (p.freezeTimer > 0) chips.push(puChip('freeze', `${tag} frozen ${t1(p.freezeTimer)}`));
     if (p.blindTimer > 0)  chips.push(puChip('blind',  `${tag} blind ${t1(p.blindTimer)}`));
     if (p.mirrorTimer > 0) chips.push(puChip('mirror', `${tag} mirror ${t1(p.mirrorTimer)}`));

@@ -143,7 +143,10 @@ wss.on('connection', (ws: WebSocket, req) => {
         lobby.claim(ws, msg.side === 'left' || msg.side === 'right' ? msg.side : undefined);
         break;
       case 'paddle':
-        if (typeof msg.y === 'number' && Number.isFinite(msg.y)) lobby.setPaddle(ws, msg.y);
+        if (typeof msg.y === 'number' && Number.isFinite(msg.y)) {
+          const x = typeof msg.x === 'number' && Number.isFinite(msg.x) ? msg.x : undefined;
+          lobby.setPaddle(ws, msg.y, x);
+        }
         break;
       case 'chat':
         if (typeof msg.text === 'string') lobby.chat(ws, msg.text);

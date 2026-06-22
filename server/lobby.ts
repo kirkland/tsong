@@ -1521,7 +1521,7 @@ export class Lobby {
     if (side) this.game.fire(side, angle);
   }
 
-  setPaddle(ws: WebSocket, y: number) {
+  setPaddle(ws: WebSocket, y: number, x?: number) {
     const conn = this.conns.get(ws);
     if (!conn) return;
     if (this.mode === 'poly') {
@@ -1530,7 +1530,7 @@ export class Lobby {
       return;
     }
     const side = this.sideOf(ws);
-    if (side) this.game.setTarget(side, conn.id, y);
+    if (side) this.game.setTarget(side, conn.id, y, x);
   }
 
   // A player's mouse-capture (pointer lock) state changed. The match stays frozen until
@@ -1643,12 +1643,12 @@ export class Lobby {
   }
 
   /** Sync which powerups are eligible based on the current view mode.
-   *  rotate is 2D-only; disco is 3D/FP-only. */
+   *  rotate + roam are 2D-only (steered with the flat-court mouse axes); disco is 3D/FP-only. */
   private syncPowerupPool() {
     if (this.viewMode === 'normal') {
       this.game.setExcludedPowerups(['disco']); // disco's effect only shows in 3D
     } else {
-      this.game.setExcludedPowerups(['rotate']); // court flip only makes sense in 2D
+      this.game.setExcludedPowerups(['rotate', 'roam']); // court flip / freed paddle only steer in 2D
     }
   }
 
@@ -2262,6 +2262,7 @@ export class Lobby {
         growHits: this.game.growHits[side],
         shrinkHits: this.game.shrinkHits[side],
         smashHits: this.game.smashHits[side],
+        roamHits: this.game.roamHits[side],
       };
     };
     return {
