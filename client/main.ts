@@ -1476,7 +1476,7 @@ spinBtn.addEventListener('click', () => {
   net.send({ type: 'dailySpin' });
 });
 const betSection = document.getElementById('betSection') as HTMLDivElement;
-const betAmountEl = document.getElementById('betAmount') as HTMLSpanElement;
+const betAmountEl = document.getElementById('betAmount') as HTMLInputElement;
 const betStatus = document.getElementById('betStatus') as HTMLDivElement;
 const betLeftName = document.getElementById('betLeftName') as HTMLSpanElement;
 const betRightName = document.getElementById('betRightName') as HTMLSpanElement;
@@ -1552,28 +1552,32 @@ function syncBetSection() {
   const canBet = !!state && state.status === 'playing' && !state.poly && myRole === 'observer' && !state.bot;
   betSection.hidden = !canBet;
   if (!canBet || !state) return;
-  // Clamp the stake to what you actually have.
-  betAmount = Math.max(1, Math.min(betAmount, Math.max(1, wallet.coins)));
-  betAmountEl.textContent = String(betAmount);
+  // The stake is a positive whole number. We deliberately DON'T cap it to the wallet here —
+  // typing more than you have surfaces the "insufficient funds" hint below rather than being
+  // silently swallowed. Don't clobber the field while it's being edited.
+  betAmount = Math.max(1, Math.floor(betAmount) || 1);
+  if (document.activeElement !== betAmountEl) betAmountEl.value = String(betAmount);
+  betAmountEl.max = String(Math.max(1, wallet.coins));
   // Side labels + live odds on the buttons.
   const odds = state.odds; // { left, right } | null
   betLeftName.textContent = state.paddles.left.name ?? 'Left';
   betRightName.textContent = state.paddles.right.name ?? 'Right';
   betLeftOdds.textContent = odds ? `${odds.left.toFixed(2)}×` : '—';
   betRightOdds.textContent = odds ? `${odds.right.toFixed(2)}×` : '—';
-  // Multiple bets are allowed in live betting — only gate on affordability.
+  // Multiple bets are allowed in live betting — gate on affordability (and on having live odds).
   const affordable = wallet.coins >= betAmount;
-  betLeftBtn.disabled = !affordable;
-  betRightBtn.disabled = !affordable;
-  // Status line: show your open wagers (with their locked payouts) or a payout preview.
+  betLeftBtn.disabled = !affordable || !odds;
+  betRightBtn.disabled = !affordable || !odds;
+  // Status line: insufficient-funds hint takes priority, then your open wagers, then a preview.
   const payout = (amt: number, o: number) => Math.max(amt, Math.round(amt * o));
-  if (wallet.bets.length) {
+  betStatus.classList.toggle('warn', !affordable);
+  if (!affordable) {
+    betStatus.textContent = `💸 Insufficient funds — you have ${wallet.coins}🪙. Consider taking out a loan from Davis.`;
+  } else if (wallet.bets.length) {
     const mine = wallet.bets
       .map((b) => `${b.amount}🪙 on ${b.side} @ ${b.odds.toFixed(2)}× → ${payout(b.amount, b.odds)}🪙`)
       .join('  ·  ');
     betStatus.textContent = `Your bets: ${mine}`;
-  } else if (wallet.coins < betAmount) {
-    betStatus.textContent = 'Not enough coins.';
   } else if (odds) {
     betStatus.textContent = `${betAmount}🪙 wins ${payout(betAmount, odds.left)}🪙 (left) / ${payout(betAmount, odds.right)}🪙 (right)`;
   } else {
@@ -1584,7 +1588,15 @@ function syncBetSection() {
 const betLeftBtn = document.getElementById('betLeft') as HTMLButtonElement;
 const betRightBtn = document.getElementById('betRight') as HTMLButtonElement;
 document.getElementById('betMinus')!.addEventListener('click', () => { betAmount = Math.max(1, betAmount - 1); syncBetSection(); });
-document.getElementById('betPlus')!.addEventListener('click', () => { betAmount = Math.min(wallet.coins || 1, betAmount + 1); syncBetSection(); });
+document.getElementById('betPlus')!.addEventListener('click', () => { betAmount = Math.min(Math.max(1, wallet.coins), betAmount + 1); syncBetSection(); });
+// Free-type a specific stake. Parse to a positive integer; empty/garbage falls back to 1.
+betAmountEl.addEventListener('input', () => {
+  const v = parseInt(betAmountEl.value, 10);
+  betAmount = Number.isFinite(v) ? Math.max(1, v) : 1;
+  syncBetSection();
+});
+// Normalize the field on blur (e.g. snap a half-typed value back to its parsed number).
+betAmountEl.addEventListener('blur', () => { betAmountEl.value = String(betAmount); });
 betLeftBtn.addEventListener('click', () => net.send({ type: 'bet', side: 'left', amount: betAmount }));
 betRightBtn.addEventListener('click', () => net.send({ type: 'bet', side: 'right', amount: betAmount }));
 

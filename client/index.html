@@ -876,8 +876,16 @@
       #betRight { color: #ffadd2; }
       .bet-side b { color: #ffd166; font-weight: 800; }
       .bet-stake { display: flex; align-items: center; gap: 6px; }
-      #betAmount { min-width: 20px; text-align: center; font-weight: 700; color: #ffd166; }
+      #betAmount {
+        width: 64px; text-align: center; font: inherit; font-size: 12px; font-weight: 700;
+        color: #ffd166; background: #1a2035; border: 1px solid #2a3550; border-radius: 5px; padding: 4px 6px;
+      }
+      #betAmount:focus { outline: none; border-color: #4a5a85; }
+      /* hide the native number spinners — we drive the value with the −/+ buttons */
+      #betAmount::-webkit-inner-spin-button, #betAmount::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+      #betAmount { -moz-appearance: textfield; appearance: textfield; }
       #betStatus { font-size: 11px; color: #6ee7a8; min-height: 14px; text-align: center; }
+      #betStatus.warn { color: #ff8a8a; }
       /* Public bet board under the court */
       #betBoard {
         display: flex; gap: 10px; width: min(94vw, 1040px); font: 700 12px ui-monospace, monospace;
@@ -2960,7 +2968,7 @@
             <button id="betLeft" type="button" class="bet-side">◀ <span id="betLeftName">Left</span> <b id="betLeftOdds">—</b></button>
             <div class="bet-stake">
               <button id="betMinus" type="button">−</button>
-              <span id="betAmount">1</span>
+              <input id="betAmount" type="number" min="1" step="1" value="1" inputmode="numeric" />
               <button id="betPlus" type="button">+</button>
               <span class="bet-coin">🪙</span>
             </div>
