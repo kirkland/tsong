@@ -434,6 +434,124 @@ function sound(src: string, loop = false, volume = 1): HTMLAudioElement {
   return a;
 }
 
+// VN text blip: the DOOM grenade-pickup synth, tuned shorter + quieter for per-character chatter.
+let actx: AudioContext | null = null;
+function blip() {
+  try {
+    const a = (actx ??= new AudioContext());
+    const o = a.createOscillator(); const g = a.createGain();
+    o.type = 'square';
+    o.frequency.setValueAtTime(440, a.currentTime);
+    o.frequency.exponentialRampToValueAtTime(720, a.currentTime + 0.025);
+    g.gain.setValueAtTime(0.05, a.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, a.currentTime + 0.04);
+    o.connect(g); g.connect(a.destination); o.start(); o.stop(a.currentTime + 0.05);
+  } catch { /* ignore */ }
+}
+
+// --- Visual-novel dialogue ---
+// A static character portrait + a bottom dialogue box with a speaker tag and typewriter text.
+// Click / space / enter advances: mid-type it completes the line; otherwise it moves on, and
+// after the last line calls onDone. Returns a stop() for teardown.
+export function playVN(host: HTMLElement, speaker: string, portrait: string, lines: VNLine[], onDone: () => void): () => void {
+  const scene = document.createElement('div');
+  scene.style.cssText = 'position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;' +
+    'justify-content:flex-end;cursor:pointer;font-family:ui-monospace,monospace;';
+
+  const portraitEl = document.createElement('img');
+  portraitEl.src = portrait;
+  portraitEl.style.cssText = 'position:absolute;top:6%;left:50%;transform:translateX(-50%);' +
+    'max-height:58%;max-width:46%;object-fit:contain;border-radius:10px;' +
+    'box-shadow:0 0 50px rgba(140,90,255,.35);filter:drop-shadow(0 8px 24px #000);' +
+    'animation:vnPop .4s ease-out;';
+  scene.appendChild(portraitEl);
+
+  const box = document.createElement('div');
+  box.style.cssText = 'position:relative;width:min(92vw,820px);margin:0 0 6vh;padding:18px 22px;' +
+    'background:rgba(8,6,18,.92);border:1px solid #3a3258;border-radius:12px;' +
+    'box-shadow:0 0 30px rgba(0,0,0,.6);min-height:96px;';
+  const nameEl = document.createElement('div');
+  nameEl.textContent = speaker;
+  nameEl.style.cssText = 'position:absolute;top:-13px;left:18px;background:#150f24;border:1px solid #5a4a1a;' +
+    'color:#ffd166;font-size:13px;font-weight:700;letter-spacing:1px;padding:3px 12px;border-radius:6px;';
+  const textEl = document.createElement('div');
+  textEl.style.cssText = 'color:#eee;font-size:17px;line-height:1.55;min-height:52px;';
+  const hint = document.createElement('div');
+  hint.textContent = '▼';
+  hint.style.cssText = 'position:absolute;bottom:8px;right:14px;color:#7fd1ff;font-size:14px;' +
+    'animation:vnBlink 1s steps(2) infinite;opacity:0;';
+  box.appendChild(nameEl); box.appendChild(textEl); box.appendChild(hint);
+  scene.appendChild(box);
+
+  // Inject the small keyframes once.
+  if (!document.getElementById('vnKeyframes')) {
+    const st = document.createElement('style');
+    st.id = 'vnKeyframes';
+    st.textContent =
+      '@keyframes vnPop{from{opacity:0;transform:translateX(-50%) scale(.94)}to{opacity:1;transform:translateX(-50%) scale(1)}}' +
+      '@keyframes vnBlink{0%{opacity:.2}50%{opacity:1}100%{opacity:.2}}';
+    document.head.appendChild(st);
+  }
+
+  host.appendChild(scene);
+
+  let idx = -1;
+  let typing = false;
+  let full = '';
+  let pos = 0;
+  let timer: number | null = null;
+  let alive = true;
+
+  function typeTick() {
+    if (!alive) return;
+    pos++;
+    textEl.textContent = full.slice(0, pos);
+    if (pos % 2 === 0 && full[pos - 1] !== ' ') blip();
+    if (pos >= full.length) { typing = false; timer = null; hint.style.opacity = '1'; return; }
+    timer = window.setTimeout(typeTick, 22);
+  }
+
+  function showLine(i: number) {
+    const line = lines[i];
+    full = line.text; pos = 0; typing = true; hint.style.opacity = '0';
+    textEl.textContent = '';
+    if (line.sfx) { try { const s = sound(line.sfx); s.currentTime = 0; s.play().catch(() => {}); } catch { /* ignore */ } }
+    if (timer) clearTimeout(timer);
+    timer = window.setTimeout(typeTick, 60);
+  }
+
+  function advance() {
+    if (!alive) return;
+    if (typing) { // finish the current line instantly
+      if (timer) { clearTimeout(timer); timer = null; }
+      pos = full.length; textEl.textContent = full; typing = false; hint.style.opacity = '1';
+      return;
+    }
+    idx++;
+    if (idx >= lines.length) { stop(); onDone(); return; }
+    showLine(idx);
+  }
+
+  function onClick() { advance(); }
+  function onKey(e: KeyboardEvent) {
+    if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); advance(); }
+  }
+  scene.addEventListener('click', onClick);
+  document.addEventListener('keydown', onKey);
+
+  function stop() {
+    if (!alive) return;
+    alive = false;
+    if (timer) clearTimeout(timer);
+    scene.removeEventListener('click', onClick);
+    document.removeEventListener('keydown', onKey);
+    scene.remove();
+  }
+
+  advance(); // show first line
+  return stop;
+}
+
 let campaignOpen = false;
 
 export function startCampaign(net: CampaignNet): void {
@@ -502,22 +620,28 @@ function renderTitle(overlay: HTMLElement, net: CampaignNet, close: () => void) 
   overlay.appendChild(card);
 }
 
-// TEMP (step 2): a single test match against Stage 1, to verify the Pong engine end-to-end.
+// TEMP (step 3): a single Stage 1 run — intro VN → match → (on win) defeat VN → result —
+// to verify the VN engine + Pong engine together. The full multi-stage flow lands next.
 function playtest(overlay: HTMLElement, net: CampaignNet, close: () => void) {
   overlay.innerHTML = '';
   const stage = CAMPAIGN_STAGES[0];
   try { sound('/start-music.mp3').pause(); } catch { /* ignore */ }
-  const music = sound(stage.music, true, 0.45);
-  music.currentTime = 0;
-  music.play().catch(() => { /* gated until gesture */ });
 
-  playMatch(overlay, {
-    name: stage.name, portrait: stage.portrait, winScore: stage.winScore,
-    mods: stage.mods, bot: stage.bot, fx: stage.fx, skin: stage.skin,
-    phaseLabel: 'TEST MATCH',
-  }, (r) => {
-    try { music.pause(); } catch { /* ignore */ }
-    renderResult(overlay, net, close, r);
+  playVN(overlay, stage.name, stage.portrait, stage.intro, () => {
+    overlay.innerHTML = '';
+    const music = sound(stage.music, true, 0.45);
+    music.currentTime = 0;
+    music.play().catch(() => { /* gated until gesture */ });
+    playMatch(overlay, {
+      name: stage.name, portrait: stage.portrait, winScore: stage.winScore,
+      mods: stage.mods, bot: stage.bot, fx: stage.fx, skin: stage.skin,
+      phaseLabel: 'TEST MATCH',
+    }, (r) => {
+      try { music.pause(); } catch { /* ignore */ }
+      const toResult = () => renderResult(overlay, net, close, r);
+      if (r.won) { overlay.innerHTML = ''; playVN(overlay, stage.name, stage.portrait, stage.defeat, toResult); }
+      else toResult();
+    });
   });
 }
 
