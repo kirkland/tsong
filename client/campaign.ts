@@ -185,6 +185,245 @@ export const CAMPAIGN_STAGES: CampaignStage[] = [
   },
 ];
 
+// --- Self-contained 2D Pong match ---
+// The player is always LEFT; the opponent bot is RIGHT. Geometry mirrors the main game's
+// court so the feel matches. Each match runs its own rAF loop and tears itself down on end.
+
+const CW = 800, CH = 500;            // logical court size (court units)
+const PADDLE_W = 14, PADDLE_H = 90;  // paddle thickness / length
+const MARGIN = 24;                   // paddle center distance from its wall
+const PADDLE_SPEED = 900;            // bot paddle travel, court units / second
+const BALL_R = 9;
+const BASE_SPEED = 480;              // serve speed
+const SPEEDUP = 1.05;                // per-hit speed multiplier
+const TURBO_MULT = 1.5;              // serve-speed multiplier in turbo
+const TURBO_SPEEDUP = 1.1;           // per-hit speedup in turbo
+const GRAVITY = 220;                 // downward accel in gravity mode (units/s²)
+const SERVE_DELAY = 0.7;             // pause before each serve
+
+export interface MatchResult { playerScore: number; oppScore: number; won: boolean; }
+export interface MatchOpts {
+  name: string;          // opponent name (shown in HUD)
+  portrait: string;      // opponent portrait (shown in HUD corner)
+  winScore: number;
+  mods: StageMods;
+  bot: CampaignBot;
+  fx: string | null;     // screen-fx class suffix
+  skin?: string;         // opponent paddle skin id (cosmetic)
+  phaseLabel?: string;   // optional banner (e.g. "PHASE 2/3")
+}
+
+// Run one match. Calls onEnd once a side reaches winScore. Returns a stop() to abort/tear down.
+export function playMatch(host: HTMLElement, opts: MatchOpts, onEnd: (r: MatchResult) => void): () => void {
+  const turbo = !!opts.mods.turbo;
+  const serveSpeed = BASE_SPEED * (turbo ? TURBO_MULT : 1);
+  const speedup = turbo ? TURBO_SPEEDUP : SPEEDUP;
+
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:relative;width:min(96vw,1100px);aspect-ratio:8/5;';
+
+  const canvas = document.createElement('canvas');
+  canvas.width = CW; canvas.height = CH;
+  canvas.style.cssText = 'width:100%;height:100%;background:#0a0a14;border-radius:8px;' +
+    'box-shadow:0 0 40px rgba(140,90,255,.25);cursor:none;';
+  const ctx = canvas.getContext('2d')!;
+  wrap.appendChild(canvas);
+
+  // Screen-fx layer (reuses the global .fx-* background/animation classes).
+  if (opts.fx) {
+    const fx = document.createElement('div');
+    fx.className = `fx-${opts.fx}`;
+    fx.style.cssText = 'position:absolute;inset:0;border-radius:8px;pointer-events:none;';
+    wrap.appendChild(fx);
+  }
+
+  // HUD: score + opponent name/portrait + optional phase banner.
+  const hud = document.createElement('div');
+  hud.style.cssText = 'position:absolute;top:10px;left:0;right:0;display:flex;align-items:center;' +
+    'justify-content:center;gap:24px;pointer-events:none;font-family:ui-monospace,monospace;';
+  const scoreEl = document.createElement('div');
+  scoreEl.style.cssText = 'font-size:34px;font-weight:800;color:#fff;text-shadow:0 2px 8px #000;letter-spacing:6px;';
+  hud.appendChild(scoreEl);
+  wrap.appendChild(hud);
+
+  const nameTag = document.createElement('div');
+  nameTag.style.cssText = 'position:absolute;top:12px;right:14px;display:flex;align-items:center;gap:8px;' +
+    'pointer-events:none;font-family:ui-monospace,monospace;color:#ffd166;font-size:13px;';
+  nameTag.innerHTML =
+    `<img src="${opts.portrait}" style="width:34px;height:34px;border-radius:50%;object-fit:cover;border:1px solid #5a4a1a"/>` +
+    `<span>${escapeHtml(opts.name)}</span>`;
+  wrap.appendChild(nameTag);
+
+  if (opts.phaseLabel) {
+    const banner = document.createElement('div');
+    banner.textContent = opts.phaseLabel;
+    banner.style.cssText = 'position:absolute;top:14px;left:14px;color:#c8b6ff;font-size:12px;' +
+      'letter-spacing:2px;pointer-events:none;font-family:ui-monospace,monospace;';
+    wrap.appendChild(banner);
+  }
+
+  host.appendChild(wrap);
+
+  // --- state ---
+  let playerY = CH / 2, botY = CH / 2;
+  let targetY = CH / 2;        // player's desired paddle center (from pointer)
+  let ball = { x: CW / 2, y: CH / 2, vx: 0, vy: 0 };
+  let pScore = 0, oScore = 0;
+  let serveTimer = SERVE_DELAY; // counts down; ball frozen at center until 0
+  let botReact = 0, botAim = CH / 2;
+  let running = true;
+  let last = performance.now();
+
+  function serve(towardPlayer: boolean) {
+    ball.x = CW / 2; ball.y = CH / 2;
+    const angle = (Math.random() * 0.6 - 0.3); // ±~17°
+    const dir = towardPlayer ? -1 : 1;
+    ball.vx = Math.cos(angle) * serveSpeed * dir;
+    ball.vy = Math.sin(angle) * serveSpeed;
+    serveTimer = SERVE_DELAY;
+  }
+  serve(Math.random() < 0.5);
+
+  // Bot aim: only chases an approaching ball; predicts wall bounces if configured; adds error.
+  function predictY(): number {
+    // Reflect the ball's path off top/bottom walls to estimate its Y at the bot's face.
+    const faceX = CW - MARGIN;
+    if (ball.vx <= 0) return CH / 2;
+    let y = ball.y, vy = ball.vy, x = ball.x;
+    const t = (faceX - x) / ball.vx;
+    y += vy * t;
+    // Fold y into [0, CH] via triangle wave (wall reflections).
+    const span = 2 * CH;
+    y = ((y % span) + span) % span;
+    if (y > CH) y = span - y;
+    return y;
+  }
+  function recomputeBotAim() {
+    const cfg = opts.bot;
+    const approaching = ball.vx > 0;
+    if (!approaching) { botAim = cfg.idleCenter ? CH / 2 : ball.y; return; }
+    const base = cfg.predict ? predictY() : ball.y;
+    botAim = base + (Math.random() * 2 - 1) * cfg.error;
+  }
+
+  function step(dt: number) {
+    // Player paddle: ease toward pointer target (snappy but not instant).
+    playerY += (targetY - playerY) * Math.min(1, dt * 18);
+    playerY = clamp(playerY, PADDLE_H / 2, CH - PADDLE_H / 2);
+
+    // Bot paddle: re-aim on its reaction clock, then steer toward the aim.
+    botReact -= dt;
+    if (botReact <= 0) { botReact = opts.bot.react; recomputeBotAim(); }
+    const dy = botAim - botY;
+    const move = PADDLE_SPEED * dt;
+    botY += clamp(dy, -move, move);
+    botY = clamp(botY, PADDLE_H / 2, CH - PADDLE_H / 2);
+
+    if (serveTimer > 0) { serveTimer -= dt; return; }
+
+    if (opts.mods.gravity) ball.vy += GRAVITY * dt;
+    ball.x += ball.vx * dt;
+    ball.y += ball.vy * dt;
+
+    // Top / bottom walls.
+    if (ball.y < BALL_R) { ball.y = BALL_R; ball.vy = Math.abs(ball.vy); }
+    if (ball.y > CH - BALL_R) { ball.y = CH - BALL_R; ball.vy = -Math.abs(ball.vy); }
+
+    // Player paddle (left).
+    if (ball.vx < 0 && ball.x - BALL_R < MARGIN + PADDLE_W / 2 && ball.x > MARGIN) {
+      if (Math.abs(ball.y - playerY) < PADDLE_H / 2 + BALL_R) bounce(playerY, 1);
+    }
+    // Bot paddle (right).
+    if (ball.vx > 0 && ball.x + BALL_R > CW - MARGIN - PADDLE_W / 2 && ball.x < CW - MARGIN) {
+      if (Math.abs(ball.y - botY) < PADDLE_H / 2 + BALL_R) bounce(botY, -1);
+    }
+
+    // Scoring.
+    if (ball.x < -BALL_R) { oScore++; afterPoint(); }
+    else if (ball.x > CW + BALL_R) { pScore++; afterPoint(); }
+  }
+
+  function bounce(paddleY: number, dir: 1 | -1) {
+    const off = clamp((ball.y - paddleY) / (PADDLE_H / 2), -1, 1);
+    const speed = Math.hypot(ball.vx, ball.vy) * speedup;
+    const angle = off * (Math.PI / 3.2); // up to ~56°
+    ball.vx = Math.cos(angle) * speed * dir;
+    ball.vy = Math.sin(angle) * speed;
+    ball.x = dir === 1 ? MARGIN + PADDLE_W / 2 + BALL_R : CW - MARGIN - PADDLE_W / 2 - BALL_R;
+  }
+
+  function afterPoint() {
+    if (pScore >= opts.winScore || oScore >= opts.winScore) { finish(); return; }
+    serve(Math.random() < 0.5);
+  }
+
+  function finish() {
+    if (!running) return;
+    running = false;
+    cleanup();
+    onEnd({ playerScore: pScore, oppScore: oScore, won: pScore > oScore });
+  }
+
+  function render() {
+    ctx.clearRect(0, 0, CW, CH);
+    ctx.fillStyle = '#0a0a14';
+    ctx.fillRect(0, 0, CW, CH);
+    // Center dashed line.
+    ctx.strokeStyle = 'rgba(255,255,255,.15)';
+    ctx.lineWidth = 3; ctx.setLineDash([14, 16]);
+    ctx.beginPath(); ctx.moveTo(CW / 2, 0); ctx.lineTo(CW / 2, CH); ctx.stroke();
+    ctx.setLineDash([]);
+    // Paddles.
+    ctx.fillStyle = '#7fd1ff';
+    ctx.fillRect(MARGIN - PADDLE_W / 2, playerY - PADDLE_H / 2, PADDLE_W, PADDLE_H);
+    ctx.fillStyle = opts.skin === 'minion' ? '#ffe14d' : '#ff8a5c';
+    ctx.fillRect(CW - MARGIN - PADDLE_W / 2, botY - PADDLE_H / 2, PADDLE_W, PADDLE_H);
+    // Ball — fog mode hides it except near a paddle.
+    let alpha = 1;
+    if (opts.mods.fog) {
+      const dNear = Math.min(ball.x, CW - ball.x);
+      alpha = clamp(1 - (dNear - 90) / 220, 0.06, 1);
+    }
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath(); ctx.arc(ball.x, ball.y, BALL_R, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+    scoreEl.textContent = `${pScore}   ${oScore}`;
+  }
+
+  function loop(now: number) {
+    if (!running) return;
+    if (!document.body.contains(canvas)) { running = false; cleanup(); return; }
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+    step(dt);
+    render();
+    raf = requestAnimationFrame(loop);
+  }
+  let raf = requestAnimationFrame(loop);
+
+  // --- input ---
+  function pointerY(e: { clientY: number }): number {
+    const r = canvas.getBoundingClientRect();
+    return clamp(((e.clientY - r.top) / r.height) * CH, 0, CH);
+  }
+  function onMove(e: MouseEvent) { targetY = pointerY(e); }
+  function onTouch(e: TouchEvent) { if (e.touches[0]) { targetY = pointerY(e.touches[0]); e.preventDefault(); } }
+  canvas.addEventListener('mousemove', onMove);
+  canvas.addEventListener('touchmove', onTouch, { passive: false });
+
+  function cleanup() {
+    cancelAnimationFrame(raf);
+    canvas.removeEventListener('mousemove', onMove);
+    canvas.removeEventListener('touchmove', onTouch);
+    wrap.remove();
+  }
+
+  return () => { running = false; cleanup(); };
+}
+
+function clamp(v: number, lo: number, hi: number): number { return v < lo ? lo : v > hi ? hi : v; }
+
 // --- Audio ---
 const audioCache = new Map<string, HTMLAudioElement>();
 function sound(src: string, loop = false, volume = 1): HTMLAudioElement {
@@ -245,10 +484,10 @@ function renderTitle(overlay: HTMLElement, net: CampaignNet, close: () => void) 
 
   const start = document.createElement('button');
   start.textContent = '▶ ENTER THE GAUNTLET';
-  start.style.cssText = btnStyle('#ffd166', '#5a4a1a', '#150f24');
-  // The match + VN flow lands in the next build pass; for now the scaffold confirms the
-  // overlay, leaderboard and teardown all work.
-  start.onclick = () => renderComingSoon(overlay, net, close);
+  start.style.cssText = btnStyle('#7fd1ff', '#2a5a6a', '#0e1a22');
+  // TEMP (step 2): launch a single test match vs Stage 1 to exercise the Pong engine.
+  // The full VN + stage-flow wrapper replaces this next pass.
+  start.onclick = () => playtest(overlay, net, close);
 
   const quit = document.createElement('button');
   quit.textContent = 'Quit (Esc)';
@@ -263,18 +502,38 @@ function renderTitle(overlay: HTMLElement, net: CampaignNet, close: () => void) 
   overlay.appendChild(card);
 }
 
-function renderComingSoon(overlay: HTMLElement, net: CampaignNet, close: () => void) {
+// TEMP (step 2): a single test match against Stage 1, to verify the Pong engine end-to-end.
+function playtest(overlay: HTMLElement, net: CampaignNet, close: () => void) {
   overlay.innerHTML = '';
+  const stage = CAMPAIGN_STAGES[0];
+  try { sound('/start-music.mp3').pause(); } catch { /* ignore */ }
+  const music = sound(stage.music, true, 0.45);
+  music.currentTime = 0;
+  music.play().catch(() => { /* gated until gesture */ });
+
+  playMatch(overlay, {
+    name: stage.name, portrait: stage.portrait, winScore: stage.winScore,
+    mods: stage.mods, bot: stage.bot, fx: stage.fx, skin: stage.skin,
+    phaseLabel: 'TEST MATCH',
+  }, (r) => {
+    try { music.pause(); } catch { /* ignore */ }
+    renderResult(overlay, net, close, r);
+  });
+}
+
+function renderResult(overlay: HTMLElement, net: CampaignNet, close: () => void, r: MatchResult) {
+  overlay.innerHTML = '';
+  const menu = sound('/start-music.mp3', true, 0.5);
+  menu.play().catch(() => { /* ignore */ });
   const card = document.createElement('div');
-  card.style.cssText = 'text-align:center;max-width:560px;padding:24px;';
+  card.style.cssText = 'text-align:center;max-width:520px;padding:24px;';
   card.innerHTML =
-    '<div style="font-size:42px;margin-bottom:8px">🚧</div>' +
-    '<h2 style="letter-spacing:2px;margin:0 0 8px">THE GAUNTLET OPENS SOON</h2>' +
-    `<p style="color:#c8b6ff;opacity:.85;line-height:1.5">Five challengers stand between you and Davis: ` +
-    `${CAMPAIGN_STAGES.map((s) => s.name).join(' · ')}.<br>The matches and story are being wired up.</p>`;
+    `<div style="font-size:46px;margin-bottom:6px">${r.won ? '🏆' : '💀'}</div>` +
+    `<h2 style="letter-spacing:2px;margin:0 0 6px">${r.won ? 'YOU WIN' : 'YOU LOSE'}</h2>` +
+    `<p style="color:#c8b6ff;font-size:15px">Final ${r.playerScore} – ${r.oppScore}</p>`;
   const back = document.createElement('button');
-  back.textContent = '← Back';
-  back.style.cssText = btnStyle('#ffd166', '#5a4a1a', '#150f24');
+  back.textContent = '← Back to title';
+  back.style.cssText = btnStyle('#7fd1ff', '#2a5a6a', '#0e1a22');
   back.onclick = () => renderTitle(overlay, net, close);
   card.appendChild(back);
   overlay.appendChild(card);
