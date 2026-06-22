@@ -198,8 +198,9 @@ const PADDLE_SPEED = 900;            // bot paddle travel, court units / second
 const BALL_R = 9;
 const BASE_SPEED = 480;              // serve speed
 const SPEEDUP = 1.05;                // per-hit speed multiplier
-const TURBO_MULT = 1.5;              // serve-speed multiplier in turbo
-const TURBO_SPEEDUP = 1.1;           // per-hit speedup in turbo
+const TURBO_MULT = 1.3;              // serve-speed multiplier in turbo
+const TURBO_SPEEDUP = 1.06;          // per-hit speedup in turbo
+const MAX_SPEED = 1050;              // ball-speed cap so long turbo rallies can't run away
 const GRAVITY = 220;                 // downward accel in gravity mode (units/s²)
 const SERVE_DELAY = 0.7;             // pause before each serve
 
@@ -387,7 +388,7 @@ export function playMatch(host: HTMLElement, opts: MatchOpts, onEnd: (r: MatchRe
 
   function bounce(paddleY: number, dir: 1 | -1) {
     const off = clamp((ball.y - paddleY) / (PADDLE_H / 2), -1, 1);
-    const speed = Math.hypot(ball.vx, ball.vy) * speedup;
+    const speed = Math.min(Math.hypot(ball.vx, ball.vy) * speedup, MAX_SPEED);
     const angle = off * (Math.PI / 3.2); // up to ~56°
     ball.vx = Math.cos(angle) * speed * dir;
     ball.vy = Math.sin(angle) * speed;
