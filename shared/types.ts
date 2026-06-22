@@ -304,6 +304,7 @@ export interface TeamPlayer {
   hat?: string | null; // equipped cosmetic hat (purely visual — no collision)
   skin?: string | null; // equipped cosmetic skin (purely visual — no collision)
   trail?: string | null; // equipped paddle trail (purely visual — no collision)
+  title?: string | null; // equipped name title (flair shown by the name)
 }
 
 export interface PaddleState {
@@ -498,6 +499,7 @@ export interface NetWorthRow {
   net: number;   // coins + holdings value − loan owed
   coins: number; // liquid coins (wallet)
   loan: number;  // outstanding debt owed to Davis (0 if none)
+  title?: string | null; // equipped title id (flair shown by the name)
 }
 
 // Broadcast alongside the leaderboard and whenever the economy shifts (matches,

@@ -2238,6 +2238,7 @@ export class Lobby {
           hat: c.hat,
           skin: c.skin,
           trail: c.trail,
+          title: c.title,
         };
       });
       return {

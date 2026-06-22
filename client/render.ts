@@ -1,6 +1,13 @@
 // Pure drawing: takes the latest server state and paints one frame. No game logic.
 
-import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, TARGET, BREAKOUT, PowerupKind, StateMsg, PolyState, Role, Side } from '../shared/types';
+import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, TARGET, BREAKOUT, COSMETICS, PowerupKind, StateMsg, PolyState, Role, Side } from '../shared/types';
+
+// The display flair for an equipped title id (e.g. 'davisslayer' → '🏆 Davis Slayer'), or ''.
+function titleFlair(id: string | null | undefined): string {
+  if (!id) return '';
+  const t = COSMETICS.find((c) => c.id === id && c.slot === 'title');
+  return t ? t.name : '';
+}
 
 const fritzImg = new Image();
 fritzImg.src = '/fritz.jpg';
@@ -163,14 +170,34 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
   ctx.font = '13px ui-monospace, monospace';
   ctx.fillText(`${Math.round(s.ballSpeed)}`, COURT.w / 2, 22);
 
-  // Player names along the bottom
-  ctx.fillStyle = '#9fb0d8';
-  ctx.font = '16px system-ui, sans-serif';
+  // Player names along the bottom, with the lead player's equipped title as flair.
+  const leftTitle = titleFlair(s.paddles.left.players[0]?.title);
+  const rightTitle = titleFlair(s.paddles.right.players[0]?.title);
   ctx.textBaseline = 'bottom';
   ctx.textAlign = 'left';
-  ctx.fillText(s.paddles.left.name ?? '— open —', 16, COURT.h - 12);
+  let lx = 16;
+  ctx.fillStyle = '#9fb0d8';
+  ctx.font = '16px system-ui, sans-serif';
+  const leftName = s.paddles.left.name ?? '— open —';
+  ctx.fillText(leftName, lx, COURT.h - 12);
+  if (leftTitle) {
+    lx += ctx.measureText(leftName).width + 8;
+    ctx.fillStyle = '#ffd166';
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.fillText(leftTitle, lx, COURT.h - 13);
+  }
   ctx.textAlign = 'right';
-  ctx.fillText(s.paddles.right.name ?? '— open —', COURT.w - 16, COURT.h - 12);
+  let rx = COURT.w - 16;
+  ctx.fillStyle = '#9fb0d8';
+  ctx.font = '16px system-ui, sans-serif';
+  const rightName = s.paddles.right.name ?? '— open —';
+  ctx.fillText(rightName, rx, COURT.h - 12);
+  if (rightTitle) {
+    rx -= ctx.measureText(rightName).width + 8;
+    ctx.fillStyle = '#ffd166';
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.fillText(rightTitle, rx, COURT.h - 13);
+  }
 
   // Finishing move plays over the top of the normal frame.
   if (s.fatality) {

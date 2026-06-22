@@ -3480,9 +3480,11 @@ function renderNetWorth(rows: NetWorthRow[]) {
       const crown = i === 0 ? '👑 ' : '';
       const broke = r.net < 0 ? ' broke' : '';
       const debt = r.loan > 0 ? `<span class="debt"> 🔻${r.loan}</span>` : '';
+      const t = r.title ? COSMETICS.find((c) => c.id === r.title) : undefined;
+      const tag = t ? `<span class="lbtitle">${escapeHtml(t.name)}</span>` : '';
       return `<li data-rank="${i}" title="View balance sheet"><span class="rank">${i + 1}</span><span class="lbname">${crown}${escapeHtml(
         r.name,
-      )}${debt}</span><span class="worth${broke}">${r.net}🪙</span></li>`;
+      )}${tag}${debt}</span><span class="worth${broke}">${r.net}🪙</span></li>`;
     })
     .join('');
   netWorthEl.innerHTML = `<h2>💰 Net Worth</h2><ol>${items}</ol>`;

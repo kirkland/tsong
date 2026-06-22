@@ -150,7 +150,7 @@ export async function initDb(): Promise<void> {
   }
   // One-time: award the "Davis Slayer" title to everyone who has already cleared the campaign
   // (own it + auto-equip if they aren't wearing a title yet). Runs once via a meta flag.
-  const slayer = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'title_slayer_v1'`);
+  const slayer = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'title_slayer_v2'`);
   if (slayer.rowCount === 0) {
     await pool.query(`
       UPDATE players SET
@@ -159,7 +159,7 @@ export async function initDb(): Promise<void> {
         title = COALESCE(title, 'davisslayer')
       WHERE id IN (SELECT pid FROM campaign_scores WHERE won = TRUE)
     `);
-    await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('title_slayer_v1', now()::text)`);
+    await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('title_slayer_v2', now()::text)`);
   }
   console.log('leaderboard DB ready');
 }
@@ -719,6 +719,7 @@ export async function getNetWorthLeaderboard(): Promise<(NetWorthRow & { pid: st
   const { rows } = await pool.query(
     `SELECT p.id AS pid,
             p.name,
+            p.title,
             p.coins + COALESCE(h.val, 0) - COALESCE(l.owed, 0) AS net,
             p.coins,
             COALESCE(l.owed, 0) AS loan
@@ -742,6 +743,7 @@ export async function getNetWorthLeaderboard(): Promise<(NetWorthRow & { pid: st
   return rows.map((r) => ({
     pid: r.pid,
     name: r.name,
+    title: r.title ?? null,
     net: Math.round(Number(r.net)),
     coins: Number(r.coins),
     loan: Math.round(Number(r.loan)),
