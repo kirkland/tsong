@@ -609,18 +609,20 @@ const SKIN_RENDERERS: Record<string, CosmeticDraw> = {
 };
 // Draw a live skin/hat preview onto a small canvas element (used in the shop UI).
 // The canvas is scaled so the paddle fills it, then the skin is applied at full quality.
-// Paddle trails: fading ghost copies of the paddle along its recent path. Each tint maps an
-// age index (0 = oldest) to an rgba/hsla string; animated ones use the time arg.
+// Paddle trails: a soft, tapered streak of glowing blobs along the paddle's recent path.
+// Each tint returns a solid color (alpha is applied separately so the trail stays translucent);
+// animated styles use the time arg. Glowy styles blend additively for a light-trail look.
 type TrailTint = (i: number, n: number, t: number) => string;
 const TRAIL_TINTS: Record<string, TrailTint> = {
-  comet: (i, n) => `rgba(255,150,50,${(0.5 * (i + 1)) / n})`,
-  frostwake: (i, n) => `rgba(120,220,255,${(0.5 * (i + 1)) / n})`,
-  shadow: (i, n) => `rgba(25,25,45,${(0.55 * (i + 1)) / n})`,
-  ember: (i, n) => `rgba(255,70,25,${(0.5 * (i + 1)) / n})`,
-  neonstreak: (i, n, t) => `rgba(255,60,220,${((0.35 + 0.18 * Math.sin(t / 200)) * (i + 1)) / n})`,
-  rainbowtrail: (i, n, t) => `hsla(${(t / 12 + i * 32) % 360},90%,62%,${(0.5 * (i + 1)) / n})`,
+  comet: () => '#ff9632',
+  frostwake: () => '#7adcff',
+  shadow: () => '#14142a',
+  ember: () => '#ff4619',
+  neonstreak: () => '#ff3cdc',
+  rainbowtrail: (i, _n, t) => `hsl(${(t / 12 + i * 26) % 360},92%,62%)`,
 };
-const TRAIL_LEN = 10; // samples of paddle history kept for the streak
+const TRAIL_GLOW = new Set(['comet', 'frostwake', 'ember', 'neonstreak', 'rainbowtrail']); // additive blend
+const TRAIL_LEN = 14; // samples of paddle history kept for the streak
 const trailHistory = new Map<string, { x: number; y: number }[]>();
 function drawTrail(ctx: CanvasRenderingContext2D, key: string, cx: number, cy: number, h: number, id: string) {
   const tint = TRAIL_TINTS[id];
@@ -629,12 +631,31 @@ function drawTrail(ctx: CanvasRenderingContext2D, key: string, cx: number, cy: n
   if (!hist) { hist = []; trailHistory.set(key, hist); }
   hist.push({ x: cx, y: cy });
   if (hist.length > TRAIL_LEN) hist.shift();
-  const t = performance.now();
-  // Draw oldest→newest, skipping the latest sample (the paddle itself covers it).
+  if (hist.length < 3) return;
+  // Interpolate between samples so the streak reads as continuous, not stepped.
+  const pts: { x: number; y: number }[] = [];
   for (let i = 0; i < hist.length - 1; i++) {
-    ctx.fillStyle = tint(i, hist.length, t);
-    ctx.fillRect(hist[i].x - PADDLE.w / 2, hist[i].y - h / 2, PADDLE.w, h);
+    const a = hist[i], b = hist[i + 1];
+    pts.push(a, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
   }
+  const n = pts.length;
+  const t = performance.now();
+  const glow = TRAIL_GLOW.has(id);
+  ctx.save();
+  if (glow) ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < n; i++) {
+    const f = (i + 1) / n;                 // 0 → tail, 1 → head
+    const alpha = 0.3 * Math.pow(f, 1.5);  // translucent, fading toward the tail
+    if (alpha < 0.012) continue;
+    const w = PADDLE.w * (0.3 + 0.7 * f);  // taper narrower toward the tail
+    const hh = h * (0.5 + 0.5 * f);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = tint(i, n, t);
+    ctx.beginPath();
+    ctx.ellipse(pts[i].x, pts[i].y, w / 2, hh / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
 }
 
 export function drawCosmeticPreview(canvas: HTMLCanvasElement, id: string, slot: 'hat' | 'skin' | 'trail') {
@@ -650,13 +671,22 @@ export function drawCosmeticPreview(canvas: HTMLCanvasElement, id: string, slot:
   ctx.scale(scale, scale);
   const cx = 0, cy = 0, h = pH;
   if (slot === 'trail') {
-    // A few fading copies trailing upward, then the paddle — suggests motion.
+    // A soft tapered streak trailing upward, then the paddle — suggests motion.
     const tint = TRAIL_TINTS[id];
-    const n = 5;
+    const glow = TRAIL_GLOW.has(id);
+    const n = 6;
+    ctx.save();
+    if (glow) ctx.globalCompositeOperation = 'lighter';
     for (let i = 0; i < n; i++) {
-      if (tint) ctx.fillStyle = tint(i, n + 1, 0);
-      ctx.fillRect(cx - PADDLE.w / 2, cy - h / 2 + (n - i) * 9, PADDLE.w, h * 0.7);
+      const f = (i + 1) / n;
+      ctx.globalAlpha = 0.32 * Math.pow(f, 1.4);
+      ctx.fillStyle = tint ? tint(i, n, 0) : '#888';
+      const w = PADDLE.w * (0.3 + 0.7 * f), hh = h * 0.55;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy - h / 2 + (n - i) * 7, w / 2, hh / 2, 0, 0, Math.PI * 2);
+      ctx.fill();
     }
+    ctx.restore();
     ctx.fillStyle = '#3a6df0';
     ctx.save(); clipPaddle(ctx, cx, cy, h);
     ctx.fillRect(cx - PADDLE.w / 2, cy - h / 2, PADDLE.w, h);
