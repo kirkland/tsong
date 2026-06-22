@@ -94,6 +94,15 @@ export const BREAKOUT = {
   top:  10,    // (500 - (22*22 - 4)) / 2  →  (500-480)/2
 } as const;
 
+// Spectator-dropped blocks: solid rectangular obstacles the ball caroms off. Anyone
+// watching a live duel can press a button to add one at a random spot. They pile up
+// through the match (capped) and clear when a new match starts.
+export const BLOCK = {
+  min: 30,      // smallest side length, court units
+  max: 70,      // largest side length, court units
+  maxCount: 12, // most blocks allowed on the board at once
+} as const;
+
 export const GRAVITY_ACCEL = 220; // court units/sec² downward pull in gravity mode
 export const TURBO_SPEED_MULT = 1.5; // serve speed multiplier in turbo mode
 export const TURBO_SPEEDUP = 1.1; // per-hit speedup in turbo mode (vs BALL.speedup = 1.05)
@@ -265,6 +274,7 @@ export type ClientMsg =
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
   | { type: 'forfeit' } // "/ff": leave your paddle spot mid-game (and get shamed)
   | { type: 'spawnPowerup'; kind?: string } // "/powerup [name]": spectators only — drop a power-up target (random when unnamed)
+  | { type: 'addBlock' } // spectators only — drop a solid obstacle block at a random spot on the live court
   | { type: 'capture'; on: boolean } // whether this player's mouse is captured to the board
   | { type: 'kingExit' } // winner declines to stay as king of the court
   | { type: 'queueJoin' } // join the spectator queue
@@ -399,6 +409,9 @@ export interface StateMsg {
   // Live position of the diamond obstacle (diamond-hands mode), or null when none is on
   // the board. Center in court units; its size is the shared DIAMOND.r constant.
   diamondPos: { x: number; y: number } | null;
+  // Spectator-dropped solid blocks the ball bounces off. Center (x,y) + size (w,h), court
+  // units. Empty when none are on the board.
+  blocks: { x: number; y: number; w: number; h: number }[];
   // Number of "rotate" power-ups collected this point (0–3). Each adds 90° CW.
   // Resets to 0 on each new serve; 4 wraps back to 0 (full circle = no rotation).
   rotated: number;

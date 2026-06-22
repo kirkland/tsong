@@ -2328,6 +2328,15 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !powerupInfoPanel.hidden) closePowerupInfo();
 });
 
+// "Add block": spectators-only drop of a solid obstacle on the live duel court. Shown only
+// when you could actually use it (same rule as spawning a power-up, duel mode only).
+const blockControl = document.getElementById('blockControl') as HTMLDivElement;
+const addBlockBtn = document.getElementById('addBlockBtn') as HTMLButtonElement;
+const canAddBlock = () => !isPlayer() && state?.status === 'playing' && !inArena();
+addBlockBtn.addEventListener('click', () => {
+  if (canAddBlock()) net.send({ type: 'addBlock' });
+});
+
 // --- Add/kick bot dropdown (bottom-right) ---
 // One button: a dropdown of difficulty levels when no bot is in play, or a one-click
 // "kick bot" when one is. Visibility/label are driven from state in updateUI().
@@ -3301,6 +3310,7 @@ function updateUI() {
     for (const { canvas, id, slot } of shopPreviewCanvases) drawCosmeticPreview(canvas, id, slot);
   }
   if (!powerupInfoPanel.hidden) syncPowerupSpawnability();
+  blockControl.hidden = !canAddBlock();
 
   // Sync win score buttons with the current room setting.
   for (const btn of winScoreOpts.querySelectorAll<HTMLButtonElement>('.ws-btn')) {

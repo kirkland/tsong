@@ -476,6 +476,16 @@ export class Lobby {
     if (placed) this.echoCommand(conn, k ? `/powerup ${k}` : '/powerup');
   }
 
+  /** "Add block": a spectator drops a solid obstacle at a random spot on the live duel
+   *  court. Spectators only (a seated player can't junk up their own match), duel mode only. */
+  addBlock(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return; // must have joined
+    if (this.mode === 'poly') return; // duel-only — the polygon court has no block obstacles
+    if (this.sideOf(ws) || this.arenaSeats.includes(ws)) return; // not from a current player
+    if (this.game.addBlock()) this.echoCommand(conn, '/block 🧱');
+  }
+
   /** "Add bot": drop an AI opponent into an open duel side. If the requester is an
    *  observer, seat them first so it's a real 1v1 against the bot. Duel mode only. */
   addBot(ws: WebSocket, level: BotLevel) {
@@ -2353,6 +2363,7 @@ export class Lobby {
       diamondPos: this.game.diamondBlock
         ? { x: this.game.diamondBlock.x, y: this.game.diamondBlock.y }
         : null,
+      blocks: poly ? [] : this.game.blocks.map((bl) => ({ ...bl })),
       rotated: this.game.rotated,
       fritz: this.game.fritz,
       disco: this.game.disco,

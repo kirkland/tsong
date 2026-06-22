@@ -187,6 +187,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'spawnPowerup':
         lobby.spawnPowerup(ws, typeof msg.kind === 'string' ? msg.kind : undefined);
         break;
+      case 'addBlock':
+        lobby.addBlock(ws);
+        break;
       case 'capture':
         if (typeof msg.on === 'boolean') lobby.setCapture(ws, msg.on);
         break;

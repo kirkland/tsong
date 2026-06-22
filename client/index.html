@@ -2113,6 +2113,25 @@
       #powerupInfoBtn:hover {
         background: #18203a;
       }
+      #blockControl { position: relative; }
+      #blockControl[hidden] { display: none; }
+      #addBlockBtn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font: inherit;
+        font-size: 12px;
+        letter-spacing: 1px;
+        padding: 7px 12px;
+        border-radius: 6px;
+        border: 1px solid #5a4632;
+        background: #1c1610;
+        color: #e8a55a;
+        cursor: pointer;
+      }
+      #addBlockBtn:hover {
+        background: #2a2014;
+      }
       #powerupInfoBtn .caret {
         font-size: 14px;
         transition: transform 0.15s;
@@ -2993,6 +3012,12 @@
             </div>
           </div>
         </div>
+      </div>
+      <!-- Spectators only, during a live duel: drop a solid obstacle block on the court. -->
+      <div id="blockControl" hidden>
+        <button id="addBlockBtn" type="button" title="Drop a solid block on the court">
+          🧱 ADD BLOCK
+        </button>
       </div>
     </div>
     <!-- Live tournament bracket / signup, shown whenever a tournament is running. -->

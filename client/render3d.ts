@@ -467,6 +467,21 @@ export function createRenderer(container: HTMLElement): Renderer3D {
     return m;
   }
 
+  // Spectator-dropped blocks: a pool of slate boxes, scaled per block (unit geometry in x/z).
+  const BLOCK_H = 22; // how tall a block stands off the floor in 3D
+  const blockGeo = new THREE.BoxGeometry(1, BLOCK_H, 1);
+  const blockPool: THREE.Mesh<THREE.BoxGeometry, THREE.MeshStandardMaterial>[] = [];
+  function getBlock(i: number) {
+    let m = blockPool[i];
+    if (!m) {
+      m = new THREE.Mesh(blockGeo, new THREE.MeshStandardMaterial({ color: '#46506e', emissive: '#10131c', emissiveIntensity: 0.3, roughness: 0.7 }));
+      m.castShadow = true;
+      world.add(m);
+      blockPool[i] = m;
+    }
+    return m;
+  }
+
   // Scores painted big on the ice either side of center; names painted smaller at each end.
   const scoreL = makeFloorText(150);
   const scoreR = makeFloorText(150);
@@ -702,6 +717,15 @@ export function createRenderer(container: HTMLElement): Renderer3D {
       pinata.visible = false;
       for (const m of stuckPool) m.visible = false;
     }
+
+    // Spectator-dropped blocks — slate boxes scaled to each block's footprint.
+    s.blocks.forEach((bl, i) => {
+      const m = getBlock(i);
+      m.visible = true;
+      m.position.set(wx(bl.x), BLOCK_H / 2, wz(bl.y));
+      m.scale.set(bl.w, 1, bl.h);
+    });
+    for (let i = s.blocks.length; i < blockPool.length; i++) blockPool[i].visible = false;
 
     // Scores (big) and names (small) painted on the ice.
     scoreL.set(String(s.score.left), '#7da2ff', 116);

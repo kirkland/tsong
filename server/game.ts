@@ -33,6 +33,7 @@ import {
   LAYERED,
   DIAMOND,
   PINATA,
+  BLOCK,
   POWERUPS,
   TARGET,
   BREAKOUT,
@@ -98,6 +99,7 @@ export interface GameSnapshot {
   diamondBlock: { x: number; y: number; vx: number; vy: number } | null;
   pinata: boolean;
   pinataObj: PinataObj | null;
+  blocks?: { x: number; y: number; w: number; h: number }[];
   rotated: number;
   fritz?: boolean;
   disco?: boolean;
@@ -160,6 +162,9 @@ export class Game {
   diamondBlock: { x: number; y: number; vx: number; vy: number } | null = null;
   pinata = false; // "piñata" mode armed; spawns a drifting ball-collector
   pinataObj: PinataObj | null = null; // the live piñata during a match (else null)
+  // Spectator-dropped solid obstacles (the ball caroms off them). Center + size, court units.
+  // They accumulate through a match (capped) and clear at the next match start.
+  blocks: { x: number; y: number; w: number; h: number }[] = [];
   breakout = false; // "breakout" mode: destructible bricks across the centre of the court
   brickAlive: boolean[] = []; // which of the 28 bricks are still standing this point
   fog = false;    // "fog of war": server passes flag; visibility computed client-side
@@ -230,6 +235,7 @@ export class Game {
       pinataObj: this.pinataObj
         ? { ...this.pinataObj, stuck: this.pinataObj.stuck.map((s) => ({ ...s })) }
         : null,
+      blocks: this.blocks.map((bl) => ({ ...bl })),
       rotated: this.rotated,
       fritz: this.fritz,
       disco: this.disco,
@@ -285,6 +291,7 @@ export class Game {
     this.pinataObj = s.pinataObj
       ? { ...s.pinataObj, stuck: (s.pinataObj.stuck ?? []).map((x) => ({ ...x })) }
       : null;
+    this.blocks = s.blocks ? s.blocks.map((bl) => ({ ...bl })) : [];
     this.rotated = typeof s.rotated === 'number' ? s.rotated : (s.rotated ? 1 : 0);
     this.fritz = s.fritz ?? false;
     this.disco = s.disco ?? false;
@@ -363,6 +370,7 @@ export class Game {
       });
     }
     this.paddleX = { ...HOME_X }; // paddles always start at full width
+    this.blocks = []; // spectator blocks don't carry into a new match
     this.clearPowerups();
     this.target = null;
     this.targetTimer = this.nextTargetDelay();
@@ -527,6 +535,56 @@ export class Game {
     };
   }
 
+  /** Drop a solid obstacle block at a random central spot (clear of the paddles, the exact
+   *  center serve point, and — best effort — other blocks). No-op when the board is full or
+   *  no match is live. Returns true if a block was actually added. */
+  addBlock(): boolean {
+    if (this.status !== 'playing') return false;
+    if (this.blocks.length >= BLOCK.maxCount) return false;
+    const size = () => BLOCK.min + Math.random() * (BLOCK.max - BLOCK.min);
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const w = size();
+      const h = size();
+      const x = COURT.w * 0.25 + Math.random() * COURT.w * 0.5;
+      const y = (h / 2 + 16) + Math.random() * (COURT.h - h - 32);
+      // Keep clear of the very center so it doesn't sit on the serve point.
+      if (Math.hypot(x - COURT.w / 2, y - COURT.h / 2) < 90) continue;
+      // Avoid heavy overlap with an existing block (best effort — small overlap is fine).
+      const clash = this.blocks.some(
+        (bl) => Math.abs(bl.x - x) < (bl.w + w) / 2 - 8 && Math.abs(bl.y - y) < (bl.h + h) / 2 - 8,
+      );
+      if (clash) continue;
+      this.blocks.push({ x, y, w, h });
+      return true;
+    }
+    return false;
+  }
+
+  // Carom a ball off any spectator-dropped block: an axis-aligned box reflect that also
+  // pushes the ball back to the nearest face, so it can never wedge inside. No-op when the
+  // ball isn't overlapping the (radius-expanded) box.
+  private bounceBlocks(b: Ball) {
+    const r = this.ballR();
+    for (const bl of this.blocks) {
+      const hw = bl.w / 2 + r;
+      const hh = bl.h / 2 + r;
+      const dx = b.x - bl.x;
+      const dy = b.y - bl.y;
+      if (Math.abs(dx) >= hw || Math.abs(dy) >= hh) continue; // not touching
+      const penX = hw - Math.abs(dx); // overlap depth on each axis
+      const penY = hh - Math.abs(dy);
+      if (penX < penY) {
+        const s = Math.sign(dx) || 1;
+        b.x = bl.x + s * hw;          // pop out sideways
+        b.vx = s * Math.abs(b.vx);    // and bounce away
+      } else {
+        const s = Math.sign(dy) || 1;
+        b.y = bl.y + s * hh;
+        b.vy = s * Math.abs(b.vy);
+      }
+    }
+  }
+
   // Carom a ball off the diamond. The diamond is an L1 "circle" (|dx|+|dy| ≤ r), so its
   // faces are the four 45° lines; reflect the ball about the face of whichever quadrant
   // it's in. No-op when the ball is outside reach or already moving away (no trapping).
@@ -590,6 +648,7 @@ export class Game {
     this.pinataObj = null;
     this.pinataPendingSpawns = 0;
     this.pinataBurstPending = false;
+    this.blocks = [];
     this.clearPowerups();
   }
 
@@ -867,6 +926,9 @@ export class Game {
 
     // Diamond obstacle carom (diamond-hands mode); no-op when the mode is off.
     this.bounceDiamond(b);
+
+    // Spectator-dropped blocks carom (no-op when there are none).
+    this.bounceBlocks(b);
 
     // Piñata collector (piñata mode): a touch sticks the ball and removes it from play.
     if (this.pinataObj) {
