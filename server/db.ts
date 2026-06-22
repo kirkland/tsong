@@ -3,7 +3,7 @@
 // simply empty, so the rest of the app runs unchanged.
 
 import pg from 'pg';
-import { LeaderboardRow, LEADERBOARD_SIZE } from '../shared/types';
+import { LeaderboardRow, NetWorthRow, LEADERBOARD_SIZE } from '../shared/types';
 
 let pool: pg.Pool | null = null;
 
@@ -610,4 +610,41 @@ export async function getLeaderboard(): Promise<LeaderboardRow[]> {
     [LEADERBOARD_SIZE],
   );
   return rows.map((r) => ({ name: r.name, wins: r.wins, losses: r.losses, elo: r.elo }));
+}
+
+/** Net worth board: each player's coins + the live value of their stock holdings
+ *  (shares × the latest persisted price) minus any loan they owe Davis. Ranked by
+ *  net worth, top LEADERBOARD_SIZE. Includes anyone who has played, holds coins, has
+ *  an open position, or owes a debt — so a leveraged whale and a bankrupt borrower
+ *  both show up. Net can be negative when the debt outweighs the assets. */
+export async function getNetWorthLeaderboard(): Promise<NetWorthRow[]> {
+  if (!pool) return [];
+  const { rows } = await pool.query(
+    `SELECT p.name,
+            p.coins + COALESCE(h.val, 0) - COALESCE(l.owed, 0) AS net,
+            p.coins,
+            COALESCE(l.owed, 0) AS loan
+       FROM players p
+       LEFT JOIN (
+         SELECT sh.pid, SUM(sh.shares * sp.price) AS val
+           FROM stock_holdings sh
+           JOIN stock_prices sp ON sp.coin = sh.coin
+          WHERE sh.shares > 0
+          GROUP BY sh.pid
+       ) h ON h.pid = p.id
+       LEFT JOIN loans l ON l.pid = p.id
+      WHERE p.wins + p.losses > 0
+         OR p.coins <> 0
+         OR h.val IS NOT NULL
+         OR l.owed IS NOT NULL
+      ORDER BY net DESC, p.name ASC
+      LIMIT $1`,
+    [LEADERBOARD_SIZE],
+  );
+  return rows.map((r) => ({
+    name: r.name,
+    net: Math.round(Number(r.net)),
+    coins: Number(r.coins),
+    loan: Math.round(Number(r.loan)),
+  }));
 }

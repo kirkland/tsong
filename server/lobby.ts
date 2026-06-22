@@ -16,6 +16,7 @@ import {
   ARENA,
   FATALITY_MOVES,
   LeaderboardRow,
+  NetWorthRow,
   MAX_PLAYERS,
   PaddleState,
   POWERUPS,
@@ -40,7 +41,7 @@ import {
   TEAM_MAX,
   WalletMsg,
 } from '../shared/types';
-import { getLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
+import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, DAILY_SPIN_MS,
   getHoldings, investStock, cashOutStock, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
   setStockCrashAt, getMarketInstability, setMarketInstability,
@@ -169,6 +170,7 @@ export class Lobby {
   private readyTimer = 0; // seconds remaining for ready-up; 0 = no timer active
   private captureCountdown = 0; // soonest pending bench-the-laggard timer, in seconds (0 = none running)
   private leaderboard: LeaderboardRow[] = []; // cached standings, pushed to clients
+  private netWorth: NetWorthRow[] = []; // cached net-worth board (coins + holdings − debt)
   private chatLog: ChatLine[] = []; // recent chat, replayed to new connections
   private nextId = 1;
 
@@ -283,6 +285,7 @@ export class Lobby {
     this.conns.set(ws, conn);
     this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
     this.tell(ws, { type: 'leaderboard', rows: this.leaderboard });
+    this.tell(ws, { type: 'netWorth', rows: this.netWorth });
     this.tell(ws, { type: 'doomLeaderboard', solo: this.doomBoards.solo, coop: this.doomBoards.coop });
     if (this.chatLog.length) this.tell(ws, { type: 'chat', lines: this.chatLog });
   }
@@ -1099,6 +1102,8 @@ export class Lobby {
           this.announce('🔄 MARKET CRASH — unpaid loans hit 100% instability! Every coin is back to base 🪙. Holdings revalued, stability reset. Fresh start!');
         }
         for (const ws of this.conns.keys()) this.sendStocks(ws);
+        // Wallets zeroed, holdings wiped, maybe a full crash — the net-worth board moved a lot.
+        this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
       })
       .catch((e) => console.error('daily collection failed:', e));
   }
@@ -1220,6 +1225,7 @@ export class Lobby {
         if (!res) { this.sendLoan(ws); return; } // already had a loan / rejected — just refresh
         this.sendWallet(ws);
         this.sendLoan(ws);
+        this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
         this.notify(ws, `💸 Davis fronted you ${amt}🪙 — bring back ${res.loan.owed}🪙 by 5pm. Miss it and the market takes the hit. Keep grinding.`);
       })
       .catch((e) => console.error('loan failed:', e));
@@ -1234,6 +1240,7 @@ export class Lobby {
         if (!res) { this.sendWallet(ws); this.sendLoan(ws); return; } // no loan or couldn't afford it
         this.sendWallet(ws);
         this.sendLoan(ws);
+        this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
         this.notify(ws, `🤝 Loan settled. Davis respects the hustle.`);
       })
       .catch((e) => console.error('loan repay failed:', e));
@@ -1259,6 +1266,8 @@ export class Lobby {
     saveStockPrices(this.priceBoard()).catch((e) => console.error('stock price save failed:', e));
     saveStockHistory(this.historyBoard()).catch((e) => console.error('stock history save failed:', e));
     for (const ws of this.conns.keys()) this.sendStocks(ws);
+    // Holdings just revalued, so the net-worth standings shifted too.
+    this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
   }
 
   // --- Gambling ---
@@ -1946,6 +1955,17 @@ export class Lobby {
   async refreshLeaderboard() {
     this.leaderboard = await getLeaderboard();
     const data = JSON.stringify({ type: 'leaderboard', rows: this.leaderboard });
+    for (const ws of this.conns.keys()) {
+      if (ws.readyState === ws.OPEN) ws.send(data);
+    }
+    // Net worth tracks the same population, so refresh it on the same beat.
+    this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
+  }
+
+  /** Recompute the Net Worth board (coins + live holdings − debt) and push it to everyone. */
+  async refreshNetWorth() {
+    this.netWorth = await getNetWorthLeaderboard();
+    const data = JSON.stringify({ type: 'netWorth', rows: this.netWorth });
     for (const ws of this.conns.keys()) {
       if (ws.readyState === ws.OPEN) ws.send(data);
     }

@@ -188,6 +188,58 @@
         color: #7da2ff;
         text-align: right;
       }
+      /* Net Worth board — same column look as the leaderboard, gold accents.
+         coins + live stock holdings − debt owed to Davis. */
+      #netWorth {
+        width: min(90vw, 360px);
+        font-size: 14px;
+        margin-top: 10px;
+      }
+      #netWorth h2 {
+        font-size: 13px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        color: #ffd23f;
+        text-align: center;
+        margin: 8px 0 6px;
+      }
+      #netWorth ol {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      #netWorth li {
+        display: grid;
+        grid-template-columns: 22px 1fr auto;
+        gap: 10px;
+        align-items: baseline;
+        padding: 4px 10px;
+        border-radius: 4px;
+      }
+      #netWorth li:nth-child(odd) {
+        background: #0e1424;
+      }
+      #netWorth .rank {
+        color: #6b7796;
+      }
+      #netWorth .lbname {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #netWorth .worth {
+        color: #ffd23f;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      #netWorth .worth.broke {
+        color: #f87171; /* underwater — debt outweighs assets */
+      }
+      #netWorth .debt {
+        color: #f87171;
+        font-size: 11px;
+        opacity: 0.85;
+      }
       #chat {
         width: 300px;
         /* Match the canvas height (width min(94vw,1040px) at a 800/500 ratio) so the
@@ -2767,6 +2819,7 @@
         <button id="quitBtn" style="display: none; font-size: 12px; padding: 4px 10px;">🚪 Quit game</button>
         <button id="rename" class="link" style="display: none">change name</button>
         <div id="leaderboard"></div>
+        <div id="netWorth"></div>
       </div>
 
       <div id="chat">

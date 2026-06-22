@@ -16,6 +16,7 @@ import {
   BotLevel,
   ChatLine,
   LeaderboardRow,
+  NetWorthRow,
   Role,
   Side,
   StateMsg,
@@ -48,6 +49,7 @@ const kingStatusEl = document.getElementById('kingStatus') as HTMLDivElement;
 const statusEl = document.getElementById('status') as HTMLDivElement;
 const watchersEl = document.getElementById('watchers') as HTMLDivElement;
 const leaderboardEl = document.getElementById('leaderboard') as HTMLDivElement;
+const netWorthEl = document.getElementById('netWorth') as HTMLDivElement;
 const colorPicker = document.getElementById('colorPicker') as HTMLDivElement;
 const chatLog = document.getElementById('chatlog') as HTMLDivElement;
 const chatEl = document.getElementById('chat') as HTMLDivElement;
@@ -518,6 +520,8 @@ const net = connect(
       updateUI();
     } else if (msg.type === 'leaderboard') {
       renderLeaderboard(msg.rows);
+    } else if (msg.type === 'netWorth') {
+      renderNetWorth(msg.rows);
     } else if (msg.type === 'chat') {
       msg.lines.forEach(addChatLine);
       // Notify via tab title for a single new message while the tab is backgrounded.
@@ -2513,7 +2517,7 @@ if (remembered) {
     window.removeEventListener('pointerdown', dismiss);
     window.removeEventListener('keydown', dismiss);
   }
-  window.setTimeout(dismiss, reduce ? 1200 : 2400);
+  window.setTimeout(dismiss, reduce ? 600 : 1200);
   window.addEventListener('pointerdown', dismiss);
   window.addEventListener('keydown', dismiss);
 })();
@@ -2817,9 +2821,11 @@ function resetMobileLayout() {
   const stage = document.getElementById('stage') as HTMLDivElement;
   const chat = document.getElementById('chat') as HTMLDivElement;
   const lb = document.getElementById('leaderboard') as HTMLDivElement;
+  const nw = document.getElementById('netWorth') as HTMLDivElement;
   stage.style.display = '';
   chat.style.display = '';
   lb.style.display = '';
+  nw.style.display = '';
 }
 for (const btn of mobileTabs.querySelectorAll<HTMLButtonElement>('.mob-tab')) {
   btn.addEventListener('click', () => {
@@ -2830,18 +2836,22 @@ for (const btn of mobileTabs.querySelectorAll<HTMLButtonElement>('.mob-tab')) {
     const stage = document.getElementById('stage') as HTMLDivElement;
     const chat = document.getElementById('chat') as HTMLDivElement;
     const lb = document.getElementById('leaderboard') as HTMLDivElement;
+    const nw = document.getElementById('netWorth') as HTMLDivElement;
     if (tab === 'play') {
       stage.style.display = '';
       chat.style.display = 'none';
       lb.style.display = '';
+      nw.style.display = '';
     } else if (tab === 'chat') {
       stage.style.display = 'none';
       chat.style.display = '';
       lb.style.display = 'none';
+      nw.style.display = 'none';
     } else if (tab === 'leaderboard') {
       stage.style.display = 'none';
       chat.style.display = 'none';
       lb.style.display = '';
+      nw.style.display = '';
     }
   });
 }
@@ -2853,9 +2863,11 @@ if (isMobileView()) {
   const stage = document.getElementById('stage') as HTMLDivElement;
   const chatEl = document.getElementById('chat') as HTMLDivElement;
   const lb = document.getElementById('leaderboard') as HTMLDivElement;
+  const nw = document.getElementById('netWorth') as HTMLDivElement;
   stage.style.display = '';
   chatEl.style.display = 'none';
   lb.style.display = '';
+  nw.style.display = '';
 }
 
 // --- touch controls for paddle ---
@@ -3400,6 +3412,27 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
     })
     .join('');
   leaderboardEl.innerHTML = `<h2>Leaderboard</h2><ol>${items}</ol>`;
+}
+
+// The Net Worth board: coins + live stock holdings − debt owed to Davis. The
+// richest player wears a 👑; anyone underwater (debt > assets) shows in red with
+// the amount they still owe. Ranks the whole economy, not just match wins.
+function renderNetWorth(rows: NetWorthRow[]) {
+  if (!rows.length) {
+    netWorthEl.innerHTML = '';
+    return;
+  }
+  const items = rows
+    .map((r, i) => {
+      const crown = i === 0 ? '👑 ' : '';
+      const broke = r.net < 0 ? ' broke' : '';
+      const debt = r.loan > 0 ? `<span class="debt"> 🔻${r.loan}</span>` : '';
+      return `<li><span class="rank">${i + 1}</span><span class="lbname">${crown}${escapeHtml(
+        r.name,
+      )}${debt}</span><span class="worth${broke}">${r.net}🪙</span></li>`;
+    })
+    .join('');
+  netWorthEl.innerHTML = `<h2>💰 Net Worth</h2><ol>${items}</ol>`;
 }
 
 // ----------------------------------------------------------------------------

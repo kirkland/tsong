@@ -469,6 +469,23 @@ export interface LeaderboardMsg {
   rows: LeaderboardRow[];
 }
 
+// One row of the Net Worth board: total liquid + invested coins, net of any
+// debt owed to Davis. `net` = coins + (stock holdings at live price) − loan owed,
+// and can go negative when a loan outweighs the assets behind it.
+export interface NetWorthRow {
+  name: string;
+  net: number;   // coins + holdings value − loan owed
+  coins: number; // liquid coins (wallet)
+  loan: number;  // outstanding debt owed to Davis (0 if none)
+}
+
+// Broadcast alongside the leaderboard and whenever the economy shifts (matches,
+// stock re-rolls, loans, the daily collection).
+export interface NetWorthMsg {
+  type: 'netWorth';
+  rows: NetWorthRow[];
+}
+
 export interface ChatLine {
   from: string;
   text: string;
@@ -535,6 +552,7 @@ export type ServerMsg =
   | YouMsg
   | StateMsg
   | LeaderboardMsg
+  | NetWorthMsg
   | ChatMsg
   | ReactionMsg
   | AnnounceMsg
