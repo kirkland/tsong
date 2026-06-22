@@ -250,6 +250,12 @@ let state: StateMsg | null = null;
 let ballColor = '#e8eefc'; // live pong-ball color, mirrored onto the ball reaction
 let joined = false; // true once the player has entered a nickname (gates reactions)
 
+// Last rows each board was rendered with, so we can repaint (e.g. to add tip buttons the
+// moment you join) without waiting for the next server push. Declared up here so the
+// auto-rejoin path (which can run enableChat during module init) never hits them in the TDZ.
+let lastLbRows: LeaderboardRow[] = [];
+let lastNwRows: NetWorthRow[] = [];
+
 // 3D / first-person view: driven by server state (state.viewMode). Three.js loads lazily.
 let renderer3d: import('./render3d').Renderer3D | null = null;
 let loading3d = false;
@@ -3566,11 +3572,6 @@ for (const canvas of document.querySelectorAll<HTMLCanvasElement>('.pu-icon')) {
 
 // Track each player's last-known ELO so we can show a delta when it changes.
 const prevElo = new Map<string, number>();
-
-// Last rows each board was rendered with, so we can repaint (e.g. to add tip buttons the
-// moment you join) without waiting for the next server push.
-let lastLbRows: LeaderboardRow[] = [];
-let lastNwRows: NetWorthRow[] = [];
 
 function renderLeaderboard(rows: LeaderboardRow[]) {
   lastLbRows = rows;
