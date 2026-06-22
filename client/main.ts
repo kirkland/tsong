@@ -94,6 +94,15 @@ const balanceCard = document.getElementById('balanceCard') as HTMLDivElement;
 const balanceClose = document.getElementById('balanceClose') as HTMLButtonElement;
 const balanceName = document.getElementById('balanceName') as HTMLSpanElement;
 const balanceBody = document.getElementById('balanceBody') as HTMLDivElement;
+const tipModal = document.getElementById('tipModal') as HTMLDivElement;
+const tipCard = document.getElementById('tipCard') as HTMLDivElement;
+const tipClose = document.getElementById('tipClose') as HTMLButtonElement;
+const tipTitle = document.getElementById('tipTitle') as HTMLSpanElement;
+const tipBalance = document.getElementById('tipBalance') as HTMLDivElement;
+const tipPresets = document.getElementById('tipPresets') as HTMLDivElement;
+const tipAmount = document.getElementById('tipAmount') as HTMLInputElement;
+const tipStatus = document.getElementById('tipStatus') as HTMLDivElement;
+const tipSend = document.getElementById('tipSend') as HTMLButtonElement;
 const mobileControlsEl = document.getElementById('mobileControls') as HTMLDivElement;
 const mobUpBtn = document.getElementById('mobUp') as HTMLButtonElement;
 const mobDownBtn = document.getElementById('mobDown') as HTMLButtonElement;
@@ -1017,6 +1026,9 @@ document.addEventListener('click', (e) => {
 
 function enableChat() {
   joined = true;
+  // Repaint the boards now that we've joined so their per-player tip buttons appear.
+  renderLeaderboard(lastLbRows);
+  renderNetWorth(lastNwRows);
   chatInput.disabled = false;
   closingModeEl.disabled = false;
   gravityModeEl.disabled = false;
@@ -3545,7 +3557,13 @@ for (const canvas of document.querySelectorAll<HTMLCanvasElement>('.pu-icon')) {
 // Track each player's last-known ELO so we can show a delta when it changes.
 const prevElo = new Map<string, number>();
 
+// Last rows each board was rendered with, so we can repaint (e.g. to add tip buttons the
+// moment you join) without waiting for the next server push.
+let lastLbRows: LeaderboardRow[] = [];
+let lastNwRows: NetWorthRow[] = [];
+
 function renderLeaderboard(rows: LeaderboardRow[]) {
+  lastLbRows = rows;
   if (!rows.length) {
     leaderboardEl.innerHTML = '';
     return;
@@ -3577,16 +3595,24 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
       const tag = t ? `<span class="lbtitle">${escapeHtml(t.name)}</span>` : '';
       return `<li><span class="rank">${i + 1}</span><span class="lbname">${escapeHtml(
         r.name,
-      )}${tag}</span><span class="pct">${r.elo ?? 500}</span></li>`;
+      )}${tag}</span><span class="pct">${r.elo ?? 500}</span>${tipBtnHtml(r.name)}</li>`;
     })
     .join('');
   leaderboardEl.innerHTML = `<h2>Leaderboard</h2><ol>${items}</ol>`;
+}
+
+// A small gold "tip" button for a player's board row — omitted for your own name (you
+// can't tip yourself) and before you've joined. Clicking it opens the tip dialog.
+function tipBtnHtml(name: string): string {
+  if (!joined || !name || name === myName) return '';
+  return `<button class="tip-btn" data-tip-name="${escapeHtml(name)}" title="Tip ${escapeHtml(name)} coins">🪙 tip</button>`;
 }
 
 // The Net Worth board: coins + live stock holdings − debt owed to Davis. The
 // richest player wears a 👑; anyone underwater (debt > assets) shows in red with
 // the amount they still owe. Ranks the whole economy, not just match wins.
 function renderNetWorth(rows: NetWorthRow[]) {
+  lastNwRows = rows;
   if (!rows.length) {
     netWorthEl.innerHTML = '';
     return;
@@ -3600,7 +3626,7 @@ function renderNetWorth(rows: NetWorthRow[]) {
       const tag = t ? `<span class="lbtitle">${escapeHtml(t.name)}</span>` : '';
       return `<li data-rank="${i}" title="View balance sheet"><span class="rank">${i + 1}</span><span class="lbname">${crown}${escapeHtml(
         r.name,
-      )}${tag}${debt}</span><span class="worth${broke}">${r.net}🪙</span></li>`;
+      )}${tag}${debt}</span><span class="worth${broke}">${r.net}🪙</span>${tipBtnHtml(r.name)}</li>`;
     })
     .join('');
   netWorthEl.innerHTML = `<h2>💰 Net Worth</h2><ol>${items}</ol>`;
@@ -3610,10 +3636,19 @@ function renderNetWorth(rows: NetWorthRow[]) {
 // rank — the index into the board the server last sent). Event-delegated so it survives
 // every re-render.
 netWorthEl.addEventListener('click', (e) => {
+  // A tip button takes priority over the row's balance-sheet view.
+  const tipBtn = (e.target as HTMLElement).closest('.tip-btn') as HTMLElement | null;
+  if (tipBtn) { openTipDialog(tipBtn.dataset.tipName ?? ''); return; }
   const li = (e.target as HTMLElement).closest('li[data-rank]') as HTMLElement | null;
   if (!li) return;
   const rank = Number(li.dataset.rank);
   if (Number.isInteger(rank)) net.send({ type: 'balanceSheetReq', rank });
+});
+
+// Leaderboard rows aren't otherwise clickable — only their tip buttons do anything.
+leaderboardEl.addEventListener('click', (e) => {
+  const tipBtn = (e.target as HTMLElement).closest('.tip-btn') as HTMLElement | null;
+  if (tipBtn) openTipDialog(tipBtn.dataset.tipName ?? '');
 });
 
 // Render and open the balance-sheet modal from a server response.
@@ -3660,6 +3695,51 @@ balanceModal.addEventListener('click', (e) => {
 });
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !balanceModal.hidden) closeBalanceSheet();
+});
+
+// --- tip dialog (opened by the 🪙 tip button on the boards) ---
+let tipTarget = ''; // nickname currently being tipped
+function openTipDialog(name: string) {
+  if (!name || name === myName || !joined) return;
+  tipTarget = name;
+  tipTitle.textContent = `Tip ${name}`;
+  tipBalance.textContent = `You have ${wallet.coins.toLocaleString()} 🪙`;
+  tipStatus.textContent = '';
+  tipAmount.value = '';
+  tipModal.hidden = false;
+  tipAmount.focus();
+}
+function closeTipDialog() {
+  tipModal.hidden = true;
+  tipTarget = '';
+}
+function submitTip() {
+  const amount = Number(tipAmount.value);
+  if (!Number.isInteger(amount) || amount <= 0) {
+    tipStatus.textContent = 'Enter a whole number of coins.';
+    return;
+  }
+  if (amount > wallet.coins) {
+    tipStatus.textContent = "You don't have that many coins.";
+    return;
+  }
+  net.send({ type: 'tip', to: tipTarget, amount });
+  closeTipDialog();
+}
+tipPresets.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest('button[data-amt]') as HTMLElement | null;
+  if (!btn) return;
+  tipAmount.value = btn.dataset.amt ?? '';
+  tipStatus.textContent = '';
+});
+tipSend.addEventListener('click', submitTip);
+tipAmount.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitTip(); } });
+tipClose.addEventListener('click', closeTipDialog);
+tipModal.addEventListener('click', (e) => {
+  if (!tipCard.contains(e.target as Node)) closeTipDialog();
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !tipModal.hidden) closeTipDialog();
 });
 
 // ----------------------------------------------------------------------------
