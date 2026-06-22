@@ -617,10 +617,11 @@ export async function getLeaderboard(): Promise<LeaderboardRow[]> {
  *  net worth, top LEADERBOARD_SIZE. Includes anyone who has played, holds coins, has
  *  an open position, or owes a debt — so a leveraged whale and a bankrupt borrower
  *  both show up. Net can be negative when the debt outweighs the assets. */
-export async function getNetWorthLeaderboard(): Promise<NetWorthRow[]> {
+export async function getNetWorthLeaderboard(): Promise<(NetWorthRow & { pid: string })[]> {
   if (!pool) return [];
   const { rows } = await pool.query(
-    `SELECT p.name,
+    `SELECT p.id AS pid,
+            p.name,
             p.coins + COALESCE(h.val, 0) - COALESCE(l.owed, 0) AS net,
             p.coins,
             COALESCE(l.owed, 0) AS loan
@@ -642,6 +643,7 @@ export async function getNetWorthLeaderboard(): Promise<NetWorthRow[]> {
     [LEADERBOARD_SIZE],
   );
   return rows.map((r) => ({
+    pid: r.pid,
     name: r.name,
     net: Math.round(Number(r.net)),
     coins: Number(r.coins),

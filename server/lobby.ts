@@ -17,6 +17,7 @@ import {
   FATALITY_MOVES,
   LeaderboardRow,
   NetWorthRow,
+  BalanceSheetHolding,
   MAX_PLAYERS,
   PaddleState,
   POWERUPS,
@@ -171,6 +172,7 @@ export class Lobby {
   private captureCountdown = 0; // soonest pending bench-the-laggard timer, in seconds (0 = none running)
   private leaderboard: LeaderboardRow[] = []; // cached standings, pushed to clients
   private netWorth: NetWorthRow[] = []; // cached net-worth board (coins + holdings − debt)
+  private netWorthPids: string[] = []; // pid per net-worth row (server-only; resolves a rank → player)
   private chatLog: ChatLine[] = []; // recent chat, replayed to new connections
   private nextId = 1;
 
@@ -1962,13 +1964,43 @@ export class Lobby {
     this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
   }
 
-  /** Recompute the Net Worth board (coins + live holdings − debt) and push it to everyone. */
+  /** Recompute the Net Worth board (coins + live holdings − debt) and push it to everyone.
+   *  The pid of each row is cached locally (never sent to clients — it's the identity key) so a
+   *  later balance-sheet request can resolve a board rank back to a player. */
   async refreshNetWorth() {
-    this.netWorth = await getNetWorthLeaderboard();
+    const full = await getNetWorthLeaderboard();
+    this.netWorthPids = full.map((r) => r.pid);
+    this.netWorth = full.map(({ pid: _pid, ...row }) => row);
     const data = JSON.stringify({ type: 'netWorth', rows: this.netWorth });
     for (const ws of this.conns.keys()) {
       if (ws.readyState === ws.OPEN) ws.send(data);
     }
+  }
+
+  /** Build and send the balance sheet for the player at `rank` on the current net-worth board:
+   *  liquid coins, every open stock position valued at the live price, and any debt to Davis.
+   *  Public info (the board already shows net/coins/debt) — no pid ever leaves the server. */
+  async sendBalanceSheet(ws: WebSocket, rank: number) {
+    if (!Number.isInteger(rank) || rank < 0 || rank >= this.netWorthPids.length) return;
+    const pid = this.netWorthPids[rank];
+    const name = this.netWorth[rank]?.name ?? '???';
+    const [wallet, holdings, loan] = await Promise.all([getWallet(pid), getHoldings(pid), getLoan(pid)]);
+    const rows: BalanceSheetHolding[] = [];
+    let stockValue = 0;
+    for (const s of STOCKS) {
+      const h = holdings[s.id];
+      if (!h || h.shares <= 0) continue;
+      const price = this.stockPrices.get(s.id)?.price ?? s.base;
+      const value = Math.round(h.shares * price);
+      stockValue += value;
+      rows.push({ coin: s.name, ticker: s.ticker, shares: h.shares, price, value });
+    }
+    const owed = loan?.owed ?? 0;
+    const net = wallet.coins + stockValue - owed;
+    this.tell(ws, {
+      type: 'balanceSheet', rank, name,
+      coins: wallet.coins, holdings: rows, stockValue, loan: owed, net,
+    });
   }
 
   broadcast() {

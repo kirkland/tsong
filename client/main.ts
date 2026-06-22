@@ -17,6 +17,7 @@ import {
   ChatLine,
   LeaderboardRow,
   NetWorthRow,
+  BalanceSheetMsg,
   Role,
   Side,
   StateMsg,
@@ -87,6 +88,11 @@ const combosModal = document.getElementById('combosModal') as HTMLDivElement;
 const combosCard = document.getElementById('combosCard') as HTMLDivElement;
 const combosClose = document.getElementById('combosClose') as HTMLButtonElement;
 const combosList = document.getElementById('combosList') as HTMLDivElement;
+const balanceModal = document.getElementById('balanceModal') as HTMLDivElement;
+const balanceCard = document.getElementById('balanceCard') as HTMLDivElement;
+const balanceClose = document.getElementById('balanceClose') as HTMLButtonElement;
+const balanceName = document.getElementById('balanceName') as HTMLSpanElement;
+const balanceBody = document.getElementById('balanceBody') as HTMLDivElement;
 const mobileControlsEl = document.getElementById('mobileControls') as HTMLDivElement;
 const mobUpBtn = document.getElementById('mobUp') as HTMLButtonElement;
 const mobDownBtn = document.getElementById('mobDown') as HTMLButtonElement;
@@ -522,6 +528,8 @@ const net = connect(
       renderLeaderboard(msg.rows);
     } else if (msg.type === 'netWorth') {
       renderNetWorth(msg.rows);
+    } else if (msg.type === 'balanceSheet') {
+      showBalanceSheet(msg);
     } else if (msg.type === 'chat') {
       msg.lines.forEach(addChatLine);
       // Notify via tab title for a single new message while the tab is backgrounded.
@@ -3427,13 +3435,69 @@ function renderNetWorth(rows: NetWorthRow[]) {
       const crown = i === 0 ? '👑 ' : '';
       const broke = r.net < 0 ? ' broke' : '';
       const debt = r.loan > 0 ? `<span class="debt"> 🔻${r.loan}</span>` : '';
-      return `<li><span class="rank">${i + 1}</span><span class="lbname">${crown}${escapeHtml(
+      return `<li data-rank="${i}" title="View balance sheet"><span class="rank">${i + 1}</span><span class="lbname">${crown}${escapeHtml(
         r.name,
       )}${debt}</span><span class="worth${broke}">${r.net}🪙</span></li>`;
     })
     .join('');
   netWorthEl.innerHTML = `<h2>💰 Net Worth</h2><ol>${items}</ol>`;
 }
+
+// Click a Net Worth row to ask the server for that player's balance sheet (resolved by
+// rank — the index into the board the server last sent). Event-delegated so it survives
+// every re-render.
+netWorthEl.addEventListener('click', (e) => {
+  const li = (e.target as HTMLElement).closest('li[data-rank]') as HTMLElement | null;
+  if (!li) return;
+  const rank = Number(li.dataset.rank);
+  if (Number.isInteger(rank)) net.send({ type: 'balanceSheetReq', rank });
+});
+
+// Render and open the balance-sheet modal from a server response.
+function showBalanceSheet(msg: BalanceSheetMsg) {
+  balanceName.textContent = `💰 ${msg.name}`;
+  const rows: string[] = [];
+  rows.push(
+    `<div class="bs-row"><span class="bs-label">Coins on hand</span><span class="bs-val">${msg.coins}🪙</span></div>`,
+  );
+  rows.push(`<div class="bs-section">Stock holdings</div>`);
+  if (msg.holdings.length) {
+    for (const h of msg.holdings) {
+      rows.push(
+        `<div class="bs-row"><span class="bs-label">${escapeHtml(h.ticker)} ` +
+          `<span class="bs-sub">${h.shares.toFixed(2)} sh @ ${Math.round(h.price)}🪙</span></span>` +
+          `<span class="bs-val">${h.value}🪙</span></div>`,
+      );
+    }
+    rows.push(
+      `<div class="bs-row"><span class="bs-label">Stock subtotal</span><span class="bs-val">${msg.stockValue}🪙</span></div>`,
+    );
+  } else {
+    rows.push(`<div class="bs-empty">No open positions.</div>`);
+  }
+  if (msg.loan > 0) {
+    rows.push(
+      `<div class="bs-row bs-debt"><span class="bs-label">Owed to Davis</span><span class="bs-val">−${msg.loan}🪙</span></div>`,
+    );
+  }
+  rows.push(`<hr class="bs-divider" />`);
+  const broke = msg.net < 0 ? ' bs-broke' : '';
+  rows.push(
+    `<div class="bs-row bs-total${broke}"><span class="bs-label">Net worth</span><span class="bs-val">${msg.net}🪙</span></div>`,
+  );
+  balanceBody.innerHTML = rows.join('');
+  balanceModal.hidden = false;
+}
+function closeBalanceSheet() {
+  balanceModal.hidden = true;
+}
+balanceClose.addEventListener('click', closeBalanceSheet);
+balanceModal.addEventListener('click', (e) => {
+  if (!balanceCard.contains(e.target as Node)) closeBalanceSheet();
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !balanceModal.hidden) closeBalanceSheet();
+});
 
 // ----------------------------------------------------------------------------
 const _kSeq = [

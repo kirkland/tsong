@@ -269,6 +269,7 @@ export type ClientMsg =
   | { type: 'getLoan'; amount: number } // borrow `amount` coins from Davis (owe 1.5× back by the daily 5pm collection)
   | { type: 'repayLoan' } // pay Davis the full 1.5× owed and clear the loan
   | { type: 'roulette'; bets: RouletteBet[] } // stake coins on a single spin of the casino wheel
+  | { type: 'balanceSheetReq'; rank: number } // peek at a net-worth board player's balance sheet (by current rank)
   | { type: 'migrate'; oldPid: string }; // one-time: merge a UUID guest account into the signed-in Google account
 
 // --- Server -> Client ---
@@ -486,6 +487,29 @@ export interface NetWorthMsg {
   rows: NetWorthRow[];
 }
 
+// One line item on a player's balance sheet: an open stock position valued live.
+export interface BalanceSheetHolding {
+  coin: string;   // display name (e.g. "Davis Clarke Coin")
+  ticker: string; // short ticker (e.g. "DAVIS")
+  shares: number; // fractional shares held
+  price: number;  // current price per share
+  value: number;  // shares × price, rounded to whole coins
+}
+
+// Server → client: a public balance sheet for the player at `rank` on the net-worth
+// board — coins on hand, every stock position valued live, and any debt to Davis.
+// Sent in response to a balanceSheetReq (clicking a net-worth row).
+export interface BalanceSheetMsg {
+  type: 'balanceSheet';
+  rank: number;
+  name: string;
+  coins: number;                    // liquid coins
+  holdings: BalanceSheetHolding[];  // stock positions (empty if none)
+  stockValue: number;               // total live value of all holdings
+  loan: number;                     // outstanding debt owed to Davis (0 if none)
+  net: number;                      // coins + stockValue − loan
+}
+
 export interface ChatLine {
   from: string;
   text: string;
@@ -553,6 +577,7 @@ export type ServerMsg =
   | StateMsg
   | LeaderboardMsg
   | NetWorthMsg
+  | BalanceSheetMsg
   | ChatMsg
   | ReactionMsg
   | AnnounceMsg

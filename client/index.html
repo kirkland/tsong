@@ -146,8 +146,19 @@
       #readyBtn:disabled {
         opacity: 0.5;
       }
+      /* The two standings boards sit side by side, wrapping to a stack when narrow. */
+      #boards {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        align-items: flex-start;
+        gap: 16px;
+        width: 100%;
+      }
       #leaderboard {
-        width: min(90vw, 360px);
+        flex: 1 1 280px;
+        max-width: 360px;
+        min-width: 260px;
         font-size: 14px;
       }
       #leaderboard h2 {
@@ -191,9 +202,16 @@
       /* Net Worth board — same column look as the leaderboard, gold accents.
          coins + live stock holdings − debt owed to Davis. */
       #netWorth {
-        width: min(90vw, 360px);
+        flex: 1 1 280px;
+        max-width: 360px;
+        min-width: 260px;
         font-size: 14px;
-        margin-top: 10px;
+      }
+      #netWorth li {
+        cursor: pointer;
+      }
+      #netWorth li:hover {
+        background: #18203a;
       }
       #netWorth h2 {
         font-size: 13px;
@@ -1556,6 +1574,118 @@
         color: #6b7796;
         text-align: center;
       }
+      /* Balance-sheet modal — opened by clicking a Net Worth row. Reuses the combos
+         modal's centered-card look with gold accents to match the net-worth board. */
+      #balanceModal {
+        position: fixed;
+        inset: 0;
+        z-index: 120;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(4, 7, 16, 0.72);
+      }
+      #balanceModal[hidden] {
+        display: none;
+      }
+      #balanceCard {
+        width: min(92vw, 380px);
+        max-height: 80vh;
+        overflow-y: auto;
+        background: #0e1424;
+        border: 1px solid #3a3320;
+        border-radius: 12px;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
+        padding: 16px 18px 18px;
+      }
+      #balanceHead {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        color: #ffd23f;
+        margin-bottom: 12px;
+      }
+      #balanceName {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #balanceClose {
+        font: inherit;
+        font-size: 15px;
+        line-height: 1;
+        flex: 0 0 auto;
+        padding: 4px 8px;
+        border-radius: 6px;
+        border: 1px solid #2a3550;
+        background: #0e1424;
+        color: #9fb0d8;
+        cursor: pointer;
+      }
+      #balanceClose:hover {
+        background: #18203a;
+        color: #e8eefc;
+      }
+      .bs-row {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+        align-items: baseline;
+        padding: 6px 0;
+        font-size: 14px;
+      }
+      .bs-row .bs-label {
+        color: #9fb0d8;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .bs-row .bs-val {
+        color: #cdd7f5;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .bs-row .bs-sub {
+        color: #6b7796;
+        font-size: 11px;
+      }
+      .bs-section {
+        margin: 10px 0 2px;
+        font-size: 11px;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        color: #7da2ff;
+      }
+      .bs-divider {
+        border: none;
+        border-top: 1px solid #1f2940;
+        margin: 10px 0;
+      }
+      .bs-row.bs-debt .bs-val {
+        color: #f87171;
+      }
+      .bs-row.bs-total {
+        font-weight: 700;
+        font-size: 15px;
+      }
+      .bs-row.bs-total .bs-label {
+        color: #e8eefc;
+      }
+      .bs-row.bs-total .bs-val {
+        color: #ffd23f;
+      }
+      .bs-row.bs-total.bs-broke .bs-val {
+        color: #f87171;
+      }
+      .bs-empty {
+        color: #6b7796;
+        font-size: 12px;
+        padding: 4px 0;
+      }
       /* CHANGELOG dropdown, pinned to the top-right corner. */
       #changelog {
         position: fixed;
@@ -2710,6 +2840,15 @@
         <p id="combosFoot">Win a match, then tap the arrow combo to perform that finisher.</p>
       </div>
     </div>
+    <div id="balanceModal" hidden>
+      <div id="balanceCard" role="dialog" aria-modal="true" aria-label="Balance sheet">
+        <div id="balanceHead">
+          <span id="balanceName">Balance Sheet</span>
+          <button id="balanceClose" type="button" aria-label="Close">✕</button>
+        </div>
+        <div id="balanceBody"></div>
+      </div>
+    </div>
     <div id="changelog">
       <button id="changelogBtn" type="button" aria-expanded="false">
         CHANGELOG <span class="caret">▾</span>
@@ -2818,8 +2957,10 @@
         <button id="rematchBtn" style="display: none">🔄 Rematch</button>
         <button id="quitBtn" style="display: none; font-size: 12px; padding: 4px 10px;">🚪 Quit game</button>
         <button id="rename" class="link" style="display: none">change name</button>
-        <div id="leaderboard"></div>
-        <div id="netWorth"></div>
+        <div id="boards">
+          <div id="leaderboard"></div>
+          <div id="netWorth"></div>
+        </div>
       </div>
 
       <div id="chat">
