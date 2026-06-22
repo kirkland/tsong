@@ -124,6 +124,7 @@ const POLY_OVER_SECS = 5; // how long the arena win screen lingers before the ne
 const RESUME_GRACE = 45; // seconds a resumed match waits for seated players to reconnect
 const TOURNEY_INTER_MS = 5000; // pause between tournament matches so the result can be read
 const TOURNEY_DONE_MS = 12000; // how long the champion screen lingers before the tournament tears down
+const MAX_TIP = 1_000_000; // sanity cap on a single /tip (balance is the real limit)
 
 // What a seat / queue spot needs to be reclaimed by the same identity after a restart.
 interface SeatInfo {
@@ -974,6 +975,44 @@ export class Lobby {
   private wsOfConn(conn: Conn): WebSocket | undefined {
     for (const [ws, c] of this.conns) if (c === conn) return ws;
     return undefined;
+  }
+
+  /** "/tip <name> <amount>": gift coins from one online player to another. The transfer is
+   *  atomic (the sender's coins are escrowed first; a failed debit gifts nothing), then the
+   *  whole room gets a cha-ching + coin shower so tipping feels good and public. */
+  tip(ws: WebSocket, toName: string, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    const amt = Math.floor(amount);
+    if (!Number.isFinite(amt) || amt <= 0) { this.notify(ws, 'Tip must be a positive number of coins.'); return; }
+    if (amt > MAX_TIP) { this.notify(ws, `You can tip at most ${MAX_TIP.toLocaleString()} coins at once.`); return; }
+
+    // Resolve the recipient by nickname (case-insensitive) among joined connections. A player
+    // can't tip themselves — match on a different stable pid, not just a different socket.
+    const target = toName.trim().toLowerCase();
+    const recipients = [...this.conns.values()].filter(
+      (c) => c.nickname && c.pid && c.pid !== conn.pid && c.nickname.toLowerCase() === target,
+    );
+    if (recipients.length === 0) { this.notify(ws, `No online player named "${toName.trim()}" to tip.`); return; }
+    const recip = recipients[0];
+
+    // Escrow the sender's coins first; bail untouched if they can't afford it (or there's no DB).
+    spendCoins(conn.pid, amt)
+      .then(async (w) => {
+        if (!w) { this.notify(ws, "You don't have enough coins for that tip."); this.sendWallet(ws); return; }
+        await addCoins(recip.pid, recip.nickname, amt);
+        // Refresh both parties' wallets (every tab they have open) and the net-worth board.
+        this.sendWallet(ws);
+        this.refreshWalletsFor([...this.conns.values()].filter((c) => c.pid === recip.pid));
+        this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
+        // Celebrate it room-wide: a chat line + the coin-shower/cha-ching broadcast.
+        this.echoCommand(conn, `/tip ${recip.nickname} ${amt}`);
+        const data = JSON.stringify({ type: 'tip', from: conn.nickname, to: recip.nickname, amount: amt });
+        for (const sock of this.conns.keys()) {
+          if (sock.readyState === sock.OPEN) sock.send(data);
+        }
+      })
+      .catch((e) => console.error('tip failed:', e));
   }
 
   // --- Shop (cosmetics) ---

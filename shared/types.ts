@@ -289,6 +289,7 @@ export type ClientMsg =
   | { type: 'shopBuy'; item: string } // buy a cosmetic from the shop
   | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'title'; item: string | null } // equip (item) or unequip (null) a cosmetic
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
+  | { type: 'tip'; to: string; amount: number } // gift some of your coins to another online player (by nickname)
   | { type: 'dailySpin' } // claim the once-per-24h reward spin
   | { type: 'stockInvest'; coin: string; amount: number } // sink `amount` coins into a crypto at the current price
   | { type: 'stockCashOut'; coin: string } // sell the entire holding in a crypto for round(worth) coins (nearest)
@@ -562,6 +563,15 @@ export interface ReactionMsg {
   emoji: string;
 }
 
+// A player tipped another player coins. Fanned out to everyone so the whole room can
+// celebrate it (a coin shower + cha-ching). Amounts are in raw (displayed) coins.
+export interface TipMsg {
+  type: 'tip';
+  from: string; // tipper's nickname
+  to: string;   // recipient's nickname
+  amount: number;
+}
+
 // A one-off transient notice. By default a big center-screen banner (e.g. a forfeit);
 // `toast: true` renders a small unobtrusive corner toast instead (e.g. betting activity).
 export interface AnnounceMsg {
@@ -611,6 +621,7 @@ export type ServerMsg =
   | BalanceSheetMsg
   | ChatMsg
   | ReactionMsg
+  | TipMsg
   | AnnounceMsg
   | PingMsg
   | RttMsg

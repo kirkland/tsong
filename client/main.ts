@@ -542,6 +542,8 @@ const net = connect(
       }
     } else if (msg.type === 'reaction') {
       spawnReaction(msg.emoji);
+    } else if (msg.type === 'tip') {
+      celebrateTip(msg.from, msg.to, msg.amount);
     } else if (msg.type === 'announce') {
       showAnnouncement(msg.text, { toast: msg.toast });
     } else if (msg.type === 'ping') {
@@ -752,6 +754,22 @@ for (const btn of winScoreOpts.querySelectorAll<HTMLButtonElement>('.ws-btn')) {
   });
 }
 
+// Every distinct player nickname the client currently knows about (seated players,
+// watchers and the queue), minus my own — used to suggest /tip recipients.
+function knownPlayerNames(): string[] {
+  const names = new Set<string>();
+  if (state) {
+    for (const side of ['left', 'right'] as const) {
+      for (const p of state.paddles[side].players) if (p.name) names.add(p.name);
+    }
+    for (const w of state.watchers) names.add(w);
+    for (const q of state.queue) names.add(q);
+    if (state.king) names.add(state.king);
+  }
+  names.delete(myName);
+  return [...names].sort();
+}
+
 // --- slash commands ---
 // Typing "/" in chat pops up this menu of commands; each only appears when usable.
 interface ChatCommand {
@@ -771,6 +789,22 @@ const COMMANDS: ChatCommand[] = [
     enabled: () => isPlayer(),
     disabledHint: "only while you're playing",
     run: () => net.send({ type: 'forfeit' }),
+  },
+  {
+    name: 'tip',
+    hint: 'Tip a player coins — /tip <name> <amount> (e.g. /tip alice 50)',
+    enabled: () => joined,
+    disabledHint: 'join the game first',
+    argOptions: () => knownPlayerNames(),
+    argHint: (arg) => `Tip ${arg} — then add an amount (e.g. /tip ${arg} 50)`,
+    run: (arg) => {
+      const tokens = (arg ?? '').trim().split(/\s+/).filter(Boolean);
+      if (tokens.length < 2) return false; // need a name AND an amount — keep the text visible
+      const amount = Number(tokens.pop());
+      const to = tokens.join(' ');
+      if (!to || !Number.isFinite(amount) || amount <= 0 || !Number.isInteger(amount)) return false;
+      net.send({ type: 'tip', to, amount });
+    },
   },
   {
     name: 'powerup',
@@ -1235,6 +1269,48 @@ function spawnReaction(emoji: string) {
       { transform: `translate(${wobble}px, ${-rise * 0.15}px) scale(1)`, opacity: 1, offset: 0.12 },
       { transform: `translate(${drift - wobble}px, ${-rise * 0.6}px) scale(1.05)`, opacity: 1, offset: 0.65 },
       { transform: `translate(${drift}px, ${-rise}px) scale(1.1)`, opacity: 0 },
+    ],
+    { duration, easing: 'cubic-bezier(0.4, 0, 0.6, 1)' },
+  );
+  anim.onfinish = () => el.remove();
+  anim.oncancel = () => el.remove();
+}
+
+// A tip just happened anywhere in the room: cha-ching for everyone, a shower of gold
+// coins fluttering up the screen, and a banner naming who paid whom. The recipient gets
+// an extra-celebratory golden banner; everyone else a small toast.
+function celebrateTip(from: string, to: string, amount: number) {
+  playChaChing();
+  const mine = to === myName;
+  // Coin shower — scale the count a little with the size of the tip (capped so it never floods).
+  const coins = Math.min(28, 8 + Math.floor(Math.log2(amount + 1) * 3));
+  for (let i = 0; i < coins; i++) {
+    setTimeout(() => spawnCoin(), i * 70);
+  }
+  // The room sees the shower + cha-ching (and the /tip line in chat); the lucky
+  // recipient gets a golden banner calling it out.
+  if (mine) showAnnouncement(`💰 ${from} tipped you ${amount} 🪙!`, { color: '#ffcf33' });
+}
+
+// One gold coin fluttering up the screen (the tip-shower particle). Like a reaction,
+// but spins as it rises for a little extra sparkle.
+function spawnCoin() {
+  const el = document.createElement('div');
+  el.className = 'floating-reaction';
+  el.textContent = '🪙';
+  el.style.left = `${5 + Math.random() * 90}vw`;
+  reactionLayer.append(el);
+
+  const rise = window.innerHeight + 120;
+  const drift = (Math.random() - 0.5) * 220;
+  const spin = (Math.random() < 0.5 ? -1 : 1) * (360 + Math.random() * 360);
+  const duration = 2200 + Math.random() * 1400;
+
+  const anim = el.animate(
+    [
+      { transform: 'translate(0, 0) rotate(0deg) scale(0.4)', opacity: 0 },
+      { transform: `translate(${drift * 0.3}px, ${-rise * 0.15}px) rotate(${spin * 0.15}deg) scale(1)`, opacity: 1, offset: 0.12 },
+      { transform: `translate(${drift}px, ${-rise}px) rotate(${spin}deg) scale(1.1)`, opacity: 0 },
     ],
     { duration, easing: 'cubic-bezier(0.4, 0, 0.6, 1)' },
   );
