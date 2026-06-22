@@ -52,6 +52,7 @@ export async function initDb(): Promise<void> {
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_spin BIGINT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS bonus_spins INTEGER NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS trail TEXT`);
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS title TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS email TEXT`);
   // Stock market: per-player positions (fractional shares + coins-invested cost basis),
   // keyed by player + coin id; and the global price board (one row per coin).
@@ -146,6 +147,19 @@ export async function initDb(): Promise<void> {
     await pool.query(`DELETE FROM stock_prices`);
     await pool.query(`DELETE FROM stock_holdings`);
     await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('coin_scale_100x_v1', now()::text)`);
+  }
+  // One-time: award the "Davis Slayer" title to everyone who has already cleared the campaign
+  // (own it + auto-equip if they aren't wearing a title yet). Runs once via a meta flag.
+  const slayer = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'title_slayer_v1'`);
+  if (slayer.rowCount === 0) {
+    await pool.query(`
+      UPDATE players SET
+        owned = CASE WHEN ',' || owned || ',' LIKE '%,davisslayer,%' THEN owned
+                     WHEN owned = '' THEN 'davisslayer' ELSE owned || ',davisslayer' END,
+        title = COALESCE(title, 'davisslayer')
+      WHERE id IN (SELECT pid FROM campaign_scores WHERE won = TRUE)
+    `);
+    await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('title_slayer_v1', now()::text)`);
   }
   console.log('leaderboard DB ready');
 }
@@ -282,18 +296,20 @@ export interface Wallet {
   hat: string | null; // equipped hat item id
   skin: string | null; // equipped skin item id
   trail: string | null; // equipped paddle-trail item id
+  title: string | null; // equipped name-title item id
   lastSpin: number; // epoch ms of the last daily spin (0 = never)
   bonusSpins: number; // free extra wheel spins (e.g. from winning a tournament)
 }
-const EMPTY_WALLET: Wallet = { coins: 0, owned: [], hat: null, skin: null, trail: null, lastSpin: 0, bonusSpins: 0 };
+const EMPTY_WALLET: Wallet = { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, lastSpin: 0, bonusSpins: 0 };
 
-function rowToWallet(r: { coins: number; owned: string; hat: string | null; skin: string | null; trail?: string | null; last_spin?: string | number; bonus_spins?: number }): Wallet {
+function rowToWallet(r: { coins: number; owned: string; hat: string | null; skin: string | null; trail?: string | null; title?: string | null; last_spin?: string | number; bonus_spins?: number }): Wallet {
   return {
     coins: r.coins,
     owned: (r.owned || '').split(',').filter(Boolean),
     hat: r.hat ?? null,
     skin: r.skin ?? null,
     trail: r.trail ?? null,
+    title: r.title ?? null,
     lastSpin: Number(r.last_spin ?? 0),
     bonusSpins: Number(r.bonus_spins ?? 0),
   };
@@ -315,7 +331,7 @@ export async function getElos(pids: string[]): Promise<Map<string, { elo: number
 /** Read a player's wallet (coins + owned items + equipped cosmetics + spin state). */
 export async function getWallet(pid: string): Promise<Wallet> {
   if (!pool || !pid) return { ...EMPTY_WALLET };
-  const { rows } = await pool.query(`SELECT coins, owned, hat, skin, trail, last_spin, bonus_spins FROM players WHERE id = $1`, [pid]);
+  const { rows } = await pool.query(`SELECT coins, owned, hat, skin, trail, title, last_spin, bonus_spins FROM players WHERE id = $1`, [pid]);
   return rows.length ? rowToWallet(rows[0]) : { ...EMPTY_WALLET };
 }
 
@@ -358,8 +374,28 @@ export async function grantItem(pid: string, _name: string, item: string): Promi
   if (cur.owned.includes(item)) return cur;
   const owned = [...cur.owned, item].join(',');
   const { rows } = await pool.query(
-    `UPDATE players SET owned = $2 WHERE id = $1 RETURNING coins, owned, hat, skin, trail, last_spin`,
+    `UPDATE players SET owned = $2 WHERE id = $1 RETURNING coins, owned, hat, skin, trail, title, last_spin`,
     [pid, owned],
+  );
+  return rows.length ? rowToWallet(rows[0]) : null;
+}
+
+/** Award a title (achievement reward, e.g. clearing the campaign): add it to `owned` and
+ *  auto-equip it only if the player isn't already wearing a title. Returns updated wallet. */
+export async function awardTitle(pid: string, name: string, title: string): Promise<Wallet | null> {
+  if (!pool || !pid) return null;
+  await pool.query(
+    `INSERT INTO players (id, name) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name`,
+    [pid, name],
+  );
+  const { rows } = await pool.query(
+    `UPDATE players SET
+       owned = CASE WHEN ',' || owned || ',' LIKE '%,' || $2 || ',%' THEN owned
+                    WHEN owned = '' THEN $2 ELSE owned || ',' || $2 END,
+       title = COALESCE(title, $2)
+     WHERE id = $1
+     RETURNING coins, owned, hat, skin, trail, title`,
+    [pid, title],
   );
   return rows.length ? rowToWallet(rows[0]) : null;
 }
@@ -378,20 +414,20 @@ export async function buyItem(pid: string, name: string, item: string, price: nu
   const owned = [...cur.owned, item].join(',');
   const { rows } = await pool.query(
     `UPDATE players SET coins = coins - $2, owned = $3 WHERE id = $1 AND coins >= $2
-       RETURNING coins, owned, hat, skin, trail`,
+       RETURNING coins, owned, hat, skin, trail, title`,
     [pid, price, owned],
   );
   return rows.length ? rowToWallet(rows[0]) : null;
 }
 
 /** Equip (or unequip with item=null) a cosmetic in a slot. Only equips owned items. */
-export async function equipItem(pid: string, slot: 'hat' | 'skin' | 'trail', item: string | null): Promise<Wallet | null> {
+export async function equipItem(pid: string, slot: 'hat' | 'skin' | 'trail' | 'title', item: string | null): Promise<Wallet | null> {
   if (!pool || !pid) return null;
   const cur = await getWallet(pid);
   if (item !== null && !cur.owned.includes(item)) return null; // can't equip what you don't own
-  const col = slot === 'hat' ? 'hat' : slot === 'skin' ? 'skin' : 'trail';
+  const col = slot === 'hat' ? 'hat' : slot === 'skin' ? 'skin' : slot === 'trail' ? 'trail' : 'title';
   const { rows } = await pool.query(
-    `UPDATE players SET ${col} = $2 WHERE id = $1 RETURNING coins, owned, hat, skin, trail`,
+    `UPDATE players SET ${col} = $2 WHERE id = $1 RETURNING coins, owned, hat, skin, trail, title`,
     [pid, item],
   );
   return rows.length ? rowToWallet(rows[0]) : null;
@@ -403,7 +439,7 @@ export async function spendCoins(pid: string, amount: number): Promise<Wallet | 
   if (!pool || !pid || amount <= 0) return null;
   const { rows } = await pool.query(
     `UPDATE players SET coins = coins - $2 WHERE id = $1 AND coins >= $2
-       RETURNING coins, owned, hat, skin, trail`,
+       RETURNING coins, owned, hat, skin, trail, title`,
     [pid, amount],
   );
   return rows.length ? rowToWallet(rows[0]) : null;
@@ -415,7 +451,7 @@ export async function addCoins(pid: string, name: string, delta: number): Promis
   const { rows } = await pool.query(
     `INSERT INTO players (id, name, coins) VALUES ($1, $2, GREATEST(0, $3))
        ON CONFLICT (id) DO UPDATE SET coins = GREATEST(0, players.coins + $3), name = EXCLUDED.name
-       RETURNING coins, owned, hat, skin, trail`,
+       RETURNING coins, owned, hat, skin, trail, title`,
     [pid, name, delta],
   );
   return rows.length ? rowToWallet(rows[0]) : null;
@@ -663,14 +699,14 @@ export async function collectDefaultedLoans(nowMs: number): Promise<{ pids: stri
 export async function getLeaderboard(): Promise<LeaderboardRow[]> {
   if (!pool) return [];
   const { rows } = await pool.query(
-    `SELECT name, wins, losses, elo
+    `SELECT name, wins, losses, elo, title
        FROM players
       WHERE wins + losses > 0
       ORDER BY elo DESC, name ASC
       LIMIT $1`,
     [LEADERBOARD_SIZE],
   );
-  return rows.map((r) => ({ name: r.name, wins: r.wins, losses: r.losses, elo: r.elo }));
+  return rows.map((r) => ({ name: r.name, wins: r.wins, losses: r.losses, elo: r.elo, title: r.title ?? null }));
 }
 
 /** Net worth board: each player's coins + the live value of their stock holdings

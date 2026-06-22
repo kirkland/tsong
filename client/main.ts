@@ -557,7 +557,7 @@ const net = connect(
     } else if (msg.type === 'campaignLeaderboard') {
       campaignScores = msg.rows;
     } else if (msg.type === 'wallet') {
-      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
+      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
       rouletteHandle.setCoins(msg.coins);
       // During a roulette spin, hold every coin-total display (toolbar tab, shop, market) at its
       // pre-result value until the wheel lands — otherwise the settled balance reveals the outcome
@@ -1364,10 +1364,10 @@ campaignBtn.addEventListener('click', async () => {
 });
 
 // --- Coins, cosmetics shop & betting ---
-let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
-  { coins: 0, owned: [], hat: null, skin: null, trail: null, bets: [], nextSpinAt: 0, bonusSpins: 0 };
+let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
+  { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, bets: [], nextSpinAt: 0, bonusSpins: 0 };
 let betAmount = 100; // default wager (economy is scaled ×100); min is still 1
-let shopTab: 'hat' | 'skin' | 'trail' = 'hat';
+let shopTab: 'hat' | 'skin' | 'trail' | 'title' = 'hat';
 const shopBtn = document.getElementById('shopBtn') as HTMLButtonElement;
 const shopPanel = document.getElementById('shopPanel') as HTMLDivElement;
 const coinCount = document.getElementById('coinCount') as HTMLSpanElement;
@@ -1376,8 +1376,9 @@ const shopItems = document.getElementById('shopItems') as HTMLDivElement;
 const tabHats = document.getElementById('tabHats') as HTMLButtonElement;
 const tabSkins = document.getElementById('tabSkins') as HTMLButtonElement;
 const tabTrails = document.getElementById('tabTrails') as HTMLButtonElement;
-const shopTabs = [tabHats, tabSkins, tabTrails];
-function selectShopTab(tab: 'hat' | 'skin' | 'trail', el: HTMLButtonElement) {
+const tabTitles = document.getElementById('tabTitles') as HTMLButtonElement;
+const shopTabs = [tabHats, tabSkins, tabTrails, tabTitles];
+function selectShopTab(tab: 'hat' | 'skin' | 'trail' | 'title', el: HTMLButtonElement) {
   shopTab = tab;
   for (const t of shopTabs) t.classList.toggle('active', t === el);
   renderShop();
@@ -1385,6 +1386,7 @@ function selectShopTab(tab: 'hat' | 'skin' | 'trail', el: HTMLButtonElement) {
 tabHats.addEventListener('click', () => selectShopTab('hat', tabHats));
 tabSkins.addEventListener('click', () => selectShopTab('skin', tabSkins));
 tabTrails.addEventListener('click', () => selectShopTab('trail', tabTrails));
+tabTitles.addEventListener('click', () => selectShopTab('title', tabTitles));
 const spinBtn = document.getElementById('spinBtn') as HTMLButtonElement;
 let spinning = false; // a spin animation is currently playing
 spinBtn.addEventListener('click', () => {
@@ -1427,22 +1429,29 @@ function renderShop() {
   for (const item of COSMETICS) {
     if (item.slot !== shopTab) continue; // show only the active tab's items
     const owned = wallet.owned.includes(item.id);
-    const equipped = (item.slot === 'hat' ? wallet.hat : item.slot === 'skin' ? wallet.skin : wallet.trail) === item.id;
+    const equipped = (item.slot === 'hat' ? wallet.hat : item.slot === 'skin' ? wallet.skin : item.slot === 'trail' ? wallet.trail : wallet.title) === item.id;
     const row = document.createElement('div');
     row.className = 'shop-row';
-    // Tiny live-rendered preview canvas
-    const preview = document.createElement('canvas') as HTMLCanvasElement;
-    preview.width = 28; preview.height = 52;
-    preview.className = 'shop-preview';
-    drawCosmeticPreview(preview, item.id, item.slot);
-    shopPreviewCanvases.push({ canvas: preview, id: item.id, slot: item.slot });
-    row.appendChild(preview);
+    // Titles have no paddle preview — they're text flair. Other slots get a live preview canvas.
+    if (item.slot !== 'title') {
+      const preview = document.createElement('canvas') as HTMLCanvasElement;
+      preview.width = 28; preview.height = 52;
+      preview.className = 'shop-preview';
+      drawCosmeticPreview(preview, item.id, item.slot);
+      shopPreviewCanvases.push({ canvas: preview, id: item.id, slot: item.slot as 'hat' | 'skin' | 'trail' });
+      row.appendChild(preview);
+    }
     const name = document.createElement('span');
     name.className = 'shop-name';
-    name.textContent = owned ? item.name : `${item.name} · ${item.price}🪙`;
+    name.textContent = owned || item.locked ? item.name : `${item.name} · ${item.price}🪙`;
     row.appendChild(name);
     const btn = document.createElement('button');
-    if (!owned) {
+    if (!owned && item.locked) {
+      // Locked items (e.g. Davis Slayer) can't be bought — unlocked by an achievement.
+      btn.textContent = '🔒 Campaign';
+      btn.disabled = true;
+      btn.title = 'Clear the campaign to unlock';
+    } else if (!owned) {
       btn.textContent = 'Buy';
       btn.disabled = wallet.coins < item.price;
       btn.onclick = () => { net.send({ type: 'shopBuy', item: item.id }); playChaChing(); };
@@ -3448,9 +3457,11 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
 
   const items = rows
     .map((r, i) => {
+      const t = r.title ? COSMETICS.find((c) => c.id === r.title) : undefined;
+      const tag = t ? `<span class="lbtitle">${escapeHtml(t.name)}</span>` : '';
       return `<li><span class="rank">${i + 1}</span><span class="lbname">${escapeHtml(
         r.name,
-      )}</span><span class="pct">${r.elo ?? 500}</span></li>`;
+      )}${tag}</span><span class="pct">${r.elo ?? 500}</span></li>`;
     })
     .join('');
   leaderboardEl.innerHTML = `<h2>Leaderboard</h2><ol>${items}</ol>`;

@@ -44,7 +44,7 @@ import {
   CampaignScoreRow,
 } from '../shared/types';
 import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
-  recordCampaignScore, getCampaignLeaderboard,
+  recordCampaignScore, getCampaignLeaderboard, awardTitle,
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, DAILY_SPIN_MS,
   getHoldings, investStock, cashOutStock, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
   setStockCrashAt, getMarketInstability, setMarketInstability,
@@ -75,6 +75,7 @@ interface Conn {
   hat: string | null;
   skin: string | null;
   trail: string | null;
+  title: string | null;
 }
 
 // One step of a crypto's price random walk. Pure RNG — never tied to who invested or how
@@ -287,6 +288,7 @@ export class Lobby {
       hat: null,
       skin: null,
       trail: null,
+      title: null,
     };
     this.conns.set(ws, conn);
     this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
@@ -607,11 +609,17 @@ export class Lobby {
     recordCampaignScore(pid, nick, score, stage, won)
       .then((firstClear) => {
         this.refreshCampaignLeaderboards();
+        if (won) {
+          // Clearing the campaign unlocks the "Davis Slayer" title (own it + auto-wear it).
+          awardTitle(pid, nick, 'davisslayer')
+            .then((w) => { if (w) { const c = this.conns.get(ws); if (c) c.title = w.title; this.sendWallet(ws); this.refreshLeaderboard(); } })
+            .catch((e) => console.error('title award failed:', e));
+        }
         if (firstClear) {
           addCoins(pid, nick, CAMPAIGN_CLEAR_BONUS)
             .then(() => this.sendWallet(ws))
             .catch((e) => console.error('campaign clear bonus failed:', e));
-          this.announce(`🏆 ${nick} cleared Davis Collects — +${CAMPAIGN_CLEAR_BONUS} coins!`);
+          this.announce(`🏆 ${nick} cleared Davis Collects — +${CAMPAIGN_CLEAR_BONUS} coins & the Davis Slayer title!`);
         }
       })
       .catch((e) => console.error('campaign score save failed:', e));
@@ -840,6 +848,7 @@ export class Lobby {
       hat: null,
       skin: null,
       trail: null,
+      title: null,
     };
     this.conns.set(ws, conn);
     this.teams[side].push(ws);
@@ -935,7 +944,8 @@ export class Lobby {
         c.hat = w.hat;
         c.skin = w.skin;
         c.trail = w.trail;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        c.title = w.title;
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet load failed:', e));
   }
@@ -948,8 +958,8 @@ export class Lobby {
       .then((w) => {
         const c = this.conns.get(ws);
         if (!c) return;
-        c.hat = w.hat; c.skin = w.skin; c.trail = w.trail;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        c.hat = w.hat; c.skin = w.skin; c.trail = w.trail; c.title = w.title;
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet send failed:', e));
   }
@@ -973,14 +983,14 @@ export class Lobby {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     const cosmetic = COSMETICS.find((c) => c.id === item);
-    if (!cosmetic) return;
+    if (!cosmetic || cosmetic.locked) return; // locked items (e.g. Davis Slayer) can't be bought
     buyItem(conn.pid, conn.nickname, cosmetic.id, cosmetic.price)
       .then((w) => { if (w) this.sendWallet(ws); })
       .catch((e) => console.error('shop buy failed:', e));
   }
 
   /** Equip (item) or unequip (null) a cosmetic in its slot. */
-  shopEquip(ws: WebSocket, slot: 'hat' | 'skin' | 'trail', item: string | null) {
+  shopEquip(ws: WebSocket, slot: 'hat' | 'skin' | 'trail' | 'title', item: string | null) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     if (item !== null) {
@@ -991,8 +1001,9 @@ export class Lobby {
       .then((w) => {
         if (!w) return;
         const c = this.conns.get(ws);
-        if (c) { c.hat = w.hat; c.skin = w.skin; c.trail = w.trail; }
+        if (c) { c.hat = w.hat; c.skin = w.skin; c.trail = w.trail; c.title = w.title; }
         this.sendWallet(ws);
+        if (slot === 'title') this.refreshLeaderboard(); // title shows on the board
       })
       .catch((e) => console.error('shop equip failed:', e));
   }
