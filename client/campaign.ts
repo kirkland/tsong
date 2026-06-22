@@ -8,7 +8,7 @@
 // Story + design live in docs/campaign-script.md. This pass builds the scaffold: the launch
 // overlay, title screen and leaderboard. The Pong sim, VN engine and stage flow land next.
 
-import { CampaignScoreRow, CAMPAIGN_STAGE_COUNT } from '../shared/types';
+import { CampaignScoreRow, CAMPAIGN_STAGE_COUNT, BLASTER } from '../shared/types';
 
 // Networking hook into the shared websocket (provided by main.ts).
 export interface CampaignNet {
@@ -136,6 +136,8 @@ export const CAMPAIGN_STAGES: CampaignStage[] = [
       { text: "You're really going to face him. God." },
       { text: 'Okay. Whatever you owe him — don’t let him tell you the number.' },
       { text: 'Once you hear it... it’s real.' },
+      { text: 'Wait. Take this — a blaster. Click to fire; a hit locks his paddle for a few seconds.' },
+      { text: 'Fifteen shots. That’s all I could skim from his books. Use them sparingly — they won’t last three rounds if you waste them.', sfx: '/blaster.mp3' },
     ],
   },
   {
@@ -201,7 +203,7 @@ const TURBO_SPEEDUP = 1.1;           // per-hit speedup in turbo
 const GRAVITY = 220;                 // downward accel in gravity mode (units/s²)
 const SERVE_DELAY = 0.7;             // pause before each serve
 
-export interface MatchResult { playerScore: number; oppScore: number; won: boolean; }
+export interface MatchResult { playerScore: number; oppScore: number; won: boolean; ammoLeft: number; }
 export interface MatchOpts {
   name: string;          // opponent name (shown in HUD)
   portrait: string;      // opponent portrait (shown in HUD corner)
@@ -211,6 +213,7 @@ export interface MatchOpts {
   fx: string | null;     // screen-fx class suffix
   skin?: string;         // opponent paddle skin id (cosmetic)
   phaseLabel?: string;   // optional banner (e.g. "PHASE 2/3")
+  ammo?: number;         // blaster shots available this match (undefined = no blaster)
 }
 
 // Run one match. Calls onEnd once a side reaches winScore. Returns a stop() to abort/tear down.
@@ -246,6 +249,12 @@ export function playMatch(host: HTMLElement, opts: MatchOpts, onEnd: (r: MatchRe
   hud.appendChild(scoreEl);
   wrap.appendChild(hud);
 
+  // Blaster ammo readout (bottom-left), only when the player has a blaster.
+  const ammoEl = document.createElement('div');
+  ammoEl.style.cssText = 'position:absolute;bottom:12px;left:14px;color:#9ff;font-size:14px;' +
+    'pointer-events:none;font-family:ui-monospace,monospace;text-shadow:0 1px 4px #000;';
+  wrap.appendChild(ammoEl);
+
   const nameTag = document.createElement('div');
   nameTag.style.cssText = 'position:absolute;top:12px;right:14px;display:flex;align-items:center;gap:8px;' +
     'pointer-events:none;font-family:ui-monospace,monospace;color:#ffd166;font-size:13px;';
@@ -274,6 +283,13 @@ export function playMatch(host: HTMLElement, opts: MatchOpts, onEnd: (r: MatchRe
   let running = true;
   let captured = false; // mouse-trap: the match is frozen until the player captures their mouse
   let last = performance.now();
+
+  // Blaster: click while captured to fire a projectile that locks the opponent's paddle on a
+  // hit (mirrors the base game's BLASTER). Ammo carries across the boss's phases via the result.
+  const hasBlaster = opts.ammo !== undefined;
+  let ammo = opts.ammo ?? 0;
+  let botDisabled = 0; // seconds the opponent paddle stays locked after a blaster hit
+  const shots: { x: number; y: number; vx: number; vy: number; life: number }[] = [];
 
   function serve(towardPlayer: boolean) {
     ball.x = CW / 2; ball.y = CH / 2;
@@ -307,19 +323,43 @@ export function playMatch(host: HTMLElement, opts: MatchOpts, onEnd: (r: MatchRe
     botAim = base + (Math.random() * 2 - 1) * cfg.error;
   }
 
+  // Fire a blaster shot from the player's paddle, auto-aimed at the opponent within the cone.
+  function fire() {
+    if (ammo <= 0) return;
+    ammo--;
+    const sx = MARGIN + PADDLE_W / 2 + BALL_R, sy = playerY;
+    const ang = clamp(Math.atan2(botY - sy, (CW - MARGIN) - sx), -BLASTER.maxAngle, BLASTER.maxAngle);
+    shots.push({ x: sx, y: sy, vx: Math.cos(ang) * BLASTER.speed, vy: Math.sin(ang) * BLASTER.speed, life: BLASTER.life });
+  }
+
   function step(dt: number) {
     if (!captured) return; // frozen until the player captures their mouse to the court
     // Player paddle: ease toward pointer target (snappy but not instant).
     playerY += (targetY - playerY) * Math.min(1, dt * 18);
     playerY = clamp(playerY, PADDLE_H / 2, CH - PADDLE_H / 2);
 
-    // Bot paddle: re-aim on its reaction clock, then steer toward the aim.
-    botReact -= dt;
-    if (botReact <= 0) { botReact = opts.bot.react; recomputeBotAim(); }
-    const dy = botAim - botY;
-    const move = PADDLE_SPEED * dt;
-    botY += clamp(dy, -move, move);
-    botY = clamp(botY, PADDLE_H / 2, CH - PADDLE_H / 2);
+    // Bot paddle: frozen while blaster-disabled; otherwise re-aim and steer toward the aim.
+    if (botDisabled > 0) {
+      botDisabled -= dt;
+    } else {
+      botReact -= dt;
+      if (botReact <= 0) { botReact = opts.bot.react; recomputeBotAim(); }
+      const dy = botAim - botY;
+      const move = PADDLE_SPEED * dt;
+      botY += clamp(dy, -move, move);
+      botY = clamp(botY, PADDLE_H / 2, CH - PADDLE_H / 2);
+    }
+
+    // Advance blaster projectiles: reflect off top/bottom, lock the bot paddle on a hit.
+    for (let i = shots.length - 1; i >= 0; i--) {
+      const s = shots[i];
+      s.x += s.vx * dt; s.y += s.vy * dt; s.life -= dt;
+      if (s.y < BLASTER.r) { s.y = BLASTER.r; s.vy = Math.abs(s.vy); }
+      if (s.y > CH - BLASTER.r) { s.y = CH - BLASTER.r; s.vy = -Math.abs(s.vy); }
+      const hit = s.x + BLASTER.r > CW - MARGIN - PADDLE_W / 2 && Math.abs(s.y - botY) < PADDLE_H / 2 + BLASTER.r;
+      if (hit) { botDisabled = BLASTER.disable; shots.splice(i, 1); continue; }
+      if (s.life <= 0 || s.x > CW || s.x < 0) shots.splice(i, 1);
+    }
 
     if (serveTimer > 0) { serveTimer -= dt; return; }
 
@@ -363,7 +403,7 @@ export function playMatch(host: HTMLElement, opts: MatchOpts, onEnd: (r: MatchRe
     if (!running) return;
     running = false;
     cleanup();
-    onEnd({ playerScore: pScore, oppScore: oScore, won: pScore > oScore });
+    onEnd({ playerScore: pScore, oppScore: oScore, won: pScore > oScore, ammoLeft: ammo });
   }
 
   function render() {
@@ -375,11 +415,17 @@ export function playMatch(host: HTMLElement, opts: MatchOpts, onEnd: (r: MatchRe
     ctx.lineWidth = 3; ctx.setLineDash([14, 16]);
     ctx.beginPath(); ctx.moveTo(CW / 2, 0); ctx.lineTo(CW / 2, CH); ctx.stroke();
     ctx.setLineDash([]);
-    // Paddles.
+    // Paddles. The opponent flashes red while blaster-locked.
     ctx.fillStyle = '#7fd1ff';
     ctx.fillRect(MARGIN - PADDLE_W / 2, playerY - PADDLE_H / 2, PADDLE_W, PADDLE_H);
-    ctx.fillStyle = opts.skin === 'minion' ? '#ffe14d' : '#ff8a5c';
+    ctx.fillStyle = botDisabled > 0 ? '#ff4d4d' : (opts.skin === 'minion' ? '#ffe14d' : '#ff8a5c');
     ctx.fillRect(CW - MARGIN - PADDLE_W / 2, botY - PADDLE_H / 2, PADDLE_W, PADDLE_H);
+    // Blaster projectiles.
+    for (const s of shots) {
+      ctx.fillStyle = '#9ff'; ctx.shadowColor = '#7fd1ff'; ctx.shadowBlur = 12;
+      ctx.beginPath(); ctx.arc(s.x, s.y, BLASTER.r, 0, Math.PI * 2); ctx.fill();
+      ctx.shadowBlur = 0;
+    }
     // Ball — fog mode hides it except near a paddle.
     let alpha = 1;
     if (opts.mods.fog) {
@@ -391,6 +437,7 @@ export function playMatch(host: HTMLElement, opts: MatchOpts, onEnd: (r: MatchRe
     ctx.beginPath(); ctx.arc(ball.x, ball.y, BALL_R, 0, Math.PI * 2); ctx.fill();
     ctx.globalAlpha = 1;
     scoreEl.textContent = `${pScore}   ${oScore}`;
+    if (hasBlaster) ammoEl.textContent = `🔫 ${ammo} ${'▮'.repeat(Math.min(ammo, 15))}`;
   }
 
   function loop(now: number) {
@@ -429,7 +476,10 @@ export function playMatch(host: HTMLElement, opts: MatchOpts, onEnd: (r: MatchRe
       e.preventDefault();
     }
   }
-  function onClick() { if (document.pointerLockElement !== canvas) canvas.requestPointerLock(); }
+  function onClick() {
+    if (document.pointerLockElement !== canvas) { canvas.requestPointerLock(); return; }
+    if (captured) fire(); // a click while captured fires the blaster
+  }
   function onLockChange() {
     const locked = document.pointerLockElement === canvas;
     if (locked) { captured = true; showPrompt(false); }
@@ -708,6 +758,7 @@ async function runCampaign(ctx: RunCtx, close: () => void) {
   stopAllMusic();
 
   let scored = 0, allowed = 0, stageReached = 1, won = false;
+  let ammo = 0; // blaster shots, gifted by Avery before the Davis fight; persists across phases
 
   clear();
   await vn(ctx, 'Davis', '/davisclarke.jpg', COLD_OPEN);
@@ -747,9 +798,11 @@ async function runCampaign(ctx: RunCtx, close: () => void) {
       const r = await match(ctx, {
         name: stage.name, portrait: ph.portrait, winScore: ph.winScore,
         mods: ph.mods, bot: stage.bot, fx: ph.fx, skin: stage.skin, phaseLabel: ph.label,
+        ammo: isDavis ? ammo : undefined,
       });
       if (cancelled()) { music.pause(); return; }
       scored += r.playerScore; allowed += r.oppScore;
+      if (isDavis) ammo = r.ammoLeft; // carry remaining shots into the next phase
       if (!r.won) { lostRun = true; break; }
     }
     music.pause();
@@ -769,6 +822,7 @@ async function runCampaign(ctx: RunCtx, close: () => void) {
     clear();
     await vn(ctx, stage.name, isDavis ? '/davisclarke.jpg' : stage.portrait, stage.defeat);
     if (cancelled()) return;
+    if (stage.id === 'avery') ammo = 15; // Avery hands over the blaster before Davis
   }
 
   if (cancelled()) return;
