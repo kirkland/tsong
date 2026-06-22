@@ -161,6 +161,29 @@ export async function initDb(): Promise<void> {
     `);
     await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('title_slayer_v2', now()::text)`);
   }
+  // One-time account recovery: the owner lost the guest "matty supreme" account (cleared
+  // cookies) but still signs in via Google (mbeauvais@linksquares.com). Merge the orphaned
+  // "matty supreme" row into that Google account and restore the name. Re-runs until it
+  // succeeds (so a wrong email/name can be fixed and redeployed); flag is set only on success.
+  const mergedMatty = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'merge_matty_supreme_v1'`);
+  if (mergedMatty.rowCount === 0) {
+    const tgt = await pool.query<{ id: string }>(
+      `SELECT id FROM players WHERE email = 'mbeauvais@linksquares.com' LIMIT 1`,
+    );
+    const src = await pool.query<{ id: string }>(
+      `SELECT id FROM players WHERE name = 'matty supreme' ORDER BY wins DESC, coins DESC LIMIT 1`,
+    );
+    const targetPid = tgt.rows[0]?.id;
+    const sourcePid = src.rows[0]?.id;
+    if (targetPid && sourcePid && targetPid !== sourcePid) {
+      await migratePlayer(sourcePid, targetPid);
+      await pool.query(`UPDATE players SET name = 'matty supreme' WHERE id = $1`, [targetPid]);
+      await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('merge_matty_supreme_v1', now()::text)`);
+      console.log(`merged matty supreme (${sourcePid}) into Google account (${targetPid})`);
+    } else {
+      console.warn(`matty-supreme merge skipped — target(${targetPid ?? 'none'}) / source(${sourcePid ?? 'none'}); will retry next boot`);
+    }
+  }
   console.log('leaderboard DB ready');
 }
 
@@ -467,13 +490,14 @@ export async function addCoins(pid: string, name: string, delta: number): Promis
  *  then delete the old row. No-op if the pids are the same or oldPid doesn't exist. */
 export async function migratePlayer(oldPid: string, newPid: string): Promise<void> {
   if (!pool || !oldPid || !newPid || oldPid === newPid) return;
-  const { rows } = await pool.query<{ wins: number; losses: number; elo: number; coins: number; owned: string; hat: string | null; skin: string | null }>(
-    `SELECT wins, losses, elo, coins, owned, hat, skin FROM players WHERE id = $1`,
+  const { rows } = await pool.query<{ wins: number; losses: number; elo: number; coins: number; owned: string; hat: string | null; skin: string | null; trail: string | null; title: string | null }>(
+    `SELECT wins, losses, elo, coins, owned, hat, skin, trail, title FROM players WHERE id = $1`,
     [oldPid],
   );
   if (!rows.length) return; // nothing to migrate
   const old = rows[0];
-  // Merge: add wins/losses/coins; take the higher ELO; union owned items; keep Google hat/skin unless unset.
+  // Merge: add wins/losses/coins; take the higher ELO; union owned items; keep the target's
+  // equipped cosmetics, falling back to the old account's for any slot the target hasn't set.
   await pool.query(
     `UPDATE players SET
        wins   = wins   + $2,
@@ -484,9 +508,11 @@ export async function migratePlayer(oldPid: string, newPid: string): Promise<voi
                   CASE WHEN $6 = '' THEN owned ELSE owned || ',' || $6 END
                 END,
        hat    = COALESCE(hat, $7),
-       skin   = COALESCE(skin, $8)
+       skin   = COALESCE(skin, $8),
+       trail  = COALESCE(trail, $9),
+       title  = COALESCE(title, $10)
      WHERE id = $1`,
-    [newPid, old.wins, old.losses, old.elo, old.coins, old.owned, old.hat, old.skin],
+    [newPid, old.wins, old.losses, old.elo, old.coins, old.owned, old.hat, old.skin, old.trail, old.title],
   );
   await pool.query(`DELETE FROM players WHERE id = $1`, [oldPid]);
 }
