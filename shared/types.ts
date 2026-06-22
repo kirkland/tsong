@@ -149,7 +149,7 @@ export const COIN_SCALE = 100;
 export interface CosmeticItem {
   id: string;
   name: string;
-  slot: 'hat' | 'skin';
+  slot: 'hat' | 'skin' | 'trail';
   price: number;
 }
 // Static cosmetics cost 1000 coins; animated ones cost 2000 (10×/20× the COIN_SCALE base).
@@ -187,6 +187,13 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'wood', name: 'Wood', slot: 'skin', price: 1000 },
   { id: 'hologram', name: 'Hologram', slot: 'skin', price: 2000 }, // animated
   { id: 'venom', name: 'Venom', slot: 'skin', price: 2000 }, // animated
+  // Paddle trails — a fading streak behind the paddle as it moves. Animated ones cost 2000.
+  { id: 'comet', name: 'Comet', slot: 'trail', price: 1000 },
+  { id: 'frostwake', name: 'Frost Wake', slot: 'trail', price: 1000 },
+  { id: 'shadow', name: 'Shadow', slot: 'trail', price: 1000 },
+  { id: 'ember', name: 'Ember', slot: 'trail', price: 1000 },
+  { id: 'neonstreak', name: 'Neon Streak', slot: 'trail', price: 2000 }, // animated
+  { id: 'rainbowtrail', name: 'Rainbow Trail', slot: 'trail', price: 2000 }, // animated
 ] as const;
 export const CHAT_MAX_LEN = 200; // max characters per chat message
 export const CHAT_HISTORY = 50; // recent messages kept/sent to new joiners
@@ -262,7 +269,7 @@ export type ClientMsg =
   | { type: 'doomReward' } // grant the player 1 coin (killed the DOOM minion boss)
   | { type: 'campaignScore'; score: number; stage: number; won: boolean } // record a campaign run (arcade score, furthest stage, whether Davis fell)
   | { type: 'shopBuy'; item: string } // buy a cosmetic from the shop
-  | { type: 'shopEquip'; slot: 'hat' | 'skin'; item: string | null } // equip (item) or unequip (null) a cosmetic
+  | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail'; item: string | null } // equip (item) or unequip (null) a cosmetic
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
   | { type: 'dailySpin' } // claim the once-per-24h reward spin
   | { type: 'stockInvest'; coin: string; amount: number } // sink `amount` coins into a crypto at the current price
@@ -286,6 +293,7 @@ export interface TeamPlayer {
   color: string;
   hat?: string | null; // equipped cosmetic hat (purely visual — no collision)
   skin?: string | null; // equipped cosmetic skin (purely visual — no collision)
+  trail?: string | null; // equipped paddle trail (purely visual — no collision)
 }
 
 export interface PaddleState {
@@ -602,6 +610,7 @@ export interface WalletMsg {
   owned: string[]; // item ids owned
   hat: string | null; // equipped hat
   skin: string | null; // equipped skin
+  trail: string | null; // equipped paddle trail
   // Your open wagers on the live duel (multiple allowed in live betting); each locks the odds
   // it was placed at. Empty when you have none.
   bets: Array<{ side: Side; amount: number; odds: number }>;

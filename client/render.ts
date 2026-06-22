@@ -82,6 +82,8 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
     const p = s.paddles[side];
     if (p.players.length) {
       for (const pl of p.players) {
+        // Paddle trail (drawn under the paddle). Skipped while locked or minion-morphed.
+        if (pl.trail && !p.disabled && !minionOn) drawTrail(ctx, `${side}:${pl.id}`, pl.x, pl.y, p.h, pl.trail);
         if (minionOn) {
           drawMinionPaddle(ctx, pl.x, pl.y, p.h);
         } else {
@@ -607,7 +609,35 @@ const SKIN_RENDERERS: Record<string, CosmeticDraw> = {
 };
 // Draw a live skin/hat preview onto a small canvas element (used in the shop UI).
 // The canvas is scaled so the paddle fills it, then the skin is applied at full quality.
-export function drawCosmeticPreview(canvas: HTMLCanvasElement, id: string, slot: 'hat' | 'skin') {
+// Paddle trails: fading ghost copies of the paddle along its recent path. Each tint maps an
+// age index (0 = oldest) to an rgba/hsla string; animated ones use the time arg.
+type TrailTint = (i: number, n: number, t: number) => string;
+const TRAIL_TINTS: Record<string, TrailTint> = {
+  comet: (i, n) => `rgba(255,150,50,${(0.5 * (i + 1)) / n})`,
+  frostwake: (i, n) => `rgba(120,220,255,${(0.5 * (i + 1)) / n})`,
+  shadow: (i, n) => `rgba(25,25,45,${(0.55 * (i + 1)) / n})`,
+  ember: (i, n) => `rgba(255,70,25,${(0.5 * (i + 1)) / n})`,
+  neonstreak: (i, n, t) => `rgba(255,60,220,${((0.35 + 0.18 * Math.sin(t / 200)) * (i + 1)) / n})`,
+  rainbowtrail: (i, n, t) => `hsla(${(t / 12 + i * 32) % 360},90%,62%,${(0.5 * (i + 1)) / n})`,
+};
+const TRAIL_LEN = 10; // samples of paddle history kept for the streak
+const trailHistory = new Map<string, { x: number; y: number }[]>();
+function drawTrail(ctx: CanvasRenderingContext2D, key: string, cx: number, cy: number, h: number, id: string) {
+  const tint = TRAIL_TINTS[id];
+  if (!tint) return;
+  let hist = trailHistory.get(key);
+  if (!hist) { hist = []; trailHistory.set(key, hist); }
+  hist.push({ x: cx, y: cy });
+  if (hist.length > TRAIL_LEN) hist.shift();
+  const t = performance.now();
+  // Draw oldest→newest, skipping the latest sample (the paddle itself covers it).
+  for (let i = 0; i < hist.length - 1; i++) {
+    ctx.fillStyle = tint(i, hist.length, t);
+    ctx.fillRect(hist[i].x - PADDLE.w / 2, hist[i].y - h / 2, PADDLE.w, h);
+  }
+}
+
+export function drawCosmeticPreview(canvas: HTMLCanvasElement, id: string, slot: 'hat' | 'skin' | 'trail') {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
   const W = canvas.width, H = canvas.height;
@@ -619,7 +649,20 @@ export function drawCosmeticPreview(canvas: HTMLCanvasElement, id: string, slot:
   ctx.translate(W / 2, H / 2);
   ctx.scale(scale, scale);
   const cx = 0, cy = 0, h = pH;
-  if (slot === 'skin') {
+  if (slot === 'trail') {
+    // A few fading copies trailing upward, then the paddle — suggests motion.
+    const tint = TRAIL_TINTS[id];
+    const n = 5;
+    for (let i = 0; i < n; i++) {
+      if (tint) ctx.fillStyle = tint(i, n + 1, 0);
+      ctx.fillRect(cx - PADDLE.w / 2, cy - h / 2 + (n - i) * 9, PADDLE.w, h * 0.7);
+    }
+    ctx.fillStyle = '#3a6df0';
+    ctx.save(); clipPaddle(ctx, cx, cy, h);
+    ctx.fillRect(cx - PADDLE.w / 2, cy - h / 2, PADDLE.w, h);
+    ctx.restore();
+    skinHighlight(ctx, cx, cy, h);
+  } else if (slot === 'skin') {
     const fn = SKIN_RENDERERS[id];
     if (fn) {
       fn(ctx, cx, cy, h);
