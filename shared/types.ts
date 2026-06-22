@@ -149,8 +149,9 @@ export const COIN_SCALE = 100;
 export interface CosmeticItem {
   id: string;
   name: string;
-  slot: 'hat' | 'skin' | 'trail';
+  slot: 'hat' | 'skin' | 'trail' | 'title';
   price: number;
+  locked?: 'campaign'; // not buyable — unlocked by an in-game achievement (e.g. clearing the campaign)
 }
 // Static cosmetics cost 1000 coins; animated ones cost 2000 (10×/20× the COIN_SCALE base).
 export const COSMETICS: readonly CosmeticItem[] = [
@@ -194,6 +195,15 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'ember', name: 'Ember', slot: 'trail', price: 1000 },
   { id: 'neonstreak', name: 'Neon Streak', slot: 'trail', price: 2000 }, // animated
   { id: 'rainbowtrail', name: 'Rainbow Trail', slot: 'trail', price: 2000 }, // animated
+  // Titles — flair shown next to your name on the leaderboard. Mostly buyable; "Davis Slayer"
+  // is NOT buyable — it's unlocked only by clearing the campaign.
+  { id: 'davisslayer', name: '🏆 Davis Slayer', slot: 'title', price: 0, locked: 'campaign' },
+  { id: 'clown', name: '🤡 Clown', slot: 'title', price: 1000 },
+  { id: 'sharpshooter', name: '🎯 Sharpshooter', slot: 'title', price: 3000 },
+  { id: 'champion', name: '🏅 Champion', slot: 'title', price: 3000 },
+  { id: 'highroller', name: '💸 High Roller', slot: 'title', price: 5000 },
+  { id: 'legend', name: '⭐ Legend', slot: 'title', price: 8000 },
+  { id: 'goat', name: '🐐 GOAT', slot: 'title', price: 10000 },
 ] as const;
 export const CHAT_MAX_LEN = 200; // max characters per chat message
 export const CHAT_HISTORY = 50; // recent messages kept/sent to new joiners
@@ -269,7 +279,7 @@ export type ClientMsg =
   | { type: 'doomReward' } // grant the player 1 coin (killed the DOOM minion boss)
   | { type: 'campaignScore'; score: number; stage: number; won: boolean } // record a campaign run (arcade score, furthest stage, whether Davis fell)
   | { type: 'shopBuy'; item: string } // buy a cosmetic from the shop
-  | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail'; item: string | null } // equip (item) or unequip (null) a cosmetic
+  | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'title'; item: string | null } // equip (item) or unequip (null) a cosmetic
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
   | { type: 'dailySpin' } // claim the once-per-24h reward spin
   | { type: 'stockInvest'; coin: string; amount: number } // sink `amount` coins into a crypto at the current price
@@ -471,6 +481,7 @@ export interface LeaderboardRow {
   wins: number;
   losses: number;
   elo: number;
+  title?: string | null; // equipped title id (flair shown by the name)
 }
 
 // Broadcast on connect and whenever the standings change (after a match).
@@ -611,6 +622,7 @@ export interface WalletMsg {
   hat: string | null; // equipped hat
   skin: string | null; // equipped skin
   trail: string | null; // equipped paddle trail
+  title: string | null; // equipped name title (flair shown by your name)
   // Your open wagers on the live duel (multiple allowed in live betting); each locks the odds
   // it was placed at. Empty when you have none.
   bets: Array<{ side: Side; amount: number; odds: number }>;
