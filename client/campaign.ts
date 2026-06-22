@@ -554,6 +554,27 @@ export function playVN(host: HTMLElement, speaker: string, portrait: string, lin
 
 let campaignOpen = false;
 
+// Run context threaded through the flow: lets each step register a teardown and lets the
+// flow bail the moment the player quits (Esc), without firing later VN boxes / matches.
+interface RunCtx {
+  overlay: HTMLElement;
+  net: CampaignNet;
+  token: { cancelled: boolean };
+  setStop: (stop: (() => void) | null) => void;
+}
+
+// Framing dialogue (cold open) and endings — see docs/campaign-script.md.
+const COLD_OPEN: VNLine[] = [
+  { text: 'Rough year, huh? The coins, the loans, the bad bets. I’ve seen your books.' },
+  { text: "Relax. I'm a reasonable man. Here's the deal, one time only." },
+  { text: "Win my little tournament — five of my associates — and your debt's gone. Wiped clean." },
+  { text: 'Lose?' },
+  { text: "...Let's not lose. First table's waiting." },
+];
+const DEFEAT_ENDING: VNLine[] = [
+  { text: 'Account closed.', sfx: '/you-lose.mp3' },
+];
+
 export function startCampaign(net: CampaignNet): void {
   if (campaignOpen) return;
   campaignOpen = true;
@@ -566,26 +587,52 @@ export function startCampaign(net: CampaignNet): void {
     "font-family:ui-monospace,monospace;color:#ffd166;overflow:hidden;";
 
   const menuMusic = sound('/start-music.mp3', true, 0.5);
+  let currentStop: (() => void) | null = null;
+  const token = { cancelled: false };
+  const ctx: RunCtx = { overlay, net, token, setStop: (s) => { currentStop = s; } };
 
   function close() {
     if (!campaignOpen) return;
     campaignOpen = false;
-    try { menuMusic.pause(); menuMusic.currentTime = 0; } catch { /* ignore */ }
+    token.cancelled = true;
+    if (currentStop) { try { currentStop(); } catch { /* ignore */ } currentStop = null; }
+    stopAllMusic();
     document.removeEventListener('keydown', onKey);
     overlay.remove();
   }
   function onKey(e: KeyboardEvent) { if (e.key === 'Escape') close(); }
   document.addEventListener('keydown', onKey);
 
-  renderTitle(overlay, net, close);
+  renderTitle(ctx, close);
   document.body.appendChild(overlay);
   // Autoplay is gated until a user gesture; the launching click usually satisfies it.
   menuMusic.play().catch(() => { /* will start on first interaction */ });
 }
 
+function stopAllMusic() {
+  for (const a of audioCache.values()) { if (a.loop) { try { a.pause(); a.currentTime = 0; } catch { /* ignore */ } } }
+}
+
+// Promise wrappers so the flow reads top-to-bottom; each registers its stop() for teardown.
+function vn(ctx: RunCtx, speaker: string, portrait: string, lines: VNLine[]): Promise<void> {
+  return new Promise((res) => {
+    const stop = playVN(ctx.overlay, speaker, portrait, lines, () => { ctx.setStop(null); res(); });
+    ctx.setStop(stop);
+  });
+}
+function match(ctx: RunCtx, opts: MatchOpts): Promise<MatchResult> {
+  return new Promise((res) => {
+    const stop = playMatch(ctx.overlay, opts, (r) => { ctx.setStop(null); res(r); });
+    ctx.setStop(stop);
+  });
+}
+
 // --- Title screen ---
-function renderTitle(overlay: HTMLElement, net: CampaignNet, close: () => void) {
+function renderTitle(ctx: RunCtx, close: () => void) {
+  const { overlay } = ctx;
   overlay.innerHTML = '';
+  const menu = sound('/start-music.mp3', true, 0.5);
+  menu.play().catch(() => { /* gated until gesture */ });
 
   const card = document.createElement('div');
   card.style.cssText = 'text-align:center;max-width:680px;padding:24px;';
@@ -603,9 +650,7 @@ function renderTitle(overlay: HTMLElement, net: CampaignNet, close: () => void) 
   const start = document.createElement('button');
   start.textContent = '▶ ENTER THE GAUNTLET';
   start.style.cssText = btnStyle('#7fd1ff', '#2a5a6a', '#0e1a22');
-  // TEMP (step 2): launch a single test match vs Stage 1 to exercise the Pong engine.
-  // The full VN + stage-flow wrapper replaces this next pass.
-  start.onclick = () => playtest(overlay, net, close);
+  start.onclick = () => { void runCampaign(ctx, close); };
 
   const quit = document.createElement('button');
   quit.textContent = 'Quit (Esc)';
@@ -616,50 +661,125 @@ function renderTitle(overlay: HTMLElement, net: CampaignNet, close: () => void) 
   card.appendChild(tag);
   card.appendChild(start);
   card.appendChild(quit);
-  card.appendChild(renderBoard(net));
+  card.appendChild(renderBoard(ctx.net));
   overlay.appendChild(card);
 }
 
-// TEMP (step 3): a single Stage 1 run — intro VN → match → (on win) defeat VN → result —
-// to verify the VN engine + Pong engine together. The full multi-stage flow lands next.
-function playtest(overlay: HTMLElement, net: CampaignNet, close: () => void) {
-  overlay.innerHTML = '';
-  const stage = CAMPAIGN_STAGES[0];
-  try { sound('/start-music.mp3').pause(); } catch { /* ignore */ }
+// --- The full run: cold open → 5 stages (Davis = 3 phases) → ending → score submit. ---
+interface RunSummary { scored: number; allowed: number; finalScore: number; stageReached: number; won: boolean; }
 
-  playVN(overlay, stage.name, stage.portrait, stage.intro, () => {
-    overlay.innerHTML = '';
+async function runCampaign(ctx: RunCtx, close: () => void) {
+  const { overlay } = ctx;
+  const cancelled = () => ctx.token.cancelled;
+  const clear = () => { overlay.innerHTML = ''; };
+  stopAllMusic();
+
+  let scored = 0, allowed = 0, stageReached = 1, won = false;
+
+  clear();
+  await vn(ctx, 'Davis', '/davisclarke.jpg', COLD_OPEN);
+  if (cancelled()) return;
+
+  for (let i = 0; i < CAMPAIGN_STAGES.length; i++) {
+    const stage = CAMPAIGN_STAGES[i];
+    const isDavis = i === CAMPAIGN_STAGES.length - 1;
+    stageReached = i + 1;
+
+    clear();
+    await vn(ctx, stage.name, stage.portrait, stage.intro);
+    if (cancelled()) return;
+
+    // Phase list: normal stages have one; Davis has his base phase + stage.phases.
+    const phases = [
+      { portrait: stage.portrait, winScore: stage.winScore, mods: stage.mods, fx: stage.fx,
+        label: stage.phases ? 'PHASE 1/3' : undefined, transition: [] as VNLine[] },
+      ...(stage.phases ?? []).map((p, k) => ({
+        portrait: p.portrait, winScore: p.winScore, mods: p.mods, fx: p.fx,
+        label: `PHASE ${k + 2}/3`, transition: p.transition,
+      })),
+    ];
+
+    // One continuous music track per stage (the boss track spans all 3 phases).
     const music = sound(stage.music, true, 0.45);
-    music.currentTime = 0;
-    music.play().catch(() => { /* gated until gesture */ });
-    playMatch(overlay, {
-      name: stage.name, portrait: stage.portrait, winScore: stage.winScore,
-      mods: stage.mods, bot: stage.bot, fx: stage.fx, skin: stage.skin,
-      phaseLabel: 'TEST MATCH',
-    }, (r) => {
-      try { music.pause(); } catch { /* ignore */ }
-      const toResult = () => renderResult(overlay, net, close, r);
-      if (r.won) { overlay.innerHTML = ''; playVN(overlay, stage.name, stage.portrait, stage.defeat, toResult); }
-      else toResult();
-    });
-  });
+    music.currentTime = 0; music.play().catch(() => {});
+
+    let lostRun = false;
+    for (const ph of phases) {
+      if (ph.transition.length) {
+        clear();
+        await vn(ctx, stage.name, ph.portrait, ph.transition);
+        if (cancelled()) { music.pause(); return; }
+      }
+      clear();
+      const r = await match(ctx, {
+        name: stage.name, portrait: ph.portrait, winScore: ph.winScore,
+        mods: ph.mods, bot: stage.bot, fx: ph.fx, skin: stage.skin, phaseLabel: ph.label,
+      });
+      if (cancelled()) { music.pause(); return; }
+      scored += r.playerScore; allowed += r.oppScore;
+      if (!r.won) { lostRun = true; break; }
+    }
+    music.pause();
+
+    if (lostRun) {
+      clear();
+      await vn(ctx, 'Davis', '/davisclarke.jpg', DEFEAT_ENDING);
+      if (cancelled()) return;
+      break;
+    }
+
+    // Stage cleared. Davis's "defeat" lines double as the victory ending.
+    if (isDavis) {
+      won = true;
+      try { const s = sound('/yay.mp3'); s.currentTime = 0; s.play().catch(() => {}); } catch { /* ignore */ }
+    }
+    clear();
+    await vn(ctx, stage.name, isDavis ? '/davisclarke.jpg' : stage.portrait, stage.defeat);
+    if (cancelled()) return;
+  }
+
+  if (cancelled()) return;
+  const finalScore = (scored - allowed) * 1000;
+  ctx.net.submitScore(finalScore, stageReached, won);
+  renderResult(ctx, close, { scored, allowed, finalScore, stageReached, won });
 }
 
-function renderResult(overlay: HTMLElement, net: CampaignNet, close: () => void, r: MatchResult) {
+function renderResult(ctx: RunCtx, close: () => void, s: RunSummary) {
+  const { overlay } = ctx;
   overlay.innerHTML = '';
   const menu = sound('/start-music.mp3', true, 0.5);
-  menu.play().catch(() => { /* ignore */ });
+  menu.currentTime = 0; menu.play().catch(() => { /* ignore */ });
+
   const card = document.createElement('div');
-  card.style.cssText = 'text-align:center;max-width:520px;padding:24px;';
+  card.style.cssText = 'text-align:center;max-width:560px;padding:24px;';
+  const heading = s.won ? '🏆 DEBT CLEARED' : '💀 ACCOUNT CLOSED';
   card.innerHTML =
-    `<div style="font-size:46px;margin-bottom:6px">${r.won ? '🏆' : '💀'}</div>` +
-    `<h2 style="letter-spacing:2px;margin:0 0 6px">${r.won ? 'YOU WIN' : 'YOU LOSE'}</h2>` +
-    `<p style="color:#c8b6ff;font-size:15px">Final ${r.playerScore} – ${r.oppScore}</p>`;
+    `<div style="font-size:46px;margin-bottom:4px">${s.won ? '🏆' : '💀'}</div>` +
+    `<h2 style="letter-spacing:2px;margin:0 0 4px">${heading}</h2>` +
+    `<p style="color:#c8b6ff;font-size:14px;margin:0 0 14px">Reached stage ${s.stageReached}/${CAMPAIGN_STAGE_COUNT}</p>` +
+    `<div style="font-size:13px;color:#bbb;line-height:1.8">` +
+      `<div>Points scored: <b style="color:#7fd1ff">${s.scored}</b></div>` +
+      `<div>Points allowed: <b style="color:#ff8a5c">${s.allowed}</b></div>` +
+      `<div>(${s.scored} − ${s.allowed}) × 1000</div>` +
+    `</div>` +
+    `<div style="font-size:30px;font-weight:800;color:#ffd166;margin:10px 0 2px">${s.finalScore.toLocaleString()}</div>` +
+    `<div style="font-size:12px;color:#776;letter-spacing:2px">FINAL SCORE</div>` +
+    (s.won ? `<div style="margin-top:10px;color:#7fffa0;font-size:13px">+2500 coins on your first clear 🪙</div>` : '');
+
+  const retry = document.createElement('button');
+  retry.textContent = '↻ Run again';
+  retry.style.cssText = btnStyle('#7fd1ff', '#2a5a6a', '#0e1a22');
+  retry.onclick = () => { void runCampaign(ctx, close); };
+
   const back = document.createElement('button');
-  back.textContent = '← Back to title';
-  back.style.cssText = btnStyle('#7fd1ff', '#2a5a6a', '#0e1a22');
-  back.onclick = () => renderTitle(overlay, net, close);
+  back.textContent = 'Title';
+  back.style.cssText = btnStyle('#9aa', '#333', '#0c0c14') + 'margin-left:10px;';
+  back.onclick = () => renderTitle(ctx, close);
+
+  card.appendChild(document.createElement('br'));
+  card.appendChild(retry);
   card.appendChild(back);
+  card.appendChild(renderBoard(ctx.net));
   overlay.appendChild(card);
 }
 
