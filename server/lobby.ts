@@ -74,6 +74,7 @@ interface Conn {
   // Cached wallet/cosmetics (loaded from the DB on join). Purely cosmetic — never affects play.
   hat: string | null;
   skin: string | null;
+  trail: string | null;
 }
 
 // One step of a crypto's price random walk. Pure RNG — never tied to who invested or how
@@ -285,6 +286,7 @@ export class Lobby {
       lastChatAt: 0,
       hat: null,
       skin: null,
+      trail: null,
     };
     this.conns.set(ws, conn);
     this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
@@ -837,6 +839,7 @@ export class Lobby {
       lastChatAt: 0,
       hat: null,
       skin: null,
+      trail: null,
     };
     this.conns.set(ws, conn);
     this.teams[side].push(ws);
@@ -931,7 +934,8 @@ export class Lobby {
         if (!c) return;
         c.hat = w.hat;
         c.skin = w.skin;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        c.trail = w.trail;
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet load failed:', e));
   }
@@ -944,8 +948,8 @@ export class Lobby {
       .then((w) => {
         const c = this.conns.get(ws);
         if (!c) return;
-        c.hat = w.hat; c.skin = w.skin;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        c.hat = w.hat; c.skin = w.skin; c.trail = w.trail;
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet send failed:', e));
   }
@@ -976,7 +980,7 @@ export class Lobby {
   }
 
   /** Equip (item) or unequip (null) a cosmetic in its slot. */
-  shopEquip(ws: WebSocket, slot: 'hat' | 'skin', item: string | null) {
+  shopEquip(ws: WebSocket, slot: 'hat' | 'skin' | 'trail', item: string | null) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     if (item !== null) {
@@ -987,7 +991,7 @@ export class Lobby {
       .then((w) => {
         if (!w) return;
         const c = this.conns.get(ws);
-        if (c) { c.hat = w.hat; c.skin = w.skin; }
+        if (c) { c.hat = w.hat; c.skin = w.skin; c.trail = w.trail; }
         this.sendWallet(ws);
       })
       .catch((e) => console.error('shop equip failed:', e));
@@ -2222,6 +2226,7 @@ export class Lobby {
           color: c.color,
           hat: c.hat,
           skin: c.skin,
+          trail: c.trail,
         };
       });
       return {

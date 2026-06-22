@@ -557,7 +557,7 @@ const net = connect(
     } else if (msg.type === 'campaignLeaderboard') {
       campaignScores = msg.rows;
     } else if (msg.type === 'wallet') {
-      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
+      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
       rouletteHandle.setCoins(msg.coins);
       // During a roulette spin, hold every coin-total display (toolbar tab, shop, market) at its
       // pre-result value until the wheel lands — otherwise the settled balance reveals the outcome
@@ -1364,10 +1364,10 @@ campaignBtn.addEventListener('click', async () => {
 });
 
 // --- Coins, cosmetics shop & betting ---
-let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
-  { coins: 0, owned: [], hat: null, skin: null, bets: [], nextSpinAt: 0, bonusSpins: 0 };
+let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
+  { coins: 0, owned: [], hat: null, skin: null, trail: null, bets: [], nextSpinAt: 0, bonusSpins: 0 };
 let betAmount = 100; // default wager (economy is scaled ×100); min is still 1
-let shopTab: 'hat' | 'skin' = 'hat';
+let shopTab: 'hat' | 'skin' | 'trail' = 'hat';
 const shopBtn = document.getElementById('shopBtn') as HTMLButtonElement;
 const shopPanel = document.getElementById('shopPanel') as HTMLDivElement;
 const coinCount = document.getElementById('coinCount') as HTMLSpanElement;
@@ -1375,8 +1375,16 @@ const shopCoins = document.getElementById('shopCoins') as HTMLSpanElement;
 const shopItems = document.getElementById('shopItems') as HTMLDivElement;
 const tabHats = document.getElementById('tabHats') as HTMLButtonElement;
 const tabSkins = document.getElementById('tabSkins') as HTMLButtonElement;
-tabHats.addEventListener('click', () => { shopTab = 'hat'; tabHats.classList.add('active'); tabSkins.classList.remove('active'); renderShop(); });
-tabSkins.addEventListener('click', () => { shopTab = 'skin'; tabSkins.classList.add('active'); tabHats.classList.remove('active'); renderShop(); });
+const tabTrails = document.getElementById('tabTrails') as HTMLButtonElement;
+const shopTabs = [tabHats, tabSkins, tabTrails];
+function selectShopTab(tab: 'hat' | 'skin' | 'trail', el: HTMLButtonElement) {
+  shopTab = tab;
+  for (const t of shopTabs) t.classList.toggle('active', t === el);
+  renderShop();
+}
+tabHats.addEventListener('click', () => selectShopTab('hat', tabHats));
+tabSkins.addEventListener('click', () => selectShopTab('skin', tabSkins));
+tabTrails.addEventListener('click', () => selectShopTab('trail', tabTrails));
 const spinBtn = document.getElementById('spinBtn') as HTMLButtonElement;
 let spinning = false; // a spin animation is currently playing
 spinBtn.addEventListener('click', () => {
@@ -1408,7 +1416,7 @@ document.addEventListener('click', (e) => {
 
 // Build the shop rows (buy / equip / unequip) + the betting section from the current wallet.
 // Keep track of preview canvases so the animation loop can repaint them.
-const shopPreviewCanvases: { canvas: HTMLCanvasElement; id: string; slot: 'hat' | 'skin' }[] = [];
+const shopPreviewCanvases: { canvas: HTMLCanvasElement; id: string; slot: 'hat' | 'skin' | 'trail' }[] = [];
 
 function renderShop() {
   coinCount.textContent = String(wallet.coins);
@@ -1419,7 +1427,7 @@ function renderShop() {
   for (const item of COSMETICS) {
     if (item.slot !== shopTab) continue; // show only the active tab's items
     const owned = wallet.owned.includes(item.id);
-    const equipped = (item.slot === 'hat' ? wallet.hat : wallet.skin) === item.id;
+    const equipped = (item.slot === 'hat' ? wallet.hat : item.slot === 'skin' ? wallet.skin : wallet.trail) === item.id;
     const row = document.createElement('div');
     row.className = 'shop-row';
     // Tiny live-rendered preview canvas
