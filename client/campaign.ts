@@ -126,7 +126,7 @@ export const CAMPAIGN_STAGES: CampaignStage[] = [
     fx: 'smoke',
     mods: { fog: true },
     winScore: 3,
-    bot: { react: 0.13, error: 40, predict: true, idleCenter: false },
+    bot: { react: 0.16, error: 52, predict: false, idleCenter: false },
     intro: [
       { text: "You shouldn't have made it this far. Listen— listen to me." },
       { text: 'Nobody pays Davis off. You win, you lose, doesn’t matter— the debt always—' },
@@ -272,6 +272,7 @@ export function playMatch(host: HTMLElement, opts: MatchOpts, onEnd: (r: MatchRe
   let serveTimer = SERVE_DELAY; // counts down; ball frozen at center until 0
   let botReact = 0, botAim = CH / 2;
   let running = true;
+  let captured = false; // mouse-trap: the match is frozen until the player captures their mouse
   let last = performance.now();
 
   function serve(towardPlayer: boolean) {
@@ -307,6 +308,7 @@ export function playMatch(host: HTMLElement, opts: MatchOpts, onEnd: (r: MatchRe
   }
 
   function step(dt: number) {
+    if (!captured) return; // frozen until the player captures their mouse to the court
     // Player paddle: ease toward pointer target (snappy but not instant).
     playerY += (targetY - playerY) * Math.min(1, dt * 18);
     playerY = clamp(playerY, PADDLE_H / 2, CH - PADDLE_H / 2);
@@ -402,20 +404,51 @@ export function playMatch(host: HTMLElement, opts: MatchOpts, onEnd: (r: MatchRe
   }
   let raf = requestAnimationFrame(loop);
 
-  // --- input ---
-  function pointerY(e: { clientY: number }): number {
+  // --- input + mouse trap ---
+  // "Click to capture": pointer-lock the canvas so the cursor can't wander off mid-rally
+  // (mirrors the main game). While locked, the paddle moves by relative mouse motion; touch
+  // controls absolutely. The match is frozen until captured, and re-freezes if the lock is lost.
+  const prompt = document.createElement('div');
+  prompt.textContent = '🖱 click to capture your mouse';
+  prompt.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;' +
+    'color:#fff;font-size:18px;letter-spacing:1px;background:rgba(0,0,0,.45);border-radius:8px;' +
+    'pointer-events:none;font-family:ui-monospace,monospace;';
+  wrap.appendChild(prompt);
+  const showPrompt = (on: boolean) => { prompt.style.display = on ? 'flex' : 'none'; };
+
+  function onMove(e: MouseEvent) {
+    if (document.pointerLockElement !== canvas) return;
     const r = canvas.getBoundingClientRect();
-    return clamp(((e.clientY - r.top) / r.height) * CH, 0, CH);
+    targetY = clamp(targetY + e.movementY * (CH / r.height), 0, CH);
   }
-  function onMove(e: MouseEvent) { targetY = pointerY(e); }
-  function onTouch(e: TouchEvent) { if (e.touches[0]) { targetY = pointerY(e.touches[0]); e.preventDefault(); } }
+  function onTouch(e: TouchEvent) {
+    if (e.touches[0]) {
+      const r = canvas.getBoundingClientRect();
+      targetY = clamp(((e.touches[0].clientY - r.top) / r.height) * CH, 0, CH);
+      captured = true; showPrompt(false);
+      e.preventDefault();
+    }
+  }
+  function onClick() { if (document.pointerLockElement !== canvas) canvas.requestPointerLock(); }
+  function onLockChange() {
+    const locked = document.pointerLockElement === canvas;
+    if (locked) { captured = true; showPrompt(false); }
+    else { captured = false; showPrompt(true); } // lost the lock (Esc / focus) — freeze + re-prompt
+  }
   canvas.addEventListener('mousemove', onMove);
+  canvas.addEventListener('touchstart', onTouch, { passive: false });
   canvas.addEventListener('touchmove', onTouch, { passive: false });
+  canvas.addEventListener('click', onClick);
+  document.addEventListener('pointerlockchange', onLockChange);
 
   function cleanup() {
     cancelAnimationFrame(raf);
     canvas.removeEventListener('mousemove', onMove);
+    canvas.removeEventListener('touchstart', onTouch);
     canvas.removeEventListener('touchmove', onTouch);
+    canvas.removeEventListener('click', onClick);
+    document.removeEventListener('pointerlockchange', onLockChange);
+    if (document.pointerLockElement === canvas) document.exitPointerLock();
     wrap.remove();
   }
 
