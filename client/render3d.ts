@@ -12,7 +12,7 @@
 // of the Vite build also keeps the (small) production VPS from OOMing while bundling.
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js';
 import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, POWERUPS, TARGET, PowerupKind, Side, StateMsg } from '../shared/types';
-import { drawLegendIcon, drawDiamondIcon } from './render';
+import { drawLegendIcon, drawDiamondIcon, blockHue } from './render';
 
 export interface BlasterAim { side: Side; angle: number; }
 
@@ -724,6 +724,7 @@ export function createRenderer(container: HTMLElement): Renderer3D {
       m.visible = true;
       m.position.set(wx(bl.x), BLOCK_H / 2, wz(bl.y));
       m.scale.set(bl.w, 1, bl.h);
+      m.material.color.setHSL(blockHue(bl.x, bl.y) / 360, 0.68, 0.5);
     });
     for (let i = s.blocks.length; i < blockPool.length; i++) blockPool[i].visible = false;
 

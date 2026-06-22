@@ -542,10 +542,10 @@ export class Game {
   addBlock(): boolean {
     if (this.status !== 'playing') return false;
     if (this.blocks.length >= BLOCK.maxCount) return false;
-    const size = () => BLOCK.min + Math.random() * (BLOCK.max - BLOCK.min);
     for (let attempt = 0; attempt < 12; attempt++) {
-      const w = size();
-      const h = size();
+      // Square, like a breakout brick (just bigger). One size drives both sides.
+      const w = BLOCK.min + Math.random() * (BLOCK.max - BLOCK.min);
+      const h = w;
       const x = COURT.w * 0.25 + Math.random() * COURT.w * 0.5;
       const y = (h / 2 + 16) + Math.random() * (COURT.h - h - 32);
       // Keep clear of the very center so it doesn't sit on the serve point.

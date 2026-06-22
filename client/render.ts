@@ -506,33 +506,32 @@ function drawDiamond(ctx: CanvasRenderingContext2D, x: number, y: number) {
   ctx.restore();
 }
 
-// A spectator-dropped block: a solid slate brick with a beveled highlight and a bolt
-// motif so it reads as a hazard the ball caroms off. Centered on (x, y).
+// A stable, varied hue for a spectator block, derived from its (fixed) position so its
+// color never flickers as other blocks come and go. Shared with the 3D renderer.
+export function blockHue(x: number, y: number): number {
+  return ((Math.round(x) * 49 + Math.round(y) * 17) % 360 + 360) % 360;
+}
+
+// A spectator-dropped block, drawn exactly like a breakout brick — a colorful rounded
+// rectangle with a top highlight and bottom shadow bar. Centered on (x, y).
 function drawBlock(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
+  const hue = blockHue(x, y);
+  const left = x - w / 2, top = y - h / 2;
+  const r = Math.min(6, Math.min(w, h) * 0.18); // brick-like rounded corners
+  const bar = Math.max(3, h * 0.08);            // highlight/shadow bar thickness
   ctx.save();
-  ctx.translate(x, y);
-  const left = -w / 2, top = -h / 2;
 
-  // Body — a slate gradient with a soft shadow so it sits above the floor.
-  const grad = ctx.createLinearGradient(0, top, 0, top + h);
-  grad.addColorStop(0, '#5a6786');
-  grad.addColorStop(1, '#2c3650');
-  ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
-  ctx.shadowBlur = 10;
-  ctx.fillStyle = grad;
-  ctx.fillRect(left, top, w, h);
-  ctx.shadowBlur = 0;
-
-  // Top/left bevel highlight + bottom/right shade for a chunky 3D edge.
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = 'rgba(180, 196, 230, 0.9)';
+  // Body
+  ctx.fillStyle = `hsl(${hue}, 68%, 48%)`;
   ctx.beginPath();
-  ctx.moveTo(left + 1, top + h - 1); ctx.lineTo(left + 1, top + 1); ctx.lineTo(left + w - 1, top + 1);
-  ctx.stroke();
-  ctx.strokeStyle = 'rgba(8, 12, 22, 0.7)';
-  ctx.beginPath();
-  ctx.moveTo(left + w - 1, top + 1); ctx.lineTo(left + w - 1, top + h - 1); ctx.lineTo(left + 1, top + h - 1);
-  ctx.stroke();
+  (ctx as CanvasRenderingContext2D & { roundRect?: (...a: unknown[]) => void }).roundRect?.(left, top, w, h, r) ?? ctx.rect(left, top, w, h);
+  ctx.fill();
+  // Top highlight
+  ctx.fillStyle = `hsla(${hue}, 75%, 78%, 0.55)`;
+  ctx.fillRect(left + 2, top + 2, w - 4, bar);
+  // Bottom shadow
+  ctx.fillStyle = `hsla(${hue}, 45%, 18%, 0.45)`;
+  ctx.fillRect(left + 2, top + h - 2 - bar, w - 4, bar);
 
   ctx.restore();
 }
