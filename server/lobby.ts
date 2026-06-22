@@ -45,7 +45,7 @@ import {
 } from '../shared/types';
 import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
-  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, DAILY_SPIN_MS,
+  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS,
   getHoldings, investStock, cashOutStock, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
   setStockCrashAt, getMarketInstability, setMarketInstability,
   getLoan, takeLoan, repayLoan, collectDefaultedLoans, realignLoansToDeadline } from './db';
@@ -977,37 +977,46 @@ export class Lobby {
     return undefined;
   }
 
-  /** "/tip <name> <amount>": gift coins from one online player to another. The transfer is
+  /** "/tip <name> <amount>": gift coins to another player — online or not. The transfer is
    *  atomic (the sender's coins are escrowed first; a failed debit gifts nothing), then the
-   *  whole room gets a cha-ching + coin shower so tipping feels good and public. */
+   *  whole room gets a cha-ching + coin shower so tipping feels good and public. An offline
+   *  recipient is looked up in the DB by name; the coins are waiting when they next sign in. */
   tip(ws: WebSocket, toName: string, amount: number) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     const amt = Math.floor(amount);
     if (!Number.isFinite(amt) || amt <= 0) { this.notify(ws, 'Tip must be a positive number of coins.'); return; }
     if (amt > MAX_TIP) { this.notify(ws, `You can tip at most ${MAX_TIP.toLocaleString()} coins at once.`); return; }
+    const display = toName.trim();
+    if (!display) { this.notify(ws, 'Who do you want to tip? Try /tip <name> <amount>.'); return; }
 
-    // Resolve the recipient by nickname (case-insensitive) among joined connections. A player
-    // can't tip themselves — match on a different stable pid, not just a different socket.
-    const target = toName.trim().toLowerCase();
-    const recipients = [...this.conns.values()].filter(
+    // Resolve the recipient by nickname (case-insensitive): prefer a live connection so the
+    // coins land instantly, otherwise fall back to a DB lookup so even offline players can be
+    // tipped. Either way they're identified by a stable pid that isn't the tipper's own.
+    const target = display.toLowerCase();
+    const online = [...this.conns.values()].find(
       (c) => c.nickname && c.pid && c.pid !== conn.pid && c.nickname.toLowerCase() === target,
     );
-    if (recipients.length === 0) { this.notify(ws, `No online player named "${toName.trim()}" to tip.`); return; }
-    const recip = recipients[0];
 
-    // Escrow the sender's coins first; bail untouched if they can't afford it (or there's no DB).
-    spendCoins(conn.pid, amt)
-      .then(async (w) => {
+    const resolve: Promise<{ pid: string; name: string } | null> = online
+      ? Promise.resolve({ pid: online.pid, name: online.nickname })
+      : findPlayerByName(display);
+
+    resolve
+      .then(async (recip) => {
+        if (!recip) { this.notify(ws, `No player named "${display}" to tip.`); return; }
+        if (recip.pid === conn.pid) { this.notify(ws, "You can't tip yourself."); return; }
+        // Escrow the sender's coins first; bail untouched if they can't afford it (or there's no DB).
+        const w = await spendCoins(conn.pid, amt);
         if (!w) { this.notify(ws, "You don't have enough coins for that tip."); this.sendWallet(ws); return; }
-        await addCoins(recip.pid, recip.nickname, amt);
-        // Refresh both parties' wallets (every tab they have open) and the net-worth board.
+        await addCoins(recip.pid, recip.name, amt);
+        // Refresh the tipper's wallet, plus any tab the recipient has open, and the net-worth board.
         this.sendWallet(ws);
         this.refreshWalletsFor([...this.conns.values()].filter((c) => c.pid === recip.pid));
         this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
         // Celebrate it room-wide: a chat line + the coin-shower/cha-ching broadcast.
-        this.echoCommand(conn, `/tip ${recip.nickname} ${amt}`);
-        const data = JSON.stringify({ type: 'tip', from: conn.nickname, to: recip.nickname, amount: amt });
+        this.echoCommand(conn, `/tip ${recip.name} ${amt}`);
+        const data = JSON.stringify({ type: 'tip', from: conn.nickname, to: recip.name, amount: amt });
         for (const sock of this.conns.keys()) {
           if (sock.readyState === sock.OPEN) sock.send(data);
         }

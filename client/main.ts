@@ -792,7 +792,7 @@ const COMMANDS: ChatCommand[] = [
   },
   {
     name: 'tip',
-    hint: 'Tip a player coins — /tip <name> <amount> (e.g. /tip alice 50)',
+    hint: 'Tip anyone coins — /tip <name> <amount>. Offline players get it next sign-in.',
     enabled: () => joined,
     disabledHint: 'join the game first',
     argOptions: () => knownPlayerNames(),

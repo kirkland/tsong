@@ -335,6 +335,19 @@ export async function getWallet(pid: string): Promise<Wallet> {
   return rows.length ? rowToWallet(rows[0]) : { ...EMPTY_WALLET };
 }
 
+/** Find a player by display name (case-insensitive), for tipping someone who isn't online.
+ *  Names aren't unique, so pick the most established match — most wins, then richest. Returns
+ *  the stable pid + the canonical stored name, or null if nobody by that name exists. */
+export async function findPlayerByName(name: string): Promise<{ pid: string; name: string } | null> {
+  if (!pool || !name.trim()) return null;
+  const { rows } = await pool.query<{ id: string; name: string }>(
+    `SELECT id, name FROM players WHERE LOWER(name) = LOWER($1)
+       ORDER BY wins DESC, coins DESC LIMIT 1`,
+    [name.trim()],
+  );
+  return rows.length ? { pid: rows[0].id, name: rows[0].name } : null;
+}
+
 /** Give a player a free bonus wheel spin (tournament reward). */
 export async function addBonusSpin(pid: string, name: string): Promise<void> {
   if (!pool || !pid) return;
