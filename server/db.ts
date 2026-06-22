@@ -127,11 +127,11 @@ export async function recordResult(winners: PlayerRef[], losers: PlayerRef[]): P
 
   const allPids = [...winners, ...losers].map((p) => p.pid);
 
-  // Upsert all players so they exist before we read ELO. Each winner also earns 1 coin.
+  // Upsert all players so they exist before we read ELO. Each winner also earns 100 coins.
   for (const w of winners) {
     await pool.query(
-      `INSERT INTO players (id, name, wins, coins) VALUES ($1, $2, 1, 1)
-         ON CONFLICT (id) DO UPDATE SET wins = players.wins + 1, coins = players.coins + 1, name = EXCLUDED.name`,
+      `INSERT INTO players (id, name, wins, coins) VALUES ($1, $2, 1, 100)
+         ON CONFLICT (id) DO UPDATE SET wins = players.wins + 1, coins = players.coins + 100, name = EXCLUDED.name`,
       [w.pid, w.name],
     );
   }

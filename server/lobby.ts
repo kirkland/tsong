@@ -441,11 +441,11 @@ export class Lobby {
     this.broadcastDoomLobby();
   }
 
-  /** Grant 1 coin for killing the DOOM minion boss. */
+  /** Grant 100 coins for killing the DOOM minion boss. */
   doomReward(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
-    addCoins(conn.pid, conn.nickname, 1)
+    addCoins(conn.pid, conn.nickname, 100)
       .then(() => this.sendWallet(ws))
       .catch((e) => console.error('doom reward failed:', e));
   }
@@ -1295,14 +1295,14 @@ export class Lobby {
   /** Called every tick after the active sim ticks. Routes to the live mode's bookkeeping. */
   sync() {
     this.expireResume();
-    // "coins" power-up: pay the collecting side 1 coin, once.
+    // "coins" power-up: pay the collecting side 100 coins, once.
     if (this.game.coinGrant) {
       const side = this.game.coinGrant;
       this.game.coinGrant = null;
       for (const c of this.connsOn(side)) {
         if (!c.pid) continue;
         const w = this.wsOfConn(c);
-        addCoins(c.pid, c.nickname, 1).then(() => { if (w) this.sendWallet(w); }).catch(() => {});
+        addCoins(c.pid, c.nickname, 100).then(() => { if (w) this.sendWallet(w); }).catch(() => {});
       }
     }
     // Safety: if a duel was abandoned (back to 'waiting' with no result) or we slid into
