@@ -7,8 +7,9 @@ import { LeaderboardRow, NetWorthRow, LEADERBOARD_SIZE, CampaignScoreRow } from 
 
 let pool: pg.Pool | null = null;
 
-// Railway's internal connection (*.railway.internal) and localhost don't use TLS;
-// the public proxy host does. Enable a permissive SSL only for the latter.
+// Localhost and internal hostnames (a DB on the same box, or any *.internal private host)
+// don't use TLS; a remote/managed Postgres over the public internet does. Enable a
+// permissive SSL only for the latter.
 function sslFor(url: string): pg.PoolConfig['ssl'] {
   try {
     const host = new URL(url).hostname;

@@ -162,8 +162,9 @@ export class Game {
   diamondBlock: { x: number; y: number; vx: number; vy: number } | null = null;
   pinata = false; // "piñata" mode armed; spawns a drifting ball-collector
   pinataObj: PinataObj | null = null; // the live piñata during a match (else null)
-  // Spectator-dropped solid obstacles (the ball caroms off them). Center + size, court units.
-  // They accumulate through a match (capped) and clear at the next match start.
+  // Spectator-dropped obstacles. Like breakout bricks: the ball caroms off them and the
+  // block shatters on contact. Center + size, court units. They accumulate as spectators
+  // drop them (capped), get knocked out by rallies, and clear at the next match start.
   blocks: { x: number; y: number; w: number; h: number }[] = [];
   breakout = false; // "breakout" mode: destructible bricks across the centre of the court
   brickAlive: boolean[] = []; // which of the 28 bricks are still standing this point
@@ -565,23 +566,26 @@ export class Game {
   // ball isn't overlapping the (radius-expanded) box.
   private bounceBlocks(b: Ball) {
     const r = this.ballR();
-    for (const bl of this.blocks) {
-      const hw = bl.w / 2 + r;
-      const hh = bl.h / 2 + r;
-      const dx = b.x - bl.x;
-      const dy = b.y - bl.y;
-      if (Math.abs(dx) >= hw || Math.abs(dy) >= hh) continue; // not touching
-      const penX = hw - Math.abs(dx); // overlap depth on each axis
-      const penY = hh - Math.abs(dy);
-      if (penX < penY) {
-        const s = Math.sign(dx) || 1;
-        b.x = bl.x + s * hw;          // pop out sideways
-        b.vx = s * Math.abs(b.vx);    // and bounce away
+    // Just like breakout bricks: reflect on the face the ball hit first (smaller overlap),
+    // then destroy the block. One block per step so the ball can't tunnel through a seam.
+    for (let i = this.blocks.length - 1; i >= 0; i--) {
+      const bl = this.blocks[i];
+      const left = bl.x - bl.w / 2, right = bl.x + bl.w / 2;
+      const top = bl.y - bl.h / 2, bottom = bl.y + bl.h / 2;
+      if (b.x + r <= left || b.x - r >= right || b.y + r <= top || b.y - r >= bottom) continue; // no overlap
+      const overlapLeft = (b.x + r) - left;
+      const overlapRight = right - (b.x - r);
+      const overlapTop = (b.y + r) - top;
+      const overlapBot = bottom - (b.y - r);
+      const minH = Math.min(overlapLeft, overlapRight);
+      const minV = Math.min(overlapTop, overlapBot);
+      if (minH < minV) {
+        b.vx = overlapLeft < overlapRight ? -Math.abs(b.vx) : Math.abs(b.vx);
       } else {
-        const s = Math.sign(dy) || 1;
-        b.y = bl.y + s * hh;
-        b.vy = s * Math.abs(b.vy);
+        b.vy = overlapTop < overlapBot ? -Math.abs(b.vy) : Math.abs(b.vy);
       }
+      this.blocks.splice(i, 1); // one hit shatters it, like a breakout brick
+      break;
     }
   }
 

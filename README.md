@@ -53,9 +53,10 @@ The win–loss leaderboard is stored in Postgres via the `DATABASE_URL` env var.
   and empty — everything else works normally.
 - **With a DB:** set `DATABASE_URL`, e.g. run a local Postgres and
   `DATABASE_URL=postgres://user:pass@localhost:5432/tsong npm run dev`.
-- **On Railway:** add a **PostgreSQL** database to the project, then reference it from
-  the app service with a variable `DATABASE_URL = ${{Postgres.DATABASE_URL}}`. The app
-  uses the internal connection (no SSL); the public proxy host enables SSL automatically.
+- **In production:** the app runs on a single VPS (DigitalOcean) with Postgres on
+  `localhost`; `DATABASE_URL` lives in `/etc/tsong.env`. See
+  [`deploy/DEPLOY.md`](deploy/DEPLOY.md) for the full setup. (A managed/remote Postgres
+  works too — those hosts get SSL automatically.)
 
 ## Contributing
 
