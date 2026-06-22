@@ -191,12 +191,15 @@ export async function getDoomLeaderboards(): Promise<{ solo: DoomScoreRow[]; coo
 }
 
 // Record a campaign run: keep only each player's best arcade score (and the stage/won that
-// went with it). A higher score replaces the row; ties keep the existing. Returns true when
-// this run is the player's FIRST-EVER full clear (so the caller grants the one-time coin bonus).
-export async function recordCampaignScore(pid: string, name: string, score: number, stage: number, won: boolean): Promise<boolean> {
-  if (!pool || !pid) return false;
-  const prior = await pool.query(`SELECT won FROM campaign_scores WHERE pid = $1`, [pid]);
+// went with it). A higher score replaces the row; ties keep the existing. Returns flags for
+// the caller's coin bonuses: `firstClear` (first-ever full clear) and `firstPerfect` (first-ever
+// flawless run — the max score of CAMPAIGN_PERFECT_SCORE).
+export const CAMPAIGN_PERFECT_SCORE = 25000; // (25 points scored − 0 allowed) × 1000
+export async function recordCampaignScore(pid: string, name: string, score: number, stage: number, won: boolean): Promise<{ firstClear: boolean; firstPerfect: boolean }> {
+  if (!pool || !pid) return { firstClear: false, firstPerfect: false };
+  const prior = await pool.query(`SELECT won, score FROM campaign_scores WHERE pid = $1`, [pid]);
   const alreadyWon = prior.rows.length ? Boolean(prior.rows[0].won) : false;
+  const priorScore = prior.rows.length ? Number(prior.rows[0].score) : Number.NEGATIVE_INFINITY;
   await pool.query(
     `INSERT INTO campaign_scores (pid, name, score, stage, won) VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (pid) DO UPDATE
@@ -206,7 +209,10 @@ export async function recordCampaignScore(pid: string, name: string, score: numb
            won   = campaign_scores.won OR EXCLUDED.won`,
     [pid, name, Math.floor(score), Math.floor(stage), won],
   );
-  return won && !alreadyWon;
+  return {
+    firstClear: won && !alreadyWon,
+    firstPerfect: won && score >= CAMPAIGN_PERFECT_SCORE && priorScore < CAMPAIGN_PERFECT_SCORE,
+  };
 }
 
 // Top campaign arcade scores.

@@ -608,7 +608,7 @@ export class Lobby {
     if (!Number.isFinite(stage) || stage < 1) return;
     const pid = conn.pid, nick = conn.nickname;
     recordCampaignScore(pid, nick, score, stage, won)
-      .then((firstClear) => {
+      .then(({ firstClear, firstPerfect }) => {
         this.refreshCampaignLeaderboards();
         if (won) {
           // Clearing the campaign unlocks the "Davis Slayer" title (own it + auto-wear it).
@@ -621,6 +621,13 @@ export class Lobby {
             .then(() => this.sendWallet(ws))
             .catch((e) => console.error('campaign clear bonus failed:', e));
           this.announce(`🏆 ${nick} cleared Davis Collects — +${CAMPAIGN_CLEAR_BONUS} coins & the Davis Slayer title!`);
+        }
+        if (firstPerfect) {
+          // Flawless run (never conceded a point): one-time 10k-coin jackpot.
+          addCoins(pid, nick, CAMPAIGN_PERFECT_BONUS)
+            .then(() => this.sendWallet(ws))
+            .catch((e) => console.error('campaign perfect bonus failed:', e));
+          this.announce(`💯 ${nick} got a PERFECT Davis Collects run — +${CAMPAIGN_PERFECT_BONUS} coins!`);
         }
       })
       .catch((e) => console.error('campaign score save failed:', e));
@@ -2571,6 +2578,7 @@ export class Lobby {
 // --- AI opponent (bot) data ---
 
 const CAMPAIGN_CLEAR_BONUS = 2500; // one-time coin reward for a first-ever full clear of the campaign
+const CAMPAIGN_PERFECT_BONUS = 10000; // one-time jackpot for a first-ever flawless (25000) run
 const BOT_OVER_SECS = 4; // how long the win/lose screen holds before the bot leaves
 const BOT_FINISH_SECS = 10; // window for a human winner to land a fatality before the bot leaves
 
