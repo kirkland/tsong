@@ -3,6 +3,7 @@
 
 import { connect } from './net';
 import { initRoulette } from './roulette';
+import { initAds, revealAds } from './ads';
 import { draw, drawLegendIcon, setBlasterAim, drawCosmeticPreview } from './render';
 import {
   COURT,
@@ -739,6 +740,7 @@ joinForm.addEventListener('submit', (e) => {
   if (pendingMigrate) { pendingMigrate(); pendingMigrate = null; }
   overlay.style.display = 'none';
   enableChat();
+  revealAds(); // the fake banner ad only appears once you're in (never over the join screen)
 });
 
 // --- ping: notify everyone you want players ---
@@ -1551,6 +1553,15 @@ typeDieBtn.addEventListener('click', async () => {
   } catch (e) {
     console.error('Type or Die failed to load:', e);
   }
+});
+
+// --- Fake banner ad (bottom of page). Spammy clickbait for the game's own features that, when
+// clicked, actually launches them. Built now (hidden); revealed once the player joins. ---
+initAds({
+  doom: () => doomBtn.click(),
+  campaign: () => campaignBtn.click(),
+  typedie: () => typeDieBtn.click(),
+  shop: () => shopBtn.click(),
 });
 
 // --- Campaign ("Davis Collects", lazy-loaded, self-contained). Runs its own 2D Pong + VN;
