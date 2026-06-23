@@ -73,6 +73,19 @@ export const BLASTER = {
   maxAngle: Math.PI / 3, // ± aim cone off straight-across
 } as const;
 export const CURVE_SPIN = 1.4; // spin (rad/s) applied to the ball on a curve hit
+// "Roam" power-up: the paddle can push inward off its wall for a limited number of hits.
+// `maxInset` is how far toward center it can travel; `hits` is how many paddle contacts it lasts.
+export const ROAM = {
+  maxInset: 180, // court units the paddle can push inward from its default wall position
+  hits: 5,       // paddle contacts the roam power-up lasts
+} as const;
+// Spectator-dropped obstacle blocks: solid axis-aligned boxes that deflect the ball.
+// Blocks accumulate during a match (up to `maxCount`) and clear at the next match start.
+export const BLOCK = {
+  maxCount: 4, // most blocks allowed on the court at once
+  min: 40,     // minimum block side length, court units
+  max: 80,     // maximum block side length, court units
+} as const;
 // "Breakout" mode: a single column of bricks runs down the centre of the court.
 // 1 column × 22 rows of 18×18 bricks with 4-unit gaps.
 // Total 22 bricks. Wall is centred at x=400 in the 800×500 court.
@@ -131,7 +144,7 @@ export const TARGET = {
 //   rotate — the entire court rotates 90° for the rest of the match
 export const POWERUPS = [
   'grow', 'shrink', 'smash', 'slow', 'multi',
-  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate', 'fritz', 'disco', 'blaster', 'minion', 'earthquake', 'coins', 'blackout', 'bullettime', 'vortex', 'glitch', 'smoke', 'tilt',
+  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate', 'fritz', 'disco', 'blaster', 'minion', 'earthquake', 'coins', 'blackout', 'bullettime', 'vortex', 'glitch', 'smoke', 'tilt', 'roam',
 ] as const;
 export type PowerupKind = (typeof POWERUPS)[number];
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
@@ -269,7 +282,7 @@ export type ClientMsg =
   // pid = stable per-browser identity; color = chosen paddle color
   | { type: 'join'; nickname: string; pid: string; color?: string }
   | { type: 'claim'; side?: Side } // preferred side; omitted = auto-assign to the smaller team
-  | { type: 'paddle'; y: number } // desired paddle center Y, in court units
+  | { type: 'paddle'; y: number; x?: number } // desired paddle center Y (and optional roam inset X), in court units
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
   | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean } // toggle game modes
@@ -277,6 +290,8 @@ export type ClientMsg =
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
   | { type: 'forfeit' } // "/ff": leave your paddle spot mid-game (and get shamed)
   | { type: 'spawnPowerup'; kind?: string } // "/powerup [name]": spectators only — drop a power-up target (random when unnamed)
+  | { type: 'addBlock' } // spectators only — drop a solid obstacle block at a random central position
+  | { type: 'tip'; to: string; amount: number } // send coins directly to another player by nickname
   | { type: 'capture'; on: boolean } // whether this player's mouse is captured to the board
   | { type: 'kingExit' } // winner declines to stay as king of the court
   | { type: 'queueJoin' } // join the spectator queue
@@ -432,6 +447,8 @@ export interface StateMsg {
   // Which bricks are still alive (true = alive). Length = BREAKOUT.cols × BREAKOUT.rows.
   // null when breakout mode is off.
   bricks: boolean[] | null;
+  // Spectator-dropped obstacle blocks currently on the court. Cleared at each match start.
+  blocks: { x: number; y: number; w: number; h: number }[];
   fog: boolean;    // "fog of war": ball invisible except close to either paddle
   portal: boolean; // "portal walls": top/bottom walls teleport the ball to a random Y
   winner: string | null; // nickname of the winner when status === 'over'

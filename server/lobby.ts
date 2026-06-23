@@ -1562,7 +1562,7 @@ export class Lobby {
     if (side) this.game.fire(side, angle);
   }
 
-  setPaddle(ws: WebSocket, y: number) {
+  setPaddle(ws: WebSocket, y: number, x?: number) {
     const conn = this.conns.get(ws);
     if (!conn) return;
     if (this.mode === 'poly') {
@@ -1571,7 +1571,40 @@ export class Lobby {
       return;
     }
     const side = this.sideOf(ws);
-    if (side) this.game.setTarget(side, conn.id, y);
+    if (side) this.game.setTarget(side, conn.id, y, x);
+  }
+
+  /** Spectators may drop a solid obstacle block into the live match. */
+  addBlock(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn) return;
+    if (this.sideOf(ws)) return; // players can't spawn blocks (spectator-only)
+    this.game.addBlock();
+  }
+
+  /** Transfer coins from this player to another player by nickname. */
+  tip(ws: WebSocket, toNickname: string, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    const amt = Math.floor(amount);
+    if (!Number.isFinite(amt) || amt < 1) return;
+    const target = [...this.conns.values()].find((c) => c.nickname === toNickname && c.pid && c.pid !== conn.pid);
+    if (!target?.pid) return;
+    spendCoins(conn.pid, amt)
+      .then((senderWallet) => {
+        if (!senderWallet) return; // couldn't afford
+        addCoins(target.pid!, target.nickname ?? toNickname, amt)
+          .then(() => {
+            // Notify both parties.
+            const senderWs = [...this.conns.entries()].find(([, c]) => c === conn)?.[0];
+            const targetWs = [...this.conns.entries()].find(([, c]) => c === target)?.[0];
+            if (senderWs) { this.sendWallet(senderWs); this.notify(senderWs, `💸 Sent ${amt}🪙 to ${toNickname}.`); }
+            if (targetWs) { this.sendWallet(targetWs); this.notify(targetWs, `💰 ${conn.nickname} tipped you ${amt}🪙!`); }
+            this.refreshNetWorth().catch((e) => console.error('net worth after tip failed:', e));
+          })
+          .catch((e) => console.error('tip credit failed:', e));
+      })
+      .catch((e) => console.error('tip debit failed:', e));
   }
 
   // A player's mouse-capture (pointer lock) state changed. The match stays frozen until
