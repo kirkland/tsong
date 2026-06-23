@@ -185,6 +185,29 @@ export async function initDb(): Promise<void> {
       console.warn(`matty-supreme merge skipped — target(${targetPid ?? 'none'}) / source(${sourcePid ?? 'none'}); will retry next boot`);
     }
   }
+  // One-time account merge: combine every guest "boam" account into the owner's Google
+  // account (nmolloy@linksquares.com) — full merge (stats, coins, cosmetics, stocks, loan,
+  // DOOM + campaign scores) — then label the Google account "boam". Re-runs until the
+  // Google row exists (sign in once with Google first); the flag is set only on success.
+  const mergedBoam = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'merge_boam_v1'`);
+  if (mergedBoam.rowCount === 0) {
+    const tgt = await pool.query<{ id: string }>(
+      `SELECT id FROM players WHERE email = 'nmolloy@linksquares.com' ORDER BY wins DESC, coins DESC LIMIT 1`,
+    );
+    const targetPid = tgt.rows[0]?.id;
+    if (targetPid) {
+      const srcs = await pool.query<{ id: string }>(
+        `SELECT id FROM players WHERE LOWER(TRIM(name)) = 'boam' AND id <> $1`,
+        [targetPid],
+      );
+      for (const r of srcs.rows) await mergePlayerFull(r.id, targetPid);
+      await pool.query(`UPDATE players SET name = 'boam' WHERE id = $1`, [targetPid]);
+      await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('merge_boam_v1', now()::text)`);
+      console.log(`merged ${srcs.rowCount} 'boam' account(s) into Google account (${targetPid})`);
+    } else {
+      console.warn(`boam merge skipped — no player with email nmolloy@linksquares.com yet; will retry next boot`);
+    }
+  }
   console.log('leaderboard DB ready');
 }
 
@@ -529,6 +552,58 @@ export async function migratePlayer(oldPid: string, newPid: string): Promise<voi
     [newPid, old.wins, old.losses, old.elo, old.coins, old.owned, old.hat, old.skin, old.trail, old.title],
   );
   await pool.query(`DELETE FROM players WHERE id = $1`, [oldPid]);
+}
+
+/** Full account merge for combining duplicate accounts: reassigns every per-player row
+ *  (stock positions, loan, DOOM + campaign scores) from oldPid to newPid — combining on
+ *  conflicts so nothing is double-counted — then folds the players row in via migratePlayer
+ *  (stats/coins/cosmetics) and deletes the old row. No-op if the pids match. */
+export async function mergePlayerFull(oldPid: string, newPid: string): Promise<void> {
+  if (!pool || !oldPid || !newPid || oldPid === newPid) return;
+  // Stock positions: pool shares + cost basis into any existing holding of the same coin.
+  await pool.query(
+    `INSERT INTO stock_holdings (pid, coin, shares, cost)
+       SELECT $2, coin, shares, cost FROM stock_holdings WHERE pid = $1
+       ON CONFLICT (pid, coin) DO UPDATE
+         SET shares = stock_holdings.shares + EXCLUDED.shares,
+             cost   = stock_holdings.cost   + EXCLUDED.cost`,
+    [oldPid, newPid],
+  );
+  await pool.query(`DELETE FROM stock_holdings WHERE pid = $1`, [oldPid]);
+  // Loan: only one open loan per player, so move the source's only if the target has none;
+  // otherwise the target keeps its own and the source's is dropped.
+  await pool.query(
+    `INSERT INTO loans (pid, amount, owed, due_at)
+       SELECT $2, amount, owed, due_at FROM loans WHERE pid = $1
+       ON CONFLICT (pid) DO NOTHING`,
+    [oldPid, newPid],
+  );
+  await pool.query(`DELETE FROM loans WHERE pid = $1`, [oldPid]);
+  // DOOM high scores: keep the best round per mode. Co-op rows are team-keyed ("team:%"),
+  // not per-player, so only the source's solo row moves.
+  await pool.query(
+    `INSERT INTO doom_scores (pid, name, coop, round)
+       SELECT $2, name, coop, round FROM doom_scores WHERE pid = $1
+       ON CONFLICT (pid, coop) DO UPDATE
+         SET round = GREATEST(doom_scores.round, EXCLUDED.round), name = EXCLUDED.name`,
+    [oldPid, newPid],
+  );
+  await pool.query(`DELETE FROM doom_scores WHERE pid = $1`, [oldPid]);
+  // Campaign arcade: keep the best score (and the stage/won that went with it).
+  await pool.query(
+    `INSERT INTO campaign_scores (pid, name, score, stage, won)
+       SELECT $2, name, score, stage, won FROM campaign_scores WHERE pid = $1
+       ON CONFLICT (pid) DO UPDATE
+         SET name  = EXCLUDED.name,
+             score = GREATEST(campaign_scores.score, EXCLUDED.score),
+             stage = CASE WHEN EXCLUDED.score > campaign_scores.score THEN EXCLUDED.stage ELSE campaign_scores.stage END,
+             won   = campaign_scores.won OR EXCLUDED.won`,
+    [oldPid, newPid],
+  );
+  await pool.query(`DELETE FROM campaign_scores WHERE pid = $1`, [oldPid]);
+  // Finally fold the players row (wins/losses/elo/coins/owned + equipped cosmetics) in and
+  // delete the old row.
+  await migratePlayer(oldPid, newPid);
 }
 
 /** Create or update a player row — used by the OAuth callback to ensure the row exists. */
