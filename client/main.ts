@@ -1542,7 +1542,13 @@ function renderShop() {
     }
     const name = document.createElement('span');
     name.className = 'shop-name';
-    name.textContent = owned || item.locked ? item.name : `${item.name} · ${item.price}🪙`;
+    const priceSuffix = owned || item.locked ? '' : ` · ${item.price}🪙`;
+    if (item.id === 'opstask') {
+      // Show this title with its live animated rainbow font as its own shop preview.
+      name.innerHTML = `<span class="rainbow-text">${item.name}</span>${priceSuffix}`;
+    } else {
+      name.textContent = item.name + priceSuffix;
+    }
     row.appendChild(name);
     const btn = document.createElement('button');
     if (!owned && item.locked) {
@@ -3636,7 +3642,7 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
   const items = rows
     .map((r, i) => {
       const t = r.title ? COSMETICS.find((c) => c.id === r.title) : undefined;
-      const tag = t ? `<span class="lbtitle">${escapeHtml(t.name)}</span>` : '';
+      const tag = t ? `<span class="lbtitle${r.title === 'opstask' ? ' rainbow' : ''}">${escapeHtml(t.name)}</span>` : '';
       return `<li><span class="rank">${i + 1}</span><span class="lbname">${escapeHtml(
         r.name,
       )}${tag}</span><span class="pct">${r.elo ?? 500}</span>${tipBtnHtml(r.name)}</li>`;
@@ -3667,7 +3673,7 @@ function renderNetWorth(rows: NetWorthRow[]) {
       const broke = r.net < 0 ? ' broke' : '';
       const debt = r.loan > 0 ? `<span class="debt"> 🔻${r.loan}</span>` : '';
       const t = r.title ? COSMETICS.find((c) => c.id === r.title) : undefined;
-      const tag = t ? `<span class="lbtitle">${escapeHtml(t.name)}</span>` : '';
+      const tag = t ? `<span class="lbtitle${r.title === 'opstask' ? ' rainbow' : ''}">${escapeHtml(t.name)}</span>` : '';
       return `<li data-rank="${i}" title="View balance sheet"><span class="rank">${i + 1}</span><span class="lbname">${crown}${escapeHtml(
         r.name,
       )}${tag}${debt}</span><span class="worth${broke}">${r.net}🪙</span>${tipBtnHtml(r.name)}</li>`;

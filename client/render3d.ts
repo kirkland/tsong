@@ -332,6 +332,43 @@ export function createRenderer(container: HTMLElement): Renderer3D {
         }
         break;
       }
+      case 'saturn': {
+        g.add(mesh(new THREE.SphereGeometry(5.5, 16, 12), mat('#e08a3c', '#3a1e08'), 11));
+        const ring = mesh(new THREE.TorusGeometry(9, 0.9, 8, 28), mat('#e9c98a', '#5a4520'), 11);
+        ring.rotation.x = Math.PI / 2 - 0.5; g.add(ring);
+        break;
+      }
+      case 'propeller': {
+        g.add(mesh(new THREE.SphereGeometry(W * 0.55, 16, 10, 0, Math.PI * 2, 0, Math.PI / 2), mat('#e8513b', '#3a0f08'), 1));
+        const prop = new THREE.Group();
+        for (const r of [0, Math.PI]) {
+          const blade = mesh(new THREE.BoxGeometry(14, 0.6, 3), mat('#6cc1ff', '#123'), 0);
+          blade.position.x = Math.cos(r) * 7; blade.position.z = Math.sin(r) * 7;
+          blade.rotation.y = r;
+          prop.add(blade);
+        }
+        prop.position.y = 8; prop.name = 'spin'; g.add(prop);
+        break;
+      }
+      case 'flamingcrown': {
+        g.add(mesh(new THREE.CylinderGeometry(W * 0.72, W * 0.72, 6, 18), mat('#ffd23f', '#5a4500'), 3));
+        for (let i = 0; i < 5; i++) {
+          const a = (i / 5) * Math.PI * 2;
+          const fl = mesh(new THREE.ConeGeometry(2, 8, 8), mat('#ff5a1c', '#ff3000'), 9);
+          fl.position.x = Math.cos(a) * W * 0.72; fl.position.z = Math.sin(a) * W * 0.72;
+          g.add(fl);
+        }
+        break;
+      }
+      case 'diamondtiara': {
+        const band = mesh(new THREE.TorusGeometry(W * 0.7, 0.7, 8, 24, Math.PI), mat('#dfe7f5', '#445'), 2);
+        band.rotation.x = Math.PI / 2; g.add(band);
+        for (let i = -1; i <= 1; i++) {
+          const gem = mesh(new THREE.OctahedronGeometry(i === 0 ? 2.6 : 1.8), mat('#9fe0ff', '#0a2a44'), i === 0 ? 6 : 4);
+          gem.position.x = i * W * 0.5; g.add(gem);
+        }
+        break;
+      }
       default:
         g.add(mesh(new THREE.CylinderGeometry(W * 0.55, W * 0.55, 12, 16), mat('#15171c'), 6.5));
     }
@@ -629,10 +666,11 @@ export function createRenderer(container: HTMLElement): Renderer3D {
         if (pl.hat) {
           const hat = getHat(hi++, pl.hat);
           hat.visible = true;
-          const bob = pl.hat === 'halo' ? 4 + Math.sin(Date.now() / 300) * 2 : 1;
+          const bob = (pl.hat === 'halo' || pl.hat === 'saturn') ? 4 + Math.sin(Date.now() / 300) * 2 : 1;
           hat.position.set(wx(pl.x), PADDLE_H + bob, wz(pl.y));
-          if (pl.hat === 'flame') hat.scale.setScalar(0.9 + 0.15 * Math.abs(Math.sin(Date.now() / 120)));
+          if (pl.hat === 'flame' || pl.hat === 'flamingcrown') hat.scale.setScalar(0.9 + 0.15 * Math.abs(Math.sin(Date.now() / 120)));
           else hat.scale.setScalar(1);
+          if (pl.hat === 'propeller') { const sp = hat.getObjectByName('spin'); if (sp) sp.rotation.y = Date.now() / 90; }
         }
       }
     }
