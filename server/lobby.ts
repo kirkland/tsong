@@ -777,9 +777,9 @@ export class Lobby {
     this.world.leave(ws);
   }
 
-  /** Record a client's self-reported avatar position (clamped to the map in World.move). */
-  worldMove(ws: WebSocket, x: number, y: number) {
-    this.world.move(ws, x, y);
+  /** Record a client's self-reported avatar position + heading + driven car (clamped in World.move). */
+  worldMove(ws: WebSocket, x: number, y: number, a?: number, car?: string | null) {
+    this.world.move(ws, x, y, a, car);
   }
 
   /** Snapshot every in-world avatar, joining each socket's identity (id/name/color) from its Conn. */
@@ -789,7 +789,7 @@ export class Lobby {
       const c = this.conns.get(ws);
       const p = this.world.positionOf(ws);
       if (!c || !p) continue;
-      out.push({ id: c.id, name: c.nickname || 'anon', color: c.color, x: p.x, y: p.y });
+      out.push({ id: c.id, name: c.nickname || 'anon', color: c.color, x: p.x, y: p.y, a: p.a, car: p.car });
     }
     return out;
   }
@@ -1290,7 +1290,7 @@ export class Lobby {
         c.trail = w.trail;
         c.title = w.title;
         c.song = w.song;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet load failed:', e));
   }
@@ -1304,7 +1304,7 @@ export class Lobby {
         const c = this.conns.get(ws);
         if (!c) return;
         c.hat = w.hat; c.skin = w.skin; c.trail = w.trail; c.title = w.title; c.song = w.song;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet send failed:', e));
   }
@@ -1460,7 +1460,7 @@ export class Lobby {
   }
 
   /** Equip (item) or unequip (null) a cosmetic in its slot. */
-  shopEquip(ws: WebSocket, slot: 'hat' | 'skin' | 'trail' | 'title' | 'song', item: string | null) {
+  shopEquip(ws: WebSocket, slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car', item: string | null) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     if (item !== null) {

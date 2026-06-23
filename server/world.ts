@@ -8,9 +8,19 @@
 import type { WebSocket } from 'ws';
 import { WORLD } from '../shared/types';
 
+// One avatar's live state in the world. `a` (heading, radians) and `car` (driven car id, or
+// null on foot) are purely cosmetic relay state — set from the client's worldMove and fanned
+// back out so everyone renders the right thing (a walking avatar vs a pointed car).
+interface WorldPos {
+  x: number;
+  y: number;
+  a: number;
+  car: string | null;
+}
+
 export class World {
-  // ws → its avatar's position. Membership in this map IS "is in the world".
-  private pos = new Map<WebSocket, { x: number; y: number }>();
+  // ws → its avatar's state. Membership in this map IS "is in the world".
+  private pos = new Map<WebSocket, WorldPos>();
 
   has(ws: WebSocket): boolean {
     return this.pos.has(ws);
@@ -25,26 +35,28 @@ export class World {
     return this.pos.keys();
   }
 
-  positionOf(ws: WebSocket): { x: number; y: number } | undefined {
+  positionOf(ws: WebSocket): WorldPos | undefined {
     return this.pos.get(ws);
   }
 
   /** Drop a fresh avatar in at the central plaza spawn (no-op if already in the world). */
   enter(ws: WebSocket): void {
-    if (!this.pos.has(ws)) this.pos.set(ws, { x: WORLD.spawnX, y: WORLD.spawnY });
+    if (!this.pos.has(ws)) this.pos.set(ws, { x: WORLD.spawnX, y: WORLD.spawnY, a: 0, car: null });
   }
 
   leave(ws: WebSocket): void {
     this.pos.delete(ws);
   }
 
-  /** Store a self-reported position, clamped to the map. Ignores non-finite input and any
-   *  client that isn't in the world (e.g. a stray message after leaving). */
-  move(ws: WebSocket, x: number, y: number): void {
+  /** Store a self-reported position (clamped to the map) plus heading + driven car. Ignores
+   *  non-finite input and any client that isn't in the world (e.g. a stray late message). */
+  move(ws: WebSocket, x: number, y: number, a?: number, car?: string | null): void {
     const p = this.pos.get(ws);
     if (!p) return;
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
     p.x = Math.max(0, Math.min(WORLD.w, x));
     p.y = Math.max(0, Math.min(WORLD.h, y));
+    if (typeof a === 'number' && Number.isFinite(a)) p.a = a;
+    p.car = typeof car === 'string' ? car : null;
   }
 }

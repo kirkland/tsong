@@ -27,6 +27,7 @@ import {
   POWERUPS,
   TEAM_MAX,
   COSMETICS,
+  carById,
   SPIN_SEGMENTS,
   STOCKS,
   StockSide,
@@ -632,7 +633,7 @@ const net = connect(
     } else if (msg.type === 'world') {
       worldMod?.feedWorld(msg.avatars);
     } else if (msg.type === 'wallet') {
-      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
+      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, car: msg.car, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
       rouletteHandle.setCoins(msg.coins);
       if (!lootPanel.hidden) renderLoot();
       if (!marketplacePanel.hidden) renderMarketplace();
@@ -1602,17 +1603,22 @@ worldBtn.addEventListener('click', async () => {
     worldMod.startWorld({
       enter: () => net.send({ type: 'worldEnter' }),
       leave: () => net.send({ type: 'worldLeave' }),
-      move: (x, y) => net.send({ type: 'worldMove', x, y }),
+      move: (x, y, a, car) => net.send({ type: 'worldMove', x, y, a, car }),
       name: () => myName,
       color: () => myColor,
       selfId: () => myId,
+      car: () => wallet.car, // the car you've equipped in the shop (null = on foot only)
       onExit: () => worldBtn.setAttribute('aria-pressed', 'false'),
       // Walk into the Arena → hop into the play queue (you'll be seated when a spot opens).
       enterArena: () => net.send({ type: 'queueJoin' }),
       // Casino/Bank choices open the existing feature panels by triggering their toolbar buttons.
+      // Deferred to the next tick: the world tears down on this same click, and firing the button
+      // synchronously let the originating click keep bubbling to the panel's "close on outside
+      // click" handler — which instantly re-closed the panel (the casino bug). A 0ms gap lets the
+      // current click finish first, so the panel opens cleanly.
       openFeature: (feature) => {
         const id = feature === 'roulette' ? 'rouletteBtn' : feature === 'stocks' ? 'marketBtn' : 'loanBtn';
-        (document.getElementById(id) as HTMLButtonElement | null)?.click();
+        setTimeout(() => (document.getElementById(id) as HTMLButtonElement | null)?.click(), 0);
       },
     });
   } catch (e) {
@@ -1653,10 +1659,10 @@ document.addEventListener('keydown', (e) => {
 });
 
 // --- Coins, cosmetics shop & betting ---
-let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; song: string | null; exclusives: { id: string; serial: number; instanceId: number }[]; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
-  { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, exclusives: [], bets: [], nextSpinAt: 0, bonusSpins: 0 };
+let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; song: string | null; car: string | null; exclusives: { id: string; serial: number; instanceId: number }[]; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
+  { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, car: null, exclusives: [], bets: [], nextSpinAt: 0, bonusSpins: 0 };
 let betAmount = 100; // default wager (economy is scaled ×100); min is still 1
-let shopTab: 'hat' | 'skin' | 'trail' | 'title' | 'song' = 'hat';
+let shopTab: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' = 'hat';
 const shopBtn = document.getElementById('shopBtn') as HTMLButtonElement;
 const shopPanel = document.getElementById('shopPanel') as HTMLDivElement;
 const coinCount = document.getElementById('coinCount') as HTMLSpanElement;
@@ -1667,8 +1673,9 @@ const tabSkins = document.getElementById('tabSkins') as HTMLButtonElement;
 const tabTrails = document.getElementById('tabTrails') as HTMLButtonElement;
 const tabTitles = document.getElementById('tabTitles') as HTMLButtonElement;
 const tabSongs = document.getElementById('tabSongs') as HTMLButtonElement;
-const shopTabs = [tabHats, tabSkins, tabTrails, tabTitles, tabSongs];
-function selectShopTab(tab: 'hat' | 'skin' | 'trail' | 'title' | 'song', el: HTMLButtonElement) {
+const tabCars = document.getElementById('tabCars') as HTMLButtonElement;
+const shopTabs = [tabHats, tabSkins, tabTrails, tabTitles, tabSongs, tabCars];
+function selectShopTab(tab: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car', el: HTMLButtonElement) {
   shopTab = tab;
   for (const t of shopTabs) t.classList.toggle('active', t === el);
   renderShop();
@@ -1678,6 +1685,7 @@ tabSkins.addEventListener('click', () => selectShopTab('skin', tabSkins));
 tabTrails.addEventListener('click', () => selectShopTab('trail', tabTrails));
 tabTitles.addEventListener('click', () => selectShopTab('title', tabTitles));
 tabSongs.addEventListener('click', () => selectShopTab('song', tabSongs));
+tabCars.addEventListener('click', () => selectShopTab('car', tabCars));
 const spinBtn = document.getElementById('spinBtn') as HTMLButtonElement;
 let spinning = false; // a spin animation is currently playing
 spinBtn.addEventListener('click', () => {
@@ -1720,11 +1728,11 @@ function renderShop() {
   for (const item of COSMETICS) {
     if (item.slot !== shopTab) continue; // show only the active tab's items
     const owned = wallet.owned.includes(item.id);
-    const equipped = (item.slot === 'hat' ? wallet.hat : item.slot === 'skin' ? wallet.skin : item.slot === 'trail' ? wallet.trail : item.slot === 'song' ? wallet.song : wallet.title) === item.id;
+    const equipped = (item.slot === 'hat' ? wallet.hat : item.slot === 'skin' ? wallet.skin : item.slot === 'trail' ? wallet.trail : item.slot === 'song' ? wallet.song : item.slot === 'car' ? wallet.car : wallet.title) === item.id;
     const row = document.createElement('div');
     row.className = 'shop-row';
     // Titles are text flair and songs are audio — neither has a paddle preview. Songs get a ▶
-    // button to audition the clip; other non-title slots get a live preview canvas.
+    // button to audition the clip; cars get a colored swatch; other slots get a live preview canvas.
     if (item.slot === 'song') {
       const play = document.createElement('button');
       play.className = 'shop-preview-song';
@@ -1732,6 +1740,13 @@ function renderShop() {
       play.title = `Preview ${item.name}`;
       play.onclick = () => previewSong(item.audio ?? '');
       row.appendChild(play);
+    } else if (item.slot === 'car') {
+      const car = carById(item.id);
+      const sw = document.createElement('span');
+      sw.className = 'shop-preview-car';
+      sw.style.cssText = `display:inline-block;width:28px;height:18px;border-radius:4px;background:${car?.body ?? '#888'};border:2px solid ${car?.accent ?? '#222'};`;
+      sw.title = car ? `top speed ${car.speed}, grip ${car.grip}` : '';
+      row.appendChild(sw);
     } else if (item.slot !== 'title') {
       const preview = document.createElement('canvas') as HTMLCanvasElement;
       preview.width = 28; preview.height = 52;
