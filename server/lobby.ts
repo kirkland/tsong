@@ -1260,25 +1260,6 @@ export class Lobby {
       .catch((e) => console.error('stocks send failed:', e));
   }
 
-  /** Nudge a coin's price in response to a buy or sell. Impact is market-cap-weighted:
-   *  trading X% of (price × supply) moves the price by X%. Low-supply coins are more
-   *  volatile; pumping a coin that's already expensive takes proportionally more capital.
-   *  Price is clamped to [base/100, base×1000]. Broadcasts to everyone immediately. */
-  private applyTradeImpact(coin: string, value: number, direction: 'buy' | 'sell') {
-    const cur = this.stockPrices.get(coin);
-    if (!cur) return;
-    const stock = STOCKS.find((s) => s.id === coin);
-    if (!stock) return;
-    // Market-cap weighting: trading X% of market cap moves price by X%.
-    // Low-supply coins are naturally more volatile (smaller cap = bigger swings).
-    const marketCap = cur.price * stock.supply;
-    const factor = direction === 'buy' ? 1 + value / marketCap : 1 - value / marketCap;
-    const newPrice = Math.round(Math.max(stock.base / 100, Math.min(cur.price * factor, stock.base * 1_000)) * 100) / 100;
-    this.stockPrices.set(coin, { price: newPrice, prev: cur.price });
-    saveStockPrices(this.priceBoard()).catch((e) => console.error('trade impact save failed:', e));
-    for (const ws of this.conns.keys()) this.sendStocks(ws);
-  }
-
   /** Invest coins into a crypto at its current price. Coins are escrowed into shares. */
   stockInvest(ws: WebSocket, coin: string, amount: number) {
     const conn = this.conns.get(ws);
@@ -1291,7 +1272,7 @@ export class Lobby {
     investStock(conn.pid, conn.nickname, coin, amt, price)
       .then((w) => {
         if (!w) { this.sendStocks(ws); return; } // couldn't afford — just refresh the view
-        this.applyTradeImpact(coin, amt, 'buy'); // buy pressure → price up
+        this.sendStocks(ws);
         this.sendWallet(ws);
       })
       .catch((e) => console.error('stock invest failed:', e));
@@ -1307,7 +1288,7 @@ export class Lobby {
     cashOutStock(conn.pid, conn.nickname, coin, price)
       .then((res) => {
         if (!res) { this.sendStocks(ws); return; } // held nothing in that coin
-        this.applyTradeImpact(coin, res.payout, 'sell'); // sell pressure → price down
+        this.sendStocks(ws);
         this.sendWallet(ws);
       })
       .catch((e) => console.error('stock cash-out failed:', e));
