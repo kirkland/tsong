@@ -162,7 +162,7 @@ export const COIN_SCALE = 100;
 export interface CosmeticItem {
   id: string;
   name: string;
-  slot: 'hat' | 'skin' | 'trail' | 'title' | 'song';
+  slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car';
   price: number;
   locked?: 'campaign'; // not buyable — unlocked by an in-game achievement (e.g. clearing the campaign)
   audio?: string; // for 'song' items: path to the mp3 that plays during your matches
@@ -243,6 +243,10 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'song-battle', name: 'regular battle theme', slot: 'song', price: 15000, audio: '/battle.mp3' },
   { id: 'song-disco', name: 'disco', slot: 'song', price: 20000, audio: '/disco.mp3' },
   { id: 'song-davis', name: 'davis boss theme', slot: 'song', price: 30000, audio: '/davis-battle.mp3' },
+  // Cars — drive them around the World map (slot 'car'; physics/look live in CARS above).
+  { id: 'car-coupe', name: '🚗 Coupe', slot: 'car', price: 8000 },
+  { id: 'car-drifter', name: '🏎️ Drift King', slot: 'car', price: 20000 },
+  { id: 'car-muscle', name: '🚙 Muscle', slot: 'car', price: 35000 },
 ] as const;
 // --- Economy Overhaul: scarce "exclusive" cosmetics ---
 // Loot-box-only cosmetics with a HARD global mint cap (see exclusive_supply in the DB). They are
@@ -321,15 +325,42 @@ export type BotLevel = (typeof BOT_LEVELS)[number];
 // add a WORLD_BUILDINGS entry and a handler for its `kind` on the client. Nothing else in
 // the protocol needs to change.
 export const WORLD = {
-  w: 2200,      // map width, world units
-  h: 1500,      // map height, world units
-  spawnX: 1100, // where a fresh avatar appears (the central plaza)
-  spawnY: 1140,
+  w: 3200,      // map width, world units
+  h: 2200,      // map height, world units
+  spawnX: 1600, // where a fresh avatar appears (the central plaza)
+  spawnY: 1240,
 } as const;
 export const WORLD_AVATAR = {
   r: 16,        // avatar body radius, world units
-  speed: 280,   // walk speed, world units / second
+  speed: 280,   // on-foot walk speed, world units / second
 } as const;
+
+// --- Cars -------------------------------------------------------------------------------
+// You buy a car in the shop (it lives in the `car` cosmetic slot, like a hat) and drive it
+// around the world — roughly twice walking speed, with arcade drift (low grip = more slide).
+// A car id matches a COSMETICS entry with slot 'car'; CARS holds the look + physics for it.
+export interface CarSpec {
+  id: string;
+  name: string;
+  body: string;   // main paint color
+  accent: string; // roof / stripe color
+  speed: number;  // top speed, world units / second
+  accel: number;  // how fast it reaches top speed, units / s²
+  turn: number;   // steering rate, radians / second at speed
+  grip: number;   // 0..1 lateral grip per tick — lower = driftier (slides more)
+}
+export const CARS: readonly CarSpec[] = [
+  // The starter: balanced, grippy, forgiving.
+  { id: 'car-coupe',   name: 'Coupe',     body: '#e23b3b', accent: '#fff1f1', speed: 560, accel: 700, turn: 2.6, grip: 0.86 },
+  // The drifter: a touch faster and much looser — built to slide.
+  { id: 'car-drifter', name: 'Drift King', body: '#2bd4c4', accent: '#10302d', speed: 600, accel: 760, turn: 3.0, grip: 0.70 },
+  // The muscle: fastest and heaviest, wide drifts once it breaks loose.
+  { id: 'car-muscle',  name: 'Muscle',    body: '#8a5cf6', accent: '#1c1430', speed: 660, accel: 620, turn: 2.2, grip: 0.78 },
+] as const;
+export function carById(id: string | null | undefined): CarSpec | null {
+  if (!id) return null;
+  return CARS.find((c) => c.id === id) ?? null;
+}
 
 // What entering a building does (the client maps each `kind` to an action). Add a kind here
 // and a handler on the client to introduce a new venue.
@@ -348,9 +379,9 @@ export interface WorldBuilding {
   color: string; // wall color
 }
 export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
-  { id: 'arena',  kind: 'arena',  name: 'TSONG ARENA', emoji: '🏓', x: 900,  y: 220,  w: 400, h: 260, color: '#3a4ea8' },
-  { id: 'casino', kind: 'casino', name: 'CASINO',      emoji: '🎰', x: 320,  y: 640,  w: 320, h: 240, color: '#a8323a' },
-  { id: 'bank',   kind: 'bank',   name: 'BANK',        emoji: '🏦', x: 1560, y: 640,  w: 320, h: 240, color: '#2f7d4f' },
+  { id: 'arena',  kind: 'arena',  name: 'TSONG ARENA', emoji: '🏓', x: 1360, y: 300,  w: 480, h: 340, color: '#3a4ea8' },
+  { id: 'casino', kind: 'casino', name: 'CASINO',      emoji: '🎰', x: 440,  y: 1480, w: 440, h: 320, color: '#a8323a' },
+  { id: 'bank',   kind: 'bank',   name: 'BANK',        emoji: '🏦', x: 2320, y: 1480, w: 440, h: 320, color: '#2f7d4f' },
 ] as const;
 
 // One avatar as broadcast to everyone in the world. `id` matches YouMsg.id, so a client can
@@ -362,6 +393,8 @@ export interface WorldAvatar {
   color: string;
   x: number;
   y: number;
+  a?: number;          // heading in radians (only meaningful while driving)
+  car?: string | null; // car id being driven, or null/undefined when on foot
 }
 export interface WorldMsg {
   type: 'world';
@@ -416,7 +449,7 @@ export type ClientMsg =
   | { type: 'tdKill'; id: number } // claim a kill: you finished typing this monster's word
   | { type: 'campaignScore'; score: number; stage: number; won: boolean } // record a campaign run (arcade score, furthest stage, whether Davis fell)
   | { type: 'shopBuy'; item: string } // buy a cosmetic from the shop
-  | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'title' | 'song'; item: string | null } // equip (item) or unequip (null) a cosmetic
+  | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car'; item: string | null } // equip (item) or unequip (null) a cosmetic
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
   | { type: 'dailySpin' } // claim the once-per-24h reward spin
   | { type: 'stockInvest'; coin: string; amount: number; side?: StockSide } // open a long or short position
@@ -433,7 +466,7 @@ export type ClientMsg =
   | { type: 'loanBookReq' } // request the public open-loan book (for the clickable stability-bar modal)
   | { type: 'worldEnter' } // step into the free-roam world map (start sending/receiving avatar positions)
   | { type: 'worldLeave' } // leave the world map
-  | { type: 'worldMove'; x: number; y: number } // client-authoritative avatar position, world units
+  | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null } // client-authoritative avatar position (world units), heading + car when driving
   | { type: 'migrate'; oldPid: string }; // one-time: merge a UUID guest account into the signed-in Google account
 
 // --- Server -> Client ---
@@ -931,6 +964,7 @@ export interface WalletMsg {
   trail: string | null; // equipped paddle trail
   title: string | null; // equipped name title (flair shown by your name)
   song: string | null; // equipped theme song (plays during your matches)
+  car: string | null; // equipped car (driven in the World map)
   // Owned scarce exclusives (loot-box mints / marketplace buys): item id + mint serial +
   // instance id (the marketplace lists a specific instance). Kept OUT of the `owned` CSV —
   // exclusives are tracked per-instance in their own table.
