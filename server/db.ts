@@ -3,7 +3,7 @@
 // simply empty, so the rest of the app runs unchanged.
 
 import pg from 'pg';
-import { LeaderboardRow, NetWorthRow, LEADERBOARD_SIZE, CampaignScoreRow, StockSide, positionWorth } from '../shared/types';
+import { LeaderboardRow, NetWorthRow, LEADERBOARD_SIZE, CampaignScoreRow, StockSide, StockTf, positionWorth } from '../shared/types';
 
 let pool: pg.Pool | null = null;
 
@@ -889,11 +889,12 @@ export async function saveStockPrices(prices: { id: string; price: number; prev:
   }
 }
 
-// The graph history is the per-coin price series (5m/1h/1d). It used to live only in server
-// memory, so every restart/deploy wiped the graphs. We persist the whole board as one small
-// JSON blob in doom_meta (a single row, rewritten in place — never grows) so the graphs survive
-// restarts. The series are already length-capped (see STOCK_HISTORY), so the blob stays a few KB.
-type StockSeries = { '5m': number[]; '1h': number[]; '1d': number[] };
+// The graph history is the per-coin price series (one array per STOCK_HISTORY timeframe). It
+// used to live only in server memory, so every restart/deploy wiped the graphs. We persist the
+// whole board as one small JSON blob in doom_meta (a single row, rewritten in place — never
+// grows) so the graphs survive restarts. The series are length-capped (see STOCK_HISTORY), so
+// the blob stays a few KB. Partial: blobs persisted before a timeframe was added lack its key.
+type StockSeries = Partial<Record<StockTf, number[]>>;
 
 /** Load the persisted graph history (empty if never saved / no DB / unreadable). */
 export async function getStockHistory(): Promise<Record<string, StockSeries>> {

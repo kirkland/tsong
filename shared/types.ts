@@ -829,14 +829,16 @@ export const MARKET_INSTABILITY_THRESHOLD = 10000;
 // is how many re-rolls (30s each) between samples; `cap` is how many points to keep:
 //   5m → sample every re-roll (30s), 10 points  = 5 minutes
 //   1h → sample every 4 re-rolls (2 min), 30 points = 1 hour
+//   6h → sample every 24 re-rolls (12 min), 30 points = 6 hours
 //   1d → sample every 60 re-rolls (30 min), 48 points = 1 day
 // History lives in server memory only (not persisted), so it refills after a restart.
 export const STOCK_HISTORY = {
   '5m': { everyTicks: 1, cap: 10 },
   '1h': { everyTicks: 4, cap: 30 },
+  '6h': { everyTicks: 24, cap: 30 },
   '1d': { everyTicks: 60, cap: 48 },
 } as const;
-export type StockTf = keyof typeof STOCK_HISTORY; // '5m' | '1h' | '1d'
+export type StockTf = keyof typeof STOCK_HISTORY; // '5m' | '1h' | '6h' | '1d'
 
 // Direction of a stock position. A player can hold long and short of the same coin at once.
 export type StockSide = 'long' | 'short';
@@ -859,7 +861,7 @@ export interface StockMsg {
   holdings: { id: string; side: StockSide; shares: number; cost: number; worth: number }[];
   // Price history for the per-coin graphs, in STOCKS order — one array per timeframe (oldest
   // first). See STOCK_HISTORY for the cadence/length of each series.
-  history: { id: string; series: { '5m': number[]; '1h': number[]; '1d': number[] } }[];
+  history: { id: string; series: Record<StockTf, number[]> }[];
   nextUpdateAt: number; // epoch ms when prices next re-roll
   // Global market-stability pool: `unpaid` is the running total of defaulted loan debt, `threshold`
   // is where it triggers a market-wide crash (MARKET_INSTABILITY_THRESHOLD). Drives the bar.

@@ -41,6 +41,7 @@ import {
   STOCK_HISTORY,
   MARKET_INSTABILITY_THRESHOLD,
   StockSide,
+  StockTf,
   positionWorth,
   TEAM_MAX,
   WalletMsg,
@@ -259,11 +260,9 @@ export class Lobby {
   // Per-coin price history for the graphs (in-memory only) — one series per timeframe, each
   // sampled at its own cadence (see STOCK_HISTORY). Seeded with the current price so a graph
   // is never empty.
-  private stockHist: Record<'5m' | '1h' | '1d', Map<string, number[]>> = {
-    '5m': new Map(STOCKS.map((s) => [s.id, [s.base]] as [string, number[]])),
-    '1h': new Map(STOCKS.map((s) => [s.id, [s.base]] as [string, number[]])),
-    '1d': new Map(STOCKS.map((s) => [s.id, [s.base]] as [string, number[]])),
-  };
+  private stockHist: Record<StockTf, Map<string, number[]>> = Object.fromEntries(
+    (Object.keys(STOCK_HISTORY) as StockTf[]).map((tf) => [tf, new Map(STOCKS.map((s) => [s.id, [s.base]] as [string, number[]]))]),
+  ) as Record<StockTf, Map<string, number[]>>;
   private stockHistTick = 0; // re-roll counter, to decide which series to sample each tick
   private liveMatchId: number | null = null; // bracket match currently on the court
   private tourneyInterMs = 0; // ms left on the "next match" interstitial between games
@@ -1368,16 +1367,18 @@ export class Lobby {
    *  initDb). No-op on prices without a DB; the crash is still scheduled in memory. */
   async loadStockPrices() {
     const saved = await getStockPrices();
-    const savedHist = await getStockHistory().catch(() => ({} as Record<string, { '5m': number[]; '1h': number[]; '1d': number[] }>));
+    const savedHist = await getStockHistory().catch(() => ({} as Record<string, Partial<Record<StockTf, number[]>>>));
     for (const s of STOCKS) {
       const row = saved[s.id];
       if (row && row.price > 0) this.stockPrices.set(s.id, { price: row.price, prev: row.prev });
       // Restore the graph history from the DB so the graphs survive restarts; if there's none (or
-      // it's unusable), seed each series with the single resumed price so a graph is never empty.
+      // it's unusable, e.g. a timeframe added since the blob was saved), seed each series with the
+      // single resumed price so a graph is never empty.
       const seed = this.stockPrices.get(s.id)?.price ?? s.base;
       const h = savedHist[s.id];
-      for (const tf of ['5m', '1h', '1d'] as const) {
-        const arr = Array.isArray(h?.[tf]) ? h![tf].filter((n) => typeof n === 'number' && Number.isFinite(n)) : [];
+      for (const tf of Object.keys(STOCK_HISTORY) as StockTf[]) {
+        const raw = h?.[tf];
+        const arr = Array.isArray(raw) ? raw.filter((n) => typeof n === 'number' && Number.isFinite(n)) : [];
         const capped = arr.slice(-STOCK_HISTORY[tf].cap);
         this.stockHist[tf].set(s.id, capped.length ? capped : [seed]);
       }
@@ -1462,23 +1463,21 @@ export class Lobby {
     });
   }
 
-  /** The per-coin graph history (all three timeframes), in STOCKS order. */
-  private historyBoard(): { id: string; series: { '5m': number[]; '1h': number[]; '1d': number[] } }[] {
+  /** The per-coin graph history (every timeframe), in STOCKS order. */
+  private historyBoard(): { id: string; series: Record<StockTf, number[]> }[] {
+    const tfs = Object.keys(STOCK_HISTORY) as StockTf[];
     return STOCKS.map((s) => ({
       id: s.id,
-      series: {
-        '5m': this.stockHist['5m'].get(s.id) ?? [],
-        '1h': this.stockHist['1h'].get(s.id) ?? [],
-        '1d': this.stockHist['1d'].get(s.id) ?? [],
-      },
+      series: Object.fromEntries(tfs.map((tf) => [tf, this.stockHist[tf].get(s.id) ?? []])) as Record<StockTf, number[]>,
     }));
   }
 
   /** Record the current price into each graph series (call once per re-roll / reset). Each
-   *  timeframe samples at its own cadence: 5m every tick, 1h every 4, 1d every 60. */
+   *  timeframe samples at its own cadence (see STOCK_HISTORY): 5m every tick, 1h every 4,
+   *  6h every 24, 1d every 60. */
   private recordStockHistory() {
     this.stockHistTick++;
-    for (const tf of ['5m', '1h', '1d'] as const) {
+    for (const tf of Object.keys(STOCK_HISTORY) as StockTf[]) {
       if (this.stockHistTick % STOCK_HISTORY[tf].everyTicks !== 0) continue;
       const cap = STOCK_HISTORY[tf].cap;
       const map = this.stockHist[tf];

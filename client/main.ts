@@ -29,6 +29,7 @@ import {
   SPIN_SEGMENTS,
   STOCKS,
   StockSide,
+  StockTf,
   positionWorth,
   TickHealth,
 } from '../shared/types';
@@ -1875,7 +1876,7 @@ function showToast(text: string) {
 type Market = {
   prices: { id: string; price: number; prev: number }[];
   holdings: { id: string; side: StockSide; shares: number; cost: number; worth: number }[];
-  history: { id: string; series: { '5m': number[]; '1h': number[]; '1d': number[] } }[];
+  history: { id: string; series: Record<StockTf, number[]> }[];
   nextUpdateAt: number;
 };
 let market: Market = { prices: [], holdings: [], history: [], nextUpdateAt: 0 };
@@ -1887,9 +1888,9 @@ const marketList = document.getElementById('marketList') as HTMLDivElement;
 // Per-coin "amount to invest" steppers, kept across re-renders so the value doesn't reset
 // when prices re-roll. Defaults to 1.
 const investAmt = new Map<string, number>();
-// Which timeframe the little graphs show — shared across all coins. '5m' = last 10 recent
-// samples, '1h' = the whole recent series, '1d' = the daily series.
-let graphTf: '5m' | '1h' | '1d' = '1h';
+// Which timeframe the little graphs show — shared across all coins (see STOCK_HISTORY for
+// each one's span/resolution).
+let graphTf: StockTf = '1h';
 
 marketBtn.addEventListener('click', () => {
   const open = marketPanel.hidden;
@@ -1901,7 +1902,7 @@ marketBtn.addEventListener('click', () => {
 document.getElementById('marketGraphTf')?.addEventListener('click', (e) => {
   const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-tf]');
   if (!btn) return;
-  graphTf = btn.dataset.tf as '5m' | '1h' | '1d';
+  graphTf = btn.dataset.tf as StockTf;
   document.querySelectorAll('#marketGraphTf button').forEach((b) => b.classList.toggle('active', b === btn));
   renderMarket();
 });
