@@ -10,6 +10,7 @@ import { TournamentMatchView, TournamentView } from '../shared/types';
 export interface Participant {
   pid: string;
   name: string;
+  country?: { name: string; flag: string };
 }
 
 interface MatchNode {
@@ -136,6 +137,17 @@ export class Tournament {
       winner: m.winner?.name ?? null,
       live: m.id === liveMatchId,
     }));
+    // Build a nickname → country lookup from all known participants.
+    const countries: Record<string, { name: string; flag: string }> = {};
+    const addParticipant = (p: Participant | null) => {
+      if (p?.country) countries[p.name] = p.country;
+    };
+    for (const s of this.slots) addParticipant(s);
+    for (const m of this.matches) {
+      addParticipant(m.p1);
+      addParticipant(m.p2);
+      addParticipant(m.winner);
+    }
     return {
       status: this.status,
       size: this.size,
@@ -144,6 +156,7 @@ export class Tournament {
       matches,
       rounds: this.rounds,
       champion: this.champion?.name ?? null,
+      countries,
     };
   }
 }

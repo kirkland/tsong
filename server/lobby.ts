@@ -44,6 +44,7 @@ import {
   TEAM_MAX,
   WalletMsg,
   CampaignScoreRow,
+  WC_COUNTRIES,
 } from '../shared/types';
 import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
@@ -686,13 +687,20 @@ export class Lobby {
     const t = this.tournament;
     if (!t || t.status !== 'signup') return;
     if (this.sideOf(ws)) return; // can't be mid-match and in signup
-    const p: Participant = { pid: conn.pid, name: conn.nickname };
+    // Pick a random World Cup country not yet claimed by another participant.
+    const taken = new Set(Object.values(t.view(null).countries).map((c) => c.name));
+    const available = (WC_COUNTRIES as ReadonlyArray<{ name: string; flag: string }>).filter((c) => !taken.has(c.name));
+    const country = available.length > 0
+      ? available[Math.floor(Math.random() * available.length)]
+      : undefined;
+    const p: Participant = { pid: conn.pid, name: conn.nickname, country };
     if (!t.join(p)) return;
-    this.announce(`${conn.nickname} joined the tournament (${t.filledCount()}/${t.size})`);
+    const flag = country ? ` ${country.flag} ${country.name}` : '';
+    this.announce(`${conn.nickname}${flag} joined the tournament (${t.filledCount()}/${t.size})`);
     // Full house → build the bracket and seat the first match.
     if (t.isFull()) {
       t.start();
-      this.announce('🏆 Bracket set — let the games begin!');
+      this.announce('⚽ World Cup bracket set — let the games begin!');
       this.seatTournamentMatch();
     }
   }
@@ -818,7 +826,9 @@ export class Lobby {
         ])
           .then(() => this.refreshWalletsFor([champ]))
           .catch((e) => console.error('tournament prize failed:', e));
-        this.announce(`🏆 ${champ.nickname} won the tournament — ${prize} coins + a bonus spin!`);
+        const champCountry = t.view(null).countries[champ.nickname];
+        const champFlag = champCountry ? ` ${champCountry.flag} ${champCountry.name}` : '';
+        this.announce(`⚽🏆 ${champ.nickname}${champFlag} wins the World Cup — ${prize} coins + a bonus spin!`);
       }
       // Hold the champion screen longer than a between-match break, then tear down.
       this.tourneyInterMs = t.status === 'done' ? TOURNEY_DONE_MS : TOURNEY_INTER_MS;

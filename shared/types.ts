@@ -511,7 +511,62 @@ export interface TournamentView {
   matches: TournamentMatchView[];
   rounds: number; // total number of rounds (so the client can label/lay them out)
   champion: string | null; // nickname of the winner once status === 'done'
+  // World Cup Edition: each participant is randomly assigned a nation from the 2026 field.
+  // Maps player nickname → assigned country. Populated once a player joins during signup.
+  countries: Record<string, { name: string; flag: string }>;
 }
+
+// The 48 nations in the 2026 FIFA World Cup field, with their emoji flags.
+export const WC_COUNTRIES: ReadonlyArray<{ name: string; flag: string }> = [
+  { name: 'Algeria', flag: '🇩🇿' },
+  { name: 'Argentina', flag: '🇦🇷' },
+  { name: 'Australia', flag: '🇦🇺' },
+  { name: 'Austria', flag: '🇦🇹' },
+  { name: 'Belgium', flag: '🇧🇪' },
+  { name: 'Bosnia and Herzegovina', flag: '🇧🇦' },
+  { name: 'Brazil', flag: '🇧🇷' },
+  { name: 'Cabo Verde', flag: '🇨🇻' },
+  { name: 'Canada', flag: '🇨🇦' },
+  { name: 'Colombia', flag: '🇨🇴' },
+  { name: 'Congo DR', flag: '🇨🇩' },
+  { name: "Côte d'Ivoire", flag: '🇨🇮' },
+  { name: 'Croatia', flag: '🇭🇷' },
+  { name: 'Curaçao', flag: '🇨🇼' },
+  { name: 'Czechia', flag: '🇨🇿' },
+  { name: 'Ecuador', flag: '🇪🇨' },
+  { name: 'Egypt', flag: '🇪🇬' },
+  { name: 'England', flag: '🏴󠁧󠁢󠁥󠁮󠁧󠁿' },
+  { name: 'France', flag: '🇫🇷' },
+  { name: 'Germany', flag: '🇩🇪' },
+  { name: 'Ghana', flag: '🇬🇭' },
+  { name: 'Haiti', flag: '🇭🇹' },
+  { name: 'IR Iran', flag: '🇮🇷' },
+  { name: 'Iraq', flag: '🇮🇶' },
+  { name: 'Japan', flag: '🇯🇵' },
+  { name: 'Jordan', flag: '🇯🇴' },
+  { name: 'Korea Republic', flag: '🇰🇷' },
+  { name: 'Mexico', flag: '🇲🇽' },
+  { name: 'Morocco', flag: '🇲🇦' },
+  { name: 'Netherlands', flag: '🇳🇱' },
+  { name: 'New Zealand', flag: '🇳🇿' },
+  { name: 'Norway', flag: '🇳🇴' },
+  { name: 'Panama', flag: '🇵🇦' },
+  { name: 'Paraguay', flag: '🇵🇾' },
+  { name: 'Portugal', flag: '🇵🇹' },
+  { name: 'Qatar', flag: '🇶🇦' },
+  { name: 'Saudi Arabia', flag: '🇸🇦' },
+  { name: 'Scotland', flag: '🏴󠁧󠁢󠁳󠁣󠁴󠁿' },
+  { name: 'Senegal', flag: '🇸🇳' },
+  { name: 'South Africa', flag: '🇿🇦' },
+  { name: 'Spain', flag: '🇪🇸' },
+  { name: 'Sweden', flag: '🇸🇪' },
+  { name: 'Switzerland', flag: '🇨🇭' },
+  { name: 'Tunisia', flag: '🇹🇳' },
+  { name: 'Türkiye', flag: '🇹🇷' },
+  { name: 'United States', flag: '🇺🇸' },
+  { name: 'Uruguay', flag: '🇺🇾' },
+  { name: 'Uzbekistan', flag: '🇺🇿' },
+] as const;
 
 // Sent to a single connection whenever its own role changes (connect / claim / release).
 export interface YouMsg {
