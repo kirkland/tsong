@@ -1540,7 +1540,13 @@ function renderShop() {
     }
     const name = document.createElement('span');
     name.className = 'shop-name';
-    name.textContent = owned || item.locked ? item.name : `${item.name} · ${item.price}🪙`;
+    const priceSuffix = owned || item.locked ? '' : ` · ${item.price}🪙`;
+    if (item.id === 'opstask') {
+      // Show this title with its live animated rainbow font as its own shop preview.
+      name.innerHTML = `<span class="rainbow-text">${item.name}</span>${priceSuffix}`;
+    } else {
+      name.textContent = item.name + priceSuffix;
+    }
     row.appendChild(name);
     const btn = document.createElement('button');
     if (!owned && item.locked) {
