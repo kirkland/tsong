@@ -1714,18 +1714,46 @@ export class Lobby {
     return Math.min(100, Math.round((this.marketInstability / MARKET_INSTABILITY_THRESHOLD) * 100));
   }
 
-  /** Market crash: every coin snaps back to its base price. Holdings are left untouched — they
-   *  simply revalue at the new price (worth = floor(shares × base)) — so a crash wipes the gains.
-   *  Pure price effect; the caller handles scheduling, the instability pool, and announcing. */
-  private resetMarket() {
-    for (const s of STOCKS) {
+  /** Loan-default market crash: a RANDOM subset of coins each drop by a RANDOM degree, while one
+   *  random coin SPIKES UP — NOT a clean snap-to-base for the whole board. The variability is
+   *  deliberate anti-exploit design: a predictable total crash would let someone take a loan on
+   *  one account and short the entire market on another for a risk-free wipe — but here you can't
+   *  know which coins fall (or how hard), and one defies the crash and pumps, so blanket-shorting
+   *  gets burned. Returns the drops + the pump (for the announcement). Holdings just revalue. */
+  private crashMarket(): { drops: { ticker: string; pct: number }[]; pump: { ticker: string; pct: number } | null } {
+    // Shuffle the coins (Fisher–Yates). The first becomes the pump; a random prefix of the rest crash.
+    const pool = [...STOCKS];
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [pool[i], pool[j]] = [pool[j], pool[i]];
+    }
+    // One coin defies the crash and spikes a random +40%–120% (clamped to the usual ceiling), so
+    // shorting the whole board is never safe.
+    let pump: { ticker: string; pct: number } | null = null;
+    const up = pool.shift();
+    if (up) {
+      const cur = this.stockPrices.get(up.id) ?? { price: up.base, prev: up.base };
+      const ceil = up.base * 1_000;
+      const newPrice = Math.min(ceil, Math.round(cur.price * (1.4 + Math.random() * 0.8) * 100) / 100);
+      this.stockPrices.set(up.id, { price: newPrice, prev: cur.price });
+      pump = { ticker: up.ticker, pct: Math.max(0, Math.round((newPrice / cur.price - 1) * 100)) };
+    }
+    // Crash a random-sized prefix of the remaining coins — at least one (when any remain).
+    const count = pool.length ? 1 + Math.floor(Math.random() * pool.length) : 0;
+    const drops: { ticker: string; pct: number }[] = [];
+    for (const s of pool.slice(0, count)) {
       const cur = this.stockPrices.get(s.id) ?? { price: s.base, prev: s.base };
-      this.stockPrices.set(s.id, { price: s.base, prev: cur.price }); // prev = pre-crash price, so the drop shows
+      const dropFrac = 0.2 + Math.random() * 0.6; // each hit coin loses a random 20%–80%
+      const floor = s.base / 100;
+      const newPrice = Math.max(floor, Math.round(cur.price * (1 - dropFrac) * 100) / 100);
+      this.stockPrices.set(s.id, { price: newPrice, prev: cur.price }); // prev = pre-crash, so the cliff shows
+      drops.push({ ticker: s.ticker, pct: Math.max(0, Math.round((1 - newPrice / cur.price) * 100)) });
     }
     this.nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS; // give the fresh prices a full window
     this.recordStockHistory(); // the crash itself is a history point (the cliff edge)
     saveStockPrices(this.priceBoard()).catch((e) => console.error('stock price save failed:', e));
     saveStockHistory(this.historyBoard()).catch((e) => console.error('stock history save failed:', e));
+    return { drops, pump };
   }
 
   /** The daily event (replaces the old fixed daily reset): Davis collects on every overdue loan,
@@ -1757,10 +1785,12 @@ export class Lobby {
         }
         // Crash only when the pool fills — this is now the sole market-reset trigger.
         if (this.marketInstability >= MARKET_INSTABILITY_THRESHOLD) {
-          this.resetMarket();
+          const { drops, pump } = this.crashMarket();
           this.marketInstability = 0;
           setMarketInstability(0).catch((e) => console.error('instability save failed:', e));
-          this.announce('🔄 MARKET CRASH — unpaid loans hit 100% instability! Every coin is back to base 🪙. Holdings revalued, stability reset. Fresh start!');
+          const tanked = drops.map((d) => `${d.ticker} −${d.pct}%`).join(', ');
+          const pumpStr = pump ? ` …but ${pump.ticker} ripped +${pump.pct}%!` : '';
+          this.announce(`📉 MARKET CRASH — unpaid loans hit 100% instability! ${tanked || 'nothing'} tanked.${pumpStr} Stability reset.`);
         }
         for (const ws of this.conns.keys()) this.sendStocks(ws);
         // Wallets zeroed, holdings wiped, maybe a full crash — the net-worth board moved a lot.
