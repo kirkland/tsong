@@ -823,6 +823,20 @@
         cursor: pointer;
       }
       #campaignBtn:hover { background: #12222e; color: #a9e2ff; }
+      /* Type or Die launch: amber/green to read apart from DOOM (red) and Campaign (blue). */
+      #typeDieBtn {
+        font: inherit;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        padding: 7px 10px;
+        border-radius: 6px;
+        border: 1px solid #5a4a22;
+        background: #1a160e;
+        color: #ffd54f;
+        cursor: pointer;
+      }
+      #typeDieBtn:hover { background: #221d12; color: #ffe49a; }
       /* Coin balance + shop dropdown */
       #shop { position: relative; }
       #shopBtn {
@@ -2651,6 +2665,7 @@
       <button id="muteBtn" type="button" aria-pressed="false" title="Toggle sound on/off (M)">🔊</button>
       <button id="doomBtn" type="button" title="Rip and tear (a hidden DOOM minigame)">😈 DOOM</button>
       <button id="campaignBtn" type="button" title="Davis Collects — a story campaign vs escalating opponents">CAMPAIGN</button>
+      <button id="typeDieBtn" type="button" title="Type or Die — co-op typing horde defense. Type to survive, together.">⌨️ TYPE OR DIE</button>
       <div id="shop">
         <button id="shopBtn" type="button" aria-expanded="false" title="Coins, cosmetics & betting">🪙 <span id="coinCount">0</span></button>
         <div id="shopPanel" hidden>

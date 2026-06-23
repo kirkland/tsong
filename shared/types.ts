@@ -319,6 +319,11 @@ export type ClientMsg =
   | { type: 'doomRelay'; data: unknown } // forward an opaque DOOM payload to the co-op partner
   | { type: 'doomScore'; round: number; coop: boolean; name?: string } // record a DOOM run's reached round (name = combined team label for co-op)
   | { type: 'doomReward' } // grant the player 1 coin (killed the DOOM minion boss)
+  | { type: 'tdJoin' } // join the shared co-op "Type or Die" arena
+  | { type: 'tdLeave' } // leave the Type or Die arena
+  | { type: 'tdStart' } // (any participant) start the next Type or Die run from the waiting room
+  | { type: 'tdTarget'; id: number | null } // soft-lock the monster you're currently typing (null = release)
+  | { type: 'tdKill'; id: number } // claim a kill: you finished typing this monster's word
   | { type: 'campaignScore'; score: number; stage: number; won: boolean } // record a campaign run (arcade score, furthest stage, whether Davis fell)
   | { type: 'shopBuy'; item: string } // buy a cosmetic from the shop
   | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'title' | 'song'; item: string | null } // equip (item) or unequip (null) a cosmetic
@@ -710,6 +715,8 @@ export type ServerMsg =
   | DoomRelayMsg
   | DoomEndMsg
   | DoomLeaderboardMsg
+  | TypeDieStateMsg
+  | TypeDieLeaderboardMsg
   | CampaignLeaderboardMsg
   | WalletMsg
   | StockMsg
@@ -947,6 +954,51 @@ export interface DoomLeaderboardMsg {
   type: 'doomLeaderboard';
   solo: Array<{ name: string; round: number }>;
   coop: Array<{ name: string; round: number }>;
+}
+
+// --- "Type or Die" (co-op typing horde-defense) ---
+// One shared global arena. Monsters bearing words march down toward a shared base; type a
+// monster's word to destroy it. Base HP / wave / score are shared, so more typists = deeper
+// waves. Server-authoritative: it owns spawns, positions, HP and scoring; clients render this
+// state and send soft target-locks + kill claims (validated server-side).
+export type TdPhase = 'lobby' | 'countdown' | 'playing' | 'gameover';
+export type TdKind = 'normal' | 'fast' | 'boss' | 'coin';
+
+// One monster on the field. y runs 0 (spawn, top) → 1 (the base, bottom); x is 0..1 across.
+// `lockedBy` is the participant id currently typing it (so clients don't fight over a word).
+export interface TdEnemy {
+  id: number;
+  x: number;
+  y: number;
+  word: string;
+  kind: TdKind;
+  lockedBy: string | null;
+}
+// One participant in the arena, with their live kill tally (drives the MVP flourish).
+export interface TdPlayer {
+  id: string; // matches a connection id, so a client can find itself
+  name: string;
+  color: string;
+  kills: number;
+}
+export interface TypeDieStateMsg {
+  type: 'tdState';
+  phase: TdPhase;
+  you: string;            // this client's participant id
+  players: TdPlayer[];
+  enemies: TdEnemy[];
+  baseHp: number;
+  baseMax: number;
+  wave: number;
+  score: number;
+  countdown: number;      // seconds left in the pre-run countdown (0 unless phase === 'countdown')
+  overIn: number;         // seconds the gameover screen lingers before returning to the lobby
+  mvp: string | null;     // top killer's name (set on gameover)
+}
+export interface TypeDieScoreRow { name: string; wave: number; }
+export interface TypeDieLeaderboardMsg {
+  type: 'tdLeaderboard';
+  rows: TypeDieScoreRow[]; // best wave reached per player
 }
 
 // Campaign ("Davis Collects") high scores. One row per player (best arcade score kept).

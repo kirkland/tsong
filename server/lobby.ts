@@ -4,6 +4,7 @@
 import type { WebSocket } from 'ws';
 import { Game } from './game';
 import { PolyGame } from './polygame';
+import { TypeGame } from './typegame';
 import { Tournament, Participant } from './tournament';
 import {
   CHAT_HISTORY,
@@ -47,6 +48,7 @@ import {
   WC_COUNTRIES,
 } from '../shared/types';
 import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
+  recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS,
   getHoldings, investStock, cashOutStock, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
@@ -266,7 +268,45 @@ export class Lobby {
   private liveMatchId: number | null = null; // bracket match currently on the court
   private tourneyInterMs = 0; // ms left on the "next match" interstitial between games
 
-  constructor(private game: Game) {}
+  // --- "Type or Die" (co-op typing horde-defense) ---
+  // A single shared, server-authoritative arena that runs alongside everything else. Players
+  // drop in via the overlay; the sim owns the monsters / base / scoring (see TypeGame). State
+  // is broadcast only to participants, throttled to ~30 Hz.
+  private typeGame: TypeGame;
+  private tdSockets = new Map<string, WebSocket>(); // participant connection id → socket
+  private tdBoard: TypeDieScoreRow[] = [];          // cached best-wave leaderboard, pushed to clients
+  private tdBroadcastTick = 0;                       // throttle counter for tdState fan-out
+
+  constructor(private game: Game) {
+    this.typeGame = new TypeGame({
+      // A coin-monster kill pays the player who landed it.
+      award: (id, coins) => {
+        const ws = this.tdSockets.get(id);
+        const conn = ws && this.conns.get(ws);
+        if (ws && conn && conn.pid) {
+          addCoins(conn.pid, conn.nickname, coins * COIN_SCALE)
+            .then(() => this.sendWallet(ws))
+            .catch((e) => console.error('type-or-die coin award failed:', e));
+        }
+      },
+      // A run ended: bank each participant's best wave and pay out coins (capped) for showing up.
+      ended: (wave, players) => {
+        for (const p of players) {
+          const ws = this.tdSockets.get(p.id);
+          const conn = ws && this.conns.get(ws);
+          if (!ws || !conn || !conn.pid) continue;
+          const coins = Math.min(wave, 20); // COIN_CAP mirror — modest, presence-rewarding
+          recordTypeDieScore(conn.pid, conn.nickname, wave)
+            .then(() => this.refreshTypeDieLeaderboard())
+            .catch((e) => console.error('type-or-die score save failed:', e));
+          addCoins(conn.pid, conn.nickname, coins * COIN_SCALE)
+            .then(() => this.sendWallet(ws))
+            .catch((e) => console.error('type-or-die coin payout failed:', e));
+        }
+      },
+      announce: (text) => this.announce(text),
+    });
+  }
 
   /** Advance whichever simulation is live this tick (called by the server loop). */
   tick(dt: number) {
@@ -276,6 +316,7 @@ export class Lobby {
       this.steerBot(dt); // set the bot's paddle target before the sim eases paddles
       this.game.tick(dt);
     }
+    this.typeGame.tick(dt); // the typing minigame runs in parallel, independent of the pong sim
   }
 
   /** Match status for the deploy gate (/api/status): true while a real rally is running. */
@@ -304,6 +345,7 @@ export class Lobby {
     this.tell(ws, { type: 'leaderboard', rows: this.leaderboard });
     this.tell(ws, { type: 'netWorth', rows: this.netWorth });
     this.tell(ws, { type: 'doomLeaderboard', solo: this.doomBoards.solo, coop: this.doomBoards.coop });
+    this.tell(ws, { type: 'tdLeaderboard', rows: this.tdBoard });
     this.tell(ws, { type: 'campaignLeaderboard', rows: this.campaignBoard });
     if (this.chatLog.length) this.tell(ws, { type: 'chat', lines: this.chatLog });
   }
@@ -613,6 +655,64 @@ export class Lobby {
         .then(() => { this.sendWallet(ws); this.refreshNetWorth().catch(() => {}); })
         .catch((e) => console.error('doom reward failed:', e));
       this.notify(ws, `🪙 +${reward.toLocaleString()} coins for reaching round ${r} in DOOM!`);
+    }
+  }
+
+  // --- "Type or Die" co-op arena ---
+
+  /** A client opens the Type or Die overlay / drops into the arena. */
+  tdJoin(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return;
+    this.tdSockets.set(conn.id, ws);
+    this.typeGame.join(conn.id, conn.nickname, conn.color);
+    this.tell(ws, { type: 'tdLeaderboard', rows: this.tdBoard });
+  }
+
+  /** A client closes the overlay / leaves the arena. */
+  tdLeave(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn) return;
+    this.tdSockets.delete(conn.id);
+    this.typeGame.leave(conn.id);
+  }
+
+  /** Any participant kicks off the next run from the waiting room. */
+  tdStart(ws: WebSocket) {
+    if (!this.tdSockets.has(this.conns.get(ws)?.id ?? '')) return;
+    this.typeGame.start();
+  }
+
+  /** Soft-lock the monster a client is mid-word on (so others don't fight the same word). */
+  tdTarget(ws: WebSocket, id: number | null) {
+    const conn = this.conns.get(ws);
+    if (!conn || !this.tdSockets.has(conn.id)) return;
+    this.typeGame.target(conn.id, id);
+  }
+
+  /** A client finished typing a word — claim the kill (validated server-side). */
+  tdKill(ws: WebSocket, id: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !this.tdSockets.has(conn.id)) return;
+    this.typeGame.claimKill(conn.id, id);
+  }
+
+  /** Reload the Type or Die best-wave leaderboard from the DB and push it to everyone. */
+  async refreshTypeDieLeaderboard() {
+    this.tdBoard = await getTypeDieLeaderboard();
+    const msg = JSON.stringify({ type: 'tdLeaderboard', rows: this.tdBoard });
+    for (const sock of this.conns.keys()) {
+      if (sock.readyState === sock.OPEN) sock.send(msg);
+    }
+  }
+
+  /** Fan the Type or Die state out to its participants (~30 Hz; only when anyone's in it). */
+  private broadcastTypeDie() {
+    if (!this.typeGame.active) return;
+    if (++this.tdBroadcastTick % 2 !== 0) return; // throttle 60 Hz → ~30 Hz
+    const snap = this.typeGame.snapshot();
+    for (const [id, ws] of this.tdSockets) {
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'tdState', you: id, ...snap }));
     }
   }
 
@@ -1939,6 +2039,7 @@ export class Lobby {
 
   remove(ws: WebSocket) {
     this.doomLeave(ws); // drop any co-op DOOM slot (and notify the partner)
+    this.tdLeave(ws);   // drop out of the Type or Die arena
     const leavingPid = this.conns.get(ws)?.pid ?? '';
     // Tournament participant left: advance their opponent / free their slot before the
     // generic seat teardown below (which would lose the bracket context).
@@ -2279,6 +2380,7 @@ export class Lobby {
     for (const ws of this.conns.keys()) {
       if (ws.readyState === ws.OPEN) ws.send(data);
     }
+    this.broadcastTypeDie();
   }
 
   // --- internals ---

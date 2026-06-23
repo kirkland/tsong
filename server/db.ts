@@ -125,6 +125,14 @@ export async function initDb(): Promise<void> {
       PRIMARY KEY (pid, coop)
     )
   `);
+  // "Type or Die" co-op typing horde-defense — best wave reached, one row per player.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS typedie_scores (
+      pid  TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      wave INTEGER NOT NULL DEFAULT 1
+    )
+  `);
   // Campaign ("Davis Collects") arcade scores — one row per player, best score kept.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS campaign_scores (
@@ -343,6 +351,28 @@ export async function getDoomLeaderboards(): Promise<{ solo: DoomScoreRow[]; coo
     return rows.map((r) => ({ name: r.name, round: r.round }));
   };
   return { solo: await fetchMode(false), coop: await fetchMode(true) };
+}
+
+export interface TypeDieScoreRow { name: string; wave: number; }
+
+// Record a "Type or Die" run for one participant: keep only their best wave reached.
+export async function recordTypeDieScore(pid: string, name: string, wave: number): Promise<void> {
+  if (!pool || !pid) return;
+  await pool.query(
+    `INSERT INTO typedie_scores (pid, name, wave) VALUES ($1, $2, $3)
+       ON CONFLICT (pid) DO UPDATE
+       SET wave = GREATEST(typedie_scores.wave, EXCLUDED.wave), name = EXCLUDED.name`,
+    [pid, name, wave],
+  );
+}
+
+// Top waves reached, best per player.
+export async function getTypeDieLeaderboard(): Promise<TypeDieScoreRow[]> {
+  if (!pool) return [];
+  const { rows } = await pool.query(
+    `SELECT name, wave FROM typedie_scores ORDER BY wave DESC, name ASC LIMIT 10`,
+  );
+  return rows.map((r) => ({ name: r.name, wave: r.wave }));
 }
 
 // Record a campaign run: keep only each player's best arcade score (and the stage/won that
@@ -752,6 +782,15 @@ export async function mergePlayerFull(oldPid: string, newPid: string): Promise<v
     [oldPid, newPid],
   );
   await pool.query(`DELETE FROM doom_scores WHERE pid = $1`, [oldPid]);
+  // "Type or Die": keep the best wave reached.
+  await pool.query(
+    `INSERT INTO typedie_scores (pid, name, wave)
+       SELECT $2, name, wave FROM typedie_scores WHERE pid = $1
+       ON CONFLICT (pid) DO UPDATE
+         SET wave = GREATEST(typedie_scores.wave, EXCLUDED.wave), name = EXCLUDED.name`,
+    [oldPid, newPid],
+  );
+  await pool.query(`DELETE FROM typedie_scores WHERE pid = $1`, [oldPid]);
   // Campaign arcade: keep the best score (and the stage/won that went with it).
   await pool.query(
     `INSERT INTO campaign_scores (pid, name, score, stage, won)

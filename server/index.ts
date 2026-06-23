@@ -276,6 +276,21 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'doomReward':
         lobby.doomReward(ws);
         break;
+      case 'tdJoin':
+        lobby.tdJoin(ws);
+        break;
+      case 'tdLeave':
+        lobby.tdLeave(ws);
+        break;
+      case 'tdStart':
+        lobby.tdStart(ws);
+        break;
+      case 'tdTarget':
+        lobby.tdTarget(ws, typeof msg.id === 'number' && Number.isFinite(msg.id) ? msg.id : null);
+        break;
+      case 'tdKill':
+        if (typeof msg.id === 'number' && Number.isFinite(msg.id)) lobby.tdKill(ws, msg.id);
+        break;
       case 'campaignScore':
         if (typeof msg.score === 'number' && typeof msg.stage === 'number' && typeof msg.won === 'boolean') {
           lobby.campaignScore(ws, msg.score, msg.stage, msg.won);

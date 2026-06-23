@@ -610,6 +610,10 @@ const net = connect(
       doomMod?.feedDoomEnd(msg.reason);
     } else if (msg.type === 'doomLeaderboard') {
       doomScores = { solo: msg.solo, coop: msg.coop };
+    } else if (msg.type === 'tdState') {
+      typeDieMod?.feedTdState(msg);
+    } else if (msg.type === 'tdLeaderboard') {
+      typeDieScores = msg.rows;
     } else if (msg.type === 'campaignLeaderboard') {
       campaignScores = msg.rows;
     } else if (msg.type === 'wallet') {
@@ -1475,6 +1479,28 @@ doomBtn.addEventListener('click', async () => {
     });
   } catch (e) {
     console.error('DOOM failed to load:', e);
+  }
+});
+
+// --- "Type or Die" co-op typing horde-defense (lazy-loaded). Server-authoritative: the
+// overlay just renders tdState and sends keystroke outcomes (td* messages, routed above). ---
+const typeDieBtn = document.getElementById('typeDieBtn') as HTMLButtonElement;
+let typeDieMod: typeof import('./typeordie') | null = null;
+let typeDieScores: import('../shared/types').TypeDieScoreRow[] = [];
+typeDieBtn.addEventListener('click', async () => {
+  try {
+    typeDieMod = await import('./typeordie');
+    typeDieMod.startTypeDie({
+      join: () => net.send({ type: 'tdJoin' }),
+      leave: () => net.send({ type: 'tdLeave' }),
+      start: () => net.send({ type: 'tdStart' }),
+      target: (id) => net.send({ type: 'tdTarget', id }),
+      kill: (id) => net.send({ type: 'tdKill', id }),
+      name: () => myName,
+      leaderboard: () => typeDieScores,
+    });
+  } catch (e) {
+    console.error('Type or Die failed to load:', e);
   }
 });
 
