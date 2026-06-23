@@ -176,7 +176,7 @@
       }
       #leaderboard li {
         display: grid;
-        grid-template-columns: 22px 1fr auto auto;
+        grid-template-columns: 22px 1fr auto 48px;
         gap: 10px;
         align-items: baseline;
         padding: 4px 10px;
@@ -228,7 +228,7 @@
       }
       #netWorth li {
         display: grid;
-        grid-template-columns: 22px 1fr auto auto;
+        grid-template-columns: 22px 1fr auto;
         gap: 10px;
         align-items: baseline;
         padding: 4px 10px;
@@ -897,16 +897,8 @@
       #betRight { color: #ffadd2; }
       .bet-side b { color: #ffd166; font-weight: 800; }
       .bet-stake { display: flex; align-items: center; gap: 6px; }
-      #betAmount {
-        width: 64px; text-align: center; font: inherit; font-size: 12px; font-weight: 700;
-        color: #ffd166; background: #1a2035; border: 1px solid #2a3550; border-radius: 5px; padding: 4px 6px;
-      }
-      #betAmount:focus { outline: none; border-color: #4a5a85; }
-      /* hide the native number spinners — we drive the value with the −/+ buttons */
-      #betAmount::-webkit-inner-spin-button, #betAmount::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-      #betAmount { -moz-appearance: textfield; appearance: textfield; }
+      #betAmount { min-width: 20px; text-align: center; font-weight: 700; color: #ffd166; }
       #betStatus { font-size: 11px; color: #6ee7a8; min-height: 14px; text-align: center; }
-      #betStatus.warn { color: #ff8a8a; }
       /* Public bet board under the court */
       #betBoard {
         display: flex; gap: 10px; width: min(94vw, 1040px); font: 700 12px ui-monospace, monospace;
@@ -1090,7 +1082,8 @@
       .coin-row:first-child { border-top: none; }
       .coin-logo { width: 34px; height: 34px; border-radius: 6px; object-fit: cover; background: #060912; }
       .coin-main { min-width: 0; }
-      .coin-name { font-size: 12px; font-weight: 700; color: #cdd7f5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .coin-name { font-size: 12px; font-weight: 700; color: #cdd7f5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; align-items: baseline; gap: 6px; }
+      .coin-supply { font-size: 10px; font-weight: 400; color: #5a6a8a; flex-shrink: 0; }
       .coin-price { font-size: 11px; color: #9fb0d8; }
       .coin-chg { font-weight: 700; margin-left: 4px; }
       .coin-chg.up { color: #6ee7a8; }
@@ -1101,23 +1094,12 @@
       .coin-pos .pl-down { color: #ff7a7a; }
       .coin-actions { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
       .coin-buy { display: flex; align-items: center; gap: 3px; }
-      .coin-trade { display: flex; gap: 4px; }
-      .coin-trade button { flex: 1; }
-      .coin-buy button, .coin-trade button, .coin-actions > button {
+      .coin-buy button, .coin-actions > button {
         font: inherit; font-size: 11px; font-weight: 700; padding: 3px 7px; border-radius: 5px;
         border: 1px solid #2a3550; background: #1a2035; color: #9fb0d8; cursor: pointer;
       }
-      .coin-buy button:hover:not(:disabled), .coin-trade button:hover:not(:disabled), .coin-actions > button:hover:not(:disabled) { background: #2d4070; color: #fff; }
-      .coin-buy button:disabled, .coin-trade button:disabled, .coin-actions > button:disabled { opacity: 0.45; cursor: default; }
-      /* Buy = green, Short = red — so the direction of the bet reads at a glance. */
-      .coin-long { border-color: #1f5a3a !important; background: #0e2419 !important; color: #5fe0a0 !important; }
-      .coin-long:hover:not(:disabled) { background: #14361f !important; }
-      .coin-shortbtn { border-color: #5a1f24 !important; background: #2a0e12 !important; color: #ff8e8e !important; }
-      .coin-shortbtn:hover:not(:disabled) { background: #3a141a !important; }
-      .coin-cover { border-color: #5a1f24 !important; background: #2a0e12 !important; color: #ff8e8e !important; }
-      .coin-cover:hover:not(:disabled) { background: #3a141a !important; }
-      /* SHORT tag on a position read-out / balance sheet row. */
-      .pos-short { font-size: 9px; font-weight: 800; color: #ff8e8e; background: #2a0e12; border: 1px solid #5a1f24; border-radius: 3px; padding: 0 3px; vertical-align: middle; }
+      .coin-buy button:hover:not(:disabled), .coin-actions > button:hover:not(:disabled) { background: #2d4070; color: #fff; }
+      .coin-buy button:disabled, .coin-actions > button:disabled { opacity: 0.45; cursor: default; }
       .coin-amt {
         width: 56px; text-align: center; font-weight: 700; color: #ffd166; font-size: 11px;
         background: #0b1120; border: 1px solid #2a3550; border-radius: 5px; padding: 3px 4px;
@@ -1750,142 +1732,6 @@
         font-size: 12px;
         padding: 4px 0;
       }
-      /* Small gold "tip" button shown next to a player's name on the boards. */
-      .tip-btn {
-        font: inherit;
-        font-size: 12px;
-        line-height: 1;
-        padding: 2px 6px;
-        border-radius: 5px;
-        border: 1px solid #5a4a1e;
-        background: #221b0c;
-        color: #ffd23f;
-        cursor: pointer;
-        opacity: 0.7;
-        transition: opacity 0.12s, background 0.12s;
-      }
-      .tip-btn:hover {
-        opacity: 1;
-        background: #3a2e10;
-      }
-      /* Tip dialog — mirrors the balance-sheet modal's look. */
-      #tipModal {
-        position: fixed;
-        inset: 0;
-        z-index: 121;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: rgba(4, 7, 16, 0.72);
-      }
-      #tipModal[hidden] {
-        display: none;
-      }
-      #tipCard {
-        width: min(92vw, 320px);
-        background: #0e1424;
-        border: 1px solid #3a3320;
-        border-radius: 12px;
-        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
-        padding: 16px 18px 18px;
-      }
-      #tipHead {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-        font-size: 16px;
-        font-weight: 700;
-        letter-spacing: 0.5px;
-        color: #ffd23f;
-        margin-bottom: 12px;
-      }
-      #tipTitle {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      #tipClose {
-        font: inherit;
-        font-size: 15px;
-        line-height: 1;
-        flex: 0 0 auto;
-        padding: 4px 8px;
-        border-radius: 6px;
-        border: 1px solid #2a3550;
-        background: #0e1424;
-        color: #9fb0d8;
-        cursor: pointer;
-      }
-      #tipClose:hover {
-        background: #18203a;
-        color: #e8eefc;
-      }
-      #tipBalance {
-        font-size: 12px;
-        color: #9fb0d8;
-        margin-bottom: 10px;
-      }
-      #tipPresets {
-        display: flex;
-        gap: 6px;
-        margin-bottom: 10px;
-      }
-      #tipPresets button {
-        flex: 1 1 0;
-        font: inherit;
-        font-size: 13px;
-        padding: 6px 0;
-        border-radius: 6px;
-        border: 1px solid #2a3550;
-        background: #131b30;
-        color: #cdd7f5;
-        cursor: pointer;
-      }
-      #tipPresets button:hover {
-        background: #1c2742;
-        color: #fff;
-      }
-      #tipInputRow {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-bottom: 10px;
-      }
-      #tipAmount {
-        flex: 1 1 auto;
-        font: inherit;
-        font-size: 15px;
-        padding: 8px 10px;
-        border-radius: 6px;
-        border: 1px solid #2a3550;
-        background: #060a14;
-        color: #e8eefc;
-      }
-      #tipInputRow .tip-coin {
-        font-size: 18px;
-      }
-      #tipStatus {
-        min-height: 16px;
-        font-size: 12px;
-        color: #f87171;
-        margin-bottom: 10px;
-      }
-      #tipSend {
-        width: 100%;
-        font: inherit;
-        font-size: 14px;
-        font-weight: 700;
-        padding: 9px 0;
-        border-radius: 8px;
-        border: 1px solid #5a4a1e;
-        background: #ffd23f;
-        color: #1a1404;
-        cursor: pointer;
-      }
-      #tipSend:hover {
-        background: #ffdf6b;
-      }
       /* CHANGELOG dropdown, pinned to the top-right corner. */
       #changelog {
         position: fixed;
@@ -2146,25 +1992,6 @@
       }
       #powerupInfoBtn:hover {
         background: #18203a;
-      }
-      #blockControl { position: relative; }
-      #blockControl[hidden] { display: none; }
-      #addBlockBtn {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        font: inherit;
-        font-size: 12px;
-        letter-spacing: 1px;
-        padding: 7px 12px;
-        border-radius: 6px;
-        border: 1px solid #5a4632;
-        background: #1c1610;
-        color: #e8a55a;
-        cursor: pointer;
-      }
-      #addBlockBtn:hover {
-        background: #2a2014;
       }
       #powerupInfoBtn .caret {
         font-size: 14px;
@@ -2631,7 +2458,7 @@
             <button type="button" data-tf="1d">1d</button>
           </div>
           <div id="marketList"></div>
-          <div id="marketNote"><b>Buy</b> to bet a coin rises; <b>Short</b> to bet it falls. A short profits as the price drops (toward +100% near zero), but if the price climbs past your entry it goes <b>negative</b> — covering then <b>costs</b> you coins, so a short gone wrong can drain far more than you staked. Prices update every 30s and drift up over the day. ⚠️ Unpaid loans build market instability; at 100% the whole market <b>CRASHES</b> back to base.</div>
+          <div id="marketNote">Prices update every 30s and drift up over the day. Your position's worth tracks the price; cashing out pays it rounded down to whole coins. ⚠️ Every 24h the market <b>RESETS</b> to 1.00 and holdings revalue at the bottom — cash out before the daily reset.</div>
         </div>
       </div>
       <div id="loan">
@@ -3037,21 +2864,8 @@
                 <span class="pu-desc">The court leans and the ball rolls downhill</span>
               </div>
             </div>
-            <div class="pu-row">
-              <canvas class="pu-icon" data-kind="roam" width="40" height="40"></canvas>
-              <div class="pu-info">
-                <span class="pu-name" style="color:#4ade80">roam</span>
-                <span class="pu-desc">Your paddle roams into the court (mouse / ←→) — until you hit twice</span>
-              </div>
-            </div>
           </div>
         </div>
-      </div>
-      <!-- Spectators only, during a live duel: drop a solid obstacle block on the court. -->
-      <div id="blockControl" hidden>
-        <button id="addBlockBtn" type="button" title="Drop a solid block on the court">
-          🧱 ADD BLOCK
-        </button>
       </div>
     </div>
     <!-- Live tournament bracket / signup, shown whenever a tournament is running. -->
@@ -3082,29 +2896,6 @@
           <button id="balanceClose" type="button" aria-label="Close">✕</button>
         </div>
         <div id="balanceBody"></div>
-      </div>
-    </div>
-    <div id="tipModal" hidden>
-      <div id="tipCard" role="dialog" aria-modal="true" aria-label="Tip a player">
-        <div id="tipHead">
-          <span id="tipTitle">Tip</span>
-          <button id="tipClose" type="button" aria-label="Close">✕</button>
-        </div>
-        <div id="tipBody">
-          <div id="tipBalance"></div>
-          <div id="tipPresets">
-            <button type="button" data-amt="10">10</button>
-            <button type="button" data-amt="50">50</button>
-            <button type="button" data-amt="100">100</button>
-            <button type="button" data-amt="500">500</button>
-          </div>
-          <div id="tipInputRow">
-            <input id="tipAmount" type="number" min="1" step="1" inputmode="numeric" placeholder="amount" />
-            <span class="tip-coin">🪙</span>
-          </div>
-          <div id="tipStatus"></div>
-          <button id="tipSend" type="button">Send tip 🪙</button>
-        </div>
       </div>
     </div>
     <div id="changelog">
@@ -3186,7 +2977,7 @@
             <button id="betLeft" type="button" class="bet-side">◀ <span id="betLeftName">Left</span> <b id="betLeftOdds">—</b></button>
             <div class="bet-stake">
               <button id="betMinus" type="button">−</button>
-              <input id="betAmount" type="number" min="1" step="1" value="1" inputmode="numeric" />
+              <span id="betAmount">1</span>
               <button id="betPlus" type="button">+</button>
               <span class="bet-coin">🪙</span>
             </div>

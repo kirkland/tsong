@@ -1260,17 +1260,19 @@ export class Lobby {
       .catch((e) => console.error('stocks send failed:', e));
   }
 
-  /** Nudge a coin's price in response to a buy or sell. The impact scales with the trade
-   *  value: 25 000 coins of buying (or selling) moves the price by ~100%. Smaller trades
-   *  have proportional effect. Price is clamped to [base/100, base×1000] so it can't go
-   *  zero or blow up. Broadcasts the updated market to everyone immediately. */
+  /** Nudge a coin's price in response to a buy or sell. Impact is market-cap-weighted:
+   *  trading X% of (price × supply) moves the price by X%. Low-supply coins are more
+   *  volatile; pumping a coin that's already expensive takes proportionally more capital.
+   *  Price is clamped to [base/100, base×1000]. Broadcasts to everyone immediately. */
   private applyTradeImpact(coin: string, value: number, direction: 'buy' | 'sell') {
-    const IMPACT_DIVISOR = 25_000;
     const cur = this.stockPrices.get(coin);
     if (!cur) return;
     const stock = STOCKS.find((s) => s.id === coin);
     if (!stock) return;
-    const factor = direction === 'buy' ? 1 + value / IMPACT_DIVISOR : 1 - value / IMPACT_DIVISOR;
+    // Market-cap weighting: trading X% of market cap moves price by X%.
+    // Low-supply coins are naturally more volatile (smaller cap = bigger swings).
+    const marketCap = cur.price * stock.supply;
+    const factor = direction === 'buy' ? 1 + value / marketCap : 1 - value / marketCap;
     const newPrice = Math.round(Math.max(stock.base / 100, Math.min(cur.price * factor, stock.base * 1_000)) * 100) / 100;
     this.stockPrices.set(coin, { price: newPrice, prev: cur.price });
     saveStockPrices(this.priceBoard()).catch((e) => console.error('trade impact save failed:', e));
