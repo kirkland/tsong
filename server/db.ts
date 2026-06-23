@@ -3,7 +3,12 @@
 // simply empty, so the rest of the app runs unchanged.
 
 import pg from 'pg';
-import { LeaderboardRow, NetWorthRow, LEADERBOARD_SIZE, CampaignScoreRow, StockSide, StockTf, positionWorth } from '../shared/types';
+import { LeaderboardRow, NetWorthRow, LEADERBOARD_SIZE, CampaignScoreRow, StockSide, StockTf, positionWorth, EXCLUSIVES, isExclusive } from '../shared/types';
+
+// Economy Overhaul: the House treasury is seeded ONCE with a genesis allocation. This is the
+// only mint besides match wins and the one-time campaign clear/flawless bonuses — every other
+// payout is funded by (debited from) the House, keeping coins conserved.
+export const HOUSE_GENESIS = 5_000_000;
 
 let pool: pg.Pool | null = null;
 
@@ -105,6 +110,59 @@ export async function initDb(): Promise<void> {
       due_at BIGINT NOT NULL
     )
   `);
+  // --- Economy Overhaul schema ---
+  // is_netizen flags the synthetic bot "netizen" traders so they can be seeded/identified. They
+  // are real player rows (they appear on the net-worth board) but never mint and are House-funded.
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS is_netizen BOOLEAN NOT NULL DEFAULT FALSE`);
+  // Fast-sell tax window: when a long/short position was opened, so a cash-out within 60s is taxed.
+  await pool.query(`ALTER TABLE stock_holdings ADD COLUMN IF NOT EXISTS opened_at BIGINT`);
+  // Authoritative global mint count + cap gate, one row per exclusive (seeded below). The atomic
+  // `UPDATE ... WHERE minted < cap RETURNING` on this row is the ONLY exclusive mint path.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS exclusive_supply (
+      item   TEXT PRIMARY KEY,
+      minted INT NOT NULL DEFAULT 0
+    )
+  `);
+  // Per-instance ownership ledger for minted exclusives. `serial` is the mint number (1..cap);
+  // `origin` records how it entered the world ('lootbox'). Indexed for owner/item lookups.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS exclusive_instances (
+      id        BIGSERIAL PRIMARY KEY,
+      item      TEXT NOT NULL,
+      owner_pid TEXT NOT NULL,
+      minted_at BIGINT NOT NULL,
+      origin    TEXT NOT NULL DEFAULT 'lootbox',
+      serial    INT NOT NULL
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS exclusive_instances_owner ON exclusive_instances (owner_pid)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS exclusive_instances_item ON exclusive_instances (item)`);
+  // Player marketplace: one open listing per instance (UNIQUE on instance_id). The buy txn locks
+  // the lowest ask of an item FOR UPDATE so two buyers can't take the same listing.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS listings (
+      id          BIGSERIAL PRIMARY KEY,
+      instance_id BIGINT NOT NULL,
+      item        TEXT NOT NULL,
+      seller_pid  TEXT NOT NULL,
+      seller_name TEXT NOT NULL,
+      ask         INT NOT NULL,
+      created_at  BIGINT NOT NULL,
+      UNIQUE (instance_id)
+    )
+  `);
+  // (The House treasury genesis row lives in doom_meta, which is created further down; it's seeded
+  // right after that CREATE so the INSERT can't reference a missing table.)
+  // Seed (or top up) the supply gate so every exclusive has a counter row from boot. ON CONFLICT
+  // DO NOTHING keeps existing mint counts; new exclusives added later start at 0.
+  for (const x of EXCLUSIVES) {
+    await pool.query(
+      `INSERT INTO exclusive_supply (item, minted) VALUES ($1, 0) ON CONFLICT (item) DO NOTHING`,
+      [x.id],
+    );
+  }
+
   // Bounties: a pot of coins riding on a player's head (keyed by their pid). Anyone can add to
   // it; the next player to beat the bountied player in a duel collects the whole pot and the row
   // is deleted. `target_name` is the latest display name, kept only for announcements.
@@ -149,6 +207,12 @@ export async function initDb(): Promise<void> {
   // One-time wipe: scores recorded before boss-battle rounds existed are no longer
   // comparable, so clear the whole board once (gated by a meta flag so it runs just once).
   await pool.query(`CREATE TABLE IF NOT EXISTS doom_meta (k TEXT PRIMARY KEY, v TEXT NOT NULL)`);
+  // Economy Overhaul: seed the House treasury exactly once with the genesis allocation (the only
+  // mint besides match wins / campaign bonuses). Idempotent via ON CONFLICT DO NOTHING.
+  await pool.query(
+    `INSERT INTO doom_meta (k, v) VALUES ('house_balance', $1) ON CONFLICT (k) DO NOTHING`,
+    [String(HOUSE_GENESIS)],
+  );
   const reset = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'reset_boss_v1'`);
   if (reset.rowCount === 0) {
     await pool.query(`DELETE FROM doom_scores`);
@@ -489,10 +553,11 @@ export interface Wallet {
   trail: string | null; // equipped paddle-trail item id
   title: string | null; // equipped name-title item id
   song: string | null; // equipped theme-song item id
+  exclusives: { id: string; serial: number; instanceId: number }[]; // owned scarce exclusives (per-instance)
   lastSpin: number; // epoch ms of the last daily spin (0 = never)
   bonusSpins: number; // free extra wheel spins (e.g. from winning a tournament)
 }
-const EMPTY_WALLET: Wallet = { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, lastSpin: 0, bonusSpins: 0 };
+const EMPTY_WALLET: Wallet = { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, exclusives: [], lastSpin: 0, bonusSpins: 0 };
 
 function rowToWallet(r: { coins: number; owned: string; hat: string | null; skin: string | null; trail?: string | null; title?: string | null; song?: string | null; last_spin?: string | number; bonus_spins?: number }): Wallet {
   return {
@@ -503,9 +568,24 @@ function rowToWallet(r: { coins: number; owned: string; hat: string | null; skin
     trail: r.trail ?? null,
     title: r.title ?? null,
     song: r.song ?? null,
+    // Exclusives come from their own table, not the players row; callers using a RETURNING row
+    // (equip/spend/etc.) leave this empty — only getWallet hydrates it (see below).
+    exclusives: [],
     lastSpin: Number(r.last_spin ?? 0),
     bonusSpins: Number(r.bonus_spins ?? 0),
   };
+}
+
+/** Read a player's owned exclusive instances (item id + serial + instance id), one row per owned
+ *  instance. The instance id lets the client list a specific instance on the marketplace. */
+export async function getExclusives(pid: string): Promise<{ id: string; serial: number; instanceId: number }[]> {
+  if (!pool || !pid) return [];
+  const { rows } = await pool.query<{ id: number; item: string; serial: number }>(
+    `SELECT id, item, serial FROM exclusive_instances
+       WHERE owner_pid = $1 ORDER BY item, serial ASC`,
+    [pid],
+  );
+  return rows.map((r) => ({ id: r.item, serial: Number(r.serial), instanceId: Number(r.id) }));
 }
 
 /** Read Elo + games-played for a set of players (for the betting odds model). Missing players
@@ -525,7 +605,10 @@ export async function getElos(pids: string[]): Promise<Map<string, { elo: number
 export async function getWallet(pid: string): Promise<Wallet> {
   if (!pool || !pid) return { ...EMPTY_WALLET };
   const { rows } = await pool.query(`SELECT coins, owned, hat, skin, trail, title, song, last_spin, bonus_spins FROM players WHERE id = $1`, [pid]);
-  return rows.length ? rowToWallet(rows[0]) : { ...EMPTY_WALLET };
+  if (!rows.length) return { ...EMPTY_WALLET };
+  const w = rowToWallet(rows[0]);
+  w.exclusives = await getExclusives(pid); // hydrate owned scarce exclusives (their own table)
+  return w;
 }
 
 /** Find a player by display name (case-insensitive), for tipping someone who isn't online.
@@ -630,7 +713,14 @@ export async function buyItem(pid: string, name: string, item: string, price: nu
 export async function equipItem(pid: string, slot: 'hat' | 'skin' | 'trail' | 'title' | 'song', item: string | null): Promise<Wallet | null> {
   if (!pool || !pid) return null;
   const cur = await getWallet(pid);
-  if (item !== null && !cur.owned.includes(item)) return null; // can't equip what you don't own
+  // Ownership check: a scarce exclusive isn't in the `owned` CSV — verify it via the per-instance
+  // ledger instead. A regular cosmetic must be in `owned` as before.
+  if (item !== null) {
+    const owns = isExclusive(item)
+      ? cur.exclusives.some((e) => e.id === item)
+      : cur.owned.includes(item);
+    if (!owns) return null; // can't equip what you don't own
+  }
   const col = slot === 'hat' ? 'hat' : slot === 'skin' ? 'skin' : slot === 'trail' ? 'trail' : slot === 'song' ? 'song' : 'title';
   const { rows } = await pool.query(
     `UPDATE players SET ${col} = $2 WHERE id = $1 RETURNING coins, owned, hat, skin, trail, title, song`,
@@ -833,39 +923,202 @@ export async function getHoldings(pid: string): Promise<Holding[]> {
  *  returns null — if the player can't afford it) and pools amount/price shares into the
  *  long or short position. Both sides escrow coins the same way; they differ only at cash-out
  *  (see cashOutStock / positionWorth). Returns the updated wallet on success. */
-export async function investStock(pid: string, _name: string, coin: string, amount: number, price: number, side: StockSide = 'long'): Promise<Wallet | null> {
+export async function investStock(pid: string, _name: string, coin: string, amount: number, price: number, side: StockSide = 'long', nowMs: number = Date.now()): Promise<Wallet | null> {
   if (!pool || !pid || amount <= 0 || !(price > 0)) return null;
   // Escrow the coins first; bail out untouched if the balance isn't there.
   const wallet = await spendCoins(pid, amount);
   if (!wallet) return null;
   const shares = amount / price;
+  // `opened_at` stamps the fast-sell-tax window. Adding to an existing position resets it to now,
+  // so topping up restarts the 60s clock for the whole (re-averaged) position — keeps the tax
+  // simple and unexploitable.
   await pool.query(
-    `INSERT INTO stock_holdings (pid, coin, side, shares, cost) VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO stock_holdings (pid, coin, side, shares, cost, opened_at) VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (pid, coin, side) DO UPDATE
        SET shares = stock_holdings.shares + EXCLUDED.shares,
-           cost   = stock_holdings.cost   + EXCLUDED.cost`,
-    [pid, coin, side, shares, Math.floor(amount)],
+           cost   = stock_holdings.cost   + EXCLUDED.cost,
+           opened_at = EXCLUDED.opened_at`,
+    [pid, coin, side, shares, Math.floor(amount), nowMs],
   );
   return wallet;
 }
 
-/** Close the entire long or short position in `coin` at the given price: pays round(worth)
- *  coins (worth = positionWorth — shares × price for a long; 2 × cost − shares × price for a
- *  short, which is NEGATIVE when an underwater short is covered, debiting the wallet), deletes
- *  the holding, and returns the new wallet plus the payout. A negative payout is applied via
- *  addCoins, which floors the wallet at 0. Returns null if the player holds nothing on that side. */
-export async function cashOutStock(pid: string, name: string, coin: string, price: number, side: StockSide = 'long'): Promise<{ wallet: Wallet; payout: number } | null> {
+/** Close the entire long or short position in `coin` at the given price and delete the holding,
+ *  WITHOUT crediting the wallet. Returns the raw position numbers so the caller (lobby) can split
+ *  the payout into a House-backed principal refund + a House-funded gain + the fast-sell tax, all
+ *  to keep coins conserved. `cost` is the cost basis (House-held escrow), `payout` is
+ *  round(positionWorth) at the close price, `openedAt` stamps the fast-sell window. Returns null
+ *  when the player holds nothing on that side. */
+export async function closePosition(pid: string, coin: string, price: number, side: StockSide = 'long'): Promise<{ cost: number; payout: number; openedAt: number } | null> {
   if (!pool || !pid) return null;
-  const { rows } = await pool.query(`SELECT shares, cost FROM stock_holdings WHERE pid = $1 AND coin = $2 AND side = $3`, [pid, coin, side]);
+  const { rows } = await pool.query(`SELECT shares, cost, opened_at FROM stock_holdings WHERE pid = $1 AND coin = $2 AND side = $3`, [pid, coin, side]);
   if (!rows.length || Number(rows[0].shares) <= 0) return null;
   const shares = Number(rows[0].shares);
   const cost = Number(rows[0].cost);
+  const openedAt = Number(rows[0].opened_at ?? 0);
   const payout = Math.round(positionWorth(side, shares, cost, price));
   await pool.query(`DELETE FROM stock_holdings WHERE pid = $1 AND coin = $2 AND side = $3`, [pid, coin, side]);
-  // addCoins with a 0 delta still returns the (unchanged) wallet, so a wiped-out position
-  // still resolves cleanly.
-  const wallet = (await addCoins(pid, name, payout)) ?? (await getWallet(pid));
-  return { wallet, payout };
+  return { cost, payout, openedAt };
+}
+
+// --- Economy Overhaul: exclusives (loot boxes) + player marketplace ---
+
+/** Atomically mint one exclusive for `pid` if the global cap isn't reached. The conditional
+ *  UPDATE on exclusive_supply is the ONLY mint path; rowCount === 0 means the item is capped out
+ *  (caller must DEGRADE to a coin payout — never over-mint). On success the new serial = the
+ *  incremented mint count, and an instance row is inserted. Returns the serial, or null when
+ *  capped out / no DB. */
+export async function mintExclusive(pid: string, item: string, cap: number, nowMs: number = Date.now()): Promise<number | null> {
+  if (!pool || !pid) return null;
+  const gate = await pool.query<{ minted: number }>(
+    `UPDATE exclusive_supply SET minted = minted + 1 WHERE item = $1 AND minted < $2 RETURNING minted`,
+    [item, cap],
+  );
+  if (gate.rowCount === 0) return null; // capped out — caller degrades to coins
+  const serial = Number(gate.rows[0].minted);
+  await pool.query(
+    `INSERT INTO exclusive_instances (item, owner_pid, minted_at, origin, serial) VALUES ($1, $2, $3, 'lootbox', $4)`,
+    [item, pid, nowMs, serial],
+  );
+  return serial;
+}
+
+/** How many of each exclusive have been minted globally (item → minted count). */
+export async function getExclusiveSupply(): Promise<Record<string, number>> {
+  if (!pool) return {};
+  const { rows } = await pool.query<{ item: string; minted: number }>(`SELECT item, minted FROM exclusive_supply`);
+  const out: Record<string, number> = {};
+  for (const r of rows) out[r.item] = Number(r.minted);
+  return out;
+}
+
+/** The last-sale price map (item → last marketplace sale price), stored as one JSON KV row. */
+export async function getExclusiveLastSale(): Promise<Record<string, number>> {
+  if (!pool) return {};
+  try {
+    const { rows } = await pool.query(`SELECT v FROM doom_meta WHERE k = 'exclusive_last_sale'`);
+    if (!rows.length) return {};
+    const parsed = JSON.parse(rows[0].v);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+async function setExclusiveLastSale(item: string, price: number): Promise<void> {
+  if (!pool) return;
+  const cur = await getExclusiveLastSale();
+  cur[item] = price;
+  await pool.query(
+    `INSERT INTO doom_meta (k, v) VALUES ('exclusive_last_sale', $1)
+       ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+    [JSON.stringify(cur)],
+  );
+}
+
+/** List one owned exclusive instance for sale at `ask` coins. Verifies the seller owns the
+ *  instance and it isn't already listed (UNIQUE on instance_id). Returns true on success. */
+export async function listExclusive(instanceId: number, sellerPid: string, sellerName: string, ask: number, nowMs: number = Date.now()): Promise<boolean> {
+  if (!pool || !sellerPid || !(ask > 0)) return false;
+  // Ownership guard: the instance must exist and belong to the seller.
+  const own = await pool.query(`SELECT item FROM exclusive_instances WHERE id = $1 AND owner_pid = $2`, [instanceId, sellerPid]);
+  if (!own.rowCount) return false;
+  const item = own.rows[0].item as string;
+  try {
+    await pool.query(
+      `INSERT INTO listings (instance_id, item, seller_pid, seller_name, ask, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+      [instanceId, item, sellerPid, sellerName, Math.floor(ask), nowMs],
+    );
+    return true;
+  } catch {
+    return false; // already listed (UNIQUE violation) or other constraint
+  }
+}
+
+/** Cancel one of the seller's own listings. Returns true if a row was removed. */
+export async function cancelListing(listingId: number, sellerPid: string): Promise<boolean> {
+  if (!pool || !sellerPid) return false;
+  const res = await pool.query(`DELETE FROM listings WHERE id = $1 AND seller_pid = $2`, [listingId, sellerPid]);
+  return (res.rowCount ?? 0) > 0;
+}
+
+export interface MarketListing { id: number; instanceId: number; item: string; sellerPid: string; sellerName: string; ask: number; }
+
+/** Every open listing, ascending ask (the floor per item is the first one). */
+export async function getMarketListings(): Promise<MarketListing[]> {
+  if (!pool) return [];
+  const { rows } = await pool.query(`SELECT id, instance_id, item, seller_pid, seller_name, ask FROM listings ORDER BY item, ask ASC`);
+  return rows.map((r) => ({ id: Number(r.id), instanceId: Number(r.instance_id), item: r.item, sellerPid: r.seller_pid, sellerName: r.seller_name, ask: Number(r.ask) }));
+}
+
+/** Buy the lowest-ask listing of `item` in one transaction. Conservation: buyer −ask,
+ *  seller +(ask − commission), House +commission (net zero). Auto-unequips the instance from the
+ *  seller if they had it on. Returns the sale price + parties on success, or a reason on failure. */
+export async function buyLowestAsk(item: string, buyerPid: string, _buyerName: string, commissionRate: number = 0.10): Promise<
+  | { ok: true; ask: number; commission: number; sellerPid: string; sellerName: string; instanceId: number }
+  | { ok: false; reason: 'none' | 'self' | 'afford' | 'nodb' }
+> {
+  if (!pool || !buyerPid) return { ok: false, reason: 'nodb' };
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Lock the lowest ask so two concurrent buyers can't take the same listing.
+    const sel = await client.query(
+      `SELECT id, instance_id, seller_pid, seller_name, ask FROM listings WHERE item = $1 ORDER BY ask ASC LIMIT 1 FOR UPDATE`,
+      [item],
+    );
+    if (!sel.rowCount) { await client.query('ROLLBACK'); return { ok: false, reason: 'none' }; }
+    const listing = sel.rows[0];
+    const sellerPid = listing.seller_pid as string;
+    const sellerName = listing.seller_name as string;
+    const ask = Number(listing.ask);
+    const instanceId = Number(listing.instance_id);
+    if (sellerPid === buyerPid) { await client.query('ROLLBACK'); return { ok: false, reason: 'self' }; }
+    // Charge the buyer atomically (rowCount 0 => can't afford).
+    const pay = await client.query(
+      `UPDATE players SET coins = coins - $2 WHERE id = $1 AND coins >= $2`,
+      [buyerPid, ask],
+    );
+    if (!pay.rowCount) { await client.query('ROLLBACK'); return { ok: false, reason: 'afford' }; }
+    const commission = Math.ceil(ask * commissionRate);
+    const sellerGets = ask - commission;
+    // Credit the seller (ensure the row exists; sellers always do, but be safe).
+    await client.query(
+      `INSERT INTO players (id, name, coins) VALUES ($1, $2, GREATEST(0, $3))
+         ON CONFLICT (id) DO UPDATE SET coins = GREATEST(0, players.coins + $3), name = EXCLUDED.name`,
+      [sellerPid, sellerName, sellerGets],
+    );
+    // Commission flows into the House.
+    await client.query(
+      `UPDATE doom_meta SET v = (GREATEST(0, v::numeric + $1))::text WHERE k = 'house_balance'`,
+      [commission],
+    );
+    // Transfer the instance, delete the listing.
+    await client.query(`UPDATE exclusive_instances SET owner_pid = $1 WHERE id = $2`, [buyerPid, instanceId]);
+    await client.query(`DELETE FROM listings WHERE id = $1`, [listing.id]);
+    // If the seller had this exact instance equipped in any slot, clear that slot (the item id is
+    // shared across all instances, so only unequip when they no longer own ANY instance of it).
+    const stillOwns = await client.query(`SELECT 1 FROM exclusive_instances WHERE owner_pid = $1 AND item = $2 LIMIT 1`, [sellerPid, item]);
+    if (!stillOwns.rowCount) {
+      await client.query(
+        `UPDATE players SET
+           hat   = CASE WHEN hat   = $2 THEN NULL ELSE hat   END,
+           skin  = CASE WHEN skin  = $2 THEN NULL ELSE skin  END,
+           trail = CASE WHEN trail = $2 THEN NULL ELSE trail END,
+           title = CASE WHEN title = $2 THEN NULL ELSE title END
+         WHERE id = $1`,
+        [sellerPid, item],
+      );
+    }
+    await client.query('COMMIT');
+    // Record the last sale (outside the txn; a best-effort cache).
+    await setExclusiveLastSale(item, ask).catch(() => {});
+    return { ok: true, ask, commission, sellerPid, sellerName, instanceId };
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 /** Load the persisted global price board (empty if never saved / no DB). */
@@ -956,6 +1209,44 @@ export async function setMarketInstability(n: number): Promise<void> {
   );
 }
 
+// --- House treasury (the coin-conservation backbone) ---
+// The House balance lives in a single doom_meta KV row (like market_instability) so it's
+// persistent and shared. Every coin that flows into a sink (roulette stakes, lost bets, loot-box
+// prices, marketplace commission, fast-sell tax, seized loan-default wallets, market escrow)
+// credits the House; every House-funded payout debits it. The debit is race-safe: it only
+// succeeds when the House actually holds the coins, so the treasury can never go negative.
+
+/** Read the current House balance (0 if no DB / never seeded). */
+export async function getHouseBalance(): Promise<number> {
+  if (!pool) return 0;
+  const { rows } = await pool.query(`SELECT v FROM doom_meta WHERE k = 'house_balance'`);
+  return rows.length ? Number(rows[0].v) || 0 : 0;
+}
+
+/** Adjust the House balance by `delta`. A credit (delta > 0) always applies (floored at 0). A
+ *  debit (delta < 0) is CONDITIONAL — it only succeeds when the House holds at least |delta|,
+ *  so it can never overdraw. Returns the new balance, or null when a debit couldn't be funded
+ *  (caller must NOT proceed as if it paid out). A zero delta is a no-op read. */
+export async function houseAdjust(delta: number): Promise<number | null> {
+  if (!pool) return null;
+  if (delta === 0) return getHouseBalance();
+  if (delta > 0) {
+    // Credit: clamp at 0 so a corrupt negative row can't make coins vanish silently.
+    const { rows } = await pool.query(
+      `UPDATE doom_meta SET v = (GREATEST(0, v::numeric + $1))::text WHERE k = 'house_balance' RETURNING v`,
+      [delta],
+    );
+    return rows.length ? Number(rows[0].v) : null;
+  }
+  // Debit: only when the balance covers it. rowCount === 0 => insufficient funds.
+  const need = -delta;
+  const { rows } = await pool.query(
+    `UPDATE doom_meta SET v = (v::numeric - $1)::text WHERE k = 'house_balance' AND v::numeric >= $1 RETURNING v`,
+    [need],
+  );
+  return rows.length ? Number(rows[0].v) : null;
+}
+
 // --- Davis's loans ---
 export interface Loan { amount: number; owed: number; dueAt: number; }
 
@@ -1008,16 +1299,71 @@ export async function repayLoan(pid: string): Promise<{ wallet: Wallet } | null>
  *  wipe all their stock positions, and clear the debt. Returns the affected pids (so the caller
  *  can refresh anyone connected) plus `totalOwed` — the sum of every defaulter's unpaid 1.5×
  *  debt, which the caller feeds into the market-instability pool. */
-export async function collectDefaultedLoans(nowMs: number): Promise<{ pids: string[]; totalOwed: number }> {
-  if (!pool) return { pids: [], totalOwed: 0 };
+export async function collectDefaultedLoans(nowMs: number): Promise<{ pids: string[]; totalOwed: number; seized: number }> {
+  if (!pool) return { pids: [], totalOwed: 0, seized: 0 };
   const { rows } = await pool.query(`SELECT pid, owed FROM loans WHERE due_at <= $1`, [nowMs]);
   const pids = rows.map((r) => r.pid as string);
-  if (!pids.length) return { pids: [], totalOwed: 0 };
+  if (!pids.length) return { pids: [], totalOwed: 0, seized: 0 };
   const totalOwed = rows.reduce((sum, r) => sum + (Number(r.owed) || 0), 0);
+  // Economy Overhaul: the wallet coins Davis takes are REAL coins that must go somewhere to stay
+  // conserved — sum them BEFORE zeroing so the caller can route them into the House. The escrowed
+  // stock cost of the wiped positions is already House-held (pushed there at invest time), so
+  // deleting those positions just forfeits the player's claim on that escrow to the House — no
+  // coins move, and nothing is double-counted. The virtual `owed` still feeds market instability
+  // exactly as before and is NEVER minted as coins.
+  const seizedRes = await pool.query<{ s: string }>(`SELECT COALESCE(SUM(coins), 0) AS s FROM players WHERE id = ANY($1)`, [pids]);
+  const seized = Number(seizedRes.rows[0]?.s ?? 0);
   await pool.query(`UPDATE players SET coins = 0, owned = '', hat = NULL, skin = NULL WHERE id = ANY($1)`, [pids]);
   await pool.query(`DELETE FROM stock_holdings WHERE pid = ANY($1)`, [pids]);
   await pool.query(`DELETE FROM loans WHERE pid = ANY($1)`, [pids]);
-  return { pids, totalOwed };
+  return { pids, totalOwed, seized };
+}
+
+/** The public open-loan book: borrower name, principal, owed, and deadline — ordered by the
+ *  biggest debts first. Drives the clickable stability-bar modal. Empty without a DB. */
+export async function getOpenLoans(): Promise<{ name: string; amount: number; owed: number; dueAt: number }[]> {
+  if (!pool) return [];
+  const { rows } = await pool.query<{ name: string; amount: number; owed: number; due_at: number }>(
+    `SELECT p.name, l.amount, l.owed, l.due_at
+       FROM loans l JOIN players p ON p.id = l.pid
+      ORDER BY l.owed DESC, p.name ASC
+      LIMIT 50`,
+  );
+  return rows.map((r) => ({ name: r.name, amount: Number(r.amount), owed: Number(r.owed), dueAt: Number(r.due_at) }));
+}
+
+// --- Economy Overhaul: netizen bot traders ---
+
+/** All netizen (bot trader) player ids + names. They're real player rows flagged is_netizen. */
+export async function getNetizens(): Promise<{ pid: string; name: string; coins: number }[]> {
+  if (!pool) return [];
+  const { rows } = await pool.query<{ id: string; name: string; coins: number }>(
+    `SELECT id, name, coins FROM players WHERE is_netizen = TRUE`,
+  );
+  return rows.map((r) => ({ pid: r.id, name: r.name, coins: Number(r.coins) }));
+}
+
+/** Seed a netizen row, funding its starting coins FROM the House (a transfer, never a mint).
+ *  Returns true if it was funded+created (or already existed); false when the House couldn't
+ *  cover the funding (caller seeds fewer). Idempotent on the pid: an existing netizen isn't
+ *  re-funded. */
+export async function seedNetizen(pid: string, name: string, startCoins: number): Promise<boolean> {
+  if (!pool || !pid) return false;
+  const existing = await pool.query(`SELECT 1 FROM players WHERE id = $1`, [pid]);
+  if (existing.rowCount) {
+    // Make sure the flag is set, but don't re-fund.
+    await pool.query(`UPDATE players SET is_netizen = TRUE WHERE id = $1`, [pid]);
+    return true;
+  }
+  // Pull the starting coins out of the House first (conditional debit). If it can't fund, abort.
+  const funded = await houseAdjust(-startCoins);
+  if (funded === null) return false;
+  await pool.query(
+    `INSERT INTO players (id, name, coins, is_netizen) VALUES ($1, $2, $3, TRUE)
+       ON CONFLICT (id) DO UPDATE SET is_netizen = TRUE`,
+    [pid, name, startCoins],
+  );
+  return true;
 }
 
 export async function getLeaderboard(): Promise<LeaderboardRow[]> {

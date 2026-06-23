@@ -1031,6 +1031,59 @@
       .coin-graph { display: block; width: 100%; height: 26px; margin-top: 4px; }
       #marketNote { font-size: 10px; color: #5a647e; margin-top: 8px; line-height: 1.4; }
       #marketList { max-height: 56vh; overflow-y: auto; }
+      /* Economy Overhaul: House readout + order-flow tint */
+      .house-readout { font-size: 11px; color: #c9b46a; margin-bottom: 8px; }
+      .house-readout .house-low { color: #ff7a7a; font-weight: 700; }
+      .coin-flow { font-size: 10px; margin-left: 6px; }
+      .coin-flow.up { color: #6ee7a8; }
+      .coin-flow.down { color: #ff7a7a; }
+      /* Loot box + Marketplace panels (model on #marketPanel) */
+      #lootPanel, #marketplacePanel {
+        position: fixed; top: 52px; left: 12px; width: 340px; max-height: 84vh; overflow-y: auto;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #lootPanel[hidden], #marketplacePanel[hidden] { display: none; }
+      #lootPanel h3, #marketplacePanel h3 {
+        font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; margin: 8px 0 6px;
+      }
+      .loot-blurb { font-size: 11px; color: #8693b3; line-height: 1.4; margin-bottom: 8px; }
+      #lootOpenBtn {
+        width: 100%; font: inherit; font-size: 13px; font-weight: 700; padding: 9px 0; border-radius: 6px;
+        border: 1px solid #6b4a8f; background: #1a1228; color: #d0a0e0; cursor: pointer;
+      }
+      #lootOpenBtn:hover:not(:disabled) { background: #2a1c3c; }
+      #lootOpenBtn:disabled { opacity: 0.5; cursor: default; }
+      .loot-reveal { min-height: 18px; margin: 8px 0; text-align: center; }
+      .loot-pop { font-size: 14px; color: #e8eefc; animation: lootPop 0.4s ease; }
+      .loot-pop.loot-rare { color: #ffd86e; font-size: 16px; text-shadow: 0 0 10px rgba(255,216,110,0.6); }
+      .loot-rarity { font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: #b09; }
+      @keyframes lootPop { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+      .loot-owned, .loot-cap { font-size: 10px; color: #6b7796; margin-top: 8px; line-height: 1.5; }
+      .loot-badge { display: inline-block; background: #11182c; border: 1px solid #2a3550; border-radius: 4px; padding: 1px 5px; margin: 1px; }
+      .loot-serial { color: #ffd86e; font-weight: 700; }
+      .mp-tabs { display: flex; gap: 4px; margin-bottom: 8px; }
+      .mp-tab {
+        flex: 1; font: inherit; font-size: 10px; font-weight: 700; padding: 4px 0; border-radius: 5px;
+        border: 1px solid #2a3550; background: #11182c; color: #8693b3; cursor: pointer;
+      }
+      .mp-tab.active { background: #2d4070; border-color: #3a6df0; color: #fff; }
+      .mp-section { font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: #5a647e; margin: 8px 0 4px; }
+      .mp-row { display: flex; flex-direction: column; gap: 3px; padding: 6px 0; border-bottom: 1px solid #1a2236; }
+      .mp-name { font-size: 12px; color: #e8eefc; }
+      .mp-rarity { font-size: 9px; color: #b09; text-transform: uppercase; }
+      .mp-meta { font-size: 10px; color: #6b7796; }
+      .mp-serial { font-size: 10px; color: #ffd86e; }
+      .mp-empty { font-size: 11px; color: #6b7796; padding: 8px 0; }
+      .mp-buy, .mp-cancel, .mp-equip, .mp-list {
+        font: inherit; font-size: 11px; font-weight: 700; padding: 4px 8px; border-radius: 5px;
+        border: 1px solid #2a3550; background: #11182c; color: #9fb0d8; cursor: pointer; align-self: flex-start;
+      }
+      .mp-buy:disabled { opacity: 0.45; cursor: default; }
+      .mp-own-actions { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+      .mp-ask { width: 70px; font: inherit; font-size: 11px; padding: 3px 5px; border-radius: 4px; border: 1px solid #2a3550; background: #0a0f1c; color: #e8eefc; }
+      /* The stability bar reads as clickable (opens the loan book) */
+      #marketStability { cursor: pointer; }
       /* Davis's loan shark dropdown (sibling of #market in #topLeft) */
       #loan { position: relative; }
       #loanBtn {
@@ -2807,12 +2860,15 @@
         <button id="casinoBtn" type="button" aria-expanded="false" title="Market, loans &amp; roulette">🎰 Casino <span class="caret">▾</span></button>
         <div id="casinoPanel" class="nav-menu" hidden>
           <button id="marketBtn" type="button" aria-expanded="false" title="Invest coins in joke cryptos">📈 Market</button>
+          <button id="lootBtn" type="button" aria-expanded="false" title="Open loot boxes — roll for scarce, capped exclusives">🎁 Loot Box</button>
+          <button id="marketplaceBtn" type="button" aria-expanded="false" title="Buy &amp; sell scarce exclusives with other players">🛒 Marketplace</button>
           <button id="loanBtn" type="button" aria-expanded="false" title="Borrow coins from Davis — pay back 1.5× by the daily reset">💸 Get Loan</button>
           <button id="rouletteBtn" type="button" aria-expanded="false" title="Play roulette — bet coins on the wheel">🎡 Roulette</button>
         </div>
       </div>
       <div id="marketPanel" hidden>
         <h3>Crypto Market · <span id="marketCoins">0</span> 🪙</h3>
+        <div id="houseReadout" class="house-readout">🏦 House: 0 🪙</div>
         <div id="marketTimer">next move in —</div>
         <div id="marketGraphTf">
           <button type="button" data-tf="5m">5m</button>
@@ -2854,6 +2910,14 @@
           </div>
         </div>
         <div id="rouletteNote">Single-zero wheel. Straight number pays 35:1, dozens 2:1, red/black/odd/even/half 1:1. The green 0 is the house edge. Pick a chip, click the board to stake, then Spin.</div>
+      </div>
+      <div id="lootPanel" hidden>
+        <h3>🎁 Loot Box</h3>
+        <div id="lootBody"></div>
+      </div>
+      <div id="marketplacePanel" hidden>
+        <h3>🛒 Marketplace</h3>
+        <div id="marketplaceBody"></div>
       </div>
       <div id="viewMode">
         <button id="viewModeBtn" type="button" aria-expanded="false">VIEW <span class="caret">▾</span></button>
