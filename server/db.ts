@@ -250,17 +250,26 @@ export async function initDb(): Promise<void> {
   }
   // One-time: hand tsong-mobile's entire net worth (coins + stock positions) to lasso, then
   // zero out tsong-mobile. Not a full account merge — stats, cosmetics and scores stay put.
-  // Each name resolves to its richest row in case of duplicates. Re-runs until both exist.
-  const tsongToLasso = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'tsong_to_lasso_v1'`);
+  // Names are matched on a normalized form (lowercased, all non-alphanumerics stripped) so
+  // spacing/dash variants — "tsong - mobile", "tsong–mobile", double spaces — all resolve.
+  // "lasso" normalizes to "lasso" (NOT "lasso - mobile" → "lassomobile", so they stay
+  // distinct). Each name resolves to its richest row. Re-runs until both exist.
+  const tsongToLasso = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'tsong_to_lasso_v2'`);
   if (tsongToLasso.rowCount === 0) {
+    const norm = `LOWER(REGEXP_REPLACE(name, '[^a-zA-Z0-9]', '', 'g'))`;
     const src = await pool.query<{ id: string }>(
-      `SELECT id FROM players WHERE LOWER(TRIM(name)) = 'tsong - mobile' ORDER BY coins DESC LIMIT 1`,
+      `SELECT id FROM players WHERE ${norm} = 'tsongmobile' ORDER BY coins DESC LIMIT 1`,
     );
     const dst = await pool.query<{ id: string }>(
-      `SELECT id FROM players WHERE LOWER(TRIM(name)) = 'lasso' ORDER BY coins DESC LIMIT 1`,
+      `SELECT id FROM players WHERE ${norm} = 'lasso' ORDER BY coins DESC LIMIT 1`,
     );
     const srcPid = src.rows[0]?.id;
     const dstPid = dst.rows[0]?.id;
+    if (!srcPid || !dstPid) {
+      // Log every player name so a failed match can be diagnosed from the boot log.
+      const all = await pool.query<{ name: string }>(`SELECT name FROM players ORDER BY coins DESC LIMIT 40`);
+      console.warn(`tsong→lasso names seen: ${all.rows.map((r) => JSON.stringify(r.name)).join(', ')}`);
+    }
     if (srcPid && dstPid && srcPid !== dstPid) {
       // Coins: add tsong-mobile's balance to lasso, then zero the source.
       await pool.query(
@@ -279,7 +288,7 @@ export async function initDb(): Promise<void> {
         [srcPid, dstPid],
       );
       await pool.query(`DELETE FROM stock_holdings WHERE pid = $1`, [srcPid]);
-      await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('tsong_to_lasso_v1', now()::text)`);
+      await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('tsong_to_lasso_v2', now()::text)`);
       console.log(`transferred tsong-mobile (${srcPid}) net worth to lasso (${dstPid})`);
     } else {
       console.warn(`tsong→lasso transfer skipped — src(${srcPid ?? 'none'}) / dst(${dstPid ?? 'none'}); will retry next boot`);
