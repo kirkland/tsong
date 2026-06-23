@@ -3007,6 +3007,7 @@ if (remembered) {
   nick.value = remembered;
   overlay.style.display = 'none';
   enableChat();
+  revealAds(); // returning players skip the join form — still show the banner ad
 } else {
   nick.focus();
 }
