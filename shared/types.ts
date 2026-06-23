@@ -301,8 +301,8 @@ export type ClientMsg =
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
   | { type: 'tip'; to: string; amount: number } // gift some of your coins to another online player (by nickname)
   | { type: 'dailySpin' } // claim the once-per-24h reward spin
-  | { type: 'stockInvest'; coin: string; amount: number } // sink `amount` coins into a crypto at the current price
-  | { type: 'stockCashOut'; coin: string } // sell the entire holding in a crypto for round(worth) coins (nearest)
+  | { type: 'stockInvest'; coin: string; amount: number; side?: StockSide } // open a position: long (default) buys, short bets the price falls — both escrow `amount` coins
+  | { type: 'stockCashOut'; coin: string; side?: StockSide } // close the whole long (default) or short position in a crypto for round(worth) coins
   | { type: 'getLoan'; amount: number } // borrow `amount` coins from Davis (owe 1.5× back by the daily 5pm collection)
   | { type: 'repayLoan' } // pay Davis the full 1.5× owed and clear the loan
   | { type: 'roulette'; bets: RouletteBet[] } // stake coins on a single spin of the casino wheel
@@ -536,9 +536,10 @@ export interface NetWorthMsg {
 export interface BalanceSheetHolding {
   coin: string;   // display name (e.g. "Davis Clarke Coin")
   ticker: string; // short ticker (e.g. "DAVIS")
+  side: StockSide; // long or short
   shares: number; // fractional shares held
   price: number;  // current price per share
-  value: number;  // shares × price, rounded to whole coins
+  value: number;  // live cash-out value (see positionWorth), rounded to whole coins
 }
 
 // Server → client: a public balance sheet for the player at `rank` on the net-worth
@@ -704,6 +705,21 @@ export const STOCKS = [
   { id: 'fritz', name: 'Fritz Coin', ticker: 'FRITZ', img: '/fritz.jpg', base: 100 },
 ] as const;
 export type StockId = (typeof STOCKS)[number]['id'];
+// A position is either a long (you own shares; profit when the price rises) or a short (you
+// bet against the coin; profit when it falls). Both escrow `amount` coins up front. A long
+// cashes out for round(shares × price). A short pays round(2 × cost − shares × price) on
+// cover: break-even if the price is unchanged, rising toward +100% as the price falls — but
+// turning NEGATIVE once the price climbs past your entry. There's no floor: covering an
+// underwater short COSTS coins, so a short gone wrong can lose far more than you staked
+// (limited only by your wallet, which can't go below 0). `cost`/`shares` are pooled per
+// (coin, side), giving a blended entry price.
+export type StockSide = 'long' | 'short';
+/** Coins returned when closing a position of `shares`/`cost` at `price`, BEFORE rounding.
+ *  A short's worth goes negative once the price rises past its entry (an underwater short
+ *  costs coins to cover) — uncapped, so a runaway price can wipe out more than the stake. */
+export function positionWorth(side: StockSide, shares: number, cost: number, price: number): number {
+  return side === 'short' ? 2 * cost - shares * price : shares * price;
+}
 export const STOCK_UPDATE_MS = 30 * 1000; // prices re-roll every 30 seconds
 // Market stability: the market no longer resets on a daily timer. Instead, each day's loan
 // collection adds every defaulter's unpaid debt (the 1.5× `owed`) to a global instability
@@ -732,10 +748,10 @@ export interface StockMsg {
   // Global price board, in STOCKS order. `prev` is the price at the previous re-roll (for the
   // %-change readout); `price` is the live one.
   prices: { id: string; price: number; prev: number }[];
-  // This player's open positions (only coins they actually hold). `shares` is fractional;
-  // `cost` is the total coins poured in (cost basis); `worth` is floor(shares × price) — the
-  // coins they'd get if they cashed out right now.
-  holdings: { id: string; shares: number; cost: number; worth: number }[];
+  // This player's open positions — a coin can appear twice (a long AND a short). `shares` is
+  // fractional; `cost` is the total coins escrowed (cost basis); `worth` is floor of what
+  // they'd get cashing out now (see positionWorth — differs for long vs short).
+  holdings: { id: string; side: StockSide; shares: number; cost: number; worth: number }[];
   // Price history for the per-coin graphs, in STOCKS order — one array per timeframe (oldest
   // first). See STOCK_HISTORY for the cadence/length of each series.
   history: { id: string; series: { '5m': number[]; '1h': number[]; '1d': number[] } }[];

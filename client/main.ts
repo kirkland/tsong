@@ -28,6 +28,8 @@ import {
   COSMETICS,
   SPIN_SEGMENTS,
   STOCKS,
+  StockSide,
+  positionWorth,
   TickHealth,
 } from '../shared/types';
 
@@ -1764,7 +1766,7 @@ function showToast(text: string) {
 // round(worth) — nearest whole coin — exactly what the server pays out.
 type Market = {
   prices: { id: string; price: number; prev: number }[];
-  holdings: { id: string; shares: number; cost: number; worth: number }[];
+  holdings: { id: string; side: StockSide; shares: number; cost: number; worth: number }[];
   history: { id: string; series: { '5m': number[]; '1h': number[]; '1d': number[] } }[];
   nextUpdateAt: number;
 };
@@ -1840,7 +1842,9 @@ function renderMarket() {
   marketList.innerHTML = '';
   for (const stock of STOCKS) {
     const p = market.prices.find((x) => x.id === stock.id);
-    const hold = market.holdings.find((x) => x.id === stock.id);
+    // A coin can carry both a long and a short position at once.
+    const longPos = market.holdings.find((x) => x.id === stock.id && x.side === 'long');
+    const shortPos = market.holdings.find((x) => x.id === stock.id && x.side === 'short');
     const price = p?.price ?? stock.base;
     // Headline % is the move over the SELECTED timeframe (first → last of the visible graph),
     // so it changes when you switch Minutes / Hour / Day — not a static per-tick number.
@@ -1848,10 +1852,6 @@ function renderMarket() {
     const last = series.length ? series[series.length - 1] : price;
     const first = series.length >= 2 ? series[0] : last;
     const pct = first > 0 ? ((last - first) / first) * 100 : 0;
-    // A position's live worth = shares × current price (fractional, so it moves smoothly);
-    // cashing out pays it rounded to the nearest whole coin (≥ x.5 up, below down).
-    const rawWorth = hold ? hold.shares * price : 0;
-    const cashOut = Math.round(rawWorth);
 
     const row = document.createElement('div');
     row.className = 'coin-row';
@@ -1874,15 +1874,25 @@ function renderMarket() {
     const arrow = dir === 'up' ? '▲' : dir === 'down' ? '▼' : '•';
     priceLine.innerHTML = `${price.toFixed(2)} 🪙<span class="coin-chg ${dir}">${arrow} ${Math.abs(pct).toFixed(1)}%</span>`;
     main.appendChild(priceLine);
-    if (hold) {
-      const pos = document.createElement('div');
-      pos.className = 'coin-pos';
+    // One read-out line per open position. A long profits as the price rises; a short profits
+    // as it falls — and goes negative (covering costs coins) once the price passes its entry.
+    const posLine = (hold: typeof longPos & {}) => {
+      const rawWorth = positionWorth(hold.side, hold.shares, hold.cost, price);
+      const cashOut = Math.round(rawWorth);
       const plPct = hold.cost > 0 ? (rawWorth / hold.cost - 1) * 100 : 0;
       const plClass = plPct > 0.05 ? 'pl-up' : plPct < -0.05 ? 'pl-down' : '';
       const sign = plPct >= 0 ? '+' : '';
-      pos.innerHTML = `${hold.cost}🪙 in → <span class="${plClass}">${rawWorth.toFixed(2)}🪙 (${sign}${plPct.toFixed(0)}%)</span> · cash out ${cashOut}`;
-      main.appendChild(pos);
-    }
+      const tag = hold.side === 'short' ? '<span class="pos-short">SHORT</span> ' : '';
+      const verb = hold.side === 'short' ? 'cover' : 'cash out';
+      // A negative worth means closing costs you coins instead of paying out.
+      const closeTxt = cashOut >= 0 ? `${verb} ${cashOut}` : `${verb} costs ${-cashOut}`;
+      const div = document.createElement('div');
+      div.className = 'coin-pos';
+      div.innerHTML = `${tag}${hold.cost}🪙 → <span class="${plClass}">${rawWorth.toFixed(2)}🪙 (${sign}${plPct.toFixed(0)}%)</span> · ${closeTxt}`;
+      return div;
+    };
+    if (longPos) main.appendChild(posLine(longPos));
+    if (shortPos) main.appendChild(posLine(shortPos));
     const graph = document.createElement('canvas');
     graph.className = 'coin-graph';
     graph.width = 176; graph.height = 26;
@@ -1909,37 +1919,60 @@ function renderMarket() {
     amtEl.value = String(amt);
     const plus = document.createElement('button');
     plus.textContent = '+';
+    buy.append(minus, amtEl, plus);
+    actions.appendChild(buy);
+
+    // Open-position buttons: Buy (long) and Short, both staking the stepper amount.
+    const trade = document.createElement('div');
+    trade.className = 'coin-trade';
     const invest = document.createElement('button');
-    invest.textContent = 'Invest';
+    invest.className = 'coin-long';
+    invest.textContent = 'Buy';
     invest.disabled = wallet.coins < amt;
-    invest.onclick = () => { net.send({ type: 'stockInvest', coin: stock.id, amount: investAmt.get(stock.id) ?? 100 }); playChaChing(); };
+    invest.onclick = () => { net.send({ type: 'stockInvest', coin: stock.id, amount: investAmt.get(stock.id) ?? 100, side: 'long' }); playChaChing(); };
+    const short = document.createElement('button');
+    short.className = 'coin-shortbtn';
+    short.textContent = 'Short';
+    short.disabled = wallet.coins < amt;
+    short.onclick = () => { net.send({ type: 'stockInvest', coin: stock.id, amount: investAmt.get(stock.id) ?? 100, side: 'short' }); playChaChing(); };
+    trade.append(invest, short);
+    actions.appendChild(trade);
+
     // Step/commit the amount in place (don't re-render) — rebuilding the row would detach the very
     // button that was clicked and trip the click-outside handler, closing the whole panel.
     const setAmt = (v: number) => {
       const clamped = Math.max(1, Math.min(v, Math.max(1, wallet.coins)));
       investAmt.set(stock.id, clamped);
       amtEl.value = String(clamped);
-      invest.disabled = wallet.coins < clamped;
+      invest.disabled = short.disabled = wallet.coins < clamped;
     };
-    // Track what they type live (so Invest gates correctly); normalize/clamp on commit (blur/Enter).
+    // Track what they type live (so the buttons gate correctly); normalize/clamp on commit (blur/Enter).
     amtEl.addEventListener('input', () => {
       const v = Math.floor(Number(amtEl.value));
       const valid = Number.isFinite(v) && v >= 1;
       investAmt.set(stock.id, valid ? v : 1);
-      invest.disabled = !valid || wallet.coins < v;
+      invest.disabled = short.disabled = !valid || wallet.coins < v;
     });
     amtEl.addEventListener('change', () => setAmt(Math.floor(Number(amtEl.value)) || 1));
     minus.onclick = () => setAmt((investAmt.get(stock.id) ?? 100) - 1);
     plus.onclick = () => setAmt((investAmt.get(stock.id) ?? 100) + 1);
-    buy.append(minus, amtEl, plus, invest);
-    actions.appendChild(buy);
 
-    const cash = document.createElement('button');
-    cash.className = 'coin-cash';
-    cash.textContent = hold ? `Cash out ${cashOut}🪙` : 'Cash out';
-    cash.disabled = !hold;
-    cash.onclick = () => { net.send({ type: 'stockCashOut', coin: stock.id }); playChaChing(); };
-    actions.appendChild(cash);
+    // Close-position buttons: only shown for the side(s) actually held.
+    if (longPos) {
+      const cash = document.createElement('button');
+      cash.className = 'coin-cash';
+      cash.textContent = `Cash out ${Math.round(positionWorth('long', longPos.shares, longPos.cost, price))}🪙`;
+      cash.onclick = () => { net.send({ type: 'stockCashOut', coin: stock.id, side: 'long' }); playChaChing(); };
+      actions.appendChild(cash);
+    }
+    if (shortPos) {
+      const cover = document.createElement('button');
+      cover.className = 'coin-cover';
+      const cv = Math.round(positionWorth('short', shortPos.shares, shortPos.cost, price));
+      cover.textContent = cv >= 0 ? `Cover ${cv}🪙` : `Cover (pay ${-cv}🪙)`;
+      cover.onclick = () => { net.send({ type: 'stockCashOut', coin: stock.id, side: 'short' }); playChaChing(); };
+      actions.appendChild(cover);
+    }
 
     row.appendChild(actions);
     marketList.appendChild(row);
@@ -3672,8 +3705,9 @@ function showBalanceSheet(msg: BalanceSheetMsg) {
   rows.push(`<div class="bs-section">Stock holdings</div>`);
   if (msg.holdings.length) {
     for (const h of msg.holdings) {
+      const tag = h.side === 'short' ? '<span class="pos-short">SHORT</span> ' : '';
       rows.push(
-        `<div class="bs-row"><span class="bs-label">${escapeHtml(h.ticker)} ` +
+        `<div class="bs-row"><span class="bs-label">${tag}${escapeHtml(h.ticker)} ` +
           `<span class="bs-sub">${h.shares.toFixed(2)} sh @ ${Math.round(h.price)}🪙</span></span>` +
           `<span class="bs-val">${h.value}🪙</span></div>`,
       );

@@ -39,6 +39,8 @@ import {
   STOCK_UPDATE_MS,
   STOCK_HISTORY,
   MARKET_INSTABILITY_THRESHOLD,
+  StockSide,
+  positionWorth,
   TEAM_MAX,
   WalletMsg,
   CampaignScoreRow,
@@ -1291,9 +1293,9 @@ export class Lobby {
     getHoldings(conn.pid)
       .then((h) => {
         if (!this.conns.has(ws)) return;
-        const holdings = Object.entries(h).map(([id, hd]) => {
-          const price = this.stockPrices.get(id)?.price ?? 0;
-          return { id, shares: hd.shares, cost: hd.cost, worth: Math.floor(hd.shares * price) };
+        const holdings = h.map((hd) => {
+          const price = this.stockPrices.get(hd.coin)?.price ?? 0;
+          return { id: hd.coin, side: hd.side, shares: hd.shares, cost: hd.cost, worth: Math.floor(positionWorth(hd.side, hd.shares, hd.cost, price)) };
         });
         this.tell(ws, {
           type: 'stocks', prices, holdings, history, nextUpdateAt: this.nextStockUpdateAt,
@@ -1303,8 +1305,8 @@ export class Lobby {
       .catch((e) => console.error('stocks send failed:', e));
   }
 
-  /** Invest coins into a crypto at its current price. Coins are escrowed into shares. */
-  stockInvest(ws: WebSocket, coin: string, amount: number) {
+  /** Open a long or short position in a crypto at its current price. Coins are escrowed. */
+  stockInvest(ws: WebSocket, coin: string, amount: number, side: StockSide) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     if (!STOCKS.some((s) => s.id === coin)) return; // unknown coin
@@ -1312,7 +1314,7 @@ export class Lobby {
     if (!Number.isFinite(amt) || amt < 1) return; // positive whole coins only
     const price = this.stockPrices.get(coin)?.price;
     if (!price || !(price > 0)) return;
-    investStock(conn.pid, conn.nickname, coin, amt, price)
+    investStock(conn.pid, conn.nickname, coin, amt, price, side)
       .then((w) => {
         if (!w) { this.sendStocks(ws); return; } // couldn't afford — just refresh the view
         this.sendWallet(ws);
@@ -1321,16 +1323,16 @@ export class Lobby {
       .catch((e) => console.error('stock invest failed:', e));
   }
 
-  /** Cash out the whole position in a crypto for floor(current worth) coins. */
-  stockCashOut(ws: WebSocket, coin: string) {
+  /** Close the whole long or short position in a crypto for round(current worth) coins. */
+  stockCashOut(ws: WebSocket, coin: string, side: StockSide) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     if (!STOCKS.some((s) => s.id === coin)) return;
     const price = this.stockPrices.get(coin)?.price;
     if (!price || !(price > 0)) return;
-    cashOutStock(conn.pid, conn.nickname, coin, price)
+    cashOutStock(conn.pid, conn.nickname, coin, price, side)
       .then((res) => {
-        if (!res) { this.sendStocks(ws); return; } // held nothing in that coin
+        if (!res) { this.sendStocks(ws); return; } // held nothing on that side
         this.sendWallet(ws);
         this.sendStocks(ws);
       })
@@ -2122,12 +2124,12 @@ export class Lobby {
     const rows: BalanceSheetHolding[] = [];
     let stockValue = 0;
     for (const s of STOCKS) {
-      const h = holdings[s.id];
-      if (!h || h.shares <= 0) continue;
-      const price = this.stockPrices.get(s.id)?.price ?? s.base;
-      const value = Math.round(h.shares * price);
-      stockValue += value;
-      rows.push({ coin: s.name, ticker: s.ticker, shares: h.shares, price, value });
+      for (const h of holdings.filter((x) => x.coin === s.id && x.shares > 0)) {
+        const price = this.stockPrices.get(s.id)?.price ?? s.base;
+        const value = Math.round(positionWorth(h.side, h.shares, h.cost, price));
+        stockValue += value;
+        rows.push({ coin: s.name, ticker: s.ticker, side: h.side, shares: h.shares, price, value });
+      }
     }
     const owed = loan?.owed ?? 0;
     const net = wallet.coins + stockValue - owed;

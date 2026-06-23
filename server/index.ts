@@ -281,11 +281,11 @@ wss.on('connection', (ws: WebSocket, req) => {
         break;
       case 'stockInvest':
         if (typeof msg.coin === 'string' && typeof msg.amount === 'number') {
-          lobby.stockInvest(ws, msg.coin, msg.amount);
+          lobby.stockInvest(ws, msg.coin, msg.amount, msg.side === 'short' ? 'short' : 'long');
         }
         break;
       case 'stockCashOut':
-        if (typeof msg.coin === 'string') lobby.stockCashOut(ws, msg.coin);
+        if (typeof msg.coin === 'string') lobby.stockCashOut(ws, msg.coin, msg.side === 'short' ? 'short' : 'long');
         break;
       case 'getLoan':
         if (typeof msg.amount === 'number') lobby.getLoanFor(ws, msg.amount);

@@ -1080,12 +1080,23 @@
       .coin-pos .pl-down { color: #ff7a7a; }
       .coin-actions { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
       .coin-buy { display: flex; align-items: center; gap: 3px; }
-      .coin-buy button, .coin-actions > button {
+      .coin-trade { display: flex; gap: 4px; }
+      .coin-trade button { flex: 1; }
+      .coin-buy button, .coin-trade button, .coin-actions > button {
         font: inherit; font-size: 11px; font-weight: 700; padding: 3px 7px; border-radius: 5px;
         border: 1px solid #2a3550; background: #1a2035; color: #9fb0d8; cursor: pointer;
       }
-      .coin-buy button:hover:not(:disabled), .coin-actions > button:hover:not(:disabled) { background: #2d4070; color: #fff; }
-      .coin-buy button:disabled, .coin-actions > button:disabled { opacity: 0.45; cursor: default; }
+      .coin-buy button:hover:not(:disabled), .coin-trade button:hover:not(:disabled), .coin-actions > button:hover:not(:disabled) { background: #2d4070; color: #fff; }
+      .coin-buy button:disabled, .coin-trade button:disabled, .coin-actions > button:disabled { opacity: 0.45; cursor: default; }
+      /* Buy = green, Short = red — so the direction of the bet reads at a glance. */
+      .coin-long { border-color: #1f5a3a !important; background: #0e2419 !important; color: #5fe0a0 !important; }
+      .coin-long:hover:not(:disabled) { background: #14361f !important; }
+      .coin-shortbtn { border-color: #5a1f24 !important; background: #2a0e12 !important; color: #ff8e8e !important; }
+      .coin-shortbtn:hover:not(:disabled) { background: #3a141a !important; }
+      .coin-cover { border-color: #5a1f24 !important; background: #2a0e12 !important; color: #ff8e8e !important; }
+      .coin-cover:hover:not(:disabled) { background: #3a141a !important; }
+      /* SHORT tag on a position read-out / balance sheet row. */
+      .pos-short { font-size: 9px; font-weight: 800; color: #ff8e8e; background: #2a0e12; border: 1px solid #5a1f24; border-radius: 3px; padding: 0 3px; vertical-align: middle; }
       .coin-amt {
         width: 56px; text-align: center; font-weight: 700; color: #ffd166; font-size: 11px;
         background: #0b1120; border: 1px solid #2a3550; border-radius: 5px; padding: 3px 4px;
@@ -2597,7 +2608,7 @@
             <button type="button" data-tf="1d">1d</button>
           </div>
           <div id="marketList"></div>
-          <div id="marketNote">Prices update every 30s and drift up over the day. Your position's worth tracks the price; cashing out pays it rounded down to whole coins. ⚠️ Every 24h the market <b>RESETS</b> to 1.00 and holdings revalue at the bottom — cash out before the daily reset.</div>
+          <div id="marketNote"><b>Buy</b> to bet a coin rises; <b>Short</b> to bet it falls. A short profits as the price drops (toward +100% near zero), but if the price climbs past your entry it goes <b>negative</b> — covering then <b>costs</b> you coins, so a short gone wrong can drain far more than you staked. Prices update every 30s and drift up over the day. ⚠️ Unpaid loans build market instability; at 100% the whole market <b>CRASHES</b> back to base.</div>
         </div>
       </div>
       <div id="loan">
