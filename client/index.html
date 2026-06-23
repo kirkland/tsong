@@ -783,6 +783,27 @@
         gap: 8px;
         align-items: flex-start;
       }
+      /* Grouped nav dropdowns (Arcade, Casino) — collapse related toolbar buttons into menus. */
+      #arcade, #casino { position: relative; }
+      #arcadeBtn, #casinoBtn {
+        display: flex; align-items: center; gap: 6px;
+        font: inherit; font-size: 12px; letter-spacing: 1px; padding: 7px 12px;
+        border-radius: 6px; border: 1px solid #2a3550; background: #0e1424;
+        color: #7da2ff; cursor: pointer;
+      }
+      #arcadeBtn:hover, #casinoBtn:hover { background: #18203a; }
+      #arcadeBtn .caret, #casinoBtn .caret { font-size: 10px; transition: transform 0.15s; }
+      #arcadeBtn[aria-expanded='true'] .caret, #casinoBtn[aria-expanded='true'] .caret { transform: rotate(180deg); }
+      .nav-menu {
+        position: absolute; top: calc(100% + 6px); left: 0; min-width: 170px;
+        display: flex; flex-direction: column; gap: 5px;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55); padding: 6px; z-index: 60;
+      }
+      .nav-menu[hidden] { display: none; }
+      /* Menu rows: arcade + casino trigger buttons fill the menu width, left-aligned. */
+      #arcadePanel > button,
+      #casinoPanel > button { display: flex; width: 100%; justify-content: flex-start; }
       /* Mute button */
       #muteBtn {
         font: inherit;
@@ -955,7 +976,7 @@
       }
       #marketBtn:hover { background: #102a1c; }
       #marketPanel {
-        position: absolute; top: calc(100% + 6px); left: 0; width: 360px;
+        position: fixed; top: 52px; left: 12px; width: 360px; max-height: 84vh; overflow-y: auto;
         background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
         box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
       }
@@ -983,7 +1004,7 @@
       }
       #loanBtn:hover { background: #2a1c10; }
       #loanPanel {
-        position: absolute; top: calc(100% + 6px); left: 0; width: 300px;
+        position: fixed; top: 52px; left: 12px; width: 300px; max-height: 84vh; overflow-y: auto;
         background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
         box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
       }
@@ -1033,7 +1054,7 @@
       }
       #rouletteBtn:hover { background: #2a1018; }
       #roulettePanel {
-        position: absolute; top: calc(100% + 6px); left: 0; width: 340px;
+        position: fixed; top: 52px; left: 12px; width: 340px;
         max-height: 84vh; overflow-y: auto;
         background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
         box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
@@ -2596,7 +2617,7 @@
           left: 6px;
           gap: 4px;
         }
-        #viewModeBtn, #muteBtn, #gameModesBtn, #powerupInfoBtn, #marketBtn, #loanBtn, #rouletteBtn {
+        #viewModeBtn, #muteBtn, #gameModesBtn, #powerupInfoBtn, #marketBtn, #loanBtn, #rouletteBtn, #arcadeBtn, #casinoBtn {
           font-size: 10px;
           padding: 4px 8px;
         }
@@ -2663,9 +2684,14 @@
     </div>
     <div id="topLeft">
       <button id="muteBtn" type="button" aria-pressed="false" title="Toggle sound on/off (M)">🔊</button>
-      <button id="doomBtn" type="button" title="Rip and tear (a hidden DOOM minigame)">😈 DOOM</button>
-      <button id="campaignBtn" type="button" title="Davis Collects — a story campaign vs escalating opponents">CAMPAIGN</button>
-      <button id="typeDieBtn" type="button" title="Type or Die — co-op typing horde defense. Type to survive, together.">⌨️ TYPE OR DIE</button>
+      <div id="arcade">
+        <button id="arcadeBtn" type="button" aria-expanded="false" title="Minigames">🎮 Arcade <span class="caret">▾</span></button>
+        <div id="arcadePanel" class="nav-menu" hidden>
+          <button id="doomBtn" type="button" title="Rip and tear (a hidden DOOM minigame)">😈 DOOM</button>
+          <button id="campaignBtn" type="button" title="Davis Collects — a story campaign vs escalating opponents">🏓 Campaign</button>
+          <button id="typeDieBtn" type="button" title="Type or Die — co-op typing horde defense. Type to survive, together.">⌨️ Type or Die</button>
+        </div>
+      </div>
       <div id="shop">
         <button id="shopBtn" type="button" aria-expanded="false" title="Coins, cosmetics & betting">🪙 <span id="coinCount">0</span></button>
         <div id="shopPanel" hidden>
@@ -2681,57 +2707,56 @@
           <div id="shopItems"></div>
         </div>
       </div>
-      <div id="market">
-        <button id="marketBtn" type="button" aria-expanded="false" title="Invest coins in joke cryptos">📈 Market</button>
-        <div id="marketPanel" hidden>
-          <h3>Crypto Market · <span id="marketCoins">0</span> 🪙</h3>
-          <div id="marketTimer">next move in —</div>
-          <div id="marketGraphTf">
-            <button type="button" data-tf="5m">5m</button>
-            <button type="button" data-tf="1h" class="active">1h</button>
-            <button type="button" data-tf="1d">1d</button>
-          </div>
-          <div id="marketList"></div>
-          <div id="marketNote"><b>Buy</b> to bet a coin rises; <b>Short</b> to bet it falls. A short profits as the price drops (toward +100% near zero), but if the price climbs past your entry it goes <b>negative</b> — covering then <b>costs</b> you coins, so a short gone wrong can drain far more than you staked. Prices update every 30s and drift up over the day. ⚠️ Unpaid loans build market instability; at 100% the whole market <b>CRASHES</b> back to base.</div>
+      <div id="casino">
+        <button id="casinoBtn" type="button" aria-expanded="false" title="Market, loans &amp; roulette">🪙 Casino <span class="caret">▾</span></button>
+        <div id="casinoPanel" class="nav-menu" hidden>
+          <button id="marketBtn" type="button" aria-expanded="false" title="Invest coins in joke cryptos">📈 Market</button>
+          <button id="loanBtn" type="button" aria-expanded="false" title="Borrow coins from Davis — pay back 1.5× by the daily reset">💸 Get Loan</button>
+          <button id="rouletteBtn" type="button" aria-expanded="false" title="Play roulette — bet coins on the wheel">🎡 Roulette</button>
         </div>
       </div>
-      <div id="loan">
-        <button id="loanBtn" type="button" aria-expanded="false" title="Borrow coins from Davis — pay back 1.5× by the daily reset">💸 Get Loan</button>
-        <div id="loanPanel" hidden>
-          <h3>Davis @ Citizens</h3>
-          <img id="loanImg" alt="Davis Clarke" />
-          <div id="loanBody"></div>
+      <div id="marketPanel" hidden>
+        <h3>Crypto Market · <span id="marketCoins">0</span> 🪙</h3>
+        <div id="marketTimer">next move in —</div>
+        <div id="marketGraphTf">
+          <button type="button" data-tf="5m">5m</button>
+          <button type="button" data-tf="1h" class="active">1h</button>
+          <button type="button" data-tf="1d">1d</button>
         </div>
+        <div id="marketList"></div>
+        <div id="marketNote"><b>Buy</b> to bet a coin rises; <b>Short</b> to bet it falls. A short profits as the price drops (toward +100% near zero), but if the price climbs past your entry it goes <b>negative</b> — covering then <b>costs</b> you coins, so a short gone wrong can drain far more than you staked. Prices update every 30s and drift up over the day. ⚠️ Unpaid loans build market instability; at 100% the whole market <b>CRASHES</b> back to base.</div>
       </div>
-      <div id="roulette">
-        <button id="rouletteBtn" type="button" aria-expanded="false" title="Play roulette — bet coins on the wheel">🎡 Roulette</button>
-        <div id="roulettePanel" hidden>
-          <h3>Roulette · <span id="rouletteCoins">0</span> 🪙</h3>
-          <div id="rouletteWheelWrap">
-            <canvas id="rouletteWheel" width="220" height="220"></canvas>
-            <div id="rouletteResult"></div>
-          </div>
-          <div id="rouletteChips">
-            <span class="rl-chips-label">Chip</span>
-            <button class="rl-chip active" data-chip="1" type="button">1</button>
-            <button class="rl-chip" data-chip="5" type="button">5</button>
-            <button class="rl-chip" data-chip="10" type="button">10</button>
-            <button class="rl-chip" data-chip="25" type="button">25</button>
-            <button class="rl-chip" data-chip="100" type="button">100</button>
-            <button class="rl-chip" data-chip="500" type="button">500</button>
-            <button class="rl-chip" data-chip="1000" type="button">1000</button>
-          </div>
-          <!-- Betting board: 0, the 1–36 grid, then the outside bets. Built by client/roulette.ts. -->
-          <div id="rouletteBoard"></div>
-          <div id="rouletteFoot">
-            <span id="rouletteStake">Staked: 0 🪙</span>
-            <div class="rl-foot-btns">
-              <button id="rouletteClear" type="button">Clear</button>
-              <button id="rouletteSpin" type="button" disabled>Spin</button>
-            </div>
-          </div>
-          <div id="rouletteNote">Single-zero wheel. Straight number pays 35:1, dozens 2:1, red/black/odd/even/half 1:1. The green 0 is the house edge. Pick a chip, click the board to stake, then Spin.</div>
+      <div id="loanPanel" hidden>
+        <h3>Davis @ Citizens</h3>
+        <img id="loanImg" alt="Davis Clarke" />
+        <div id="loanBody"></div>
+      </div>
+      <div id="roulettePanel" hidden>
+        <h3>Roulette · <span id="rouletteCoins">0</span> 🪙</h3>
+        <div id="rouletteWheelWrap">
+          <canvas id="rouletteWheel" width="220" height="220"></canvas>
+          <div id="rouletteResult"></div>
         </div>
+        <div id="rouletteChips">
+          <span class="rl-chips-label">Chip</span>
+          <button class="rl-chip active" data-chip="1" type="button">1</button>
+          <button class="rl-chip" data-chip="5" type="button">5</button>
+          <button class="rl-chip" data-chip="10" type="button">10</button>
+          <button class="rl-chip" data-chip="25" type="button">25</button>
+          <button class="rl-chip" data-chip="100" type="button">100</button>
+          <button class="rl-chip" data-chip="500" type="button">500</button>
+          <button class="rl-chip" data-chip="1000" type="button">1000</button>
+        </div>
+        <!-- Betting board: 0, the 1–36 grid, then the outside bets. Built by client/roulette.ts. -->
+        <div id="rouletteBoard"></div>
+        <div id="rouletteFoot">
+          <span id="rouletteStake">Staked: 0 🪙</span>
+          <div class="rl-foot-btns">
+            <button id="rouletteClear" type="button">Clear</button>
+            <button id="rouletteSpin" type="button" disabled>Spin</button>
+          </div>
+        </div>
+        <div id="rouletteNote">Single-zero wheel. Straight number pays 35:1, dozens 2:1, red/black/odd/even/half 1:1. The green 0 is the house edge. Pick a chip, click the board to stake, then Spin.</div>
       </div>
       <div id="viewMode">
         <button id="viewModeBtn" type="button" aria-expanded="false">VIEW <span class="caret">▾</span></button>

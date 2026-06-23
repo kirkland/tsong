@@ -1522,6 +1522,38 @@ campaignBtn.addEventListener('click', async () => {
   }
 });
 
+// --- Arcade & Casino nav dropdowns: group the minigame / economy buttons into menus to keep
+// the toolbar tidy. The grouped buttons keep their own IDs and click handlers; these toggles
+// just show/hide the popover and close it once an item is picked. ---
+const arcadeBtn = document.getElementById('arcadeBtn') as HTMLButtonElement;
+const arcadePanel = document.getElementById('arcadePanel') as HTMLDivElement;
+const casinoBtn = document.getElementById('casinoBtn') as HTMLButtonElement;
+const casinoPanel = document.getElementById('casinoPanel') as HTMLDivElement;
+function closeNavMenu(btn: HTMLButtonElement, panel: HTMLDivElement) {
+  panel.hidden = true;
+  btn.setAttribute('aria-expanded', 'false');
+}
+function toggleNavMenu(btn: HTMLButtonElement, panel: HTMLDivElement) {
+  const open = panel.hidden;
+  panel.hidden = !open;
+  btn.setAttribute('aria-expanded', String(open));
+}
+arcadeBtn.addEventListener('click', () => toggleNavMenu(arcadeBtn, arcadePanel));
+casinoBtn.addEventListener('click', () => toggleNavMenu(casinoBtn, casinoPanel));
+// Picking an item closes its menu — the launched minigame / opened panel takes over from there.
+arcadePanel.addEventListener('click', (e) => { if ((e.target as HTMLElement).closest('button')) closeNavMenu(arcadeBtn, arcadePanel); });
+casinoPanel.addEventListener('click', (e) => { if ((e.target as HTMLElement).closest('button')) closeNavMenu(casinoBtn, casinoPanel); });
+document.addEventListener('click', (e) => {
+  const t = e.target as Node;
+  if (!arcadePanel.hidden && !arcadeBtn.contains(t) && !arcadePanel.contains(t)) closeNavMenu(arcadeBtn, arcadePanel);
+  if (!casinoPanel.hidden && !casinoBtn.contains(t) && !casinoPanel.contains(t)) closeNavMenu(casinoBtn, casinoPanel);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (!arcadePanel.hidden) closeNavMenu(arcadeBtn, arcadePanel);
+  if (!casinoPanel.hidden) closeNavMenu(casinoBtn, casinoPanel);
+});
+
 // --- Coins, cosmetics shop & betting ---
 let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; song: string | null; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
   { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, bets: [], nextSpinAt: 0, bonusSpins: 0 };
