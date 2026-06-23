@@ -248,6 +248,43 @@ export async function initDb(): Promise<void> {
     await pool.query(`UPDATE players SET coins = 10000 WHERE coins > 10000`);
     await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('coin_cap_10k_v1', now()::text)`);
   }
+  // One-time: hand tsong-mobile's entire net worth (coins + stock positions) to lasso, then
+  // zero out tsong-mobile. Not a full account merge — stats, cosmetics and scores stay put.
+  // Each name resolves to its richest row in case of duplicates. Re-runs until both exist.
+  const tsongToLasso = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'tsong_to_lasso_v1'`);
+  if (tsongToLasso.rowCount === 0) {
+    const src = await pool.query<{ id: string }>(
+      `SELECT id FROM players WHERE LOWER(TRIM(name)) = 'tsong - mobile' ORDER BY coins DESC LIMIT 1`,
+    );
+    const dst = await pool.query<{ id: string }>(
+      `SELECT id FROM players WHERE LOWER(TRIM(name)) = 'lasso' ORDER BY coins DESC LIMIT 1`,
+    );
+    const srcPid = src.rows[0]?.id;
+    const dstPid = dst.rows[0]?.id;
+    if (srcPid && dstPid && srcPid !== dstPid) {
+      // Coins: add tsong-mobile's balance to lasso, then zero the source.
+      await pool.query(
+        `UPDATE players SET coins = coins + (SELECT coins FROM players WHERE id = $1) WHERE id = $2`,
+        [srcPid, dstPid],
+      );
+      await pool.query(`UPDATE players SET coins = 0 WHERE id = $1`, [srcPid]);
+      // Stock positions: fold tsong-mobile's holdings into lasso's (merging matching sides),
+      // then delete the source's rows.
+      await pool.query(
+        `INSERT INTO stock_holdings (pid, coin, side, shares, cost)
+           SELECT $2, coin, side, shares, cost FROM stock_holdings WHERE pid = $1
+         ON CONFLICT (pid, coin, side) DO UPDATE
+           SET shares = stock_holdings.shares + EXCLUDED.shares,
+               cost   = stock_holdings.cost   + EXCLUDED.cost`,
+        [srcPid, dstPid],
+      );
+      await pool.query(`DELETE FROM stock_holdings WHERE pid = $1`, [srcPid]);
+      await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('tsong_to_lasso_v1', now()::text)`);
+      console.log(`transferred tsong-mobile (${srcPid}) net worth to lasso (${dstPid})`);
+    } else {
+      console.warn(`tsong→lasso transfer skipped — src(${srcPid ?? 'none'}) / dst(${dstPid ?? 'none'}); will retry next boot`);
+    }
+  }
   console.log('leaderboard DB ready');
 }
 
