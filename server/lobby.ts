@@ -1371,17 +1371,32 @@ export class Lobby {
     for (const s of STOCKS) {
       const row = saved[s.id];
       if (row && row.price > 0) this.stockPrices.set(s.id, { price: row.price, prev: row.prev });
-      // Restore the graph history from the DB so the graphs survive restarts; if there's none (or
-      // it's unusable, e.g. a timeframe added since the blob was saved), seed each series with the
-      // single resumed price so a graph is never empty.
+      // Restore the graph history from the DB so the graphs survive restarts.
       const seed = this.stockPrices.get(s.id)?.price ?? s.base;
       const h = savedHist[s.id];
-      for (const tf of Object.keys(STOCK_HISTORY) as StockTf[]) {
+      const tfs = Object.keys(STOCK_HISTORY) as StockTf[];
+      // Load each persisted (capped) series.
+      const loaded: Record<string, number[]> = {};
+      for (const tf of tfs) {
         const raw = h?.[tf];
         const arr = Array.isArray(raw) ? raw.filter((n) => typeof n === 'number' && Number.isFinite(n)) : [];
-        const capped = arr.slice(-STOCK_HISTORY[tf].cap);
-        this.stockHist[tf].set(s.id, capped.length ? capped : [seed]);
+        loaded[tf] = arr.slice(-STOCK_HISTORY[tf].cap);
       }
+      // Backfill any timeframe that has no real history yet (e.g. one added after the blob was
+      // last saved, like 6h) from the finest persisted series that reaches back far enough — so
+      // its graph shows a real curve immediately instead of a flat single point. Native samples
+      // at the timeframe's own cadence then replace these over time.
+      for (const tf of tfs) {
+        if (loaded[tf].length >= 2) continue;
+        const spanTicks = STOCK_HISTORY[tf].cap * STOCK_HISTORY[tf].everyTicks;
+        const src = tfs
+          .filter((o) => o !== tf && loaded[o].length >= 2 && loaded[o].length * STOCK_HISTORY[o].everyTicks >= spanTicks)
+          .sort((a, b) => STOCK_HISTORY[a].everyTicks - STOCK_HISTORY[b].everyTicks)[0];
+        if (src) loaded[tf] = loaded[src].slice(-Math.min(STOCK_HISTORY[tf].cap, Math.ceil(spanTicks / STOCK_HISTORY[src].everyTicks)));
+      }
+      // Anything still empty (truly fresh market) seeds with the single resumed price so a graph
+      // is never blank.
+      for (const tf of tfs) this.stockHist[tf].set(s.id, loaded[tf].length ? loaded[tf] : [seed]);
     }
     // The collection fires at the next 5pm ET — a deterministic time — so just (re)book it on
     // boot rather than resuming a stored timestamp. Then pull any open loan still booked under the
