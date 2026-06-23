@@ -39,8 +39,6 @@ import {
   STOCK_UPDATE_MS,
   STOCK_HISTORY,
   MARKET_INSTABILITY_THRESHOLD,
-  StockSide,
-  positionWorth,
   TEAM_MAX,
   WalletMsg,
   CampaignScoreRow,
@@ -48,7 +46,7 @@ import {
 } from '../shared/types';
 import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
-  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS,
+  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, DAILY_SPIN_MS,
   getHoldings, investStock, cashOutStock, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
   setStockCrashAt, getMarketInstability, setMarketInstability,
   getLoan, takeLoan, repayLoan, collectDefaultedLoans, realignLoansToDeadline } from './db';
@@ -127,7 +125,6 @@ const POLY_OVER_SECS = 5; // how long the arena win screen lingers before the ne
 const RESUME_GRACE = 45; // seconds a resumed match waits for seated players to reconnect
 const TOURNEY_INTER_MS = 5000; // pause between tournament matches so the result can be read
 const TOURNEY_DONE_MS = 12000; // how long the champion screen lingers before the tournament tears down
-const MAX_TIP = 1_000_000; // sanity cap on a single /tip (balance is the real limit)
 
 // What a seat / queue spot needs to be reclaimed by the same identity after a restart.
 interface SeatInfo {
@@ -477,16 +474,6 @@ export class Lobby {
       : undefined;
     const placed = this.mode === 'poly' ? this.poly.forceTarget(k) : this.game.forceTarget(k);
     if (placed) this.echoCommand(conn, k ? `/powerup ${k}` : '/powerup');
-  }
-
-  /** "Add block": a spectator drops a solid obstacle at a random spot on the live duel
-   *  court. Spectators only (a seated player can't junk up their own match), duel mode only. */
-  addBlock(ws: WebSocket) {
-    const conn = this.conns.get(ws);
-    if (!conn || !conn.nickname) return; // must have joined
-    if (this.mode === 'poly') return; // duel-only — the polygon court has no block obstacles
-    if (this.sideOf(ws) || this.arenaSeats.includes(ws)) return; // not from a current player
-    if (this.game.addBlock()) this.echoCommand(conn, '/block 🧱');
   }
 
   /** "Add bot": drop an AI opponent into an open duel side. If the requester is an
@@ -1011,53 +998,6 @@ export class Lobby {
     return undefined;
   }
 
-  /** "/tip <name> <amount>": gift coins to another player — online or not. The transfer is
-   *  atomic (the sender's coins are escrowed first; a failed debit gifts nothing), then the
-   *  whole room gets a cha-ching + coin shower so tipping feels good and public. An offline
-   *  recipient is looked up in the DB by name; the coins are waiting when they next sign in. */
-  tip(ws: WebSocket, toName: string, amount: number) {
-    const conn = this.conns.get(ws);
-    if (!conn || !conn.nickname || !conn.pid) return;
-    const amt = Math.floor(amount);
-    if (!Number.isFinite(amt) || amt <= 0) { this.notify(ws, 'Tip must be a positive number of coins.'); return; }
-    if (amt > MAX_TIP) { this.notify(ws, `You can tip at most ${MAX_TIP.toLocaleString()} coins at once.`); return; }
-    const display = toName.trim();
-    if (!display) { this.notify(ws, 'Who do you want to tip? Try /tip <name> <amount>.'); return; }
-
-    // Resolve the recipient by nickname (case-insensitive): prefer a live connection so the
-    // coins land instantly, otherwise fall back to a DB lookup so even offline players can be
-    // tipped. Either way they're identified by a stable pid that isn't the tipper's own.
-    const target = display.toLowerCase();
-    const online = [...this.conns.values()].find(
-      (c) => c.nickname && c.pid && c.pid !== conn.pid && c.nickname.toLowerCase() === target,
-    );
-
-    const resolve: Promise<{ pid: string; name: string } | null> = online
-      ? Promise.resolve({ pid: online.pid, name: online.nickname })
-      : findPlayerByName(display);
-
-    resolve
-      .then(async (recip) => {
-        if (!recip) { this.notify(ws, `No player named "${display}" to tip.`); return; }
-        if (recip.pid === conn.pid) { this.notify(ws, "You can't tip yourself."); return; }
-        // Escrow the sender's coins first; bail untouched if they can't afford it (or there's no DB).
-        const w = await spendCoins(conn.pid, amt);
-        if (!w) { this.notify(ws, "You don't have enough coins for that tip."); this.sendWallet(ws); return; }
-        await addCoins(recip.pid, recip.name, amt);
-        // Refresh the tipper's wallet, plus any tab the recipient has open, and the net-worth board.
-        this.sendWallet(ws);
-        this.refreshWalletsFor([...this.conns.values()].filter((c) => c.pid === recip.pid));
-        this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
-        // Celebrate it room-wide: a chat line + the coin-shower/cha-ching broadcast.
-        this.echoCommand(conn, `/tip ${recip.name} ${amt}`);
-        const data = JSON.stringify({ type: 'tip', from: conn.nickname, to: recip.name, amount: amt });
-        for (const sock of this.conns.keys()) {
-          if (sock.readyState === sock.OPEN) sock.send(data);
-        }
-      })
-      .catch((e) => console.error('tip failed:', e));
-  }
-
   // --- Shop (cosmetics) ---
 
   /** Buy a cosmetic from the shop, spending coins. Cosmetics are visual-only. */
@@ -1308,9 +1248,9 @@ export class Lobby {
     getHoldings(conn.pid)
       .then((h) => {
         if (!this.conns.has(ws)) return;
-        const holdings = h.map((hd) => {
-          const price = this.stockPrices.get(hd.coin)?.price ?? 0;
-          return { id: hd.coin, side: hd.side, shares: hd.shares, cost: hd.cost, worth: Math.floor(positionWorth(hd.side, hd.shares, hd.cost, price)) };
+        const holdings = Object.entries(h).map(([id, hd]) => {
+          const price = this.stockPrices.get(id)?.price ?? 0;
+          return { id, shares: hd.shares, cost: hd.cost, worth: Math.floor(hd.shares * price) };
         });
         this.tell(ws, {
           type: 'stocks', prices, holdings, history, nextUpdateAt: this.nextStockUpdateAt,
@@ -1320,8 +1260,25 @@ export class Lobby {
       .catch((e) => console.error('stocks send failed:', e));
   }
 
-  /** Open a long or short position in a crypto at its current price. Coins are escrowed. */
-  stockInvest(ws: WebSocket, coin: string, amount: number, side: StockSide) {
+  /** Nudge a coin's price in response to a buy or sell. The impact scales with the trade
+   *  value: 25 000 coins of buying (or selling) moves the price by ~100%. Smaller trades
+   *  have proportional effect. Price is clamped to [base/100, base×1000] so it can't go
+   *  zero or blow up. Broadcasts the updated market to everyone immediately. */
+  private applyTradeImpact(coin: string, value: number, direction: 'buy' | 'sell') {
+    const IMPACT_DIVISOR = 25_000;
+    const cur = this.stockPrices.get(coin);
+    if (!cur) return;
+    const stock = STOCKS.find((s) => s.id === coin);
+    if (!stock) return;
+    const factor = direction === 'buy' ? 1 + value / IMPACT_DIVISOR : 1 - value / IMPACT_DIVISOR;
+    const newPrice = Math.round(Math.max(stock.base / 100, Math.min(cur.price * factor, stock.base * 1_000)) * 100) / 100;
+    this.stockPrices.set(coin, { price: newPrice, prev: cur.price });
+    saveStockPrices(this.priceBoard()).catch((e) => console.error('trade impact save failed:', e));
+    for (const ws of this.conns.keys()) this.sendStocks(ws);
+  }
+
+  /** Invest coins into a crypto at its current price. Coins are escrowed into shares. */
+  stockInvest(ws: WebSocket, coin: string, amount: number) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     if (!STOCKS.some((s) => s.id === coin)) return; // unknown coin
@@ -1329,27 +1286,27 @@ export class Lobby {
     if (!Number.isFinite(amt) || amt < 1) return; // positive whole coins only
     const price = this.stockPrices.get(coin)?.price;
     if (!price || !(price > 0)) return;
-    investStock(conn.pid, conn.nickname, coin, amt, price, side)
+    investStock(conn.pid, conn.nickname, coin, amt, price)
       .then((w) => {
         if (!w) { this.sendStocks(ws); return; } // couldn't afford — just refresh the view
+        this.applyTradeImpact(coin, amt, 'buy'); // buy pressure → price up
         this.sendWallet(ws);
-        this.sendStocks(ws);
       })
       .catch((e) => console.error('stock invest failed:', e));
   }
 
-  /** Close the whole long or short position in a crypto for round(current worth) coins. */
-  stockCashOut(ws: WebSocket, coin: string, side: StockSide) {
+  /** Cash out the whole position in a crypto for floor(current worth) coins. */
+  stockCashOut(ws: WebSocket, coin: string) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     if (!STOCKS.some((s) => s.id === coin)) return;
     const price = this.stockPrices.get(coin)?.price;
     if (!price || !(price > 0)) return;
-    cashOutStock(conn.pid, conn.nickname, coin, price, side)
+    cashOutStock(conn.pid, conn.nickname, coin, price)
       .then((res) => {
-        if (!res) { this.sendStocks(ws); return; } // held nothing on that side
+        if (!res) { this.sendStocks(ws); return; } // held nothing in that coin
+        this.applyTradeImpact(coin, res.payout, 'sell'); // sell pressure → price down
         this.sendWallet(ws);
-        this.sendStocks(ws);
       })
       .catch((e) => console.error('stock cash-out failed:', e));
   }
@@ -1603,7 +1560,7 @@ export class Lobby {
     if (side) this.game.fire(side, angle);
   }
 
-  setPaddle(ws: WebSocket, y: number, x?: number) {
+  setPaddle(ws: WebSocket, y: number) {
     const conn = this.conns.get(ws);
     if (!conn) return;
     if (this.mode === 'poly') {
@@ -1612,7 +1569,7 @@ export class Lobby {
       return;
     }
     const side = this.sideOf(ws);
-    if (side) this.game.setTarget(side, conn.id, y, x);
+    if (side) this.game.setTarget(side, conn.id, y);
   }
 
   // A player's mouse-capture (pointer lock) state changed. The match stays frozen until
@@ -1725,12 +1682,12 @@ export class Lobby {
   }
 
   /** Sync which powerups are eligible based on the current view mode.
-   *  rotate + roam are 2D-only (steered with the flat-court mouse axes); disco is 3D/FP-only. */
+   *  rotate is 2D-only; disco is 3D/FP-only. */
   private syncPowerupPool() {
     if (this.viewMode === 'normal') {
       this.game.setExcludedPowerups(['disco']); // disco's effect only shows in 3D
     } else {
-      this.game.setExcludedPowerups(['rotate', 'roam']); // court flip / freed paddle only steer in 2D
+      this.game.setExcludedPowerups(['rotate']); // court flip only makes sense in 2D
     }
   }
 
@@ -2139,12 +2096,12 @@ export class Lobby {
     const rows: BalanceSheetHolding[] = [];
     let stockValue = 0;
     for (const s of STOCKS) {
-      for (const h of holdings.filter((x) => x.coin === s.id && x.shares > 0)) {
-        const price = this.stockPrices.get(s.id)?.price ?? s.base;
-        const value = Math.round(positionWorth(h.side, h.shares, h.cost, price));
-        stockValue += value;
-        rows.push({ coin: s.name, ticker: s.ticker, side: h.side, shares: h.shares, price, value });
-      }
+      const h = holdings[s.id];
+      if (!h || h.shares <= 0) continue;
+      const price = this.stockPrices.get(s.id)?.price ?? s.base;
+      const value = Math.round(h.shares * price);
+      stockValue += value;
+      rows.push({ coin: s.name, ticker: s.ticker, shares: h.shares, price, value });
     }
     const owed = loan?.owed ?? 0;
     const net = wallet.coins + stockValue - owed;
@@ -2345,7 +2302,6 @@ export class Lobby {
         growHits: this.game.growHits[side],
         shrinkHits: this.game.shrinkHits[side],
         smashHits: this.game.smashHits[side],
-        roamHits: this.game.roamHits[side],
       };
     };
     return {
@@ -2380,7 +2336,6 @@ export class Lobby {
       diamondPos: this.game.diamondBlock
         ? { x: this.game.diamondBlock.x, y: this.game.diamondBlock.y }
         : null,
-      blocks: poly ? [] : this.game.blocks.map((bl) => ({ ...bl })),
       rotated: this.game.rotated,
       fritz: this.game.fritz,
       disco: this.game.disco,
