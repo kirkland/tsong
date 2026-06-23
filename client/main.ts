@@ -2210,6 +2210,8 @@ const lootBody = document.getElementById('lootBody') as HTMLDivElement;
 const LOOT_PRICE = 2500; // mirror of the server's Lobby.LOOT_PRICE (display only)
 let lootBusy = false;
 let lootTimer: number | undefined; // clears a hung "Opening…" if no lootResult arrives
+let lootRevealHtml = ''; // last prize reveal, kept across re-renders (wallet/house/market updates
+                         // re-run renderLoot right after an open and would otherwise wipe it)
 function renderLoot() {
   const canAfford = wallet.coins >= LOOT_PRICE;
   const mine = wallet.exclusives;
@@ -2222,43 +2224,39 @@ function renderLoot() {
   lootBody.innerHTML = `
     <div class="loot-blurb">Crack a box for ${LOOT_PRICE.toLocaleString()}🪙: a common cosmetic, a coin payout, or a <b>scarce exclusive</b> (hard mint cap — some are 1-of-1).</div>
     <button id="lootOpenBtn" type="button" ${canAfford && !lootBusy ? '' : 'disabled'}>${lootBusy ? 'Opening…' : canAfford ? `🎁 Open Box · ${LOOT_PRICE.toLocaleString()}🪙` : `Need ${LOOT_PRICE.toLocaleString()}🪙 — you have ${wallet.coins.toLocaleString()}`}</button>
-    <div id="lootReveal" class="loot-reveal"></div>
+    <div id="lootReveal" class="loot-reveal">${lootRevealHtml}</div>
     ${owned}
     <div class="loot-cap"><b>Mint caps:</b> ${EXCLUSIVES.map((x) => `${escapeHtml(x.name)} (${x.cap})`).join(' · ')}</div>`;
   const openBtn = document.getElementById('lootOpenBtn') as HTMLButtonElement | null;
   if (openBtn) openBtn.onclick = () => {
     if (lootBusy || wallet.coins < LOOT_PRICE) return;
-    lootBusy = true; renderLoot();
+    lootBusy = true; lootRevealHtml = ''; renderLoot();
     net.send({ type: 'lootBoxOpen' });
     // Safety net: never hang on "Opening…" if no result comes back (e.g. server hiccup).
     if (lootTimer !== undefined) clearTimeout(lootTimer);
     lootTimer = window.setTimeout(() => {
       if (!lootBusy) return;
       lootBusy = false;
+      lootRevealHtml = '<div class="loot-pop">⚠️ No response — try again (you were not charged if it failed).</div>';
       renderLoot();
-      const r = document.getElementById('lootReveal');
-      if (r) r.innerHTML = '<div class="loot-pop">⚠️ No response — try again (you were not charged if it failed).</div>';
     }, 8000);
   };
 }
 function onLootResult(msg: LootResultMsg) {
   if (lootTimer !== undefined) { clearTimeout(lootTimer); lootTimer = undefined; }
   lootBusy = false;
-  renderLoot();
-  const reveal = document.getElementById('lootReveal');
-  if (reveal) {
-    let html = '';
-    if (msg.kind === 'exclusive') {
-      html = `<div class="loot-pop loot-rare">✨ <b>${escapeHtml(msg.name ?? '')}</b> <span class="loot-serial">#${msg.serial} of ${msg.cap}</span><div class="loot-rarity">${escapeHtml(msg.rarity ?? '')}</div></div>`;
-      playChaChing();
-    } else if (msg.kind === 'cosmetic') {
-      html = `<div class="loot-pop">🎨 You got <b>${escapeHtml(msg.name ?? '')}</b>!</div>`;
-    } else {
-      html = `<div class="loot-pop">🪙 <b>+${(msg.coins ?? 0).toLocaleString()}</b> coins</div>`;
-      playChaChing();
-    }
-    reveal.innerHTML = html;
+  if (msg.kind === 'exclusive') {
+    lootRevealHtml = `<div class="loot-pop loot-rare">✨ <b>${escapeHtml(msg.name ?? '')}</b> <span class="loot-serial">#${msg.serial} of ${msg.cap}</span><div class="loot-rarity">${escapeHtml(msg.rarity ?? '')}</div></div>`;
+    playChaChing();
+  } else if (msg.kind === 'cosmetic') {
+    lootRevealHtml = `<div class="loot-pop">🎨 You got <b>${escapeHtml(msg.name ?? '')}</b>!</div>`;
+  } else {
+    lootRevealHtml = `<div class="loot-pop">🪙 <b>+${(msg.coins ?? 0).toLocaleString()}</b> coins</div>`;
+    playChaChing();
   }
+  // Persisted in lootRevealHtml so the wallet/house/market re-renders that follow an open don't
+  // wipe the prize; renderLoot() paints it from there.
+  renderLoot();
 }
 if (lootBtn) lootBtn.addEventListener('click', () => {
   const open = lootPanel.hidden;
