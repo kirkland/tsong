@@ -792,6 +792,20 @@
         color: #7da2ff; cursor: pointer;
       }
       #arcadeBtn:hover, #casinoBtn:hover { background: #18203a; }
+      /* Attention-grabbing flashing: Arcade pulses bright red, Casino bright green. */
+      @keyframes arcadeFlash {
+        0%, 100% { background: #2a0e12; color: #ff6b6b; border-color: #b3343a; box-shadow: 0 0 6px rgba(255,80,80,0.5); }
+        50% { background: #ff3b3b; color: #2a0406; border-color: #ff3b3b; box-shadow: 0 0 16px rgba(255,80,80,0.95); }
+      }
+      @keyframes casinoFlash {
+        0%, 100% { background: #0e2a1a; color: #5bff9d; border-color: #2fa85f; box-shadow: 0 0 6px rgba(60,255,140,0.5); }
+        50% { background: #2dff88; color: #06210f; border-color: #2dff88; box-shadow: 0 0 16px rgba(60,255,140,0.95); }
+      }
+      #arcadeBtn { animation: arcadeFlash 1s ease-in-out infinite; }
+      #casinoBtn { animation: casinoFlash 1s ease-in-out infinite; }
+      @media (prefers-reduced-motion: reduce) {
+        #arcadeBtn, #casinoBtn { animation: none; }
+      }
       #arcadeBtn .caret, #casinoBtn .caret { font-size: 10px; transition: transform 0.15s; }
       #arcadeBtn[aria-expanded='true'] .caret, #casinoBtn[aria-expanded='true'] .caret { transform: rotate(180deg); }
       .nav-menu {
@@ -2708,7 +2722,7 @@
         </div>
       </div>
       <div id="casino">
-        <button id="casinoBtn" type="button" aria-expanded="false" title="Market, loans &amp; roulette">🪙 Casino <span class="caret">▾</span></button>
+        <button id="casinoBtn" type="button" aria-expanded="false" title="Market, loans &amp; roulette">🎰 Casino <span class="caret">▾</span></button>
         <div id="casinoPanel" class="nav-menu" hidden>
           <button id="marketBtn" type="button" aria-expanded="false" title="Invest coins in joke cryptos">📈 Market</button>
           <button id="loanBtn" type="button" aria-expanded="false" title="Borrow coins from Davis — pay back 1.5× by the daily reset">💸 Get Loan</button>
