@@ -641,8 +641,6 @@ const SKIN_RENDERERS: Record<string, CosmeticDraw> = {
   venom: fillVenom,
   obsidian: fillObsidian,
   aurora: fillAurora,
-  liquidgold: fillLiquidGold,
-  prism: fillPrism,
 };
 // Draw a live skin/hat preview onto a small canvas element (used in the shop UI).
 // The canvas is scaled so the paddle fills it, then the skin is applied at full quality.
@@ -1155,35 +1153,6 @@ function fillAurora(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: nu
   g.addColorStop(0.7, `hsl(${275 + s},75%,62%)`);
   g.addColorStop(1, `hsl(${150 + s},80%,50%)`);
   ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
-  skinHighlight(ctx, cx, cy, h); ctx.restore();
-}
-function fillLiquidGold(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
-  ctx.save(); clipPaddle(ctx, cx, cy, h);
-  const r = paddleRect(cx, cy, h);
-  const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
-  g.addColorStop(0, '#6a4a00'); g.addColorStop(0.5, '#ffe9a0'); g.addColorStop(1, '#6a4a00');
-  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
-  for (const sp of [0, 0.5]) {
-    const t = ((Date.now() / 600) + sp) % 1, gy = r.y - 20 + (r.h + 40) * t;
-    const glint = ctx.createLinearGradient(0, gy - 10, 0, gy + 10);
-    glint.addColorStop(0, 'rgba(255,255,220,0)'); glint.addColorStop(0.5, 'rgba(255,255,235,0.9)'); glint.addColorStop(1, 'rgba(255,255,220,0)');
-    ctx.fillStyle = glint; ctx.fillRect(r.x, r.y, r.w, r.h);
-  }
-  skinHighlight(ctx, cx, cy, h); ctx.restore();
-}
-function fillPrism(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
-  ctx.save(); clipPaddle(ctx, cx, cy, h);
-  const r = paddleRect(cx, cy, h);
-  const off = (Date.now() / 8) % h, top = r.y;
-  for (const dy of [0, h]) {
-    const g = ctx.createLinearGradient(0, top - off + dy, 0, top - off + dy + h);
-    ['#ff3b30', '#ff9500', '#ffd60a', '#34c759', '#0a84ff', '#bf5af2', '#ff3b30'].forEach((c, i, a) => g.addColorStop(i / (a.length - 1), c));
-    ctx.fillStyle = g; ctx.fillRect(r.x, top, r.w, h);
-  }
-  const t = (Date.now() / 500) % 1, sy = r.y - 10 + (r.h + 20) * t;
-  const sweep = ctx.createLinearGradient(0, sy - 8, 0, sy + 8);
-  sweep.addColorStop(0, 'rgba(255,255,255,0)'); sweep.addColorStop(0.5, 'rgba(255,255,255,0.6)'); sweep.addColorStop(1, 'rgba(255,255,255,0)');
-  ctx.fillStyle = sweep; ctx.fillRect(r.x, r.y, r.w, r.h);
   skinHighlight(ctx, cx, cy, h); ctx.restore();
 }
 function fillGold(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
