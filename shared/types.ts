@@ -162,9 +162,10 @@ export const COIN_SCALE = 100;
 export interface CosmeticItem {
   id: string;
   name: string;
-  slot: 'hat' | 'skin' | 'trail' | 'title';
+  slot: 'hat' | 'skin' | 'trail' | 'title' | 'song';
   price: number;
   locked?: 'campaign'; // not buyable — unlocked by an in-game achievement (e.g. clearing the campaign)
+  audio?: string; // for 'song' items: path to the mp3 that plays during your matches
 }
 // Static cosmetics cost 1000 coins; animated ones cost 2000 (10×/20× the COIN_SCALE base).
 export const COSMETICS: readonly CosmeticItem[] = [
@@ -237,6 +238,11 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'marketmaker', name: '📈 Market Maker', slot: 'title', price: 40000 },
   { id: 'untouchable', name: '👑 Untouchable', slot: 'title', price: 50000 },
   { id: 'opstask', name: '🛠️ Ops Task Duty', slot: 'title', price: 100000 }, // animated rainbow
+  // Theme songs — one plays (looped) during your matches. If more than one player in a match
+  // owns+equips a song, the server picks one at random for that match.
+  { id: 'song-battle', name: 'regular battle theme', slot: 'song', price: 15000, audio: '/battle.mp3' },
+  { id: 'song-disco', name: 'disco', slot: 'song', price: 20000, audio: '/disco.mp3' },
+  { id: 'song-davis', name: 'davis boss theme', slot: 'song', price: 30000, audio: '/davis-battle.mp3' },
 ] as const;
 export const CHAT_MAX_LEN = 200; // max characters per chat message
 export const CHAT_HISTORY = 50; // recent messages kept/sent to new joiners
@@ -315,7 +321,7 @@ export type ClientMsg =
   | { type: 'doomReward' } // grant the player 1 coin (killed the DOOM minion boss)
   | { type: 'campaignScore'; score: number; stage: number; won: boolean } // record a campaign run (arcade score, furthest stage, whether Davis fell)
   | { type: 'shopBuy'; item: string } // buy a cosmetic from the shop
-  | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'title'; item: string | null } // equip (item) or unequip (null) a cosmetic
+  | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'title' | 'song'; item: string | null } // equip (item) or unequip (null) a cosmetic
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
   | { type: 'dailySpin' } // claim the once-per-24h reward spin
   | { type: 'stockInvest'; coin: string; amount: number; side?: StockSide } // open a long or short position
@@ -712,7 +718,17 @@ export type ServerMsg =
   | RouletteResultMsg
   | TipMsg
   | BountyBoardMsg
-  | BountyHitMsg;
+  | BountyHitMsg
+  | ThemeSongMsg;
+
+// Broadcast when a match kicks off and a seated player has a theme song equipped — every client
+// loops `audio` for the duration of the match (until status leaves 'playing'). `owner` is the
+// nickname whose song was picked (random among the match's players who have one equipped).
+export interface ThemeSongMsg {
+  type: 'themeSong';
+  audio: string;
+  owner: string;
+}
 
 // Broadcast when one player tips another — drives the room-wide coin shower.
 export interface TipMsg {
@@ -746,6 +762,7 @@ export interface WalletMsg {
   skin: string | null; // equipped skin
   trail: string | null; // equipped paddle trail
   title: string | null; // equipped name title (flair shown by your name)
+  song: string | null; // equipped theme song (plays during your matches)
   // Your open wagers on the live duel (multiple allowed in live betting); each locks the odds
   // it was placed at. Empty when you have none.
   bets: Array<{ side: Side; amount: number; odds: number }>;

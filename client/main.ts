@@ -133,6 +133,8 @@ function applyMute() {
   minionSound.muted = muted;
   chaChing.muted = muted;
   yaySound.muted = muted;
+  themeSound.muted = muted;
+  previewSound.muted = muted;
 }
 muteBtn.addEventListener('click', () => {
   muted = !muted;
@@ -327,6 +329,24 @@ function playChaChing() { try { chaChing.currentTime = 0; void chaChing.play(); 
 const yaySound = new Audio('/yay.mp3'); // daily-spin prize celebration
 yaySound.preload = 'auto';
 function playYay() { try { yaySound.currentTime = 0; void yaySound.play(); } catch { /* ignore */ } }
+// Theme song: a player's equipped track, looped for the duration of a match. Started by a
+// `themeSong` server message at kickoff and stopped when the match leaves 'playing' (below).
+const themeSound = new Audio();
+themeSound.preload = 'auto';
+themeSound.loop = true;
+function playTheme(src: string) {
+  try { themeSound.src = src; themeSound.currentTime = 0; themeSound.muted = muted; void themeSound.play(); } catch { /* ignore */ }
+}
+function stopTheme() {
+  try { themeSound.pause(); themeSound.removeAttribute('src'); } catch { /* ignore */ }
+}
+// Shop auditions: a one-shot preview of a song (doesn't touch the live match theme).
+const previewSound = new Audio();
+previewSound.preload = 'none';
+function previewSong(src: string) {
+  if (!src) return;
+  try { previewSound.pause(); previewSound.src = src; previewSound.currentTime = 0; previewSound.muted = muted; void previewSound.play(); } catch { /* ignore */ }
+}
 // Apply persisted mute state immediately (before applyMute() runs at definition time).
 applyMute();
 let prevStatus: StateMsg['status'] | null = null; // last seen status, to fire on the rising edge into 'over'
@@ -501,6 +521,8 @@ const net = connect(
         averySound.currentTime = 0;
       }
       prevFatality = fatalityActive;
+      // Theme song stops the instant a match leaves 'playing' (match over / back to waiting).
+      if (msg.status !== 'playing' && prevStatus === 'playing') stopTheme();
       prevStatus = msg.status;
       // Disco music: plays for the duration of the powerup, stops when the point ends.
       const discoActive = !!msg.disco;
@@ -571,6 +593,8 @@ const net = connect(
       renderNetWorth(lastNwRows);
     } else if (msg.type === 'bountyHit') {
       celebrateTip(msg.winner, msg.target, msg.amount);
+    } else if (msg.type === 'themeSong') {
+      playTheme(msg.audio);
     } else if (msg.type === 'announce') {
       showAnnouncement(msg.text, { toast: msg.toast });
     } else if (msg.type === 'ping') {
@@ -589,7 +613,7 @@ const net = connect(
     } else if (msg.type === 'campaignLeaderboard') {
       campaignScores = msg.rows;
     } else if (msg.type === 'wallet') {
-      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
+      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
       rouletteHandle.setCoins(msg.coins);
       // During a roulette spin, hold every coin-total display (toolbar tab, shop, market) at its
       // pre-result value until the wheel lands — otherwise the settled balance reveals the outcome
@@ -1473,10 +1497,10 @@ campaignBtn.addEventListener('click', async () => {
 });
 
 // --- Coins, cosmetics shop & betting ---
-let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
-  { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, bets: [], nextSpinAt: 0, bonusSpins: 0 };
+let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; song: string | null; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
+  { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, bets: [], nextSpinAt: 0, bonusSpins: 0 };
 let betAmount = 100; // default wager (economy is scaled ×100); min is still 1
-let shopTab: 'hat' | 'skin' | 'trail' | 'title' = 'hat';
+let shopTab: 'hat' | 'skin' | 'trail' | 'title' | 'song' = 'hat';
 const shopBtn = document.getElementById('shopBtn') as HTMLButtonElement;
 const shopPanel = document.getElementById('shopPanel') as HTMLDivElement;
 const coinCount = document.getElementById('coinCount') as HTMLSpanElement;
@@ -1486,8 +1510,9 @@ const tabHats = document.getElementById('tabHats') as HTMLButtonElement;
 const tabSkins = document.getElementById('tabSkins') as HTMLButtonElement;
 const tabTrails = document.getElementById('tabTrails') as HTMLButtonElement;
 const tabTitles = document.getElementById('tabTitles') as HTMLButtonElement;
-const shopTabs = [tabHats, tabSkins, tabTrails, tabTitles];
-function selectShopTab(tab: 'hat' | 'skin' | 'trail' | 'title', el: HTMLButtonElement) {
+const tabSongs = document.getElementById('tabSongs') as HTMLButtonElement;
+const shopTabs = [tabHats, tabSkins, tabTrails, tabTitles, tabSongs];
+function selectShopTab(tab: 'hat' | 'skin' | 'trail' | 'title' | 'song', el: HTMLButtonElement) {
   shopTab = tab;
   for (const t of shopTabs) t.classList.toggle('active', t === el);
   renderShop();
@@ -1496,6 +1521,7 @@ tabHats.addEventListener('click', () => selectShopTab('hat', tabHats));
 tabSkins.addEventListener('click', () => selectShopTab('skin', tabSkins));
 tabTrails.addEventListener('click', () => selectShopTab('trail', tabTrails));
 tabTitles.addEventListener('click', () => selectShopTab('title', tabTitles));
+tabSongs.addEventListener('click', () => selectShopTab('song', tabSongs));
 const spinBtn = document.getElementById('spinBtn') as HTMLButtonElement;
 let spinning = false; // a spin animation is currently playing
 spinBtn.addEventListener('click', () => {
@@ -1538,11 +1564,19 @@ function renderShop() {
   for (const item of COSMETICS) {
     if (item.slot !== shopTab) continue; // show only the active tab's items
     const owned = wallet.owned.includes(item.id);
-    const equipped = (item.slot === 'hat' ? wallet.hat : item.slot === 'skin' ? wallet.skin : item.slot === 'trail' ? wallet.trail : wallet.title) === item.id;
+    const equipped = (item.slot === 'hat' ? wallet.hat : item.slot === 'skin' ? wallet.skin : item.slot === 'trail' ? wallet.trail : item.slot === 'song' ? wallet.song : wallet.title) === item.id;
     const row = document.createElement('div');
     row.className = 'shop-row';
-    // Titles have no paddle preview — they're text flair. Other slots get a live preview canvas.
-    if (item.slot !== 'title') {
+    // Titles are text flair and songs are audio — neither has a paddle preview. Songs get a ▶
+    // button to audition the clip; other non-title slots get a live preview canvas.
+    if (item.slot === 'song') {
+      const play = document.createElement('button');
+      play.className = 'shop-preview-song';
+      play.textContent = '▶';
+      play.title = `Preview ${item.name}`;
+      play.onclick = () => previewSong(item.audio ?? '');
+      row.appendChild(play);
+    } else if (item.slot !== 'title') {
       const preview = document.createElement('canvas') as HTMLCanvasElement;
       preview.width = 28; preview.height = 52;
       preview.className = 'shop-preview';
