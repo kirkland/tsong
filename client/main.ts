@@ -3607,6 +3607,16 @@ let workOn = false;
 let workPrevMuted = false;
 let workLastPaint = 0;
 
+// Terminal mode: a sibling boss-key disguise styled as a shell. Shares the menu-lift
+// machinery with work mode (only one can be active at a time).
+const termModeEl = document.getElementById('termMode') as HTMLDivElement;
+const tmTabsEl = document.getElementById('tmTabs') as HTMLDivElement;
+const tmBodyEl = document.getElementById('tmBody') as HTMLDivElement;
+const termBtn = document.getElementById('termBtn') as HTMLButtonElement;
+let termOn = false;
+let termLastPaint = 0;
+const inDisguise = () => workOn || termOn;
+
 // The top grid row mirrors the real toolbar: each cell maps to a live button and,
 // when clicked, opens the genuine dropdown/modal. The cell shows the button's own
 // current label (icon, coin count, mute state…) so it reads exactly like the toolbar.
@@ -3737,53 +3747,156 @@ function renderWorkGrid() {
   wmStatusEl.textContent = `Sum: ${Math.round(total).toLocaleString()}   Avg: ${STOCKS.length ? Math.round(total / STOCKS.length).toLocaleString() : 0}   Count: ${STOCKS.length}`;
 }
 
+// Terminal disguise: a tab per toolbar button (same data-wm-btn delegation as the grid)
+// plus a shell body whose "command output" is the live game data.
+function renderTerm() {
+  tmTabsEl.innerHTML = WM_MENU_IDS
+    .map((id) => `<span class="tm-tab" data-wm-btn="${id}">${escapeHtml(wmBtnLabel(id))}</span>`)
+    .join('');
+  tmBodyEl.innerHTML = buildTermBody();
+}
+
+function buildTermBody(): string {
+  const fmt = (n: number) => Math.round(n).toLocaleString();
+  const padR = (s: string | number, n: number) => String(s).padEnd(n);
+  const padL = (s: string | number, n: number) => String(s).padStart(n);
+  const prompt = '<span class="tm-prompt">ops@prod-1</span>:<span class="tm-path">~/ops</span>$ ';
+  const L: string[] = [];
+
+  L.push(`${prompt}./status.sh --live`);
+  L.push('<span class="tm-dim">resolving services ............ ok</span>');
+  L.push('');
+
+  // Market ← the crypto positions.
+  L.push('<span class="tm-key">== market ====================================</span>');
+  L.push('<span class="tm-dim"> TICKER     LAST     CHG%      QTY     VALUE</span>');
+  for (const s of STOCKS) {
+    const p = market.prices.find((x) => x.id === s.id);
+    const price = p?.price ?? s.base;
+    const ser = market.history.find((h) => h.id === s.id)?.series;
+    const line = ser?.['1d']?.length ? ser['1d'] : (ser?.['1h'] ?? []);
+    const chg = line.length >= 2 && line[0] > 0
+      ? ((line[line.length - 1] - line[0]) / line[0]) * 100
+      : (p && p.prev > 0 ? ((p.price - p.prev) / p.prev) * 100 : 0);
+    const longH = market.holdings.find((h) => h.id === s.id && h.side === 'long');
+    const shortH = market.holdings.find((h) => h.id === s.id && h.side === 'short');
+    const qty = (longH?.shares ?? 0) + (shortH?.shares ?? 0);
+    const val = (longH?.worth ?? 0) + (shortH?.worth ?? 0);
+    const chgTxt = `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%`;
+    const chgSpan = `<span class="${chg >= 0 ? 'tm-pos' : 'tm-neg'}">${padL(chgTxt, 8)}</span>`;
+    L.push(` ${padR(s.ticker, 7)} ${padL(price.toFixed(2), 8)} ${chgSpan} ${padL(qty > 0 ? qty.toFixed(2) : '-', 8)} ${padL(val > 0 ? fmt(val) : '-', 9)}`);
+  }
+  L.push('');
+
+  // Accounts ← the net-worth board.
+  L.push('<span class="tm-key">== accounts (net worth) ======================</span>');
+  L.push('<span class="tm-dim"> ACCOUNT            NET     CASH      LIAB</span>');
+  for (const n of lastNwRows.slice(0, 8)) {
+    L.push(escapeHtml(` ${padR(n.name, 14)} ${padL(fmt(n.net), 9)} ${padL(fmt(n.coins), 8)} ${padL(fmt(n.loan || 0), 9)}`));
+  }
+  L.push('');
+
+  // Standings ← the win/loss board.
+  L.push('<span class="tm-key">== standings =================================</span>');
+  L.push('<span class="tm-dim"> EMPLOYEE          W     L      ELO</span>');
+  for (const l of lastLbRows.slice(0, 8)) {
+    L.push(escapeHtml(` ${padR(l.name, 14)} ${padL(l.wins, 5)} ${padL(l.losses, 5)} ${padL(l.elo, 8)}`));
+  }
+  L.push('');
+
+  // Session ← the live match.
+  const statusText = !state ? 'idle' : state.status === 'over' ? 'closed' : state.status === 'playing' ? 'running' : 'pending';
+  L.push('<span class="tm-key">== session ===================================</span>');
+  L.push(escapeHtml(` division.a : ${padR(state?.paddles.left.name ?? 'vacant', 14)} units ${state?.score.left ?? 0}`));
+  L.push(escapeHtml(` division.b : ${padR(state?.paddles.right.name ?? 'vacant', 14)} units ${state?.score.right ?? 0}`));
+  L.push(escapeHtml(` phase: ${padR(statusText, 9)} throughput: ${state ? Math.round(state.ballSpeed) : 0}`));
+  L.push('');
+
+  // Recent log ← chat.
+  const tail = workChat.slice(-5);
+  if (tail.length) {
+    L.push('<span class="tm-key">== tail -n5 ops.log ==========================</span>');
+    for (const c of tail) L.push('<span class="tm-dim">' + escapeHtml(' ' + c) + '</span>');
+    L.push('');
+  }
+
+  const riskM = document.getElementById('msPct')?.textContent?.match(/[\d,]+%/g);
+  const riskPct = riskM ? riskM[riskM.length - 1] : '0%';
+  L.push(escapeHtml(`wallet: ${fmt(wallet.coins)} coins  |  open positions: ${market.holdings.length}  |  risk: ${riskPct}`));
+  L.push('');
+  L.push(`${prompt}<span class="tm-cursor"></span>`);
+  return L.join('\n');
+}
+
+// Shared enter/exit plumbing for both disguises: mute the game without touching the saved
+// pref, retitle the tab, and on exit close any menu opened from the disguise.
+function enterDisguise(title: string) {
+  workPrevMuted = muted;
+  if (!muted) { muted = true; applyMute(); }
+  document.title = title;
+}
+function exitDisguise() {
+  if (muted && !workPrevMuted) { muted = false; applyMute(); }
+  document.title = ORIGINAL_TITLE;
+  // Close any dropdown opened from the disguise so it doesn't linger on the game view.
+  document.querySelectorAll(WM_PANEL_SEL).forEach((b) => (b as HTMLElement).click());
+  document.body.classList.remove('wm-menus');
+}
+
 function setWorkMode(on: boolean) {
   if (on === workOn) return;
+  if (on && termOn) setTermMode(false); // the two disguises are mutually exclusive
   workOn = on;
   workModeEl.hidden = !on;
   workModeEl.setAttribute('aria-hidden', String(!on));
-  if (on) {
-    workPrevMuted = muted;
-    if (!muted) { muted = true; applyMute(); } // hush the pong bloops without touching the saved pref
-    document.title = 'FY25_Operating_Model.xlsx - Google Sheets';
-    renderWorkGrid();
-  } else {
-    if (muted && !workPrevMuted) { muted = false; applyMute(); }
-    document.title = ORIGINAL_TITLE;
-    // Close any dropdown opened from the sheet so it doesn't linger on the game view.
-    document.querySelectorAll(WM_PANEL_SEL).forEach((b) => (b as HTMLElement).click());
-    document.body.classList.remove('wm-menus');
-  }
+  if (on) { enterDisguise('FY25_Operating_Model.xlsx - Google Sheets'); renderWorkGrid(); }
+  else exitDisguise();
 }
 workBtn.addEventListener('click', () => setWorkMode(true));
 
-// Reflect whether a toolbar dropdown/modal is open: lift it above the sheet (and hide
-// its trigger button) via the `wm-menus` body class while in work mode.
-function wmSyncMenus() {
-  document.body.classList.toggle('wm-menus', workOn && !!document.querySelector(WM_PANEL_SEL));
+function setTermMode(on: boolean) {
+  if (on === termOn) return;
+  if (on && workOn) setWorkMode(false);
+  termOn = on;
+  termModeEl.hidden = !on;
+  termModeEl.setAttribute('aria-hidden', String(!on));
+  if (on) { enterDisguise('prod-1 — ssh ops@prod-1 — 120×34'); renderTerm(); }
+  else exitDisguise();
 }
-// A click on a top-row menu cell opens the real dropdown/modal by dispatching a click on
-// the underlying button — reusing all its existing toggle, close-others, and outside-click
-// logic. stopPropagation keeps the sheet click from reaching the document close-handlers
+termBtn.addEventListener('click', () => setTermMode(true));
+
+// Reflect whether a toolbar dropdown/modal is open: lift it above the disguise (and hide
+// its trigger button) via the `wm-menus` body class while a disguise is active.
+function wmSyncMenus() {
+  document.body.classList.toggle('wm-menus', inDisguise() && !!document.querySelector(WM_PANEL_SEL));
+}
+// A click on a menu cell/tab opens the real dropdown/modal by dispatching a click on the
+// underlying button — reusing all its existing toggle, close-others, and outside-click
+// logic. stopPropagation keeps the disguise click from reaching the document close-handlers
 // (which would otherwise immediately shut the panel we just opened).
-wmGridEl.addEventListener('click', (e) => {
-  const cell = (e.target as HTMLElement).closest('[data-wm-btn]') as HTMLElement | null;
-  if (!cell) return;
+function wmMenuClick(e: Event) {
+  const el = (e.target as HTMLElement).closest('[data-wm-btn]') as HTMLElement | null;
+  if (!el) return;
   e.preventDefault();
   e.stopPropagation();
-  document.getElementById(cell.dataset.wmBtn!)?.click();
+  document.getElementById(el.dataset.wmBtn!)?.click();
   wmSyncMenus();
-});
-// Recompute after any other click (e.g. clicking the sheet closes an open dropdown).
-document.addEventListener('click', () => { if (workOn) wmSyncMenus(); });
+}
+wmGridEl.addEventListener('click', wmMenuClick);
+tmTabsEl.addEventListener('click', wmMenuClick);
+// Recompute after any other click (e.g. clicking the body closes an open dropdown).
+document.addEventListener('click', () => { if (inDisguise()) wmSyncMenus(); });
 // Esc is the boss-key exit. Capture phase so it fires regardless of focus.
 window.addEventListener('keydown', (e) => {
-  if (workOn && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setWorkMode(false); }
+  if (e.key !== 'Escape') return;
+  if (workOn) { e.preventDefault(); e.stopPropagation(); setWorkMode(false); }
+  else if (termOn) { e.preventDefault(); e.stopPropagation(); setTermMode(false); }
 }, true);
 
 function loop(t: number) {
   sampleFps(t);
   if (workOn && t - workLastPaint > 450) { workLastPaint = t; renderWorkGrid(); }
+  if (termOn && t - termLastPaint > 450) { termLastPaint = t; renderTerm(); }
   // Arena: keyboard nudges the paddle along its edge (mouse handled in mousemove).
   if (inArena() && canControl() && state?.poly) {
     const me = myPolyPlayer(state);

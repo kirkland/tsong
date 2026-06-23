@@ -839,6 +839,12 @@
         color: #7da2ff; cursor: pointer;
       }
       #workBtn:hover { background: #18203a; }
+      #termBtn {
+        font: inherit; font-size: 11px; letter-spacing: 1px; padding: 6px 10px;
+        border-radius: 6px; border: 1px solid #2a3550; background: #0e1424;
+        color: #7da2ff; cursor: pointer;
+      }
+      #termBtn:hover { background: #18203a; }
       #doomBtn {
         font: inherit;
         font-size: 12px;
@@ -2706,7 +2712,7 @@
           left: 6px;
           gap: 4px;
         }
-        #viewModeBtn, #muteBtn, #workBtn, #gameModesBtn, #powerupInfoBtn, #marketBtn, #loanBtn, #rouletteBtn, #arcadeBtn, #casinoBtn {
+        #viewModeBtn, #muteBtn, #workBtn, #termBtn, #gameModesBtn, #powerupInfoBtn, #marketBtn, #loanBtn, #rouletteBtn, #arcadeBtn, #casinoBtn {
           font-size: 10px;
           padding: 4px 8px;
         }
@@ -2830,6 +2836,41 @@
       body.wm-menus #changelog > button,
       body.wm-menus #botControl > button,
       body.wm-menus #debugControl > button { visibility: hidden; }
+
+      /* --- Terminal mode: a second boss-key disguise styled as a shell window. --- */
+      #termMode {
+        position: fixed; inset: 0; z-index: 100000; background: #0c0c0c;
+        color: #d6d6d6; font-family: "SF Mono", "Roboto Mono", Menlo, Consolas, ui-monospace, monospace;
+        font-size: 13px; display: flex; flex-direction: column; cursor: default; user-select: none;
+      }
+      #termMode[hidden] { display: none; }
+      #tmBar {
+        display: flex; align-items: flex-end; gap: 0; padding: 6px 8px 0;
+        background: #1d1d1d; border-bottom: 1px solid #000; min-height: 30px;
+      }
+      #tmTabs { display: flex; gap: 1px; flex-wrap: wrap; }
+      #tmTabs .tm-tab {
+        padding: 5px 12px; background: #2a2a2a; color: #9aa0a6; cursor: pointer;
+        border: 1px solid #000; border-bottom: none; border-radius: 6px 6px 0 0;
+        font-size: 12px; white-space: nowrap; max-width: 150px; overflow: hidden; text-overflow: ellipsis;
+      }
+      #tmTabs .tm-tab:hover { background: #343434; color: #e6e6e6; }
+      #tmTabs .tm-tab.tm-active { background: #0c0c0c; color: #57c7ff; }
+      #tmBody {
+        flex: 1; overflow: hidden; padding: 10px 14px; white-space: pre; line-height: 1.45;
+        font-size: 13px; color: #cfcfcf;
+      }
+      #tmBody .tm-prompt { color: #2ecc71; }
+      #tmBody .tm-path { color: #57c7ff; }
+      #tmBody .tm-key { color: #c678dd; }
+      #tmBody .tm-pos { color: #2ecc71; }
+      #tmBody .tm-neg { color: #e06c75; }
+      #tmBody .tm-dim { color: #6b6b6b; }
+      #tmBody .tm-cursor {
+        display: inline-block; width: 8px; height: 15px; vertical-align: text-bottom;
+        background: #cfcfcf; animation: tmBlink 1s step-end infinite;
+      }
+      @keyframes tmBlink { 50% { opacity: 0; } }
     </style>
   </head>
   <body>
@@ -2848,6 +2889,7 @@
     <div id="topLeft">
       <button id="muteBtn" type="button" aria-pressed="false" title="Toggle sound on/off (M)">🔊</button>
       <button id="workBtn" type="button" title="Work mode — disguise as a spreadsheet (Esc to exit)">📊 Work</button>
+      <button id="termBtn" type="button" title="Terminal mode — disguise as a terminal (Esc to exit)">💻 Term</button>
       <div id="arcade">
         <button id="arcadeBtn" type="button" aria-expanded="false" title="Minigames">🎮 Arcade <span class="caret">▾</span></button>
         <div id="arcadePanel" class="nav-menu" hidden>
@@ -3545,6 +3587,15 @@
         <span class="wm-tab">Data</span>
         <span class="wm-status" id="wmStatus">Ready</span>
       </div>
+    </div>
+
+    <!-- Terminal mode: a second boss-key disguise that looks like a shell. The tab bar
+         (#tmTabs) holds one tab per real toolbar button; clicking opens the genuine
+         dropdown/modal. The body (#tmBody) is filled with the live game data as command
+         output by main.ts. Esc exits. -->
+    <div id="termMode" hidden aria-hidden="true">
+      <div id="tmBar"><div id="tmTabs"></div></div>
+      <div id="tmBody"></div>
     </div>
 
     <div id="overlay">
