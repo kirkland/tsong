@@ -41,11 +41,43 @@ const MAP_H = MAP.length;
 const W = 320;
 const H = 200;
 
-// Team spawn points (inside each house, facing the doorway), used for initial placement and
-// respawns. Index = team. The doorway in front of each spawn opens toward the central bus.
+// Team spawn points (inside each house, facing the doorway), used as the match-start / no-enemy
+// fallback. Index = team. The doorway in front of each spawn opens toward the central bus.
 const SPAWNS = [
   { x: 7.5, y: 2.5 },     // team 0 (red), top house
   { x: 7.5, y: 13.5 },    // team 1 (blue), bottom house
+];
+
+// Dynamic respawn pool — candidate points scattered across the map's open areas so respawns can
+// be steered AWAY from whoever's currently camping. Each is tagged with the `side` it sits on
+// (0 = red half / 1 = blue half / -1 = neutral mid-map) only as a tie-breaker for the no-enemy
+// fallback; the live spawn picker scores purely on distance to enemies. The list is kept 180°-
+// rotationally symmetric (mirror every red point to a blue one) so neither team gets a safer set.
+// Every entry MUST land on a floor tile — we assert that against the map at module load below.
+const SPAWN_POOL: { x: number; y: number; side: number }[] = [
+  // Red side: the house interior plus its two front corners flanking the doorway.
+  { x: 7.5, y: 2.5, side: 0 },
+  { x: 4.5, y: 2.5, side: 0 },
+  { x: 10.5, y: 2.5, side: 0 },
+  // Red-side yard: open ground and the side-lane cover just outside the house.
+  { x: 2.5, y: 4.5, side: 0 },
+  { x: 13.5, y: 4.5, side: 0 },
+  { x: 3.5, y: 6.5, side: 0 },
+  { x: 12.5, y: 6.5, side: 0 },
+  // Neutral mid-map: the left/right flanks beside the bus (the only ways across the centre).
+  { x: 1.5, y: 7.5, side: -1 },
+  { x: 14.5, y: 7.5, side: -1 },
+  { x: 1.5, y: 8.5, side: -1 },
+  { x: 14.5, y: 8.5, side: -1 },
+  // Blue-side yard (mirror of the red-side yard points).
+  { x: 3.5, y: 9.5, side: 1 },
+  { x: 12.5, y: 9.5, side: 1 },
+  { x: 2.5, y: 11.5, side: 1 },
+  { x: 13.5, y: 11.5, side: 1 },
+  // Blue side: house interior + front corners (mirror of the red house points).
+  { x: 4.5, y: 13.5, side: 1 },
+  { x: 10.5, y: 13.5, side: 1 },
+  { x: 7.5, y: 13.5, side: 1 },
 ];
 const TEAM_COLORS = ['#ff5c5c', '#5c9dff']; // red, blue (HUD + sprite tint)
 const TEAM_NAMES = ['RED', 'BLUE'];
@@ -70,6 +102,10 @@ function isWall(mx: number, my: number): boolean {
   if (mx < 0 || my < 0 || mx >= MAP_W || my >= MAP_H) return true;
   return MAP[my][mx] !== '.';
 }
+
+// Drop any respawn candidate that doesn't actually sit on a floor tile, so a mistyped point can
+// never spawn a player inside a wall. Done once at load against the same isWall the sim uses.
+const VALID_SPAWNS = SPAWN_POOL.filter((s) => !isWall(Math.floor(s.x), Math.floor(s.y)));
 
 // Clear line of sight between two points (no wall crossing) — coarse step sampling.
 function losClear(x0: number, y0: number, x1: number, y1: number): boolean {
@@ -354,11 +390,47 @@ export function startNuketown(net: NuketownNet): void {
   }
 
   // --- host sim helpers ---
+  // Host-side dynamic respawn: pick a point that's FAR from whoever's alive on the enemy team, so
+  // a dead player can't be fed straight back into a camper's crosshairs. Runs only on the host
+  // (it reads the canonical `players` array). Spawn positions reach guests via the {t:'st'} snap.
   function spawnPlayer(p: Player) {
-    const s = SPAWNS[p.team] ?? SPAWNS[0];
-    // Jitter the spawn a touch so teammates don't stack exactly.
-    p.x = s.x + (Math.random() - 0.5) * 0.8;
-    p.y = s.y + (Math.random() - 0.5) * 0.8;
+    // Living enemies are what we're avoiding; ignore dead/teammate players.
+    const enemies = players.filter((e) => e !== p && e.alive && e.team !== p.team);
+
+    let s: { x: number; y: number };
+    if (enemies.length === 0) {
+      // Match start (or a wiped enemy team): nothing to flee, so spawn on our own side. Prefer a
+      // random candidate tagged for our team, falling back to the fixed house corner.
+      const ours = VALID_SPAWNS.filter((c) => c.side === p.team);
+      s = ours.length ? ours[Math.floor(Math.random() * ours.length)] : (SPAWNS[p.team] ?? SPAWNS[0]);
+    } else {
+      // Score every candidate by its distance to the NEAREST living enemy (bigger = safer), then
+      // pick at random among the top-3 safest. The randomness stops respawns from being a fixed,
+      // learnable pattern while still keeping the player well away from the current fight.
+      const scored = VALID_SPAWNS
+        .map((c) => ({
+          c,
+          safety: Math.min(...enemies.map((e) => Math.hypot(e.x - c.x, e.y - c.y))),
+        }))
+        .sort((a, b) => b.safety - a.safety);
+      const top = scored.slice(0, Math.min(3, scored.length));
+      s = top[Math.floor(Math.random() * top.length)].c;
+    }
+
+    // Jitter a touch so teammates respawning at the same point don't stack exactly, then clamp the
+    // result back onto a floor tile (and off any enemy stood there) so we never land in a wall or
+    // right on top of someone — re-rolling the jitter a few times before giving up on the raw point.
+    let nx = s.x, ny = s.y;
+    for (let tries = 0; tries < 6; tries++) {
+      const jx = s.x + (Math.random() - 0.5) * 0.8;
+      const jy = s.y + (Math.random() - 0.5) * 0.8;
+      if (isWall(Math.floor(jx), Math.floor(jy))) continue;
+      const blocked = enemies.some((e) => Math.hypot(e.x - jx, e.y - jy) < 0.6);
+      nx = jx; ny = jy;
+      if (!blocked) break;
+    }
+    p.x = nx;
+    p.y = ny;
     p.angle = p.team === 0 ? 0.78 : 0.78 + Math.PI; // face roughly toward the centre
     p.health = MAX_HEALTH;
     p.ammo = MAX_AMMO;
