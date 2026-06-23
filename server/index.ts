@@ -276,6 +276,18 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'doomReward':
         lobby.doomReward(ws);
         break;
+      case 'ntJoin':
+        lobby.ntJoin(ws);
+        break;
+      case 'ntLeave':
+        lobby.ntLeave(ws);
+        break;
+      case 'ntStart':
+        lobby.ntStart(ws);
+        break;
+      case 'ntRelay':
+        if (msg.data !== undefined) lobby.ntRelay(ws, msg.data);
+        break;
       case 'tdJoin':
         lobby.tdJoin(ws);
         break;

@@ -614,6 +614,80 @@ export class Lobby {
     });
   }
 
+  // --- Nuketown (team deathmatch FPS) ---
+  // Mirrors the co-op DOOM subsystem, but for up to 6 players across two teams with a dumb
+  // broadcast relay (not a 2-slot pairing): the match itself runs on the clients (slot 0, the
+  // first joiner, is the host/authority). The server only matchmakes, assigns teams (balanced),
+  // tracks the 'waiting'|'playing'|'ended' status, and fans relay payloads out to everyone else.
+  // Like DOOM, none of the Pong game state is touched.
+  private ntSlots: WebSocket[] = [];
+  private ntTeams = new Map<WebSocket, number>(); // ws → team (0 red / 1 blue)
+  private ntStatus: 'waiting' | 'playing' = 'waiting';
+  private static readonly NT_CAP = 6;
+
+  /** Take a slot in the Nuketown lobby (max 6), assigned to the smaller team for balance. */
+  ntJoin(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return;
+    if (this.ntSlots.includes(ws) || this.ntSlots.length >= Lobby.NT_CAP) return;
+    // Balance teams: join whichever side currently has fewer players (ties → red/0).
+    let red = 0, blue = 0;
+    for (const t of this.ntTeams.values()) (t === 0 ? red++ : blue++);
+    this.ntSlots.push(ws);
+    this.ntTeams.set(ws, red <= blue ? 0 : 1);
+    this.broadcastNtLobby();
+  }
+
+  /** Leave the Nuketown lobby/match. If the HOST (slot 0) left, end the match for everyone. */
+  ntLeave(ws: WebSocket) {
+    const i = this.ntSlots.indexOf(ws);
+    if (i === -1) return;
+    const wasHost = i === 0;
+    this.ntSlots.splice(i, 1);
+    this.ntTeams.delete(ws);
+    if (wasHost) {
+      // The authority is gone — there's no one to simulate the match, so tear it down for all
+      // remaining participants and reset the lobby.
+      for (const other of this.ntSlots) {
+        this.tell(other, { type: 'ntLobby', status: 'ended', slot: 0, hostSlot: 0, players: [] });
+      }
+      this.ntSlots = [];
+      this.ntTeams.clear();
+      this.ntStatus = 'waiting';
+      return;
+    }
+    // A non-host left: if everyone but the host has gone the match falls back to waiting.
+    if (this.ntSlots.length <= 1) this.ntStatus = 'waiting';
+    this.broadcastNtLobby();
+  }
+
+  /** (Host only) flip the lobby to 'playing' and broadcast — kicks off the match for everyone. */
+  ntStart(ws: WebSocket) {
+    if (this.ntSlots[0] !== ws) return; // only the host (slot 0) may start
+    if (this.ntSlots.length < 2) return; // need at least 2 players
+    this.ntStatus = 'playing';
+    this.broadcastNtLobby();
+  }
+
+  /** Forward an opaque Nuketown payload to every OTHER participant (dumb fan-out). */
+  ntRelay(ws: WebSocket, data: unknown) {
+    if (!this.ntSlots.includes(ws)) return;
+    for (const other of this.ntSlots) {
+      if (other !== ws) this.tell(other, { type: 'ntRelay', data });
+    }
+  }
+
+  private broadcastNtLobby() {
+    const players = this.ntSlots.map((sock, slot) => ({
+      name: this.conns.get(sock)?.nickname ?? `P${slot}`,
+      team: this.ntTeams.get(sock) ?? 0,
+      slot,
+    }));
+    this.ntSlots.forEach((sock, slot) => {
+      this.tell(sock, { type: 'ntLobby', status: this.ntStatus, slot, hostSlot: 0, players });
+    });
+  }
+
   // DOOM high-round leaderboards (solo + co-op), cached and pushed to clients.
   private doomBoards: { solo: DoomScoreRow[]; coop: DoomScoreRow[] } = { solo: [], coop: [] };
   private campaignBoard: CampaignScoreRow[] = [];
@@ -2053,6 +2127,7 @@ export class Lobby {
 
   remove(ws: WebSocket) {
     this.doomLeave(ws); // drop any co-op DOOM slot (and notify the partner)
+    this.ntLeave(ws);   // drop any Nuketown slot (ends the match if the host left)
     this.tdLeave(ws);   // drop out of the Type or Die arena
     const leavingPid = this.conns.get(ws)?.pid ?? '';
     // Tournament participant left: advance their opponent / free their slot before the
