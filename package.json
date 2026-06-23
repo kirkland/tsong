@@ -12,7 +12,8 @@
     "build": "vite build",
     "start": "tsx server/index.ts",
     "typecheck": "tsc --noEmit",
-    "conservation": "tsx scripts/conservation-check.ts"
+    "conservation": "tsx scripts/conservation-check.ts",
+    "listen": "tsx tools/listener/listen.ts"
   },
   "dependencies": {
     "dotenv": "^17.4.2",
