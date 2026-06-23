@@ -322,6 +322,7 @@ export type ClientMsg =
   | { type: 'ntJoin' } // take a slot in the Nuketown team-deathmatch lobby (up to 6)
   | { type: 'ntLeave' } // leave the Nuketown lobby / match
   | { type: 'ntStart' } // (host only) start the Nuketown match from the waiting room
+  | { type: 'ntEnd'; team: number } // (host only) report the winning team so the server pays the winners
   | { type: 'ntRelay'; data: unknown } // forward an opaque Nuketown payload to all other participants
   | { type: 'tdJoin' } // join the shared co-op "Type or Die" arena
   | { type: 'tdLeave' } // leave the Type or Die arena

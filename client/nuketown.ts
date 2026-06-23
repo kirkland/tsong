@@ -105,6 +105,7 @@ export interface NuketownNet {
   leave(): void;
   start(): void;
   relay(data: unknown): void;
+  end(team: number): void; // (host only) report the winning team so the server can pay the winners
   name(): string; // this client's display name
 }
 
@@ -303,6 +304,7 @@ export function startNuketown(net: NuketownNet): void {
   let scores: [number, number] = [0, 0];
   let matchTime = MATCH_SECONDS; // seconds remaining (host counts down, guests mirror)
   let over: { winner: number } | null = null; // winner team (or -1 for a draw)
+  let endReported = false; // host reports the result to the server exactly once (pays the winners)
 
   // Host: per-slot tracking of the last processed input edge counters + latest input.
   const guestInputs = new Map<number, NetInput>();
@@ -551,6 +553,9 @@ export function startNuketown(net: NuketownNet): void {
           over = { winner: scores[0] === scores[1] ? -1 : (scores[0] > scores[1] ? 0 : 1) };
         }
       }
+      // Once the match resolves, the host reports the winning team to the server so it can pay
+      // out the win reward — exactly once (a draw reports -1, which the server simply ignores).
+      if (over && !endReported) { endReported = true; net.end(over.winner); }
       // Stream a snapshot to everyone ~20/s.
       netAccum += dt;
       if (netAccum >= 0.05) {
