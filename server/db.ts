@@ -1248,8 +1248,8 @@ export async function houseAdjust(delta: number): Promise<number | null> {
     // coins paid INTO the House on a missing row would be silently destroyed). Clamp at 0 so a
     // corrupt negative row can't make coins vanish.
     const { rows } = await pool.query(
-      `INSERT INTO doom_meta (k, v) VALUES ('house_balance', $1::text)
-         ON CONFLICT (k) DO UPDATE SET v = (GREATEST(0, doom_meta.v::numeric + $1))::text
+      `INSERT INTO doom_meta (k, v) VALUES ('house_balance', ($1::numeric)::text)
+         ON CONFLICT (k) DO UPDATE SET v = (GREATEST(0, doom_meta.v::numeric + $1::numeric))::text
        RETURNING v`,
       [delta],
     );
