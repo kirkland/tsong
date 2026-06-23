@@ -655,7 +655,7 @@ export class Lobby {
 
   // Loot box: a fixed coin price (flows to the House) that rolls a weighted prize. A coin roll
   // (or a degraded capped-out exclusive) pays this much from the House.
-  private static readonly LOOT_PRICE = 2500;
+  private static readonly LOOT_PRICE = 1000;
   private static readonly LOOT_COIN_REWARD = 1500;
 
   private static readonly NT_CAP = 6;
@@ -1981,6 +1981,17 @@ export class Lobby {
         if (!w) { this.notify(ws, `A loot box costs ${Lobby.LOOT_PRICE.toLocaleString()}🪙 — you're short.`); this.sendWallet(ws); return; }
         // The price flows into the House (it funds the coin/exclusive payouts).
         await this.houseCredit(Lobby.LOOT_PRICE);
+        // Pay a coin prize from the House — but NEVER take a player's money for nothing: if the
+        // House can't fund a prize (returns 0), refund the box price instead (pull it back out of
+        // the House it was just credited to, keeping coins conserved).
+        const payLootCoins = async (): Promise<void> => {
+          const paid = await this.housePay(pid, nick, Lobby.LOOT_COIN_REWARD);
+          if (paid > 0) { this.tell(ws, { type: 'lootResult', kind: 'coins', coins: paid }); return; }
+          await addCoins(pid, nick, Lobby.LOOT_PRICE);
+          await houseAdjust(-Lobby.LOOT_PRICE);
+          this.notify(ws, 'Loot box fizzled — your coins were refunded.');
+          this.tell(ws, { type: 'lootResult', kind: 'coins', coins: Lobby.LOOT_PRICE });
+        };
         // Weighted roll (same idiom as the daily spin): common / coins / rare. Reused below.
         const weights = [55, 30, 15]; // common cosmetic, coins, rare exclusive
         const total = weights.reduce((a, b) => a + b, 0);
@@ -1998,12 +2009,10 @@ export class Lobby {
             this.tell(ws, { type: 'lootResult', kind: 'cosmetic', item: item.id, name: item.name });
           } else {
             // Owns everything common → degrade to coins from the House.
-            const paid = await this.housePay(pid, nick, Lobby.LOOT_COIN_REWARD);
-            this.tell(ws, { type: 'lootResult', kind: 'coins', coins: paid });
+            await payLootCoins();
           }
         } else if (bucket === 1) {
-          const paid = await this.housePay(pid, nick, Lobby.LOOT_COIN_REWARD);
-          this.tell(ws, { type: 'lootResult', kind: 'coins', coins: paid });
+          await payLootCoins();
         } else {
           // Rare exclusive: pick one weighted toward higher-cap (more common) items, attempt the
           // atomic capped mint, and degrade to coins if it's sold out globally.
@@ -2013,9 +2022,8 @@ export class Lobby {
             this.tell(ws, { type: 'lootResult', kind: 'exclusive', item: pick.id, name: pick.name, serial, cap: pick.cap, rarity: pick.rarity });
             this.announce(`✨ ${nick} pulled an EXCLUSIVE: ${pick.name} (#${serial} of ${pick.cap})!`);
           } else {
-            // Capped out — no over-mint. Degrade to a House coin payout.
-            const paid = await this.housePay(pid, nick, Lobby.LOOT_COIN_REWARD);
-            this.tell(ws, { type: 'lootResult', kind: 'coins', coins: paid });
+            // Capped out — no over-mint. Degrade to a House coin payout (refunds if House is dry).
+            await payLootCoins();
           }
         }
         this.sendWallet(ws);
