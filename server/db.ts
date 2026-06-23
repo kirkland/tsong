@@ -213,6 +213,19 @@ export async function initDb(): Promise<void> {
     `INSERT INTO doom_meta (k, v) VALUES ('house_balance', $1) ON CONFLICT (k) DO NOTHING`,
     [String(HOUSE_GENESIS)],
   );
+  // One-time recovery: the economy first shipped with a House that some deploys left unfunded
+  // (missing/zeroed row → every House-backed payout silently paid 0, and coins paid in were lost).
+  // Once, lift the treasury to at least the genesis floor. GREATEST never destroys a House that
+  // legitimately grew past genesis from gambling losses; gated so it runs a single time.
+  const houseReseed = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'house_reseed_v1'`);
+  if (houseReseed.rowCount === 0) {
+    await pool.query(
+      `INSERT INTO doom_meta (k, v) VALUES ('house_balance', $1)
+         ON CONFLICT (k) DO UPDATE SET v = GREATEST(doom_meta.v::numeric, $1::numeric)::text`,
+      [String(HOUSE_GENESIS)],
+    );
+    await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('house_reseed_v1', now()::text)`);
+  }
   const reset = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'reset_boss_v1'`);
   if (reset.rowCount === 0) {
     await pool.query(`DELETE FROM doom_scores`);
@@ -1231,9 +1244,13 @@ export async function houseAdjust(delta: number): Promise<number | null> {
   if (!pool) return null;
   if (delta === 0) return getHouseBalance();
   if (delta > 0) {
-    // Credit: clamp at 0 so a corrupt negative row can't make coins vanish silently.
+    // Credit: UPSERT so a credit always lands even if the genesis row was never seeded (otherwise
+    // coins paid INTO the House on a missing row would be silently destroyed). Clamp at 0 so a
+    // corrupt negative row can't make coins vanish.
     const { rows } = await pool.query(
-      `UPDATE doom_meta SET v = (GREATEST(0, v::numeric + $1))::text WHERE k = 'house_balance' RETURNING v`,
+      `INSERT INTO doom_meta (k, v) VALUES ('house_balance', $1::text)
+         ON CONFLICT (k) DO UPDATE SET v = (GREATEST(0, doom_meta.v::numeric + $1))::text
+       RETURNING v`,
       [delta],
     );
     return rows.length ? Number(rows[0].v) : null;

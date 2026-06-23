@@ -1148,6 +1148,19 @@
         background: #1a0810; color: #ff6b9d; cursor: pointer;
       }
       #rouletteBtn:hover { background: #2a1018; }
+      /* Loot Box (purple) + Black Market (teal) — match the tinted Casino-menu button language. */
+      #lootBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #4a2f6b;
+        background: #150e22; color: #c79dff; cursor: pointer;
+      }
+      #lootBtn:hover { background: #241636; }
+      #marketplaceBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #1f5a5a;
+        background: #0a1a1a; color: #5fe0e0; cursor: pointer;
+      }
+      #marketplaceBtn:hover { background: #102a2a; }
       #roulettePanel {
         position: fixed; top: 52px; left: 12px; width: 340px;
         max-height: 84vh; overflow-y: auto;
@@ -2919,7 +2932,7 @@
         <div id="casinoPanel" class="nav-menu" hidden>
           <button id="marketBtn" type="button" aria-expanded="false" title="Invest coins in joke cryptos">📈 Market</button>
           <button id="lootBtn" type="button" aria-expanded="false" title="Open loot boxes — roll for scarce, capped exclusives">🎁 Loot Box</button>
-          <button id="marketplaceBtn" type="button" aria-expanded="false" title="Buy &amp; sell scarce exclusives with other players">🛒 Marketplace</button>
+          <button id="marketplaceBtn" type="button" aria-expanded="false" title="Black Market — buy &amp; sell scarce exclusives with other players">🛒 Black Market</button>
           <button id="loanBtn" type="button" aria-expanded="false" title="Borrow coins from Davis — pay back 1.5× by the daily reset">💸 Get Loan</button>
           <button id="rouletteBtn" type="button" aria-expanded="false" title="Play roulette — bet coins on the wheel">🎡 Roulette</button>
         </div>
@@ -2974,7 +2987,7 @@
         <div id="lootBody"></div>
       </div>
       <div id="marketplacePanel" hidden>
-        <h3>🛒 Marketplace</h3>
+        <h3>🛒 Black Market</h3>
         <div id="marketplaceBody"></div>
       </div>
       <div id="viewMode">

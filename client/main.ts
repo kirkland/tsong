@@ -2207,7 +2207,7 @@ function renderHouse() {
 const lootBtn = document.getElementById('lootBtn') as HTMLButtonElement | null;
 const lootPanel = document.getElementById('lootPanel') as HTMLDivElement;
 const lootBody = document.getElementById('lootBody') as HTMLDivElement;
-const LOOT_PRICE = 2500; // mirror of the server's Lobby.LOOT_PRICE (display only)
+const LOOT_PRICE = 1000; // mirror of the server's Lobby.LOOT_PRICE (display only)
 let lootBusy = false;
 function renderLoot() {
   const canAfford = wallet.coins >= LOOT_PRICE;
@@ -2220,7 +2220,7 @@ function renderLoot() {
     : '';
   lootBody.innerHTML = `
     <div class="loot-blurb">Crack a box for ${LOOT_PRICE.toLocaleString()}🪙: a common cosmetic, a coin payout, or a <b>scarce exclusive</b> (hard mint cap — some are 1-of-1).</div>
-    <button id="lootOpenBtn" type="button" ${canAfford && !lootBusy ? '' : 'disabled'}>${lootBusy ? 'Opening…' : `🎁 Open Box · ${LOOT_PRICE.toLocaleString()}🪙`}</button>
+    <button id="lootOpenBtn" type="button" ${canAfford && !lootBusy ? '' : 'disabled'}>${lootBusy ? 'Opening…' : canAfford ? `🎁 Open Box · ${LOOT_PRICE.toLocaleString()}🪙` : `Need ${LOOT_PRICE.toLocaleString()}🪙 — you have ${wallet.coins.toLocaleString()}`}</button>
     <div id="lootReveal" class="loot-reveal"></div>
     ${owned}
     <div class="loot-cap"><b>Mint caps:</b> ${EXCLUSIVES.map((x) => `${escapeHtml(x.name)} (${x.cap})`).join(' · ')}</div>`;
