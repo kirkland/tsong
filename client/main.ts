@@ -2,12 +2,14 @@
 // and the Join button. Input is only sent when this client holds a paddle.
 
 import { connect } from './net';
-import { draw, drawLegendIcon, setBlasterAim } from './render';
+import { initRoulette } from './roulette';
+import { draw, drawLegendIcon, setBlasterAim, drawCosmeticPreview } from './render';
 import {
   COURT,
   PADDLE,
   BALL,
   BLASTER,
+  ROAM,
   ARENA,
   MAX_PLAYERS,
   REACTIONS,
@@ -15,12 +17,20 @@ import {
   BotLevel,
   ChatLine,
   LeaderboardRow,
+  NetWorthRow,
+  BalanceSheetMsg,
   Role,
   Side,
   StateMsg,
   PowerupKind,
   POWERUPS,
   TEAM_MAX,
+  COSMETICS,
+  SPIN_SEGMENTS,
+  STOCKS,
+  StockSide,
+  positionWorth,
+  TickHealth,
 } from '../shared/types';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -36,12 +46,14 @@ const queueBtn = document.getElementById('queueBtn') as HTMLButtonElement;
 const queueArea = document.getElementById('queueArea') as HTMLDivElement;
 const readyBtn = document.getElementById('readyBtn') as HTMLButtonElement;
 const rematchBtn = document.getElementById('rematchBtn') as HTMLButtonElement;
+const quitBtn = document.getElementById('quitBtn') as HTMLButtonElement;
 const pingBtn = document.getElementById('pingBtn') as HTMLButtonElement;
 const renameBtn = document.getElementById('rename') as HTMLButtonElement;
 const kingStatusEl = document.getElementById('kingStatus') as HTMLDivElement;
 const statusEl = document.getElementById('status') as HTMLDivElement;
 const watchersEl = document.getElementById('watchers') as HTMLDivElement;
 const leaderboardEl = document.getElementById('leaderboard') as HTMLDivElement;
+const netWorthEl = document.getElementById('netWorth') as HTMLDivElement;
 const colorPicker = document.getElementById('colorPicker') as HTMLDivElement;
 const chatLog = document.getElementById('chatlog') as HTMLDivElement;
 const chatEl = document.getElementById('chat') as HTMLDivElement;
@@ -57,6 +69,9 @@ const diamondModeEl = document.getElementById('diamondMode') as HTMLInputElement
 const pinataModeEl = document.getElementById('pinataMode') as HTMLInputElement;
 const layeredModeEl = document.getElementById('layeredMode') as HTMLInputElement;
 const arenaModeEl = document.getElementById('arenaMode') as HTMLInputElement;
+const breakoutModeEl = document.getElementById('breakoutMode') as HTMLInputElement;
+const fogModeEl = document.getElementById('fogMode') as HTMLInputElement;
+const portalModeEl = document.getElementById('portalMode') as HTMLInputElement;
 const reactionsEl = document.getElementById('reactions') as HTMLDivElement;
 const recentReactionsEl = document.getElementById('recentReactions') as HTMLDivElement;
 const ballReactionEl = document.getElementById('ballReaction') as HTMLDivElement;
@@ -76,6 +91,20 @@ const combosModal = document.getElementById('combosModal') as HTMLDivElement;
 const combosCard = document.getElementById('combosCard') as HTMLDivElement;
 const combosClose = document.getElementById('combosClose') as HTMLButtonElement;
 const combosList = document.getElementById('combosList') as HTMLDivElement;
+const balanceModal = document.getElementById('balanceModal') as HTMLDivElement;
+const balanceCard = document.getElementById('balanceCard') as HTMLDivElement;
+const balanceClose = document.getElementById('balanceClose') as HTMLButtonElement;
+const balanceName = document.getElementById('balanceName') as HTMLSpanElement;
+const balanceBody = document.getElementById('balanceBody') as HTMLDivElement;
+const tipModal = document.getElementById('tipModal') as HTMLDivElement;
+const tipCard = document.getElementById('tipCard') as HTMLDivElement;
+const tipClose = document.getElementById('tipClose') as HTMLButtonElement;
+const tipTitle = document.getElementById('tipTitle') as HTMLSpanElement;
+const tipBalance = document.getElementById('tipBalance') as HTMLDivElement;
+const tipPresets = document.getElementById('tipPresets') as HTMLDivElement;
+const tipAmount = document.getElementById('tipAmount') as HTMLInputElement;
+const tipStatus = document.getElementById('tipStatus') as HTMLDivElement;
+const tipSend = document.getElementById('tipSend') as HTMLButtonElement;
 const mobileControlsEl = document.getElementById('mobileControls') as HTMLDivElement;
 const mobUpBtn = document.getElementById('mobUp') as HTMLButtonElement;
 const mobDownBtn = document.getElementById('mobDown') as HTMLButtonElement;
@@ -98,8 +127,12 @@ function applyMute() {
   finishSound.muted = muted;
   pacmanSound.muted = muted;
   jsavSound.muted = muted;
+  averySound.muted = muted;
   discoSound.muted = muted;
   blasterSound.muted = muted;
+  minionSound.muted = muted;
+  chaChing.muted = muted;
+  yaySound.muted = muted;
 }
 muteBtn.addEventListener('click', () => {
   muted = !muted;
@@ -170,11 +203,46 @@ function makeId(): string {
     return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
   });
 }
-const myPid = getCookie('tsong_pid') ?? (() => {
+// `let` so a Google login can upgrade it to the stable g:xxx pid at runtime.
+let myPid = getCookie('tsong_pid') ?? (() => {
   const id = makeId();
   setCookie('tsong_pid', id);
   return id;
 })();
+
+// --- Google auth chip ---
+const authChip    = document.getElementById('authChip')    as HTMLDivElement;
+const signInLink  = document.getElementById('signInLink')  as HTMLAnchorElement;
+
+interface AuthMe { pid?: string; name?: string; email?: string; oauthEnabled?: boolean; }
+fetch('/auth/me')
+  .then((r) => r.json() as Promise<AuthMe>)
+  .then((data) => {
+    if (data.pid) {
+      const oldPid = myPid; // UUID that was active before we knew the Google pid
+      myPid = data.pid;
+      if (!getCookie('tsong_nick') && !nick.value) nick.value = data.name ?? '';
+      authChip.hidden = false;
+      authChip.replaceChildren();
+      const label = document.createTextNode(`Signed in as ${data.name ?? data.email ?? ''} · `);
+      const out = document.createElement('a');
+      out.href = '/auth/logout';
+      out.textContent = 'Sign out';
+      authChip.append(label, out);
+      // If the player has an existing UUID account, migrate it into the Google account.
+      // Send after join so the server's conn.pid is already set when the wallet refresh arrives.
+      if (oldPid && oldPid !== myPid && !oldPid.startsWith('g:')) {
+        const doMigrate = () => net.send({ type: 'migrate', oldPid });
+        // If already joined, fire immediately; otherwise wait until after the join message.
+        if (myName) doMigrate(); else pendingMigrate = doMigrate;
+      }
+    } else if (data.oauthEnabled) {
+      signInLink.hidden = false;
+    }
+  })
+  .catch(() => { /* OAuth not configured or network error — guest mode continues as-is */ });
+
+let pendingMigrate: (() => void) | null = null; // fired once, right after the first join message
 
 let myRole: Role = 'observer';
 let myId = ''; // per-connection id from the server; identifies our own paddle in state
@@ -183,6 +251,12 @@ let myColor = '#e8eefc';
 let state: StateMsg | null = null;
 let ballColor = '#e8eefc'; // live pong-ball color, mirrored onto the ball reaction
 let joined = false; // true once the player has entered a nickname (gates reactions)
+
+// Last rows each board was rendered with, so we can repaint (e.g. to add tip buttons the
+// moment you join) without waiting for the next server push. Declared up here so the
+// auto-rejoin path (which can run enableChat during module init) never hits them in the TDZ.
+let lastLbRows: LeaderboardRow[] = [];
+let lastNwRows: NetWorthRow[] = [];
 
 // 3D / first-person view: driven by server state (state.viewMode). Three.js loads lazily.
 let renderer3d: import('./render3d').Renderer3D | null = null;
@@ -195,9 +269,11 @@ let fatality2dActive = false;
 
 let target = COURT.h / 2; // desired paddle center Y, court units (duel)
 let arenaTarget = 0; // desired paddle offset along my edge, court units (arena)
+let targetX = 0; // desired inward inset off my wall while "roam" is active, court units (duel)
 // Blaster: the local player's current aim angle (vertical deflection off straight-across).
 let aimAngle = 0;
 let lastSent = -1;
+let lastSentX = 0;
 let lastSendAt = 0;
 const keys = new Set<string>();
 // Mobile touch state: once the player taps the board we consider them "captured"
@@ -217,6 +293,8 @@ const FATALITIES = [
   { move: 'SINGULARITY', label: 'Black Hole', seq: ['arrowdown', 'arrowdown', 'arrowdown'], hint: '↓↓↓', desc: 'Space buckles. A black hole tears open at center court, spaghettifies the loser into its accretion disk, then implodes into a blinding singularity and detonates.' },
   { move: 'PAC_CHOMP', label: 'Pac-Man', seq: ['arrowup', 'arrowdown', 'arrowup'], hint: '↑↓↑', desc: 'You become a yellow Pac-Man and waka-waka down a trail of ping-pong pellets to the frozen loser, devour them, then balloon up and burst.' },
   { move: 'JSAV', label: 'Jsav', seq: ['arrowup', 'arrowdown', 'arrowdown'], hint: '↑↓↓', desc: "The loser becomes Jsav, whose face stretches taller and inflates ever bigger and wider until it swallows the whole court." },
+  { move: 'MONITOR_BREAK', label: 'Smash', seq: ['arrowdown', 'arrowup', 'arrowup'], hint: '↓↑↑', desc: 'The ball rockets into the screen, the court erupts in smoke, and the glass shatters as if your monitor just broke.' },
+  { move: 'AVERY', label: 'Avery', seq: ['arrowleft', 'arrowleft', 'arrowright'], hint: '←←→', desc: "The screen snaps to black and Avery's face slams in full-frame, jittering, as a jumpscare blares. Don't say we didn't warn you." },
 ] as const;
 const COMBO_KEYS = new Set(FATALITIES.flatMap((f) => f.seq as readonly string[]));
 const COMBO_WINDOW_MS = 1500; // presses older than this are forgotten
@@ -231,16 +309,28 @@ const pacmanSound = new Audio('/start-music.mp3'); // PAC_CHOMP only
 pacmanSound.preload = 'auto';
 const jsavSound = new Audio('/you-lose.mp3'); // JSAV only
 jsavSound.preload = 'auto';
+const averySound = new Audio('/jumpscare.mp3'); // AVERY only
+averySound.preload = 'auto';
 const discoSound = new Audio('/disco.mp3'); // plays while the disco powerup is active
 discoSound.preload = 'auto';
 discoSound.loop = true;
 const blasterSound = new Audio('/blaster.mp3'); // gunshot when the blaster fires
 blasterSound.preload = 'auto';
+const minionSound = new Audio('/minion-laugh.mp3'); // loops while the minion powerup is active
+minionSound.preload = 'auto';
+minionSound.loop = true;
+const chaChing = new Audio('/chaching.mp3'); // coin powerup pickup + shop purchases
+chaChing.preload = 'auto';
+function playChaChing() { try { chaChing.currentTime = 0; void chaChing.play(); } catch { /* ignore */ } }
+const yaySound = new Audio('/yay.mp3'); // daily-spin prize celebration
+yaySound.preload = 'auto';
+function playYay() { try { yaySound.currentTime = 0; void yaySound.play(); } catch { /* ignore */ } }
 // Apply persisted mute state immediately (before applyMute() runs at definition time).
 applyMute();
 let prevStatus: StateMsg['status'] | null = null; // last seen status, to fire on the rising edge into 'over'
 let prevFatality = false; // whether a fatality was playing last frame, to fire music on the rising edge
 let prevDisco = false; // rising-edge detection for disco sound
+let prevMinion = false; // rising-edge detection for minion laugh loop
 let prevProjCount = 0; // last seen projectile count, to fire the gunshot on a new shot
 let prevTarget: StateMsg['target'] | undefined = undefined; // detect powerup pickup for flash
 let prevHitSeq = -1; // detect any paddle contact (both sides, including same-side repeats)
@@ -319,6 +409,48 @@ colorPicker.addEventListener('click', (e) => {
   }
 });
 
+// --- latency probe ---------------------------------------------------------
+// Round-trip time is measured by sending the server a timestamped `rtt` frame; it
+// echoes the timestamp straight back and we diff it against our own clock. Purely a
+// client-side health readout (surfaced behind the NET debug toggle); it never touches
+// gameplay or the server's authoritative state. renderDebug() is defined with the rest
+// of the debug UI below — it's hoisted, and never runs before module init completes.
+const RTT_WINDOW = 20; // recent samples kept for the rolling average / max
+const rttSamples: number[] = [];
+let lastRtt = 0;
+function recordRtt(ms: number) {
+  if (!Number.isFinite(ms) || ms < 0) return;
+  lastRtt = ms;
+  rttSamples.push(ms);
+  if (rttSamples.length > RTT_WINDOW) rttSamples.shift();
+  renderDebug();
+}
+
+// Latest server tick-loop health, as reported on the rtt echo (null until the first reply).
+let serverTick: TickHealth | null = null;
+
+// Client frame-rate sampler: the render loop tallies frames into one-second buckets; a
+// sustained dip below ~50 fps means this player's own machine/browser is struggling
+// (distinct from a network problem). We keep a rolling window so we can show the worst
+// recent second, where stutter actually lives.
+const FPS_WINDOW = 30; // one-second readings kept (~30 s of history)
+const fpsSamples: number[] = [];
+let lastFps = 0;
+let fpsFrames = 0; // frames counted in the current bucket
+let fpsBucketStart = 0; // timestamp (loop's DOMHighResTimeStamp) the bucket opened
+function sampleFps(t: number) {
+  if (fpsBucketStart === 0) { fpsBucketStart = t; return; }
+  fpsFrames++;
+  const span = t - fpsBucketStart;
+  if (span < 1000) return;
+  lastFps = (fpsFrames * 1000) / span;
+  fpsFrames = 0;
+  fpsBucketStart = t;
+  fpsSamples.push(lastFps);
+  if (fpsSamples.length > FPS_WINDOW) fpsSamples.shift();
+  renderDebug();
+}
+
 const net = connect(
   (msg) => {
     if (msg.type === 'you') {
@@ -351,6 +483,7 @@ const net = connect(
         const track =
           msg.fatality?.move === 'JSAV' ? jsavSound
           : msg.fatality?.move === 'PAC_CHOMP' ? pacmanSound
+          : msg.fatality?.move === 'AVERY' ? averySound
           : null;
         if (track) {
           finishSound.pause(); // hand off from the "FINISH HIM!" sting to the sound
@@ -362,6 +495,8 @@ const net = connect(
         pacmanSound.currentTime = 0;
         jsavSound.pause();
         jsavSound.currentTime = 0;
+        averySound.pause();
+        averySound.currentTime = 0;
       }
       prevFatality = fatalityActive;
       prevStatus = msg.status;
@@ -375,6 +510,16 @@ const net = connect(
         discoSound.currentTime = 0;
       }
       prevDisco = discoActive;
+      // Minion laugh: loops while the minion powerup is active, stops when the point ends.
+      const minionActive = !!msg.minion;
+      if (minionActive && !prevMinion) {
+        minionSound.currentTime = 0;
+        minionSound.play().catch(() => {});
+      } else if (!minionActive && prevMinion) {
+        minionSound.pause();
+        minionSound.currentTime = 0;
+      }
+      prevMinion = minionActive;
       // Gunshot on every new blaster projectile (heard by shooter, opponent and spectators).
       const projCount = msg.projectiles.length;
       if (projCount > prevProjCount) {
@@ -390,7 +535,10 @@ const net = connect(
       prevHitSeq = msg.hitSeq;
       prevScore = { ...msg.score };
       // Detect powerup pickup: target was present last frame, gone this frame.
-      if (prevTarget && !msg.target) showPowerupFlash(prevTarget.kind, prevTarget.x, prevTarget.y);
+      if (prevTarget && !msg.target) {
+        showPowerupFlash(prevTarget.kind, prevTarget.x, prevTarget.y);
+        if (prevTarget.kind === 'coins') playChaChing(); // coin grab
+      }
       prevTarget = msg.target ?? null;
       state = msg;
       syncMyPaddleFromServer();
@@ -398,6 +546,10 @@ const net = connect(
       updateUI();
     } else if (msg.type === 'leaderboard') {
       renderLeaderboard(msg.rows);
+    } else if (msg.type === 'netWorth') {
+      renderNetWorth(msg.rows);
+    } else if (msg.type === 'balanceSheet') {
+      showBalanceSheet(msg);
     } else if (msg.type === 'chat') {
       msg.lines.forEach(addChatLine);
       // Notify via tab title for a single new message while the tab is backgrounded.
@@ -407,16 +559,46 @@ const net = connect(
       }
     } else if (msg.type === 'reaction') {
       spawnReaction(msg.emoji);
+    } else if (msg.type === 'tip') {
+      celebrateTip(msg.from, msg.to, msg.amount);
     } else if (msg.type === 'announce') {
-      showAnnouncement(msg.text);
+      showAnnouncement(msg.text, { toast: msg.toast });
     } else if (msg.type === 'ping') {
       onPing(msg.from);
+    } else if (msg.type === 'rtt') {
+      if (msg.tick) serverTick = msg.tick;
+      recordRtt(performance.now() - msg.t);
     } else if (msg.type === 'doomLobby') {
       doomMod?.feedDoomLobby(msg);
     } else if (msg.type === 'doomRelay') {
       doomMod?.feedDoomRelay(msg.data);
     } else if (msg.type === 'doomEnd') {
       doomMod?.feedDoomEnd(msg.reason);
+    } else if (msg.type === 'doomLeaderboard') {
+      doomScores = { solo: msg.solo, coop: msg.coop };
+    } else if (msg.type === 'campaignLeaderboard') {
+      campaignScores = msg.rows;
+    } else if (msg.type === 'wallet') {
+      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
+      rouletteHandle.setCoins(msg.coins);
+      // During a roulette spin, hold every coin-total display (toolbar tab, shop, market) at its
+      // pre-result value until the wheel lands — otherwise the settled balance reveals the outcome
+      // before the animation finishes. The roulette `onSettled` callback runs refreshWallet then.
+      if (!rouletteHandle.isSpinning()) refreshWallet();
+    } else if (msg.type === 'stocks') {
+      market = { prices: msg.prices, holdings: msg.holdings, history: msg.history, nextUpdateAt: msg.nextUpdateAt };
+      if (!marketPanel.hidden) renderMarket();
+      updateMarketTimer();
+      renderStability(msg.stability);
+    } else if (msg.type === 'spinResult') {
+      celebrateSpin(msg.reward, msg.segment);
+    } else if (msg.type === 'rouletteResult') {
+      rouletteHandle.onResult(msg);
+    } else if (msg.type === 'loan') {
+      loan = msg.loan;
+      // Taking/repaying resets the conversation; collecting (loan→null) drops back to the intro.
+      if (!loan) loanStep = 'intro';
+      if (!loanPanel.hidden) renderLoan();
     }
   },
   () => {
@@ -427,8 +609,27 @@ const net = connect(
     if (myName) net.send({ type: 'join', nickname: myName, pid: myPid, color: myColor });
     // Re-assert capture state after a (re)connect so the server's view stays in sync.
     if (pointerLocked) net.send({ type: 'capture', on: true });
+    // Take a fresh latency reading the instant we're (re)connected, rather than waiting
+    // out the probe interval below.
+    net.send({ type: 'rtt', t: performance.now() });
   },
 );
+
+// Repaint every coin-total display from the current wallet (toolbar tab, shop, open market/loan
+// panels). Held back during a roulette spin so the result isn't revealed before the wheel lands.
+function refreshWallet() {
+  renderShop();
+  if (!marketPanel.hidden) renderMarket(); // coin balance gates the Invest buttons
+  if (!loanPanel.hidden && loan) renderLoan(); // balance gates the Pay button
+}
+
+// Roulette panel (top-left): bets are settled server-side; this just drives the wheel UI.
+const rouletteHandle = initRoulette({
+  send: (bets) => net.send({ type: 'roulette', bets }),
+  playWin: playYay,
+  // Fires when the wheel finishes; reveal the settled balance everywhere now, not mid-spin.
+  onSettled: refreshWallet,
+});
 
 const isPlayer = () => myRole === 'left' || myRole === 'right' || myRole === 'player';
 const inArena = () => myRole === 'player';
@@ -473,6 +674,7 @@ joinForm.addEventListener('submit', (e) => {
   setCookie('tsong_color', myColor);
   // repeat join = rename; pid keeps the leaderboard identity stable
   net.send({ type: 'join', nickname: myName, pid: myPid, color: myColor });
+  if (pendingMigrate) { pendingMigrate(); pendingMigrate = null; }
   overlay.style.display = 'none';
   enableChat();
 });
@@ -520,6 +722,9 @@ joinBtn.addEventListener('click', () => net.send({ type: 'claim' }));
 joinLeftBtn.addEventListener('click', () => net.send({ type: 'claim', side: 'left' }));
 joinRightBtn.addEventListener('click', () => net.send({ type: 'claim', side: 'right' }));
 
+// --- quit game: vacate your paddle spot (the side reverts to "— open —") ---
+quitBtn.addEventListener('click', () => net.send({ type: 'forfeit' }));
+
 // --- king exit: winner declines to stay ---
 kingStatusEl.addEventListener('click', () => net.send({ type: 'kingExit' }));
 
@@ -548,6 +753,15 @@ layeredModeEl.addEventListener('change', () =>
 arenaModeEl.addEventListener('change', () =>
   net.send({ type: 'mode', arena: arenaModeEl.checked }),
 );
+breakoutModeEl.addEventListener('change', () =>
+  net.send({ type: 'mode', breakout: breakoutModeEl.checked }),
+);
+fogModeEl.addEventListener('change', () =>
+  net.send({ type: 'mode', fog: fogModeEl.checked }),
+);
+portalModeEl.addEventListener('change', () =>
+  net.send({ type: 'mode', portal: portalModeEl.checked }),
+);
 
 // --- win score selector ---
 for (const btn of winScoreOpts.querySelectorAll<HTMLButtonElement>('.ws-btn')) {
@@ -555,6 +769,22 @@ for (const btn of winScoreOpts.querySelectorAll<HTMLButtonElement>('.ws-btn')) {
     const score = Number(btn.dataset.score);
     net.send({ type: 'setWinScore', score });
   });
+}
+
+// Every distinct player nickname the client currently knows about (seated players,
+// watchers and the queue), minus my own — used to suggest /tip recipients.
+function knownPlayerNames(): string[] {
+  const names = new Set<string>();
+  if (state) {
+    for (const side of ['left', 'right'] as const) {
+      for (const p of state.paddles[side].players) if (p.name) names.add(p.name);
+    }
+    for (const w of state.watchers) names.add(w);
+    for (const q of state.queue) names.add(q);
+    if (state.king) names.add(state.king);
+  }
+  names.delete(myName);
+  return [...names].sort();
 }
 
 // --- slash commands ---
@@ -576,6 +806,22 @@ const COMMANDS: ChatCommand[] = [
     enabled: () => isPlayer(),
     disabledHint: "only while you're playing",
     run: () => net.send({ type: 'forfeit' }),
+  },
+  {
+    name: 'tip',
+    hint: 'Tip anyone coins — /tip <name> <amount>. Offline players get it next sign-in.',
+    enabled: () => joined,
+    disabledHint: 'join the game first',
+    argOptions: () => knownPlayerNames(),
+    argHint: (arg) => `Tip ${arg} — then add an amount (e.g. /tip ${arg} 50)`,
+    run: (arg) => {
+      const tokens = (arg ?? '').trim().split(/\s+/).filter(Boolean);
+      if (tokens.length < 2) return false; // need a name AND an amount — keep the text visible
+      const amount = Number(tokens.pop());
+      const to = tokens.join(' ');
+      if (!to || !Number.isFinite(amount) || amount <= 0 || !Number.isInteger(amount)) return false;
+      net.send({ type: 'tip', to, amount });
+    },
   },
   {
     name: 'powerup',
@@ -788,6 +1034,9 @@ document.addEventListener('click', (e) => {
 
 function enableChat() {
   joined = true;
+  // Repaint the boards now that we've joined so their per-player tip buttons appear.
+  renderLeaderboard(lastLbRows);
+  renderNetWorth(lastNwRows);
   chatInput.disabled = false;
   closingModeEl.disabled = false;
   gravityModeEl.disabled = false;
@@ -797,6 +1046,9 @@ function enableChat() {
   pinataModeEl.disabled = false;
   layeredModeEl.disabled = false;
   arenaModeEl.disabled = false;
+  breakoutModeEl.disabled = false;
+  fogModeEl.disabled = false;
+  portalModeEl.disabled = false;
   for (const btn of reactionsEl.querySelectorAll<HTMLButtonElement>('.reaction-btn')) {
     btn.disabled = false;
   }
@@ -1044,6 +1296,48 @@ function spawnReaction(emoji: string) {
   anim.oncancel = () => el.remove();
 }
 
+// A tip just happened anywhere in the room: cha-ching for everyone, a shower of gold
+// coins fluttering up the screen, and a banner naming who paid whom. The recipient gets
+// an extra-celebratory golden banner; everyone else a small toast.
+function celebrateTip(from: string, to: string, amount: number) {
+  playChaChing();
+  const mine = to === myName;
+  // Coin shower — scale the count a little with the size of the tip (capped so it never floods).
+  const coins = Math.min(28, 8 + Math.floor(Math.log2(amount + 1) * 3));
+  for (let i = 0; i < coins; i++) {
+    setTimeout(() => spawnCoin(), i * 70);
+  }
+  // The room sees the shower + cha-ching (and the /tip line in chat); the lucky
+  // recipient gets a golden banner calling it out.
+  if (mine) showAnnouncement(`💰 ${from} tipped you ${amount} 🪙!`, { color: '#ffcf33' });
+}
+
+// One gold coin fluttering up the screen (the tip-shower particle). Like a reaction,
+// but spins as it rises for a little extra sparkle.
+function spawnCoin() {
+  const el = document.createElement('div');
+  el.className = 'floating-reaction';
+  el.textContent = '🪙';
+  el.style.left = `${5 + Math.random() * 90}vw`;
+  reactionLayer.append(el);
+
+  const rise = window.innerHeight + 120;
+  const drift = (Math.random() - 0.5) * 220;
+  const spin = (Math.random() < 0.5 ? -1 : 1) * (360 + Math.random() * 360);
+  const duration = 2200 + Math.random() * 1400;
+
+  const anim = el.animate(
+    [
+      { transform: 'translate(0, 0) rotate(0deg) scale(0.4)', opacity: 0 },
+      { transform: `translate(${drift * 0.3}px, ${-rise * 0.15}px) rotate(${spin * 0.15}deg) scale(1)`, opacity: 1, offset: 0.12 },
+      { transform: `translate(${drift}px, ${-rise}px) rotate(${spin}deg) scale(1.1)`, opacity: 0 },
+    ],
+    { duration, easing: 'cubic-bezier(0.4, 0, 0.6, 1)' },
+  );
+  anim.onfinish = () => el.remove();
+  anim.oncancel = () => el.remove();
+}
+
 // textContent (not innerHTML) keeps user-supplied names/messages from injecting markup.
 let lastChatDate = '';
 const TZ = 'America/New_York';
@@ -1131,6 +1425,8 @@ function showPowerupFlash(kind: string, cx: number, cy: number) {
 // uses the server only as a 2-slot lobby + opaque relay (doom* messages, routed below). ---
 const doomBtn = document.getElementById('doomBtn') as HTMLButtonElement;
 let doomMod: typeof import('./doom') | null = null;
+// Latest DOOM high-round leaderboards (solo / co-op), pushed by the server.
+let doomScores: { solo: Array<{ name: string; round: number }>; coop: Array<{ name: string; round: number }> } = { solo: [], coop: [] };
 doomBtn.addEventListener('click', async () => {
   try {
     doomMod = await import('./doom');
@@ -1138,18 +1434,305 @@ doomBtn.addEventListener('click', async () => {
       join: () => net.send({ type: 'doomJoin' }),
       leave: () => net.send({ type: 'doomLeave' }),
       relay: (data) => net.send({ type: 'doomRelay', data }),
+      submitScore: (round, coop, label) => net.send({ type: 'doomScore', round, coop, name: label }),
+      scores: () => doomScores,
+      name: () => myName,
+      awardCoin: () => net.send({ type: 'doomReward' }),
     });
   } catch (e) {
     console.error('DOOM failed to load:', e);
   }
 });
 
-// A big, transient banner across the middle of the screen (e.g. someone forfeits).
-function showAnnouncement(text: string, color?: string) {
+// --- Campaign ("Davis Collects", lazy-loaded, self-contained). Runs its own 2D Pong + VN;
+// the server is used only to persist arcade scores (campaignScore / campaignLeaderboard). ---
+const campaignBtn = document.getElementById('campaignBtn') as HTMLButtonElement;
+// Latest campaign leaderboard, pushed by the server.
+let campaignScores: import('../shared/types').CampaignScoreRow[] = [];
+campaignBtn.addEventListener('click', async () => {
+  try {
+    const mod = await import('./campaign');
+    mod.startCampaign({
+      submitScore: (score, stage, won) => net.send({ type: 'campaignScore', score, stage, won }),
+      leaderboard: () => campaignScores,
+      name: () => myName,
+    });
+  } catch (e) {
+    console.error('Campaign failed to load:', e);
+  }
+});
+
+// --- Coins, cosmetics shop & betting ---
+let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
+  { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, bets: [], nextSpinAt: 0, bonusSpins: 0 };
+let betAmount = 100; // default wager (economy is scaled ×100); min is still 1
+let shopTab: 'hat' | 'skin' | 'trail' | 'title' = 'hat';
+const shopBtn = document.getElementById('shopBtn') as HTMLButtonElement;
+const shopPanel = document.getElementById('shopPanel') as HTMLDivElement;
+const coinCount = document.getElementById('coinCount') as HTMLSpanElement;
+const shopCoins = document.getElementById('shopCoins') as HTMLSpanElement;
+const shopItems = document.getElementById('shopItems') as HTMLDivElement;
+const tabHats = document.getElementById('tabHats') as HTMLButtonElement;
+const tabSkins = document.getElementById('tabSkins') as HTMLButtonElement;
+const tabTrails = document.getElementById('tabTrails') as HTMLButtonElement;
+const tabTitles = document.getElementById('tabTitles') as HTMLButtonElement;
+const shopTabs = [tabHats, tabSkins, tabTrails, tabTitles];
+function selectShopTab(tab: 'hat' | 'skin' | 'trail' | 'title', el: HTMLButtonElement) {
+  shopTab = tab;
+  for (const t of shopTabs) t.classList.toggle('active', t === el);
+  renderShop();
+}
+tabHats.addEventListener('click', () => selectShopTab('hat', tabHats));
+tabSkins.addEventListener('click', () => selectShopTab('skin', tabSkins));
+tabTrails.addEventListener('click', () => selectShopTab('trail', tabTrails));
+tabTitles.addEventListener('click', () => selectShopTab('title', tabTitles));
+const spinBtn = document.getElementById('spinBtn') as HTMLButtonElement;
+let spinning = false; // a spin animation is currently playing
+spinBtn.addEventListener('click', () => {
+  const onCooldown = !!wallet.nextSpinAt && wallet.nextSpinAt > Date.now();
+  if (spinning || (onCooldown && wallet.bonusSpins <= 0)) return;
+  spinning = true;
+  spinBtn.disabled = true;
+  net.send({ type: 'dailySpin' });
+});
+const betSection = document.getElementById('betSection') as HTMLDivElement;
+const betAmountEl = document.getElementById('betAmount') as HTMLInputElement;
+const betStatus = document.getElementById('betStatus') as HTMLDivElement;
+const betLeftName = document.getElementById('betLeftName') as HTMLSpanElement;
+const betRightName = document.getElementById('betRightName') as HTMLSpanElement;
+const betLeftOdds = document.getElementById('betLeftOdds') as HTMLElement;
+const betRightOdds = document.getElementById('betRightOdds') as HTMLElement;
+
+shopBtn.addEventListener('click', () => {
+  const open = shopPanel.hidden;
+  shopPanel.hidden = !open;
+  shopBtn.setAttribute('aria-expanded', String(open));
+  if (open) renderShop();
+});
+document.addEventListener('click', (e) => {
+  if (shopPanel.hidden) return;
+  const t = e.target as Node;
+  if (!shopPanel.contains(t) && !shopBtn.contains(t)) { shopPanel.hidden = true; shopBtn.setAttribute('aria-expanded', 'false'); }
+});
+
+// Build the shop rows (buy / equip / unequip) + the betting section from the current wallet.
+// Keep track of preview canvases so the animation loop can repaint them.
+const shopPreviewCanvases: { canvas: HTMLCanvasElement; id: string; slot: 'hat' | 'skin' | 'trail' }[] = [];
+
+function renderShop() {
+  coinCount.textContent = String(wallet.coins);
+  shopCoins.textContent = String(wallet.coins);
+  updateSpinButton();
+  shopItems.innerHTML = '';
+  shopPreviewCanvases.length = 0;
+  for (const item of COSMETICS) {
+    if (item.slot !== shopTab) continue; // show only the active tab's items
+    const owned = wallet.owned.includes(item.id);
+    const equipped = (item.slot === 'hat' ? wallet.hat : item.slot === 'skin' ? wallet.skin : item.slot === 'trail' ? wallet.trail : wallet.title) === item.id;
+    const row = document.createElement('div');
+    row.className = 'shop-row';
+    // Titles have no paddle preview — they're text flair. Other slots get a live preview canvas.
+    if (item.slot !== 'title') {
+      const preview = document.createElement('canvas') as HTMLCanvasElement;
+      preview.width = 28; preview.height = 52;
+      preview.className = 'shop-preview';
+      drawCosmeticPreview(preview, item.id, item.slot);
+      shopPreviewCanvases.push({ canvas: preview, id: item.id, slot: item.slot as 'hat' | 'skin' | 'trail' });
+      row.appendChild(preview);
+    }
+    const name = document.createElement('span');
+    name.className = 'shop-name';
+    const priceSuffix = owned || item.locked ? '' : ` · ${item.price}🪙`;
+    if (item.id === 'opstask') {
+      // Show this title with its live animated rainbow font as its own shop preview.
+      name.innerHTML = `<span class="rainbow-text">${item.name}</span>${priceSuffix}`;
+    } else {
+      name.textContent = item.name + priceSuffix;
+    }
+    row.appendChild(name);
+    const btn = document.createElement('button');
+    if (!owned && item.locked) {
+      // Locked items (e.g. Davis Slayer) can't be bought — unlocked by an achievement.
+      btn.textContent = '🔒 Campaign';
+      btn.disabled = true;
+      btn.title = 'Clear the campaign to unlock';
+    } else if (!owned) {
+      btn.textContent = 'Buy';
+      btn.disabled = wallet.coins < item.price;
+      btn.onclick = () => { net.send({ type: 'shopBuy', item: item.id }); playChaChing(); };
+    } else {
+      btn.textContent = equipped ? 'Unequip' : 'Equip';
+      if (equipped) btn.classList.add('equipped');
+      btn.onclick = () => net.send({ type: 'shopEquip', slot: item.slot, item: equipped ? null : item.id });
+    }
+    row.appendChild(btn);
+    shopItems.appendChild(row);
+  }
+  syncBetSection();
+}
+
+// Lightweight: only updates the betting section (no item-list rebuild). Safe to call every
+// tick — rebuilding the item DOM each frame was eating Buy clicks.
+function syncBetSection() {
+  // Live betting: open to spectators any time a (non-arena, non-bot) duel is in play.
+  const canBet = !!state && state.status === 'playing' && !state.poly && myRole === 'observer' && !state.bot;
+  betSection.hidden = !canBet;
+  if (!canBet || !state) return;
+  // The stake is a positive whole number. We deliberately DON'T cap it to the wallet here —
+  // typing more than you have surfaces the "insufficient funds" hint below rather than being
+  // silently swallowed. Don't clobber the field while it's being edited.
+  betAmount = Math.max(1, Math.floor(betAmount) || 1);
+  if (document.activeElement !== betAmountEl) betAmountEl.value = String(betAmount);
+  betAmountEl.max = String(Math.max(1, wallet.coins));
+  // Side labels + live odds on the buttons.
+  const odds = state.odds; // { left, right } | null
+  betLeftName.textContent = state.paddles.left.name ?? 'Left';
+  betRightName.textContent = state.paddles.right.name ?? 'Right';
+  betLeftOdds.textContent = odds ? `${odds.left.toFixed(2)}×` : '—';
+  betRightOdds.textContent = odds ? `${odds.right.toFixed(2)}×` : '—';
+  // Multiple bets are allowed in live betting — gate on affordability (and on having live odds).
+  const affordable = wallet.coins >= betAmount;
+  betLeftBtn.disabled = !affordable || !odds;
+  betRightBtn.disabled = !affordable || !odds;
+  // Status line: insufficient-funds hint takes priority, then your open wagers, then a preview.
+  const payout = (amt: number, o: number) => Math.max(amt, Math.round(amt * o));
+  betStatus.classList.toggle('warn', !affordable);
+  if (!affordable) {
+    betStatus.textContent = `💸 Insufficient funds — you have ${wallet.coins}🪙. Consider taking out a loan from Davis.`;
+  } else if (wallet.bets.length) {
+    const mine = wallet.bets
+      .map((b) => `${b.amount}🪙 on ${b.side} @ ${b.odds.toFixed(2)}× → ${payout(b.amount, b.odds)}🪙`)
+      .join('  ·  ');
+    betStatus.textContent = `Your bets: ${mine}`;
+  } else if (odds) {
+    betStatus.textContent = `${betAmount}🪙 wins ${payout(betAmount, odds.left)}🪙 (left) / ${payout(betAmount, odds.right)}🪙 (right)`;
+  } else {
+    betStatus.textContent = '';
+  }
+}
+
+const betLeftBtn = document.getElementById('betLeft') as HTMLButtonElement;
+const betRightBtn = document.getElementById('betRight') as HTMLButtonElement;
+document.getElementById('betMinus')!.addEventListener('click', () => { betAmount = Math.max(1, betAmount - 1); syncBetSection(); });
+document.getElementById('betPlus')!.addEventListener('click', () => { betAmount = Math.min(Math.max(1, wallet.coins), betAmount + 1); syncBetSection(); });
+// Free-type a specific stake. Parse to a positive integer; empty/garbage falls back to 1.
+betAmountEl.addEventListener('input', () => {
+  const v = parseInt(betAmountEl.value, 10);
+  betAmount = Number.isFinite(v) ? Math.max(1, v) : 1;
+  syncBetSection();
+});
+// Normalize the field on blur (e.g. snap a half-typed value back to its parsed number).
+betAmountEl.addEventListener('blur', () => { betAmountEl.value = String(betAmount); });
+betLeftBtn.addEventListener('click', () => net.send({ type: 'bet', side: 'left', amount: betAmount }));
+betRightBtn.addEventListener('click', () => net.send({ type: 'bet', side: 'right', amount: betAmount }));
+
+// Daily-spin button: bright pink + flashing when a spin is ready; otherwise a live countdown.
+function updateSpinButton() {
+  if (spinning) { spinBtn.textContent = '🎰 Spinning…'; spinBtn.disabled = true; spinBtn.classList.remove('ready'); return; }
+  const ms = wallet.nextSpinAt - Date.now();
+  const dailyReady = !wallet.nextSpinAt || ms <= 0;
+  const bonus = wallet.bonusSpins > 0;
+  const ready = dailyReady || bonus;
+  spinBtn.disabled = !ready;
+  spinBtn.classList.toggle('ready', ready);
+  if (bonus) {
+    // Bonus spins (from tournament wins) take priority and ignore the daily cooldown.
+    spinBtn.textContent = wallet.bonusSpins > 1 ? `🏆 BONUS SPIN! (${wallet.bonusSpins})` : '🏆 BONUS SPIN!';
+  } else if (dailyReady) {
+    spinBtn.textContent = '🎰 DAILY SPIN — FREE!';
+  } else {
+    const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+    spinBtn.textContent = `🎰 Next spin in ${h}h ${m}m`;
+  }
+}
+setInterval(updateSpinButton, 1000);
+
+// The spinning reel: a horizontal strip of the wheel segments that scrolls and eases to a
+// stop with the won segment under the center pointer, then reveals the prize + plays "yay".
+function celebrateSpin(reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string }, segment: number) {
+  const CW = 104; // card width incl. gap
+  const VIS = 5;  // visible cards
+  const VW = CW * VIS;
+  const colors = ['#ff5c5c', '#ffd166', '#6ee7a8', '#7da2ff', '#e040fb', '#ff922b', '#4dd2ff', '#b197fc'];
+
+  const back = document.createElement('div');
+  back.style.cssText =
+    'position:fixed;inset:0;z-index:10000;display:flex;flex-direction:column;align-items:center;' +
+    'justify-content:center;gap:18px;background:rgba(4,6,13,0.88);';
+  const heading = document.createElement('div');
+  heading.textContent = '🎰 DAILY SPIN';
+  heading.style.cssText = 'font:900 30px ui-monospace,monospace;color:#ff5cc8;text-shadow:0 2px 0 #000;';
+  const viewport = document.createElement('div');
+  viewport.style.cssText =
+    `position:relative;width:${VW}px;max-width:92vw;height:96px;overflow:hidden;border-radius:12px;` +
+    'border:2px solid #ff5cc8;background:#0a0e1c;box-shadow:0 0 24px rgba(255,92,200,0.4);';
+  const strip = document.createElement('div');
+  strip.style.cssText = 'position:absolute;top:8px;left:0;display:flex;will-change:transform;';
+  const LOOPS = 16;
+  for (let i = 0; i < LOOPS * SPIN_SEGMENTS.length; i++) {
+    const seg = SPIN_SEGMENTS[i % SPIN_SEGMENTS.length];
+    const card = document.createElement('div');
+    card.style.cssText =
+      `flex:0 0 ${CW - 8}px;margin:0 4px;height:80px;border-radius:10px;display:flex;align-items:center;` +
+      `justify-content:center;text-align:center;font:800 16px ui-monospace,monospace;color:#1a1020;` +
+      `background:${colors[i % SPIN_SEGMENTS.length]};`;
+    card.textContent = seg.label;
+    strip.appendChild(card);
+  }
+  viewport.appendChild(strip);
+  // center pointer
+  const pointer = document.createElement('div');
+  pointer.style.cssText =
+    `position:absolute;top:0;bottom:0;left:${VW / 2 - 2}px;width:4px;background:#fff;` +
+    'box-shadow:0 0 8px #fff;pointer-events:none;';
+  viewport.appendChild(pointer);
+  const prize = document.createElement('div');
+  prize.style.cssText = 'font:800 20px ui-monospace,monospace;color:#ffd166;min-height:24px;text-align:center;';
+  back.append(heading, viewport, prize);
+  document.body.appendChild(back);
+
+  // Land the chosen segment, many loops in, centered under the pointer.
+  const landIndex = (LOOPS - 3) * SPIN_SEGMENTS.length + segment;
+  const startX = -(2 * SPIN_SEGMENTS.length + segment) * CW + (VW / 2 - CW / 2);
+  const endX = -(landIndex * CW) + (VW / 2 - CW / 2);
+  strip.style.transform = `translateX(${startX}px)`;
+  // Wait for the start frame to actually paint, then apply the transition to the end — a
+  // double-rAF is reliable where a synchronous reflow can get coalesced away (no animation).
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    strip.style.transition = 'transform 4s cubic-bezier(0.16, 0.84, 0.12, 1)';
+    strip.style.transform = `translateX(${endX}px)`;
+  }));
+
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    spinning = false;
+    updateSpinButton();
+    playYay();
+    prize.textContent = reward.kind === 'coins' ? `You won ${reward.amount} 🪙!` : `You won a free ${reward.name}! 🎉`;
+    // brief confetti-ish flash on the viewport
+    viewport.style.boxShadow = '0 0 40px rgba(255,209,102,0.8)';
+    const closeBtn = document.createElement('button');
+    closeBtn.textContent = 'Nice!';
+    closeBtn.style.cssText =
+      'font:800 15px ui-monospace,monospace;padding:9px 26px;border-radius:8px;cursor:pointer;' +
+      'border:none;background:#ff5cc8;color:#1a1020;';
+    closeBtn.addEventListener('click', () => back.remove());
+    back.appendChild(closeBtn);
+  };
+  strip.addEventListener('transitionend', finish, { once: true });
+  setTimeout(finish, 4500); // safety net if transitionend doesn't fire
+}
+
+// A transient notice. By default a big center-screen banner (e.g. a forfeit); `toast: true`
+// shows a small, stacking corner toast instead (betting activity, bet results).
+function showAnnouncement(text: string, opts?: { color?: string; toast?: boolean }) {
+  if (opts?.toast) { showToast(text); return; }
   const el = document.createElement('div');
   el.className = 'announce-banner';
   el.textContent = text;
-  if (color) el.style.color = color;
+  if (opts?.color) el.style.color = opts.color;
   reactionLayer.append(el);
   const anim = el.animate(
     [
@@ -1163,6 +1746,420 @@ function showAnnouncement(text: string, color?: string) {
   anim.onfinish = () => el.remove();
   anim.oncancel = () => el.remove();
 }
+
+// Small, unobtrusive toast in the bottom-right corner; multiple stack and auto-dismiss.
+// Rolling "Recent bets" log in the chat column: keeps the last few bet events (placements +
+// results) on screen, newest on top, instead of flashing away — so you can glance back at what
+// just happened.
+const betLogList = document.getElementById('betLogList') as HTMLDivElement;
+const BET_LOG_MAX = 5;
+function showToast(text: string) {
+  betLogList.querySelector('.bet-log-empty')?.remove();
+  const el = document.createElement('div');
+  el.className = 'bet-log-entry';
+  el.textContent = text;
+  betLogList.prepend(el); // newest on top
+  while (betLogList.children.length > BET_LOG_MAX) betLogList.lastElementChild?.remove();
+  el.animate(
+    [{ opacity: 0, transform: 'translateX(10px)' }, { opacity: 1, transform: 'translateX(0)' }],
+    { duration: 240, easing: 'ease-out' },
+  );
+}
+
+// --- Crypto market dropdown (top-left): invest coins into 5 joke cryptos ---
+// The server owns the global price board and each player's positions; we just render the
+// latest `stocks` message and fire invest/cash-out requests. The cash-out number we show is
+// round(worth) — nearest whole coin — exactly what the server pays out.
+type Market = {
+  prices: { id: string; price: number; prev: number }[];
+  holdings: { id: string; side: StockSide; shares: number; cost: number; worth: number }[];
+  history: { id: string; series: { '5m': number[]; '1h': number[]; '1d': number[] } }[];
+  nextUpdateAt: number;
+};
+let market: Market = { prices: [], holdings: [], history: [], nextUpdateAt: 0 };
+const marketBtn = document.getElementById('marketBtn') as HTMLButtonElement;
+const marketPanel = document.getElementById('marketPanel') as HTMLDivElement;
+const marketCoins = document.getElementById('marketCoins') as HTMLSpanElement;
+const marketTimer = document.getElementById('marketTimer') as HTMLDivElement;
+const marketList = document.getElementById('marketList') as HTMLDivElement;
+// Per-coin "amount to invest" steppers, kept across re-renders so the value doesn't reset
+// when prices re-roll. Defaults to 1.
+const investAmt = new Map<string, number>();
+// Which timeframe the little graphs show — shared across all coins. '5m' = last 10 recent
+// samples, '1h' = the whole recent series, '1d' = the daily series.
+let graphTf: '5m' | '1h' | '1d' = '1h';
+
+marketBtn.addEventListener('click', () => {
+  const open = marketPanel.hidden;
+  marketPanel.hidden = !open;
+  marketBtn.setAttribute('aria-expanded', String(open));
+  if (open) renderMarket();
+});
+// Timeframe toggle (delegated, since the buttons live in the static panel header).
+document.getElementById('marketGraphTf')?.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button[data-tf]');
+  if (!btn) return;
+  graphTf = btn.dataset.tf as '5m' | '1h' | '1d';
+  document.querySelectorAll('#marketGraphTf button').forEach((b) => b.classList.toggle('active', b === btn));
+  renderMarket();
+});
+
+// Draw a tiny sparkline of `pts` into `cv`. Flat/scarce data → a faint baseline. Colored by
+// net change over the window (green up, red down).
+function drawSparkline(cv: HTMLCanvasElement, pts: number[]) {
+  const ctx2 = cv.getContext('2d');
+  if (!ctx2) return;
+  const w = cv.width, h = cv.height, pad = 2;
+  ctx2.clearRect(0, 0, w, h);
+  if (pts.length < 2) {
+    ctx2.strokeStyle = '#2a3550';
+    ctx2.beginPath(); ctx2.moveTo(pad, h / 2); ctx2.lineTo(w - pad, h / 2); ctx2.stroke();
+    return;
+  }
+  let lo = Math.min(...pts), hi = Math.max(...pts);
+  if (hi - lo < 1e-9) { lo -= 1; hi += 1; } // flat line → center it
+  const up = pts[pts.length - 1] >= pts[0];
+  const x = (i: number) => pad + (i / (pts.length - 1)) * (w - 2 * pad);
+  const y = (v: number) => h - pad - ((v - lo) / (hi - lo)) * (h - 2 * pad);
+  ctx2.strokeStyle = up ? '#6ee7a8' : '#ff7a7a';
+  ctx2.lineWidth = 1.5;
+  ctx2.beginPath();
+  pts.forEach((v, i) => (i ? ctx2.lineTo(x(i), y(v)) : ctx2.moveTo(x(i), y(v))));
+  ctx2.stroke();
+}
+
+// The price series to plot for a coin at the current timeframe (each timeframe is its own
+// server-side series, sampled at its own cadence — see STOCK_HISTORY).
+function seriesFor(id: string): number[] {
+  const h = market.history.find((x) => x.id === id);
+  return h ? h.series[graphTf] ?? [] : [];
+}
+document.addEventListener('click', (e) => {
+  if (marketPanel.hidden) return;
+  const t = e.target as Node;
+  // A click that removed its own target from the DOM (e.g. a re-render) lands here with a
+  // detached node, which is "not contained" — ignore it so the panel doesn't snap shut.
+  if (t instanceof Node && !t.isConnected) return;
+  if (!marketPanel.contains(t) && !marketBtn.contains(t)) { marketPanel.hidden = true; marketBtn.setAttribute('aria-expanded', 'false'); }
+});
+
+function renderMarket() {
+  marketCoins.textContent = String(wallet.coins);
+  marketList.innerHTML = '';
+  for (const stock of STOCKS) {
+    const p = market.prices.find((x) => x.id === stock.id);
+    // A coin can carry both a long and a short position at once.
+    const longPos = market.holdings.find((x) => x.id === stock.id && x.side === 'long');
+    const shortPos = market.holdings.find((x) => x.id === stock.id && x.side === 'short');
+    const price = p?.price ?? stock.base;
+    // Headline % is the move over the SELECTED timeframe (first → last of the visible graph),
+    // so it changes when you switch Minutes / Hour / Day — not a static per-tick number.
+    const series = seriesFor(stock.id);
+    const last = series.length ? series[series.length - 1] : price;
+    const first = series.length >= 2 ? series[0] : last;
+    const pct = first > 0 ? ((last - first) / first) * 100 : 0;
+
+    const row = document.createElement('div');
+    row.className = 'coin-row';
+
+    const logo = document.createElement('img');
+    logo.className = 'coin-logo';
+    logo.src = stock.img;
+    logo.alt = stock.name;
+    row.appendChild(logo);
+
+    const main = document.createElement('div');
+    main.className = 'coin-main';
+    const name = document.createElement('div');
+    name.className = 'coin-name';
+    name.textContent = stock.name;
+    const supply = document.createElement('span');
+    supply.className = 'coin-supply';
+    supply.textContent = `${stock.supply.toLocaleString()} circ.`;
+    name.appendChild(supply);
+    main.appendChild(name);
+    const priceLine = document.createElement('div');
+    priceLine.className = 'coin-price';
+    const dir = pct > 0.01 ? 'up' : pct < -0.01 ? 'down' : 'flat';
+    const arrow = dir === 'up' ? '▲' : dir === 'down' ? '▼' : '•';
+    priceLine.innerHTML = `${price.toFixed(2)} 🪙<span class="coin-chg ${dir}">${arrow} ${Math.abs(pct).toFixed(1)}%</span>`;
+    main.appendChild(priceLine);
+    // One read-out line per open position. A long profits as the price rises; a short profits
+    // as it falls — and goes negative (covering costs coins) once the price passes its entry.
+    const posLine = (hold: typeof longPos & {}) => {
+      const rawWorth = positionWorth(hold.side, hold.shares, hold.cost, price);
+      const cashOut = Math.round(rawWorth);
+      const plPct = hold.cost > 0 ? (rawWorth / hold.cost - 1) * 100 : 0;
+      const plClass = plPct > 0.05 ? 'pl-up' : plPct < -0.05 ? 'pl-down' : '';
+      const sign = plPct >= 0 ? '+' : '';
+      const tag = hold.side === 'short' ? '<span class="pos-short">SHORT</span> ' : '';
+      const verb = hold.side === 'short' ? 'cover' : 'cash out';
+      // A negative worth means closing costs you coins instead of paying out.
+      const closeTxt = cashOut >= 0 ? `${verb} ${cashOut}` : `${verb} costs ${-cashOut}`;
+      const div = document.createElement('div');
+      div.className = 'coin-pos';
+      div.innerHTML = `${tag}${hold.cost}🪙 → <span class="${plClass}">${rawWorth.toFixed(2)}🪙 (${sign}${plPct.toFixed(0)}%)</span> · ${closeTxt}`;
+      return div;
+    };
+    if (longPos) main.appendChild(posLine(longPos));
+    if (shortPos) main.appendChild(posLine(shortPos));
+    const graph = document.createElement('canvas');
+    graph.className = 'coin-graph';
+    graph.width = 176; graph.height = 26;
+    drawSparkline(graph, series);
+    main.appendChild(graph);
+    row.appendChild(main);
+
+    const actions = document.createElement('div');
+    actions.className = 'coin-actions';
+    const buy = document.createElement('div');
+    buy.className = 'coin-buy';
+    let amt = investAmt.get(stock.id) ?? 100;
+    amt = Math.max(1, Math.min(amt, Math.max(1, wallet.coins)));
+    investAmt.set(stock.id, amt);
+    const minus = document.createElement('button');
+    minus.textContent = '−';
+    // Typable amount: the player can key in any number, or nudge it with −/+. Defaults to 100.
+    const amtEl = document.createElement('input');
+    amtEl.type = 'number';
+    amtEl.min = '1';
+    amtEl.step = '1';
+    amtEl.className = 'coin-amt';
+    amtEl.setAttribute('inputmode', 'numeric');
+    amtEl.value = String(amt);
+    const plus = document.createElement('button');
+    plus.textContent = '+';
+    buy.append(minus, amtEl, plus);
+    actions.appendChild(buy);
+
+    // Open-position buttons: Buy (long) and Short, both staking the stepper amount.
+    const trade = document.createElement('div');
+    trade.className = 'coin-trade';
+    const invest = document.createElement('button');
+    invest.className = 'coin-long';
+    invest.textContent = 'Buy';
+    invest.disabled = wallet.coins < amt;
+    invest.onclick = () => { net.send({ type: 'stockInvest', coin: stock.id, amount: investAmt.get(stock.id) ?? 100, side: 'long' }); playChaChing(); };
+    const short = document.createElement('button');
+    short.className = 'coin-shortbtn';
+    short.textContent = 'Short';
+    short.disabled = wallet.coins < amt;
+    short.onclick = () => { net.send({ type: 'stockInvest', coin: stock.id, amount: investAmt.get(stock.id) ?? 100, side: 'short' }); playChaChing(); };
+    trade.append(invest, short);
+    actions.appendChild(trade);
+
+    // Step/commit the amount in place (don't re-render) — rebuilding the row would detach the very
+    // button that was clicked and trip the click-outside handler, closing the whole panel.
+    const setAmt = (v: number) => {
+      const clamped = Math.max(1, Math.min(v, Math.max(1, wallet.coins)));
+      investAmt.set(stock.id, clamped);
+      amtEl.value = String(clamped);
+      invest.disabled = short.disabled = wallet.coins < clamped;
+    };
+    // Track what they type live (so the buttons gate correctly); normalize/clamp on commit (blur/Enter).
+    amtEl.addEventListener('input', () => {
+      const v = Math.floor(Number(amtEl.value));
+      const valid = Number.isFinite(v) && v >= 1;
+      investAmt.set(stock.id, valid ? v : 1);
+      invest.disabled = short.disabled = !valid || wallet.coins < v;
+    });
+    amtEl.addEventListener('change', () => setAmt(Math.floor(Number(amtEl.value)) || 1));
+    minus.onclick = () => setAmt((investAmt.get(stock.id) ?? 100) - 1);
+    plus.onclick = () => setAmt((investAmt.get(stock.id) ?? 100) + 1);
+
+    // Close-position buttons: only shown for the side(s) actually held.
+    if (longPos) {
+      const cash = document.createElement('button');
+      cash.className = 'coin-cash';
+      cash.textContent = `Cash out ${Math.round(positionWorth('long', longPos.shares, longPos.cost, price))}🪙`;
+      cash.onclick = () => { net.send({ type: 'stockCashOut', coin: stock.id, side: 'long' }); playChaChing(); };
+      actions.appendChild(cash);
+    }
+    if (shortPos) {
+      const cover = document.createElement('button');
+      cover.className = 'coin-cover';
+      const cv = Math.round(positionWorth('short', shortPos.shares, shortPos.cost, price));
+      cover.textContent = cv >= 0 ? `Cover ${cv}🪙` : `Cover (pay ${-cv}🪙)`;
+      cover.onclick = () => { net.send({ type: 'stockCashOut', coin: stock.id, side: 'short' }); playChaChing(); };
+      actions.appendChild(cover);
+    }
+
+    row.appendChild(actions);
+    marketList.appendChild(row);
+  }
+}
+
+// Live countdown to the next price re-roll (the panel can stay open across a move).
+function updateMarketTimer() {
+  if (marketPanel.hidden) return;
+  const ms = market.nextUpdateAt - Date.now();
+  if (!market.nextUpdateAt || ms <= 0) { marketTimer.textContent = 'next move: any moment…'; return; }
+  const m = Math.floor(ms / 60000), s = Math.floor((ms % 60000) / 1000);
+  marketTimer.textContent = `next move in ${m}:${String(s).padStart(2, '0')}`;
+}
+setInterval(updateMarketTimer, 1000);
+
+// --- Market Stability bar (top of the chat column) ---
+// Fills with the total unpaid (defaulted) loan debt; at 100% the whole market crashes. The
+// server sends the latest pool on every `stocks` message (join, trades, re-rolls, collection).
+const marketStability = document.getElementById('marketStability') as HTMLDivElement;
+const msFill = document.getElementById('msFill') as HTMLDivElement;
+const msPct = document.getElementById('msPct') as HTMLSpanElement;
+const msInfo = document.getElementById('msInfo') as HTMLButtonElement;
+const msInfoPop = document.getElementById('msInfoPop') as HTMLDivElement;
+msInfo.addEventListener('click', () => { msInfoPop.hidden = !msInfoPop.hidden; });
+function renderStability(s: { unpaid: number; threshold: number } | undefined) {
+  if (!s || !(s.threshold > 0)) return;
+  marketStability.hidden = false;
+  const frac = Math.max(0, Math.min(1, s.unpaid / s.threshold));
+  const pct = Math.round(frac * 100);
+  msFill.style.width = `${frac * 100}%`;
+  // Green (stable) → red (about to crash) as the bar fills.
+  msFill.style.backgroundColor = `hsl(${Math.round(140 * (1 - frac))} 70% 52%)`;
+  msPct.textContent = `${Math.round(s.unpaid).toLocaleString()} / ${s.threshold.toLocaleString()} 🪙 · ${pct}%`;
+}
+
+// --- Davis's loans (top-left): borrow coins, owe 1.5× by the daily 5pm collection ---
+// The server owns the loan; we render the latest `loan` state and fire getLoan/repayLoan.
+// `loanStep` is local conversation state: 'intro' (Davis offers) → 'amount' (pick how much).
+// Once you hold a loan, the panel always shows the repay view regardless of step.
+const loanBtn = document.getElementById('loanBtn') as HTMLButtonElement;
+const loanPanel = document.getElementById('loanPanel') as HTMLDivElement;
+const loanImg = document.getElementById('loanImg') as HTMLImageElement;
+const loanBody = document.getElementById('loanBody') as HTMLDivElement;
+let loan: { amount: number; owed: number; dueAt: number } | null = null;
+let loanStep: 'intro' | 'amount' = 'intro';
+
+// Davis Clarke mannerism shown on the intro.
+const DAVIS_QUOTES = [
+  "You miss 100% of the loans you don't take.",
+];
+let davisQuote = DAVIS_QUOTES[0];
+
+// Davis's three faces, by stage of the conversation. (Files live in client/public.)
+const DAVIS_INTRO = '/davis_at_citizens.jpg';
+const DAVIS_AMOUNT = '/davis_marathon.png';
+const DAVIS_OWED = '/davis_glasses.jpg';
+
+function fmtCountdown(ms: number): string {
+  if (ms <= 0) return 'any moment now';
+  const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+  if (h > 0) return `${h}h ${m}m`;
+  const s = Math.floor((ms % 60000) / 1000);
+  return `${m}m ${String(s).padStart(2, '0')}s`;
+}
+
+function renderLoan() {
+  loanBody.innerHTML = '';
+  // You owe Davis — always show the repay view (his sunglasses are on; he means business).
+  if (loan) {
+    loanImg.src = DAVIS_OWED;
+    const due = loan.dueAt - Date.now();
+    loanBody.innerHTML =
+      `<div class="loan-line">You borrowed <b>${loan.amount}</b>🪙. Davis wants <span class="loan-owe">${loan.owed}🪙</span> back.</div>` +
+      `<div class="loan-due">Due by <b>5pm</b> · <b>${fmtCountdown(due)}</b> left. Miss it and he takes <b>everything</b> — coins, stocks, and cosmetics — and your unpaid debt destabilizes the whole market.</div>`;
+    const actions = document.createElement('div');
+    actions.className = 'loan-actions';
+    const pay = document.createElement('button');
+    pay.className = 'loan-pay';
+    pay.textContent = `Pay ${loan.owed}🪙`;
+    pay.disabled = wallet.coins < loan.owed;
+    pay.title = pay.disabled ? "You can't cover the full repayment yet." : '';
+    pay.onclick = () => { net.send({ type: 'repayLoan' }); playChaChing(); };
+    const close = document.createElement('button');
+    close.textContent = 'Not yet';
+    close.onclick = closeLoan;
+    actions.append(pay, close);
+    loanBody.appendChild(actions);
+    return;
+  }
+
+  // No loan: 'amount' step (pick how much) or 'intro' (Davis offers).
+  if (loanStep === 'amount') {
+    loanImg.src = DAVIS_AMOUNT;
+    loanBody.innerHTML = `<div class="loan-line">I respect a fellow heavy hitter. How much you need? I'll want <b>1.5×</b> back by <b>5pm</b>.</div>`;
+    const row = document.createElement('div');
+    row.className = 'loan-amt-row';
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '1';
+    input.step = '1';
+    input.value = '500';
+    input.setAttribute('inputmode', 'numeric');
+    row.appendChild(input);
+    loanBody.appendChild(row);
+    const owe = document.createElement('div');
+    owe.className = 'loan-due';
+    const previewOwed = (v: number) => Math.ceil(Math.max(0, Math.floor(v || 0)) * 1.5);
+    const refreshOwe = () => { owe.textContent = `You'll owe Davis ${previewOwed(Number(input.value))}🪙.`; };
+    refreshOwe();
+    input.addEventListener('input', refreshOwe);
+    loanBody.appendChild(owe);
+    const warn = document.createElement('div');
+    warn.className = 'loan-warn';
+    warn.innerHTML = `⚠️ If you don't repay by <b>5pm</b>, Davis takes <b>EVERYTHING</b> — your coins, your stocks, and every cosmetic you own — and your unpaid debt destabilizes the market for everyone. No mercy.`;
+    loanBody.appendChild(warn);
+    const actions = document.createElement('div');
+    actions.className = 'loan-actions';
+    const borrow = document.createElement('button');
+    borrow.className = 'loan-yes';
+    borrow.textContent = 'Borrow';
+    borrow.onclick = () => {
+      const amt = Math.floor(Number(input.value));
+      if (!Number.isFinite(amt) || amt < 1) return;
+      net.send({ type: 'getLoan', amount: amt });
+      playChaChing();
+    };
+    const back = document.createElement('button');
+    back.textContent = 'Back';
+    back.onclick = () => { loanStep = 'intro'; renderLoan(); };
+    actions.append(borrow, back);
+    loanBody.appendChild(actions);
+    return;
+  }
+
+  // Intro: Davis at Citizens, offering a loan.
+  loanImg.src = DAVIS_INTRO;
+  loanBody.innerHTML =
+    `<div class="loan-quote">"${davisQuote}"</div>` +
+    `<div class="loan-line">I can spot you some coins — pay me back <b>1.5×</b> by <b>5pm</b>. Would you like a loan?</div>`;
+  const actions = document.createElement('div');
+  actions.className = 'loan-actions';
+  const yes = document.createElement('button');
+  yes.className = 'loan-yes';
+  yes.textContent = 'Yes';
+  yes.onclick = () => { loanStep = 'amount'; renderLoan(); };
+  const no = document.createElement('button');
+  no.textContent = 'No';
+  no.onclick = closeLoan;
+  actions.append(yes, no);
+  loanBody.appendChild(actions);
+}
+
+function closeLoan() {
+  loanPanel.hidden = true;
+  loanBtn.setAttribute('aria-expanded', 'false');
+}
+
+loanBtn.addEventListener('click', () => {
+  const open = loanPanel.hidden;
+  loanPanel.hidden = !open;
+  loanBtn.setAttribute('aria-expanded', String(open));
+  if (open) {
+    davisQuote = DAVIS_QUOTES[Math.floor(Math.random() * DAVIS_QUOTES.length)];
+    loanStep = 'intro';
+    renderLoan();
+  }
+});
+// Live-refresh the due countdown (and re-gate the Pay button on balance) while open.
+setInterval(() => { if (!loanPanel.hidden && loan) renderLoan(); }, 1000);
+// Click-outside closes the panel (mirrors the market panel behavior).
+document.addEventListener('click', (e) => {
+  if (loanPanel.hidden) return;
+  const t = e.target as Node;
+  if (t instanceof Node && !t.isConnected) return;
+  if (!loanPanel.contains(t) && !loanBtn.contains(t)) closeLoan();
+});
 
 // --- Game Modes dropdown (top-left): game mode toggles ---
 const gameModesBtn = document.getElementById('gameModesBtn') as HTMLButtonElement;
@@ -1231,6 +2228,28 @@ tournamentCollapseBtn.addEventListener('click', () => {
   if (state) renderTournament(state.tournament);
 });
 
+// Public bet board under the court: who bet how much on each side.
+const betBoard = document.getElementById('betBoard') as HTMLDivElement;
+function renderBetBoard(s: StateMsg) {
+  const b = s.bets;
+  const any = b.left.length || b.right.length;
+  // Show only during a (non-arena) duel when there are wagers.
+  betBoard.hidden = !any || !!s.poly;
+  if (betBoard.hidden) return;
+  const col = (side: 'left' | 'right') => {
+    const list = b[side];
+    const total = list.reduce((a, x) => a + x.amount, 0);
+    const lines = list.length
+      ? list.map((x) => `<div class="bet-line"><span>${escapeHtml(x.name)}</span><span class="amt">${x.amount}🪙</span></div>`).join('')
+      : '<div class="bet-empty">no bets</div>';
+    const label = side === 'left' ? (s.paddles.left.name ?? 'Left') : (s.paddles.right.name ?? 'Right');
+    const odds = s.odds ? ` <span class="bet-odds">${s.odds[side].toFixed(2)}×</span>` : '';
+    return `<div class="bet-col ${side}"><h4>${escapeHtml(label)}${odds}</h4>${lines}` +
+      (total ? `<div class="bet-total">total ${total}🪙</div>` : '') + `</div>`;
+  };
+  betBoard.innerHTML = col('left') + col('right');
+}
+
 // Render the live tournament panel from server state (signup slots, bracket, or champion).
 function renderTournament(t: StateMsg['tournament']) {
   document.body.classList.toggle('tournament-on', !!t);
@@ -1253,20 +2272,24 @@ function renderTournament(t: StateMsg['tournament']) {
   tournamentCollapseBtn.hidden = t.status === 'signup'; // nothing to fold during signup
   tournamentCollapseBtn.textContent = bracketCollapsed ? '▸' : '▾';
   tournamentBody.hidden = bracketCollapsed && t.status !== 'signup';
+  // Only the creator sees the cancel (✕) button — keeps a random spectator from nuking it.
+  tournamentCancelBtn.hidden = t.creator !== myName;
 
   if (t.status === 'signup') {
     const filled = t.slots.filter(Boolean).length;
-    tournamentTitle.textContent = `🏆 Tournament — ${filled}/${t.size} joined`;
+    tournamentTitle.textContent = `⚽ World Cup — ${filled}/${t.size} joined`;
     const alreadyIn = t.slots.some((s) => s === myName);
     tournamentJoinBtn.hidden = !(myRole === 'observer' && !alreadyIn && filled < t.size && joined);
     tournamentBody.innerHTML =
       `<div class="t-slots">` +
       t.slots
-        .map((s, i) =>
-          s
-            ? `<div class="t-slot"><span class="t-seed">#${i + 1}</span>${escapeHtml(s)}</div>`
-            : `<div class="t-slot open"><span class="t-seed">#${i + 1}</span>open</div>`,
-        )
+        .map((s, i) => {
+          if (!s) return `<div class="t-slot open"><span class="t-seed">#${i + 1}</span>open</div>`;
+          const c = t.countries[s];
+          const flag = c ? `<span class="t-flag">${c.flag}</span>` : '';
+          const ctry = c ? `<span class="t-country">${escapeHtml(c.name)}</span>` : '';
+          return `<div class="t-slot"><span class="t-seed">#${i + 1}</span>${flag}${escapeHtml(s)}${ctry}</div>`;
+        })
         .join('') +
       `</div>`;
     return;
@@ -1275,12 +2298,13 @@ function renderTournament(t: StateMsg['tournament']) {
   // active / done → render the bracket by round.
   tournamentJoinBtn.hidden = true;
   const liveMatch = t.matches.find((m) => m.live);
+  const flagOf = (name: string | null) => name && t.countries[name] ? t.countries[name].flag + ' ' : '';
   tournamentTitle.textContent =
     t.status === 'done'
-      ? `🏆 Champion: ${t.champion ?? '—'}`
+      ? `⚽🏆 ${flagOf(t.champion)}${t.champion ?? '—'}`
       : liveMatch && liveMatch.p1 && liveMatch.p2
-        ? `🏆 ${liveMatch.p1} vs ${liveMatch.p2}`
-        : '🏆 Tournament';
+        ? `⚽ ${flagOf(liveMatch.p1)}${liveMatch.p1} vs ${flagOf(liveMatch.p2)}${liveMatch.p2}`
+        : '⚽ World Cup';
   const roundName = (r: number) => {
     const fromEnd = t.rounds - 1 - r; // 0 = final
     if (fromEnd === 0) return 'Final';
@@ -1290,7 +2314,9 @@ function renderTournament(t: StateMsg['tournament']) {
   };
   const player = (name: string | null, isWinner: boolean) => {
     if (!name) return `<div class="t-player tbd">TBD</div>`;
-    return `<div class="t-player${isWinner ? ' winner' : ''}">${escapeHtml(name)}${isWinner ? ' ✓' : ''}</div>`;
+    const c = t.countries[name];
+    const flag = c ? `<span class="t-flag">${c.flag}</span>` : '';
+    return `<div class="t-player${isWinner ? ' winner' : ''}">${flag}${escapeHtml(name)}${isWinner ? ' ✓' : ''}</div>`;
   };
   let html = `<div class="t-bracket">`;
   for (let r = 0; r < t.rounds; r++) {
@@ -1306,7 +2332,8 @@ function renderTournament(t: StateMsg['tournament']) {
   }
   html += `</div>`;
   if (t.status === 'done' && t.champion) {
-    html += `<div class="t-champion">🏆 ${escapeHtml(t.champion)} wins!</div>`;
+    const champC = t.countries[t.champion];
+    html += `<div class="t-champion">⚽🏆 ${champC ? champC.flag + ' ' : ''}${escapeHtml(t.champion)} wins the World Cup!</div>`;
   }
   tournamentBody.innerHTML = html;
 }
@@ -1315,7 +2342,28 @@ function renderTournament(t: StateMsg['tournament']) {
 const powerupInfoBtn = document.getElementById('powerupInfoBtn') as HTMLButtonElement;
 const powerupInfoPanel = document.getElementById('powerupInfoPanel') as HTMLDivElement;
 
+// Spawning from the dropdown follows the same rule as the /powerup command:
+// only a spectator can drop one, and only while a match is live.
+const canSpawnPowerup = () => !isPlayer() && state?.status === 'playing';
+
+// Each legend row doubles as a spawn button: clicking it drops that power-up,
+// just like typing `/powerup <kind>`. When you can't spawn, the panel is a plain
+// legend (the `.legend-only` class dims the click affordance).
+function syncPowerupSpawnability() {
+  powerupInfoPanel.classList.toggle('legend-only', !canSpawnPowerup());
+}
+for (const row of powerupInfoPanel.querySelectorAll<HTMLDivElement>('.pu-row')) {
+  const kind = row.querySelector<HTMLCanvasElement>('.pu-icon')?.dataset.kind;
+  if (!kind) continue;
+  row.title = `Spawn the ${kind} power-up`;
+  row.addEventListener('click', () => {
+    if (!canSpawnPowerup()) return;
+    net.send({ type: 'spawnPowerup', kind });
+  });
+}
+
 function openPowerupInfo() {
+  syncPowerupSpawnability();
   powerupInfoPanel.hidden = false;
   powerupInfoBtn.setAttribute('aria-expanded', 'true');
 }
@@ -1333,6 +2381,15 @@ document.addEventListener('click', (e) => {
 });
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !powerupInfoPanel.hidden) closePowerupInfo();
+});
+
+// "Add block": spectators-only drop of a solid obstacle on the live duel court. Shown only
+// when you could actually use it (same rule as spawning a power-up, duel mode only).
+const blockControl = document.getElementById('blockControl') as HTMLDivElement;
+const addBlockBtn = document.getElementById('addBlockBtn') as HTMLButtonElement;
+const canAddBlock = () => !isPlayer() && state?.status === 'playing' && !inArena();
+addBlockBtn.addEventListener('click', () => {
+  if (canAddBlock()) net.send({ type: 'addBlock' });
 });
 
 // --- Add/kick bot dropdown (bottom-right) ---
@@ -1405,6 +2462,7 @@ const changelogPanel = document.getElementById('changelogPanel') as HTMLDivEleme
 interface Commit {
   hash: string;
   subject: string;
+  author: string;
   date: string;
   url?: string; // GitHub link to the commit, when available
 }
@@ -1456,6 +2514,7 @@ async function loadChangelog() {
       subject.textContent = c.subject;
       const meta = document.createElement('div');
       meta.className = 'changelog-meta';
+      const tail = `${timeAgo(c.date)}${c.author ? ` · ${c.author}` : ''}`;
       if (c.url) {
         // Link the short hash to the commit on GitHub; open in a new tab.
         const link = document.createElement('a');
@@ -1464,9 +2523,9 @@ async function loadChangelog() {
         link.target = '_blank';
         link.rel = 'noopener noreferrer';
         link.textContent = c.hash;
-        meta.append(link, document.createTextNode(` · ${timeAgo(c.date)}`));
+        meta.append(link, document.createTextNode(` · ${tail}`));
       } else {
-        meta.textContent = `${c.hash} · ${timeAgo(c.date)}`;
+        meta.textContent = `${c.hash} · ${tail}`;
       }
       item.append(subject, meta);
       changelogPanel.append(item);
@@ -1501,6 +2560,85 @@ document.addEventListener('click', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !changelogPanel.hidden) closeChangelog();
 });
+
+// --- NET debug readout: live performance stats, hidden behind a corner toggle ---
+// Three things together answer "are players seeing good performance?": round-trip
+// latency (the network), client FPS (this player's machine), and server tick health
+// (the shared simulation). Each is colored green/amber/red by how it actually feels.
+const debugBtn = document.getElementById('debugBtn') as HTMLButtonElement;
+const debugPanel = document.getElementById('debugPanel') as HTMLDivElement;
+const dbgPing = document.getElementById('dbgPing') as HTMLSpanElement;
+const dbgPingStats = document.getElementById('dbgPingStats') as HTMLSpanElement;
+const dbgFps = document.getElementById('dbgFps') as HTMLSpanElement;
+const dbgFpsMin = document.getElementById('dbgFpsMin') as HTMLSpanElement;
+const dbgTps = document.getElementById('dbgTps') as HTMLSpanElement;
+const dbgTick = document.getElementById('dbgTick') as HTMLSpanElement;
+
+const GOOD = '#6ee7a8';
+const WARN = '#ffd166';
+const BAD = '#ff6b6b';
+// Latency: snappy under 60 ms, noticeable under 140, laggy beyond (the rule of thumb for
+// real-time control feeling responsive).
+const rttColor = (ms: number) => (ms < 60 ? GOOD : ms < 140 ? WARN : BAD);
+// Frame rate: smooth at/above ~55, choppy under ~40 (higher = better, so the test flips).
+const fpsColor = (fps: number) => (fps >= 55 ? GOOD : fps >= 40 ? WARN : BAD);
+// Tick rate: the loop targets 60; under ~58 it's slipping, under ~50 it's clearly behind.
+const tpsColor = (tps: number) => (tps >= 58 ? GOOD : tps >= 50 ? WARN : BAD);
+
+function setStat(el: HTMLSpanElement, text: string, color: string) {
+  el.textContent = text;
+  el.style.color = color;
+}
+function renderDebug() {
+  if (debugPanel.hidden) return; // only paint while the panel is open
+
+  // Network — round-trip latency.
+  if (rttSamples.length === 0) {
+    setStat(dbgPing, '—', '#cdd7f5');
+    dbgPingStats.textContent = '—';
+  } else {
+    const avg = rttSamples.reduce((a, b) => a + b, 0) / rttSamples.length;
+    const max = Math.max(...rttSamples);
+    setStat(dbgPing, `${Math.round(lastRtt)} ms`, rttColor(lastRtt));
+    dbgPingStats.textContent = `${Math.round(avg)} / ${Math.round(max)} ms`;
+  }
+
+  // Client — render frame rate (current + worst recent second).
+  if (fpsSamples.length === 0) {
+    setStat(dbgFps, '—', '#cdd7f5');
+    setStat(dbgFpsMin, '—', '#cdd7f5');
+  } else {
+    const min = Math.min(...fpsSamples);
+    setStat(dbgFps, String(Math.round(lastFps)), fpsColor(lastFps));
+    setStat(dbgFpsMin, String(Math.round(min)), fpsColor(min));
+  }
+
+  // Server — authoritative tick-loop health (reported on the rtt echo).
+  if (!serverTick) {
+    setStat(dbgTps, '—', '#cdd7f5');
+    dbgTick.textContent = '—';
+  } else {
+    setStat(dbgTps, `${serverTick.tps} tps`, tpsColor(serverTick.tps));
+    dbgTick.textContent = `${serverTick.busyAvg} ms · ${serverTick.slowPct}% slow`;
+    dbgTick.style.color = serverTick.slowPct < 5 ? GOOD : serverTick.slowPct < 20 ? WARN : BAD;
+  }
+}
+function openDebug() {
+  debugPanel.hidden = false;
+  debugBtn.setAttribute('aria-expanded', 'true');
+  renderDebug();
+}
+function closeDebug() {
+  debugPanel.hidden = true;
+  debugBtn.setAttribute('aria-expanded', 'false');
+}
+debugBtn.addEventListener('click', () => (debugPanel.hidden ? openDebug() : closeDebug()));
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !debugPanel.hidden) closeDebug();
+});
+// Probe latency on a steady cadence while the socket is up. net.send() is a no-op when
+// disconnected, so a dropped connection just pauses the readout until it's back.
+setInterval(() => net.send({ type: 'rtt', t: performance.now() }), 2000);
 
 // --- startup: a remembered nickname skips the prompt (the actual join is sent in
 // the onOpen handler once the socket connects). ---
@@ -1597,7 +2735,7 @@ if (remembered) {
     window.removeEventListener('pointerdown', dismiss);
     window.removeEventListener('keydown', dismiss);
   }
-  window.setTimeout(dismiss, reduce ? 1200 : 2400);
+  window.setTimeout(dismiss, reduce ? 600 : 1200);
   window.addEventListener('pointerdown', dismiss);
   window.addEventListener('keydown', dismiss);
 })();
@@ -1609,6 +2747,7 @@ if (remembered) {
 // position over the canvas, and click the board to (re)capture the mouse.
 let pointerLocked = false;
 const clampPaddle = (y: number) => Math.max(PADDLE.h / 2, Math.min(COURT.h - PADDLE.h / 2, y));
+const clampRoam = (x: number) => Math.max(0, Math.min(ROAM.maxInset, x));
 
 // The "board" you capture the mouse to is the canvas in 2D and the 3D container in 3D
 // (the canvas is display:none in 3D, so it can neither be clicked nor receive mousemove).
@@ -1659,6 +2798,12 @@ function onBoardMouseMove(e: MouseEvent) {
     target = clampPaddle(target + sign * dx * (COURT.h / r.width) * 1.5);
   } else {
     target = clampPaddle(target + e.movementY * (COURT.h / r.height));
+    // Roam power-up: the otherwise-unused horizontal axis pushes the paddle into the
+    // court. Moving toward center (right for left side, left for right side) extends it.
+    if (myRoamHits() > 0 && myAmmo() <= 0) {
+      const sign = myRole === 'right' ? -1 : 1;
+      targetX = clampRoam(targetX + sign * e.movementX * (COURT.w / r.width));
+    }
   }
 }
 
@@ -1670,6 +2815,11 @@ function myDuelSide(): 'left' | 'right' | null {
 function myAmmo(): number {
   const s = myDuelSide();
   return s && state ? state.paddles[s].ammo ?? 0 : 0;
+}
+// Hits left on my "roam" power-up (>0 means my paddle can push into the court).
+function myRoamHits(): number {
+  const s = myDuelSide();
+  return s && state ? state.paddles[s].roamHits ?? 0 : 0;
 }
 // Fire the blaster (a mouse click while captured and armed). Server validates ammo.
 function fireBlaster() {
@@ -1746,14 +2896,50 @@ window.addEventListener('keydown', (e) => {
 // --- fatalities toggle (shared room-wide setting, not per-user) ---
 // The checkbox just requests a change; the server owns the value and broadcasts it to
 // everyone in `state.fatalitiesEnabled`, which is what updateUI() renders the box from.
+// Fatalities are permanently ON. Trying to turn them off just gets you mocked.
+const FATALITY_MOCKS = [
+  "Turn off fatalities? What are you, allergic to fun?",
+  "lol no. Finishers stay ON, coward.",
+  "Aww, does the wittle baby not like a finishing move?",
+  "Denied. Embrace the violence. 🔪",
+  "Nice try. Real ones leave fatalities ON.",
+  "You can't handle the FATALITY, can you?",
+  "Imagine playing pong without finishers. Couldn't be you.",
+];
 fatalityCheck.addEventListener('change', () => {
-  net.send({ type: 'setFatalities', enabled: fatalityCheck.checked });
+  if (!fatalityCheck.checked) {
+    fatalityCheck.checked = true; // snap it back on
+    showFatalityMock(FATALITY_MOCKS[Math.floor(Math.random() * FATALITY_MOCKS.length)]);
+  }
 });
+
+// A little mocking popup, shown when someone dares to un-check fatalities.
+function showFatalityMock(text: string) {
+  const back = document.createElement('div');
+  back.style.cssText =
+    'position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;' +
+    'background:rgba(0,0,0,0.55);';
+  const card = document.createElement('div');
+  card.style.cssText =
+    'max-width:360px;margin:20px;padding:22px 24px;border-radius:12px;background:#1a0e12;' +
+    'border:1px solid #5a2230;box-shadow:0 12px 40px rgba(0,0,0,0.6);text-align:center;' +
+    'font:700 16px ui-monospace,monospace;color:#ff8a8a;';
+  card.innerHTML =
+    '<div style="font-size:40px;margin-bottom:8px">☠️😂</div>' +
+    `<div style="line-height:1.5">${escapeHtml(text)}</div>` +
+    '<button style="margin-top:18px;font:700 14px ui-monospace,monospace;padding:8px 20px;' +
+    'border-radius:8px;border:1px solid #5a2230;background:#2a1218;color:#ff7a7a;cursor:pointer">Fine, leave them ON</button>';
+  const close = () => back.remove();
+  card.querySelector('button')!.addEventListener('click', close);
+  back.addEventListener('click', (e) => { if (e.target === back) close(); });
+  back.appendChild(card);
+  document.body.appendChild(back);
+}
 
 // --- fatality combos reference modal ---
 // Built once from FATALITIES so adding a finisher there auto-lists it here. Keys render
 // as little ↑/↓ keycaps; the description explains what each finisher does.
-const ARROW: Record<string, string> = { arrowup: '↑', arrowdown: '↓' };
+const ARROW: Record<string, string> = { arrowup: '↑', arrowdown: '↓', arrowleft: '←', arrowright: '→' };
 function buildCombosList() {
   combosList.replaceChildren();
   for (const f of FATALITIES) {
@@ -1812,14 +2998,47 @@ function applyCanvasRotation(rotated: number) {
   const portrait = rotated === 1 || rotated === 3;
   canvas.width  = portrait ? COURT.h : COURT.w;
   canvas.height = portrait ? COURT.w : COURT.h;
-  if (portrait) {
-    canvas.classList.add('rotated');
-    game3dEl.classList.add('rotated');
-  } else {
-    canvas.classList.remove('rotated');
-    game3dEl.classList.remove('rotated');
-  }
+  canvas.classList.toggle('rotated', portrait);
+  game3dEl.classList.toggle('rotated', portrait);
+  screenFx.classList.toggle('rotated', portrait);
   renderer3d?.resize();
+}
+
+// Earthquake power-up: jiggle the whole board element while the point is live. Independent
+// of the canvas draw transforms (and pointer lock survives a CSS transform).
+// Apply the screen-effect power-ups (earthquake/tilt transform the board element; the rest
+// toggle overlay layers). All view-agnostic: works the same in 2D, 3D and first-person.
+const screenFx = document.getElementById('screenFx') as HTMLDivElement;
+const fxBlackout = screenFx.querySelector('.fx-blackout') as HTMLElement;
+const fxBullet = screenFx.querySelector('.fx-bullet') as HTMLElement;
+const fxVortex = screenFx.querySelector('.fx-vortex') as HTMLElement;
+const fxGlitch = screenFx.querySelector('.fx-glitch') as HTMLElement;
+const fxSmoke = screenFx.querySelector('.fx-smoke') as HTMLElement;
+let boardFxOn = false;
+function applyScreenFx(s: StateMsg) {
+  const live = s.status === 'playing';
+  // Board transform: earthquake shake + tilt perspective, combined.
+  const quake = live && s.earthquake;
+  const tilt = live && s.tilt;
+  if (quake || tilt) {
+    const dx = quake ? (Math.random() * 2 - 1) * 7 : 0;
+    const dy = quake ? (Math.random() * 2 - 1) * 7 : 0;
+    const t = `${tilt ? 'perspective(640px) rotateX(16deg)' : ''} translate(${dx}px, ${dy}px)`.trim();
+    const active = boardEl();
+    active.style.transform = t;
+    (active === canvas ? game3dEl : canvas).style.transform = '';
+    boardFxOn = true;
+  } else if (boardFxOn) {
+    canvas.style.transform = '';
+    game3dEl.style.transform = '';
+    boardFxOn = false;
+  }
+  // Overlay layers.
+  fxBlackout.classList.toggle('on', live && s.blackout);
+  fxBullet.classList.toggle('on', live && s.bullettime);
+  fxVortex.classList.toggle('on', live && s.vortex);
+  fxGlitch.classList.toggle('on', live && s.glitch);
+  fxSmoke.classList.toggle('on', live && s.smoke);
 }
 
 // --- main loop ---
@@ -1832,9 +3051,11 @@ function resetMobileLayout() {
   const stage = document.getElementById('stage') as HTMLDivElement;
   const chat = document.getElementById('chat') as HTMLDivElement;
   const lb = document.getElementById('leaderboard') as HTMLDivElement;
+  const nw = document.getElementById('netWorth') as HTMLDivElement;
   stage.style.display = '';
   chat.style.display = '';
   lb.style.display = '';
+  nw.style.display = '';
 }
 for (const btn of mobileTabs.querySelectorAll<HTMLButtonElement>('.mob-tab')) {
   btn.addEventListener('click', () => {
@@ -1845,18 +3066,22 @@ for (const btn of mobileTabs.querySelectorAll<HTMLButtonElement>('.mob-tab')) {
     const stage = document.getElementById('stage') as HTMLDivElement;
     const chat = document.getElementById('chat') as HTMLDivElement;
     const lb = document.getElementById('leaderboard') as HTMLDivElement;
+    const nw = document.getElementById('netWorth') as HTMLDivElement;
     if (tab === 'play') {
       stage.style.display = '';
       chat.style.display = 'none';
       lb.style.display = '';
+      nw.style.display = '';
     } else if (tab === 'chat') {
       stage.style.display = 'none';
       chat.style.display = '';
       lb.style.display = 'none';
+      nw.style.display = 'none';
     } else if (tab === 'leaderboard') {
       stage.style.display = 'none';
       chat.style.display = 'none';
       lb.style.display = '';
+      nw.style.display = '';
     }
   });
 }
@@ -1868,9 +3093,11 @@ if (isMobileView()) {
   const stage = document.getElementById('stage') as HTMLDivElement;
   const chatEl = document.getElementById('chat') as HTMLDivElement;
   const lb = document.getElementById('leaderboard') as HTMLDivElement;
+  const nw = document.getElementById('netWorth') as HTMLDivElement;
   stage.style.display = '';
   chatEl.style.display = 'none';
   lb.style.display = '';
+  nw.style.display = '';
 }
 
 // --- touch controls for paddle ---
@@ -2023,6 +3250,7 @@ function canControl(): boolean {
 }
 
 function loop(t: number) {
+  sampleFps(t);
   // Arena: keyboard nudges the paddle along its edge (mouse handled in mousemove).
   if (inArena() && canControl() && state?.poly) {
     const me = myPolyPlayer(state);
@@ -2070,13 +3298,24 @@ function loop(t: number) {
     } else {
       if (keys.has('arrowup') || keys.has('w') || mobileUpHeld) target -= step;
       if (keys.has('arrowdown') || keys.has('s') || mobileDownHeld) target += step;
+      // Roam power-up: ←/→ push the freed paddle into the court (toward center) and back.
+      if (myRoamHits() > 0) {
+        const sign = myRole === 'right' ? -1 : 1;
+        if (keys.has('arrowright') || keys.has('d')) targetX = clampRoam(targetX + sign * step);
+        if (keys.has('arrowleft') || keys.has('a')) targetX = clampRoam(targetX - sign * step);
+      }
     }
     target = Math.max(PADDLE.h / 2, Math.min(COURT.h - PADDLE.h / 2, target));
+    // Once roaming ends, relax the local inset so the next pickup starts at the wall.
+    if (myRoamHits() <= 0) targetX = 0;
 
-    // Send when it changed meaningfully, throttled to ~30/s.
-    if (Math.abs(target - lastSent) > 0.5 && t - lastSendAt > 33) {
-      net.send({ type: 'paddle', y: target });
+    // Send when Y (or, while roaming, the inset X) changed meaningfully, throttled to ~30/s.
+    const roaming = myRoamHits() > 0;
+    const changed = Math.abs(target - lastSent) > 0.5 || (roaming && Math.abs(targetX - lastSentX) > 0.5);
+    if (changed && t - lastSendAt > 33) {
+      net.send(roaming ? { type: 'paddle', y: target, x: targetX } : { type: 'paddle', y: target });
       lastSent = target;
+      lastSentX = targetX;
       lastSendAt = t;
     }
   }
@@ -2097,6 +3336,7 @@ function loop(t: number) {
       if (!showFatality2d && state.viewMode !== 'normal') renderer3d?.resize();
     }
     applyCanvasRotation(state.rotated);
+    applyScreenFx(state);
     if (state.viewMode !== 'normal' && renderer3d && !state.fatality) {
       const side = state.viewMode === 'firstperson'
         ? (myRole !== 'observer' ? (myRole as 'left' | 'right') : fpSide)
@@ -2116,6 +3356,16 @@ function updateUI() {
 
   renderPuHud(state);
   renderTournament(state.tournament);
+  renderBetBoard(state);
+  // The bet panel lives under the court (not in the shop), so it must refresh every frame —
+  // otherwise live odds, seat changes, and your placed bets only update on a page reload.
+  syncBetSection();
+  if (!shopPanel.hidden) {
+    // Repaint animated skin previews every frame while the shop is open
+    for (const { canvas, id, slot } of shopPreviewCanvases) drawCosmeticPreview(canvas, id, slot);
+  }
+  if (!powerupInfoPanel.hidden) syncPowerupSpawnability();
+  blockControl.hidden = !canAddBlock();
 
   // Sync win score buttons with the current room setting.
   for (const btn of winScoreOpts.querySelectorAll<HTMLButtonElement>('.ws-btn')) {
@@ -2153,6 +3403,15 @@ function updateUI() {
   }
   if (document.activeElement !== arenaModeEl && arenaModeEl.checked !== state.arena) {
     arenaModeEl.checked = state.arena;
+  }
+  if (document.activeElement !== breakoutModeEl && breakoutModeEl.checked !== state.breakout) {
+    breakoutModeEl.checked = state.breakout;
+  }
+  if (document.activeElement !== fogModeEl && fogModeEl.checked !== state.fog) {
+    fogModeEl.checked = state.fog;
+  }
+  if (document.activeElement !== portalModeEl && portalModeEl.checked !== state.portal) {
+    portalModeEl.checked = state.portal;
   }
 
   // Add/kick-bot button: show the right control for the current match state.
@@ -2272,6 +3531,9 @@ function updateUI() {
   joinBtn.textContent = state.arena ? 'Join arena' : 'Join game';
   renameBtn.style.display = myName ? 'inline-block' : 'none';
   pingBtn.style.display = myName ? 'inline-block' : 'none';
+  // Quit game: only while you hold a paddle. Forfeiting vacates your seat, so the
+  // side reverts to "— open —" for everyone.
+  quitBtn.style.display = isPlayer() ? 'inline-block' : 'none';
 
   // Mobile ▲/▼ buttons: visible while the player is in a live match in duel mode.
   // Hidden in arena mode (paddle direction isn't vertical), during waiting/over states,
@@ -2311,6 +3573,7 @@ const PU_CHIP_COLOR: Record<string, string> = {
   slow: '#7aa2ff', ghost: '#c8beff', tiny: '#ff8c42', bigball: '#fb923c',
   freeze: '#88d8f7', blind: '#9988bb', mirror: '#ff7eb3',
   grow: '#ffd166', shrink: '#5ad1e6', smash: '#ff6b3d', blaster: '#ff4d4d',
+  roam: '#4ade80',
 };
 
 function renderPuHud(s: StateMsg) {
@@ -2328,6 +3591,7 @@ function renderPuHud(s: StateMsg) {
     if (p.growHits > 0)    chips.push(puChip('grow',   `${tag} grow ×${p.growHits}`));
     if (p.shrinkHits > 0)  chips.push(puChip('shrink', `${tag} shrink ×${p.shrinkHits}`));
     if (p.smashHits > 0)   chips.push(puChip('smash',  `${tag} smash ×${p.smashHits}`));
+    if (p.roamHits > 0)    chips.push(puChip('roam',   `${tag} roam ×${p.roamHits}`));
     if (p.freezeTimer > 0) chips.push(puChip('freeze', `${tag} frozen ${t1(p.freezeTimer)}`));
     if (p.blindTimer > 0)  chips.push(puChip('blind',  `${tag} blind ${t1(p.blindTimer)}`));
     if (p.mirrorTimer > 0) chips.push(puChip('mirror', `${tag} mirror ${t1(p.mirrorTimer)}`));
@@ -2359,6 +3623,7 @@ for (const canvas of document.querySelectorAll<HTMLCanvasElement>('.pu-icon')) {
 const prevElo = new Map<string, number>();
 
 function renderLeaderboard(rows: LeaderboardRow[]) {
+  lastLbRows = rows;
   if (!rows.length) {
     leaderboardEl.innerHTML = '';
     return;
@@ -2374,7 +3639,7 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
         const delta = mine.elo - prev;
         const sign = delta > 0 ? '+' : '';
         const color = delta > 0 ? '#4ade80' : '#f87171';
-        showAnnouncement(`${sign}${delta} ELO`, color);
+        showAnnouncement(`${sign}${delta} ELO`, { color });
       }
       prevElo.set(myName, mine.elo);
     }
@@ -2386,13 +3651,157 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
 
   const items = rows
     .map((r, i) => {
+      const t = r.title ? COSMETICS.find((c) => c.id === r.title) : undefined;
+      const tag = t ? `<span class="lbtitle${r.title === 'opstask' ? ' rainbow' : ''}">${escapeHtml(t.name)}</span>` : '';
       return `<li><span class="rank">${i + 1}</span><span class="lbname">${escapeHtml(
         r.name,
-      )}</span><span class="pct">${r.elo ?? 500}</span></li>`;
+      )}${tag}</span><span class="pct">${r.elo ?? 500}</span>${tipBtnHtml(r.name)}</li>`;
     })
     .join('');
   leaderboardEl.innerHTML = `<h2>Leaderboard</h2><ol>${items}</ol>`;
 }
+
+// A small gold "tip" button for a player's board row — omitted for your own name (you
+// can't tip yourself) and before you've joined. Clicking it opens the tip dialog.
+function tipBtnHtml(name: string): string {
+  if (!joined || !name || name === myName) return '';
+  return `<button class="tip-btn" data-tip-name="${escapeHtml(name)}" title="Tip ${escapeHtml(name)} coins">🪙 tip</button>`;
+}
+
+// The Net Worth board: coins + live stock holdings − debt owed to Davis. The
+// richest player wears a 👑; anyone underwater (debt > assets) shows in red with
+// the amount they still owe. Ranks the whole economy, not just match wins.
+function renderNetWorth(rows: NetWorthRow[]) {
+  lastNwRows = rows;
+  if (!rows.length) {
+    netWorthEl.innerHTML = '';
+    return;
+  }
+  const items = rows
+    .map((r, i) => {
+      const crown = i === 0 ? '👑 ' : '';
+      const broke = r.net < 0 ? ' broke' : '';
+      const debt = r.loan > 0 ? `<span class="debt"> 🔻${r.loan}</span>` : '';
+      const t = r.title ? COSMETICS.find((c) => c.id === r.title) : undefined;
+      const tag = t ? `<span class="lbtitle${r.title === 'opstask' ? ' rainbow' : ''}">${escapeHtml(t.name)}</span>` : '';
+      return `<li data-rank="${i}" title="View balance sheet"><span class="rank">${i + 1}</span><span class="lbname">${crown}${escapeHtml(
+        r.name,
+      )}${tag}${debt}</span><span class="worth${broke}">${r.net}🪙</span>${tipBtnHtml(r.name)}</li>`;
+    })
+    .join('');
+  netWorthEl.innerHTML = `<h2>💰 Net Worth</h2><ol>${items}</ol>`;
+}
+
+// Click a Net Worth row to ask the server for that player's balance sheet (resolved by
+// rank — the index into the board the server last sent). Event-delegated so it survives
+// every re-render.
+netWorthEl.addEventListener('click', (e) => {
+  // A tip button takes priority over the row's balance-sheet view.
+  const tipBtn = (e.target as HTMLElement).closest('.tip-btn') as HTMLElement | null;
+  if (tipBtn) { openTipDialog(tipBtn.dataset.tipName ?? ''); return; }
+  const li = (e.target as HTMLElement).closest('li[data-rank]') as HTMLElement | null;
+  if (!li) return;
+  const rank = Number(li.dataset.rank);
+  if (Number.isInteger(rank)) net.send({ type: 'balanceSheetReq', rank });
+});
+
+// Leaderboard rows aren't otherwise clickable — only their tip buttons do anything.
+leaderboardEl.addEventListener('click', (e) => {
+  const tipBtn = (e.target as HTMLElement).closest('.tip-btn') as HTMLElement | null;
+  if (tipBtn) openTipDialog(tipBtn.dataset.tipName ?? '');
+});
+
+// Render and open the balance-sheet modal from a server response.
+function showBalanceSheet(msg: BalanceSheetMsg) {
+  balanceName.textContent = `💰 ${msg.name}`;
+  const rows: string[] = [];
+  rows.push(
+    `<div class="bs-row"><span class="bs-label">Coins on hand</span><span class="bs-val">${msg.coins}🪙</span></div>`,
+  );
+  rows.push(`<div class="bs-section">Stock holdings</div>`);
+  if (msg.holdings.length) {
+    for (const h of msg.holdings) {
+      const tag = h.side === 'short' ? '<span class="pos-short">SHORT</span> ' : '';
+      rows.push(
+        `<div class="bs-row"><span class="bs-label">${tag}${escapeHtml(h.ticker)} ` +
+          `<span class="bs-sub">${h.shares.toFixed(2)} sh @ ${Math.round(h.price)}🪙</span></span>` +
+          `<span class="bs-val">${h.value}🪙</span></div>`,
+      );
+    }
+    rows.push(
+      `<div class="bs-row"><span class="bs-label">Stock subtotal</span><span class="bs-val">${msg.stockValue}🪙</span></div>`,
+    );
+  } else {
+    rows.push(`<div class="bs-empty">No open positions.</div>`);
+  }
+  if (msg.loan > 0) {
+    rows.push(
+      `<div class="bs-row bs-debt"><span class="bs-label">Owed to Davis</span><span class="bs-val">−${msg.loan}🪙</span></div>`,
+    );
+  }
+  rows.push(`<hr class="bs-divider" />`);
+  const broke = msg.net < 0 ? ' bs-broke' : '';
+  rows.push(
+    `<div class="bs-row bs-total${broke}"><span class="bs-label">Net worth</span><span class="bs-val">${msg.net}🪙</span></div>`,
+  );
+  balanceBody.innerHTML = rows.join('');
+  balanceModal.hidden = false;
+}
+function closeBalanceSheet() {
+  balanceModal.hidden = true;
+}
+balanceClose.addEventListener('click', closeBalanceSheet);
+balanceModal.addEventListener('click', (e) => {
+  if (!balanceCard.contains(e.target as Node)) closeBalanceSheet();
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !balanceModal.hidden) closeBalanceSheet();
+});
+
+// --- tip dialog (opened by the 🪙 tip button on the boards) ---
+let tipTarget = ''; // nickname currently being tipped
+function openTipDialog(name: string) {
+  if (!name || name === myName || !joined) return;
+  tipTarget = name;
+  tipTitle.textContent = `Tip ${name}`;
+  tipBalance.textContent = `You have ${wallet.coins.toLocaleString()} 🪙`;
+  tipStatus.textContent = '';
+  tipAmount.value = '';
+  tipModal.hidden = false;
+  tipAmount.focus();
+}
+function closeTipDialog() {
+  tipModal.hidden = true;
+  tipTarget = '';
+}
+function submitTip() {
+  const amount = Number(tipAmount.value);
+  if (!Number.isInteger(amount) || amount <= 0) {
+    tipStatus.textContent = 'Enter a whole number of coins.';
+    return;
+  }
+  if (amount > wallet.coins) {
+    tipStatus.textContent = "You don't have that many coins.";
+    return;
+  }
+  net.send({ type: 'tip', to: tipTarget, amount });
+  closeTipDialog();
+}
+tipPresets.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest('button[data-amt]') as HTMLElement | null;
+  if (!btn) return;
+  tipAmount.value = btn.dataset.amt ?? '';
+  tipStatus.textContent = '';
+});
+tipSend.addEventListener('click', submitTip);
+tipAmount.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitTip(); } });
+tipClose.addEventListener('click', closeTipDialog);
+tipModal.addEventListener('click', (e) => {
+  if (!tipCard.contains(e.target as Node)) closeTipDialog();
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !tipModal.hidden) closeTipDialog();
+});
 
 // ----------------------------------------------------------------------------
 const _kSeq = [
