@@ -241,6 +241,13 @@ export async function initDb(): Promise<void> {
       console.warn(`boam merge skipped — no player with email nmolloy@linksquares.com yet; will retry next boot`);
     }
   }
+  // One-time: cap everyone's coins at 10 000. Anyone over the limit gets brought back down;
+  // anyone below keeps their balance. Idempotent after it runs once.
+  const coinCap = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'coin_cap_10k_v1'`);
+  if (coinCap.rowCount === 0) {
+    await pool.query(`UPDATE players SET coins = 10000 WHERE coins > 10000`);
+    await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('coin_cap_10k_v1', now()::text)`);
+  }
   console.log('leaderboard DB ready');
 }
 
