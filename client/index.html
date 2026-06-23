@@ -792,17 +792,18 @@
         color: #7da2ff; cursor: pointer;
       }
       #arcadeBtn:hover, #casinoBtn:hover { background: #18203a; }
-      /* Attention-grabbing flashing: Arcade pulses bright red, Casino bright green. */
-      @keyframes arcadeFlash {
-        0%, 100% { background: #2a0e12; color: #ff6b6b; border-color: #b3343a; box-shadow: 0 0 6px rgba(255,80,80,0.5); }
-        50% { background: #ff3b3b; color: #2a0406; border-color: #ff3b3b; box-shadow: 0 0 16px rgba(255,80,80,0.95); }
+      /* Ambient glow: steady tinted buttons (Arcade red, Casino green) with a soft, slow
+         breathing halo — noticeable but not blinky. */
+      #arcadeBtn { color: #ff8a8a; border-color: #6e2a2f; background: #1c0e10; animation: arcadeGlow 3.2s ease-in-out infinite; }
+      #casinoBtn { color: #7ff0b0; border-color: #2a6e45; background: #0e1c14; animation: casinoGlow 3.2s ease-in-out infinite; }
+      @keyframes arcadeGlow {
+        0%, 100% { box-shadow: 0 0 4px rgba(255,80,80,0.25); }
+        50% { box-shadow: 0 0 13px rgba(255,80,80,0.6); }
       }
-      @keyframes casinoFlash {
-        0%, 100% { background: #0e2a1a; color: #5bff9d; border-color: #2fa85f; box-shadow: 0 0 6px rgba(60,255,140,0.5); }
-        50% { background: #2dff88; color: #06210f; border-color: #2dff88; box-shadow: 0 0 16px rgba(60,255,140,0.95); }
+      @keyframes casinoGlow {
+        0%, 100% { box-shadow: 0 0 4px rgba(60,255,140,0.25); }
+        50% { box-shadow: 0 0 13px rgba(60,255,140,0.6); }
       }
-      #arcadeBtn { animation: arcadeFlash 1s ease-in-out infinite; }
-      #casinoBtn { animation: casinoFlash 1s ease-in-out infinite; }
       @media (prefers-reduced-motion: reduce) {
         #arcadeBtn, #casinoBtn { animation: none; }
       }
