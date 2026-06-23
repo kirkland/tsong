@@ -762,6 +762,7 @@ export const STOCKS = [
   { id: 'otto',  name: 'OTTO',             ticker: 'OTTO',  img: '/otto.webp',          base: 100, supply: 1500  },
   { id: 'bacon', name: 'Bacon Roll',       ticker: 'BACON', img: '/baconroll.png',      base: 100, supply: 1000  },
   { id: 'fritz', name: 'Fritz Coin',       ticker: 'FRITZ', img: '/fritz.jpg',          base: 100, supply: 500   },
+  { id: 'omega', name: 'Omega Davis',      ticker: 'OMEGA', img: '/davis-cosmic.jpg',   base: 100, supply: 10000 },
 ] as const;
 export type StockId = (typeof STOCKS)[number]['id'];
 export const STOCK_UPDATE_MS = 30 * 1000; // prices re-roll every 30 seconds
