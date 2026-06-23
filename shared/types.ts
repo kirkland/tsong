@@ -922,9 +922,10 @@ export type StockId = (typeof STOCKS)[number]['id'];
 export const STOCK_UPDATE_MS = 30 * 1000; // prices re-roll every 30 seconds
 // Market stability: the market no longer resets on a daily timer. Instead, each day's loan
 // collection adds every defaulter's unpaid debt (the 1.5× `owed`) to a global instability
-// pool. When that pool reaches MARKET_INSTABILITY_THRESHOLD coins, the whole market crashes
-// (every coin snaps back to base) for EVERYONE and the pool resets to 0. The "Market Stability"
-// bar shows pool / threshold.
+// pool. When that pool reaches MARKET_INSTABILITY_THRESHOLD coins a CRASH fires for EVERYONE —
+// a random subset of coins each drop by a random degree while one random coin spikes up (so it
+// can't be exploited by shorting the whole board) — and the pool resets to 0. The "Market
+// Stability" bar shows pool / threshold.
 export const MARKET_INSTABILITY_THRESHOLD = 10000;
 // Per-coin price-history buffers for the little graphs — one independent series per
 // timeframe so each view has its own resolution and span (no overlap/aliasing). `everyTicks`
