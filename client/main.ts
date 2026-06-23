@@ -609,6 +609,10 @@ const net = connect(
       doomMod?.feedDoomRelay(msg.data);
     } else if (msg.type === 'doomEnd') {
       doomMod?.feedDoomEnd(msg.reason);
+    } else if (msg.type === 'ntLobby') {
+      nuketownMod?.feedNtLobby(msg);
+    } else if (msg.type === 'ntRelay') {
+      nuketownMod?.feedNtRelay(msg.data);
     } else if (msg.type === 'doomLeaderboard') {
       doomScores = { solo: msg.solo, coop: msg.coop };
     } else if (msg.type === 'tdState') {
@@ -1480,6 +1484,26 @@ doomBtn.addEventListener('click', async () => {
     });
   } catch (e) {
     console.error('DOOM failed to load:', e);
+  }
+});
+
+// --- Nuketown team-deathmatch FPS (lazy-loaded, self-contained). Host-authoritative: the
+// server is only a lobby + broadcast relay (nt* messages, routed above). Slot 0 (first joiner)
+// simulates the whole match and streams snapshots; guests send input and render from them. ---
+const nuketownBtn = document.getElementById('nuketownBtn') as HTMLButtonElement;
+let nuketownMod: typeof import('./nuketown') | null = null;
+nuketownBtn.addEventListener('click', async () => {
+  try {
+    nuketownMod = await import('./nuketown');
+    nuketownMod.startNuketown({
+      join: () => net.send({ type: 'ntJoin' }),
+      leave: () => net.send({ type: 'ntLeave' }),
+      start: () => net.send({ type: 'ntStart' }),
+      relay: (data) => net.send({ type: 'ntRelay', data }),
+      name: () => myName,
+    });
+  } catch (e) {
+    console.error('Nuketown failed to load:', e);
   }
 });
 

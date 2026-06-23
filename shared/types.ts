@@ -319,6 +319,10 @@ export type ClientMsg =
   | { type: 'doomRelay'; data: unknown } // forward an opaque DOOM payload to the co-op partner
   | { type: 'doomScore'; round: number; coop: boolean; name?: string } // record a DOOM run's reached round (name = combined team label for co-op)
   | { type: 'doomReward' } // grant the player 1 coin (killed the DOOM minion boss)
+  | { type: 'ntJoin' } // take a slot in the Nuketown team-deathmatch lobby (up to 6)
+  | { type: 'ntLeave' } // leave the Nuketown lobby / match
+  | { type: 'ntStart' } // (host only) start the Nuketown match from the waiting room
+  | { type: 'ntRelay'; data: unknown } // forward an opaque Nuketown payload to all other participants
   | { type: 'tdJoin' } // join the shared co-op "Type or Die" arena
   | { type: 'tdLeave' } // leave the Type or Die arena
   | { type: 'tdStart' } // (any participant) start the next Type or Die run from the waiting room
@@ -714,6 +718,8 @@ export type ServerMsg =
   | DoomLobbyMsg
   | DoomRelayMsg
   | DoomEndMsg
+  | NtLobbyMsg
+  | NtRelayMsg
   | DoomLeaderboardMsg
   | TypeDieStateMsg
   | TypeDieLeaderboardMsg
@@ -950,6 +956,22 @@ export interface DoomRelayMsg {
 export interface DoomEndMsg {
   type: 'doomEnd';
   reason: string;
+}
+// Nuketown lobby (up to 6 slots, two teams). `slot` is which slot this client holds (0 = host).
+// `hostSlot` is always 0 unless the host leaves (then the match ends). When status flips to
+// 'playing', the host (slot 0) is the authority; on 'ended' everyone bails to the menu.
+export interface NtLobbyMsg {
+  type: 'ntLobby';
+  status: 'waiting' | 'playing' | 'ended';
+  slot: number; // this client's slot (0 = host)
+  hostSlot: number; // which slot is the authority (0)
+  players: { name: string; team: number; slot: number }[]; // everyone in the lobby
+}
+// An opaque payload broadcast from one Nuketown participant to all others (host state
+// snapshot / guest input). Clients pick out the messages they care about.
+export interface NtRelayMsg {
+  type: 'ntRelay';
+  data: unknown;
 }
 // High-round leaderboards for the DOOM minigame (separate solo / co-op tables).
 export interface DoomLeaderboardMsg {
