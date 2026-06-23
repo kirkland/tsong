@@ -2040,7 +2040,9 @@ export class Lobby {
           await addCoins(pid, nick, Lobby.LOOT_PRICE).catch(() => {});
           await houseAdjust(-Lobby.LOOT_PRICE).catch(() => {});
           this.sendWallet(ws);
-          this.notify(ws, 'Loot box errored — your coins were refunded.');
+          // Surface the real reason to the player (we can't read prod logs from the build sandbox)
+          // so a live failure is diagnosable. Short + safe — it's just the error message text.
+          this.notify(ws, `Loot box errored (refunded): ${String((err as Error)?.message ?? err).slice(0, 140)}`);
           this.tell(ws, { type: 'lootResult', kind: 'coins', coins: Lobby.LOOT_PRICE });
         }
       })
