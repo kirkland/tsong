@@ -2131,17 +2131,19 @@ function renderTournament(t: StateMsg['tournament']) {
 
   if (t.status === 'signup') {
     const filled = t.slots.filter(Boolean).length;
-    tournamentTitle.textContent = `🏆 Tournament — ${filled}/${t.size} joined`;
+    tournamentTitle.textContent = `⚽ World Cup — ${filled}/${t.size} joined`;
     const alreadyIn = t.slots.some((s) => s === myName);
     tournamentJoinBtn.hidden = !(myRole === 'observer' && !alreadyIn && filled < t.size && joined);
     tournamentBody.innerHTML =
       `<div class="t-slots">` +
       t.slots
-        .map((s, i) =>
-          s
-            ? `<div class="t-slot"><span class="t-seed">#${i + 1}</span>${escapeHtml(s)}</div>`
-            : `<div class="t-slot open"><span class="t-seed">#${i + 1}</span>open</div>`,
-        )
+        .map((s, i) => {
+          if (!s) return `<div class="t-slot open"><span class="t-seed">#${i + 1}</span>open</div>`;
+          const c = t.countries[s];
+          const flag = c ? `<span class="t-flag">${c.flag}</span>` : '';
+          const ctry = c ? `<span class="t-country">${escapeHtml(c.name)}</span>` : '';
+          return `<div class="t-slot"><span class="t-seed">#${i + 1}</span>${flag}${escapeHtml(s)}${ctry}</div>`;
+        })
         .join('') +
       `</div>`;
     return;
@@ -2150,12 +2152,13 @@ function renderTournament(t: StateMsg['tournament']) {
   // active / done → render the bracket by round.
   tournamentJoinBtn.hidden = true;
   const liveMatch = t.matches.find((m) => m.live);
+  const flagOf = (name: string | null) => name && t.countries[name] ? t.countries[name].flag + ' ' : '';
   tournamentTitle.textContent =
     t.status === 'done'
-      ? `🏆 Champion: ${t.champion ?? '—'}`
+      ? `⚽🏆 ${flagOf(t.champion)}${t.champion ?? '—'}`
       : liveMatch && liveMatch.p1 && liveMatch.p2
-        ? `🏆 ${liveMatch.p1} vs ${liveMatch.p2}`
-        : '🏆 Tournament';
+        ? `⚽ ${flagOf(liveMatch.p1)}${liveMatch.p1} vs ${flagOf(liveMatch.p2)}${liveMatch.p2}`
+        : '⚽ World Cup';
   const roundName = (r: number) => {
     const fromEnd = t.rounds - 1 - r; // 0 = final
     if (fromEnd === 0) return 'Final';
@@ -2165,7 +2168,9 @@ function renderTournament(t: StateMsg['tournament']) {
   };
   const player = (name: string | null, isWinner: boolean) => {
     if (!name) return `<div class="t-player tbd">TBD</div>`;
-    return `<div class="t-player${isWinner ? ' winner' : ''}">${escapeHtml(name)}${isWinner ? ' ✓' : ''}</div>`;
+    const c = t.countries[name];
+    const flag = c ? `<span class="t-flag">${c.flag}</span>` : '';
+    return `<div class="t-player${isWinner ? ' winner' : ''}">${flag}${escapeHtml(name)}${isWinner ? ' ✓' : ''}</div>`;
   };
   let html = `<div class="t-bracket">`;
   for (let r = 0; r < t.rounds; r++) {
@@ -2181,7 +2186,8 @@ function renderTournament(t: StateMsg['tournament']) {
   }
   html += `</div>`;
   if (t.status === 'done' && t.champion) {
-    html += `<div class="t-champion">🏆 ${escapeHtml(t.champion)} wins!</div>`;
+    const champC = t.countries[t.champion];
+    html += `<div class="t-champion">⚽🏆 ${champC ? champC.flag + ' ' : ''}${escapeHtml(t.champion)} wins the World Cup!</div>`;
   }
   tournamentBody.innerHTML = html;
 }
