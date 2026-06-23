@@ -73,18 +73,12 @@ export const BLASTER = {
   maxAngle: Math.PI / 3, // ± aim cone off straight-across
 } as const;
 export const CURVE_SPIN = 1.4; // spin (rad/s) applied to the ball on a curve hit
-// "Roam" power-up: the paddle can push inward off its wall for a limited number of hits.
-// `maxInset` is how far toward center it can travel; `hits` is how many paddle contacts it lasts.
+// "Roam" power-up: your paddle is freed from its wall and may push into the playing area
+// along the other axis (mouse left/right, or ←/→ keys). It lasts until you hit the ball
+// twice, then eases back home. Leaving your wall exposes your goal — a real gamble.
 export const ROAM = {
-  maxInset: 180, // court units the paddle can push inward from its default wall position
-  hits: 5,       // paddle contacts the roam power-up lasts
-} as const;
-// Spectator-dropped obstacle blocks: solid axis-aligned boxes that deflect the ball.
-// Blocks accumulate during a match (up to `maxCount`) and clear at the next match start.
-export const BLOCK = {
-  maxCount: 4, // most blocks allowed on the court at once
-  min: 40,     // minimum block side length, court units
-  max: 80,     // maximum block side length, court units
+  hits: 2,        // paddle hits before roaming ends and the paddle eases home
+  maxInset: 300,  // furthest the paddle center may push inward from its wall, court units
 } as const;
 // "Breakout" mode: a single column of bricks runs down the centre of the court.
 // 1 column × 22 rows of 18×18 bricks with 4-unit gaps.
@@ -98,6 +92,15 @@ export const BREAKOUT = {
   gap: 4,  // gap between bricks
   left: 391,   // (800 - 18) / 2
   top:  10,    // (500 - (22*22 - 4)) / 2  →  (500-480)/2
+} as const;
+
+// Spectator-dropped blocks: solid rectangular obstacles the ball caroms off. Anyone
+// watching a live duel can press a button to add one at a random spot. They pile up
+// through the match (capped) and clear when a new match starts.
+export const BLOCK = {
+  min: 30,      // smallest side length, court units
+  max: 70,      // largest side length, court units
+  maxCount: 12, // most blocks allowed on the board at once
 } as const;
 
 export const GRAVITY_ACCEL = 220; // court units/sec² downward pull in gravity mode
@@ -142,6 +145,7 @@ export const TARGET = {
 //   tiny   — ball shrinks to near-invisible size for 5 s
 //   warp   — ball teleports to a random mid-court position
 //   rotate — the entire court rotates 90° for the rest of the match
+//   roam   — your paddle leaves its wall and roams into the court until you hit twice
 export const POWERUPS = [
   'grow', 'shrink', 'smash', 'slow', 'multi',
   'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate', 'fritz', 'disco', 'blaster', 'minion', 'earthquake', 'coins', 'blackout', 'bullettime', 'vortex', 'glitch', 'smoke', 'tilt', 'roam',
@@ -282,7 +286,7 @@ export type ClientMsg =
   // pid = stable per-browser identity; color = chosen paddle color
   | { type: 'join'; nickname: string; pid: string; color?: string }
   | { type: 'claim'; side?: Side } // preferred side; omitted = auto-assign to the smaller team
-  | { type: 'paddle'; y: number; x?: number } // desired paddle center Y (and optional roam inset X), in court units
+  | { type: 'paddle'; y: number; x?: number } // desired paddle center Y (and, while roaming, inward inset X), court units
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
   | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean } // toggle game modes
@@ -290,8 +294,7 @@ export type ClientMsg =
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
   | { type: 'forfeit' } // "/ff": leave your paddle spot mid-game (and get shamed)
   | { type: 'spawnPowerup'; kind?: string } // "/powerup [name]": spectators only — drop a power-up target (random when unnamed)
-  | { type: 'addBlock' } // spectators only — drop a solid obstacle block at a random central position
-  | { type: 'tip'; to: string; amount: number } // send coins directly to another player by nickname
+  | { type: 'addBlock' } // spectators only — drop a solid obstacle block at a random spot on the live court
   | { type: 'capture'; on: boolean } // whether this player's mouse is captured to the board
   | { type: 'kingExit' } // winner declines to stay as king of the court
   | { type: 'queueJoin' } // join the spectator queue
@@ -316,9 +319,10 @@ export type ClientMsg =
   | { type: 'shopBuy'; item: string } // buy a cosmetic from the shop
   | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'title'; item: string | null } // equip (item) or unequip (null) a cosmetic
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
+  | { type: 'tip'; to: string; amount: number } // gift some of your coins to another online player (by nickname)
   | { type: 'dailySpin' } // claim the once-per-24h reward spin
-  | { type: 'stockInvest'; coin: string; amount: number } // sink `amount` coins into a crypto at the current price
-  | { type: 'stockCashOut'; coin: string } // sell the entire holding in a crypto for round(worth) coins (nearest)
+  | { type: 'stockInvest'; coin: string; amount: number; side?: StockSide } // open a position: long (default) buys, short bets the price falls — both escrow `amount` coins
+  | { type: 'stockCashOut'; coin: string; side?: StockSide } // close the whole long (default) or short position in a crypto for round(worth) coins
   | { type: 'getLoan'; amount: number } // borrow `amount` coins from Davis (owe 1.5× back by the daily 5pm collection)
   | { type: 'repayLoan' } // pay Davis the full 1.5× owed and clear the loan
   | { type: 'roulette'; bets: RouletteBet[] } // stake coins on a single spin of the casino wheel
@@ -363,6 +367,7 @@ export interface PaddleState {
   growHits: number;
   shrinkHits: number;
   smashHits: number;
+  roamHits: number; // paddle hits left on the "roam" power-up (0 when not roaming)
 }
 
 // One player's paddle in Arena (polygon) mode. The paddle rides along its edge of the
@@ -424,6 +429,9 @@ export interface StateMsg {
   // Live position of the diamond obstacle (diamond-hands mode), or null when none is on
   // the board. Center in court units; its size is the shared DIAMOND.r constant.
   diamondPos: { x: number; y: number } | null;
+  // Spectator-dropped solid blocks the ball bounces off. Center (x,y) + size (w,h), court
+  // units. Empty when none are on the board.
+  blocks: { x: number; y: number; w: number; h: number }[];
   // Number of "rotate" power-ups collected this point (0–3). Each adds 90° CW.
   // Resets to 0 on each new serve; 4 wraps back to 0 (full circle = no rotation).
   rotated: number;
@@ -447,8 +455,6 @@ export interface StateMsg {
   // Which bricks are still alive (true = alive). Length = BREAKOUT.cols × BREAKOUT.rows.
   // null when breakout mode is off.
   bricks: boolean[] | null;
-  // Spectator-dropped obstacle blocks currently on the court. Cleared at each match start.
-  blocks: { x: number; y: number; w: number; h: number }[];
   fog: boolean;    // "fog of war": ball invisible except close to either paddle
   portal: boolean; // "portal walls": top/bottom walls teleport the ball to a random Y
   winner: string | null; // nickname of the winner when status === 'over'
@@ -605,9 +611,10 @@ export interface NetWorthMsg {
 export interface BalanceSheetHolding {
   coin: string;   // display name (e.g. "Davis Clarke Coin")
   ticker: string; // short ticker (e.g. "DAVIS")
+  side: StockSide; // long or short
   shares: number; // fractional shares held
   price: number;  // current price per share
-  value: number;  // shares × price, rounded to whole coins
+  value: number;  // live cash-out value (see positionWorth), rounded to whole coins
 }
 
 // Server → client: a public balance sheet for the player at `rank` on the net-worth
@@ -643,6 +650,15 @@ export interface ChatMsg {
 export interface ReactionMsg {
   type: 'reaction';
   emoji: string;
+}
+
+// A player tipped another player coins. Fanned out to everyone so the whole room can
+// celebrate it (a coin shower + cha-ching). Amounts are in raw (displayed) coins.
+export interface TipMsg {
+  type: 'tip';
+  from: string; // tipper's nickname
+  to: string;   // recipient's nickname
+  amount: number;
 }
 
 // A one-off transient notice. By default a big center-screen banner (e.g. a forfeit);
@@ -694,6 +710,7 @@ export type ServerMsg =
   | BalanceSheetMsg
   | ChatMsg
   | ReactionMsg
+  | TipMsg
   | AnnounceMsg
   | PingMsg
   | RttMsg
@@ -763,6 +780,21 @@ export const STOCKS = [
   { id: 'fritz', name: 'Fritz Coin',       ticker: 'FRITZ', img: '/fritz.jpg',          base: 100, supply: 500   },
 ] as const;
 export type StockId = (typeof STOCKS)[number]['id'];
+// A position is either a long (you own shares; profit when the price rises) or a short (you
+// bet against the coin; profit when it falls). Both escrow `amount` coins up front. A long
+// cashes out for round(shares × price). A short pays round(2 × cost − shares × price) on
+// cover: break-even if the price is unchanged, rising toward +100% as the price falls — but
+// turning NEGATIVE once the price climbs past your entry. There's no floor: covering an
+// underwater short COSTS coins, so a short gone wrong can lose far more than you staked
+// (limited only by your wallet, which can't go below 0). `cost`/`shares` are pooled per
+// (coin, side), giving a blended entry price.
+export type StockSide = 'long' | 'short';
+/** Coins returned when closing a position of `shares`/`cost` at `price`, BEFORE rounding.
+ *  A short's worth goes negative once the price rises past its entry (an underwater short
+ *  costs coins to cover) — uncapped, so a runaway price can wipe out more than the stake. */
+export function positionWorth(side: StockSide, shares: number, cost: number, price: number): number {
+  return side === 'short' ? 2 * cost - shares * price : shares * price;
+}
 export const STOCK_UPDATE_MS = 30 * 1000; // prices re-roll every 30 seconds
 // Market stability: the market no longer resets on a daily timer. Instead, each day's loan
 // collection adds every defaulter's unpaid debt (the 1.5× `owed`) to a global instability
@@ -791,10 +823,10 @@ export interface StockMsg {
   // Global price board, in STOCKS order. `prev` is the price at the previous re-roll (for the
   // %-change readout); `price` is the live one.
   prices: { id: string; price: number; prev: number }[];
-  // This player's open positions (only coins they actually hold). `shares` is fractional;
-  // `cost` is the total coins poured in (cost basis); `worth` is floor(shares × price) — the
-  // coins they'd get if they cashed out right now.
-  holdings: { id: string; shares: number; cost: number; worth: number }[];
+  // This player's open positions — a coin can appear twice (a long AND a short). `shares` is
+  // fractional; `cost` is the total coins escrowed (cost basis); `worth` is floor of what
+  // they'd get cashing out now (see positionWorth — differs for long vs short).
+  holdings: { id: string; side: StockSide; shares: number; cost: number; worth: number }[];
   // Price history for the per-coin graphs, in STOCKS order — one array per timeframe (oldest
   // first). See STOCK_HISTORY for the cadence/length of each series.
   history: { id: string; series: { '5m': number[]; '1h': number[]; '1d': number[] } }[];
