@@ -655,7 +655,7 @@ export class Lobby {
 
   // Loot box: a fixed coin price (flows to the House) that rolls a weighted prize. A coin roll
   // (or a degraded capped-out exclusive) pays this much from the House.
-  private static readonly LOOT_PRICE = 1000;
+  private static readonly LOOT_PRICE = 2500;
   private static readonly LOOT_COIN_REWARD = 1500;
 
   private static readonly NT_CAP = 6;
@@ -1979,6 +1979,10 @@ export class Lobby {
     spendCoins(pid, Lobby.LOOT_PRICE)
       .then(async (w) => {
         if (!w) { this.notify(ws, `A loot box costs ${Lobby.LOOT_PRICE.toLocaleString()}🪙 — you're short.`); this.sendWallet(ws); return; }
+        // Everything past the charge is wrapped: if ANY step throws (e.g. a missing economy table
+        // on a half-migrated DB), we refund the price and still send a lootResult — the player is
+        // never charged for nothing and the client never hangs on "Opening…".
+        try {
         // The price flows into the House (it funds the coin/exclusive payouts).
         await this.houseCredit(Lobby.LOOT_PRICE);
         // Pay a coin prize from the House — but NEVER take a player's money for nothing: if the
@@ -2029,6 +2033,16 @@ export class Lobby {
         this.sendWallet(ws);
         this.refreshNetWorth().catch(() => {});
         this.broadcastMarket(); // a fresh mint changes the "X of cap minted" readouts
+        } catch (err) {
+          // A payout step threw after we charged — refund the price, pull it back out of the
+          // House, and send a result so the client clears its "Opening…" state.
+          console.error('loot box payout failed — refunding:', err);
+          await addCoins(pid, nick, Lobby.LOOT_PRICE).catch(() => {});
+          await houseAdjust(-Lobby.LOOT_PRICE).catch(() => {});
+          this.sendWallet(ws);
+          this.notify(ws, 'Loot box errored — your coins were refunded.');
+          this.tell(ws, { type: 'lootResult', kind: 'coins', coins: Lobby.LOOT_PRICE });
+        }
       })
       .catch((e) => console.error('loot box failed:', e));
   }

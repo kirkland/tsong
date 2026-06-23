@@ -2196,8 +2196,9 @@ function renderHouse() {
 const lootBtn = document.getElementById('lootBtn') as HTMLButtonElement | null;
 const lootPanel = document.getElementById('lootPanel') as HTMLDivElement;
 const lootBody = document.getElementById('lootBody') as HTMLDivElement;
-const LOOT_PRICE = 1000; // mirror of the server's Lobby.LOOT_PRICE (display only)
+const LOOT_PRICE = 2500; // mirror of the server's Lobby.LOOT_PRICE (display only)
 let lootBusy = false;
+let lootTimer: number | undefined; // clears a hung "Opening…" if no lootResult arrives
 function renderLoot() {
   const canAfford = wallet.coins >= LOOT_PRICE;
   const mine = wallet.exclusives;
@@ -2218,9 +2219,19 @@ function renderLoot() {
     if (lootBusy || wallet.coins < LOOT_PRICE) return;
     lootBusy = true; renderLoot();
     net.send({ type: 'lootBoxOpen' });
+    // Safety net: never hang on "Opening…" if no result comes back (e.g. server hiccup).
+    if (lootTimer !== undefined) clearTimeout(lootTimer);
+    lootTimer = window.setTimeout(() => {
+      if (!lootBusy) return;
+      lootBusy = false;
+      renderLoot();
+      const r = document.getElementById('lootReveal');
+      if (r) r.innerHTML = '<div class="loot-pop">⚠️ No response — try again (you were not charged if it failed).</div>';
+    }, 8000);
   };
 }
 function onLootResult(msg: LootResultMsg) {
+  if (lootTimer !== undefined) { clearTimeout(lootTimer); lootTimer = undefined; }
   lootBusy = false;
   renderLoot();
   const reveal = document.getElementById('lootReveal');
