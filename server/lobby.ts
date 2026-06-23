@@ -622,11 +622,16 @@ export class Lobby {
           this.announce(`🏆 ${nick} cleared Davis Collects — +${CAMPAIGN_CLEAR_BONUS} coins & the Davis Slayer title!`);
         }
         if (firstPerfect) {
-          // Flawless run (never conceded a point): one-time 10k-coin jackpot.
+          // Flawless run (never conceded a point): one-time 10k-coin jackpot + the "Flawless"
+          // title, force-equipped since it outranks Davis Slayer.
           addCoins(pid, nick, CAMPAIGN_PERFECT_BONUS)
             .then(() => this.sendWallet(ws))
             .catch((e) => console.error('campaign perfect bonus failed:', e));
-          this.announce(`💯 ${nick} got a PERFECT Davis Collects run — +${CAMPAIGN_PERFECT_BONUS} coins!`);
+          grantItem(pid, nick, 'flawless')
+            .then(() => equipItem(pid, 'title', 'flawless'))
+            .then((w) => { if (w) { const c = this.conns.get(ws); if (c) c.title = w.title; this.sendWallet(ws); this.refreshLeaderboard(); } })
+            .catch((e) => console.error('flawless title award failed:', e));
+          this.announce(`💯 ${nick} got a PERFECT Davis Collects run — +${CAMPAIGN_PERFECT_BONUS} coins & the Flawless title!`);
         }
       })
       .catch((e) => console.error('campaign score save failed:', e));
