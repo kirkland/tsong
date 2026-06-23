@@ -215,6 +215,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   // Titles — flair shown next to your name on the leaderboard. Mostly buyable; "Davis Slayer"
   // is NOT buyable — it's unlocked only by clearing the campaign.
   { id: 'davisslayer', name: '🏆 Davis Slayer', slot: 'title', price: 0, locked: 'campaign' },
+  { id: 'flawless', name: '💯 Flawless', slot: 'title', price: 0, locked: 'campaign' }, // perfect campaign run only
   { id: 'clown', name: '🤡 Clown', slot: 'title', price: 1000 },
   { id: 'sharpshooter', name: '🎯 Sharpshooter', slot: 'title', price: 3000 },
   { id: 'champion', name: '🏅 Champion', slot: 'title', price: 3000 },

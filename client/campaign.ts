@@ -860,7 +860,7 @@ function renderResult(ctx: RunCtx, close: () => void, s: RunSummary) {
     `<div style="font-size:30px;font-weight:800;color:#ffd166;margin:10px 0 2px">${s.finalScore.toLocaleString()}</div>` +
     `<div style="font-size:12px;color:#776;letter-spacing:2px">FINAL SCORE</div>` +
     (s.finalScore >= 25000
-      ? `<div style="margin-top:10px;color:#ffd166;font-size:15px;font-weight:800;letter-spacing:1px">💯 PERFECT RUN — +10,000 coins!</div>`
+      ? `<div style="margin-top:10px;color:#ffd166;font-size:15px;font-weight:800;letter-spacing:1px">💯 PERFECT RUN — +10,000 coins & the Flawless title!</div>`
       : s.won ? `<div style="margin-top:10px;color:#7fffa0;font-size:13px">+2500 coins on your first clear 🪙</div>` : '');
 
   const retry = document.createElement('button');

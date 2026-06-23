@@ -162,6 +162,19 @@ export async function initDb(): Promise<void> {
     `);
     await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('title_slayer_v2', now()::text)`);
   }
+  // One-time: award the "Flawless" title to anyone who has already scored a perfect campaign
+  // run (the max CAMPAIGN_PERFECT_SCORE). Own it + auto-equip if they aren't wearing a title.
+  const flawless = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'title_flawless_v1'`);
+  if (flawless.rowCount === 0) {
+    await pool.query(`
+      UPDATE players SET
+        owned = CASE WHEN ',' || owned || ',' LIKE '%,flawless,%' THEN owned
+                     WHEN owned = '' THEN 'flawless' ELSE owned || ',flawless' END,
+        title = COALESCE(title, 'flawless')
+      WHERE id IN (SELECT pid FROM campaign_scores WHERE score >= ${CAMPAIGN_PERFECT_SCORE})
+    `);
+    await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('title_flawless_v1', now()::text)`);
+  }
   // One-time account recovery: the owner lost the guest "matty supreme" account (cleared
   // cookies) but still signs in via Google (mbeauvais@linksquares.com). Merge the orphaned
   // "matty supreme" row into that Google account and restore the name. Re-runs until it
