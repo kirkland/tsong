@@ -292,6 +292,7 @@ export type ClientMsg =
   | { type: 'spawnPowerup'; kind?: string } // "/powerup [name]": spectators only — drop a power-up target (random when unnamed)
   | { type: 'addBlock' } // spectators only — drop a solid obstacle block at a random central position
   | { type: 'tip'; to: string; amount: number } // send coins directly to another player by nickname
+  | { type: 'placeBounty'; to: string; amount: number } // put coins on a player's head; the next to beat them claims it
   | { type: 'capture'; on: boolean } // whether this player's mouse is captured to the board
   | { type: 'kingExit' } // winner declines to stay as king of the court
   | { type: 'queueJoin' } // join the spectator queue
@@ -363,6 +364,7 @@ export interface PaddleState {
   growHits: number;
   shrinkHits: number;
   smashHits: number;
+  roamHits: number; // paddle-contacts left on the "roam" power-up (paddle roams into the court)
 }
 
 // One player's paddle in Arena (polygon) mode. The paddle rides along its edge of the
@@ -707,7 +709,33 @@ export type ServerMsg =
   | StockMsg
   | LoanMsg
   | SpinResultMsg
-  | RouletteResultMsg;
+  | RouletteResultMsg
+  | TipMsg
+  | BountyBoardMsg
+  | BountyHitMsg;
+
+// Broadcast when one player tips another — drives the room-wide coin shower.
+export interface TipMsg {
+  type: 'tip';
+  from: string;
+  to: string;
+  amount: number;
+}
+
+// The active-bounties board: a pot of coins riding on each named player's head. Whoever beats
+// that player in a duel next claims the whole pot, and it clears. Sent on join and on change.
+export interface BountyBoardMsg {
+  type: 'bounties';
+  list: { name: string; pot: number }[];
+}
+
+// Broadcast when a bounty is collected — the winner beat the bountied player. Drives a coin shower.
+export interface BountyHitMsg {
+  type: 'bountyHit';
+  winner: string;
+  target: string;
+  amount: number;
+}
 
 // A player's private wallet + cosmetics + active bet, sent only to that client.
 export interface WalletMsg {

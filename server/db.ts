@@ -104,6 +104,16 @@ export async function initDb(): Promise<void> {
       due_at BIGINT NOT NULL
     )
   `);
+  // Bounties: a pot of coins riding on a player's head (keyed by their pid). Anyone can add to
+  // it; the next player to beat the bountied player in a duel collects the whole pot and the row
+  // is deleted. `target_name` is the latest display name, kept only for announcements.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS bounties (
+      target_pid  TEXT PRIMARY KEY,
+      target_name TEXT NOT NULL,
+      pot         INTEGER NOT NULL DEFAULT 0
+    )
+  `);
   // DOOM minigame high scores — best round reached, per player, per mode (solo / co-op).
   await pool.query(`
     CREATE TABLE IF NOT EXISTS doom_scores (
@@ -618,6 +628,41 @@ export async function addCoins(pid: string, name: string, delta: number): Promis
     [pid, name, delta],
   );
   return rows.length ? rowToWallet(rows[0]) : null;
+}
+
+// --- Bounties ---
+
+/** Add `amount` coins to the bounty on `targetPid` (creating it if none). Returns the new pot. */
+export async function addBounty(targetPid: string, targetName: string, amount: number): Promise<number> {
+  if (!pool || !targetPid || amount <= 0) return 0;
+  const { rows } = await pool.query(
+    `INSERT INTO bounties (target_pid, target_name, pot) VALUES ($1, $2, $3)
+       ON CONFLICT (target_pid) DO UPDATE SET pot = bounties.pot + $3, target_name = EXCLUDED.target_name
+       RETURNING pot`,
+    [targetPid, targetName, amount],
+  );
+  return rows.length ? Number(rows[0].pot) : 0;
+}
+
+/** The current bounty pot on a player (0 if none). */
+export async function getBountyOn(pid: string): Promise<number> {
+  if (!pool || !pid) return 0;
+  const { rows } = await pool.query(`SELECT pot FROM bounties WHERE target_pid = $1`, [pid]);
+  return rows.length ? Number(rows[0].pot) : 0;
+}
+
+/** Delete the bounty on a player, returning the pot that was riding on them (0 if none). */
+export async function clearBounty(pid: string): Promise<number> {
+  if (!pool || !pid) return 0;
+  const { rows } = await pool.query(`DELETE FROM bounties WHERE target_pid = $1 RETURNING pot`, [pid]);
+  return rows.length ? Number(rows[0].pot) : 0;
+}
+
+/** Every active bounty, biggest pot first — for the board. */
+export async function getBounties(): Promise<{ pid: string; name: string; pot: number }[]> {
+  if (!pool) return [];
+  const { rows } = await pool.query(`SELECT target_pid, target_name, pot FROM bounties WHERE pot > 0 ORDER BY pot DESC`);
+  return rows.map((r) => ({ pid: r.target_pid, name: r.target_name, pot: Number(r.pot) }));
 }
 
 /** Merge a guest UUID account into a Google account: add stats, transfer cosmetics,

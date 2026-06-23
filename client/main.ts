@@ -257,6 +257,8 @@ let joined = false; // true once the player has entered a nickname (gates reacti
 // auto-rejoin path (which can run enableChat during module init) never hits them in the TDZ.
 let lastLbRows: LeaderboardRow[] = [];
 let lastNwRows: NetWorthRow[] = [];
+// Active bounties, keyed by lowercased player name → pot. Drives the 🎯 badge on the boards.
+const bounties = new Map<string, number>();
 
 // 3D / first-person view: driven by server state (state.viewMode). Three.js loads lazily.
 let renderer3d: import('./render3d').Renderer3D | null = null;
@@ -561,6 +563,14 @@ const net = connect(
       spawnReaction(msg.emoji);
     } else if (msg.type === 'tip') {
       celebrateTip(msg.from, msg.to, msg.amount);
+    } else if (msg.type === 'bounties') {
+      bounties.clear();
+      for (const b of msg.list) bounties.set(b.name.toLowerCase(), b.pot);
+      // Repaint the boards so 🎯 badges appear/update immediately.
+      renderLeaderboard(lastLbRows);
+      renderNetWorth(lastNwRows);
+    } else if (msg.type === 'bountyHit') {
+      celebrateTip(msg.winner, msg.target, msg.amount);
     } else if (msg.type === 'announce') {
       showAnnouncement(msg.text, { toast: msg.toast });
     } else if (msg.type === 'ping') {
@@ -3655,7 +3665,7 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
       const tag = t ? `<span class="lbtitle${r.title === 'opstask' ? ' rainbow' : ''}">${escapeHtml(t.name)}</span>` : '';
       return `<li><span class="rank">${i + 1}</span><span class="lbname">${escapeHtml(
         r.name,
-      )}${tag}</span><span class="pct">${r.elo ?? 500}</span>${tipBtnHtml(r.name)}</li>`;
+      )}${tag}${bountyBadgeHtml(r.name)}</span><span class="pct">${r.elo ?? 500}</span>${rowActionsHtml(r.name)}</li>`;
     })
     .join('');
   leaderboardEl.innerHTML = `<h2>Leaderboard</h2><ol>${items}</ol>`;
@@ -3666,6 +3676,25 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
 function tipBtnHtml(name: string): string {
   if (!joined || !name || name === myName) return '';
   return `<button class="tip-btn" data-tip-name="${escapeHtml(name)}" title="Tip ${escapeHtml(name)} coins">🪙 tip</button>`;
+}
+
+// A "bounty" button for a player's board row — like the tip button, hidden for your own name
+// (you can't bounty yourself). Clicking it opens the bounty dialog.
+function bountyBtnHtml(name: string): string {
+  if (!joined || !name || name === myName) return '';
+  return `<button class="bounty-btn" data-bounty-name="${escapeHtml(name)}" title="Put a bounty on ${escapeHtml(name)} — whoever beats them next claims it">🎯</button>`;
+}
+
+// The tip + bounty buttons, grouped into one grid cell so the boards keep a fixed column count.
+function rowActionsHtml(name: string): string {
+  return `<span class="row-actions">${bountyBtnHtml(name)}${tipBtnHtml(name)}</span>`;
+}
+
+// A 🎯 badge showing the pot riding on a player (shown inline by their name when one exists).
+function bountyBadgeHtml(name: string): string {
+  const pot = bounties.get(name.toLowerCase());
+  if (!pot) return '';
+  return ` <span class="bounty-badge" title="${pot.toLocaleString()} coin bounty — beat them to claim it">🎯${pot.toLocaleString()}</span>`;
 }
 
 // The Net Worth board: coins + live stock holdings − debt owed to Davis. The
@@ -3686,7 +3715,7 @@ function renderNetWorth(rows: NetWorthRow[]) {
       const tag = t ? `<span class="lbtitle${r.title === 'opstask' ? ' rainbow' : ''}">${escapeHtml(t.name)}</span>` : '';
       return `<li data-rank="${i}" title="View balance sheet"><span class="rank">${i + 1}</span><span class="lbname">${crown}${escapeHtml(
         r.name,
-      )}${tag}${debt}</span><span class="worth${broke}">${r.net}🪙</span>${tipBtnHtml(r.name)}</li>`;
+      )}${tag}${debt}${bountyBadgeHtml(r.name)}</span><span class="worth${broke}">${r.net}🪙</span>${rowActionsHtml(r.name)}</li>`;
     })
     .join('');
   netWorthEl.innerHTML = `<h2>💰 Net Worth</h2><ol>${items}</ol>`;
@@ -3696,7 +3725,9 @@ function renderNetWorth(rows: NetWorthRow[]) {
 // rank — the index into the board the server last sent). Event-delegated so it survives
 // every re-render.
 netWorthEl.addEventListener('click', (e) => {
-  // A tip button takes priority over the row's balance-sheet view.
+  // A tip/bounty button takes priority over the row's balance-sheet view.
+  const bountyBtn = (e.target as HTMLElement).closest('.bounty-btn') as HTMLElement | null;
+  if (bountyBtn) { openBountyDialog(bountyBtn.dataset.bountyName ?? ''); return; }
   const tipBtn = (e.target as HTMLElement).closest('.tip-btn') as HTMLElement | null;
   if (tipBtn) { openTipDialog(tipBtn.dataset.tipName ?? ''); return; }
   const li = (e.target as HTMLElement).closest('li[data-rank]') as HTMLElement | null;
@@ -3705,8 +3736,10 @@ netWorthEl.addEventListener('click', (e) => {
   if (Number.isInteger(rank)) net.send({ type: 'balanceSheetReq', rank });
 });
 
-// Leaderboard rows aren't otherwise clickable — only their tip buttons do anything.
+// Leaderboard rows aren't otherwise clickable — only their tip/bounty buttons do anything.
 leaderboardEl.addEventListener('click', (e) => {
+  const bountyBtn = (e.target as HTMLElement).closest('.bounty-btn') as HTMLElement | null;
+  if (bountyBtn) { openBountyDialog(bountyBtn.dataset.bountyName ?? ''); return; }
   const tipBtn = (e.target as HTMLElement).closest('.tip-btn') as HTMLElement | null;
   if (tipBtn) openTipDialog(tipBtn.dataset.tipName ?? '');
 });
@@ -3758,14 +3791,33 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !balanceModal.hidden) closeBalanceSheet();
 });
 
-// --- tip dialog (opened by the 🪙 tip button on the boards) ---
-let tipTarget = ''; // nickname currently being tipped
+// --- tip / bounty dialog (opened by the 🪙 tip or 🎯 bounty button on the boards) ---
+// One modal serves both: `dialogMode` decides the labels and which message gets sent on submit.
+let tipTarget = ''; // nickname currently being tipped / bountied
+let dialogMode: 'tip' | 'bounty' = 'tip';
 function openTipDialog(name: string) {
   if (!name || name === myName || !joined) return;
+  dialogMode = 'tip';
   tipTarget = name;
   tipTitle.textContent = `Tip ${name}`;
   tipBalance.textContent = `You have ${wallet.coins.toLocaleString()} 🪙`;
+  tipSend.textContent = 'Send tip 🪙';
   tipStatus.textContent = '';
+  tipAmount.value = '';
+  tipModal.hidden = false;
+  tipAmount.focus();
+}
+function openBountyDialog(name: string) {
+  if (!name || name === myName || !joined) return;
+  dialogMode = 'bounty';
+  tipTarget = name;
+  const cur = bounties.get(name.toLowerCase());
+  tipTitle.textContent = `🎯 Bounty on ${name}`;
+  tipBalance.textContent = cur
+    ? `Current pot: ${cur.toLocaleString()}🪙 · you have ${wallet.coins.toLocaleString()}🪙`
+    : `You have ${wallet.coins.toLocaleString()} 🪙`;
+  tipSend.textContent = 'Place bounty 🎯';
+  tipStatus.textContent = 'Whoever beats them next claims the whole pot.';
   tipAmount.value = '';
   tipModal.hidden = false;
   tipAmount.focus();
@@ -3784,7 +3836,7 @@ function submitTip() {
     tipStatus.textContent = "You don't have that many coins.";
     return;
   }
-  net.send({ type: 'tip', to: tipTarget, amount });
+  net.send(dialogMode === 'bounty' ? { type: 'placeBounty', to: tipTarget, amount } : { type: 'tip', to: tipTarget, amount });
   closeTipDialog();
 }
 tipPresets.addEventListener('click', (e) => {
