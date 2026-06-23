@@ -832,6 +832,13 @@
         cursor: pointer;
       }
       #muteBtn:hover { background: #18203a; }
+      /* Work mode toggle — same nav style as the others, a touch more compact. */
+      #workBtn {
+        font: inherit; font-size: 11px; letter-spacing: 1px; padding: 6px 10px;
+        border-radius: 6px; border: 1px solid #2a3550; background: #0e1424;
+        color: #7da2ff; cursor: pointer;
+      }
+      #workBtn:hover { background: #18203a; }
       #doomBtn {
         font: inherit;
         font-size: 12px;
@@ -2646,7 +2653,7 @@
           left: 6px;
           gap: 4px;
         }
-        #viewModeBtn, #muteBtn, #gameModesBtn, #powerupInfoBtn, #marketBtn, #loanBtn, #rouletteBtn, #arcadeBtn, #casinoBtn {
+        #viewModeBtn, #muteBtn, #workBtn, #gameModesBtn, #powerupInfoBtn, #marketBtn, #loanBtn, #rouletteBtn, #arcadeBtn, #casinoBtn {
           font-size: 10px;
           padding: 4px 8px;
         }
@@ -2696,6 +2703,64 @@
           padding: 3px 8px;
         }
       }
+
+      /* --- Work mode: a full-screen spreadsheet disguise ("boss key"). Covers everything,
+         shows the live game data as innocuous cells, and exits with Esc. --- */
+      #workMode {
+        position: fixed; inset: 0; z-index: 100000; background: #f9fbfd;
+        color: #202124; font-family: Arial, "Segoe UI", Roboto, sans-serif; font-size: 13px;
+        display: flex; flex-direction: column; cursor: default; user-select: none;
+      }
+      #workMode[hidden] { display: none; }
+      #wmMenu {
+        display: flex; align-items: center; gap: 14px; padding: 5px 12px;
+        background: #fff; border-bottom: 1px solid #e0e3e7; white-space: nowrap;
+      }
+      #wmMenu .wm-logo { color: #188038; font-size: 18px; }
+      #wmMenu .wm-file { font-size: 15px; color: #202124; }
+      #wmMenu .wm-menus { color: #5f6368; font-size: 13px; }
+      #wmMenu .wm-saved { margin-left: auto; color: #5f6368; font-size: 12px; }
+      #wmToolbar {
+        display: flex; align-items: center; gap: 16px; padding: 5px 14px;
+        background: #fff; border-bottom: 1px solid #e0e3e7; color: #444746; font-size: 14px;
+      }
+      #wmToolbar span { cursor: default; }
+      #wmFormula {
+        display: flex; align-items: center; gap: 0; background: #fff;
+        border-bottom: 1px solid #c4c7c5; font-size: 13px;
+      }
+      #wmFormula .wm-namebox {
+        width: 78px; padding: 4px 8px; border-right: 1px solid #e0e3e7; color: #202124;
+        font-family: "Roboto Mono", ui-monospace, monospace;
+      }
+      #wmFormula .wm-fx { padding: 4px 12px; color: #5f6368; font-style: italic; border-right: 1px solid #e0e3e7; }
+      #wmFormula #wmFormulaVal { padding: 4px 10px; color: #3c4043; font-family: "Roboto Mono", ui-monospace, monospace; }
+      #wmGrid { flex: 1; overflow: hidden; background: #fff; }
+      #wmGrid table { border-collapse: collapse; table-layout: fixed; }
+      #wmGrid th, #wmGrid td {
+        border: 1px solid #e1e3e6; height: 21px; padding: 0 5px; font-weight: 400;
+        font-size: 12px; overflow: hidden; white-space: nowrap; text-align: left;
+        font-family: Arial, sans-serif; color: #202124;
+      }
+      #wmGrid td { width: 94px; }
+      #wmGrid th.wm-colh, #wmGrid th.wm-rowh {
+        background: #f8f9fa; color: #5f6368; text-align: center; font-size: 11px; font-weight: 400;
+      }
+      #wmGrid th.wm-rowh { width: 38px; }
+      #wmGrid th.wm-corner { background: #f8f9fa; width: 38px; }
+      #wmGrid td.wm-num { text-align: right; font-family: "Roboto Mono", ui-monospace, monospace; }
+      #wmGrid td.wm-sec { font-weight: 700; color: #202124; }
+      #wmGrid td.wm-hdr { font-weight: 700; background: #f3f6fb; color: #3c4043; }
+      #wmGrid td.wm-pos { color: #137333; }
+      #wmGrid td.wm-neg { color: #c5221f; }
+      #wmGrid td.wm-a1 { outline: 2px solid #1a73e8; outline-offset: -2px; }
+      #wmTabs {
+        display: flex; align-items: center; gap: 2px; padding: 3px 10px;
+        background: #fff; border-top: 1px solid #e0e3e7; font-size: 12px; color: #5f6368;
+      }
+      #wmTabs .wm-tab { padding: 4px 14px; border-right: 1px solid #eee; }
+      #wmTabs .wm-tab.active { color: #0b57d0; font-weight: 700; background: #f0f4fc; border-radius: 4px 4px 0 0; }
+      #wmTabs .wm-status { margin-left: auto; font-family: "Roboto Mono", ui-monospace, monospace; }
     </style>
   </head>
   <body>
@@ -2713,6 +2778,7 @@
     </div>
     <div id="topLeft">
       <button id="muteBtn" type="button" aria-pressed="false" title="Toggle sound on/off (M)">🔊</button>
+      <button id="workBtn" type="button" title="Work mode — disguise as a spreadsheet (Esc to exit)">📊 Work</button>
       <div id="arcade">
         <button id="arcadeBtn" type="button" aria-expanded="false" title="Minigames">🎮 Arcade <span class="caret">▾</span></button>
         <div id="arcadePanel" class="nav-menu" hidden>
@@ -3373,6 +3439,33 @@
     </div>
 
     <div id="reactionLayer" aria-hidden="true"></div>
+
+    <!-- Work mode: full-screen spreadsheet disguise. The grid (#wmGrid) is filled with the
+         live game data by main.ts; Esc exits. -->
+    <div id="workMode" hidden aria-hidden="true">
+      <div id="wmMenu">
+        <span class="wm-logo">▦</span>
+        <span class="wm-file">FY25_Operating_Model.xlsx</span>
+        <span class="wm-menus">File&nbsp;&nbsp;&nbsp;Edit&nbsp;&nbsp;&nbsp;View&nbsp;&nbsp;&nbsp;Insert&nbsp;&nbsp;&nbsp;Format&nbsp;&nbsp;&nbsp;Data&nbsp;&nbsp;&nbsp;Tools&nbsp;&nbsp;&nbsp;Extensions&nbsp;&nbsp;&nbsp;Help</span>
+        <span class="wm-saved">✓ Saved to Drive</span>
+      </div>
+      <div id="wmToolbar">
+        <span>↶</span><span>↷</span><span>🖨</span><span>100%</span><span>$</span><span>%</span><span>.0</span><span>.00</span><span>123 ▾</span><span>Arial ▾</span><span><b>B</b></span><span><i>I</i></span><span>▾ Fill</span><span>Σ ▾</span>
+      </div>
+      <div id="wmFormula">
+        <span class="wm-namebox">A1</span>
+        <span class="wm-fx">fx</span>
+        <span id="wmFormulaVal"></span>
+      </div>
+      <div id="wmGrid"></div>
+      <div id="wmTabs">
+        <span class="wm-tab active">Summary</span>
+        <span class="wm-tab">Forecast</span>
+        <span class="wm-tab">Positions</span>
+        <span class="wm-tab">Data</span>
+        <span class="wm-status" id="wmStatus">Ready</span>
+      </div>
+    </div>
 
     <div id="overlay">
       <form id="joinForm">

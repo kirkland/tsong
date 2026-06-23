@@ -260,6 +260,8 @@ let joined = false; // true once the player has entered a nickname (gates reacti
 // auto-rejoin path (which can run enableChat during module init) never hits them in the TDZ.
 let lastLbRows: LeaderboardRow[] = [];
 let lastNwRows: NetWorthRow[] = [];
+// Rolling buffer of recent chat lines, surfaced as a "memos" column in Work mode.
+const workChat: string[] = [];
 // Active bounties, keyed by lowercased player name → pot. Drives the 🎯 badge on the boards.
 const bounties = new Map<string, number>();
 
@@ -1395,6 +1397,10 @@ function formatChatDate(ms: number): string {
   return d.toLocaleDateString('en-US', opts);
 }
 function addChatLine(line: ChatLine) {
+  if (!line.command) {
+    workChat.push(`${line.from}: ${line.text}`);
+    if (workChat.length > 30) workChat.shift();
+  }
   if (line.command && hideCmdsEl.checked) return;
   const ts = line.time ?? Date.now();
   const timeStr = formatChatTime(ts);
@@ -3377,8 +3383,154 @@ function canControl(): boolean {
   return pointerLocked || touchActive || mobileCaptured;
 }
 
+// --- Work mode: a full-screen spreadsheet disguise (boss key) -----------------------------
+// Covers the whole app with a convincing Google-Sheets-style grid whose cells are the live game
+// data (scores, market, net worth, standings, chat). Mutes audio and renames the tab while
+// active so nothing gives it away. Toggle on with the 📊 Work button; Esc exits.
+const workModeEl = document.getElementById('workMode') as HTMLDivElement;
+const wmGridEl = document.getElementById('wmGrid') as HTMLDivElement;
+const wmStatusEl = document.getElementById('wmStatus') as HTMLSpanElement;
+const wmFormulaEl = document.getElementById('wmFormulaVal') as HTMLSpanElement;
+const workBtn = document.getElementById('workBtn') as HTMLButtonElement;
+const WM_COLS = 22; // columns A..V
+const WM_ROWS = 46;
+let workOn = false;
+let workPrevMuted = false;
+let workLastPaint = 0;
+
+function wmColLetter(i: number): string { // 0 -> A, 25 -> Z, 26 -> AA
+  let s = '';
+  for (i += 1; i > 0; i = Math.floor((i - 1) / 26)) s = String.fromCharCode(65 + ((i - 1) % 26)) + s;
+  return s;
+}
+
+// Build the cell contents for the current frame, keyed "row,col" (both 1-based; col 1 = A).
+function buildWorkCells(): { cells: Map<string, { v: string; cls?: string }>; total: number } {
+  const cells = new Map<string, { v: string; cls?: string }>();
+  const put = (r: number, c: number, v: string | number, cls?: string) => cells.set(`${r},${c}`, { v: String(v), cls });
+  const fmt = (n: number) => Math.round(n).toLocaleString();
+
+  put(1, 1, 'FY25 Operating Model — Consolidated', 'wm-sec wm-a1');
+
+  // Positions block ← the crypto market.
+  let r = 3;
+  put(r, 1, 'Ticker', 'wm-hdr'); put(r, 2, 'Last', 'wm-hdr'); put(r, 3, 'Chg %', 'wm-hdr'); put(r, 4, 'Qty', 'wm-hdr'); put(r, 5, 'Mkt Value', 'wm-hdr');
+  r++;
+  let total = 0;
+  for (const s of STOCKS) {
+    const p = market.prices.find((x) => x.id === s.id);
+    const price = p?.price ?? s.base;
+    const ser = market.history.find((h) => h.id === s.id)?.series;
+    const line = ser?.['1d']?.length ? ser['1d'] : (ser?.['1h'] ?? []);
+    const chg = line.length >= 2 && line[0] > 0
+      ? ((line[line.length - 1] - line[0]) / line[0]) * 100
+      : (p && p.prev > 0 ? ((p.price - p.prev) / p.prev) * 100 : 0);
+    const longH = market.holdings.find((h) => h.id === s.id && h.side === 'long');
+    const shortH = market.holdings.find((h) => h.id === s.id && h.side === 'short');
+    const qty = (longH?.shares ?? 0) + (shortH?.shares ?? 0);
+    const val = (longH?.worth ?? 0) + (shortH?.worth ?? 0);
+    total += val;
+    put(r, 1, s.ticker);
+    put(r, 2, price.toFixed(2), 'wm-num');
+    put(r, 3, `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%`, `wm-num ${chg >= 0 ? 'wm-pos' : 'wm-neg'}`);
+    put(r, 4, qty > 0 ? qty.toFixed(2) : '', 'wm-num');
+    put(r, 5, val > 0 ? fmt(val) : '', 'wm-num');
+    r++;
+  }
+
+  // Accounts block ← the net-worth board.
+  r += 1;
+  put(r, 1, 'Account', 'wm-hdr'); put(r, 2, 'Net', 'wm-hdr'); put(r, 3, 'Cash', 'wm-hdr'); put(r, 4, 'Liabilities', 'wm-hdr');
+  r++;
+  for (const n of lastNwRows.slice(0, 10)) {
+    put(r, 1, n.name); put(r, 2, fmt(n.net), 'wm-num'); put(r, 3, fmt(n.coins), 'wm-num'); put(r, 4, fmt(n.loan || 0), 'wm-num');
+    r++;
+  }
+
+  // Personnel block ← the win/loss standings.
+  r += 1;
+  put(r, 1, 'Employee', 'wm-hdr'); put(r, 2, 'Closed', 'wm-hdr'); put(r, 3, 'Lost', 'wm-hdr'); put(r, 4, 'Score', 'wm-hdr');
+  r++;
+  for (const l of lastLbRows.slice(0, 10)) {
+    put(r, 1, l.name); put(r, 2, l.wins, 'wm-num'); put(r, 3, l.losses, 'wm-num'); put(r, 4, l.elo, 'wm-num');
+    r++;
+  }
+
+  // KPI block (right-hand columns) ← the live match + wallet.
+  const statusText = !state ? '—' : state.status === 'over' ? 'Closed' : state.status === 'playing' ? 'In Progress' : 'Planning';
+  const riskM = document.getElementById('msPct')?.textContent?.match(/[\d,]+%/g);
+  const riskPct = riskM ? riskM[riskM.length - 1] : '0%';
+  const kpi: [string, string | number][] = [
+    ['Division A', state?.paddles.left.name ?? 'Vacant'],
+    ['Division B', state?.paddles.right.name ?? 'Vacant'],
+    ['A Units', state?.score.left ?? 0],
+    ['B Units', state?.score.right ?? 0],
+    ['Throughput', state ? Math.round(state.ballSpeed) : 0],
+    ['Phase', statusText],
+    ['Lead', state?.winner ?? '—'],
+    ['Cash on Hand', fmt(wallet.coins)],
+    ['Open Positions', market.holdings.length],
+    ['Risk Index', riskPct],
+  ];
+  put(3, 7, 'Operations KPI', 'wm-hdr'); put(3, 8, 'Value', 'wm-hdr');
+  kpi.forEach(([k, v], i) => { put(4 + i, 7, k); put(4 + i, 8, v, typeof v === 'number' ? 'wm-num' : ''); });
+
+  // Memos block ← recent chat, split into note + owner like a comments column.
+  let mr = 4 + kpi.length + 2;
+  put(mr, 7, 'Recent Memos', 'wm-hdr'); put(mr, 8, 'Owner', 'wm-hdr');
+  mr++;
+  for (const c of workChat.slice(-12)) {
+    const i = c.indexOf(': ');
+    put(mr, 7, i > 0 ? c.slice(i + 2) : c); put(mr, 8, i > 0 ? c.slice(0, i) : '');
+    mr++;
+  }
+
+  return { cells, total };
+}
+
+function renderWorkGrid() {
+  const { cells, total } = buildWorkCells();
+  let html = '<table><thead><tr><th class="wm-corner"></th>';
+  for (let c = 0; c < WM_COLS; c++) html += `<th class="wm-colh">${wmColLetter(c)}</th>`;
+  html += '</tr></thead><tbody>';
+  for (let r = 1; r <= WM_ROWS; r++) {
+    html += `<tr><th class="wm-rowh">${r}</th>`;
+    for (let c = 1; c <= WM_COLS; c++) {
+      const cell = cells.get(`${r},${c}`);
+      html += cell ? `<td class="${cell.cls ?? ''}">${escapeHtml(cell.v)}</td>` : '<td></td>';
+    }
+    html += '</tr>';
+  }
+  wmGridEl.innerHTML = html + '</tbody></table>';
+  const lastCoinRow = 3 + STOCKS.length;
+  wmFormulaEl.textContent = `=SUMPRODUCT(B4:B${lastCoinRow},D4:D${lastCoinRow})`;
+  wmStatusEl.textContent = `Sum: ${Math.round(total).toLocaleString()}   Avg: ${STOCKS.length ? Math.round(total / STOCKS.length).toLocaleString() : 0}   Count: ${STOCKS.length}`;
+}
+
+function setWorkMode(on: boolean) {
+  if (on === workOn) return;
+  workOn = on;
+  workModeEl.hidden = !on;
+  workModeEl.setAttribute('aria-hidden', String(!on));
+  if (on) {
+    workPrevMuted = muted;
+    if (!muted) { muted = true; applyMute(); } // hush the pong bloops without touching the saved pref
+    document.title = 'FY25_Operating_Model.xlsx - Google Sheets';
+    renderWorkGrid();
+  } else {
+    if (muted && !workPrevMuted) { muted = false; applyMute(); }
+    document.title = ORIGINAL_TITLE;
+  }
+}
+workBtn.addEventListener('click', () => setWorkMode(true));
+// Esc is the boss-key exit. Capture phase so it fires regardless of focus.
+window.addEventListener('keydown', (e) => {
+  if (workOn && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setWorkMode(false); }
+}, true);
+
 function loop(t: number) {
   sampleFps(t);
+  if (workOn && t - workLastPaint > 450) { workLastPaint = t; renderWorkGrid(); }
   // Arena: keyboard nudges the paddle along its edge (mouse handled in mousemove).
   if (inArena() && canControl() && state?.poly) {
     const me = myPolyPlayer(state);
