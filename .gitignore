@@ -7,3 +7,6 @@ client/dist/
 .tsong-state.json
 bot.ts
 HANDOFF.md
+
+# Claude Code local config + agent worktrees (not project code)
+.claude/
