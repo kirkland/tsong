@@ -250,24 +250,35 @@ export async function initDb(): Promise<void> {
   }
   // One-time: hand tsong-mobile's entire net worth (coins + stock positions) to lasso, then
   // zero out tsong-mobile. Not a full account merge — stats, cosmetics and scores stay put.
-  // Names are matched on a normalized form (lowercased, all non-alphanumerics stripped) so
-  // spacing/dash variants — "tsong - mobile", "tsong–mobile", double spaces — all resolve.
-  // "lasso" normalizes to "lasso" (NOT "lasso - mobile" → "lassomobile", so they stay
-  // distinct). Each name resolves to its richest row. Re-runs until both exist.
-  const tsongToLasso = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'tsong_to_lasso_v2'`);
+  // Matching is deliberately tolerant: any account whose normalized name (lowercased, all
+  // non-alphanumerics stripped) CONTAINS "tsong" / "lasso", picking the one with the highest
+  // live net worth (coins + stock value) so we always grab the account that actually holds the
+  // balance — never an empty namesake. Re-runs until both resolve.
+  const tsongToLasso = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'tsong_to_lasso_v3'`);
   if (tsongToLasso.rowCount === 0) {
-    const norm = `LOWER(REGEXP_REPLACE(name, '[^a-zA-Z0-9]', '', 'g'))`;
-    const src = await pool.query<{ id: string }>(
-      `SELECT id FROM players WHERE ${norm} = 'tsongmobile' ORDER BY coins DESC LIMIT 1`,
-    );
-    const dst = await pool.query<{ id: string }>(
-      `SELECT id FROM players WHERE ${norm} = 'lasso' ORDER BY coins DESC LIMIT 1`,
-    );
-    const srcPid = src.rows[0]?.id;
-    const dstPid = dst.rows[0]?.id;
+    // Richest (by live net worth) account whose normalized name contains `needle`.
+    const richestContaining = async (needle: string): Promise<string | undefined> => {
+      const r = await pool!.query<{ id: string }>(
+        `SELECT p.id,
+                p.coins + COALESCE(SUM(CASE WHEN sh.side = 'short'
+                                            THEN 2 * sh.cost - sh.shares * sp.price
+                                            ELSE sh.shares * sp.price END), 0) AS networth
+           FROM players p
+           LEFT JOIN stock_holdings sh ON sh.pid = p.id AND sh.shares > 0
+           LEFT JOIN stock_prices sp ON sp.coin = sh.coin
+          WHERE LOWER(REGEXP_REPLACE(p.name, '[^a-zA-Z0-9]', '', 'g')) LIKE $1
+          GROUP BY p.id
+          ORDER BY networth DESC
+          LIMIT 1`,
+        [`%${needle}%`],
+      );
+      return r.rows[0]?.id;
+    };
+    const srcPid = await richestContaining('tsong');
+    const dstPid = await richestContaining('lasso');
     if (!srcPid || !dstPid) {
       // Log every player name so a failed match can be diagnosed from the boot log.
-      const all = await pool.query<{ name: string }>(`SELECT name FROM players ORDER BY coins DESC LIMIT 40`);
+      const all = await pool.query<{ name: string }>(`SELECT name FROM players ORDER BY coins DESC LIMIT 60`);
       console.warn(`tsong→lasso names seen: ${all.rows.map((r) => JSON.stringify(r.name)).join(', ')}`);
     }
     if (srcPid && dstPid && srcPid !== dstPid) {
@@ -288,7 +299,7 @@ export async function initDb(): Promise<void> {
         [srcPid, dstPid],
       );
       await pool.query(`DELETE FROM stock_holdings WHERE pid = $1`, [srcPid]);
-      await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('tsong_to_lasso_v2', now()::text)`);
+      await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('tsong_to_lasso_v3', now()::text)`);
       console.log(`transferred tsong-mobile (${srcPid}) net worth to lasso (${dstPid})`);
     } else {
       console.warn(`tsong→lasso transfer skipped — src(${srcPid ?? 'none'}) / dst(${dstPid ?? 'none'}); will retry next boot`);
