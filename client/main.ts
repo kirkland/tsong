@@ -3398,6 +3398,22 @@ let workOn = false;
 let workPrevMuted = false;
 let workLastPaint = 0;
 
+// The top grid row mirrors the real toolbar: each cell maps to a live button and,
+// when clicked, opens the genuine dropdown/modal. The cell shows the button's own
+// current label (icon, coin count, mute state…) so it reads exactly like the toolbar.
+const WM_MENU_IDS = [
+  'muteBtn', 'arcadeBtn', 'shopBtn', 'casinoBtn', 'viewModeBtn',
+  'gameModesBtn', 'tourneyBtn', 'powerupInfoBtn', 'changelogBtn', 'debugBtn',
+];
+// The current visible text of a toolbar button, minus the dropdown caret.
+function wmBtnLabel(id: string): string {
+  const t = document.getElementById(id)?.textContent ?? '';
+  return t.replace(/▾/g, '').replace(/\s+/g, ' ').trim();
+}
+// Triggers that, when expanded, mean a toolbar dropdown/modal is currently open.
+const WM_PANEL_SEL =
+  '#topLeft [aria-expanded="true"], #changelog [aria-expanded="true"], #debugControl [aria-expanded="true"]';
+
 function wmColLetter(i: number): string { // 0 -> A, 25 -> Z, 26 -> AA
   let s = '';
   for (i += 1; i > 0; i = Math.floor((i - 1) / 26)) s = String.fromCharCode(65 + ((i - 1) % 26)) + s;
@@ -3405,12 +3421,14 @@ function wmColLetter(i: number): string { // 0 -> A, 25 -> Z, 26 -> AA
 }
 
 // Build the cell contents for the current frame, keyed "row,col" (both 1-based; col 1 = A).
-function buildWorkCells(): { cells: Map<string, { v: string; cls?: string }>; total: number } {
-  const cells = new Map<string, { v: string; cls?: string }>();
+function buildWorkCells(): { cells: Map<string, { v: string; cls?: string; btn?: string }>; total: number } {
+  const cells = new Map<string, { v: string; cls?: string; btn?: string }>();
   const put = (r: number, c: number, v: string | number, cls?: string) => cells.set(`${r},${c}`, { v: String(v), cls });
   const fmt = (n: number) => Math.round(n).toLocaleString();
 
-  put(1, 1, 'FY25 Operating Model — Consolidated', 'wm-sec wm-a1');
+  // Top row: one clickable cell per real toolbar button (opens the same dropdown/modal),
+  // showing that button's own current label.
+  WM_MENU_IDS.forEach((id, i) => cells.set(`1,${i + 1}`, { v: wmBtnLabel(id), cls: 'wm-menu-cell', btn: id }));
 
   // Positions block ← the crypto market.
   let r = 3;
@@ -3497,7 +3515,10 @@ function renderWorkGrid() {
     html += `<tr><th class="wm-rowh">${r}</th>`;
     for (let c = 1; c <= WM_COLS; c++) {
       const cell = cells.get(`${r},${c}`);
-      html += cell ? `<td class="${cell.cls ?? ''}">${escapeHtml(cell.v)}</td>` : '<td></td>';
+      if (cell) {
+        const attr = cell.btn ? ` data-wm-btn="${cell.btn}"` : '';
+        html += `<td class="${cell.cls ?? ''}"${attr}>${escapeHtml(cell.v)}</td>`;
+      } else html += '<td></td>';
     }
     html += '</tr>';
   }
@@ -3520,9 +3541,32 @@ function setWorkMode(on: boolean) {
   } else {
     if (muted && !workPrevMuted) { muted = false; applyMute(); }
     document.title = ORIGINAL_TITLE;
+    // Close any dropdown opened from the sheet so it doesn't linger on the game view.
+    document.querySelectorAll(WM_PANEL_SEL).forEach((b) => (b as HTMLElement).click());
+    document.body.classList.remove('wm-menus');
   }
 }
 workBtn.addEventListener('click', () => setWorkMode(true));
+
+// Reflect whether a toolbar dropdown/modal is open: lift it above the sheet (and hide
+// its trigger button) via the `wm-menus` body class while in work mode.
+function wmSyncMenus() {
+  document.body.classList.toggle('wm-menus', workOn && !!document.querySelector(WM_PANEL_SEL));
+}
+// A click on a top-row menu cell opens the real dropdown/modal by dispatching a click on
+// the underlying button — reusing all its existing toggle, close-others, and outside-click
+// logic. stopPropagation keeps the sheet click from reaching the document close-handlers
+// (which would otherwise immediately shut the panel we just opened).
+wmGridEl.addEventListener('click', (e) => {
+  const cell = (e.target as HTMLElement).closest('[data-wm-btn]') as HTMLElement | null;
+  if (!cell) return;
+  e.preventDefault();
+  e.stopPropagation();
+  document.getElementById(cell.dataset.wmBtn!)?.click();
+  wmSyncMenus();
+});
+// Recompute after any other click (e.g. clicking the sheet closes an open dropdown).
+document.addEventListener('click', () => { if (workOn) wmSyncMenus(); });
 // Esc is the boss-key exit. Capture phase so it fires regardless of focus.
 window.addEventListener('keydown', (e) => {
   if (workOn && e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); setWorkMode(false); }

@@ -2761,6 +2761,22 @@
       #wmTabs .wm-tab { padding: 4px 14px; border-right: 1px solid #eee; }
       #wmTabs .wm-tab.active { color: #0b57d0; font-weight: 700; background: #f0f4fc; border-radius: 4px 4px 0 0; }
       #wmTabs .wm-status { margin-left: auto; font-family: "Roboto Mono", ui-monospace, monospace; }
+      /* Top-row cells that map to the real toolbar buttons — look like a header band but click through. */
+      #wmGrid td.wm-menu-cell {
+        cursor: pointer; font-weight: 700; text-align: center; color: #1a73e8; background: #e8f0fe;
+      }
+      #wmGrid td.wm-menu-cell:hover { background: #d2e3fc; }
+      /* While a sheet menu is open, lift the real toolbar above the overlay (z 100000) but keep the
+         trigger buttons invisible — only the genuine dropdown/modal shows, floating over the sheet. */
+      body.wm-menus #topLeft,
+      body.wm-menus #changelog,
+      body.wm-menus #botControl,
+      body.wm-menus #debugControl { z-index: 100001; }
+      body.wm-menus #topLeft > button,
+      body.wm-menus #topLeft > div > button,
+      body.wm-menus #changelog > button,
+      body.wm-menus #botControl > button,
+      body.wm-menus #debugControl > button { visibility: hidden; }
     </style>
   </head>
   <body>
