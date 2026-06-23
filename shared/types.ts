@@ -317,8 +317,8 @@ export type ClientMsg =
   | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'title'; item: string | null } // equip (item) or unequip (null) a cosmetic
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
   | { type: 'dailySpin' } // claim the once-per-24h reward spin
-  | { type: 'stockInvest'; coin: string; amount: number } // sink `amount` coins into a crypto at the current price
-  | { type: 'stockCashOut'; coin: string } // sell the entire holding in a crypto for round(worth) coins (nearest)
+  | { type: 'stockInvest'; coin: string; amount: number; side?: StockSide } // open a long or short position
+  | { type: 'stockCashOut'; coin: string; side?: StockSide } // close a long or short position
   | { type: 'getLoan'; amount: number } // borrow `amount` coins from Davis (owe 1.5× back by the daily 5pm collection)
   | { type: 'repayLoan' } // pay Davis the full 1.5× owed and clear the loan
   | { type: 'roulette'; bets: RouletteBet[] } // stake coins on a single spin of the casino wheel
@@ -603,11 +603,12 @@ export interface NetWorthMsg {
 
 // One line item on a player's balance sheet: an open stock position valued live.
 export interface BalanceSheetHolding {
-  coin: string;   // display name (e.g. "Davis Clarke Coin")
-  ticker: string; // short ticker (e.g. "DAVIS")
-  shares: number; // fractional shares held
-  price: number;  // current price per share
-  value: number;  // shares × price, rounded to whole coins
+  coin: string;       // display name (e.g. "Davis Clarke Coin")
+  ticker: string;     // short ticker (e.g. "DAVIS")
+  side: StockSide;    // 'long' or 'short'
+  shares: number;     // fractional shares held
+  price: number;      // current price per share
+  value: number;      // positionWorth at current price, rounded to whole coins
 }
 
 // Server → client: a public balance sheet for the player at `rank` on the net-worth
@@ -784,6 +785,14 @@ export const STOCK_HISTORY = {
 } as const;
 export type StockTf = keyof typeof STOCK_HISTORY; // '5m' | '1h' | '1d'
 
+// Direction of a stock position. A player can hold long and short of the same coin at once.
+export type StockSide = 'long' | 'short';
+// Current value of a position: long pays shares×price; short pays 2×cost − shares×price
+// (goes negative if price climbs past entry — covering then costs the holder extra coins).
+export function positionWorth(side: StockSide, shares: number, cost: number, price: number): number {
+  return side === 'long' ? shares * price : 2 * cost - shares * price;
+}
+
 // A player's private market view: the global price board plus that player's own positions.
 // Sent on join, after every trade, and to everyone when prices re-roll.
 export interface StockMsg {
@@ -794,7 +803,7 @@ export interface StockMsg {
   // This player's open positions (only coins they actually hold). `shares` is fractional;
   // `cost` is the total coins poured in (cost basis); `worth` is floor(shares × price) — the
   // coins they'd get if they cashed out right now.
-  holdings: { id: string; shares: number; cost: number; worth: number }[];
+  holdings: { id: string; side: StockSide; shares: number; cost: number; worth: number }[];
   // Price history for the per-coin graphs, in STOCKS order — one array per timeframe (oldest
   // first). See STOCK_HISTORY for the cadence/length of each series.
   history: { id: string; series: { '5m': number[]; '1h': number[]; '1d': number[] } }[];
