@@ -204,6 +204,27 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'highroller', name: '💸 High Roller', slot: 'title', price: 5000 },
   { id: 'legend', name: '⭐ Legend', slot: 'title', price: 8000 },
   { id: 'goat', name: '🐐 GOAT', slot: 'title', price: 10000 },
+  // --- Premium tier (high-end coin sinks) ---
+  // Hats (animated, bespoke 2D + 3D models)
+  { id: 'saturn', name: 'Ringed Planet', slot: 'hat', price: 8000 },
+  { id: 'propeller', name: 'Propeller Cap', slot: 'hat', price: 10000 },
+  { id: 'flamingcrown', name: 'Flaming Crown', slot: 'hat', price: 12000 },
+  { id: 'diamondtiara', name: 'Diamond Tiara', slot: 'hat', price: 20000 },
+  // Skins (animated)
+  { id: 'obsidian', name: 'Obsidian', slot: 'skin', price: 6000 },
+  { id: 'aurora', name: 'Aurora', slot: 'skin', price: 10000 },
+  { id: 'liquidgold', name: 'Liquid Gold', slot: 'skin', price: 15000 },
+  { id: 'prism', name: 'Prism', slot: 'skin', price: 20000 },
+  // Trails
+  { id: 'stardust', name: 'Stardust', slot: 'trail', price: 5000 },
+  { id: 'inferno', name: 'Inferno', slot: 'trail', price: 8000 },
+  { id: 'lightning', name: 'Lightning', slot: 'trail', price: 10000 },
+  { id: 'phoenix', name: 'Phoenix', slot: 'trail', price: 15000 }, // animated
+  // Titles (flex tier)
+  { id: 'whale', name: '💎 Whale', slot: 'title', price: 25000 },
+  { id: 'marketmaker', name: '📈 Market Maker', slot: 'title', price: 40000 },
+  { id: 'untouchable', name: '👑 Untouchable', slot: 'title', price: 50000 },
+  { id: 'opstask', name: 'Ops Task Duty', slot: 'title', price: 100000 }, // animated rainbow
 ] as const;
 export const CHAT_MAX_LEN = 200; // max characters per chat message
 export const CHAT_HISTORY = 50; // recent messages kept/sent to new joiners

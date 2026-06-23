@@ -8,6 +8,10 @@ function titleFlair(id: string | null | undefined): string {
   const t = COSMETICS.find((c) => c.id === id && c.slot === 'title');
   return t ? t.name : '';
 }
+// Title flair colour — most are gold; the "Ops Task Duty" title cycles the rainbow.
+function titleColor(id: string | null | undefined): string {
+  return id === 'opstask' ? `hsl(${(Date.now() / 10) % 360},90%,62%)` : '#ffd166';
+}
 
 const fritzImg = new Image();
 fritzImg.src = '/fritz.jpg';
@@ -171,8 +175,10 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
   ctx.fillText(`${Math.round(s.ballSpeed)}`, COURT.w / 2, 22);
 
   // Player names along the bottom, with the lead player's equipped title as flair.
-  const leftTitle = titleFlair(s.paddles.left.players[0]?.title);
-  const rightTitle = titleFlair(s.paddles.right.players[0]?.title);
+  const leftId = s.paddles.left.players[0]?.title;
+  const rightId = s.paddles.right.players[0]?.title;
+  const leftTitle = titleFlair(leftId);
+  const rightTitle = titleFlair(rightId);
   ctx.textBaseline = 'bottom';
   ctx.textAlign = 'left';
   let lx = 16;
@@ -182,7 +188,7 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
   ctx.fillText(leftName, lx, COURT.h - 12);
   if (leftTitle) {
     lx += ctx.measureText(leftName).width + 8;
-    ctx.fillStyle = '#ffd166';
+    ctx.fillStyle = titleColor(leftId);
     ctx.font = '12px system-ui, sans-serif';
     ctx.fillText(leftTitle, lx, COURT.h - 13);
   }
@@ -194,7 +200,7 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
   ctx.fillText(rightName, rx, COURT.h - 12);
   if (rightTitle) {
     rx -= ctx.measureText(rightName).width + 8;
-    ctx.fillStyle = '#ffd166';
+    ctx.fillStyle = titleColor(rightId);
     ctx.font = '12px system-ui, sans-serif';
     ctx.fillText(rightTitle, rx, COURT.h - 13);
   }
@@ -633,6 +639,10 @@ const SKIN_RENDERERS: Record<string, CosmeticDraw> = {
   wood: fillWood,
   hologram: fillHologram,
   venom: fillVenom,
+  obsidian: fillObsidian,
+  aurora: fillAurora,
+  liquidgold: fillLiquidGold,
+  prism: fillPrism,
 };
 // Draw a live skin/hat preview onto a small canvas element (used in the shop UI).
 // The canvas is scaled so the paddle fills it, then the skin is applied at full quality.
@@ -647,8 +657,12 @@ const TRAIL_TINTS: Record<string, TrailTint> = {
   ember: () => '#ff4619',
   neonstreak: () => '#ff3cdc',
   rainbowtrail: (i, _n, t) => `hsl(${(t / 12 + i * 26) % 360},92%,62%)`,
+  stardust: (i) => (i % 2 ? '#ffffff' : '#9fd8ff'),
+  inferno: (i, n) => `hsl(${20 + (i / n) * 35},100%,${50 + (i / n) * 12}%)`, // red tail → yellow head
+  lightning: () => '#8ab4ff',
+  phoenix: (i, _n, t) => `hsl(${(t / 14 + i * 18) % 60},100%,58%)`, // animated red↔gold fire
 };
-const TRAIL_GLOW = new Set(['comet', 'frostwake', 'ember', 'neonstreak', 'rainbowtrail']); // additive blend
+const TRAIL_GLOW = new Set(['comet', 'frostwake', 'ember', 'neonstreak', 'rainbowtrail', 'stardust', 'inferno', 'lightning', 'phoenix']); // additive blend
 const TRAIL_LEN = 14; // samples of paddle history kept for the streak
 const trailHistory = new Map<string, { x: number; y: number }[]>();
 function drawTrail(ctx: CanvasRenderingContext2D, key: string, cx: number, cy: number, h: number, id: string) {
@@ -759,6 +773,10 @@ const HAT_RENDERERS: Record<string, CosmeticDraw> = {
   pirate: drawPirate,
   santa: drawSanta,
   headphones: drawHeadphones,
+  saturn: drawSaturn,
+  propeller: drawPropeller,
+  flamingcrown: drawFlamingCrown,
+  diamondtiara: drawDiamondTiara,
 };
 
 // Cosmetic "top hat": a little hat perched at the top end of the paddle. Visual only.
@@ -826,6 +844,73 @@ function drawHalo(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: numb
   ctx.beginPath();
   ctx.ellipse(cx, top, PADDLE.w * 0.7, 3.2, 0, 0, Math.PI * 2);
   ctx.stroke();
+  ctx.restore();
+}
+// --- Premium hats ---
+function drawSaturn(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2 - 11 + Math.sin(Date.now() / 400) * 1.5;
+  ctx.save();
+  // planet
+  const g = ctx.createRadialGradient(cx - 2, top - 2, 1, cx, top, 6);
+  g.addColorStop(0, '#ffd9a0'); g.addColorStop(0.6, '#e08a3c'); g.addColorStop(1, '#8a4a18');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(cx, top, 5.5, 0, Math.PI * 2); ctx.fill();
+  // tilted ring
+  ctx.strokeStyle = '#e9c98a'; ctx.lineWidth = 2;
+  ctx.save(); ctx.translate(cx, top); ctx.rotate(-0.5);
+  ctx.beginPath(); ctx.ellipse(0, 0, 10, 3, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+  ctx.restore();
+}
+function drawPropeller(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  ctx.save();
+  // beanie cap
+  ctx.fillStyle = '#e8513b';
+  ctx.beginPath(); ctx.arc(cx, top, PADDLE.w * 0.5, Math.PI, 0); ctx.fill();
+  ctx.fillStyle = '#ffd23f'; ctx.fillRect(cx - PADDLE.w * 0.5, top - 1, PADDLE.w, 2);
+  // spinning propeller
+  const a = Date.now() / 90;
+  ctx.translate(cx, top - 8); ctx.rotate(a);
+  ctx.fillStyle = '#6cc1ff';
+  for (const d of [0, Math.PI]) {
+    ctx.save(); ctx.rotate(d);
+    ctx.beginPath(); ctx.ellipse(7, 0, 7, 2.2, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+  ctx.fillStyle = '#ffd23f';
+  ctx.beginPath(); ctx.arc(0, 0, 1.8, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+function drawFlamingCrown(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2, w = PADDLE.w + 4;
+  ctx.save();
+  ctx.fillStyle = '#ffd23f';
+  ctx.fillRect(cx - w / 2, top - 6, w, 5);
+  ctx.beginPath();
+  for (let i = 0; i < 3; i++) { const sx = cx - w / 2 + (i + 0.5) * (w / 3); ctx.moveTo(sx - 3, top - 6); ctx.lineTo(sx, top - 12); ctx.lineTo(sx + 3, top - 6); }
+  ctx.fill();
+  const fl = Math.abs(Math.sin(Date.now() / 120));
+  ctx.shadowColor = '#ff5a1c'; ctx.shadowBlur = 10;
+  for (let i = 0; i < 3; i++) {
+    const sx = cx - w / 2 + (i + 0.5) * (w / 3);
+    ctx.fillStyle = i % 2 ? '#ff7a1c' : '#ffb01c';
+    ctx.beginPath(); ctx.moveTo(sx - 3, top - 11); ctx.quadraticCurveTo(sx, top - 18 - fl * 5, sx + 3, top - 11); ctx.closePath(); ctx.fill();
+  }
+  ctx.restore();
+}
+function drawDiamondTiara(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2, w = PADDLE.w + 6;
+  ctx.save();
+  ctx.strokeStyle = '#dfe7f5'; ctx.lineWidth = 2.5;
+  ctx.beginPath(); ctx.moveTo(cx - w / 2, top - 2); ctx.quadraticCurveTo(cx, top - 9, cx + w / 2, top - 2); ctx.stroke();
+  const spark = 0.6 + 0.4 * Math.abs(Math.sin(Date.now() / 200));
+  ctx.shadowColor = '#bfe0ff'; ctx.shadowBlur = 8 * spark;
+  const gx = [cx - w * 0.32, cx, cx + w * 0.32], gyv = [top - 4, top - 9, top - 4];
+  for (let i = 0; i < 3; i++) {
+    ctx.fillStyle = i === 1 ? '#9fe0ff' : '#eaf4ff';
+    ctx.beginPath(); ctx.moveTo(gx[i], gyv[i] - 3); ctx.lineTo(gx[i] + 2.4, gyv[i]); ctx.lineTo(gx[i], gyv[i] + 3); ctx.lineTo(gx[i] - 2.4, gyv[i]); ctx.closePath(); ctx.fill();
+  }
   ctx.restore();
 }
 function drawCowboy(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
@@ -1046,6 +1131,60 @@ function drawHeadphones(ctx: CanvasRenderingContext2D, cx: number, cy: number, h
 // --- additional cosmetic skins (fill the paddle rect; some animated; visual only) ---
 function paddleRect(cx: number, cy: number, h: number) {
   return { x: cx - PADDLE.w / 2, y: cy - h / 2, w: PADDLE.w, h };
+}
+// --- Premium skins ---
+function fillObsidian(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save(); clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  g.addColorStop(0, '#05060a'); g.addColorStop(0.5, '#1a1426'); g.addColorStop(1, '#05060a');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  const t = (Date.now() / 900) % 1, gy = r.y - 16 + (r.h + 32) * t;
+  const glint = ctx.createLinearGradient(0, gy - 6, 0, gy + 6);
+  glint.addColorStop(0, 'rgba(190,170,255,0)'); glint.addColorStop(0.5, 'rgba(205,185,255,0.5)'); glint.addColorStop(1, 'rgba(190,170,255,0)');
+  ctx.fillStyle = glint; ctx.fillRect(r.x, r.y, r.w, r.h);
+  skinHighlight(ctx, cx, cy, h); ctx.restore();
+}
+function fillAurora(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save(); clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const s = Math.sin(Date.now() / 1000) * 30;
+  const g = ctx.createLinearGradient(0, r.y, 0, r.y + r.h);
+  g.addColorStop(0, `hsl(${150 + s},80%,55%)`);
+  g.addColorStop(0.45, `hsl(${190 + s},85%,55%)`);
+  g.addColorStop(0.7, `hsl(${275 + s},75%,62%)`);
+  g.addColorStop(1, `hsl(${150 + s},80%,50%)`);
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  skinHighlight(ctx, cx, cy, h); ctx.restore();
+}
+function fillLiquidGold(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save(); clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  g.addColorStop(0, '#6a4a00'); g.addColorStop(0.5, '#ffe9a0'); g.addColorStop(1, '#6a4a00');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  for (const sp of [0, 0.5]) {
+    const t = ((Date.now() / 600) + sp) % 1, gy = r.y - 20 + (r.h + 40) * t;
+    const glint = ctx.createLinearGradient(0, gy - 10, 0, gy + 10);
+    glint.addColorStop(0, 'rgba(255,255,220,0)'); glint.addColorStop(0.5, 'rgba(255,255,235,0.9)'); glint.addColorStop(1, 'rgba(255,255,220,0)');
+    ctx.fillStyle = glint; ctx.fillRect(r.x, r.y, r.w, r.h);
+  }
+  skinHighlight(ctx, cx, cy, h); ctx.restore();
+}
+function fillPrism(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save(); clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const off = (Date.now() / 8) % h, top = r.y;
+  for (const dy of [0, h]) {
+    const g = ctx.createLinearGradient(0, top - off + dy, 0, top - off + dy + h);
+    ['#ff3b30', '#ff9500', '#ffd60a', '#34c759', '#0a84ff', '#bf5af2', '#ff3b30'].forEach((c, i, a) => g.addColorStop(i / (a.length - 1), c));
+    ctx.fillStyle = g; ctx.fillRect(r.x, top, r.w, h);
+  }
+  const t = (Date.now() / 500) % 1, sy = r.y - 10 + (r.h + 20) * t;
+  const sweep = ctx.createLinearGradient(0, sy - 8, 0, sy + 8);
+  sweep.addColorStop(0, 'rgba(255,255,255,0)'); sweep.addColorStop(0.5, 'rgba(255,255,255,0.6)'); sweep.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = sweep; ctx.fillRect(r.x, r.y, r.w, r.h);
+  skinHighlight(ctx, cx, cy, h); ctx.restore();
 }
 function fillGold(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
   ctx.save();
