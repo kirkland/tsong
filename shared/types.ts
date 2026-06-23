@@ -230,8 +230,6 @@ export const COSMETICS: readonly CosmeticItem[] = [
   // Skins (animated)
   { id: 'obsidian', name: 'Obsidian', slot: 'skin', price: 6000 },
   { id: 'aurora', name: 'Aurora', slot: 'skin', price: 10000 },
-  { id: 'liquidgold', name: 'Liquid Gold', slot: 'skin', price: 15000 },
-  { id: 'prism', name: 'Prism', slot: 'skin', price: 20000 },
   // Trails
   { id: 'stardust', name: 'Stardust', slot: 'trail', price: 5000 },
   { id: 'inferno', name: 'Inferno', slot: 'trail', price: 8000 },
