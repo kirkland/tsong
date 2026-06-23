@@ -591,8 +591,16 @@ export function startDoom(net: DoomNet): void {
       if (td > reach) {
         const sp = (e.boss ? enemySpeedFor(round) * 0.9 : enemySpeedFor(round)) * dt;
         const dx = (target.x - e.x) / td, dy = (target.y - e.y) / td;
-        if (!isWall(Math.floor(e.x + dx * sp), Math.floor(e.y))) e.x += dx * sp;
-        if (!isWall(Math.floor(e.x), Math.floor(e.y + dy * sp))) e.y += dy * sp;
+        const pad = 0.2; // body half-size for wall collision
+        const nx = e.x + dx * sp, ny = e.y + dy * sp;
+        const xEdge = nx + (dx > 0 ? pad : -pad);
+        if (!isWall(Math.floor(xEdge), Math.floor(e.y - pad)) &&
+            !isWall(Math.floor(xEdge), Math.floor(e.y)) &&
+            !isWall(Math.floor(xEdge), Math.floor(e.y + pad))) e.x = nx;
+        const yEdge = ny + (dy > 0 ? pad : -pad);
+        if (!isWall(Math.floor(e.x - pad), Math.floor(yEdge)) &&
+            !isWall(Math.floor(e.x), Math.floor(yEdge)) &&
+            !isWall(Math.floor(e.x + pad), Math.floor(yEdge))) e.y = ny;
       } else if (e.attackCd <= 0) {
         target.health -= e.boss ? 22 : (e.fritz || e.jsav) ? 14 : 9; // boss hits hardest; mini-bosses a bit harder
         e.attackCd = e.boss ? 0.9 : 1.1;
