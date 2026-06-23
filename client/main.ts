@@ -9,7 +9,6 @@ import {
   PADDLE,
   BALL,
   BLASTER,
-  ROAM,
   ARENA,
   MAX_PLAYERS,
   REACTIONS,
@@ -28,8 +27,6 @@ import {
   COSMETICS,
   SPIN_SEGMENTS,
   STOCKS,
-  StockSide,
-  positionWorth,
   TickHealth,
 } from '../shared/types';
 
@@ -96,15 +93,6 @@ const balanceCard = document.getElementById('balanceCard') as HTMLDivElement;
 const balanceClose = document.getElementById('balanceClose') as HTMLButtonElement;
 const balanceName = document.getElementById('balanceName') as HTMLSpanElement;
 const balanceBody = document.getElementById('balanceBody') as HTMLDivElement;
-const tipModal = document.getElementById('tipModal') as HTMLDivElement;
-const tipCard = document.getElementById('tipCard') as HTMLDivElement;
-const tipClose = document.getElementById('tipClose') as HTMLButtonElement;
-const tipTitle = document.getElementById('tipTitle') as HTMLSpanElement;
-const tipBalance = document.getElementById('tipBalance') as HTMLDivElement;
-const tipPresets = document.getElementById('tipPresets') as HTMLDivElement;
-const tipAmount = document.getElementById('tipAmount') as HTMLInputElement;
-const tipStatus = document.getElementById('tipStatus') as HTMLDivElement;
-const tipSend = document.getElementById('tipSend') as HTMLButtonElement;
 const mobileControlsEl = document.getElementById('mobileControls') as HTMLDivElement;
 const mobUpBtn = document.getElementById('mobUp') as HTMLButtonElement;
 const mobDownBtn = document.getElementById('mobDown') as HTMLButtonElement;
@@ -252,12 +240,6 @@ let state: StateMsg | null = null;
 let ballColor = '#e8eefc'; // live pong-ball color, mirrored onto the ball reaction
 let joined = false; // true once the player has entered a nickname (gates reactions)
 
-// Last rows each board was rendered with, so we can repaint (e.g. to add tip buttons the
-// moment you join) without waiting for the next server push. Declared up here so the
-// auto-rejoin path (which can run enableChat during module init) never hits them in the TDZ.
-let lastLbRows: LeaderboardRow[] = [];
-let lastNwRows: NetWorthRow[] = [];
-
 // 3D / first-person view: driven by server state (state.viewMode). Three.js loads lazily.
 let renderer3d: import('./render3d').Renderer3D | null = null;
 let loading3d = false;
@@ -269,11 +251,9 @@ let fatality2dActive = false;
 
 let target = COURT.h / 2; // desired paddle center Y, court units (duel)
 let arenaTarget = 0; // desired paddle offset along my edge, court units (arena)
-let targetX = 0; // desired inward inset off my wall while "roam" is active, court units (duel)
 // Blaster: the local player's current aim angle (vertical deflection off straight-across).
 let aimAngle = 0;
 let lastSent = -1;
-let lastSentX = 0;
 let lastSendAt = 0;
 const keys = new Set<string>();
 // Mobile touch state: once the player taps the board we consider them "captured"
@@ -559,8 +539,6 @@ const net = connect(
       }
     } else if (msg.type === 'reaction') {
       spawnReaction(msg.emoji);
-    } else if (msg.type === 'tip') {
-      celebrateTip(msg.from, msg.to, msg.amount);
     } else if (msg.type === 'announce') {
       showAnnouncement(msg.text, { toast: msg.toast });
     } else if (msg.type === 'ping') {
@@ -771,22 +749,6 @@ for (const btn of winScoreOpts.querySelectorAll<HTMLButtonElement>('.ws-btn')) {
   });
 }
 
-// Every distinct player nickname the client currently knows about (seated players,
-// watchers and the queue), minus my own — used to suggest /tip recipients.
-function knownPlayerNames(): string[] {
-  const names = new Set<string>();
-  if (state) {
-    for (const side of ['left', 'right'] as const) {
-      for (const p of state.paddles[side].players) if (p.name) names.add(p.name);
-    }
-    for (const w of state.watchers) names.add(w);
-    for (const q of state.queue) names.add(q);
-    if (state.king) names.add(state.king);
-  }
-  names.delete(myName);
-  return [...names].sort();
-}
-
 // --- slash commands ---
 // Typing "/" in chat pops up this menu of commands; each only appears when usable.
 interface ChatCommand {
@@ -806,22 +768,6 @@ const COMMANDS: ChatCommand[] = [
     enabled: () => isPlayer(),
     disabledHint: "only while you're playing",
     run: () => net.send({ type: 'forfeit' }),
-  },
-  {
-    name: 'tip',
-    hint: 'Tip anyone coins — /tip <name> <amount>. Offline players get it next sign-in.',
-    enabled: () => joined,
-    disabledHint: 'join the game first',
-    argOptions: () => knownPlayerNames(),
-    argHint: (arg) => `Tip ${arg} — then add an amount (e.g. /tip ${arg} 50)`,
-    run: (arg) => {
-      const tokens = (arg ?? '').trim().split(/\s+/).filter(Boolean);
-      if (tokens.length < 2) return false; // need a name AND an amount — keep the text visible
-      const amount = Number(tokens.pop());
-      const to = tokens.join(' ');
-      if (!to || !Number.isFinite(amount) || amount <= 0 || !Number.isInteger(amount)) return false;
-      net.send({ type: 'tip', to, amount });
-    },
   },
   {
     name: 'powerup',
@@ -1034,9 +980,6 @@ document.addEventListener('click', (e) => {
 
 function enableChat() {
   joined = true;
-  // Repaint the boards now that we've joined so their per-player tip buttons appear.
-  renderLeaderboard(lastLbRows);
-  renderNetWorth(lastNwRows);
   chatInput.disabled = false;
   closingModeEl.disabled = false;
   gravityModeEl.disabled = false;
@@ -1296,48 +1239,6 @@ function spawnReaction(emoji: string) {
   anim.oncancel = () => el.remove();
 }
 
-// A tip just happened anywhere in the room: cha-ching for everyone, a shower of gold
-// coins fluttering up the screen, and a banner naming who paid whom. The recipient gets
-// an extra-celebratory golden banner; everyone else a small toast.
-function celebrateTip(from: string, to: string, amount: number) {
-  playChaChing();
-  const mine = to === myName;
-  // Coin shower — scale the count a little with the size of the tip (capped so it never floods).
-  const coins = Math.min(28, 8 + Math.floor(Math.log2(amount + 1) * 3));
-  for (let i = 0; i < coins; i++) {
-    setTimeout(() => spawnCoin(), i * 70);
-  }
-  // The room sees the shower + cha-ching (and the /tip line in chat); the lucky
-  // recipient gets a golden banner calling it out.
-  if (mine) showAnnouncement(`💰 ${from} tipped you ${amount} 🪙!`, { color: '#ffcf33' });
-}
-
-// One gold coin fluttering up the screen (the tip-shower particle). Like a reaction,
-// but spins as it rises for a little extra sparkle.
-function spawnCoin() {
-  const el = document.createElement('div');
-  el.className = 'floating-reaction';
-  el.textContent = '🪙';
-  el.style.left = `${5 + Math.random() * 90}vw`;
-  reactionLayer.append(el);
-
-  const rise = window.innerHeight + 120;
-  const drift = (Math.random() - 0.5) * 220;
-  const spin = (Math.random() < 0.5 ? -1 : 1) * (360 + Math.random() * 360);
-  const duration = 2200 + Math.random() * 1400;
-
-  const anim = el.animate(
-    [
-      { transform: 'translate(0, 0) rotate(0deg) scale(0.4)', opacity: 0 },
-      { transform: `translate(${drift * 0.3}px, ${-rise * 0.15}px) rotate(${spin * 0.15}deg) scale(1)`, opacity: 1, offset: 0.12 },
-      { transform: `translate(${drift}px, ${-rise}px) rotate(${spin}deg) scale(1.1)`, opacity: 0 },
-    ],
-    { duration, easing: 'cubic-bezier(0.4, 0, 0.6, 1)' },
-  );
-  anim.onfinish = () => el.remove();
-  anim.oncancel = () => el.remove();
-}
-
 // textContent (not innerHTML) keeps user-supplied names/messages from injecting markup.
 let lastChatDate = '';
 const TZ = 'America/New_York';
@@ -1496,7 +1397,7 @@ spinBtn.addEventListener('click', () => {
   net.send({ type: 'dailySpin' });
 });
 const betSection = document.getElementById('betSection') as HTMLDivElement;
-const betAmountEl = document.getElementById('betAmount') as HTMLInputElement;
+const betAmountEl = document.getElementById('betAmount') as HTMLSpanElement;
 const betStatus = document.getElementById('betStatus') as HTMLDivElement;
 const betLeftName = document.getElementById('betLeftName') as HTMLSpanElement;
 const betRightName = document.getElementById('betRightName') as HTMLSpanElement;
@@ -1578,32 +1479,28 @@ function syncBetSection() {
   const canBet = !!state && state.status === 'playing' && !state.poly && myRole === 'observer' && !state.bot;
   betSection.hidden = !canBet;
   if (!canBet || !state) return;
-  // The stake is a positive whole number. We deliberately DON'T cap it to the wallet here —
-  // typing more than you have surfaces the "insufficient funds" hint below rather than being
-  // silently swallowed. Don't clobber the field while it's being edited.
-  betAmount = Math.max(1, Math.floor(betAmount) || 1);
-  if (document.activeElement !== betAmountEl) betAmountEl.value = String(betAmount);
-  betAmountEl.max = String(Math.max(1, wallet.coins));
+  // Clamp the stake to what you actually have.
+  betAmount = Math.max(1, Math.min(betAmount, Math.max(1, wallet.coins)));
+  betAmountEl.textContent = String(betAmount);
   // Side labels + live odds on the buttons.
   const odds = state.odds; // { left, right } | null
   betLeftName.textContent = state.paddles.left.name ?? 'Left';
   betRightName.textContent = state.paddles.right.name ?? 'Right';
   betLeftOdds.textContent = odds ? `${odds.left.toFixed(2)}×` : '—';
   betRightOdds.textContent = odds ? `${odds.right.toFixed(2)}×` : '—';
-  // Multiple bets are allowed in live betting — gate on affordability (and on having live odds).
+  // Multiple bets are allowed in live betting — only gate on affordability.
   const affordable = wallet.coins >= betAmount;
-  betLeftBtn.disabled = !affordable || !odds;
-  betRightBtn.disabled = !affordable || !odds;
-  // Status line: insufficient-funds hint takes priority, then your open wagers, then a preview.
+  betLeftBtn.disabled = !affordable;
+  betRightBtn.disabled = !affordable;
+  // Status line: show your open wagers (with their locked payouts) or a payout preview.
   const payout = (amt: number, o: number) => Math.max(amt, Math.round(amt * o));
-  betStatus.classList.toggle('warn', !affordable);
-  if (!affordable) {
-    betStatus.textContent = `💸 Insufficient funds — you have ${wallet.coins}🪙. Consider taking out a loan from Davis.`;
-  } else if (wallet.bets.length) {
+  if (wallet.bets.length) {
     const mine = wallet.bets
       .map((b) => `${b.amount}🪙 on ${b.side} @ ${b.odds.toFixed(2)}× → ${payout(b.amount, b.odds)}🪙`)
       .join('  ·  ');
     betStatus.textContent = `Your bets: ${mine}`;
+  } else if (wallet.coins < betAmount) {
+    betStatus.textContent = 'Not enough coins.';
   } else if (odds) {
     betStatus.textContent = `${betAmount}🪙 wins ${payout(betAmount, odds.left)}🪙 (left) / ${payout(betAmount, odds.right)}🪙 (right)`;
   } else {
@@ -1614,15 +1511,7 @@ function syncBetSection() {
 const betLeftBtn = document.getElementById('betLeft') as HTMLButtonElement;
 const betRightBtn = document.getElementById('betRight') as HTMLButtonElement;
 document.getElementById('betMinus')!.addEventListener('click', () => { betAmount = Math.max(1, betAmount - 1); syncBetSection(); });
-document.getElementById('betPlus')!.addEventListener('click', () => { betAmount = Math.min(Math.max(1, wallet.coins), betAmount + 1); syncBetSection(); });
-// Free-type a specific stake. Parse to a positive integer; empty/garbage falls back to 1.
-betAmountEl.addEventListener('input', () => {
-  const v = parseInt(betAmountEl.value, 10);
-  betAmount = Number.isFinite(v) ? Math.max(1, v) : 1;
-  syncBetSection();
-});
-// Normalize the field on blur (e.g. snap a half-typed value back to its parsed number).
-betAmountEl.addEventListener('blur', () => { betAmountEl.value = String(betAmount); });
+document.getElementById('betPlus')!.addEventListener('click', () => { betAmount = Math.min(wallet.coins || 1, betAmount + 1); syncBetSection(); });
 betLeftBtn.addEventListener('click', () => net.send({ type: 'bet', side: 'left', amount: betAmount }));
 betRightBtn.addEventListener('click', () => net.send({ type: 'bet', side: 'right', amount: betAmount }));
 
@@ -1772,7 +1661,7 @@ function showToast(text: string) {
 // round(worth) — nearest whole coin — exactly what the server pays out.
 type Market = {
   prices: { id: string; price: number; prev: number }[];
-  holdings: { id: string; side: StockSide; shares: number; cost: number; worth: number }[];
+  holdings: { id: string; shares: number; cost: number; worth: number }[];
   history: { id: string; series: { '5m': number[]; '1h': number[]; '1d': number[] } }[];
   nextUpdateAt: number;
 };
@@ -1848,9 +1737,7 @@ function renderMarket() {
   marketList.innerHTML = '';
   for (const stock of STOCKS) {
     const p = market.prices.find((x) => x.id === stock.id);
-    // A coin can carry both a long and a short position at once.
-    const longPos = market.holdings.find((x) => x.id === stock.id && x.side === 'long');
-    const shortPos = market.holdings.find((x) => x.id === stock.id && x.side === 'short');
+    const hold = market.holdings.find((x) => x.id === stock.id);
     const price = p?.price ?? stock.base;
     // Headline % is the move over the SELECTED timeframe (first → last of the visible graph),
     // so it changes when you switch Minutes / Hour / Day — not a static per-tick number.
@@ -1858,6 +1745,10 @@ function renderMarket() {
     const last = series.length ? series[series.length - 1] : price;
     const first = series.length >= 2 ? series[0] : last;
     const pct = first > 0 ? ((last - first) / first) * 100 : 0;
+    // A position's live worth = shares × current price (fractional, so it moves smoothly);
+    // cashing out pays it rounded to the nearest whole coin (≥ x.5 up, below down).
+    const rawWorth = hold ? hold.shares * price : 0;
+    const cashOut = Math.round(rawWorth);
 
     const row = document.createElement('div');
     row.className = 'coin-row';
@@ -1873,6 +1764,10 @@ function renderMarket() {
     const name = document.createElement('div');
     name.className = 'coin-name';
     name.textContent = stock.name;
+    const supply = document.createElement('span');
+    supply.className = 'coin-supply';
+    supply.textContent = `${stock.supply.toLocaleString()} circ.`;
+    name.appendChild(supply);
     main.appendChild(name);
     const priceLine = document.createElement('div');
     priceLine.className = 'coin-price';
@@ -1880,25 +1775,15 @@ function renderMarket() {
     const arrow = dir === 'up' ? '▲' : dir === 'down' ? '▼' : '•';
     priceLine.innerHTML = `${price.toFixed(2)} 🪙<span class="coin-chg ${dir}">${arrow} ${Math.abs(pct).toFixed(1)}%</span>`;
     main.appendChild(priceLine);
-    // One read-out line per open position. A long profits as the price rises; a short profits
-    // as it falls — and goes negative (covering costs coins) once the price passes its entry.
-    const posLine = (hold: typeof longPos & {}) => {
-      const rawWorth = positionWorth(hold.side, hold.shares, hold.cost, price);
-      const cashOut = Math.round(rawWorth);
+    if (hold) {
+      const pos = document.createElement('div');
+      pos.className = 'coin-pos';
       const plPct = hold.cost > 0 ? (rawWorth / hold.cost - 1) * 100 : 0;
       const plClass = plPct > 0.05 ? 'pl-up' : plPct < -0.05 ? 'pl-down' : '';
       const sign = plPct >= 0 ? '+' : '';
-      const tag = hold.side === 'short' ? '<span class="pos-short">SHORT</span> ' : '';
-      const verb = hold.side === 'short' ? 'cover' : 'cash out';
-      // A negative worth means closing costs you coins instead of paying out.
-      const closeTxt = cashOut >= 0 ? `${verb} ${cashOut}` : `${verb} costs ${-cashOut}`;
-      const div = document.createElement('div');
-      div.className = 'coin-pos';
-      div.innerHTML = `${tag}${hold.cost}🪙 → <span class="${plClass}">${rawWorth.toFixed(2)}🪙 (${sign}${plPct.toFixed(0)}%)</span> · ${closeTxt}`;
-      return div;
-    };
-    if (longPos) main.appendChild(posLine(longPos));
-    if (shortPos) main.appendChild(posLine(shortPos));
+      pos.innerHTML = `${hold.cost}🪙 in → <span class="${plClass}">${rawWorth.toFixed(2)}🪙 (${sign}${plPct.toFixed(0)}%)</span> · cash out ${cashOut}`;
+      main.appendChild(pos);
+    }
     const graph = document.createElement('canvas');
     graph.className = 'coin-graph';
     graph.width = 176; graph.height = 26;
@@ -1925,60 +1810,37 @@ function renderMarket() {
     amtEl.value = String(amt);
     const plus = document.createElement('button');
     plus.textContent = '+';
-    buy.append(minus, amtEl, plus);
-    actions.appendChild(buy);
-
-    // Open-position buttons: Buy (long) and Short, both staking the stepper amount.
-    const trade = document.createElement('div');
-    trade.className = 'coin-trade';
     const invest = document.createElement('button');
-    invest.className = 'coin-long';
-    invest.textContent = 'Buy';
+    invest.textContent = 'Invest';
     invest.disabled = wallet.coins < amt;
-    invest.onclick = () => { net.send({ type: 'stockInvest', coin: stock.id, amount: investAmt.get(stock.id) ?? 100, side: 'long' }); playChaChing(); };
-    const short = document.createElement('button');
-    short.className = 'coin-shortbtn';
-    short.textContent = 'Short';
-    short.disabled = wallet.coins < amt;
-    short.onclick = () => { net.send({ type: 'stockInvest', coin: stock.id, amount: investAmt.get(stock.id) ?? 100, side: 'short' }); playChaChing(); };
-    trade.append(invest, short);
-    actions.appendChild(trade);
-
+    invest.onclick = () => { net.send({ type: 'stockInvest', coin: stock.id, amount: investAmt.get(stock.id) ?? 100 }); playChaChing(); };
     // Step/commit the amount in place (don't re-render) — rebuilding the row would detach the very
     // button that was clicked and trip the click-outside handler, closing the whole panel.
     const setAmt = (v: number) => {
       const clamped = Math.max(1, Math.min(v, Math.max(1, wallet.coins)));
       investAmt.set(stock.id, clamped);
       amtEl.value = String(clamped);
-      invest.disabled = short.disabled = wallet.coins < clamped;
+      invest.disabled = wallet.coins < clamped;
     };
-    // Track what they type live (so the buttons gate correctly); normalize/clamp on commit (blur/Enter).
+    // Track what they type live (so Invest gates correctly); normalize/clamp on commit (blur/Enter).
     amtEl.addEventListener('input', () => {
       const v = Math.floor(Number(amtEl.value));
       const valid = Number.isFinite(v) && v >= 1;
       investAmt.set(stock.id, valid ? v : 1);
-      invest.disabled = short.disabled = !valid || wallet.coins < v;
+      invest.disabled = !valid || wallet.coins < v;
     });
     amtEl.addEventListener('change', () => setAmt(Math.floor(Number(amtEl.value)) || 1));
     minus.onclick = () => setAmt((investAmt.get(stock.id) ?? 100) - 1);
     plus.onclick = () => setAmt((investAmt.get(stock.id) ?? 100) + 1);
+    buy.append(minus, amtEl, plus, invest);
+    actions.appendChild(buy);
 
-    // Close-position buttons: only shown for the side(s) actually held.
-    if (longPos) {
-      const cash = document.createElement('button');
-      cash.className = 'coin-cash';
-      cash.textContent = `Cash out ${Math.round(positionWorth('long', longPos.shares, longPos.cost, price))}🪙`;
-      cash.onclick = () => { net.send({ type: 'stockCashOut', coin: stock.id, side: 'long' }); playChaChing(); };
-      actions.appendChild(cash);
-    }
-    if (shortPos) {
-      const cover = document.createElement('button');
-      cover.className = 'coin-cover';
-      const cv = Math.round(positionWorth('short', shortPos.shares, shortPos.cost, price));
-      cover.textContent = cv >= 0 ? `Cover ${cv}🪙` : `Cover (pay ${-cv}🪙)`;
-      cover.onclick = () => { net.send({ type: 'stockCashOut', coin: stock.id, side: 'short' }); playChaChing(); };
-      actions.appendChild(cover);
-    }
+    const cash = document.createElement('button');
+    cash.className = 'coin-cash';
+    cash.textContent = hold ? `Cash out ${cashOut}🪙` : 'Cash out';
+    cash.disabled = !hold;
+    cash.onclick = () => { net.send({ type: 'stockCashOut', coin: stock.id }); playChaChing(); };
+    actions.appendChild(cash);
 
     row.appendChild(actions);
     marketList.appendChild(row);
@@ -2379,15 +2241,6 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !powerupInfoPanel.hidden) closePowerupInfo();
 });
 
-// "Add block": spectators-only drop of a solid obstacle on the live duel court. Shown only
-// when you could actually use it (same rule as spawning a power-up, duel mode only).
-const blockControl = document.getElementById('blockControl') as HTMLDivElement;
-const addBlockBtn = document.getElementById('addBlockBtn') as HTMLButtonElement;
-const canAddBlock = () => !isPlayer() && state?.status === 'playing' && !inArena();
-addBlockBtn.addEventListener('click', () => {
-  if (canAddBlock()) net.send({ type: 'addBlock' });
-});
-
 // --- Add/kick bot dropdown (bottom-right) ---
 // One button: a dropdown of difficulty levels when no bot is in play, or a one-click
 // "kick bot" when one is. Visibility/label are driven from state in updateUI().
@@ -2743,7 +2596,6 @@ if (remembered) {
 // position over the canvas, and click the board to (re)capture the mouse.
 let pointerLocked = false;
 const clampPaddle = (y: number) => Math.max(PADDLE.h / 2, Math.min(COURT.h - PADDLE.h / 2, y));
-const clampRoam = (x: number) => Math.max(0, Math.min(ROAM.maxInset, x));
 
 // The "board" you capture the mouse to is the canvas in 2D and the 3D container in 3D
 // (the canvas is display:none in 3D, so it can neither be clicked nor receive mousemove).
@@ -2794,12 +2646,6 @@ function onBoardMouseMove(e: MouseEvent) {
     target = clampPaddle(target + sign * dx * (COURT.h / r.width) * 1.5);
   } else {
     target = clampPaddle(target + e.movementY * (COURT.h / r.height));
-    // Roam power-up: the otherwise-unused horizontal axis pushes the paddle into the
-    // court. Moving toward center (right for left side, left for right side) extends it.
-    if (myRoamHits() > 0 && myAmmo() <= 0) {
-      const sign = myRole === 'right' ? -1 : 1;
-      targetX = clampRoam(targetX + sign * e.movementX * (COURT.w / r.width));
-    }
   }
 }
 
@@ -2811,11 +2657,6 @@ function myDuelSide(): 'left' | 'right' | null {
 function myAmmo(): number {
   const s = myDuelSide();
   return s && state ? state.paddles[s].ammo ?? 0 : 0;
-}
-// Hits left on my "roam" power-up (>0 means my paddle can push into the court).
-function myRoamHits(): number {
-  const s = myDuelSide();
-  return s && state ? state.paddles[s].roamHits ?? 0 : 0;
 }
 // Fire the blaster (a mouse click while captured and armed). Server validates ammo.
 function fireBlaster() {
@@ -3294,24 +3135,13 @@ function loop(t: number) {
     } else {
       if (keys.has('arrowup') || keys.has('w') || mobileUpHeld) target -= step;
       if (keys.has('arrowdown') || keys.has('s') || mobileDownHeld) target += step;
-      // Roam power-up: ←/→ push the freed paddle into the court (toward center) and back.
-      if (myRoamHits() > 0) {
-        const sign = myRole === 'right' ? -1 : 1;
-        if (keys.has('arrowright') || keys.has('d')) targetX = clampRoam(targetX + sign * step);
-        if (keys.has('arrowleft') || keys.has('a')) targetX = clampRoam(targetX - sign * step);
-      }
     }
     target = Math.max(PADDLE.h / 2, Math.min(COURT.h - PADDLE.h / 2, target));
-    // Once roaming ends, relax the local inset so the next pickup starts at the wall.
-    if (myRoamHits() <= 0) targetX = 0;
 
-    // Send when Y (or, while roaming, the inset X) changed meaningfully, throttled to ~30/s.
-    const roaming = myRoamHits() > 0;
-    const changed = Math.abs(target - lastSent) > 0.5 || (roaming && Math.abs(targetX - lastSentX) > 0.5);
-    if (changed && t - lastSendAt > 33) {
-      net.send(roaming ? { type: 'paddle', y: target, x: targetX } : { type: 'paddle', y: target });
+    // Send when it changed meaningfully, throttled to ~30/s.
+    if (Math.abs(target - lastSent) > 0.5 && t - lastSendAt > 33) {
+      net.send({ type: 'paddle', y: target });
       lastSent = target;
-      lastSentX = targetX;
       lastSendAt = t;
     }
   }
@@ -3361,7 +3191,6 @@ function updateUI() {
     for (const { canvas, id, slot } of shopPreviewCanvases) drawCosmeticPreview(canvas, id, slot);
   }
   if (!powerupInfoPanel.hidden) syncPowerupSpawnability();
-  blockControl.hidden = !canAddBlock();
 
   // Sync win score buttons with the current room setting.
   for (const btn of winScoreOpts.querySelectorAll<HTMLButtonElement>('.ws-btn')) {
@@ -3569,7 +3398,6 @@ const PU_CHIP_COLOR: Record<string, string> = {
   slow: '#7aa2ff', ghost: '#c8beff', tiny: '#ff8c42', bigball: '#fb923c',
   freeze: '#88d8f7', blind: '#9988bb', mirror: '#ff7eb3',
   grow: '#ffd166', shrink: '#5ad1e6', smash: '#ff6b3d', blaster: '#ff4d4d',
-  roam: '#4ade80',
 };
 
 function renderPuHud(s: StateMsg) {
@@ -3587,7 +3415,6 @@ function renderPuHud(s: StateMsg) {
     if (p.growHits > 0)    chips.push(puChip('grow',   `${tag} grow ×${p.growHits}`));
     if (p.shrinkHits > 0)  chips.push(puChip('shrink', `${tag} shrink ×${p.shrinkHits}`));
     if (p.smashHits > 0)   chips.push(puChip('smash',  `${tag} smash ×${p.smashHits}`));
-    if (p.roamHits > 0)    chips.push(puChip('roam',   `${tag} roam ×${p.roamHits}`));
     if (p.freezeTimer > 0) chips.push(puChip('freeze', `${tag} frozen ${t1(p.freezeTimer)}`));
     if (p.blindTimer > 0)  chips.push(puChip('blind',  `${tag} blind ${t1(p.blindTimer)}`));
     if (p.mirrorTimer > 0) chips.push(puChip('mirror', `${tag} mirror ${t1(p.mirrorTimer)}`));
@@ -3619,7 +3446,6 @@ for (const canvas of document.querySelectorAll<HTMLCanvasElement>('.pu-icon')) {
 const prevElo = new Map<string, number>();
 
 function renderLeaderboard(rows: LeaderboardRow[]) {
-  lastLbRows = rows;
   if (!rows.length) {
     leaderboardEl.innerHTML = '';
     return;
@@ -3651,24 +3477,16 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
       const tag = t ? `<span class="lbtitle${r.title === 'opstask' ? ' rainbow' : ''}">${escapeHtml(t.name)}</span>` : '';
       return `<li><span class="rank">${i + 1}</span><span class="lbname">${escapeHtml(
         r.name,
-      )}${tag}</span><span class="pct">${r.elo ?? 500}</span>${tipBtnHtml(r.name)}</li>`;
+      )}${tag}</span><span class="pct">${r.elo ?? 500}</span></li>`;
     })
     .join('');
   leaderboardEl.innerHTML = `<h2>Leaderboard</h2><ol>${items}</ol>`;
-}
-
-// A small gold "tip" button for a player's board row — omitted for your own name (you
-// can't tip yourself) and before you've joined. Clicking it opens the tip dialog.
-function tipBtnHtml(name: string): string {
-  if (!joined || !name || name === myName) return '';
-  return `<button class="tip-btn" data-tip-name="${escapeHtml(name)}" title="Tip ${escapeHtml(name)} coins">🪙 tip</button>`;
 }
 
 // The Net Worth board: coins + live stock holdings − debt owed to Davis. The
 // richest player wears a 👑; anyone underwater (debt > assets) shows in red with
 // the amount they still owe. Ranks the whole economy, not just match wins.
 function renderNetWorth(rows: NetWorthRow[]) {
-  lastNwRows = rows;
   if (!rows.length) {
     netWorthEl.innerHTML = '';
     return;
@@ -3682,7 +3500,7 @@ function renderNetWorth(rows: NetWorthRow[]) {
       const tag = t ? `<span class="lbtitle${r.title === 'opstask' ? ' rainbow' : ''}">${escapeHtml(t.name)}</span>` : '';
       return `<li data-rank="${i}" title="View balance sheet"><span class="rank">${i + 1}</span><span class="lbname">${crown}${escapeHtml(
         r.name,
-      )}${tag}${debt}</span><span class="worth${broke}">${r.net}🪙</span>${tipBtnHtml(r.name)}</li>`;
+      )}${tag}${debt}</span><span class="worth${broke}">${r.net}🪙</span></li>`;
     })
     .join('');
   netWorthEl.innerHTML = `<h2>💰 Net Worth</h2><ol>${items}</ol>`;
@@ -3692,19 +3510,10 @@ function renderNetWorth(rows: NetWorthRow[]) {
 // rank — the index into the board the server last sent). Event-delegated so it survives
 // every re-render.
 netWorthEl.addEventListener('click', (e) => {
-  // A tip button takes priority over the row's balance-sheet view.
-  const tipBtn = (e.target as HTMLElement).closest('.tip-btn') as HTMLElement | null;
-  if (tipBtn) { openTipDialog(tipBtn.dataset.tipName ?? ''); return; }
   const li = (e.target as HTMLElement).closest('li[data-rank]') as HTMLElement | null;
   if (!li) return;
   const rank = Number(li.dataset.rank);
   if (Number.isInteger(rank)) net.send({ type: 'balanceSheetReq', rank });
-});
-
-// Leaderboard rows aren't otherwise clickable — only their tip buttons do anything.
-leaderboardEl.addEventListener('click', (e) => {
-  const tipBtn = (e.target as HTMLElement).closest('.tip-btn') as HTMLElement | null;
-  if (tipBtn) openTipDialog(tipBtn.dataset.tipName ?? '');
 });
 
 // Render and open the balance-sheet modal from a server response.
@@ -3717,9 +3526,8 @@ function showBalanceSheet(msg: BalanceSheetMsg) {
   rows.push(`<div class="bs-section">Stock holdings</div>`);
   if (msg.holdings.length) {
     for (const h of msg.holdings) {
-      const tag = h.side === 'short' ? '<span class="pos-short">SHORT</span> ' : '';
       rows.push(
-        `<div class="bs-row"><span class="bs-label">${tag}${escapeHtml(h.ticker)} ` +
+        `<div class="bs-row"><span class="bs-label">${escapeHtml(h.ticker)} ` +
           `<span class="bs-sub">${h.shares.toFixed(2)} sh @ ${Math.round(h.price)}🪙</span></span>` +
           `<span class="bs-val">${h.value}🪙</span></div>`,
       );
@@ -3752,51 +3560,6 @@ balanceModal.addEventListener('click', (e) => {
 });
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !balanceModal.hidden) closeBalanceSheet();
-});
-
-// --- tip dialog (opened by the 🪙 tip button on the boards) ---
-let tipTarget = ''; // nickname currently being tipped
-function openTipDialog(name: string) {
-  if (!name || name === myName || !joined) return;
-  tipTarget = name;
-  tipTitle.textContent = `Tip ${name}`;
-  tipBalance.textContent = `You have ${wallet.coins.toLocaleString()} 🪙`;
-  tipStatus.textContent = '';
-  tipAmount.value = '';
-  tipModal.hidden = false;
-  tipAmount.focus();
-}
-function closeTipDialog() {
-  tipModal.hidden = true;
-  tipTarget = '';
-}
-function submitTip() {
-  const amount = Number(tipAmount.value);
-  if (!Number.isInteger(amount) || amount <= 0) {
-    tipStatus.textContent = 'Enter a whole number of coins.';
-    return;
-  }
-  if (amount > wallet.coins) {
-    tipStatus.textContent = "You don't have that many coins.";
-    return;
-  }
-  net.send({ type: 'tip', to: tipTarget, amount });
-  closeTipDialog();
-}
-tipPresets.addEventListener('click', (e) => {
-  const btn = (e.target as HTMLElement).closest('button[data-amt]') as HTMLElement | null;
-  if (!btn) return;
-  tipAmount.value = btn.dataset.amt ?? '';
-  tipStatus.textContent = '';
-});
-tipSend.addEventListener('click', submitTip);
-tipAmount.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitTip(); } });
-tipClose.addEventListener('click', closeTipDialog);
-tipModal.addEventListener('click', (e) => {
-  if (!tipCard.contains(e.target as Node)) closeTipDialog();
-});
-window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && !tipModal.hidden) closeTipDialog();
 });
 
 // ----------------------------------------------------------------------------
