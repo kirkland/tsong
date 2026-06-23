@@ -3,12 +3,13 @@
 // simply empty, so the rest of the app runs unchanged.
 
 import pg from 'pg';
-import { LeaderboardRow, NetWorthRow, LEADERBOARD_SIZE, CampaignScoreRow } from '../shared/types';
+import { LeaderboardRow, NetWorthRow, LEADERBOARD_SIZE, CampaignScoreRow, StockSide, positionWorth } from '../shared/types';
 
 let pool: pg.Pool | null = null;
 
-// Railway's internal connection (*.railway.internal) and localhost don't use TLS;
-// the public proxy host does. Enable a permissive SSL only for the latter.
+// Localhost and internal hostnames (a DB on the same box, or any *.internal private host)
+// don't use TLS; a remote/managed Postgres over the public internet does. Enable a
+// permissive SSL only for the latter.
 function sslFor(url: string): pg.PoolConfig['ssl'] {
   try {
     const host = new URL(url).hostname;
@@ -54,16 +55,36 @@ export async function initDb(): Promise<void> {
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS trail TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS title TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS email TEXT`);
-  // Stock market: per-player positions (fractional shares + coins-invested cost basis),
-  // keyed by player + coin id; and the global price board (one row per coin).
+  // Stock market: per-player positions (fractional shares + coins-escrowed cost basis), keyed
+  // by player + coin id + side ('long'/'short' — a player can hold both at once); and the
+  // global price board (one row per coin).
   await pool.query(`
     CREATE TABLE IF NOT EXISTS stock_holdings (
       pid    TEXT NOT NULL,
       coin   TEXT NOT NULL,
+      side   TEXT NOT NULL DEFAULT 'long',
       shares DOUBLE PRECISION NOT NULL DEFAULT 0,
       cost   INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (pid, coin)
+      PRIMARY KEY (pid, coin, side)
     )
+  `);
+  // Migrate tables that predate shorting: add the `side` column and widen the primary key to
+  // include it (so longs and shorts of the same coin can coexist). Idempotent — the PK swap
+  // only runs while `side` isn't yet part of the key.
+  await pool.query(`ALTER TABLE stock_holdings ADD COLUMN IF NOT EXISTS side TEXT NOT NULL DEFAULT 'long'`);
+  await pool.query(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.key_column_usage
+         WHERE table_name = 'stock_holdings'
+           AND constraint_name = 'stock_holdings_pkey'
+           AND column_name = 'side'
+      ) THEN
+        ALTER TABLE stock_holdings DROP CONSTRAINT IF EXISTS stock_holdings_pkey;
+        ALTER TABLE stock_holdings ADD CONSTRAINT stock_holdings_pkey PRIMARY KEY (pid, coin, side);
+      END IF;
+    END $$;
   `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS stock_prices (
@@ -195,6 +216,29 @@ export async function initDb(): Promise<void> {
       console.log(`merged matty supreme (${sourcePid}) into Google account (${targetPid})`);
     } else {
       console.warn(`matty-supreme merge skipped — target(${targetPid ?? 'none'}) / source(${sourcePid ?? 'none'}); will retry next boot`);
+    }
+  }
+  // One-time account merge: combine every guest "boam" account into the owner's Google
+  // account (nmolloy@linksquares.com) — full merge (stats, coins, cosmetics, stocks, loan,
+  // DOOM + campaign scores) — then label the Google account "boam". Re-runs until the
+  // Google row exists (sign in once with Google first); the flag is set only on success.
+  const mergedBoam = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'merge_boam_v1'`);
+  if (mergedBoam.rowCount === 0) {
+    const tgt = await pool.query<{ id: string }>(
+      `SELECT id FROM players WHERE email = 'nmolloy@linksquares.com' ORDER BY wins DESC, coins DESC LIMIT 1`,
+    );
+    const targetPid = tgt.rows[0]?.id;
+    if (targetPid) {
+      const srcs = await pool.query<{ id: string }>(
+        `SELECT id FROM players WHERE LOWER(TRIM(name)) = 'boam' AND id <> $1`,
+        [targetPid],
+      );
+      for (const r of srcs.rows) await mergePlayerFull(r.id, targetPid);
+      await pool.query(`UPDATE players SET name = 'boam' WHERE id = $1`, [targetPid]);
+      await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('merge_boam_v1', now()::text)`);
+      console.log(`merged ${srcs.rowCount} 'boam' account(s) into Google account (${targetPid})`);
+    } else {
+      console.warn(`boam merge skipped — no player with email nmolloy@linksquares.com yet; will retry next boot`);
     }
   }
   // One-time: cap everyone's coins at 10 000. Anyone over the limit gets brought back down;
@@ -384,6 +428,19 @@ export async function getWallet(pid: string): Promise<Wallet> {
   return rows.length ? rowToWallet(rows[0]) : { ...EMPTY_WALLET };
 }
 
+/** Find a player by display name (case-insensitive), for tipping someone who isn't online.
+ *  Names aren't unique, so pick the most established match — most wins, then richest. Returns
+ *  the stable pid + the canonical stored name, or null if nobody by that name exists. */
+export async function findPlayerByName(name: string): Promise<{ pid: string; name: string } | null> {
+  if (!pool || !name.trim()) return null;
+  const { rows } = await pool.query<{ id: string; name: string }>(
+    `SELECT id, name FROM players WHERE LOWER(name) = LOWER($1)
+       ORDER BY wins DESC, coins DESC LIMIT 1`,
+    [name.trim()],
+  );
+  return rows.length ? { pid: rows[0].id, name: rows[0].name } : null;
+}
+
 /** Give a player a free bonus wheel spin (tournament reward). */
 export async function addBonusSpin(pid: string, name: string): Promise<void> {
   if (!pool || !pid) return;
@@ -536,9 +593,9 @@ export async function migratePlayer(oldPid: string, newPid: string): Promise<voi
   );
   // Transfer stock_holdings from old → new, merging into any existing positions.
   await pool.query(
-    `INSERT INTO stock_holdings (pid, coin, shares, cost)
-       SELECT $2, coin, shares, cost FROM stock_holdings WHERE pid = $1
-       ON CONFLICT (pid, coin) DO UPDATE
+    `INSERT INTO stock_holdings (pid, coin, side, shares, cost)
+       SELECT $2, coin, side, shares, cost FROM stock_holdings WHERE pid = $1
+       ON CONFLICT (pid, coin, side) DO UPDATE
          SET shares = stock_holdings.shares + EXCLUDED.shares,
              cost   = stock_holdings.cost   + EXCLUDED.cost`,
     [oldPid, newPid],
@@ -555,6 +612,58 @@ export async function migratePlayer(oldPid: string, newPid: string): Promise<voi
   await pool.query(`DELETE FROM players WHERE id = $1`, [oldPid]);
 }
 
+/** Full account merge for combining duplicate accounts: reassigns every per-player row
+ *  (stock positions, loan, DOOM + campaign scores) from oldPid to newPid — combining on
+ *  conflicts so nothing is double-counted — then folds the players row in via migratePlayer
+ *  (stats/coins/cosmetics) and deletes the old row. No-op if the pids match. */
+export async function mergePlayerFull(oldPid: string, newPid: string): Promise<void> {
+  if (!pool || !oldPid || !newPid || oldPid === newPid) return;
+  // Stock positions: pool shares + cost basis into any existing holding of the same coin+side.
+  await pool.query(
+    `INSERT INTO stock_holdings (pid, coin, side, shares, cost)
+       SELECT $2, coin, side, shares, cost FROM stock_holdings WHERE pid = $1
+       ON CONFLICT (pid, coin, side) DO UPDATE
+         SET shares = stock_holdings.shares + EXCLUDED.shares,
+             cost   = stock_holdings.cost   + EXCLUDED.cost`,
+    [oldPid, newPid],
+  );
+  await pool.query(`DELETE FROM stock_holdings WHERE pid = $1`, [oldPid]);
+  // Loan: only one open loan per player, so move the source's only if the target has none;
+  // otherwise the target keeps its own and the source's is dropped.
+  await pool.query(
+    `INSERT INTO loans (pid, amount, owed, due_at)
+       SELECT $2, amount, owed, due_at FROM loans WHERE pid = $1
+       ON CONFLICT (pid) DO NOTHING`,
+    [oldPid, newPid],
+  );
+  await pool.query(`DELETE FROM loans WHERE pid = $1`, [oldPid]);
+  // DOOM high scores: keep the best round per mode. Co-op rows are team-keyed ("team:%"),
+  // not per-player, so only the source's solo row moves.
+  await pool.query(
+    `INSERT INTO doom_scores (pid, name, coop, round)
+       SELECT $2, name, coop, round FROM doom_scores WHERE pid = $1
+       ON CONFLICT (pid, coop) DO UPDATE
+         SET round = GREATEST(doom_scores.round, EXCLUDED.round), name = EXCLUDED.name`,
+    [oldPid, newPid],
+  );
+  await pool.query(`DELETE FROM doom_scores WHERE pid = $1`, [oldPid]);
+  // Campaign arcade: keep the best score (and the stage/won that went with it).
+  await pool.query(
+    `INSERT INTO campaign_scores (pid, name, score, stage, won)
+       SELECT $2, name, score, stage, won FROM campaign_scores WHERE pid = $1
+       ON CONFLICT (pid) DO UPDATE
+         SET name  = EXCLUDED.name,
+             score = GREATEST(campaign_scores.score, EXCLUDED.score),
+             stage = CASE WHEN EXCLUDED.score > campaign_scores.score THEN EXCLUDED.stage ELSE campaign_scores.stage END,
+             won   = campaign_scores.won OR EXCLUDED.won`,
+    [oldPid, newPid],
+  );
+  await pool.query(`DELETE FROM campaign_scores WHERE pid = $1`, [oldPid]);
+  // Finally fold the players row (wins/losses/elo/coins/owned + equipped cosmetics) in and
+  // delete the old row.
+  await migratePlayer(oldPid, newPid);
+}
+
 /** Create or update a player row — used by the OAuth callback to ensure the row exists. */
 export async function upsertPlayer(pid: string, name: string, email?: string): Promise<void> {
   if (!pool || !pid) return;
@@ -567,48 +676,48 @@ export async function upsertPlayer(pid: string, name: string, email?: string): P
 }
 
 // --- Stock market ---
-export interface Holding { shares: number; cost: number; }
+export interface Holding { coin: string; side: StockSide; shares: number; cost: number; }
 
-/** Read all of a player's open stock positions, keyed by coin id. */
-export async function getHoldings(pid: string): Promise<Record<string, Holding>> {
-  if (!pool || !pid) return {};
-  const { rows } = await pool.query(`SELECT coin, shares, cost FROM stock_holdings WHERE pid = $1 AND shares > 0`, [pid]);
-  const out: Record<string, Holding> = {};
-  for (const r of rows) out[r.coin] = { shares: Number(r.shares), cost: Number(r.cost) };
-  return out;
+/** Read all of a player's open stock positions (longs and shorts). */
+export async function getHoldings(pid: string): Promise<Holding[]> {
+  if (!pool || !pid) return [];
+  const { rows } = await pool.query(`SELECT coin, side, shares, cost FROM stock_holdings WHERE pid = $1 AND shares > 0`, [pid]);
+  return rows.map((r) => ({ coin: r.coin, side: (r.side === 'short' ? 'short' : 'long') as StockSide, shares: Number(r.shares), cost: Number(r.cost) }));
 }
 
-/** Invest `amount` coins into `coin` at the given price: deducts the coins (fails — returns
- *  null — if the player can't afford it) and adds amount/price shares to the position,
- *  pooling with any existing holding. Returns the updated wallet on success. */
-export async function investStock(pid: string, _name: string, coin: string, amount: number, price: number): Promise<Wallet | null> {
+/** Open (or add to) a position in `coin` at the given price: escrows `amount` coins (fails —
+ *  returns null — if the player can't afford it) and pools amount/price shares into the
+ *  long or short position. Both sides escrow coins the same way; they differ only at cash-out
+ *  (see cashOutStock / positionWorth). Returns the updated wallet on success. */
+export async function investStock(pid: string, _name: string, coin: string, amount: number, price: number, side: StockSide = 'long'): Promise<Wallet | null> {
   if (!pool || !pid || amount <= 0 || !(price > 0)) return null;
   // Escrow the coins first; bail out untouched if the balance isn't there.
   const wallet = await spendCoins(pid, amount);
   if (!wallet) return null;
   const shares = amount / price;
   await pool.query(
-    `INSERT INTO stock_holdings (pid, coin, shares, cost) VALUES ($1, $2, $3, $4)
-       ON CONFLICT (pid, coin) DO UPDATE
+    `INSERT INTO stock_holdings (pid, coin, side, shares, cost) VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (pid, coin, side) DO UPDATE
        SET shares = stock_holdings.shares + EXCLUDED.shares,
            cost   = stock_holdings.cost   + EXCLUDED.cost`,
-    [pid, coin, shares, Math.floor(amount)],
+    [pid, coin, side, shares, Math.floor(amount)],
   );
   return wallet;
 }
 
-/** Cash out the entire position in `coin` at the given price: pays round(shares × price)
- *  coins, deletes the holding, and returns the new wallet plus the payout. Rounds to the
- *  NEAREST whole coin — worth ≥ x.5 rounds up, below rounds down (a 1-coin buy at 0.96 or
- *  0.55 cashes out for 1; at 0.40 it rounds to 0). Returns null if the player holds nothing
- *  in that coin. */
-export async function cashOutStock(pid: string, name: string, coin: string, price: number): Promise<{ wallet: Wallet; payout: number } | null> {
+/** Close the entire long or short position in `coin` at the given price: pays round(worth)
+ *  coins (worth = positionWorth — shares × price for a long; 2 × cost − shares × price for a
+ *  short, which is NEGATIVE when an underwater short is covered, debiting the wallet), deletes
+ *  the holding, and returns the new wallet plus the payout. A negative payout is applied via
+ *  addCoins, which floors the wallet at 0. Returns null if the player holds nothing on that side. */
+export async function cashOutStock(pid: string, name: string, coin: string, price: number, side: StockSide = 'long'): Promise<{ wallet: Wallet; payout: number } | null> {
   if (!pool || !pid) return null;
-  const { rows } = await pool.query(`SELECT shares FROM stock_holdings WHERE pid = $1 AND coin = $2`, [pid, coin]);
+  const { rows } = await pool.query(`SELECT shares, cost FROM stock_holdings WHERE pid = $1 AND coin = $2 AND side = $3`, [pid, coin, side]);
   if (!rows.length || Number(rows[0].shares) <= 0) return null;
   const shares = Number(rows[0].shares);
-  const payout = Math.round(shares * price);
-  await pool.query(`DELETE FROM stock_holdings WHERE pid = $1 AND coin = $2`, [pid, coin]);
+  const cost = Number(rows[0].cost);
+  const payout = Math.round(positionWorth(side, shares, cost, price));
+  await pool.query(`DELETE FROM stock_holdings WHERE pid = $1 AND coin = $2 AND side = $3`, [pid, coin, side]);
   // addCoins with a 0 delta still returns the (unchanged) wallet, so a wiped-out position
   // still resolves cleanly.
   const wallet = (await addCoins(pid, name, payout)) ?? (await getWallet(pid));
@@ -795,7 +904,10 @@ export async function getNetWorthLeaderboard(): Promise<(NetWorthRow & { pid: st
             COALESCE(l.owed, 0) AS loan
        FROM players p
        LEFT JOIN (
-         SELECT sh.pid, SUM(sh.shares * sp.price) AS val
+         SELECT sh.pid,
+                SUM(CASE WHEN sh.side = 'short'
+                         THEN 2 * sh.cost - sh.shares * sp.price
+                         ELSE sh.shares * sp.price END) AS val
            FROM stock_holdings sh
            JOIN stock_prices sp ON sp.coin = sh.coin
           WHERE sh.shares > 0
