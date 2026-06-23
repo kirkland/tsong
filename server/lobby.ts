@@ -623,7 +623,10 @@ export class Lobby {
   private ntSlots: WebSocket[] = [];
   private ntTeams = new Map<WebSocket, number>(); // ws → team (0 red / 1 blue)
   private ntStatus: 'waiting' | 'playing' = 'waiting';
+  private ntStartedAt = 0; // epoch ms the current match started (for the min-length reward guard)
   private static readonly NT_CAP = 6;
+  private static readonly NT_WIN_REWARD = 750; // coins each winning-team player earns per match
+  private static readonly NT_MIN_MATCH_MS = 60_000; // matches shorter than this don't pay (anti-farm)
 
   /** Take a slot in the Nuketown lobby (max 6), assigned to the smaller team for balance. */
   ntJoin(ws: WebSocket) {
@@ -666,7 +669,30 @@ export class Lobby {
     if (this.ntSlots[0] !== ws) return; // only the host (slot 0) may start
     if (this.ntSlots.length < 2) return; // need at least 2 players
     this.ntStatus = 'playing';
+    this.ntStartedAt = Date.now();
     this.broadcastNtLobby();
+  }
+
+  /** (Host only) settle a finished Nuketown match: pay every player on the winning team the win
+   *  reward. Guards: only the host may report, only while a match is live (status flips to
+   *  'waiting' so it pays out exactly once), the winning team must be valid (a draw reports -1
+   *  and pays no one), and the match must have lasted a minimum length so a host can't farm coins
+   *  with instant "wins". */
+  ntEnd(ws: WebSocket, winningTeam: number) {
+    if (this.ntSlots[0] !== ws) return;        // only the authoritative host reports the result
+    if (this.ntStatus !== 'playing') return;   // already settled, or never started — ignore
+    this.ntStatus = 'waiting';                 // settle once; any further ntEnd is a no-op
+    if (winningTeam !== 0 && winningTeam !== 1) return;             // draw / invalid → no payout
+    if (Date.now() - this.ntStartedAt < Lobby.NT_MIN_MATCH_MS) return; // too short to be real
+    for (const sock of this.ntSlots) {
+      if (this.ntTeams.get(sock) !== winningTeam) continue;
+      const conn = this.conns.get(sock);
+      if (!conn || !conn.pid) continue;
+      addCoins(conn.pid, conn.nickname, Lobby.NT_WIN_REWARD)
+        .then(() => { this.sendWallet(sock); this.refreshNetWorth().catch(() => {}); })
+        .catch((e) => console.error('nuketown reward failed:', e));
+      this.notify(sock, `🏆 Your team won Nuketown — +${Lobby.NT_WIN_REWARD.toLocaleString()} coins!`);
+    }
   }
 
   /** Forward an opaque Nuketown payload to every OTHER participant (dumb fan-out). */

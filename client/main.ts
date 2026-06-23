@@ -1500,6 +1500,7 @@ nuketownBtn.addEventListener('click', async () => {
       leave: () => net.send({ type: 'ntLeave' }),
       start: () => net.send({ type: 'ntStart' }),
       relay: (data) => net.send({ type: 'ntRelay', data }),
+      end: (team) => net.send({ type: 'ntEnd', team }),
       name: () => myName,
     });
   } catch (e) {

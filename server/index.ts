@@ -285,6 +285,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'ntStart':
         lobby.ntStart(ws);
         break;
+      case 'ntEnd':
+        if (typeof msg.team === 'number') lobby.ntEnd(ws, msg.team);
+        break;
       case 'ntRelay':
         if (msg.data !== undefined) lobby.ntRelay(ws, msg.data);
         break;
