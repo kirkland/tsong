@@ -223,7 +223,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'whale', name: '💎 Whale', slot: 'title', price: 25000 },
   { id: 'marketmaker', name: '📈 Market Maker', slot: 'title', price: 40000 },
   { id: 'untouchable', name: '👑 Untouchable', slot: 'title', price: 50000 },
-  { id: 'opstask', name: 'Ops Task Duty', slot: 'title', price: 100000 }, // animated rainbow
+  { id: 'opstask', name: '🛠️ Ops Task Duty', slot: 'title', price: 100000 }, // animated rainbow
 ] as const;
 export const CHAT_MAX_LEN = 200; // max characters per chat message
 export const CHAT_HISTORY = 50; // recent messages kept/sent to new joiners
