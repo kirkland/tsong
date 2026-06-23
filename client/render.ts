@@ -692,8 +692,17 @@ const TRAIL_TINTS: Record<string, TrailTint> = {
   inferno: (i, n) => `hsl(${20 + (i / n) * 35},100%,${50 + (i / n) * 12}%)`, // red tail → yellow head
   lightning: () => '#8ab4ff',
   phoenix: (i, _n, t) => `hsl(${(t / 14 + i * 18) % 60},100%,58%)`, // animated red↔gold fire
+  // --- exclusive trails ---
+  'x-eclipse': (i, n, t) => {
+    const f = i / n;
+    const pulse = 0.5 + 0.5 * Math.sin(t / 700 + i * 0.5);
+    // Tail: deep void-violet → Head: blazing corona gold, with slow pulse
+    const hue = 260 - f * 215;               // violet at tail → gold at head
+    const light = 18 + f * 42 + pulse * 12;  // dark → blazing, animated
+    return `hsl(${hue},100%,${light}%)`;
+  },
 };
-const TRAIL_GLOW = new Set(['comet', 'frostwake', 'ember', 'neonstreak', 'rainbowtrail', 'stardust', 'inferno', 'lightning', 'phoenix']); // additive blend
+const TRAIL_GLOW = new Set(['comet', 'frostwake', 'ember', 'neonstreak', 'rainbowtrail', 'stardust', 'inferno', 'lightning', 'phoenix', 'x-eclipse']); // additive blend
 const TRAIL_LEN = 14; // samples of paddle history kept for the streak
 const trailHistory = new Map<string, { x: number; y: number }[]>();
 function drawTrail(ctx: CanvasRenderingContext2D, key: string, cx: number, cy: number, h: number, id: string) {
