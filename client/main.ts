@@ -2207,7 +2207,8 @@ function renderHouse() {
 const lootBtn = document.getElementById('lootBtn') as HTMLButtonElement | null;
 const lootPanel = document.getElementById('lootPanel') as HTMLDivElement;
 const lootBody = document.getElementById('lootBody') as HTMLDivElement;
-const LOOT_PRICE = 2500; // mirror of the server's Lobby.LOOT_PRICE (display only)
+const LOOT_PRICE = 2500;       // mirror of server's Lobby.LOOT_PRICE (display only)
+const LOOT_COIN_REWARD = 1500; // mirror of server's Lobby.LOOT_COIN_REWARD
 let lootBusy = false;
 let lootTimer: number | undefined; // clears a hung "Opening…" if no lootResult arrives
 let lootRevealHtml = ''; // last prize reveal, kept across re-renders (wallet/house/market updates
@@ -2222,7 +2223,12 @@ function renderLoot() {
       }).join(' ')}</div>`
     : '';
   lootBody.innerHTML = `
-    <div class="loot-blurb">Crack a box for ${LOOT_PRICE.toLocaleString()}🪙: a common cosmetic, a coin payout, or a <b>scarce exclusive</b> (hard mint cap — some are 1-of-1).</div>
+    <div class="loot-blurb">Spend ${LOOT_PRICE.toLocaleString()}🪙 to crack a box — you get one of:</div>
+    <table class="loot-odds">
+      <tr><td>55%</td><td>🎨 Common cosmetic</td><td>hat / skin / trail / title</td></tr>
+      <tr><td>30%</td><td>🪙 Coin payout</td><td>+${LOOT_COIN_REWARD.toLocaleString()} coins</td></tr>
+      <tr><td>15%</td><td>✨ Scarce exclusive</td><td>hard mint cap · some 1-of-1</td></tr>
+    </table>
     <button id="lootOpenBtn" type="button" ${canAfford && !lootBusy ? '' : 'disabled'}>${lootBusy ? 'Opening…' : canAfford ? `🎁 Open Box · ${LOOT_PRICE.toLocaleString()}🪙` : `Need ${LOOT_PRICE.toLocaleString()}🪙 — you have ${wallet.coins.toLocaleString()}`}</button>
     <div id="lootReveal" class="loot-reveal">${lootRevealHtml}</div>
     ${owned}
@@ -2245,13 +2251,18 @@ function renderLoot() {
 function onLootResult(msg: LootResultMsg) {
   if (lootTimer !== undefined) { clearTimeout(lootTimer); lootTimer = undefined; }
   lootBusy = false;
+  const SLOT_LABEL: Record<string, string> = { hat: '🎩 Hat', skin: '🎨 Skin', trail: '✨ Trail', title: '🏷️ Title', song: '🎵 Song' };
   if (msg.kind === 'exclusive') {
-    lootRevealHtml = `<div class="loot-pop loot-rare">✨ <b>${escapeHtml(msg.name ?? '')}</b> <span class="loot-serial">#${msg.serial} of ${msg.cap}</span><div class="loot-rarity">${escapeHtml(msg.rarity ?? '')}</div></div>`;
+    const excl = EXCLUSIVES.find((x) => x.id === (msg.item ?? ''));
+    const slotLabel = excl ? (SLOT_LABEL[excl.slot] ?? excl.slot) : '';
+    lootRevealHtml = `<div class="loot-pop loot-rare"><div class="loot-slot">${slotLabel} · Exclusive</div>✨ <b>${escapeHtml(msg.name ?? '')}</b><br><span class="loot-serial">#${msg.serial} of ${msg.cap}</span><div class="loot-rarity">${escapeHtml(msg.rarity ?? '')}</div></div>`;
     playChaChing();
   } else if (msg.kind === 'cosmetic') {
-    lootRevealHtml = `<div class="loot-pop">🎨 You got <b>${escapeHtml(msg.name ?? '')}</b>!</div>`;
+    const cosm = COSMETICS.find((c) => c.id === (msg.item ?? ''));
+    const slotLabel = cosm ? (SLOT_LABEL[cosm.slot] ?? cosm.slot) : '';
+    lootRevealHtml = `<div class="loot-pop"><div class="loot-slot">${slotLabel}</div>🎨 <b>${escapeHtml(msg.name ?? '')}</b><div class="loot-added">Added to your wardrobe!</div></div>`;
   } else {
-    lootRevealHtml = `<div class="loot-pop">🪙 <b>+${(msg.coins ?? 0).toLocaleString()}</b> coins</div>`;
+    lootRevealHtml = `<div class="loot-pop"><div class="loot-slot">Coin Payout</div>🪙 <b>+${(msg.coins ?? 0).toLocaleString()}</b> coins</div>`;
     playChaChing();
   }
   // Persisted in lootRevealHtml so the wallet/house/market re-renders that follow an open don't

@@ -1054,16 +1054,26 @@
         font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; margin: 8px 0 6px;
       }
       .loot-blurb { font-size: 11px; color: #8693b3; line-height: 1.4; margin-bottom: 8px; }
+      .loot-odds { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 8px; }
+      .loot-odds td { padding: 3px 4px; }
+      .loot-odds td:first-child { color: #6b9aff; font-weight: 700; width: 36px; }
+      .loot-odds td:nth-child(2) { color: #c0ccee; }
+      .loot-odds td:last-child { color: #8693b3; text-align: right; font-size: 10px; }
+      .loot-odds tr:nth-child(2) td:first-child { color: #ffd86e; }
+      .loot-odds tr:nth-child(3) td:first-child { color: #d070ff; }
       #lootOpenBtn {
         width: 100%; font: inherit; font-size: 13px; font-weight: 700; padding: 9px 0; border-radius: 6px;
         border: 1px solid #6b4a8f; background: #1a1228; color: #d0a0e0; cursor: pointer;
       }
       #lootOpenBtn:hover:not(:disabled) { background: #2a1c3c; }
       #lootOpenBtn:disabled { opacity: 0.5; cursor: default; }
-      .loot-reveal { min-height: 18px; margin: 8px 0; text-align: center; }
-      .loot-pop { font-size: 14px; color: #e8eefc; animation: lootPop 0.4s ease; }
-      .loot-pop.loot-rare { color: #ffd86e; font-size: 16px; text-shadow: 0 0 10px rgba(255,216,110,0.6); }
-      .loot-rarity { font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: #b09; }
+      .loot-reveal { min-height: 18px; margin: 8px 0; }
+      .loot-reveal:not(:empty) { background: #0b1020; border: 1px solid #2a3550; border-radius: 6px; padding: 10px 8px; text-align: center; }
+      .loot-pop { font-size: 15px; color: #e8eefc; animation: lootPop 0.4s ease; }
+      .loot-slot { font-size: 10px; color: #6b9aff; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 3px; }
+      .loot-added { font-size: 10px; color: #5a7a5a; margin-top: 4px; }
+      .loot-pop.loot-rare { color: #ffd86e; font-size: 17px; text-shadow: 0 0 10px rgba(255,216,110,0.6); }
+      .loot-rarity { font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: #b09; margin-top: 3px; }
       @keyframes lootPop { from { transform: scale(0.6); opacity: 0; } to { transform: scale(1); opacity: 1; } }
       .loot-owned, .loot-cap { font-size: 10px; color: #6b7796; margin-top: 8px; line-height: 1.5; }
       .loot-badge { display: inline-block; background: #11182c; border: 1px solid #2a3550; border-radius: 4px; padding: 1px 5px; margin: 1px; }
