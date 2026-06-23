@@ -334,6 +334,26 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'balanceSheetReq':
         if (typeof msg.rank === 'number') lobby.sendBalanceSheet(ws, msg.rank);
         break;
+      case 'lootBoxOpen':
+        lobby.openLootBox(ws);
+        break;
+      case 'marketList':
+        if (typeof msg.instanceId === 'number' && typeof msg.ask === 'number') {
+          lobby.marketList(ws, msg.instanceId, msg.ask);
+        }
+        break;
+      case 'marketCancel':
+        if (typeof msg.listingId === 'number') lobby.marketCancel(ws, msg.listingId);
+        break;
+      case 'marketBuy':
+        if (typeof msg.item === 'string') lobby.marketBuy(ws, msg.item);
+        break;
+      case 'marketReq':
+        lobby.sendMarket(ws);
+        break;
+      case 'loanBookReq':
+        lobby.sendLoanBook(ws);
+        break;
       case 'migrate': {
         // Only honour the request if the socket is authenticated — prevents spoofing.
         const authSession = wsSessions.get(ws);

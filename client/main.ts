@@ -32,6 +32,11 @@ import {
   StockTf,
   positionWorth,
   TickHealth,
+  EXCLUSIVES,
+  ExclusiveItem,
+  LootResultMsg,
+  MarketItemView,
+  LoanBookMsg,
 } from '../shared/types';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -624,8 +629,10 @@ const net = connect(
     } else if (msg.type === 'campaignLeaderboard') {
       campaignScores = msg.rows;
     } else if (msg.type === 'wallet') {
-      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
+      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
       rouletteHandle.setCoins(msg.coins);
+      if (!lootPanel.hidden) renderLoot();
+      if (!marketplacePanel.hidden) renderMarketplace();
       // During a roulette spin, hold every coin-total display (toolbar tab, shop, market) at its
       // pre-result value until the wheel lands — otherwise the settled balance reveals the outcome
       // before the animation finishes. The roulette `onSettled` callback runs refreshWallet then.
@@ -644,6 +651,16 @@ const net = connect(
       // Taking/repaying resets the conversation; collecting (loan→null) drops back to the intro.
       if (!loan) loanStep = 'intro';
       if (!loanPanel.hidden) renderLoan();
+    } else if (msg.type === 'house') {
+      houseBalance = msg.balance;
+      renderHouse();
+    } else if (msg.type === 'lootResult') {
+      onLootResult(msg);
+    } else if (msg.type === 'market') {
+      marketplace = msg.items;
+      if (!marketplacePanel.hidden) renderMarketplace();
+    } else if (msg.type === 'loanBook') {
+      showLoanBook(msg);
     }
   },
   () => {
@@ -1587,8 +1604,8 @@ document.addEventListener('keydown', (e) => {
 });
 
 // --- Coins, cosmetics shop & betting ---
-let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; song: string | null; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
-  { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, bets: [], nextSpinAt: 0, bonusSpins: 0 };
+let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; song: string | null; exclusives: { id: string; serial: number; instanceId: number }[]; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
+  { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, exclusives: [], bets: [], nextSpinAt: 0, bonusSpins: 0 };
 let betAmount = 100; // default wager (economy is scaled ×100); min is still 1
 let shopTab: 'hat' | 'skin' | 'trail' | 'title' | 'song' = 'hat';
 const shopBtn = document.getElementById('shopBtn') as HTMLButtonElement;
@@ -1905,7 +1922,7 @@ function showToast(text: string) {
 // latest `stocks` message and fire invest/cash-out requests. The cash-out number we show is
 // round(worth) — nearest whole coin — exactly what the server pays out.
 type Market = {
-  prices: { id: string; price: number; prev: number }[];
+  prices: { id: string; price: number; prev: number; flow?: number }[];
   holdings: { id: string; side: StockSide; shares: number; cost: number; worth: number }[];
   history: { id: string; series: Record<StockTf, number[]> }[];
   nextUpdateAt: number;
@@ -2016,7 +2033,11 @@ function renderMarket() {
     priceLine.className = 'coin-price';
     const dir = pct > 0.01 ? 'up' : pct < -0.01 ? 'down' : 'flat';
     const arrow = dir === 'up' ? '▲' : dir === 'down' ? '▼' : '•';
-    priceLine.innerHTML = `${price.toFixed(2)} 🪙<span class="coin-chg ${dir}">${arrow} ${Math.abs(pct).toFixed(1)}%</span>`;
+    // Order-flow tint: a small ▲/▼ from the server-reported net pressure sign (buy- vs sell-heavy).
+    const flow = p?.flow ?? 0;
+    const flowTag = flow > 0 ? '<span class="coin-flow up" title="buy pressure">▲</span>'
+      : flow < 0 ? '<span class="coin-flow down" title="sell pressure">▼</span>' : '';
+    priceLine.innerHTML = `${price.toFixed(2)} 🪙<span class="coin-chg ${dir}">${arrow} ${Math.abs(pct).toFixed(1)}%</span>${flowTag}`;
     main.appendChild(priceLine);
     // One read-out line per open position. A long profits as the price rises; a short profits
     // as it falls — and goes negative (covering costs coins) once the price passes its entry.
@@ -2141,7 +2162,12 @@ const msFill = document.getElementById('msFill') as HTMLDivElement;
 const msPct = document.getElementById('msPct') as HTMLSpanElement;
 const msInfo = document.getElementById('msInfo') as HTMLButtonElement;
 const msInfoPop = document.getElementById('msInfoPop') as HTMLDivElement;
-msInfo.addEventListener('click', () => { msInfoPop.hidden = !msInfoPop.hidden; });
+msInfo.addEventListener('click', (e) => { e.stopPropagation(); msInfoPop.hidden = !msInfoPop.hidden; });
+// Click the stability bar (anywhere but the info button) to open the public loan book.
+marketStability.addEventListener('click', (e) => {
+  if (msInfo.contains(e.target as Node)) return; // the ⓘ button is its own thing
+  net.send({ type: 'loanBookReq' });
+});
 function renderStability(s: { unpaid: number; threshold: number } | undefined) {
   if (!s || !(s.threshold > 0)) return;
   marketStability.hidden = false;
@@ -2151,6 +2177,189 @@ function renderStability(s: { unpaid: number; threshold: number } | undefined) {
   // Green (stable) → red (about to crash) as the bar fills.
   msFill.style.backgroundColor = `hsl(${Math.round(140 * (1 - frac))} 70% 52%)`;
   msPct.textContent = `${Math.round(s.unpaid).toLocaleString()} / ${s.threshold.toLocaleString()} 🪙 · ${pct}%`;
+}
+
+// --- Economy Overhaul: House treasury readout ---
+// The server broadcasts the House balance on join + whenever it changes. The treasury funds most
+// payouts; when it runs low, payouts are throttled (housePay), so we show a "payouts reduced" note.
+let houseBalance = 0;
+const HOUSE_LOW = 250_000; // below this, the throttle is likely biting — warn the player
+const houseReadout = document.getElementById('houseReadout') as HTMLDivElement | null;
+function renderHouse() {
+  if (!houseReadout) return;
+  const low = houseBalance < HOUSE_LOW;
+  houseReadout.innerHTML = `🏦 House: <b>${Math.round(houseBalance).toLocaleString()}</b> 🪙` +
+    (low ? ` <span class="house-low">payouts reduced</span>` : '');
+}
+
+// --- Loot boxes (top-left panel; reuses the spin/celebrate reveal) ---
+const lootBtn = document.getElementById('lootBtn') as HTMLButtonElement | null;
+const lootPanel = document.getElementById('lootPanel') as HTMLDivElement;
+const lootBody = document.getElementById('lootBody') as HTMLDivElement;
+const LOOT_PRICE = 2500; // mirror of the server's Lobby.LOOT_PRICE (display only)
+let lootBusy = false;
+function renderLoot() {
+  const canAfford = wallet.coins >= LOOT_PRICE;
+  const mine = wallet.exclusives;
+  const owned = mine.length
+    ? `<div class="loot-owned"><b>Your exclusives:</b> ${mine.map((e) => {
+        const def = EXCLUSIVES.find((x) => x.id === e.id);
+        return `<span class="loot-badge">${escapeHtml(def?.name ?? e.id)} <span class="loot-serial">#${e.serial}</span></span>`;
+      }).join(' ')}</div>`
+    : '';
+  lootBody.innerHTML = `
+    <div class="loot-blurb">Crack a box for ${LOOT_PRICE.toLocaleString()}🪙: a common cosmetic, a coin payout, or a <b>scarce exclusive</b> (hard mint cap — some are 1-of-1).</div>
+    <button id="lootOpenBtn" type="button" ${canAfford && !lootBusy ? '' : 'disabled'}>${lootBusy ? 'Opening…' : `🎁 Open Box · ${LOOT_PRICE.toLocaleString()}🪙`}</button>
+    <div id="lootReveal" class="loot-reveal"></div>
+    ${owned}
+    <div class="loot-cap"><b>Mint caps:</b> ${EXCLUSIVES.map((x) => `${escapeHtml(x.name)} (${x.cap})`).join(' · ')}</div>`;
+  const openBtn = document.getElementById('lootOpenBtn') as HTMLButtonElement | null;
+  if (openBtn) openBtn.onclick = () => {
+    if (lootBusy || wallet.coins < LOOT_PRICE) return;
+    lootBusy = true; renderLoot();
+    net.send({ type: 'lootBoxOpen' });
+  };
+}
+function onLootResult(msg: LootResultMsg) {
+  lootBusy = false;
+  renderLoot();
+  const reveal = document.getElementById('lootReveal');
+  if (reveal) {
+    let html = '';
+    if (msg.kind === 'exclusive') {
+      html = `<div class="loot-pop loot-rare">✨ <b>${escapeHtml(msg.name ?? '')}</b> <span class="loot-serial">#${msg.serial} of ${msg.cap}</span><div class="loot-rarity">${escapeHtml(msg.rarity ?? '')}</div></div>`;
+      playChaChing();
+    } else if (msg.kind === 'cosmetic') {
+      html = `<div class="loot-pop">🎨 You got <b>${escapeHtml(msg.name ?? '')}</b>!</div>`;
+    } else {
+      html = `<div class="loot-pop">🪙 <b>+${(msg.coins ?? 0).toLocaleString()}</b> coins</div>`;
+      playChaChing();
+    }
+    reveal.innerHTML = html;
+  }
+}
+if (lootBtn) lootBtn.addEventListener('click', () => {
+  const open = lootPanel.hidden;
+  lootPanel.hidden = !open;
+  lootBtn.setAttribute('aria-expanded', String(open));
+  if (open) renderLoot();
+});
+document.addEventListener('click', (e) => {
+  if (lootPanel.hidden) return;
+  const t = e.target as Node;
+  if (t instanceof Node && !t.isConnected) return;
+  if (!lootPanel.contains(t) && !(lootBtn && lootBtn.contains(t))) { lootPanel.hidden = true; lootBtn?.setAttribute('aria-expanded', 'false'); }
+});
+
+// --- Player marketplace (scarce exclusives): browse floors + "My Items" ---
+let marketplace: MarketItemView[] = [];
+let mpTab: 'browse' | 'mine' = 'browse';
+const marketplaceBtn = document.getElementById('marketplaceBtn') as HTMLButtonElement | null;
+const marketplacePanel = document.getElementById('marketplacePanel') as HTMLDivElement;
+const marketplaceBody = document.getElementById('marketplaceBody') as HTMLDivElement;
+function renderMarketplace() {
+  const tabs = `<div class="mp-tabs">
+    <button type="button" class="mp-tab${mpTab === 'browse' ? ' active' : ''}" data-mptab="browse">Browse</button>
+    <button type="button" class="mp-tab${mpTab === 'mine' ? ' active' : ''}" data-mptab="mine">My Items</button>
+  </div>`;
+  let body = '';
+  if (mpTab === 'browse') {
+    body = marketplace.map((it) => {
+      const def = EXCLUSIVES.find((x) => x.id === it.item) as ExclusiveItem | undefined;
+      const floor = it.floor !== null ? `${it.floor.toLocaleString()}🪙` : '—';
+      const last = it.lastSale !== null ? `last ${it.lastSale.toLocaleString()}🪙` : 'no sales yet';
+      const canBuy = it.floor !== null && wallet.coins >= it.floor;
+      return `<div class="mp-row">
+        <div class="mp-name">${escapeHtml(def?.name ?? it.item)} <span class="mp-rarity">${escapeHtml(def?.rarity ?? '')}</span></div>
+        <div class="mp-meta">${it.minted} of ${it.cap} minted · floor ${floor} · ${last}</div>
+        <button type="button" class="mp-buy" data-mpbuy="${it.item}" ${canBuy ? '' : 'disabled'}>Buy Lowest${it.floor !== null ? ` (${it.floor.toLocaleString()}🪙)` : ''}</button>
+      </div>`;
+    }).join('') || '<div class="mp-empty">No exclusives minted yet — try a loot box.</div>';
+  } else {
+    // "My Items": list-for / cancel + a quick equip.
+    const myListings = marketplace.flatMap((it) => it.listings.filter((l) => l.mine).map((l) => ({ ...l, def: EXCLUSIVES.find((x) => x.id === it.item) })));
+    const listingRows = myListings.map((l) =>
+      `<div class="mp-row"><div class="mp-name">${escapeHtml(l.def?.name ?? l.item)} <span class="mp-serial">listed for ${l.ask.toLocaleString()}🪙</span></div>
+        <button type="button" class="mp-cancel" data-mpcancel="${l.id}">Cancel</button></div>`,
+    ).join('');
+    const ownRows = wallet.exclusives.map((e) => {
+      const def = EXCLUSIVES.find((x) => x.id === e.id) as ExclusiveItem | undefined;
+      const equipped = (def && (wallet.hat === e.id || wallet.skin === e.id || wallet.trail === e.id || wallet.title === e.id));
+      return `<div class="mp-row">
+        <div class="mp-name">${escapeHtml(def?.name ?? e.id)} <span class="mp-serial">#${e.serial}</span></div>
+        <div class="mp-own-actions">
+          <button type="button" class="mp-equip" data-mpequip="${e.id}" data-mpslot="${def?.slot ?? ''}">${equipped ? 'Unequip' : 'Equip'}</button>
+          <input type="number" min="1" class="mp-ask" data-mpask="${e.serial}" placeholder="price" />
+          <button type="button" class="mp-list" data-mplist="${e.id}" data-mpserial="${e.serial}">List</button>
+        </div>
+      </div>`;
+    }).join('') || '<div class="mp-empty">You own no exclusives yet.</div>';
+    body = `${myListings.length ? `<div class="mp-section">Your listings</div>${listingRows}` : ''}<div class="mp-section">Your items</div>${ownRows}`;
+  }
+  marketplaceBody.innerHTML = tabs + body;
+}
+// Delegated handlers for the marketplace panel.
+marketplaceBody.addEventListener('click', (e) => {
+  const el = e.target as HTMLElement;
+  const tab = el.closest<HTMLButtonElement>('[data-mptab]');
+  if (tab) { mpTab = tab.dataset.mptab as 'browse' | 'mine'; renderMarketplace(); return; }
+  const buy = el.closest<HTMLButtonElement>('[data-mpbuy]');
+  if (buy) { net.send({ type: 'marketBuy', item: buy.dataset.mpbuy! }); return; }
+  const cancel = el.closest<HTMLButtonElement>('[data-mpcancel]');
+  if (cancel) { net.send({ type: 'marketCancel', listingId: Number(cancel.dataset.mpcancel) }); return; }
+  const equip = el.closest<HTMLButtonElement>('[data-mpequip]');
+  if (equip) {
+    const id = equip.dataset.mpequip!;
+    const slot = equip.dataset.mpslot as 'hat' | 'skin' | 'trail' | 'title';
+    const equipped = wallet.hat === id || wallet.skin === id || wallet.trail === id || wallet.title === id;
+    net.send({ type: 'shopEquip', slot, item: equipped ? null : id });
+    return;
+  }
+  const list = el.closest<HTMLButtonElement>('[data-mplist]');
+  if (list) {
+    const serial = Number(list.dataset.mpserial);
+    const itemId = list.dataset.mplist!;
+    const input = marketplaceBody.querySelector<HTMLInputElement>(`input[data-mpask="${serial}"]`);
+    const ask = Math.floor(Number(input?.value));
+    if (!Number.isFinite(ask) || ask < 1) { showAnnouncement('Enter a price to list.', { toast: true }); return; }
+    // Resolve the specific instance id from the wallet (serial is unique per item).
+    const owned = wallet.exclusives.find((x) => x.id === itemId && x.serial === serial);
+    if (!owned) { showAnnouncement('Could not resolve that item.', { toast: true }); return; }
+    net.send({ type: 'marketList', instanceId: owned.instanceId, ask });
+    return;
+  }
+});
+if (marketplaceBtn) marketplaceBtn.addEventListener('click', () => {
+  const open = marketplacePanel.hidden;
+  marketplacePanel.hidden = !open;
+  marketplaceBtn.setAttribute('aria-expanded', String(open));
+  if (open) { net.send({ type: 'marketReq' }); renderMarketplace(); }
+});
+document.addEventListener('click', (e) => {
+  if (marketplacePanel.hidden) return;
+  const t = e.target as Node;
+  if (t instanceof Node && !t.isConnected) return;
+  if (!marketplacePanel.contains(t) && !(marketplaceBtn && marketplaceBtn.contains(t))) { marketplacePanel.hidden = true; marketplaceBtn?.setAttribute('aria-expanded', 'false'); }
+});
+
+// --- Loan book modal (cloned from the balance-sheet modal pattern) ---
+function showLoanBook(msg: LoanBookMsg) {
+  balanceName.textContent = '📒 Davis\'s Loan Book';
+  if (!msg.loans.length) {
+    balanceBody.innerHTML = '<div class="bs-empty">No open loans — the books are clean.</div>';
+  } else {
+    const now = Date.now();
+    const rows = msg.loans.map((l) => {
+      const ms = l.dueAt - now;
+      const hrs = ms > 0 ? Math.floor(ms / 3_600_000) : 0;
+      const mins = ms > 0 ? Math.floor((ms % 3_600_000) / 60_000) : 0;
+      const due = ms > 0 ? `${hrs}h ${mins}m` : 'overdue';
+      return `<div class="bs-row"><span class="bs-label">${escapeHtml(l.name)} <span class="bs-sub">borrowed ${l.amount.toLocaleString()}🪙 · due ${due}</span></span>` +
+        `<span class="bs-val bs-debt">−${l.owed.toLocaleString()}🪙</span></div>`;
+    });
+    balanceBody.innerHTML = rows.join('');
+  }
+  balanceModal.hidden = false;
 }
 
 // --- Davis's loans (top-left): borrow coins, owe 1.5× by the daily 5pm collection ---

@@ -244,6 +244,32 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'song-disco', name: 'disco', slot: 'song', price: 20000, audio: '/disco.mp3' },
   { id: 'song-davis', name: 'davis boss theme', slot: 'song', price: 30000, audio: '/davis-battle.mp3' },
 ] as const;
+// --- Economy Overhaul: scarce "exclusive" cosmetics ---
+// Loot-box-only cosmetics with a HARD global mint cap (see exclusive_supply in the DB). They are
+// NOT in COSMETICS and are NOT buyable in the shop — the only way to get one is to roll it from a
+// loot box (a mint, gated by the cap) or buy a used one off the player marketplace (a transfer).
+// They reuse the same equip columns (hat/skin/trail/title) as regular cosmetics, so a slot is
+// mutually exclusive between a regular cosmetic and an exclusive. `cap` is the lifetime mint cap;
+// a couple are cap:1 one-of-a-kind grails. Rarity is purely a display/weight hint.
+export interface ExclusiveItem {
+  id: string;
+  name: string;
+  slot: 'hat' | 'skin' | 'trail' | 'title';
+  cap: number;     // lifetime global mint cap (authoritative count lives in exclusive_supply)
+  rarity: 'rare' | 'epic' | 'legendary' | 'mythic';
+}
+export const EXCLUSIVES: readonly ExclusiveItem[] = [
+  { id: 'x-voidcrown',   name: '🕳️ Void Crown',      slot: 'hat',   cap: 1, rarity: 'mythic' },     // one-of-one grail
+  { id: 'x-genesis',     name: '🌌 Genesis Skin',     slot: 'skin',  cap: 1, rarity: 'mythic' },     // one-of-one grail
+  { id: 'x-eclipse',     name: '🌑 Eclipse Trail',    slot: 'trail', cap: 3, rarity: 'legendary' },
+  { id: 'x-prismhalo',   name: '💠 Prism Halo',       slot: 'hat',   cap: 3, rarity: 'legendary' },
+  { id: 'x-founder',     name: '🪙 Founder',          slot: 'title', cap: 3, rarity: 'epic' },
+  { id: 'x-quantum',     name: '⚛️ Quantum Skin',     slot: 'skin',  cap: 3, rarity: 'epic' },
+] as const;
+export function isExclusive(id: string): boolean {
+  return EXCLUSIVES.some((x) => x.id === id);
+}
+
 export const CHAT_MAX_LEN = 200; // max characters per chat message
 export const CHAT_HISTORY = 50; // recent messages kept/sent to new joiners
 export const TICK_MS = 1000 / 60;
@@ -340,6 +366,12 @@ export type ClientMsg =
   | { type: 'repayLoan' } // pay Davis the full 1.5× owed and clear the loan
   | { type: 'roulette'; bets: RouletteBet[] } // stake coins on a single spin of the casino wheel
   | { type: 'balanceSheetReq'; rank: number } // peek at a net-worth board player's balance sheet (by current rank)
+  | { type: 'lootBoxOpen' } // open a loot box: spend coins, roll a weighted prize (common cosmetic / House coins / capped-rare exclusive)
+  | { type: 'marketList'; instanceId: number; ask: number } // list an owned exclusive instance on the marketplace for `ask` coins
+  | { type: 'marketCancel'; listingId: number } // cancel one of your own listings
+  | { type: 'marketBuy'; item: string } // buy the lowest-ask listed instance of an exclusive item
+  | { type: 'marketReq' } // request the current marketplace book (listings + floors + supply)
+  | { type: 'loanBookReq' } // request the public open-loan book (for the clickable stability-bar modal)
   | { type: 'migrate'; oldPid: string }; // one-time: merge a UUID guest account into the signed-in Google account
 
 // --- Server -> Client ---
@@ -733,7 +765,66 @@ export type ServerMsg =
   | TipMsg
   | BountyBoardMsg
   | BountyHitMsg
-  | ThemeSongMsg;
+  | ThemeSongMsg
+  | LootResultMsg
+  | MarketMsg
+  | LoanBookMsg
+  | HouseMsg;
+
+// --- Economy Overhaul server → client messages ---
+
+// Result of opening a loot box, sent only to the opener so it can run the reveal animation.
+// `kind` picks the celebration: a common cosmetic grant, a House-funded coin payout, or a
+// freshly-minted scarce exclusive (with its serial). A capped-out exclusive roll degrades to a
+// coin payout server-side, so the client only ever sees a real, paid result.
+export interface LootResultMsg {
+  type: 'lootResult';
+  kind: 'coins' | 'cosmetic' | 'exclusive';
+  coins?: number;             // coins paid (kind === 'coins')
+  item?: string;              // item id (cosmetic or exclusive)
+  name?: string;              // display name of the item
+  serial?: number;            // mint serial (exclusive only): "#serial of cap"
+  cap?: number;               // the item's global cap (exclusive only)
+  rarity?: string;            // rarity tag (exclusive only)
+}
+
+// The public marketplace book for scarce exclusives: per-item floor + listings, last-sale prices,
+// and how many of each item have been minted (vs the cap). Sent in response to marketReq and
+// re-pushed to interested clients after any listing change.
+export interface MarketListingView {
+  id: number;          // listing id (for cancel)
+  instanceId: number;  // the instance being sold
+  item: string;        // exclusive item id
+  sellerName: string;  // seller display name
+  ask: number;         // ask price in coins
+  mine: boolean;       // true if this listing belongs to the requesting player
+}
+export interface MarketItemView {
+  item: string;        // exclusive item id
+  floor: number | null; // lowest ask across all listings of this item (null = none listed)
+  minted: number;      // how many have been minted globally
+  cap: number;         // the item's lifetime mint cap
+  lastSale: number | null; // last sale price (null = never sold)
+  listings: MarketListingView[]; // every open listing for this item, ascending ask
+}
+export interface MarketMsg {
+  type: 'market';
+  items: MarketItemView[];
+}
+
+// The public open-loan book (clicking the market-stability bar): who owes Davis what, due when.
+export interface LoanBookRow { name: string; amount: number; owed: number; dueAt: number; }
+export interface LoanBookMsg {
+  type: 'loanBook';
+  loans: LoanBookRow[];
+}
+
+// The House treasury balance, broadcast on join and whenever it changes. When it runs low,
+// House-funded payouts are throttled (see housePay) — the client surfaces a "payouts reduced" note.
+export interface HouseMsg {
+  type: 'house';
+  balance: number;
+}
 
 // Broadcast when a match kicks off and a seated player has a theme song equipped — every client
 // loops `audio` for the duration of the match (until status leaves 'playing'). `owner` is the
@@ -777,6 +868,10 @@ export interface WalletMsg {
   trail: string | null; // equipped paddle trail
   title: string | null; // equipped name title (flair shown by your name)
   song: string | null; // equipped theme song (plays during your matches)
+  // Owned scarce exclusives (loot-box mints / marketplace buys): item id + mint serial +
+  // instance id (the marketplace lists a specific instance). Kept OUT of the `owned` CSV —
+  // exclusives are tracked per-instance in their own table.
+  exclusives: { id: string; serial: number; instanceId: number }[];
   // Your open wagers on the live duel (multiple allowed in live betting); each locks the odds
   // it was placed at. Empty when you have none.
   bets: Array<{ side: Side; amount: number; odds: number }>;
@@ -860,8 +955,9 @@ export function positionWorth(side: StockSide, shares: number, cost: number, pri
 export interface StockMsg {
   type: 'stocks';
   // Global price board, in STOCKS order. `prev` is the price at the previous re-roll (for the
-  // %-change readout); `price` is the live one.
-  prices: { id: string; price: number; prev: number }[];
+  // %-change readout); `price` is the live one. `flow` is the current net order-flow pressure
+  // sign for that coin (+1 buy-heavy, −1 sell-heavy, 0 balanced) — drives a small ▲/▼ tint.
+  prices: { id: string; price: number; prev: number; flow?: number }[];
   // This player's open positions (only coins they actually hold). `shares` is fractional;
   // `cost` is the total coins poured in (cost basis); `worth` is floor(shares × price) — the
   // coins they'd get if they cashed out right now.

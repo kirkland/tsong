@@ -47,14 +47,22 @@ import {
   WalletMsg,
   CampaignScoreRow,
   WC_COUNTRIES,
+  EXCLUSIVES,
+  isExclusive,
+  MarketItemView,
+  MarketListingView,
 } from '../shared/types';
 import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS,
-  getHoldings, investStock, cashOutStock, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
+  getHoldings, investStock, closePosition, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
   setStockCrashAt, getMarketInstability, setMarketInstability,
-  getLoan, takeLoan, repayLoan, collectDefaultedLoans, realignLoansToDeadline,
+  getLoan, takeLoan, repayLoan, collectDefaultedLoans, realignLoansToDeadline, getOpenLoans,
+  houseAdjust, getHouseBalance,
+  mintExclusive, getExclusiveSupply, getExclusiveLastSale,
+  listExclusive, cancelListing, getMarketListings, buyLowestAsk,
+  getNetizens, seedNetizen,
   addBounty, getBountyOn, clearBounty, getBounties } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
@@ -93,12 +101,18 @@ interface Conn {
 // (symmetric, so it doesn't drag the typical trajectory below the drift): usually ±~5% per
 // tick, with a 1-in-12 chance of a bigger swing on top. Clamped to [base/100, base×1000] and
 // rounded to cents (so it can dip below the starting price for real downside, never to zero).
-function rollPrice(price: number, base: number): number {
+function rollPrice(price: number, base: number, pressure = 0): number {
   const ticksPerDay = 86_400_000 / STOCK_UPDATE_MS;
   const drift = Math.pow(2, 1 / ticksPerDay); // typical ×2 per day — a gentle climb
   let g = (Math.random() * 2 - 1) * 0.05; // ±5% jitter (log space)
   if (Math.random() < 0.08) g += (Math.random() * 2 - 1) * 0.18; // occasional bigger swing
-  const np = price * drift * Math.exp(g);
+  // Economy Overhaul: blend the existing drift/noise (60%) with order-flow pressure (40%). Buying
+  // pushes the price up, selling/shorting pushes it down, but only as a minority influence — the
+  // long-term drift still wins and the base×1000 / base/100 clamp keeps cornering impossible.
+  const driftMult = drift * Math.exp(g);
+  const flowMult = 1 + Math.max(-0.5, Math.min(0.5, pressure));
+  const mult = Math.pow(driftMult, 0.6) * Math.pow(flowMult, 0.4);
+  const np = price * mult;
   return Math.round(Math.max(base / 100, Math.min(np, base * 1_000)) * 100) / 100;
 }
 
@@ -248,6 +262,13 @@ export class Lobby {
     STOCKS.map((s) => [s.id, { price: s.base, prev: s.base }] as [string, { price: number; prev: number }]),
   );
   private nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS;
+  // Economy Overhaul: in-memory order-flow pressure per coin (buys push +, sells/shorts push −),
+  // accumulated by recordFlow and decayed each re-roll. Drives 40% of the price move. Lives only
+  // in memory (decays to zero, harmless on restart) — never persisted.
+  private pressure = new Map<string, number>();
+  // Cached House treasury balance, hydrated on boot and kept in sync after each adjust. Broadcast
+  // to clients so the market/casino header can show it (and "payouts reduced" when low).
+  private houseBalance = 0;
   // Epoch ms of the next daily loan-collection event — the next 5:00pm America/New_York. At this
   // tick Davis collects on overdue loans and each defaulter's unpaid debt is added to the
   // instability pool; the market only crashes when that pool fills (see runDailyCollection).
@@ -283,7 +304,7 @@ export class Lobby {
         const ws = this.tdSockets.get(id);
         const conn = ws && this.conns.get(ws);
         if (ws && conn && conn.pid) {
-          addCoins(conn.pid, conn.nickname, coins * COIN_SCALE)
+          this.housePay(conn.pid, conn.nickname, coins * COIN_SCALE)
             .then(() => this.sendWallet(ws))
             .catch((e) => console.error('type-or-die coin award failed:', e));
         }
@@ -298,7 +319,7 @@ export class Lobby {
           recordTypeDieScore(conn.pid, conn.nickname, wave)
             .then(() => this.refreshTypeDieLeaderboard())
             .catch((e) => console.error('type-or-die score save failed:', e));
-          addCoins(conn.pid, conn.nickname, coins * COIN_SCALE)
+          this.housePay(conn.pid, conn.nickname, coins * COIN_SCALE)
             .then(() => this.sendWallet(ws))
             .catch((e) => console.error('type-or-die coin payout failed:', e));
         }
@@ -594,7 +615,7 @@ export class Lobby {
   doomReward(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
-    addCoins(conn.pid, conn.nickname, COIN_SCALE)
+    this.housePay(conn.pid, conn.nickname, COIN_SCALE)
       .then(() => this.sendWallet(ws))
       .catch((e) => console.error('doom reward failed:', e));
   }
@@ -624,6 +645,19 @@ export class Lobby {
   private ntTeams = new Map<WebSocket, number>(); // ws → team (0 red / 1 blue)
   private ntStatus: 'waiting' | 'playing' = 'waiting';
   private ntStartedAt = 0; // epoch ms the current match started (for the min-length reward guard)
+  // Economy Overhaul: netizen bot traders. Seeded once from the House; they appear on the
+  // net-worth board automatically (getNetWorthLeaderboard includes everyone).
+  private static readonly NETIZEN_START_COINS = 5000;
+  private static readonly NETIZEN_NAMES = [
+    'satoshi_jr', 'diamond_paws', 'moonboy420', 'hodl_hannah', 'paperhands_pete',
+    'algo_andy', 'bagholder_bo', 'shorty_sue', 'whale_watcher', 'degen_dana',
+  ];
+
+  // Loot box: a fixed coin price (flows to the House) that rolls a weighted prize. A coin roll
+  // (or a degraded capped-out exclusive) pays this much from the House.
+  private static readonly LOOT_PRICE = 2500;
+  private static readonly LOOT_COIN_REWARD = 1500;
+
   private static readonly NT_CAP = 6;
   private static readonly NT_WIN_REWARD = 750; // coins each winning-team player earns per match
   private static readonly NT_MIN_MATCH_MS = 60_000; // matches shorter than this don't pay (anti-farm)
@@ -688,10 +722,12 @@ export class Lobby {
       if (this.ntTeams.get(sock) !== winningTeam) continue;
       const conn = this.conns.get(sock);
       if (!conn || !conn.pid) continue;
-      addCoins(conn.pid, conn.nickname, Lobby.NT_WIN_REWARD)
-        .then(() => { this.sendWallet(sock); this.refreshNetWorth().catch(() => {}); })
+      this.housePay(conn.pid, conn.nickname, Lobby.NT_WIN_REWARD)
+        .then((paid) => {
+          this.sendWallet(sock); this.refreshNetWorth().catch(() => {});
+          if (paid > 0) this.notify(sock, `🏆 Your team won Nuketown — +${paid.toLocaleString()} coins!`);
+        })
         .catch((e) => console.error('nuketown reward failed:', e));
-      this.notify(sock, `🏆 Your team won Nuketown — +${Lobby.NT_WIN_REWARD.toLocaleString()} coins!`);
     }
   }
 
@@ -750,10 +786,13 @@ export class Lobby {
     // faucet on purpose; early rounds pay little (50, 100, …) so it scales with how far you get.
     if (conn.pid) {
       const reward = 50 * r;
-      addCoins(conn.pid, conn.nickname, reward)
-        .then(() => { this.sendWallet(ws); this.refreshNetWorth().catch(() => {}); })
+      // House-funded (throttled when the treasury is low). Surface the CREDITED amount, not the ask.
+      this.housePay(conn.pid, conn.nickname, reward)
+        .then((paid) => {
+          this.sendWallet(ws); this.refreshNetWorth().catch(() => {});
+          if (paid > 0) this.notify(ws, `🪙 +${paid.toLocaleString()} coins for reaching round ${r} in DOOM!`);
+        })
         .catch((e) => console.error('doom reward failed:', e));
-      this.notify(ws, `🪙 +${reward.toLocaleString()} coins for reaching round ${r} in DOOM!`);
     }
   }
 
@@ -1031,7 +1070,7 @@ export class Lobby {
         const champ = winners[0];
         const prize = t.size * COIN_SCALE;
         Promise.all([
-          addCoins(champ.pid, champ.nickname, prize),
+          this.housePay(champ.pid, champ.nickname, prize), // House-funded prize (throttled when low)
           addBonusSpin(champ.pid, champ.nickname),
         ])
           .then(() => this.refreshWalletsFor([champ]))
@@ -1179,6 +1218,8 @@ export class Lobby {
     this.sendLoan(ws);
     // Send the active-bounties board so heads show their pot right away.
     this.sendBounties(ws);
+    // Send the House treasury balance (drives the market/casino header readout).
+    this.tell(ws, { type: 'house', balance: Math.round(this.houseBalance) });
   }
 
   /** Load a connection's wallet from the DB into memory and send it to that client. */
@@ -1194,7 +1235,7 @@ export class Lobby {
         c.trail = w.trail;
         c.title = w.title;
         c.song = w.song;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet load failed:', e));
   }
@@ -1208,7 +1249,7 @@ export class Lobby {
         const c = this.conns.get(ws);
         if (!c) return;
         c.hat = w.hat; c.skin = w.skin; c.trail = w.trail; c.title = w.title; c.song = w.song;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet send failed:', e));
   }
@@ -1368,8 +1409,11 @@ export class Lobby {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     if (item !== null) {
+      // The item may be a regular cosmetic OR a scarce exclusive — both reuse the equip slots.
       const cosmetic = COSMETICS.find((c) => c.id === item);
-      if (!cosmetic || cosmetic.slot !== slot) return; // item must exist and match the slot
+      const exclusive = EXCLUSIVES.find((x) => x.id === item);
+      const def = cosmetic ?? exclusive;
+      if (!def || def.slot !== slot) return; // item must exist and match the slot
     }
     equipItem(conn.pid, slot, item)
       .then((w) => {
@@ -1411,7 +1455,9 @@ export class Lobby {
         for (let i = 0; i < weights.length; i++) { roll -= weights[i]; if (roll < 0) { seg = i; break; } }
         const def = SPIN_SEGMENTS[seg];
         if (def.kind === 'coins') {
-          await addCoins(conn.pid, conn.nickname, def.value);
+          // House-funded; the wheel always lands on the chosen segment, but the actual credit is
+          // throttled when the House is low (the wallet refresh shows the real balance).
+          await this.housePay(conn.pid, conn.nickname, def.value);
           this.tell(ws, { type: 'spinResult', segment: seg, reward: { kind: 'coins', amount: def.value } });
         } else {
           const avail = COSMETICS.filter((c) => c.slot === def.kind && !owned.includes(c.id));
@@ -1449,16 +1495,73 @@ export class Lobby {
     spendCoins(conn.pid, total)
       .then(async (w) => {
         if (!w) { this.sendWallet(ws); return; } // insufficient coins (or no DB) — nothing wagered
+        // The staked coins flow into the House first (a sink); winnings are paid back from it.
+        await this.houseCredit(total);
         const win = Math.floor(Math.random() * 37); // 0–36, single zero
-        let payout = 0;
+        let want = 0;
         for (const b of bets) {
-          if (rouletteWins(b, win)) payout += b.amount * (ROULETTE_PAYOUTS[b.kind as RouletteBetKind] + 1);
+          if (rouletteWins(b, win)) want += b.amount * (ROULETTE_PAYOUTS[b.kind as RouletteBetKind] + 1);
         }
-        if (payout > 0) await addCoins(conn.pid, conn.nickname, payout);
+        // Pay winnings from the House. Report the CREDITED amount so the client never shows a
+        // payout the House couldn't fund.
+        const payout = want > 0 ? await this.housePay(conn.pid, conn.nickname, want) : 0;
         this.tell(ws, { type: 'rouletteResult', number: win, staked: total, payout });
         this.sendWallet(ws);
       })
       .catch((e) => console.error('roulette failed:', e));
+  }
+
+  // --- House treasury (coin-conservation backbone) ---
+
+  /** Pay a player from the House. Returns the amount ACTUALLY paid (0 when the House is empty).
+   *  Scaling: pay the full `requested` when it's a small slice of the treasury (≤25%), otherwise
+   *  throttle to floor(balance × 0.25), clamped to the balance. The House is debited first (the
+   *  conditional debit guarantees it never overdraws), then the paid amount is credited to the
+   *  player — so coins are merely transferred, never minted. Callers MUST surface the returned
+   *  (credited) amount to the player, never `requested`. */
+  private async housePay(pid: string, name: string, requested: number): Promise<number> {
+    if (!pid || !(requested > 0)) return 0;
+    const bal = await getHouseBalance();
+    if (bal <= 0) { this.houseBalance = Math.max(0, bal); return 0; }
+    const cap = Math.floor(bal * 0.25);
+    let pay = requested <= cap ? requested : cap;
+    pay = Math.min(pay, bal);
+    pay = Math.floor(pay);
+    if (pay <= 0) return 0;
+    const after = await houseAdjust(-pay); // conditional debit (can't overdraw)
+    if (after === null) return 0;           // someone drained it between read and debit — pay nothing
+    this.houseBalance = after;
+    await addCoins(pid, name, pay);
+    this.broadcastHouse();
+    return pay;
+  }
+
+  /** Push coins INTO the House (a sink: roulette stakes, lost bets, loot-box price, commission,
+   *  fast-sell tax, seized wallets, market escrow). Updates the cache + broadcasts. */
+  private async houseCredit(amount: number): Promise<void> {
+    if (!(amount > 0)) return;
+    const after = await houseAdjust(amount);
+    if (after !== null) { this.houseBalance = after; this.broadcastHouse(); }
+  }
+
+  /** Broadcast the latest House balance to every client (drives the header readout). */
+  private broadcastHouse() {
+    const data = JSON.stringify({ type: 'house', balance: Math.round(this.houseBalance) });
+    for (const ws of this.conns.keys()) if (ws.readyState === ws.OPEN) ws.send(data);
+  }
+
+  /** Record order-flow into the price-pressure model. Buys/covers pass +coins, sells/shorts pass
+   *  −coins. Normalize against the coin's "market cap" (supply × base) so a fixed coin amount
+   *  matters more for a thin coin, scale by SENSITIVITY, accumulate, and clamp. */
+  private recordFlow(coin: string, signedCoins: number) {
+    const s = STOCKS.find((x) => x.id === coin);
+    if (!s) return;
+    const SENSITIVITY = 2;
+    const denom = s.supply * s.base;
+    if (!(denom > 0)) return;
+    const delta = (signedCoins / denom) * SENSITIVITY;
+    const cur = this.pressure.get(coin) ?? 0;
+    this.pressure.set(coin, Math.max(-1, Math.min(1, cur + delta)));
   }
 
   // --- Stock market ---
@@ -1505,6 +1608,99 @@ export class Lobby {
     realignLoansToDeadline(this.nextStockCrashAt).catch((e) => console.error('loan deadline realign failed:', e));
     // Resume the instability pool so the stability bar (and crash trigger) survive restarts.
     this.marketInstability = await getMarketInstability().catch(() => 0);
+    // Economy Overhaul: hydrate the House treasury and seed the netizen bot traders (funded from
+    // the House). Both are best-effort — without a DB they no-op cleanly.
+    this.houseBalance = await getHouseBalance().catch(() => 0);
+    await this.seedNetizens().catch((e) => console.error('netizen seed failed:', e));
+  }
+
+  // --- Netizens (bot traders) ---
+  // Synthetic player rows (is_netizen=true) seeded from the House that trade through the REAL
+  // invest/cash-out paths each stock tick, so they exert order-flow pressure, pay House escrow,
+  // and draw House payouts exactly like humans — but never mint and stop when their coins run dry.
+
+  /** Seed up to NETIZEN_COUNT netizens, each funded from the House. Stops early if the House
+   *  can't fund the next one. Idempotent — existing netizens aren't re-funded. */
+  private async seedNetizens() {
+    for (let i = 0; i < Lobby.NETIZEN_NAMES.length; i++) {
+      const name = Lobby.NETIZEN_NAMES[i];
+      const pid = `netizen:${i}`;
+      const ok = await seedNetizen(pid, name, Lobby.NETIZEN_START_COINS);
+      if (!ok) break; // House couldn't fund — seed fewer
+    }
+    // Reflect the funding cost on the cached balance + clients.
+    this.houseBalance = await getHouseBalance().catch(() => this.houseBalance);
+    this.broadcastHouse();
+  }
+
+  /** Each stock re-roll, act on ~1/3 of the netizens. Each picks a coin and trades a small slice
+   *  of its balance via the real invest/cash-out paths (so recordFlow + escrow + housePay all
+   *  apply). Three archetypes by index: momentum (follow pressure sign), mean-reversion (fade the
+   *  recent move), and random-with-upward-bias. They never mint and stop when broke. */
+  private tickNetizens() {
+    getNetizens()
+      .then(async (nets) => {
+        if (!nets.length) return;
+        for (const n of nets) {
+          if (Math.random() > 0.34) continue; // ~1/3 act per tick
+          if (n.coins < 100) {
+            // Broke-ish: try to liquidate a position back to coins (a sell exerts − pressure).
+            const holds = await getHoldings(n.pid).catch(() => []);
+            if (holds.length) {
+              const h = holds[Math.floor(Math.random() * holds.length)];
+              await this.netizenCashOut(n.pid, n.name, h.coin, h.side);
+            }
+            continue;
+          }
+          const idx = Number(n.pid.split(':')[1] ?? 0);
+          const archetype = idx % 3; // 0 momentum, 1 mean-reversion, 2 random-upbias
+          const stock = STOCKS[Math.floor(Math.random() * STOCKS.length)];
+          const press = this.pressure.get(stock.id) ?? 0;
+          const board = this.stockPrices.get(stock.id);
+          const move = board && board.prev > 0 ? board.price / board.prev - 1 : 0;
+          // Decide buy vs sell-existing by archetype.
+          let buy = true;
+          if (archetype === 0) buy = press >= 0;            // momentum: follow the flow
+          else if (archetype === 1) buy = move <= 0;        // mean-reversion: buy dips, sell rips
+          else buy = Math.random() < 0.62;                  // random with a mild upward bias
+          if (buy) {
+            const amt = Math.max(1, Math.floor(n.coins * (0.04 + Math.random() * 0.08))); // 4–12% of balance
+            await this.netizenInvest(n.pid, n.name, stock.id, amt, 'long');
+          } else {
+            const holds = (await getHoldings(n.pid).catch(() => [])).filter((h) => h.coin === stock.id);
+            if (holds.length) await this.netizenCashOut(n.pid, n.name, stock.id, holds[0].side);
+            else {
+              // Nothing to sell — buy a little instead so the bot stays active.
+              const amt = Math.max(1, Math.floor(n.coins * 0.05));
+              await this.netizenInvest(n.pid, n.name, stock.id, amt, 'long');
+            }
+          }
+        }
+        // Netizen wallets/holdings moved → the net-worth board shifted.
+        this.refreshNetWorth().catch(() => {});
+      })
+      .catch((e) => console.error('netizen tick failed:', e));
+  }
+
+  /** A netizen opens a position through the real escrow path: spend coins, push the escrow into
+   *  the House, record buy-flow. Mirrors stockInvest but headless (no socket). */
+  private async netizenInvest(pid: string, name: string, coin: string, amount: number, side: StockSide) {
+    const price = this.stockPrices.get(coin)?.price;
+    if (!price || !(price > 0)) return;
+    const w = await investStock(pid, name, coin, amount, price, side).catch(() => null);
+    if (!w) return;
+    // The escrow stays in the position's `cost` (counted by the invariant) — no House push.
+    this.recordFlow(coin, side === 'short' ? -amount : amount);
+  }
+
+  /** A netizen closes a position through the real House-backed cash-out (principal refund +
+   *  throttled gain + fast-sell tax), recording sell/cover flow. */
+  private async netizenCashOut(pid: string, name: string, coin: string, side: StockSide) {
+    const price = this.stockPrices.get(coin)?.price;
+    if (!price || !(price > 0)) return;
+    const res = await this.settleCashOut(pid, name, coin, price, side).catch(() => null);
+    if (!res) return;
+    this.recordFlow(coin, side === 'short' ? res.gross : -res.gross);
   }
 
   /** Book the next daily loan-collection event — the next 5:00pm America/New_York — and persist it. */
@@ -1539,7 +1735,10 @@ export class Lobby {
   private runDailyCollection() {
     this.scheduleNextCollect(); // book the next daily event immediately (so we never re-fire next tick)
     collectDefaultedLoans(Date.now())
-      .then(({ pids, totalOwed }) => {
+      .then(({ pids, totalOwed, seized }) => {
+        // The wallet coins Davis seized are real coins — route them INTO the House so they stay
+        // conserved (the virtual `owed` still feeds instability separately, below).
+        if (seized > 0) this.houseCredit(seized).catch((e) => console.error('seized → house failed:', e));
         // Refresh + notify any defaulter still online (wallet/stocks/loan all just changed).
         const hit = new Set(pids);
         for (const ws of this.conns.keys()) {
@@ -1570,11 +1769,14 @@ export class Lobby {
       .catch((e) => console.error('daily collection failed:', e));
   }
 
-  /** The global price board, in STOCKS order. */
-  private priceBoard(): { id: string; price: number; prev: number }[] {
+  /** The global price board, in STOCKS order. `flow` is the sign of the current order-flow
+   *  pressure (+1 buy-heavy / −1 sell-heavy / 0 balanced) for the per-coin ▲/▼ tint. */
+  private priceBoard(): { id: string; price: number; prev: number; flow: number }[] {
     return STOCKS.map((s) => {
       const p = this.stockPrices.get(s.id) ?? { price: s.base, prev: s.base };
-      return { id: s.id, price: p.price, prev: p.prev };
+      const pr = this.pressure.get(s.id) ?? 0;
+      const flow = pr > 0.02 ? 1 : pr < -0.02 ? -1 : 0;
+      return { id: s.id, price: p.price, prev: p.prev, flow };
     });
   }
 
@@ -1637,26 +1839,72 @@ export class Lobby {
     const price = this.stockPrices.get(coin)?.price;
     if (!price || !(price > 0)) return;
     investStock(conn.pid, conn.nickname, coin, amt, price, side)
-      .then((w) => {
+      .then(async (w) => {
         if (!w) { this.sendStocks(ws); return; } // couldn't afford — just refresh the view
+        // Economy Overhaul: the escrowed coins are held in the position's `cost` column (the
+        // invariant counts that escrow), so they leave circulation without being minted. The trade
+        // exerts buy/cover pressure on the price (recorded after the DB write lands).
+        this.recordFlow(coin, side === 'short' ? -amt : amt);
         this.sendStocks(ws);
         this.sendWallet(ws);
       })
       .catch((e) => console.error('stock invest failed:', e));
   }
 
-  /** Close the whole long or short position in a crypto for round(current worth) coins. */
+  /** Cash-out used by both players and netizens. The position's `cost` (escrow) is released back
+   *  to the player as principal — IN FULL, never throttled (it's the player's own escrowed coins,
+   *  not a House payout). Only the GAIN (payout − cost, if positive) is a House-funded payout via
+   *  housePay (throttled when the House is low). On a LOSS (payout < cost) the player gets `payout`
+   *  and the unrecovered escrow (cost − payout) flows into the House. A fast-sell (held <60s) taxes
+   *  10% of the payout into the House. Conservation is exact: the escrow that left circulation at
+   *  invest comes back as principal + House (loss) or principal + House gain (win). Returns the
+   *  gross payout (for the pressure model) + the net credited to the player. */
+  private async settleCashOut(pid: string, name: string, coin: string, price: number, side: StockSide): Promise<{ gross: number; credited: number } | null> {
+    const pos = await closePosition(pid, coin, price, side);
+    if (!pos) return null;
+    const { cost, payout, openedAt } = pos;
+    let credited = 0;
+    if (payout >= cost) {
+      // Win/flat: return the full principal directly (it was the player's escrow), then pay the
+      // gain from the House (throttled when low). The principal is NEVER throttled.
+      if (cost > 0) { await addCoins(pid, name, cost); credited += cost; }
+      const gain = payout - cost;
+      if (gain > 0) credited += await this.housePay(pid, name, gain);
+    } else {
+      // Loss: the player recovers `payout`; the unrecovered escrow flows into the House so the
+      // released escrow is fully accounted for (player + House = the original cost).
+      const back = Math.max(0, payout);
+      if (back > 0) { await addCoins(pid, name, back); credited += back; }
+      const toHouse = cost - back;
+      if (toHouse > 0) await this.houseCredit(toHouse);
+    }
+    // Fast-sell tax: a position closed within 60s pays 10% of the (positive) payout to the House.
+    if (payout > 0 && openedAt > 0 && Date.now() - openedAt < 60_000) {
+      const tax = Math.floor(payout * 0.10);
+      if (tax > 0) {
+        const taken = await spendCoins(pid, tax); // claw the tax back out of what we just paid
+        if (taken) { await this.houseCredit(tax); credited -= tax; }
+      }
+    }
+    return { gross: Math.max(0, payout), credited };
+  }
+
+  /** Close the whole long or short position in a crypto. Principal is returned in full; profit is
+   *  House-throttled; a fast-sell is taxed (see settleCashOut). */
   stockCashOut(ws: WebSocket, coin: string, side: StockSide) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     if (!STOCKS.some((s) => s.id === coin)) return;
     const price = this.stockPrices.get(coin)?.price;
     if (!price || !(price > 0)) return;
-    cashOutStock(conn.pid, conn.nickname, coin, price, side)
+    this.settleCashOut(conn.pid, conn.nickname, coin, price, side)
       .then((res) => {
         if (!res) { this.sendStocks(ws); return; } // held nothing on that side
+        // A close exerts sell (long) / cover (short) pressure on the price.
+        this.recordFlow(coin, side === 'short' ? res.gross : -res.gross);
         this.sendStocks(ws);
         this.sendWallet(ws);
+        this.refreshNetWorth().catch(() => {});
       })
       .catch((e) => console.error('stock cash-out failed:', e));
   }
@@ -1681,8 +1929,15 @@ export class Lobby {
     // Deadline is the next daily 5pm collection; if one somehow isn't booked, compute it directly.
     const dueAt = this.nextStockCrashAt || nextFivePmEtMs(Date.now());
     takeLoan(conn.pid, conn.nickname, amt, dueAt)
-      .then((res) => {
+      .then(async (res) => {
         if (!res) { this.sendLoan(ws); return; } // already had a loan / rejected — just refresh
+        // Economy Overhaul: the loan principal is House-funded — Davis lends the House's coins, so
+        // the principal is debited from the treasury rather than minted (keeps coins conserved).
+        // The credit to the player already happened in takeLoan; we just balance the House here.
+        // The debit is best-effort: if the House is short, the shortfall is the one place coins can
+        // enter circulation outside a mint (a documented rough edge — see the conservation notes).
+        const after = await houseAdjust(-amt);
+        if (after !== null) { this.houseBalance = after; this.broadcastHouse(); }
         this.sendWallet(ws);
         this.sendLoan(ws);
         this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
@@ -1695,15 +1950,193 @@ export class Lobby {
   repayLoanFor(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
-    repayLoan(conn.pid)
-      .then((res) => {
+    const pid = conn.pid;
+    // Read the owed amount first so the repaid coins (spent inside repayLoan) can be routed to the
+    // House — repaying a House-funded loan returns the principal + interest to the treasury.
+    getLoan(pid)
+      .then((loan) => repayLoan(pid).then((res) => ({ loan, res })))
+      .then(async ({ loan, res }) => {
         if (!res) { this.sendWallet(ws); this.sendLoan(ws); return; } // no loan or couldn't afford it
+        if (loan?.owed) await this.houseCredit(loan.owed);
         this.sendWallet(ws);
         this.sendLoan(ws);
         this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
         this.notify(ws, `🤝 Loan settled. Davis respects the hustle.`);
       })
       .catch((e) => console.error('loan repay failed:', e));
+  }
+
+  // --- Loot boxes (the ONLY exclusive mint path) ---
+
+  /** Open a loot box: spend the fixed price (which flows into the House), then roll a weighted
+   *  prize — a common cosmetic, House-funded coins, or a capped-rare exclusive. The exclusive mint
+   *  is atomic + cap-gated (mintExclusive); a capped-out roll DEGRADES to a House coin payout so we
+   *  never over-mint. Sends a `lootResult` for the reveal animation. */
+  openLootBox(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    const pid = conn.pid, nick = conn.nickname;
+    spendCoins(pid, Lobby.LOOT_PRICE)
+      .then(async (w) => {
+        if (!w) { this.notify(ws, `A loot box costs ${Lobby.LOOT_PRICE.toLocaleString()}🪙 — you're short.`); this.sendWallet(ws); return; }
+        // The price flows into the House (it funds the coin/exclusive payouts).
+        await this.houseCredit(Lobby.LOOT_PRICE);
+        // Weighted roll (same idiom as the daily spin): common / coins / rare. Reused below.
+        const weights = [55, 30, 15]; // common cosmetic, coins, rare exclusive
+        const total = weights.reduce((a, b) => a + b, 0);
+        let roll = Math.random() * total;
+        let bucket = 0;
+        for (let i = 0; i < weights.length; i++) { roll -= weights[i]; if (roll < 0) { bucket = i; break; } }
+
+        if (bucket === 0) {
+          // Common cosmetic: grant a random UNOWNED regular cosmetic (skip locked + already-owned).
+          const owned = new Set((await getWallet(pid)).owned);
+          const pool = COSMETICS.filter((c) => !c.locked && !owned.has(c.id));
+          if (pool.length) {
+            const item = pool[Math.floor(Math.random() * pool.length)];
+            await grantItem(pid, nick, item.id);
+            this.tell(ws, { type: 'lootResult', kind: 'cosmetic', item: item.id, name: item.name });
+          } else {
+            // Owns everything common → degrade to coins from the House.
+            const paid = await this.housePay(pid, nick, Lobby.LOOT_COIN_REWARD);
+            this.tell(ws, { type: 'lootResult', kind: 'coins', coins: paid });
+          }
+        } else if (bucket === 1) {
+          const paid = await this.housePay(pid, nick, Lobby.LOOT_COIN_REWARD);
+          this.tell(ws, { type: 'lootResult', kind: 'coins', coins: paid });
+        } else {
+          // Rare exclusive: pick one weighted toward higher-cap (more common) items, attempt the
+          // atomic capped mint, and degrade to coins if it's sold out globally.
+          const pick = this.rollExclusive();
+          const serial = await mintExclusive(pid, pick.id, pick.cap);
+          if (serial !== null) {
+            this.tell(ws, { type: 'lootResult', kind: 'exclusive', item: pick.id, name: pick.name, serial, cap: pick.cap, rarity: pick.rarity });
+            this.announce(`✨ ${nick} pulled an EXCLUSIVE: ${pick.name} (#${serial} of ${pick.cap})!`);
+          } else {
+            // Capped out — no over-mint. Degrade to a House coin payout.
+            const paid = await this.housePay(pid, nick, Lobby.LOOT_COIN_REWARD);
+            this.tell(ws, { type: 'lootResult', kind: 'coins', coins: paid });
+          }
+        }
+        this.sendWallet(ws);
+        this.refreshNetWorth().catch(() => {});
+        this.broadcastMarket(); // a fresh mint changes the "X of cap minted" readouts
+      })
+      .catch((e) => console.error('loot box failed:', e));
+  }
+
+  /** Pick which exclusive a rare roll targets — weighted toward higher-cap (less scarce) items so
+   *  the one-of-one grails stay genuinely rare. */
+  private rollExclusive() {
+    const weights = EXCLUSIVES.map((x) => x.cap); // cap-as-weight: cap:1 grails are 1/total
+    const total = weights.reduce((a, b) => a + b, 0);
+    let roll = Math.random() * total;
+    for (let i = 0; i < EXCLUSIVES.length; i++) { roll -= weights[i]; if (roll < 0) return EXCLUSIVES[i]; }
+    return EXCLUSIVES[EXCLUSIVES.length - 1];
+  }
+
+  // --- Player marketplace (scarce exclusives) ---
+
+  /** Build the public marketplace book (per-item floor + listings + supply + last sale). */
+  private async buildMarket(forPid: string): Promise<MarketItemView[]> {
+    const [listings, supply, lastSale] = await Promise.all([
+      getMarketListings(), getExclusiveSupply(), getExclusiveLastSale(),
+    ]);
+    return EXCLUSIVES.map((x) => {
+      const mine = listings.filter((l) => l.item === x.id);
+      const views: MarketListingView[] = mine.map((l) => ({
+        id: l.id, instanceId: l.instanceId, item: l.item, sellerName: l.sellerName, ask: l.ask, mine: l.sellerPid === forPid,
+      }));
+      const floor = views.length ? Math.min(...views.map((v) => v.ask)) : null;
+      return {
+        item: x.id,
+        floor,
+        minted: supply[x.id] ?? 0,
+        cap: x.cap,
+        lastSale: lastSale[x.id] ?? null,
+        listings: views,
+      };
+    });
+  }
+
+  /** Send one client the current marketplace book. */
+  sendMarket(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn) return;
+    this.buildMarket(conn.pid)
+      .then((items) => { if (this.conns.has(ws)) this.tell(ws, { type: 'market', items }); })
+      .catch((e) => console.error('market send failed:', e));
+  }
+
+  /** Re-push the marketplace book to everyone who could be viewing it (after any change). */
+  private broadcastMarket() {
+    for (const ws of this.conns.keys()) if (ws.readyState === ws.OPEN) this.sendMarket(ws);
+  }
+
+  /** List an owned exclusive instance for sale. */
+  marketList(ws: WebSocket, instanceId: number, ask: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    const price = Math.floor(ask);
+    if (!Number.isFinite(instanceId) || !Number.isFinite(price) || price < 1 || price > 100_000_000) return;
+    listExclusive(instanceId, conn.pid, conn.nickname, price)
+      .then((ok) => {
+        if (!ok) { this.notify(ws, "Couldn't list that item (not yours, or already listed)."); return; }
+        this.sendWallet(ws);
+        this.broadcastMarket();
+      })
+      .catch((e) => console.error('market list failed:', e));
+  }
+
+  /** Cancel one of your own listings. */
+  marketCancel(ws: WebSocket, listingId: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    if (!Number.isFinite(listingId)) return;
+    cancelListing(listingId, conn.pid)
+      .then((ok) => { if (ok) { this.sendWallet(ws); this.broadcastMarket(); } })
+      .catch((e) => console.error('market cancel failed:', e));
+  }
+
+  /** Buy the lowest-ask instance of an exclusive item (one atomic transaction). */
+  marketBuy(ws: WebSocket, item: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    if (!isExclusive(item)) return;
+    const buyerName = conn.nickname;
+    buyLowestAsk(item, conn.pid, buyerName)
+      .then((res) => {
+        if (!res.ok) {
+          const msg = res.reason === 'self' ? "That's your own listing."
+            : res.reason === 'afford' ? "You can't afford the floor."
+            : res.reason === 'none' ? 'Nothing listed for that item.' : '';
+          if (msg) this.notify(ws, msg);
+          this.sendWallet(ws);
+          this.broadcastMarket();
+          return;
+        }
+        // Conservation: buyer −ask (handled in the txn), seller +(ask−commission), House +commission.
+        // Reflect the commission on the cached House balance + clients.
+        this.houseBalance += res.commission;
+        this.broadcastHouse();
+        const def = EXCLUSIVES.find((x) => x.id === item);
+        this.notify(ws, `🛒 Bought ${def?.name ?? item} for ${res.ask.toLocaleString()}🪙.`);
+        // Refresh the seller's wallet too if they're online.
+        for (const [sock, c] of this.conns) if (c.pid === res.sellerPid) this.sendWallet(sock);
+        this.sendWallet(ws);
+        this.broadcastMarket();
+        this.refreshNetWorth().catch(() => {});
+      })
+      .catch((e) => console.error('market buy failed:', e));
+  }
+
+  // --- Loan book (public, clickable from the stability bar) ---
+
+  /** Send one client the public open-loan book. */
+  sendLoanBook(ws: WebSocket) {
+    getOpenLoans()
+      .then((loans) => { if (this.conns.has(ws)) this.tell(ws, { type: 'loanBook', loans }); })
+      .catch((e) => console.error('loan book send failed:', e));
   }
 
   /** Re-roll every coin's price when the re-roll window elapses, persist the board, and push
@@ -1720,11 +2153,17 @@ export class Lobby {
     this.nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS;
     for (const s of STOCKS) {
       const cur = this.stockPrices.get(s.id) ?? { price: s.base, prev: s.base };
-      this.stockPrices.set(s.id, { price: rollPrice(cur.price, s.base), prev: cur.price });
+      // Economy Overhaul: decay the order-flow pressure FIRST (p *= 0.5 per tick), then blend it
+      // into the new price. Decaying first keeps a single burst of trading from compounding.
+      const p = (this.pressure.get(s.id) ?? 0) * 0.5;
+      this.pressure.set(s.id, p);
+      this.stockPrices.set(s.id, { price: rollPrice(cur.price, s.base, p), prev: cur.price });
     }
     this.recordStockHistory();
     saveStockPrices(this.priceBoard()).catch((e) => console.error('stock price save failed:', e));
     saveStockHistory(this.historyBoard()).catch((e) => console.error('stock history save failed:', e));
+    // Netizen bots trade AFTER the re-roll (through the real escrow/payout paths).
+    this.tickNetizens();
     for (const ws of this.conns.keys()) this.sendStocks(ws);
     // Holdings just revalued, so the net-worth standings shifted too.
     this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
@@ -1814,17 +2253,21 @@ export class Lobby {
     const pending = this.bets;
     this.bets = [];
     for (const b of pending) {
+      const pid = this.conns.get(b.ws)?.pid ?? b.pid;
+      // Every staked coin (escrowed at bet time) now flows INTO the House; winnings are then paid
+      // back out of it. This keeps bets a closed transfer: stakes → House, payouts → House.
+      this.houseCredit(b.amount).catch((e) => console.error('bet stake → house failed:', e));
       if (b.side === winnerSide) {
-        const payout = Math.max(b.amount, Math.round(b.amount * b.odds)); // never pay below stake
-        addCoins(this.conns.get(b.ws)?.pid ?? b.pid, b.name, payout)
-          .then(() => {
+        const want = Math.max(b.amount, Math.round(b.amount * b.odds)); // never quote below stake
+        this.housePay(pid, b.name, want)
+          .then((payout) => {
             if (!this.conns.has(b.ws)) return;
             this.sendWallet(b.ws);
             this.notify(b.ws, `🎲 ${b.side} won — your ${b.amount}🪙 bet pays ${payout}🪙 (+${payout - b.amount})`);
           })
           .catch((e) => console.error('payout failed:', e));
       } else {
-        // Lost — stake was escrowed at bet time; just refresh their wallet view + tell them.
+        // Lost — stake was escrowed at bet time and routed to the House above; just refresh.
         if (this.conns.has(b.ws)) {
           this.sendWallet(b.ws);
           this.notify(b.ws, `🎲 ${winnerSide} won — your ${b.amount}🪙 bet on ${b.side} lost`);
@@ -2198,7 +2641,7 @@ export class Lobby {
       for (const c of this.connsOn(side)) {
         if (!c.pid) continue;
         const w = this.wsOfConn(c);
-        addCoins(c.pid, c.nickname, COIN_SCALE).then(() => { if (w) this.sendWallet(w); }).catch(() => {});
+        this.housePay(c.pid, c.nickname, COIN_SCALE).then(() => { if (w) this.sendWallet(w); }).catch(() => {});
       }
     }
     // Safety: if a duel was abandoned (back to 'waiting' with no result) or we slid into

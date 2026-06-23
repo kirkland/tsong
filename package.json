@@ -11,7 +11,8 @@
     "dev:host": "PORT=3001 concurrently -k -n server,client -c blue,magenta \"tsx watch server/index.ts\" \"vite --host\"",
     "build": "vite build",
     "start": "tsx server/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "conservation": "tsx scripts/conservation-check.ts"
   },
   "dependencies": {
     "dotenv": "^17.4.2",
