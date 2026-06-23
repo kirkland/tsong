@@ -311,6 +311,15 @@ wss.on('connection', (ws: WebSocket, req) => {
           lobby.campaignScore(ws, msg.score, msg.stage, msg.won);
         }
         break;
+      case 'worldEnter':
+        lobby.worldEnter(ws);
+        break;
+      case 'worldLeave':
+        lobby.worldLeave(ws);
+        break;
+      case 'worldMove':
+        if (typeof msg.x === 'number' && typeof msg.y === 'number') lobby.worldMove(ws, msg.x, msg.y);
+        break;
       case 'dailySpin':
         lobby.dailySpin(ws);
         break;

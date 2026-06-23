@@ -900,6 +900,15 @@
         cursor: pointer;
       }
       #nuketownBtn:hover { background: #2a1a0e; color: #ffb877; }
+      /* Beta "World" launch: a cool teal "explore" vibe, set apart from the toolbar greys. */
+      #worldBtn {
+        border: 1px solid #2c6f6a;
+        background: linear-gradient(#13302e, #0f2422);
+        color: #6fe3d6;
+        font-weight: 700;
+      }
+      #worldBtn:hover { background: linear-gradient(#1a423f, #133230); color: #9af3e9; }
+      #worldBtn[aria-pressed="true"] { box-shadow: 0 0 0 2px #2c6f6a inset; color: #c6fff7; }
       /* Coin balance + shop dropdown */
       #shop { position: relative; }
       #shopBtn {
@@ -2911,6 +2920,7 @@
     </div>
     <div id="topLeft">
       <button id="muteBtn" type="button" aria-pressed="false" title="Toggle sound on/off (M)">🔊</button>
+      <button id="worldBtn" type="button" aria-pressed="false" title="Walk around the TSONG world (beta) — a free-roam map with everyone on it">🌍 World</button>
       <button id="workBtn" type="button" title="Work mode — disguise as a spreadsheet (Esc to exit)">📊 Work</button>
       <button id="termBtn" type="button" title="Terminal mode — disguise as a terminal (Esc to exit)">💻 Term</button>
       <div id="arcade">

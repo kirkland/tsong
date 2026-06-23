@@ -309,6 +309,65 @@ export type FatalityMove = (typeof FATALITY_MOVES)[number];
 export const BOT_LEVELS = ['easy', 'medium', 'hard'] as const;
 export type BotLevel = (typeof BOT_LEVELS)[number];
 
+// --- Beta "World" (free-roam 2D overworld) ---------------------------------------------
+// A shared top-down town the players walk around as little avatars, each with their name
+// floating above. Walk up to a building to enter it: the Arena (the classic tsong game),
+// the Casino (roulette), or the Bank (stocks / loans). Movement is client-authoritative —
+// there are no competitive stakes in walking around, so each client owns its avatar's
+// position and streams it; the server only clamps it to the map and fans everyone's
+// positions out to whoever is currently in the world.
+//
+// Built to grow: to put a new venue on the map (a car dealership, a house you can buy, …),
+// add a WORLD_BUILDINGS entry and a handler for its `kind` on the client. Nothing else in
+// the protocol needs to change.
+export const WORLD = {
+  w: 2200,      // map width, world units
+  h: 1500,      // map height, world units
+  spawnX: 1100, // where a fresh avatar appears (the central plaza)
+  spawnY: 1140,
+} as const;
+export const WORLD_AVATAR = {
+  r: 16,        // avatar body radius, world units
+  speed: 280,   // walk speed, world units / second
+} as const;
+
+// What entering a building does (the client maps each `kind` to an action). Add a kind here
+// and a handler on the client to introduce a new venue.
+export type WorldBuildingKind = 'arena' | 'casino' | 'bank';
+// A venue's footprint on the map. The rectangle (top-left origin, world units) is solid —
+// avatars collide with it — and an apron just outside the door is the entry trigger zone.
+export interface WorldBuilding {
+  id: string;
+  kind: WorldBuildingKind;
+  name: string;  // sign over the door
+  emoji: string; // glyph drawn on the building face
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  color: string; // wall color
+}
+export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
+  { id: 'arena',  kind: 'arena',  name: 'TSONG ARENA', emoji: '🏓', x: 900,  y: 220,  w: 400, h: 260, color: '#3a4ea8' },
+  { id: 'casino', kind: 'casino', name: 'CASINO',      emoji: '🎰', x: 320,  y: 640,  w: 320, h: 240, color: '#a8323a' },
+  { id: 'bank',   kind: 'bank',   name: 'BANK',        emoji: '🏦', x: 1560, y: 640,  w: 320, h: 240, color: '#2f7d4f' },
+] as const;
+
+// One avatar as broadcast to everyone in the world. `id` matches YouMsg.id, so a client can
+// skip drawing its own avatar from this list — it renders that one straight from its own
+// input for zero-latency movement, and draws everyone else from here.
+export interface WorldAvatar {
+  id: string;
+  name: string;
+  color: string;
+  x: number;
+  y: number;
+}
+export interface WorldMsg {
+  type: 'world';
+  avatars: WorldAvatar[];
+}
+
 // --- Client -> Server ---
 export type ClientMsg =
   // pid = stable per-browser identity; color = chosen paddle color
@@ -372,6 +431,9 @@ export type ClientMsg =
   | { type: 'marketBuy'; item: string } // buy the lowest-ask listed instance of an exclusive item
   | { type: 'marketReq' } // request the current marketplace book (listings + floors + supply)
   | { type: 'loanBookReq' } // request the public open-loan book (for the clickable stability-bar modal)
+  | { type: 'worldEnter' } // step into the free-roam world map (start sending/receiving avatar positions)
+  | { type: 'worldLeave' } // leave the world map
+  | { type: 'worldMove'; x: number; y: number } // client-authoritative avatar position, world units
   | { type: 'migrate'; oldPid: string }; // one-time: merge a UUID guest account into the signed-in Google account
 
 // --- Server -> Client ---
@@ -769,6 +831,7 @@ export type ServerMsg =
   | LootResultMsg
   | MarketMsg
   | LoanBookMsg
+  | WorldMsg
   | HouseMsg;
 
 // --- Economy Overhaul server → client messages ---

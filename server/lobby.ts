@@ -5,6 +5,7 @@ import type { WebSocket } from 'ws';
 import { Game } from './game';
 import { PolyGame } from './polygame';
 import { TypeGame } from './typegame';
+import { World } from './world';
 import { Tournament, Participant } from './tournament';
 import {
   CHAT_HISTORY,
@@ -51,6 +52,7 @@ import {
   isExclusive,
   MarketItemView,
   MarketListingView,
+  WorldAvatar,
 } from '../shared/types';
 import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
@@ -645,6 +647,15 @@ export class Lobby {
   private ntTeams = new Map<WebSocket, number>(); // ws → team (0 red / 1 blue)
   private ntStatus: 'waiting' | 'playing' = 'waiting';
   private ntStartedAt = 0; // epoch ms the current match started (for the min-length reward guard)
+
+  // --- Beta "World" (free-roam overworld) ---
+  // A shared top-down town players walk around. Positions are client-authoritative; we just
+  // store them (clamped) and fan everyone-in-the-world's positions back out. broadcast() calls
+  // broadcastWorld() every tick, but it only sends every WORLD_BROADCAST_EVERY ticks (~15 Hz —
+  // plenty smooth for walking, a fraction of the bandwidth of the 60 Hz Pong state).
+  private world = new World();
+  private worldBcTick = 0;
+  private static readonly WORLD_BROADCAST_EVERY = 4; // 60 Hz / 4 ≈ 15 Hz position updates
   // Economy Overhaul: netizen bot traders. Seeded once from the House; they appear on the
   // net-worth board automatically (getNetWorthLeaderboard includes everyone).
   private static readonly NETIZEN_START_COINS = 5000;
@@ -748,6 +759,50 @@ export class Lobby {
     this.ntSlots.forEach((sock, slot) => {
       this.tell(sock, { type: 'ntLobby', status: this.ntStatus, slot, hostSlot: 0, players });
     });
+  }
+
+  // --- Beta World (free-roam overworld) ---
+
+  /** Step a player into the world map. Sends them the current roster right away so they see
+   *  everyone the instant they arrive (instead of waiting for the next broadcast tick). */
+  worldEnter(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return; // must have joined (need a name to show)
+    this.world.enter(ws);
+    this.tell(ws, { type: 'world', avatars: this.worldAvatars() });
+  }
+
+  /** Step a player out of the world map. */
+  worldLeave(ws: WebSocket) {
+    this.world.leave(ws);
+  }
+
+  /** Record a client's self-reported avatar position (clamped to the map in World.move). */
+  worldMove(ws: WebSocket, x: number, y: number) {
+    this.world.move(ws, x, y);
+  }
+
+  /** Snapshot every in-world avatar, joining each socket's identity (id/name/color) from its Conn. */
+  private worldAvatars(): WorldAvatar[] {
+    const out: WorldAvatar[] = [];
+    for (const ws of this.world.sockets()) {
+      const c = this.conns.get(ws);
+      const p = this.world.positionOf(ws);
+      if (!c || !p) continue;
+      out.push({ id: c.id, name: c.nickname || 'anon', color: c.color, x: p.x, y: p.y });
+    }
+    return out;
+  }
+
+  /** Fan everyone-in-the-world's positions out to everyone in the world. Called every tick by
+   *  broadcast(); throttled to ~15 Hz and a no-op when the world is empty. */
+  broadcastWorld() {
+    if (this.world.size === 0) return;
+    if (++this.worldBcTick % Lobby.WORLD_BROADCAST_EVERY !== 0) return;
+    const data = JSON.stringify({ type: 'world', avatars: this.worldAvatars() });
+    for (const ws of this.world.sockets()) {
+      if (ws.readyState === ws.OPEN) ws.send(data);
+    }
   }
 
   // DOOM high-round leaderboards (solo + co-op), cached and pushed to clients.
@@ -2652,6 +2707,7 @@ export class Lobby {
     this.doomLeave(ws); // drop any co-op DOOM slot (and notify the partner)
     this.ntLeave(ws);   // drop any Nuketown slot (ends the match if the host left)
     this.tdLeave(ws);   // drop out of the Type or Die arena
+    this.world.leave(ws); // drop their avatar from the free-roam world map
     const leavingPid = this.conns.get(ws)?.pid ?? '';
     // Tournament participant left: advance their opponent / free their slot before the
     // generic seat teardown below (which would lose the bracket context).
@@ -2993,6 +3049,7 @@ export class Lobby {
       if (ws.readyState === ws.OPEN) ws.send(data);
     }
     this.broadcastTypeDie();
+    this.broadcastWorld();
   }
 
   // --- internals ---

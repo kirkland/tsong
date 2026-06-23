@@ -629,6 +629,8 @@ const net = connect(
       typeDieScores = msg.rows;
     } else if (msg.type === 'campaignLeaderboard') {
       campaignScores = msg.rows;
+    } else if (msg.type === 'world') {
+      worldMod?.feedWorld(msg.avatars);
     } else if (msg.type === 'wallet') {
       wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
       rouletteHandle.setCoins(msg.coins);
@@ -672,6 +674,9 @@ const net = connect(
     if (myName) net.send({ type: 'join', nickname: myName, pid: myPid, color: myColor });
     // Re-assert capture state after a (re)connect so the server's view stays in sync.
     if (pointerLocked) net.send({ type: 'capture', on: true });
+    // If we're walking the world map, re-announce our presence (the server drops us on socket
+    // close, so a reconnect would otherwise make our avatar invisible to everyone else).
+    worldMod?.reenterWorld();
     // Take a fresh latency reading the instant we're (re)connected, rather than waiting
     // out the probe interval below.
     net.send({ type: 'rtt', t: performance.now() });
@@ -1579,6 +1584,39 @@ campaignBtn.addEventListener('click', async () => {
     });
   } catch (e) {
     console.error('Campaign failed to load:', e);
+  }
+});
+
+// --- Beta "World": a free-roam 2D overworld you walk around as a named avatar, seeing everyone
+// else who's currently in the world. It's the future main UI; for now its buildings deep-link
+// into existing features — the Arena (tsong itself, via the play queue), the Casino (roulette)
+// and the Bank (crypto market / loans). Lazy-loaded + fully self-contained (client/world.ts);
+// the server only relays avatar positions. ---
+const worldBtn = document.getElementById('worldBtn') as HTMLButtonElement;
+let worldMod: typeof import('./world') | null = null;
+worldBtn.addEventListener('click', async () => {
+  try {
+    worldMod = await import('./world');
+    if (worldMod.isWorldOpen()) return; // already walking around
+    worldBtn.setAttribute('aria-pressed', 'true');
+    worldMod.startWorld({
+      enter: () => net.send({ type: 'worldEnter' }),
+      leave: () => net.send({ type: 'worldLeave' }),
+      move: (x, y) => net.send({ type: 'worldMove', x, y }),
+      name: () => myName,
+      color: () => myColor,
+      selfId: () => myId,
+      onExit: () => worldBtn.setAttribute('aria-pressed', 'false'),
+      // Walk into the Arena → hop into the play queue (you'll be seated when a spot opens).
+      enterArena: () => net.send({ type: 'queueJoin' }),
+      // Casino/Bank choices open the existing feature panels by triggering their toolbar buttons.
+      openFeature: (feature) => {
+        const id = feature === 'roulette' ? 'rouletteBtn' : feature === 'stocks' ? 'marketBtn' : 'loanBtn';
+        (document.getElementById(id) as HTMLButtonElement | null)?.click();
+      },
+    });
+  } catch (e) {
+    console.error('World failed to load:', e);
   }
 });
 
