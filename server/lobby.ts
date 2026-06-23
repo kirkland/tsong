@@ -51,7 +51,8 @@ import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recor
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS,
   getHoldings, investStock, cashOutStock, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
   setStockCrashAt, getMarketInstability, setMarketInstability,
-  getLoan, takeLoan, repayLoan, collectDefaultedLoans, realignLoansToDeadline } from './db';
+  getLoan, takeLoan, repayLoan, collectDefaultedLoans, realignLoansToDeadline,
+  addBounty, getBountyOn, clearBounty, getBounties } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
 
@@ -128,6 +129,7 @@ const RESUME_GRACE = 45; // seconds a resumed match waits for seated players to 
 const TOURNEY_INTER_MS = 5000; // pause between tournament matches so the result can be read
 const TOURNEY_DONE_MS = 12000; // how long the champion screen lingers before the tournament tears down
 const MAX_TIP = 1_000_000; // sanity cap on a single /tip (balance is the real limit)
+const MAX_BOUNTY = 1_000_000; // sanity cap on a single bounty contribution (balance is the real limit)
 
 // What a seat / queue spot needs to be reclaimed by the same identity after a restart.
 interface SeatInfo {
@@ -963,6 +965,8 @@ export class Lobby {
     this.sendStocks(ws);
     // Send their loan status (so the Get Loan panel knows whether they owe Davis).
     this.sendLoan(ws);
+    // Send the active-bounties board so heads show their pot right away.
+    this.sendBounties(ws);
   }
 
   /** Load a connection's wallet from the DB into memory and send it to that client. */
@@ -1053,6 +1057,84 @@ export class Lobby {
         }
       })
       .catch((e) => console.error('tip failed:', e));
+  }
+
+  // --- Bounties ---
+
+  /** Push the active-bounties board to one client. */
+  private sendBounties(ws: WebSocket) {
+    getBounties()
+      .then((list) => { if (this.conns.has(ws)) this.tell(ws, { type: 'bounties', list: list.map((b) => ({ name: b.name, pot: b.pot })) }); })
+      .catch((e) => console.error('bounties send failed:', e));
+  }
+
+  /** Refresh the bounties board for everyone (after a placement or payout). */
+  private broadcastBounties() {
+    getBounties()
+      .then((list) => {
+        const data = JSON.stringify({ type: 'bounties', list: list.map((b) => ({ name: b.name, pot: b.pot })) });
+        for (const sock of this.conns.keys()) if (sock.readyState === sock.OPEN) sock.send(data);
+      })
+      .catch((e) => console.error('bounties broadcast failed:', e));
+  }
+
+  /** Put coins on a player's head. The pot is escrowed from the placer immediately; whoever
+   *  beats that player in a duel next collects the whole thing (see the payout in onGameOver).
+   *  Mirrors /tip: target resolved by nickname (online first, then DB), can't bounty yourself. */
+  placeBounty(ws: WebSocket, toName: string, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    const amt = Math.floor(amount);
+    if (!Number.isFinite(amt) || amt <= 0) { this.notify(ws, 'A bounty must be a positive number of coins.'); return; }
+    if (amt > MAX_BOUNTY) { this.notify(ws, `A bounty can be at most ${MAX_BOUNTY.toLocaleString()} coins at once.`); return; }
+    const display = toName.trim();
+    if (!display) { this.notify(ws, 'Who do you want to put a bounty on?'); return; }
+
+    const target = display.toLowerCase();
+    const online = [...this.conns.values()].find(
+      (c) => c.nickname && c.pid && c.pid !== conn.pid && c.nickname.toLowerCase() === target,
+    );
+    const resolve: Promise<{ pid: string; name: string } | null> = online
+      ? Promise.resolve({ pid: online.pid, name: online.nickname })
+      : findPlayerByName(display);
+
+    resolve
+      .then(async (recip) => {
+        if (!recip) { this.notify(ws, `No player named "${display}" to bounty.`); return; }
+        if (recip.pid === conn.pid) { this.notify(ws, "You can't put a bounty on yourself."); return; }
+        // Escrow the placer's coins first; bail untouched if they can't afford it.
+        const w = await spendCoins(conn.pid, amt);
+        if (!w) { this.notify(ws, "You don't have enough coins for that bounty."); this.sendWallet(ws); return; }
+        const pot = await addBounty(recip.pid, recip.name, amt);
+        this.sendWallet(ws);
+        this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
+        this.echoCommand(conn, `/bounty ${recip.name} ${amt}`);
+        this.announce(`🎯 ${conn.nickname} put ${amt.toLocaleString()}🪙 on ${recip.name}'s head — pot is now ${pot.toLocaleString()}🪙! Beat them to claim it.`);
+        this.broadcastBounties();
+      })
+      .catch((e) => console.error('bounty failed:', e));
+  }
+
+  /** Pay out any bounty on a beaten player to the duel's winner, then clear it. Called once per
+   *  match from the over-handler. Only a clean 1v1 result (one winner, one loser) collects. */
+  private settleBounty(winners: Conn[], losers: Conn[]) {
+    if (winners.length !== 1 || losers.length !== 1) return; // bounties are a heads-up affair
+    const winner = winners[0];
+    const loser = losers[0];
+    if (!winner.pid || !loser.pid || winner.pid === loser.pid) return;
+    getBountyOn(loser.pid)
+      .then(async (pot) => {
+        if (pot <= 0) return;
+        await clearBounty(loser.pid);
+        await addCoins(winner.pid, winner.nickname, pot);
+        this.refreshWalletsFor([winner]);
+        this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
+        this.announce(`🎯 ${winner.nickname} collected the ${pot.toLocaleString()}🪙 bounty on ${loser.nickname}!`);
+        const data = JSON.stringify({ type: 'bountyHit', winner: winner.nickname, target: loser.nickname, amount: pot });
+        for (const sock of this.conns.keys()) if (sock.readyState === sock.OPEN) sock.send(data);
+        this.broadcastBounties();
+      })
+      .catch((e) => console.error('bounty payout failed:', e));
   }
 
   // --- Shop (cosmetics) ---
@@ -2030,6 +2112,7 @@ export class Lobby {
             .catch((e) => console.error('leaderboard update failed:', e));
         }
         this.settleBets(winnerSide); // pay out spectator wagers on this match
+        this.settleBounty(winners, losers); // pay any bounty on the loser to the winner
       } else if (this.activeFatality && Date.now() - this.fatalityAt > FATALITY_DISPLAY_MS) {
         // Once the finishing move has played out, return to the lobby so the frozen
         // FATALITY screen clears and a fresh match can be started.

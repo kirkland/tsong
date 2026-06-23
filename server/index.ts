@@ -156,6 +156,11 @@ wss.on('connection', (ws: WebSocket, req) => {
           lobby.tip(ws, msg.to, msg.amount);
         }
         break;
+      case 'placeBounty':
+        if (typeof msg.to === 'string' && typeof msg.amount === 'number' && Number.isFinite(msg.amount)) {
+          lobby.placeBounty(ws, msg.to, msg.amount);
+        }
+        break;
       case 'reaction':
         if (typeof msg.emoji === 'string') lobby.reaction(ws, msg.emoji);
         break;
