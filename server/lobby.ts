@@ -605,6 +605,15 @@ export class Lobby {
     recordDoomScore(key, label, coop, r)
       .then(() => this.refreshDoomLeaderboards())
       .catch((e) => console.error('doom score save failed:', e));
+    // Reward 50 coins × the round reached — every run, no gating. DOOM is a grindable coin
+    // faucet on purpose; early rounds pay little (50, 100, …) so it scales with how far you get.
+    if (conn.pid) {
+      const reward = 50 * r;
+      addCoins(conn.pid, conn.nickname, reward)
+        .then(() => { this.sendWallet(ws); this.refreshNetWorth().catch(() => {}); })
+        .catch((e) => console.error('doom reward failed:', e));
+      this.notify(ws, `🪙 +${reward.toLocaleString()} coins for reaching round ${r} in DOOM!`);
+    }
   }
 
   /** Reload the campaign leaderboard from the DB and push it to everyone. */
