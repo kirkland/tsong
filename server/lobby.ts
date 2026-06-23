@@ -80,6 +80,7 @@ interface Conn {
   skin: string | null;
   trail: string | null;
   title: string | null;
+  song: string | null; // equipped theme song id (plays during this player's matches)
 }
 
 // One step of a crypto's price random walk. Pure RNG — never tied to who invested or how
@@ -166,6 +167,7 @@ export class Lobby {
   private teams: Record<Side, WebSocket[]> = { left: [], right: [] };
   private winnerName: string | null = null;
   private overHandled = false; // guards the one-time spot reopening when a match ends
+  private lastDuelPlaying = false; // rising-edge detector for "a duel just kicked off" (theme songs)
   private king: { side: Side; pid: string; nickname: string; ws: WebSocket } | null = null;
   private streakPid: string | null = null; // pid of the player on the current win streak
   private kingStreak = 0; // consecutive match wins by that player (the king's reign length)
@@ -295,6 +297,7 @@ export class Lobby {
       skin: null,
       trail: null,
       title: null,
+      song: null,
     };
     this.conns.set(ws, conn);
     this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
@@ -883,6 +886,7 @@ export class Lobby {
       skin: null,
       trail: null,
       title: null,
+      song: null,
     };
     this.conns.set(ws, conn);
     this.teams[side].push(ws);
@@ -981,7 +985,8 @@ export class Lobby {
         c.skin = w.skin;
         c.trail = w.trail;
         c.title = w.title;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        c.song = w.song;
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet load failed:', e));
   }
@@ -994,8 +999,8 @@ export class Lobby {
       .then((w) => {
         const c = this.conns.get(ws);
         if (!c) return;
-        c.hat = w.hat; c.skin = w.skin; c.trail = w.trail; c.title = w.title;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        c.hat = w.hat; c.skin = w.skin; c.trail = w.trail; c.title = w.title; c.song = w.song;
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet send failed:', e));
   }
@@ -1151,7 +1156,7 @@ export class Lobby {
   }
 
   /** Equip (item) or unequip (null) a cosmetic in its slot. */
-  shopEquip(ws: WebSocket, slot: 'hat' | 'skin' | 'trail' | 'title', item: string | null) {
+  shopEquip(ws: WebSocket, slot: 'hat' | 'skin' | 'trail' | 'title' | 'song', item: string | null) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     if (item !== null) {
@@ -1162,7 +1167,7 @@ export class Lobby {
       .then((w) => {
         if (!w) return;
         const c = this.conns.get(ws);
-        if (c) { c.hat = w.hat; c.skin = w.skin; c.trail = w.trail; c.title = w.title; }
+        if (c) { c.hat = w.hat; c.skin = w.skin; c.trail = w.trail; c.title = w.title; c.song = w.song; }
         this.sendWallet(ws);
         if (slot === 'title') this.refreshLeaderboard(); // title shows on the board
       })
@@ -1981,6 +1986,8 @@ export class Lobby {
     if (this.tournament) this.tournamentSync();
     else if (this.mode === 'poly') this.polySync();
     else this.duelSync();
+    // Theme songs: when a duel kicks off, play a seated player's equipped song (random if several).
+    if (this.mode !== 'poly') this.maybeStartThemeSong();
     // Bench anyone holding up a live, ready opponent by not capturing their mouse.
     // (Suspended during a tournament — benching a seated player would break the bracket.)
     if (!this.tournament) this.enforceCaptureTimeout();
@@ -2009,6 +2016,29 @@ export class Lobby {
       this.polyOverTimer = 0;
       if (this.poly.status === 'waiting' && this.arenaSeats.length >= 3) this.poly.start();
     }
+  }
+
+  /** On the tick a duel kicks off (status rises to 'playing'), pick a theme song from the seated
+   *  players who have one equipped — random when more than one — and broadcast it to everyone so
+   *  it loops for the match. Clients stop it on their own when the match leaves 'playing'. */
+  private maybeStartThemeSong() {
+    const playing = this.game.status === 'playing';
+    if (playing && !this.lastDuelPlaying) {
+      const songs: { owner: string; audio: string }[] = [];
+      for (const ws of [...this.teams.left, ...this.teams.right]) {
+        const c = this.conns.get(ws);
+        if (!c || !c.song) continue;
+        const item = COSMETICS.find((x) => x.id === c.song && x.slot === 'song');
+        if (item?.audio) songs.push({ owner: c.nickname, audio: item.audio });
+      }
+      if (songs.length) {
+        const pick = songs[Math.floor(Math.random() * songs.length)];
+        const data = JSON.stringify({ type: 'themeSong', audio: pick.audio, owner: pick.owner });
+        for (const sock of this.conns.keys()) if (sock.readyState === sock.OPEN) sock.send(data);
+        this.announce(`🎵 ${pick.owner}'s theme is playing!`);
+      }
+    }
+    this.lastDuelPlaying = playing;
   }
 
   // Record an arena round: the survivor gets a win, everyone else who was seated a loss.
