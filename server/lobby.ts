@@ -837,10 +837,11 @@ export class Lobby {
     recordDoomScore(key, label, coop, r)
       .then(() => this.refreshDoomLeaderboards())
       .catch((e) => console.error('doom score save failed:', e));
-    // Reward 50 coins × the round reached — every run, no gating. DOOM is a grindable coin
-    // faucet on purpose; early rounds pay little (50, 100, …) so it scales with how far you get.
+    // Reward stacks per round: round 1 pays 50, round 2 adds 100, round 3 adds 150, … so the
+    // total for reaching round r is 50·(1+2+…+r) = 25·r·(r+1) (e.g. R2 → 150, R5 → 750). Every
+    // run, no gating — DOOM is a grindable coin faucet on purpose that scales with how far you get.
     if (conn.pid) {
-      const reward = 50 * r;
+      const reward = 25 * r * (r + 1);
       // House-funded (throttled when the treasury is low). Surface the CREDITED amount, not the ask.
       this.housePay(conn.pid, conn.nickname, reward)
         .then((paid) => {

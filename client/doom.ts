@@ -42,6 +42,10 @@ fritzImg.src = '/fritz.jpg';
 const jsavImg = new Image();
 jsavImg.src = '/jsav.jpg';
 const isBossRound = (round: number): boolean => round % 5 === 0;
+// Coin economy (mirrors server/lobby.ts): the round reward stacks — round k is worth 50·k, so
+// the running total for reaching round r is 50·(1+…+r) = 25·r·(r+1). Each minion boss pays 100.
+const DOOM_BOSS_COINS = 100;
+const doomRoundCoins = (round: number): number => 25 * round * (round + 1);
 // Grenade: thrown with space, flies forward, then explodes for big area damage.
 const GRENADE_SPEED = 5.5; // tiles / second (a short lob — drops just in front of you)
 const GRENADE_FUSE = 0.5;  // seconds before it detonates (≈ a couple tiles out)
@@ -244,10 +248,17 @@ export function startDoom(net: DoomNet): void {
   hud.append(healthEl, ammoEl, killsEl);
   overlay.appendChild(hud);
 
+  // Running tally (top-left) of coins earned this run: stacking round rewards + boss bounties.
+  const coinsEl = document.createElement('div');
+  coinsEl.style.cssText =
+    'position:absolute;top:14px;left:14px;display:none;font:700 18px ui-monospace,monospace;' +
+    'color:#ffd166;text-shadow:2px 2px 0 #000;letter-spacing:1px;pointer-events:none;';
+  overlay.appendChild(coinsEl);
+
   // Co-op: a small buddy health bar in the top-left so you can watch your partner.
   const buddyBar = document.createElement('div');
   buddyBar.style.cssText =
-    'position:absolute;top:14px;left:14px;display:none;flex-direction:column;gap:3px;' +
+    'position:absolute;top:44px;left:14px;display:none;flex-direction:column;gap:3px;' +
     'font:700 12px ui-monospace,monospace;color:#9fd8a0;text-shadow:1px 1px 0 #000;pointer-events:none;';
   const buddyLabel = document.createElement('div');
   const buddyTrack = document.createElement('div');
@@ -311,9 +322,9 @@ export function startDoom(net: DoomNet): void {
     '<div style="color:#cdd7f5;font-weight:700;margin-bottom:4px">CONTROLS</div>' +
     'WASD move · A/D strafe · mouse or ←/→ turn · click to shoot · <b>SPACE</b> to throw a grenade · ESC quit' +
     '<div style="color:#cdd7f5;font-weight:700;margin:12px 0 4px">SURVIVE THE ROUNDS</div>' +
-    'Each round spawns more (and tougher) enemies. Clear them all to advance. Special enemies show up on a schedule:' +
+    'Each round spawns more (and tougher) enemies. Clear them all to advance. <b style="color:#ffd166">Coins stack each round you reach</b> (round 1 = 50, round 2 = +100, …) and pay out when your run ends. Special enemies show up on a schedule:' +
     '<div style="margin-top:8px;text-align:left;display:inline-block">' +
-    '<div><span style="color:#ffd21e">😈 Minion BOSS</span> — every 5th round. Huge, tanky, hits hard (with its own health bar). <b>Kill it for a coin.</b></div>' +
+    '<div><span style="color:#ffd21e">😈 Minion BOSS</span> — every 5th round. Huge, tanky, hits hard (with its own health bar). <b>Kill it for +100 coins.</b></div>' +
     '<div><span style="color:#f59e0b">🧍 Fritz</span> — every 3rd round. A beefy mini-boss. <b>Drops a full-health pack.</b></div>' +
     '<div><span style="color:#63e6be">🧍 Jsav</span> — every 2nd round. A beefy mini-boss. <b>Drops a grenade.</b></div>' +
     '</div>' +
@@ -351,6 +362,7 @@ export function startDoom(net: DoomNet): void {
   let enemies: Enemy[] = [];
   let kills = 0;
   let round = 1;
+  let bossCoins = 0; // coins banked from minion-boss kills this run (100 each)
   let betweenTimer = 0; // seconds of the "ROUND N" intermission remaining (0 = fighting)
   let over: 'dead' | null = null; // survival mode: you only ever lose
   let scoreSubmitted = false;
@@ -1003,11 +1015,16 @@ export function startDoom(net: DoomNet): void {
     }
     if (mode === 'menu' || mode === 'wait') {
       hud.style.display = 'none'; banner.style.display = 'none'; buddyBar.style.display = 'none';
+      coinsEl.style.display = 'none';
       if (mode === 'menu') menu.style.display = 'flex';
       return;
     }
     const alive = enemies.filter((e) => e.alive).length;
     hud.style.display = 'flex';
+    // Coins earned this run so far: stacking round rewards + boss bounties already banked.
+    const earned = doomRoundCoins(round) + bossCoins;
+    coinsEl.style.display = 'block';
+    coinsEl.textContent = `🪙 ${earned.toLocaleString()} earned`;
     const p = me();
     healthEl.textContent = `♥ ${Math.max(0, Math.round(p.health))}`;
     ammoEl.textContent = `▮ ${p.ammo}${p.grenades > 0 ? `   💣 ${p.grenades}` : ''}`;
@@ -1025,7 +1042,7 @@ export function startDoom(net: DoomNet): void {
     const bossTag = isBossRound(round) ? ' (BOSS BATTLE)' : '';
     killsEl.textContent = betweenTimer > 0 ? `ROUND ${round}${bossTag} ▸` : `ROUND ${round}${bossTag} · ${alive} left`;
     if (over === 'dead') {
-      banner.textContent = `GAME OVER\nReached round ${round}\n${mode === 'solo' ? 'press R to retry · ' : ''}ESC to quit`;
+      banner.textContent = `GAME OVER\nReached round ${round}\n🪙 ${earned.toLocaleString()} coins earned\n${mode === 'solo' ? 'press R to retry · ' : ''}ESC to quit`;
       banner.style.color = '#ff2d2d';
       banner.style.fontSize = '40px';
       banner.style.display = 'flex';
@@ -1043,7 +1060,7 @@ export function startDoom(net: DoomNet): void {
   function startSolo() {
     mode = 'solo'; selfIdx = 0;
     players = [freshPlayer(2.5, 2.5)];
-    round = 1; kills = 0; over = null; myAngle = 0; scoreSubmitted = false; betweenTimer = 0;
+    round = 1; kills = 0; bossCoins = 0; over = null; myAngle = 0; scoreSubmitted = false; betweenTimer = 0;
     drops = []; grenades = []; blasts = [];
     enemies = spawnEnemiesForRound(round, players);
     menu.style.display = 'none';
@@ -1052,7 +1069,7 @@ export function startDoom(net: DoomNet): void {
     selfIdx = slot;
     mode = slot === 0 ? 'host' : 'guest';
     players = [freshPlayer(2.5, 2.5), freshPlayer(3.5, 2.5)];
-    round = 1; kills = 0; over = null; myAngle = 0; scoreSubmitted = false; betweenTimer = 0;
+    round = 1; kills = 0; bossCoins = 0; over = null; myAngle = 0; scoreSubmitted = false; betweenTimer = 0;
     drops = []; grenades = []; blasts = [];
     enemies = slot === 0 ? spawnEnemiesForRound(round, players) : [];
     lastGuestFireSeq = 0; lastGuestGrenadeSeq = 0;
@@ -1163,7 +1180,7 @@ export function startDoom(net: DoomNet): void {
     syncBossMusic();
     // Award a coin the moment the minion boss dies (each participant gets one).
     const bossAlive = enemies.some((e) => e.boss && e.alive);
-    if (prevBossAlive && !bossAlive) net.awardCoin();
+    if (prevBossAlive && !bossAlive) { net.awardCoin(); bossCoins += DOOM_BOSS_COINS; }
     prevBossAlive = bossAlive;
     raf = requestAnimationFrame(loop);
   }
