@@ -1252,6 +1252,152 @@
       #rouletteSpin:hover:not(:disabled) { filter: brightness(1.1); }
       #rouletteSpin:disabled { opacity: 0.45; cursor: default; }
       #rouletteNote { font-size: 10px; color: #5a647e; margin-top: 8px; line-height: 1.4; }
+
+      /* --- Blackjack --- */
+      #bjBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #3a5520;
+        background: #121e0a; color: #8df06a; cursor: pointer;
+      }
+      #bjBtn:hover { background: #1c2e12; }
+      #bjPanel {
+        position: fixed; top: 52px; left: 12px; width: 320px;
+        max-height: 84vh; overflow-y: auto;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #bjPanel[hidden] { display: none; }
+      #bjPanel h3 { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; margin: 8px 0 6px; }
+      .bj-table { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+      .bj-label { font-size: 10px; color: #6b7796; text-transform: uppercase; letter-spacing: 1px; }
+      .bj-cards { display: flex; gap: 6px; flex-wrap: wrap; min-height: 60px; }
+      .bj-card {
+        width: 38px; height: 56px; border-radius: 5px; border: 1px solid #3a4566;
+        background: #f0f0f0; color: #1a1a2e; font: 800 13px ui-monospace, monospace;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 2px; user-select: none; box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+      }
+      .bj-card.red { color: #cc1122; }
+      .bj-card.back { background: #1a2a5a; color: #3a5580; border-color: #2a3a60; font-size: 20px; }
+      .bj-card span { font-size: 15px; line-height: 1; }
+      .bj-status { font: 700 12px ui-monospace, monospace; color: #cdd7f5; margin-bottom: 6px; min-height: 16px; }
+      .bj-result { font: 800 14px ui-monospace, monospace; min-height: 18px; margin-bottom: 8px; }
+      .bj-win { color: #6ee7a8; } .bj-win.bj-bj { color: #ffd166; font-size: 16px; }
+      .bj-lose { color: #ff7a7a; } .bj-push { color: #a0b0d0; }
+      .bj-controls { display: flex; flex-direction: column; gap: 8px; }
+      .bj-bet-row { display: flex; align-items: center; gap: 8px; }
+      .bj-label-sm { font-size: 11px; color: #6b7796; }
+      .bj-bet-row input {
+        flex: 1; font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 5px;
+        border: 1px solid #2a3550; background: #060912; color: #fff; min-width: 0;
+      }
+      .bj-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+      .bj-deal-btn, .bj-action-btn {
+        font: inherit; font-size: 12px; font-weight: 700; padding: 6px 14px;
+        border-radius: 6px; cursor: pointer;
+      }
+      .bj-deal-btn { border: none; background: #22cc66; color: #0a1a0a; }
+      .bj-deal-btn:hover { background: #28e870; }
+      .bj-action-btn { border: 1px solid #2a3550; background: #11182c; color: #cdd7f5; }
+      .bj-action-btn:hover:not(:disabled) { background: #1a2238; }
+      .bj-action-btn:disabled { opacity: 0.4; cursor: default; }
+      .bj-deal-btn:disabled { opacity: 0.4; cursor: default; }
+      .bj-note { font-size: 10px; color: #5a647e; margin-top: 8px; line-height: 1.4; }
+
+      /* --- Craps --- */
+      #crapsBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #5a3a0a;
+        background: #1c1208; color: #f0a030; cursor: pointer;
+      }
+      #crapsBtn:hover { background: #261a0c; }
+      #crapsPanel {
+        position: fixed; top: 52px; left: 12px; width: 300px;
+        max-height: 84vh; overflow-y: auto;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #crapsPanel[hidden] { display: none; }
+      #crapsPanel h3 { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; margin: 8px 0 6px; }
+      .craps-dice { font-size: 40px; text-align: center; margin: 8px 0; letter-spacing: 8px; }
+      @keyframes crapsPop { 0% { transform: scale(1.4) rotate(-8deg); } 100% { transform: scale(1); } }
+      .craps-roll-pop { animation: crapsPop 0.5s ease-out; }
+      .craps-point-comeout { font: 700 11px ui-monospace, monospace; color: #9fb0d8; padding: 5px 8px; border-radius: 5px; background: #11182c; margin-bottom: 8px; }
+      .craps-point-active { font: 700 11px ui-monospace, monospace; color: #ffd166; padding: 5px 8px; border-radius: 5px; background: #1c1a0a; border: 1px solid #5a4a0a; margin-bottom: 8px; }
+      .craps-result { font: 800 13px ui-monospace, monospace; min-height: 18px; margin-bottom: 8px; }
+      .craps-win { color: #6ee7a8; } .craps-lose { color: #ff7a7a; }
+      .craps-push { color: #a0b0d0; } .craps-neutral { color: #cdd7f5; } .craps-rolling { color: #8898b8; }
+      .craps-bets { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+      .craps-bet-row { display: flex; align-items: center; gap: 8px; }
+      .craps-bet-row label { font-size: 11px; color: #9fb0d8; white-space: nowrap; }
+      .craps-bet-row input {
+        flex: 1; font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 5px;
+        border: 1px solid #2a3550; background: #060912; color: #fff; min-width: 0;
+      }
+      .craps-roll-btn {
+        width: 100%; font: inherit; font-size: 13px; font-weight: 700; padding: 8px;
+        border-radius: 6px; border: none; background: #f0a030; color: #1a0c00; cursor: pointer;
+      }
+      .craps-roll-btn:hover { background: #ffc050; }
+      .craps-roll-btn:disabled { opacity: 0.4; cursor: default; }
+      .craps-note { font-size: 10px; color: #5a647e; margin-top: 8px; line-height: 1.4; }
+
+      /* --- Crash --- */
+      #crashBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #3a1a50;
+        background: #120a1c; color: #d080ff; cursor: pointer;
+      }
+      #crashBtn:hover { background: #1c1030; }
+      #crashPanel {
+        position: fixed; top: 52px; left: 12px; width: 320px;
+        max-height: 84vh; overflow-y: auto;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #crashPanel[hidden] { display: none; }
+      #crashPanel h3 { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; margin: 8px 0 6px; }
+      #crashCanvas { display: block; width: 100%; border-radius: 6px; border: 1px solid #1a2238; margin-bottom: 6px; }
+      .crash-mult {
+        font: 900 32px ui-monospace, monospace; text-align: center; letter-spacing: 2px;
+        padding: 4px 0 8px; transition: color 0.1s;
+      }
+      .crash-mult.idle { color: #6b7796; }
+      .crash-mult.live { color: #22e8ff; text-shadow: 0 0 14px rgba(34,232,255,0.5); }
+      .crash-mult.crashed { color: #ff4466; text-shadow: 0 0 14px rgba(255,68,102,0.5); }
+      .crash-status { font: 700 12px ui-monospace, monospace; color: #cdd7f5; min-height: 18px; margin-bottom: 8px; text-align: center; }
+      .crash-betters { max-height: 100px; overflow-y: auto; margin-bottom: 8px; display: flex; flex-direction: column; gap: 3px; }
+      .crash-no-bets { font-size: 11px; color: #4a5570; text-align: center; padding: 6px 0; }
+      .crash-row { display: flex; align-items: center; gap: 6px; font-size: 11px; padding: 2px 4px; border-radius: 4px; background: #0a1018; }
+      .crash-row-name { flex: 1; color: #9fb0d8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .crash-row-amt { color: #ffd166; font-weight: 700; }
+      .crash-badge { font-size: 11px; font-weight: 700; }
+      .crash-badge.cashed { color: #6ee7a8; }
+      .crash-badge.lost { color: #ff7a7a; }
+      .crash-badge.live { color: #22e8ff; }
+      .crash-controls { display: flex; flex-direction: column; gap: 6px; }
+      .crash-input-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+      .crash-label { font-size: 10px; color: #6b7796; white-space: nowrap; }
+      .crash-input-row input {
+        width: 70px; font: inherit; font-size: 12px; padding: 5px 6px; border-radius: 5px;
+        border: 1px solid #2a3550; background: #060912; color: #fff;
+      }
+      .crash-btn-row { display: flex; gap: 8px; }
+      .crash-bet-btn {
+        flex: 1; font: inherit; font-size: 12px; font-weight: 700; padding: 7px 0;
+        border-radius: 6px; border: none; background: #d080ff; color: #1a0a28; cursor: pointer;
+      }
+      .crash-bet-btn:hover:not(:disabled) { background: #e8a8ff; }
+      .crash-bet-btn:disabled { opacity: 0.4; cursor: default; }
+      .crash-cashout-btn {
+        flex: 1; font: inherit; font-size: 12px; font-weight: 700; padding: 7px 0;
+        border-radius: 6px; border: none; background: #22cc66; color: #0a1a0a; cursor: pointer;
+        animation: cashoutPulse 0.7s ease-in-out infinite alternate;
+      }
+      .crash-cashout-btn:hover { background: #28e870; }
+      .crash-cashout-btn[hidden] { display: none; }
+      @keyframes cashoutPulse { from { box-shadow: 0 0 4px #22cc66; } to { box-shadow: 0 0 18px #22cc66; } }
+      .crash-note { font-size: 10px; color: #5a647e; margin-top: 8px; line-height: 1.4; }
       .coin-row {
         display: grid; grid-template-columns: 34px 1fr auto; gap: 8px; align-items: center;
         padding: 7px 0; border-top: 1px solid #1c2640;
@@ -2956,6 +3102,9 @@
           <button id="marketplaceBtn" type="button" aria-expanded="false" title="Black Market — buy &amp; sell scarce exclusives with other players">🛒 Black Market</button>
           <button id="loanBtn" type="button" aria-expanded="false" title="Borrow coins from Davis — pay back 1.5× by the daily reset">💸 Get Loan</button>
           <button id="rouletteBtn" type="button" aria-expanded="false" title="Play roulette — bet coins on the wheel">🎡 Roulette</button>
+          <button id="bjBtn" type="button" aria-expanded="false" title="Play blackjack — beat the dealer to 21">🃏 Blackjack</button>
+          <button id="crapsBtn" type="button" aria-expanded="false" title="Shoot craps — pass or don't pass">🎲 Craps</button>
+          <button id="crashBtn" type="button" aria-expanded="false" title="Crash — cash out before the multiplier crashes">🚀 Crash</button>
         </div>
       </div>
       <div id="marketPanel" hidden>
@@ -3002,6 +3151,71 @@
           </div>
         </div>
         <div id="rouletteNote">Single-zero wheel. Straight number pays 35:1, dozens 2:1, red/black/odd/even/half 1:1. The green 0 is the house edge. Pick a chip, click the board to stake, then Spin.</div>
+      </div>
+      <!-- Blackjack panel -->
+      <div id="bjPanel" hidden>
+        <h3>Blackjack · <span id="bjCoins">0</span> 🪙</h3>
+        <div class="bj-table">
+          <div class="bj-label">Dealer</div>
+          <div id="bjDealerCards" class="bj-cards"></div>
+          <div class="bj-label">You</div>
+          <div id="bjPlayerCards" class="bj-cards"></div>
+        </div>
+        <div id="bjStatus" class="bj-status"></div>
+        <div id="bjResult" class="bj-result"></div>
+        <div class="bj-controls">
+          <div class="bj-bet-row">
+            <span class="bj-label-sm">Bet 🪙</span>
+            <input id="bjBet" type="number" min="1" max="5000" value="100" />
+          </div>
+          <div class="bj-btns">
+            <button id="bjDeal" type="button" class="bj-deal-btn">Deal</button>
+            <button id="bjHit" type="button" class="bj-action-btn" disabled>Hit</button>
+            <button id="bjStand" type="button" class="bj-action-btn" disabled>Stand</button>
+            <button id="bjDouble" type="button" class="bj-action-btn" disabled>Double</button>
+          </div>
+        </div>
+        <div class="bj-note">Beat the dealer's hand without going over 21. Blackjack pays 3:2. Dealer stands on all 17s. Max bet 5,000 🪙.</div>
+      </div>
+      <!-- Craps panel -->
+      <div id="crapsPanel" hidden>
+        <h3>Street Craps · <span id="crapsCoins">0</span> 🪙</h3>
+        <div id="crapsDice" class="craps-dice">⚀ ⚀</div>
+        <div id="crapsPoint" class="craps-point-comeout">Come-out roll</div>
+        <div id="crapsResult" class="craps-result"></div>
+        <div class="craps-bets">
+          <div class="craps-bet-row">
+            <label>Pass Line 🪙</label>
+            <input id="crapsPass" type="number" min="0" max="2000" value="100" />
+          </div>
+          <div class="craps-bet-row">
+            <label>Don't Pass 🪙</label>
+            <input id="crapsDontPass" type="number" min="0" max="2000" value="0" />
+          </div>
+        </div>
+        <button id="crapsRoll" type="button" class="craps-roll-btn">🎲 Roll</button>
+        <div class="craps-note">Come-out: 7/11 = Pass wins · 2/3 = Don't Pass wins · 12 = Don't Pass pushes · any other sets the point. Max 2,000 🪙 per bet.</div>
+      </div>
+      <!-- Crash panel -->
+      <div id="crashPanel" hidden>
+        <h3>Crash · <span id="crashCoins">0</span> 🪙</h3>
+        <canvas id="crashCanvas" width="300" height="120"></canvas>
+        <div id="crashMult" class="crash-mult idle">1.00×</div>
+        <div id="crashStatus" class="crash-status">Waiting for next round…</div>
+        <div id="crashBetters" class="crash-betters"></div>
+        <div class="crash-controls">
+          <div class="crash-input-row">
+            <span class="crash-label">Bet 🪙</span>
+            <input id="crashBet" type="number" min="1" max="3000" value="50" />
+            <span class="crash-label">Auto cashout ×</span>
+            <input id="crashAuto" type="number" min="1.01" step="0.1" placeholder="—" />
+          </div>
+          <div class="crash-btn-row">
+            <button id="crashBetBtn" type="button" class="crash-bet-btn">Place Bet</button>
+            <button id="crashCashoutBtn" type="button" class="crash-cashout-btn" hidden>💰 Cash Out</button>
+          </div>
+        </div>
+        <div class="crash-note">Bet during the 8s window. Multiplier rises from 1×. Cash out any time — or lose everything when it crashes. Max 3,000 🪙.</div>
       </div>
       <div id="lootPanel" hidden>
         <h3>🎁 Loot Box</h3>

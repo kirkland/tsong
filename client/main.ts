@@ -3,6 +3,9 @@
 
 import { connect } from './net';
 import { initRoulette } from './roulette';
+import { initBlackjack } from './blackjack';
+import { initCraps } from './craps';
+import { initCrash } from './crash';
 import { initAds, revealAds } from './ads';
 import { draw, drawLegendIcon, setBlasterAim, drawCosmeticPreview } from './render';
 import {
@@ -635,6 +638,9 @@ const net = connect(
     } else if (msg.type === 'wallet') {
       wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, car: msg.car, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
       rouletteHandle.setCoins(msg.coins);
+      bjHandle.setCoins(msg.coins);
+      crapsHandle.setCoins(msg.coins);
+      crashHandle.setCoins(msg.coins);
       if (!lootPanel.hidden) renderLoot();
       if (!marketplacePanel.hidden) renderMarketplace();
       // During a roulette spin, hold every coin-total display (toolbar tab, shop, market) at its
@@ -650,6 +656,14 @@ const net = connect(
       celebrateSpin(msg.reward, msg.segment);
     } else if (msg.type === 'rouletteResult') {
       rouletteHandle.onResult(msg);
+    } else if (msg.type === 'bjState') {
+      bjHandle.onState(msg);
+    } else if (msg.type === 'bjResult') {
+      bjHandle.onResult(msg);
+    } else if (msg.type === 'crapsResult') {
+      crapsHandle.onResult(msg);
+    } else if (msg.type === 'crashState') {
+      crashHandle.onState(msg);
     } else if (msg.type === 'loan') {
       loan = msg.loan;
       // Taking/repaying resets the conversation; collecting (loan→null) drops back to the intro.
@@ -698,6 +712,27 @@ const rouletteHandle = initRoulette({
   playWin: playYay,
   // Fires when the wheel finishes; reveal the settled balance everywhere now, not mid-spin.
   onSettled: refreshWallet,
+});
+
+// Blackjack panel.
+const bjHandle = initBlackjack({
+  send: (type, payload) => net.send({ type, ...payload } as Parameters<typeof net.send>[0]),
+  playWin: playYay,
+  onSettled: refreshWallet,
+});
+
+// Craps panel.
+const crapsHandle = initCraps({
+  send: (pass, dontPass) => net.send({ type: 'crapsRoll', pass, dontPass }),
+  playWin: playYay,
+  onSettled: refreshWallet,
+});
+
+// Crash panel — live state streamed from server every 100ms.
+const crashHandle = initCrash({
+  sendBet: (amount, autoCashout) => net.send({ type: 'crashBet', amount, ...(autoCashout ? { autoCashout } : {}) }),
+  sendCashout: () => net.send({ type: 'crashCashout' }),
+  playWin: playYay,
 });
 
 const isPlayer = () => myRole === 'left' || myRole === 'right' || myRole === 'player';

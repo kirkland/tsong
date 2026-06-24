@@ -457,6 +457,11 @@ export type ClientMsg =
   | { type: 'getLoan'; amount: number } // borrow `amount` coins from Davis (owe 1.5× back by the daily 5pm collection)
   | { type: 'repayLoan' } // pay Davis the full 1.5× owed and clear the loan
   | { type: 'roulette'; bets: RouletteBet[] } // stake coins on a single spin of the casino wheel
+  | { type: 'bjBet'; amount: number } // start a blackjack hand with this wager
+  | { type: 'bjAction'; action: BjAction } // hit, stand, or double down
+  | { type: 'crapsRoll'; pass: number; dontPass: number } // roll the dice with pass/don't-pass bets
+  | { type: 'crashBet'; amount: number; autoCashout?: number } // bet on the next crash round (optional auto-cashout multiplier)
+  | { type: 'crashCashout' } // cash out of the current live crash round
   | { type: 'balanceSheetReq'; rank: number } // peek at a net-worth board player's balance sheet (by current rank)
   | { type: 'lootBoxOpen' } // open a loot box: spend coins, roll a weighted prize (common cosmetic / House coins / capped-rare exclusive)
   | { type: 'marketList'; instanceId: number; ask: number } // list an owned exclusive instance on the marketplace for `ask` coins
@@ -857,6 +862,10 @@ export type ServerMsg =
   | LoanMsg
   | SpinResultMsg
   | RouletteResultMsg
+  | BjStateMsg
+  | BjResultMsg
+  | CrapsResultMsg
+  | CrashStateMsg
   | TipMsg
   | BountyBoardMsg
   | BountyHitMsg
@@ -1132,6 +1141,65 @@ export interface RouletteResultMsg {
   number: number; // winning pocket, 0–36
   staked: number; // total coins wagered this spin
   payout: number; // total coins paid back (0 if all bets lost)
+}
+
+// --- Blackjack ---
+// Six-deck shoe. Cards as rank+suit strings: A2–9TJQK + SHDC (e.g. 'AS', 'TD', 'KH').
+// Server is authoritative: it holds the shoe, deals, resolves, and settles the wallet.
+export const BJ_MAX_BET = 5_000;
+export type BjAction = 'hit' | 'stand' | 'double';
+export type BjOutcome = 'blackjack' | 'win' | 'push' | 'lose';
+export interface BjStateMsg {
+  type: 'bjState';
+  playerCards: string[]; // e.g. ['AS', 'TD']
+  dealerCard: string;    // face-up card (hidden one not revealed until stand / double)
+  playerTotal: number;   // best soft/hard total ≤ 21 (busted = bust total)
+  canDouble: boolean;    // true only before the first hit
+  status: 'playing';
+}
+export interface BjResultMsg {
+  type: 'bjResult';
+  playerCards: string[];
+  dealerCards: string[]; // both dealer cards revealed
+  playerTotal: number;
+  dealerTotal: number;
+  outcome: BjOutcome;   // 'blackjack'=3:2, 'win'=1:1, 'push'=even, 'lose'=0
+  bet: number;
+  payout: number;        // coins returned (0=lose, bet=push, bet×2=win, floor(bet×2.5)=BJ)
+}
+
+// --- Street Craps ---
+// Pass Line / Don't Pass bets with a come-out → point-phase state machine.
+export const CRAPS_MAX_BET = 2_000;
+export interface CrapsResultMsg {
+  type: 'crapsResult';
+  dice: [number, number]; // individual die values, 1–6
+  total: number;
+  prevPoint: number | null; // craps point before this roll (null = was on come-out)
+  newPoint: number | null;  // point after this roll (null = come-out phase; number = point active)
+  outcome: 'win' | 'lose' | 'point'; // 'point' = no resolution, keep rolling
+  push12: boolean;          // come-out 12: pass loses, don't-pass pushes (not loses)
+  passPayout: number;       // coins returned for the Pass Line bet (0 = lost)
+  dontPassPayout: number;   // coins returned for the Don't Pass bet
+}
+
+// --- Crash ---
+// Lobby-wide multiplayer crash: multiplier rises from 1.00× and crashes at a server-chosen
+// point. Players bet during the 8s window and cash out before the crash. House edge ≈ 3%.
+export const CRASH_BETTING_MS = 8_000;
+export const CRASH_TICK_MS = 100;        // live-phase tick interval (ms)
+export const CRASH_ENDED_MS = 4_000;     // how long the crash result lingers before next round
+export const CRASH_MAX_BET = 3_000;
+export const CRASH_GROWTH = 1.02;        // multiplier per 100ms tick (~7× per minute at the start)
+export interface CrashStateMsg {
+  type: 'crashState';
+  phase: 'betting' | 'live' | 'ended';
+  multiplier: number;          // 1.00 during betting; rising during live; crash value when ended
+  timeLeft: number;            // ms remaining in the betting window (0 during live/ended)
+  bets: { name: string; amount: number; cashedAt: number | null }[];
+  yourBet: number | null;      // null = not in this round
+  yourCashedAt: number | null; // multiplier at which you cashed out (null = still live or lost)
+  crashedAt: number | null;    // the final crash multiplier (non-null only when ended)
 }
 
 // Co-op DOOM lobby status (2 slots). `slot` is which slot this client holds (0 = host,

@@ -342,6 +342,21 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'roulette':
         if (Array.isArray(msg.bets)) lobby.roulette(ws, msg.bets);
         break;
+      case 'bjBet':
+        if (typeof msg.amount === 'number') lobby.blackjackBet(ws, msg.amount);
+        break;
+      case 'bjAction':
+        if (typeof msg.action === 'string') lobby.blackjackAction(ws, msg.action as import('../shared/types').BjAction);
+        break;
+      case 'crapsRoll':
+        if (typeof msg.pass === 'number' && typeof msg.dontPass === 'number') lobby.crapsRoll(ws, msg.pass, msg.dontPass);
+        break;
+      case 'crashBet':
+        if (typeof msg.amount === 'number') lobby.crashBetAction(ws, msg.amount, msg.autoCashout);
+        break;
+      case 'crashCashout':
+        lobby.crashCashout(ws);
+        break;
       case 'balanceSheetReq':
         if (typeof msg.rank === 'number') lobby.sendBalanceSheet(ws, msg.rank);
         break;

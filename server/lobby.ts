@@ -36,6 +36,18 @@ import {
   RouletteBet,
   RouletteBetKind,
   rouletteWins,
+  BJ_MAX_BET,
+  BjAction,
+  BjStateMsg,
+  BjResultMsg,
+  CRAPS_MAX_BET,
+  CrapsResultMsg,
+  CRASH_BETTING_MS,
+  CRASH_TICK_MS,
+  CRASH_ENDED_MS,
+  CRASH_MAX_BET,
+  CRASH_GROWTH,
+  CrashStateMsg,
   StateMsg,
   STOCKS,
   STOCK_UPDATE_MS,
@@ -79,6 +91,13 @@ function isValidReaction(emoji: string): boolean {
   return emoji.length > 0 && emoji.length <= 16 && EMOJI_ONLY.test(emoji);
 }
 
+interface BjHand {
+  playerCards: string[];
+  dealerCards: string[]; // both cards held server-side; second one revealed at showdown
+  bet: number;           // current wager (doubled if player doubled down)
+  shoe: string[];        // remaining shoe to draw from
+}
+
 interface Conn {
   id: string; // per-connection id (used in `you` messages)
   pid: string; // stable per-browser identity (leaderboard key); '' until joined
@@ -94,6 +113,9 @@ interface Conn {
   trail: string | null;
   title: string | null;
   song: string | null; // equipped theme song id (plays during this player's matches)
+  // Casino games
+  bjHand?: BjHand;             // active blackjack hand (undefined = not playing)
+  crapsPoint: number | null;   // current craps point (null = come-out phase)
 }
 
 // One step of a crypto's price random walk. Pure RNG — never tied to who invested or how
@@ -290,6 +312,14 @@ export class Lobby {
   private liveMatchId: number | null = null; // bracket match currently on the court
   private tourneyInterMs = 0; // ms left on the "next match" interstitial between games
 
+  // --- Crash casino game ---
+  private crashPhase: 'betting' | 'live' | 'ended' = 'betting';
+  private crashPhaseStart = 0;           // Date.now() when the current phase began
+  private crashAt = 0;                   // predetermined crash multiplier (secret until crash)
+  private crashTicksNeeded = 0;          // live-phase ticks until crashAt is reached
+  private crashTicks = 0;               // elapsed live-phase ticks
+  private crashBets: Array<{ ws: WebSocket; pid: string; name: string; amount: number; autoCashout: number | null; cashedAt: number | null }> = [];
+
   // --- "Type or Die" (co-op typing horde-defense) ---
   // A single shared, server-authoritative arena that runs alongside everything else. Players
   // drop in via the overlay; the sim owns the monsters / base / scoring (see TypeGame). State
@@ -328,6 +358,9 @@ export class Lobby {
       },
       announce: (text) => this.announce(text),
     });
+    // Kick off the perpetual Crash casino game.
+    this.crashPhaseStart = Date.now();
+    setInterval(() => this.crashTick(), CRASH_TICK_MS);
   }
 
   /** Advance whichever simulation is live this tick (called by the server loop). */
@@ -361,6 +394,7 @@ export class Lobby {
       trail: null,
       title: null,
       song: null,
+      crapsPoint: null,
     };
     this.conns.set(ws, conn);
     this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
@@ -370,6 +404,7 @@ export class Lobby {
     this.tell(ws, { type: 'tdLeaderboard', rows: this.tdBoard });
     this.tell(ws, { type: 'campaignLeaderboard', rows: this.campaignBoard });
     if (this.chatLog.length) this.tell(ws, { type: 'chat', lines: this.chatLog });
+    this.tell(ws, this.buildCrashState(ws));
   }
 
   chat(ws: WebSocket, text: string) {
@@ -1190,6 +1225,7 @@ export class Lobby {
       trail: null,
       title: null,
       song: null,
+      crapsPoint: null,
     };
     this.conns.set(ws, conn);
     this.teams[side].push(ws);
@@ -1565,6 +1601,288 @@ export class Lobby {
         this.sendWallet(ws);
       })
       .catch((e) => console.error('roulette failed:', e));
+  }
+
+  // --- Blackjack ---
+
+  blackjackBet(ws: WebSocket, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    if (conn.bjHand) { this.sendWallet(ws); return; } // already in a hand
+    if (!Number.isInteger(amount) || amount <= 0 || amount > BJ_MAX_BET) { this.sendWallet(ws); return; }
+    spendCoins(conn.pid, amount)
+      .then(async (w) => {
+        if (!w) { this.sendWallet(ws); return; }
+        await this.houseCredit(amount);
+        const shoe = bjFreshShoe();
+        const hand: BjHand = {
+          playerCards: [bjDeal(shoe), bjDeal(shoe)],
+          dealerCards: [bjDeal(shoe), bjDeal(shoe)],
+          bet: amount,
+          shoe,
+        };
+        conn.bjHand = hand;
+        const pt = bjTotal(hand.playerCards);
+        const playerBJ = hand.playerCards.length === 2 && pt === 21;
+        const dealerBJ = bjTotal(hand.dealerCards) === 21;
+        if (playerBJ) {
+          const outcome = dealerBJ ? 'push' : 'blackjack';
+          const want = dealerBJ ? amount : Math.floor(amount * 2.5);
+          const payout = want > 0 ? await this.housePay(conn.pid, conn.nickname, want) : 0;
+          conn.bjHand = undefined;
+          const msg: BjResultMsg = { type: 'bjResult', playerCards: hand.playerCards, dealerCards: hand.dealerCards, playerTotal: pt, dealerTotal: bjTotal(hand.dealerCards), outcome, bet: amount, payout };
+          this.tell(ws, msg);
+          this.sendWallet(ws);
+          return;
+        }
+        const state: BjStateMsg = { type: 'bjState', playerCards: hand.playerCards, dealerCard: hand.dealerCards[0], playerTotal: pt, canDouble: true, status: 'playing' };
+        this.tell(ws, state);
+        this.sendWallet(ws);
+      })
+      .catch((e) => console.error('blackjack bet failed:', e));
+  }
+
+  blackjackAction(ws: WebSocket, action: BjAction) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.bjHand || !conn.pid || !conn.nickname) return;
+    const hand = conn.bjHand;
+    if (action === 'double') {
+      if (hand.playerCards.length !== 2) return;
+      spendCoins(conn.pid, hand.bet)
+        .then(async (w) => {
+          if (!w) {
+            // Can't afford double — treat as hit
+            hand.playerCards.push(bjDeal(hand.shoe));
+            await this.bjFinishOrContinue(ws, conn, hand, false);
+            return;
+          }
+          await this.houseCredit(hand.bet);
+          hand.bet *= 2;
+          hand.playerCards.push(bjDeal(hand.shoe));
+          await this.bjStandAndSettle(ws, conn, hand);
+        })
+        .catch((e) => console.error('blackjack double failed:', e));
+      return;
+    }
+    if (action === 'hit') {
+      hand.playerCards.push(bjDeal(hand.shoe));
+      this.bjFinishOrContinue(ws, conn, hand, false).catch((e) => console.error('blackjack hit failed:', e));
+      return;
+    }
+    if (action === 'stand') {
+      this.bjStandAndSettle(ws, conn, hand).catch((e) => console.error('blackjack stand failed:', e));
+    }
+  }
+
+  private async bjFinishOrContinue(ws: WebSocket, conn: Conn, hand: BjHand, canDouble: boolean) {
+    const pt = bjTotal(hand.playerCards);
+    if (pt > 21) {
+      conn.bjHand = undefined;
+      const msg: BjResultMsg = { type: 'bjResult', playerCards: hand.playerCards, dealerCards: hand.dealerCards, playerTotal: pt, dealerTotal: bjTotal(hand.dealerCards), outcome: 'lose', bet: hand.bet, payout: 0 };
+      this.tell(ws, msg);
+      this.sendWallet(ws);
+      return;
+    }
+    const state: BjStateMsg = { type: 'bjState', playerCards: hand.playerCards, dealerCard: hand.dealerCards[0], playerTotal: pt, canDouble, status: 'playing' };
+    this.tell(ws, state);
+  }
+
+  private async bjStandAndSettle(ws: WebSocket, conn: Conn, hand: BjHand) {
+    while (bjTotal(hand.dealerCards) < 17) hand.dealerCards.push(bjDeal(hand.shoe));
+    const pt = bjTotal(hand.playerCards);
+    const dt = bjTotal(hand.dealerCards);
+    let outcome: 'win' | 'push' | 'lose';
+    let want: number;
+    if (dt > 21 || pt > dt) { outcome = 'win'; want = hand.bet * 2; }
+    else if (pt === dt) { outcome = 'push'; want = hand.bet; }
+    else { outcome = 'lose'; want = 0; }
+    conn.bjHand = undefined;
+    const payout = want > 0 ? await this.housePay(conn.pid!, conn.nickname!, want) : 0;
+    const msg: BjResultMsg = { type: 'bjResult', playerCards: hand.playerCards, dealerCards: hand.dealerCards, playerTotal: pt, dealerTotal: dt, outcome, bet: hand.bet, payout };
+    this.tell(ws, msg);
+    this.sendWallet(ws);
+  }
+
+  // --- Street Craps ---
+
+  crapsRoll(ws: WebSocket, pass: number, dontPass: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    if (!Number.isInteger(pass) || pass < 0 || pass > CRAPS_MAX_BET) { this.sendWallet(ws); return; }
+    if (!Number.isInteger(dontPass) || dontPass < 0 || dontPass > CRAPS_MAX_BET) { this.sendWallet(ws); return; }
+    const total = pass + dontPass;
+    if (total <= 0) return;
+    const prevPoint = conn.crapsPoint;
+    spendCoins(conn.pid, total)
+      .then(async (w) => {
+        if (!w) { this.sendWallet(ws); return; }
+        await this.houseCredit(total);
+        const d1 = Math.ceil(Math.random() * 6);
+        const d2 = Math.ceil(Math.random() * 6);
+        const sum = d1 + d2;
+        let outcome: 'win' | 'lose' | 'point';
+        let newPoint: number | null = prevPoint;
+        let push12 = false;
+        let passWant = 0, dontWant = 0;
+        if (prevPoint === null) {
+          if (sum === 7 || sum === 11) {
+            outcome = 'win'; newPoint = null;
+            passWant = pass * 2;
+          } else if (sum === 2 || sum === 3) {
+            outcome = 'lose'; newPoint = null;
+            dontWant = dontPass * 2;
+          } else if (sum === 12) {
+            outcome = 'lose'; newPoint = null; push12 = true;
+            dontWant = dontPass; // push: return the don't-pass bet
+          } else {
+            outcome = 'point'; newPoint = sum;
+            conn.crapsPoint = sum;
+          }
+        } else {
+          if (sum === prevPoint) {
+            outcome = 'win'; newPoint = null; conn.crapsPoint = null;
+            passWant = pass * 2;
+          } else if (sum === 7) {
+            outcome = 'lose'; newPoint = null; conn.crapsPoint = null;
+            dontWant = dontPass * 2;
+          } else {
+            outcome = 'point'; newPoint = prevPoint;
+          }
+        }
+        const passPayout = passWant > 0 ? await this.housePay(conn.pid!, conn.nickname!, passWant) : 0;
+        const dontPassPayout = dontWant > 0 ? await this.housePay(conn.pid!, conn.nickname!, dontWant) : 0;
+        const msg: CrapsResultMsg = { type: 'crapsResult', dice: [d1, d2], total: sum, prevPoint, newPoint, outcome, push12, passPayout, dontPassPayout };
+        this.tell(ws, msg);
+        this.sendWallet(ws);
+      })
+      .catch((e) => console.error('craps roll failed:', e));
+  }
+
+  // --- Crash casino game ---
+
+  crashBetAction(ws: WebSocket, amount: number, autoCashout?: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    if (this.crashPhase !== 'betting') return; // betting window closed
+    if (this.crashBets.some((b) => b.ws === ws)) return; // already bet this round
+    if (!Number.isInteger(amount) || amount <= 0 || amount > CRASH_MAX_BET) { this.sendWallet(ws); return; }
+    const auto = (typeof autoCashout === 'number' && autoCashout > 1) ? Math.round(autoCashout * 100) / 100 : null;
+    spendCoins(conn.pid, amount)
+      .then(async (w) => {
+        if (!w) { this.sendWallet(ws); return; }
+        await this.houseCredit(amount);
+        this.crashBets.push({ ws, pid: conn.pid, name: conn.nickname, amount, autoCashout: auto, cashedAt: null });
+        this.sendWallet(ws);
+        this.crashBroadcastAll();
+      })
+      .catch((e) => console.error('crash bet failed:', e));
+  }
+
+  crashCashout(ws: WebSocket) {
+    if (this.crashPhase !== 'live') return;
+    const bet = this.crashBets.find((b) => b.ws === ws);
+    if (!bet || bet.cashedAt !== null) return;
+    const mult = Math.round(Math.pow(CRASH_GROWTH, this.crashTicks) * 100) / 100;
+    bet.cashedAt = mult;
+    const conn = this.conns.get(ws);
+    if (conn?.pid) {
+      const payout = Math.floor(bet.amount * mult);
+      this.housePay(conn.pid, conn.nickname, payout)
+        .then(() => { if (this.conns.has(ws)) this.sendWallet(ws); })
+        .catch((e) => console.error('crash cashout failed:', e));
+    }
+    this.crashBroadcastAll();
+  }
+
+  private crashTick() {
+    const now = Date.now();
+    if (this.crashPhase === 'betting') {
+      if (now - this.crashPhaseStart >= CRASH_BETTING_MS) {
+        this.crashPhase = 'live';
+        this.crashPhaseStart = now;
+        this.crashTicks = 0;
+        this.crashAt = bjCrashPoint();
+        this.crashTicksNeeded = Math.ceil(Math.log(this.crashAt) / Math.log(CRASH_GROWTH));
+      }
+    } else if (this.crashPhase === 'live') {
+      this.crashTicks++;
+      const mult = Math.round(Math.pow(CRASH_GROWTH, this.crashTicks) * 100) / 100;
+      // Process auto-cashouts
+      for (const b of this.crashBets) {
+        if (b.cashedAt !== null) continue;
+        if (b.autoCashout !== null && mult >= b.autoCashout) {
+          b.cashedAt = b.autoCashout;
+          const conn = this.conns.get(b.ws);
+          if (conn?.pid) {
+            const payout = Math.floor(b.amount * b.autoCashout);
+            this.housePay(conn.pid, conn.nickname, payout)
+              .then(() => { if (this.conns.has(b.ws)) this.sendWallet(b.ws); })
+              .catch((e) => console.error('crash auto-cashout failed:', e));
+          }
+        }
+      }
+      // Check crash
+      if (this.crashTicks >= this.crashTicksNeeded) {
+        this.crashPhase = 'ended';
+        this.crashPhaseStart = now;
+        this.crashBroadcastAll();
+        return;
+      }
+    } else {
+      // ended
+      if (now - this.crashPhaseStart >= CRASH_ENDED_MS) {
+        this.crashPhase = 'betting';
+        this.crashPhaseStart = now;
+        this.crashBets = [];
+        this.crashAt = 0;
+        this.crashTicks = 0;
+      }
+    }
+    this.crashBroadcastAll();
+  }
+
+  private buildCrashState(ws: WebSocket): CrashStateMsg {
+    const mult = this.crashPhase === 'live'
+      ? Math.round(Math.pow(CRASH_GROWTH, this.crashTicks) * 100) / 100
+      : this.crashPhase === 'ended' ? this.crashAt : 1.00;
+    const timeLeft = this.crashPhase === 'betting'
+      ? Math.max(0, CRASH_BETTING_MS - (Date.now() - this.crashPhaseStart))
+      : 0;
+    const myBet = this.crashBets.find((b) => b.ws === ws);
+    return {
+      type: 'crashState',
+      phase: this.crashPhase,
+      multiplier: mult,
+      timeLeft,
+      bets: this.crashBets.map((b) => ({ name: b.name, amount: b.amount, cashedAt: b.cashedAt })),
+      yourBet: myBet?.amount ?? null,
+      yourCashedAt: myBet?.cashedAt ?? null,
+      crashedAt: this.crashPhase === 'ended' ? this.crashAt : null,
+    };
+  }
+
+  private crashBroadcastAll() {
+    const now = Date.now();
+    const mult = this.crashPhase === 'live'
+      ? Math.round(Math.pow(CRASH_GROWTH, this.crashTicks) * 100) / 100
+      : this.crashPhase === 'ended' ? this.crashAt : 1.00;
+    const timeLeft = this.crashPhase === 'betting' ? Math.max(0, CRASH_BETTING_MS - (now - this.crashPhaseStart)) : 0;
+    const betsView = this.crashBets.map((b) => ({ name: b.name, amount: b.amount, cashedAt: b.cashedAt }));
+    for (const [ws] of this.conns) {
+      if (ws.readyState !== ws.OPEN) continue;
+      const myBet = this.crashBets.find((b) => b.ws === ws);
+      const msg: CrashStateMsg = {
+        type: 'crashState',
+        phase: this.crashPhase,
+        multiplier: mult,
+        timeLeft,
+        bets: betsView,
+        yourBet: myBet?.amount ?? null,
+        yourCashedAt: myBet?.cashedAt ?? null,
+        crashedAt: this.crashPhase === 'ended' ? this.crashAt : null,
+      };
+      ws.send(JSON.stringify(msg));
+    }
   }
 
   // --- House treasury (coin-conservation backbone) ---
@@ -3492,6 +3810,52 @@ export class Lobby {
   private tell(ws: WebSocket, msg: ServerMsg) {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
   }
+}
+
+// --- Blackjack helpers ---
+
+const BJ_RANKS = ['A','2','3','4','5','6','7','8','9','T','J','Q','K'];
+const BJ_SUITS = ['S','H','D','C'];
+
+function bjFreshShoe(): string[] {
+  const shoe: string[] = [];
+  for (let d = 0; d < 6; d++)
+    for (const r of BJ_RANKS)
+      for (const s of BJ_SUITS)
+        shoe.push(r + s);
+  for (let i = shoe.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shoe[i], shoe[j]] = [shoe[j], shoe[i]];
+  }
+  return shoe;
+}
+
+function bjDeal(shoe: string[]): string {
+  if (shoe.length < 26) shoe.push(...bjFreshShoe());
+  return shoe.pop()!;
+}
+
+function bjCardVal(card: string): number {
+  const r = card[0];
+  if (r === 'A') return 11;
+  if ('TJQK'.includes(r)) return 10;
+  return Number(r);
+}
+
+function bjTotal(cards: string[]): number {
+  let total = 0, aces = 0;
+  for (const c of cards) { const v = bjCardVal(c); total += v; if (v === 11) aces++; }
+  while (total > 21 && aces > 0) { total -= 10; aces--; }
+  return total;
+}
+
+// Crash point generator: ~3% chance of instant crash; otherwise exponential distribution
+// weighted toward low multipliers (median ≈ 2×). House keeps uncashed bets.
+function bjCrashPoint(): number {
+  const u = Math.random();
+  if (u < 0.03) return 1.00;
+  const v = (u - 0.03) / 0.97;
+  return Math.max(1.01, Math.round(100 * 0.97 / (1 - v * 0.94)) / 100);
 }
 
 // --- AI opponent (bot) data ---
