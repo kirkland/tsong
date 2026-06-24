@@ -1715,7 +1715,9 @@ export const FIGHTERS: Fighter[] = [
 export interface StagePlatform {
   x: number; y: number; w: number; h: number;
   passThrough: boolean; // true = jump up through it / hold ↓ to drop down
-  moves?: { dx: number; period: number }; // optional side-to-side oscillation (amplitude px, seconds)
+  // optional oscillation: dx = horizontal amplitude (px), dy = vertical amplitude (px),
+  // period = seconds per full cycle, phase = 0..1 offset so platforms desync.
+  moves?: { dx: number; period: number; dy?: number; phase?: number };
 }
 // A damaging hazard region (e.g. lava). Touching it deals damage + a strong upward launch.
 export interface StageHazard {
@@ -1792,6 +1794,24 @@ export const STAGES: Stage[] = [
       { x: 300, y: 480 }, { x: 980, y: 480 }, { x: 240, y: 480 }, { x: 1040, y: 480 },
     ],
     blast: { left: -160, right: 1440, top: -260, bottom: 880 },
+  },
+  {
+    id: 'gauntlet', name: 'The Gauntlet',
+    blurb: 'Everything moves. Sliding platforms + two out-of-phase risers — time your landings.',
+    backdrop: '#141a2e',
+    platforms: [
+      { x: 100, y: 590, w: 240, h: 30, passThrough: false }, // left anchor ground
+      { x: 940, y: 590, w: 240, h: 30, passThrough: false }, // right anchor ground
+      { x: 540, y: 500, w: 220, h: 20, passThrough: true, moves: { dx: 280, period: 5 } },                 // wide low slider
+      { x: 330, y: 380, w: 180, h: 20, passThrough: true, moves: { dx: 0, period: 4, dy: 140 } },           // left riser
+      { x: 770, y: 380, w: 180, h: 20, passThrough: true, moves: { dx: 0, period: 4, dy: 140, phase: 0.5 } }, // right riser (opposite)
+      { x: 560, y: 250, w: 160, h: 20, passThrough: true, moves: { dx: 220, period: 6.5, phase: 0.25 } },   // high slider
+    ],
+    hazards: [],
+    spawns: [
+      { x: 200, y: 510 }, { x: 1040, y: 510 }, { x: 540, y: 420 }, { x: 700, y: 420 },
+    ],
+    blast: { left: -160, right: 1440, top: -260, bottom: 900 },
   },
 ];
 
