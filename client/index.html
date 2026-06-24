@@ -4,6 +4,14 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>tsong — multiplayer pong</title>
+    <!-- Phaser is externalized from the bundle (too big to build on the 1 GB VPS) and loaded from a
+         CDN. The build emits ESM, where Rollup's `output.globals` is ignored, so `import 'phaser'`
+         survives as a bare specifier — this import map resolves it to Phaser's CDN ESM build so the
+         lazy-loaded World overlay (client/world.ts) can import it in the browser. Must precede any
+         module <script>. (Unused in dev: Vite pre-bundles phaser from node_modules there.) -->
+    <script type="importmap">
+      { "imports": { "phaser": "https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.esm.js" } }
+    </script>
     <style>
       :root {
         color-scheme: dark;
@@ -4088,7 +4096,6 @@
       </form>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.min.js"></script>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>
