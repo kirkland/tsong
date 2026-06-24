@@ -44,6 +44,8 @@ import {
   MarketItemView,
   LoanBookMsg,
   NewsItem,
+  LOOT_TABLE,
+  minBet,
 } from '../shared/types';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -1738,6 +1740,32 @@ document.addEventListener('keydown', (e) => {
   if (!casinoPanel.hidden) closeNavMenu(casinoBtn, casinoPanel);
 });
 
+// --- News panel ---
+const newsBtn = document.getElementById('newsBtn') as HTMLButtonElement;
+const newsPanel = document.getElementById('newsPanel') as HTMLDivElement;
+let newsFeed: NewsItem[] = [];
+newsBtn.addEventListener('click', () => {
+  const open = newsPanel.hidden;
+  newsPanel.hidden = !open;
+  newsBtn.setAttribute('aria-expanded', String(open));
+  if (open) { if (!newsFeed.length) net.send({ type: 'newsReq' }); renderNews(); }
+});
+document.addEventListener('click', (e) => {
+  if (newsPanel.hidden) return;
+  const t = e.target as Node;
+  if (t instanceof Node && !t.isConnected) return;
+  if (!newsPanel.contains(t) && !newsBtn.contains(t)) { newsPanel.hidden = true; newsBtn.setAttribute('aria-expanded', 'false'); }
+});
+function renderNews() {
+  if (!newsFeed.length) { newsBody.innerHTML = '<div class="news-item" style="color:#5a647e">No news yet. Check back during market hours (M–F 9am–5pm ET).</div>'; return; }
+  newsBody.innerHTML = newsFeed.map((item) => {
+    const d = new Date(item.ts);
+    const time = d.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' });
+    return `<div class="news-item"><span class="news-time">${time}</span><span class="news-headline">${escapeHtml(item.headline)}</span></div>`;
+  }).join('');
+}
+const newsBody = document.getElementById('newsBody') as HTMLDivElement;
+
 // --- Coins, cosmetics shop & betting ---
 let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; song: string | null; car: string | null; exclusives: { id: string; serial: number; instanceId: number }[]; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
   { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, car: null, exclusives: [], bets: [], nextSpinAt: 0, bonusSpins: 0 };
@@ -1873,12 +1901,15 @@ function syncBetSection() {
   const canBet = !!state && state.status === 'playing' && !state.poly && myRole === 'observer' && !state.bot;
   betSection.hidden = !canBet;
   if (!canBet || !state) return;
-  // The stake is a positive whole number. We deliberately DON'T cap it to the wallet here —
-  // typing more than you have surfaces the "insufficient funds" hint below rather than being
-  // silently swallowed. Don't clobber the field while it's being edited.
-  betAmount = Math.max(1, Math.floor(betAmount) || 1);
+  // The stake is a positive whole number no lower than the wealth-scaled minimum.
+  // We deliberately DON'T cap it to the wallet here — typing more than you have surfaces the
+  // "insufficient funds" hint below rather than being silently swallowed. Don't clobber the
+  // field while it's being edited.
+  const min = minBet(wallet.coins);
+  betAmount = Math.max(min, Math.floor(betAmount) || min);
   if (document.activeElement !== betAmountEl) betAmountEl.value = String(betAmount);
   betAmountEl.max = String(Math.max(1, wallet.coins));
+  betAmountEl.min = String(min);
   // Side labels + live odds on the buttons.
   const odds = state.odds; // { left, right } | null
   betLeftName.textContent = state.paddles.left.name ?? 'Left';
@@ -1908,12 +1939,13 @@ function syncBetSection() {
 
 const betLeftBtn = document.getElementById('betLeft') as HTMLButtonElement;
 const betRightBtn = document.getElementById('betRight') as HTMLButtonElement;
-document.getElementById('betMinus')!.addEventListener('click', () => { betAmount = Math.max(1, betAmount - 1); syncBetSection(); });
-document.getElementById('betPlus')!.addEventListener('click', () => { betAmount = Math.min(Math.max(1, wallet.coins), betAmount + 1); syncBetSection(); });
+document.getElementById('betMinus')!.addEventListener('click', () => { betAmount = Math.max(minBet(wallet.coins), betAmount - 1); syncBetSection(); });
+document.getElementById('betPlus')!.addEventListener('click', () => { betAmount = Math.min(Math.max(minBet(wallet.coins), wallet.coins), betAmount + 1); syncBetSection(); });
 // Free-type a specific stake. Parse to a positive integer; empty/garbage falls back to 1.
 betAmountEl.addEventListener('input', () => {
   const v = parseInt(betAmountEl.value, 10);
-  betAmount = Number.isFinite(v) ? Math.max(1, v) : 1;
+  const min = minBet(wallet.coins);
+  betAmount = Number.isFinite(v) ? Math.max(min, v) : min;
   syncBetSection();
 });
 // Normalize the field on blur (e.g. snap a half-typed value back to its parsed number).
@@ -2341,7 +2373,6 @@ const lootBtn = document.getElementById('lootBtn') as HTMLButtonElement | null;
 const lootPanel = document.getElementById('lootPanel') as HTMLDivElement;
 const lootBody = document.getElementById('lootBody') as HTMLDivElement;
 const LOOT_PRICE = 2500;       // mirror of server's Lobby.LOOT_PRICE (display only)
-const LOOT_COIN_REWARD = 1500; // mirror of server's Lobby.LOOT_COIN_REWARD
 let lootBusy = false;
 let lootTimer: number | undefined; // clears a hung "Opening…" if no lootResult arrives
 let lootRevealHtml = ''; // last prize reveal, kept across re-renders (wallet/house/market updates
@@ -2355,12 +2386,16 @@ function renderLoot() {
         return `<span class="loot-badge">${escapeHtml(def?.name ?? e.id)} <span class="loot-serial">#${e.serial}</span></span>`;
       }).join(' ')}</div>`
     : '';
+  const W = LOOT_TABLE;
+  const totalW = W.cosmeticWeight + W.exclusiveWeight + W.coinBackWeight + W.nothingWeight;
+  const pct = (w: number) => ((w / totalW) * 100).toFixed(1);
   lootBody.innerHTML = `
     <div class="loot-blurb">Spend ${LOOT_PRICE.toLocaleString()}🪙 to crack a box — you get one of:</div>
     <table class="loot-odds">
-      <tr><td>55%</td><td>🎨 Common cosmetic</td><td>hat / skin / trail / title</td></tr>
-      <tr><td>30%</td><td>🪙 Coin payout</td><td>+${LOOT_COIN_REWARD.toLocaleString()} coins</td></tr>
-      <tr><td>15%</td><td>✨ Scarce exclusive</td><td>hard mint cap · some 1-of-1</td></tr>
+      <tr><td>${pct(W.cosmeticWeight)}%</td><td>🎨 Common cosmetic</td><td>hat / skin / trail</td></tr>
+      <tr><td>${pct(W.exclusiveWeight)}%</td><td>✨ Scarce exclusive</td><td>hard mint cap · some 1-of-1</td></tr>
+      <tr><td>${pct(W.coinBackWeight)}%</td><td>🪙 Coin back</td><td>${W.coinBackMin.toLocaleString()}–${W.coinBackMax.toLocaleString()} coins</td></tr>
+      <tr><td>${pct(W.nothingWeight)}%</td><td>🫥 Nothing</td><td>the house thanks you</td></tr>
     </table>
     <button id="lootOpenBtn" type="button" ${canAfford && !lootBusy ? '' : 'disabled'}>${lootBusy ? 'Opening…' : canAfford ? `🎁 Open Box · ${LOOT_PRICE.toLocaleString()}🪙` : `Need ${LOOT_PRICE.toLocaleString()}🪙 — you have ${wallet.coins.toLocaleString()}`}</button>
     <div id="lootReveal" class="loot-reveal">${lootRevealHtml}</div>
@@ -2394,6 +2429,8 @@ function onLootResult(msg: LootResultMsg) {
     const cosm = COSMETICS.find((c) => c.id === (msg.item ?? ''));
     const slotLabel = cosm ? (SLOT_LABEL[cosm.slot] ?? cosm.slot) : '';
     lootRevealHtml = `<div class="loot-pop"><div class="loot-slot">${slotLabel}</div>🎨 <b>${escapeHtml(msg.name ?? '')}</b><div class="loot-added">Added to your wardrobe!</div></div>`;
+  } else if (msg.kind === 'nothing') {
+    lootRevealHtml = `<div class="loot-pop loot-nothing"><div class="loot-slot">Empty</div>🫥 <b>Better luck next time…</b><div class="loot-added">The house thanks you for your contribution.</div></div>`;
   } else {
     lootRevealHtml = `<div class="loot-pop"><div class="loot-slot">Coin Payout</div>🪙 <b>+${(msg.coins ?? 0).toLocaleString()}</b> coins</div>`;
     playChaChing();
@@ -3558,12 +3595,10 @@ function isMobileView(): boolean {
 function resetMobileLayout() {
   const stage = document.getElementById('stage') as HTMLDivElement;
   const chat = document.getElementById('chat') as HTMLDivElement;
-  const lb = document.getElementById('leaderboard') as HTMLDivElement;
-  const nw = document.getElementById('netWorth') as HTMLDivElement;
+  const boards = document.getElementById('boards') as HTMLDivElement;
   stage.style.display = '';
   chat.style.display = '';
-  lb.style.display = '';
-  nw.style.display = '';
+  boards.style.display = '';
 }
 for (const btn of mobileTabs.querySelectorAll<HTMLButtonElement>('.mob-tab')) {
   btn.addEventListener('click', () => {
@@ -3573,23 +3608,19 @@ for (const btn of mobileTabs.querySelectorAll<HTMLButtonElement>('.mob-tab')) {
     const tab = btn.dataset.tab;
     const stage = document.getElementById('stage') as HTMLDivElement;
     const chat = document.getElementById('chat') as HTMLDivElement;
-    const lb = document.getElementById('leaderboard') as HTMLDivElement;
-    const nw = document.getElementById('netWorth') as HTMLDivElement;
+    const boards = document.getElementById('boards') as HTMLDivElement;
     if (tab === 'play') {
       stage.style.display = '';
       chat.style.display = 'none';
-      lb.style.display = '';
-      nw.style.display = '';
+      boards.style.display = '';
     } else if (tab === 'chat') {
       stage.style.display = 'none';
       chat.style.display = '';
-      lb.style.display = 'none';
-      nw.style.display = 'none';
+      boards.style.display = 'none';
     } else if (tab === 'leaderboard') {
       stage.style.display = 'none';
       chat.style.display = 'none';
-      lb.style.display = '';
-      nw.style.display = '';
+      boards.style.display = '';
     }
   });
 }
@@ -3600,12 +3631,10 @@ window.addEventListener('resize', () => {
 if (isMobileView()) {
   const stage = document.getElementById('stage') as HTMLDivElement;
   const chatEl = document.getElementById('chat') as HTMLDivElement;
-  const lb = document.getElementById('leaderboard') as HTMLDivElement;
-  const nw = document.getElementById('netWorth') as HTMLDivElement;
+  const boards = document.getElementById('boards') as HTMLDivElement;
   stage.style.display = '';
   chatEl.style.display = 'none';
-  lb.style.display = '';
-  nw.style.display = '';
+  boards.style.display = '';
 }
 
 // --- touch controls for paddle ---
@@ -4462,7 +4491,7 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
 
   const items = rows
     .map((r, i) => {
-      const t = r.title ? COSMETICS.find((c) => c.id === r.title) : undefined;
+      const t = r.title ? (COSMETICS.find((c) => c.id === r.title) ?? EXCLUSIVES.find((e) => e.id === r.title)) : undefined;
       const tag = t ? `<span class="lbtitle${r.title === 'opstask' ? ' rainbow' : ''}">${escapeHtml(t.name)}</span>` : '';
       return `<li><span class="rank">${i + 1}</span><span class="lbname">${escapeHtml(
         r.name,
@@ -4512,7 +4541,7 @@ function renderNetWorth(rows: NetWorthRow[]) {
       const crown = i === 0 ? '👑 ' : '';
       const broke = r.net < 0 ? ' broke' : '';
       const debt = r.loan > 0 ? `<span class="debt"> 🔻${r.loan}</span>` : '';
-      const t = r.title ? COSMETICS.find((c) => c.id === r.title) : undefined;
+      const t = r.title ? (COSMETICS.find((c) => c.id === r.title) ?? EXCLUSIVES.find((e) => e.id === r.title)) : undefined;
       const tag = t ? `<span class="lbtitle${r.title === 'opstask' ? ' rainbow' : ''}">${escapeHtml(t.name)}</span>` : '';
       return `<li data-rank="${i}" title="View balance sheet"><span class="rank">${i + 1}</span><span class="lbname">${crown}${escapeHtml(
         r.name,
