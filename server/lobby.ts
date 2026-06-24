@@ -94,7 +94,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, record
   getNetizenByPid, getNetizenCount, getNetWorthRank,
   getNewsFeed, saveNewsFeed } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
-import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR } from '../shared/types';
+import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
 // emoji code points (pictographs, components, ZWJ, variation selectors, flags).
@@ -710,10 +710,11 @@ export class Lobby {
 
     const netWorth = Number(row.net);
     const maxWager = Math.round(netWorth * NETIZEN_CHALLENGE_MAX_FRAC);
-    if (wager < 100 || wager > maxWager) return;
-
-    // Check the human has enough coins.
+    // Wealth-scaled minimum bet: can't wager below the player's floor.
     const wallet = await getWallet(conn.pid);
+    const minWager = minBet(wallet.coins);
+    const effectiveMin = Math.min(minWager, maxWager);
+    if (wager < effectiveMin || wager > maxWager) return;
     if (wallet.coins < wager) return;
 
     // Escrow: deduct from human, credit to netizen so net worth is accurate during the match.
@@ -2358,8 +2359,8 @@ export class Lobby {
               tradedSide = 'buy';
             }
           }
-          // Trade chatter (Plan 02): low probability during market hours.
-          if (tradedSide && isMarketHours(Date.now()) && Math.random() < 0.25) {
+          // Trade chatter: reduced frequency (was 0.25 → ≈0.06 so ~1/4 as often).
+          if (tradedSide && isMarketHours(Date.now()) && Math.random() < 0.06) {
             const pool = tradedSide === 'buy' ? NETIZEN_DIALOGUE.buyLong : NETIZEN_DIALOGUE.sellProfit;
             const tmpl = pool[Math.floor(Math.random() * pool.length)];
             this.netizenSay(n.pid, n.name, tmpl.replace('{ticker}', stock.ticker));
@@ -2572,10 +2573,13 @@ export class Lobby {
     let roll = Math.random() * totalW;
     const pick = scored.find((s) => { roll -= s.weight; return roll <= 0; }) ?? scored[0];
 
+    const sector = SECTORS.find((s) => (s.ids as readonly string[]).includes(pick.id));
+    const sectorName = sector?.name ?? 'market';
+
     const dir = Math.random() < 0.5 ? 'bullish' : 'bearish';
     const templates = dir === 'bullish' ? NEWS_TEMPLATES_BULLISH : NEWS_TEMPLATES_BEARISH;
     const tmpl = templates[Math.floor(Math.random() * templates.length)];
-    const headline = tmpl.replace('{name}', pick.name).replace('{ticker}', pick.ticker);
+    const headline = tmpl.replace('{name}', pick.name).replace('{ticker}', pick.ticker).replace('{sector}', sectorName);
 
     const item: NewsItem = {
       id: `news_${now}`,
@@ -2587,9 +2591,19 @@ export class Lobby {
     if (this.newsFeed.length > 30) this.newsFeed.length = 30;
     saveNewsFeed(this.newsFeed).catch((e: unknown) => console.error('news feed save failed:', e));
 
-    // Schedule the hidden injection 7–30 min from now.
+    // Schedule hidden injections: primary coin gets full pressure, sector-mates get a fraction.
     const magnitude = (dir === 'bullish' ? 1 : -1) * (0.25 + Math.random() * 0.35);
-    this.pendingNews.push({ coin: pick.id, magnitude, fireAt: now + (7 + Math.random() * 23) * 60_000 });
+    const delay = (25 + Math.random() * 35) * 60_000;
+    this.pendingNews.push({ coin: pick.id, magnitude, fireAt: now + delay });
+    if (sector) {
+      for (const sid of sector.ids) {
+        if (sid === pick.id) continue;
+        if (Math.random() < 0.6) { // 60 % chance each sector sibling catches a piece
+          const siblingMag = magnitude * (0.3 + Math.random() * 0.4); // 30–70 % of the primary
+          this.pendingNews.push({ coin: sid, magnitude: siblingMag, fireAt: now + Math.floor(delay * (0.5 + Math.random() * 0.5)) });
+        }
+      }
+    }
 
     // Broadcast to all connected clients.
     for (const ws of this.conns.keys()) {
@@ -3832,7 +3846,7 @@ export class Lobby {
   /** Post a chat message as a netizen (name + its own color), respecting the global throttle. */
   private netizenSay(pid: string, name: string, text: string) {
     const now = Date.now();
-    if (now - this.lastNetizenChatAt < 10_000) return; // throttle: ~1 line per 10s
+    if (now - this.lastNetizenChatAt < 40_000) return; // throttle: ~1 line per 40s (was 10s)
     this.lastNetizenChatAt = now;
     this.botChat(name, text, Lobby.netizenColor(pid));
   }

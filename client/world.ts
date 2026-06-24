@@ -404,6 +404,7 @@ export function startWorld(net: WorldNet): void {
   // --- NPC state ---
   const npcs: LiveNpc[] = [];          // populated in create()
   let nearNpc: LiveNpc | null = null;  // townsperson within talking range
+  let nearNetizen: string | null = null; // netizen id within talking range
   let talkOpen = false;                // an NPC dialogue box is up → movement pauses
   let npcAdvance: (() => void) | null = null; // set while a dialogue is live; called on Enter/click
   let npcClose: (() => void) | null = null;   // closes the live dialogue (Esc)
@@ -833,9 +834,116 @@ export function startWorld(net: WorldNet): void {
 
   function triggerNear() {
     if (dialogOpen || talkOpen) return;
+    if (nearNetizen) {
+      const a = others.find((o) => o.id === nearNetizen);
+      if (!a) return;
+      startNetizenTalk(a);
+      return;
+    }
     if (nearNpc) { startTalk(nearNpc); return; }
     const b = WORLD_BUILDINGS.find((x) => x.id === nearId);
     if (b) enterBuilding(b.kind);
+  }
+
+  /** Start a simple dialogue with a netizen: flavor text, then challenge option. */
+  function startNetizenTalk(a: WorldAvatar) {
+    if (talkOpen || dialogOpen) return;
+    talkOpen = true;
+    keys.clear(); joyActive = false;
+    prompt.style.display = 'none';
+
+    const flavor = NETIZEN_DIALOGUE.idleBanter[Math.floor(Math.random() * NETIZEN_DIALOGUE.idleBanter.length)]
+      .replace('{ticker}', STOCKS[Math.floor(Math.random() * STOCKS.length)].ticker);
+
+    npcName.textContent = a.name;
+    npcBox.style.display = 'block';
+
+    let pageI = 0;
+    let typing = false;
+    let timer = 0;
+    let full = '';
+
+    const showChoices = () => {
+      npcHint.style.display = 'none';
+      npcChoices.style.display = 'flex';
+      npcChoices.replaceChildren();
+      const challengeBtn = document.createElement('button');
+      challengeBtn.type = 'button';
+      challengeBtn.textContent = '⚔️ Challenge to a duel!';
+      challengeBtn.style.cssText =
+        'flex:1;cursor:pointer;background:#2a4a20;color:#e8eefc;border:2px solid #4a8a40;' +
+        'border-radius:10px;padding:11px;font-size:15px;font-weight:700;font-family:ui-monospace,monospace;';
+      challengeBtn.onmouseenter = () => { challengeBtn.style.background = '#3a5a30'; };
+      challengeBtn.onmouseleave = () => { challengeBtn.style.background = '#2a4a20'; };
+      challengeBtn.onclick = () => {
+        selectBlip();
+        closeNetizenTalk();
+        net.onNetizenClick?.(a.id);
+      };
+      const passBtn = document.createElement('button');
+      passBtn.type = 'button';
+      passBtn.textContent = '👋 Not right now';
+      passBtn.style.cssText =
+        'flex:1;cursor:pointer;background:#21305a;color:#e8eefc;border:2px solid #4a64a0;' +
+        'border-radius:10px;padding:11px;font-size:15px;font-weight:700;font-family:ui-monospace,monospace;';
+      passBtn.onmouseenter = () => { passBtn.style.background = '#2c4079'; };
+      passBtn.onmouseleave = () => { passBtn.style.background = '#21305a'; };
+      passBtn.onclick = () => { selectBlip(); closeNetizenTalk(); };
+      npcChoices.append(challengeBtn, passBtn);
+    };
+
+    const showPage = () => {
+      npcChoices.style.display = 'none';
+      if (pageI === 0) {
+        full = flavor;
+      } else if (pageI === 1) {
+        full = 'Looking for a challenge? Put your coins where your mouth is.';
+        showChoices();
+        return;
+      } else {
+        closeNetizenTalk();
+        return;
+      }
+      let shown = 0;
+      typing = true;
+      npcText.textContent = '';
+      npcHint.style.display = 'none';
+      timer = window.setInterval(() => {
+        shown++;
+        npcText.textContent = full.slice(0, shown);
+        if (shown % 2 === 0) textBlip();
+        if (shown >= full.length) {
+          window.clearInterval(timer);
+          typing = false;
+          npcHint.style.display = 'block';
+        }
+      }, 30);
+    };
+
+    npcAdvance = () => {
+      if (typing) {
+        window.clearInterval(timer);
+        typing = false;
+        npcText.textContent = full;
+        npcHint.style.display = 'block';
+        return;
+      }
+      pageI++;
+      showPage();
+    };
+
+    npcClose = closeNetizenTalk;
+
+    function closeNetizenTalk() {
+      window.clearInterval(timer);
+      talkOpen = false;
+      npcAdvance = null;
+      npcClose = null;
+      npcBox.style.display = 'none';
+      npcChoices.style.display = 'none';
+    }
+
+    showPage();
   }
   prompt.onclick = triggerNear;
   driveBtn.onclick = toggleDrive;
@@ -985,20 +1093,30 @@ export function startWorld(net: WorldNet): void {
     nearId = best;
     // nearest townsperson (can't chat from inside a car) — buildings win ties.
     nearNpc = null;
+    nearNetizen = null;
     if (!best && !driving) {
       let bD = R + TRIGGER_PAD + 12;
       for (const n of npcs) {
         const d = Math.hypot(n.x - selfX, n.y - selfY);
         if (d < bD) { bD = d; nearNpc = n; }
       }
+      // Also check for netizen avatars within range.
+      for (const a of others) {
+        if (!a.bot) continue;
+        const d = Math.hypot(a.x - selfX, a.y - selfY);
+        if (d < bD) { bD = d; nearNetizen = a.id; nearNpc = null; }
+      }
     }
     if (best) {
       const b = WORLD_BUILDINGS.find((x) => x.id === best)!;
       prompt.textContent = labelFor(b.kind);
+    } else if (nearNetizen) {
+      const a = others.find((o) => o.id === nearNetizen);
+      prompt.textContent = `💬 Talk to ${a?.name ?? 'Netizen'}`;
     } else if (nearNpc) {
       prompt.textContent = `💬 Talk to ${nearNpc.def.name}`;
     }
-    prompt.style.display = (nearId || nearNpc) && !dialogOpen && !talkOpen ? 'block' : 'none';
+    prompt.style.display = (nearId || nearNpc || nearNetizen) && !dialogOpen && !talkOpen ? 'block' : 'none';
   }
 
   function maybeSendMove(now: number) {
@@ -1529,15 +1647,7 @@ export function startWorld(net: WorldNet): void {
         const ta = a.a ?? av.ra;
         av.ra += angDelta(av.ra, ta) * Math.min(1, dt * 12);
         placeAvatar(av, av.rx, av.ry, av.ra, !!a.car, a.color, a.name);
-        // netizen speech bubbles: cycle a new line every 4–7s
-        if (a.bot) {
-          if (now >= av.bubbleNextAt) {
-            av.bubble.setText(botLine()).setVisible(true);
-            av.bubbleNextAt = now + 4000 + Math.random() * 3000;
-          }
-        } else if (av.bubble.visible) {
-          av.bubble.setVisible(false);
-        }
+        // Netizens are silent until approached — no auto speech bubbles.
       }
       // drop avatars that left
       for (const [id, av] of remote) if (!seen.has(id)) { av.c.destroy(); remote.delete(id); }
@@ -1549,13 +1659,6 @@ export function startWorld(net: WorldNet): void {
     if (d > Math.PI) d -= Math.PI * 2;
     if (d < -Math.PI) d += Math.PI * 2;
     return d;
-  }
-
-  // A random netizen speech line (reuses the shared NETIZEN_DIALOGUE corpus + a random ticker).
-  function botLine(): string {
-    const pool = [...NETIZEN_DIALOGUE.buyLong, ...NETIZEN_DIALOGUE.sellProfit, ...NETIZEN_DIALOGUE.idleBanter];
-    return pool[Math.floor(Math.random() * pool.length)]
-      .replace('{ticker}', STOCKS[Math.floor(Math.random() * STOCKS.length)].ticker);
   }
 
   function makeAvatar(sc: Phaser.Scene, name: string, color: string): Av {

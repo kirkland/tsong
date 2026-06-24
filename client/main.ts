@@ -79,6 +79,7 @@ const chatForm = document.getElementById('chatForm') as HTMLFormElement;
 const chatInput = document.getElementById('chatInput') as HTMLInputElement;
 const hideCmdsEl = document.getElementById('hideCmds') as HTMLInputElement;
 const hideTimestampsEl = document.getElementById('hideTimestamps') as HTMLInputElement;
+const hideNetizenChatEl = document.getElementById('hideNetizenChat') as HTMLInputElement;
 const closingModeEl = document.getElementById('closingMode') as HTMLInputElement;
 const gravityModeEl = document.getElementById('gravityMode') as HTMLInputElement;
 const turboModeEl = document.getElementById('turboMode') as HTMLInputElement;
@@ -1512,6 +1513,7 @@ function addChatLine(line: ChatLine) {
     if (workChat.length > 30) workChat.shift();
   }
   if (line.command && hideCmdsEl.checked) return;
+  if (!line.player && hideNetizenChatEl.checked) return;
   const ts = line.time ?? Date.now();
   const timeStr = formatChatTime(ts);
   const dateStr = formatChatDate(ts);
@@ -1523,7 +1525,8 @@ function addChatLine(line: ChatLine) {
     chatLog.append(sep);
   }
   const row = document.createElement('div');
-  row.className = line.command ? 'chat-row chat-row-cmd' : 'chat-row';
+  const isNonPlayer = !line.player;
+  row.className = line.command ? 'chat-row chat-row-cmd' : 'chat-row' + (isNonPlayer ? ' chat-row-np' : '');
   const stamp = document.createElement('span');
   stamp.className = 'chatstamp';
   stamp.textContent = timeStr;
@@ -1552,6 +1555,13 @@ hideCmdsEl.addEventListener('change', () => {
 
 hideTimestampsEl.addEventListener('change', () => {
   chatEl.classList.toggle('hide-timestamps', hideTimestampsEl.checked);
+});
+
+hideNetizenChatEl.addEventListener('change', () => {
+  const hide = hideNetizenChatEl.checked;
+  for (const row of chatLog.querySelectorAll<HTMLElement>('.chat-row-np')) {
+    row.style.display = hide ? 'none' : '';
+  }
 });
 
 // Small name-pop at the court location where a power-up was just collected.

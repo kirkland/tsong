@@ -487,7 +487,8 @@ export type ClientMsg =
   | { type: 'migrate'; oldPid: string } // one-time: merge a UUID guest account into the signed-in Google account
   | { type: 'netizenInfoReq'; netizenId: string }
   | { type: 'netizenChallenge'; netizenId: string; wager: number }
-  | { type: 'newsReq' };
+  | { type: 'newsReq' }
+  | { type: 'eloProfileReq'; rank: number };
 
 // --- Server -> Client ---
 
@@ -790,6 +791,19 @@ export interface BalanceSheetMsg {
   net: number;                      // coins + stockValue − loan
 }
 
+// Server → client: an Elo leaderboard drill-down card (mirrors the net-worth balance sheet).
+export interface EloProfileMsg {
+  type: 'eloProfile';
+  rank: number;
+  name: string;
+  wins: number;
+  losses: number;
+  elo: number;
+  winPct: number;
+  lastPlayed: number | null;
+  rival: { name: string; wins: number; losses: number } | null;
+}
+
 export interface ChatLine {
   from: string;
   text: string;
@@ -893,7 +907,8 @@ export type ServerMsg =
   | HouseMsg
   | NetizenInfoMsg
   | NetizenChallengeResultMsg
-  | NewsMsg;
+  | NewsMsg
+  | EloProfileMsg;
 
 // --- Economy Overhaul server → client messages ---
 
@@ -963,24 +978,38 @@ export interface NewsMsg {
 }
 // Headline templates — allude without stating direction or timing.
 export const NEWS_TEMPLATES_BULLISH = [
-  'Whispers in the Casino district: someone\'s been quietly loading up on {name}.',
-  '{ticker} chatter is heating up — the smart money looks interested.',
-  'A well-known whale was seen eyeing {name}.',
-  'Insiders are unusually optimistic about {ticker} lately.',
-  'Rumors are swirling that {name} is about to catch a bid.',
-  'Something is brewing with {ticker} — the order book is thickening.',
-  'A prominent trader just moved a position into {name}.',
-  'The vibe around {ticker} is shifting — the murmurs are getting louder.',
+  'Whispers in the Casino district: someone\'s been quietly loading up on {name} — and they might not be the only one circling the {sector} sector.',
+  '{ticker} chatter is heating up across the trading floor — the smart money looks interested, and a few shell companies just lit up on the order book.',
+  'A well-known whale was seen eyeing {name} early this morning, and word is they\'re shopping the whole {sector} basket.',
+  'Insiders are unusually optimistic about {ticker} lately — chatter among the floor traders suggests the quiet accumulation has already begun.',
+  'Rumors are swirling that {name} is about to catch a bid, and a handful of algo funds have started positioning across the {sector} board.',
+  'Something is brewing with {ticker} — the order book is thickening at the ask, and the options flow is starting to look interesting.',
+  'A prominent trader just moved a sizable position into {name}, and their recent track record has the rest of the floor paying attention.',
+  'The vibe around {ticker} is shifting — the murmurs are getting louder, and the consolidated tape shows unusual activity rippling through {sector}.',
+  'Deep pockets are circling {name}: a series of dark-pool prints just crossed the tape, and the street is starting to take notice of the broader {sector} bid.',
+  'Calls are stacking up on {ticker} — someone with a big book is betting this {sector} name has room to run, and the gamma flow is starting to accelerate.',
+  'Whisper number on {name} is creeping higher — three independent analysts just revised their outlook, and the algo flow is turning increasingly constructive across the sector.',
+  'Accumulation alert: {ticker} just saw its heaviest volume in weeks, and the tape reads like a coordinated bid across multiple {sector} names.',
+  'A large institutional flip into {name} just registered on the consolidated tape — the kind of print that usually precedes a broader rotation into {sector}.',
+  'Sources close to the exchange report that a major {sector} player has been steadily adding {ticker} through dark pools for the past three sessions.',
+  'The put/call ratio on {name} just hit a multi-week low — the options market is screaming that the bears have thrown in the towel on this one.',
 ];
 export const NEWS_TEMPLATES_BEARISH = [
-  'Analysts are growing wary of {name}\'s recent run.',
-  'Something feels off about {ticker} — insiders are getting quiet.',
-  'Rumblings that {name} holders are heading for the exits.',
-  'A cold wind is blowing through {ticker}.',
-  'The smart money appears to be rotating out of {name}.',
-  '{ticker} is looking wobbly — profit-takers are circling.',
-  'Volume on {name} is drying up; the silence is telling.',
-  'A shadow has fallen over {ticker} — traders are hedging.',
+  'Analysts are growing wary of {name}\'s recent run — the momentum looks tired, and a few second-tier holders have started trimming their {sector} exposure.',
+  'Something feels off about {ticker} — insiders are getting quiet, and the bid depth has been thinning out across the {sector} board.',
+  'Rumblings that {name} holders are heading for the exits — a cluster of large sell orders just hit the tape, and the algo flow is turning defensive across {sector}.',
+  'A cold wind is blowing through {ticker} — the consolidated tape shows distribution, not accumulation, and the whole {sector} sector is starting to feel the chill.',
+  'The smart money appears to be rotating out of {name} — a couple of known funds have marked down their {sector} exposure in recent filings.',
+  '{ticker} is looking wobbly — profit-takers are circling and the volume profile suggests the easy money has already been made in this {sector} name.',
+  'Volume on {name} is drying up — the silence is telling, and the lack of bids below the market has the floor worried about a broader {sector} shakeout.',
+  'A shadow has fallen over {ticker} — traders are hedging, the options skew is flipping bearish, and the entire {sector} sector is starting to trade heavy.',
+  'Distribution day for {name}: the tape shows large blocks printing on the ask, and the market-makers are leaning short across the {sector} complex.',
+  'The high-frequency flow just flipped negative on {ticker} — the algo community smells weakness, and the short interest in {sector} names is ticking up.',
+  'A well-known bear just published a note on {name}, and the initial reaction in the {sector} pit has been noticeably defensive — bids are pulling fast.',
+  'Open interest is collapsing on {ticker} — the longs are throwing in the towel, and the options market is pricing in a rough stretch for the {sector} group.',
+  'Dark-pool activity on {name} just spiked — but the prints are all on the sell side, and the whisper on the street is that a big holder is quietly exiting {sector}.',
+  'The macro headwinds are starting to hit {ticker}: a broader risk-off move is taking shape, and the {sector} names are bearing the brunt of the selling.',
+  'Liquidity is drying up on {name} — the bid-ask spread just widened to its highest in weeks, and the order book looks thin across the entire {sector} board.',
 ];
 
 // Broadcast when a match kicks off and a seated player has a theme song equipped — every client
@@ -1077,6 +1106,14 @@ export const STOCKS = [
   { id: 'omega', name: 'Omega Davis',      ticker: 'OMEGA', img: '/davis-cosmic.jpg',   base: 100, supply: 10000 },
 ] as const;
 export type StockId = (typeof STOCKS)[number]['id'];
+
+// Market sectors — a news headline about one coin can pressure the whole sector.
+export const SECTORS: { name: string; ids: StockId[] }[] = [
+  { name: 'Creators', ids: ['kenny', 'chugs', 'davis'] },
+  { name: 'Meme',     ids: ['otto', 'bacon', 'fritz'] },
+  { name: 'Derivatives', ids: ['omega'] },
+];
+
 export const STOCK_UPDATE_MS = 30 * 1000; // prices re-roll every 30 seconds
 // Market stability: the market no longer resets on a daily timer. Instead, each day's loan
 // collection adds every defaulter's unpaid debt (the 1.5× `owed`) to a global instability
@@ -1176,7 +1213,7 @@ export const ROULETTE_WHEEL: readonly number[] = [
   0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10,
   5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26,
 ];
-export const ROULETTE_MAX_TOTAL = 10000; // most coins that may be staked across all bets on one spin
+export const ROULETTE_MAX_TOTAL = 50000; // most coins that may be staked across all bets on one spin
 
 // The bet kinds offered. `straight` needs a target `number` (0–36); the rest are the
 // classic "outside" bets. The value is the profit-to-stake ratio — a winning bet returns
@@ -1222,7 +1259,7 @@ export interface RouletteResultMsg {
 // --- Blackjack ---
 // Six-deck shoe. Cards as rank+suit strings: A2–9TJQK + SHDC (e.g. 'AS', 'TD', 'KH').
 // Server is authoritative: it holds the shoe, deals, resolves, and settles the wallet.
-export const BJ_MAX_BET = 5_000;
+export const BJ_MAX_BET = 50_000;
 export type BjAction = 'hit' | 'stand' | 'double';
 export type BjOutcome = 'blackjack' | 'win' | 'push' | 'lose';
 export interface BjStateMsg {
@@ -1246,7 +1283,7 @@ export interface BjResultMsg {
 
 // --- Street Craps ---
 // Pass Line / Don't Pass bets with a come-out → point-phase state machine.
-export const CRAPS_MAX_BET = 2_000;
+export const CRAPS_MAX_BET = 50_000;
 export interface CrapsResultMsg {
   type: 'crapsResult';
   dice: [number, number]; // individual die values, 1–6
@@ -1265,12 +1302,12 @@ export interface CrapsResultMsg {
 export const CRASH_BETTING_MS = 12_000;
 export const CRASH_TICK_MS = 100;        // live-phase tick interval (ms)
 export const CRASH_ENDED_MS = 4_000;     // how long the crash result lingers before next round
-export const CRASH_MAX_BET = 3_000;
+export const CRASH_MAX_BET = 50_000;
 export const CRASH_GROWTH = 1.02;        // multiplier per 100ms tick (~7× per minute at the start)
 // --- Slots ---
 // Classic 3-reel slot machine. Each reel shows 3 symbols; the center row is the pay line.
 // Symbol weights skew rare symbols low. Server rolls, evaluates, settles the wallet.
-export const SLOTS_MAX_BET = 1_000;
+export const SLOTS_MAX_BET = 50_000;
 // Symbol pool (index 0–6), listed rarest→most-common for human readability.
 // Weights are sampled on each reel independently. The '7' jackpot is weighted 1/64.
 export const SLOTS_SYMBOLS = ['7️⃣', '💎', '🍀', '⭐', '🍊', '🍋', '🍒'] as const;
@@ -1427,26 +1464,45 @@ export const NETIZEN_DIALOGUE = {
   buyLong: [
     'aped into {ticker} 🚀', 'loading {ticker} here', '{ticker} looking juicy ngl',
     'all in {ticker} lfg', 'yolo {ticker} 🚀', 'adding {ticker} to the bag', '{ticker} dip is tasty',
+    'hearing good things about {ticker} rn', 'just doubled my {ticker} position', 'stacking {ticker} while its cheap',
+    'whale alert — someone just bought a wall of {ticker}', 'chart says {ticker} going higher 📈',
+    'filling my bags with {ticker} before the next leg up',
   ],
   sellProfit: [
     'took profit on {ticker} 💰', 'out of {ticker}, ty market', '{ticker} paid the bills today',
     'locked in gains on {ticker} ✅', 'trimmed {ticker} for some profit',
+    'scalp successful — out of {ticker} with a bag 💼', 'that {ticker} pump was generous, i took half off',
+    'profit is profit, even on {ticker}', 'called that {ticker} rip perfectly ngl',
   ],
   sellLoss: [
     'got rekt on {ticker} 💀', 'paperhanded {ticker} again', '{ticker} bagholder no more',
     'sold {ticker} at a loss rip 💸', 'dyor they said {ticker} they said',
+    '{ticker} just dumped on me hard', 'why do i always buy the top on {ticker}',
+    'giving up on {ticker}, too much pain', 'that {ticker} trade went exactly as expected — badly',
+    'my {ticker} position just got liquidated oof',
   ],
   newsBullish: [
     'something brewing with {ticker}? 👀', "i'm not not buying {ticker} rn",
     'feels like {ticker} szn', '{ticker} definitely up to something', 'heard a rumor about {ticker} 😏',
+    'just read the news — {ticker} about to moon 🌙', 'the signs are all pointing to {ticker}',
+    'if you are not buying {ticker} right now what are you doing', 'momentum is building for {ticker}',
+    'algo flow just turned positive on {ticker}', '{ticker} looking primed for a breakout',
+    'the tape on {ticker} is screaming accumulation',
   ],
   newsBearish: [
     'staying away from {ticker} today', '{ticker} giving me bad vibes',
     'might short {ticker} ngl', 'something off with {ticker} energy', 'not touching {ticker} with a pole',
+    '{ticker} looking like a falling knife rn', 'the news on {ticker} is not good at all',
+    'everyone piling into {ticker} is a sign to get out', 'shorting {ticker} feels like free money',
+    'that {ticker} chart is a disaster', 'smart money is leaving {ticker} fast',
   ],
   idleBanter: [
     "who's this lasso guy with 1M net worth", 'new exclusive dropped in the black market 👀',
     'anyone else watching the leaderboard?', 'market looking spicy today 🌶️',
     'feels like a dead cat bounce', 'chart says up but my gut says down 🤷',
+    'has anyone actually beaten the top elo player', 'heard the casino has a new game dropping soon',
+    'these loan interest rates are criminal smh', 'the house always wins eventually',
+    'anyone know what time the lootbox resets', 'the economy in this game is wild',
+    'i swear the market moves when i look away', 'net worth go brr 📈 or should i say brr 📉',
   ],
 };
