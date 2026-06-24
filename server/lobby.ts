@@ -92,7 +92,8 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, record
   addBounty, getBountyOn, clearBounty, getBounties,
   challengedToday, recordChallenge,
   getNetizenByPid, getNetizenCount, getNetWorthRank,
-  getNewsFeed, saveNewsFeed } from './db';
+  getNewsFeed, saveNewsFeed,
+  getGameModes, saveGameModes } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR } from '../shared/types';
 
@@ -3311,6 +3312,53 @@ export class Lobby {
     // View mode is locked while a match is in progress to avoid disrupting players.
     if ((opts.viewMode === 'normal' || opts.viewMode === '3d' || opts.viewMode === 'firstperson') && this.game.status !== 'playing') {
       this.viewMode = opts.viewMode;
+      this.syncPowerupPool();
+    }
+    // Remember the room's chosen modes so they survive a reboot/redeploy.
+    this.persistModes();
+  }
+
+  /** Snapshot of the room's armed mode toggles — the set persisted across reboots. */
+  private currentModes(): import('./db').GameModes {
+    return {
+      closing: this.game.closing,
+      gravity: this.game.gravity,
+      turbo: this.game.turbo,
+      streamer: this.streamerMode,
+      diamond: this.game.diamond,
+      pinata: this.game.pinata,
+      layered: this.game.layered,
+      arena: this.arena,
+      breakout: this.game.breakout,
+      fog: this.game.fog,
+      portal: this.game.portal,
+      viewMode: this.viewMode,
+    };
+  }
+
+  /** Fire-and-forget persist of the current mode toggles. */
+  private persistModes() {
+    saveGameModes(this.currentModes()).catch((e: unknown) => console.error('game modes save failed:', e));
+  }
+
+  /** Re-apply mode toggles persisted from a previous run. Called once on boot after the DB
+   *  is ready. Each flag flows through its normal setter so behaviour matches a live toggle. */
+  async loadModes() {
+    const m = await getGameModes().catch(() => null);
+    if (!m) return;
+    if (typeof m.closing === 'boolean') this.game.setClosing(m.closing);
+    if (typeof m.gravity === 'boolean') this.game.setGravity(m.gravity);
+    if (typeof m.turbo === 'boolean') this.game.setTurbo(m.turbo);
+    if (typeof m.streamer === 'boolean') this.streamerMode = m.streamer;
+    if (typeof m.diamond === 'boolean') this.game.setDiamond(m.diamond);
+    if (typeof m.pinata === 'boolean') this.game.setPinata(m.pinata);
+    if (typeof m.layered === 'boolean') this.game.setLayered(m.layered);
+    if (typeof m.arena === 'boolean') this.setArena(m.arena);
+    if (typeof m.breakout === 'boolean') this.game.setBreakout(m.breakout);
+    if (typeof m.fog === 'boolean') this.game.setFog(m.fog);
+    if (typeof m.portal === 'boolean') this.game.setPortal(m.portal);
+    if ((m.viewMode === 'normal' || m.viewMode === '3d' || m.viewMode === 'firstperson') && this.game.status !== 'playing') {
+      this.viewMode = m.viewMode;
       this.syncPowerupPool();
     }
   }

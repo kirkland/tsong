@@ -1299,6 +1299,31 @@ export async function setMarketInstability(n: number): Promise<void> {
   );
 }
 
+// The room's armed game-mode toggles (gravity, turbo, arena, view mode, …) live as one small
+// JSON blob in doom_meta so the operator's chosen modes survive a server reboot/redeploy.
+export type GameModes = Record<string, boolean | string>;
+
+/** Read the persisted game-mode toggles. null if never set / no DB. */
+export async function getGameModes(): Promise<GameModes | null> {
+  if (!pool) return null;
+  try {
+    const { rows } = await pool.query(`SELECT v FROM doom_meta WHERE k = 'game_modes'`);
+    if (!rows.length) return null;
+    const parsed = JSON.parse(rows[0].v);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch { return null; }
+}
+
+/** Persist the room's game-mode toggles (upsert in place). */
+export async function saveGameModes(modes: GameModes): Promise<void> {
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO doom_meta (k, v) VALUES ('game_modes', $1)
+       ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+    [JSON.stringify(modes)],
+  );
+}
+
 // --- House treasury (the coin-conservation backbone) ---
 // The House balance lives in a single doom_meta KV row (like market_instability) so it's
 // persistent and shared. Every coin that flows into a sink (roulette stakes, lost bets, loot-box
