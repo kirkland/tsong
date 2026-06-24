@@ -1190,8 +1190,9 @@ export interface StockMsg {
   prices: { id: string; price: number; prev: number; flow?: number }[];
   // This player's open positions (only coins they actually hold). `shares` is fractional;
   // `cost` is the total coins poured in (cost basis); `worth` is floor(shares × price) — the
-  // coins they'd get if they cashed out right now.
-  holdings: { id: string; side: StockSide; shares: number; cost: number; worth: number }[];
+  // coins they'd get if they cashed out right now. `openedAt` is the server-time stamp of the
+  // last open/top-up, used to count down the 60s fast-sell-tax window.
+  holdings: { id: string; side: StockSide; shares: number; cost: number; worth: number; openedAt: number }[];
   // Price history for the per-coin graphs, in STOCKS order — one array per timeframe (oldest
   // first). See STOCK_HISTORY for the cadence/length of each series.
   history: { id: string; series: Record<StockTf, number[]> }[];

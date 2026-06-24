@@ -2541,7 +2541,7 @@ export class Lobby {
         if (!this.conns.has(ws)) return;
         const holdings = h.map((hd) => {
           const price = this.stockPrices.get(hd.coin)?.price ?? 0;
-          return { id: hd.coin, side: hd.side, shares: hd.shares, cost: hd.cost, worth: Math.floor(positionWorth(hd.side, hd.shares, hd.cost, price)) };
+          return { id: hd.coin, side: hd.side, shares: hd.shares, cost: hd.cost, worth: Math.floor(positionWorth(hd.side, hd.shares, hd.cost, price)), openedAt: hd.openedAt };
         });
         this.tell(ws, {
           type: 'stocks', prices, holdings, history, nextUpdateAt: this.nextStockUpdateAt,

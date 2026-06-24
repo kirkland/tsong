@@ -2158,7 +2158,7 @@ function showToast(text: string) {
 // round(worth) — nearest whole coin — exactly what the server pays out.
 type Market = {
   prices: { id: string; price: number; prev: number; flow?: number }[];
-  holdings: { id: string; side: StockSide; shares: number; cost: number; worth: number }[];
+  holdings: { id: string; side: StockSide; shares: number; cost: number; worth: number; openedAt: number }[];
   history: { id: string; series: Record<StockTf, number[]> }[];
   nextUpdateAt: number;
 };
@@ -2229,6 +2229,17 @@ document.addEventListener('click', (e) => {
   if (!marketPanel.contains(t) && !marketBtn.contains(t)) { marketPanel.hidden = true; marketBtn.setAttribute('aria-expanded', 'false'); }
 });
 
+// Fast-sell tax window (mirrors server/lobby.ts settleCashOut): closing a position within 60s
+// of opening — or topping it up — taxes 10% of the payout. Show a live countdown so it's clear
+// when the position is safe to close tax-free.
+const FAST_SELL_MS = 60_000;
+function taxBadge(openedAt: number): { text: string; cls: string } {
+  const left = openedAt > 0 ? Math.max(0, FAST_SELL_MS - (Date.now() - openedAt)) : 0;
+  return left > 0
+    ? { text: `🔒 10% tax · safe in ${Math.ceil(left / 1000)}s`, cls: 'tax-wait' }
+    : { text: '✅ tax-free', cls: 'tax-free' };
+}
+
 function renderMarket() {
   marketCoins.textContent = String(wallet.coins);
   marketList.innerHTML = '';
@@ -2289,6 +2300,13 @@ function renderMarket() {
       const div = document.createElement('div');
       div.className = 'coin-pos';
       div.innerHTML = `${tag}${hold.cost}🪙 → <span class="${plClass}">${rawWorth.toFixed(2)}🪙 (${sign}${plPct.toFixed(0)}%)</span> · ${closeTxt}`;
+      // Live fast-sell-tax countdown, refreshed every second by updateMarketTimer.
+      const badge = taxBadge(hold.openedAt);
+      const taxEl = document.createElement('span');
+      taxEl.className = `pos-tax ${badge.cls}`;
+      taxEl.dataset.opened = String(hold.openedAt);
+      taxEl.textContent = ` · ${badge.text}`;
+      div.appendChild(taxEl);
       return div;
     };
     if (longPos) main.appendChild(posLine(longPos));
@@ -2379,9 +2397,16 @@ function renderMarket() {
   }
 }
 
-// Live countdown to the next price re-roll (the panel can stay open across a move).
+// Live countdown to the next price re-roll (the panel can stay open across a move), plus the
+// per-position fast-sell-tax countdowns.
 function updateMarketTimer() {
   if (marketPanel.hidden) return;
+  // Refresh each open position's tax-window badge in place (no full re-render).
+  for (const el of marketList.querySelectorAll<HTMLElement>('.pos-tax')) {
+    const badge = taxBadge(Number(el.dataset.opened));
+    el.textContent = ` · ${badge.text}`;
+    el.className = `pos-tax ${badge.cls}`;
+  }
   const ms = market.nextUpdateAt - Date.now();
   if (!market.nextUpdateAt || ms <= 0) { marketTimer.textContent = 'next move: any moment…'; return; }
   const m = Math.floor(ms / 60000), s = Math.floor((ms % 60000) / 1000);

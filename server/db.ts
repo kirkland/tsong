@@ -983,13 +983,14 @@ export async function upsertPlayer(pid: string, name: string, email?: string): P
 }
 
 // --- Stock market ---
-export interface Holding { coin: string; side: StockSide; shares: number; cost: number; }
+export interface Holding { coin: string; side: StockSide; shares: number; cost: number; openedAt: number; }
 
-/** Read all of a player's open stock positions (longs and shorts). */
+/** Read all of a player's open stock positions (longs and shorts). `openedAt` stamps the
+ *  fast-sell-tax window so clients can show a countdown to tax-free. */
 export async function getHoldings(pid: string): Promise<Holding[]> {
   if (!pool || !pid) return [];
-  const { rows } = await pool.query(`SELECT coin, side, shares, cost FROM stock_holdings WHERE pid = $1 AND shares > 0`, [pid]);
-  return rows.map((r) => ({ coin: r.coin, side: (r.side === 'short' ? 'short' : 'long') as StockSide, shares: Number(r.shares), cost: Number(r.cost) }));
+  const { rows } = await pool.query(`SELECT coin, side, shares, cost, opened_at FROM stock_holdings WHERE pid = $1 AND shares > 0`, [pid]);
+  return rows.map((r) => ({ coin: r.coin, side: (r.side === 'short' ? 'short' : 'long') as StockSide, shares: Number(r.shares), cost: Number(r.cost), openedAt: Number(r.opened_at ?? 0) }));
 }
 
 /** Open (or add to) a position in `coin` at the given price: escrows `amount` coins (fails —
