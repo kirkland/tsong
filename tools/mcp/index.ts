@@ -20,9 +20,21 @@ async function verifyIdentity(): Promise<void> {
   const expect = cfg.expectName;
   let cache = conn.getState();
 
-  // Retry: sendBoardsTo (leaderboard + netWorth) is async and can arrive late
-  if (!cache.leaderboard || !cache.netWorth) {
-    await new Promise((r) => setTimeout(r, 6000));
+  // The boards (leaderboard + netWorth) stream in asynchronously, and the signal
+  // that proves the account has *played* (and is therefore a real account, not a
+  // guest) lands LATE relative to ready():
+  //   - leaderboard.selfRank arrives in a follow-up board update, not the first one
+  //   - your leaderboard row is absent from the top-N rows when you rank below it
+  // ready() only waits for the four boards to be *non-null*, so a single read here
+  // races that data and wrongly concludes "0 games played". Poll specifically for the
+  // leaderboard self-signal (selfRank, or the expected name appearing in the rows)
+  // until it arrives or we exhaust the budget — exhausting it is the genuine
+  // "guest / brand-new account" case, which correctly stays blocked.
+  const havePlayedSignal = (c: typeof cache): boolean =>
+    c.leaderboard?.selfRank !== undefined ||
+    !!c.leaderboard?.rows?.some((r) => r.name === expect);
+  for (let i = 0; i < 8 && !havePlayedSignal(cache); i++) {
+    await new Promise((r) => setTimeout(r, 1500));
     cache = conn.getState();
   }
   let name: string | null = null;
