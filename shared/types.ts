@@ -747,6 +747,8 @@ export interface LeaderboardRow {
 export interface LeaderboardMsg {
   type: 'leaderboard';
   rows: LeaderboardRow[];
+  selfElo?: number;
+  selfRank?: number;
 }
 
 // One row of the Net Worth board: total liquid + invested coins, net of any

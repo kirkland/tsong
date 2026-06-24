@@ -458,7 +458,7 @@ export class Lobby {
     };
     this.conns.set(ws, conn);
     this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
-    this.tell(ws, { type: 'leaderboard', rows: this.leaderboard });
+    this.tell(ws, { type: 'leaderboard', rows: this.leaderboard, ...this.selfEloData(ws) });
     this.tell(ws, { type: 'netWorth', rows: this.netWorth });
     this.tell(ws, { type: 'doomLeaderboard', solo: this.doomBoards.solo, coop: this.doomBoards.coop });
     this.tell(ws, { type: 'tdLeaderboard', rows: this.tdBoard });
@@ -2660,8 +2660,8 @@ export class Lobby {
       const toHouse = cost - back;
       if (toHouse > 0) await this.houseCredit(toHouse);
     }
-    // Fast-sell tax: a position closed within 60s pays 10% of the (positive) payout to the House.
-    if (payout > 0 && openedAt > 0 && Date.now() - openedAt < 60_000) {
+    // Fast-sell tax: a position closed too quickly pays 10% of the (positive) payout to the House.
+    if (payout > 0 && openedAt > 0 && Date.now() - openedAt < 300_000) {
       const tax = Math.floor(payout * 0.10);
       if (tax > 0) {
         const taken = await spendCoins(pid, tax); // claw the tax back out of what we just paid
@@ -3729,12 +3729,22 @@ export class Lobby {
     const board = await getEloBoard();
     this.leaderboard = board.map(({ pid: _p, ...row }) => row);
     this.eloPids = board.map((r) => r.pid);
-    const data = JSON.stringify({ type: 'leaderboard', rows: this.leaderboard });
     for (const ws of this.conns.keys()) {
-      if (ws.readyState === ws.OPEN) ws.send(data);
+      if (ws.readyState !== ws.OPEN) continue;
+      const extra = this.selfEloData(ws);
+      ws.send(JSON.stringify({ type: 'leaderboard', rows: this.leaderboard, ...extra }));
     }
     // Net worth tracks the same population, so refresh it on the same beat.
     this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
+  }
+
+  /** Produce `selfElo` / `selfRank` for a single connection, or `{}` if unknown. */
+  private selfEloData(ws: WebSocket): { selfElo?: number; selfRank?: number } {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return {};
+    const idx = this.eloPids.indexOf(conn.pid);
+    if (idx === -1) return {};
+    return { selfElo: this.leaderboard[idx]?.elo, selfRank: idx + 1 };
   }
 
   /** Recompute the Net Worth board (coins + live holdings − debt) and push it to everyone.

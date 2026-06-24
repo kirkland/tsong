@@ -405,6 +405,7 @@ export function startWorld(net: WorldNet): void {
   const npcs: LiveNpc[] = [];          // populated in create()
   let nearNpc: LiveNpc | null = null;  // townsperson within talking range
   let nearNetizen: string | null = null; // netizen id within talking range
+  let talkNetizenId: string | null = null; // netizen id currently in conversation (frozen)
   let talkOpen = false;                // an NPC dialogue box is up → movement pauses
   let npcAdvance: (() => void) | null = null; // set while a dialogue is live; called on Enter/click
   let npcClose: (() => void) | null = null;   // closes the live dialogue (Esc)
@@ -849,6 +850,7 @@ export function startWorld(net: WorldNet): void {
   function startNetizenTalk(a: WorldAvatar) {
     if (talkOpen || dialogOpen) return;
     talkOpen = true;
+    talkNetizenId = a.id;
     keys.clear(); joyActive = false;
     prompt.style.display = 'none';
 
@@ -876,9 +878,14 @@ export function startWorld(net: WorldNet): void {
       challengeBtn.onmouseenter = () => { challengeBtn.style.background = '#3a5a30'; };
       challengeBtn.onmouseleave = () => { challengeBtn.style.background = '#2a4a20'; };
       challengeBtn.onclick = () => {
-        selectBlip();
-        closeNetizenTalk();
-        net.onNetizenClick?.(a.id);
+        try {
+          selectBlip();
+          const nid = nearNetizen || a.id;
+          closeNetizenTalk();
+          if (nid) net.onNetizenClick?.(nid);
+        } catch {
+          closeNetizenTalk();
+        }
       };
       const passBtn = document.createElement('button');
       passBtn.type = 'button';
@@ -937,6 +944,7 @@ export function startWorld(net: WorldNet): void {
     function closeNetizenTalk() {
       window.clearInterval(timer);
       talkOpen = false;
+      talkNetizenId = null;
       npcAdvance = null;
       npcClose = null;
       npcBox.style.display = 'none';
@@ -1641,9 +1649,14 @@ export function startWorld(net: WorldNet): void {
         seen.add(a.id);
         let av = remote.get(a.id);
         if (!av) { av = makeAvatar(sc, a.name, a.color); av.rx = a.x; av.ry = a.y; av.ra = a.a ?? 0; remote.set(a.id, av); }
-        // smooth toward the latest broadcast
-        av.rx += (a.x - av.rx) * Math.min(1, dt * 12);
-        av.ry += (a.y - av.ry) * Math.min(1, dt * 12);
+        if (a.id === talkNetizenId) {
+          // freeze the netizen being spoken to — don't update its position from the broadcast.
+          // Give it a gentle idle bob so it still looks alive.
+          av.ry += Math.sin(now / 180) * 0.3;
+        } else {
+          av.rx += (a.x - av.rx) * Math.min(1, dt * 12);
+          av.ry += (a.y - av.ry) * Math.min(1, dt * 12);
+        }
         const ta = a.a ?? av.ra;
         av.ra += angDelta(av.ra, ta) * Math.min(1, dt * 12);
         placeAvatar(av, av.rx, av.ry, av.ra, !!a.car, a.color, a.name);

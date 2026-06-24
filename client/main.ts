@@ -609,7 +609,7 @@ const net = connect(
       syncViewMode(msg.viewMode ?? 'normal');
       updateUI();
     } else if (msg.type === 'leaderboard') {
-      renderLeaderboard(msg.rows);
+      renderLeaderboard(msg.rows, msg.selfElo, msg.selfRank);
     } else if (msg.type === 'netWorth') {
       renderNetWorth(msg.rows);
     } else if (msg.type === 'balanceSheet') {
@@ -1513,7 +1513,6 @@ function addChatLine(line: ChatLine) {
     if (workChat.length > 30) workChat.shift();
   }
   if (line.command && hideCmdsEl.checked) return;
-  if (!line.player && hideNetizenChatEl.checked) return;
   const ts = line.time ?? Date.now();
   const timeStr = formatChatTime(ts);
   const dateStr = formatChatDate(ts);
@@ -1526,7 +1525,8 @@ function addChatLine(line: ChatLine) {
   }
   const row = document.createElement('div');
   const isNonPlayer = !line.player;
-  row.className = line.command ? 'chat-row chat-row-cmd' : 'chat-row' + (isNonPlayer ? ' chat-row-np' : '');
+  const classes = line.command ? 'chat-row chat-row-cmd' : 'chat-row';
+  row.className = classes + (isNonPlayer ? ' chat-row-np' : '');
   const stamp = document.createElement('span');
   stamp.className = 'chatstamp';
   stamp.textContent = timeStr;
@@ -1541,6 +1541,7 @@ function addChatLine(line: ChatLine) {
   content.className = 'chatbody';
   content.append(who, body);
   row.append(stamp, content);
+  if (isNonPlayer && hideNetizenChatEl.checked) row.style.display = 'none';
   chatLog.append(row);
   while (chatLog.childElementCount > 100) chatLog.firstElementChild!.remove();
   chatLog.scrollTop = chatLog.scrollHeight;
@@ -4562,7 +4563,7 @@ for (const canvas of document.querySelectorAll<HTMLCanvasElement>('.pu-icon')) {
 // Track each player's last-known ELO so we can show a delta when it changes.
 const prevElo = new Map<string, number>();
 
-function renderLeaderboard(rows: LeaderboardRow[]) {
+function renderLeaderboard(rows: LeaderboardRow[], selfElo?: number, selfRank?: number) {
   lastLbRows = rows;
   if (!rows.length) {
     leaderboardEl.innerHTML = '';
@@ -4584,7 +4585,6 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
       prevElo.set(myName, mine.elo);
     }
   } else if (myName) {
-    // Seed on first load so we have a baseline.
     const mine = rows.find((r) => r.name === myName);
     if (mine && !prevElo.has(myName)) prevElo.set(myName, mine.elo);
   }
@@ -4598,7 +4598,11 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
       )}${tag}${bountyBadgeHtml(r.name)}</span><span class="pct">${r.elo ?? 500}</span>${rowActionsHtml(r.name)}</li>`;
     })
     .join('');
-  leaderboardEl.innerHTML = `<h2>Leaderboard</h2><ol>${items}</ol>`;
+  let selfRow = '';
+  if (selfElo !== undefined && selfRank !== undefined && myName && !rows.some((r) => r.name === myName)) {
+    selfRow = `<li class="self-row"><span class="rank">#${selfRank}</span><span class="lbname">${escapeHtml(myName)}</span><span class="pct">${selfElo}</span></li>`;
+  }
+  leaderboardEl.innerHTML = `<h2>Leaderboard</h2><ol>${items}${selfRow}</ol>`;
 }
 
 // A small gold "tip" button for a player's board row — omitted for your own name (you
