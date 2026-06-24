@@ -45,12 +45,24 @@ const STR_PER = 0.09;            // +mult per strength point
 const RESPAWN_INVULN = 1.5;      // seconds of invulnerability after respawn
 const RESPAWN_DELAY = 1.0;       // seconds before respawn after a ring-out
 const HITSTUN_PER_KB = 0.0012;   // seconds of hitstun per knockback px/s
+const ULTRA_GAIN = 1.6;          // ultra-meter points gained per damage-% taken (full ≈ 8–10 hits)
+const ULTRA_RADIUS = 200;        // ultra burst radius (px)
+const ULTRA_DMG = 26;            // ultra burst base damage-%
+const SHIELD_MAX = 100;          // shield HP
+const SHIELD_DRAIN = 26;         // shield HP drained per second while held
+const SHIELD_REGEN = 16;         // shield HP regained per second when not shielding
+const SHIELD_STUN = 1.3;         // seconds of stun when your shield breaks
+const DODGE_TIME = 0.42;         // total dodge duration (roll/spot/air)
+const DODGE_INVULN = 0.3;        // intangible portion of a dodge
+const ROLL_SPEED = 540;          // horizontal speed of a roll dodge
+const AIRDODGE_SPEED = 470;      // speed of a directional air dodge
 
 function fighterById(id: string | null | undefined): Fighter {
   return FIGHTERS.find((f) => f.id === id) ?? FIGHTERS[0];
 }
-function bodyW(f: Fighter): number { return 22 + f.size * 4.2; }
-function bodyH(f: Fighter): number { return 40 + f.size * 6.0; }
+// Fighters are kept fairly small relative to the 1280×720 stage so the maps feel roomy.
+function bodyW(f: Fighter): number { return 18 + f.size * 3.4; }
+function bodyH(f: Fighter): number { return 32 + f.size * 4.8; }
 function runSpeed(f: Fighter): number { return RUN_BASE + f.speed * RUN_PER; }
 function jumpImpulse(f: Fighter): number { return JUMP_BASE + f.jump * JUMP_PER; }
 function termVel(f: Fighter): number { return FALL_BASE + f.fallSpeed * FALL_PER; }
@@ -133,7 +145,7 @@ export function startSuperBros(net: SuperBrosNet): void {
   title.style.cssText =
     'position:absolute;top:8px;left:0;right:0;text-align:center;font:700 13px ui-monospace,monospace;' +
     'color:#9fb0d8;text-shadow:1px 1px 0 #000;pointer-events:none;';
-  title.textContent = '←/→ move · W/Space jump (×2 + recovery) · ↓ fast-fall/drop · J/click melee · K projectile · ESC quit';
+  title.textContent = '←/→ move · W/Space jump · ↓ fast-fall · J melee (↑/↓ tilt) · K projectile · L ULTRA · Shift shield (+dir = roll/dodge) · ESC quit';
   overlay.appendChild(title);
 
   // --- menu / lobby / character-select layer ---
@@ -281,10 +293,14 @@ export function startSuperBros(net: SuperBrosNet): void {
     const g = c.createLinearGradient(0, 0, 0, cv.height);
     if (s.id === 'plaza') { g.addColorStop(0, '#aee0ff'); g.addColorStop(1, '#7fb2e8'); }
     else if (s.id === 'paddlepark') { g.addColorStop(0, '#0c1a26'); g.addColorStop(1, '#16313f'); }
+    else if (s.id === 'gauntlet') { g.addColorStop(0, '#1e2747'); g.addColorStop(1, '#0a0e1c'); }
     else { g.addColorStop(0, '#3a0a0a'); g.addColorStop(1, '#0c0303'); }
     c.fillStyle = g; c.fillRect(0, 0, cv.width, cv.height);
-    // flavor: plaza buildings, paddle-park net+stars, hellpit glow
-    if (s.id === 'plaza') {
+    // flavor: plaza buildings, paddle-park net+stars, gauntlet grid, hellpit glow
+    if (s.id === 'gauntlet') {
+      c.strokeStyle = 'rgba(120,150,220,0.18)'; c.lineWidth = 1;
+      for (let x = -10; x < cv.width; x += 14) { c.beginPath(); c.moveTo(x, 0); c.lineTo(x + 20, cv.height); c.stroke(); }
+    } else if (s.id === 'plaza') {
       c.fillStyle = 'rgba(255,255,255,0.55)';
       for (let i = 0; i < 3; i++) { const x = 20 + i * 42; c.beginPath(); c.arc(x, 14, 5, 0, Math.PI * 2); c.arc(x + 6, 16, 4, 0, Math.PI * 2); c.fill(); }
       c.fillStyle = 'rgba(40,60,90,0.35)';
@@ -307,7 +323,11 @@ export function startSuperBros(net: SuperBrosNet): void {
     // platforms
     for (const p of s.platforms) {
       const x = p.x * sx, y = p.y * sy, w = p.w * sx, h = Math.max(2, p.h * sy);
-      if (s.id === 'paddlepark') {
+      if (s.id === 'gauntlet') {
+        c.fillStyle = '#5b6680'; c.fillRect(x, y, w, h);
+        c.fillStyle = '#ffcf3a'; c.fillRect(x, y, w, 1);
+        if (p.moves) { c.fillStyle = '#ffcf3a'; c.fillRect(x + w / 2 - 2, y - 3, 4, 2); } // movement marker
+      } else if (s.id === 'paddlepark') {
         c.fillStyle = '#e8f0ff'; c.fillRect(x, y, w, h);
         c.fillStyle = '#9fb6d8'; c.fillRect(x, y + h - 1, w, 1);
       } else if (p.passThrough) {
@@ -390,15 +410,24 @@ export function startSuperBros(net: SuperBrosNet): void {
     hitstun: number;         // seconds locked out of control after a hit
     meleeCd: number;         // melee cooldown / active timer
     meleeActive: number;     // >0 while the melee hitbox is live this frame
+    meleeDir: number;        // direction of the live swing: -1 up, 0 forward, 1 down (for render)
     projCd: number;
     flash: number;
+    ultra: number;           // 0..100 ultra meter — fills as you TAKE damage, persists across lives
+    ultraFx: number;         // >0 while the ultra burst is visually firing
+    shield: number;          // 0..SHIELD_MAX shield HP
+    shielding: boolean;      // host: shield is currently up this frame
+    shieldStun: number;      // >0 while stunned from a shield break (can't act)
+    dodgeT: number;          // >0 while a dodge is active (intangible early, lag late)
+    dodgeDir: number;        // -1 left / 0 spot / 1 right / 2 air (for render)
     attackSeq: number;       // edge counter for melee (per slot, host applies)
     projSeq: number;         // edge counter for projectile
     jumpSeq: number;         // edge counter for jump presses (host applies discrete jumps)
   }
   interface NetInput {
     move: number; down: boolean; fastFall: boolean; facing: number;
-    attackSeq: number; projSeq: number; jumpSeq: number;
+    attackSeq: number; projSeq: number; jumpSeq: number; atkDir: number; ultraSeq: number;
+    shield: boolean; dodgeSeq: number; dodgeMove: number;
   }
 
   let stage: Stage = STAGES[0];
@@ -413,11 +442,15 @@ export function startSuperBros(net: SuperBrosNet): void {
   const lastAttack = new Map<number, number>();
   const lastProj = new Map<number, number>();
   const lastJump = new Map<number, number>();
+  const lastUltra = new Map<number, number>();
+  const lastDodge = new Map<number, number>();
 
   // local input
   const keys = new Set<string>();
   let myFacing = 1;
-  let myAttackSeq = 0, myProjSeq = 0, myJumpSeq = 0;
+  let myAttackSeq = 0, myProjSeq = 0, myJumpSeq = 0, myUltraSeq = 0, myDodgeSeq = 0;
+  let myAttackDir = 0; // direction locked at the moment of a melee press: -1 up, 0 fwd, 1 down
+  let myDodgeMove = 0; // horizontal intent locked at the moment of a dodge press
 
   const me = (): FighterState | undefined => fighters.find((p) => p.slot === selfSlot);
 
@@ -448,14 +481,20 @@ export function startSuperBros(net: SuperBrosNet): void {
     p.onGround = false; p.jumps = 0; p.usedRecovery = false; p.dropTimer = 0;
     p.invuln = RESPAWN_INVULN; p.respawnIn = 0; p.hitstun = 0;
     p.meleeCd = 0; p.meleeActive = 0; p.projCd = 0; p.flash = 0;
+    p.shield = SHIELD_MAX; p.shielding = false; p.shieldStun = 0; p.dodgeT = 0; p.dodgeDir = 0;
+    // note: p.ultra is deliberately NOT reset — the meter persists across lives.
   }
 
   // The set of platforms a fighter could be standing on this frame (with moving-platform offsets).
   function platRects(): { x: number; y: number; w: number; h: number; passThrough: boolean }[] {
     return stage.platforms.map((pl) => {
-      let x = pl.x;
-      if (pl.moves) x += Math.sin((movePhase / pl.moves.period) * Math.PI * 2) * pl.moves.dx;
-      return { x, y: pl.y, w: pl.w, h: pl.h, passThrough: pl.passThrough };
+      let x = pl.x, y = pl.y;
+      if (pl.moves) {
+        const t = (movePhase / pl.moves.period + (pl.moves.phase ?? 0)) * Math.PI * 2;
+        x += Math.sin(t) * pl.moves.dx;
+        if (pl.moves.dy) y += Math.sin(t) * pl.moves.dy;
+      }
+      return { x, y, w: pl.w, h: pl.h, passThrough: pl.passThrough };
     });
   }
 
@@ -512,6 +551,7 @@ export function startSuperBros(net: SuperBrosNet): void {
 
   // Discrete jump from a press: 1st jump, 2nd (double) jump, then the recovery up-burst.
   function doJump(p: FighterState) {
+    if (p.shielding || p.shieldStun > 0 || p.dodgeT > 0) return; // can't jump while shielding/stunned/dodging
     if (p.hitstun > 0.05) { /* still allow recovery to break stun a little */ }
     const f = fighterById(p.fid);
     if (p.onGround || p.jumps === 0) {
@@ -535,6 +575,7 @@ export function startSuperBros(net: SuperBrosNet): void {
     const vf = fighterById(victim.fid);
     const af = attacker ? fighterById(attacker.fid) : null;
     victim.dmg += dmg;
+    victim.ultra = Math.min(100, victim.ultra + dmg * ULTRA_GAIN); // taking hits charges your ultra
     const aStr = af ? strMult(af) : 1.0;
     const mag = (KB_BASE + baseExtra + victim.dmg * KB_SCALE) * aStr / weightDiv(vf);
     const len = Math.hypot(dirX, dirY) || 1;
@@ -546,31 +587,153 @@ export function startSuperBros(net: SuperBrosNet): void {
     hitSound();
   }
 
+  // Host: resolve an incoming hit on `e`, honoring intangibility (invuln/dodge) and shields.
+  // Returns true if the hit "connected" (was blocked by shield OR dealt knockback) — i.e. a
+  // projectile should be consumed. Returns false if it whiffed through an intangible target.
+  function resolveHit(e: FighterState, attacker: FighterState | null, dmg: number, dirX: number, dirY: number, baseExtra = 0): boolean {
+    if (e.eliminated || e.respawnIn !== 0 || e.invuln > 0 || e.dodgeT > 0) return false;
+    if (e.shielding) {
+      e.shield -= dmg + 5; // shields cost a bit more than the raw damage to hold up
+      blip(170, 0.05, 'sine', 0.13);
+      if (e.shield <= 0) {
+        e.shield = 0; e.shieldStun = SHIELD_STUN; e.shielding = false;
+        applyKnockback(e, attacker, 6, dirX, dirY, 240); // shield break: pop them up, briefly helpless
+      }
+      return true;
+    }
+    applyKnockback(e, attacker, dmg, dirX, dirY, baseExtra);
+    return true;
+  }
+
   // Host: resolve a melee swing by `p` (called when its attackSeq edges).
-  function doMelee(p: FighterState) {
-    if (p.respawnIn !== 0 || p.eliminated || p.meleeCd > 0 || p.hitstun > 0) return;
+  // `dir`: -1 = up-tilt (launches straight up), 1 = down (spike in air / sweep on ground),
+  //         0 = neutral forward attack (the original).
+  function doMelee(p: FighterState, dir = 0) {
+    if (p.respawnIn !== 0 || p.eliminated || p.meleeCd > 0 || p.hitstun > 0 || busy(p)) return;
     const f = fighterById(p.fid);
     p.meleeCd = 0.18 + f.melee.startup * 0.03; // startup-derived cooldown
     p.meleeActive = 0.12;
-    blip(300, 0.06, 'square', 0.1);
+    p.meleeDir = dir;
+    blip(dir === -1 ? 440 : dir === 1 ? 220 : 300, 0.06, 'square', 0.1);
     const reach = 26 + f.melee.range * 14;
-    const hx = p.x + p.facing * (bodyW(f) / 2 + reach / 2);
-    const hy = p.y - bodyH(f) / 2;
-    const hw = reach, hh = bodyH(f) * 0.9;
+    const bw = bodyW(f), bh = bodyH(f);
+    // Hitbox + knockback vector vary by direction. (p.y is the fighter's feet.)
+    let hx: number, hy: number, hw: number, hh: number;
+    let kx: number, ky: number, dmgMult: number, baseExtra: number;
+    if (dir === -1) {
+      // UP: hitbox over the head, big vertical launch — the go-to vertical KO / juggle starter.
+      hw = bw * 1.2; hh = reach;
+      hx = p.x; hy = p.y - bh - reach / 2;
+      kx = p.facing * 0.25; ky = -1; dmgMult = 1.7; baseExtra = 60;
+    } else if (dir === 1 && !p.onGround) {
+      // DOWN (aerial): SPIKE — drives opponents straight down. Risky off-stage kill move.
+      hw = bw * 1.1; hh = reach;
+      hx = p.x; hy = p.y + reach / 2;
+      kx = p.facing * 0.2; ky = 1; dmgMult = 1.6; baseExtra = 120;
+    } else if (dir === 1) {
+      // DOWN (grounded): low SWEEP — hits both sides, low pop. Good for crowd control / edge poke.
+      hw = bw + reach * 1.4; hh = bh * 0.5;
+      hx = p.x; hy = p.y - bh * 0.2;
+      kx = 0; ky = -0.6; dmgMult = 1.5; baseExtra = 0;
+    } else {
+      // FORWARD (neutral): the original swing.
+      hw = reach; hh = bh * 0.9;
+      hx = p.x + p.facing * (bw / 2 + reach / 2); hy = p.y - bh / 2;
+      kx = p.facing; ky = -0.5; dmgMult = 1.8; baseExtra = 0;
+    }
     for (const e of fighters) {
-      if (e === p || e.eliminated || e.respawnIn !== 0 || e.invuln > 0) continue;
+      if (e === p) continue;
       const ef = fighterById(e.fid);
       const ex = e.x, ey = e.y - bodyH(ef) / 2;
       if (Math.abs(ex - hx) < hw / 2 + bodyW(ef) / 2 && Math.abs(ey - hy) < hh / 2 + bodyH(ef) / 2) {
-        const dmg = f.melee.dmg * 1.8;
-        applyKnockback(e, p, dmg, p.facing, -0.5);
+        // grounded down-sweep that hits a foe on the wrong side should knock them away, not through us
+        const knockX = (dir === 1 && p.onGround) ? Math.sign(ex - p.x) || p.facing : kx;
+        resolveHit(e, p, f.melee.dmg * dmgMult, knockX, ky, baseExtra);
       }
     }
   }
 
+  // Host: unleash `p`'s ULTRA — needs a full meter (100). The meter fills only by TAKING
+  // damage and persists across lives (MK-style). Each fighter has a signature ultra:
+  //   minion   → Banana Barrage  (spread of arcing bananas + a slip burst)
+  //   pikachu  → Thunderstorm    (wide AoE with a huge straight-up launch)
+  //   rob      → Knife Storm     (fan of fast knives)
+  //   lebron   → Signature Slam  (a posterizing dunk: downward-spiking ground pound)
+  //   jsav     → Bullet Hell     (rapid forward spray of bullets)
+  //   kenny    → Grand Slam      (massive bat shockwave + a screamer line-drive)
+  function doUltra(p: FighterState) {
+    if (p.respawnIn !== 0 || p.eliminated || p.ultra < 100 || p.hitstun > 0 || busy(p)) return;
+    const f = fighterById(p.fid);
+    p.ultra = 0;
+    p.ultraFx = 0.45;
+    p.flash = 0.3;
+    p.invuln = Math.max(p.invuln, 0.5); // brief armor so the ultra lands reliably
+    blip(120, 0.18, 'sawtooth', 0.22); blip(760, 0.16, 'square', 0.16);
+    const cy = p.y - bodyH(f) / 2;
+    // radial AoE burst around the fighter
+    const radial = (dmg: number, ky: number, baseExtra: number, radius = ULTRA_RADIUS) => {
+      for (const e of fighters) {
+        if (e === p) continue;
+        const ef = fighterById(e.fid);
+        const dx = e.x - p.x, dy = (e.y - bodyH(ef) / 2) - cy;
+        if (Math.hypot(dx, dy) <= radius + bodyW(ef) / 2) {
+          resolveHit(e, p, dmg, Math.sign(dx) || p.facing, ky, baseExtra);
+        }
+      }
+    };
+    // forward fan of the fighter's signature projectile
+    const fan = (count: number, dmgMul: number, spreadVy: number, speedMul: number, arc: Proj['arc']) => {
+      const speed = (320 + f.projectile.speed * 60) * speedMul;
+      for (let i = 0; i < count; i++) {
+        const t = count === 1 ? 0 : (i / (count - 1) - 0.5);
+        projs.push({
+          slot: p.slot, x: p.x + p.facing * bodyW(f) * 0.6, y: cy,
+          vx: p.facing * speed, vy: t * spreadVy + (arc === 'lob' ? -220 : 0),
+          life: 2.0, dmg: f.projectile.dmg * 1.6 * dmgMul, kbStr: f.strength, arc, bounces: 0, kind: f.id,
+        });
+      }
+    };
+    switch (f.id) {
+      case 'pikachu': p.flash = 0.45; radial(ULTRA_DMG + 6, -1.15, 320, 240); break;        // Thunderstorm
+      case 'lebron':  p.vy = Math.min(p.vy, -40); radial(ULTRA_DMG + 4, 0.85, 300, 200); break; // Signature Slam (spike)
+      case 'jsav':    fan(9, 0.7, 220, 1.3, 'straight'); radial(8, -0.4, 80, 120); break;    // Bullet Hell
+      case 'rob':     p.vy = Math.min(p.vy, -90); fan(7, 0.8, 300, 1.1, 'straight'); break;  // Knife Storm
+      case 'minion':  p.vy = Math.min(p.vy, -90); fan(6, 0.9, 130, 1.0, 'lob'); radial(6, -0.5, 80, 120); break; // Banana Barrage
+      case 'kenny': default: p.vy = Math.min(p.vy, -120); radial(ULTRA_DMG, -0.7, 260); fan(1, 1.4, 0, 1.25, 'straight'); break; // Grand Slam
+    }
+  }
+
+  // True while `p` can't act (shielding, shield-broken, or mid-dodge).
+  function busy(p: FighterState) { return p.shielding || p.shieldStun > 0 || p.dodgeT > 0; }
+
+  // Host: resolve a dodge (called when dodgeSeq edges). `move` is the held horizontal intent.
+  // Airborne → air dodge (directional dash). Grounded + direction → roll. Grounded neutral → spot dodge.
+  function doDodge(p: FighterState, move: number) {
+    if (p.respawnIn !== 0 || p.eliminated || p.hitstun > 0 || p.shieldStun > 0 || p.dodgeT > 0) return;
+    p.dodgeT = DODGE_TIME;
+    p.invuln = Math.max(p.invuln, DODGE_INVULN);
+    p.shielding = false;
+    if (!p.onGround) {
+      // air dodge: a single directional burst (also a recovery option)
+      p.dodgeDir = 2;
+      const dx = move || 0;
+      p.vx = dx * AIRDODGE_SPEED;
+      p.vy = dx === 0 ? -AIRDODGE_SPEED * 0.5 : -AIRDODGE_SPEED * 0.25;
+    } else if (move !== 0) {
+      // roll along the ground in the held direction
+      p.dodgeDir = move > 0 ? 1 : -1;
+      p.vx = p.dodgeDir * ROLL_SPEED;
+    } else {
+      // spot dodge in place
+      p.dodgeDir = 0;
+      p.vx = 0;
+    }
+    blip(520, 0.05, 'triangle', 0.1);
+  }
+
   // Host: spawn a projectile from `p` (called when its projSeq edges).
   function doProj(p: FighterState) {
-    if (p.respawnIn !== 0 || p.eliminated || p.projCd > 0 || p.hitstun > 0) return;
+    if (p.respawnIn !== 0 || p.eliminated || p.projCd > 0 || p.hitstun > 0 || busy(p)) return;
     const f = fighterById(p.fid);
     p.projCd = 0.12 + f.projectile.cooldown * 0.09;
     const speed = 320 + f.projectile.speed * 60;
@@ -606,12 +769,13 @@ export function startSuperBros(net: SuperBrosNet): void {
       // hit detection vs fighters
       const owner = fighters.find((q) => q.slot === pr.slot) ?? null;
       for (const e of fighters) {
-        if (e.slot === pr.slot || e.eliminated || e.respawnIn !== 0 || e.invuln > 0) continue;
+        if (e.slot === pr.slot) continue;
         const ef = fighterById(e.fid);
         if (Math.abs(e.x - pr.x) < bodyW(ef) / 2 + 8 && Math.abs((e.y - bodyH(ef) / 2) - pr.y) < bodyH(ef) / 2 + 8) {
-          applyKnockback(e, owner, pr.dmg, Math.sign(pr.vx) || e.facing, -0.35);
-          projs.splice(i, 1);
-          break;
+          if (resolveHit(e, owner, pr.dmg, Math.sign(pr.vx) || e.facing, -0.35)) {
+            projs.splice(i, 1);
+            break;
+          }
         }
       }
     }
@@ -657,18 +821,26 @@ export function startSuperBros(net: SuperBrosNet): void {
     void idxBySlot;
   }
 
-  function readIntent(): { move: number; down: boolean; fastFall: boolean } {
+  function readIntent(): { move: number; down: boolean; fastFall: boolean; shield: boolean } {
     let move = 0;
     if (keys.has('arrowleft') || keys.has('a')) move -= 1;
     if (keys.has('arrowright') || keys.has('d')) move += 1;
     const down = keys.has('arrowdown') || keys.has('s');
-    return { move, down, fastFall: down };
+    const shield = keys.has('shift');
+    return { move, down, fastFall: down, shield };
   }
 
   // Local action edges (host applies immediately for its own; guests bump counters for relay).
   function localJump() { const p = me(); if (over || !p || p.eliminated || p.respawnIn > 0) return; myJumpSeq++; if (isHost) doJump(p); }
-  function localMelee() { const p = me(); if (over || !p || p.eliminated || p.respawnIn > 0) return; myAttackSeq++; if (isHost) doMelee(p); }
+  function meleeDir(): number {
+    if (keys.has('arrowup') || keys.has('w')) return -1;   // up tilt
+    if (keys.has('arrowdown') || keys.has('s')) return 1;  // down tilt / spike
+    return 0;                                               // neutral / forward
+  }
+  function localMelee() { const p = me(); if (over || !p || p.eliminated || p.respawnIn > 0) return; myAttackDir = meleeDir(); myAttackSeq++; if (isHost) doMelee(p, myAttackDir); }
   function localProj() { const p = me(); if (over || !p || p.eliminated || p.respawnIn > 0) return; myProjSeq++; if (isHost) doProj(p); }
+  function localUltra() { const p = me(); if (over || !p || p.eliminated || p.respawnIn > 0 || p.ultra < 100) return; myUltraSeq++; if (isHost) doUltra(p); }
+  function localDodge() { const p = me(); if (over || !p || p.eliminated || p.respawnIn > 0) return; myDodgeMove = readIntent().move; myDodgeSeq++; if (isHost) doDodge(p, myDodgeMove); }
 
   // =====================================================================================
   // Update
@@ -698,24 +870,41 @@ export function startSuperBros(net: SuperBrosNet): void {
           if (p.projCd > 0) p.projCd -= dt;
           if (p.invuln > 0) p.invuln -= dt;
           if (p.flash > 0) p.flash -= dt;
+          if (p.ultraFx > 0) p.ultraFx -= dt;
+          if (p.shieldStun > 0) p.shieldStun -= dt;
+          if (p.dodgeT > 0) p.dodgeT -= dt;
 
           let inp: { move: number; down: boolean; fastFall: boolean };
+          let wantShield = false;
           if (p.slot === selfSlot) {
-            inp = intent; p.facing = myFacing;
+            inp = intent; p.facing = myFacing; wantShield = intent.shield;
           } else {
             const gi = guestInputs.get(p.slot);
             inp = gi ? { move: gi.move, down: gi.down, fastFall: gi.fastFall } : { move: 0, down: false, fastFall: false };
-            if (gi) p.facing = gi.facing || p.facing;
+            if (gi) { p.facing = gi.facing || p.facing; wantShield = gi.shield; }
           }
           // apply relayed action edges for guests
           if (p.slot !== selfSlot) {
             const gi = guestInputs.get(p.slot);
             if (gi) {
               if (gi.jumpSeq > (lastJump.get(p.slot) ?? 0)) { lastJump.set(p.slot, gi.jumpSeq); doJump(p); }
-              if (gi.attackSeq > (lastAttack.get(p.slot) ?? 0)) { lastAttack.set(p.slot, gi.attackSeq); doMelee(p); }
+              if (gi.attackSeq > (lastAttack.get(p.slot) ?? 0)) { lastAttack.set(p.slot, gi.attackSeq); doMelee(p, gi.atkDir || 0); }
               if (gi.projSeq > (lastProj.get(p.slot) ?? 0)) { lastProj.set(p.slot, gi.projSeq); doProj(p); }
+              if (gi.ultraSeq > (lastUltra.get(p.slot) ?? 0)) { lastUltra.set(p.slot, gi.ultraSeq); doUltra(p); }
+              if (gi.dodgeSeq > (lastDodge.get(p.slot) ?? 0)) { lastDodge.set(p.slot, gi.dodgeSeq); doDodge(p, gi.dodgeMove || 0); }
             }
           }
+          // shield state: held while grounded, not stunned, not mid-dodge — drains, then breaks.
+          p.shielding = wantShield && p.onGround && p.shieldStun <= 0 && p.dodgeT <= 0 && p.hitstun <= 0;
+          if (p.shielding) {
+            p.shield -= SHIELD_DRAIN * dt;
+            if (p.shield <= 0) { p.shield = 0; p.shieldStun = SHIELD_STUN; p.shielding = false; }
+          } else if (p.shieldStun <= 0) {
+            p.shield = Math.min(SHIELD_MAX, p.shield + SHIELD_REGEN * dt);
+          }
+          // movement lock: stand still while shielding / shield-stunned; mid-dodge keep dodge velocity.
+          if (p.shielding || p.shieldStun > 0) inp = { move: 0, down: inp.down, fastFall: false };
+          else if (p.dodgeT > 0) inp = { move: 0, down: false, fastFall: false };
           physics(p, inp, dt);
         }
         moveProjs(dt);
@@ -735,7 +924,9 @@ export function startSuperBros(net: SuperBrosNet): void {
             s: p.slot, n: p.name, fid: p.fid,
             x: Math.round(p.x), y: Math.round(p.y), fc: p.facing,
             d: Math.round(p.dmg), st: p.stocks, iv: p.invuln > 0 ? 1 : 0,
-            el: p.eliminated ? 1 : 0, rs: p.respawnIn, ma: p.meleeActive > 0 ? 1 : 0, fl: p.flash > 0 ? 1 : 0,
+            el: p.eliminated ? 1 : 0, rs: p.respawnIn, ma: p.meleeActive > 0 ? 1 : 0, md: p.meleeDir, fl: p.flash > 0 ? 1 : 0,
+            u: Math.round(p.ultra), uf: p.ultraFx > 0 ? 1 : 0,
+            sh: Math.round(p.shield), shg: p.shielding ? 1 : 0, sst: p.shieldStun > 0 ? 1 : 0, dg: p.dodgeT > 0 ? 1 : 0, dd: p.dodgeDir,
           })),
           p: projs.map((pr) => ({ x: Math.round(pr.x), y: Math.round(pr.y), k: pr.kind, a: pr.arc })),
           over,
@@ -751,7 +942,8 @@ export function startSuperBros(net: SuperBrosNet): void {
         net.relay({
           t: 'in', slot: selfSlot,
           move: intent.move, down: intent.down, fastFall: intent.fastFall, facing: myFacing,
-          attackSeq: myAttackSeq, projSeq: myProjSeq, jumpSeq: myJumpSeq,
+          attackSeq: myAttackSeq, projSeq: myProjSeq, jumpSeq: myJumpSeq, atkDir: myAttackDir, ultraSeq: myUltraSeq,
+          shield: intent.shield, dodgeSeq: myDodgeSeq, dodgeMove: myDodgeMove,
         });
       }
       // decay local cosmetic timers on the mirrored fighters
@@ -784,8 +976,17 @@ export function startSuperBros(net: SuperBrosNet): void {
     const g = ctx.createLinearGradient(0, 0, 0, SB_STAGE_H);
     if (stage.id === 'plaza') { g.addColorStop(0, '#aee0ff'); g.addColorStop(1, '#7fb2e8'); }
     else if (stage.id === 'paddlepark') { g.addColorStop(0, '#0c1a26'); g.addColorStop(1, '#16313f'); }
+    else if (stage.id === 'gauntlet') { g.addColorStop(0, '#1e2747'); g.addColorStop(1, '#0a0e1c'); }
     else { g.addColorStop(0, '#3a0a0a'); g.addColorStop(1, '#0c0303'); }
     ctx.fillStyle = g; ctx.fillRect(0, 0, SB_STAGE_W, SB_STAGE_H);
+    if (stage.id === 'gauntlet') {
+      // scrolling industrial grid + warning chevrons
+      ctx.strokeStyle = 'rgba(120,150,220,0.12)'; ctx.lineWidth = 2;
+      const off = (movePhase * 40) % 80;
+      for (let x = -80 + off; x < SB_STAGE_W; x += 80) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + 120, SB_STAGE_H); ctx.stroke(); }
+      ctx.fillStyle = 'rgba(255,200,60,0.10)';
+      for (let i = 0; i < 6; i++) { const y = 80 + i * 110; ctx.fillRect((i % 2 ? 60 : SB_STAGE_W - 160), y, 100, 16); }
+    }
     if (stage.id === 'plaza') {
       // simple town silhouette
       ctx.fillStyle = 'rgba(255,255,255,0.55)';
@@ -811,6 +1012,15 @@ export function startSuperBros(net: SuperBrosNet): void {
       ctx.fillStyle = '#e8f0ff'; ctx.fillRect(r.x, r.y, r.w, r.h);
       ctx.fillStyle = '#9fb6d8'; ctx.fillRect(r.x, r.y + r.h - 5, r.w, 5);
       ctx.fillStyle = '#0c1a26'; ctx.fillRect(r.x + 6, r.y + 3, r.w - 12, 3);
+      return;
+    }
+    if (sid === 'gauntlet') {
+      // steel platform with a yellow hazard lip + bolts
+      ctx.fillStyle = '#5b6680'; ctx.fillRect(r.x, r.y, r.w, r.h);
+      ctx.fillStyle = '#7d8aa8'; ctx.fillRect(r.x, r.y, r.w, Math.min(5, r.h));
+      ctx.fillStyle = '#2c3346'; ctx.fillRect(r.x, r.y + r.h - 4, r.w, 4);
+      ctx.fillStyle = '#ffcf3a';
+      for (let bx = r.x + 6; bx < r.x + r.w - 6; bx += 16) ctx.fillRect(bx, r.y + 2, 8, 2);
       return;
     }
     if (pass) {
@@ -865,8 +1075,9 @@ export function startSuperBros(net: SuperBrosNet): void {
     const w = bodyW(f), h = bodyH(f);
     const top = p.y - h;
     ctx.save();
-    // invuln blink
-    if (p.invuln > 0 && Math.floor(p.invuln * 12) % 2 === 0) ctx.globalAlpha = 0.4;
+    // invuln blink — or a steadier ghost while mid-dodge (intangible)
+    if (p.dodgeT > 0) ctx.globalAlpha = 0.4;
+    else if (p.invuln > 0 && Math.floor(p.invuln * 12) % 2 === 0) ctx.globalAlpha = 0.4;
     // flip for facing: translate to center, scale x
     ctx.translate(p.x, top);
     ctx.scale(p.facing, 1);
@@ -874,17 +1085,61 @@ export function startSuperBros(net: SuperBrosNet): void {
     drawFighterArt(f, p.x, top, w, h, p.flash > 0);
     ctx.restore();
 
-    // melee swing arc (drawn unflipped, in facing direction)
+    // shield bubble — translucent dome whose size tracks remaining shield HP
+    if (p.shielding && p.shield > 0) {
+      const cyb = p.y - h / 2;
+      const rad = (w + h) * 0.34 * (0.45 + 0.55 * (p.shield / SHIELD_MAX));
+      const ring = SLOT_RING[p.slot % SLOT_RING.length];
+      ctx.save();
+      ctx.globalAlpha = 0.32;
+      ctx.fillStyle = ring;
+      ctx.beginPath(); ctx.arc(p.x, cyb, rad, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 0.7; ctx.lineWidth = 2; ctx.strokeStyle = '#dff1ff';
+      ctx.beginPath(); ctx.arc(p.x, cyb, rad, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+    }
+    // shield-break stars spinning over the head
+    if (p.shieldStun > 0) {
+      ctx.save();
+      ctx.fillStyle = '#ffe14d'; ctx.font = '700 16px ui-monospace,monospace'; ctx.textAlign = 'center';
+      for (let i = 0; i < 3; i++) {
+        const a = movePhase * 6 + i * (Math.PI * 2 / 3);
+        ctx.fillText('✦', p.x + Math.cos(a) * 16, top - 6 + Math.sin(a) * 5);
+      }
+      ctx.restore();
+    }
+
+    // melee swing arc (drawn unflipped) — placed by attack direction
     if (p.meleeActive > 0) {
       const reach = 26 + f.melee.range * 14;
       ctx.save();
       ctx.globalAlpha = 0.5;
-      ctx.fillStyle = '#ffffff';
-      const hx = p.x + p.facing * (w / 2);
+      ctx.fillStyle = p.meleeDir === 1 ? '#ff9a5a' : p.meleeDir === -1 ? '#9adcff' : '#ffffff';
+      let cx: number, cy: number, a0: number, a1: number;
+      if (p.meleeDir === -1) {            // up arc over the head
+        cx = p.x; cy = p.y - h; a0 = -Math.PI / 2 - 0.9; a1 = -Math.PI / 2 + 0.9;
+      } else if (p.meleeDir === 1) {      // down arc under the feet
+        cx = p.x; cy = p.y; a0 = Math.PI / 2 - 1.1; a1 = Math.PI / 2 + 1.1;
+      } else {                            // forward arc in facing direction
+        cx = p.x + p.facing * (w / 2); cy = p.y - h / 2;
+        a0 = p.facing > 0 ? -0.9 : Math.PI - 0.9; a1 = p.facing > 0 ? 0.9 : Math.PI + 0.9;
+      }
       ctx.beginPath();
-      ctx.moveTo(hx, p.y - h / 2);
-      ctx.arc(hx, p.y - h / 2, reach, p.facing > 0 ? -0.9 : Math.PI - 0.9, p.facing > 0 ? 0.9 : Math.PI + 0.9);
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, reach, a0, a1);
       ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+
+    // ultra burst — expanding shockwave rings while firing
+    if (p.ultraFx > 0) {
+      const a = Math.max(0, p.ultraFx / 0.45);
+      const r = ULTRA_RADIUS * Math.min(1, (1 - a) * 1.15);
+      ctx.save();
+      ctx.globalAlpha = a * 0.75; ctx.lineWidth = 9; ctx.strokeStyle = f.color;
+      ctx.beginPath(); ctx.arc(p.x, p.y - h / 2, r, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = a * 0.5; ctx.lineWidth = 3; ctx.strokeStyle = '#fff';
+      ctx.beginPath(); ctx.arc(p.x, p.y - h / 2, r * 0.66, 0, Math.PI * 2); ctx.stroke();
       ctx.restore();
     }
 
@@ -928,6 +1183,15 @@ export function startSuperBros(net: SuperBrosNet): void {
       ctx.font = '16px ui-monospace,monospace';
       ctx.fillStyle = ring;
       ctx.fillText('●'.repeat(Math.max(0, p.stocks)), x + panelW / 2, y + 76);
+      // ultra meter bar above the panel (gold + pulse when full)
+      const um = Math.max(0, Math.min(100, p.ultra));
+      const ready = um >= 100 && !p.eliminated;
+      ctx.fillStyle = 'rgba(0,0,0,0.5)'; ctx.fillRect(x, y - 11, panelW, 7);
+      ctx.globalAlpha = ready ? 0.55 + 0.45 * Math.abs(Math.sin(movePhase * 6)) : 1;
+      ctx.fillStyle = ready ? '#ffd166' : '#5ad1ff';
+      ctx.fillRect(x, y - 11, panelW * um / 100, 7);
+      ctx.globalAlpha = 1;
+      if (ready) { ctx.fillStyle = '#ffd166'; ctx.font = '700 11px ui-monospace,monospace'; ctx.fillText('★ ULTRA ★', x + panelW / 2, y - 15); }
       x += panelW + gap;
     }
   }
@@ -984,7 +1248,8 @@ export function startSuperBros(net: SuperBrosNet): void {
         slot: lp.slot, name: lp.name, fid,
         x: 0, y: 0, vx: 0, vy: 0, facing: 1, onGround: false, jumps: 0, usedRecovery: false, dropTimer: 0,
         dmg: 0, stocks: SB_STOCKS, invuln: RESPAWN_INVULN, respawnIn: 0, eliminated: false,
-        hitstun: 0, meleeCd: 0, meleeActive: 0, projCd: 0, flash: 0,
+        hitstun: 0, meleeCd: 0, meleeActive: 0, meleeDir: 0, projCd: 0, flash: 0, ultra: 0, ultraFx: 0,
+        shield: SHIELD_MAX, shielding: false, shieldStun: 0, dodgeT: 0, dodgeDir: 0,
         attackSeq: 0, projSeq: 0, jumpSeq: 0,
       };
       spawnFighter(fs, i);
@@ -1046,6 +1311,11 @@ export function startSuperBros(net: SuperBrosNet): void {
             attackSeq: Number(msg.attackSeq) || 0,
             projSeq: Number(msg.projSeq) || 0,
             jumpSeq: Number(msg.jumpSeq) || 0,
+            atkDir: Number(msg.atkDir) || 0,
+            ultraSeq: Number(msg.ultraSeq) || 0,
+            shield: !!msg.shield,
+            dodgeSeq: Number(msg.dodgeSeq) || 0,
+            dodgeMove: Number(msg.dodgeMove) || 0,
           });
         }
       } else if (!isHost && msg.t === 'st') {
@@ -1059,7 +1329,9 @@ export function startSuperBros(net: SuperBrosNet): void {
           x: Number(r.x), y: Number(r.y), vx: 0, vy: 0, facing: Number(r.fc) || 1,
           onGround: false, jumps: 0, usedRecovery: false, dropTimer: 0,
           dmg: Number(r.d), stocks: Number(r.st), invuln: r.iv ? 1 : 0, respawnIn: Number(r.rs) || 0,
-          eliminated: !!r.el, hitstun: 0, meleeCd: 0, meleeActive: r.ma ? 0.1 : 0, projCd: 0,
+          eliminated: !!r.el, hitstun: 0, meleeCd: 0, meleeActive: r.ma ? 0.1 : 0, meleeDir: Number(r.md) || 0, projCd: 0,
+          ultra: Number(r.u) || 0, ultraFx: r.uf ? 0.2 : 0,
+          shield: r.sh === undefined ? SHIELD_MAX : Number(r.sh), shielding: !!r.shg, shieldStun: r.sst ? 0.2 : 0, dodgeT: r.dg ? 0.2 : 0, dodgeDir: Number(r.dd) || 0,
           flash: r.fl ? 0.1 : 0, attackSeq: 0, projSeq: 0, jumpSeq: 0,
         }));
         const sp = (msg.p as Array<Record<string, unknown>>) ?? [];
@@ -1079,15 +1351,23 @@ export function startSuperBros(net: SuperBrosNet): void {
     const k = e.key.toLowerCase();
     if (k === 'escape') { close(); return; }
     if (mode !== 'play') return;
-    if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'w', 'a', 's', 'd', ' ', 'j', 'k'].includes(k)) {
+    if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'w', 'a', 's', 'd', ' ', 'j', 'k', 'l', 'shift'].includes(k)) {
       e.preventDefault(); e.stopImmediatePropagation();
     }
+    keys.add(k); // track held state first so dodge can read the current direction
     if (!e.repeat) {
+      const dirKey = (k === 'arrowleft' || k === 'a' || k === 'arrowright' || k === 'd' || k === 'arrowdown' || k === 's');
+      const downKey = (k === 'arrowdown' || k === 's');
       if (k === 'w' || k === ' ' || k === 'arrowup') localJump();
       else if (k === 'j') localMelee();
       else if (k === 'k') localProj();
+      else if (k === 'l') localUltra();
+      // Shield = hold Shift. A dodge fires when you tilt a direction while shielding,
+      // or press Shift while already holding one (Smash-style roll / spot / air dodge).
+      else if (k === 'shift') { const i = readIntent(); if (i.move !== 0 || (keys.has('arrowdown') || keys.has('s'))) localDodge(); }
+      else if (dirKey && keys.has('shift') && !downKey) localDodge();
+      else if (downKey && keys.has('shift')) localDodge();
     }
-    keys.add(k);
   };
   const onKeyUp = (e: KeyboardEvent) => { keys.delete(e.key.toLowerCase()); };
   const onMouseDown = () => { if (mode === 'play') localMelee(); };
