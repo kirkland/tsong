@@ -1727,6 +1727,12 @@ worldBtn.addEventListener('click', async () => {
           }, 0);
           return;
         }
+        // The DOOM portal launches DOOM the same way the toolbar's Doom button does (deferred a
+        // tick like the others, so the world's teardown click finishes first).
+        if (feature === 'doom') {
+          setTimeout(() => doomBtn.click(), 0);
+          return;
+        }
         const id = feature === 'roulette' ? 'rouletteBtn'
                  : feature === 'blackjack' ? 'bjBtn'
                  : feature === 'craps'     ? 'crapsBtn'

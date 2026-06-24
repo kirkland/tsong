@@ -393,7 +393,7 @@ export function petById(id: string | null | undefined) {
 
 // What entering a building does (the client maps each `kind` to an action). Add a kind here
 // and a handler on the client to introduce a new venue.
-export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop';
+export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal';
 // A venue's footprint on the map. The rectangle (top-left origin, world units) is solid —
 // avatars collide with it — and an apron just outside the door is the entry trigger zone.
 export interface WorldBuilding {
@@ -408,10 +408,14 @@ export interface WorldBuilding {
   color: string; // wall color
 }
 export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
-  { id: 'arena',  kind: 'arena',  name: 'TSONG ARENA', emoji: '🏓', x: 1360, y: 300,  w: 480, h: 340, color: '#3a4ea8' },
-  { id: 'casino', kind: 'casino', name: 'CASINO',      emoji: '🎰', x: 440,  y: 1480, w: 440, h: 320, color: '#a8323a' },
-  { id: 'bank',   kind: 'bank',   name: 'BANK',        emoji: '🏦', x: 2320, y: 1480, w: 440, h: 320, color: '#2f7d4f' },
-  { id: 'petshop', kind: 'petshop', name: 'PET SHOP',  emoji: '🐾', x: 2320, y: 300,  w: 420, h: 300, color: '#7a4fa8' },
+  // Shrunk to ~0.72× their old footprints and re-centred near their old spots (so the auto-tuned
+  // roads still meet their doors). Old: arena 480×340, casino/bank 440×320, petshop 420×300.
+  { id: 'arena',  kind: 'arena',  name: 'TSONG ARENA', emoji: '🏓', x: 1425, y: 345,  w: 350, h: 250, color: '#3a4ea8' },
+  { id: 'casino', kind: 'casino', name: 'CASINO',      emoji: '🎰', x: 500,  y: 1525, w: 320, h: 230, color: '#a8323a' },
+  { id: 'bank',   kind: 'bank',   name: 'BANK',        emoji: '🏦', x: 2380, y: 1525, w: 320, h: 230, color: '#2f7d4f' },
+  { id: 'petshop', kind: 'petshop', name: 'PET SHOP',  emoji: '🐾', x: 2370, y: 335,  w: 320, h: 230, color: '#7a4fa8' },
+  // Hellfire portal to DOOM — small footprint just south of the central fountain, on the path.
+  { id: 'doomportal', kind: 'doomportal', name: 'DOOM', emoji: '🔥', x: 1520, y: 1380, w: 160, h: 190, color: '#3a0000' },
 ] as const;
 
 // One avatar as broadcast to everyone in the world. `id` matches YouMsg.id, so a client can
