@@ -264,7 +264,7 @@ wss.on('connection', (ws: WebSocket, req) => {
         if (typeof msg.item === 'string') lobby.shopBuy(ws, msg.item);
         break;
       case 'shopEquip':
-        if ((msg.slot === 'hat' || msg.slot === 'skin' || msg.slot === 'trail' || msg.slot === 'title' || msg.slot === 'song' || msg.slot === 'car') && (msg.item === null || typeof msg.item === 'string')) {
+        if ((msg.slot === 'hat' || msg.slot === 'skin' || msg.slot === 'trail' || msg.slot === 'title' || msg.slot === 'song' || msg.slot === 'car' || msg.slot === 'pet') && (msg.item === null || typeof msg.item === 'string')) {
           lobby.shopEquip(ws, msg.slot, msg.item);
         }
         break;
@@ -322,7 +322,7 @@ wss.on('connection', (ws: WebSocket, req) => {
         break;
       case 'worldMove':
         if (typeof msg.x === 'number' && typeof msg.y === 'number') {
-          lobby.worldMove(ws, msg.x, msg.y, typeof msg.a === 'number' ? msg.a : undefined, typeof msg.car === 'string' ? msg.car : null);
+          lobby.worldMove(ws, msg.x, msg.y, typeof msg.a === 'number' ? msg.a : undefined, typeof msg.car === 'string' ? msg.car : null, typeof msg.pet === 'string' ? msg.pet : null);
         }
         break;
       case 'dailySpin':
