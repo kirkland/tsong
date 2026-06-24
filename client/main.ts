@@ -8,6 +8,7 @@ import { initCraps } from './craps';
 import { initCrash } from './crash';
 import { initSlots } from './slots';
 import { initAds, revealAds } from './ads';
+import { initFlyover, startFlyovers } from './flyover';
 import { draw, drawLegendIcon, setBlasterAim, drawCosmeticPreview } from './render';
 import {
   COURT,
@@ -830,6 +831,7 @@ joinForm.addEventListener('submit', (e) => {
   overlay.style.display = 'none';
   enableChat();
   revealAds(); // the fake banner ad only appears once you're in (never over the join screen)
+  startFlyovers();
 });
 
 // --- ping: notify everyone you want players ---
@@ -1652,6 +1654,7 @@ initAds({
   typedie: () => typeDieBtn.click(),
   shop: () => shopBtn.click(),
 });
+initFlyover(); // the occasional banner-plane flyover (and rarer crash)
 
 // --- Campaign ("Davis Collects", lazy-loaded, self-contained). Runs its own 2D Pong + VN;
 // the server is used only to persist arcade scores (campaignScore / campaignLeaderboard). ---
@@ -3271,6 +3274,7 @@ if (remembered) {
   overlay.style.display = 'none';
   enableChat();
   revealAds(); // returning players skip the join form — still show the banner ad
+  startFlyovers();
 } else {
   nick.focus();
 }
