@@ -11,6 +11,15 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        // Keep Phaser in its own chunk so rollup minifies it in isolation
+        // rather than holding the entire bundle in memory at once.
+        manualChunks(id) {
+          if (id.includes('phaser')) return 'phaser';
+        },
+      },
+    },
   },
   server: {
     port: 5173,
