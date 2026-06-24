@@ -473,7 +473,8 @@ export type ClientMsg =
   | { type: 'worldEnter' } // step into the free-roam world map (start sending/receiving avatar positions)
   | { type: 'worldLeave' } // leave the world map
   | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null } // client-authoritative avatar position (world units), heading + car when driving
-  | { type: 'migrate'; oldPid: string }; // one-time: merge a UUID guest account into the signed-in Google account
+  | { type: 'migrate'; oldPid: string } // one-time: merge a UUID guest account into the signed-in Google account
+  | { type: 'newsReq' }; // request the current news feed
 
 // --- Server -> Client ---
 
@@ -876,7 +877,8 @@ export type ServerMsg =
   | MarketMsg
   | LoanBookMsg
   | WorldMsg
-  | HouseMsg;
+  | HouseMsg
+  | NewsMsg;
 
 // --- Economy Overhaul server → client messages ---
 
@@ -932,6 +934,39 @@ export interface HouseMsg {
   type: 'house';
   balance: number;
 }
+
+// A market news headline — published hourly during market hours with a hidden price move.
+export interface NewsItem {
+  id: string;
+  ts: number;         // publish epoch ms
+  coin: string;       // affected coin id
+  headline: string;   // allusive flavor text (no numbers, no explicit direction)
+}
+export interface NewsMsg {
+  type: 'news';
+  items: NewsItem[];  // newest-first, up to ~30
+}
+// Headline templates — allude without stating direction or timing.
+export const NEWS_TEMPLATES_BULLISH = [
+  'Whispers in the Casino district: someone\'s been quietly loading up on {name}.',
+  '{ticker} chatter is heating up — the smart money looks interested.',
+  'A well-known whale was seen eyeing {name}.',
+  'Insiders are unusually optimistic about {ticker} lately.',
+  'Rumors are swirling that {name} is about to catch a bid.',
+  'Something is brewing with {ticker} — the order book is thickening.',
+  'A prominent trader just moved a position into {name}.',
+  'The vibe around {ticker} is shifting — the murmurs are getting louder.',
+];
+export const NEWS_TEMPLATES_BEARISH = [
+  'Analysts are growing wary of {name}\'s recent run.',
+  'Something feels off about {ticker} — insiders are getting quiet.',
+  'Rumblings that {name} holders are heading for the exits.',
+  'A cold wind is blowing through {ticker}.',
+  'The smart money appears to be rotating out of {name}.',
+  '{ticker} is looking wobbly — profit-takers are circling.',
+  'Volume on {name} is drying up; the silence is telling.',
+  'A shadow has fallen over {ticker} — traders are hedging.',
+];
 
 // Broadcast when a match kicks off and a seated player has a theme song equipped — every client
 // loops `audio` for the duration of the match (until status leaves 'playing'). `owner` is the

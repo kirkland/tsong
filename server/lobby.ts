@@ -71,6 +71,9 @@ import {
   MarketItemView,
   MarketListingView,
   WorldAvatar,
+  NewsItem,
+  NEWS_TEMPLATES_BULLISH,
+  NEWS_TEMPLATES_BEARISH,
 } from '../shared/types';
 import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
@@ -83,7 +86,8 @@ import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recor
   mintExclusive, getExclusiveSupply, getExclusiveLastSale,
   listExclusive, cancelListing, getMarketListings, buyLowestAsk,
   getNetizens, seedNetizen,
-  addBounty, getBountyOn, clearBounty, getBounties } from './db';
+  addBounty, getBountyOn, clearBounty, getBounties,
+  getNewsFeed, saveNewsFeed } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
 
@@ -162,6 +166,25 @@ function nextFivePmEtMs(nowMs: number): number {
   let delta = target - secsNow;
   if (delta <= 0) delta += 24 * 3600; // already past 5pm in NY → the next one is tomorrow
   return nowMs + delta * 1000;
+}
+
+// Market-hours check: M–F 9:00–16:59 America/New_York.
+function isMarketHours(nowMs: number): boolean {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour12: false, weekday: 'short', hour: '2-digit',
+  }).formatToParts(new Date(nowMs));
+  const day = parts.find(p => p.type === 'weekday')?.value;
+  const hour = Number(parts.find(p => p.type === 'hour')?.value) || 0;
+  return !['Sat','Sun'].includes(day ?? '') && hour >= 9 && hour < 17;
+}
+// Epoch ms of the next top-of-hour boundary (xx:00:00) in real time.
+function nextTopOfHourMs(nowMs: number): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour12: false, minute: '2-digit', second: '2-digit',
+  }).formatToParts(new Date(nowMs));
+  const m = Number(parts.find(p => p.type === 'minute')?.value) || 0;
+  const s = Number(parts.find(p => p.type === 'second')?.value) || 0;
+  return nowMs + ((3600 - (m * 60 + s)) % 3600 || 3600) * 1000;
 }
 
 // Epoch ms when the daily spin is next available (0 = available now).
@@ -296,6 +319,13 @@ export class Lobby {
   // accumulated by recordFlow and decayed each re-roll. Drives 40% of the price move. Lives only
   // in memory (decays to zero, harmless on restart) — never persisted.
   private pressure = new Map<string, number>();
+  // --- Market News Engine ---
+  // Pending price-pressure injections from published news headlines, waiting to fire at fireAt.
+  private pendingNews: { coin: string; magnitude: number; fireAt: number }[] = [];
+  // Epoch ms of the next scheduled headline publish (top of the next market hour).
+  private nextNewsAt = nextTopOfHourMs(Date.now());
+  // Cached news feed (newest-first items). Hydrated on boot from DB, updated on each publish.
+  private newsFeed: NewsItem[] = [];
   // Cached House treasury balance, hydrated on boot and kept in sync after each adjust. Broadcast
   // to clients so the market/casino header can show it (and "payouts reduced" when low).
   private houseBalance = 0;
@@ -1318,6 +1348,8 @@ export class Lobby {
     this.sendBounties(ws);
     // Send the House treasury balance (drives the market/casino header readout).
     this.tell(ws, { type: 'house', balance: Math.round(this.houseBalance) });
+    // Send the news feed.
+    this.sendNews(ws);
   }
 
   /** Load a connection's wallet from the DB into memory and send it to that client. */
@@ -2026,6 +2058,9 @@ export class Lobby {
     // the House). Both are best-effort — without a DB they no-op cleanly.
     this.houseBalance = await getHouseBalance().catch(() => 0);
     await this.seedNetizens().catch((e) => console.error('netizen seed failed:', e));
+    // Market News Engine: hydrate the cached feed, schedule the next top-of-hour.
+    this.newsFeed = await getNewsFeed().catch(() => []);
+    this.nextNewsAt = nextTopOfHourMs(Date.now());
   }
 
   // --- Netizens (bot traders) ---
@@ -2271,6 +2306,55 @@ export class Lobby {
         });
       })
       .catch((e) => console.error('stocks send failed:', e));
+  }
+
+  /** Send the cached news feed to a single client. */
+  sendNews(ws: WebSocket) {
+    this.tell(ws, { type: 'news', items: this.newsFeed });
+  }
+
+  /** Publish a new market headline: pick a coin, build the item, push to feed + DB, broadcast to
+   *  all clients, and schedule the hidden price-pressure injection 7–30 min later. */
+  private publishNews() {
+    const now = Date.now();
+    // Pick a coin, lightly weighted toward those with older or no recent news.
+    const lastNewsTs = new Map<string, number>();
+    for (const item of this.newsFeed) {
+      const existing = lastNewsTs.get(item.coin) ?? 0;
+      if (item.ts > existing) lastNewsTs.set(item.coin, item.ts);
+    }
+    const scored = STOCKS.map((s) => {
+      const last = lastNewsTs.get(s.id) ?? 0;
+      const recency = Math.max(0, now - last); // ms since last news
+      return { id: s.id, name: s.name, ticker: s.ticker, weight: 1 + recency / 3_600_000 };
+    });
+    const totalW = scored.reduce((a, b) => a + b.weight, 0);
+    let roll = Math.random() * totalW;
+    const pick = scored.find((s) => { roll -= s.weight; return roll <= 0; }) ?? scored[0];
+
+    const dir = Math.random() < 0.5 ? 'bullish' : 'bearish';
+    const templates = dir === 'bullish' ? NEWS_TEMPLATES_BULLISH : NEWS_TEMPLATES_BEARISH;
+    const tmpl = templates[Math.floor(Math.random() * templates.length)];
+    const headline = tmpl.replace('{name}', pick.name).replace('{ticker}', pick.ticker);
+
+    const item: NewsItem = {
+      id: `news_${now}`,
+      ts: now,
+      coin: pick.id,
+      headline,
+    };
+    this.newsFeed.unshift(item);
+    if (this.newsFeed.length > 30) this.newsFeed.length = 30;
+    saveNewsFeed(this.newsFeed).catch((e: unknown) => console.error('news feed save failed:', e));
+
+    // Schedule the hidden injection 7–30 min from now.
+    const magnitude = (dir === 'bullish' ? 1 : -1) * (0.25 + Math.random() * 0.35);
+    this.pendingNews.push({ coin: pick.id, magnitude, fireAt: now + (7 + Math.random() * 23) * 60_000 });
+
+    // Broadcast to all connected clients.
+    for (const ws of this.conns.keys()) {
+      if (ws.readyState === ws.OPEN) this.sendNews(ws);
+    }
   }
 
   /** Open a long or short position in a crypto at its current price. Coins are escrowed. */
@@ -2611,14 +2695,29 @@ export class Lobby {
    *  the fresh (revalued) market to every connected client. Also fires the daily loan-collection
    *  event when its time arrives. Cheap to call every tick. */
   private tickStocks() {
+    const now = Date.now();
     // The daily collection takes precedence (it may crash + repush the market itself), so handle
     // it first and bail.
-    if (this.nextStockCrashAt && Date.now() >= this.nextStockCrashAt) {
+    if (this.nextStockCrashAt && now >= this.nextStockCrashAt) {
       this.runDailyCollection();
       return;
     }
-    if (Date.now() < this.nextStockUpdateAt) return;
-    this.nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS;
+    // --- Market News Engine: fire pending price injections ---
+    for (let i = this.pendingNews.length - 1; i >= 0; i--) {
+      const pn = this.pendingNews[i];
+      if (now >= pn.fireAt) {
+        const cur = this.pressure.get(pn.coin) ?? 0;
+        this.pressure.set(pn.coin, Math.max(-1, Math.min(1, cur + pn.magnitude)));
+        this.pendingNews.splice(i, 1);
+      }
+    }
+    // --- Market News Engine: publish check (hourly during market hours) ---
+    if (now >= this.nextNewsAt) {
+      if (isMarketHours(now)) this.publishNews();
+      this.nextNewsAt = nextTopOfHourMs(now);
+    }
+    if (now < this.nextStockUpdateAt) return;
+    this.nextStockUpdateAt = now + STOCK_UPDATE_MS;
     for (const s of STOCKS) {
       const cur = this.stockPrices.get(s.id) ?? { price: s.base, prev: s.base };
       // Economy Overhaul: decay the order-flow pressure FIRST (p *= 0.5 per tick), then blend it
