@@ -3530,12 +3530,10 @@ function isMobileView(): boolean {
 function resetMobileLayout() {
   const stage = document.getElementById('stage') as HTMLDivElement;
   const chat = document.getElementById('chat') as HTMLDivElement;
-  const lb = document.getElementById('leaderboard') as HTMLDivElement;
-  const nw = document.getElementById('netWorth') as HTMLDivElement;
+  const boards = document.getElementById('boards') as HTMLDivElement;
   stage.style.display = '';
   chat.style.display = '';
-  lb.style.display = '';
-  nw.style.display = '';
+  boards.style.display = '';
 }
 for (const btn of mobileTabs.querySelectorAll<HTMLButtonElement>('.mob-tab')) {
   btn.addEventListener('click', () => {
@@ -3545,23 +3543,19 @@ for (const btn of mobileTabs.querySelectorAll<HTMLButtonElement>('.mob-tab')) {
     const tab = btn.dataset.tab;
     const stage = document.getElementById('stage') as HTMLDivElement;
     const chat = document.getElementById('chat') as HTMLDivElement;
-    const lb = document.getElementById('leaderboard') as HTMLDivElement;
-    const nw = document.getElementById('netWorth') as HTMLDivElement;
+    const boards = document.getElementById('boards') as HTMLDivElement;
     if (tab === 'play') {
       stage.style.display = '';
       chat.style.display = 'none';
-      lb.style.display = '';
-      nw.style.display = '';
+      boards.style.display = '';
     } else if (tab === 'chat') {
       stage.style.display = 'none';
       chat.style.display = '';
-      lb.style.display = 'none';
-      nw.style.display = 'none';
+      boards.style.display = 'none';
     } else if (tab === 'leaderboard') {
       stage.style.display = 'none';
       chat.style.display = 'none';
-      lb.style.display = '';
-      nw.style.display = '';
+      boards.style.display = '';
     }
   });
 }
@@ -3572,12 +3566,10 @@ window.addEventListener('resize', () => {
 if (isMobileView()) {
   const stage = document.getElementById('stage') as HTMLDivElement;
   const chatEl = document.getElementById('chat') as HTMLDivElement;
-  const lb = document.getElementById('leaderboard') as HTMLDivElement;
-  const nw = document.getElementById('netWorth') as HTMLDivElement;
+  const boards = document.getElementById('boards') as HTMLDivElement;
   stage.style.display = '';
   chatEl.style.display = 'none';
-  lb.style.display = '';
-  nw.style.display = '';
+  boards.style.display = '';
 }
 
 // --- touch controls for paddle ---
