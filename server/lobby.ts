@@ -83,9 +83,11 @@ import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recor
   mintExclusive, getExclusiveSupply, getExclusiveLastSale,
   listExclusive, cancelListing, getMarketListings, buyLowestAsk,
   getNetizens, seedNetizen,
-  addBounty, getBountyOn, clearBounty, getBounties } from './db';
+  addBounty, getBountyOn, clearBounty, getBounties,
+  challengedToday, recordChallenge,
+  getNetizenByPid, getNetizenCount, getNetWorthRank } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
-import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
+import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
 // emoji code points (pictographs, components, ZWJ, variation selectors, flags).
@@ -251,12 +253,24 @@ export class Lobby {
   private bot: {
     ws: WebSocket;
     side: Side;
-    id: string;
-    level: BotLevel;
-    reactTimer: number; // seconds until the bot re-aims (its reaction lag)
-    aimY: number; // current target Y the bot is steering toward
-  } | null = null;
+      id: string;
+      level: BotLevel;
+      reactTimer: number; // seconds until the bot re-aims (its reaction lag)
+      aimY: number; // current target Y the bot is steering toward
+      reactOverride?: number; // challenge difficulty: override reaction time
+      errorPxOverride?: number; // challenge difficulty: override aim error in px
+    } | null = null;
   private botOverTimer = 0; // seconds the post-match screen lingers before the bot leaves
+
+  // Active netizen challenge: set when a player challenges a netizen, settled when the bot match ends.
+  private pendingChallenge: {
+    playerPid: string;
+    playerName: string;
+    playerWs: WebSocket;
+    netizenPid: string;
+    netizenName: string;
+    wager: number;
+  } | null = null;
 
   // Streamer mode: fake chat bots spam the chat to distract players.
   private streamerMode = false;
@@ -618,6 +632,80 @@ export class Lobby {
     if (!botSide) return; // no open side left for the bot
     this.spawnBot(botSide, level);
     // Both sides manned now — start the match if we were idle.
+    if (this.teams.left.length && this.teams.right.length && this.game.status === 'waiting') {
+      this.game.start();
+    }
+    this.refreshPause();
+  }
+
+  // --- Netizen Challenge (Plan 10) ---
+
+  /** Return info about a netizen for the challenge dialog. */
+  async sendNetizenInfo(ws: WebSocket, netizenId: string) {
+    const conn = this.conns.get(ws);
+    const row = await getNetizenByPid(netizenId);
+    if (!row) return;
+    const boundaryMs = latest5pmEtBoundary();
+    const today = await challengedToday(conn?.pid || '', netizenId, boundaryMs);
+    const netWorth = Number(row.net);
+    const maxWin = Math.round(netWorth * NETIZEN_CHALLENGE_MAX_FRAC);
+    this.tell(ws, { type: 'netizenInfo', netizenId, netWorth, maxWin, challengedToday: today, netizenName: row.name });
+  }
+
+  /** Challenge a netizen to a coin-wager Pong duel. */
+  async netizenChallenge(ws: WebSocket, netizenId: string, wager: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    if (this.bot || this.pendingChallenge) return;
+    if (this.tournament) return;
+    if (this.mode === 'poly' || this.arena) return;
+    if (this.game.layered) return;
+
+    const row = await getNetizenByPid(netizenId);
+    if (!row) return;
+
+    const boundaryMs = latest5pmEtBoundary();
+    const today = await challengedToday(conn.pid, netizenId, boundaryMs);
+    if (today) return;
+
+    const netWorth = Number(row.net);
+    const maxWager = Math.round(netWorth * NETIZEN_CHALLENGE_MAX_FRAC);
+    if (wager < 100 || wager > maxWager) return;
+
+    // Check the human has enough coins.
+    const wallet = await getWallet(conn.pid);
+    if (wallet.coins < wager) return;
+
+    // Escrow: deduct from human, credit to netizen so net worth is accurate during the match.
+    await addCoins(conn.pid, conn.nickname || 'Player', -wager);
+    await addCoins(netizenId, row.name, wager);
+    await recordChallenge(conn.pid, netizenId, Date.now());
+
+    // Determine bot difficulty from the netizen's net worth.
+    const netRank = await getNetWorthRank(netizenId);
+    const totalNetizens = await getNetizenCount();
+    const t = totalNetizens > 1 ? 1 - (netRank - 1) / (totalNetizens - 1) : 0.5;
+    const react = NETIZEN_CHALLENGE_EASIEST_REACT + t * (NETIZEN_CHALLENGE_HARDEST_REACT - NETIZEN_CHALLENGE_EASIEST_REACT);
+    const errPx = Math.round(NETIZEN_CHALLENGE_EASIEST_ERROR + t * (NETIZEN_CHALLENGE_HARDEST_ERROR - NETIZEN_CHALLENGE_EASIEST_ERROR));
+
+    if (conn.role === 'observer') {
+      const open = SIDES.find((s) => this.teams[s].length === 0);
+      if (!open) return;
+      this.claim(ws, open);
+    }
+    const botSide = SIDES.find((s) => this.teams[s].length === 0);
+    if (!botSide) return;
+
+    this.pendingChallenge = {
+      playerPid: conn.pid,
+      playerName: conn.nickname || 'Player',
+      playerWs: ws,
+      netizenPid: netizenId,
+      netizenName: row.name,
+      wager,
+    };
+    this.spawnBot(botSide, 'hard', { reactOverride: react, errorPxOverride: errPx });
+
     if (this.teams.left.length && this.teams.right.length && this.game.status === 'waiting') {
       this.game.start();
     }
@@ -1215,7 +1303,7 @@ export class Lobby {
   }
 
   // Seat a synthetic bot connection on a side and start steering its paddle.
-  private spawnBot(side: Side, level: BotLevel) {
+  private spawnBot(side: Side, level: BotLevel, overrides?: { reactOverride?: number; errorPxOverride?: number }) {
     const ws = makeBotSocket();
     const conn: Conn = {
       id: String(this.nextId++),
@@ -1236,18 +1324,43 @@ export class Lobby {
     this.conns.set(ws, conn);
     this.teams[side].push(ws);
     this.game.addPlayer(side, conn.id);
-    this.bot = { ws, side, id: conn.id, level, reactTimer: 0, aimY: COURT.h / 2 };
+    this.bot = {
+      ws, side, id: conn.id, level, reactTimer: 0, aimY: COURT.h / 2,
+      reactOverride: overrides?.reactOverride,
+      errorPxOverride: overrides?.errorPxOverride,
+    };
   }
 
   // Tear the bot out of its seat. A bot leaving never crowns a king and never leaves the
   // duel frozen on an 'over' screen — it always returns the room to a clean waiting state.
   private removeBotInternal() {
     if (!this.bot) return;
-    const { ws, side, id } = this.bot;
+    const { ws, side: botSide, id } = this.bot;
+    // Settle an active netizen challenge before tearing down the bot.
+    if (this.pendingChallenge) {
+      const c = this.pendingChallenge;
+      const winnerSide = this.game.winnerSide;
+      const humanWon = winnerSide && winnerSide !== botSide;
+      const delta = humanWon ? c.wager : -c.wager;
+      addCoins(c.playerPid, c.playerName, delta).then(() => {
+        if (this.conns.has(c.playerWs)) this.sendWallet(c.playerWs);
+      }).catch(() => {});
+      addCoins(c.netizenPid, c.netizenName, -delta).then(() => {
+        this.refreshNetWorth().catch(() => {});
+      }).catch(() => {});
+      this.tell(c.playerWs, {
+        type: 'netizenChallengeResult',
+        won: !!humanWon,
+        delta: Math.abs(delta),
+        netizenName: c.netizenName,
+      });
+      this.refreshNetWorth().catch(() => {});
+      this.pendingChallenge = null;
+    }
     this.bot = null;
     this.botOverTimer = 0;
-    this.teams[side] = this.teams[side].filter((s) => s !== ws);
-    this.game.removePlayer(side, id);
+    this.teams[botSide] = this.teams[botSide].filter((s) => s !== ws);
+    this.game.removePlayer(botSide, id);
     this.conns.delete(ws);
     this.king = null;
     if (this.game.status !== 'waiting') {
@@ -1273,10 +1386,12 @@ export class Lobby {
     if (!this.bot) return;
     if (this.game.status !== 'playing' || this.game.paused) return;
     const cfg = BOT_CFG[this.bot.level];
+    const react = this.bot.reactOverride ?? cfg.react;
+    const errPx = this.bot.errorPxOverride ?? cfg.error;
     this.bot.reactTimer -= dt;
     if (this.bot.reactTimer <= 0) {
-      this.bot.reactTimer = cfg.react;
-      this.bot.aimY = this.botAim(this.bot.side, cfg);
+      this.bot.reactTimer = react;
+      this.bot.aimY = this.botAim(this.bot.side, { ...cfg, error: errPx });
     }
     this.game.setTarget(this.bot.side, this.bot.id, this.bot.aimY);
   }
@@ -3918,6 +4033,18 @@ const BOT_CFG: Record<BotLevel, BotCfg> = {
   medium: { react: 0.14, error: 42, predict: false, idleCenter: true },
   hard: { react: 0.05, error: 10, predict: true, idleCenter: false },
 };
+
+/** Latest 5pm ET boundary in ms since epoch. */
+function latest5pmEtBoundary(): number {
+  const now = Date.now();
+  const d = new Date(now);
+  const etOffset = d.getTimezoneOffset() <= 240 ? 4 : 5; // EDT=-4, EST=-5
+  const etNow = now - etOffset * 3600000;
+  const etDayStart = Math.floor(etNow / 86400000) * 86400000;
+  const et5pm = etDayStart + 17 * 3600000;
+  // If the current time in ET is before 5pm, use yesterday's 5pm.
+  return etNow < et5pm ? et5pm - 86400000 : et5pm;
+}
 
 const BOT_NAMES: Record<BotLevel, string> = {
   easy: '🤖 Bot (easy)',

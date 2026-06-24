@@ -39,6 +39,7 @@ export interface WorldNet {
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
   openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'stocks' | 'loans'): void; // open a Casino/Bank feature
+  onNetizenClick?(netizenId: string): void; // user tapped a netizen avatar in the world
 }
 
 // --- module-level controller so feedWorld()/isWorldOpen() can reach the live overlay ---
@@ -409,6 +410,17 @@ export function startWorld(net: WorldNet): void {
   }
   function onPointerDown(e: PointerEvent) {
     if (dialogOpen || e.target !== canvas) return;
+    // Check if we tapped a netizen avatar (bot trader) to start a challenge.
+    const wx = e.clientX / SCALE + camX;
+    const wy = e.clientY / SCALE + camY;
+    for (const a of others) {
+      if ((a.id.startsWith('netizen:') || a.bot) && Math.hypot(wx - a.x, wy - a.y) <= R * 2) {
+        dialogOpen = true;
+        joyActive = false;
+        net.onNetizenClick?.(a.id);
+        return;
+      }
+    }
     joyActive = true;
     joyOX = joyCX = e.clientX;
     joyOY = joyCY = e.clientY;

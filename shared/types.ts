@@ -395,6 +395,7 @@ export interface WorldAvatar {
   y: number;
   a?: number;          // heading in radians (only meaningful while driving)
   car?: string | null; // car id being driven, or null/undefined when on foot
+  bot?: boolean;       // true for netizen (bot trader) avatars
 }
 export interface WorldMsg {
   type: 'world';
@@ -473,7 +474,9 @@ export type ClientMsg =
   | { type: 'worldEnter' } // step into the free-roam world map (start sending/receiving avatar positions)
   | { type: 'worldLeave' } // leave the world map
   | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null } // client-authoritative avatar position (world units), heading + car when driving
-  | { type: 'migrate'; oldPid: string }; // one-time: merge a UUID guest account into the signed-in Google account
+  | { type: 'migrate'; oldPid: string } // one-time: merge a UUID guest account into the signed-in Google account
+  | { type: 'netizenInfoReq'; netizenId: string } // request info about a netizen for the challenge dialog
+  | { type: 'netizenChallenge'; netizenId: string; wager: number }; // challenge a netizen to a Pong duel
 
 // --- Server -> Client ---
 
@@ -876,7 +879,9 @@ export type ServerMsg =
   | MarketMsg
   | LoanBookMsg
   | WorldMsg
-  | HouseMsg;
+  | HouseMsg
+  | NetizenInfoMsg
+  | NetizenChallengeResultMsg;
 
 // --- Economy Overhaul server → client messages ---
 
@@ -1321,3 +1326,27 @@ export interface CampaignLeaderboardMsg {
   rows: CampaignScoreRow[];
 }
 export const CAMPAIGN_STAGE_COUNT = 5;
+
+// --- Netizen Challenge (Plan 10) ---
+// Max fraction of a netizen's net worth a player can win in one challenge.
+export const NETIZEN_CHALLENGE_MAX_FRAC = 0.20;
+// Difficulty clamp: use Davis campaign hardest parameters (react=0.09, error=22).
+export const NETIZEN_CHALLENGE_HARDEST_REACT = 0.09;
+export const NETIZEN_CHALLENGE_HARDEST_ERROR = 22;
+export const NETIZEN_CHALLENGE_EASIEST_REACT = 0.30;
+export const NETIZEN_CHALLENGE_EASIEST_ERROR = 95;
+
+export interface NetizenInfoMsg {
+  type: 'netizenInfo';
+  netizenId: string;
+  netizenName: string;
+  netWorth: number;
+  maxWin: number;
+  challengedToday: boolean;
+}
+export interface NetizenChallengeResultMsg {
+  type: 'netizenChallengeResult';
+  won: boolean;
+  delta: number;
+  netizenName: string;
+}
