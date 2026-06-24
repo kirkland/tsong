@@ -770,6 +770,7 @@ const slotsHandle = initSlots({
 // Crash panel — live state streamed from server every 100ms.
 const crashHandle = initCrash({
   sendBet: (amount, autoCashout) => net.send({ type: 'crashBet', amount, ...(autoCashout ? { autoCashout } : {}) }),
+  sendCancelBet: () => net.send({ type: 'crashCancelBet' }),
   sendCashout: () => net.send({ type: 'crashCashout' }),
   playWin: playYay,
 });

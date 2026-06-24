@@ -2042,6 +2042,20 @@ export class Lobby {
       .catch((e) => console.error('crash bet failed:', e));
   }
 
+  crashCancelBet(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    if (this.crashPhase !== 'betting') return;
+    const idx = this.crashBets.findIndex((b) => b.ws === ws);
+    if (idx === -1) return;
+    const bet = this.crashBets[idx];
+    this.crashBets.splice(idx, 1);
+    this.housePay(conn.pid, conn.nickname ?? '', bet.amount)
+      .then(() => { if (this.conns.has(ws)) this.sendWallet(ws); })
+      .catch((e) => console.error('crash cancel failed:', e));
+    this.crashBroadcastAll();
+  }
+
   crashCashout(ws: WebSocket) {
     if (this.crashPhase !== 'live') return;
     const bet = this.crashBets.find((b) => b.ws === ws);

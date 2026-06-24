@@ -1407,6 +1407,12 @@
       }
       .crash-bet-btn:hover:not(:disabled) { background: #e8a8ff; }
       .crash-bet-btn:disabled { opacity: 0.4; cursor: default; }
+      .crash-cancel-btn {
+        flex: 0 0 auto; font: inherit; font-size: 12px; font-weight: 700; padding: 7px 12px;
+        border-radius: 6px; border: 1px solid #554455; background: #1a1020; color: #cc88cc; cursor: pointer;
+      }
+      .crash-cancel-btn:hover { background: #241630; }
+      .crash-cancel-btn[hidden] { display: none; }
       .crash-cashout-btn {
         flex: 1; font: inherit; font-size: 12px; font-weight: 700; padding: 7px 0;
         border-radius: 6px; border: none; background: #22cc66; color: #0a1a0a; cursor: pointer;
@@ -3376,10 +3382,11 @@
           </div>
           <div class="crash-btn-row">
             <button id="crashBetBtn" type="button" class="crash-bet-btn">Place Bet</button>
+            <button id="crashCancelBetBtn" type="button" class="crash-cancel-btn" hidden>✖ Cancel</button>
             <button id="crashCashoutBtn" type="button" class="crash-cashout-btn" hidden>💰 Cash Out</button>
           </div>
         </div>
-        <div class="crash-note">Bet during the 8s window. Multiplier rises from 1×. Cash out any time — or lose everything when it crashes. Max 3,000 🪙.</div>
+        <div class="crash-note">Bet during the 12s window. Multiplier rises from 1×. Cash out any time — or lose everything when it crashes. Max 3,000 🪙.</div>
       </div>
       <!-- Slots panel -->
       <div id="slotsPanel" hidden>

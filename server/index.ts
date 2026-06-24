@@ -357,6 +357,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'crashBet':
         if (typeof msg.amount === 'number') lobby.crashBetAction(ws, msg.amount, msg.autoCashout);
         break;
+      case 'crashCancelBet':
+        lobby.crashCancelBet(ws);
+        break;
       case 'crashCashout':
         lobby.crashCashout(ws);
         break;

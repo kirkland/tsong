@@ -471,6 +471,7 @@ export type ClientMsg =
   | { type: 'bjAction'; action: BjAction } // hit, stand, or double down
   | { type: 'crapsRoll'; pass: number; dontPass: number } // roll the dice with pass/don't-pass bets
   | { type: 'crashBet'; amount: number; autoCashout?: number } // bet on the next crash round (optional auto-cashout multiplier)
+  | { type: 'crashCancelBet' } // cancel a placed bet while the betting window is still open
   | { type: 'crashCashout' } // cash out of the current live crash round
   | { type: 'slotsSpin'; amount: number } // spin the 3-reel slot machine with this wager
   | { type: 'balanceSheetReq'; rank: number } // peek at a net-worth board player's balance sheet (by current rank)
@@ -1261,7 +1262,7 @@ export interface CrapsResultMsg {
 // --- Crash ---
 // Lobby-wide multiplayer crash: multiplier rises from 1.00× and crashes at a server-chosen
 // point. Players bet during the 8s window and cash out before the crash. House edge ≈ 3%.
-export const CRASH_BETTING_MS = 8_000;
+export const CRASH_BETTING_MS = 12_000;
 export const CRASH_TICK_MS = 100;        // live-phase tick interval (ms)
 export const CRASH_ENDED_MS = 4_000;     // how long the crash result lingers before next round
 export const CRASH_MAX_BET = 3_000;

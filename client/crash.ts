@@ -11,6 +11,7 @@ export interface CrashHandle {
 
 export function initCrash(opts: {
   sendBet: (amount: number, autoCashout?: number) => void;
+  sendCancelBet: () => void;
   sendCashout: () => void;
   playWin?: () => void;
 }): CrashHandle {
@@ -20,6 +21,7 @@ export function initCrash(opts: {
   const betInput = document.getElementById('crashBet') as HTMLInputElement;
   const autoInput = document.getElementById('crashAuto') as HTMLInputElement;
   const betBtn = document.getElementById('crashBetBtn') as HTMLButtonElement;
+  const cancelBetBtn = document.getElementById('crashCancelBetBtn') as HTMLButtonElement;
   const cashoutBtn = document.getElementById('crashCashoutBtn') as HTMLButtonElement;
   const multEl = document.getElementById('crashMult') as HTMLDivElement;
   const statusEl = document.getElementById('crashStatus') as HTMLDivElement;
@@ -114,6 +116,7 @@ export function initCrash(opts: {
       const s = Math.ceil(msg.timeLeft / 1000);
       statusEl.textContent = `Betting open — ${s}s to place bets`;
       betBtn.disabled = msg.yourBet !== null;
+      cancelBetBtn.hidden = msg.yourBet === null;
       cashoutBtn.hidden = true;
     } else if (msg.phase === 'live') {
       if (msg.yourBet !== null && msg.yourCashedAt === null) {
@@ -127,9 +130,11 @@ export function initCrash(opts: {
         cashoutBtn.hidden = true;
       }
       betBtn.disabled = true;
+      cancelBetBtn.hidden = true;
     } else {
       // ended
       cashoutBtn.hidden = true;
+      cancelBetBtn.hidden = true;
       betBtn.disabled = false;
       if (msg.yourBet !== null) {
         if (msg.yourCashedAt !== null) {
@@ -154,6 +159,7 @@ export function initCrash(opts: {
     opts.sendBet(amount, auto);
     betBtn.disabled = true;
   });
+  cancelBetBtn.addEventListener('click', () => { opts.sendCancelBet(); cancelBetBtn.hidden = true; betBtn.disabled = false; });
   cashoutBtn.addEventListener('click', () => { opts.sendCashout(); cashoutBtn.hidden = true; });
 
   btn.addEventListener('click', () => {
