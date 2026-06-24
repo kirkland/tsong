@@ -83,7 +83,7 @@ interface Enemy {
 }
 interface Grenade { x: number; y: number; vx: number; vy: number; fuse: number; }
 interface Blast { x: number; y: number; t: number; } // explosion flash effect (t counts down)
-interface GuestInput { forward: number; strafe: number; angle: number; fireSeq: number; grenadeSeq: number; }
+interface GuestInput { forward: number; strafe: number; angle: number; fireSeq: number; grenadeSeq: number; dashSeq: number; }
 
 // Networking hook into the host websocket (provided by main.ts).
 export interface DoomScore { name: string; round: number; }
@@ -115,8 +115,8 @@ const PICKUP_RADIUS = 0.6; // how close you must get to grab a drop (grid units)
 
 // Survival rounds: each round spawns more (and slightly tougher) enemies at random open
 // cells, kept clear of the players' spawn corner.
-function enemyCountFor(round: number): number { return 3 + Math.floor((round - 1) * 1.5); }
-function enemyHpFor(round: number): number { return 2 + Math.floor((round - 1) / 4); }
+function enemyCountFor(round: number): number { return Math.min(12, 3 + Math.floor((round - 1) * 1.5)); }
+function enemyHpFor(round: number): number { return 2 + Math.floor((round - 1) / 2); }
 function enemySpeedFor(round: number): number { return Math.min(1.3 + (round - 1) * 0.1, 2.6); }
 
 function randomOpenCell(players: Player[], minDist: number): { x: number; y: number } {
@@ -165,7 +165,7 @@ function spawnEnemiesForRound(round: number, players: Player[]): Enemy[] {
   return out;
 }
 function freshPlayer(x: number, y: number): Player {
-  return { x, y, angle: 0, health: 100, ammo: 60, alive: true, flash: 0, grenades: 0 };
+  return { x, y, angle: 0, health: 100, ammo: 60, alive: true, flash: 0, grenades: 1 };
 }
 
 let doomBest = 0; // best round this client has reached this session (for the menu)
@@ -273,7 +273,7 @@ export function startDoom(net: DoomNet): void {
   title.style.cssText =
     'position:absolute;top:14px;left:0;right:0;text-align:center;font:700 14px ui-monospace,monospace;' +
     'color:#9fb0d8;text-shadow:1px 1px 0 #000;pointer-events:none;';
-  title.textContent = 'WASD move · mouse/←→ turn · click shoot · space grenade · ESC quit';
+  title.textContent = 'WASD move · mouse/←→ turn · click shoot · SPACE grenade · SHIFT dash · ESC quit';
   overlay.appendChild(title);
 
   const banner = document.createElement('div');
@@ -320,7 +320,7 @@ export function startDoom(net: DoomNet): void {
     'max-width:520px;font:600 13px ui-monospace,monospace;color:#9fb0d8;line-height:1.7;text-align:center;';
   menuInfo.innerHTML =
     '<div style="color:#cdd7f5;font-weight:700;margin-bottom:4px">CONTROLS</div>' +
-    'WASD move · A/D strafe · mouse or ←/→ turn · click to shoot · <b>SPACE</b> to throw a grenade · ESC quit' +
+    'WASD move · A/D strafe · mouse or ←/→ turn · click to shoot · <b>SPACE</b> grenade · <b>SHIFT</b> dash (2-tile burst, 1.5s cooldown) · ESC quit' +
     '<div style="color:#cdd7f5;font-weight:700;margin:12px 0 4px">SURVIVE THE ROUNDS</div>' +
     'Each round spawns more (and tougher) enemies. Clear them all to advance. <b style="color:#ffd166">Coins stack each round you reach</b> (round 1 = 50, round 2 = +100, …) and pay out when your run ends. Special enemies show up on a schedule:' +
     '<div style="margin-top:8px;text-align:left;display:inline-block">' +
@@ -328,6 +328,7 @@ export function startDoom(net: DoomNet): void {
     '<div><span style="color:#f59e0b">🧍 Fritz</span> — every 3rd round. A beefy mini-boss. <b>Drops a full-health pack.</b></div>' +
     '<div><span style="color:#63e6be">🧍 Jsav</span> — every 2nd round. A beefy mini-boss. <b>Drops a grenade.</b></div>' +
     '</div>' +
+    '<div><span style="color:#ffd21e">⭐ Power Star</span> — dropped between every wave. Pick it up for <b>double-damage shots</b> until the next round starts.</div>' +
     '<div style="margin-top:10px;color:#8693b3">Low on ammo? Regular kills drop ammo when you need it. Co-op: you both share the round &amp; high-score.</div>';
   menu.append(menuTitle, menuMsg, btnRow, menuInfo);
   overlay.appendChild(menu);
@@ -368,23 +369,28 @@ export function startDoom(net: DoomNet): void {
   let scoreSubmitted = false;
   // Pickups dropped by slain enemies: ammo crates (when low), full-health packs (fritz),
   // and grenades (jsav).
-  let drops: Array<{ x: number; y: number; kind: 'ammo' | 'health' | 'grenade' }> = [];
-  let grenades: Grenade[] = []; // live thrown grenades (authority simulates them)
-  let blasts: Blast[] = []; // explosion flash effects (visual)
-  let myGrenadeSeq = 0; // counts our grenade throws (guest tells the host via input)
-  let lastGuestGrenadeSeq = 0; // host: last processed guest grenade throw
+  let drops: Array<{ x: number; y: number; kind: 'ammo' | 'health' | 'grenade' | 'powerup' }> = [];
+  let grenades: Grenade[] = [];
+  let blasts: Blast[] = [];
+  let myGrenadeSeq = 0;
+  let lastGuestGrenadeSeq = 0;
+  let powerRoundActive = false; // ⭐ double-damage power pickup, resets at next wave start
+  let dashCd = 0;    // seconds until dash is ready (0 = ready)
+  let dashFlash = 0; // brief cyan tint on dash
+  let myDashSeq = 0;
+  let lastGuestDashSeq = 0;
 
   // local input / feedback
   const keys = new Set<string>();
   let myAngle = 0;
   let muzzle = 0;
   let hurt = 0;
-  let prevHealth = 100; // detect any drop in my own health to flash red (works for the guest too)
+  let prevHealth = 100;
   let gunRecoil = 0;
   let bob = 0;
-  let myFireSeq = 0; // counts our shots (guest uses this to tell the host to fire)
-  let lastGuestFireSeq = 0; // host: last processed guest shot
-  let guestIn: GuestInput = { forward: 0, strafe: 0, angle: 0, fireSeq: 0, grenadeSeq: 0 };
+  let myFireSeq = 0;
+  let lastGuestFireSeq = 0;
+  let guestIn: GuestInput = { forward: 0, strafe: 0, angle: 0, fireSeq: 0, grenadeSeq: 0, dashSeq: 0 };
   let partnerName = ''; // co-op: the other player's name (host learns it via relay)
   const zBuffer = new Float32Array(W);
 
@@ -473,7 +479,7 @@ export function startDoom(net: DoomNet): void {
       if (dist < bestDist) { bestDist = dist; best = e; }
     }
     if (best) {
-      best.hp -= 1;
+      best.hp -= powerRoundActive ? 2 : 1;
       best.flash = 0.12;
       if (best.boss) laughSound(); // the boss cackles every time it's hit
       if (best.hp <= 0) killEnemy(best);
@@ -551,6 +557,24 @@ export function startDoom(net: DoomNet): void {
     if (!isWall(Math.floor(p.x), Math.floor(ny + Math.sign(ny - p.y) * pad))) p.y = ny;
   }
 
+  function dashPlayer(p: Player, forward: number, strafe: number) {
+    const dirX = Math.cos(p.angle), dirY = Math.sin(p.angle);
+    let ddx = dirX * forward - dirY * strafe;
+    let ddy = dirY * forward + dirX * strafe;
+    const len = Math.hypot(ddx, ddy);
+    if (len > 0.01) { ddx /= len; ddy /= len; } else { ddx = dirX; ddy = dirY; }
+    moveWithCollision(p, p.x + ddx * 2.0, p.y + ddy * 2.0);
+  }
+
+  function localDash() {
+    if (dashCd > 0 || over || !me().alive) return;
+    dashCd = 1.5;
+    dashFlash = 0.12;
+    myDashSeq++;
+    const { forward, strafe } = readIntent(0);
+    if (mode !== 'guest') dashPlayer(me(), forward || 1, strafe);
+  }
+
   // Read local keys → a movement intent (forward/strafe) for the local player.
   function readIntent(dt: number): { forward: number; strafe: number } {
     let forward = 0, strafe = 0;
@@ -576,8 +600,9 @@ export function startDoom(net: DoomNet): void {
       const d = drops[i];
       const grabber = players.find((p) => p.alive && Math.hypot(p.x - d.x, p.y - d.y) < PICKUP_RADIUS);
       if (grabber) {
-        if (d.kind === 'health') grabber.health = 100; // fritz pack = full heal
-        else if (d.kind === 'grenade') grabber.grenades += 1; // jsav drop
+        if (d.kind === 'health') grabber.health = 100;
+        else if (d.kind === 'grenade') grabber.grenades += 1;
+        else if (d.kind === 'powerup') powerRoundActive = true;
         else grabber.ammo += AMMO_PER_PICKUP;
         drops.splice(i, 1);
         if (grabber === me()) pickupSound();
@@ -629,18 +654,27 @@ export function startDoom(net: DoomNet): void {
     if (players.every((p) => !p.alive)) { over = 'dead'; return; }
     if (betweenTimer > 0) {
       betweenTimer -= dt;
-      if (betweenTimer <= 0) { enemies = spawnEnemiesForRound(round, players); betweenTimer = 0; }
+      if (betweenTimer <= 0) {
+        enemies = spawnEnemiesForRound(round, players);
+        betweenTimer = 0;
+        powerRoundActive = false;
+        drops = drops.filter((d) => d.kind !== 'powerup'); // stale power-ups vanish with the intermission
+      }
       return;
     }
     if (enemies.every((e) => !e.alive)) {
-      // Wave cleared — advance, reward survivors, and queue the next wave.
       round++;
-      betweenTimer = isBossRound(round) ? 3.2 : 2.2; // longer "get ready" before a boss
+      betweenTimer = isBossRound(round) ? 3.2 : 2.2;
       enemies = [];
       for (const p of players) {
         if (!p.alive) continue;
         p.health = Math.min(100, p.health + 20);
         p.ammo += 25;
+      }
+      // Drop 2 random bonus pickups to grab during the intermission.
+      const bonusKinds: Array<'ammo' | 'health' | 'grenade' | 'powerup'> = ['ammo', 'health', 'grenade', 'powerup'];
+      for (let b = 0; b < 2; b++) {
+        drops.push({ ...randomOpenCell(players, 2), kind: bonusKinds[Math.floor(Math.random() * bonusKinds.length)] });
       }
     }
   }
@@ -694,6 +728,10 @@ export function startDoom(net: DoomNet): void {
           lastGuestGrenadeSeq = guestIn.grenadeSeq;
           if (players[1].alive && players[1].grenades > 0) { players[1].grenades--; spawnGrenade(players[1]); }
         }
+        if (guestIn.dashSeq > lastGuestDashSeq) {
+          lastGuestDashSeq = guestIn.dashSeq;
+          if (players[1].alive) dashPlayer(players[1], guestIn.forward, guestIn.strafe);
+        }
         stepEnemies(dt);
         moveGrenades(dt);
         collectDrops();
@@ -711,7 +749,7 @@ export function startDoom(net: DoomNet): void {
           drops: drops.map((d) => ({ x: d.x, y: d.y, kind: d.kind })),
           grenades: grenades.map((g) => ({ x: g.x, y: g.y })),
           blasts: blasts.map((b) => ({ x: b.x, y: b.y, t: b.t })),
-          round, between: betweenTimer > 0, over,
+          round, between: betweenTimer > 0, over, powerRound: powerRoundActive,
         });
       }
     } else if (mode === 'guest') {
@@ -722,10 +760,12 @@ export function startDoom(net: DoomNet): void {
       netAccum += dt;
       if (netAccum >= 0.033) {
         netAccum = 0;
-        net.relay({ t: 'in', forward, strafe, angle: myAngle, fireSeq: myFireSeq, grenadeSeq: myGrenadeSeq });
+        net.relay({ t: 'in', forward, strafe, angle: myAngle, fireSeq: myFireSeq, grenadeSeq: myGrenadeSeq, dashSeq: myDashSeq });
       }
       maybeSubmitScore(); // round/over arrive via the host snapshot
     }
+    if (dashCd > 0) dashCd = Math.max(0, dashCd - dt);
+    if (dashFlash > 0) dashFlash = Math.max(0, dashFlash - dt);
     // Flash red whenever my own health drops (covers the guest, whose health arrives via
     // snapshot rather than the local sim).
     const myHp = players[selfIdx]?.health ?? prevHealth;
@@ -781,7 +821,7 @@ export function startDoom(net: DoomNet): void {
     }
 
     // Sprites: enemies, drops, thrown grenades, explosions + the partner, z-buffer occluded.
-    type Spr = { x: number; y: number; kind: 'imp' | 'marine' | 'ammo' | 'health' | 'grenade' | 'boss' | 'fritz' | 'jsav' | 'blast'; flash: boolean; t?: number };
+    type Spr = { x: number; y: number; kind: 'imp' | 'marine' | 'ammo' | 'health' | 'grenade' | 'powerup' | 'boss' | 'fritz' | 'jsav' | 'blast'; flash: boolean; t?: number };
     const sprites: Spr[] = [];
     for (const e of enemies) if (e.alive) sprites.push({ x: e.x, y: e.y, kind: e.boss ? 'boss' : e.fritz ? 'fritz' : e.jsav ? 'jsav' : 'imp', flash: e.flash > 0 });
     for (const d of drops) sprites.push({ x: d.x, y: d.y, kind: d.kind, flash: false });
@@ -808,6 +848,7 @@ export function startDoom(net: DoomNet): void {
       else if (d.s.kind === 'ammo') drawAmmo(screenX, size);
       else if (d.s.kind === 'health') drawHealth(screenX, size);
       else if (d.s.kind === 'grenade') drawGrenade(screenX, size);
+      else if (d.s.kind === 'powerup') drawPowerup(screenX, size);
       else if (d.s.kind === 'blast') drawBlast(screenX, size, d.s.t ?? 0);
       else if (d.s.kind === 'boss') drawBoss(screenX, size, d.s.flash);
       else if (d.s.kind === 'fritz') drawFritz(screenX, size, d.s.flash);
@@ -819,8 +860,6 @@ export function startDoom(net: DoomNet): void {
     drawCrosshair();
     drawBossBar();
     if (hurt > 0) {
-      // A brighter full-screen wash plus a stronger red vignette around the edges so a hit
-      // really reads as "you're taking damage".
       const a = Math.min(0.65, hurt * 1.6);
       ctx.fillStyle = `rgba(200,0,0,${a * 0.55})`;
       ctx.fillRect(0, 0, W, H);
@@ -828,6 +867,10 @@ export function startDoom(net: DoomNet): void {
       vg.addColorStop(0, 'rgba(200,0,0,0)');
       vg.addColorStop(1, `rgba(170,0,0,${a})`);
       ctx.fillStyle = vg;
+      ctx.fillRect(0, 0, W, H);
+    }
+    if (dashFlash > 0) {
+      ctx.fillStyle = `rgba(80,200,255,${dashFlash * 1.4})`;
       ctx.fillRect(0, 0, W, H);
     }
   }
@@ -978,6 +1021,29 @@ export function startDoom(net: DoomNet): void {
     ctx.strokeRect(left, top, boxW, boxH);
   }
 
+  function drawPowerup(cx: number, size: number) {
+    const s = Math.max(4, Math.min(size, H * 1.4) * 0.18);
+    const cy = H / 2 + Math.min(size, H * 1.4) * 0.05;
+    ctx.fillStyle = '#ffd21e';
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const a = (i * Math.PI) / 5 - Math.PI / 2;
+      const r = i % 2 === 0 ? s : s * 0.42;
+      const px = cx + Math.cos(a) * r, py = cy + Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#fff8c0';
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const a = (i * Math.PI) / 5 - Math.PI / 2;
+      const r = i % 2 === 0 ? s * 0.38 : s * 0.16;
+      const px = cx + Math.cos(a) * r, py = cy + Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.closePath(); ctx.fill();
+  }
+
   function drawGun() {
     const bobX = Math.sin(bob) * 6;
     const bobY = Math.abs(Math.cos(bob)) * 4 + gunRecoil * 22;
@@ -1027,7 +1093,8 @@ export function startDoom(net: DoomNet): void {
     coinsEl.textContent = `🪙 ${earned.toLocaleString()} earned`;
     const p = me();
     healthEl.textContent = `♥ ${Math.max(0, Math.round(p.health))}`;
-    ammoEl.textContent = `▮ ${p.ammo}${p.grenades > 0 ? `   💣 ${p.grenades}` : ''}`;
+    const dashTxt = dashCd > 0 ? `⚡${dashCd.toFixed(1)}s` : '⚡DASH';
+    ammoEl.textContent = `▮ ${p.ammo}${p.grenades > 0 ? `  💣 ${p.grenades}` : ''}  ${dashTxt}${powerRoundActive ? '  ⭐2×' : ''}`;
     // Co-op: show the buddy's health bar (top-left).
     const mate = partner();
     if (mate) {
@@ -1062,6 +1129,7 @@ export function startDoom(net: DoomNet): void {
     players = [freshPlayer(2.5, 2.5)];
     round = 1; kills = 0; bossCoins = 0; over = null; myAngle = 0; scoreSubmitted = false; betweenTimer = 0;
     drops = []; grenades = []; blasts = [];
+    powerRoundActive = false; dashCd = 0; dashFlash = 0; myDashSeq = 0;
     enemies = spawnEnemiesForRound(round, players);
     menu.style.display = 'none';
   }
@@ -1071,9 +1139,10 @@ export function startDoom(net: DoomNet): void {
     players = [freshPlayer(2.5, 2.5), freshPlayer(3.5, 2.5)];
     round = 1; kills = 0; bossCoins = 0; over = null; myAngle = 0; scoreSubmitted = false; betweenTimer = 0;
     drops = []; grenades = []; blasts = [];
+    powerRoundActive = false; dashCd = 0; dashFlash = 0; myDashSeq = 0;
     enemies = slot === 0 ? spawnEnemiesForRound(round, players) : [];
-    lastGuestFireSeq = 0; lastGuestGrenadeSeq = 0;
-    guestIn = { forward: 0, strafe: 0, angle: 0, fireSeq: 0, grenadeSeq: 0 };
+    lastGuestFireSeq = 0; lastGuestGrenadeSeq = 0; lastGuestDashSeq = 0;
+    guestIn = { forward: 0, strafe: 0, angle: 0, fireSeq: 0, grenadeSeq: 0, dashSeq: 0 };
     partnerName = '';
     // Tell the host our name so it can record the combined team score on game over.
     if (mode === 'guest') net.relay({ t: 'name', name: net.name() });
@@ -1111,6 +1180,7 @@ export function startDoom(net: DoomNet): void {
           angle: Number((msg as { angle: number }).angle) || 0,
           fireSeq: Number((msg as { fireSeq: number }).fireSeq) || 0,
           grenadeSeq: Number((msg as { grenadeSeq: number }).grenadeSeq) || 0,
+          dashSeq: Number((msg as { dashSeq: number }).dashSeq) || 0,
         };
       } else if (mode === 'guest' && msg.t === 'st') {
         const st = msg as unknown as {
@@ -1129,6 +1199,7 @@ export function startDoom(net: DoomNet): void {
         grenades = (st.grenades ?? []).map((g) => ({ x: g.x, y: g.y, vx: 0, vy: 0, fuse: 0 }));
         blasts = (st.blasts ?? []).map((b) => ({ x: b.x, y: b.y, t: b.t }));
         round = st.round; betweenTimer = st.between ? 1 : 0; over = st.over;
+        if ('powerRound' in st) powerRoundActive = !!(st as { powerRound?: boolean }).powerRound;
         if (over === 'dead' && players[selfIdx] && !players[selfIdx].alive) hurt = Math.max(hurt, 0.2);
       }
     },
@@ -1146,11 +1217,12 @@ export function startDoom(net: DoomNet): void {
     const k = e.key.toLowerCase();
     if (k === 'escape') { close(); return; }
     if (k === 'r' && over && mode === 'solo') { restartSolo(); return; }
-    if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'w', 'a', 's', 'd', ' '].includes(k)) {
+    if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'w', 'a', 's', 'd', ' ', 'shift'].includes(k)) {
       e.preventDefault(); e.stopImmediatePropagation();
     }
-    // Shooting is mouse-click only; space throws a grenade (once per press, not on key-repeat).
+    // Shooting is mouse-click only; space throws a grenade; shift dashes.
     if (k === ' ' && !e.repeat) throwGrenade();
+    if (k === 'shift' && !e.repeat) localDash();
     keys.add(k);
   };
   const onKeyUp = (e: KeyboardEvent) => { keys.delete(e.key.toLowerCase()); e.stopImmediatePropagation(); };
