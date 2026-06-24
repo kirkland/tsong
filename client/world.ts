@@ -30,6 +30,8 @@ import {
   WorldBuildingKind,
   CarSpec,
   carById,
+  NETIZEN_DIALOGUE,
+  STOCKS,
 } from '../shared/types';
 
 // What the world needs from the rest of the app. main.ts supplies these (see startWorld call).
@@ -1073,6 +1075,8 @@ export function startWorld(net: WorldNet): void {
     carBody: Phaser.GameObjects.Image;
     carRoof: Phaser.GameObjects.Image;
     label: Phaser.GameObjects.Text;
+    bubble: Phaser.GameObjects.Text;  // netizen speech bubble (hidden for humans)
+    bubbleNextAt: number;             // when this bot picks its next line
     // smoothed render position for remote avatars (we lerp toward the broadcast)
     rx: number; ry: number; ra: number;
   }
@@ -1510,6 +1514,15 @@ export function startWorld(net: WorldNet): void {
         const ta = a.a ?? av.ra;
         av.ra += angDelta(av.ra, ta) * Math.min(1, dt * 12);
         placeAvatar(av, av.rx, av.ry, av.ra, !!a.car, a.color, a.name);
+        // netizen speech bubbles: cycle a new line every 4–7s
+        if (a.bot) {
+          if (now >= av.bubbleNextAt) {
+            av.bubble.setText(botLine()).setVisible(true);
+            av.bubbleNextAt = now + 4000 + Math.random() * 3000;
+          }
+        } else if (av.bubble.visible) {
+          av.bubble.setVisible(false);
+        }
       }
       // drop avatars that left
       for (const [id, av] of remote) if (!seen.has(id)) { av.c.destroy(); remote.delete(id); }
@@ -1523,6 +1536,13 @@ export function startWorld(net: WorldNet): void {
     return d;
   }
 
+  // A random netizen speech line (reuses the shared NETIZEN_DIALOGUE corpus + a random ticker).
+  function botLine(): string {
+    const pool = [...NETIZEN_DIALOGUE.buyLong, ...NETIZEN_DIALOGUE.sellProfit, ...NETIZEN_DIALOGUE.idleBanter];
+    return pool[Math.floor(Math.random() * pool.length)]
+      .replace('{ticker}', STOCKS[Math.floor(Math.random() * STOCKS.length)].ticker);
+  }
+
   function makeAvatar(sc: Phaser.Scene, name: string, color: string): Av {
     const tint = hexToInt(color);
     const shadow = sc.add.image(0, R * 0.7, 'w-shadow').setScale(TEXEL);
@@ -1531,8 +1551,13 @@ export function startWorld(net: WorldNet): void {
     const carRoof = sc.add.image(0, 0, 'w-car-roof').setScale(TEXEL);
     const car = sc.add.container(0, 0, [carBody, carRoof]).setVisible(false);
     const label = sc.add.text(0, -R - 14, name, NAME_STYLE).setOrigin(0.5, 1);
-    const c = sc.add.container(selfX, selfY, [shadow, car, person, label]);
-    return { c, person, car, carBody, carRoof, label, rx: selfX, ry: selfY, ra: 0 };
+    const bubble = sc.add.text(0, -R - 32, '', {
+      fontFamily: 'system-ui, sans-serif', fontSize: '11px', color: '#ffeb3b',
+      backgroundColor: '#1b2542e6', padding: { x: 6, y: 3 }, align: 'center',
+      stroke: '#0b1020', strokeThickness: 2, resolution: 2,
+    }).setOrigin(0.5, 1).setVisible(false);
+    const c = sc.add.container(selfX, selfY, [shadow, car, person, label, bubble]);
+    return { c, person, car, carBody, carRoof, label, bubble, bubbleNextAt: 0, rx: selfX, ry: selfY, ra: 0 };
   }
 
   function placeAvatar(av: Av, x: number, y: number, a: number, drivingNow: boolean, color: string, name: string) {
@@ -1643,7 +1668,7 @@ export function startWorld(net: WorldNet): void {
   controller = {
     feed(avatars) {
       others = avatars;
-      const n = avatars.length;
+      const n = avatars.filter((a) => !a.bot).length; // netizens don't count as players
       count.textContent = n === 1 ? '1 player here' : `${n} players here`;
     },
     reenter() { net.enter(); },
