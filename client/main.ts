@@ -1717,6 +1717,9 @@ async function openFishing(): Promise<void> {
     console.error('Fishing failed to load:', e);
   }
 }
+// Arcade-menu entry: same fishing overlay you get from walking into the pond in the World.
+const fishingBtn = document.getElementById('fishingBtn') as HTMLButtonElement;
+fishingBtn.addEventListener('click', () => { void openFishing(); });
 
 // --- Beta "World": a free-roam 2D overworld you walk around as a named avatar, seeing everyone
 // else who's currently in the world. It's the future main UI; for now its buildings deep-link
