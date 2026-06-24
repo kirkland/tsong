@@ -464,6 +464,7 @@ export type ClientMsg =
   | { type: 'crashCashout' } // cash out of the current live crash round
   | { type: 'slotsSpin'; amount: number } // spin the 3-reel slot machine with this wager
   | { type: 'balanceSheetReq'; rank: number } // peek at a net-worth board player's balance sheet (by current rank)
+  | { type: 'eloProfileReq'; rank: number } // peek at a leaderboard player's Elo profile (by current rank)
   | { type: 'lootBoxOpen' } // open a loot box: spend coins, roll a weighted prize (common cosmetic / House coins / capped-rare exclusive)
   | { type: 'marketList'; instanceId: number; ask: number } // list an owned exclusive instance on the marketplace for `ask` coins
   | { type: 'marketCancel'; listingId: number } // cancel one of your own listings
@@ -776,6 +777,21 @@ export interface BalanceSheetMsg {
   net: number;                      // coins + stockValue − loan
 }
 
+// Server → client: ELO profile for a player whose Elo-board row was clicked.
+// The server resolves the rank → pid internally and returns the public stats,
+// plus a head-to-head summary against the #1 player (if not yourself).
+export interface EloProfileMsg {
+  type: 'eloProfile';
+  rank: number;
+  name: string;
+  wins: number;
+  losses: number;
+  elo: number;
+  winPct: number;          // 0–100
+  lastPlayed: number | null; // epoch ms, null when never played
+  rival: { name: string; wins: number; losses: number } | null;
+}
+
 export interface ChatLine {
   from: string;
   text: string;
@@ -876,7 +892,8 @@ export type ServerMsg =
   | MarketMsg
   | LoanBookMsg
   | WorldMsg
-  | HouseMsg;
+  | HouseMsg
+  | EloProfileMsg;
 
 // --- Economy Overhaul server → client messages ---
 

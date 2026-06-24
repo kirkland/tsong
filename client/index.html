@@ -2145,6 +2145,63 @@
         font-size: 12px;
         padding: 4px 0;
       }
+      /* Elo profile modal — opened by clicking a leaderboard row. Reuses the same card
+         shape as the balance-sheet modal (#balanceCard) via the shared #balanceCard id
+         pattern, but lives in its own overlay so both modals can coexist. */
+      #eloModal {
+        position: fixed;
+        inset: 0;
+        z-index: 130;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(4, 7, 16, 0.72);
+      }
+      #eloModal[hidden] {
+        display: none;
+      }
+      #eloCard {
+        width: min(92vw, 380px);
+        max-height: 80vh;
+        overflow-y: auto;
+        background: #0e1424;
+        border: 1px solid #3a3320;
+        border-radius: 12px;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
+        padding: 16px 18px 18px;
+      }
+      #eloHead {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        color: #4ade80;
+        margin-bottom: 12px;
+      }
+      #eloName {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #eloClose {
+        font: inherit;
+        font-size: 15px;
+        line-height: 1;
+        flex: 0 0 auto;
+        padding: 4px 8px;
+        border-radius: 6px;
+        border: 1px solid #2a3550;
+        background: #0e1424;
+        color: #9fb0d8;
+        cursor: pointer;
+      }
+      #eloClose:hover {
+        background: #18203a;
+        color: #e8eefc;
+      }
       /* Small gold "tip" button shown next to a player's name on the boards. */
       .tip-btn {
         font: inherit;
@@ -3735,6 +3792,15 @@
           <button id="balanceClose" type="button" aria-label="Close">✕</button>
         </div>
         <div id="balanceBody"></div>
+      </div>
+    </div>
+    <div id="eloModal" hidden>
+      <div id="eloCard" role="dialog" aria-modal="true" aria-label="ELO profile">
+        <div id="eloHead">
+          <span id="eloName">ELO Profile</span>
+          <button id="eloClose" type="button" aria-label="Close">✕</button>
+        </div>
+        <div id="eloBody"></div>
       </div>
     </div>
     <div id="tipModal" hidden>

@@ -24,6 +24,7 @@ import {
   LeaderboardRow,
   NetWorthRow,
   BalanceSheetMsg,
+  EloProfileMsg,
   Role,
   Side,
   StateMsg,
@@ -108,6 +109,11 @@ const balanceCard = document.getElementById('balanceCard') as HTMLDivElement;
 const balanceClose = document.getElementById('balanceClose') as HTMLButtonElement;
 const balanceName = document.getElementById('balanceName') as HTMLSpanElement;
 const balanceBody = document.getElementById('balanceBody') as HTMLDivElement;
+const eloModal = document.getElementById('eloModal') as HTMLDivElement;
+const eloCard = document.getElementById('eloCard') as HTMLDivElement;
+const eloClose = document.getElementById('eloClose') as HTMLButtonElement;
+const eloNameEl = document.getElementById('eloName') as HTMLSpanElement;
+const eloBody = document.getElementById('eloBody') as HTMLDivElement;
 const tipModal = document.getElementById('tipModal') as HTMLDivElement;
 const tipCard = document.getElementById('tipCard') as HTMLDivElement;
 const tipClose = document.getElementById('tipClose') as HTMLButtonElement;
@@ -588,6 +594,8 @@ const net = connect(
       renderNetWorth(msg.rows);
     } else if (msg.type === 'balanceSheet') {
       showBalanceSheet(msg);
+    } else if (msg.type === 'eloProfile') {
+      showEloProfile(msg);
     } else if (msg.type === 'chat') {
       msg.lines.forEach(addChatLine);
       // Notify via tab title for a single new message while the tab is backgrounded.
@@ -4436,7 +4444,7 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
     .map((r, i) => {
       const t = r.title ? COSMETICS.find((c) => c.id === r.title) : undefined;
       const tag = t ? `<span class="lbtitle${r.title === 'opstask' ? ' rainbow' : ''}">${escapeHtml(t.name)}</span>` : '';
-      return `<li><span class="rank">${i + 1}</span><span class="lbname">${escapeHtml(
+      return `<li data-rank="${i}"><span class="rank">${i + 1}</span><span class="lbname">${escapeHtml(
         r.name,
       )}${tag}${bountyBadgeHtml(r.name)}</span><span class="pct">${r.elo ?? 500}</span>${rowActionsHtml(r.name)}</li>`;
     })
@@ -4509,12 +4517,16 @@ netWorthEl.addEventListener('click', (e) => {
   if (Number.isInteger(rank)) net.send({ type: 'balanceSheetReq', rank });
 });
 
-// Leaderboard rows aren't otherwise clickable — only their tip/bounty buttons do anything.
+// Click a leaderboard row to ask the server for that player's Elo profile.
 leaderboardEl.addEventListener('click', (e) => {
   const bountyBtn = (e.target as HTMLElement).closest('.bounty-btn') as HTMLElement | null;
   if (bountyBtn) { openBountyDialog(bountyBtn.dataset.bountyName ?? ''); return; }
   const tipBtn = (e.target as HTMLElement).closest('.tip-btn') as HTMLElement | null;
-  if (tipBtn) openTipDialog(tipBtn.dataset.tipName ?? '');
+  if (tipBtn) { openTipDialog(tipBtn.dataset.tipName ?? ''); return; }
+  const li = (e.target as HTMLElement).closest('li[data-rank]') as HTMLElement | null;
+  if (!li) return;
+  const rank = Number(li.dataset.rank);
+  if (Number.isInteger(rank)) net.send({ type: 'eloProfileReq', rank });
 });
 
 // Render and open the balance-sheet modal from a server response.
@@ -4562,7 +4574,55 @@ balanceModal.addEventListener('click', (e) => {
 });
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !balanceModal.hidden) closeBalanceSheet();
+  if (e.key === 'Escape' && !eloModal.hidden) closeEloProfile();
 });
+
+// --- Elo profile modal (opened by clicking a leaderboard row) ---
+
+function showEloProfile(msg: EloProfileMsg) {
+  eloNameEl.textContent = `🏓 ${msg.name}`;
+  const total = msg.wins + msg.losses;
+  const lines: string[] = [];
+  lines.push(
+    `<div class="bs-row"><span class="bs-label">Wins</span><span class="bs-val">${msg.wins}</span></div>`,
+    `<div class="bs-row"><span class="bs-label">Losses</span><span class="bs-val">${msg.losses}</span></div>`,
+    `<div class="bs-row"><span class="bs-label">Games</span><span class="bs-val">${total}</span></div>`,
+    `<div class="bs-row"><span class="bs-label">Elo</span><span class="bs-val">${msg.elo}</span></div>`,
+    `<div class="bs-row"><span class="bs-label">Win rate</span><span class="bs-val">${msg.winPct}%</span></div>`,
+    `<div class="bs-row"><span class="bs-label">Last played</span><span class="bs-val">${fmtLastPlayed(msg.lastPlayed)}</span></div>`,
+  );
+  if (msg.rival) {
+    const r = msg.rival;
+    lines.push(`<hr class="bs-divider" />`);
+    lines.push(`<div class="bs-section">Head‑to‑head vs ${escapeHtml(r.name)}</div>`);
+    lines.push(
+      `<div class="bs-row"><span class="bs-label">Record</span><span class="bs-val">${r.wins}–${r.losses}</span></div>`,
+    );
+  }
+  eloBody.innerHTML = lines.join('');
+  eloModal.hidden = false;
+}
+function closeEloProfile() {
+  eloModal.hidden = true;
+}
+eloClose.addEventListener('click', closeEloProfile);
+eloModal.addEventListener('click', (e) => {
+  if (!eloCard.contains(e.target as Node)) closeEloProfile();
+});
+
+/** Format an epoch-ms timestamp as a friendly relative string (e.g. "3h ago"). */
+function fmtLastPlayed(ts: number | null): string {
+  if (!ts) return 'Never';
+  const diff = Date.now() - ts;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(ts).toLocaleDateString();
+}
 
 // --- tip / bounty dialog (opened by the 🪙 tip or 🎯 bounty button on the boards) ---
 // One modal serves both: `dialogMode` decides the labels and which message gets sent on submit.

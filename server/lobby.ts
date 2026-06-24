@@ -72,7 +72,7 @@ import {
   MarketListingView,
   WorldAvatar,
 } from '../shared/types';
-import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
+import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS,
@@ -232,6 +232,7 @@ export class Lobby {
   private leaderboard: LeaderboardRow[] = []; // cached standings, pushed to clients
   private netWorth: NetWorthRow[] = []; // cached net-worth board (coins + holdings − debt)
   private netWorthPids: string[] = []; // pid per net-worth row (server-only; resolves a rank → player)
+  private eloPids: string[] = []; // pid per Elo leaderboard row (server-only; resolves a rank → player)
   private chatLog: ChatLine[] = []; // recent chat, replayed to new connections
   private nextId = 1;
 
@@ -3353,7 +3354,9 @@ export class Lobby {
 
   /** Re-query the standings, cache them, and push to every connected client. */
   async refreshLeaderboard() {
-    this.leaderboard = await getLeaderboard();
+    const board = await getEloBoard();
+    this.leaderboard = board.map(({ pid: _p, ...row }) => row);
+    this.eloPids = board.map((r) => r.pid);
     const data = JSON.stringify({ type: 'leaderboard', rows: this.leaderboard });
     for (const ws of this.conns.keys()) {
       if (ws.readyState === ws.OPEN) ws.send(data);
@@ -3398,6 +3401,30 @@ export class Lobby {
     this.tell(ws, {
       type: 'balanceSheet', rank, name,
       coins: wallet.coins, holdings: rows, stockValue, loan: owed, net,
+    });
+  }
+
+  /** Build and send the Elo profile for the player at `rank` on the current leaderboard:
+   *  record, ELO, win%, last played, plus head-to-head against the #1 player (if not yourself). */
+  async sendEloProfile(ws: WebSocket, rank: number) {
+    if (!Number.isInteger(rank) || rank < 0 || rank >= this.eloPids.length) return;
+    const pid = this.eloPids[rank];
+    const profile = await getPlayerProfile(pid);
+    if (!profile) return;
+    let rival: { name: string; wins: number; losses: number } | null = null;
+    if (rank !== 0 && this.eloPids.length > 1) {
+      rival = await getRival(pid, this.eloPids[0]);
+    }
+    this.tell(ws, {
+      type: 'eloProfile',
+      rank,
+      name: profile.name,
+      wins: profile.wins,
+      losses: profile.losses,
+      elo: profile.elo,
+      winPct: profile.winPct,
+      lastPlayed: profile.lastPlayed,
+      rival,
     });
   }
 
