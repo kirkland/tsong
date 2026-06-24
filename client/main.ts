@@ -1687,30 +1687,6 @@ worldBtn.addEventListener('click', async () => {
 // --- Arcade & Casino nav dropdowns: group the minigame / economy buttons into menus to keep
 // the toolbar tidy. The grouped buttons keep their own IDs and click handlers; these toggles
 // just show/hide the popover and close it once an item is picked. ---
-const newsBtn = document.getElementById('newsBtn') as HTMLButtonElement;
-const newsPanel = document.getElementById('newsPanel') as HTMLDivElement;
-const newsBody = document.getElementById('newsBody') as HTMLDivElement;
-let newsFeed: NewsItem[] = [];
-newsBtn.addEventListener('click', () => {
-  const open = newsPanel.hidden;
-  newsPanel.hidden = !open;
-  newsBtn.setAttribute('aria-expanded', String(open));
-  if (open) { if (!newsFeed.length) net.send({ type: 'newsReq' }); renderNews(); }
-});
-document.addEventListener('click', (e) => {
-  if (newsPanel.hidden) return;
-  const t = e.target as Node;
-  if (t instanceof Node && !t.isConnected) return;
-  if (!newsPanel.contains(t) && !newsBtn.contains(t)) { newsPanel.hidden = true; newsBtn.setAttribute('aria-expanded', 'false'); }
-});
-function renderNews() {
-  if (!newsFeed.length) { newsBody.innerHTML = '<div class="news-item" style="color:#5a647e">No news yet. Check back during market hours (M–F 9am–5pm ET).</div>'; return; }
-  newsBody.innerHTML = newsFeed.map((item) => {
-    const d = new Date(item.ts);
-    const time = d.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' });
-    return `<div class="news-item"><span class="news-time">${time}</span><span class="news-headline">${escapeHtml(item.headline)}</span></div>`;
-  }).join('');
-}
 const arcadeBtn = document.getElementById('arcadeBtn') as HTMLButtonElement;
 const arcadePanel = document.getElementById('arcadePanel') as HTMLDivElement;
 const casinoBtn = document.getElementById('casinoBtn') as HTMLButtonElement;
