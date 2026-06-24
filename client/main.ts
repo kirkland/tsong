@@ -334,6 +334,7 @@ const FATALITIES = [
 const COMBO_KEYS = new Set(FATALITIES.flatMap((f) => f.seq as readonly string[]));
 const COMBO_WINDOW_MS = 1500; // presses older than this are forgotten
 let fatalityDone = false; // already fired (or skipped) for the current 'over' screen
+let pongWinCounted = false; // counted this 'over' screen toward the World "win 10 games" objective
 
 // "FINISH HIM!" announcer sting, played once when a match ends with fatalities armed.
 const finishSound = new Audio('/finish-him.mp3');
@@ -4301,6 +4302,19 @@ function updateUI() {
 
   // Once the match is no longer over, re-arm the finishing move for next time.
   if (state.status !== 'over') fatalityDone = false;
+
+  // Count match wins toward the World "win 10 tsong games" objective (once per 'over' screen).
+  // The World panel reads this counter and claims the reward when you next visit town.
+  if (state.status !== 'over') pongWinCounted = false;
+  else if (!pongWinCounted) {
+    pongWinCounted = true;
+    if (state.winner && myName && state.winner === myName) {
+      try {
+        const k = 'tsong.world.pongWins';
+        localStorage.setItem(k, String((parseInt(localStorage.getItem(k) || '0', 10) || 0) + 1));
+      } catch { /* ignore */ }
+    }
+  }
 
   if (state.status === 'waiting') statusEl.textContent = 'Waiting for players…';
   else if (state.status === 'over') {

@@ -792,7 +792,7 @@ export class Lobby {
 
   // World "weekly objective" rewards. Granted once per player per quest (tracked in-memory for the
   // server's lifetime), paid from the House like the DOOM bounty.
-  private static QUEST_REWARDS: Record<string, number> = { 'find-waldo': 400 };
+  private static QUEST_REWARDS: Record<string, number> = { 'find-waldo': 400, 'give-banana': 400, 'win-ten': 1000 };
   private claimedQuests = new Set<string>(); // `${pid}:${quest}`
   questClaim(ws: WebSocket, quest: string) {
     const conn = this.conns.get(ws);

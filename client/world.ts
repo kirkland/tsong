@@ -171,23 +171,32 @@ const HEDGE_RING: { x: number; y: number }[] = (() => {
 // --- townsfolk: client-side NPCs that wander near a home spot and have a few lines. A couple of
 // them ask a question you can actually answer (two reply choices, each with its own comeback).
 // Purely local flavour — never networked, so they cost the server nothing. ---
-interface NpcChoice { label: string; reply: string }
+interface NpcChoice { label: string; reply: string; claim?: string } // claim → completes an objective
+type HairStyle = 'short' | 'long' | 'bun' | 'spiky' | 'pony' | 'bald';
 interface NpcDef {
   id: string;
   name: string;
-  shirt: number;        // body/shirt tint (ignored for the minion)
-  hair: number;         // hair tint (ignored for the minion)
-  kind?: 'minion';      // special one-off sprite; default is the little-person
-  glasses?: boolean;    // overlay specs on the little-person head
+  shirt: number;        // shirt/dress tint (ignored for the minion)
+  hair: number;         // hair tint
+  skin?: number;        // skin tone tint (default a mid tone)
+  hairStyle?: HairStyle;// default 'short'
+  body?: 'pants' | 'dress'; // silhouette, default 'pants'
+  hat?: 'cap' | 'sun';  // optional headwear
+  hatColor?: number;    // cap tint (sun hat is fixed straw)
+  kind?: 'minion' | 'kenny'; // special one-off sprite; default is the little-person
+  glasses?: boolean;    // overlay specs
   stripes?: boolean;    // red/white striped shirt instead of a flat tinted one (Waldo!)
   x: number; y: number; // home anchor (NPC roams around this)
   roam: number;         // wander radius, world units
   lines: string[];      // flavour one-liners, cycled each chat
   ask?: { q: string; choices: [NpcChoice, NpcChoice] }; // optional: a question you can answer
 }
+// Skin-tone palette to spread across the cast.
+const SKINS = [0xf6d3b0, 0xeebb91, 0xd29b6e, 0xb87a4f, 0x8d5a34] as const;
 const NPCS: NpcDef[] = [
   {
-    id: 'pip', name: 'Pip', shirt: 0xe05a6d, hair: 0x4a2f1a, x: 1470, y: 1170, roam: 120,
+    id: 'pip', name: 'Pip', shirt: 0xe05a6d, hair: 0x4a2f1a, skin: SKINS[0], hairStyle: 'spiky',
+    x: 1470, y: 1170, roam: 120,
     lines: [
       'I walked around the fountain. Twice!',
       'Did you know the ball has eyes? It watches you sleep.',
@@ -195,7 +204,8 @@ const NPCS: NpcDef[] = [
     ],
   },
   {
-    id: 'vito', name: 'Coach Vito', shirt: 0x3a78c2, hair: 0x2a2a2a, x: 1710, y: 720, roam: 90,
+    id: 'vito', name: 'Coach Vito', shirt: 0x3a78c2, hair: 0x2a2a2a, skin: SKINS[3],
+    hat: 'cap', hatColor: 0x14306a, x: 1710, y: 720, roam: 90,
     lines: ["Back in my day the ball was square. We liked it that way."],
     ask: {
       q: 'Want the secret to winning at tsong?',
@@ -206,7 +216,8 @@ const NPCS: NpcDef[] = [
     },
   },
   {
-    id: 'lou', name: 'Lucky Lou', shirt: 0x2faf6a, hair: 0x6b4a1f, x: 770, y: 1380, roam: 110,
+    id: 'lou', name: 'Lucky Lou', shirt: 0x2faf6a, hair: 0x6b4a1f, skin: SKINS[2], hairStyle: 'bald',
+    x: 770, y: 1380, roam: 110,
     lines: [
       "I'm up BIG. Don't tell my wife.",
       'The house always wins. But not today. ...Probably today.',
@@ -214,7 +225,8 @@ const NPCS: NpcDef[] = [
     ],
   },
   {
-    id: 'edna', name: 'Banker Edna', shirt: 0x8a5cf6, hair: 0x9a9aa8, x: 2430, y: 1380, roam: 90,
+    id: 'edna', name: 'Banker Edna', shirt: 0x8a5cf6, hair: 0x9a9aa8, skin: SKINS[1],
+    body: 'dress', hairStyle: 'bun', glasses: true, x: 2430, y: 1380, roam: 90,
     lines: ['A penny saved is a penny we hold for you. Indefinitely.'],
     ask: {
       q: 'Care to make an investment today?',
@@ -225,7 +237,8 @@ const NPCS: NpcDef[] = [
     },
   },
   {
-    id: 'drift', name: 'Drift', shirt: 0xff8a3d, hair: 0x1f1f1f, x: 1150, y: 1255, roam: 130,
+    id: 'drift', name: 'Drift', shirt: 0xff8a3d, hair: 0x1f1f1f, skin: SKINS[2], hairStyle: 'spiky',
+    glasses: true, x: 1150, y: 1255, roam: 130,
     lines: [
       'Nice car. Mine corners better, though.',
       'I drifted the whole plaza once. No witnesses, but it happened.',
@@ -233,15 +246,59 @@ const NPCS: NpcDef[] = [
     ],
   },
   {
-    id: 'mush', name: 'Mush', shirt: 0xc24a8a, hair: 0x3a6b2f, x: 2120, y: 820, roam: 120,
+    id: 'mush', name: 'Mush', shirt: 0xc24a8a, hair: 0x3a6b2f, skin: SKINS[1], hairStyle: 'long',
+    x: 2120, y: 820, roam: 120,
     lines: [
       "Don't eat the red mushrooms. ...Or do. I'm not your dad.",
       'I talk to the trees. They sway back. We have an understanding.',
     ],
   },
+  // --- the women of tsong ---
+  {
+    id: 'rosa', name: 'Rosa', shirt: 0xff8fb3, hair: 0x5a3416, skin: SKINS[2],
+    body: 'dress', hairStyle: 'long', hat: 'sun', x: 880, y: 760, roam: 130,
+    lines: [
+      'I planted every flower you see. You\'re welcome.',
+      'A little water, a little sun, a lot of yelling at the weeds.',
+      'If you pick a flower I WILL know.',
+    ],
+  },
+  {
+    id: 'mei', name: 'Mei', shirt: 0x46c2b0, hair: 0x161616, skin: SKINS[1],
+    body: 'dress', hairStyle: 'bun', x: 2380, y: 980, roam: 110,
+    lines: [
+      'I beat the casino once. Spent it all on shoes. No regrets.',
+      'Wanna race? ...No? Coward.',
+    ],
+    ask: {
+      q: 'Heads or tails — call it.',
+      choices: [
+        { label: 'Heads', reply: 'Tails. Ha! ...Best of one, I always say.' },
+        { label: 'Tails', reply: 'Heads! The house — I mean, *I* — always win.' },
+      ],
+    },
+  },
+  {
+    id: 'gwen', name: 'Gwen', shirt: 0x9b6cff, hair: 0xc9a23a, skin: SKINS[0],
+    body: 'dress', hairStyle: 'pony', glasses: true, x: 1380, y: 1520, roam: 120,
+    lines: [
+      'I read every changelog. Yes, ALL of them. Someone has to.',
+      'There\'s a hidden mode, you know. I won\'t say where. ...Octagon.',
+      'Beta this, beta that. When does it become a gamma?',
+    ],
+  },
+  {
+    id: 'opal', name: 'Granny Opal', shirt: 0x7a8cc0, hair: 0xdedede, skin: SKINS[4],
+    body: 'dress', hairStyle: 'bun', glasses: true, x: 2000, y: 1500, roam: 70,
+    lines: [
+      'Back in MY day we had ONE paddle and we were grateful.',
+      'You kids and your "drift physics." In my day we just crashed.',
+      'Come closer, dear. ...No, too close. There.',
+    ],
+  },
   {
     id: 'waldo', name: 'Waldo', shirt: 0xd23b3b, hair: 0x3a2a1a, glasses: true, stripes: true,
-    x: 470, y: 470, roam: 150, // tucked into the far NW corner — properly hard to find
+    hat: 'cap', hatColor: 0xd23b3b, x: 470, y: 470, roam: 150, // far NW corner — properly hard to find
     lines: [
       'You FOUND me?! Took you long enough.',
       'Red-and-white stripes in a town full of grass. Worst camouflage ever.',
@@ -253,12 +310,28 @@ const NPCS: NpcDef[] = [
   {
     // Matt's custom guy: a distinguished older gent (grey hair, specs, teal cardigan) who never
     // strays from the fountain — the office nag reminding you there's work to do.
-    id: 'burt', name: 'Burt', shirt: 0x2e8b8b, hair: 0xb9bcc4, glasses: true, x: 1600, y: 1235, roam: 34,
+    id: 'burt', name: 'Burt', shirt: 0x2e8b8b, hair: 0xb9bcc4, skin: SKINS[1], glasses: true,
+    x: 1600, y: 1235, roam: 34,
     lines: [
       "Don't you have to get back to work?",
       "Aren't you on Ops-Task Rotation this week?",
       'Those Tech Services guys sure like to slack off!',
     ],
+  },
+  {
+    id: 'kenny', name: 'Kenny', shirt: 0x2bbfae, hair: 0x171717, kind: 'kenny', x: 1500, y: 720, roam: 70,
+    lines: [
+      'Strike zone? Never met her.',
+      'Wheels just mean a lower center of gravity. Pure science. Pure offense.',
+      'Put me on the mound in the 9th. I close it out. Every time.',
+    ],
+    ask: {
+      q: 'Pickin\' teams — am I your first overall?',
+      choices: [
+        { label: 'First pick', reply: 'Smart. I don\'t lose. Grab a glove.' },
+        { label: 'Maybe later', reply: 'Your funeral. Enjoy the L from the dugout.' },
+      ],
+    },
   },
   {
     id: 'kevin', name: 'Kevin', shirt: 0xfdd835, hair: 0x111111, kind: 'minion', x: 1880, y: 1240, roam: 140,
@@ -271,7 +344,7 @@ const NPCS: NpcDef[] = [
     ask: {
       q: 'BA-NA-NA?!',
       choices: [
-        { label: '🍌 Banana!', reply: 'BANANAAAAAA! *happy minion noises*' },
+        { label: '🍌 Banana!', reply: 'BANANAAAAAA! *happy minion noises*', claim: 'give-banana' },
         { label: 'No thanks', reply: '...Poopaye. (he looks devastated)' },
       ],
     },
@@ -343,18 +416,9 @@ export function startWorld(net: WorldNet): void {
   gameHost.style.cssText = 'position:absolute;inset:0;';
   overlay.appendChild(gameHost);
 
-  // --- atmosphere: a warm sun tint + a soft vignette, blended over the canvas. This is the single
-  // biggest "it looks lit, not flat" win and costs nothing (two non-interactive CSS layers). ---
-  const sunTint = document.createElement('div');
-  sunTint.style.cssText =
-    'position:absolute;inset:0;z-index:1;pointer-events:none;mix-blend-mode:soft-light;' +
-    'background:radial-gradient(120% 90% at 64% 24%, rgba(255,236,170,.85), rgba(255,180,120,.25) 55%, rgba(40,60,120,.35) 100%);';
-  overlay.appendChild(sunTint);
-  const vignette = document.createElement('div');
-  vignette.style.cssText =
-    'position:absolute;inset:0;z-index:1;pointer-events:none;' +
-    'background:radial-gradient(120% 100% at 50% 46%, rgba(0,0,0,0) 52%, rgba(8,12,30,.42) 100%);';
-  overlay.appendChild(vignette);
+  // (Atmosphere — the warm sun tint + vignette — is rendered on the GPU inside the Phaser scene
+  // now, not as DOM blend layers. That keeps it fast and consistent across Chromium/Firefox/Safari
+  // instead of each engine compositing a soft-light DOM layer over the WebGL canvas differently.)
 
   // Top bar: title + live player count + drive toggle + exit.
   const topbar = document.createElement('div');
@@ -599,9 +663,15 @@ export function startWorld(net: WorldNet): void {
   }
 
   // --- weekly objectives (top-left panel + reward toast) ---
-  interface Objective { id: string; label: string; reward: number; done: boolean }
+  // `progress` (optional) returns "[done, total]" for objectives that count toward a goal (e.g.
+  // winning 10 games) so the panel can show "(7/10)".
+  interface Objective { id: string; label: string; reward: number; done: boolean; progress?: () => [number, number] }
+  const PONG_WINS_KEY = 'tsong.world.pongWins'; // bumped by main.ts on each match win
+  const pongWins = () => { try { return parseInt(localStorage.getItem(PONG_WINS_KEY) || '0', 10) || 0; } catch { return 0; } };
   const objectives: Objective[] = [
     { id: 'find-waldo', label: 'Find Waldo', reward: 400, done: false },
+    { id: 'give-banana', label: 'Give Kevin a banana', reward: 400, done: false },
+    { id: 'win-ten', label: 'Win 10 tsong games', reward: 1000, done: false, progress: () => [Math.min(pongWins(), 10), 10] },
   ];
   const questKey = (id: string) => `tsong.world.quest.${id}`;
   for (const o of objectives) { try { o.done = localStorage.getItem(questKey(o.id)) === '1'; } catch { /* ignore */ } }
@@ -615,13 +685,21 @@ export function startWorld(net: WorldNet): void {
       box.textContent = o.done ? '☑' : '☐';
       box.style.cssText = `font-size:15px;color:${o.done ? '#6bd06b' : '#9fb0d8'};`;
       const lab = document.createElement('span');
-      lab.textContent = o.label;
+      const prog = !o.done && o.progress ? ` (${o.progress()[0]}/${o.progress()[1]})` : '';
+      lab.textContent = o.label + prog;
       if (o.done) lab.style.textDecoration = 'line-through';
       const rew = document.createElement('span');
       rew.textContent = `+${o.reward}🪙`;
       rew.style.cssText = 'margin-left:auto;font-size:11px;opacity:.7;';
       row.append(box, lab, rew);
       objList.appendChild(row);
+    }
+  }
+  // Auto-complete any progress objective whose goal is already met (e.g. you hit 10 wins, then
+  // wandered back into town). Called on open.
+  function checkProgressObjectives() {
+    for (const o of objectives) {
+      if (!o.done && o.progress) { const [d, t] = o.progress(); if (d >= t) completeObjective(o.id); }
     }
   }
   let toastTimer = 0;
@@ -642,6 +720,7 @@ export function startWorld(net: WorldNet): void {
     showToast(`✅ Objective complete!<br><b>${o.label}</b> &nbsp;<span style="color:#ffe14d">+${o.reward} 🪙</span>`);
   }
   renderObjectives();
+  checkProgressObjectives(); // claim "win 10 games" if you finished it before coming back to town
 
   // --- NPC dialogue (Pokémon-style bottom box: typewriter line(s), then optional reply choices) ---
   function startTalk(n: LiveNpc) {
@@ -682,6 +761,7 @@ export function startWorld(net: WorldNet): void {
         b.onclick = (ev) => {
           ev.stopPropagation();
           selectBlip();
+          if (ch.claim) completeObjective(ch.claim); // e.g. actually giving Kevin a banana
           npcChoices.style.display = 'none';
           pages.push({ text: ch.reply }); // append the comeback as the next page
           pageI++; showPage();
@@ -1028,26 +1108,45 @@ export function startWorld(net: WorldNet): void {
       g.generateTexture(`w-fountain-${f}`, 24, 24);
     }
 
-    // --- NPC townsperson: three stacked 12×16 layers (all same canvas so they align in a
-    // container). 'head' is fixed skin + eyes + dark legs; 'hair' and 'body' are white so they can
-    // be tinted per-NPC. Distinct little-person silhouette vs the ball-players. ---
-    const SKIN = 0xf1c9a0, SKIN_D = 0xd9a87e;
-    g.clear(); // head + face + legs/feet (untinted)
-    px(4, 2, 5, 5, SKIN); px(4, 6, 5, 1, SKIN_D);   // head
-    px(5, 4, 1, 1, 0x2a1f1a); px(7, 4, 1, 1, 0x2a1f1a); // eyes
-    px(4, 13, 2, 3, 0x39424f); px(7, 13, 2, 3, 0x39424f); // legs
-    px(4, 15, 2, 1, 0x222831); px(7, 15, 2, 1, 0x222831); // shoes
-    g.generateTexture('w-npc-head', 12, 16);
-    g.clear(); // hair cap (tint = hair color)
-    px(4, 1, 5, 2, 0xffffff); px(3, 2, 1, 2, 0xffffff); px(8, 2, 1, 2, 0xffffff);
-    g.generateTexture('w-npc-hair', 12, 16);
-    g.clear(); // round specs across the eyes (overlay; Waldo & friends)
-    px(4, 4, 2, 2, 0x20242c); px(7, 4, 2, 2, 0x20242c); px(6, 4, 1, 1, 0x20242c); // two rims + bridge
-    px(5, 5, 1, 1, 0xbfe0ff); px(8, 5, 1, 1, 0xbfe0ff);                            // glint
+    // --- NPC townsperson: stacked 12×16 layers (all on the same canvas so they align in a
+    // container). Skin / hair / clothes are white so each can be TINTED per-NPC; mix-and-match of
+    // skin tone + hairstyle + body (pants/dress) + hat + glasses gives lots of distinct people. ---
+    g.clear(); // skin: head + neck (tint = skin tone)
+    px(4, 2, 5, 5, 0xffffff); px(5, 6, 3, 1, 0xffffff);
+    g.generateTexture('w-npc-skin', 12, 16);
+    g.clear(); // face: eyes (fixed)
+    px(5, 4, 1, 1, 0x2a1f1a); px(7, 4, 1, 1, 0x2a1f1a);
+    g.generateTexture('w-npc-face', 12, 16);
+    g.clear(); // legs + shoes (fixed; pants bodies)
+    px(4, 13, 2, 3, 0x39424f); px(7, 13, 2, 3, 0x39424f);
+    px(4, 15, 2, 1, 0x222831); px(7, 15, 2, 1, 0x222831);
+    g.generateTexture('w-npc-legs', 12, 16);
+
+    // hairstyles (all white → tint = hair color)
+    const hair = (key: string, draw: () => void) => { g.clear(); draw(); g.generateTexture(key, 12, 16); };
+    hair('w-hair-short', () => { px(4, 1, 5, 2, 0xffffff); px(3, 2, 1, 2, 0xffffff); px(8, 2, 1, 2, 0xffffff); });
+    hair('w-hair-long', () => { px(3, 1, 6, 2, 0xffffff); px(3, 2, 1, 6, 0xffffff); px(8, 2, 1, 6, 0xffffff); });
+    hair('w-hair-bun', () => { px(4, 1, 5, 2, 0xffffff); px(3, 2, 1, 2, 0xffffff); px(8, 2, 1, 2, 0xffffff); px(5, 0, 3, 1, 0xffffff); });
+    hair('w-hair-spiky', () => { px(4, 1, 5, 2, 0xffffff); px(4, 0, 1, 1, 0xffffff); px(6, 0, 1, 1, 0xffffff); px(8, 0, 1, 1, 0xffffff); px(3, 2, 1, 2, 0xffffff); px(8, 2, 1, 2, 0xffffff); });
+    hair('w-hair-pony', () => { px(4, 1, 5, 2, 0xffffff); px(3, 2, 1, 2, 0xffffff); px(8, 2, 1, 2, 0xffffff); px(9, 2, 1, 6, 0xffffff); });
+
+    g.clear(); // round specs across the eyes (overlay)
+    px(4, 4, 2, 2, 0x20242c); px(7, 4, 2, 2, 0x20242c); px(6, 4, 1, 1, 0x20242c);
+    px(5, 5, 1, 1, 0xbfe0ff); px(8, 5, 1, 1, 0xbfe0ff);
     g.generateTexture('w-npc-glasses', 12, 16);
-    g.clear(); // torso + arms (tint = shirt color)
+    g.clear(); // torso + arms (tint = shirt) — pants silhouette
     px(3, 7, 6, 6, 0xffffff); px(2, 8, 1, 4, 0xffffff); px(9, 8, 1, 4, 0xffffff);
     g.generateTexture('w-npc-body', 12, 16);
+    g.clear(); // dress: bodice + flared skirt to the hem (tint = dress) — female silhouette
+    px(3, 7, 6, 4, 0xffffff); px(2, 8, 1, 3, 0xffffff); px(9, 8, 1, 3, 0xffffff);
+    px(3, 11, 6, 1, 0xffffff); px(2, 12, 8, 2, 0xffffff); px(1, 14, 10, 2, 0xffffff);
+    g.generateTexture('w-npc-dress', 12, 16);
+    g.clear(); // baseball cap (tint = hat color)
+    px(3, 1, 6, 2, 0xffffff); px(2, 2, 7, 1, 0xffffff); px(2, 3, 4, 1, 0xffffff);
+    g.generateTexture('w-npc-hat-cap', 12, 16);
+    g.clear(); // straw sun hat (fixed)
+    px(1, 3, 10, 1, 0xe2c074); px(2, 2, 8, 1, 0xead08a); px(4, 0, 4, 2, 0xd9b15f);
+    g.generateTexture('w-npc-hat-sun', 12, 16);
     g.clear(); // Waldo's red/white striped torso (baked, not tinted)
     const RED = 0xd23b3b, WHT = 0xf4f4f4;
     for (let yy = 0; yy < 6; yy++) px(3, 7 + yy, 6, 1, yy % 2 === 0 ? RED : WHT);
@@ -1067,6 +1166,32 @@ export function startWorld(net: WorldNet): void {
     px(4, 2, 1, 1, 0x111111); px(6, 1, 1, 1, 0x111111); px(8, 2, 1, 1, 0x111111); // hair tufts
     px(4, 15, 2, 1, 0x1a1a1a); px(7, 15, 2, 1, 0x1a1a1a);              // feet
     g.generateTexture('w-minion', 12, 16);
+
+    // --- Kenny: a wheelchair ballplayer (cap, glasses, bat over the shoulder). Original 16×16
+    // pixel tribute. ---
+    const TIRE = 0x2a2a2a, RIM = 0x9097a0, HUB = 0xcdd2da, FRAME = 0xb8bcc4;
+    const JER = 0x2bbfae, JER_D = 0x1f8f83, PANTS = 0x2f4a6b, CAPC = 0xd23b3b, CAP_D = 0xa8202c;
+    const SKN = 0xf1c9a0, BAT = 0xc8a05a, BAT_D = 0x9c7a36;
+    g.clear();
+    // wheels (big side wheels) + hubs
+    const wheel = (cx: number) => {
+      px(cx - 2, 9, 5, 6, TIRE); px(cx - 3, 10, 7, 4, TIRE);  // tyre
+      px(cx - 1, 10, 3, 4, RIM); px(cx, 11, 1, 2, HUB);        // rim + hub
+    };
+    wheel(3); wheel(12);
+    // chair frame: seat, backrest, push handle, footplate
+    px(5, 9, 6, 2, FRAME); px(5, 5, 1, 5, FRAME); px(5, 4, 2, 1, FRAME); px(6, 13, 4, 1, FRAME);
+    // seated body (jersey) + lap/shorts + resting feet
+    px(6, 7, 5, 4, JER); px(6, 10, 1, 1, JER_D); px(5, 8, 1, 2, JER); px(10, 8, 1, 2, JER);
+    px(6, 11, 5, 2, PANTS); px(6, 13, 1, 1, 0x222222); px(9, 13, 1, 1, 0x222222);
+    // head + cap + glasses
+    px(6, 2, 5, 4, SKN); px(6, 3, 1, 1, 0x171717); px(10, 4, 1, 2, 0x171717); // hair edges
+    px(5, 1, 6, 2, CAPC); px(5, 2, 6, 1, CAP_D); px(11, 2, 2, 1, CAPC);        // cap + forward brim
+    px(7, 4, 2, 1, 0x20242c); px(9, 4, 2, 1, 0x20242c); px(6, 4, 1, 1, 0x20242c); // glasses
+    // baseball bat held over the right shoulder, angled up-right
+    px(10, 6, 1, 1, BAT_D); px(11, 5, 1, 1, BAT); px(12, 4, 1, 1, BAT);
+    px(13, 3, 2, 1, BAT); px(13, 1, 2, 2, 0xd8b56a); px(12, 2, 1, 1, BAT);
+    g.generateTexture('w-kenny', 16, 16);
 
     // --- soft round shadow (12×6 texels) ---
     g.clear();
@@ -1324,6 +1449,29 @@ export function startWorld(net: WorldNet): void {
       self = makeAvatar(sc, net.name() || 'you', net.color());
       sc.cameras.main.startFollow(self.c, true, 0.18, 0.18);
       sc.cameras.main.roundPixels = true;
+
+      // --- atmosphere on the GPU: a warm Multiply tint + a radial vignette, both pinned to the
+      // camera (scrollFactor 0). Replaces the old DOM soft-light layers — same lit look, but it
+      // renders identically and fast on every browser instead of compositing DOM over the canvas. ---
+      const VIG = 'w-vignette';
+      if (!sc.textures.exists(VIG)) {
+        const sz = 256;
+        const ct = sc.textures.createCanvas(VIG, sz, sz);
+        if (ct) {
+          const c2 = ct.getContext();
+          const grd = c2.createRadialGradient(sz / 2, sz * 0.46, sz * 0.28, sz / 2, sz * 0.46, sz * 0.64);
+          grd.addColorStop(0, 'rgba(0,0,0,0)');
+          grd.addColorStop(1, 'rgba(8,12,30,0.42)');
+          c2.fillStyle = grd; c2.fillRect(0, 0, sz, sz);
+          ct.refresh();
+        }
+      }
+      const warm = sc.add.rectangle(0, 0, 10, 10, 0xffe2b0).setOrigin(0).setScrollFactor(0)
+        .setBlendMode(Phaser.BlendModes.MULTIPLY).setAlpha(0.34).setDepth(50000);
+      const vig = sc.add.image(0, 0, VIG).setOrigin(0).setScrollFactor(0).setDepth(50001);
+      const fitAtmo = (w: number, h: number) => { warm.setSize(w, h); vig.setDisplaySize(w, h); };
+      fitAtmo(sc.scale.width, sc.scale.height);
+      sc.scale.on('resize', (gs: Phaser.Structs.Size) => fitAtmo(gs.width, gs.height));
     },
 
     update(this: Phaser.Scene, time: number, delta: number) {
@@ -1407,14 +1555,25 @@ export function startWorld(net: WorldNet): void {
     let parts: Phaser.GameObjects.Image[];
     if (def.kind === 'minion') {
       parts = [sc.add.image(0, 0, 'w-minion').setScale(TEXEL * 1.15).setOrigin(0.5, 0.95)];
+    } else if (def.kind === 'kenny') {
+      parts = [sc.add.image(0, 0, 'w-kenny').setScale(TEXEL * 1.2).setOrigin(0.5, 0.95)];
     } else {
-      const bodyKey = def.stripes ? 'w-npc-body-stripe' : 'w-npc-body';
-      const body = sc.add.image(0, 0, bodyKey).setScale(TEXEL).setOrigin(0.5, 0.95);
-      if (!def.stripes) body.setTint(def.shirt);
-      const head = sc.add.image(0, 0, 'w-npc-head').setScale(TEXEL).setOrigin(0.5, 0.95);
-      const hair = sc.add.image(0, 0, 'w-npc-hair').setScale(TEXEL).setOrigin(0.5, 0.95).setTint(def.hair);
-      parts = [body, head, hair];
-      if (def.glasses) parts.push(sc.add.image(0, 0, 'w-npc-glasses').setScale(TEXEL).setOrigin(0.5, 0.95));
+      const layer = (key: string, tint?: number) => {
+        const im = sc.add.image(0, 0, key).setScale(TEXEL).setOrigin(0.5, 0.95);
+        if (tint !== undefined) im.setTint(tint);
+        return im;
+      };
+      parts = [];
+      const dress = def.body === 'dress';
+      if (!dress) parts.push(layer('w-npc-legs'));                          // pants legs (under skirt-less bodies)
+      parts.push(def.stripes ? layer('w-npc-body-stripe') : layer(dress ? 'w-npc-dress' : 'w-npc-body', def.shirt));
+      parts.push(layer('w-npc-skin', def.skin ?? SKINS[1]));                // head
+      parts.push(layer('w-npc-face'));                                      // eyes
+      const style = def.hairStyle ?? 'short';
+      if (style !== 'bald') parts.push(layer(`w-hair-${style}`, def.hair)); // hair
+      if (def.hat === 'cap') parts.push(layer('w-npc-hat-cap', def.hatColor ?? 0xd23b3b));
+      else if (def.hat === 'sun') parts.push(layer('w-npc-hat-sun'));
+      if (def.glasses) parts.push(layer('w-npc-glasses'));
     }
     const bob = sc.add.container(0, 0, parts);
     const label = sc.add.text(0, -R - 26, def.name, NAME_STYLE).setOrigin(0.5, 1);
