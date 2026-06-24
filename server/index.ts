@@ -164,6 +164,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'reaction':
         if (typeof msg.emoji === 'string') lobby.reaction(ws, msg.emoji);
         break;
+      case 'summonPlane':
+        lobby.summonPlane(ws);
+        break;
       case 'mode':
         lobby.setMode(ws, {
           closing: typeof msg.closing === 'boolean' ? msg.closing : undefined,

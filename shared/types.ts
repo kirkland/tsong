@@ -480,6 +480,7 @@ export type ClientMsg =
   | { type: 'paddle'; y: number; x?: number } // desired paddle center Y (and optional roam inset X), in court units
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
+  | { type: 'summonPlane' } // secret: summon the banner-plane for the whole room to see
   | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean } // toggle game modes
   | { type: 'fatality'; move: string } // winner-only, validated server-side
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
@@ -914,6 +915,13 @@ export interface PingMsg {
   from: string;
 }
 
+// Someone summoned the banner-plane via the secret word; the whole room flies it. `idx`
+// selects which "your airplane has arrived" banner so everyone sees the same one.
+export interface FlyoverMsg {
+  type: 'flyover';
+  idx: number;
+}
+
 // A snapshot of the authoritative loop's health, sampled over a rolling window. The
 // loop must hold 60 Hz; if a tick's work overruns its budget the whole room lags at
 // once, so these numbers are the server-side smoking gun. Ride along on the rtt echo.
@@ -951,6 +959,7 @@ export type ServerMsg =
   | ReactionMsg
   | AnnounceMsg
   | PingMsg
+  | FlyoverMsg
   | RttMsg
   | DoomLobbyMsg
   | DoomRelayMsg

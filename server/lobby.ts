@@ -514,6 +514,21 @@ export class Lobby {
     }
   }
 
+  // Secret: a player typed the magic word — fly the banner-plane for the whole room. The
+  // banner choice (idx) is picked here so everyone sees the same arrival message.
+  summonPlane(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return; // must have joined
+    const now = Date.now();
+    if (now - conn.lastChatAt < 3000) return; // gentle throttle: no plane spam
+    conn.lastChatAt = now;
+
+    const data = JSON.stringify({ type: 'flyover', idx: Math.floor(Math.random() * 1000) });
+    for (const sock of this.conns.keys()) {
+      if (sock.readyState === sock.OPEN) sock.send(data);
+    }
+  }
+
   // End the current win streak (a reign ended by something other than a win).
   private endStreak() {
     this.streakPid = null;

@@ -163,8 +163,10 @@ function playCrashSound() {
   } catch {}
 }
 
-/** Build the (hidden) overlay + styles. Call once at startup. */
-export function initFlyover() {
+/** Build the (hidden) overlay + styles. Call once at startup.
+ * `onSummon` fires when a player types the secret word — main.ts relays it to the server,
+ * which broadcasts a `flyover` message so the whole room flies the same plane. */
+export function initFlyover(onSummon?: () => void) {
   if (root) return;
 
   const style = document.createElement('style');
@@ -252,8 +254,9 @@ export function initFlyover() {
   // Manual triggers for testing / mischief.
   (window as Window & { flyover?: (m?: Mode) => void }).flyover = (m: Mode = 'nocrash') => launch(m);
 
-  // 🤫 Secret: type the magic word anywhere (outside a text field) and a plane comes
-  // for you on demand — banner and all. The eternal answer to "will my airplane ever come?"
+  // 🤫 Secret: type the magic word anywhere (outside a text field) to summon a plane for
+  // the whole room — the eternal answer to "will my airplane ever come?" Relayed via the
+  // server so everyone sees it, not just you.
   const SECRET = 'airplane';
   let typed = '';
   window.addEventListener('keydown', (e) => {
@@ -264,9 +267,16 @@ export function initFlyover() {
     typed = (typed + e.key.toLowerCase()).slice(-SECRET.length);
     if (typed === SECRET) {
       typed = '';
-      if (!flying) launch('nocrash', SUMMON_MESSAGES[Math.floor(Math.random() * SUMMON_MESSAGES.length)]);
+      onSummon?.();
     }
   });
+}
+
+/** Fly a summoned plane carrying a special "your airplane has arrived" banner. Triggered by
+ * the server's `flyover` broadcast so the whole room sees the same one (forced nocrash). */
+export function flySummoned(idx: number) {
+  if (flying) return;
+  launch('nocrash', SUMMON_MESSAGES[((idx % SUMMON_MESSAGES.length) + SUMMON_MESSAGES.length) % SUMMON_MESSAGES.length]);
 }
 
 /** Begin the random flyover schedule. Safe to call more than once (idempotent). */

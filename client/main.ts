@@ -8,7 +8,7 @@ import { initCraps } from './craps';
 import { initCrash } from './crash';
 import { initSlots } from './slots';
 import { initAds, revealAds } from './ads';
-import { initFlyover, startFlyovers } from './flyover';
+import { initFlyover, startFlyovers, flySummoned } from './flyover';
 import { draw, drawLegendIcon, setBlasterAim, drawCosmeticPreview } from './render';
 import {
   COURT,
@@ -650,6 +650,8 @@ const net = connect(
       showAnnouncement(msg.text, { toast: msg.toast });
     } else if (msg.type === 'ping') {
       onPing(msg.from);
+    } else if (msg.type === 'flyover') {
+      flySummoned(msg.idx); // someone summoned the plane with the secret word — everyone flies it
     } else if (msg.type === 'rtt') {
       if (msg.tick) serverTick = msg.tick;
       recordRtt(performance.now() - msg.t);
@@ -1706,7 +1708,7 @@ initAds({
   typedie: () => typeDieBtn.click(),
   shop: () => shopBtn.click(),
 });
-initFlyover(); // the occasional banner-plane flyover (and rarer crash)
+initFlyover(() => net.send({ type: 'summonPlane' })); // the occasional banner-plane flyover (and rarer crash); secret word summons one room-wide
 
 // --- Campaign ("Davis Collects", lazy-loaded, self-contained). Runs its own 2D Pong + VN;
 // the server is used only to persist arcade scores (campaignScore / campaignLeaderboard). ---
