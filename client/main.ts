@@ -44,6 +44,7 @@ import {
   MarketItemView,
   LoanBookMsg,
   NewsItem,
+  minBet,
 } from '../shared/types';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -1875,12 +1876,15 @@ function syncBetSection() {
   const canBet = !!state && state.status === 'playing' && !state.poly && myRole === 'observer' && !state.bot;
   betSection.hidden = !canBet;
   if (!canBet || !state) return;
-  // The stake is a positive whole number. We deliberately DON'T cap it to the wallet here —
-  // typing more than you have surfaces the "insufficient funds" hint below rather than being
-  // silently swallowed. Don't clobber the field while it's being edited.
-  betAmount = Math.max(1, Math.floor(betAmount) || 1);
+  // The stake is a positive whole number no lower than the wealth-scaled minimum.
+  // We deliberately DON'T cap it to the wallet here — typing more than you have surfaces the
+  // "insufficient funds" hint below rather than being silently swallowed. Don't clobber the
+  // field while it's being edited.
+  const min = minBet(wallet.coins);
+  betAmount = Math.max(min, Math.floor(betAmount) || min);
   if (document.activeElement !== betAmountEl) betAmountEl.value = String(betAmount);
   betAmountEl.max = String(Math.max(1, wallet.coins));
+  betAmountEl.min = String(min);
   // Side labels + live odds on the buttons.
   const odds = state.odds; // { left, right } | null
   betLeftName.textContent = state.paddles.left.name ?? 'Left';
@@ -1910,12 +1914,13 @@ function syncBetSection() {
 
 const betLeftBtn = document.getElementById('betLeft') as HTMLButtonElement;
 const betRightBtn = document.getElementById('betRight') as HTMLButtonElement;
-document.getElementById('betMinus')!.addEventListener('click', () => { betAmount = Math.max(1, betAmount - 1); syncBetSection(); });
-document.getElementById('betPlus')!.addEventListener('click', () => { betAmount = Math.min(Math.max(1, wallet.coins), betAmount + 1); syncBetSection(); });
+document.getElementById('betMinus')!.addEventListener('click', () => { betAmount = Math.max(minBet(wallet.coins), betAmount - 1); syncBetSection(); });
+document.getElementById('betPlus')!.addEventListener('click', () => { betAmount = Math.min(Math.max(minBet(wallet.coins), wallet.coins), betAmount + 1); syncBetSection(); });
 // Free-type a specific stake. Parse to a positive integer; empty/garbage falls back to 1.
 betAmountEl.addEventListener('input', () => {
   const v = parseInt(betAmountEl.value, 10);
-  betAmount = Number.isFinite(v) ? Math.max(1, v) : 1;
+  const min = minBet(wallet.coins);
+  betAmount = Number.isFinite(v) ? Math.max(min, v) : min;
   syncBetSection();
 });
 // Normalize the field on blur (e.g. snap a half-typed value back to its parsed number).
@@ -3560,12 +3565,10 @@ function isMobileView(): boolean {
 function resetMobileLayout() {
   const stage = document.getElementById('stage') as HTMLDivElement;
   const chat = document.getElementById('chat') as HTMLDivElement;
-  const lb = document.getElementById('leaderboard') as HTMLDivElement;
-  const nw = document.getElementById('netWorth') as HTMLDivElement;
+  const boards = document.getElementById('boards') as HTMLDivElement;
   stage.style.display = '';
   chat.style.display = '';
-  lb.style.display = '';
-  nw.style.display = '';
+  boards.style.display = '';
 }
 for (const btn of mobileTabs.querySelectorAll<HTMLButtonElement>('.mob-tab')) {
   btn.addEventListener('click', () => {
@@ -3575,23 +3578,19 @@ for (const btn of mobileTabs.querySelectorAll<HTMLButtonElement>('.mob-tab')) {
     const tab = btn.dataset.tab;
     const stage = document.getElementById('stage') as HTMLDivElement;
     const chat = document.getElementById('chat') as HTMLDivElement;
-    const lb = document.getElementById('leaderboard') as HTMLDivElement;
-    const nw = document.getElementById('netWorth') as HTMLDivElement;
+    const boards = document.getElementById('boards') as HTMLDivElement;
     if (tab === 'play') {
       stage.style.display = '';
       chat.style.display = 'none';
-      lb.style.display = '';
-      nw.style.display = '';
+      boards.style.display = '';
     } else if (tab === 'chat') {
       stage.style.display = 'none';
       chat.style.display = '';
-      lb.style.display = 'none';
-      nw.style.display = 'none';
+      boards.style.display = 'none';
     } else if (tab === 'leaderboard') {
       stage.style.display = 'none';
       chat.style.display = 'none';
-      lb.style.display = '';
-      nw.style.display = '';
+      boards.style.display = '';
     }
   });
 }
@@ -3602,12 +3601,10 @@ window.addEventListener('resize', () => {
 if (isMobileView()) {
   const stage = document.getElementById('stage') as HTMLDivElement;
   const chatEl = document.getElementById('chat') as HTMLDivElement;
-  const lb = document.getElementById('leaderboard') as HTMLDivElement;
-  const nw = document.getElementById('netWorth') as HTMLDivElement;
+  const boards = document.getElementById('boards') as HTMLDivElement;
   stage.style.display = '';
   chatEl.style.display = 'none';
-  lb.style.display = '';
-  nw.style.display = '';
+  boards.style.display = '';
 }
 
 // --- touch controls for paddle ---
@@ -4464,7 +4461,7 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
 
   const items = rows
     .map((r, i) => {
-      const t = r.title ? COSMETICS.find((c) => c.id === r.title) : undefined;
+      const t = r.title ? (COSMETICS.find((c) => c.id === r.title) ?? EXCLUSIVES.find((e) => e.id === r.title)) : undefined;
       const tag = t ? `<span class="lbtitle${r.title === 'opstask' ? ' rainbow' : ''}">${escapeHtml(t.name)}</span>` : '';
       return `<li><span class="rank">${i + 1}</span><span class="lbname">${escapeHtml(
         r.name,
@@ -4514,7 +4511,7 @@ function renderNetWorth(rows: NetWorthRow[]) {
       const crown = i === 0 ? '👑 ' : '';
       const broke = r.net < 0 ? ' broke' : '';
       const debt = r.loan > 0 ? `<span class="debt"> 🔻${r.loan}</span>` : '';
-      const t = r.title ? COSMETICS.find((c) => c.id === r.title) : undefined;
+      const t = r.title ? (COSMETICS.find((c) => c.id === r.title) ?? EXCLUSIVES.find((e) => e.id === r.title)) : undefined;
       const tag = t ? `<span class="lbtitle${r.title === 'opstask' ? ' rainbow' : ''}">${escapeHtml(t.name)}</span>` : '';
       return `<li data-rank="${i}" title="View balance sheet"><span class="rank">${i + 1}</span><span class="lbname">${crown}${escapeHtml(
         r.name,
