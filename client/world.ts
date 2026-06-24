@@ -47,6 +47,7 @@ export interface WorldNet {
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
   openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'stocks' | 'loans'): void; // open a Casino/Bank feature
   claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
+  onNetizenClick?(netizenId: string): void; // user tapped a netizen avatar in the world (→ challenge)
 }
 
 // --- module-level controller so feedWorld()/isWorldOpen() can reach the live overlay ---
@@ -869,6 +870,14 @@ export function startWorld(net: WorldNet): void {
     unlockAudio();
     // Ignore drags that start on a chrome button or while a modal/dialogue is up.
     if (dialogOpen || talkOpen || (e.target instanceof Element && e.target.closest('button'))) return;
+    // Tapped a netizen avatar? → fire the challenge hook instead of starting to walk.
+    if (mainCam && net.onNetizenClick) {
+      const wp = mainCam.getWorldPoint(e.clientX, e.clientY);
+      for (const a of others) {
+        if (!(a.bot || a.id.startsWith('netizen:'))) continue;
+        if (Math.hypot(wp.x - a.x, wp.y - a.y) <= R * 2.5) { net.onNetizenClick(a.id); return; }
+      }
+    }
     joyActive = true;
     joyOX = joyCX = e.clientX;
     joyOY = joyCY = e.clientY;
@@ -1358,6 +1367,7 @@ export function startWorld(net: WorldNet): void {
 
   // --- the Phaser scene ---
   let game: Phaser.Game | null = null;
+  let mainCam: Phaser.Cameras.Scene2D.Camera | null = null; // for screen→world hit-testing on tap
 
   const scene = {
     preload(this: Phaser.Scene) {
@@ -1374,6 +1384,7 @@ export function startWorld(net: WorldNet): void {
       sc.cameras.main.setBounds(0, 0, WORLD.w, WORLD.h);
       sc.cameras.main.setZoom(ZOOM);
       sc.cameras.main.setBackgroundColor(0x3f7a3a);
+      mainCam = sc.cameras.main;
 
       // --- ground tilemap: grass + grass-bordered dirt (roads + plaza), from Kenney tiles ---
       const COLS = Math.ceil(WORLD.w / TILE), ROWS = Math.ceil(WORLD.h / TILE);
