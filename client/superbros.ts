@@ -133,7 +133,7 @@ export function startSuperBros(net: SuperBrosNet): void {
   title.style.cssText =
     'position:absolute;top:8px;left:0;right:0;text-align:center;font:700 13px ui-monospace,monospace;' +
     'color:#9fb0d8;text-shadow:1px 1px 0 #000;pointer-events:none;';
-  title.textContent = '←/→ move · W/Space jump (×2 + recovery) · ↓ fast-fall/drop · J/click melee · K projectile · ESC quit';
+  title.textContent = '←/→ move · W/Space jump (×2 + recovery) · ↓ fast-fall/drop · J/click melee (↑/↓ for up-tilt/spike) · K projectile · ESC quit';
   overlay.appendChild(title);
 
   // --- menu / lobby / character-select layer ---
@@ -390,6 +390,7 @@ export function startSuperBros(net: SuperBrosNet): void {
     hitstun: number;         // seconds locked out of control after a hit
     meleeCd: number;         // melee cooldown / active timer
     meleeActive: number;     // >0 while the melee hitbox is live this frame
+    meleeDir: number;        // direction of the live swing: -1 up, 0 forward, 1 down (for render)
     projCd: number;
     flash: number;
     attackSeq: number;       // edge counter for melee (per slot, host applies)
@@ -398,7 +399,7 @@ export function startSuperBros(net: SuperBrosNet): void {
   }
   interface NetInput {
     move: number; down: boolean; fastFall: boolean; facing: number;
-    attackSeq: number; projSeq: number; jumpSeq: number;
+    attackSeq: number; projSeq: number; jumpSeq: number; atkDir: number;
   }
 
   let stage: Stage = STAGES[0];
@@ -418,6 +419,7 @@ export function startSuperBros(net: SuperBrosNet): void {
   const keys = new Set<string>();
   let myFacing = 1;
   let myAttackSeq = 0, myProjSeq = 0, myJumpSeq = 0;
+  let myAttackDir = 0; // direction locked at the moment of a melee press: -1 up, 0 fwd, 1 down
 
   const me = (): FighterState | undefined => fighters.find((p) => p.slot === selfSlot);
 
@@ -547,23 +549,49 @@ export function startSuperBros(net: SuperBrosNet): void {
   }
 
   // Host: resolve a melee swing by `p` (called when its attackSeq edges).
-  function doMelee(p: FighterState) {
+  // `dir`: -1 = up-tilt (launches straight up), 1 = down (spike in air / sweep on ground),
+  //         0 = neutral forward attack (the original).
+  function doMelee(p: FighterState, dir = 0) {
     if (p.respawnIn !== 0 || p.eliminated || p.meleeCd > 0 || p.hitstun > 0) return;
     const f = fighterById(p.fid);
     p.meleeCd = 0.18 + f.melee.startup * 0.03; // startup-derived cooldown
     p.meleeActive = 0.12;
-    blip(300, 0.06, 'square', 0.1);
+    p.meleeDir = dir;
+    blip(dir === -1 ? 440 : dir === 1 ? 220 : 300, 0.06, 'square', 0.1);
     const reach = 26 + f.melee.range * 14;
-    const hx = p.x + p.facing * (bodyW(f) / 2 + reach / 2);
-    const hy = p.y - bodyH(f) / 2;
-    const hw = reach, hh = bodyH(f) * 0.9;
+    const bw = bodyW(f), bh = bodyH(f);
+    // Hitbox + knockback vector vary by direction. (p.y is the fighter's feet.)
+    let hx: number, hy: number, hw: number, hh: number;
+    let kx: number, ky: number, dmgMult: number, baseExtra: number;
+    if (dir === -1) {
+      // UP: hitbox over the head, big vertical launch — the go-to vertical KO / juggle starter.
+      hw = bw * 1.2; hh = reach;
+      hx = p.x; hy = p.y - bh - reach / 2;
+      kx = p.facing * 0.25; ky = -1; dmgMult = 1.7; baseExtra = 60;
+    } else if (dir === 1 && !p.onGround) {
+      // DOWN (aerial): SPIKE — drives opponents straight down. Risky off-stage kill move.
+      hw = bw * 1.1; hh = reach;
+      hx = p.x; hy = p.y + reach / 2;
+      kx = p.facing * 0.2; ky = 1; dmgMult = 1.6; baseExtra = 120;
+    } else if (dir === 1) {
+      // DOWN (grounded): low SWEEP — hits both sides, low pop. Good for crowd control / edge poke.
+      hw = bw + reach * 1.4; hh = bh * 0.5;
+      hx = p.x; hy = p.y - bh * 0.2;
+      kx = 0; ky = -0.6; dmgMult = 1.5; baseExtra = 0;
+    } else {
+      // FORWARD (neutral): the original swing.
+      hw = reach; hh = bh * 0.9;
+      hx = p.x + p.facing * (bw / 2 + reach / 2); hy = p.y - bh / 2;
+      kx = p.facing; ky = -0.5; dmgMult = 1.8; baseExtra = 0;
+    }
     for (const e of fighters) {
       if (e === p || e.eliminated || e.respawnIn !== 0 || e.invuln > 0) continue;
       const ef = fighterById(e.fid);
       const ex = e.x, ey = e.y - bodyH(ef) / 2;
       if (Math.abs(ex - hx) < hw / 2 + bodyW(ef) / 2 && Math.abs(ey - hy) < hh / 2 + bodyH(ef) / 2) {
-        const dmg = f.melee.dmg * 1.8;
-        applyKnockback(e, p, dmg, p.facing, -0.5);
+        // grounded down-sweep that hits a foe on the wrong side should knock them away, not through us
+        const knockX = (dir === 1 && p.onGround) ? Math.sign(ex - p.x) || p.facing : kx;
+        applyKnockback(e, p, f.melee.dmg * dmgMult, knockX, ky, baseExtra);
       }
     }
   }
@@ -667,7 +695,12 @@ export function startSuperBros(net: SuperBrosNet): void {
 
   // Local action edges (host applies immediately for its own; guests bump counters for relay).
   function localJump() { const p = me(); if (over || !p || p.eliminated || p.respawnIn > 0) return; myJumpSeq++; if (isHost) doJump(p); }
-  function localMelee() { const p = me(); if (over || !p || p.eliminated || p.respawnIn > 0) return; myAttackSeq++; if (isHost) doMelee(p); }
+  function meleeDir(): number {
+    if (keys.has('arrowup') || keys.has('w')) return -1;   // up tilt
+    if (keys.has('arrowdown') || keys.has('s')) return 1;  // down tilt / spike
+    return 0;                                               // neutral / forward
+  }
+  function localMelee() { const p = me(); if (over || !p || p.eliminated || p.respawnIn > 0) return; myAttackDir = meleeDir(); myAttackSeq++; if (isHost) doMelee(p, myAttackDir); }
   function localProj() { const p = me(); if (over || !p || p.eliminated || p.respawnIn > 0) return; myProjSeq++; if (isHost) doProj(p); }
 
   // =====================================================================================
@@ -712,7 +745,7 @@ export function startSuperBros(net: SuperBrosNet): void {
             const gi = guestInputs.get(p.slot);
             if (gi) {
               if (gi.jumpSeq > (lastJump.get(p.slot) ?? 0)) { lastJump.set(p.slot, gi.jumpSeq); doJump(p); }
-              if (gi.attackSeq > (lastAttack.get(p.slot) ?? 0)) { lastAttack.set(p.slot, gi.attackSeq); doMelee(p); }
+              if (gi.attackSeq > (lastAttack.get(p.slot) ?? 0)) { lastAttack.set(p.slot, gi.attackSeq); doMelee(p, gi.atkDir || 0); }
               if (gi.projSeq > (lastProj.get(p.slot) ?? 0)) { lastProj.set(p.slot, gi.projSeq); doProj(p); }
             }
           }
@@ -735,7 +768,7 @@ export function startSuperBros(net: SuperBrosNet): void {
             s: p.slot, n: p.name, fid: p.fid,
             x: Math.round(p.x), y: Math.round(p.y), fc: p.facing,
             d: Math.round(p.dmg), st: p.stocks, iv: p.invuln > 0 ? 1 : 0,
-            el: p.eliminated ? 1 : 0, rs: p.respawnIn, ma: p.meleeActive > 0 ? 1 : 0, fl: p.flash > 0 ? 1 : 0,
+            el: p.eliminated ? 1 : 0, rs: p.respawnIn, ma: p.meleeActive > 0 ? 1 : 0, md: p.meleeDir, fl: p.flash > 0 ? 1 : 0,
           })),
           p: projs.map((pr) => ({ x: Math.round(pr.x), y: Math.round(pr.y), k: pr.kind, a: pr.arc })),
           over,
@@ -751,7 +784,7 @@ export function startSuperBros(net: SuperBrosNet): void {
         net.relay({
           t: 'in', slot: selfSlot,
           move: intent.move, down: intent.down, fastFall: intent.fastFall, facing: myFacing,
-          attackSeq: myAttackSeq, projSeq: myProjSeq, jumpSeq: myJumpSeq,
+          attackSeq: myAttackSeq, projSeq: myProjSeq, jumpSeq: myJumpSeq, atkDir: myAttackDir,
         });
       }
       // decay local cosmetic timers on the mirrored fighters
@@ -874,16 +907,24 @@ export function startSuperBros(net: SuperBrosNet): void {
     drawFighterArt(f, p.x, top, w, h, p.flash > 0);
     ctx.restore();
 
-    // melee swing arc (drawn unflipped, in facing direction)
+    // melee swing arc (drawn unflipped) — placed by attack direction
     if (p.meleeActive > 0) {
       const reach = 26 + f.melee.range * 14;
       ctx.save();
       ctx.globalAlpha = 0.5;
-      ctx.fillStyle = '#ffffff';
-      const hx = p.x + p.facing * (w / 2);
+      ctx.fillStyle = p.meleeDir === 1 ? '#ff9a5a' : p.meleeDir === -1 ? '#9adcff' : '#ffffff';
+      let cx: number, cy: number, a0: number, a1: number;
+      if (p.meleeDir === -1) {            // up arc over the head
+        cx = p.x; cy = p.y - h; a0 = -Math.PI / 2 - 0.9; a1 = -Math.PI / 2 + 0.9;
+      } else if (p.meleeDir === 1) {      // down arc under the feet
+        cx = p.x; cy = p.y; a0 = Math.PI / 2 - 1.1; a1 = Math.PI / 2 + 1.1;
+      } else {                            // forward arc in facing direction
+        cx = p.x + p.facing * (w / 2); cy = p.y - h / 2;
+        a0 = p.facing > 0 ? -0.9 : Math.PI - 0.9; a1 = p.facing > 0 ? 0.9 : Math.PI + 0.9;
+      }
       ctx.beginPath();
-      ctx.moveTo(hx, p.y - h / 2);
-      ctx.arc(hx, p.y - h / 2, reach, p.facing > 0 ? -0.9 : Math.PI - 0.9, p.facing > 0 ? 0.9 : Math.PI + 0.9);
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, reach, a0, a1);
       ctx.closePath(); ctx.fill();
       ctx.restore();
     }
@@ -984,7 +1025,7 @@ export function startSuperBros(net: SuperBrosNet): void {
         slot: lp.slot, name: lp.name, fid,
         x: 0, y: 0, vx: 0, vy: 0, facing: 1, onGround: false, jumps: 0, usedRecovery: false, dropTimer: 0,
         dmg: 0, stocks: SB_STOCKS, invuln: RESPAWN_INVULN, respawnIn: 0, eliminated: false,
-        hitstun: 0, meleeCd: 0, meleeActive: 0, projCd: 0, flash: 0,
+        hitstun: 0, meleeCd: 0, meleeActive: 0, meleeDir: 0, projCd: 0, flash: 0,
         attackSeq: 0, projSeq: 0, jumpSeq: 0,
       };
       spawnFighter(fs, i);
@@ -1046,6 +1087,7 @@ export function startSuperBros(net: SuperBrosNet): void {
             attackSeq: Number(msg.attackSeq) || 0,
             projSeq: Number(msg.projSeq) || 0,
             jumpSeq: Number(msg.jumpSeq) || 0,
+            atkDir: Number(msg.atkDir) || 0,
           });
         }
       } else if (!isHost && msg.t === 'st') {
@@ -1059,7 +1101,7 @@ export function startSuperBros(net: SuperBrosNet): void {
           x: Number(r.x), y: Number(r.y), vx: 0, vy: 0, facing: Number(r.fc) || 1,
           onGround: false, jumps: 0, usedRecovery: false, dropTimer: 0,
           dmg: Number(r.d), stocks: Number(r.st), invuln: r.iv ? 1 : 0, respawnIn: Number(r.rs) || 0,
-          eliminated: !!r.el, hitstun: 0, meleeCd: 0, meleeActive: r.ma ? 0.1 : 0, projCd: 0,
+          eliminated: !!r.el, hitstun: 0, meleeCd: 0, meleeActive: r.ma ? 0.1 : 0, meleeDir: Number(r.md) || 0, projCd: 0,
           flash: r.fl ? 0.1 : 0, attackSeq: 0, projSeq: 0, jumpSeq: 0,
         }));
         const sp = (msg.p as Array<Record<string, unknown>>) ?? [];
