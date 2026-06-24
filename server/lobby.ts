@@ -71,6 +71,7 @@ import {
   MarketItemView,
   MarketListingView,
   WorldAvatar,
+  minBet,
 } from '../shared/types';
 import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
@@ -1589,8 +1590,11 @@ export class Lobby {
       total += b.amount;
     }
     if (total <= 0 || total > ROULETTE_MAX_TOTAL) { this.sendWallet(ws); return; }
-    // Escrow the whole stake up front; if it doesn't clear, the player can't afford it.
-    spendCoins(conn.pid, total)
+    // Wealth-scaled minimum bet: refuse a stake below the player's floor.
+    getWallet(conn.pid).then((w) => {
+      if (!w || total < minBet(w.coins)) { this.sendWallet(ws); return; }
+      // Escrow the whole stake up front; if it doesn't clear, the player can't afford it.
+      spendCoins(conn.pid, total)
       .then(async (w) => {
         if (!w) { this.sendWallet(ws); return; } // insufficient coins (or no DB) — nothing wagered
         // The staked coins flow into the House first (a sink); winnings are paid back from it.
@@ -1607,6 +1611,8 @@ export class Lobby {
         this.sendWallet(ws);
       })
       .catch((e) => console.error('roulette failed:', e));
+    })
+    .catch((e) => console.error('getWallet failed:', e));
   }
 
   // --- Blackjack ---
@@ -1616,36 +1622,40 @@ export class Lobby {
     if (!conn || !conn.pid || !conn.nickname) return;
     if (conn.bjHand) { this.sendWallet(ws); return; } // already in a hand
     if (!Number.isInteger(amount) || amount <= 0 || amount > BJ_MAX_BET) { this.sendWallet(ws); return; }
-    spendCoins(conn.pid, amount)
-      .then(async (w) => {
-        if (!w) { this.sendWallet(ws); return; }
-        await this.houseCredit(amount);
-        const shoe = bjFreshShoe();
-        const hand: BjHand = {
-          playerCards: [bjDeal(shoe), bjDeal(shoe)],
-          dealerCards: [bjDeal(shoe), bjDeal(shoe)],
-          bet: amount,
-          shoe,
-        };
-        conn.bjHand = hand;
-        const pt = bjTotal(hand.playerCards);
-        const playerBJ = hand.playerCards.length === 2 && pt === 21;
-        const dealerBJ = bjTotal(hand.dealerCards) === 21;
-        if (playerBJ) {
-          const outcome = dealerBJ ? 'push' : 'blackjack';
-          const want = dealerBJ ? amount : Math.floor(amount * 2.5);
-          const payout = want > 0 ? await this.housePay(conn.pid, conn.nickname, want) : 0;
-          conn.bjHand = undefined;
-          const msg: BjResultMsg = { type: 'bjResult', playerCards: hand.playerCards, dealerCards: hand.dealerCards, playerTotal: pt, dealerTotal: bjTotal(hand.dealerCards), outcome, bet: amount, payout };
-          this.tell(ws, msg);
+    getWallet(conn.pid).then((w) => {
+      if (!w || amount < minBet(w.coins)) { this.sendWallet(ws); return; }
+      spendCoins(conn.pid, amount)
+        .then(async (w) => {
+          if (!w) { this.sendWallet(ws); return; }
+          await this.houseCredit(amount);
+          const shoe = bjFreshShoe();
+          const hand: BjHand = {
+            playerCards: [bjDeal(shoe), bjDeal(shoe)],
+            dealerCards: [bjDeal(shoe), bjDeal(shoe)],
+            bet: amount,
+            shoe,
+          };
+          conn.bjHand = hand;
+          const pt = bjTotal(hand.playerCards);
+          const playerBJ = hand.playerCards.length === 2 && pt === 21;
+          const dealerBJ = bjTotal(hand.dealerCards) === 21;
+          if (playerBJ) {
+            const outcome = dealerBJ ? 'push' : 'blackjack';
+            const want = dealerBJ ? amount : Math.floor(amount * 2.5);
+            const payout = want > 0 ? await this.housePay(conn.pid, conn.nickname, want) : 0;
+            conn.bjHand = undefined;
+            const msg: BjResultMsg = { type: 'bjResult', playerCards: hand.playerCards, dealerCards: hand.dealerCards, playerTotal: pt, dealerTotal: bjTotal(hand.dealerCards), outcome, bet: amount, payout };
+            this.tell(ws, msg);
+            this.sendWallet(ws);
+            return;
+          }
+          const state: BjStateMsg = { type: 'bjState', playerCards: hand.playerCards, dealerCard: hand.dealerCards[0], playerTotal: pt, canDouble: true, status: 'playing' };
+          this.tell(ws, state);
           this.sendWallet(ws);
-          return;
-        }
-        const state: BjStateMsg = { type: 'bjState', playerCards: hand.playerCards, dealerCard: hand.dealerCards[0], playerTotal: pt, canDouble: true, status: 'playing' };
-        this.tell(ws, state);
-        this.sendWallet(ws);
-      })
-      .catch((e) => console.error('blackjack bet failed:', e));
+        })
+        .catch((e) => console.error('blackjack bet failed:', e));
+    })
+    .catch((e) => console.error('getWallet failed:', e));
   }
 
   blackjackAction(ws: WebSocket, action: BjAction) {
@@ -2701,8 +2711,11 @@ export class Lobby {
     if (!Number.isFinite(amt) || amt < 1) return;
     const odds = this.currentOdds()[side]; // lock the odds shown at this instant
     const { pid, nickname: name } = conn;
-    // Escrow the stake atomically — spendCoins returns null if they can't actually afford it.
-    spendCoins(pid, amt)
+    // Wealth-scaled minimum bet: check against the player's floor.
+    getWallet(pid).then((w) => {
+      if (!w || amt < minBet(w.coins)) { this.sendWallet(ws); return; }
+      // Escrow the stake atomically — spendCoins returns null if they can't actually afford it.
+      spendCoins(pid, amt)
       .then((w) => {
         if (!w) { this.sendWallet(ws); return; } // insufficient coins — refresh their view, no bet
         this.bets.push({ pid, side, amount: amt, ws, name, odds });
@@ -2710,6 +2723,8 @@ export class Lobby {
         this.announce(`🎲 ${name} bet ${amt} on ${side} @ ${odds.toFixed(2)}×`, true);
       })
       .catch((e) => console.error('bet failed:', e));
+    })
+    .catch((e) => console.error('getWallet failed:', e));
   }
 
   /** Settle all open wagers against the winning side: correct calls pay stake × locked odds. */
