@@ -62,6 +62,18 @@ export async function initDb(): Promise<void> {
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS song TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS car TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS email TEXT`);
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_played BIGINT`);
+  // Head-to-head matchups: one row per unordered pair, with per-player win counts.
+  // Both player1 < player2 lexicographically so the pair is always stored the same way.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS head_to_head (
+      player1 TEXT NOT NULL,
+      player2 TEXT NOT NULL,
+      p1_wins INTEGER NOT NULL DEFAULT 0,
+      p2_wins INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (player1, player2)
+    )
+  `);
   // Stock market: per-player positions (fractional shares + coins-escrowed cost basis), keyed
   // by player + coin id + side ('long'/'short' — a player can hold both at once); and the
   // global price board (one row per coin).
@@ -533,18 +545,19 @@ export async function recordResult(winners: PlayerRef[], losers: PlayerRef[]): P
 
   // Upsert all players so they exist before we read ELO. Each winner also earns 100 coins
   // (1 win reward × COIN_SCALE — the whole economy is scaled ×100).
+  const now = Date.now();
   for (const w of winners) {
     await pool.query(
-      `INSERT INTO players (id, name, wins, coins) VALUES ($1, $2, 1, 100)
-         ON CONFLICT (id) DO UPDATE SET wins = players.wins + 1, coins = players.coins + 100, name = EXCLUDED.name`,
-      [w.pid, w.name],
+      `INSERT INTO players (id, name, wins, coins, last_played) VALUES ($1, $2, 1, 100, $3)
+         ON CONFLICT (id) DO UPDATE SET wins = players.wins + 1, coins = players.coins + 100, name = EXCLUDED.name, last_played = EXCLUDED.last_played`,
+      [w.pid, w.name, now],
     );
   }
   for (const l of losers) {
     await pool.query(
-      `INSERT INTO players (id, name, losses) VALUES ($1, $2, 1)
-         ON CONFLICT (id) DO UPDATE SET losses = players.losses + 1, name = EXCLUDED.name`,
-      [l.pid, l.name],
+      `INSERT INTO players (id, name, losses, last_played) VALUES ($1, $2, 1, $3)
+         ON CONFLICT (id) DO UPDATE SET losses = players.losses + 1, name = EXCLUDED.name, last_played = EXCLUDED.last_played`,
+      [l.pid, l.name, now],
     );
   }
 
@@ -571,6 +584,23 @@ export async function recordResult(winners: PlayerRef[], losers: PlayerRef[]): P
   for (const l of losers) {
     const newElo = Math.max(1, Math.round(eloOf(l.pid) + ELO_K * (0 - eL)));
     await pool.query(`UPDATE players SET elo = $2 WHERE id = $1`, [l.pid, newElo]);
+  }
+
+  // Head-to-head: for every winner↔loser pair, increment the winning player's
+  // counter in the unordered pair row (player1 < player2 lexicographically).
+  for (const w of winners) {
+    for (const l of losers) {
+      const [p1, p2] = w.pid < l.pid ? [w.pid, l.pid] : [l.pid, w.pid];
+      const wIsP1 = w.pid === p1;
+      await pool.query(
+        `INSERT INTO head_to_head (player1, player2, p1_wins, p2_wins)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (player1, player2) DO UPDATE SET
+             p1_wins = head_to_head.p1_wins + $3,
+             p2_wins = head_to_head.p2_wins + $4`,
+        [p1, p2, wIsP1 ? 1 : 0, wIsP1 ? 0 : 1],
+      );
+    }
   }
 }
 
@@ -1441,6 +1471,79 @@ export async function getLeaderboard(): Promise<LeaderboardRow[]> {
     [LEADERBOARD_SIZE],
   );
   return rows.map((r) => ({ name: r.name, wins: r.wins, losses: r.losses, elo: r.elo, title: r.title ?? null }));
+}
+
+/** Full Elo leaderboard including the stable pid (server-only — pid is never sent to clients),
+ *  used by the lobby to resolve a board rank back to a player for the profile drilldown. */
+export async function getEloBoard(): Promise<(LeaderboardRow & { pid: string })[]> {
+  if (!pool) return [];
+  const { rows } = await pool.query(
+    `SELECT id AS pid, name, wins, losses, elo, title
+       FROM players
+      WHERE wins + losses > 0
+      ORDER BY elo DESC, name ASC
+      LIMIT $1`,
+    [LEADERBOARD_SIZE],
+  );
+  return rows.map((r) => ({
+    pid: r.pid,
+    name: r.name,
+    wins: Number(r.wins),
+    losses: Number(r.losses),
+    elo: Number(r.elo),
+    title: r.title ?? null,
+  }));
+}
+
+/** A player's public profile for the Elo drilldown. Returns null when the player
+ *  doesn't exist (or there's no DB). */
+export interface PlayerProfile {
+  name: string;
+  wins: number;
+  losses: number;
+  elo: number;
+  winPct: number;
+  lastPlayed: number | null;
+}
+export async function getPlayerProfile(pid: string): Promise<PlayerProfile | null> {
+  if (!pool || !pid) return null;
+  const { rows } = await pool.query(
+    `SELECT name, wins, losses, elo, last_played FROM players WHERE id = $1`,
+    [pid],
+  );
+  if (!rows.length) return null;
+  const r = rows[0];
+  const total = Number(r.wins) + Number(r.losses);
+  return {
+    name: r.name,
+    wins: Number(r.wins),
+    losses: Number(r.losses),
+    elo: Number(r.elo),
+    winPct: total > 0 ? Math.round((Number(r.wins) / total) * 100) : 0,
+    lastPlayed: r.last_played ? Number(r.last_played) : null,
+  };
+}
+
+/** Head-to-head record between two players: the first argument's wins/losses
+ *  against the second, or null if they've never met (or there's no DB). */
+export async function getRival(pid: string, rivalPid: string): Promise<{ name: string; wins: number; losses: number } | null> {
+  if (!pool || !pid || !rivalPid || pid === rivalPid) return null;
+  const [p1, p2] = pid < rivalPid ? [pid, rivalPid] : [rivalPid, pid];
+  const { rows } = await pool.query(
+    `SELECT h.p1_wins, h.p2_wins, p.name AS rival_name
+       FROM head_to_head h
+       JOIN players p ON p.id = $3
+       WHERE h.player1 = $1 AND h.player2 = $2`,
+    [p1, p2, rivalPid],
+  );
+  if (!rows.length) return null;
+  const r = rows[0];
+  const pidIsP1 = pid === p1;
+  return {
+    name: r.rival_name,
+    wins: pidIsP1 ? Number(r.p1_wins) : Number(r.p2_wins),
+    losses: pidIsP1 ? Number(r.p2_wins) : Number(r.p1_wins),
+  };
 }
 
 /** Net worth board: each player's coins + the live value of their stock holdings

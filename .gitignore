@@ -10,3 +10,4 @@ HANDOFF.md
 
 # Claude Code local config + agent worktrees (not project code)
 .claude/
+tsong_plans/

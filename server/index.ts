@@ -369,6 +369,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'balanceSheetReq':
         if (typeof msg.rank === 'number') lobby.sendBalanceSheet(ws, msg.rank);
         break;
+      case 'eloProfileReq':
+        if (typeof msg.rank === 'number') lobby.sendEloProfile(ws, msg.rank);
+        break;
       case 'lootBoxOpen':
         lobby.openLootBox(ws);
         break;
