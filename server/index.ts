@@ -314,6 +314,11 @@ wss.on('connection', (ws: WebSocket, req) => {
           lobby.campaignScore(ws, msg.score, msg.stage, msg.won);
         }
         break;
+      case 'fishCatch':
+        if (typeof msg.tier === 'string' && typeof msg.sizeLb === 'number') {
+          lobby.fishCatch(ws, msg.tier, msg.sizeLb);
+        }
+        break;
       case 'worldEnter':
         lobby.worldEnter(ws);
         break;

@@ -83,6 +83,7 @@ import {
 import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSelfElo, getSelfNetWorth, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
+  recordFishCatch, getFishingLeaderboard, FishingScoreRow,
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS,
   getHoldings, investStock, closePosition, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
   setStockCrashAt, getMarketInstability, setMarketInstability,
@@ -468,6 +469,7 @@ export class Lobby {
     this.tell(ws, { type: 'doomLeaderboard', solo: this.doomBoards.solo, coop: this.doomBoards.coop });
     this.tell(ws, { type: 'tdLeaderboard', rows: this.tdBoard });
     this.tell(ws, { type: 'campaignLeaderboard', rows: this.campaignBoard });
+    this.tell(ws, { type: 'fishLeaderboard', rows: this.fishBoard });
     if (this.chatLog.length) this.tell(ws, { type: 'chat', lines: this.chatLog });
     this.tell(ws, this.buildCrashState(ws));
   }
@@ -1047,6 +1049,16 @@ export class Lobby {
   // DOOM high-round leaderboards (solo + co-op), cached and pushed to clients.
   private doomBoards: { solo: DoomScoreRow[]; coop: DoomScoreRow[] } = { solo: [], coop: [] };
   private campaignBoard: CampaignScoreRow[] = [];
+  private fishBoard: FishingScoreRow[] = [];
+  // Anti-abuse: last fishing payout time per pid (ms). Claims faster than FISH_COOLDOWN_MS are
+  // ignored, so a scripted client can't spam the House for coins.
+  private lastFishAt = new Map<string, number>();
+  private static readonly FISH_COOLDOWN_MS = 2500;
+  // House-funded reward range per tier (server picks an amount within the range; client only
+  // sends the tier, never a coin amount). Legendary is a flat jackpot + the Angler title.
+  private static readonly FISH_REWARDS: Record<string, [number, number]> = {
+    junk: [0, 10], common: [50, 120], uncommon: [160, 360], rare: [600, 1200], legendary: [3000, 3000],
+  };
 
   /** Reload the DOOM leaderboards from the DB and push them to everyone. */
   async refreshDoomLeaderboards() {
@@ -1088,6 +1100,67 @@ export class Lobby {
           if (paid > 0) this.notify(ws, `🪙 +${paid.toLocaleString()} coins for reaching round ${r} in DOOM!`);
         })
         .catch((e) => console.error('doom reward failed:', e));
+    }
+  }
+
+  // --- Fishing minigame ---
+
+  /** Reload the biggest-catch leaderboard from the DB and push it to everyone. */
+  async refreshFishLeaderboard() {
+    this.fishBoard = await getFishingLeaderboard();
+    const msg = JSON.stringify({ type: 'fishLeaderboard', rows: this.fishBoard });
+    for (const sock of this.conns.keys()) {
+      if (sock.readyState === sock.OPEN) sock.send(msg);
+    }
+  }
+
+  /** A landed fish: validate the tier + size, rate-limit, pay a House-funded reward by tier, and
+   *  (for legendaries) grant the one-time Angler title. The client never sends a coin amount — the
+   *  server picks the payout from the tier's range, so a tampered client can't mint money. */
+  fishCatch(ws: WebSocket, tier: string, sizeLb: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    const range = Lobby.FISH_REWARDS[tier];
+    if (!range) return;                                   // unknown tier
+    if (!Number.isFinite(sizeLb) || sizeLb <= 0) return;  // bad size
+    const pid = conn.pid, nick = conn.nickname;
+    // Rate-limit: at most one payout per FISH_COOLDOWN_MS per player (stops scripted spam).
+    const now = Date.now();
+    const last = this.lastFishAt.get(pid) ?? 0;
+    if (now - last < Lobby.FISH_COOLDOWN_MS) return;
+    this.lastFishAt.set(pid, now);
+
+    // Record the catch for the biggest-catch board (keeps each player's max).
+    recordFishCatch(pid, nick, sizeLb)
+      .then(() => this.refreshFishLeaderboard())
+      .catch((e) => console.error('fish catch save failed:', e));
+
+    // House-funded reward: a server-picked amount within the tier's range.
+    const [lo, hi] = range;
+    const reward = lo + Math.floor(Math.random() * (hi - lo + 1));
+    const legendary = tier === 'legendary';
+
+    const finish = (item?: { id: string; name: string }) => {
+      this.housePay(pid, nick, reward)
+        .then((paid) => {
+          this.sendWallet(ws); this.refreshNetWorth().catch(() => {});
+          this.tell(ws, { type: 'fishReward', coins: paid, item });
+        })
+        .catch((e) => console.error('fish reward failed:', e));
+    };
+
+    if (legendary) {
+      // Landing a legendary unlocks the locked "Angler" title (own it + auto-wear it if untitled).
+      awardTitle(pid, nick, 'angler')
+        .then((w) => {
+          if (w) { conn.title = w.title; this.refreshLeaderboard(); }
+          const cos = COSMETICS.find((c) => c.id === 'angler');
+          finish(cos ? { id: cos.id, name: cos.name } : undefined);
+          this.announce(`🎣 ${nick} landed a LEGENDARY catch (${Math.round(sizeLb)} lb) and earned the Angler title!`);
+        })
+        .catch((e) => { console.error('angler title award failed:', e); finish(); });
+    } else {
+      finish();
     }
   }
 

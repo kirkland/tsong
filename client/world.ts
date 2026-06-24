@@ -52,7 +52,7 @@ export interface WorldNet {
   pet(): string | null;          // our equipped pet id (null = none → nothing trails us)
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'stocks' | 'loans' | 'petshop' | 'doom'): void; // open a Casino/Bank/Pet-Shop/DOOM feature
+  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'stocks' | 'loans' | 'petshop' | 'doom' | 'fishing'): void; // open a Casino/Bank/Pet-Shop/DOOM/Fishing feature
   claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
   onNetizenClick?(netizenId: string): void; // user tapped a netizen avatar in the world (→ challenge)
 }
@@ -199,7 +199,7 @@ interface NpcDef {
   body?: 'pants' | 'dress'; // silhouette, default 'pants'
   hat?: 'cap' | 'sun';  // optional headwear
   hatColor?: number;    // cap tint (sun hat is fixed straw)
-  kind?: 'minion' | 'kenny' | 'demon' | 'soul'; // special one-off sprite; default is the little-person
+  kind?: 'minion' | 'kenny' | 'demon' | 'soul' | 'angler'; // special one-off sprite; default is the little-person
   glasses?: boolean;    // overlay specs
   stripes?: boolean;    // red/white striped shirt instead of a flat tinted one (Waldo!)
   x: number; y: number; // home anchor (NPC roams around this)
@@ -376,6 +376,16 @@ const NPCS: NpcDef[] = [
       "Don't go through the gate… please.",
       'So cold. So hot. Both. Always.',
       'Has it been a thousand years yet?',
+    ],
+  },
+  {
+    // Planted on the fishing pond's pier, rod permanently in the water. Does NOT want to chat.
+    id: 'grumpy-angler', name: 'Grizzled Angler', shirt: 0x3f6f4a, hair: 0x6a5235, kind: 'angler',
+    x: 1985, y: 1110, roam: 0,
+    lines: [
+      "Fuck off, I'm fishing.",
+      "...I'm fishing. Go away.",
+      "You're scaring the fish. Beat it.",
     ],
   },
   {
@@ -650,6 +660,7 @@ export function startWorld(net: WorldNet): void {
       case 'bank': return '🏦 Enter the Bank';
       case 'petshop': return '🐾 Enter the Pet Shop';
       case 'doomportal': return '🔥 Enter the gates of DOOM';
+      case 'pond': return '🎣 Cast a line';
     }
   }
   function enterBuilding(kind: WorldBuildingKind) {
@@ -682,6 +693,12 @@ export function startWorld(net: WorldNet): void {
     if (kind === 'doomportal') {
       openDialog('🔥 The Gates of DOOM', 'A hot wind howls up from below…', [
         { label: '🔥 Descend', onPick: () => { exit(); net.openFeature('doom'); } },
+      ]);
+      return;
+    }
+    if (kind === 'pond') {
+      openDialog('🎣 Fishing Pond', 'The water is calm. A good day for fishing.', [
+        { label: '🎣 Fish', onPick: () => { exit(); net.openFeature('fishing'); } },
       ]);
       return;
     }
@@ -1295,6 +1312,10 @@ export function startWorld(net: WorldNet): void {
   // its own phase/anchor so update() can jitter alpha/scale/offset and make them dance ("on fire").
   interface Flame { img: Phaser.GameObjects.Image; bx: number; by: number; phase: number; amp: number; base: number }
   const flames: Flame[] = [];
+  // Fishing-pond ripples: faint expanding rings on the water, each on its own phase, animated in
+  // update() the same per-frame way the flames/swayers are.
+  interface Ripple { ring: Phaser.GameObjects.Arc; cx: number; cy: number; phase: number; maxR: number }
+  const ripples: Ripple[] = [];
 
   const NAME_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
     fontFamily: 'system-ui, sans-serif', fontSize: '11px', color: '#ffffff',
@@ -1452,6 +1473,23 @@ export function startWorld(net: WorldNet): void {
       px(4, 11, 5, 3, SHAD); px(4, 11, 5, 1, PALE_D);
       px(4, 14, 1, 1, SHAD); px(6, 14, 1, 2, SHAD); px(8, 14, 1, 1, SHAD);
       g.generateTexture('w-tortured-soul', 12, 16);
+    }
+
+    // --- Grizzled Angler: straw sun hat, green vest, a fishing rod with a line in the water
+    // (16×16 so the rod can reach off to the side). ---
+    {
+      const VEST = 0x3f6f4a, VEST_D = 0x2c5236, SKN2 = 0xf1c9a0, HAT = 0xd8c690, HAT_D = 0xb09a5e;
+      const ROD = 0x8a5a2a, PANTS2 = 0x394a5a, LINE = 0xdddddd;
+      g.clear();
+      px(6, 13, 2, 3, PANTS2); px(9, 13, 2, 3, PANTS2); px(6, 15, 2, 1, 0x222222); px(9, 15, 2, 1, 0x222222); // legs + boots
+      px(5, 7, 7, 6, VEST); px(5, 12, 7, 1, VEST_D);          // vest body
+      px(4, 8, 1, 4, SKN2); px(12, 8, 1, 3, SKN2);            // arms
+      px(6, 3, 5, 4, SKN2);                                   // head
+      px(7, 4, 1, 1, 0x222222); px(9, 4, 1, 1, 0x222222); px(7, 6, 3, 1, 0x6b4f3a); // grumpy eyes + frown
+      px(4, 2, 9, 1, HAT_D); px(5, 1, 6, 2, HAT); px(5, 0, 6, 1, HAT);              // straw sun hat
+      px(12, 8, 1, 1, ROD); px(13, 6, 1, 1, ROD); px(14, 4, 1, 1, ROD); px(15, 2, 1, 1, ROD); // rod shaft
+      px(15, 3, 1, 7, LINE);                                  // line dangling to the water
+      g.generateTexture('w-angler', 16, 16);
     }
 
     // --- soft round shadow (12×6 texels) ---
@@ -1726,6 +1764,53 @@ export function startWorld(net: WorldNet): void {
     }
   }
 
+  // The fishing pond: a rounded body of water (a couple of blue tones + a lighter rim) instead of
+  // a building, with a small wooden pier/dock jutting from its west (plaza-facing) edge. It's still
+  // solid (the WORLD_BUILDINGS rect collides), so you stand at the pier edge — you can't wade in.
+  // Live ripples (pushed into `ripples`, animated each frame in update()) make the water shimmer.
+  function buildPond(sc: Phaser.Scene, b: WorldBuilding) {
+    const W = Math.round(b.w / TEXEL), H = Math.round(b.h / TEXEL);
+    const depth = b.y; // low depth: water sits on the ground, avatars/pier render over it as they pass
+    const g = sc.make.graphics({ x: 0, y: 0 }, false);
+    const P = (x: number, y: number, w: number, h: number, c: number, a = 1) => px9(g, x, y, w, h, c, a);
+    // A rounded blob: fill a rounded rect for the rim, then inset darker/lighter water bands.
+    const RIM = 0x6fb7e0, DEEP = 0x1d5478, MID = 0x2a6f97, SHIMMER = 0x7fc6ec;
+    const rr = Math.min(W, H) * 0.32;
+    g.fillStyle(RIM, 1); g.fillRoundedRect(0, 0, W, H, rr);                 // light sandy-blue rim
+    g.fillStyle(MID, 1); g.fillRoundedRect(3, 3, W - 6, H - 6, rr * 0.92);  // main water tone
+    g.fillStyle(DEEP, 1); g.fillRoundedRect(8, 8, W - 16, H - 16, rr * 0.8); // deeper center
+    // a couple of static shimmer streaks for depth
+    P(Math.round(W * 0.3), Math.round(H * 0.32), Math.round(W * 0.22), 2, SHIMMER, 0.5);
+    P(Math.round(W * 0.5), Math.round(H * 0.6), Math.round(W * 0.18), 2, SHIMMER, 0.4);
+    g.generateTexture('w-pond', W, H);
+    g.destroy();
+    sc.add.image(b.x, b.y, 'w-pond').setOrigin(0, 0).setScale(TEXEL).setDepth(depth);
+
+    // Live ripple rings drifting on the water.
+    const n = 4;
+    for (let i = 0; i < n; i++) {
+      const cx = b.x + b.w * (0.35 + Math.random() * 0.5);
+      const cy = b.y + b.h * (0.3 + Math.random() * 0.5);
+      const maxR = 10 + Math.random() * 14;
+      const ring = sc.add.circle(cx, cy, 1).setStrokeStyle(2, 0xbfe6ff, 0.5).setDepth(depth + 1);
+      ripples.push({ ring, cx, cy, phase: Math.random() * Math.PI * 2, maxR });
+    }
+
+    // Wooden pier/dock on the west (plaza-facing) side: planks reaching out over the water from the
+    // shore, with two posts at the tip. Drawn as its own texture so it layers cleanly over the water.
+    const pg = sc.make.graphics({ x: 0, y: 0 }, false);
+    const PLANK = 0x9c6b3f, PLANK_D = 0x7a4f2c, POST = 0x5e3c20;
+    const pierW = 24, pierH = 14; // texels
+    pg.fillStyle(PLANK_D, 1); pg.fillRect(0, 0, pierW, pierH);
+    pg.fillStyle(PLANK, 1);
+    for (let py = 1; py < pierH - 1; py += 3) pg.fillRect(1, py, pierW - 2, 2); // plank slats
+    pg.fillStyle(POST, 1); pg.fillRect(pierW - 3, 0, 2, pierH); pg.fillRect(pierW - 3, 0, 2, 2);
+    pg.generateTexture('w-pier', pierW, pierH);
+    pg.destroy();
+    // Anchor the pier so it sticks out from the pond's west edge toward the plaza, vertically centered.
+    sc.add.image(b.x, b.y + b.h / 2, 'w-pier').setOrigin(1, 0.5).setScale(TEXEL).setDepth(b.y + b.h / 2);
+  }
+
   // --- the Phaser scene ---
   let game: Phaser.Game | null = null;
   let mainCam: Phaser.Cameras.Scene2D.Camera | null = null; // for screen→world hit-testing on tap
@@ -1805,12 +1890,15 @@ export function startWorld(net: WorldNet): void {
 
       // --- buildings + name signs (Casino & Arena are custom-themed; Bank is a Kenney house) ---
       for (const b of WORLD_BUILDINGS) {
-        // ground shadow cast down-right
-        sc.add.rectangle(b.x + 14, b.y + 18, b.w, b.h, 0x0a1226, 0.32)
-          .setOrigin(0, 0).setDepth(b.y + b.h - 1);
+        // ground shadow cast down-right (skip the pond — water is flush with the ground)
+        if (b.kind !== 'pond') {
+          sc.add.rectangle(b.x + 14, b.y + 18, b.w, b.h, 0x0a1226, 0.32)
+            .setOrigin(0, 0).setDepth(b.y + b.h - 1);
+        }
         if (b.kind === 'casino') buildCasino(sc, b);
         else if (b.kind === 'arena') buildArena(sc, b);
         else if (b.kind === 'doomportal') buildDoomPortal(sc, b);
+        else if (b.kind === 'pond') buildPond(sc, b);
         else buildBuilding(sc, b);
         const sign = sc.add.text(b.x + b.w / 2, b.y - 6, b.name, {
           fontFamily: 'system-ui, sans-serif', fontSize: '15px', fontStyle: 'bold',
@@ -1870,6 +1958,13 @@ export function startWorld(net: WorldNet): void {
         f.img.setAlpha(0.7 + flick * 0.3);
         f.img.x = f.bx + Math.sin(t1 * 1.7) * 2.2 * f.amp;
         f.img.y = f.by - Math.max(0, flick) * 1.5;
+      }
+
+      // pond ripples: each ring slowly expands and fades, then resets — a gentle shimmer.
+      for (const rp of ripples) {
+        const cycle = ((time / 2600 + rp.phase / (Math.PI * 2)) % 1 + 1) % 1; // 0→1 loop
+        rp.ring.setRadius(2 + cycle * rp.maxR);
+        rp.ring.setStrokeStyle(2, 0xbfe6ff, 0.5 * (1 - cycle));
       }
 
       if (!dialogOpen && !talkOpen) {
@@ -2023,6 +2118,8 @@ export function startWorld(net: WorldNet): void {
       parts = [sc.add.image(0, 0, 'w-demon').setScale(TEXEL * 1.05).setOrigin(0.5, 0.95)];
     } else if (def.kind === 'soul') {
       parts = [sc.add.image(0, 0, 'w-tortured-soul').setScale(TEXEL * 1.05).setOrigin(0.5, 0.95).setAlpha(0.82)];
+    } else if (def.kind === 'angler') {
+      parts = [sc.add.image(0, 0, 'w-angler').setScale(TEXEL * 1.2).setOrigin(0.5, 0.95)];
     } else {
       const layer = (key: string, tint?: number) => {
         const im = sc.add.image(0, 0, key).setScale(TEXEL).setOrigin(0.5, 0.95);
