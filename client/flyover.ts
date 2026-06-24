@@ -283,10 +283,14 @@ export function initFlyover(onSummon?: () => void) {
 }
 
 /** Fly a summoned plane carrying a special "your airplane has arrived" banner. Triggered by
- * the server's `flyover` broadcast so the whole room sees the same one (forced nocrash). */
+ * the server's `flyover` broadcast so the whole room sees the same one. Usually lands safely,
+ * but ~1 in 20 summons the engine stalls and it goes down in flames — be careful what you wish
+ * for. The crash is derived from the shared `idx` so the whole room sees the same fate. */
+const SUMMON_CRASH_EVERY = 20; // ~5% of summoned planes meet a fiery end
 export function flySummoned(idx: number) {
   if (flying) return;
-  launch('nocrash', SUMMON_MESSAGES[((idx % SUMMON_MESSAGES.length) + SUMMON_MESSAGES.length) % SUMMON_MESSAGES.length]);
+  const doomed = idx % SUMMON_CRASH_EVERY === 0;
+  launch(doomed ? 'crash' : 'nocrash', SUMMON_MESSAGES[((idx % SUMMON_MESSAGES.length) + SUMMON_MESSAGES.length) % SUMMON_MESSAGES.length]);
 }
 
 /** Begin the random flyover schedule. Safe to call more than once (idempotent). */
