@@ -3814,7 +3814,6 @@ function applyCanvasRotation(rotated: number) {
 // toggle overlay layers). All view-agnostic: works the same in 2D, 3D and first-person.
 const screenFx = document.getElementById('screenFx') as HTMLDivElement;
 const fxBlackout = screenFx.querySelector('.fx-blackout') as HTMLElement;
-const fxBullet = screenFx.querySelector('.fx-bullet') as HTMLElement;
 const fxVortex = screenFx.querySelector('.fx-vortex') as HTMLElement;
 const fxGlitch = screenFx.querySelector('.fx-glitch') as HTMLElement;
 const fxSmoke = screenFx.querySelector('.fx-smoke') as HTMLElement;
@@ -3839,7 +3838,6 @@ function applyScreenFx(s: StateMsg) {
   }
   // Overlay layers.
   fxBlackout.classList.toggle('on', live && s.blackout);
-  fxBullet.classList.toggle('on', live && s.bullettime);
   fxVortex.classList.toggle('on', live && s.vortex);
   fxGlitch.classList.toggle('on', live && s.glitch);
   fxSmoke.classList.toggle('on', live && s.smoke);

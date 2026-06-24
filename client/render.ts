@@ -2054,7 +2054,6 @@ const TARGET_STYLE: Record<PowerupKind, { stroke: string; fill: string }> = {
   earthquake: { stroke: '#b07a3a', fill: 'rgba(176, 122,  58, 0.16)' }, // dusty brown
   coins:   { stroke: '#ffcf33', fill: 'rgba(255, 207,  51, 0.18)' }, // gold
   blackout:   { stroke: '#9aa0b0', fill: 'rgba(20, 22, 30, 0.4)' }, // dark
-  bullettime: { stroke: '#5aa0ff', fill: 'rgba(40, 90, 220, 0.16)' }, // blue
   vortex:     { stroke: '#b97cff', fill: 'rgba(180, 120, 255, 0.16)' }, // purple
   glitch:     { stroke: '#00fff0', fill: 'rgba(0, 255, 240, 0.14)' }, // cyan
   smoke:      { stroke: '#c8c8d2', fill: 'rgba(190, 190, 200, 0.16)' }, // grey
@@ -2361,11 +2360,6 @@ const GLYPHS: Record<PowerupKind, (ctx: CanvasRenderingContext2D, x: number, y: 
   blackout(ctx, x, y) {
     ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2); ctx.stroke();
     ctx.beginPath(); ctx.arc(x, y, 11, -Math.PI / 2, Math.PI / 2); ctx.fill();
-  },
-  // bullettime: a clock with a slowed hand → "time slows"
-  bullettime(ctx, x, y) {
-    ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y - 7); ctx.moveTo(x, y); ctx.lineTo(x + 5, y + 2); ctx.stroke();
   },
   // vortex: a spiral → "swirl"
   vortex(ctx, x, y) {

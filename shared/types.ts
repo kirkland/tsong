@@ -144,7 +144,7 @@ export const TARGET = {
 //   rotate — the entire court rotates 90° for the rest of the match
 export const POWERUPS = [
   'grow', 'shrink', 'smash', 'slow', 'multi',
-  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate', 'fritz', 'disco', 'blaster', 'minion', 'earthquake', 'coins', 'blackout', 'bullettime', 'vortex', 'glitch', 'smoke', 'tilt', 'roam',
+  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate', 'fritz', 'disco', 'blaster', 'minion', 'earthquake', 'coins', 'blackout', 'vortex', 'glitch', 'smoke', 'tilt', 'roam',
 ] as const;
 export type PowerupKind = (typeof POWERUPS)[number];
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
@@ -674,7 +674,6 @@ export interface StateMsg {
   minion: boolean; // "minion" power-up: both paddles are drawn as a minion for the point
   earthquake: boolean; // "earthquake" power-up: court shakes and the ball jitters for the point
   blackout: boolean; // "blackout": heavy dark vignette obscures the court
-  bullettime: boolean; // "bullet time": ball slows + blue tint
   vortex: boolean; // "vortex": swirling overlay + ball pulled toward center
   glitch: boolean; // "glitch": TV-static / RGB-split overlay
   smoke: boolean; // "smoke bomb": drifting smoke clouds obscure the court

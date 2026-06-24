@@ -1785,7 +1785,6 @@
       #screenFx .fx.on { display: block; }
       .fx-blackout { background: radial-gradient(ellipse at center, rgba(0,0,0,0) 16%, rgba(0,0,0,0.5) 44%, rgba(0,0,0,0.96) 74%); animation: fxPulse 2.6s ease-in-out infinite; }
       @keyframes fxPulse { 0%,100% { opacity: 0.85; } 50% { opacity: 1; } }
-      .fx-bullet { background: rgba(40,90,220,0.22); box-shadow: inset 0 0 120px rgba(20,40,160,0.6); }
       .fx-vortex { background: conic-gradient(from 0deg, rgba(180,120,255,0), rgba(180,120,255,0.28), rgba(120,200,255,0), rgba(180,120,255,0.28), rgba(180,120,255,0)); animation: fxSpin 2.2s linear infinite; mix-blend-mode: screen; }
       @keyframes fxSpin { to { transform: rotate(360deg); } }
       .fx-glitch { background: repeating-linear-gradient(0deg, rgba(0,0,0,0) 0 2px, rgba(0,0,0,0.28) 2px 4px); mix-blend-mode: overlay; animation: fxGlitch 0.16s steps(2) infinite; }
@@ -4300,7 +4299,6 @@
              the board in any view; layers are toggled by main.ts. Never intercepts input. -->
         <div id="screenFx" aria-hidden="true">
           <div class="fx fx-blackout"></div>
-          <div class="fx fx-bullet"></div>
           <div class="fx fx-vortex"></div>
           <div class="fx fx-glitch"></div>
           <div class="fx fx-smoke"></div>
