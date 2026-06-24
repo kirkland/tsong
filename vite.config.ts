@@ -11,15 +11,12 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    // Skip minification — the VPS has ~1 GB RAM and esbuild minification
-    // spikes memory enough to trigger the OOM killer. Gzip at serve time
-    // recovers most of the size savings.
-    minify: false,
     rollupOptions: {
+      // Phaser (~6 MB) is too large to bundle on the 1 GB VPS without OOM.
+      // Load it from CDN instead; the matching <script> tag is in index.html.
+      external: ['phaser'],
       output: {
-        manualChunks(id) {
-          if (id.includes('phaser')) return 'phaser';
-        },
+        globals: { phaser: 'Phaser' },
       },
     },
   },
