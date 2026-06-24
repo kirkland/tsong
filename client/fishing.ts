@@ -167,7 +167,9 @@ export function startFishing(net: FishingNet): void {
   function setStatus(text: string) { status.textContent = text; }
 
   function startCast() {
-    if (phase !== 'idle') return;
+    // Castable from 'idle' OR straight off a 'reveal' (the "click to cast again" path) — but never
+    // mid-cast/bite/reel.
+    if (phase !== 'idle' && phase !== 'reveal') return;
     phase = 'cast';
     pending = rollCatch();
     waitTimer = 2 + Math.random() * 6; // bite in 2–8s
