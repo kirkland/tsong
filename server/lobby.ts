@@ -85,7 +85,8 @@ import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recor
   getNetizens, seedNetizen,
   addBounty, getBountyOn, clearBounty, getBounties,
   challengedToday, recordChallenge,
-  getNetizenByPid, getNetizenCount, getNetWorthRank } from './db';
+  getNetizenByPid, getNetizenCount, getNetWorthRank,
+  applyInactivityTax, recentlyTaxedPids } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR } from '../shared/types';
 
@@ -2291,6 +2292,26 @@ export class Lobby {
    *  which point the pool resets to 0. Books the next event, then refreshes/announces and repushes. */
   private runDailyCollection() {
     this.scheduleNextCollect(); // book the next daily event immediately (so we never re-fire next tick)
+
+    // Inactivity tax: skip weekends (no market hours to have played in).
+    const now = new Date();
+    const day = now.getUTCDay(); // 0=Sun, 6=Sat
+    if (day !== 0 && day !== 6) {
+      // Compute today's 9am ET market-open.
+      const marketOpenMs = todayAtEtHour(9);
+      applyInactivityTax(marketOpenMs).then((totalTax) => {
+        if (totalTax > 0) {
+          // Refresh wallets for any taxed player who's online.
+          for (const ws of this.conns.keys()) {
+            const conn = this.conns.get(ws);
+            if (conn?.pid && recentlyTaxedPids.has(conn.pid)) this.sendWallet(ws);
+          }
+          this.announce(`📋 Inactivity tax: ${Math.round(totalTax).toLocaleString()}🪙 collected from idle whales → House.`);
+          this.refreshNetWorth().catch(() => {});
+        }
+      }).catch((e) => console.error('inactivity tax failed:', e));
+    }
+
     collectDefaultedLoans(Date.now())
       .then(({ pids, totalOwed, seized }) => {
         // The wallet coins Davis seized are real coins — route them INTO the House so they stay
@@ -4044,6 +4065,15 @@ function latest5pmEtBoundary(): number {
   const et5pm = etDayStart + 17 * 3600000;
   // If the current time in ET is before 5pm, use yesterday's 5pm.
   return etNow < et5pm ? et5pm - 86400000 : et5pm;
+}
+
+/** Return the epoch-ms timestamp of today at the given ET hour (0–23). */
+function todayAtEtHour(hour: number): number {
+  const d = new Date();
+  const etOffset = d.getTimezoneOffset() <= 240 ? 4 : 5;
+  const etNow = Date.now() - etOffset * 3600000;
+  const etDayStart = Math.floor(etNow / 86400000) * 86400000;
+  return etDayStart + hour * 3600000;
 }
 
 const BOT_NAMES: Record<BotLevel, string> = {

@@ -3,7 +3,7 @@
 // simply empty, so the rest of the app runs unchanged.
 
 import pg from 'pg';
-import { LeaderboardRow, NetWorthRow, LEADERBOARD_SIZE, CampaignScoreRow, StockSide, StockTf, positionWorth, EXCLUSIVES, isExclusive } from '../shared/types';
+import { LeaderboardRow, NetWorthRow, LEADERBOARD_SIZE, CampaignScoreRow, StockSide, StockTf, positionWorth, EXCLUSIVES, isExclusive, TAX_EXEMPT_BELOW, INACTIVITY_TAX_BRACKETS } from '../shared/types';
 
 // Economy Overhaul: the House treasury is seeded ONCE with a genesis allocation. This is the
 // only mint besides match wins and the one-time campaign clear/flawless bonuses — every other
@@ -62,6 +62,7 @@ export async function initDb(): Promise<void> {
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS song TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS car TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS email TEXT`);
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_played BIGINT NOT NULL DEFAULT 0`);
   // Stock market: per-player positions (fractional shares + coins-escrowed cost basis), keyed
   // by player + coin id + side ('long'/'short' — a player can hold both at once); and the
   // global price board (one row per coin).
@@ -507,21 +508,22 @@ export async function recordResult(winners: PlayerRef[], losers: PlayerRef[]): P
   if (!pool) return;
 
   const allPids = [...winners, ...losers].map((p) => p.pid);
+  const now = Date.now();
 
   // Upsert all players so they exist before we read ELO. Each winner also earns 100 coins
   // (1 win reward × COIN_SCALE — the whole economy is scaled ×100).
   for (const w of winners) {
     await pool.query(
       `INSERT INTO players (id, name, wins, coins) VALUES ($1, $2, 1, 100)
-         ON CONFLICT (id) DO UPDATE SET wins = players.wins + 1, coins = players.coins + 100, name = EXCLUDED.name`,
-      [w.pid, w.name],
+         ON CONFLICT (id) DO UPDATE SET wins = players.wins + 1, coins = players.coins + 100, name = EXCLUDED.name, last_played = $3`,
+      [w.pid, w.name, now],
     );
   }
   for (const l of losers) {
     await pool.query(
       `INSERT INTO players (id, name, losses) VALUES ($1, $2, 1)
-         ON CONFLICT (id) DO UPDATE SET losses = players.losses + 1, name = EXCLUDED.name`,
-      [l.pid, l.name],
+         ON CONFLICT (id) DO UPDATE SET losses = players.losses + 1, name = EXCLUDED.name, last_played = $3`,
+      [l.pid, l.name, now],
     );
   }
 
@@ -543,11 +545,11 @@ export async function recordResult(winners: PlayerRef[], losers: PlayerRef[]): P
   // Apply ELO delta to each player (same delta regardless of team size).
   for (const w of winners) {
     const newElo = Math.max(1, Math.round(eloOf(w.pid) + ELO_K * (1 - eW)));
-    await pool.query(`UPDATE players SET elo = $2 WHERE id = $1`, [w.pid, newElo]);
+    await pool.query(`UPDATE players SET elo = $2, last_played = $3 WHERE id = $1`, [w.pid, newElo, now]);
   }
   for (const l of losers) {
     const newElo = Math.max(1, Math.round(eloOf(l.pid) + ELO_K * (0 - eL)));
-    await pool.query(`UPDATE players SET elo = $2 WHERE id = $1`, [l.pid, newElo]);
+    await pool.query(`UPDATE players SET elo = $2, last_played = $3 WHERE id = $1`, [l.pid, newElo, now]);
   }
 }
 
@@ -1524,3 +1526,47 @@ export async function getNetWorthRank(pid: string): Promise<number> {
   );
   return rows.length ? Number(rows[0].rnk) : 1;
 }
+
+// --- Inactivity Tax (Plan 04) ---
+
+/**
+ * Levy a progressive inactivity tax on players who did NOT play during market hours today.
+ * Players at or below TAX_EXEMPT_BELOW pay nothing. Returns total coins taxed (→ House).
+ */
+export async function applyInactivityTax(marketOpenMs: number): Promise<number> {
+  if (!pool) return 0;
+  const { rows } = await pool.query(
+    `SELECT id, name, coins FROM players
+      WHERE is_netizen = FALSE
+        AND coins > $1
+        AND last_played < $2
+        AND last_played > 0`,
+    [TAX_EXEMPT_BELOW, marketOpenMs],
+  );
+  if (!rows.length) return 0;
+
+  let totalTax = 0;
+  const taxedPids: string[] = [];
+  for (const r of rows) {
+    const coins = Number(r.coins);
+    let rate = 0;
+    for (const b of INACTIVITY_TAX_BRACKETS) {
+      if (coins >= b.min) rate = b.rate;
+      else break;
+    }
+    let tax = Math.max(100, Math.floor(coins * rate));
+    // Cap so the player never drops below TAX_EXEMPT_BELOW.
+    const after = coins - tax;
+    if (after < TAX_EXEMPT_BELOW) tax = coins - TAX_EXEMPT_BELOW;
+    if (tax <= 0) continue;
+    await pool.query(`UPDATE players SET coins = coins - $2 WHERE id = $1`, [r.id, tax]);
+    totalTax += tax;
+    taxedPids.push(r.id);
+  }
+  recentlyTaxedPids = new Set(taxedPids);
+  if (totalTax > 0) await houseAdjust(totalTax);
+  return totalTax;
+}
+
+/** Return the set of pids that were taxed by the latest applyInactivityTax call, so lobby.ts can refresh their wallets. */
+export let recentlyTaxedPids = new Set<string>();

@@ -1336,6 +1336,16 @@ export const NETIZEN_CHALLENGE_HARDEST_ERROR = 22;
 export const NETIZEN_CHALLENGE_EASIEST_REACT = 0.30;
 export const NETIZEN_CHALLENGE_EASIEST_ERROR = 95;
 
+// --- Inactivity Tax (Plan 04) ---
+export const TAX_EXEMPT_BELOW = 10_000; // coins; players at or below this pay zero
+export const INACTIVITY_TAX_BRACKETS: { min: number; rate: number }[] = [
+  { min: 10_000,      rate: 0.03 },
+  { min: 100_000,     rate: 0.04 },
+  { min: 500_000,     rate: 0.055 },
+  { min: 1_000_000,   rate: 0.07 },
+  { min: 5_000_000,   rate: 0.07 },
+];
+
 export interface NetizenInfoMsg {
   type: 'netizenInfo';
   netizenId: string;
