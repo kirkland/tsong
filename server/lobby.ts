@@ -977,7 +977,7 @@ export class Lobby {
   private sbStatus: 'waiting' | 'playing' = 'waiting';
   private sbStartedAt = 0; // epoch ms the current match started (min-length reward guard)
   private static readonly SB_CAP = 4;
-  private static readonly SB_WIN_REWARD = 500; // coins the winner earns per match
+  private static readonly SB_WIN_REWARD = 1000; // coins the winner earns per match
   private static readonly SB_MIN_MATCH_MS = 30_000; // matches shorter than this don't pay (anti-farm)
 
   /** Take a slot in the Super Tsong Bros lobby (max 4). Joins with no fighter picked yet. */
