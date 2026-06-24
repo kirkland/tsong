@@ -20,7 +20,7 @@ function suitFor(card: number): string {
 }
 function suitColor(card: number): string {
   const s = suitFor(card);
-  return s === '♥' || s === '♦' ? '#e85555' : '#e0e8f0';
+  return s === '♥' || s === '♦' ? '#c0392b' : '#1a1a2e';
 }
 
 export function initHilo(opts: {
