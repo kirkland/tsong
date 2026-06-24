@@ -20,7 +20,11 @@
 // enterBuilding() and a building-texture case here. The map/camera/collision/labels key off
 // shared data.
 
-import Phaser from 'phaser';
+// Namespace import (not default): Phaser's real ESM build (the CDN one used in prod via the
+// index.html import map) exports only NAMED members and has NO default export. `import Phaser
+// from 'phaser'` only worked in dev because Vite synthesises a default; in prod the browser loads
+// the real ESM, finds no default, and the World chunk fails to instantiate (button does nothing).
+import * as Phaser from 'phaser';
 import {
   WORLD,
   WORLD_AVATAR,
