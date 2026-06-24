@@ -844,6 +844,10 @@ export class Lobby {
   // Economy Overhaul: netizen bot traders. Seeded once from the House; they appear on the
   // net-worth board automatically (getNetWorthLeaderboard includes everyone).
   private static readonly NETIZEN_START_COINS = 5000;
+  // Netizens mill around the town-centre plaza (mirrors client/world.ts PLAZA at 1600,1100 r240).
+  // They spawn near it and are leashed to NETIZEN_LEASH units of its centre so they stay in view.
+  private static readonly PLAZA = { x: 1600, y: 1100 };
+  private static readonly NETIZEN_LEASH = 360;
   private static readonly NETIZEN_NAMES = [
     'satoshi_jr', 'diamond_paws', 'moonboy420', 'hodl_hannah', 'paperhands_pete',
     'algo_andy', 'bagholder_bo', 'shorty_sue', 'whale_watcher', 'degen_dana',
@@ -1019,10 +1023,18 @@ export class Lobby {
       }
       pos.x += pos.hx * speed * dt;
       pos.y += pos.hy * speed * dt;
-      // Clamp to map bounds (leave some margin from the edges).
-      const margin = 80;
-      if (pos.x < margin || pos.x > 3200 - margin) { pos.hx = -pos.hx; pos.x = Math.max(margin, Math.min(3200 - margin, pos.x)); }
-      if (pos.y < margin || pos.y > 2200 - margin) { pos.hy = -pos.hy; pos.y = Math.max(margin, Math.min(2200 - margin, pos.y)); }
+      // Leash to the centre plaza: if a netizen strays past NETIZEN_LEASH, snap it back onto the
+      // leash circle and steer it back toward the plaza (with a little jitter) so they keep milling
+      // around the fountain in view rather than wandering off across the map.
+      const dx = pos.x - Lobby.PLAZA.x, dy = pos.y - Lobby.PLAZA.y;
+      const dist = Math.hypot(dx, dy) || 1;
+      if (dist > Lobby.NETIZEN_LEASH) {
+        pos.x = Lobby.PLAZA.x + (dx / dist) * Lobby.NETIZEN_LEASH;
+        pos.y = Lobby.PLAZA.y + (dy / dist) * Lobby.NETIZEN_LEASH;
+        const a = Math.atan2(-dy, -dx) + (Math.random() - 0.5);
+        pos.hx = Math.cos(a); pos.hy = Math.sin(a);
+        pos.until = now + 2000 + Math.random() * 4000;
+      }
     }
     if (this.world.size === 0) return; // no humans to send to
     if (++this.worldBcTick % Lobby.WORLD_BROADCAST_EVERY !== 0) return;
@@ -2264,16 +2276,17 @@ export class Lobby {
     // the House). Both are best-effort — without a DB they no-op cleanly.
     this.houseBalance = await getHouseBalance().catch(() => 0);
     await this.seedNetizens().catch((e) => console.error('netizen seed failed:', e));
-    // Seed netizen world avatar positions with staggered spawn times (0–90 min after boot).
+    // Seed netizen world avatar positions around the centre plaza with a short staggered spawn
+    // (0–5 min after boot, so they show up promptly instead of trickling in over an hour).
     this.netizenPos.clear();
     for (let i = 0; i < Lobby.NETIZEN_NAMES.length; i++) {
       const pid = `netizen:${i}`;
       this.netizenPos.set(pid, {
-        x: 1400 + Math.random() * 400,
-        y: 1040 + Math.random() * 400,
+        x: Lobby.PLAZA.x + (Math.random() * 2 - 1) * 160,
+        y: Lobby.PLAZA.y + (Math.random() * 2 - 1) * 160,
         hx: 0, hy: 0,
         until: 0,
-        spawnAt: Date.now() + Math.random() * 5400_000, // 0–90 min
+        spawnAt: Date.now() + Math.random() * 300_000, // 0–5 min
       });
     }
     // Market News Engine: hydrate the cached feed, schedule the next top-of-hour.
