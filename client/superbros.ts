@@ -839,90 +839,10 @@ export function startSuperBros(net: SuperBrosNet): void {
   }
 
   // Pixel-baked fighter art (jsav uses the image). Drawn in stage-space at (x = center, top).
+  // A subtle idle bob/squash makes them feel alive without touching the sim.
   function drawFighterArt(f: Fighter, cx: number, top: number, w: number, h: number, flash: boolean) {
-    const left = cx - w / 2;
-    if (flash) { ctx.fillStyle = '#ffffff'; ctx.fillRect(left, top, w, h); }
-    const px = (rx: number, ry: number, rw: number, rh: number, col: string) => {
-      ctx.fillStyle = flash ? lighten(col) : col;
-      ctx.fillRect(left + rx * w, top + ry * h, rw * w, rh * h);
-    };
-    switch (f.id) {
-      case 'minion': {
-        px(0.15, 0.40, 0.70, 0.60, '#3158b0');     // overalls
-        px(0.10, 0.05, 0.80, 0.45, '#ffd836');     // yellow body/head
-        px(0.18, 0.16, 0.64, 0.14, '#bbbbbb');     // goggle strap
-        px(0.30, 0.13, 0.40, 0.18, '#dddddd');     // goggle lens
-        px(0.40, 0.16, 0.20, 0.12, '#222');        // pupil
-        px(0.18, 0.92, 0.24, 0.08, '#222');        // feet
-        px(0.58, 0.92, 0.24, 0.08, '#222');
-        break;
-      }
-      case 'pikachu': {
-        px(0.12, 0.30, 0.76, 0.62, '#f6d02f');     // body
-        px(0.20, 0.08, 0.60, 0.30, '#f6d02f');     // head
-        px(0.16, -0.05, 0.16, 0.22, '#f6d02f'); px(0.16, -0.05, 0.16, 0.08, '#222'); // left ear tip
-        px(0.68, -0.05, 0.16, 0.22, '#f6d02f'); px(0.68, -0.05, 0.16, 0.08, '#222'); // right ear tip
-        px(0.26, 0.20, 0.12, 0.10, '#e85a5a');     // cheek
-        px(0.62, 0.20, 0.12, 0.10, '#e85a5a');
-        px(0.34, 0.16, 0.08, 0.08, '#222'); px(0.58, 0.16, 0.08, 0.08, '#222'); // eyes
-        px(0.78, 0.55, 0.22, 0.10, '#7a5a10');     // tail
-        break;
-      }
-      case 'rob': {
-        px(0.20, 0.42, 0.60, 0.42, '#e8862e');     // orange shirt
-        px(0.22, 0.84, 0.24, 0.16, '#2a3a5a');     // legs
-        px(0.54, 0.84, 0.24, 0.16, '#2a3a5a');
-        px(0.30, 0.08, 0.40, 0.34, '#e8b890');     // head
-        px(0.28, 0.04, 0.44, 0.14, '#2a1a0a');     // dark hair
-        px(0.38, 0.20, 0.08, 0.06, '#222'); px(0.54, 0.20, 0.08, 0.06, '#222'); // eyes
-        break;
-      }
-      case 'lebron': {
-        px(0.22, 0.36, 0.56, 0.40, '#552583');     // purple jersey
-        px(0.30, 0.40, 0.40, 0.12, '#fdb927');     // gold trim
-        px(0.24, 0.76, 0.22, 0.24, '#552583');     // shorts/legs
-        px(0.54, 0.76, 0.22, 0.24, '#552583');
-        px(0.34, 0.04, 0.32, 0.30, '#6a4a32');     // head
-        px(0.36, 0.02, 0.28, 0.10, '#1a1008');     // hair/headband
-        break;
-      }
-      case 'jsav': {
-        // drawn via the image (handled below); fall through to image-or-fallback.
-        if (jsavReady()) {
-          const aspect = jsavImg.naturalWidth / jsavImg.naturalHeight;
-          let dw = w, dh = w / aspect;
-          if (dh > h) { dh = h; dw = h * aspect; }
-          ctx.drawImage(jsavImg, cx - dw / 2, top + (h - dh), dw, dh);
-        } else {
-          px(0.2, 0.1, 0.6, 0.8, f.color);
-        }
-        return;
-      }
-      case 'kenny': {
-        // wheelchair: two wheels + frame
-        px(0.10, 0.72, 0.34, 0.28, '#333');        // back wheel
-        px(0.16, 0.78, 0.22, 0.16, '#777');
-        px(0.62, 0.80, 0.22, 0.18, '#333');        // front small wheel
-        px(0.18, 0.66, 0.60, 0.08, '#888');        // frame bar
-        // seated body
-        px(0.28, 0.34, 0.46, 0.36, '#2bbfae');     // teal hoodie
-        px(0.36, 0.06, 0.32, 0.30, '#e8b890');     // head
-        px(0.34, 0.02, 0.36, 0.12, '#171717');     // dark hood/hair
-        // a bat held up
-        px(0.74, 0.10, 0.10, 0.40, '#b06a2a');
-        px(0.72, 0.06, 0.14, 0.10, '#8a4a18');
-        break;
-      }
-      default: px(0.2, 0.1, 0.6, 0.8, f.color);
-    }
-  }
-
-  function lighten(hex: string): string {
-    const m = /^#?([0-9a-f]{6})$/i.exec(hex);
-    if (!m) return '#ffffff';
-    const n = parseInt(m[1], 16);
-    const r = Math.min(255, (n >> 16) + 90), g = Math.min(255, ((n >> 8) & 255) + 90), b = Math.min(255, (n & 255) + 90);
-    return `rgb(${r},${g},${b})`;
+    const bob = Math.sin(movePhase * 4 + cx * 0.05) * 0.012; // tiny vertical breathing
+    drawFighterArtCore(ctx, f, cx - w / 2, top + bob * h, w, h, flash, false, movePhase);
   }
 
   function drawHud() {
@@ -1143,40 +1063,292 @@ export function startSuperBros(net: SuperBrosNet): void {
   }
 }
 
-// Portrait for the select-screen swatch canvas (no flash, no facing). Reuses the same idiom but
-// at swatch scale; jsav draws the image when ready, otherwise a colored block.
-function drawPortrait(c: CanvasRenderingContext2D, f: Fighter, w: number, h: number) {
-  c.fillStyle = '#0a0a12'; c.fillRect(0, 0, w, h);
+// --- shared pixel-art color helpers (module-level so both the live sprite and the portrait share them) ---
+function clampByte(n: number): number { return n < 0 ? 0 : n > 255 ? 255 : n | 0; }
+function shadeHex(hex: string, amt: number): string {
+  // amt in [-1,1]: negative darkens, positive lightens. Falls back gracefully on bad input.
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  if (amt >= 0) { r += (255 - r) * amt; g += (255 - g) * amt; b += (255 - b) * amt; }
+  else { r *= 1 + amt; g *= 1 + amt; b *= 1 + amt; }
+  return `rgb(${clampByte(r)},${clampByte(g)},${clampByte(b)})`;
+}
+
+// neck tone for jsav (shared so both passes match)
+const skinNeck = '#d9a679';
+
+// The single source of truth for every fighter's body. Drawn into any 2D context at (left, top, w, h)
+// in fractional coords via `px`. Used for the live in-game sprite (with hit-flash + idle bob) and for
+// the select-screen portrait. `outline` draws a soft drop-shadow under the feet for the portrait card.
+function drawFighterArtCore(
+  c: CanvasRenderingContext2D, f: Fighter, left: number, top: number, w: number, h: number,
+  flash: boolean, dropShadow: boolean, phase = 0,
+) {
   const px = (rx: number, ry: number, rw: number, rh: number, col: string) => {
-    c.fillStyle = col; c.fillRect(rx * w, ry * h, rw * w, rh * h);
+    c.fillStyle = flash ? shadeHex(col, 0.85) : col;
+    c.fillRect(left + rx * w, top + ry * h, rw * w, rh * h);
   };
+  // thin contrasting outline: paint a slightly inflated dark rect behind a region.
+  const px2 = (rx: number, ry: number, rw: number, rh: number, fill: string, ol: string) => {
+    const o = 0.022;
+    px(rx - o, ry - o, rw + o * 2, rh + o * 2, ol);
+    px(rx, ry, rw, rh, fill);
+  };
+
+  if (dropShadow) {
+    c.save();
+    c.fillStyle = 'rgba(0,0,0,0.28)';
+    c.beginPath();
+    c.ellipse(left + w * 0.5, top + h * 0.985, w * 0.34, h * 0.035, 0, 0, Math.PI * 2);
+    c.fill();
+    c.restore();
+  }
+
   switch (f.id) {
-    case 'minion':
-      px(0.15, 0.45, 0.70, 0.55, '#3158b0'); px(0.12, 0.05, 0.76, 0.45, '#ffd836');
-      px(0.32, 0.14, 0.36, 0.18, '#ddd'); px(0.42, 0.17, 0.18, 0.1, '#222'); break;
-    case 'pikachu':
-      px(0.14, 0.3, 0.72, 0.6, '#f6d02f'); px(0.2, 0.06, 0.6, 0.3, '#f6d02f');
-      px(0.18, 0, 0.14, 0.12, '#222'); px(0.68, 0, 0.14, 0.12, '#222');
-      px(0.26, 0.2, 0.12, 0.1, '#e85a5a'); px(0.62, 0.2, 0.12, 0.1, '#e85a5a'); break;
-    case 'rob':
-      px(0.2, 0.42, 0.6, 0.5, '#e8862e'); px(0.3, 0.08, 0.4, 0.34, '#e8b890');
-      px(0.28, 0.04, 0.44, 0.14, '#2a1a0a'); break;
-    case 'lebron':
-      px(0.22, 0.36, 0.56, 0.55, '#552583'); px(0.3, 0.4, 0.4, 0.12, '#fdb927');
-      px(0.34, 0.04, 0.32, 0.3, '#6a4a32'); break;
-    case 'jsav': {
-      const ready = jsavImg.complete && jsavImg.naturalWidth > 0;
-      if (ready) {
-        const aspect = jsavImg.naturalWidth / jsavImg.naturalHeight;
-        let dw = w, dh = w / aspect; if (dh > h) { dh = h; dw = h * aspect; }
-        c.drawImage(jsavImg, (w - dw) / 2, (h - dh) / 2, dw, dh);
-      } else { px(0.2, 0.1, 0.6, 0.8, f.color); }
+    case 'minion': {
+      const skin = '#f7d52a', sh1 = '#d4ae16', hi = '#fff07a';
+      const denim = '#2f57b0', dsh = '#1f3d80', dhi = '#5a82d6';
+      // capsule body (outlined)
+      px2(0.16, 0.05, 0.68, 0.90, skin, '#3a2e00');
+      px(0.16, 0.05, 0.16, 0.90, sh1);                  // left core shade (will be flipped → reads as back)
+      px(0.68, 0.05, 0.16, 0.90, sh1);                  // right shade
+      px(0.66, 0.10, 0.10, 0.78, '#8f7404');            // deeper lower-right shadow
+      px(0.30, 0.07, 0.30, 0.10, hi);                   // top highlight band
+      // overalls (denim) over lower body
+      px2(0.16, 0.46, 0.68, 0.42, denim, '#13265a');
+      px(0.62, 0.50, 0.20, 0.38, dsh);                  // overalls right shadow
+      px(0.20, 0.48, 0.30, 0.08, dhi);                  // overalls highlight
+      px(0.30, 0.30, 0.10, 0.18, denim); px(0.30, 0.28, 0.10, 0.04, '#13265a'); // strap
+      px(0.42, 0.52, 0.07, 0.07, '#ffd94a'); px(0.42, 0.52, 0.07, 0.07, shadeHex('#ffd94a', -0.2)); // button base
+      px(0.43, 0.53, 0.05, 0.05, '#c79a10'); // button
+      // ONE big goggle
+      px2(0.30, 0.13, 0.42, 0.22, '#cfd4da', '#2a2a2a'); // silver rim
+      px(0.34, 0.16, 0.34, 0.16, '#bfeaff');             // light-blue glass
+      px(0.34, 0.16, 0.34, 0.05, '#e6f6ff');             // glass top sheen
+      px(0.46, 0.18, 0.12, 0.12, '#1a1a22');             // dark pupil
+      px(0.48, 0.19, 0.04, 0.04, '#ffffff');             // glint
+      px(0.27, 0.20, 0.04, 0.10, '#9aa0a8');             // rim strap left
+      px(0.71, 0.20, 0.04, 0.10, '#9aa0a8');             // rim strap right
+      // hair tufts
+      px(0.40, 0.00, 0.05, 0.07, '#111'); px(0.52, -0.01, 0.05, 0.08, '#111');
+      // gloved hands
+      px2(0.07, 0.55, 0.12, 0.14, '#1a1a1a', '#000'); px2(0.81, 0.55, 0.12, 0.14, '#1a1a1a', '#000');
+      // little dark feet
+      px2(0.22, 0.90, 0.20, 0.10, '#141414', '#000'); px2(0.58, 0.90, 0.20, 0.10, '#141414', '#000');
       break;
     }
-    case 'kenny':
-      px(0.1, 0.7, 0.34, 0.3, '#333'); px(0.62, 0.78, 0.22, 0.2, '#333');
-      px(0.28, 0.34, 0.46, 0.4, '#2bbfae'); px(0.36, 0.06, 0.32, 0.3, '#e8b890');
-      px(0.74, 0.1, 0.1, 0.4, '#b06a2a'); break;
+    case 'pikachu': {
+      const y = '#f7d51f', ysh = '#d8ad00', yhi = '#ffee8a';
+      // ears (with black tips)
+      px2(0.14, -0.10, 0.16, 0.34, y, '#5a4400'); px(0.14, -0.10, 0.16, 0.12, '#2a2a2a');
+      px2(0.70, -0.10, 0.16, 0.34, y, '#5a4400'); px(0.70, -0.10, 0.16, 0.12, '#2a2a2a');
+      // chunky body
+      px2(0.14, 0.10, 0.72, 0.84, y, '#6a5200');
+      px(0.66, 0.14, 0.20, 0.78, ysh);                   // right/back shading
+      px(0.20, 0.12, 0.34, 0.10, yhi);                   // forehead highlight
+      // brown back stripes (upper back)
+      px(0.20, 0.40, 0.46, 0.05, '#8a5a18'); px(0.20, 0.52, 0.40, 0.05, '#8a5a18');
+      // rosy cheeks
+      px(0.20, 0.30, 0.13, 0.11, '#ef5a5a'); px(0.20, 0.30, 0.13, 0.04, '#ff8a8a');
+      px(0.67, 0.30, 0.13, 0.11, '#ef5a5a'); px(0.67, 0.30, 0.11, 0.04, '#ff8a8a');
+      // big eyes + white shine
+      px2(0.32, 0.20, 0.12, 0.14, '#161616', '#000'); px(0.35, 0.21, 0.05, 0.05, '#fff');
+      px2(0.56, 0.20, 0.12, 0.14, '#161616', '#000'); px(0.59, 0.21, 0.05, 0.05, '#fff');
+      // nose + mouth
+      px(0.47, 0.34, 0.06, 0.04, '#3a2a10');
+      px(0.42, 0.40, 0.16, 0.03, '#7a4a18');
+      // little arms + feet
+      px2(0.06, 0.52, 0.12, 0.16, y, '#6a5200'); px2(0.82, 0.52, 0.12, 0.16, y, '#6a5200');
+      px2(0.22, 0.90, 0.20, 0.10, ysh, '#6a5200'); px2(0.58, 0.90, 0.20, 0.10, ysh, '#6a5200');
+      // zig-zag lightning-bolt tail (behind, on left so it reads as trailing)
+      px(0.00, 0.58, 0.10, 0.07, '#8a5a18');
+      px(0.04, 0.50, 0.08, 0.10, '#7a4a14');
+      px(-0.02, 0.46, 0.08, 0.07, '#9a6a20');
+      px(0.02, 0.62, 0.07, 0.08, '#6a3a10');
+      break;
+    }
+    case 'rob': {
+      const skin = '#e7b48a', ssh = '#c79066', orange = '#ec8a2c', osh = '#c46d14', ohi = '#ffae5e';
+      const hair = '#3a2412', hairhi = '#5e3c1e', jeans = '#26344f', jsh = '#19233a';
+      // legs (jeans) + shoes
+      px2(0.26, 0.78, 0.20, 0.18, jeans, '#0f1626'); px(0.26, 0.78, 0.07, 0.18, jsh);
+      px2(0.54, 0.78, 0.20, 0.18, jeans, '#0f1626'); px(0.54, 0.78, 0.07, 0.18, jsh);
+      px2(0.24, 0.94, 0.24, 0.06, '#23252b', '#000'); px2(0.52, 0.94, 0.24, 0.06, '#23252b', '#000'); // shoes
+      // orange t-shirt torso
+      px2(0.22, 0.40, 0.56, 0.40, orange, '#5a2e06');
+      px(0.62, 0.44, 0.16, 0.34, osh);                   // fold/shadow on right
+      px(0.30, 0.42, 0.22, 0.06, ohi);                   // shoulder highlight
+      px(0.46, 0.50, 0.04, 0.28, osh);                   // center fold crease
+      // arms + hands
+      px2(0.10, 0.42, 0.13, 0.30, orange, '#5a2e06'); px2(0.77, 0.42, 0.13, 0.30, orange, '#5a2e06'); // sleeves
+      px2(0.10, 0.66, 0.13, 0.12, skin, '#7a5230'); px2(0.77, 0.66, 0.13, 0.12, skin, '#7a5230');     // hands
+      // head
+      px2(0.30, 0.10, 0.40, 0.32, skin, '#7a5230');
+      px(0.60, 0.14, 0.10, 0.26, ssh);                   // face right shade
+      // hair
+      px(0.28, 0.04, 0.44, 0.14, hair); px2(0.28, 0.04, 0.44, 0.10, hair, '#1a0f06');
+      px(0.34, 0.05, 0.18, 0.04, hairhi);                // hair highlight
+      px(0.28, 0.10, 0.06, 0.10, hair); px(0.66, 0.10, 0.06, 0.10, hair); // sideburns
+      // eyes + smile
+      px(0.38, 0.22, 0.07, 0.06, '#1a1a1a'); px(0.55, 0.22, 0.07, 0.06, '#1a1a1a');
+      px(0.39, 0.22, 0.03, 0.02, '#fff'); px(0.56, 0.22, 0.03, 0.02, '#fff');
+      px(0.40, 0.33, 0.20, 0.02, '#8a4a30'); px(0.40, 0.34, 0.03, 0.02, '#8a4a30'); px(0.57, 0.34, 0.03, 0.02, '#8a4a30'); // slight smile
+      break;
+    }
+    case 'lebron': {
+      const skin = '#6b4a2f', ssh = '#523722', shi = '#8a6440';
+      const purp = '#552583', psh = '#3c1a60', phi = '#7b46ad', gold = '#fdb927', goldsh = '#c98c0e';
+      // legs + high-tops
+      px2(0.26, 0.74, 0.20, 0.16, skin, '#3a2616'); px2(0.54, 0.74, 0.20, 0.16, skin, '#3a2616');
+      px2(0.23, 0.88, 0.25, 0.10, '#f4f4f4', '#000'); px2(0.52, 0.88, 0.25, 0.10, '#f4f4f4', '#000'); // sneakers
+      px(0.23, 0.88, 0.25, 0.03, gold); px(0.52, 0.88, 0.25, 0.03, gold);                              // shoe stripe
+      // gold/purple shorts
+      px2(0.22, 0.66, 0.56, 0.16, gold, '#7a5408');
+      px(0.62, 0.68, 0.16, 0.14, goldsh);
+      px(0.49, 0.66, 0.03, 0.16, purp);                  // shorts seam
+      // jersey
+      px2(0.20, 0.34, 0.60, 0.34, purp, '#260f42');
+      px(0.64, 0.38, 0.16, 0.30, psh);                   // right shade
+      px(0.26, 0.36, 0.24, 0.06, phi);                   // chest highlight
+      px(0.20, 0.34, 0.60, 0.04, gold);                  // shoulder trim
+      px(0.20, 0.62, 0.60, 0.04, gold);                  // hem trim
+      // number "23" on chest
+      px(0.34, 0.44, 0.05, 0.12, gold); px(0.34, 0.44, 0.10, 0.03, gold); px(0.39, 0.47, 0.04, 0.03, gold); px(0.34, 0.50, 0.10, 0.03, gold); px(0.34, 0.53, 0.04, 0.03, gold); px(0.34, 0.53, 0.10, 0.03, gold); // 2
+      px(0.50, 0.44, 0.10, 0.03, gold); px(0.56, 0.47, 0.04, 0.03, gold); px(0.50, 0.50, 0.10, 0.03, gold); px(0.56, 0.53, 0.04, 0.03, gold); px(0.50, 0.53, 0.10, 0.03, gold); // 3
+      // muscular arms + hands
+      px2(0.07, 0.36, 0.13, 0.30, skin, '#3a2616'); px2(0.80, 0.36, 0.13, 0.30, skin, '#3a2616');
+      px(0.07, 0.36, 0.05, 0.30, ssh); px(0.86, 0.40, 0.05, 0.26, ssh); // arm shading
+      px(0.10, 0.40, 0.06, 0.06, shi); px(0.82, 0.40, 0.06, 0.06, shi); // bicep highlight
+      // head + confident face
+      px2(0.32, 0.06, 0.36, 0.30, skin, '#3a2616');
+      px(0.60, 0.10, 0.08, 0.24, ssh);
+      px(0.34, 0.02, 0.32, 0.08, '#211711'); // hairline
+      // headband
+      px2(0.32, 0.08, 0.36, 0.07, gold, '#7a5408'); px(0.34, 0.09, 0.20, 0.02, '#ffe08a');
+      // eyes + confident grin
+      px(0.39, 0.18, 0.07, 0.05, '#161616'); px(0.55, 0.18, 0.07, 0.05, '#161616');
+      px(0.42, 0.28, 0.18, 0.03, '#f4f4f4'); // teeth/grin
+      break;
+    }
+    case 'jsav': {
+      const ready = jsavReady();
+      const shirt = '#3a7bd5', shirtSh = '#285aa0', shirtHi = '#5e9bef';
+      if (dropShadow) { /* already drawn */ }
+      // pixel torso/shoulders below the head
+      px2(0.20, 0.58, 0.60, 0.40, shirt, '#15315c');
+      px(0.62, 0.62, 0.18, 0.34, shirtSh);     // right shade
+      px(0.26, 0.60, 0.26, 0.06, shirtHi);     // collar highlight
+      px(0.44, 0.58, 0.12, 0.10, skinNeck); // neck
+      // collar V
+      px(0.42, 0.58, 0.16, 0.05, '#15315c');
+      // head: mask the photo into a rounded/oval with a dark outline
+      const cxh = left + w * 0.5, cyh = top + h * 0.30;
+      const rxh = w * 0.30, ryh = h * 0.26;
+      // dark outline ring
+      c.save();
+      c.fillStyle = '#10141c';
+      c.beginPath();
+      c.ellipse(cxh, cyh, rxh + w * 0.03, ryh + h * 0.025, 0, 0, Math.PI * 2);
+      c.fill();
+      // clip oval and draw photo (or fallback block)
+      c.beginPath();
+      c.ellipse(cxh, cyh, rxh, ryh, 0, 0, Math.PI * 2);
+      c.clip();
+      if (ready) {
+        const aspect = jsavImg.naturalWidth / jsavImg.naturalHeight;
+        let dw = rxh * 2.2, dh = dw / aspect;
+        if (dh < ryh * 2.2) { dh = ryh * 2.2; dw = dh * aspect; }
+        c.drawImage(jsavImg, cxh - dw / 2, cyh - dh / 2, dw, dh);
+      } else {
+        c.fillStyle = flash ? shadeHex(f.color, 0.85) : f.color;
+        c.fillRect(cxh - rxh, cyh - ryh, rxh * 2, ryh * 2);
+      }
+      c.restore();
+      if (flash) {
+        c.save();
+        c.globalAlpha = 0.55; c.fillStyle = '#fff';
+        c.beginPath(); c.ellipse(cxh, cyh, rxh, ryh, 0, 0, Math.PI * 2); c.fill();
+        c.restore();
+      }
+      break;
+    }
+    case 'kenny': {
+      const tire = '#1c1c1c', rim = '#9aa0a8', hub = '#cfd4da', frame = '#b03030', framesh = '#7a1f1f';
+      const skin = '#e7b48a', ssh = '#c79066';
+      const jersey = '#1f9e8e', jsh = '#147063', jhi = '#3fc7b5', cap = '#173a8a', capsh = '#0e2860';
+      // big back wheel (shaded: tire ring, rim, hub, spokes)
+      const wcx = left + w * 0.30, wcy = top + h * 0.74, wr = w * 0.30;
+      c.save();
+      c.fillStyle = flash ? shadeHex(tire, 0.85) : tire;
+      c.beginPath(); c.arc(wcx, wcy, wr, 0, Math.PI * 2); c.fill();
+      c.fillStyle = '#000'; c.globalAlpha = 0.4;
+      c.beginPath(); c.arc(wcx + wr * 0.18, wcy + wr * 0.18, wr * 0.92, 0, Math.PI * 2); c.fill();
+      c.globalAlpha = 1;
+      c.fillStyle = rim; c.beginPath(); c.arc(wcx, wcy, wr * 0.66, 0, Math.PI * 2); c.fill();
+      c.fillStyle = flash ? shadeHex(tire, 0.85) : '#2a2a2a'; c.beginPath(); c.arc(wcx, wcy, wr * 0.52, 0, Math.PI * 2); c.fill();
+      // spokes
+      c.strokeStyle = rim; c.lineWidth = Math.max(1, w * 0.02);
+      for (let k = 0; k < 6; k++) {
+        const a = (k / 6) * Math.PI * 2 + phase * 1.5;
+        c.beginPath(); c.moveTo(wcx, wcy); c.lineTo(wcx + Math.cos(a) * wr * 0.52, wcy + Math.sin(a) * wr * 0.52); c.stroke();
+      }
+      c.fillStyle = hub; c.beginPath(); c.arc(wcx, wcy, wr * 0.16, 0, Math.PI * 2); c.fill();
+      c.restore();
+      // small front wheel
+      const fcx = left + w * 0.80, fcy = top + h * 0.85, fr = w * 0.13;
+      c.save();
+      c.fillStyle = flash ? shadeHex(tire, 0.85) : tire; c.beginPath(); c.arc(fcx, fcy, fr, 0, Math.PI * 2); c.fill();
+      c.fillStyle = rim; c.beginPath(); c.arc(fcx, fcy, fr * 0.5, 0, Math.PI * 2); c.fill();
+      c.fillStyle = hub; c.beginPath(); c.arc(fcx, fcy, fr * 0.2, 0, Math.PI * 2); c.fill();
+      c.restore();
+      // chair frame
+      px2(0.20, 0.56, 0.56, 0.07, frame, '#4a1212');   // seat bar
+      px(0.20, 0.60, 0.56, 0.03, framesh);
+      px2(0.70, 0.30, 0.06, 0.30, frame, '#4a1212');   // backrest post
+      px2(0.74, 0.66, 0.16, 0.06, frame, '#4a1212');   // front fork to small wheel
+      // seated body in team jersey
+      px2(0.30, 0.30, 0.42, 0.30, jersey, '#0c4a40');
+      px(0.62, 0.34, 0.12, 0.24, jsh);                 // jersey shade
+      px(0.34, 0.32, 0.20, 0.05, jhi);                 // jersey highlight
+      px(0.36, 0.44, 0.10, 0.04, '#fff');              // jersey logo stripe
+      // legs across the seat
+      px2(0.30, 0.58, 0.34, 0.10, jsh, '#0c4a40');
+      // arm raising the bat
+      px2(0.58, 0.26, 0.12, 0.18, skin, '#7a5230');
+      // head + face
+      px2(0.34, 0.08, 0.32, 0.26, skin, '#7a5230');
+      px(0.58, 0.12, 0.08, 0.20, ssh);                 // face shade
+      px(0.42, 0.18, 0.06, 0.05, '#1a1a1a'); px(0.55, 0.18, 0.06, 0.05, '#1a1a1a'); // eyes
+      px(0.43, 0.18, 0.02, 0.02, '#fff');
+      px(0.44, 0.27, 0.14, 0.02, '#8a4a30');           // mouth
+      // cap
+      px2(0.32, 0.04, 0.36, 0.10, cap, '#091e4a'); px(0.34, 0.05, 0.20, 0.03, '#3a5fb0');
+      px2(0.62, 0.10, 0.16, 0.05, capsh, '#091e4a');   // brim
+      // baseball BAT raised over the shoulder (diagonal)
+      c.save();
+      c.translate(left + w * 0.70, top + h * 0.28);
+      c.rotate(-0.9);
+      c.fillStyle = flash ? shadeHex('#b5824a', 0.85) : '#b5824a';
+      c.fillRect(-w * 0.04, -h * 0.02, w * 0.10, h * 0.42);   // barrel
+      c.fillStyle = '#8a5a2a'; c.fillRect(-w * 0.04, h * 0.30, w * 0.10, h * 0.10); // handle
+      c.fillStyle = '#d6a766'; c.fillRect(-w * 0.02, 0, w * 0.03, h * 0.40);        // wood highlight
+      c.restore();
+      break;
+    }
     default: px(0.2, 0.1, 0.6, 0.8, f.color);
   }
+}
+
+// Portrait for the select-screen swatch canvas (no flash, no facing). Reuses the SAME core art so the
+// cards are richer mini versions of the in-game sprites, with a soft drop-shadow under the feet.
+function drawPortrait(c: CanvasRenderingContext2D, f: Fighter, w: number, h: number) {
+  // subtle vignette background so the outlined art pops on the card
+  const g = c.createLinearGradient(0, 0, 0, h);
+  g.addColorStop(0, '#161a28'); g.addColorStop(1, '#0a0a12');
+  c.fillStyle = g; c.fillRect(0, 0, w, h);
+  // inset the art a touch so ears/tails/bats don't clip the card edges
+  const pad = w * 0.10;
+  drawFighterArtCore(c, f, pad, h * 0.06, w - pad * 2, h * 0.92, false, true);
 }
