@@ -79,6 +79,7 @@ import {
   minBet,
   FAST_SELL_TAX_MS,
   FAST_SELL_TAX_RATE,
+  FIGHTERS,
 } from '../shared/types';
 import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSelfElo, getSelfNetWorth, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
@@ -961,6 +962,113 @@ export class Lobby {
     }));
     this.ntSlots.forEach((sock, slot) => {
       this.tell(sock, { type: 'ntLobby', status: this.ntStatus, slot, hostSlot: 0, players });
+    });
+  }
+
+  // --- Super Tsong Bros (PvP platform fighter) ---
+  // A clone of the Nuketown subsystem: up to 4 players free-for-all, host-authoritative over a
+  // dumb broadcast relay. The server only matchmakes the lobby, tracks each player's chosen
+  // fighter (for the all-locked start gate), tracks 'waiting'|'playing' status, and fans relay
+  // payloads out. Slot 0 (first joiner) is the host/authority and runs the whole match client-side.
+  // The win reward is House-funded and paid once per match to the reported winning slot, behind
+  // host-only + status + min-length guards (same anti-farm shape as Nuketown). No Pong state touched.
+  private sbSlots: WebSocket[] = [];
+  private sbFighters = new Map<WebSocket, string | null>(); // ws → locked fighter id (null = not picked)
+  private sbStatus: 'waiting' | 'playing' = 'waiting';
+  private sbStartedAt = 0; // epoch ms the current match started (min-length reward guard)
+  private static readonly SB_CAP = 4;
+  private static readonly SB_WIN_REWARD = 1000; // coins the winner earns per match
+  private static readonly SB_MIN_MATCH_MS = 30_000; // matches shorter than this don't pay (anti-farm)
+
+  /** Take a slot in the Super Tsong Bros lobby (max 4). Joins with no fighter picked yet. */
+  sbJoin(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return;
+    if (this.sbSlots.includes(ws) || this.sbSlots.length >= Lobby.SB_CAP) return;
+    if (this.sbStatus === 'playing') return; // can't hop into a running match (pick before the next one)
+    this.sbSlots.push(ws);
+    this.sbFighters.set(ws, null);
+    this.broadcastSbLobby();
+  }
+
+  /** Lock in (or change, while waiting) the fighter for this player's slot. */
+  sbPick(ws: WebSocket, fighter: string) {
+    if (!this.sbSlots.includes(ws)) return;
+    if (this.sbStatus === 'playing') return; // locked once the match is live
+    if (!FIGHTERS.some((f) => f.id === fighter)) return; // must be a real fighter id
+    this.sbFighters.set(ws, fighter);
+    this.broadcastSbLobby();
+  }
+
+  /** Leave the lobby/match. If the HOST (slot 0) left, end the match for everyone. */
+  sbLeave(ws: WebSocket) {
+    const i = this.sbSlots.indexOf(ws);
+    if (i === -1) return;
+    const wasHost = i === 0;
+    this.sbSlots.splice(i, 1);
+    this.sbFighters.delete(ws);
+    if (wasHost) {
+      // The authority is gone — no one can simulate the match. Tear it down for everyone left.
+      for (const other of this.sbSlots) {
+        this.tell(other, { type: 'sbLobby', status: 'ended', slot: 0, hostSlot: 0, players: [] });
+      }
+      this.sbSlots = [];
+      this.sbFighters.clear();
+      this.sbStatus = 'waiting';
+      return;
+    }
+    if (this.sbSlots.length <= 1) this.sbStatus = 'waiting';
+    this.broadcastSbLobby();
+  }
+
+  /** (Host only) start the match. Requires ≥2 players AND every player to have locked a fighter. */
+  sbStart(ws: WebSocket) {
+    if (this.sbSlots[0] !== ws) return;            // only the host (slot 0) may start
+    if (this.sbSlots.length < 2) return;           // need at least 2 players
+    if (!this.sbSlots.every((s) => this.sbFighters.get(s))) return; // all-locked gate
+    this.sbStatus = 'playing';
+    this.sbStartedAt = Date.now();
+    this.broadcastSbLobby();
+  }
+
+  /** (Host only) settle a finished match: pay the reported winning slot the House-funded reward.
+   *  Guards: host-only, only while live (status flips to 'waiting' so it pays exactly once), the
+   *  winner slot must be valid, and the match must have lasted a minimum length (anti-farm). */
+  sbEnd(ws: WebSocket, winnerSlot: number) {
+    if (this.sbSlots[0] !== ws) return;          // only the authoritative host reports
+    if (this.sbStatus !== 'playing') return;     // already settled / never started — ignore
+    this.sbStatus = 'waiting';                   // settle once; any further sbEnd is a no-op
+    const winSock = this.sbSlots[winnerSlot];
+    if (winnerSlot < 0 || !winSock) { this.broadcastSbLobby(); return; } // invalid → no payout
+    if (Date.now() - this.sbStartedAt < Lobby.SB_MIN_MATCH_MS) { this.broadcastSbLobby(); return; }
+    const conn = this.conns.get(winSock);
+    if (conn && conn.pid) {
+      this.housePay(conn.pid, conn.nickname, Lobby.SB_WIN_REWARD)
+        .then((paid) => {
+          this.sendWallet(winSock); this.refreshNetWorth().catch(() => {});
+          if (paid > 0) this.notify(winSock, `🥊 You won Super Tsong Bros — +${paid.toLocaleString()} coins!`);
+        })
+        .catch((e) => console.error('super tsong bros reward failed:', e));
+    }
+    this.broadcastSbLobby();
+  }
+
+  /** Forward an opaque Super Tsong Bros payload to every OTHER participant (dumb fan-out). */
+  sbRelay(ws: WebSocket, data: unknown) {
+    if (!this.sbSlots.includes(ws)) return;
+    for (const other of this.sbSlots) {
+      if (other !== ws) this.tell(other, { type: 'sbRelay', data });
+    }
+  }
+
+  private broadcastSbLobby() {
+    const players = this.sbSlots.map((sock, slot) => ({
+      name: this.conns.get(sock)?.nickname ?? `P${slot}`,
+      slot,
+      fighter: this.sbFighters.get(sock) ?? null,
+    }));
+    this.sbSlots.forEach((sock, slot) => {
+      this.tell(sock, { type: 'sbLobby', status: this.sbStatus, slot, hostSlot: 0, players });
     });
   }
 
@@ -3562,6 +3670,7 @@ export class Lobby {
   remove(ws: WebSocket) {
     this.doomLeave(ws); // drop any co-op DOOM slot (and notify the partner)
     this.ntLeave(ws);   // drop any Nuketown slot (ends the match if the host left)
+    this.sbLeave(ws);   // drop any Super Tsong Bros slot (ends the match if the host left)
     this.tdLeave(ws);   // drop out of the Type or Die arena
     this.world.leave(ws); // drop their avatar from the free-roam world map
     const leavingPid = this.conns.get(ws)?.pid ?? '';

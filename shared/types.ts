@@ -514,6 +514,12 @@ export type ClientMsg =
   | { type: 'ntStart' } // (host only) start the Nuketown match from the waiting room
   | { type: 'ntEnd'; team: number } // (host only) report the winning team so the server pays the winners
   | { type: 'ntRelay'; data: unknown } // forward an opaque Nuketown payload to all other participants
+  | { type: 'sbJoin' } // take a slot in the Super Tsong Bros lobby (2–4 players)
+  | { type: 'sbLeave' } // leave the Super Tsong Bros lobby / match
+  | { type: 'sbPick'; fighter: string } // lock in a fighter for the character-select gate
+  | { type: 'sbStart' } // (host only) start the Super Tsong Bros match (needs ≥2 players, all locked)
+  | { type: 'sbEnd'; winner: number } // (host only) report the winning slot so the server pays the winner
+  | { type: 'sbRelay'; data: unknown } // forward an opaque Super Tsong Bros payload to all other participants
   | { type: 'tdJoin' } // join the shared co-op "Type or Die" arena
   | { type: 'tdLeave' } // leave the Type or Die arena
   | { type: 'tdStart' } // (any participant) start the next Type or Die run from the waiting room
@@ -951,6 +957,8 @@ export type ServerMsg =
   | DoomEndMsg
   | NtLobbyMsg
   | NtRelayMsg
+  | SbLobbyMsg
+  | SbRelayMsg
   | DoomLeaderboardMsg
   | TypeDieStateMsg
   | TypeDieLeaderboardMsg
@@ -1450,6 +1458,24 @@ export interface NtRelayMsg {
   type: 'ntRelay';
   data: unknown;
 }
+// Super Tsong Bros lobby (2–4 slots, free-for-all platform fighter). `slot` is which slot this
+// client holds (0 = host/authority). Each player carries their chosen `fighter` id (null until
+// they lock in). The match can only start once every player has a non-null fighter AND ≥2 are
+// present (the all-locked gate). On 'playing', slot 0 simulates the whole match; on 'ended'
+// everyone bails to the menu (the host left).
+export interface SbLobbyMsg {
+  type: 'sbLobby';
+  status: 'waiting' | 'playing' | 'ended';
+  slot: number; // this client's slot (0 = host)
+  hostSlot: number; // which slot is the authority (0)
+  players: { name: string; slot: number; fighter: string | null }[]; // everyone in the lobby + their pick
+}
+// An opaque payload broadcast from one Super Tsong Bros participant to all others (host state
+// snapshot / guest input). Clients pick out the messages they care about.
+export interface SbRelayMsg {
+  type: 'sbRelay';
+  data: unknown;
+}
 // High-round leaderboards for the DOOM minigame (separate solo / co-op tables).
 export interface DoomLeaderboardMsg {
   type: 'doomLeaderboard';
@@ -1599,3 +1625,177 @@ export const NETIZEN_DIALOGUE = {
     'i swear the market moves when i look away', 'net worth go brr 📈 or should i say brr 📉',
   ],
 };
+
+// =====================================================================================
+// Super Tsong Bros — a 2–4 player PvP platform fighter (Smash-like). Wire contract + the
+// fighter roster and the stage list shared by client (sim + render) and server (lobby gate).
+// The sim itself lives in client/superbros.ts; these are the tunable data tables.
+// =====================================================================================
+
+// Per-fighter melee attack: an instant arc/hitbox in front of the fighter.
+export interface FighterMelee {
+  name: string;     // move name, shown in HUD / select
+  range: number;    // 1–10 reach in front of the fighter
+  dmg: number;      // 1–10 damage dealt (→ damage-% added)
+  startup: number;  // 1–10 wind-up frames (lower = snappier; high = slow but strong)
+}
+// Per-fighter projectile (K). Fired forward; despawns off-screen or after a lifetime.
+export interface FighterProjectile {
+  name: string;                          // projectile name
+  speed: number;                         // 1–10 launch speed
+  dmg: number;                           // 1–10 damage on hit
+  cooldown: number;                      // 1–10 reuse delay (lower = more rapid fire)
+  arc: 'straight' | 'lob' | 'bounce';    // trajectory: flat, gravity-lobbed, or floor-bouncing
+}
+// A playable fighter. All stats are on a 1–10 "feel" scale; the engine (client/superbros.ts)
+// converts them to physics units. `color` is the flat select-screen / fallback tint; `useImage`
+// (jsav only) means the sprite is the /jsav.jpg asset rather than pixel-baked art.
+export interface Fighter {
+  id: string;
+  name: string;
+  blurb: string;       // one-line archetype shown on the select screen
+  color: string;       // portrait / fallback body tint
+  speed: number;       // ground run speed
+  strength: number;    // knockback dealt (attacker strength)
+  weight: number;      // knockback resistance (heavier = launched less)
+  jump: number;        // jump + recovery (up-burst) height
+  fallSpeed: number;   // gravity / fast-fall feel
+  size: number;        // hurtbox size (also visual scale)
+  melee: FighterMelee;
+  projectile: FighterProjectile;
+  useImage?: boolean;  // jsav: draw the /jsav.jpg image instead of pixel art
+}
+
+// The roster. Six fighters, tuned for clear variety across the feel scale.
+// TO ADD MORE FIGHTERS: append an entry here (and a matching draw routine + portrait swatch in
+// client/superbros.ts's FIGHTER_ART / drawFighter). Nothing else needs to change — the lobby,
+// select gate and sim all read this table.
+export const FIGHTERS: Fighter[] = [
+  {
+    id: 'minion', name: 'Minion', blurb: 'Rushdown lightweight — fast, frail, annoying.',
+    color: '#ffd836', speed: 8, strength: 4, weight: 3, jump: 7, fallSpeed: 5, size: 4,
+    melee: { name: 'Slap', range: 3, dmg: 3, startup: 2 },
+    projectile: { name: 'Banana', speed: 4, dmg: 3, cooldown: 4, arc: 'lob' },
+  },
+  {
+    id: 'pikachu', name: 'Pikachu', blurb: 'Fast floaty zoner — shock from range.',
+    color: '#f6d02f', speed: 9, strength: 4, weight: 3, jump: 8, fallSpeed: 4, size: 4,
+    melee: { name: 'Tail Whip', range: 3, dmg: 4, startup: 2 },
+    projectile: { name: 'Lightning Bolt', speed: 10, dmg: 5, cooldown: 5, arc: 'straight' },
+  },
+  {
+    id: 'rob', name: 'Rob', blurb: 'Balanced all-rounder — no glaring weakness.',
+    color: '#e8862e', speed: 6, strength: 6, weight: 5, jump: 6, fallSpeed: 5, size: 5,
+    melee: { name: 'Jab', range: 4, dmg: 5, startup: 3 },
+    projectile: { name: 'Knife', speed: 8, dmg: 5, cooldown: 5, arc: 'straight' },
+  },
+  {
+    id: 'lebron', name: 'LeBron James', blurb: 'Athletic heavyweight — huge hops, huge hits.',
+    color: '#552583', speed: 6, strength: 8, weight: 7, jump: 8, fallSpeed: 6, size: 7,
+    melee: { name: 'Dunk Slam', range: 5, dmg: 8, startup: 6 },
+    projectile: { name: 'Basketball', speed: 6, dmg: 7, cooldown: 6, arc: 'bounce' },
+  },
+  {
+    id: 'jsav', name: 'jsav', blurb: 'Machine-gun zoner — bury them in bullets.',
+    color: '#7a6a55', speed: 5, strength: 5, weight: 5, jump: 5, fallSpeed: 6, size: 5,
+    melee: { name: 'Pistol-Whip', range: 4, dmg: 5, startup: 3 },
+    projectile: { name: 'Bullet', speed: 10, dmg: 2, cooldown: 1, arc: 'straight' },
+    useImage: true,
+  },
+  {
+    id: 'kenny', name: 'Kenny', blurb: 'Wheelchair bat-swinger — heavy, rolls fast, no recovery.',
+    color: '#2bbfae', speed: 7, strength: 7, weight: 8, jump: 3, fallSpeed: 7, size: 6,
+    melee: { name: 'Bat Swing', range: 6, dmg: 7, startup: 4 },
+    projectile: { name: 'Baseball', speed: 7, dmg: 5, cooldown: 5, arc: 'lob' },
+  },
+  // ↑ add more fighters here.
+];
+
+// A solid or pass-through platform rect, in stage-space (origin top-left, y down).
+export interface StagePlatform {
+  x: number; y: number; w: number; h: number;
+  passThrough: boolean; // true = jump up through it / hold ↓ to drop down
+  moves?: { dx: number; period: number }; // optional side-to-side oscillation (amplitude px, seconds)
+}
+// A damaging hazard region (e.g. lava). Touching it deals damage + a strong upward launch.
+export interface StageHazard {
+  x: number; y: number; w: number; h: number;
+  kind: 'lava';
+  dmg: number;     // damage-% added per touch tick
+  launch: number;  // upward launch impulse strength
+}
+// A stage. Coordinates are in a fixed 1280×720 stage-space; the renderer scales to the canvas.
+// Blast zones: a fighter launched past these bounds loses a stock. `spawns` are respawn points.
+export interface Stage {
+  id: string;
+  name: string;
+  blurb: string;
+  backdrop: string;          // base sky/background tint
+  platforms: StagePlatform[];
+  hazards: StageHazard[];
+  spawns: { x: number; y: number }[]; // up to 4 spawn points
+  blast: { left: number; right: number; top: number; bottom: number }; // ring-out bounds
+}
+
+// Stage-space is 1280 wide × 720 tall. Blast zones sit OUTSIDE that so there's margin off-screen.
+export const SB_STAGE_W = 1280;
+export const SB_STAGE_H = 720;
+
+// The three stages. TO ADD MORE STAGES: append here (and the renderer in client/superbros.ts
+// already draws platforms/hazards generically; add a backdrop case for extra flavor).
+export const STAGES: Stage[] = [
+  {
+    id: 'plaza', name: 'Plaza Showdown',
+    blurb: 'Open & beginner-friendly. A long floor + two small floats.',
+    backdrop: '#7fb2e8',
+    platforms: [
+      { x: 240, y: 560, w: 800, h: 40, passThrough: false }, // long solid main floor
+      { x: 360, y: 400, w: 200, h: 20, passThrough: true },  // left float
+      { x: 720, y: 400, w: 200, h: 20, passThrough: true },  // right float
+    ],
+    hazards: [],
+    spawns: [
+      { x: 420, y: 480 }, { x: 860, y: 480 }, { x: 560, y: 340 }, { x: 720, y: 340 },
+    ],
+    blast: { left: -160, right: 1440, top: -260, bottom: 880 },
+  },
+  {
+    id: 'paddlepark', name: 'Paddle Park',
+    blurb: 'Aerial & vertical. NO floor — staggered pong-paddle platforms with gaps.',
+    backdrop: '#10202b',
+    platforms: [
+      { x: 200, y: 560, w: 220, h: 22, passThrough: true },  // low-left paddle
+      { x: 860, y: 560, w: 220, h: 22, passThrough: true },  // low-right paddle
+      { x: 520, y: 420, w: 240, h: 22, passThrough: true, moves: { dx: 180, period: 7 } }, // moving mid paddle
+      { x: 340, y: 280, w: 200, h: 22, passThrough: true },  // high-left paddle
+      { x: 740, y: 280, w: 200, h: 22, passThrough: true },  // high-right paddle
+    ],
+    hazards: [],
+    spawns: [
+      { x: 300, y: 500 }, { x: 960, y: 500 }, { x: 440, y: 220 }, { x: 820, y: 220 },
+    ],
+    blast: { left: -160, right: 1440, top: -260, bottom: 860 },
+  },
+  {
+    id: 'hellpit', name: 'Hell Pit',
+    blurb: 'DOOM hazard stage. A central lava pit between two ledges — touch it and fly.',
+    backdrop: '#1a0808',
+    platforms: [
+      { x: 160, y: 560, w: 360, h: 60, passThrough: false }, // left ground
+      { x: 760, y: 560, w: 360, h: 60, passThrough: false }, // right ground
+      { x: 540, y: 360, w: 200, h: 20, passThrough: true },  // center float over the pit
+    ],
+    hazards: [
+      { x: 520, y: 600, w: 240, h: 120, kind: 'lava', dmg: 12, launch: 9 }, // central lava pit
+    ],
+    spawns: [
+      { x: 300, y: 480 }, { x: 980, y: 480 }, { x: 240, y: 480 }, { x: 1040, y: 480 },
+    ],
+    blast: { left: -160, right: 1440, top: -260, bottom: 880 },
+  },
+];
+
+// Super Tsong Bros match rules (shared so client sim + any future server checks agree).
+export const SB_STOCKS = 3;          // lives per fighter
+export const SB_MAX_PLAYERS = 4;     // lobby cap
+export const SB_MIN_PLAYERS = 2;     // min to start

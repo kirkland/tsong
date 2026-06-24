@@ -663,6 +663,10 @@ const net = connect(
       nuketownMod?.feedNtLobby(msg);
     } else if (msg.type === 'ntRelay') {
       nuketownMod?.feedNtRelay(msg.data);
+    } else if (msg.type === 'sbLobby') {
+      superBrosMod?.feedSbLobby(msg);
+    } else if (msg.type === 'sbRelay') {
+      superBrosMod?.feedSbRelay(msg.data);
     } else if (msg.type === 'doomLeaderboard') {
       doomScores = { solo: msg.solo, coop: msg.coop };
     } else if (msg.type === 'tdState') {
@@ -1646,6 +1650,29 @@ nuketownBtn.addEventListener('click', async () => {
     });
   } catch (e) {
     console.error('Nuketown failed to load:', e);
+  }
+});
+
+// --- Super Tsong Bros PvP platform fighter (lazy-loaded, self-contained). Host-authoritative:
+// the server is only a lobby (with a per-slot fighter pick + all-locked start gate) + broadcast
+// relay (sb* messages, routed above). Slot 0 (first joiner) simulates the whole match and
+// streams snapshots; guests send input and render from them. ---
+const sbBtn = document.getElementById('sbBtn') as HTMLButtonElement;
+let superBrosMod: typeof import('./superbros') | null = null;
+sbBtn.addEventListener('click', async () => {
+  try {
+    superBrosMod = await import('./superbros');
+    superBrosMod.startSuperBros({
+      join: () => net.send({ type: 'sbJoin' }),
+      leave: () => net.send({ type: 'sbLeave' }),
+      pick: (fighter) => net.send({ type: 'sbPick', fighter }),
+      start: () => net.send({ type: 'sbStart' }),
+      end: (winner) => net.send({ type: 'sbEnd', winner }),
+      relay: (data) => net.send({ type: 'sbRelay', data }),
+      name: () => myName,
+    });
+  } catch (e) {
+    console.error('Super Tsong Bros failed to load:', e);
   }
 });
 
