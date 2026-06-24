@@ -4160,8 +4160,9 @@ function bjTotal(cards: string[]): number {
 // weighted toward low multipliers (median ≈ 2×). House keeps uncashed bets.
 function bjCrashPoint(): number {
   const u = Math.random();
-  if (u < 0.03) return 1.00;
-  const v = (u - 0.03) / 0.97;
+  if (u < 0.01) return 1.00;
+  // mild power transform pushes more rounds to higher multipliers
+  const v = Math.pow((u - 0.01) / 0.99, 0.85);
   return Math.max(1.01, Math.round(100 * 0.97 / (1 - v * 0.94)) / 100);
 }
 
