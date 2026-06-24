@@ -43,6 +43,7 @@ import {
   LootResultMsg,
   MarketItemView,
   LoanBookMsg,
+  minBet,
 } from '../shared/types';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -1845,12 +1846,15 @@ function syncBetSection() {
   const canBet = !!state && state.status === 'playing' && !state.poly && myRole === 'observer' && !state.bot;
   betSection.hidden = !canBet;
   if (!canBet || !state) return;
-  // The stake is a positive whole number. We deliberately DON'T cap it to the wallet here —
-  // typing more than you have surfaces the "insufficient funds" hint below rather than being
-  // silently swallowed. Don't clobber the field while it's being edited.
-  betAmount = Math.max(1, Math.floor(betAmount) || 1);
+  // The stake is a positive whole number no lower than the wealth-scaled minimum.
+  // We deliberately DON'T cap it to the wallet here — typing more than you have surfaces the
+  // "insufficient funds" hint below rather than being silently swallowed. Don't clobber the
+  // field while it's being edited.
+  const min = minBet(wallet.coins);
+  betAmount = Math.max(min, Math.floor(betAmount) || min);
   if (document.activeElement !== betAmountEl) betAmountEl.value = String(betAmount);
   betAmountEl.max = String(Math.max(1, wallet.coins));
+  betAmountEl.min = String(min);
   // Side labels + live odds on the buttons.
   const odds = state.odds; // { left, right } | null
   betLeftName.textContent = state.paddles.left.name ?? 'Left';
@@ -1880,12 +1884,13 @@ function syncBetSection() {
 
 const betLeftBtn = document.getElementById('betLeft') as HTMLButtonElement;
 const betRightBtn = document.getElementById('betRight') as HTMLButtonElement;
-document.getElementById('betMinus')!.addEventListener('click', () => { betAmount = Math.max(1, betAmount - 1); syncBetSection(); });
-document.getElementById('betPlus')!.addEventListener('click', () => { betAmount = Math.min(Math.max(1, wallet.coins), betAmount + 1); syncBetSection(); });
+document.getElementById('betMinus')!.addEventListener('click', () => { betAmount = Math.max(minBet(wallet.coins), betAmount - 1); syncBetSection(); });
+document.getElementById('betPlus')!.addEventListener('click', () => { betAmount = Math.min(Math.max(minBet(wallet.coins), wallet.coins), betAmount + 1); syncBetSection(); });
 // Free-type a specific stake. Parse to a positive integer; empty/garbage falls back to 1.
 betAmountEl.addEventListener('input', () => {
   const v = parseInt(betAmountEl.value, 10);
-  betAmount = Number.isFinite(v) ? Math.max(1, v) : 1;
+  const min = minBet(wallet.coins);
+  betAmount = Number.isFinite(v) ? Math.max(min, v) : min;
   syncBetSection();
 });
 // Normalize the field on blur (e.g. snap a half-typed value back to its parsed number).
