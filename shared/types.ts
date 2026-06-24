@@ -202,6 +202,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'wood', name: 'Wood', slot: 'skin', price: 1000 },
   { id: 'hologram', name: 'Hologram', slot: 'skin', price: 2000 }, // animated
   { id: 'venom', name: 'Venom', slot: 'skin', price: 2000 }, // animated
+  { id: 'pickle', name: 'Pickle Rick', slot: 'skin', price: 2000 }, // animated — I turned myself into a paddle, Morty!
   // Paddle trails — a fading streak behind the paddle as it moves. Animated ones cost 2000.
   { id: 'comet', name: 'Comet', slot: 'trail', price: 1000 },
   { id: 'frostwake', name: 'Frost Wake', slot: 'trail', price: 1000 },

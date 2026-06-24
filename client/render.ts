@@ -673,6 +673,7 @@ const SKIN_RENDERERS: Record<string, CosmeticDraw> = {
   wood: fillWood,
   hologram: fillHologram,
   venom: fillVenom,
+  pickle: fillPickle,
   obsidian: fillObsidian,
   aurora: fillAurora,
   carbon: fillCarbon,
@@ -1378,6 +1379,52 @@ function fillMidas(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: num
   glint.addColorStop(0.5, `rgba(255,235,120,${0.4 + 0.3 * Math.sin(t * 1.5)})`);
   glint.addColorStop(1, 'rgba(255,235,120,0)');
   ctx.fillStyle = glint; ctx.fillRect(r.x, r.y, r.w, r.h);
+  skinHighlight(ctx, cx, cy, h); ctx.restore();
+}
+// Pickle Rick — "I turned myself into a paddle, Morty!" A bumpy green pickle with
+// Rick's wide, darting eyes and worried grimace. Animated: the eyes glance around.
+function fillPickle(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save(); clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 1000;
+  // Pickle body — glossy green, darker at the edges
+  const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  g.addColorStop(0, '#3d5f1a'); g.addColorStop(0.45, '#7cb342'); g.addColorStop(0.6, '#9ccc65'); g.addColorStop(1, '#3d5f1a');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Warts / bumps speckled down the pickle
+  for (let i = 0; i < 9; i++) {
+    const bx = r.x + r.w * (0.3 + 0.4 * ((i * 0.37) % 1));
+    const by = r.y + r.h * ((i + 0.5) / 9);
+    ctx.fillStyle = 'rgba(40,70,15,0.55)';
+    ctx.beginPath(); ctx.arc(bx, by, 1.3, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(200,230,150,0.35)';
+    ctx.beginPath(); ctx.arc(bx - 0.6, by - 0.6, 0.6, 0, Math.PI * 2); ctx.fill();
+  }
+  // Rick's face, near the top of the paddle
+  const fy = r.y + r.h * 0.2;
+  const er = r.w * 0.22;          // eye radius
+  const ex = r.w * 0.24;          // eye horizontal offset from center
+  const dart = Math.sin(t * 1.7) * er * 0.4; // pupils glance side to side
+  const blink = (t % 5) > 4.85 ? 0.15 : 1;   // occasional quick blink
+  for (const dir of [-1, 1]) {
+    const px = cx + dir * ex;
+    ctx.fillStyle = '#f5f5f0';
+    ctx.beginPath(); ctx.ellipse(px, fy, er, er * blink, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#1a1a1a';
+    ctx.beginPath(); ctx.arc(px + dart, fy, er * 0.45 * blink, 0, Math.PI * 2); ctx.fill();
+  }
+  // Worried unibrow
+  ctx.strokeStyle = '#2e4310'; ctx.lineWidth = 1.6; ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx - ex - er, fy - er * 1.1);
+  ctx.quadraticCurveTo(cx, fy - er * 1.7, cx + ex + er, fy - er * 1.1);
+  ctx.stroke();
+  // Small grimace mouth
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(cx - er, fy + er * 1.8);
+  ctx.quadraticCurveTo(cx, fy + er * 1.3, cx + er, fy + er * 1.8);
+  ctx.stroke();
   skinHighlight(ctx, cx, cy, h); ctx.restore();
 }
 // --- Exclusive skins ---
