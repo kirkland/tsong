@@ -215,6 +215,14 @@ export async function initDb(): Promise<void> {
       won   BOOLEAN NOT NULL DEFAULT FALSE
     )
   `);
+  // Fishing minigame — biggest catch (lb) ever landed, one row per player.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fishing_scores (
+      pid     TEXT PRIMARY KEY,
+      name    TEXT NOT NULL,
+      best_lb DOUBLE PRECISION NOT NULL DEFAULT 0
+    )
+  `);
   // Co-op scores used to be recorded per-player; they're now one combined team entry keyed
   // "team:<a> and <b>". Drop any legacy per-player co-op rows so the board only shows pairs.
   await pool.query(`DELETE FROM doom_scores WHERE coop = TRUE AND pid NOT LIKE 'team:%'`);
@@ -466,6 +474,28 @@ export async function getDoomLeaderboards(): Promise<{ solo: DoomScoreRow[]; coo
     return rows.map((r) => ({ name: r.name, round: r.round }));
   };
   return { solo: await fetchMode(false), coop: await fetchMode(true) };
+}
+
+export interface FishingScoreRow { name: string; lb: number; }
+
+// Record a fishing catch: keep only each player's biggest (heaviest) fish ever landed.
+export async function recordFishCatch(pid: string, name: string, lb: number): Promise<void> {
+  if (!pool || !pid || !Number.isFinite(lb) || lb <= 0) return;
+  await pool.query(
+    `INSERT INTO fishing_scores (pid, name, best_lb) VALUES ($1, $2, $3)
+       ON CONFLICT (pid) DO UPDATE
+       SET best_lb = GREATEST(fishing_scores.best_lb, EXCLUDED.best_lb), name = EXCLUDED.name`,
+    [pid, name, lb],
+  );
+}
+
+// Biggest catches across all anglers (top N by best landed weight).
+export async function getFishingLeaderboard(): Promise<FishingScoreRow[]> {
+  if (!pool) return [];
+  const { rows } = await pool.query(
+    `SELECT name, best_lb FROM fishing_scores ORDER BY best_lb DESC, name ASC LIMIT 10`,
+  );
+  return rows.map((r) => ({ name: r.name, lb: Number(r.best_lb) }));
 }
 
 export interface TypeDieScoreRow { name: string; wave: number; }

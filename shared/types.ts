@@ -164,7 +164,7 @@ export interface CosmeticItem {
   name: string;
   slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'pet';
   price: number;
-  locked?: 'campaign'; // not buyable — unlocked by an in-game achievement (e.g. clearing the campaign)
+  locked?: 'campaign' | 'fishing'; // not buyable — unlocked by an in-game achievement (clearing the campaign, landing a legendary fish, …)
   audio?: string; // for 'song' items: path to the mp3 that plays during your matches
 }
 // Static cosmetics cost 1000 coins; animated ones cost 2000 (10×/20× the COIN_SCALE base).
@@ -214,6 +214,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   // is NOT buyable — it's unlocked only by clearing the campaign.
   { id: 'davisslayer', name: '🏆 Davis Slayer', slot: 'title', price: 0, locked: 'campaign' },
   { id: 'flawless', name: '💯 Flawless', slot: 'title', price: 0, locked: 'campaign' }, // perfect campaign run only
+  { id: 'angler', name: '🎣 Angler', slot: 'title', price: 0, locked: 'fishing' }, // land a legendary fish
   { id: 'clown', name: '🤡 Clown', slot: 'title', price: 1000 },
   { id: 'sharpshooter', name: '🎯 Sharpshooter', slot: 'title', price: 3000 },
   { id: 'champion', name: '🏅 Champion', slot: 'title', price: 3000 },
@@ -393,7 +394,7 @@ export function petById(id: string | null | undefined) {
 
 // What entering a building does (the client maps each `kind` to an action). Add a kind here
 // and a handler on the client to introduce a new venue.
-export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal';
+export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond';
 // A venue's footprint on the map. The rectangle (top-left origin, world units) is solid —
 // avatars collide with it — and an apron just outside the door is the entry trigger zone.
 export interface WorldBuilding {
@@ -416,7 +417,41 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
   { id: 'petshop', kind: 'petshop', name: 'PET SHOP',  emoji: '🐾', x: 2370, y: 335,  w: 320, h: 230, color: '#7a4fa8' },
   // Hellfire portal to DOOM — small footprint just south of the central fountain, on the path.
   { id: 'doomportal', kind: 'doomportal', name: 'DOOM', emoji: '🔥', x: 1520, y: 1380, w: 160, h: 190, color: '#3a0000' },
+  // Fishing pond — a body of water east of the plaza with a wooden pier on its west (plaza) side.
+  // Footprint clears the plaza (x ends 1840), the petshop (x starts 2370) and the bank (y 1525+).
+  { id: 'pond', kind: 'pond', name: 'FISHING POND', emoji: '🎣', x: 2000, y: 970, w: 320, h: 280, color: '#2a6f97' },
 ] as const;
+
+// --- Fishing minigame ---
+// The solo fishing overlay (client/fishing.ts) rolls a tier, then a species within that tier,
+// then a size between minLb/maxLb. Rarer tiers fight harder in the reel mini-game and pay more
+// (House-funded, server-picked — see lobby.fishCatch). The client only sends tier + sizeLb back;
+// it never names a coin amount, so a tampered client can't mint money.
+export type FishTier = 'junk' | 'common' | 'uncommon' | 'rare' | 'legendary';
+export interface FishSpecies { id: string; name: string; tier: FishTier; minLb: number; maxLb: number; }
+export const FISH: readonly FishSpecies[] = [
+  // junk — barely worth reeling in
+  { id: 'boot',     name: '🥾 Old Boot',    tier: 'junk',      minLb: 0.5, maxLb: 3 },
+  { id: 'can',      name: '🥫 Soda Can',    tier: 'junk',      minLb: 0.1, maxLb: 1 },
+  { id: 'seaweed',  name: '🌿 Seaweed',     tier: 'junk',      minLb: 0.2, maxLb: 2 },
+  // common
+  { id: 'minnow',   name: '🐟 Minnow',      tier: 'common',    minLb: 0.1, maxLb: 0.8 },
+  { id: 'perch',    name: '🐟 Perch',       tier: 'common',    minLb: 0.5, maxLb: 3 },
+  { id: 'sunfish',  name: '🐠 Sunfish',     tier: 'common',    minLb: 0.4, maxLb: 2.5 },
+  // uncommon
+  { id: 'bass',     name: '🐟 Largemouth Bass', tier: 'uncommon', minLb: 2, maxLb: 12 },
+  { id: 'trout',    name: '🐟 Rainbow Trout',   tier: 'uncommon', minLb: 1.5, maxLb: 9 },
+  // rare
+  { id: 'catfish',  name: '🐱 Giant Catfish', tier: 'rare',    minLb: 10, maxLb: 60 },
+  { id: 'koi',      name: '✨ Golden Koi',    tier: 'rare',    minLb: 5, maxLb: 30 },
+  // legendary — a tsong-themed monster of the deep
+  { id: 'daviswhale', name: '🐋 Davis Whale', tier: 'legendary', minLb: 200, maxLb: 1500 },
+] as const;
+// Tier roll weights (sum 100): junk 18 / common 50 / uncommon 22 / rare 8 / legendary 2.
+export const FISH_TIER_WEIGHTS: Readonly<Record<FishTier, number>> = {
+  junk: 18, common: 50, uncommon: 22, rare: 8, legendary: 2,
+};
+export const FISH_TIERS: readonly FishTier[] = ['junk', 'common', 'uncommon', 'rare', 'legendary'];
 
 // One avatar as broadcast to everyone in the world. `id` matches YouMsg.id, so a client can
 // skip drawing its own avatar from this list — it renders that one straight from its own
@@ -485,6 +520,7 @@ export type ClientMsg =
   | { type: 'tdTarget'; id: number | null } // soft-lock the monster you're currently typing (null = release)
   | { type: 'tdKill'; id: number } // claim a kill: you finished typing this monster's word
   | { type: 'campaignScore'; score: number; stage: number; won: boolean } // record a campaign run (arcade score, furthest stage, whether Davis fell)
+  | { type: 'fishCatch'; tier: string; sizeLb: number } // landed a fish — server picks the House-funded coin reward by tier (client never sends coins)
   | { type: 'shopBuy'; item: string } // buy a cosmetic from the shop
   | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'pet'; item: string | null } // equip (item) or unequip (null) a cosmetic
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
@@ -919,6 +955,8 @@ export type ServerMsg =
   | TypeDieStateMsg
   | TypeDieLeaderboardMsg
   | CampaignLeaderboardMsg
+  | FishRewardMsg
+  | FishLeaderboardMsg
   | WalletMsg
   | StockMsg
   | LoanMsg
@@ -1472,6 +1510,21 @@ export interface CampaignLeaderboardMsg {
   rows: CampaignScoreRow[];
 }
 export const CAMPAIGN_STAGE_COUNT = 5;
+
+// --- Fishing minigame messages ---
+// Sent back to the angler after a validated catch: the House-funded coin reward, plus the
+// (one-time) Angler title item if a legendary was landed.
+export interface FishRewardMsg {
+  type: 'fishReward';
+  coins: number;
+  item?: { id: string; name: string };
+}
+// Biggest-catch leaderboard (top N by best landed weight), pushed on each catch.
+export interface FishLeaderboardRow { name: string; lb: number; }
+export interface FishLeaderboardMsg {
+  type: 'fishLeaderboard';
+  rows: FishLeaderboardRow[];
+}
 
 // --- Netizen Challenge (Plan 10) ---
 export const NETIZEN_CHALLENGE_MAX_FRAC = 0.20;

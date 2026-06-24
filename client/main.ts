@@ -671,6 +671,11 @@ const net = connect(
       typeDieScores = msg.rows;
     } else if (msg.type === 'campaignLeaderboard') {
       campaignScores = msg.rows;
+    } else if (msg.type === 'fishLeaderboard') {
+      fishScores = msg.rows;
+      fishingMod?.feedFishLeaderboard(msg.rows);
+    } else if (msg.type === 'fishReward') {
+      fishingMod?.feedFishReward(msg.coins, msg.item);
     } else if (msg.type === 'netizenInfo') {
       showNetizenChallenge(msg);
     } else if (msg.type === 'netizenChallengeResult') {
@@ -1694,6 +1699,25 @@ campaignBtn.addEventListener('click', async () => {
   }
 });
 
+// --- Fishing minigame ("Cast a line", lazy-loaded, self-contained). Reached from the World pond's
+// pier. Solo Canvas overlay: it rolls a fish, runs the skill game, and reports tier+size to the
+// server, which pays a House-funded reward and tracks the biggest catch. ---
+let fishingMod: typeof import('./fishing') | null = null;
+// Latest biggest-catch leaderboard, pushed by the server.
+let fishScores: import('../shared/types').FishLeaderboardRow[] = [];
+async function openFishing(): Promise<void> {
+  try {
+    fishingMod = await import('./fishing');
+    fishingMod.startFishing({
+      catchFish: (tier, sizeLb) => net.send({ type: 'fishCatch', tier, sizeLb }),
+      leaderboard: () => fishScores,
+      name: () => myName,
+    });
+  } catch (e) {
+    console.error('Fishing failed to load:', e);
+  }
+}
+
 // --- Beta "World": a free-roam 2D overworld you walk around as a named avatar, seeing everyone
 // else who's currently in the world. It's the future main UI; for now its buildings deep-link
 // into existing features — the Arena (tsong itself, via the play queue), the Casino (roulette)
@@ -1739,6 +1763,12 @@ worldBtn.addEventListener('click', async () => {
         // tick like the others, so the world's teardown click finishes first).
         if (feature === 'doom') {
           setTimeout(() => doomBtn.click(), 0);
+          return;
+        }
+        // The pond's pier opens the solo Fishing overlay (lazy-loaded, like DOOM/campaign),
+        // deferred a tick so the world's teardown click finishes first.
+        if (feature === 'fishing') {
+          setTimeout(() => { void openFishing(); }, 0);
           return;
         }
         const id = feature === 'roulette' ? 'rouletteBtn'
