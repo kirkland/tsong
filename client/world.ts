@@ -380,8 +380,8 @@ const NPCS: NpcDef[] = [
   },
   {
     // Planted on the fishing pond's pier, rod permanently in the water. Does NOT want to chat.
-    id: 'grumpy-angler', name: 'Grizzled Angler', shirt: 0x3f6f4a, hair: 0x6a5235, kind: 'angler',
-    x: 1985, y: 1110, roam: 0,
+    id: 'grumpy-angler', name: 'Andy', shirt: 0x3f6f4a, hair: 0x6a5235, kind: 'angler',
+    x: 2000, y: 990, roam: 0,
     lines: [
       "Fuck off, I'm fishing.",
       "...I'm fishing. Go away.",
@@ -1773,18 +1773,42 @@ export function startWorld(net: WorldNet): void {
     const depth = b.y; // low depth: water sits on the ground, avatars/pier render over it as they pass
     const g = sc.make.graphics({ x: 0, y: 0 }, false);
     const P = (x: number, y: number, w: number, h: number, c: number, a = 1) => px9(g, x, y, w, h, c, a);
-    // A rounded blob: fill a rounded rect for the rim, then inset darker/lighter water bands.
-    const RIM = 0x6fb7e0, DEEP = 0x1d5478, MID = 0x2a6f97, SHIMMER = 0x7fc6ec;
-    const rr = Math.min(W, H) * 0.32;
-    g.fillStyle(RIM, 1); g.fillRoundedRect(0, 0, W, H, rr);                 // light sandy-blue rim
-    g.fillStyle(MID, 1); g.fillRoundedRect(3, 3, W - 6, H - 6, rr * 0.92);  // main water tone
-    g.fillStyle(DEEP, 1); g.fillRoundedRect(8, 8, W - 16, H - 16, rr * 0.8); // deeper center
-    // a couple of static shimmer streaks for depth
-    P(Math.round(W * 0.3), Math.round(H * 0.32), Math.round(W * 0.22), 2, SHIMMER, 0.5);
-    P(Math.round(W * 0.5), Math.round(H * 0.6), Math.round(W * 0.18), 2, SHIMMER, 0.4);
+    // An organic pond: concentric ellipses for a sandy shore, a shallow rim, the main water and a
+    // deep centre — plus a couple of lily pads, so it reads as a pond and not a blue rectangle.
+    const cx = W / 2, cy = H / 2;
+    const SAND = 0xcdb892, SAND_D = 0xb39b73, SHALLOW = 0x5fb0dd, MID = 0x2a6f97, DEEP = 0x143f5c;
+    const SHIM = 0xafe0fb, PAD = 0x3f9d52, PAD_D = 0x2c7a3c;
+    g.fillStyle(SAND_D, 1); g.fillEllipse(cx, cy + 2, W, H);                       // shore shadow
+    g.fillStyle(SAND, 1);   g.fillEllipse(cx, cy, W - 2, H - 6);                   // sandy shore
+    g.fillStyle(SHALLOW, 1); g.fillEllipse(cx, cy, W - 14, H - 16);                // shallow water rim
+    g.fillStyle(MID, 1);    g.fillEllipse(cx, cy, W - 22, H - 26);                 // main water
+    g.fillStyle(DEEP, 1);   g.fillEllipse(cx, cy, (W - 22) * 0.58, (H - 26) * 0.58); // deep centre
+    P(Math.round(W * 0.34), Math.round(H * 0.34), Math.round(W * 0.16), 2, SHIM, 0.55); // shimmer
+    P(Math.round(W * 0.52), Math.round(H * 0.58), Math.round(W * 0.12), 2, SHIM, 0.45);
+    const pad = (lx: number, ly: number, r: number) => {
+      g.fillStyle(PAD, 1); g.fillEllipse(lx, ly, r * 2, r * 1.6);
+      g.fillStyle(PAD_D, 1); g.fillEllipse(lx, ly + 1, r * 1.3, r * 1.0);
+      g.fillStyle(MID, 1); g.fillRect(lx, ly - 1, r + 1, 2); // pie-slice notch
+    };
+    pad(Math.round(W * 0.40), Math.round(H * 0.46), 5);
+    pad(Math.round(W * 0.62), Math.round(H * 0.40), 4);
+    pad(Math.round(W * 0.50), Math.round(H * 0.66), 4);
     g.generateTexture('w-pond', W, H);
     g.destroy();
     sc.add.image(b.x, b.y, 'w-pond').setOrigin(0, 0).setScale(TEXEL).setDepth(depth);
+
+    // Reed/cattail clusters dotted around the shore so the edge looks planted, not cut out.
+    const rg = sc.make.graphics({ x: 0, y: 0 }, false);
+    const REED = 0x4a7d3a, REED_D = 0x3a6330, CAT = 0x7a4a26;
+    rg.fillStyle(REED, 1); rg.fillRect(2, 4, 1, 11); rg.fillRect(4, 2, 1, 13); rg.fillRect(6, 5, 1, 10);
+    rg.fillStyle(REED_D, 1); rg.fillRect(3, 8, 1, 7);
+    rg.fillStyle(CAT, 1); rg.fillRect(4, 0, 1, 3); rg.fillRect(6, 4, 1, 2);
+    rg.generateTexture('w-reeds', 8, 16);
+    rg.destroy();
+    for (const [fx, fy] of [[0.16, 0.20], [0.82, 0.26], [0.30, 0.86], [0.72, 0.80]] as const) {
+      sc.add.image(b.x + b.w * fx, b.y + b.h * fy, 'w-reeds')
+        .setOrigin(0.5, 1).setScale(TEXEL).setDepth(b.y + b.h * fy);
+    }
 
     // Live ripple rings drifting on the water.
     const n = 4;
