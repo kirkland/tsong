@@ -6,6 +6,7 @@ import { initRoulette } from './roulette';
 import { initBlackjack } from './blackjack';
 import { initCraps } from './craps';
 import { initCrash } from './crash';
+import { initSlots } from './slots';
 import { initAds, revealAds } from './ads';
 import { draw, drawLegendIcon, setBlasterAim, drawCosmeticPreview } from './render';
 import {
@@ -641,6 +642,7 @@ const net = connect(
       bjHandle.setCoins(msg.coins);
       crapsHandle.setCoins(msg.coins);
       crashHandle.setCoins(msg.coins);
+      slotsHandle.setCoins(msg.coins);
       if (!lootPanel.hidden) renderLoot();
       if (!marketplacePanel.hidden) renderMarketplace();
       // During a roulette spin, hold every coin-total display (toolbar tab, shop, market) at its
@@ -662,6 +664,8 @@ const net = connect(
       bjHandle.onResult(msg);
     } else if (msg.type === 'crapsResult') {
       crapsHandle.onResult(msg);
+    } else if (msg.type === 'slotsResult') {
+      slotsHandle.onResult(msg);
     } else if (msg.type === 'crashState') {
       crashHandle.onState(msg);
     } else if (msg.type === 'loan') {
@@ -724,6 +728,13 @@ const bjHandle = initBlackjack({
 // Craps panel.
 const crapsHandle = initCraps({
   send: (pass, dontPass) => net.send({ type: 'crapsRoll', pass, dontPass }),
+  playWin: playYay,
+  onSettled: refreshWallet,
+});
+
+// Slots panel.
+const slotsHandle = initSlots({
+  send: (amount) => net.send({ type: 'slotsSpin', amount }),
   playWin: playYay,
   onSettled: refreshWallet,
 });

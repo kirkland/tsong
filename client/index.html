@@ -1398,6 +1398,85 @@
       .crash-cashout-btn[hidden] { display: none; }
       @keyframes cashoutPulse { from { box-shadow: 0 0 4px #22cc66; } to { box-shadow: 0 0 18px #22cc66; } }
       .crash-note { font-size: 10px; color: #5a647e; margin-top: 8px; line-height: 1.4; }
+
+      /* --- Slots --- */
+      #slotsBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #5a3a10;
+        background: #1c1208; color: #ffb830; cursor: pointer;
+      }
+      #slotsBtn:hover { background: #2a1c0e; }
+      #slotsPanel {
+        position: fixed; top: 52px; left: 12px; width: 280px;
+        max-height: 84vh; overflow-y: auto;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #slotsPanel[hidden] { display: none; }
+      #slotsPanel h3 { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; margin: 8px 0 6px; }
+      .slots-machine {
+        position: relative; background: #060c18; border: 2px solid #3a4566;
+        border-radius: 8px; padding: 8px; margin-bottom: 8px;
+        box-shadow: inset 0 2px 12px rgba(0,0,0,0.5);
+      }
+      .slots-reels { display: flex; gap: 6px; justify-content: center; }
+      .slots-reel {
+        flex: 1; background: #0a1020; border: 1px solid #2a3550; border-radius: 5px;
+        padding: 4px 0; display: flex; flex-direction: column; gap: 2px;
+        overflow: hidden;
+      }
+      .slots-sym {
+        font-size: 26px; text-align: center; line-height: 1.1; padding: 3px 0;
+        transition: transform 0.05s;
+      }
+      .slots-sym.center {
+        background: rgba(255,255,255,0.04); border-radius: 3px;
+      }
+      .slots-sym.win-sym {
+        animation: slotWinPop 0.4s ease-out;
+      }
+      @keyframes slotWinPop {
+        0% { transform: scale(1.5); } 60% { transform: scale(0.9); } 100% { transform: scale(1); }
+      }
+      /* Highlight bar on the center (pay) line */
+      .slots-payline {
+        position: absolute; left: 8px; right: 8px;
+        top: calc(8px + (100% - 16px) / 3 + 4px);
+        height: calc((100% - 16px) / 3);
+        border-top: 2px solid rgba(255,214,102,0.35);
+        border-bottom: 2px solid rgba(255,214,102,0.35);
+        border-radius: 3px; pointer-events: none;
+      }
+      .slots-result {
+        font: 800 13px ui-monospace, monospace; min-height: 20px; text-align: center; margin-bottom: 8px;
+      }
+      .slots-win { color: #6ee7a8; }
+      .slots-lose { color: #6b7796; }
+      @keyframes jackpotFlash { 0%,100% { color: #ffd166; } 50% { color: #ff6b9d; } }
+      .slots-jackpot { animation: jackpotFlash 0.4s ease-in-out 4; font-size: 15px; }
+      .slots-controls { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+      .slots-label { font-size: 11px; color: #6b7796; white-space: nowrap; }
+      .slots-controls input {
+        flex: 1; font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 5px;
+        border: 1px solid #2a3550; background: #060912; color: #fff; min-width: 0;
+      }
+      .slots-spin-btn {
+        font: inherit; font-size: 12px; font-weight: 700; padding: 6px 14px;
+        border-radius: 6px; border: none; background: #ffb830; color: #1a0c00; cursor: pointer; white-space: nowrap;
+      }
+      .slots-spin-btn:hover:not(:disabled) { background: #ffd060; }
+      .slots-spin-btn:disabled { opacity: 0.4; cursor: default; }
+      .slots-pay-table {
+        display: flex; flex-direction: column; gap: 3px;
+        background: #060c18; border: 1px solid #1a2238; border-radius: 6px; padding: 6px 8px;
+        margin-bottom: 8px;
+      }
+      .slots-pay-row {
+        display: flex; justify-content: space-between; align-items: center;
+        font: 12px ui-monospace, monospace; color: #9fb0d8;
+      }
+      .slots-pay-mult { color: #ffd166; font-weight: 700; }
+      .slots-note { font-size: 10px; color: #5a647e; line-height: 1.4; }
       .coin-row {
         display: grid; grid-template-columns: 34px 1fr auto; gap: 8px; align-items: center;
         padding: 7px 0; border-top: 1px solid #1c2640;
@@ -3105,6 +3184,7 @@
           <button id="bjBtn" type="button" aria-expanded="false" title="Play blackjack — beat the dealer to 21">🃏 Blackjack</button>
           <button id="crapsBtn" type="button" aria-expanded="false" title="Shoot craps — pass or don't pass">🎲 Craps</button>
           <button id="crashBtn" type="button" aria-expanded="false" title="Crash — cash out before the multiplier crashes">🚀 Crash</button>
+          <button id="slotsBtn" type="button" aria-expanded="false" title="Slots — spin the 3-reel machine">🎰 Slots</button>
         </div>
       </div>
       <div id="marketPanel" hidden>
@@ -3216,6 +3296,26 @@
           </div>
         </div>
         <div class="crash-note">Bet during the 8s window. Multiplier rises from 1×. Cash out any time — or lose everything when it crashes. Max 3,000 🪙.</div>
+      </div>
+      <!-- Slots panel -->
+      <div id="slotsPanel" hidden>
+        <h3>Slots · <span id="slotsCoins">0</span> 🪙</h3>
+        <div id="slotsMachine" class="slots-machine">
+          <div class="slots-reels">
+            <div id="slotsReel0" class="slots-reel"></div>
+            <div id="slotsReel1" class="slots-reel"></div>
+            <div id="slotsReel2" class="slots-reel"></div>
+          </div>
+          <div class="slots-payline"></div>
+        </div>
+        <div id="slotsResult" class="slots-result"></div>
+        <div class="slots-controls">
+          <span class="slots-label">Bet 🪙</span>
+          <input id="slotsBet" type="number" min="1" max="1000" value="10" />
+          <button id="slotsSpin" type="button" class="slots-spin-btn">🎰 Spin</button>
+        </div>
+        <div id="slotsPayTable" class="slots-pay-table"></div>
+        <div class="slots-note">Match 3 identical symbols on the center row to win. 7️⃣ jackpot = 100× your bet. Max bet 1,000 🪙.</div>
       </div>
       <div id="lootPanel" hidden>
         <h3>🎁 Loot Box</h3>

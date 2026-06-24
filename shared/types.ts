@@ -462,6 +462,7 @@ export type ClientMsg =
   | { type: 'crapsRoll'; pass: number; dontPass: number } // roll the dice with pass/don't-pass bets
   | { type: 'crashBet'; amount: number; autoCashout?: number } // bet on the next crash round (optional auto-cashout multiplier)
   | { type: 'crashCashout' } // cash out of the current live crash round
+  | { type: 'slotsSpin'; amount: number } // spin the 3-reel slot machine with this wager
   | { type: 'balanceSheetReq'; rank: number } // peek at a net-worth board player's balance sheet (by current rank)
   | { type: 'lootBoxOpen' } // open a loot box: spend coins, roll a weighted prize (common cosmetic / House coins / capped-rare exclusive)
   | { type: 'marketList'; instanceId: number; ask: number } // list an owned exclusive instance on the marketplace for `ask` coins
@@ -865,6 +866,7 @@ export type ServerMsg =
   | BjStateMsg
   | BjResultMsg
   | CrapsResultMsg
+  | SlotsResultMsg
   | CrashStateMsg
   | TipMsg
   | BountyBoardMsg
@@ -1191,6 +1193,29 @@ export const CRASH_TICK_MS = 100;        // live-phase tick interval (ms)
 export const CRASH_ENDED_MS = 4_000;     // how long the crash result lingers before next round
 export const CRASH_MAX_BET = 3_000;
 export const CRASH_GROWTH = 1.02;        // multiplier per 100ms tick (~7× per minute at the start)
+// --- Slots ---
+// Classic 3-reel slot machine. Each reel shows 3 symbols; the center row is the pay line.
+// Symbol weights skew rare symbols low. Server rolls, evaluates, settles the wallet.
+export const SLOTS_MAX_BET = 1_000;
+// Symbol pool (index 0–6), listed rarest→most-common for human readability.
+// Weights are sampled on each reel independently. The '7' jackpot is weighted 1/64.
+export const SLOTS_SYMBOLS = ['7️⃣', '💎', '🍀', '⭐', '🍊', '🍋', '🍒'] as const;
+export type SlotsSymbol = typeof SLOTS_SYMBOLS[number];
+// Payout multipliers for a 3-of-a-kind center-row match (applied to the bet).
+export const SLOTS_PAYOUTS: Record<SlotsSymbol, number> = {
+  '7️⃣': 100, '💎': 40, '🍀': 20, '⭐': 10, '🍊': 5, '🍋': 3, '🍒': 2,
+};
+// Per-reel symbol weights (index matches SLOTS_SYMBOLS). Total = 64.
+export const SLOTS_WEIGHTS = [1, 2, 3, 6, 10, 14, 28] as const;
+export interface SlotsResultMsg {
+  type: 'slotsResult';
+  // reels[reel][row]: 3 reels × 3 rows (row 1 is the pay line)
+  reels: [SlotsSymbol[], SlotsSymbol[], SlotsSymbol[]];
+  win: SlotsSymbol | null; // the matching symbol on the pay line, or null (no win)
+  bet: number;
+  payout: number;          // coins returned (0 on loss)
+}
+
 export interface CrashStateMsg {
   type: 'crashState';
   phase: 'betting' | 'live' | 'ended';

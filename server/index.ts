@@ -357,6 +357,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'crashCashout':
         lobby.crashCashout(ws);
         break;
+      case 'slotsSpin':
+        if (typeof msg.amount === 'number') lobby.slotsSpin(ws, msg.amount);
+        break;
       case 'balanceSheetReq':
         if (typeof msg.rank === 'number') lobby.sendBalanceSheet(ws, msg.rank);
         break;

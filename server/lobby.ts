@@ -42,6 +42,12 @@ import {
   BjResultMsg,
   CRAPS_MAX_BET,
   CrapsResultMsg,
+  SLOTS_MAX_BET,
+  SLOTS_SYMBOLS,
+  SLOTS_WEIGHTS,
+  SLOTS_PAYOUTS,
+  SlotsSymbol,
+  SlotsResultMsg,
   CRASH_BETTING_MS,
   CRASH_TICK_MS,
   CRASH_ENDED_MS,
@@ -1756,6 +1762,40 @@ export class Lobby {
         this.sendWallet(ws);
       })
       .catch((e) => console.error('craps roll failed:', e));
+  }
+
+  // --- Slots ---
+
+  slotsSpin(ws: WebSocket, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    if (!Number.isInteger(amount) || amount <= 0 || amount > SLOTS_MAX_BET) { this.sendWallet(ws); return; }
+    spendCoins(conn.pid, amount)
+      .then(async (w) => {
+        if (!w) { this.sendWallet(ws); return; }
+        await this.houseCredit(amount);
+        // Roll each reel: pick 3 symbols (top, center, bottom) per reel using weighted sampling.
+        const totalWeight = (SLOTS_WEIGHTS as readonly number[]).reduce((a, b) => a + b, 0);
+        const spinReel = (): SlotsSymbol[] =>
+          [0, 1, 2].map(() => {
+            let r = Math.floor(Math.random() * totalWeight);
+            for (let i = 0; i < SLOTS_SYMBOLS.length; i++) {
+              r -= SLOTS_WEIGHTS[i];
+              if (r < 0) return SLOTS_SYMBOLS[i];
+            }
+            return SLOTS_SYMBOLS[SLOTS_SYMBOLS.length - 1];
+          });
+        const reels = [spinReel(), spinReel(), spinReel()] as [SlotsSymbol[], SlotsSymbol[], SlotsSymbol[]];
+        // Evaluate center row (index 1 of each reel).
+        const [a, b, c] = [reels[0][1], reels[1][1], reels[2][1]];
+        const win = (a === b && b === c) ? a : null;
+        const want = win ? amount * SLOTS_PAYOUTS[win] : 0;
+        const payout = want > 0 ? await this.housePay(conn.pid!, conn.nickname!, want) : 0;
+        const msg: SlotsResultMsg = { type: 'slotsResult', reels, win, bet: amount, payout };
+        this.tell(ws, msg);
+        this.sendWallet(ws);
+      })
+      .catch((e) => console.error('slots spin failed:', e));
   }
 
   // --- Crash casino game ---
