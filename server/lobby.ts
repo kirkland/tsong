@@ -1023,7 +1023,9 @@ export class Lobby {
         if (dist < 8) {
           // Reached target — pause, then pick a new random spot.
           pos.pauseUntil = now + 800 + Math.random() * 2500;
-          const a = Math.random() * Math.PI * 2, r = 40 + Math.random() * 120;
+          // Roam the whole town, not just the fountain: targets anywhere within ~1000 units of the
+          // plaza so the netizens spread out around the map instead of clustering at the centre.
+          const a = Math.random() * Math.PI * 2, r = 200 + Math.random() * 800;
           pos.tx = Lobby.PLAZA.x + Math.cos(a) * r;
           pos.ty = Lobby.PLAZA.y + Math.sin(a) * r;
         } else {
@@ -2279,8 +2281,11 @@ export class Lobby {
     this.netizenPos.clear();
     for (let i = 0; i < Lobby.NETIZEN_NAMES.length; i++) {
       const pid = `netizen:${i}`;
-      const x = Lobby.PLAZA.x + (Math.random() * 2 - 1) * 160;
-      const y = Lobby.PLAZA.y + (Math.random() * 2 - 1) * 160;
+      // Scatter the initial positions across the town (radially, up to ~900 units) so they don't
+      // all start piled on the fountain.
+      const a0 = Math.random() * Math.PI * 2, r0 = Math.random() * 900;
+      const x = Lobby.PLAZA.x + Math.cos(a0) * r0;
+      const y = Lobby.PLAZA.y + Math.sin(a0) * r0;
       this.netizenPos.set(pid, {
         x, y,
         tx: x, ty: y,

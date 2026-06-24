@@ -301,6 +301,7 @@ const NPCS: NpcDef[] = [
       'I read every changelog. Yes, ALL of them. Someone has to.',
       'There\'s a hidden mode, you know. I won\'t say where. ...Octagon.',
       'Beta this, beta that. When does it become a gamma?',
+      'That tortured soul sure is irritating!',
     ],
   },
   {
