@@ -419,7 +419,7 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
   { id: 'doomportal', kind: 'doomportal', name: 'DOOM', emoji: '🔥', x: 1520, y: 1380, w: 160, h: 190, color: '#3a0000' },
   // Fishing pond — a body of water east of the plaza with a wooden pier on its west (plaza) side.
   // Footprint clears the plaza (x ends 1840), the petshop (x starts 2370) and the bank (y 1525+).
-  { id: 'pond', kind: 'pond', name: 'FISHING POND', emoji: '🎣', x: 2000, y: 970, w: 320, h: 280, color: '#2a6f97' },
+  { id: 'pond', kind: 'pond', name: 'FISHING POND', emoji: '🎣', x: 2020, y: 860, w: 300, h: 260, color: '#2a6f97' },
 ] as const;
 
 // --- Fishing minigame ---

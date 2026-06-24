@@ -231,10 +231,11 @@ export function startFishing(net: FishingNet): void {
       fishY += fishVel * dt * (info.fishSpeed / 100);
       if (fishY < 0.04) { fishY = 0.04; fishVel = Math.abs(fishVel); }
       if (fishY > 0.96) { fishY = 0.96; fishVel = -Math.abs(fishVel); }
-      // Catch zone: HOLD pushes it up (negative), release lets gravity pull it down.
-      zoneVel += (holding ? -1.6 : 1.4) * dt;
-      zoneVel *= 0.9;
-      zoneY += zoneVel;
+      // Catch zone: HOLD pushes it up (negative), release lets gravity pull it down. Velocity is
+      // damped and the POSITION update is dt-scaled (the missing *dt was making it rocket ~60×/s).
+      zoneVel += (holding ? -5 : 4.2) * dt;
+      zoneVel *= 0.88;
+      zoneY += zoneVel * dt;
       if (zoneY < ZONE_H / 2) { zoneY = ZONE_H / 2; zoneVel = 0; }
       if (zoneY > 1 - ZONE_H / 2) { zoneY = 1 - ZONE_H / 2; zoneVel = 0; }
       // Fill while the fish is inside the zone, drain otherwise.
