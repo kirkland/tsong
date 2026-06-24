@@ -1225,6 +1225,26 @@ export async function setMarketInstability(n: number): Promise<void> {
   );
 }
 
+/** Read the persisted news feed (up to ~30 items, newest-first). Empty if no DB. */
+export async function getNewsFeed(): Promise<import('../shared/types').NewsItem[]> {
+  if (!pool) return [];
+  try {
+    const { rows } = await pool.query(`SELECT v FROM doom_meta WHERE k = 'news_feed'`);
+    if (!rows.length) return [];
+    const parsed = JSON.parse(rows[0].v);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+/** Persist the news feed (upsert in place). */
+export async function saveNewsFeed(items: import('../shared/types').NewsItem[]): Promise<void> {
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO doom_meta (k, v) VALUES ('news_feed', $1)
+       ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+    [JSON.stringify(items.slice(0, 30))],
+  );
+}
+
 // --- House treasury (the coin-conservation backbone) ---
 // The House balance lives in a single doom_meta KV row (like market_instability) so it's
 // persistent and shared. Every coin that flows into a sink (roulette stakes, lost bets, loot-box

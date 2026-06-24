@@ -473,7 +473,8 @@ export type ClientMsg =
   | { type: 'worldEnter' } // step into the free-roam world map (start sending/receiving avatar positions)
   | { type: 'worldLeave' } // leave the world map
   | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null } // client-authoritative avatar position (world units), heading + car when driving
-  | { type: 'migrate'; oldPid: string }; // one-time: merge a UUID guest account into the signed-in Google account
+  | { type: 'migrate'; oldPid: string } // one-time: merge a UUID guest account into the signed-in Google account
+  | { type: 'newsReq' }; // request the current news feed
 
 // --- Server -> Client ---
 
@@ -876,7 +877,8 @@ export type ServerMsg =
   | MarketMsg
   | LoanBookMsg
   | WorldMsg
-  | HouseMsg;
+  | HouseMsg
+  | NewsMsg;
 
 // --- Economy Overhaul server → client messages ---
 
@@ -1321,3 +1323,36 @@ export interface CampaignLeaderboardMsg {
   rows: CampaignScoreRow[];
 }
 export const CAMPAIGN_STAGE_COUNT = 5;
+
+// --- Market news (Plan 01) ---
+export interface NewsItem { id: string; ts: number; coin: string; headline: string; }
+export interface NewsMsg { type: 'news'; items: NewsItem[]; }
+
+// --- Netizen dialogue corpus (Plan 02 + Plan 03) ---
+export const NETIZEN_DIALOGUE = {
+  buyLong: [
+    'aped into {ticker} 🚀', 'loading {ticker} here', '{ticker} looking juicy ngl',
+    'all in {ticker} lfg', 'yolo {ticker} 🚀', 'adding {ticker} to the bag', '{ticker} dip is tasty',
+  ],
+  sellProfit: [
+    'took profit on {ticker} 💰', 'out of {ticker}, ty market', '{ticker} paid the bills today',
+    'locked in gains on {ticker} ✅', 'trimmed {ticker} for some profit',
+  ],
+  sellLoss: [
+    'got rekt on {ticker} 💀', 'paperhanded {ticker} again', '{ticker} bagholder no more',
+    'sold {ticker} at a loss rip 💸', 'dyor they said {ticker} they said',
+  ],
+  newsBullish: [
+    'something brewing with {ticker}? 👀', "i'm not not buying {ticker} rn",
+    'feels like {ticker} szn', '{ticker} definitely up to something', 'heard a rumor about {ticker} 😏',
+  ],
+  newsBearish: [
+    'staying away from {ticker} today', '{ticker} giving me bad vibes',
+    'might short {ticker} ngl', 'something off with {ticker} energy', 'not touching {ticker} with a pole',
+  ],
+  idleBanter: [
+    "who's this lasso guy with 1M net worth", 'new exclusive dropped in the black market 👀',
+    'anyone else watching the leaderboard?', 'market looking spicy today 🌶️',
+    'feels like a dead cat bounce', 'chart says up but my gut says down 🤷',
+  ],
+};
