@@ -332,12 +332,12 @@ export type BotLevel = (typeof BOT_LEVELS)[number];
 // Built to grow: to put a new venue on the map (a car dealership, a house you can buy, …),
 // add a WORLD_BUILDINGS entry and a handler for its `kind` on the client. Nothing else in
 // the protocol needs to change.
-export const WORLD = {
-  w: 3200,      // map width, world units
-  h: 2200,      // map height, world units
-  spawnX: 1600, // where a fresh avatar appears (the central plaza)
+export const WORLD: { w: number; h: number; spawnX: number; spawnY: number } = {
+  w: 3200,
+  h: 2200,
+  spawnX: 1600,
   spawnY: 1240,
-} as const;
+};
 export const WORLD_AVATAR = {
   r: 16,        // avatar body radius, world units
   speed: 280,   // on-foot walk speed, world units / second
@@ -483,7 +483,9 @@ export type ClientMsg =
   | { type: 'worldLeave' } // leave the world map
   | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null } // client-authoritative avatar position (world units), heading + car when driving
   | { type: 'migrate'; oldPid: string } // one-time: merge a UUID guest account into the signed-in Google account
-  | { type: 'newsReq' }; // request the current news feed
+  | { type: 'netizenInfoReq'; netizenId: string }
+  | { type: 'netizenChallenge'; netizenId: string; wager: number }
+  | { type: 'newsReq' };
 
 // --- Server -> Client ---
 
@@ -887,6 +889,8 @@ export type ServerMsg =
   | LoanBookMsg
   | WorldMsg
   | HouseMsg
+  | NetizenInfoMsg
+  | NetizenChallengeResultMsg
   | NewsMsg;
 
 // --- Economy Overhaul server → client messages ---
@@ -1390,10 +1394,31 @@ export interface CampaignLeaderboardMsg {
 }
 export const CAMPAIGN_STAGE_COUNT = 5;
 
+// --- Netizen Challenge (Plan 10) ---
+export const NETIZEN_CHALLENGE_MAX_FRAC = 0.20;
+export const NETIZEN_CHALLENGE_HARDEST_REACT = 0.09;
+export const NETIZEN_CHALLENGE_HARDEST_ERROR = 22;
+export const NETIZEN_CHALLENGE_EASIEST_REACT = 0.30;
+export const NETIZEN_CHALLENGE_EASIEST_ERROR = 95;
+
+export interface NetizenInfoMsg {
+  type: 'netizenInfo';
+  netizenId: string;
+  netizenName: string;
+  netWorth: number;
+  maxWin: number;
+  challengedToday: boolean;
+}
+export interface NetizenChallengeResultMsg {
+  type: 'netizenChallengeResult';
+  won: boolean;
+  delta: number;
+  netizenName: string;
+}
+
 // --- Market news (Plan 01) ---
 export interface NewsItem { id: string; ts: number; coin: string; headline: string; }
 export interface NewsMsg { type: 'news'; items: NewsItem[]; }
-
 
 // --- Netizen dialogue corpus (Plan 02 + Plan 03) ---
 export const NETIZEN_DIALOGUE = {

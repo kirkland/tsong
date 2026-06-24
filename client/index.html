@@ -2336,6 +2336,55 @@
       #tipSend:hover {
         background: #ffdf6b;
       }
+      /* Netizen Challenge dialog — centered card, same family as the tip/balance modals. */
+      #netizenChallengeModal {
+        position: fixed; inset: 0; z-index: 9999;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(4, 7, 16, 0.72);
+      }
+      #netizenChallengeModal[hidden] { display: none; }
+      #netizenChallengeCard {
+        width: min(92vw, 320px); background: #0e1424; border: 1px solid #3a3a6a;
+        border-radius: 12px; box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
+        padding: 16px 18px 18px;
+      }
+      #netizenChallengeHead {
+        display: flex; align-items: center; justify-content: space-between; gap: 10px;
+        font-size: 16px; font-weight: 700; letter-spacing: 0.5px; color: #e8eefc; margin-bottom: 12px;
+      }
+      #netizenChallengeName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      #netizenChallengeClose {
+        font: inherit; font-size: 15px; line-height: 1; flex: 0 0 auto; padding: 4px 8px;
+        border-radius: 6px; border: 1px solid #2a3550; background: #0e1424; color: #9fb0d8; cursor: pointer;
+      }
+      #netizenChallengeClose:hover { background: #18203a; color: #e8eefc; }
+      #netizenChallengeBody { display: flex; flex-direction: column; gap: 10px; }
+      #netizenChallengeInfo { font-size: 13px; color: #cdd7f5; line-height: 1.5; }
+      #netizenChallengeNetWorth { color: #ffd23f; font-weight: 700; }
+      .nc-warn { font-size: 12px; color: #ff8a8a; background: #2a1411; border: 1px solid #6b2a1f; border-radius: 6px; padding: 8px 10px; }
+      #netizenChallengeRow { display: flex; align-items: center; gap: 6px; }
+      #netizenChallengeRow .nc-label { font-size: 12px; color: #9fb0d8; white-space: nowrap; }
+      #netizenChallengeRow input {
+        flex: 1; font: inherit; font-size: 14px; font-weight: 700; padding: 6px 8px; border-radius: 6px;
+        border: 1px solid #2a3550; background: #060a14; color: #ffd166; min-width: 0; text-align: center;
+      }
+      #netizenChallengeRow input::-webkit-inner-spin-button,
+      #netizenChallengeRow input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+      #netizenChallengeRow input { -moz-appearance: textfield; appearance: textfield; }
+      #netizenChallengeRow button {
+        font: inherit; font-size: 16px; font-weight: 700; line-height: 1; padding: 5px 10px;
+        border-radius: 6px; border: 1px solid #2a3550; background: #1a2035; color: #cdd7f5; cursor: pointer;
+      }
+      #netizenChallengeRow button:hover { background: #2d4070; color: #fff; }
+      .nc-note { font-size: 11px; color: #6b7796; }
+      #netizenChallengeBtn {
+        width: 100%; font: inherit; font-size: 14px; font-weight: 700; padding: 10px 0;
+        border-radius: 8px; border: none; background: #ff5cc8; color: #1a1020; cursor: pointer;
+        text-shadow: 0 1px 0 rgba(255,255,255,0.3);
+      }
+      #netizenChallengeBtn:hover:not(:disabled) { filter: brightness(1.1); }
+      #netizenChallengeBtn:disabled { opacity: 0.45; cursor: default; }
+
       /* CHANGELOG dropdown, pinned to the top-right corner. */
       #changelog {
         position: fixed;
@@ -3793,6 +3842,29 @@
           </div>
           <div id="tipStatus"></div>
           <button id="tipSend" type="button">Send tip 🪙</button>
+        </div>
+      </div>
+    </div>
+    <!-- Netizen Challenge dialog -->
+    <div id="netizenChallengeModal" hidden>
+      <div id="netizenChallengeCard" role="dialog" aria-modal="true" aria-label="Challenge a Netizen">
+        <div id="netizenChallengeHead">
+          <span id="netizenChallengeName">Netizen</span>
+          <button id="netizenChallengeClose" type="button" aria-label="Close">✕</button>
+        </div>
+        <div id="netizenChallengeBody">
+          <div id="netizenChallengeInfo">
+            <span id="netizenChallengeNetWorth">Net worth: 0 🪙</span>
+          </div>
+          <div id="netizenChallengeWarn" class="nc-warn" hidden>Already challenged today — try again tomorrow.</div>
+          <div id="netizenChallengeRow">
+            <span class="nc-label">Wager 🪙</span>
+            <button id="ncWagerMinus" type="button">−</button>
+            <input id="ncWager" type="number" min="100" step="1" value="100" inputmode="numeric" />
+            <button id="ncWagerPlus" type="button">+</button>
+          </div>
+          <div id="ncMaxWin" class="nc-note">Max win: — 🪙</div>
+          <button id="netizenChallengeBtn" type="button">Challenge to a Duel!</button>
         </div>
       </div>
     </div>

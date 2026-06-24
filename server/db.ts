@@ -402,6 +402,7 @@ export async function initDb(): Promise<void> {
       console.warn(`tsong→lasso transfer skipped — src(${srcPid ?? 'none'}) / dst(${dstPid ?? 'none'}); will retry next boot`);
     }
   }
+  await ensureNetizenChallengesTable();
   console.log('leaderboard DB ready');
 }
 
@@ -1245,26 +1246,6 @@ export async function setMarketInstability(n: number): Promise<void> {
   );
 }
 
-/** Read the persisted news feed (up to ~30 items, newest-first). Empty if no DB. */
-export async function getNewsFeed(): Promise<import('../shared/types').NewsItem[]> {
-  if (!pool) return [];
-  try {
-    const { rows } = await pool.query(`SELECT v FROM doom_meta WHERE k = 'news_feed'`);
-    if (!rows.length) return [];
-    const parsed = JSON.parse(rows[0].v);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch { return []; }
-}
-/** Persist the news feed (upsert in place). */
-export async function saveNewsFeed(items: import('../shared/types').NewsItem[]): Promise<void> {
-  if (!pool) return;
-  await pool.query(
-    `INSERT INTO doom_meta (k, v) VALUES ('news_feed', $1)
-       ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
-    [JSON.stringify(items.slice(0, 30))],
-  );
-}
-
 // --- House treasury (the coin-conservation backbone) ---
 // The House balance lives in a single doom_meta KV row (like market_instability) so it's
 // persistent and shared. Every coin that flows into a sink (roulette stakes, lost bets, loot-box
@@ -1481,4 +1462,85 @@ export async function getNetWorthLeaderboard(): Promise<(NetWorthRow & { pid: st
     coins: Number(r.coins),
     loan: Math.round(Number(r.loan)),
   }));
+}
+
+// --- Netizen Challenge (Plan 10) ---
+
+/** Ensure the netizen_challenges table exists. */
+export async function ensureNetizenChallengesTable(): Promise<void> {
+  if (!pool) return;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS netizen_challenges (
+      player_pid  TEXT NOT NULL,
+      netizen_pid TEXT NOT NULL,
+      ts          BIGINT NOT NULL,
+      PRIMARY KEY (player_pid, netizen_pid)
+    )
+  `);
+}
+
+/** Check if `playerPid` has challenged `netizenPid` today (since the last 5pm ET boundary). */
+export async function challengedToday(playerPid: string, netizenPid: string, boundaryMs: number): Promise<boolean> {
+  if (!pool) return false;
+  const { rows } = await pool.query(
+    `SELECT 1 FROM netizen_challenges WHERE player_pid = $1 AND netizen_pid = $2 AND ts >= $3`,
+    [playerPid, netizenPid, boundaryMs],
+  );
+  return rows.length > 0;
+}
+
+/** Record that `playerPid` challenged `netizenPid` now. */
+export async function recordChallenge(playerPid: string, netizenPid: string, nowMs: number): Promise<void> {
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO netizen_challenges (player_pid, netizen_pid, ts) VALUES ($1, $2, $3)
+       ON CONFLICT (player_pid, netizen_pid) DO UPDATE SET ts = EXCLUDED.ts`,
+    [playerPid, netizenPid, nowMs],
+  );
+}
+
+/** Look up a netizen by pid. */
+export async function getNetizenByPid(pid: string): Promise<{ pid: string; name: string; net: number } | null> {
+  if (!pool) return null;
+  const { rows } = await pool.query(
+    `SELECT id AS pid, name, coins + COALESCE(h.val, 0) - COALESCE(l.owed, 0) AS net
+       FROM players p
+       LEFT JOIN (
+         SELECT sh.pid,
+                SUM(CASE WHEN sh.side = 'short'
+                         THEN 2 * sh.cost - sh.shares * sp.price
+                         ELSE sh.shares * sp.price END) AS val
+           FROM stock_holdings sh
+           JOIN stock_prices sp ON sp.coin = sh.coin
+          WHERE sh.shares > 0
+          GROUP BY sh.pid
+       ) h ON h.pid = p.id
+       LEFT JOIN loans l ON l.pid = p.id
+       WHERE p.id = $1 AND p.bot = true`,
+    [pid],
+  );
+  return rows.length ? { pid: rows[0].pid, name: rows[0].name, net: Number(rows[0].net) } : null;
+}
+
+/** Count total netizens. */
+export async function getNetizenCount(): Promise<number> {
+  if (!pool) return 0;
+  const { rows } = await pool.query(`SELECT COUNT(*) AS c FROM players WHERE bot = true`);
+  return Number(rows[0].c);
+}
+
+/** Rank of a netizen by net worth (1 = highest). */
+export async function getNetWorthRank(pid: string): Promise<number> {
+  if (!pool) return 1;
+  const { rows } = await pool.query(
+    `SELECT rnk FROM (
+       SELECT p.id,
+              ROW_NUMBER() OVER (ORDER BY p.coins - COALESCE(l.owed, 0) DESC) AS rnk
+         FROM players p
+         LEFT JOIN loans l ON l.pid = p.id
+        WHERE p.bot = true
+     ) sub WHERE id = $1`,
+    [pid],
+  );
+  return rows.length ? Number(rows[0].rnk) : 1;
 }

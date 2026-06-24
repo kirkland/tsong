@@ -43,6 +43,7 @@ import {
   LootResultMsg,
   MarketItemView,
   LoanBookMsg,
+  NetizenInfoMsg,
   NewsItem,
   LOOT_TABLE,
   minBet,
@@ -121,6 +122,19 @@ const tipAmount = document.getElementById('tipAmount') as HTMLInputElement;
 const tipStatus = document.getElementById('tipStatus') as HTMLDivElement;
 const tipSend = document.getElementById('tipSend') as HTMLButtonElement;
 const mobileControlsEl = document.getElementById('mobileControls') as HTMLDivElement;
+
+// --- Netizen Challenge dialog ---
+const ncModal = document.getElementById('netizenChallengeModal') as HTMLDivElement;
+const ncName = document.getElementById('netizenChallengeName') as HTMLSpanElement;
+const ncNetWorth = document.getElementById('netizenChallengeNetWorth') as HTMLSpanElement;
+const ncWarn = document.getElementById('netizenChallengeWarn') as HTMLDivElement;
+const ncRow = document.getElementById('netizenChallengeRow') as HTMLDivElement;
+const ncWager = document.getElementById('ncWager') as HTMLInputElement;
+const ncMaxWin = document.getElementById('ncMaxWin') as HTMLDivElement;
+const ncChallengeBtn = document.getElementById('netizenChallengeBtn') as HTMLButtonElement;
+const ncClose = document.getElementById('netizenChallengeClose') as HTMLButtonElement;
+const ncMinus = document.getElementById('ncWagerMinus') as HTMLButtonElement;
+const ncPlus = document.getElementById('ncWagerPlus') as HTMLButtonElement;
 const mobUpBtn = document.getElementById('mobUp') as HTMLButtonElement;
 const mobDownBtn = document.getElementById('mobDown') as HTMLButtonElement;
 
@@ -637,6 +651,13 @@ const net = connect(
       typeDieScores = msg.rows;
     } else if (msg.type === 'campaignLeaderboard') {
       campaignScores = msg.rows;
+    } else if (msg.type === 'netizenInfo') {
+      showNetizenChallenge(msg);
+    } else if (msg.type === 'netizenChallengeResult') {
+      const text = msg.won
+        ? `🏆 Beat ${msg.netizenName} — won ${msg.delta}🪙!`
+        : `💸 Lost to ${msg.netizenName} — lost ${msg.delta}🪙.`;
+      showToast(text);
     } else if (msg.type === 'world') {
       worldMod?.feedWorld(msg.avatars);
     } else if (msg.type === 'wallet') {
@@ -1668,6 +1689,8 @@ worldBtn.addEventListener('click', async () => {
       // synchronously let the originating click keep bubbling to the panel's "close on outside
       // click" handler — which instantly re-closed the panel (the casino bug). A 0ms gap lets the
       // current click finish first, so the panel opens cleanly.
+      // Tapping a netizen avatar in the world requests its info for the challenge dialog.
+      onNetizenClick: (netizenId) => { net.send({ type: 'netizenInfoReq', netizenId }); },
       openFeature: (feature) => {
         const id = feature === 'roulette' ? 'rouletteBtn'
                  : feature === 'blackjack' ? 'bjBtn'
@@ -1715,32 +1738,6 @@ document.addEventListener('keydown', (e) => {
   if (!arcadePanel.hidden) closeNavMenu(arcadeBtn, arcadePanel);
   if (!casinoPanel.hidden) closeNavMenu(casinoBtn, casinoPanel);
 });
-
-// --- News panel ---
-const newsBtn = document.getElementById('newsBtn') as HTMLButtonElement;
-const newsPanel = document.getElementById('newsPanel') as HTMLDivElement;
-let newsFeed: NewsItem[] = [];
-newsBtn.addEventListener('click', () => {
-  const open = newsPanel.hidden;
-  newsPanel.hidden = !open;
-  newsBtn.setAttribute('aria-expanded', String(open));
-  if (open) { if (!newsFeed.length) net.send({ type: 'newsReq' }); renderNews(); }
-});
-document.addEventListener('click', (e) => {
-  if (newsPanel.hidden) return;
-  const t = e.target as Node;
-  if (t instanceof Node && !t.isConnected) return;
-  if (!newsPanel.contains(t) && !newsBtn.contains(t)) { newsPanel.hidden = true; newsBtn.setAttribute('aria-expanded', 'false'); }
-});
-function renderNews() {
-  if (!newsFeed.length) { newsBody.innerHTML = '<div class="news-item" style="color:#5a647e">No news yet. Check back during market hours (M–F 9am–5pm ET).</div>'; return; }
-  newsBody.innerHTML = newsFeed.map((item) => {
-    const d = new Date(item.ts);
-    const time = d.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' });
-    return `<div class="news-item"><span class="news-time">${time}</span><span class="news-headline">${escapeHtml(item.headline)}</span></div>`;
-  }).join('');
-}
-const newsBody = document.getElementById('newsBody') as HTMLDivElement;
 
 // --- Coins, cosmetics shop & betting ---
 let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; song: string | null; car: string | null; exclusives: { id: string; serial: number; instanceId: number }[]; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
@@ -2660,6 +2657,66 @@ function closeLoan() {
   loanPanel.hidden = true;
   loanBtn.setAttribute('aria-expanded', 'false');
 }
+
+// --- Netizen Challenge dialog ---
+let ncNetizenId = '';
+let ncMax = 0; // max wager (20% of net worth)
+
+function showNetizenChallenge(msg: NetizenInfoMsg) {
+  if (!joined) return;
+  ncNetizenId = msg.netizenId;
+  const netWorth = msg.netWorth;
+  ncMax = Math.max(100, Math.floor(netWorth * 0.2));
+  ncName.textContent = msg.netizenName;
+  ncNetWorth.textContent = `Net worth: ${netWorth.toLocaleString()} 🪙`;
+  ncWarn.hidden = !msg.challengedToday;
+  ncRow.hidden = msg.challengedToday;
+  ncChallengeBtn.hidden = msg.challengedToday;
+  const wager = Math.min(100, ncMax);
+  ncWager.value = String(wager);
+  ncWager.max = String(ncMax);
+  ncWager.min = '100';
+  ncMaxWin.textContent = `Max win: ${ncMax.toLocaleString()} 🪙 (20% of net worth)`;
+  ncChallengeBtn.disabled = ncMax < 100;
+  if (!ncModal.hidden) return;
+  ncModal.hidden = false;
+}
+
+function closeNetizenChallenge() {
+  ncModal.hidden = true;
+}
+
+function clampNcWager() {
+  let v = Math.floor(Number(ncWager.value));
+  if (!Number.isFinite(v) || v < 100) v = 100;
+  if (v > ncMax) v = ncMax;
+  ncWager.value = String(v);
+  ncChallengeBtn.disabled = v < 100 || v > ncMax;
+}
+
+ncClose.addEventListener('click', closeNetizenChallenge);
+ncModal.addEventListener('click', (e) => {
+  if (e.target === ncModal) closeNetizenChallenge();
+});
+ncWager.addEventListener('input', clampNcWager);
+ncWager.addEventListener('change', clampNcWager);
+ncMinus.addEventListener('click', () => {
+  ncWager.value = String(Math.max(100, Math.floor(Number(ncWager.value) || 100) - 10));
+  clampNcWager();
+});
+ncPlus.addEventListener('click', () => {
+  ncWager.value = String(Math.min(ncMax, Math.floor(Number(ncWager.value) || 100) + 10));
+  clampNcWager();
+});
+ncChallengeBtn.addEventListener('click', () => {
+  const wager = Math.floor(Number(ncWager.value));
+  if (wager < 100 || wager > ncMax || !ncNetizenId) return;
+  net.send({ type: 'netizenChallenge', netizenId: ncNetizenId, wager });
+  closeNetizenChallenge();
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !ncModal.hidden) closeNetizenChallenge();
+});
 
 loanBtn.addEventListener('click', () => {
   const open = loanPanel.hidden;
