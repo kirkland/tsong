@@ -1663,7 +1663,13 @@ worldBtn.addEventListener('click', async () => {
       // click" handler — which instantly re-closed the panel (the casino bug). A 0ms gap lets the
       // current click finish first, so the panel opens cleanly.
       openFeature: (feature) => {
-        const id = feature === 'roulette' ? 'rouletteBtn' : feature === 'stocks' ? 'marketBtn' : 'loanBtn';
+        const id = feature === 'roulette' ? 'rouletteBtn'
+                 : feature === 'blackjack' ? 'bjBtn'
+                 : feature === 'craps'     ? 'crapsBtn'
+                 : feature === 'crash'     ? 'crashBtn'
+                 : feature === 'slots'     ? 'slotsBtn'
+                 : feature === 'stocks'    ? 'marketBtn'
+                 : 'loanBtn';
         setTimeout(() => (document.getElementById(id) as HTMLButtonElement | null)?.click(), 0);
       },
     });

@@ -38,7 +38,7 @@ export interface WorldNet {
   car(): string | null;          // our equipped car id (null = none → can't drive)
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'roulette' | 'stocks' | 'loans'): void; // open a Casino/Bank feature
+  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'stocks' | 'loans'): void; // open a Casino/Bank feature
 }
 
 // --- module-level controller so feedWorld()/isWorldOpen() can reach the live overlay ---
@@ -325,7 +325,11 @@ export function startWorld(net: WorldNet): void {
     if (kind === 'arena') { exit(); net.enterArena(); return; }
     if (kind === 'casino') {
       openDialog('🎰 Casino', 'What are you feeling lucky for?', [
-        { label: '🎡 Roulette', onPick: () => { exit(); net.openFeature('roulette'); } },
+        { label: '🎡 Roulette',   onPick: () => { exit(); net.openFeature('roulette');  } },
+        { label: '🃏 Blackjack',  onPick: () => { exit(); net.openFeature('blackjack'); } },
+        { label: '🎲 Craps',      onPick: () => { exit(); net.openFeature('craps');     } },
+        { label: '🚀 Crash',      onPick: () => { exit(); net.openFeature('crash');     } },
+        { label: '🎰 Slots',      onPick: () => { exit(); net.openFeature('slots');     } },
       ]);
       return;
     }
