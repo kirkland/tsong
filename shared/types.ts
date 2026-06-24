@@ -1174,6 +1174,11 @@ export type StockTf = keyof typeof STOCK_HISTORY; // '5m' | '1h' | '6h' | '1d'
 
 // Direction of a stock position. A player can hold long and short of the same coin at once.
 export type StockSide = 'long' | 'short';
+// Fast-sell tax: closing a position (long cash-out / short cover) within this window of opening —
+// or topping it up, which restamps the clock — taxes this fraction of the payout to the House.
+// Single source of truth so the server's charge and the client's countdown can't drift apart.
+export const FAST_SELL_TAX_MS = 300_000; // 5 minutes
+export const FAST_SELL_TAX_RATE = 0.10;  // 10% of the (positive) payout
 // Current value of a position: long pays shares×price; short pays 2×cost − shares×price
 // (goes negative if price climbs past entry — covering then costs the holder extra coins).
 export function positionWorth(side: StockSide, shares: number, cost: number, price: number): number {

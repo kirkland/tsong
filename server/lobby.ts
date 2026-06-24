@@ -77,6 +77,8 @@ import {
   NEWS_TEMPLATES_BEARISH,
   LOOT_TABLE,
   minBet,
+  FAST_SELL_TAX_MS,
+  FAST_SELL_TAX_RATE,
 } from '../shared/types';
 import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSelfElo, getSelfNetWorth, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
@@ -2662,9 +2664,9 @@ export class Lobby {
       const toHouse = cost - back;
       if (toHouse > 0) await this.houseCredit(toHouse);
     }
-    // Fast-sell tax: a position closed too quickly pays 10% of the (positive) payout to the House.
-    if (payout > 0 && openedAt > 0 && Date.now() - openedAt < 300_000) {
-      const tax = Math.floor(payout * 0.10);
+    // Fast-sell tax: a position closed within FAST_SELL_TAX_MS pays a cut of the payout to the House.
+    if (payout > 0 && openedAt > 0 && Date.now() - openedAt < FAST_SELL_TAX_MS) {
+      const tax = Math.floor(payout * FAST_SELL_TAX_RATE);
       if (tax > 0) {
         const taken = await spendCoins(pid, tax); // claw the tax back out of what we just paid
         if (taken) { await this.houseCredit(tax); credited -= tax; }

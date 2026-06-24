@@ -40,6 +40,8 @@ import {
   StockSide,
   StockTf,
   positionWorth,
+  FAST_SELL_TAX_MS,
+  FAST_SELL_TAX_RATE,
   TickHealth,
   EXCLUSIVES,
   ExclusiveItem,
@@ -2229,15 +2231,15 @@ document.addEventListener('click', (e) => {
   if (!marketPanel.contains(t) && !marketBtn.contains(t)) { marketPanel.hidden = true; marketBtn.setAttribute('aria-expanded', 'false'); }
 });
 
-// Fast-sell tax window (mirrors server/lobby.ts settleCashOut): closing a position within 60s
-// of opening — or topping it up — taxes 10% of the payout. Show a live countdown so it's clear
-// when the position is safe to close tax-free.
-const FAST_SELL_MS = 60_000;
+// Fast-sell tax window (FAST_SELL_TAX_MS, shared with server/lobby.ts settleCashOut): closing a
+// position within that window of opening — or topping it up — taxes FAST_SELL_TAX_RATE of the
+// payout. Show a live countdown so it's clear when the position is safe to close tax-free.
 function taxBadge(openedAt: number): { text: string; cls: string } {
-  const left = openedAt > 0 ? Math.max(0, FAST_SELL_MS - (Date.now() - openedAt)) : 0;
-  return left > 0
-    ? { text: `🔒 10% tax · safe in ${Math.ceil(left / 1000)}s`, cls: 'tax-wait' }
-    : { text: '✅ tax-free', cls: 'tax-free' };
+  const left = openedAt > 0 ? Math.max(0, FAST_SELL_TAX_MS - (Date.now() - openedAt)) : 0;
+  if (left <= 0) return { text: '✅ tax-free', cls: 'tax-free' };
+  const secs = Math.ceil(left / 1000);
+  const clock = secs >= 60 ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : `${secs}s`;
+  return { text: `🔒 ${Math.round(FAST_SELL_TAX_RATE * 100)}% tax · safe in ${clock}`, cls: 'tax-wait' };
 }
 
 function renderMarket() {
