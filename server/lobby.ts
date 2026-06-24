@@ -790,8 +790,8 @@ export class Lobby {
       .catch((e) => console.error('doom reward failed:', e));
   }
 
-  // World "weekly objective" rewards. Granted once per player per quest (tracked in-memory for the
-  // server's lifetime), paid from the House like the DOOM bounty.
+  // World "weekly objective" rewards, in coins (NOT win-units — these are paid as-is, not ×COIN_SCALE).
+  // Granted once per player per quest (tracked in-memory for the server's lifetime), paid from the House.
   private static QUEST_REWARDS: Record<string, number> = { 'find-waldo': 400, 'give-banana': 400, 'win-ten': 1000 };
   private claimedQuests = new Set<string>(); // `${pid}:${quest}`
   questClaim(ws: WebSocket, quest: string) {
@@ -802,7 +802,7 @@ export class Lobby {
     const key = `${conn.pid}:${quest}`;
     if (this.claimedQuests.has(key)) return; // already paid
     this.claimedQuests.add(key);
-    this.housePay(conn.pid, conn.nickname, reward * COIN_SCALE)
+    this.housePay(conn.pid, conn.nickname, reward) // already in coins — do NOT ×COIN_SCALE
       .then(() => this.sendWallet(ws))
       .catch((e) => { this.claimedQuests.delete(key); console.error('quest reward failed:', e); });
   }

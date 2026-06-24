@@ -402,6 +402,29 @@ export async function initDb(): Promise<void> {
       console.warn(`tsong→lasso transfer skipped — src(${srcPid ?? 'none'}) / dst(${dstPid ?? 'none'}); will retry next boot`);
     }
   }
+  // One-time: delete the account(s) named exactly "matt" (per request) — NOT "matty supreme" or any
+  // other name. Matched on the normalized exact name so it can't catch a near-namesake. Removes the
+  // player row plus its dependent rows across the economy/score tables. Gated so it runs once.
+  const delMatt = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'delete_matt_v1'`);
+  if (delMatt.rowCount === 0) {
+    const victims = await pool.query<{ id: string }>(
+      `SELECT id FROM players WHERE LOWER(TRIM(name)) = 'matt'`,
+    );
+    for (const v of victims.rows) {
+      const pid = v.id;
+      await pool.query(`DELETE FROM stock_holdings     WHERE pid = $1`, [pid]);
+      await pool.query(`DELETE FROM loans              WHERE pid = $1`, [pid]);
+      await pool.query(`DELETE FROM exclusive_instances WHERE owner_pid = $1`, [pid]);
+      await pool.query(`DELETE FROM listings           WHERE seller_pid = $1`, [pid]);
+      await pool.query(`DELETE FROM bounties           WHERE target_pid = $1`, [pid]);
+      await pool.query(`DELETE FROM doom_scores        WHERE pid = $1`, [pid]);
+      await pool.query(`DELETE FROM typedie_scores     WHERE pid = $1`, [pid]);
+      await pool.query(`DELETE FROM campaign_scores    WHERE pid = $1`, [pid]);
+      await pool.query(`DELETE FROM players            WHERE id  = $1`, [pid]);
+      console.log(`deleted account 'matt' (${pid})`);
+    }
+    await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('delete_matt_v1', now()::text)`);
+  }
   await ensureNetizenChallengesTable();
   console.log('leaderboard DB ready');
 }
