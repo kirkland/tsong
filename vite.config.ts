@@ -14,6 +14,8 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // Allow tunneled hostnames (ngrok etc.) so a second device can join over the internet in dev.
+    allowedHosts: true,
     proxy: {
       '/ws': {
         target: `ws://localhost:${serverPort}`,

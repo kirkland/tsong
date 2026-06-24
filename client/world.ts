@@ -44,6 +44,7 @@ export interface WorldNet {
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
   openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'stocks' | 'loans'): void; // open a Casino/Bank feature
+  claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
 }
 
 // --- module-level controller so feedWorld()/isWorldOpen() can reach the live overlay ---
@@ -240,7 +241,7 @@ const NPCS: NpcDef[] = [
   },
   {
     id: 'waldo', name: 'Waldo', shirt: 0xd23b3b, hair: 0x3a2a1a, glasses: true, stripes: true,
-    x: 980, y: 980, roam: 150,
+    x: 470, y: 470, roam: 150, // tucked into the far NW corner — properly hard to find
     lines: [
       'You FOUND me?! Took you long enough.',
       'Red-and-white stripes in a town full of grass. Worst camouflage ever.',
@@ -299,15 +300,6 @@ function hexToInt(c: string): number {
   if (c.length === 3) c = c[0] + c[0] + c[1] + c[1] + c[2] + c[2];
   return parseInt(c, 16) >>> 0;
 }
-// Shade a 0xRRGGBB color toward black (f<1) or white (f>1) — for cheap pixel-art highlights/shadows.
-function shade(int: number, f: number): number {
-  const ch = (v: number) => clamp(Math.round(v * Math.min(f, 1) + (f > 1 ? 255 * (f - 1) : 0)), 0, 255);
-  const r = ch((int >> 16) & 0xff);
-  const g = ch((int >> 8) & 0xff);
-  const b = ch(int & 0xff);
-  return (r << 16) | (g << 8) | b;
-}
-
 export function startWorld(net: WorldNet): void {
   if (controller) return; // already open
 
@@ -387,6 +379,27 @@ export function startWorld(net: WorldNet): void {
     'border:1px solid #2c3a63;border-radius:8px;padding:7px 12px;font-size:13px;';
   topbar.append(title, count, driveBtn, backBtn);
   overlay.appendChild(topbar);
+
+  // Weekly objectives panel (top-left, under the title).
+  const objPanel = document.createElement('div');
+  objPanel.style.cssText =
+    'position:absolute;top:46px;left:14px;z-index:2;min-width:188px;background:#0c1330d9;' +
+    'border:1px solid #2c3a63;border-radius:10px;padding:9px 12px 10px;box-shadow:0 6px 20px #0006;pointer-events:none;';
+  const objTitle = document.createElement('div');
+  objTitle.textContent = '📋 Weekly Objectives';
+  objTitle.style.cssText = 'color:#cfe0ff;font-size:12px;font-weight:700;letter-spacing:.4px;margin-bottom:6px;opacity:.85;';
+  const objList = document.createElement('div');
+  objPanel.append(objTitle, objList);
+  overlay.appendChild(objPanel);
+
+  // Objective-complete toast (slides in top-center).
+  const toast = document.createElement('div');
+  toast.style.cssText =
+    'position:absolute;top:-80px;left:50%;transform:translateX(-50%);z-index:5;pointer-events:none;' +
+    'background:linear-gradient(#1b2b14,#10210c);border:2px solid #6bd06b;border-radius:12px;' +
+    'padding:12px 20px;color:#eafbe6;font-weight:700;box-shadow:0 10px 30px #000a;text-align:center;' +
+    'transition:top .45s cubic-bezier(.2,1.3,.4,1);';
+  overlay.appendChild(toast);
 
   // Controls hint (bottom-left).
   const help = document.createElement('div');
@@ -585,6 +598,51 @@ export function startWorld(net: WorldNet): void {
     dialog.style.display = 'none';
   }
 
+  // --- weekly objectives (top-left panel + reward toast) ---
+  interface Objective { id: string; label: string; reward: number; done: boolean }
+  const objectives: Objective[] = [
+    { id: 'find-waldo', label: 'Find Waldo', reward: 400, done: false },
+  ];
+  const questKey = (id: string) => `tsong.world.quest.${id}`;
+  for (const o of objectives) { try { o.done = localStorage.getItem(questKey(o.id)) === '1'; } catch { /* ignore */ } }
+  const chaching = new Audio('/chaching.mp3'); chaching.volume = 0.7;
+  function renderObjectives() {
+    objList.replaceChildren();
+    for (const o of objectives) {
+      const row = document.createElement('div');
+      row.style.cssText = `display:flex;align-items:center;gap:8px;font-size:13px;margin:3px 0;color:${o.done ? '#8fe08f' : '#dbe4f7'};`;
+      const box = document.createElement('span');
+      box.textContent = o.done ? '☑' : '☐';
+      box.style.cssText = `font-size:15px;color:${o.done ? '#6bd06b' : '#9fb0d8'};`;
+      const lab = document.createElement('span');
+      lab.textContent = o.label;
+      if (o.done) lab.style.textDecoration = 'line-through';
+      const rew = document.createElement('span');
+      rew.textContent = `+${o.reward}🪙`;
+      rew.style.cssText = 'margin-left:auto;font-size:11px;opacity:.7;';
+      row.append(box, lab, rew);
+      objList.appendChild(row);
+    }
+  }
+  let toastTimer = 0;
+  function showToast(html: string) {
+    toast.innerHTML = html;
+    toast.style.top = '64px';
+    window.clearTimeout(toastTimer);
+    toastTimer = window.setTimeout(() => { toast.style.top = '-90px'; }, 3400);
+  }
+  function completeObjective(id: string) {
+    const o = objectives.find((x) => x.id === id);
+    if (!o || o.done) return;
+    o.done = true;
+    try { localStorage.setItem(questKey(id), '1'); } catch { /* ignore */ }
+    renderObjectives();
+    net.claimQuest(id);                                   // server grants the coins (once)
+    try { chaching.currentTime = 0; void chaching.play(); } catch { /* ignore */ }
+    showToast(`✅ Objective complete!<br><b>${o.label}</b> &nbsp;<span style="color:#ffe14d">+${o.reward} 🪙</span>`);
+  }
+  renderObjectives();
+
   // --- NPC dialogue (Pokémon-style bottom box: typewriter line(s), then optional reply choices) ---
   function startTalk(n: LiveNpc) {
     if (talkOpen || dialogOpen) return;
@@ -592,6 +650,7 @@ export function startWorld(net: WorldNet): void {
     keys.clear(); joyActive = false;
     prompt.style.display = 'none';
     n.faceLeft = selfX < n.x; // turn to face the player
+    if (n.def.id === 'waldo') completeObjective('find-waldo'); // found him!
 
     // Build the page list: one flavour line, then (if any) the question + its chosen reply.
     type Page = { text: string; choices?: readonly [NpcChoice, NpcChoice] };
@@ -1034,55 +1093,138 @@ export function startWorld(net: WorldNet): void {
   }
 
   // Build a pixel building image keyed by id, sized to its footprint (in texels).
-  function makeBuildingTexture(scene: Phaser.Scene, b: WorldBuilding) {
-    const W = Math.round(b.w / TEXEL), H = Math.round(b.h / TEXEL);
-    const g = scene.make.graphics({ x: 0, y: 0 }, false);
-    const px = (x: number, y: number, w: number, h: number, color: number, a = 1) => {
-      g.fillStyle(color, a); g.fillRect(x, y, w, h);
-    };
-    const wall = hexToInt(b.color);
-    const roof = shade(wall, 1.28);
-    const dark = shade(wall, 0.62);
-    const roofH = Math.round(H * 0.42);
+  // Compose a building out of Kenney "Tiny Town" tiles: a roof band over wall rows, a framed door
+  // at bottom-centre, scattered windows, then a themed flourish (marquee bulbs / sign emoji).
+  function buildBuilding(sc: Phaser.Scene, b: WorldBuilding) {
+    const bw = Math.max(3, Math.round(b.w / TILE));
+    const bh = Math.max(3, Math.round(b.h / TILE));
+    const roofRows = Math.max(2, Math.round(bh * 0.5)); // a taller roof reads as a building, not a wall
+    const depth = b.y + b.h;
+    const scale = TILE / 16;
 
-    // body + base shadow + outline
-    px(0, 0, W, H, dark);
-    px(1, roofH, W - 2, H - roofH - 1, shade(wall, 0.92));
-    px(2, roofH + 1, W - 4, H - roofH - 3, wall);
-    // roof block with a lighter cap + eave line
-    px(2, 1, W - 4, roofH, roof);
-    px(2, 1, W - 4, 2, shade(wall, 1.5));
-    px(1, roofH - 1, W - 2, 2, dark);
+    // per-venue palette: casino = red roof + wood walls; arena = grey roof + wood walls;
+    // bank = grey roof + stone walls (institutional).
+    const red = b.kind === 'casino';
+    const roofTop = red ? [52, 53, 54] : [48, 49, 50];
+    const roofMid = red ? [64, 65, 66] : [60, 61, 62];
+    const wood = b.kind !== 'bank';
+    const wallL = wood ? 72 : 76, wallM = wood ? 73 : 77, wallR = wood ? 75 : 79;
+    const doorF = wood ? 85 : 89, windowF = wood ? 84 : 88;
+    const doorCol = Math.floor(bw / 2);
 
-    if (b.kind === 'arena') {
-      // a green pitch with a center net stripe set into the wall
-      const fx = Math.round(W * 0.16), fy = roofH + Math.round(H * 0.18);
-      const fw = W - fx * 2, fh = Math.round(H * 0.42);
-      px(fx, fy, fw, fh, 0x2f8f43); px(fx + 1, fy + 1, fw - 2, fh - 2, 0x3fa850);
-      px(Math.round(W / 2), fy, 1, fh, 0xffffff);
-      // light towers
-      px(3, 0, 2, 4, 0xdfe6f0); px(W - 5, 0, 2, 4, 0xdfe6f0);
-    } else if (b.kind === 'casino') {
-      // marquee bulbs + a 777 panel
-      for (let x = 4; x < W - 4; x += 5) px(x, 2, 2, 2, 0xffe14d);
-      const pw = Math.round(W * 0.4), pxx = Math.round((W - pw) / 2), pyy = roofH + 4;
-      px(pxx, pyy, pw, Math.round(H * 0.28), 0x1a1020);
-      px(pxx + 2, pyy + 2, pw - 4, Math.round(H * 0.28) - 4, 0xffd23f);
-    } else if (b.kind === 'bank') {
-      // marble columns + pediment
-      const colTop = roofH + 2, colH = H - roofH - 6;
-      for (let x = 4; x < W - 4; x += 6) px(x, colTop, 3, colH, 0xeef0e8);
-      px(2, roofH - 3, W - 4, 4, shade(wall, 1.1));
+    const place = (col: number, row: number, frame: number, d = depth) =>
+      sc.add.image(b.x + col * TILE + TILE / 2, b.y + row * TILE + TILE / 2, 'townFrames', frame)
+        .setScale(scale).setDepth(d);
+
+    for (let row = 0; row < bh; row++) {
+      for (let col = 0; col < bw; col++) {
+        const left = col === 0, right = col === bw - 1;
+        if (row < roofRows) {
+          const set = row === 0 ? roofTop : roofMid;
+          place(col, row, left ? set[0] : right ? set[2] : set[1]);
+        } else {
+          const bottom = row === bh - 1;
+          // a single tidy band of windows on the upper wall row, evenly spaced, clear of the door
+          const windowRow = row === roofRows + 1;
+          const isWindow = windowRow && !left && !right && col !== doorCol && (col - 1) % 4 === 0;
+          if (bottom && col === doorCol) place(col, row, doorF);
+          else if (isWindow) place(col, row, windowF);
+          else place(col, row, left ? wallL : right ? wallR : wallM);
+        }
+      }
     }
-    // door (bottom center)
-    const dw = Math.max(4, Math.round(W * 0.12)), dh = Math.round(H * 0.22);
-    px(Math.round((W - dw) / 2), H - dh - 1, dw, dh, 0x241a12);
-    px(Math.round((W - dw) / 2), H - dh - 1, dw, 2, 0x000000);
 
-    const key = `w-bldg-${b.id}`;
-    g.generateTexture(key, W, H);
+    // the venue glyph on a little hanging sign above the door (🏦 for the bank)
+    const doorX = b.x + doorCol * TILE + TILE / 2;
+    sc.add.text(doorX, b.y + b.h - TILE * 1.7, b.emoji, { fontSize: '22px' })
+      .setOrigin(0.5, 1).setDepth(b.y + b.h + 2);
+  }
+
+  // The Casino and Arena need to read as what they ARE, not as generic houses — so they're custom
+  // pixel facades (drawn at texel res, upscaled ×TEXEL) plus animated Phaser overlays on top.
+  function px9(g: Phaser.GameObjects.Graphics, x: number, y: number, w: number, h: number, c: number, a = 1) {
+    g.fillStyle(c, a); g.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+  }
+
+  function buildCasino(sc: Phaser.Scene, b: WorldBuilding) {
+    const W = Math.round(b.w / TEXEL), H = Math.round(b.h / TEXEL);
+    const depth = b.y + b.h;
+    const g = sc.make.graphics({ x: 0, y: 0 }, false);
+    const P = (x: number, y: number, w: number, h: number, c: number, a = 1) => px9(g, x, y, w, h, c, a);
+    // dark glam facade + neon trim
+    P(0, 0, W, H, 0x140a24);
+    P(3, 3, W - 6, H - 6, 0x271447);
+    P(3, 3, W - 6, 2, 0xff3ea5); P(3, H - 5, W - 6, 2, 0xff3ea5);       // magenta neon top/bottom
+    P(3, 3, 2, H - 6, 0xff3ea5); P(W - 5, 3, 2, H - 6, 0xff3ea5);
+    // gold marquee band across the top (bulbs are added live, on top)
+    const band = Math.round(H * 0.17);
+    P(6, 6, W - 12, band, 0xe8b84b); P(6, 6, W - 12, 3, 0xffd87a);
+    P(6, 6 + band, W - 12, 2, 0x7a5a18);
+    // central 777 sign panel
+    const sx = Math.round(W * 0.28), sy = Math.round(H * 0.3), sw = Math.round(W * 0.44), sh = Math.round(H * 0.34);
+    P(sx - 3, sy - 3, sw + 6, sh + 6, 0xffd23f); P(sx, sy, sw, sh, 0x0a0612);
+    const seven = (cx: number, cy: number, sw7: number, sh7: number, col: number) => {
+      P(cx, cy, sw7, 2, col);                                   // top bar
+      for (let i = 0; i < sh7; i++) P(cx + sw7 - 2 - Math.round(i * (sw7 - 2) / sh7), cy + i, 2, 1, col);
+    };
+    const sevenH = Math.round(sh * 0.6), sevenW = Math.round(sw * 0.18), gap = Math.round(sw * 0.1);
+    const startX = sx + Math.round((sw - (sevenW * 3 + gap * 2)) / 2), sevenY = sy + Math.round((sh - sevenH) / 2);
+    for (let i = 0; i < 3; i++) seven(startX + i * (sevenW + gap), sevenY, sevenW, sevenH, 0xff4d4d);
+    // glowing windows along the lower wall
+    const wy = Math.round(H * 0.72), ww = Math.round(W * 0.07), wh = Math.round(H * 0.12);
+    for (let x = Math.round(W * 0.1); x < W - ww - 6; x += Math.round(W * 0.2)) {
+      P(x, wy, ww, wh, 0x3a2a12); P(x + 1, wy + 1, ww - 2, wh - 2, 0xffcf5a);
+    }
+    // gold doorway + red carpet
+    const dw = Math.round(W * 0.16), dx = Math.round((W - dw) / 2), dh = Math.round(H * 0.26);
+    P(dx - 2, H - dh - 4, dw + 4, dh + 2, 0xe8b84b); P(dx, H - dh - 2, dw, dh, 0x1a0a14);
+    P(dx + 2, H - dh, dw - 4, dh, 0xb01030);
+    g.generateTexture(`w-casino`, W, H);
     g.destroy();
-    return key;
+    sc.add.image(b.x, b.y, 'w-casino').setOrigin(0, 0).setScale(TEXEL).setDepth(depth);
+
+    // live marquee bulbs chasing along the gold band
+    const by = b.y + 8 * TEXEL;
+    const n = Math.max(6, Math.round(b.w / 44));
+    for (let i = 0; i < n; i++) {
+      const bx = b.x + 14 + (i / (n - 1)) * (b.w - 28);
+      const bulb = sc.add.circle(bx, by, 5, 0xfff2a8).setDepth(depth + 1);
+      sc.tweens.add({ targets: bulb, alpha: 0.2, duration: 360, yoyo: true, repeat: -1, delay: i * 90 });
+    }
+  }
+
+  function buildArena(sc: Phaser.Scene, b: WorldBuilding) {
+    const W = Math.round(b.w / TEXEL), H = Math.round(b.h / TEXEL);
+    const depth = b.y + b.h;
+    const g = sc.make.graphics({ x: 0, y: 0 }, false);
+    const P = (x: number, y: number, w: number, h: number, c: number, a = 1) => px9(g, x, y, w, h, c, a);
+    const roofH = Math.round(H * 0.34);
+    // concrete bowl
+    P(0, roofH - 4, W, H - roofH + 4, 0x9aa1b0);
+    P(3, roofH, W - 6, H - roofH - 3, 0xc6ccd8);
+    // tiered seating hint (diagonal banding)
+    for (let r = 0; r < 4; r++) P(6, roofH + 4 + r * Math.round((H - roofH) * 0.12), W - 12, 2, 0xb0b7c4);
+    // big curved blue roof
+    P(0, 0, W, roofH, 0x2c3e8f);
+    P(0, 0, W, 3, 0x4a5fc0);
+    for (let i = 0; i < W; i++) { const dip = Math.round(Math.sin((i / W) * Math.PI) * 6); P(i, roofH - dip, 1, dip + 3, 0x24337a); }
+    // floodlight towers (poles + lamp panels) at the top corners
+    const towerX = [Math.round(W * 0.12), Math.round(W * 0.88)];
+    for (const tx of towerX) { P(tx - 1, 2, 3, roofH, 0x3a4252); P(tx - 5, 0, 11, 5, 0x2b3140); }
+    // central arched entrance with a glimpse of the green pitch + net
+    const ax = Math.round(W * 0.33), aw = Math.round(W * 0.34), ay = roofH + Math.round(H * 0.12), ah = H - ay - Math.round(H * 0.04);
+    P(ax - 3, ay - 3, aw + 6, ah + 6, 0xe8eef6); P(ax, ay, aw, ah, 0x2f8f43);
+    P(ax + 1, ay + 1, aw - 2, ah - 2, 0x3fa850); P(Math.round(W / 2), ay, 1, ah, 0xffffff);
+    g.generateTexture('w-arena', W, H);
+    g.destroy();
+    sc.add.image(b.x, b.y, 'w-arena').setOrigin(0, 0).setScale(TEXEL).setDepth(depth);
+
+    // glowing floodlights that pulse, with a soft halo
+    for (const tx of towerX) {
+      sc.add.circle(b.x + tx * TEXEL, b.y + 3 * TEXEL, 16, 0xfff0c0, 0.18).setDepth(depth + 1);
+      const lamp = sc.add.rectangle(b.x + tx * TEXEL, b.y + 2 * TEXEL, 12, 7, 0xfff6c8).setDepth(depth + 2);
+      sc.tweens.add({ targets: lamp, alpha: 0.55, duration: 900, yoyo: true, repeat: -1 });
+    }
   }
 
   // --- the Phaser scene ---
@@ -1160,13 +1302,14 @@ export function startWorld(net: WorldNet): void {
         sc.add.image(p.x, p.y, 'townFrames', TT.bush).setScale(TEXEL * 1.1).setOrigin(0.5, 0.92).setDepth(p.y);
       }
 
-      // --- buildings + name signs ---
+      // --- buildings + name signs (Casino & Arena are custom-themed; Bank is a Kenney house) ---
       for (const b of WORLD_BUILDINGS) {
-        const key = makeBuildingTexture(sc, b);
         // ground shadow cast down-right
         sc.add.rectangle(b.x + 14, b.y + 18, b.w, b.h, 0x0a1226, 0.32)
           .setOrigin(0, 0).setDepth(b.y + b.h - 1);
-        sc.add.image(b.x, b.y, key).setOrigin(0, 0).setScale(TEXEL).setDepth(b.y + b.h);
+        if (b.kind === 'casino') buildCasino(sc, b);
+        else if (b.kind === 'arena') buildArena(sc, b);
+        else buildBuilding(sc, b);
         const sign = sc.add.text(b.x + b.w / 2, b.y - 6, b.name, {
           fontFamily: 'system-ui, sans-serif', fontSize: '15px', fontStyle: 'bold',
           color: '#ffffff', stroke: '#0b1020', strokeThickness: 5, resolution: 2,

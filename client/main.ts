@@ -1701,6 +1701,7 @@ worldBtn.addEventListener('click', async () => {
                  : 'loanBtn';
         setTimeout(() => (document.getElementById(id) as HTMLButtonElement | null)?.click(), 0);
       },
+      claimQuest: (quest) => net.send({ type: 'questClaim', quest }),
     });
   } catch (e) {
     console.error('World failed to load:', e);
