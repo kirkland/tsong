@@ -124,7 +124,9 @@ export class Connection {
       if (
         this.readyResolve &&
         this.cache.wallet &&
-        this.cache.stocks
+        this.cache.stocks &&
+        this.cache.leaderboard &&
+        this.cache.netWorth
       ) {
         const r = this.readyResolve;
         this.readyResolve = null;

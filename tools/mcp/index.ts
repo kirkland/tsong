@@ -32,17 +32,31 @@ async function verifyIdentity(): Promise<void> {
     name = nw.selfRow.name;
     net = nw.selfRow.net;
     rank = nw.selfRank ?? 0;
+  } else if (nw?.rows) {
+    const found = nw.rows.find((r) => r.name === expect);
+    if (found) {
+      name = found.name;
+      net = found.net;
+      rank = nw.rows.indexOf(found) + 1;
+    }
   }
 
-  if (lb?.selfRank && lb.rows[lb.selfRank - 1]) {
+  if (lb?.selfRank) {
+    rank = lb.selfRank;
     const row = lb.rows[lb.selfRank - 1];
-    if (!name) name = row.name;
-    wins = row.wins;
-    losses = row.losses;
-    if (!rank) rank = lb.selfRank;
+    if (row) {
+      if (!name) name = row.name;
+      wins = row.wins;
+      losses = row.losses;
+    }
+  } else if (lb?.rows) {
+    const found = lb.rows.find((r) => r.name === expect);
+    if (found && !name) name = found.name;
+    if (found) { wins = found.wins; losses = found.losses; }
   }
 
-  const played = wins + losses >= 1;
+  const onLeaderboard = lb?.selfRank !== undefined;
+  const played = wins + losses >= 1 || onLeaderboard;
   const match = name === expect;
 
   if (match && played) {
