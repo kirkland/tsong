@@ -395,6 +395,7 @@ export interface WorldAvatar {
   y: number;
   a?: number;          // heading in radians (only meaningful while driving)
   car?: string | null; // car id being driven, or null/undefined when on foot
+  bot?: boolean;       // true for netizen avatars
 }
 export interface WorldMsg {
   type: 'world';
@@ -1321,3 +1322,32 @@ export interface CampaignLeaderboardMsg {
   rows: CampaignScoreRow[];
 }
 export const CAMPAIGN_STAGE_COUNT = 5;
+
+// --- Netizen dialogue corpus (Plan 02 + Plan 03) ---
+export const NETIZEN_DIALOGUE = {
+  buyLong: [
+    'aped into {ticker} 🚀', 'loading {ticker} here', '{ticker} looking juicy ngl',
+    'all in {ticker} lfg', 'yolo {ticker} 🚀', 'adding {ticker} to the bag', '{ticker} dip is tasty',
+  ],
+  sellProfit: [
+    'took profit on {ticker} 💰', 'out of {ticker}, ty market', '{ticker} paid the bills today',
+    'locked in gains on {ticker} ✅', 'trimmed {ticker} for some profit',
+  ],
+  sellLoss: [
+    'got rekt on {ticker} 💀', 'paperhanded {ticker} again', '{ticker} bagholder no more',
+    'sold {ticker} at a loss rip 💸', 'dyor they said {ticker} they said',
+  ],
+  newsBullish: [
+    'something brewing with {ticker}? 👀', "i'm not not buying {ticker} rn",
+    'feels like {ticker} szn', '{ticker} definitely up to something', 'heard a rumor about {ticker} 😏',
+  ],
+  newsBearish: [
+    'staying away from {ticker} today', '{ticker} giving me bad vibes',
+    'might short {ticker} ngl', 'something off with {ticker} energy', 'not touching {ticker} with a pole',
+  ],
+  idleBanter: [
+    "who's this lasso guy with 1M net worth", 'new exclusive dropped in the black market 👀',
+    'anyone else watching the leaderboard?', 'market looking spicy today 🌶️',
+    'feels like a dead cat bounce', 'chart says up but my gut says down 🤷',
+  ],
+};
