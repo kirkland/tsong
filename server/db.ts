@@ -1207,6 +1207,26 @@ export async function setStockCrashAt(ts: number): Promise<void> {
   );
 }
 
+/** Read the persisted news feed (up to ~30 items, newest-first). Empty if no DB. */
+export async function getNewsFeed(): Promise<import('../shared/types').NewsItem[]> {
+  if (!pool) return [];
+  try {
+    const { rows } = await pool.query(`SELECT v FROM doom_meta WHERE k = 'news_feed'`);
+    if (!rows.length) return [];
+    const parsed = JSON.parse(rows[0].v);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+/** Persist the news feed (upsert in place). */
+export async function saveNewsFeed(items: import('../shared/types').NewsItem[]): Promise<void> {
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO doom_meta (k, v) VALUES ('news_feed', $1)
+       ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+    [JSON.stringify(items.slice(0, 30))],
+  );
+}
+
 /** Read the running market-instability pool (total defaulted-loan debt since the last crash).
  *  0 if never set / no DB. Drives the "Market Stability" bar and the crash trigger. */
 export async function getMarketInstability(): Promise<number> {
@@ -1222,6 +1242,26 @@ export async function setMarketInstability(n: number): Promise<void> {
     `INSERT INTO doom_meta (k, v) VALUES ('market_instability', $1)
        ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
     [String(n)],
+  );
+}
+
+/** Read the persisted news feed (up to ~30 items, newest-first). Empty if no DB. */
+export async function getNewsFeed(): Promise<import('../shared/types').NewsItem[]> {
+  if (!pool) return [];
+  try {
+    const { rows } = await pool.query(`SELECT v FROM doom_meta WHERE k = 'news_feed'`);
+    if (!rows.length) return [];
+    const parsed = JSON.parse(rows[0].v);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+/** Persist the news feed (upsert in place). */
+export async function saveNewsFeed(items: import('../shared/types').NewsItem[]): Promise<void> {
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO doom_meta (k, v) VALUES ('news_feed', $1)
+       ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+    [JSON.stringify(items.slice(0, 30))],
   );
 }
 

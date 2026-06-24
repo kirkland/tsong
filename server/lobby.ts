@@ -1,7 +1,7 @@
 // Tracks every connected socket, which two of them hold the paddle spots, and turns
 // the Game's raw state into the broadcast message (attaching nicknames / watchers).
 
-import type { WebSocket } from 'ws';
+import { WebSocket } from 'ws';
 import { Game } from './game';
 import { PolyGame } from './polygame';
 import { TypeGame } from './typegame';
@@ -71,6 +71,12 @@ import {
   MarketItemView,
   MarketListingView,
   WorldAvatar,
+  NewsItem,
+  NETIZEN_DIALOGUE,
+  NEWS_TEMPLATES_BULLISH,
+  NEWS_TEMPLATES_BEARISH,
+  LOOT_TABLE,
+  minBet,
 } from '../shared/types';
 import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
@@ -83,7 +89,8 @@ import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recor
   mintExclusive, getExclusiveSupply, getExclusiveLastSale,
   listExclusive, cancelListing, getMarketListings, buyLowestAsk,
   getNetizens, seedNetizen,
-  addBounty, getBountyOn, clearBounty, getBounties } from './db';
+  addBounty, getBountyOn, clearBounty, getBounties,
+  getNewsFeed, saveNewsFeed } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
 
@@ -162,6 +169,25 @@ function nextFivePmEtMs(nowMs: number): number {
   let delta = target - secsNow;
   if (delta <= 0) delta += 24 * 3600; // already past 5pm in NY → the next one is tomorrow
   return nowMs + delta * 1000;
+}
+
+// Market-hours check: M–F 9:00–16:59 America/New_York.
+function isMarketHours(nowMs: number): boolean {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour12: false, weekday: 'short', hour: '2-digit',
+  }).formatToParts(new Date(nowMs));
+  const day = parts.find(p => p.type === 'weekday')?.value;
+  const hour = Number(parts.find(p => p.type === 'hour')?.value) || 0;
+  return !['Sat','Sun'].includes(day ?? '') && hour >= 9 && hour < 17;
+}
+// Epoch ms of the next top-of-hour boundary (xx:00:00) in real time.
+function nextTopOfHourMs(nowMs: number): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour12: false, minute: '2-digit', second: '2-digit',
+  }).formatToParts(new Date(nowMs));
+  const m = Number(parts.find(p => p.type === 'minute')?.value) || 0;
+  const s = Number(parts.find(p => p.type === 'second')?.value) || 0;
+  return nowMs + ((3600 - (m * 60 + s)) % 3600 || 3600) * 1000;
 }
 
 // Epoch ms when the daily spin is next available (0 = available now).
@@ -296,11 +322,26 @@ export class Lobby {
   // accumulated by recordFlow and decayed each re-roll. Drives 40% of the price move. Lives only
   // in memory (decays to zero, harmless on restart) — never persisted.
   private pressure = new Map<string, number>();
+  // --- Market News Engine ---
+  // Pending price-pressure injections from published news headlines, waiting to fire at fireAt.
+  private pendingNews: { coin: string; magnitude: number; fireAt: number }[] = [];
+  // Epoch ms of the next scheduled headline publish (top of the next market hour).
+  private nextNewsAt = nextTopOfHourMs(Date.now());
+  // Cached news feed (newest-first items). Hydrated on boot from DB, updated on each publish.
+  private newsFeed: NewsItem[] = [];
   // Cached House treasury balance, hydrated on boot and kept in sync after each adjust. Broadcast
   // to clients so the market/casino header can show it (and "payouts reduced" when low).
   private houseBalance = 0;
   // Netizen avatar wander state: position + heading + when to pick a new heading.
   private netizenPos = new Map<string, { x: number; y: number; hx: number; hy: number; until: number; spawnAt: number }>();
+  // --- Market News Engine (Plan 01 + Plan 02) ---
+  private pendingNews: { coin: string; magnitude: number; fireAt: number }[] = [];
+  private nextNewsAt = nextTopOfHourMs(Date.now());
+  private newsFeed: NewsItem[] = [];
+  // Staggered netizen reactions to news, drained in tickStocks.
+  private newsReactions: { name: string; pid: string; text: string; at: number }[] = [];
+  // Global throttle for netizen chat: don't post more than once per ~10s.
+  private lastNetizenChatAt = 0;
   // Epoch ms of the next daily loan-collection event — the next 5:00pm America/New_York. At this
   // tick Davis collects on overdue loans and each defaulter's unpaid debt is added to the
   // instability pool; the market only crashes when that pool fills (see runDailyCollection).
@@ -718,7 +759,6 @@ export class Lobby {
   // Loot box: a fixed coin price (flows to the House) that rolls a weighted prize. A coin roll
   // (or a degraded capped-out exclusive) pays this much from the House.
   private static readonly LOOT_PRICE = 2500;
-  private static readonly LOOT_COIN_REWARD = 1500;
 
   private static readonly NT_CAP = 6;
   private static readonly NT_WIN_REWARD = 750; // coins each winning-team player earns per match
@@ -1363,6 +1403,8 @@ export class Lobby {
     this.sendBounties(ws);
     // Send the House treasury balance (drives the market/casino header readout).
     this.tell(ws, { type: 'house', balance: Math.round(this.houseBalance) });
+    // Send the news feed.
+    this.sendNews(ws);
   }
 
   /** Load a connection's wallet from the DB into memory and send it to that client. */
@@ -1634,8 +1676,11 @@ export class Lobby {
       total += b.amount;
     }
     if (total <= 0 || total > ROULETTE_MAX_TOTAL) { this.sendWallet(ws); return; }
-    // Escrow the whole stake up front; if it doesn't clear, the player can't afford it.
-    spendCoins(conn.pid, total)
+    // Wealth-scaled minimum bet: refuse a stake below the player's floor.
+    getWallet(conn.pid).then((w) => {
+      if (!w || total < minBet(w.coins)) { this.sendWallet(ws); return; }
+      // Escrow the whole stake up front; if it doesn't clear, the player can't afford it.
+      spendCoins(conn.pid, total)
       .then(async (w) => {
         if (!w) { this.sendWallet(ws); return; } // insufficient coins (or no DB) — nothing wagered
         // The staked coins flow into the House first (a sink); winnings are paid back from it.
@@ -1652,6 +1697,8 @@ export class Lobby {
         this.sendWallet(ws);
       })
       .catch((e) => console.error('roulette failed:', e));
+    })
+    .catch((e) => console.error('getWallet failed:', e));
   }
 
   // --- Blackjack ---
@@ -1661,36 +1708,40 @@ export class Lobby {
     if (!conn || !conn.pid || !conn.nickname) return;
     if (conn.bjHand) { this.sendWallet(ws); return; } // already in a hand
     if (!Number.isInteger(amount) || amount <= 0 || amount > BJ_MAX_BET) { this.sendWallet(ws); return; }
-    spendCoins(conn.pid, amount)
-      .then(async (w) => {
-        if (!w) { this.sendWallet(ws); return; }
-        await this.houseCredit(amount);
-        const shoe = bjFreshShoe();
-        const hand: BjHand = {
-          playerCards: [bjDeal(shoe), bjDeal(shoe)],
-          dealerCards: [bjDeal(shoe), bjDeal(shoe)],
-          bet: amount,
-          shoe,
-        };
-        conn.bjHand = hand;
-        const pt = bjTotal(hand.playerCards);
-        const playerBJ = hand.playerCards.length === 2 && pt === 21;
-        const dealerBJ = bjTotal(hand.dealerCards) === 21;
-        if (playerBJ) {
-          const outcome = dealerBJ ? 'push' : 'blackjack';
-          const want = dealerBJ ? amount : Math.floor(amount * 2.5);
-          const payout = want > 0 ? await this.housePay(conn.pid, conn.nickname, want) : 0;
-          conn.bjHand = undefined;
-          const msg: BjResultMsg = { type: 'bjResult', playerCards: hand.playerCards, dealerCards: hand.dealerCards, playerTotal: pt, dealerTotal: bjTotal(hand.dealerCards), outcome, bet: amount, payout };
-          this.tell(ws, msg);
+    getWallet(conn.pid).then((w) => {
+      if (!w || amount < minBet(w.coins)) { this.sendWallet(ws); return; }
+      spendCoins(conn.pid, amount)
+        .then(async (w) => {
+          if (!w) { this.sendWallet(ws); return; }
+          await this.houseCredit(amount);
+          const shoe = bjFreshShoe();
+          const hand: BjHand = {
+            playerCards: [bjDeal(shoe), bjDeal(shoe)],
+            dealerCards: [bjDeal(shoe), bjDeal(shoe)],
+            bet: amount,
+            shoe,
+          };
+          conn.bjHand = hand;
+          const pt = bjTotal(hand.playerCards);
+          const playerBJ = hand.playerCards.length === 2 && pt === 21;
+          const dealerBJ = bjTotal(hand.dealerCards) === 21;
+          if (playerBJ) {
+            const outcome = dealerBJ ? 'push' : 'blackjack';
+            const want = dealerBJ ? amount : Math.floor(amount * 2.5);
+            const payout = want > 0 ? await this.housePay(conn.pid, conn.nickname, want) : 0;
+            conn.bjHand = undefined;
+            const msg: BjResultMsg = { type: 'bjResult', playerCards: hand.playerCards, dealerCards: hand.dealerCards, playerTotal: pt, dealerTotal: bjTotal(hand.dealerCards), outcome, bet: amount, payout };
+            this.tell(ws, msg);
+            this.sendWallet(ws);
+            return;
+          }
+          const state: BjStateMsg = { type: 'bjState', playerCards: hand.playerCards, dealerCard: hand.dealerCards[0], playerTotal: pt, canDouble: true, status: 'playing' };
+          this.tell(ws, state);
           this.sendWallet(ws);
-          return;
-        }
-        const state: BjStateMsg = { type: 'bjState', playerCards: hand.playerCards, dealerCard: hand.dealerCards[0], playerTotal: pt, canDouble: true, status: 'playing' };
-        this.tell(ws, state);
-        this.sendWallet(ws);
-      })
-      .catch((e) => console.error('blackjack bet failed:', e));
+        })
+        .catch((e) => console.error('blackjack bet failed:', e));
+    })
+    .catch((e) => console.error('getWallet failed:', e));
   }
 
   blackjackAction(ws: WebSocket, action: BjAction) {
@@ -2083,6 +2134,9 @@ export class Lobby {
         spawnAt: Date.now() + Math.random() * 5400_000, // 0–90 min
       });
     }
+    // Market News Engine: hydrate the cached feed, schedule the next top-of-hour.
+    this.newsFeed = await getNewsFeed().catch(() => []);
+    this.nextNewsAt = nextTopOfHourMs(Date.now());
   }
 
   // --- Netizens (bot traders) ---
@@ -2134,17 +2188,25 @@ export class Lobby {
           if (archetype === 0) buy = press >= 0;            // momentum: follow the flow
           else if (archetype === 1) buy = move <= 0;        // mean-reversion: buy dips, sell rips
           else buy = Math.random() < 0.62;                  // random with a mild upward bias
+          let tradedSide: 'buy' | 'sell' | null = null;
           if (buy) {
             const amt = Math.max(1, Math.floor(n.coins * (0.04 + Math.random() * 0.08))); // 4–12% of balance
             await this.netizenInvest(n.pid, n.name, stock.id, amt, 'long');
+            tradedSide = 'buy';
           } else {
             const holds = (await getHoldings(n.pid).catch(() => [])).filter((h) => h.coin === stock.id);
-            if (holds.length) await this.netizenCashOut(n.pid, n.name, stock.id, holds[0].side);
+            if (holds.length) { await this.netizenCashOut(n.pid, n.name, stock.id, holds[0].side); tradedSide = 'sell'; }
             else {
-              // Nothing to sell — buy a little instead so the bot stays active.
               const amt = Math.max(1, Math.floor(n.coins * 0.05));
               await this.netizenInvest(n.pid, n.name, stock.id, amt, 'long');
+              tradedSide = 'buy';
             }
+          }
+          // Trade chatter (Plan 02): low probability during market hours.
+          if (tradedSide && isMarketHours(Date.now()) && Math.random() < 0.25) {
+            const pool = tradedSide === 'buy' ? NETIZEN_DIALOGUE.buyLong : NETIZEN_DIALOGUE.sellProfit;
+            const tmpl = pool[Math.floor(Math.random() * pool.length)];
+            this.netizenSay(n.pid, n.name, tmpl.replace('{ticker}', stock.ticker));
           }
         }
         // Netizen wallets/holdings moved → the net-worth board shifted.
@@ -2330,6 +2392,55 @@ export class Lobby {
       .catch((e) => console.error('stocks send failed:', e));
   }
 
+  /** Send the cached news feed to a single client. */
+  sendNews(ws: WebSocket) {
+    this.tell(ws, { type: 'news', items: this.newsFeed });
+  }
+
+  /** Publish a new market headline: pick a coin, build the item, push to feed + DB, broadcast to
+   *  all clients, and schedule the hidden price-pressure injection 7–30 min later. */
+  private publishNews() {
+    const now = Date.now();
+    // Pick a coin, lightly weighted toward those with older or no recent news.
+    const lastNewsTs = new Map<string, number>();
+    for (const item of this.newsFeed) {
+      const existing = lastNewsTs.get(item.coin) ?? 0;
+      if (item.ts > existing) lastNewsTs.set(item.coin, item.ts);
+    }
+    const scored = STOCKS.map((s) => {
+      const last = lastNewsTs.get(s.id) ?? 0;
+      const recency = Math.max(0, now - last); // ms since last news
+      return { id: s.id, name: s.name, ticker: s.ticker, weight: 1 + recency / 3_600_000 };
+    });
+    const totalW = scored.reduce((a, b) => a + b.weight, 0);
+    let roll = Math.random() * totalW;
+    const pick = scored.find((s) => { roll -= s.weight; return roll <= 0; }) ?? scored[0];
+
+    const dir = Math.random() < 0.5 ? 'bullish' : 'bearish';
+    const templates = dir === 'bullish' ? NEWS_TEMPLATES_BULLISH : NEWS_TEMPLATES_BEARISH;
+    const tmpl = templates[Math.floor(Math.random() * templates.length)];
+    const headline = tmpl.replace('{name}', pick.name).replace('{ticker}', pick.ticker);
+
+    const item: NewsItem = {
+      id: `news_${now}`,
+      ts: now,
+      coin: pick.id,
+      headline,
+    };
+    this.newsFeed.unshift(item);
+    if (this.newsFeed.length > 30) this.newsFeed.length = 30;
+    saveNewsFeed(this.newsFeed).catch((e: unknown) => console.error('news feed save failed:', e));
+
+    // Schedule the hidden injection 7–30 min from now.
+    const magnitude = (dir === 'bullish' ? 1 : -1) * (0.25 + Math.random() * 0.35);
+    this.pendingNews.push({ coin: pick.id, magnitude, fireAt: now + (7 + Math.random() * 23) * 60_000 });
+
+    // Broadcast to all connected clients.
+    for (const ws of this.conns.keys()) {
+      if (ws.readyState === ws.OPEN) this.sendNews(ws);
+    }
+  }
+
   /** Open a long or short position in a crypto at its current price. Coins are escrowed. */
   stockInvest(ws: WebSocket, coin: string, amount: number, side: StockSide) {
     const conn = this.conns.get(ws);
@@ -2486,25 +2597,22 @@ export class Lobby {
         try {
         // The price flows into the House (it funds the coin/exclusive payouts).
         await this.houseCredit(Lobby.LOOT_PRICE);
-        // Pay a coin prize from the House — but NEVER take a player's money for nothing: if the
-        // House can't fund a prize (returns 0), refund the box price instead (pull it back out of
-        // the House it was just credited to, keeping coins conserved).
-        const payLootCoins = async (): Promise<void> => {
-          const paid = await this.housePay(pid, nick, Lobby.LOOT_COIN_REWARD);
+        // Partial coin-back: pay a random fraction of the price from the House, always < 2500.
+        // If the House can't fund it (returns 0), refund the full box price instead.
+        const payLootCoins = async (amount: number): Promise<void> => {
+          const paid = await this.housePay(pid, nick, amount);
           if (paid > 0) { this.tell(ws, { type: 'lootResult', kind: 'coins', coins: paid }); return; }
           await addCoins(pid, nick, Lobby.LOOT_PRICE);
           await houseAdjust(-Lobby.LOOT_PRICE);
           this.notify(ws, 'Loot box fizzled — your coins were refunded.');
           this.tell(ws, { type: 'lootResult', kind: 'coins', coins: Lobby.LOOT_PRICE });
         };
-        // Weighted roll (same idiom as the daily spin): common / coins / rare. Reused below.
-        const weights = [55, 30, 15]; // common cosmetic, coins, rare exclusive
-        const total = weights.reduce((a, b) => a + b, 0);
-        let roll = Math.random() * total;
-        let bucket = 0;
-        for (let i = 0; i < weights.length; i++) { roll -= weights[i]; if (roll < 0) { bucket = i; break; } }
-
-        if (bucket === 0) {
+        // 4-bucket weighted roll: cosmetic / exclusive / partial coin-back / nothing.
+        const W = LOOT_TABLE;
+        const totalW = W.cosmeticWeight + W.exclusiveWeight + W.coinBackWeight + W.nothingWeight;
+        let roll = Math.random() * totalW;
+        roll -= W.cosmeticWeight;
+        if (roll < 0) {
           // Common cosmetic: grant a random UNOWNED regular cosmetic (skip locked + already-owned).
           const owned = new Set((await getWallet(pid)).owned);
           const pool = COSMETICS.filter((c) => !c.locked && !owned.has(c.id));
@@ -2513,22 +2621,32 @@ export class Lobby {
             await grantItem(pid, nick, item.id);
             this.tell(ws, { type: 'lootResult', kind: 'cosmetic', item: item.id, name: item.name });
           } else {
-            // Owns everything common → degrade to coins from the House.
-            await payLootCoins();
+            // Owns everything common → degrade to partial coin-back.
+            await payLootCoins(W.coinBackMin + Math.floor(Math.random() * (W.coinBackMax - W.coinBackMin)));
           }
-        } else if (bucket === 1) {
-          await payLootCoins();
         } else {
-          // Rare exclusive: pick one weighted toward higher-cap (more common) items, attempt the
-          // atomic capped mint, and degrade to coins if it's sold out globally.
-          const pick = this.rollExclusive();
-          const serial = await mintExclusive(pid, pick.id, pick.cap);
-          if (serial !== null) {
-            this.tell(ws, { type: 'lootResult', kind: 'exclusive', item: pick.id, name: pick.name, serial, cap: pick.cap, rarity: pick.rarity });
-            this.announce(`✨ ${nick} pulled an EXCLUSIVE: ${pick.name} (#${serial} of ${pick.cap})!`);
+          roll -= W.exclusiveWeight;
+          if (roll < 0) {
+            // Rare exclusive: pick one weighted toward higher-cap items, attempt the atomic capped
+            // mint, and degrade to partial coin-back if it's sold out globally.
+            const pick = this.rollExclusive();
+            const serial = await mintExclusive(pid, pick.id, pick.cap);
+            if (serial !== null) {
+              this.tell(ws, { type: 'lootResult', kind: 'exclusive', item: pick.id, name: pick.name, serial, cap: pick.cap, rarity: pick.rarity });
+              this.announce(`✨ ${nick} pulled an EXCLUSIVE: ${pick.name} (#${serial} of ${pick.cap})!`);
+            } else {
+              // Capped out — degrade to partial coin-back.
+              await payLootCoins(W.coinBackMin + Math.floor(Math.random() * (W.coinBackMax - W.coinBackMin)));
+            }
           } else {
-            // Capped out — no over-mint. Degrade to a House coin payout (refunds if House is dry).
-            await payLootCoins();
+            roll -= W.coinBackWeight;
+            if (roll < 0) {
+              // Partial coin-back: always less than the box price (negative EV).
+              await payLootCoins(W.coinBackMin + Math.floor(Math.random() * (W.coinBackMax - W.coinBackMin)));
+            } else {
+              // Nothing: the price stays in the House. No refund.
+              this.tell(ws, { type: 'lootResult', kind: 'nothing' });
+            }
           }
         }
         this.sendWallet(ws);
@@ -2664,18 +2782,97 @@ export class Lobby {
       .catch((e) => console.error('loan book send failed:', e));
   }
 
+  /** Send the cached news feed to a single client. */
+  sendNews(ws: WebSocket) {
+    this.tell(ws, { type: 'news', items: this.newsFeed });
+  }
+
+  /** Publish a new market headline, schedule its hidden price injection, and schedule 2–4
+   *  staggered netizen reactions. */
+  private publishNews() {
+    const now = Date.now();
+    // Pick a coin, weighted toward those with older or no recent news.
+    const lastNewsTs = new Map<string, number>();
+    for (const item of this.newsFeed) {
+      const existing = lastNewsTs.get(item.coin) ?? 0;
+      if (item.ts > existing) lastNewsTs.set(item.coin, item.ts);
+    }
+    const scored = STOCKS.map((s) => ({
+      id: s.id, name: s.name, ticker: s.ticker,
+      weight: 1 + Math.max(0, now - (lastNewsTs.get(s.id) ?? 0)) / 3_600_000,
+    }));
+    const totalW = scored.reduce((a, b) => a + b.weight, 0);
+    let roll = Math.random() * totalW;
+    const pick = scored.find((s) => { roll -= s.weight; return roll <= 0; }) ?? scored[0];
+    const bullish = Math.random() < 0.5;
+    // Build a simple headline from the dialogue corpus.
+    const dialPool = bullish ? NETIZEN_DIALOGUE.newsBullish : NETIZEN_DIALOGUE.newsBearish;
+    const headline = (dialPool[Math.floor(Math.random() * dialPool.length)])
+      .replace('{ticker}', pick.ticker);
+
+    const item: NewsItem = { id: `news_${now}`, ts: now, coin: pick.id, headline };
+    this.newsFeed.unshift(item);
+    if (this.newsFeed.length > 30) this.newsFeed.length = 30;
+    saveNewsFeed(this.newsFeed).catch((e: unknown) => console.error('news feed save failed:', e));
+
+    // Schedule hidden injection 7–30 min from now.
+    const magnitude = (bullish ? 1 : -1) * (0.25 + Math.random() * 0.35);
+    this.pendingNews.push({ coin: pick.id, magnitude, fireAt: now + (7 + Math.random() * 23) * 60_000 });
+
+    // Schedule 2–4 staggered netizen reactions over the next ~60–120s.
+    const reactionCount = 2 + Math.floor(Math.random() * 3); // 2–4
+    const netizenPool = Lobby.NETIZEN_NAMES.map((name, i) => ({
+      name, pid: `netizen:${i}`,
+    })).sort(() => Math.random() - 0.5).slice(0, reactionCount);
+    for (const n of netizenPool) {
+      const pool = bullish ? NETIZEN_DIALOGUE.newsBullish : NETIZEN_DIALOGUE.newsBearish;
+      const tmpl = pool[Math.floor(Math.random() * pool.length)];
+      const text = tmpl.replace('{ticker}', pick.ticker);
+      const delay = 60_000 + Math.random() * 60_000; // 60–120s from now
+      this.newsReactions.push({ name: n.name, pid: n.pid, text, at: now + delay });
+    }
+
+    // Broadcast to all connected clients.
+    for (const ws of this.conns.keys()) {
+      if (ws.readyState === ws.OPEN) this.sendNews(ws);
+    }
+  }
+
   /** Re-roll every coin's price when the re-roll window elapses, persist the board, and push
    *  the fresh (revalued) market to every connected client. Also fires the daily loan-collection
    *  event when its time arrives. Cheap to call every tick. */
   private tickStocks() {
+    const now = Date.now();
     // The daily collection takes precedence (it may crash + repush the market itself), so handle
     // it first and bail.
-    if (this.nextStockCrashAt && Date.now() >= this.nextStockCrashAt) {
+    if (this.nextStockCrashAt && now >= this.nextStockCrashAt) {
       this.runDailyCollection();
       return;
     }
-    if (Date.now() < this.nextStockUpdateAt) return;
-    this.nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS;
+    // --- Market News Engine: fire pending price injections ---
+    for (let i = this.pendingNews.length - 1; i >= 0; i--) {
+      const pn = this.pendingNews[i];
+      if (now >= pn.fireAt) {
+        const cur = this.pressure.get(pn.coin) ?? 0;
+        this.pressure.set(pn.coin, Math.max(-1, Math.min(1, cur + pn.magnitude)));
+        this.pendingNews.splice(i, 1);
+      }
+    }
+    // --- Market News Engine: publish check (hourly during market hours) ---
+    if (now >= this.nextNewsAt) {
+      if (isMarketHours(now)) this.publishNews();
+      this.nextNewsAt = nextTopOfHourMs(now);
+    }
+    // --- News Engine: drain staggered netizen reactions ---
+    for (let i = this.newsReactions.length - 1; i >= 0; i--) {
+      const r = this.newsReactions[i];
+      if (now >= r.at) {
+        this.netizenSay(r.pid, r.name, r.text);
+        this.newsReactions.splice(i, 1);
+      }
+    }
+    if (now < this.nextStockUpdateAt) return;
+    this.nextStockUpdateAt = now + STOCK_UPDATE_MS;
     for (const s of STOCKS) {
       const cur = this.stockPrices.get(s.id) ?? { price: s.base, prev: s.base };
       // Economy Overhaul: decay the order-flow pressure FIRST (p *= 0.5 per tick), then blend it
@@ -2758,8 +2955,11 @@ export class Lobby {
     if (!Number.isFinite(amt) || amt < 1) return;
     const odds = this.currentOdds()[side]; // lock the odds shown at this instant
     const { pid, nickname: name } = conn;
-    // Escrow the stake atomically — spendCoins returns null if they can't actually afford it.
-    spendCoins(pid, amt)
+    // Wealth-scaled minimum bet: check against the player's floor.
+    getWallet(pid).then((w) => {
+      if (!w || amt < minBet(w.coins)) { this.sendWallet(ws); return; }
+      // Escrow the stake atomically — spendCoins returns null if they can't actually afford it.
+      spendCoins(pid, amt)
       .then((w) => {
         if (!w) { this.sendWallet(ws); return; } // insufficient coins — refresh their view, no bet
         this.bets.push({ pid, side, amount: amt, ws, name, odds });
@@ -2767,6 +2967,8 @@ export class Lobby {
         this.announce(`🎲 ${name} bet ${amt} on ${side} @ ${odds.toFixed(2)}×`, true);
       })
       .catch((e) => console.error('bet failed:', e));
+    })
+    .catch((e) => console.error('getWallet failed:', e));
   }
 
   /** Settle all open wagers against the winning side: correct calls pay stake × locked odds. */
@@ -3499,6 +3701,14 @@ export class Lobby {
     for (const sock of this.conns.keys()) {
       if (sock.readyState === sock.OPEN) sock.send(data);
     }
+  }
+
+  /** Post a chat message as a netizen (name + its own color), respecting the global throttle. */
+  private netizenSay(pid: string, name: string, text: string) {
+    const now = Date.now();
+    if (now - this.lastNetizenChatAt < 10_000) return; // throttle: ~1 line per 10s
+    this.lastNetizenChatAt = now;
+    this.botChat(name, text, Lobby.netizenColor(pid));
   }
 
   /** Inject a fake chat message from a streamer bot (bypasses rate limiting). */
