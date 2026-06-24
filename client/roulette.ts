@@ -9,6 +9,7 @@ import {
   ROULETTE_MAX_TOTAL,
   RouletteBet,
   RouletteBetKind,
+  minBet,
 } from '../shared/types';
 
 // Outside bets, in board order: row of halves/colors/parities, then the three dozens.
@@ -175,8 +176,10 @@ export function initRoulette(opts: {
       }
     }
     const total = totalStaked();
-    stakeEl.textContent = `Staked: ${total} 🪙`;
-    spinBtn.disabled = spinning || total <= 0 || total > coins;
+    const min = minBet(coins);
+    const belowMin = total > 0 && total < min;
+    stakeEl.textContent = `Staked: ${total} 🪙` + (belowMin ? ` (min ${min})` : '');
+    spinBtn.disabled = spinning || total <= 0 || total > coins || belowMin;
   }
 
   // --- Bet collection: board state → wire bets ---

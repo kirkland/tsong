@@ -1,6 +1,7 @@
 // Blackjack: player vs. dealer. Server deals from a 6-deck shoe and settles the wallet.
 // Client renders cards and outcome; all logic is server-authoritative.
 
+import { minBet } from '../shared/types';
 import type { BjStateMsg, BjResultMsg } from '../shared/types';
 
 export interface BlackjackHandle {
@@ -26,6 +27,7 @@ export function initBlackjack(opts: {
   const dealerArea = document.getElementById('bjDealerCards') as HTMLDivElement;
   const resultEl = document.getElementById('bjResult') as HTMLDivElement;
   const statusEl = document.getElementById('bjStatus') as HTMLDivElement;
+  let coins = 0;
 
   function setActionBtns(playing: boolean, canDouble = false) {
     hitBtn.disabled = !playing;
@@ -50,7 +52,8 @@ export function initBlackjack(opts: {
   }
 
   dealBtn.addEventListener('click', () => {
-    const amount = Math.max(1, Math.floor(Number(betInput.value)));
+    const min = minBet(coins);
+    const amount = Math.max(min, Math.floor(Number(betInput.value)));
     resultEl.textContent = '';
     resultEl.className = '';
     statusEl.textContent = '';
@@ -76,7 +79,7 @@ export function initBlackjack(opts: {
   setActionBtns(false);
 
   return {
-    setCoins(n: number) { coinsEl.textContent = String(n); },
+    setCoins(n: number) { coins = n; coinsEl.textContent = `${n} 🪙 (min ${minBet(n)})`; },
     onState(msg: BjStateMsg) {
       renderCards(playerArea, msg.playerCards);
       dealerArea.innerHTML = cardHtml(msg.dealerCard) + cardHtml('', true);

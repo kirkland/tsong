@@ -1107,6 +1107,19 @@ export const LOOT_TABLE = {
   coinBackMax: 1500,
 };
 
+// --- Wealth-scaled minimum bets ---
+// Anti-hoarding lever: the wealthier a player is, the higher their minimum bet floor.
+// The bottom tier is 1 so low-wealth players are unaffected — the floor only rises for
+// those sitting on large coin piles. Used across roulette, blackjack, PvP bets, and netizen challenges.
+export const MIN_BET_TIERS: readonly [number, number][] = [
+  [1_000_000, 10_000], [500_000, 5_000], [100_000, 1_000],
+  [10_000, 100], [1_000, 10], [0, 1],
+]; // [thresholdCoins, minBet], checked high→low
+export function minBet(wealth: number): number {
+  for (const [t, m] of MIN_BET_TIERS) if (wealth >= t) return m;
+  return 1;
+}
+
 // --- Roulette (single-zero European wheel) ---
 // A casino roulette table: stake coins on where the ball lands on a 0–36 wheel. The wheel
 // is the European single-zero layout, so the lone green 0 gives the house its edge. The

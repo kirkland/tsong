@@ -1,11 +1,12 @@
 // Pure drawing: takes the latest server state and paints one frame. No game logic.
 
-import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, TARGET, BREAKOUT, COSMETICS, PowerupKind, StateMsg, PolyState, Role, Side } from '../shared/types';
+import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, TARGET, BREAKOUT, COSMETICS, EXCLUSIVES, PowerupKind, StateMsg, PolyState, Role, Side } from '../shared/types';
 
 // The display flair for an equipped title id (e.g. 'davisslayer' → '🏆 Davis Slayer'), or ''.
+// Also searches EXCLUSIVES for exclusive titles (e.g. 'x-founder' → '🪙 Founder').
 function titleFlair(id: string | null | undefined): string {
   if (!id) return '';
-  const t = COSMETICS.find((c) => c.id === id && c.slot === 'title');
+  const t = COSMETICS.find((c) => c.id === id && c.slot === 'title') ?? EXCLUSIVES.find((e) => e.id === id && e.slot === 'title');
   return t ? t.name : '';
 }
 // Title flair colour — most are gold; the "Ops Task Duty" title cycles the rainbow.
@@ -677,6 +678,8 @@ const SKIN_RENDERERS: Record<string, CosmeticDraw> = {
   carbon: fillCarbon,
   mermaid: fillMermaid,
   'x-midas': fillMidas,
+  'x-genesis': fillGenesis,
+  'x-quantum': fillQuantum,
 };
 // Draw a live skin/hat preview onto a small canvas element (used in the shop UI).
 // The canvas is scaled so the paddle fills it, then the skin is applied at full quality.
@@ -831,6 +834,8 @@ const HAT_RENDERERS: Record<string, CosmeticDraw> = {
   'x-jackpot': drawJackpotCrown,
   beret: drawBeret,
   catears: drawCatEars,
+  'x-voidcrown': drawVoidCrown,
+  'x-prismhalo': drawPrismHalo,
 };
 
 // Cosmetic "top hat": a little hat perched at the top end of the paddle. Visual only.
@@ -967,6 +972,7 @@ function drawDiamondTiara(ctx: CanvasRenderingContext2D, cx: number, cy: number,
   }
   ctx.restore();
 }
+<<<<<<< HEAD
 // --- Loot-box refresh hats ---
 function drawBeret(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
   const top = cy - h / 2, w = PADDLE.w + 10;
@@ -1037,6 +1043,58 @@ function drawJackpotCrown(ctx: CanvasRenderingContext2D, cx: number, cy: number,
   }
   ctx.restore();
 }
+=======
+// --- Exclusive hats ---
+function drawVoidCrown(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2, w = PADDLE.w + 6, x = cx - w / 2, t = Date.now() / 600;
+  ctx.save();
+  // Dark crown silhouette
+  ctx.fillStyle = '#0a0012';
+  ctx.shadowColor = '#6a00b0';
+  ctx.shadowBlur = 12;
+  ctx.beginPath();
+  ctx.moveTo(x, top - 2);
+  ctx.lineTo(x + w * 0.2, top - 14);
+  ctx.lineTo(x + w * 0.35, top - 6);
+  ctx.lineTo(x + w * 0.5, top - 18);
+  ctx.lineTo(x + w * 0.65, top - 6);
+  ctx.lineTo(x + w * 0.8, top - 14);
+  ctx.lineTo(x + w, top - 2);
+  ctx.closePath();
+  ctx.fill();
+  // Void sparkle particles
+  ctx.shadowBlur = 0;
+  for (let i = 0; i < 4; i++) {
+    const px = cx + Math.sin(t + i * 2) * w * 0.3;
+    const py = top - 8 + Math.cos(t * 1.3 + i) * 6;
+    const size = 1.2 + 0.8 * Math.sin(t + i * 1.7);
+    ctx.fillStyle = i % 2 ? '#c77dff' : '#9b30ff';
+    ctx.beginPath(); ctx.arc(px, py, size, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+function drawPrismHalo(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const t = Date.now() / 500;
+  const bob = Math.sin(t * 0.7) * 2;
+  const top = cy - h / 2 - 7 + bob;
+  ctx.save();
+  // Rotating prismatic ring
+  ctx.translate(cx, top);
+  ctx.rotate(t * 0.3);
+  ctx.lineWidth = 2.8;
+  ctx.strokeStyle = `hsl(${(t * 45) % 360},95%,62%)`;
+  ctx.shadowColor = `hsl(${(t * 45 + 120) % 360},95%,62%)`;
+  ctx.shadowBlur = 14;
+  ctx.beginPath(); ctx.ellipse(0, 0, PADDLE.w * 0.7, 4, 0, 0, Math.PI * 2); ctx.stroke();
+  // Second counter-rotating ring
+  ctx.rotate(-t * 0.6);
+  ctx.lineWidth = 1.8;
+  ctx.strokeStyle = `hsl(${(t * 45 + 180) % 360},90%,72%)`;
+  ctx.shadowColor = `hsl(${(t * 45 + 300) % 360},90%,72%)`;
+  ctx.beginPath(); ctx.ellipse(0, 0, PADDLE.w * 0.55, 3, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.restore();
+}
+>>>>>>> main
 function drawCowboy(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
   const top = cy - h / 2, brimW = PADDLE.w + 16;
   ctx.save();
@@ -1281,6 +1339,7 @@ function fillAurora(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: nu
   ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
   skinHighlight(ctx, cx, cy, h); ctx.restore();
 }
+<<<<<<< HEAD
 // --- Loot-box refresh skins ---
 function fillCarbon(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
   ctx.save(); clipPaddle(ctx, cx, cy, h);
@@ -1333,6 +1392,54 @@ function fillMidas(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: num
   ctx.fillStyle = glint; ctx.fillRect(r.x, r.y, r.w, r.h);
   skinHighlight(ctx, cx, cy, h); ctx.restore();
 }
+=======
+// --- Exclusive skins ---
+function fillGenesis(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save(); clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 800;
+  // Deep cosmic gradient
+  const g = ctx.createLinearGradient(r.x, r.y, r.x + r.w, r.y + r.h);
+  g.addColorStop(0, '#05001a'); g.addColorStop(0.5, '#1a0033'); g.addColorStop(1, '#05001a');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Animated nebula wisps
+  for (let i = 0; i < 3; i++) {
+    const wx = r.x + r.w * (0.2 + 0.6 * ((t + i * 1.2) % 1));
+    const wy = r.y + r.h * (0.2 + 0.6 * ((t * 0.7 + i * 0.8) % 1));
+    const wr = 12 + 8 * Math.sin(t + i);
+    const wg = ctx.createRadialGradient(wx, wy, 0, wx, wy, wr);
+    wg.addColorStop(0, `hsla(${270 + i * 30},80%,60%,0.25)`);
+    wg.addColorStop(1, 'rgba(100,0,200,0)');
+    ctx.fillStyle = wg; ctx.fillRect(r.x, r.y, r.w, r.h);
+  }
+  skinHighlight(ctx, cx, cy, h); ctx.restore();
+}
+function fillQuantum(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save(); clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 400;
+  // Metallic teal base
+  const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  g.addColorStop(0, '#002626'); g.addColorStop(0.3, '#004d4d'); g.addColorStop(0.5, '#00b3b3'); g.addColorStop(0.7, '#004d4d'); g.addColorStop(1, '#002626');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Interference wave pattern
+  for (let i = 0; i < 6; i++) {
+    const waveY = r.y + r.h * (0.15 + 0.7 * ((t * 0.3 + i * 0.17) % 1));
+    const waveA = Math.sin(t + i * 1.1) * 0.3 + 0.3;
+    ctx.fillStyle = `rgba(0,255,255,${waveA * 0.15})`;
+    ctx.fillRect(r.x, waveY - 2, r.w, 4);
+  }
+  // Pulsing quantum dots
+  for (let i = 0; i < 8; i++) {
+    const dx = r.x + r.w * ((t * 0.2 + i * 0.12) % 1);
+    const dy = r.y + r.h * ((t * 0.25 + i * 0.09) % 1);
+    const ds = 1.5 + Math.sin(t * 2 + i) * 0.8;
+    ctx.fillStyle = `rgba(0,255,200,${0.4 + 0.3 * Math.sin(t + i)})`;
+    ctx.beginPath(); ctx.arc(dx, dy, ds, 0, Math.PI * 2); ctx.fill();
+  }
+  skinHighlight(ctx, cx, cy, h); ctx.restore();
+}
+>>>>>>> main
 function fillGold(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
   ctx.save();
   clipPaddle(ctx, cx, cy, h);
@@ -4095,3 +4202,19 @@ function toRgb(h: string): [number, number, number] {
   const v = n.length === 3 ? n.split('').map((c) => c + c).join('') : n;
   return [parseInt(v.slice(0, 2), 16), parseInt(v.slice(2, 4), 16), parseInt(v.slice(4, 6), 16)];
 }
+
+// Startup guard: warn about any exclusive cosmetic missing its client renderer entry.
+(() => {
+  const registries: Record<string, Record<string, unknown>> = {
+    hat: HAT_RENDERERS,
+    skin: SKIN_RENDERERS,
+    trail: TRAIL_TINTS,
+  };
+  for (const ex of EXCLUSIVES) {
+    const reg = registries[ex.slot === 'title' ? '' : ex.slot];
+    if (ex.slot === 'title') continue; // titles use name lookup, not a draw registry
+    if (reg && !(ex.id in reg)) {
+      console.warn(`[render] Missing renderer for exclusive "${ex.id}" (slot:${ex.slot}) — it will render as nothing!`);
+    }
+  }
+})();
