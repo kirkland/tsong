@@ -74,6 +74,7 @@ import {
   NewsItem,
   NEWS_TEMPLATES_BULLISH,
   NEWS_TEMPLATES_BEARISH,
+  LOOT_TABLE,
   minBet,
 } from '../shared/types';
 import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
@@ -739,7 +740,6 @@ export class Lobby {
   // Loot box: a fixed coin price (flows to the House) that rolls a weighted prize. A coin roll
   // (or a degraded capped-out exclusive) pays this much from the House.
   private static readonly LOOT_PRICE = 2500;
-  private static readonly LOOT_COIN_REWARD = 1500;
 
   private static readonly NT_CAP = 6;
   private static readonly NT_WIN_REWARD = 750; // coins each winning-team player earns per match
@@ -2523,25 +2523,22 @@ export class Lobby {
         try {
         // The price flows into the House (it funds the coin/exclusive payouts).
         await this.houseCredit(Lobby.LOOT_PRICE);
-        // Pay a coin prize from the House — but NEVER take a player's money for nothing: if the
-        // House can't fund a prize (returns 0), refund the box price instead (pull it back out of
-        // the House it was just credited to, keeping coins conserved).
-        const payLootCoins = async (): Promise<void> => {
-          const paid = await this.housePay(pid, nick, Lobby.LOOT_COIN_REWARD);
+        // Partial coin-back: pay a random fraction of the price from the House, always < 2500.
+        // If the House can't fund it (returns 0), refund the full box price instead.
+        const payLootCoins = async (amount: number): Promise<void> => {
+          const paid = await this.housePay(pid, nick, amount);
           if (paid > 0) { this.tell(ws, { type: 'lootResult', kind: 'coins', coins: paid }); return; }
           await addCoins(pid, nick, Lobby.LOOT_PRICE);
           await houseAdjust(-Lobby.LOOT_PRICE);
           this.notify(ws, 'Loot box fizzled — your coins were refunded.');
           this.tell(ws, { type: 'lootResult', kind: 'coins', coins: Lobby.LOOT_PRICE });
         };
-        // Weighted roll (same idiom as the daily spin): common / coins / rare. Reused below.
-        const weights = [55, 30, 15]; // common cosmetic, coins, rare exclusive
-        const total = weights.reduce((a, b) => a + b, 0);
-        let roll = Math.random() * total;
-        let bucket = 0;
-        for (let i = 0; i < weights.length; i++) { roll -= weights[i]; if (roll < 0) { bucket = i; break; } }
-
-        if (bucket === 0) {
+        // 4-bucket weighted roll: cosmetic / exclusive / partial coin-back / nothing.
+        const W = LOOT_TABLE;
+        const totalW = W.cosmeticWeight + W.exclusiveWeight + W.coinBackWeight + W.nothingWeight;
+        let roll = Math.random() * totalW;
+        roll -= W.cosmeticWeight;
+        if (roll < 0) {
           // Common cosmetic: grant a random UNOWNED regular cosmetic (skip locked + already-owned).
           const owned = new Set((await getWallet(pid)).owned);
           const pool = COSMETICS.filter((c) => !c.locked && !owned.has(c.id));
@@ -2550,22 +2547,32 @@ export class Lobby {
             await grantItem(pid, nick, item.id);
             this.tell(ws, { type: 'lootResult', kind: 'cosmetic', item: item.id, name: item.name });
           } else {
-            // Owns everything common → degrade to coins from the House.
-            await payLootCoins();
+            // Owns everything common → degrade to partial coin-back.
+            await payLootCoins(W.coinBackMin + Math.floor(Math.random() * (W.coinBackMax - W.coinBackMin)));
           }
-        } else if (bucket === 1) {
-          await payLootCoins();
         } else {
-          // Rare exclusive: pick one weighted toward higher-cap (more common) items, attempt the
-          // atomic capped mint, and degrade to coins if it's sold out globally.
-          const pick = this.rollExclusive();
-          const serial = await mintExclusive(pid, pick.id, pick.cap);
-          if (serial !== null) {
-            this.tell(ws, { type: 'lootResult', kind: 'exclusive', item: pick.id, name: pick.name, serial, cap: pick.cap, rarity: pick.rarity });
-            this.announce(`✨ ${nick} pulled an EXCLUSIVE: ${pick.name} (#${serial} of ${pick.cap})!`);
+          roll -= W.exclusiveWeight;
+          if (roll < 0) {
+            // Rare exclusive: pick one weighted toward higher-cap items, attempt the atomic capped
+            // mint, and degrade to partial coin-back if it's sold out globally.
+            const pick = this.rollExclusive();
+            const serial = await mintExclusive(pid, pick.id, pick.cap);
+            if (serial !== null) {
+              this.tell(ws, { type: 'lootResult', kind: 'exclusive', item: pick.id, name: pick.name, serial, cap: pick.cap, rarity: pick.rarity });
+              this.announce(`✨ ${nick} pulled an EXCLUSIVE: ${pick.name} (#${serial} of ${pick.cap})!`);
+            } else {
+              // Capped out — degrade to partial coin-back.
+              await payLootCoins(W.coinBackMin + Math.floor(Math.random() * (W.coinBackMax - W.coinBackMin)));
+            }
           } else {
-            // Capped out — no over-mint. Degrade to a House coin payout (refunds if House is dry).
-            await payLootCoins();
+            roll -= W.coinBackWeight;
+            if (roll < 0) {
+              // Partial coin-back: always less than the box price (negative EV).
+              await payLootCoins(W.coinBackMin + Math.floor(Math.random() * (W.coinBackMax - W.coinBackMin)));
+            } else {
+              // Nothing: the price stays in the House. No refund.
+              this.tell(ws, { type: 'lootResult', kind: 'nothing' });
+            }
           }
         }
         this.sendWallet(ws);
