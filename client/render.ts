@@ -972,7 +972,6 @@ function drawDiamondTiara(ctx: CanvasRenderingContext2D, cx: number, cy: number,
   }
   ctx.restore();
 }
-<<<<<<< HEAD
 // --- Loot-box refresh hats ---
 function drawBeret(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
   const top = cy - h / 2, w = PADDLE.w + 10;
@@ -1043,12 +1042,10 @@ function drawJackpotCrown(ctx: CanvasRenderingContext2D, cx: number, cy: number,
   }
   ctx.restore();
 }
-=======
 // --- Exclusive hats ---
 function drawVoidCrown(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
   const top = cy - h / 2, w = PADDLE.w + 6, x = cx - w / 2, t = Date.now() / 600;
   ctx.save();
-  // Dark crown silhouette
   ctx.fillStyle = '#0a0012';
   ctx.shadowColor = '#6a00b0';
   ctx.shadowBlur = 12;
@@ -1062,7 +1059,6 @@ function drawVoidCrown(ctx: CanvasRenderingContext2D, cx: number, cy: number, h:
   ctx.lineTo(x + w, top - 2);
   ctx.closePath();
   ctx.fill();
-  // Void sparkle particles
   ctx.shadowBlur = 0;
   for (let i = 0; i < 4; i++) {
     const px = cx + Math.sin(t + i * 2) * w * 0.3;
@@ -1078,7 +1074,6 @@ function drawPrismHalo(ctx: CanvasRenderingContext2D, cx: number, cy: number, h:
   const bob = Math.sin(t * 0.7) * 2;
   const top = cy - h / 2 - 7 + bob;
   ctx.save();
-  // Rotating prismatic ring
   ctx.translate(cx, top);
   ctx.rotate(t * 0.3);
   ctx.lineWidth = 2.8;
@@ -1086,7 +1081,6 @@ function drawPrismHalo(ctx: CanvasRenderingContext2D, cx: number, cy: number, h:
   ctx.shadowColor = `hsl(${(t * 45 + 120) % 360},95%,62%)`;
   ctx.shadowBlur = 14;
   ctx.beginPath(); ctx.ellipse(0, 0, PADDLE.w * 0.7, 4, 0, 0, Math.PI * 2); ctx.stroke();
-  // Second counter-rotating ring
   ctx.rotate(-t * 0.6);
   ctx.lineWidth = 1.8;
   ctx.strokeStyle = `hsl(${(t * 45 + 180) % 360},90%,72%)`;
@@ -1094,7 +1088,6 @@ function drawPrismHalo(ctx: CanvasRenderingContext2D, cx: number, cy: number, h:
   ctx.beginPath(); ctx.ellipse(0, 0, PADDLE.w * 0.55, 3, 0, 0, Math.PI * 2); ctx.stroke();
   ctx.restore();
 }
->>>>>>> main
 function drawCowboy(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
   const top = cy - h / 2, brimW = PADDLE.w + 16;
   ctx.save();
@@ -1339,7 +1332,6 @@ function fillAurora(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: nu
   ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
   skinHighlight(ctx, cx, cy, h); ctx.restore();
 }
-<<<<<<< HEAD
 // --- Loot-box refresh skins ---
 function fillCarbon(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
   ctx.save(); clipPaddle(ctx, cx, cy, h);
@@ -1348,7 +1340,6 @@ function fillCarbon(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: nu
   const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
   g.addColorStop(0, '#1a1a1a'); g.addColorStop(0.3, '#2d2d2d'); g.addColorStop(0.5, '#404040'); g.addColorStop(0.7, '#2d2d2d'); g.addColorStop(1, '#1a1a1a');
   ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
-  // Weave pattern
   for (let i = 0; i < 4; i++) {
     const wy = r.y + r.h * (0.1 + 0.27 * i);
     ctx.strokeStyle = `rgba(80,80,80,${0.2 + 0.1 * Math.sin(t + i)})`;
@@ -1364,7 +1355,6 @@ function fillMermaid(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: n
   const g = ctx.createLinearGradient(0, r.y, 0, r.y + r.h);
   g.addColorStop(0, '#004d40'); g.addColorStop(0.5, '#00897b'); g.addColorStop(1, '#004d40');
   ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
-  // Scale shimmer
   for (let i = 0; i < 5; i++) {
     const sy = r.y + r.h * (0.1 + 0.2 * i);
     const sh = 4 + 3 * Math.sin(t + i * 1.5);
@@ -1379,11 +1369,9 @@ function fillMidas(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: num
   ctx.save(); clipPaddle(ctx, cx, cy, h);
   const r = paddleRect(cx, cy, h);
   const t = Date.now() / 500;
-  // Liquid gold
   const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
   g.addColorStop(0, '#8a6d10'); g.addColorStop(0.3, '#d4a820'); g.addColorStop(0.5, '#ffd700'); g.addColorStop(0.7, '#d4a820'); g.addColorStop(1, '#8a6d10');
   ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
-  // Rippling reflections
   const wave = Math.sin(t) * 0.3 + 0.5;
   const glint = ctx.createLinearGradient(0, r.y - 8 + r.h * wave, 0, r.y + 8 + r.h * wave);
   glint.addColorStop(0, 'rgba(255,235,120,0)');
@@ -1392,17 +1380,14 @@ function fillMidas(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: num
   ctx.fillStyle = glint; ctx.fillRect(r.x, r.y, r.w, r.h);
   skinHighlight(ctx, cx, cy, h); ctx.restore();
 }
-=======
 // --- Exclusive skins ---
 function fillGenesis(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
   ctx.save(); clipPaddle(ctx, cx, cy, h);
   const r = paddleRect(cx, cy, h);
   const t = Date.now() / 800;
-  // Deep cosmic gradient
   const g = ctx.createLinearGradient(r.x, r.y, r.x + r.w, r.y + r.h);
   g.addColorStop(0, '#05001a'); g.addColorStop(0.5, '#1a0033'); g.addColorStop(1, '#05001a');
   ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
-  // Animated nebula wisps
   for (let i = 0; i < 3; i++) {
     const wx = r.x + r.w * (0.2 + 0.6 * ((t + i * 1.2) % 1));
     const wy = r.y + r.h * (0.2 + 0.6 * ((t * 0.7 + i * 0.8) % 1));
@@ -1418,18 +1403,15 @@ function fillQuantum(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: n
   ctx.save(); clipPaddle(ctx, cx, cy, h);
   const r = paddleRect(cx, cy, h);
   const t = Date.now() / 400;
-  // Metallic teal base
   const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
   g.addColorStop(0, '#002626'); g.addColorStop(0.3, '#004d4d'); g.addColorStop(0.5, '#00b3b3'); g.addColorStop(0.7, '#004d4d'); g.addColorStop(1, '#002626');
   ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
-  // Interference wave pattern
   for (let i = 0; i < 6; i++) {
     const waveY = r.y + r.h * (0.15 + 0.7 * ((t * 0.3 + i * 0.17) % 1));
     const waveA = Math.sin(t + i * 1.1) * 0.3 + 0.3;
     ctx.fillStyle = `rgba(0,255,255,${waveA * 0.15})`;
     ctx.fillRect(r.x, waveY - 2, r.w, 4);
   }
-  // Pulsing quantum dots
   for (let i = 0; i < 8; i++) {
     const dx = r.x + r.w * ((t * 0.2 + i * 0.12) % 1);
     const dy = r.y + r.h * ((t * 0.25 + i * 0.09) % 1);
@@ -1439,7 +1421,6 @@ function fillQuantum(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: n
   }
   skinHighlight(ctx, cx, cy, h); ctx.restore();
 }
->>>>>>> main
 function fillGold(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
   ctx.save();
   clipPaddle(ctx, cx, cy, h);
