@@ -790,6 +790,23 @@ export class Lobby {
       .catch((e) => console.error('doom reward failed:', e));
   }
 
+  // World "weekly objective" rewards. Granted once per player per quest (tracked in-memory for the
+  // server's lifetime), paid from the House like the DOOM bounty.
+  private static QUEST_REWARDS: Record<string, number> = { 'find-waldo': 400, 'give-banana': 400, 'win-ten': 1000 };
+  private claimedQuests = new Set<string>(); // `${pid}:${quest}`
+  questClaim(ws: WebSocket, quest: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    const reward = Lobby.QUEST_REWARDS[quest];
+    if (!reward) return;
+    const key = `${conn.pid}:${quest}`;
+    if (this.claimedQuests.has(key)) return; // already paid
+    this.claimedQuests.add(key);
+    this.housePay(conn.pid, conn.nickname, reward * COIN_SCALE)
+      .then(() => this.sendWallet(ws))
+      .catch((e) => { this.claimedQuests.delete(key); console.error('quest reward failed:', e); });
+  }
+
   /** Forward an opaque DOOM payload to the co-op partner. */
   doomRelay(ws: WebSocket, data: unknown) {
     if (!this.doomSlots.includes(ws)) return;

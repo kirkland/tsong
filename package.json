@@ -20,6 +20,7 @@
     "google-auth-library": "^10.7.0",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.13.1",
+    "phaser": "^3.90.0",
     "sirv": "^2.0.4",
     "three": "^0.184.0",
     "tsx": "^4.19.2",

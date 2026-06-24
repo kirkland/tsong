@@ -446,6 +446,7 @@ export type ClientMsg =
   | { type: 'doomRelay'; data: unknown } // forward an opaque DOOM payload to the co-op partner
   | { type: 'doomScore'; round: number; coop: boolean; name?: string } // record a DOOM run's reached round (name = combined team label for co-op)
   | { type: 'doomReward' } // grant the player 1 coin (killed the DOOM minion boss)
+  | { type: 'questClaim'; quest: string } // claim a World objective reward (server grants once per player)
   | { type: 'ntJoin' } // take a slot in the Nuketown team-deathmatch lobby (up to 6)
   | { type: 'ntLeave' } // leave the Nuketown lobby / match
   | { type: 'ntStart' } // (host only) start the Nuketown match from the waiting room
