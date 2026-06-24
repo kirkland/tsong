@@ -798,19 +798,21 @@
         gap: 8px;
         align-items: flex-start;
       }
-      /* Grouped nav dropdowns (Arcade, Casino) — collapse related toolbar buttons into menus. */
-      #arcade, #casino { position: relative; }
-      #arcadeBtn, #casinoBtn {
+      /* Grouped nav dropdowns (Arcade, Casino, Economy, Work) — collapse related toolbar buttons into menus. */
+      #arcade, #casino, #economy, #workMenu { position: relative; }
+      #arcadeBtn, #casinoBtn, #economyBtn, #workMenuBtn {
         display: flex; align-items: center; gap: 6px;
         font: inherit; font-size: 12px; letter-spacing: 1px; padding: 7px 12px;
         border-radius: 6px; border: 1px solid #2a3550; background: #0e1424;
         color: #7da2ff; cursor: pointer;
       }
-      #arcadeBtn:hover, #casinoBtn:hover { background: #18203a; }
-      /* Ambient glow: steady tinted buttons (Arcade red, Casino green) with a soft, slow
+      #arcadeBtn:hover, #casinoBtn:hover, #economyBtn:hover, #workMenuBtn:hover { background: #18203a; }
+      /* Ambient glow: steady tinted buttons (Arcade red, Casino green, Economy gold) with a soft, slow
          breathing halo — noticeable but not blinky. */
       #arcadeBtn { color: #ff8a8a; border-color: #6e2a2f; background: #1c0e10; animation: arcadeGlow 3.2s ease-in-out infinite; }
       #casinoBtn { color: #7ff0b0; border-color: #2a6e45; background: #0e1c14; animation: casinoGlow 3.2s ease-in-out infinite; }
+      #economyBtn { color: #ffd86e; border-color: #6e5a1f; background: #1a1608; animation: economyGlow 3.2s ease-in-out infinite; }
+      #workMenuBtn { color: #a8b8ff; border-color: #2a3560; background: #0c1022; }
       @keyframes arcadeGlow {
         0%, 100% { box-shadow: 0 0 4px rgba(255,80,80,0.25); }
         50% { box-shadow: 0 0 13px rgba(255,80,80,0.6); }
@@ -819,11 +821,15 @@
         0%, 100% { box-shadow: 0 0 4px rgba(60,255,140,0.25); }
         50% { box-shadow: 0 0 13px rgba(60,255,140,0.6); }
       }
-      @media (prefers-reduced-motion: reduce) {
-        #arcadeBtn, #casinoBtn { animation: none; }
+      @keyframes economyGlow {
+        0%, 100% { box-shadow: 0 0 4px rgba(255,210,80,0.25); }
+        50% { box-shadow: 0 0 13px rgba(255,210,80,0.6); }
       }
-      #arcadeBtn .caret, #casinoBtn .caret { font-size: 10px; transition: transform 0.15s; }
-      #arcadeBtn[aria-expanded='true'] .caret, #casinoBtn[aria-expanded='true'] .caret { transform: rotate(180deg); }
+      @media (prefers-reduced-motion: reduce) {
+        #arcadeBtn, #casinoBtn, #economyBtn { animation: none; }
+      }
+      #arcadeBtn .caret, #casinoBtn .caret, #economyBtn .caret, #workMenuBtn .caret { font-size: 10px; transition: transform 0.15s; }
+      #arcadeBtn[aria-expanded='true'] .caret, #casinoBtn[aria-expanded='true'] .caret, #economyBtn[aria-expanded='true'] .caret, #workMenuBtn[aria-expanded='true'] .caret { transform: rotate(180deg); }
       .nav-menu {
         position: absolute; top: calc(100% + 6px); left: 0; min-width: 170px;
         display: flex; flex-direction: column; gap: 5px;
@@ -831,9 +837,11 @@
         box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55); padding: 6px; z-index: 60;
       }
       .nav-menu[hidden] { display: none; }
-      /* Menu rows: arcade + casino trigger buttons fill the menu width, left-aligned. */
+      /* Menu rows: all nav trigger buttons fill the menu width, left-aligned. */
       #arcadePanel > button,
-      #casinoPanel > button { display: flex; width: 100%; justify-content: flex-start; }
+      #casinoPanel > button,
+      #economyPanel > button,
+      #workMenuPanel > button { display: flex; width: 100%; justify-content: flex-start; }
       /* Mute button */
       #muteBtn {
         font: inherit;
@@ -3145,7 +3153,7 @@
           gap: 4px;
           flex-wrap: wrap;
         }
-        #viewModeBtn, #muteBtn, #workBtn, #termBtn, #gameModesBtn, #powerupInfoBtn, #newsBtn, #marketBtn, #loanBtn, #rouletteBtn, #arcadeBtn, #casinoBtn {
+        #viewModeBtn, #muteBtn, #workMenuBtn, #gameModesBtn, #powerupInfoBtn, #loanBtn, #rouletteBtn, #arcadeBtn, #casinoBtn, #economyBtn {
           font-size: 10px;
           padding: 4px 8px;
         }
@@ -3332,8 +3340,13 @@
     <div id="topLeft">
       <button id="muteBtn" type="button" aria-pressed="false" title="Toggle sound on/off (M)">🔊</button>
       <button id="worldBtn" type="button" aria-pressed="false" title="Walk around the TSONG world (beta) — a free-roam map with everyone on it">🌍 World</button>
-      <button id="workBtn" type="button" title="Work mode — disguise as a spreadsheet (Esc to exit)">📊 Work</button>
-      <button id="termBtn" type="button" title="Terminal mode — disguise as a terminal (Esc to exit)">💻 Term</button>
+      <div id="workMenu">
+        <button id="workMenuBtn" type="button" aria-expanded="false" title="Boss-key disguises">📊 Work <span class="caret">▾</span></button>
+        <div id="workMenuPanel" class="nav-menu" hidden>
+          <button id="workBtn" type="button" title="Work mode — disguise as a spreadsheet (Esc to exit)">📊 Spreadsheet</button>
+          <button id="termBtn" type="button" title="Terminal mode — disguise as a terminal (Esc to exit)">💻 Term</button>
+        </div>
+      </div>
       <div id="arcade">
         <button id="arcadeBtn" type="button" aria-expanded="false" title="Minigames">🎮 Arcade <span class="caret">▾</span></button>
         <div id="arcadePanel" class="nav-menu" hidden>
@@ -3362,11 +3375,16 @@
           <div id="shopItems"></div>
         </div>
       </div>
-      <div id="casino">
-        <button id="casinoBtn" type="button" aria-expanded="false" title="Market, loans &amp; roulette">🎰 Casino <span class="caret">▾</span></button>
-        <div id="casinoPanel" class="nav-menu" hidden>
+      <div id="economy">
+        <button id="economyBtn" type="button" aria-expanded="false" title="Crypto market &amp; news">📰 Economy <span class="caret">▾</span></button>
+        <div id="economyPanel" class="nav-menu" hidden>
           <button id="newsBtn" type="button" aria-expanded="false" title="Market news — hourly headlines &amp; whispers">📰 News</button>
           <button id="marketBtn" type="button" aria-expanded="false" title="Invest coins in joke cryptos">📈 Market</button>
+        </div>
+      </div>
+      <div id="casino">
+        <button id="casinoBtn" type="button" aria-expanded="false" title="Casino games &amp; loans">🎰 Casino <span class="caret">▾</span></button>
+        <div id="casinoPanel" class="nav-menu" hidden>
           <button id="lootBtn" type="button" aria-expanded="false" title="Open loot boxes — roll for scarce, capped exclusives">🎁 Loot Box</button>
           <button id="marketplaceBtn" type="button" aria-expanded="false" title="Black Market — buy &amp; sell scarce exclusives with other players">🛒 Black Market</button>
           <button id="loanBtn" type="button" aria-expanded="false" title="Borrow coins from Davis — pay back 1.5× by the daily reset">💸 Get Loan</button>

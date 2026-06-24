@@ -1855,6 +1855,10 @@ const arcadeBtn = document.getElementById('arcadeBtn') as HTMLButtonElement;
 const arcadePanel = document.getElementById('arcadePanel') as HTMLDivElement;
 const casinoBtn = document.getElementById('casinoBtn') as HTMLButtonElement;
 const casinoPanel = document.getElementById('casinoPanel') as HTMLDivElement;
+const economyBtn = document.getElementById('economyBtn') as HTMLButtonElement;
+const economyPanel = document.getElementById('economyPanel') as HTMLDivElement;
+const workMenuBtn = document.getElementById('workMenuBtn') as HTMLButtonElement;
+const workMenuPanel = document.getElementById('workMenuPanel') as HTMLDivElement;
 function closeNavMenu(btn: HTMLButtonElement, panel: HTMLDivElement) {
   panel.hidden = true;
   btn.setAttribute('aria-expanded', 'false');
@@ -1866,18 +1870,26 @@ function toggleNavMenu(btn: HTMLButtonElement, panel: HTMLDivElement) {
 }
 arcadeBtn.addEventListener('click', () => toggleNavMenu(arcadeBtn, arcadePanel));
 casinoBtn.addEventListener('click', () => toggleNavMenu(casinoBtn, casinoPanel));
+economyBtn.addEventListener('click', () => toggleNavMenu(economyBtn, economyPanel));
+workMenuBtn.addEventListener('click', () => toggleNavMenu(workMenuBtn, workMenuPanel));
 // Picking an item closes its menu — the launched minigame / opened panel takes over from there.
 arcadePanel.addEventListener('click', (e) => { if ((e.target as HTMLElement).closest('button')) closeNavMenu(arcadeBtn, arcadePanel); });
 casinoPanel.addEventListener('click', (e) => { if ((e.target as HTMLElement).closest('button')) closeNavMenu(casinoBtn, casinoPanel); });
+economyPanel.addEventListener('click', (e) => { if ((e.target as HTMLElement).closest('button')) closeNavMenu(economyBtn, economyPanel); });
+workMenuPanel.addEventListener('click', (e) => { if ((e.target as HTMLElement).closest('button')) closeNavMenu(workMenuBtn, workMenuPanel); });
 document.addEventListener('click', (e) => {
   const t = e.target as Node;
   if (!arcadePanel.hidden && !arcadeBtn.contains(t) && !arcadePanel.contains(t)) closeNavMenu(arcadeBtn, arcadePanel);
   if (!casinoPanel.hidden && !casinoBtn.contains(t) && !casinoPanel.contains(t)) closeNavMenu(casinoBtn, casinoPanel);
+  if (!economyPanel.hidden && !economyBtn.contains(t) && !economyPanel.contains(t)) closeNavMenu(economyBtn, economyPanel);
+  if (!workMenuPanel.hidden && !workMenuBtn.contains(t) && !workMenuPanel.contains(t)) closeNavMenu(workMenuBtn, workMenuPanel);
 });
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (!arcadePanel.hidden) closeNavMenu(arcadeBtn, arcadePanel);
   if (!casinoPanel.hidden) closeNavMenu(casinoBtn, casinoPanel);
+  if (!economyPanel.hidden) closeNavMenu(economyBtn, economyPanel);
+  if (!workMenuPanel.hidden) closeNavMenu(workMenuBtn, workMenuPanel);
 });
 
 // --- Coins, cosmetics shop & betting ---
@@ -4025,7 +4037,7 @@ const inDisguise = () => workOn || termOn;
 // when clicked, opens the genuine dropdown/modal. The cell shows the button's own
 // current label (icon, coin count, mute state…) so it reads exactly like the toolbar.
 const WM_MENU_IDS = [
-  'muteBtn', 'arcadeBtn', 'shopBtn', 'casinoBtn', 'viewModeBtn',
+  'muteBtn', 'arcadeBtn', 'shopBtn', 'economyBtn', 'casinoBtn', 'viewModeBtn',
   'gameModesBtn', 'tourneyBtn', 'powerupInfoBtn', 'changelogBtn', 'debugBtn',
 ];
 // The current visible text of a toolbar button, minus the dropdown caret.
