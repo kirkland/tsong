@@ -1707,6 +1707,10 @@ worldBtn.addEventListener('click', async () => {
     });
   } catch (e) {
     console.error('World failed to load:', e);
+    // Surface the reason on-screen (we can't read prod browser consoles) so a live failure is
+    // diagnosable instead of the button silently doing nothing.
+    worldBtn.setAttribute('aria-pressed', 'false');
+    showAnnouncement(`World failed to load: ${String((e as Error)?.message ?? e).slice(0, 160)}`, { color: '#ff8a8a' });
   }
 });
 
