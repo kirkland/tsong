@@ -675,6 +675,9 @@ const SKIN_RENDERERS: Record<string, CosmeticDraw> = {
   venom: fillVenom,
   obsidian: fillObsidian,
   aurora: fillAurora,
+  carbon: fillCarbon,
+  mermaid: fillMermaid,
+  'x-midas': fillMidas,
   'x-genesis': fillGenesis,
   'x-quantum': fillQuantum,
 };
@@ -704,8 +707,16 @@ const TRAIL_TINTS: Record<string, TrailTint> = {
     const light = 18 + f * 42 + pulse * 12;  // dark → blazing, animated
     return `hsl(${hue},100%,${light}%)`;
   },
+  'x-singularity': (i, n, t) => {
+    const f = i / n;
+    // Spaghettification ring: white-hot at center → deep space blue at edges, with a rotating hue
+    const hue = (t / 20 + 240 + f * 120) % 360;
+    const light = 30 + f * 50 + 15 * Math.sin(t / 400 + i * 0.7);
+    const sat = 70 + f * 30;
+    return `hsl(${hue},${sat}%,${light}%)`;
+  },
 };
-const TRAIL_GLOW = new Set(['comet', 'frostwake', 'ember', 'neonstreak', 'rainbowtrail', 'stardust', 'inferno', 'lightning', 'phoenix', 'x-eclipse']); // additive blend
+const TRAIL_GLOW = new Set(['comet', 'frostwake', 'ember', 'neonstreak', 'rainbowtrail', 'stardust', 'inferno', 'lightning', 'phoenix', 'x-eclipse', 'x-singularity']); // additive blend
 const TRAIL_LEN = 14; // samples of paddle history kept for the streak
 const trailHistory = new Map<string, { x: number; y: number }[]>();
 function drawTrail(ctx: CanvasRenderingContext2D, key: string, cx: number, cy: number, h: number, id: string) {
@@ -820,6 +831,9 @@ const HAT_RENDERERS: Record<string, CosmeticDraw> = {
   propeller: drawPropeller,
   flamingcrown: drawFlamingCrown,
   diamondtiara: drawDiamondTiara,
+  'x-jackpot': drawJackpotCrown,
+  beret: drawBeret,
+  catears: drawCatEars,
   'x-voidcrown': drawVoidCrown,
   'x-prismhalo': drawPrismHalo,
 };
@@ -958,6 +972,78 @@ function drawDiamondTiara(ctx: CanvasRenderingContext2D, cx: number, cy: number,
   }
   ctx.restore();
 }
+<<<<<<< HEAD
+// --- Loot-box refresh hats ---
+function drawBeret(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2, w = PADDLE.w + 10;
+  ctx.save();
+  ctx.fillStyle = '#c41e3a';
+  ctx.beginPath();
+  ctx.ellipse(cx, top - 4, w / 2, 6, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#8a1528';
+  ctx.fillRect(cx - w / 2, top - 1, w, 3);
+  ctx.fillStyle = '#5a0e1a';
+  ctx.fillRect(cx - 1.5, top - 12, 3, 4);
+  ctx.restore();
+}
+function drawCatEars(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2, t = Date.now() / 300;
+  ctx.save();
+  const wiggle = Math.sin(t) * 1.5;
+  ctx.fillStyle = '#2a1a3a';
+  ctx.beginPath();
+  ctx.moveTo(cx - 10, top - 2);
+  ctx.lineTo(cx - 14 + wiggle, top - 16);
+  ctx.lineTo(cx - 4 + wiggle, top - 2);
+  ctx.closePath(); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx + 10, top - 2);
+  ctx.lineTo(cx + 14 - wiggle, top - 16);
+  ctx.lineTo(cx + 4 - wiggle, top - 2);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#ff9eb5';
+  ctx.beginPath();
+  ctx.moveTo(cx - 8, top - 3);
+  ctx.lineTo(cx - 11 + wiggle, top - 12);
+  ctx.lineTo(cx - 5 + wiggle, top - 3);
+  ctx.closePath(); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx + 8, top - 3);
+  ctx.lineTo(cx + 11 - wiggle, top - 12);
+  ctx.lineTo(cx + 5 - wiggle, top - 3);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+function drawJackpotCrown(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2, w = PADDLE.w + 8, t = Date.now() / 400;
+  ctx.save();
+  const gold = `hsl(${45 + Math.sin(t) * 5},90%,${55 + Math.sin(t * 1.3) * 8}%)`;
+  ctx.fillStyle = gold;
+  ctx.shadowColor = '#ffd700';
+  ctx.shadowBlur = 10;
+  ctx.beginPath();
+  ctx.moveTo(cx - w / 2, top - 2);
+  for (let i = 0; i < 5; i++) {
+    const px = cx - w / 2 + (w / 4) * i;
+    const py = (i % 2 === 0) ? top - 14 : top - 4;
+    ctx.lineTo(px, py);
+  }
+  ctx.lineTo(cx + w / 2, top - 2);
+  ctx.closePath(); ctx.fill();
+  ctx.shadowBlur = 0;
+  for (let i = 0; i < 3; i++) {
+    const gx = cx - w / 4 + (w / 4) * i;
+    const gy = top - 10 + Math.sin(t + i * 2) * 1.5;
+    const hue = (t * 50 + i * 120) % 360;
+    ctx.fillStyle = `hsl(${hue},95%,60%)`;
+    ctx.shadowColor = `hsl(${hue},95%,60%)`;
+    ctx.shadowBlur = 6;
+    ctx.beginPath(); ctx.arc(gx, gy, 2.5, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+=======
 // --- Exclusive hats ---
 function drawVoidCrown(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
   const top = cy - h / 2, w = PADDLE.w + 6, x = cx - w / 2, t = Date.now() / 600;
@@ -1008,6 +1094,7 @@ function drawPrismHalo(ctx: CanvasRenderingContext2D, cx: number, cy: number, h:
   ctx.beginPath(); ctx.ellipse(0, 0, PADDLE.w * 0.55, 3, 0, 0, Math.PI * 2); ctx.stroke();
   ctx.restore();
 }
+>>>>>>> main
 function drawCowboy(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
   const top = cy - h / 2, brimW = PADDLE.w + 16;
   ctx.save();
@@ -1252,6 +1339,60 @@ function fillAurora(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: nu
   ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
   skinHighlight(ctx, cx, cy, h); ctx.restore();
 }
+<<<<<<< HEAD
+// --- Loot-box refresh skins ---
+function fillCarbon(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save(); clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 600;
+  const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  g.addColorStop(0, '#1a1a1a'); g.addColorStop(0.3, '#2d2d2d'); g.addColorStop(0.5, '#404040'); g.addColorStop(0.7, '#2d2d2d'); g.addColorStop(1, '#1a1a1a');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Weave pattern
+  for (let i = 0; i < 4; i++) {
+    const wy = r.y + r.h * (0.1 + 0.27 * i);
+    ctx.strokeStyle = `rgba(80,80,80,${0.2 + 0.1 * Math.sin(t + i)})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(r.x, wy); ctx.lineTo(r.x + r.w, wy); ctx.stroke();
+  }
+  skinHighlight(ctx, cx, cy, h); ctx.restore();
+}
+function fillMermaid(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save(); clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 900;
+  const g = ctx.createLinearGradient(0, r.y, 0, r.y + r.h);
+  g.addColorStop(0, '#004d40'); g.addColorStop(0.5, '#00897b'); g.addColorStop(1, '#004d40');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Scale shimmer
+  for (let i = 0; i < 5; i++) {
+    const sy = r.y + r.h * (0.1 + 0.2 * i);
+    const sh = 4 + 3 * Math.sin(t + i * 1.5);
+    ctx.fillStyle = `rgba(178,223,219,${0.15 + 0.1 * Math.sin(t + i * 0.7)})`;
+    ctx.beginPath();
+    ctx.ellipse(r.x + r.w / 2, sy, r.w * 0.3, sh, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  skinHighlight(ctx, cx, cy, h); ctx.restore();
+}
+function fillMidas(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save(); clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 500;
+  // Liquid gold
+  const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  g.addColorStop(0, '#8a6d10'); g.addColorStop(0.3, '#d4a820'); g.addColorStop(0.5, '#ffd700'); g.addColorStop(0.7, '#d4a820'); g.addColorStop(1, '#8a6d10');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Rippling reflections
+  const wave = Math.sin(t) * 0.3 + 0.5;
+  const glint = ctx.createLinearGradient(0, r.y - 8 + r.h * wave, 0, r.y + 8 + r.h * wave);
+  glint.addColorStop(0, 'rgba(255,235,120,0)');
+  glint.addColorStop(0.5, `rgba(255,235,120,${0.4 + 0.3 * Math.sin(t * 1.5)})`);
+  glint.addColorStop(1, 'rgba(255,235,120,0)');
+  ctx.fillStyle = glint; ctx.fillRect(r.x, r.y, r.w, r.h);
+  skinHighlight(ctx, cx, cy, h); ctx.restore();
+}
+=======
 // --- Exclusive skins ---
 function fillGenesis(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
   ctx.save(); clipPaddle(ctx, cx, cy, h);
@@ -1298,6 +1439,7 @@ function fillQuantum(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: n
   }
   skinHighlight(ctx, cx, cy, h); ctx.restore();
 }
+>>>>>>> main
 function fillGold(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
   ctx.save();
   clipPaddle(ctx, cx, cy, h);

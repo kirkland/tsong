@@ -43,6 +43,7 @@ import {
   LootResultMsg,
   MarketItemView,
   LoanBookMsg,
+  LOOT_TABLE,
   minBet,
 } from '../shared/types';
 
@@ -2318,7 +2319,6 @@ const lootBtn = document.getElementById('lootBtn') as HTMLButtonElement | null;
 const lootPanel = document.getElementById('lootPanel') as HTMLDivElement;
 const lootBody = document.getElementById('lootBody') as HTMLDivElement;
 const LOOT_PRICE = 2500;       // mirror of server's Lobby.LOOT_PRICE (display only)
-const LOOT_COIN_REWARD = 1500; // mirror of server's Lobby.LOOT_COIN_REWARD
 let lootBusy = false;
 let lootTimer: number | undefined; // clears a hung "Opening…" if no lootResult arrives
 let lootRevealHtml = ''; // last prize reveal, kept across re-renders (wallet/house/market updates
@@ -2332,12 +2332,16 @@ function renderLoot() {
         return `<span class="loot-badge">${escapeHtml(def?.name ?? e.id)} <span class="loot-serial">#${e.serial}</span></span>`;
       }).join(' ')}</div>`
     : '';
+  const W = LOOT_TABLE;
+  const totalW = W.cosmeticWeight + W.exclusiveWeight + W.coinBackWeight + W.nothingWeight;
+  const pct = (w: number) => ((w / totalW) * 100).toFixed(1);
   lootBody.innerHTML = `
     <div class="loot-blurb">Spend ${LOOT_PRICE.toLocaleString()}🪙 to crack a box — you get one of:</div>
     <table class="loot-odds">
-      <tr><td>55%</td><td>🎨 Common cosmetic</td><td>hat / skin / trail / title</td></tr>
-      <tr><td>30%</td><td>🪙 Coin payout</td><td>+${LOOT_COIN_REWARD.toLocaleString()} coins</td></tr>
-      <tr><td>15%</td><td>✨ Scarce exclusive</td><td>hard mint cap · some 1-of-1</td></tr>
+      <tr><td>${pct(W.cosmeticWeight)}%</td><td>🎨 Common cosmetic</td><td>hat / skin / trail</td></tr>
+      <tr><td>${pct(W.exclusiveWeight)}%</td><td>✨ Scarce exclusive</td><td>hard mint cap · some 1-of-1</td></tr>
+      <tr><td>${pct(W.coinBackWeight)}%</td><td>🪙 Coin back</td><td>${W.coinBackMin.toLocaleString()}–${W.coinBackMax.toLocaleString()} coins</td></tr>
+      <tr><td>${pct(W.nothingWeight)}%</td><td>🫥 Nothing</td><td>the house thanks you</td></tr>
     </table>
     <button id="lootOpenBtn" type="button" ${canAfford && !lootBusy ? '' : 'disabled'}>${lootBusy ? 'Opening…' : canAfford ? `🎁 Open Box · ${LOOT_PRICE.toLocaleString()}🪙` : `Need ${LOOT_PRICE.toLocaleString()}🪙 — you have ${wallet.coins.toLocaleString()}`}</button>
     <div id="lootReveal" class="loot-reveal">${lootRevealHtml}</div>
@@ -2371,6 +2375,8 @@ function onLootResult(msg: LootResultMsg) {
     const cosm = COSMETICS.find((c) => c.id === (msg.item ?? ''));
     const slotLabel = cosm ? (SLOT_LABEL[cosm.slot] ?? cosm.slot) : '';
     lootRevealHtml = `<div class="loot-pop"><div class="loot-slot">${slotLabel}</div>🎨 <b>${escapeHtml(msg.name ?? '')}</b><div class="loot-added">Added to your wardrobe!</div></div>`;
+  } else if (msg.kind === 'nothing') {
+    lootRevealHtml = `<div class="loot-pop loot-nothing"><div class="loot-slot">Empty</div>🫥 <b>Better luck next time…</b><div class="loot-added">The house thanks you for your contribution.</div></div>`;
   } else {
     lootRevealHtml = `<div class="loot-pop"><div class="loot-slot">Coin Payout</div>🪙 <b>+${(msg.coins ?? 0).toLocaleString()}</b> coins</div>`;
     playChaChing();
