@@ -200,6 +200,7 @@ export function initHorse(opts: {
   document.addEventListener('click', (e) => {
     if (panel.hidden) return;
     const t = e.target as Node;
+    if (t instanceof Node && !t.isConnected) return; // re-render removed the node before bubble
     if (!panel.contains(t) && !btn.contains(t)) {
       panel.hidden = true;
       btn.setAttribute('aria-expanded', 'false');
