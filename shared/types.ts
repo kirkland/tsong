@@ -768,6 +768,10 @@ export interface NetWorthRow {
 export interface NetWorthMsg {
   type: 'netWorth';
   rows: NetWorthRow[];
+  // The recipient's own row + global rank, sent when they fall below the visible top-N so the
+  // client can pin them to the bottom of the board. Omitted when they're already shown.
+  selfRow?: NetWorthRow;
+  selfRank?: number;
 }
 
 // One line item on a player's balance sheet: an open stock position valued live.

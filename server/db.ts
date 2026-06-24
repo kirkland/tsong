@@ -1520,6 +1520,68 @@ export async function getEloBoard(): Promise<(LeaderboardRow & { pid: string })[
   }));
 }
 
+/** This player's own Elo standing across the WHOLE field (not just the visible top-N), so
+ *  the client can pin their row to the board even when they sit below the cutoff. null if
+ *  they haven't played / no DB. Rank ordering mirrors getEloBoard exactly. */
+export async function getSelfElo(pid: string): Promise<{ rank: number; elo: number } | null> {
+  if (!pool) return null;
+  const { rows } = await pool.query(
+    `SELECT rnk, elo FROM (
+       SELECT id, elo,
+              ROW_NUMBER() OVER (ORDER BY elo DESC, name ASC) AS rnk
+         FROM players
+        WHERE wins + losses > 0
+     ) sub WHERE id = $1`,
+    [pid],
+  );
+  return rows.length ? { rank: Number(rows[0].rnk), elo: Number(rows[0].elo) } : null;
+}
+
+/** This player's own Net Worth standing across the WHOLE field (not just the visible top-N).
+ *  Mirrors getNetWorthLeaderboard's ordering/filter so the pinned self-row is consistent with
+ *  the board. null if they don't qualify / no DB. */
+export async function getSelfNetWorth(pid: string): Promise<(NetWorthRow & { rank: number }) | null> {
+  if (!pool) return null;
+  const { rows } = await pool.query(
+    `SELECT rnk, name, title, net, coins, loan FROM (
+       SELECT p.id AS pid, p.name, p.title,
+              p.coins + COALESCE(h.val, 0) - COALESCE(l.owed, 0) AS net,
+              p.coins,
+              COALESCE(l.owed, 0) AS loan,
+              ROW_NUMBER() OVER (
+                ORDER BY p.coins + COALESCE(h.val, 0) - COALESCE(l.owed, 0) DESC, p.name ASC
+              ) AS rnk
+         FROM players p
+         LEFT JOIN (
+           SELECT sh.pid,
+                  SUM(CASE WHEN sh.side = 'short'
+                           THEN 2 * sh.cost - sh.shares * sp.price
+                           ELSE sh.shares * sp.price END) AS val
+             FROM stock_holdings sh
+             JOIN stock_prices sp ON sp.coin = sh.coin
+            WHERE sh.shares > 0
+            GROUP BY sh.pid
+         ) h ON h.pid = p.id
+         LEFT JOIN loans l ON l.pid = p.id
+        WHERE p.wins + p.losses > 0
+           OR p.coins <> 0
+           OR h.val IS NOT NULL
+           OR l.owed IS NOT NULL
+     ) sub WHERE pid = $1`,
+    [pid],
+  );
+  if (!rows.length) return null;
+  const r = rows[0];
+  return {
+    rank: Number(r.rnk),
+    name: r.name,
+    title: r.title ?? null,
+    net: Math.round(Number(r.net)),
+    coins: Number(r.coins),
+    loan: Math.round(Number(r.loan)),
+  };
+}
+
 /** A player's public profile for the Elo drilldown. Returns null when the player
  *  doesn't exist (or there's no DB). */
 export interface PlayerProfile {

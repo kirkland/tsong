@@ -296,6 +296,12 @@ let joined = false; // true once the player has entered a nickname (gates reacti
 // auto-rejoin path (which can run enableChat during module init) never hits them in the TDZ.
 let lastLbRows: LeaderboardRow[] = [];
 let lastNwRows: NetWorthRow[] = [];
+// Cached "self" pin-rows so plain re-renders (e.g. on a bounty update) keep showing the
+// player's own row when they're below the visible top-N.
+let lastLbSelfElo: number | undefined;
+let lastLbSelfRank: number | undefined;
+let lastNwSelfRow: NetWorthRow | undefined;
+let lastNwSelfRank: number | undefined;
 // Rolling buffer of recent chat lines, surfaced as a "memos" column in Work mode.
 const workChat: string[] = [];
 // Active bounties, keyed by lowercased player name → pot. Drives the 🎯 badge on the boards.
@@ -611,7 +617,7 @@ const net = connect(
     } else if (msg.type === 'leaderboard') {
       renderLeaderboard(msg.rows, msg.selfElo, msg.selfRank);
     } else if (msg.type === 'netWorth') {
-      renderNetWorth(msg.rows);
+      renderNetWorth(msg.rows, msg.selfRow, msg.selfRank);
     } else if (msg.type === 'balanceSheet') {
       showBalanceSheet(msg);
     } else if (msg.type === 'eloProfile') {
@@ -4565,6 +4571,9 @@ const prevElo = new Map<string, number>();
 
 function renderLeaderboard(rows: LeaderboardRow[], selfElo?: number, selfRank?: number) {
   lastLbRows = rows;
+  // A message carries fresh self data; a plain re-render reuses the last known values.
+  if (selfElo !== undefined || selfRank !== undefined) { lastLbSelfElo = selfElo; lastLbSelfRank = selfRank; }
+  else { selfElo = lastLbSelfElo; selfRank = lastLbSelfRank; }
   if (!rows.length) {
     leaderboardEl.innerHTML = '';
     return;
@@ -4634,8 +4643,11 @@ function bountyBadgeHtml(name: string): string {
 // The Net Worth board: coins + live stock holdings − debt owed to Davis. The
 // richest player wears a 👑; anyone underwater (debt > assets) shows in red with
 // the amount they still owe. Ranks the whole economy, not just match wins.
-function renderNetWorth(rows: NetWorthRow[]) {
+function renderNetWorth(rows: NetWorthRow[], selfRow?: NetWorthRow, selfRank?: number) {
   lastNwRows = rows;
+  // A message carries fresh self data; a plain re-render reuses the last known values.
+  if (selfRow !== undefined || selfRank !== undefined) { lastNwSelfRow = selfRow; lastNwSelfRank = selfRank; }
+  else { selfRow = lastNwSelfRow; selfRank = lastNwSelfRank; }
   if (!rows.length) {
     netWorthEl.innerHTML = '';
     return;
@@ -4652,7 +4664,15 @@ function renderNetWorth(rows: NetWorthRow[]) {
       )}${tag}${debt}${bountyBadgeHtml(r.name)}</span><span class="worth${broke}">${r.net}🪙</span>${rowActionsHtml(r.name)}</li>`;
     })
     .join('');
-  netWorthEl.innerHTML = `<h2>💰 Net Worth</h2><ol>${items}</ol>`;
+  // Pin the player's own row to the bottom when they're below the visible top-N. No data-rank
+  // (it's not an index into the board), so the balance-sheet click handler skips it.
+  let selfLi = '';
+  if (selfRow && selfRank !== undefined && !rows.some((r) => r.name === selfRow!.name)) {
+    const broke = selfRow.net < 0 ? ' broke' : '';
+    const debt = selfRow.loan > 0 ? `<span class="debt"> 🔻${selfRow.loan}</span>` : '';
+    selfLi = `<li class="self-row"><span class="rank">#${selfRank}</span><span class="lbname">${escapeHtml(selfRow.name)}${debt}</span><span class="worth${broke}">${selfRow.net}🪙</span></li>`;
+  }
+  netWorthEl.innerHTML = `<h2>💰 Net Worth</h2><ol>${items}${selfLi}</ol>`;
 }
 
 // Click a Net Worth row to ask the server for that player's balance sheet (resolved by

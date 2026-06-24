@@ -78,7 +78,7 @@ import {
   LOOT_TABLE,
   minBet,
 } from '../shared/types';
-import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
+import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSelfElo, getSelfNetWorth, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS,
@@ -459,7 +459,9 @@ export class Lobby {
     };
     this.conns.set(ws, conn);
     this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
-    this.tell(ws, { type: 'leaderboard', rows: this.leaderboard, ...this.selfEloData(ws) });
+    // Fresh observer: no pid yet, so just the plain boards. Once they join, sendBoardsTo
+    // re-sends these personalised with the player's own pinned row.
+    this.tell(ws, { type: 'leaderboard', rows: this.leaderboard });
     this.tell(ws, { type: 'netWorth', rows: this.netWorth });
     this.tell(ws, { type: 'doomLeaderboard', solo: this.doomBoards.solo, coop: this.doomBoards.coop });
     this.tell(ws, { type: 'tdLeaderboard', rows: this.tdBoard });
@@ -1548,6 +1550,9 @@ export class Lobby {
     this.tell(ws, { type: 'house', balance: Math.round(this.houseBalance) });
     // Send the news feed.
     this.sendNews(ws);
+    // Now that we know who they are, re-send the standings pinned with their own row even if
+    // they're below the visible top-N.
+    this.sendBoardsTo(ws).catch((e) => console.error('board personalise failed:', e));
   }
 
   /** Load a connection's wallet from the DB into memory and send it to that client. */
@@ -3779,20 +3784,45 @@ export class Lobby {
     this.eloPids = board.map((r) => r.pid);
     for (const ws of this.conns.keys()) {
       if (ws.readyState !== ws.OPEN) continue;
-      const extra = this.selfEloData(ws);
+      const extra = await this.selfEloData(ws);
       ws.send(JSON.stringify({ type: 'leaderboard', rows: this.leaderboard, ...extra }));
     }
     // Net worth tracks the same population, so refresh it on the same beat.
     this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
   }
 
-  /** Produce `selfElo` / `selfRank` for a single connection, or `{}` if unknown. */
-  private selfEloData(ws: WebSocket): { selfElo?: number; selfRank?: number } {
+  /** Produce `selfElo` / `selfRank` for a single connection so the client can always pin the
+   *  player to the board. Uses the cached top-N when they're on it; otherwise looks up their
+   *  true field-wide rank. `{}` for observers / players who haven't played yet. */
+  private async selfEloData(ws: WebSocket): Promise<{ selfElo?: number; selfRank?: number }> {
     const conn = this.conns.get(ws);
     if (!conn || !conn.pid) return {};
     const idx = this.eloPids.indexOf(conn.pid);
-    if (idx === -1) return {};
-    return { selfElo: this.leaderboard[idx]?.elo, selfRank: idx + 1 };
+    if (idx !== -1) return { selfElo: this.leaderboard[idx]?.elo, selfRank: idx + 1 };
+    const self = await getSelfElo(conn.pid).catch(() => null);
+    return self ? { selfElo: self.elo, selfRank: self.rank } : {};
+  }
+
+  /** Produce `selfRow` / `selfRank` for the Net Worth board when the player sits below the
+   *  visible top-N. `{}` when they're already shown, are observers, or don't qualify. */
+  private async selfNetWorthData(ws: WebSocket): Promise<{ selfRow?: NetWorthRow; selfRank?: number }> {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return {};
+    if (this.netWorthPids.includes(conn.pid)) return {}; // already on the visible board
+    const self = await getSelfNetWorth(conn.pid).catch(() => null);
+    if (!self) return {};
+    const { rank, ...row } = self;
+    return { selfRow: row, selfRank: rank };
+  }
+
+  /** Send both standings boards to one client, personalised with their own pinned row when
+   *  they fall outside the visible top-N. */
+  private async sendBoardsTo(ws: WebSocket) {
+    if (ws.readyState !== ws.OPEN) return;
+    const elo = await this.selfEloData(ws);
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'leaderboard', rows: this.leaderboard, ...elo }));
+    const nw = await this.selfNetWorthData(ws);
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'netWorth', rows: this.netWorth, ...nw }));
   }
 
   /** Recompute the Net Worth board (coins + live holdings − debt) and push it to everyone.
@@ -3802,9 +3832,10 @@ export class Lobby {
     const full = await getNetWorthLeaderboard();
     this.netWorthPids = full.map((r) => r.pid);
     this.netWorth = full.map(({ pid: _pid, ...row }) => row);
-    const data = JSON.stringify({ type: 'netWorth', rows: this.netWorth });
     for (const ws of this.conns.keys()) {
-      if (ws.readyState === ws.OPEN) ws.send(data);
+      if (ws.readyState !== ws.OPEN) continue;
+      const extra = await this.selfNetWorthData(ws);
+      ws.send(JSON.stringify({ type: 'netWorth', rows: this.netWorth, ...extra }));
     }
   }
 
