@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "PORT=3001 concurrently -k -n server,client -c blue,magenta \"tsx watch server/index.ts\" \"vite\"",
     "dev:host": "PORT=3001 concurrently -k -n server,client -c blue,magenta \"tsx watch server/index.ts\" \"vite --host\"",
-    "build": "NODE_OPTIONS=--max-old-space-size=1536 vite build",
+    "build": "vite build",
     "start": "tsx server/index.ts",
     "typecheck": "tsc --noEmit",
     "conservation": "tsx scripts/conservation-check.ts",

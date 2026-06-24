@@ -11,10 +11,12 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    // Skip minification — the VPS has ~1 GB RAM and esbuild minification
+    // spikes memory enough to trigger the OOM killer. Gzip at serve time
+    // recovers most of the size savings.
+    minify: false,
     rollupOptions: {
       output: {
-        // Keep Phaser in its own chunk so rollup minifies it in isolation
-        // rather than holding the entire bundle in memory at once.
         manualChunks(id) {
           if (id.includes('phaser')) return 'phaser';
         },
