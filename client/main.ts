@@ -1739,6 +1739,32 @@ document.addEventListener('keydown', (e) => {
   if (!casinoPanel.hidden) closeNavMenu(casinoBtn, casinoPanel);
 });
 
+// --- News panel ---
+const newsBtn = document.getElementById('newsBtn') as HTMLButtonElement;
+const newsPanel = document.getElementById('newsPanel') as HTMLDivElement;
+const newsBody = document.getElementById('newsBody') as HTMLDivElement;
+let newsFeed: NewsItem[] = [];
+newsBtn.addEventListener('click', () => {
+  const open = newsPanel.hidden;
+  newsPanel.hidden = !open;
+  newsBtn.setAttribute('aria-expanded', String(open));
+  if (open) { if (!newsFeed.length) net.send({ type: 'newsReq' }); renderNews(); }
+});
+document.addEventListener('click', (e) => {
+  if (newsPanel.hidden) return;
+  const t = e.target as Node;
+  if (t instanceof Node && !t.isConnected) return;
+  if (!newsPanel.contains(t) && !newsBtn.contains(t)) { newsPanel.hidden = true; newsBtn.setAttribute('aria-expanded', 'false'); }
+});
+function renderNews() {
+  if (!newsFeed.length) { newsBody.innerHTML = '<div class="news-item" style="color:#5a647e">No news yet. Check back during market hours (M–F 9am–5pm ET).</div>'; return; }
+  newsBody.innerHTML = newsFeed.map((item) => {
+    const d = new Date(item.ts);
+    const time = d.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' });
+    return `<div class="news-item"><span class="news-time">${time}</span><span class="news-headline">${escapeHtml(item.headline)}</span></div>`;
+  }).join('');
+}
+
 // --- Coins, cosmetics shop & betting ---
 let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; song: string | null; car: string | null; exclusives: { id: string; serial: number; instanceId: number }[]; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
   { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, car: null, exclusives: [], bets: [], nextSpinAt: 0, bonusSpins: 0 };
