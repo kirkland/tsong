@@ -235,18 +235,28 @@ export function startSuperBros(net: SuperBrosNet): void {
   }
 
   // Stage picker buttons (host only chooses; others see it disabled).
+  // Each button shows a little canvas thumbnail so the three maps look distinct.
   const stageBtns: HTMLButtonElement[] = [];
   {
     const lbl = document.createElement('span');
-    lbl.style.cssText = 'font:700 12px ui-monospace,monospace;color:#8a93b5;';
+    lbl.style.cssText = 'font:700 12px ui-monospace,monospace;color:#8a93b5;align-self:center;';
     lbl.textContent = 'STAGE:';
     stageRow.appendChild(lbl);
     STAGES.forEach((s, i) => {
       const b = document.createElement('button');
-      b.textContent = s.name;
       b.style.cssText =
-        'font:700 11px ui-monospace,monospace;padding:6px 10px;border-radius:6px;cursor:pointer;' +
-        'border:1px solid #334;background:#13131f;color:#9fb0d8;';
+        'display:flex;flex-direction:column;align-items:center;gap:4px;' +
+        'padding:6px;border-radius:8px;cursor:pointer;' +
+        'border:2px solid #334;background:#13131f;color:#9fb0d8;';
+      const thumb = document.createElement('canvas');
+      thumb.width = 132; thumb.height = 74;
+      thumb.style.cssText = 'border-radius:4px;display:block;';
+      drawStageThumb(thumb, s);
+      const cap = document.createElement('span');
+      cap.textContent = s.name;
+      cap.style.cssText = 'font:700 11px ui-monospace,monospace;';
+      b.appendChild(thumb);
+      b.appendChild(cap);
       b.onclick = () => { if (selfSlot === 0) { stageIdx = i; syncStageBtns(); } };
       stageRow.appendChild(b);
       stageBtns.push(b);
@@ -259,6 +269,54 @@ export function startSuperBros(net: SuperBrosNet): void {
       b.style.display = selfSlot === 0 ? '' : (stageIdx === i ? '' : 'none');
       b.disabled = selfSlot !== 0;
     });
+  }
+
+  // Render a miniature preview of a stage into a thumbnail canvas. Mirrors the in-game
+  // backdrop/platform/hazard look so each map reads as visually distinct at select time.
+  function drawStageThumb(cv: HTMLCanvasElement, s: Stage) {
+    const c = cv.getContext('2d');
+    if (!c) return;
+    const sx = cv.width / SB_STAGE_W, sy = cv.height / SB_STAGE_H;
+    // backdrop gradient (matches drawBackdrop)
+    const g = c.createLinearGradient(0, 0, 0, cv.height);
+    if (s.id === 'plaza') { g.addColorStop(0, '#aee0ff'); g.addColorStop(1, '#7fb2e8'); }
+    else if (s.id === 'paddlepark') { g.addColorStop(0, '#0c1a26'); g.addColorStop(1, '#16313f'); }
+    else { g.addColorStop(0, '#3a0a0a'); g.addColorStop(1, '#0c0303'); }
+    c.fillStyle = g; c.fillRect(0, 0, cv.width, cv.height);
+    // flavor: plaza buildings, paddle-park net+stars, hellpit glow
+    if (s.id === 'plaza') {
+      c.fillStyle = 'rgba(255,255,255,0.55)';
+      for (let i = 0; i < 3; i++) { const x = 20 + i * 42; c.beginPath(); c.arc(x, 14, 5, 0, Math.PI * 2); c.arc(x + 6, 16, 4, 0, Math.PI * 2); c.fill(); }
+      c.fillStyle = 'rgba(40,60,90,0.35)';
+      for (let i = 0; i < 5; i++) c.fillRect(6 + i * 26, 28 - (i % 3) * 5, 14, 50);
+    } else if (s.id === 'paddlepark') {
+      c.fillStyle = 'rgba(255,255,255,0.10)';
+      for (let y = 4; y < cv.height; y += 8) c.fillRect(cv.width / 2 - 1, y, 2, 4);
+      c.fillStyle = 'rgba(150,200,255,0.6)';
+      for (let i = 0; i < 16; i++) c.fillRect((i * 47) % cv.width, (i * 31) % 34, 1, 1);
+    } else {
+      c.fillStyle = 'rgba(255,80,20,0.12)';
+      c.fillRect(0, cv.height - 22, cv.width, 22);
+    }
+    // hazards (lava) under platforms
+    for (const hz of s.hazards) {
+      const lg = c.createLinearGradient(0, hz.y * sy, 0, (hz.y + hz.h) * sy);
+      lg.addColorStop(0, '#ffcf3a'); lg.addColorStop(0.4, '#ff6a1a'); lg.addColorStop(1, '#9a1a00');
+      c.fillStyle = lg; c.fillRect(hz.x * sx, hz.y * sy, hz.w * sx, hz.h * sy);
+    }
+    // platforms
+    for (const p of s.platforms) {
+      const x = p.x * sx, y = p.y * sy, w = p.w * sx, h = Math.max(2, p.h * sy);
+      if (s.id === 'paddlepark') {
+        c.fillStyle = '#e8f0ff'; c.fillRect(x, y, w, h);
+        c.fillStyle = '#9fb6d8'; c.fillRect(x, y + h - 1, w, 1);
+      } else if (p.passThrough) {
+        c.fillStyle = s.id === 'hellpit' ? '#5a2a1a' : '#7a5a3a'; c.fillRect(x, y, w, h);
+      } else {
+        c.fillStyle = s.id === 'hellpit' ? '#6a3a2a' : '#4a8a3a'; c.fillRect(x, y, w, Math.max(1, h * 0.3));
+        c.fillStyle = s.id === 'hellpit' ? '#3a1a14' : '#5a3a22'; c.fillRect(x, y + h * 0.3, w, h * 0.7);
+      }
+    }
   }
 
   function renderRoster() {
@@ -942,6 +1000,9 @@ export function startSuperBros(net: SuperBrosNet): void {
     if (players.length < SB_MIN_PLAYERS || !players.every((p) => p.fighter)) return;
     // tell guests which stage via the first snapshot (carry it in start by relaying a 'stg' note)
     net.relay({ t: 'stg', idx: stageIdx });
+    // the server doesn't echo a relay back to its sender, so seed our own pendingStage
+    // here — otherwise the host always falls back to stage 0 (Plaza) and streams that to guests.
+    pendingStage = stageIdx;
     net.start();
   };
   leaveBtn.onclick = () => { net.leave(); lobbyState = null; mode = 'menu'; myPick = null; syncHud(); };
