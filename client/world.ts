@@ -63,9 +63,15 @@ interface Controller {
   reenter(): void; // re-send worldEnter after a socket reconnect (server forgot us on drop)
 }
 let controller: Controller | null = null;
+let _exitWorld: (() => void) | null = null;
 
 export function isWorldOpen(): boolean {
   return controller !== null;
+}
+
+/** Tear down the world overlay if it's open. No-op if already closed. */
+export function exitWorld(): void {
+  _exitWorld?.();
 }
 
 /** Push the latest avatar roster (from a `world` server message) into the live overlay. */
@@ -1917,9 +1923,11 @@ export function startWorld(net: WorldNet): void {
     actx = null;
     overlay.remove();
     controller = null;
+    _exitWorld = null;
     net.leave();
     net.onExit();
   }
+  _exitWorld = exit;
 
   controller = {
     feed(avatars) {

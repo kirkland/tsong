@@ -348,8 +348,8 @@ export class Lobby {
   // Cached House treasury balance, hydrated on boot and kept in sync after each adjust. Broadcast
   // to clients so the market/casino header can show it (and "payouts reduced" when low).
   private houseBalance = 0;
-  // Netizen avatar wander state: position + heading + when to pick a new heading.
-  private netizenPos = new Map<string, { x: number; y: number; hx: number; hy: number; until: number; spawnAt: number }>();
+  // Netizen avatar wander state: position, target (tx/ty), pause timer, spawn delay.
+  private netizenPos = new Map<string, { x: number; y: number; tx: number; ty: number; pauseUntil: number; spawnAt: number }>();
   // Staggered netizen reactions to news, drained in tickStocks.
   private newsReactions: { name: string; pid: string; text: string; at: number }[] = [];
   // Global throttle for netizen chat: don't post more than once per ~10s.
@@ -850,9 +850,7 @@ export class Lobby {
   // net-worth board automatically (getNetWorthLeaderboard includes everyone).
   private static readonly NETIZEN_START_COINS = 5000;
   // Netizens mill around the town-centre plaza (mirrors client/world.ts PLAZA at 1600,1100 r240).
-  // They spawn near it and are leashed to NETIZEN_LEASH units of its centre so they stay in view.
   private static readonly PLAZA = { x: 1600, y: 1100 };
-  private static readonly NETIZEN_LEASH = 800;
   private static readonly NETIZEN_NAMES = [
     'satoshi_jr', 'diamond_paws', 'moonboy420', 'hodl_hannah', 'paperhands_pete',
     'algo_andy', 'bagholder_bo', 'shorty_sue', 'whale_watcher', 'degen_dana',
@@ -1012,33 +1010,26 @@ export class Lobby {
    *  throttled to ~15 Hz. Also runs when no humans are in the world to keep netizens moving. */
   broadcastWorld() {
     const now = Date.now();
-    const dt = 1 / 60; // ~1 tick (matches the game loop); approximate is fine
-    // Wander spawned netizen avatars.
-    const speed = 60; // stroll speed, world units / second
+    const dt = 1 / 60;
+    const speed = 64;
     for (let i = 0; i < Lobby.NETIZEN_NAMES.length; i++) {
       const pid = `netizen:${i}`;
       const pos = this.netizenPos.get(pid);
-      if (!pos || Date.now() < pos.spawnAt) continue;
-      if (now >= pos.until) {
-        // Pick a new random heading.
-        const angle = Math.random() * Math.PI * 2;
-        pos.hx = Math.cos(angle);
-        pos.hy = Math.sin(angle);
-        pos.until = now + 2000 + Math.random() * 4000; // 2–6s
-      }
-      pos.x += pos.hx * speed * dt;
-      pos.y += pos.hy * speed * dt;
-      // Leash to the centre plaza: if a netizen strays past NETIZEN_LEASH, snap it back onto the
-      // leash circle and steer it back toward the plaza (with a little jitter) so they keep milling
-      // around the fountain in view rather than wandering off across the map.
-      const dx = pos.x - Lobby.PLAZA.x, dy = pos.y - Lobby.PLAZA.y;
-      const dist = Math.hypot(dx, dy) || 1;
-      if (dist > Lobby.NETIZEN_LEASH) {
-        pos.x = Lobby.PLAZA.x + (dx / dist) * Lobby.NETIZEN_LEASH;
-        pos.y = Lobby.PLAZA.y + (dy / dist) * Lobby.NETIZEN_LEASH;
-        const a = Math.atan2(-dy, -dx) + (Math.random() - 0.5);
-        pos.hx = Math.cos(a); pos.hy = Math.sin(a);
-        pos.until = now + 2000 + Math.random() * 4000;
+      if (!pos || now < pos.spawnAt) continue;
+      if (now >= pos.pauseUntil) {
+        // Walk toward the current target.
+        const dx = pos.tx - pos.x, dy = pos.ty - pos.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 8) {
+          // Reached target — pause, then pick a new random spot.
+          pos.pauseUntil = now + 800 + Math.random() * 2500;
+          const a = Math.random() * Math.PI * 2, r = 40 + Math.random() * 120;
+          pos.tx = Lobby.PLAZA.x + Math.cos(a) * r;
+          pos.ty = Lobby.PLAZA.y + Math.sin(a) * r;
+        } else {
+          pos.x += (dx / dist) * speed * dt;
+          pos.y += (dy / dist) * speed * dt;
+        }
       }
     }
     if (this.world.size === 0) return; // no humans to send to
@@ -2285,16 +2276,16 @@ export class Lobby {
     this.houseBalance = await getHouseBalance().catch(() => 0);
     await this.seedNetizens().catch((e) => console.error('netizen seed failed:', e));
     // Seed netizen world avatar positions around the centre plaza with a short staggered spawn
-    // (0–5 min after boot, so they show up promptly instead of trickling in over an hour).
     this.netizenPos.clear();
     for (let i = 0; i < Lobby.NETIZEN_NAMES.length; i++) {
       const pid = `netizen:${i}`;
+      const x = Lobby.PLAZA.x + (Math.random() * 2 - 1) * 160;
+      const y = Lobby.PLAZA.y + (Math.random() * 2 - 1) * 160;
       this.netizenPos.set(pid, {
-        x: Lobby.PLAZA.x + (Math.random() * 2 - 1) * 160,
-        y: Lobby.PLAZA.y + (Math.random() * 2 - 1) * 160,
-        hx: 0, hy: 0,
-        until: 0,
-        spawnAt: Date.now() + Math.random() * 300_000, // 0–5 min
+        x, y,
+        tx: x, ty: y,
+        pauseUntil: Date.now() + 1000 + Math.random() * 3000, // stagger initial stroll
+        spawnAt: 0, // no delay — appear right away
       });
     }
     // Market News Engine: hydrate the cached feed, schedule the next top-of-hour.
@@ -3865,11 +3856,19 @@ export class Lobby {
     });
   }
 
-  /** Build and send the Elo profile for the player at `rank` on the current leaderboard:
-   *  record, ELO, win%, last played, plus head-to-head against the #1 player (if not yourself). */
-  async sendEloProfile(ws: WebSocket, rank: number) {
-    if (!Number.isInteger(rank) || rank < 0 || rank >= this.eloPids.length) return;
-    const pid = this.eloPids[rank];
+  /** Build and send the Elo profile for the player at `rank` on the current leaderboard,
+   *  or for the requesting player when `self` is true. Sends record, ELO, win%, last played,
+   *  plus head-to-head against the #1 player (if not yourself). */
+  async sendEloProfile(ws: WebSocket, rank: number, self?: boolean) {
+    let pid: string;
+    if (self) {
+      const conn = this.conns.get(ws);
+      if (!conn || !conn.pid) return;
+      pid = conn.pid;
+    } else {
+      if (!Number.isInteger(rank) || rank < 0 || rank >= this.eloPids.length) return;
+      pid = this.eloPids[rank];
+    }
     const profile = await getPlayerProfile(pid);
     if (!profile) return;
     let rival: { name: string; wins: number; losses: number } | null = null;

@@ -2793,6 +2793,7 @@ ncChallengeBtn.addEventListener('click', () => {
   if (wager < 100 || wager > ncMax || !ncNetizenId) return;
   net.send({ type: 'netizenChallenge', netizenId: ncNetizenId, wager });
   closeNetizenChallenge();
+  worldMod?.exitWorld();
 });
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !ncModal.hidden) closeNetizenChallenge();
@@ -4704,6 +4705,8 @@ netWorthEl.addEventListener('click', (e) => {
   if (bountyBtn) { openBountyDialog(bountyBtn.dataset.bountyName ?? ''); return; }
   const tipBtn = (e.target as HTMLElement).closest('.tip-btn') as HTMLElement | null;
   if (tipBtn) { openTipDialog(tipBtn.dataset.tipName ?? ''); return; }
+  const selfRow = (e.target as HTMLElement).closest('.self-row') as HTMLElement | null;
+  if (selfRow) { net.send({ type: 'eloProfileReq', rank: 0, self: true }); return; }
   const li = (e.target as HTMLElement).closest('li[data-rank]') as HTMLElement | null;
   if (!li) return;
   const rank = Number(li.dataset.rank);

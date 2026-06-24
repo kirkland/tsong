@@ -511,7 +511,7 @@ export type ClientMsg =
   | { type: 'netizenInfoReq'; netizenId: string }
   | { type: 'netizenChallenge'; netizenId: string; wager: number }
   | { type: 'newsReq' }
-  | { type: 'eloProfileReq'; rank: number };
+  | { type: 'eloProfileReq'; rank: number; self?: true };
 
 // --- Server -> Client ---
 
