@@ -17,8 +17,14 @@ const ctx = createContext(cfg, conn);
 const server = new McpServer({ name: 'tsong-economy', version: '0.1.0' });
 
 async function verifyIdentity(): Promise<void> {
-  const cache = conn.getState();
   const expect = cfg.expectName;
+  let cache = conn.getState();
+
+  // Retry: sendBoardsTo (leaderboard + netWorth) is async and can arrive late
+  if (!cache.leaderboard || !cache.netWorth) {
+    await new Promise((r) => setTimeout(r, 6000));
+    cache = conn.getState();
+  }
   let name: string | null = null;
   let wins = 0;
   let losses = 0;

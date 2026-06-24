@@ -153,9 +153,9 @@ export class Connection {
         const r = this.readyResolve;
         this.readyResolve = null;
         r();
-        console.error('ready() resolved after 8s timeout (partial state)');
+        console.error('ready() resolved after 20s timeout (partial state)');
       }
-    }, 8000);
+    }, 20000);
   }
 
   private scheduleReconnect() {
