@@ -52,7 +52,7 @@ export interface WorldNet {
   pet(): string | null;          // our equipped pet id (null = none → nothing trails us)
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'stocks' | 'loans' | 'petshop'): void; // open a Casino/Bank/Pet-Shop feature
+  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'stocks' | 'loans' | 'petshop' | 'doom'): void; // open a Casino/Bank/Pet-Shop/DOOM feature
   claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
   onNetizenClick?(netizenId: string): void; // user tapped a netizen avatar in the world (→ challenge)
 }
@@ -199,7 +199,7 @@ interface NpcDef {
   body?: 'pants' | 'dress'; // silhouette, default 'pants'
   hat?: 'cap' | 'sun';  // optional headwear
   hatColor?: number;    // cap tint (sun hat is fixed straw)
-  kind?: 'minion' | 'kenny'; // special one-off sprite; default is the little-person
+  kind?: 'minion' | 'kenny' | 'demon' | 'soul'; // special one-off sprite; default is the little-person
   glasses?: boolean;    // overlay specs
   stripes?: boolean;    // red/white striped shirt instead of a flat tinted one (Waldo!)
   x: number; y: number; // home anchor (NPC roams around this)
@@ -348,6 +348,34 @@ const NPCS: NpcDef[] = [
         { label: 'Maybe later', reply: 'Your funeral. Enjoy the L from the dugout.' },
       ],
     },
+  },
+  {
+    // The doorman of the damned: a little imp pacing in front of the hellgate, north of the portal.
+    id: 'imp', name: 'Imp', shirt: 0xc0271f, hair: 0x8a160f, kind: 'demon', x: 1600, y: 1320, roam: 110,
+    lines: [
+      'Your soul looks delicious.',
+      'Rip and tear, friend.',
+      "It's warm down there. Come see.",
+      'I get paid in screams.',
+      'Step through… I dare you.',
+      'Hell has great Wi-Fi.',
+      "I'm not the worst thing through that gate.",
+    ],
+  },
+  {
+    // A damned soul clawing at the edge of the hellgate, opposite the imp — begging passers-by.
+    id: 'tortured-soul', name: 'Tortured Soul', shirt: 0xc8d0d8, hair: 0x9aa4b0, kind: 'soul',
+    x: 1460, y: 1480, roam: 90,
+    lines: [
+      'Please… help me.',
+      'It burns… it burns…',
+      'Get me out of here.',
+      "Why won't anyone listen?",
+      'I was just like you once.',
+      "Don't go through the gate… please.",
+      'So cold. So hot. Both. Always.',
+      'Has it been a thousand years yet?',
+    ],
   },
   {
     id: 'kevin', name: 'Kevin', shirt: 0xfdd835, hair: 0x111111, kind: 'minion', x: 1880, y: 1240, roam: 140,
@@ -620,6 +648,7 @@ export function startWorld(net: WorldNet): void {
       case 'casino': return '🎰 Enter the Casino';
       case 'bank': return '🏦 Enter the Bank';
       case 'petshop': return '🐾 Enter the Pet Shop';
+      case 'doomportal': return '🔥 Enter the gates of DOOM';
     }
   }
   function enterBuilding(kind: WorldBuildingKind) {
@@ -646,6 +675,12 @@ export function startWorld(net: WorldNet): void {
       // The Pet Shop just opens the Shop panel on the Pets tab — a single choice keeps it tidy.
       openDialog('🐾 Pet Shop', 'Looking for a little companion?', [
         { label: '🐾 Browse Pets', onPick: () => { exit(); net.openFeature('petshop'); } },
+      ]);
+      return;
+    }
+    if (kind === 'doomportal') {
+      openDialog('🔥 The Gates of DOOM', 'A hot wind howls up from below…', [
+        { label: '🔥 Descend', onPick: () => { exit(); net.openFeature('doom'); } },
       ]);
       return;
     }
@@ -1255,6 +1290,10 @@ export function startWorld(net: WorldNet): void {
   let petScene: Phaser.Scene | null = null; // set in create(); needed to spawn pet text objects
   const petSprites = new Map<string, PetSprite>();
   const swayers: Phaser.GameObjects.Image[] = []; // trees/pines that gently sway in update()
+  // DOOM-portal flame sprites: little orange/yellow tongues layered over the archway. Each carries
+  // its own phase/anchor so update() can jitter alpha/scale/offset and make them dance ("on fire").
+  interface Flame { img: Phaser.GameObjects.Image; bx: number; by: number; phase: number; amp: number; base: number }
+  const flames: Flame[] = [];
 
   const NAME_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
     fontFamily: 'system-ui, sans-serif', fontSize: '11px', color: '#ffffff',
@@ -1369,6 +1408,51 @@ export function startWorld(net: WorldNet): void {
     px(13, 3, 2, 1, BAT); px(13, 1, 2, 2, 0xd8b56a); px(12, 2, 1, 1, BAT);
     g.generateTexture('w-kenny', 16, 16);
 
+    // --- the demon: a squat red imp with two horns, white eyes, a barbed tail + tiny pitchfork
+    // (12×16). Same pixel idiom as the minion/Kenny one-offs; baked (not tinted). ---
+    {
+      const RD = 0xc0271f, RD_D = 0x8a160f, RD_L = 0xe04a36, HORN = 0xf0e0c0, EYE = 0xfff4d6;
+      const PUP = 0x140000, FORK = 0xb8bcc4;
+      g.clear();
+      // barbed tail curling out to the right (behind the body)
+      px(9, 11, 2, 1, RD_D); px(10, 9, 1, 2, RD_D); px(11, 8, 1, 1, RD_D); px(10, 7, 2, 1, RD);
+      // pitchfork in the left hand
+      px(1, 6, 1, 8, FORK); px(0, 4, 1, 3, FORK); px(2, 4, 1, 3, FORK); px(1, 4, 1, 1, FORK);
+      // horns
+      px(3, 0, 1, 2, HORN); px(8, 0, 1, 2, HORN); px(3, 2, 1, 1, RD_D); px(8, 2, 1, 1, RD_D);
+      // head
+      px(3, 2, 6, 4, RD); px(3, 2, 6, 1, RD_L); px(4, 5, 4, 1, RD_D);
+      // eyes (white, glowing) + pupils
+      px(4, 3, 2, 2, EYE); px(7, 3, 2, 2, EYE); px(5, 4, 1, 1, PUP); px(7, 4, 1, 1, PUP);
+      // wicked grin
+      px(4, 5, 4, 1, 0x3a0000);
+      // body + little arms + clawed feet
+      px(3, 6, 6, 6, RD); px(3, 6, 6, 1, RD_L); px(2, 7, 1, 3, RD); px(9, 7, 1, 3, RD);
+      px(3, 11, 6, 1, RD_D);
+      px(4, 12, 2, 3, RD_D); px(7, 12, 2, 3, RD_D); // legs
+      px(3, 15, 3, 1, 0x120000); px(7, 15, 3, 1, 0x120000); // clawed feet
+      g.generateTexture('w-demon', 12, 16);
+    }
+
+    // --- the tortured soul: a pale, hunched, gaunt wretch with sunken dark eye-sockets, reaching
+    // arms and a tattered hem (12×16). Drawn near-white so the renderer can fade it to a ghost. ---
+    {
+      const PALE = 0xc8d0d8, PALE_D = 0x9aa4b0, PALE_L = 0xe6ecf2, SHAD = 0x6a7280, EYE = 0x101418;
+      g.clear();
+      // hunched head
+      px(4, 1, 5, 4, PALE); px(4, 1, 5, 1, PALE_L); px(4, 4, 5, 1, PALE_D);
+      // sunken hollow eyes + gaping moan
+      px(5, 2, 1, 2, EYE); px(7, 2, 1, 2, EYE); px(6, 4, 1, 1, SHAD);
+      // thin body
+      px(4, 5, 5, 6, PALE); px(4, 5, 5, 1, PALE_L); px(4, 10, 5, 1, PALE_D);
+      // gaunt arms reaching out for help
+      px(2, 6, 2, 1, PALE); px(3, 7, 1, 2, PALE); px(9, 6, 2, 1, PALE); px(8, 7, 1, 2, PALE);
+      // tattered, ragged lower half
+      px(4, 11, 5, 3, SHAD); px(4, 11, 5, 1, PALE_D);
+      px(4, 14, 1, 1, SHAD); px(6, 14, 1, 2, SHAD); px(8, 14, 1, 1, SHAD);
+      g.generateTexture('w-tortured-soul', 12, 16);
+    }
+
     // --- soft round shadow (12×6 texels) ---
     g.clear();
     px(2, 1, 8, 4, 0x000000, 0.28); px(1, 2, 10, 2, 0x000000, 0.28);
@@ -1424,6 +1508,26 @@ export function startWorld(net: WorldNet): void {
     bakePac('w-pet-pacman-0', 0.02); // ~closed
     bakePac('w-pet-pacman-1', 0.38); // half-open
     bakePac('w-pet-pacman-2', 0.72); // wide-open
+
+    // --- DOOM flame tongues: two teardrop shapes (orange outer, yellow core) baked at 8×12 texels.
+    // The renderer scatters a handful of these around the portal and update() jitters them so they
+    // flicker like fire. Two variants give the flame field a bit of organic variety. ---
+    const bakeFlame = (key: string, lean: number) => {
+      g.clear();
+      const OUT = 0xff5a1e, MID = 0xff9d2a, COR = 0xffe85a;
+      // outer body: a tapering tongue, widest at the base, leaning by `lean`
+      px(3 + lean, 0, 2, 2, OUT);                       // tip
+      px(2 + lean, 2, 4, 2, OUT);
+      px(1, 4, 6, 3, OUT);
+      px(1, 7, 6, 4, OUT); px(2, 11, 4, 1, OUT);        // base
+      // mid glow
+      px(3, 3, 2, 3, MID); px(2, 6, 4, 4, MID);
+      // bright core
+      px(3, 6, 2, 3, COR); px(3, 9, 2, 1, COR);
+      g.generateTexture(key, 8, 12);
+    };
+    bakeFlame('w-flame-0', 0);
+    bakeFlame('w-flame-1', 1);
 
     g.destroy();
   }
@@ -1563,6 +1667,64 @@ export function startWorld(net: WorldNet): void {
     }
   }
 
+  // The hellgate: a dark red-black stone archway with a glowing portal mouth, then live flames
+  // layered over/around it (pushed into `flames`, danced each frame in update()). Mirrors the
+  // buildCasino/buildArena idiom — bake the static facade as a texture, add animated sprites on top.
+  function buildDoomPortal(sc: Phaser.Scene, b: WorldBuilding) {
+    const W = Math.round(b.w / TEXEL), H = Math.round(b.h / TEXEL);
+    const depth = b.y + b.h;
+    const g = sc.make.graphics({ x: 0, y: 0 }, false);
+    const P = (x: number, y: number, w: number, h: number, c: number, a = 1) => px9(g, x, y, w, h, c, a);
+    // dark stone block + bevelled edges
+    P(0, 0, W, H, 0x180404);
+    P(2, 2, W - 4, H - 4, 0x2a0808);
+    P(4, 4, W - 8, 3, 0x431010); P(4, 4, 3, H - 8, 0x431010);   // top/left highlight
+    P(W - 7, 4, 3, H - 8, 0x120303); P(4, H - 7, W - 8, 3, 0x120303); // bottom/right shadow
+    // carved stone courses (rough brick lines)
+    for (let yy = 10; yy < H - 8; yy += 12) P(5, yy, W - 10, 1, 0x140404);
+    // the arch: a tall opening, rounded at the top, with a glowing red→yellow portal mouth
+    const ax = Math.round(W * 0.22), aw = W - ax * 2;
+    const ay = Math.round(H * 0.22), ah = H - ay - Math.round(H * 0.1);
+    // stone arch frame (lighter ring around the mouth)
+    P(ax - 3, ay - 3, aw + 6, ah + 6, 0x501414);
+    // portal mouth — concentric glow from deep red rim to molten yellow core
+    P(ax, ay + 2, aw, ah, 0x6e0d0d);
+    P(ax + 2, ay + 4, aw - 4, ah - 4, 0xb01818);
+    P(ax + 4, ay + 7, aw - 8, ah - 9, 0xff3a14);
+    P(ax + 6, ay + 11, aw - 12, ah - 15, 0xff7a1e);
+    P(ax + 8, ay + 16, aw - 16, ah - 22, 0xffd23f);
+    // round the top of the arch by trimming the upper corners back to stone
+    P(ax, ay + 2, 3, 4, 0x2a0808); P(ax + aw - 3, ay + 2, 3, 4, 0x2a0808);
+    // a couple of skull-ish notches on the keystone for menace
+    P(Math.round(W / 2) - 4, 5, 3, 3, 0x0c0202); P(Math.round(W / 2) + 1, 5, 3, 3, 0x0c0202);
+    g.generateTexture('w-doomportal', W, H);
+    g.destroy();
+    sc.add.image(b.x, b.y, 'w-doomportal').setOrigin(0, 0).setScale(TEXEL).setDepth(depth);
+
+    // soft red hellglow behind the mouth
+    sc.add.circle(b.x + b.w / 2, b.y + b.h * 0.5, b.w * 0.5, 0xff2a0a, 0.16).setDepth(depth + 1);
+
+    // Flames: a row dancing along the base of the gate plus a couple licking up the jambs. Each
+    // gets a phase so they don't flicker in lockstep. update() jitters alpha/scale/offset.
+    const addFlame = (fx: number, fy: number, base: number, amp: number) => {
+      const key = Math.random() < 0.5 ? 'w-flame-0' : 'w-flame-1';
+      const img = sc.add.image(fx, fy, key).setScale(TEXEL).setOrigin(0.5, 1).setDepth(depth + 2)
+        .setBlendMode(Phaser.BlendModes.ADD);
+      flames.push({ img, bx: fx, by: fy, phase: Math.random() * Math.PI * 2, amp, base });
+    };
+    const baseY = b.y + b.h - 6;
+    const n = Math.max(4, Math.round(b.w / 26));
+    for (let i = 0; i < n; i++) {
+      const fx = b.x + 12 + (i / (n - 1)) * (b.w - 24);
+      addFlame(fx, baseY, 0.9 + Math.random() * 0.5, 1);
+    }
+    // jamb flames climbing each side
+    for (const side of [0.16, 0.84]) {
+      addFlame(b.x + b.w * side, b.y + b.h * 0.62, 1.0, 1.2);
+      addFlame(b.x + b.w * side, b.y + b.h * 0.40, 0.8, 1.3);
+    }
+  }
+
   // --- the Phaser scene ---
   let game: Phaser.Game | null = null;
   let mainCam: Phaser.Cameras.Scene2D.Camera | null = null; // for screen→world hit-testing on tap
@@ -1647,6 +1809,7 @@ export function startWorld(net: WorldNet): void {
           .setOrigin(0, 0).setDepth(b.y + b.h - 1);
         if (b.kind === 'casino') buildCasino(sc, b);
         else if (b.kind === 'arena') buildArena(sc, b);
+        else if (b.kind === 'doomportal') buildDoomPortal(sc, b);
         else buildBuilding(sc, b);
         const sign = sc.add.text(b.x + b.w / 2, b.y - 6, b.name, {
           fontFamily: 'system-ui, sans-serif', fontSize: '15px', fontStyle: 'bold',
@@ -1696,6 +1859,17 @@ export function startWorld(net: WorldNet): void {
 
       // gentle breeze: each tree sways on its own phase (cheap, ~150 rotations/frame)
       for (const t of swayers) t.rotation = Math.sin(time / 700 + t.x * 0.012) * 0.035;
+
+      // the gates of DOOM are on fire: flicker each flame's height, brightness and a tiny horizontal
+      // waver, on its own phase, so the whole gate dances.
+      for (const f of flames) {
+        const t1 = time / 90 + f.phase;
+        const flick = Math.sin(t1) * 0.5 + Math.sin(t1 * 2.3 + 1) * 0.5; // ~[-1,1], chunkier than a pure sine
+        f.img.setScale(TEXEL * (f.base + flick * 0.18 * f.amp), TEXEL * (f.base + 0.3 + flick * 0.45 * f.amp));
+        f.img.setAlpha(0.7 + flick * 0.3);
+        f.img.x = f.bx + Math.sin(t1 * 1.7) * 2.2 * f.amp;
+        f.img.y = f.by - Math.max(0, flick) * 1.5;
+      }
 
       if (!dialogOpen && !talkOpen) {
         const car = driving ? myCar() : null;
@@ -1844,6 +2018,10 @@ export function startWorld(net: WorldNet): void {
       parts = [sc.add.image(0, 0, 'w-minion').setScale(TEXEL * 1.15).setOrigin(0.5, 0.95)];
     } else if (def.kind === 'kenny') {
       parts = [sc.add.image(0, 0, 'w-kenny').setScale(TEXEL * 1.2).setOrigin(0.5, 0.95)];
+    } else if (def.kind === 'demon') {
+      parts = [sc.add.image(0, 0, 'w-demon').setScale(TEXEL * 1.05).setOrigin(0.5, 0.95)];
+    } else if (def.kind === 'soul') {
+      parts = [sc.add.image(0, 0, 'w-tortured-soul').setScale(TEXEL * 1.05).setOrigin(0.5, 0.95).setAlpha(0.82)];
     } else {
       const layer = (key: string, tint?: number) => {
         const im = sc.add.image(0, 0, key).setScale(TEXEL).setOrigin(0.5, 0.95);
