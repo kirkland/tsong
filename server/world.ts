@@ -16,6 +16,7 @@ interface WorldPos {
   y: number;
   a: number;
   car: string | null;
+  pet: string | null;
 }
 
 export class World {
@@ -41,16 +42,17 @@ export class World {
 
   /** Drop a fresh avatar in at the central plaza spawn (no-op if already in the world). */
   enter(ws: WebSocket): void {
-    if (!this.pos.has(ws)) this.pos.set(ws, { x: WORLD.spawnX, y: WORLD.spawnY, a: 0, car: null });
+    if (!this.pos.has(ws)) this.pos.set(ws, { x: WORLD.spawnX, y: WORLD.spawnY, a: 0, car: null, pet: null });
   }
 
   leave(ws: WebSocket): void {
     this.pos.delete(ws);
   }
 
-  /** Store a self-reported position (clamped to the map) plus heading + driven car. Ignores
-   *  non-finite input and any client that isn't in the world (e.g. a stray late message). */
-  move(ws: WebSocket, x: number, y: number, a?: number, car?: string | null): void {
+  /** Store a self-reported position (clamped to the map) plus heading + driven car + trailing
+   *  pet. Ignores non-finite input and any client that isn't in the world (e.g. a stray late
+   *  message). */
+  move(ws: WebSocket, x: number, y: number, a?: number, car?: string | null, pet?: string | null): void {
     const p = this.pos.get(ws);
     if (!p) return;
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
@@ -58,5 +60,6 @@ export class World {
     p.y = Math.max(0, Math.min(WORLD.h, y));
     if (typeof a === 'number' && Number.isFinite(a)) p.a = a;
     p.car = typeof car === 'string' ? car : null;
+    p.pet = typeof pet === 'string' ? pet : null;
   }
 }

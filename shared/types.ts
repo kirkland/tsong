@@ -162,7 +162,7 @@ export const COIN_SCALE = 100;
 export interface CosmeticItem {
   id: string;
   name: string;
-  slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car';
+  slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'pet';
   price: number;
   locked?: 'campaign'; // not buyable — unlocked by an in-game achievement (e.g. clearing the campaign)
   audio?: string; // for 'song' items: path to the mp3 that plays during your matches
@@ -248,6 +248,10 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'car-coupe', name: '🚗 Coupe', slot: 'car', price: 8000 },
   { id: 'car-drifter', name: '🏎️ Drift King', slot: 'car', price: 20000 },
   { id: 'car-muscle', name: '🚙 Muscle', slot: 'car', price: 35000 },
+  // Pets (slot 'pet') — follow you around the World map; look/animation keyed by PETS below.
+  { id: 'pet-rock', name: '🪨 Pet Rock', slot: 'pet', price: 50000 },
+  { id: 'pet-pikachu', name: '⚡ Pikachu', slot: 'pet', price: 100000 },
+  { id: 'pet-pacman', name: '🟡 Pac-Man', slot: 'pet', price: 150000 },
   // New common loot-box refresh items
   { id: 'beret', name: 'Beret', slot: 'hat', price: 1000 },
   { id: 'catears', name: 'Cat Ears', slot: 'hat', price: 2000 }, // animated
@@ -371,9 +375,25 @@ export function carById(id: string | null | undefined): CarSpec | null {
   return CARS.find((c) => c.id === id) ?? null;
 }
 
+// --- Pets -------------------------------------------------------------------------------
+// A pet is a cosmetic that TRAILS BEHIND your avatar in the World — a little sprite that
+// follows you around (unlike a car, which replaces/IS the avatar while driving). A pet id
+// matches a COSMETICS entry with slot 'pet'. `kind` selects the custom drawn sprite in the
+// World renderer; `emoji` is just the small shop-tile preview glyph.
+export type PetKind = 'rock' | 'pikachu' | 'pacman';
+export const PETS: readonly { id: string; emoji: string; kind: PetKind }[] = [
+  { id: 'pet-rock', emoji: '🪨', kind: 'rock' },       // a googly-eyed rock
+  { id: 'pet-pikachu', emoji: '⚡', kind: 'pikachu' },  // Pikachu
+  { id: 'pet-pacman', emoji: '🟡', kind: 'pacman' },    // Pac-Man, chomping as it follows
+];
+export function petById(id: string | null | undefined) {
+  if (!id) return null;
+  return PETS.find((p) => p.id === id) ?? null;
+}
+
 // What entering a building does (the client maps each `kind` to an action). Add a kind here
 // and a handler on the client to introduce a new venue.
-export type WorldBuildingKind = 'arena' | 'casino' | 'bank';
+export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop';
 // A venue's footprint on the map. The rectangle (top-left origin, world units) is solid —
 // avatars collide with it — and an apron just outside the door is the entry trigger zone.
 export interface WorldBuilding {
@@ -391,6 +411,7 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
   { id: 'arena',  kind: 'arena',  name: 'TSONG ARENA', emoji: '🏓', x: 1360, y: 300,  w: 480, h: 340, color: '#3a4ea8' },
   { id: 'casino', kind: 'casino', name: 'CASINO',      emoji: '🎰', x: 440,  y: 1480, w: 440, h: 320, color: '#a8323a' },
   { id: 'bank',   kind: 'bank',   name: 'BANK',        emoji: '🏦', x: 2320, y: 1480, w: 440, h: 320, color: '#2f7d4f' },
+  { id: 'petshop', kind: 'petshop', name: 'PET SHOP',  emoji: '🐾', x: 2320, y: 300,  w: 420, h: 300, color: '#7a4fa8' },
 ] as const;
 
 // One avatar as broadcast to everyone in the world. `id` matches YouMsg.id, so a client can
@@ -404,6 +425,7 @@ export interface WorldAvatar {
   y: number;
   a?: number;          // heading in radians (only meaningful while driving)
   car?: string | null; // car id being driven, or null/undefined when on foot
+  pet?: string | null; // pet id trailing behind this avatar, or null/undefined when none
   bot?: boolean;       // true for netizen avatars
 }
 export interface WorldMsg {
@@ -460,7 +482,7 @@ export type ClientMsg =
   | { type: 'tdKill'; id: number } // claim a kill: you finished typing this monster's word
   | { type: 'campaignScore'; score: number; stage: number; won: boolean } // record a campaign run (arcade score, furthest stage, whether Davis fell)
   | { type: 'shopBuy'; item: string } // buy a cosmetic from the shop
-  | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car'; item: string | null } // equip (item) or unequip (null) a cosmetic
+  | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'pet'; item: string | null } // equip (item) or unequip (null) a cosmetic
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
   | { type: 'dailySpin' } // claim the once-per-24h reward spin
   | { type: 'stockInvest'; coin: string; amount: number; side?: StockSide } // open a long or short position
@@ -484,7 +506,7 @@ export type ClientMsg =
   | { type: 'loanBookReq' } // request the public open-loan book (for the clickable stability-bar modal)
   | { type: 'worldEnter' } // step into the free-roam world map (start sending/receiving avatar positions)
   | { type: 'worldLeave' } // leave the world map
-  | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null } // client-authoritative avatar position (world units), heading + car when driving
+  | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null; pet?: string | null } // client-authoritative avatar position (world units), heading + car when driving, pet trailing
   | { type: 'migrate'; oldPid: string } // one-time: merge a UUID guest account into the signed-in Google account
   | { type: 'netizenInfoReq'; netizenId: string }
   | { type: 'netizenChallenge'; netizenId: string; wager: number }
@@ -1062,6 +1084,7 @@ export interface WalletMsg {
   title: string | null; // equipped name title (flair shown by your name)
   song: string | null; // equipped theme song (plays during your matches)
   car: string | null; // equipped car (driven in the World map)
+  pet: string | null; // equipped pet (trails behind you in the World map)
   // Owned scarce exclusives (loot-box mints / marketplace buys): item id + mint serial +
   // instance id (the marketplace lists a specific instance). Kept OUT of the `owned` CSV —
   // exclusives are tracked per-instance in their own table.

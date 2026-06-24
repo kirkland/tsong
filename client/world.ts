@@ -34,6 +34,8 @@ import {
   WorldBuildingKind,
   CarSpec,
   carById,
+  petById,
+  type PetKind,
   NETIZEN_DIALOGUE,
   STOCKS,
 } from '../shared/types';
@@ -42,14 +44,15 @@ import {
 export interface WorldNet {
   enter(): void;                 // tell the server we're now in the world
   leave(): void;                 // tell the server we've left
-  move(x: number, y: number, a?: number, car?: string | null): void; // stream our state
+  move(x: number, y: number, a?: number, car?: string | null, pet?: string | null): void; // stream our state
   name(): string;                // our nickname (for our own label)
   color(): string;               // our avatar color
   selfId(): string;              // our connection id (to skip our own avatar in the broadcast)
   car(): string | null;          // our equipped car id (null = none → can't drive)
+  pet(): string | null;          // our equipped pet id (null = none → nothing trails us)
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'stocks' | 'loans'): void; // open a Casino/Bank feature
+  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'stocks' | 'loans' | 'petshop'): void; // open a Casino/Bank/Pet-Shop feature
   claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
   onNetizenClick?(netizenId: string): void; // user tapped a netizen avatar in the world (→ challenge)
 }
@@ -610,6 +613,7 @@ export function startWorld(net: WorldNet): void {
       case 'arena': return '🏓 Enter the Arena (play tsong)';
       case 'casino': return '🎰 Enter the Casino';
       case 'bank': return '🏦 Enter the Bank';
+      case 'petshop': return '🐾 Enter the Pet Shop';
     }
   }
   function enterBuilding(kind: WorldBuildingKind) {
@@ -629,6 +633,13 @@ export function startWorld(net: WorldNet): void {
       openDialog('🏦 Bank', 'How can we help you today?', [
         { label: '📈 Crypto Market', onPick: () => { exit(); net.openFeature('stocks'); } },
         { label: '💸 Get a Loan', onPick: () => { exit(); net.openFeature('loans'); } },
+      ]);
+      return;
+    }
+    if (kind === 'petshop') {
+      // The Pet Shop just opens the Shop panel on the Pets tab — a single choice keeps it tidy.
+      openDialog('🐾 Pet Shop', 'Looking for a little companion?', [
+        { label: '🐾 Browse Pets', onPick: () => { exit(); net.openFeature('petshop'); } },
       ]);
       return;
     }
@@ -1131,7 +1142,7 @@ export function startWorld(net: WorldNet): void {
     if (now - lastSentAt < 66) return; // ~15 Hz cap
     if (Math.abs(selfX - lastSentX) < 0.5 && Math.abs(selfY - lastSentY) < 0.5) return;
     lastSentX = selfX; lastSentY = selfY; lastSentAt = now;
-    net.move(selfX, selfY, driving ? facing : undefined, driving ? net.car() : null);
+    net.move(selfX, selfY, driving ? facing : undefined, driving ? net.car() : null, net.pet());
   }
 
   // ============================================================================================
@@ -1221,6 +1232,22 @@ export function startWorld(net: WorldNet): void {
   }
   const remote = new Map<string, Av>();
   let self: Av | null = null;
+
+  // Trailing pets: one little emoji sprite per avatar that has a pet equipped. The sprite chases a
+  // point ~36 world units BEHIND its owner each frame, so it reads as a companion padding along.
+  // Keyed by avatar id; entries are torn down when their owner leaves or unequips. With the PETS
+  // list empty this stays empty too (petById returns null) — it lights up once pets are authored.
+  interface PetSprite {
+    sprite: Phaser.GameObjects.Image;
+    id: string;            // which pet (so we can swap the sprite if the owner re-equips)
+    kind: PetKind;         // drives the look + whether it animates (pacman)
+    x: number; y: number;  // smoothed world position of the pet
+    lastX: number; lastY: number; // owner's last position, for a fallback "behind" direction
+    chomp: number;         // pac-man chomp animation phase (seconds, looping)
+  }
+  const PET_TRAIL = 36; // world units the pet hangs back behind its owner
+  let petScene: Phaser.Scene | null = null; // set in create(); needed to spawn pet text objects
+  const petSprites = new Map<string, PetSprite>();
   const swayers: Phaser.GameObjects.Image[] = []; // trees/pines that gently sway in update()
 
   const NAME_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
@@ -1356,6 +1383,41 @@ export function startWorld(net: WorldNet): void {
     px(8, 4, 11, 6, 0xffffff);   // cabin/roof patch (tinted with the accent color)
     px(20, 6, 4, 2, 0xffffff);   // a little nose stripe
     g.generateTexture('w-car-roof', 26, 14);
+
+    // --- Pets ---------------------------------------------------------------------------
+    // Pet Rock: a grey pebble with two googly eyes (12×10 texels).
+    g.clear();
+    px(2, 4, 8, 5, 0x8a8d92); px(3, 3, 6, 1, 0x9aa0a6); px(1, 5, 10, 3, 0x8a8d92); // body + highlight
+    px(2, 8, 8, 1, 0x6f7378);                                                       // shaded base
+    px(3, 2, 3, 3, 0xffffff); px(4, 3, 1, 1, 0x111111);                             // left googly eye
+    px(6, 2, 3, 3, 0xffffff); px(7, 3, 1, 1, 0x111111);                             // right googly eye
+    g.generateTexture('w-pet-rock', 12, 10);
+
+    // Pikachu: yellow body, black-tipped ears, red cheeks (14×16 texels).
+    {
+      const PK = 0xf6d020, PK_D = 0xe0b800, BLK = 0x1a1a1a, RED = 0xe23b3b, BRN = 0x9c6b1f;
+      g.clear();
+      px(3, 0, 2, 4, PK); px(9, 0, 2, 4, PK); px(3, 0, 2, 1, BLK); px(9, 0, 2, 1, BLK); // ears + black tips
+      px(3, 4, 8, 9, PK); px(2, 6, 10, 6, PK); px(3, 13, 8, 1, PK_D);                   // head/body
+      px(3, 6, 8, 1, BRN); px(3, 8, 8, 1, BRN);                                         // back stripes
+      px(2, 9, 2, 2, RED); px(10, 9, 2, 2, RED);                                        // cheeks
+      px(5, 7, 1, 2, BLK); px(8, 7, 1, 2, BLK); px(6, 9, 2, 1, BLK);                    // eyes + nose/mouth
+      px(4, 15, 2, 1, PK_D); px(8, 15, 2, 1, PK_D);                                     // feet
+      g.generateTexture('w-pet-pikachu', 14, 16);
+    }
+
+    // Pac-Man: three chomp frames (mouth opens toward +x; the sprite is rotated to face travel).
+    const bakePac = (key: string, mouth: number) => {
+      g.clear();
+      g.fillStyle(0xffe23a, 1);
+      g.slice(6, 6, 6, mouth, Math.PI * 2 - mouth, false);
+      g.fillPath();
+      px(5, 2, 1, 1, 0x1a1a1a); // eye
+      g.generateTexture(key, 12, 12);
+    };
+    bakePac('w-pet-pacman-0', 0.02); // ~closed
+    bakePac('w-pet-pacman-1', 0.38); // half-open
+    bakePac('w-pet-pacman-2', 0.72); // wide-open
 
     g.destroy();
   }
@@ -1591,6 +1653,7 @@ export function startWorld(net: WorldNet): void {
       for (const def of NPCS) npcs.push(makeNpc(sc, def));
 
       // --- our own avatar ---
+      petScene = sc; // remember the scene so pet sprites can be spawned on demand in update()
       self = makeAvatar(sc, net.name() || 'you', net.color());
       sc.cameras.main.startFollow(self.c, true, 0.18, 0.18);
       sc.cameras.main.roundPixels = true;
@@ -1664,8 +1727,70 @@ export function startWorld(net: WorldNet): void {
       }
       // drop avatars that left
       for (const [id, av] of remote) if (!seen.has(id)) { av.c.destroy(); remote.delete(id); }
+
+      updatePets(dt);
     },
   };
+
+  // Trail a pet behind every avatar that has one equipped. The target is a point PET_TRAIL world
+  // units behind the owner along its heading (`a`); when there's no heading (on foot) we fall back
+  // to the owner's recent move direction, and finally to "below" so a standing-still pet still sits
+  // in a sensible spot. Each pet lerps toward its target so it lags and swings like a real tagalong.
+  function updatePets(dt: number) {
+    const sc = petScene;
+    if (!sc) return;
+    const selfId = net.selfId();
+    const live = new Set<string>(); // pet owners present this frame
+    for (const a of others) {
+      // Our own pet id comes from the wallet (net.pet()), not the broadcast echo — same as cars.
+      const isSelf = a.id === selfId;
+      const petId = isSelf ? net.pet() : (a.pet ?? null);
+      const pet = petById(petId);
+      if (!pet || !petId) continue; // no pet (or an unknown id — e.g. before PETS is populated)
+      // Where the owner is right now, and which way it's heading.
+      const ox = isSelf ? selfX : (remote.get(a.id)?.rx ?? a.x);
+      const oy = isSelf ? selfY : (remote.get(a.id)?.ry ?? a.y);
+      const heading = isSelf ? facing : a.a;
+
+      live.add(a.id);
+      let ps = petSprites.get(a.id);
+      if (!ps || ps.id !== petId) {
+        // First sight of this owner's pet (or it changed) — (re)create the custom sprite.
+        if (ps) ps.sprite.destroy();
+        const tex = pet.kind === 'rock' ? 'w-pet-rock' : pet.kind === 'pikachu' ? 'w-pet-pikachu' : 'w-pet-pacman-0';
+        const sprite = sc.add.image(ox, oy, tex).setScale(TEXEL).setOrigin(0.5, 0.6);
+        ps = { sprite, id: petId, kind: pet.kind, x: ox, y: oy, lastX: ox, lastY: oy, chomp: 0 };
+        petSprites.set(a.id, ps);
+      }
+
+      // Pick the "behind" direction: heading if driving, else recent motion, else straight down.
+      let dx = ps.lastX - ox, dy = ps.lastY - oy; // owner's last-frame motion (points "backward")
+      if (typeof heading === 'number' && Number.isFinite(heading)) { dx = -Math.cos(heading); dy = -Math.sin(heading); }
+      const mag = Math.hypot(dx, dy);
+      if (mag > 0.001) { dx /= mag; dy /= mag; } else { dx = 0; dy = 1; } // default: just below the owner
+      const tx = ox + dx * PET_TRAIL, ty = oy + dy * PET_TRAIL;
+
+      // The pet's OWN travel this frame (for facing + flip), before we overwrite ps.x/ps.y.
+      const pvx = tx - ps.x, pvy = ty - ps.y;
+      ps.x += pvx * Math.min(1, dt * 8); // lazy chase so the pet lags + swings behind
+      ps.y += pvy * Math.min(1, dt * 8);
+      ps.lastX = ox; ps.lastY = oy;
+      ps.sprite.setPosition(ps.x, ps.y).setDepth(ps.y); // depth-sort with everything else by y
+
+      if (ps.kind === 'pacman') {
+        // Chomp: cycle closed→half→open→half on a ~5 Hz loop, and rotate to face travel direction.
+        ps.chomp += dt;
+        const frame = [0, 1, 2, 1][Math.floor(ps.chomp * 8) % 4];
+        ps.sprite.setTexture(`w-pet-pacman-${frame}`);
+        if (Math.hypot(pvx, pvy) > 0.5) ps.sprite.setRotation(Math.atan2(pvy, pvx));
+      } else if (ps.kind === 'pikachu') {
+        // Face the way it's walking (flip horizontally) so it doesn't moonwalk.
+        if (Math.abs(pvx) > 0.5) ps.sprite.setFlipX(pvx < 0);
+      }
+    }
+    // Tear down pets whose owner left the world or unequipped.
+    for (const [id, ps] of petSprites) if (!live.has(id)) { ps.sprite.destroy(); petSprites.delete(id); }
+  }
 
   function angDelta(from: number, to: number): number {
     let d = (to - from) % (Math.PI * 2);

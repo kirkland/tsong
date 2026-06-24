@@ -34,6 +34,7 @@ import {
   TEAM_MAX,
   COSMETICS,
   carById,
+  petById,
   SPIN_SEGMENTS,
   STOCKS,
   StockSide,
@@ -678,7 +679,7 @@ const net = connect(
     } else if (msg.type === 'world') {
       worldMod?.feedWorld(msg.avatars);
     } else if (msg.type === 'wallet') {
-      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, car: msg.car, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
+      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, car: msg.car, pet: msg.pet, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
       rouletteHandle.setCoins(msg.coins);
       bjHandle.setCoins(msg.coins);
       crapsHandle.setCoins(msg.coins);
@@ -1706,11 +1707,12 @@ worldBtn.addEventListener('click', async () => {
     worldMod.startWorld({
       enter: () => net.send({ type: 'worldEnter' }),
       leave: () => net.send({ type: 'worldLeave' }),
-      move: (x, y, a, car) => net.send({ type: 'worldMove', x, y, a, car }),
+      move: (x, y, a, car, pet) => net.send({ type: 'worldMove', x, y, a, car, pet }),
       name: () => myName,
       color: () => myColor,
       selfId: () => myId,
       car: () => wallet.car, // the car you've equipped in the shop (null = on foot only)
+      pet: () => wallet.pet, // the pet you've equipped in the shop — trails behind you (null = none)
       onExit: () => worldBtn.setAttribute('aria-pressed', 'false'),
       // Walk into the Arena → hop into the play queue (you'll be seated when a spot opens).
       enterArena: () => net.send({ type: 'queueJoin' }),
@@ -1722,6 +1724,15 @@ worldBtn.addEventListener('click', async () => {
       // Tapping a netizen avatar in the world requests its info for the challenge dialog.
       onNetizenClick: (netizenId) => { net.send({ type: 'netizenInfoReq', netizenId }); },
       openFeature: (feature) => {
+        // The Pet Shop is a cosmetic venue, not a gambling/bank feature: open the Shop panel and
+        // jump straight to the Pets tab (deferred like the others to dodge the outside-click race).
+        if (feature === 'petshop') {
+          setTimeout(() => {
+            if (shopPanel.hidden) shopBtn.click(); // open the shop if it isn't already
+            selectShopTab('pet', tabPets);
+          }, 0);
+          return;
+        }
         const id = feature === 'roulette' ? 'rouletteBtn'
                  : feature === 'blackjack' ? 'bjBtn'
                  : feature === 'craps'     ? 'crapsBtn'
@@ -1800,10 +1811,10 @@ document.addEventListener('keydown', (e) => {
 });
 
 // --- Coins, cosmetics shop & betting ---
-let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; song: string | null; car: string | null; exclusives: { id: string; serial: number; instanceId: number }[]; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
-  { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, car: null, exclusives: [], bets: [], nextSpinAt: 0, bonusSpins: 0 };
+let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; song: string | null; car: string | null; pet: string | null; exclusives: { id: string; serial: number; instanceId: number }[]; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
+  { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, car: null, pet: null, exclusives: [], bets: [], nextSpinAt: 0, bonusSpins: 0 };
 let betAmount = 100; // default wager (economy is scaled ×100); min is still 1
-let shopTab: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' = 'hat';
+let shopTab: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'pet' = 'hat';
 const shopBtn = document.getElementById('shopBtn') as HTMLButtonElement;
 const shopPanel = document.getElementById('shopPanel') as HTMLDivElement;
 const coinCount = document.getElementById('coinCount') as HTMLSpanElement;
@@ -1815,8 +1826,9 @@ const tabTrails = document.getElementById('tabTrails') as HTMLButtonElement;
 const tabTitles = document.getElementById('tabTitles') as HTMLButtonElement;
 const tabSongs = document.getElementById('tabSongs') as HTMLButtonElement;
 const tabCars = document.getElementById('tabCars') as HTMLButtonElement;
-const shopTabs = [tabHats, tabSkins, tabTrails, tabTitles, tabSongs, tabCars];
-function selectShopTab(tab: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car', el: HTMLButtonElement) {
+const tabPets = document.getElementById('tabPets') as HTMLButtonElement;
+const shopTabs = [tabHats, tabSkins, tabTrails, tabTitles, tabSongs, tabCars, tabPets];
+function selectShopTab(tab: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'pet', el: HTMLButtonElement) {
   shopTab = tab;
   for (const t of shopTabs) t.classList.toggle('active', t === el);
   renderShop();
@@ -1827,6 +1839,7 @@ tabTrails.addEventListener('click', () => selectShopTab('trail', tabTrails));
 tabTitles.addEventListener('click', () => selectShopTab('title', tabTitles));
 tabSongs.addEventListener('click', () => selectShopTab('song', tabSongs));
 tabCars.addEventListener('click', () => selectShopTab('car', tabCars));
+tabPets.addEventListener('click', () => selectShopTab('pet', tabPets));
 const spinBtn = document.getElementById('spinBtn') as HTMLButtonElement;
 let spinning = false; // a spin animation is currently playing
 spinBtn.addEventListener('click', () => {
@@ -1869,7 +1882,7 @@ function renderShop() {
   for (const item of COSMETICS) {
     if (item.slot !== shopTab) continue; // show only the active tab's items
     const owned = wallet.owned.includes(item.id);
-    const equipped = (item.slot === 'hat' ? wallet.hat : item.slot === 'skin' ? wallet.skin : item.slot === 'trail' ? wallet.trail : item.slot === 'song' ? wallet.song : item.slot === 'car' ? wallet.car : wallet.title) === item.id;
+    const equipped = (item.slot === 'hat' ? wallet.hat : item.slot === 'skin' ? wallet.skin : item.slot === 'trail' ? wallet.trail : item.slot === 'song' ? wallet.song : item.slot === 'car' ? wallet.car : item.slot === 'pet' ? wallet.pet : wallet.title) === item.id;
     const row = document.createElement('div');
     row.className = 'shop-row';
     // Titles are text flair and songs are audio — neither has a paddle preview. Songs get a ▶
@@ -1887,6 +1900,13 @@ function renderShop() {
       sw.className = 'shop-preview-car';
       sw.style.cssText = `display:inline-block;width:28px;height:18px;border-radius:4px;background:${car?.body ?? '#888'};border:2px solid ${car?.accent ?? '#222'};`;
       sw.title = car ? `top speed ${car.speed}, grip ${car.grip}` : '';
+      row.appendChild(sw);
+    } else if (item.slot === 'pet') {
+      // Pets show their emoji as the row preview (the look lives in PETS, keyed by id).
+      const sw = document.createElement('span');
+      sw.className = 'shop-preview-pet';
+      sw.style.cssText = 'display:inline-block;width:28px;text-align:center;font-size:20px;line-height:1;';
+      sw.textContent = petById(item.id)?.emoji ?? '🐾';
       row.appendChild(sw);
     } else if (item.slot !== 'title') {
       const preview = document.createElement('canvas') as HTMLCanvasElement;
