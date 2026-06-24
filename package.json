@@ -13,9 +13,11 @@
     "start": "tsx server/index.ts",
     "typecheck": "tsc --noEmit",
     "conservation": "tsx scripts/conservation-check.ts",
-    "listen": "tsx tools/listener/listen.ts"
+    "listen": "tsx tools/listener/listen.ts",
+    "mcp": "tsx tools/mcp/index.ts"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "dotenv": "^17.4.2",
     "google-auth-library": "^10.7.0",
     "jsonwebtoken": "^9.0.3",
