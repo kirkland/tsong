@@ -281,8 +281,16 @@ export function startSuperBros(net: SuperBrosNet): void {
     selectWrap.style.display = mode === 'lobby' ? 'flex' : 'none';
     const players = lobbyState?.players ?? [];
     const allLocked = players.length >= SB_MIN_PLAYERS && players.every((p) => p.fighter);
-    const canStart = mode === 'lobby' && selfSlot === 0 && allLocked;
-    startBtn.style.display = mode === 'lobby' && selfSlot === 0 ? '' : 'none';
+    // Two-step lobby: pick a FIGHTER first; once everyone's locked in, advance to the MAP-select
+    // step (host picks the stage + starts; others wait). Auto-advances both sides off `allLocked`
+    // so no extra signal is needed — and it falls back to character select if someone unlocks/leaves.
+    const inMapStep = mode === 'lobby' && allLocked;
+    selectLabel.textContent = inMapStep ? '🗺️ PICK A STAGE' : 'PICK YOUR FIGHTER';
+    selectGrid.style.display = (mode === 'lobby' && !allLocked) ? 'flex' : 'none';
+    stageRow.style.display = inMapStep ? 'flex' : 'none';
+    if (inMapStep) syncStageBtns();
+    const canStart = inMapStep && selfSlot === 0;
+    startBtn.style.display = inMapStep && selfSlot === 0 ? '' : 'none';
     startBtn.disabled = !canStart;
     startBtn.style.opacity = canStart ? '1' : '0.5';
     startBtn.style.cursor = canStart ? 'pointer' : 'default';
@@ -291,11 +299,11 @@ export function startSuperBros(net: SuperBrosNet): void {
       if (n < SB_MIN_PLAYERS) {
         menuMsg.textContent = `Waiting for players… (${n}/${SB_MAX_PLAYERS}, need ${SB_MIN_PLAYERS})`;
       } else if (!allLocked) {
-        menuMsg.textContent = 'Waiting for everyone to pick…';
+        menuMsg.textContent = 'Waiting for everyone to pick a fighter…';
       } else {
         menuMsg.textContent = selfSlot === 0
-          ? `Everyone's locked in — press START! (${n}/${SB_MAX_PLAYERS})`
-          : `Locked & loaded — waiting for the host to start… (${n}/${SB_MAX_PLAYERS})`;
+          ? 'Everyone\'s locked in — pick a stage, then START!'
+          : 'Host is choosing the map…';
       }
     }
   }
