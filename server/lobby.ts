@@ -1,7 +1,7 @@
 // Tracks every connected socket, which two of them hold the paddle spots, and turns
 // the Game's raw state into the broadcast message (attaching nicknames / watchers).
 
-import type { WebSocket } from 'ws';
+import { WebSocket } from 'ws';
 import { Game } from './game';
 import { PolyGame } from './polygame';
 import { TypeGame } from './typegame';
@@ -72,6 +72,7 @@ import {
   MarketListingView,
   WorldAvatar,
   NewsItem,
+  NETIZEN_DIALOGUE,
   NEWS_TEMPLATES_BULLISH,
   NEWS_TEMPLATES_BEARISH,
   LOOT_TABLE,
@@ -331,6 +332,14 @@ export class Lobby {
   // Cached House treasury balance, hydrated on boot and kept in sync after each adjust. Broadcast
   // to clients so the market/casino header can show it (and "payouts reduced" when low).
   private houseBalance = 0;
+  // --- Market News Engine (Plan 01 + Plan 02) ---
+  private pendingNews: { coin: string; magnitude: number; fireAt: number }[] = [];
+  private nextNewsAt = nextTopOfHourMs(Date.now());
+  private newsFeed: NewsItem[] = [];
+  // Staggered netizen reactions to news, drained in tickStocks.
+  private newsReactions: { name: string; pid: string; text: string; at: number }[] = [];
+  // Global throttle for netizen chat: don't post more than once per ~10s.
+  private lastNetizenChatAt = 0;
   // Epoch ms of the next daily loan-collection event — the next 5:00pm America/New_York. At this
   // tick Davis collects on overdue loans and each defaulter's unpaid debt is added to the
   // instability pool; the market only crashes when that pool fills (see runDailyCollection).
@@ -736,6 +745,14 @@ export class Lobby {
     'satoshi_jr', 'diamond_paws', 'moonboy420', 'hodl_hannah', 'paperhands_pete',
     'algo_andy', 'bagholder_bo', 'shorty_sue', 'whale_watcher', 'degen_dana',
   ];
+  private static readonly NETIZEN_COLORS = [
+    '#f0a030', '#30c8f0', '#e040e0', '#f06080', '#80c870',
+    '#c8a0f0', '#f0d060', '#50e0b0', '#ff7a50', '#78c0f0',
+  ];
+  private static netizenColor(pid: string): string {
+    const idx = Number(pid.split(':')[1] ?? 0);
+    return Lobby.NETIZEN_COLORS[idx % Lobby.NETIZEN_COLORS.length] ?? '#888';
+  }
 
   // Loot box: a fixed coin price (flows to the House) that rolls a weighted prize. A coin roll
   // (or a degraded capped-out exclusive) pays this much from the House.
@@ -2122,17 +2139,25 @@ export class Lobby {
           if (archetype === 0) buy = press >= 0;            // momentum: follow the flow
           else if (archetype === 1) buy = move <= 0;        // mean-reversion: buy dips, sell rips
           else buy = Math.random() < 0.62;                  // random with a mild upward bias
+          let tradedSide: 'buy' | 'sell' | null = null;
           if (buy) {
             const amt = Math.max(1, Math.floor(n.coins * (0.04 + Math.random() * 0.08))); // 4–12% of balance
             await this.netizenInvest(n.pid, n.name, stock.id, amt, 'long');
+            tradedSide = 'buy';
           } else {
             const holds = (await getHoldings(n.pid).catch(() => [])).filter((h) => h.coin === stock.id);
-            if (holds.length) await this.netizenCashOut(n.pid, n.name, stock.id, holds[0].side);
+            if (holds.length) { await this.netizenCashOut(n.pid, n.name, stock.id, holds[0].side); tradedSide = 'sell'; }
             else {
-              // Nothing to sell — buy a little instead so the bot stays active.
               const amt = Math.max(1, Math.floor(n.coins * 0.05));
               await this.netizenInvest(n.pid, n.name, stock.id, amt, 'long');
+              tradedSide = 'buy';
             }
+          }
+          // Trade chatter (Plan 02): low probability during market hours.
+          if (tradedSide && isMarketHours(Date.now()) && Math.random() < 0.25) {
+            const pool = tradedSide === 'buy' ? NETIZEN_DIALOGUE.buyLong : NETIZEN_DIALOGUE.sellProfit;
+            const tmpl = pool[Math.floor(Math.random() * pool.length)];
+            this.netizenSay(n.pid, n.name, tmpl.replace('{ticker}', stock.ticker));
           }
         }
         // Netizen wallets/holdings moved → the net-worth board shifted.
@@ -2708,6 +2733,62 @@ export class Lobby {
       .catch((e) => console.error('loan book send failed:', e));
   }
 
+  /** Send the cached news feed to a single client. */
+  sendNews(ws: WebSocket) {
+    this.tell(ws, { type: 'news', items: this.newsFeed });
+  }
+
+  /** Publish a new market headline, schedule its hidden price injection, and schedule 2–4
+   *  staggered netizen reactions. */
+  private publishNews() {
+    const now = Date.now();
+    // Pick a coin, weighted toward those with older or no recent news.
+    const lastNewsTs = new Map<string, number>();
+    for (const item of this.newsFeed) {
+      const existing = lastNewsTs.get(item.coin) ?? 0;
+      if (item.ts > existing) lastNewsTs.set(item.coin, item.ts);
+    }
+    const scored = STOCKS.map((s) => ({
+      id: s.id, name: s.name, ticker: s.ticker,
+      weight: 1 + Math.max(0, now - (lastNewsTs.get(s.id) ?? 0)) / 3_600_000,
+    }));
+    const totalW = scored.reduce((a, b) => a + b.weight, 0);
+    let roll = Math.random() * totalW;
+    const pick = scored.find((s) => { roll -= s.weight; return roll <= 0; }) ?? scored[0];
+    const bullish = Math.random() < 0.5;
+    // Build a simple headline from the dialogue corpus.
+    const dialPool = bullish ? NETIZEN_DIALOGUE.newsBullish : NETIZEN_DIALOGUE.newsBearish;
+    const headline = (dialPool[Math.floor(Math.random() * dialPool.length)])
+      .replace('{ticker}', pick.ticker);
+
+    const item: NewsItem = { id: `news_${now}`, ts: now, coin: pick.id, headline };
+    this.newsFeed.unshift(item);
+    if (this.newsFeed.length > 30) this.newsFeed.length = 30;
+    saveNewsFeed(this.newsFeed).catch((e: unknown) => console.error('news feed save failed:', e));
+
+    // Schedule hidden injection 7–30 min from now.
+    const magnitude = (bullish ? 1 : -1) * (0.25 + Math.random() * 0.35);
+    this.pendingNews.push({ coin: pick.id, magnitude, fireAt: now + (7 + Math.random() * 23) * 60_000 });
+
+    // Schedule 2–4 staggered netizen reactions over the next ~60–120s.
+    const reactionCount = 2 + Math.floor(Math.random() * 3); // 2–4
+    const netizenPool = Lobby.NETIZEN_NAMES.map((name, i) => ({
+      name, pid: `netizen:${i}`,
+    })).sort(() => Math.random() - 0.5).slice(0, reactionCount);
+    for (const n of netizenPool) {
+      const pool = bullish ? NETIZEN_DIALOGUE.newsBullish : NETIZEN_DIALOGUE.newsBearish;
+      const tmpl = pool[Math.floor(Math.random() * pool.length)];
+      const text = tmpl.replace('{ticker}', pick.ticker);
+      const delay = 60_000 + Math.random() * 60_000; // 60–120s from now
+      this.newsReactions.push({ name: n.name, pid: n.pid, text, at: now + delay });
+    }
+
+    // Broadcast to all connected clients.
+    for (const ws of this.conns.keys()) {
+      if (ws.readyState === ws.OPEN) this.sendNews(ws);
+    }
+  }
+
   /** Re-roll every coin's price when the re-roll window elapses, persist the board, and push
    *  the fresh (revalued) market to every connected client. Also fires the daily loan-collection
    *  event when its time arrives. Cheap to call every tick. */
@@ -2732,6 +2813,14 @@ export class Lobby {
     if (now >= this.nextNewsAt) {
       if (isMarketHours(now)) this.publishNews();
       this.nextNewsAt = nextTopOfHourMs(now);
+    }
+    // --- News Engine: drain staggered netizen reactions ---
+    for (let i = this.newsReactions.length - 1; i >= 0; i--) {
+      const r = this.newsReactions[i];
+      if (now >= r.at) {
+        this.netizenSay(r.pid, r.name, r.text);
+        this.newsReactions.splice(i, 1);
+      }
     }
     if (now < this.nextStockUpdateAt) return;
     this.nextStockUpdateAt = now + STOCK_UPDATE_MS;
@@ -3563,6 +3652,14 @@ export class Lobby {
     for (const sock of this.conns.keys()) {
       if (sock.readyState === sock.OPEN) sock.send(data);
     }
+  }
+
+  /** Post a chat message as a netizen (name + its own color), respecting the global throttle. */
+  private netizenSay(pid: string, name: string, text: string) {
+    const now = Date.now();
+    if (now - this.lastNetizenChatAt < 10_000) return; // throttle: ~1 line per 10s
+    this.lastNetizenChatAt = now;
+    this.botChat(name, text, Lobby.netizenColor(pid));
   }
 
   /** Inject a fake chat message from a streamer bot (bypasses rate limiting). */
