@@ -389,6 +389,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'netizenChallenge':
         if (typeof msg.netizenId === 'string' && typeof msg.wager === 'number') lobby.netizenChallenge(ws, msg.netizenId, msg.wager);
         break;
+      case 'newsReq':
+        lobby.sendNews(ws);
+        break;
       case 'migrate': {
         // Only honour the request if the socket is authenticated — prevents spoofing.
         const authSession = wsSessions.get(ws);

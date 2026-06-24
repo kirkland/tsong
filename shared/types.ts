@@ -247,6 +247,11 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'car-coupe', name: '🚗 Coupe', slot: 'car', price: 8000 },
   { id: 'car-drifter', name: '🏎️ Drift King', slot: 'car', price: 20000 },
   { id: 'car-muscle', name: '🚙 Muscle', slot: 'car', price: 35000 },
+  // New common loot-box refresh items
+  { id: 'beret', name: 'Beret', slot: 'hat', price: 1000 },
+  { id: 'catears', name: 'Cat Ears', slot: 'hat', price: 2000 }, // animated
+  { id: 'carbon', name: 'Carbon Fiber', slot: 'skin', price: 2000 }, // animated
+  { id: 'mermaid', name: 'Mermaid', slot: 'skin', price: 2000 }, // animated
 ] as const;
 // --- Economy Overhaul: scarce "exclusive" cosmetics ---
 // Loot-box-only cosmetics with a HARD global mint cap (see exclusive_supply in the DB). They are
@@ -265,10 +270,13 @@ export interface ExclusiveItem {
 export const EXCLUSIVES: readonly ExclusiveItem[] = [
   { id: 'x-voidcrown',   name: '🕳️ Void Crown',      slot: 'hat',   cap: 1, rarity: 'mythic' },     // one-of-one grail
   { id: 'x-genesis',     name: '🌌 Genesis Skin',     slot: 'skin',  cap: 1, rarity: 'mythic' },     // one-of-one grail
+  { id: 'x-singularity', name: '🌀 Singularity',      slot: 'trail', cap: 1, rarity: 'mythic' },     // one-of-one grail
   { id: 'x-eclipse',     name: '🌑 Eclipse Trail',    slot: 'trail', cap: 3, rarity: 'legendary' },
   { id: 'x-prismhalo',   name: '💠 Prism Halo',       slot: 'hat',   cap: 3, rarity: 'legendary' },
+  { id: 'x-jackpot',     name: '🎰 Jackpot Crown',    slot: 'hat',   cap: 3, rarity: 'legendary' },
   { id: 'x-founder',     name: '🪙 Founder',          slot: 'title', cap: 3, rarity: 'epic' },
   { id: 'x-quantum',     name: '⚛️ Quantum Skin',     slot: 'skin',  cap: 3, rarity: 'epic' },
+  { id: 'x-midas',       name: '👑 Midas Touch',      slot: 'skin',  cap: 3, rarity: 'epic' },
 ] as const;
 export function isExclusive(id: string): boolean {
   return EXCLUSIVES.some((x) => x.id === id);
@@ -324,12 +332,12 @@ export type BotLevel = (typeof BOT_LEVELS)[number];
 // Built to grow: to put a new venue on the map (a car dealership, a house you can buy, …),
 // add a WORLD_BUILDINGS entry and a handler for its `kind` on the client. Nothing else in
 // the protocol needs to change.
-export const WORLD = {
-  w: 3200,      // map width, world units
-  h: 2200,      // map height, world units
-  spawnX: 1600, // where a fresh avatar appears (the central plaza)
+export const WORLD: { w: number; h: number; spawnX: number; spawnY: number } = {
+  w: 3200,
+  h: 2200,
+  spawnX: 1600,
   spawnY: 1240,
-} as const;
+};
 export const WORLD_AVATAR = {
   r: 16,        // avatar body radius, world units
   speed: 280,   // on-foot walk speed, world units / second
@@ -395,7 +403,7 @@ export interface WorldAvatar {
   y: number;
   a?: number;          // heading in radians (only meaningful while driving)
   car?: string | null; // car id being driven, or null/undefined when on foot
-  bot?: boolean;       // true for netizen (bot trader) avatars
+  bot?: boolean;       // true for netizen avatars
 }
 export interface WorldMsg {
   type: 'world';
@@ -475,8 +483,9 @@ export type ClientMsg =
   | { type: 'worldLeave' } // leave the world map
   | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null } // client-authoritative avatar position (world units), heading + car when driving
   | { type: 'migrate'; oldPid: string } // one-time: merge a UUID guest account into the signed-in Google account
-  | { type: 'netizenInfoReq'; netizenId: string } // request info about a netizen for the challenge dialog
-  | { type: 'netizenChallenge'; netizenId: string; wager: number }; // challenge a netizen to a Pong duel
+  | { type: 'netizenInfoReq'; netizenId: string }
+  | { type: 'netizenChallenge'; netizenId: string; wager: number }
+  | { type: 'newsReq' };
 
 // --- Server -> Client ---
 
@@ -881,7 +890,8 @@ export type ServerMsg =
   | WorldMsg
   | HouseMsg
   | NetizenInfoMsg
-  | NetizenChallengeResultMsg;
+  | NetizenChallengeResultMsg
+  | NewsMsg;
 
 // --- Economy Overhaul server → client messages ---
 
@@ -891,7 +901,7 @@ export type ServerMsg =
 // coin payout server-side, so the client only ever sees a real, paid result.
 export interface LootResultMsg {
   type: 'lootResult';
-  kind: 'coins' | 'cosmetic' | 'exclusive';
+  kind: 'coins' | 'cosmetic' | 'exclusive' | 'nothing';
   coins?: number;             // coins paid (kind === 'coins')
   item?: string;              // item id (cosmetic or exclusive)
   name?: string;              // display name of the item
@@ -937,6 +947,39 @@ export interface HouseMsg {
   type: 'house';
   balance: number;
 }
+
+// A market news headline — published hourly during market hours with a hidden price move.
+export interface NewsItem {
+  id: string;
+  ts: number;         // publish epoch ms
+  coin: string;       // affected coin id
+  headline: string;   // allusive flavor text (no numbers, no explicit direction)
+}
+export interface NewsMsg {
+  type: 'news';
+  items: NewsItem[];  // newest-first, up to ~30
+}
+// Headline templates — allude without stating direction or timing.
+export const NEWS_TEMPLATES_BULLISH = [
+  'Whispers in the Casino district: someone\'s been quietly loading up on {name}.',
+  '{ticker} chatter is heating up — the smart money looks interested.',
+  'A well-known whale was seen eyeing {name}.',
+  'Insiders are unusually optimistic about {ticker} lately.',
+  'Rumors are swirling that {name} is about to catch a bid.',
+  'Something is brewing with {ticker} — the order book is thickening.',
+  'A prominent trader just moved a position into {name}.',
+  'The vibe around {ticker} is shifting — the murmurs are getting louder.',
+];
+export const NEWS_TEMPLATES_BEARISH = [
+  'Analysts are growing wary of {name}\'s recent run.',
+  'Something feels off about {ticker} — insiders are getting quiet.',
+  'Rumblings that {name} holders are heading for the exits.',
+  'A cold wind is blowing through {ticker}.',
+  'The smart money appears to be rotating out of {name}.',
+  '{ticker} is looking wobbly — profit-takers are circling.',
+  'Volume on {name} is drying up; the silence is telling.',
+  'A shadow has fallen over {ticker} — traders are hedging.',
+];
 
 // Broadcast when a match kicks off and a seated player has a theme song equipped — every client
 // loops `audio` for the duration of the match (until status leaves 'playing'). `owner` is the
@@ -1091,6 +1134,30 @@ export interface SpinResultMsg {
   type: 'spinResult';
   segment: number;
   reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string };
+}
+
+// --- Loot box rebalance ---
+// Whale-gamble box: ~1% cosmetic, ~0.3% exclusive, ~35% partial coin-back, ~63.7% nothing.
+export const LOOT_TABLE = {
+  cosmeticWeight: 1.0,
+  exclusiveWeight: 0.3,
+  coinBackWeight: 35.0,
+  nothingWeight: 63.7,
+  coinBackMin: 500,
+  coinBackMax: 1500,
+};
+
+// --- Wealth-scaled minimum bets ---
+// Anti-hoarding lever: the wealthier a player is, the higher their minimum bet floor.
+// The bottom tier is 1 so low-wealth players are unaffected — the floor only rises for
+// those sitting on large coin piles. Used across roulette, blackjack, PvP bets, and netizen challenges.
+export const MIN_BET_TIERS: readonly [number, number][] = [
+  [1_000_000, 10_000], [500_000, 5_000], [100_000, 1_000],
+  [10_000, 100], [1_000, 10], [0, 1],
+]; // [thresholdCoins, minBet], checked high→low
+export function minBet(wealth: number): number {
+  for (const [t, m] of MIN_BET_TIERS) if (wealth >= t) return m;
+  return 1;
 }
 
 // --- Roulette (single-zero European wheel) ---
@@ -1328,9 +1395,7 @@ export interface CampaignLeaderboardMsg {
 export const CAMPAIGN_STAGE_COUNT = 5;
 
 // --- Netizen Challenge (Plan 10) ---
-// Max fraction of a netizen's net worth a player can win in one challenge.
 export const NETIZEN_CHALLENGE_MAX_FRAC = 0.20;
-// Difficulty clamp: use Davis campaign hardest parameters (react=0.09, error=22).
 export const NETIZEN_CHALLENGE_HARDEST_REACT = 0.09;
 export const NETIZEN_CHALLENGE_HARDEST_ERROR = 22;
 export const NETIZEN_CHALLENGE_EASIEST_REACT = 0.30;
@@ -1350,3 +1415,36 @@ export interface NetizenChallengeResultMsg {
   delta: number;
   netizenName: string;
 }
+
+// --- Market news (Plan 01) ---
+export interface NewsItem { id: string; ts: number; coin: string; headline: string; }
+export interface NewsMsg { type: 'news'; items: NewsItem[]; }
+
+// --- Netizen dialogue corpus (Plan 02 + Plan 03) ---
+export const NETIZEN_DIALOGUE = {
+  buyLong: [
+    'aped into {ticker} 🚀', 'loading {ticker} here', '{ticker} looking juicy ngl',
+    'all in {ticker} lfg', 'yolo {ticker} 🚀', 'adding {ticker} to the bag', '{ticker} dip is tasty',
+  ],
+  sellProfit: [
+    'took profit on {ticker} 💰', 'out of {ticker}, ty market', '{ticker} paid the bills today',
+    'locked in gains on {ticker} ✅', 'trimmed {ticker} for some profit',
+  ],
+  sellLoss: [
+    'got rekt on {ticker} 💀', 'paperhanded {ticker} again', '{ticker} bagholder no more',
+    'sold {ticker} at a loss rip 💸', 'dyor they said {ticker} they said',
+  ],
+  newsBullish: [
+    'something brewing with {ticker}? 👀', "i'm not not buying {ticker} rn",
+    'feels like {ticker} szn', '{ticker} definitely up to something', 'heard a rumor about {ticker} 😏',
+  ],
+  newsBearish: [
+    'staying away from {ticker} today', '{ticker} giving me bad vibes',
+    'might short {ticker} ngl', 'something off with {ticker} energy', 'not touching {ticker} with a pole',
+  ],
+  idleBanter: [
+    "who's this lasso guy with 1M net worth", 'new exclusive dropped in the black market 👀',
+    'anyone else watching the leaderboard?', 'market looking spicy today 🌶️',
+    'feels like a dead cat bounce', 'chart says up but my gut says down 🤷',
+  ],
+};
