@@ -403,6 +403,7 @@ export interface WorldAvatar {
   y: number;
   a?: number;          // heading in radians (only meaningful while driving)
   car?: string | null; // car id being driven, or null/undefined when on foot
+  bot?: boolean;       // true for netizen avatars
 }
 export interface WorldMsg {
   type: 'world';
@@ -1392,6 +1393,7 @@ export const CAMPAIGN_STAGE_COUNT = 5;
 // --- Market news (Plan 01) ---
 export interface NewsItem { id: string; ts: number; coin: string; headline: string; }
 export interface NewsMsg { type: 'news'; items: NewsItem[]; }
+
 
 // --- Netizen dialogue corpus (Plan 02 + Plan 03) ---
 export const NETIZEN_DIALOGUE = {

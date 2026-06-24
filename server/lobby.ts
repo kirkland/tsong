@@ -332,6 +332,8 @@ export class Lobby {
   // Cached House treasury balance, hydrated on boot and kept in sync after each adjust. Broadcast
   // to clients so the market/casino header can show it (and "payouts reduced" when low).
   private houseBalance = 0;
+  // Netizen avatar wander state: position + heading + when to pick a new heading.
+  private netizenPos = new Map<string, { x: number; y: number; hx: number; hy: number; until: number; spawnAt: number }>();
   // --- Market News Engine (Plan 01 + Plan 02) ---
   private pendingNews: { coin: string; magnitude: number; fireAt: number }[] = [];
   private nextNewsAt = nextTopOfHourMs(Date.now());
@@ -871,7 +873,7 @@ export class Lobby {
     this.world.move(ws, x, y, a, car);
   }
 
-  /** Snapshot every in-world avatar, joining each socket's identity (id/name/color) from its Conn. */
+  /** Snapshot every in-world avatar (human + netizen). */
   private worldAvatars(): WorldAvatar[] {
     const out: WorldAvatar[] = [];
     for (const ws of this.world.sockets()) {
@@ -880,13 +882,48 @@ export class Lobby {
       if (!c || !p) continue;
       out.push({ id: c.id, name: c.nickname || 'anon', color: c.color, x: p.x, y: p.y, a: p.a, car: p.car });
     }
+    // Append spawned netizen avatars.
+    for (let i = 0; i < Lobby.NETIZEN_NAMES.length; i++) {
+      const pid = `netizen:${i}`;
+      const pos = this.netizenPos.get(pid);
+      if (!pos || Date.now() < pos.spawnAt) continue;
+      out.push({
+        id: pid,
+        name: Lobby.NETIZEN_NAMES[i],
+        color: Lobby.netizenColor(pid),
+        x: pos.x, y: pos.y,
+        bot: true,
+      });
+    }
     return out;
   }
 
-  /** Fan everyone-in-the-world's positions out to everyone in the world. Called every tick by
-   *  broadcast(); throttled to ~15 Hz and a no-op when the world is empty. */
+  /** Wander netizen avatars and fan everyone's positions out. Called every tick by broadcast();
+   *  throttled to ~15 Hz. Also runs when no humans are in the world to keep netizens moving. */
   broadcastWorld() {
-    if (this.world.size === 0) return;
+    const now = Date.now();
+    const dt = 1 / 60; // ~1 tick (matches the game loop); approximate is fine
+    // Wander spawned netizen avatars.
+    const speed = 60; // stroll speed, world units / second
+    for (let i = 0; i < Lobby.NETIZEN_NAMES.length; i++) {
+      const pid = `netizen:${i}`;
+      const pos = this.netizenPos.get(pid);
+      if (!pos || Date.now() < pos.spawnAt) continue;
+      if (now >= pos.until) {
+        // Pick a new random heading.
+        const angle = Math.random() * Math.PI * 2;
+        pos.hx = Math.cos(angle);
+        pos.hy = Math.sin(angle);
+        pos.until = now + 2000 + Math.random() * 4000; // 2–6s
+      }
+      pos.x += pos.hx * speed * dt;
+      pos.y += pos.hy * speed * dt;
+      // Clamp to map bounds (leave some margin from the edges).
+      const margin = 80;
+      if (pos.x < margin || pos.x > 3200 - margin) { pos.hx = -pos.hx; pos.x = Math.max(margin, Math.min(3200 - margin, pos.x)); }
+      if (pos.y < margin || pos.y > 2200 - margin) { pos.hy = -pos.hy; pos.y = Math.max(margin, Math.min(2200 - margin, pos.y)); }
+    }
+    if (this.world.size === 0) return; // no humans to send to
     if (++this.worldBcTick % Lobby.WORLD_BROADCAST_EVERY !== 0) return;
     const data = JSON.stringify({ type: 'world', avatars: this.worldAvatars() });
     for (const ws of this.world.sockets()) {
@@ -2085,6 +2122,18 @@ export class Lobby {
     // the House). Both are best-effort — without a DB they no-op cleanly.
     this.houseBalance = await getHouseBalance().catch(() => 0);
     await this.seedNetizens().catch((e) => console.error('netizen seed failed:', e));
+    // Seed netizen world avatar positions with staggered spawn times (0–90 min after boot).
+    this.netizenPos.clear();
+    for (let i = 0; i < Lobby.NETIZEN_NAMES.length; i++) {
+      const pid = `netizen:${i}`;
+      this.netizenPos.set(pid, {
+        x: 1400 + Math.random() * 400,
+        y: 1040 + Math.random() * 400,
+        hx: 0, hy: 0,
+        until: 0,
+        spawnAt: Date.now() + Math.random() * 5400_000, // 0–90 min
+      });
+    }
     // Market News Engine: hydrate the cached feed, schedule the next top-of-hour.
     this.newsFeed = await getNewsFeed().catch(() => []);
     this.nextNewsAt = nextTopOfHourMs(Date.now());

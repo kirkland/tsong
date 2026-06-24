@@ -25,6 +25,8 @@ import {
   WorldBuildingKind,
   CarSpec,
   carById,
+  STOCKS,
+  NETIZEN_DIALOGUE,
 } from '../shared/types';
 
 // What the world needs from the rest of the app. main.ts supplies these (see startWorld call).
@@ -134,6 +136,8 @@ export function startWorld(net: WorldNet): void {
   let selfY = WORLD.spawnY;
   let facing = -Math.PI / 2; // radians; on foot = look dir, in car = heading. Start facing "up".
   let others: WorldAvatar[] = [];
+  // Per-bot dialogue state: id → { line, nextAt } (nextAt = epoch ms to show next line).
+  const botDialogue = new Map<string, { line: string; nextAt: number }>();
 
   // --- car state ---
   let driving = false;
@@ -580,7 +584,19 @@ export function startWorld(net: WorldNet): void {
       if (a.id === selfId) continue;
       if (!onScreen(a.x, a.y, 120)) continue;
       if (a.car) drawCar(a.x, a.y, a.a ?? 0, carById(a.car), a.name, false, a.color);
-      else drawAvatar(a.x, a.y, a.color, a.name, false, 0);
+      else drawAvatar(a.x, a.y, a.color, a.name, a.bot ? true : false, 0);
+      // Speech bubble for bots.
+      if (a.bot) {
+        const d = botDialogue.get(a.id);
+        // Update dialogue every 4–7s.
+        const now = performance.now();
+        if (!d || now >= d.nextAt) {
+          botDialogue.set(a.id, { line: botLine(), nextAt: now + 4000 + Math.random() * 3000 });
+        } else {
+          ctx.font = '600 12px system-ui,sans-serif';
+          label(d.line, sx(a.x), sy(a.y) - 66, '#1b2542cc', '#ffeb3b');
+        }
+      }
     }
     if (driving) drawCar(selfX, selfY, facing, myCar(), net.name() || 'you', true, net.color());
     else drawAvatar(selfX, selfY, net.color(), net.name() || 'you', true, facing);
@@ -843,6 +859,17 @@ export function startWorld(net: WorldNet): void {
     ctx.closePath();
   }
 
+  // Pick a random dialogue line for a bot, using live market/leaderboard context where available.
+  function botLine(): string {
+    const pools = [
+      ...NETIZEN_DIALOGUE.buyLong,
+      ...NETIZEN_DIALOGUE.sellProfit,
+      ...NETIZEN_DIALOGUE.idleBanter,
+    ];
+    return pools[Math.floor(Math.random() * pools.length)]
+      .replace('{ticker}', STOCKS[Math.floor(Math.random() * STOCKS.length)].ticker);
+  }
+
   // --- teardown ---
   function exit() {
     if (!controller) return;
@@ -863,8 +890,8 @@ export function startWorld(net: WorldNet): void {
   controller = {
     feed(avatars) {
       others = avatars;
-      const n = avatars.length;
-      count.textContent = n === 1 ? '1 player here' : `${n} players here`;
+      const humans = avatars.filter((a) => !a.bot).length;
+      count.textContent = humans === 1 ? '1 player here' : `${humans} players here`;
     },
     reenter() { net.enter(); },
   };
