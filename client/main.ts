@@ -7,6 +7,9 @@ import { initBlackjack } from './blackjack';
 import { initCraps } from './craps';
 import { initCrash } from './crash';
 import { initSlots } from './slots';
+import { initPlinko } from './plinko';
+import { initHorse } from './horse';
+import { initHilo } from './hilo';
 import { initAds, revealAds } from './ads';
 import { initFlyover, startFlyovers, flySummoned } from './flyover';
 import { draw, drawLegendIcon, setBlasterAim, drawCosmeticPreview } from './render';
@@ -698,6 +701,9 @@ const net = connect(
       crapsHandle.setCoins(msg.coins);
       crashHandle.setCoins(msg.coins);
       slotsHandle.setCoins(msg.coins);
+      plinkoHandle.setCoins(msg.coins);
+      horseHandle.setCoins(msg.coins);
+      hiloHandle.setCoins(msg.coins);
       if (!lootPanel.hidden) renderLoot();
       if (!marketplacePanel.hidden) renderMarketplace();
       // During a roulette spin, hold every coin-total display (toolbar tab, shop, market) at its
@@ -721,6 +727,16 @@ const net = connect(
       crapsHandle.onResult(msg);
     } else if (msg.type === 'slotsResult') {
       slotsHandle.onResult(msg);
+    } else if (msg.type === 'plinkoResult') {
+      plinkoHandle.onResult(msg);
+    } else if (msg.type === 'horseCard') {
+      horseHandle.onCard(msg);
+    } else if (msg.type === 'horseResult') {
+      horseHandle.onResult(msg);
+    } else if (msg.type === 'hiloState') {
+      hiloHandle.onState(msg);
+    } else if (msg.type === 'hiloResult') {
+      hiloHandle.onResult(msg);
     } else if (msg.type === 'crashState') {
       crashHandle.onState(msg);
     } else if (msg.type === 'loan') {
@@ -803,6 +819,27 @@ const crashHandle = initCrash({
   sendCancelBet: () => net.send({ type: 'crashCancelBet' }),
   sendCashout: () => net.send({ type: 'crashCashout' }),
   playWin: playYay,
+});
+
+const plinkoHandle = initPlinko({
+  send: (amount) => net.send({ type: 'plinko', amount }),
+  playWin: playYay,
+  onSettled: refreshWallet,
+});
+
+const horseHandle = initHorse({
+  sendReq: () => net.send({ type: 'horseReq' }),
+  sendBet: (horse, amount) => net.send({ type: 'horseBet', horse, amount }),
+  playWin: playYay,
+  onSettled: refreshWallet,
+});
+
+const hiloHandle = initHilo({
+  sendBet: (amount) => net.send({ type: 'hiloBet', amount }),
+  sendGuess: (guess) => net.send({ type: 'hiloGuess', guess }),
+  sendCashout: () => net.send({ type: 'hiloCashout' }),
+  playWin: playYay,
+  onSettled: refreshWallet,
 });
 
 const isPlayer = () => myRole === 'left' || myRole === 'right' || myRole === 'player';

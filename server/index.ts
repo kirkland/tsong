@@ -392,6 +392,24 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'slotsSpin':
         if (typeof msg.amount === 'number') lobby.slotsSpin(ws, msg.amount);
         break;
+      case 'plinko':
+        if (typeof msg.amount === 'number') lobby.plinkoPlay(ws, msg.amount);
+        break;
+      case 'horseReq':
+        lobby.horseReq(ws);
+        break;
+      case 'horseBet':
+        if (typeof msg.horse === 'number' && typeof msg.amount === 'number') lobby.horseBet(ws, msg.horse, msg.amount);
+        break;
+      case 'hiloBet':
+        if (typeof msg.amount === 'number') lobby.hiloBet(ws, msg.amount);
+        break;
+      case 'hiloGuess':
+        if (msg.guess === 'hi' || msg.guess === 'lo') lobby.hiloGuess(ws, msg.guess);
+        break;
+      case 'hiloCashout':
+        lobby.hiloCashout(ws);
+        break;
       case 'balanceSheetReq':
         if (typeof msg.rank === 'number') lobby.sendBalanceSheet(ws, msg.rank);
         break;

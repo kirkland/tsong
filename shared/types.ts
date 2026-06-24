@@ -544,6 +544,12 @@ export type ClientMsg =
   | { type: 'crashCancelBet' } // cancel a placed bet while the betting window is still open
   | { type: 'crashCashout' } // cash out of the current live crash round
   | { type: 'slotsSpin'; amount: number } // spin the 3-reel slot machine with this wager
+  | { type: 'plinko'; amount: number } // drop a ball down the 8-row pegboard
+  | { type: 'horseReq' } // request a fresh race card (5 horses with shuffled odds)
+  | { type: 'horseBet'; horse: number; amount: number } // 0-indexed horse choice + wager
+  | { type: 'hiloBet'; amount: number } // start a Hi-Lo hand with this wager
+  | { type: 'hiloGuess'; guess: 'hi' | 'lo' } // guess Higher or Lower than the current card
+  | { type: 'hiloCashout' } // cash out the current Hi-Lo streak
   | { type: 'balanceSheetReq'; rank: number } // peek at a net-worth board player's balance sheet (by current rank)
   | { type: 'lootBoxOpen' } // open a loot box: spend coins, roll a weighted prize (common cosmetic / House coins / capped-rare exclusive)
   | { type: 'marketList'; instanceId: number; ask: number } // list an owned exclusive instance on the marketplace for `ask` coins
@@ -983,6 +989,11 @@ export type ServerMsg =
   | BjResultMsg
   | CrapsResultMsg
   | SlotsResultMsg
+  | PlinkoResultMsg
+  | HorseCardMsg
+  | HorseResultMsg
+  | HiLoStateMsg
+  | HiLoResultMsg
   | CrashStateMsg
   | TipMsg
   | BountyBoardMsg
@@ -1420,6 +1431,60 @@ export interface SlotsResultMsg {
   win: SlotsSymbol | null; // the matching symbol on the pay line, or null (no win)
   bet: number;
   payout: number;          // coins returned (0 on loss)
+}
+
+// --- Plinko ---
+// 8-row pegboard. Ball drops from center, bounces left/right at each peg. Lands in 1 of 9 slots.
+export const PLINKO_ROWS = 8;
+export const PLINKO_PAYOUTS = [26, 3, 1.4, 0.4, 0.2, 0.4, 1.4, 3, 26] as const;
+export const PLINKO_MAX_BET = 50_000;
+export interface PlinkoResultMsg {
+  type: 'plinkoResult';
+  path: boolean[];   // 8 booleans: false=left, true=right at each peg row
+  slot: number;      // sum of 'true' values (0–8)
+  multiplier: number;
+  bet: number;
+  payout: number;
+}
+
+// --- Horse Racing ---
+// 5 horses with shuffled odds. Player picks one, bets, then the server runs the race.
+export const HORSE_NAMES = [
+  'Davis Destroyer', 'Kirkland King', 'Bacon Roll',
+  'Minion Madness', 'Avery Express', 'The Pong Ball', 'Jsav Jr.', 'Ping Ponger',
+] as const;
+export const HORSE_ODDS = [1.8, 2.5, 4.0, 7.0, 14.0] as const;
+export const HORSE_MAX_BET = 50_000;
+export interface HorseCardMsg {
+  type: 'horseCard';
+  horses: { name: string; odds: number }[]; // 5 entries
+}
+export interface HorseResultMsg {
+  type: 'horseResult';
+  horses: { name: string; odds: number }[];
+  winner: number;  // 0-indexed winning horse
+  horse: number;   // which horse the player bet on
+  bet: number;
+  payout: number;
+}
+
+// --- Hi-Lo ---
+// Bet coins → get a card (1–13) → guess Higher or Lower → correct = multiplier grows, cashout any time → wrong = lose bet.
+export const HILO_MAX_BET = 50_000;
+export const HILO_HOUSE_EDGE = 0.05;
+export interface HiLoStateMsg {
+  type: 'hiloState';
+  card: number;          // current card 1-13
+  multiplier: number;    // accumulated return multiplier (1.0 at start)
+  bet: number;
+  pendingPayout: number; // floor(bet × multiplier); 0 before first correct guess
+}
+export interface HiLoResultMsg {
+  type: 'hiloResult';
+  won: boolean;    // true = cashed out; false = wrong guess
+  newCard: number; // card that was revealed
+  payout: number;  // coins received (0 on loss)
+  net: number;     // payout - bet (negative = lost)
 }
 
 export interface CrashStateMsg {

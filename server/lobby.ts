@@ -48,6 +48,19 @@ import {
   SLOTS_PAYOUTS,
   SlotsSymbol,
   SlotsResultMsg,
+  PLINKO_ROWS,
+  PLINKO_PAYOUTS,
+  PLINKO_MAX_BET,
+  PlinkoResultMsg,
+  HORSE_NAMES,
+  HORSE_ODDS,
+  HORSE_MAX_BET,
+  HorseCardMsg,
+  HorseResultMsg,
+  HILO_MAX_BET,
+  HILO_HOUSE_EDGE,
+  HiLoStateMsg,
+  HiLoResultMsg,
   CRASH_BETTING_MS,
   CRASH_TICK_MS,
   CRASH_ENDED_MS,
@@ -136,6 +149,8 @@ interface Conn {
   // Casino games
   bjHand?: BjHand;             // active blackjack hand (undefined = not playing)
   crapsPoint: number | null;   // current craps point (null = come-out phase)
+  horseCard?: { name: string; odds: number }[]; // pending race card (5 horses); undefined = no race started
+  hiloHand?: { bet: number; card: number; multiplier: number }; // active Hi-Lo hand
 }
 
 // One step of a crypto's price random walk. Pure RNG — never tied to who invested or how
@@ -2231,6 +2246,143 @@ export class Lobby {
         this.sendWallet(ws);
       })
       .catch((e) => console.error('slots spin failed:', e));
+  }
+
+  // --- Plinko ---
+
+  plinkoPlay(ws: WebSocket, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    if (!Number.isInteger(amount) || amount <= 0 || amount > PLINKO_MAX_BET) { this.sendWallet(ws); return; }
+    const bet = amount;
+    spendCoins(conn.pid, bet)
+      .then(async (w) => {
+        if (!w) { this.sendWallet(ws); return; }
+        await this.houseCredit(bet);
+        // Roll the path: 8 random booleans (false=left, true=right)
+        const path: boolean[] = [];
+        for (let i = 0; i < PLINKO_ROWS; i++) path.push(Math.random() < 0.5);
+        const slot = path.filter(Boolean).length;
+        const multiplier = PLINKO_PAYOUTS[slot];
+        const want = Math.floor(bet * multiplier);
+        const payout = want > 0 ? await this.housePay(conn.pid!, conn.nickname!, want) : 0;
+        const msg: PlinkoResultMsg = { type: 'plinkoResult', path, slot, multiplier, bet, payout };
+        this.tell(ws, msg);
+        this.sendWallet(ws);
+      })
+      .catch((e) => console.error('plinko play failed:', e));
+  }
+
+  // --- Horse Racing ---
+
+  horseReq(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    // Shuffle HORSE_NAMES and pick 5; shuffle HORSE_ODDS; pair them up
+    const names = [...HORSE_NAMES].sort(() => Math.random() - 0.5).slice(0, 5);
+    const odds = [...HORSE_ODDS].sort(() => Math.random() - 0.5);
+    const horses = names.map((name, i) => ({ name, odds: odds[i] }));
+    conn.horseCard = horses;
+    const msg: HorseCardMsg = { type: 'horseCard', horses };
+    this.tell(ws, msg);
+  }
+
+  horseBet(ws: WebSocket, horse: number, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    if (!conn.horseCard) { this.sendWallet(ws); return; } // no race card
+    if (!Number.isInteger(horse) || horse < 0 || horse > 4) { this.sendWallet(ws); return; }
+    if (!Number.isInteger(amount) || amount <= 0 || amount > HORSE_MAX_BET) { this.sendWallet(ws); return; }
+    const horses = conn.horseCard;
+    conn.horseCard = undefined; // consume the card
+    spendCoins(conn.pid, amount)
+      .then(async (w) => {
+        if (!w) { this.sendWallet(ws); return; }
+        await this.houseCredit(amount);
+        // Pick winner: weighted by 1/odds (horses with lower odds win more often)
+        const weights = horses.map((h) => 1 / h.odds);
+        const totalW = weights.reduce((a, b) => a + b, 0);
+        let r = Math.random() * totalW;
+        let winner = horses.length - 1;
+        for (let i = 0; i < weights.length; i++) {
+          r -= weights[i];
+          if (r <= 0) { winner = i; break; }
+        }
+        const won = winner === horse;
+        const want = won ? Math.floor(amount * horses[horse].odds) : 0;
+        const payout = want > 0 ? await this.housePay(conn.pid!, conn.nickname!, want) : 0;
+        const msg: HorseResultMsg = { type: 'horseResult', horses, winner, horse, bet: amount, payout };
+        this.tell(ws, msg);
+        this.sendWallet(ws);
+      })
+      .catch((e) => console.error('horse bet failed:', e));
+  }
+
+  // --- Hi-Lo ---
+
+  hiloBet(ws: WebSocket, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    if (conn.hiloHand) { this.sendWallet(ws); return; } // already in a hand
+    if (!Number.isInteger(amount) || amount <= 0 || amount > HILO_MAX_BET) { this.sendWallet(ws); return; }
+    getWallet(conn.pid).then((w) => {
+      if (!w || amount < minBet(w.coins)) { this.sendWallet(ws); return; }
+      spendCoins(conn.pid, amount)
+        .then(async (w2) => {
+          if (!w2) { this.sendWallet(ws); return; }
+          await this.houseCredit(amount);
+          const card = Math.ceil(Math.random() * 13);
+          conn.hiloHand = { bet: amount, card, multiplier: 1.0 };
+          const state: HiLoStateMsg = { type: 'hiloState', card, multiplier: 1.0, bet: amount, pendingPayout: 0 };
+          this.tell(ws, state);
+          this.sendWallet(ws);
+        })
+        .catch((e) => console.error('hilo bet failed:', e));
+    }).catch((e) => console.error('hilo getWallet failed:', e));
+  }
+
+  hiloGuess(ws: WebSocket, guess: 'hi' | 'lo') {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    const hand = conn.hiloHand;
+    if (!hand) { this.sendWallet(ws); return; }
+    // Guard impossible guesses
+    if (guess === 'hi' && hand.card === 13) { this.tell(ws, { type: 'announce', text: 'Already at the highest card — guess Lower!', toast: true }); return; }
+    if (guess === 'lo' && hand.card === 1) { this.tell(ws, { type: 'announce', text: 'Already at the lowest card — guess Higher!', toast: true }); return; }
+    // Draw next card (re-draw on tie)
+    let nextCard: number;
+    do { nextCard = Math.ceil(Math.random() * 13); } while (nextCard === hand.card);
+    const correct = (guess === 'hi' && nextCard > hand.card) || (guess === 'lo' && nextCard < hand.card);
+    if (!correct) {
+      conn.hiloHand = undefined;
+      const msg: HiLoResultMsg = { type: 'hiloResult', won: false, newCard: nextCard, payout: 0, net: -hand.bet };
+      this.tell(ws, msg);
+      // Wallet already spent — no extra update needed; re-push so client sees current balance
+      this.sendWallet(ws);
+      return;
+    }
+    // Correct — compute step multiplier
+    const stepFactor = guess === 'hi'
+      ? (1 - HILO_HOUSE_EDGE) * 12 / (13 - hand.card)
+      : (1 - HILO_HOUSE_EDGE) * 12 / (hand.card - 1);
+    hand.multiplier *= stepFactor;
+    hand.card = nextCard;
+    const pendingPayout = Math.floor(hand.bet * hand.multiplier);
+    const state: HiLoStateMsg = { type: 'hiloState', card: nextCard, multiplier: hand.multiplier, bet: hand.bet, pendingPayout };
+    this.tell(ws, state);
+  }
+
+  async hiloCashout(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    const hand = conn.hiloHand;
+    if (!hand || hand.multiplier <= 1.0) { this.sendWallet(ws); return; } // nothing to cash out
+    conn.hiloHand = undefined;
+    const want = Math.floor(hand.bet * hand.multiplier);
+    const payout = await this.housePay(conn.pid, conn.nickname, want).catch((e) => { console.error('hilo cashout failed:', e); return 0; });
+    const msg: HiLoResultMsg = { type: 'hiloResult', won: true, newCard: hand.card, payout, net: payout - hand.bet };
+    this.tell(ws, msg);
+    this.sendWallet(ws);
   }
 
   // --- Crash casino game ---

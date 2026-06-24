@@ -1551,6 +1551,182 @@
       }
       .slots-pay-mult { color: #ffd166; font-weight: 700; }
       .slots-note { font-size: 10px; color: #5a647e; line-height: 1.4; }
+
+      /* --- Plinko panel --- */
+      #plinkoBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #1e4a3a;
+        background: #0a1a14; color: #22d3ee; cursor: pointer;
+      }
+      #plinkoBtn:hover { background: #0e2a1c; }
+      #plinkoPanel {
+        position: fixed; top: 52px; left: 12px; width: 320px;
+        max-height: 84vh; overflow-y: auto;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #plinkoPanel[hidden] { display: none; }
+      #plinkoPanel h3 { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; margin: 8px 0 6px; }
+      .plinko-controls { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+      .plinko-label { font-size: 11px; color: #6b7796; white-space: nowrap; }
+      .plinko-controls input {
+        flex: 1; font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 5px;
+        border: 1px solid #2a3550; background: #060912; color: #fff; min-width: 0;
+      }
+      .plinko-drop-btn {
+        font: inherit; font-size: 12px; font-weight: 700; padding: 6px 14px;
+        border-radius: 6px; border: none; background: #22d3ee; color: #040d14; cursor: pointer; white-space: nowrap;
+      }
+      .plinko-drop-btn:hover:not(:disabled) { background: #5ee7f7; }
+      .plinko-drop-btn:disabled { opacity: 0.4; cursor: default; }
+      .plinko-result {
+        font: 800 13px ui-monospace, monospace; min-height: 20px; text-align: center; margin: 6px 0;
+      }
+      .plinko-win { color: #6ee7a8; }
+      .plinko-lose { color: #6b7796; }
+      .plinko-note { font-size: 10px; color: #5a647e; line-height: 1.4; margin-top: 8px; }
+
+      /* --- Horse Racing panel --- */
+      #horseBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #4a3a10;
+        background: #1a1208; color: #f59e0b; cursor: pointer;
+      }
+      #horseBtn:hover { background: #2a1c08; }
+      #horsePanel {
+        position: fixed; top: 52px; left: 12px; width: 320px;
+        max-height: 84vh; overflow-y: auto;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #horsePanel[hidden] { display: none; }
+      #horsePanel h3 { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; margin: 8px 0 6px; }
+      .horse-row {
+        display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px;
+        border: 1px solid transparent; margin-bottom: 4px; background: #060c18; cursor: pointer;
+        transition: border-color 0.1s;
+      }
+      .horse-row.selected { border-color: #22d3ee; background: #061824; }
+      .horse-row.winner { border-color: #22c55e; background: #061806; }
+      .horse-row.loser { opacity: 0.5; }
+      .horse-emoji { font-size: 20px; }
+      .horse-name { flex: 1; font-size: 12px; color: #cdd7f5; }
+      .horse-odds { font: 700 12px ui-monospace, monospace; color: #ffd166; }
+      .horse-sel-btn {
+        font: inherit; font-size: 11px; padding: 3px 8px; border-radius: 4px;
+        border: 1px solid #22d3ee; background: transparent; color: #22d3ee; cursor: pointer;
+      }
+      .horse-sel-btn:hover { background: #0e2030; }
+      .horse-loading { font-size: 13px; color: #6b7796; text-align: center; padding: 12px 0; }
+      .horse-bet-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+      .horse-bet-row label { font-size: 11px; color: #6b7796; white-space: nowrap; }
+      .horse-bet-row input {
+        flex: 1; font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 5px;
+        border: 1px solid #2a3550; background: #060912; color: #fff; min-width: 0;
+      }
+      .horse-place-btn {
+        font: inherit; font-size: 12px; font-weight: 700; padding: 6px 14px;
+        border-radius: 6px; border: none; background: #f59e0b; color: #1a0c00; cursor: pointer; white-space: nowrap;
+      }
+      .horse-place-btn:hover:not(:disabled) { background: #fbbf24; }
+      .horse-place-btn:disabled { opacity: 0.4; cursor: default; }
+      .horse-new-btn {
+        font: inherit; font-size: 12px; font-weight: 700; padding: 6px 14px;
+        border-radius: 6px; border: 1px solid #3b82f6; background: transparent; color: #3b82f6; cursor: pointer;
+      }
+      .horse-new-btn:hover { background: #0e1830; }
+      .horse-result {
+        font: 800 13px ui-monospace, monospace; min-height: 20px; text-align: center; margin: 6px 0;
+      }
+      .horse-win { color: #6ee7a8; }
+      .horse-lose { color: #6b7796; }
+      .horse-note { font-size: 10px; color: #5a647e; line-height: 1.4; margin-top: 8px; }
+
+      /* --- Hi-Lo panel --- */
+      #hiloBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #3a1050;
+        background: #150820; color: #a855f7; cursor: pointer;
+      }
+      #hiloBtn:hover { background: #1e0e30; }
+      #hiloPanel {
+        position: fixed; top: 52px; left: 12px; width: 300px;
+        max-height: 84vh; overflow-y: auto;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #hiloPanel[hidden] { display: none; }
+      #hiloPanel h3 { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; margin: 8px 0 6px; }
+      #hiloCard {
+        width: 90px; height: 126px; margin: 0 auto 10px; border-radius: 10px;
+        background: #e0e8f0; display: flex; align-items: center; justify-content: center;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.5); position: relative; overflow: hidden;
+      }
+      .hilo-card-inner {
+        width: 100%; height: 100%; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; font-family: 'Georgia', serif;
+        position: relative; user-select: none;
+      }
+      .hilo-card-back {
+        font-size: 48px; color: #a855f7; background: #1a0a2e; border-radius: 10px;
+        display: flex; align-items: center; justify-content: center; width: 100%; height: 100%;
+      }
+      .hilo-card-corner {
+        position: absolute; font-size: 14px; font-weight: 700; line-height: 1.1; text-align: center;
+      }
+      .hilo-card-corner.tl { top: 5px; left: 6px; }
+      .hilo-card-corner.br { bottom: 5px; right: 6px; transform: rotate(180deg); }
+      .hilo-card-center { font-size: 36px; line-height: 1; }
+      .hilo-info {
+        display: flex; justify-content: space-between; font-size: 11px; color: #9fb0d8;
+        margin-bottom: 8px; padding: 6px 8px; background: #060c18; border-radius: 6px;
+      }
+      .hilo-info strong { color: #ffd166; }
+      .hilo-bet-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+      .hilo-bet-row label { font-size: 11px; color: #6b7796; white-space: nowrap; }
+      .hilo-bet-row input {
+        flex: 1; font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 5px;
+        border: 1px solid #2a3550; background: #060912; color: #fff; min-width: 0;
+      }
+      .hilo-deal-btn {
+        font: inherit; font-size: 12px; font-weight: 700; padding: 6px 14px;
+        border-radius: 6px; border: none; background: #a855f7; color: #fff; cursor: pointer;
+        white-space: nowrap; width: 100%; margin-bottom: 8px;
+      }
+      .hilo-deal-btn:hover:not(:disabled) { background: #c084fc; }
+      .hilo-deal-btn:disabled { opacity: 0.4; cursor: default; }
+      .hilo-action-row {
+        display: flex; gap: 6px; margin-bottom: 6px;
+      }
+      .hilo-hi-btn, .hilo-lo-btn {
+        flex: 1; font: inherit; font-size: 13px; font-weight: 700; padding: 8px 0;
+        border-radius: 6px; border: none; cursor: pointer;
+      }
+      .hilo-hi-btn { background: #22c55e; color: #042410; }
+      .hilo-hi-btn:hover:not(:disabled) { background: #4ade80; }
+      .hilo-lo-btn { background: #ef4444; color: #200808; }
+      .hilo-lo-btn:hover:not(:disabled) { background: #f87171; }
+      .hilo-hi-btn:disabled, .hilo-lo-btn:disabled { opacity: 0.4; cursor: default; }
+      .hilo-cashout-btn {
+        width: 100%; font: inherit; font-size: 12px; font-weight: 700; padding: 6px;
+        border-radius: 6px; border: 1px solid #22c55e; background: transparent; color: #22c55e;
+        cursor: pointer; margin-bottom: 6px;
+      }
+      .hilo-cashout-btn:hover:not(:disabled) { background: #042410; }
+      .hilo-cashout-btn:disabled { opacity: 0.4; cursor: default; }
+      .hilo-new-btn {
+        width: 100%; font: inherit; font-size: 12px; font-weight: 700; padding: 6px;
+        border-radius: 6px; border: 1px solid #6b7796; background: transparent; color: #9fb0d8;
+        cursor: pointer; margin-bottom: 6px;
+      }
+      .hilo-new-btn:hover { background: #0e1424; }
+      .hilo-result {
+        font: 800 13px ui-monospace, monospace; min-height: 20px; text-align: center; margin: 4px 0;
+      }
+      .hilo-win { color: #6ee7a8; }
+      .hilo-lose { color: #6b7796; }
+      .hilo-note { font-size: 10px; color: #5a647e; line-height: 1.4; margin-top: 8px; }
+
       .coin-row {
         display: grid; grid-template-columns: 34px 1fr auto; gap: 8px; align-items: center;
         padding: 7px 0; border-top: 1px solid #1c2640;
@@ -3205,7 +3381,7 @@
         /* Mobile panels: full-width sheets for usability */
         #marketPanel, #shopPanel, #loanPanel, #roulettePanel, #bjPanel,
         #crapsPanel, #crashPanel, #slotsPanel, #lootPanel, #marketplacePanel,
-        #newsPanel {
+        #newsPanel, #plinkoPanel, #horsePanel, #hiloPanel {
           position: fixed; left: 0; right: 0; top: auto; bottom: 0;
           max-width: 100vw; max-height: 80vh; overflow-y: auto;
           border-radius: 12px 12px 0 0; z-index: 70;
@@ -3385,6 +3561,9 @@
       <div id="casino">
         <button id="casinoBtn" type="button" aria-expanded="false" title="Casino games &amp; loans">🎰 Casino <span class="caret">▾</span></button>
         <div id="casinoPanel" class="nav-menu" hidden>
+          <button id="plinkoBtn" type="button" aria-expanded="false" title="Drop a ball down the pegboard">🎯 Plinko</button>
+          <button id="horseBtn" type="button" aria-expanded="false" title="Pick a horse and bet on the race">🏇 Horses</button>
+          <button id="hiloBtn" type="button" aria-expanded="false" title="Guess higher or lower, chain multipliers">🃏 Hi-Lo</button>
           <button id="lootBtn" type="button" aria-expanded="false" title="Open loot boxes — roll for scarce, capped exclusives">🎁 Loot Box</button>
           <button id="marketplaceBtn" type="button" aria-expanded="false" title="Black Market — buy &amp; sell scarce exclusives with other players">🛒 Black Market</button>
           <button id="loanBtn" type="button" aria-expanded="false" title="Borrow coins from Davis — pay back 1.5× by the daily reset">💸 Get Loan</button>
@@ -3530,6 +3709,54 @@
         </div>
         <div id="slotsPayTable" class="slots-pay-table"></div>
         <div class="slots-note">Match 3 identical symbols on the center row to win. 7️⃣ jackpot = 100× your bet. Max bet 1,000 🪙.</div>
+      </div>
+      <!-- Plinko panel -->
+      <div id="plinkoPanel" hidden>
+        <h3>Plinko · <span id="plinkoCoins">0</span> 🪙</h3>
+        <canvas id="plinkoCanvas" width="296" height="260"></canvas>
+        <div id="plinkoResult" class="plinko-result"></div>
+        <div class="plinko-controls">
+          <span class="plinko-label">Bet 🪙</span>
+          <input id="plinkoBet" type="number" min="1" max="50000" value="100" />
+          <button id="plinkoDrop" type="button" class="plinko-drop-btn">🎯 Drop</button>
+        </div>
+        <div class="plinko-note">Ball bounces left/right at each of 8 pegs. Center slot pays 26×, edges also 26×, with lower multipliers in between. Max bet 50,000 🪙.</div>
+      </div>
+      <!-- Horse Racing panel -->
+      <div id="horsePanel" hidden>
+        <h3>Horse Racing · <span id="horseCoins">0</span> 🪙</h3>
+        <div id="horseList"><div class="horse-loading">🐎 Loading race…</div></div>
+        <div class="horse-bet-row">
+          <label>Bet 🪙</label>
+          <input id="horseBet" type="number" min="1" max="50000" value="100" />
+          <button id="horsePlaceBet" type="button" class="horse-place-btn" disabled>Place Bet</button>
+        </div>
+        <div id="horseResult" class="horse-result"></div>
+        <canvas id="horseCanvas" width="296" height="120"></canvas>
+        <button id="horseNewRace" type="button" class="horse-new-btn" hidden>🏇 New Race</button>
+        <div class="horse-note">Pick your horse, place your bet, watch the race. Lower odds = more likely to win, lower payout. Max bet 50,000 🪙.</div>
+      </div>
+      <!-- Hi-Lo panel -->
+      <div id="hiloPanel" hidden>
+        <h3>Hi-Lo · <span id="hiloCoins">0</span> 🪙</h3>
+        <div id="hiloCard"></div>
+        <div class="hilo-info">
+          <span>Multiplier: <strong id="hiloMult">1.00×</strong></span>
+          <span>Payout: <strong id="hiloPending">0</strong> 🪙</span>
+        </div>
+        <div class="hilo-bet-row">
+          <label>Bet 🪙</label>
+          <input id="hiloBet" type="number" min="1" max="50000" value="100" />
+        </div>
+        <button id="hiloDeal" type="button" class="hilo-deal-btn">Deal Card</button>
+        <div class="hilo-action-row">
+          <button id="hiloHi" type="button" class="hilo-hi-btn" hidden>Higher 🔼</button>
+          <button id="hiloLo" type="button" class="hilo-lo-btn" hidden>Lower 🔽</button>
+        </div>
+        <button id="hiloCashoutBtn" type="button" class="hilo-cashout-btn" hidden>💰 Cash Out</button>
+        <button id="hiloNewGame" type="button" class="hilo-new-btn" hidden>↩ New Game</button>
+        <div id="hiloResult" class="hilo-result"></div>
+        <div class="hilo-note">Get a card, guess Higher or Lower, multiply your winnings. Wrong guess = bust. A = 1, K = 13. Ties re-draw. Max bet 50,000 🪙.</div>
       </div>
       <div id="lootPanel" hidden>
         <h3>🎁 Loot Box</h3>
