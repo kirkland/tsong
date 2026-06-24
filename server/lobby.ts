@@ -847,7 +847,7 @@ export class Lobby {
   // Netizens mill around the town-centre plaza (mirrors client/world.ts PLAZA at 1600,1100 r240).
   // They spawn near it and are leashed to NETIZEN_LEASH units of its centre so they stay in view.
   private static readonly PLAZA = { x: 1600, y: 1100 };
-  private static readonly NETIZEN_LEASH = 360;
+  private static readonly NETIZEN_LEASH = 560;
   private static readonly NETIZEN_NAMES = [
     'satoshi_jr', 'diamond_paws', 'moonboy420', 'hodl_hannah', 'paperhands_pete',
     'algo_andy', 'bagholder_bo', 'shorty_sue', 'whale_watcher', 'degen_dana',
