@@ -167,6 +167,129 @@ const HEDGE_RING: { x: number; y: number }[] = (() => {
   return out;
 })();
 
+// --- townsfolk: client-side NPCs that wander near a home spot and have a few lines. A couple of
+// them ask a question you can actually answer (two reply choices, each with its own comeback).
+// Purely local flavour — never networked, so they cost the server nothing. ---
+interface NpcChoice { label: string; reply: string }
+interface NpcDef {
+  id: string;
+  name: string;
+  shirt: number;        // body/shirt tint (ignored for the minion)
+  hair: number;         // hair tint (ignored for the minion)
+  kind?: 'minion';      // special one-off sprite; default is the little-person
+  glasses?: boolean;    // overlay specs on the little-person head
+  stripes?: boolean;    // red/white striped shirt instead of a flat tinted one (Waldo!)
+  x: number; y: number; // home anchor (NPC roams around this)
+  roam: number;         // wander radius, world units
+  lines: string[];      // flavour one-liners, cycled each chat
+  ask?: { q: string; choices: [NpcChoice, NpcChoice] }; // optional: a question you can answer
+}
+const NPCS: NpcDef[] = [
+  {
+    id: 'pip', name: 'Pip', shirt: 0xe05a6d, hair: 0x4a2f1a, x: 1470, y: 1170, roam: 120,
+    lines: [
+      'I walked around the fountain. Twice!',
+      'Did you know the ball has eyes? It watches you sleep.',
+      'When I grow up I wanna be a ball too.',
+    ],
+  },
+  {
+    id: 'vito', name: 'Coach Vito', shirt: 0x3a78c2, hair: 0x2a2a2a, x: 1710, y: 720, roam: 90,
+    lines: ["Back in my day the ball was square. We liked it that way."],
+    ask: {
+      q: 'Want the secret to winning at tsong?',
+      choices: [
+        { label: 'Yes, coach!', reply: 'Hit the ball. Do NOT miss it. ...That\'ll be 500 coins.' },
+        { label: "I got this", reply: 'Cocky. I respect it. Cry quietly when you lose, okay?' },
+      ],
+    },
+  },
+  {
+    id: 'lou', name: 'Lucky Lou', shirt: 0x2faf6a, hair: 0x6b4a1f, x: 770, y: 1380, roam: 110,
+    lines: [
+      "I'm up BIG. Don't tell my wife.",
+      'The house always wins. But not today. ...Probably today.',
+      'You ever put your whole wallet on black? Character-building.',
+    ],
+  },
+  {
+    id: 'edna', name: 'Banker Edna', shirt: 0x8a5cf6, hair: 0x9a9aa8, x: 2430, y: 1380, roam: 90,
+    lines: ['A penny saved is a penny we hold for you. Indefinitely.'],
+    ask: {
+      q: 'Care to make an investment today?',
+      choices: [
+        { label: 'Tell me more', reply: 'Buy low, sell high. Consulting fee: 4,000 coins. Pleasure doing business.' },
+        { label: 'Just browsing', reply: "Of course. We'll be watching. ...Fondly." },
+      ],
+    },
+  },
+  {
+    id: 'drift', name: 'Drift', shirt: 0xff8a3d, hair: 0x1f1f1f, x: 1150, y: 1255, roam: 130,
+    lines: [
+      'Nice car. Mine corners better, though.',
+      'I drifted the whole plaza once. No witnesses, but it happened.',
+      'Grip is for cowards. ...My insurance disagrees.',
+    ],
+  },
+  {
+    id: 'mush', name: 'Mush', shirt: 0xc24a8a, hair: 0x3a6b2f, x: 2120, y: 820, roam: 120,
+    lines: [
+      "Don't eat the red mushrooms. ...Or do. I'm not your dad.",
+      'I talk to the trees. They sway back. We have an understanding.',
+    ],
+  },
+  {
+    id: 'waldo', name: 'Waldo', shirt: 0xd23b3b, hair: 0x3a2a1a, glasses: true, stripes: true,
+    x: 980, y: 980, roam: 150,
+    lines: [
+      'You FOUND me?! Took you long enough.',
+      'Red-and-white stripes in a town full of grass. Worst camouflage ever.',
+      'Have you seen my dog? His tail is striped too. It gets confusing.',
+      'Somewhere out there is a guy in my exact outfit. We do not speak.',
+      'Quick — look away and I bet you lose me again.',
+    ],
+  },
+  {
+    // Matt's custom guy: a distinguished older gent (grey hair, specs, teal cardigan) who never
+    // strays from the fountain — the office nag reminding you there's work to do.
+    id: 'burt', name: 'Burt', shirt: 0x2e8b8b, hair: 0xb9bcc4, glasses: true, x: 1600, y: 1235, roam: 34,
+    lines: [
+      "Don't you have to get back to work?",
+      "Aren't you on Ops-Task Rotation this week?",
+      'Those Tech Services guys sure like to slack off!',
+    ],
+  },
+  {
+    id: 'kevin', name: 'Kevin', shirt: 0xfdd835, hair: 0x111111, kind: 'minion', x: 1880, y: 1240, roam: 140,
+    lines: [
+      'Bello! ...Banana?',
+      'Poopaye! (that means goodbye)',
+      'Bee-do! Bee-do! Bee-do!',
+      'Tank yu! Para tú!',
+    ],
+    ask: {
+      q: 'BA-NA-NA?!',
+      choices: [
+        { label: '🍌 Banana!', reply: 'BANANAAAAAA! *happy minion noises*' },
+        { label: 'No thanks', reply: '...Poopaye. (he looks devastated)' },
+      ],
+    },
+  },
+];
+
+// A spawned, live townsperson.
+interface LiveNpc {
+  def: NpcDef;
+  x: number; y: number;
+  tx: number; ty: number;   // current wander target
+  pauseUntil: number;       // ms timestamp; stand still until then
+  faceLeft: boolean;
+  walking: boolean;
+  lineIdx: number;          // which flavour line to say next
+  c: Phaser.GameObjects.Container;
+  bob: Phaser.GameObjects.Container; // body sprites (bobbed/flipped); shadow+label sit outside it
+}
+
 // --- small helpers ---
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
@@ -205,6 +328,13 @@ export function startWorld(net: WorldNet): void {
   let joyCX = 0, joyCY = 0; // joystick current (screen px)
   let dialogOpen = false;   // movement pauses while a building dialog is up
   let nearId: string | null = null; // building the avatar is currently at the door of
+
+  // --- NPC state ---
+  const npcs: LiveNpc[] = [];          // populated in create()
+  let nearNpc: LiveNpc | null = null;  // townsperson within talking range
+  let talkOpen = false;                // an NPC dialogue box is up → movement pauses
+  let npcAdvance: (() => void) | null = null; // set while a dialogue is live; called on Enter/click
+  let npcClose: (() => void) | null = null;   // closes the live dialogue (Esc)
 
   // --- network send throttle ---
   let lastSentX = NaN, lastSentY = NaN, lastSentAt = 0;
@@ -284,6 +414,33 @@ export function startWorld(net: WorldNet): void {
   dialog.appendChild(dialogBox);
   overlay.appendChild(dialog);
 
+  // NPC dialogue — a Pokémon-style box pinned to the bottom: name tag, typewritten line, a blinking
+  // ▼, and (for the interactive folks) a couple of reply buttons. Tap / Enter / Space advances.
+  const npcBox = document.createElement('div');
+  npcBox.style.cssText =
+    'position:absolute;left:50%;bottom:24px;transform:translateX(-50%);width:min(92vw,720px);display:none;' +
+    'background:#0c1330ee;border:3px solid #e8eefc;border-radius:14px;padding:18px 22px 20px;' +
+    'box-shadow:0 12px 40px #000a;z-index:4;cursor:pointer;';
+  const npcName = document.createElement('div');
+  npcName.style.cssText =
+    'position:absolute;top:-14px;left:18px;background:#e8b84b;color:#1a1408;font-weight:800;' +
+    'font-size:14px;letter-spacing:.5px;padding:3px 12px;border-radius:8px;box-shadow:0 3px 0 #00000033;';
+  const npcText = document.createElement('div');
+  npcText.style.cssText = 'color:#eef2ff;font-size:18px;line-height:1.5;min-height:54px;font-family:ui-monospace,monospace;';
+  const npcChoices = document.createElement('div');
+  npcChoices.style.cssText = 'display:none;gap:8px;margin-top:10px;';
+  const npcHint = document.createElement('div');
+  npcHint.textContent = '▼';
+  npcHint.style.cssText = 'position:absolute;right:16px;bottom:8px;color:#9fd1ff;font-size:15px;animation:wBlink 1s steps(2) infinite;';
+  npcBox.append(npcName, npcText, npcChoices, npcHint);
+  overlay.appendChild(npcBox);
+  if (!document.getElementById('wKeyframes')) {
+    const st = document.createElement('style');
+    st.id = 'wKeyframes';
+    st.textContent = '@keyframes wBlink{0%,49%{opacity:.25}50%,100%{opacity:1}}';
+    document.head.appendChild(st);
+  }
+
   document.body.appendChild(overlay);
 
   // --- collision: keep the avatar/car outside every building rectangle ---
@@ -358,7 +515,7 @@ export function startWorld(net: WorldNet): void {
     if (helpFlash && now < helpFlashUntil) { help.innerHTML = `<span style="color:#ffd166">${helpFlash}</span>`; return; }
     help.innerHTML = driving
       ? 'W/S or ↑/↓ throttle · A/D or ←/→ steer · drag to drive · <b>F</b> get out'
-      : 'WASD / arrows or drag to walk · <b>F</b> to drive · <b>Enter</b> at a building';
+      : 'WASD / arrows or drag to walk · <b>F</b> to drive · <b>Space</b> to talk / enter';
   }
 
   // --- building entry ---
@@ -427,8 +584,110 @@ export function startWorld(net: WorldNet): void {
     dialogOpen = false;
     dialog.style.display = 'none';
   }
+
+  // --- NPC dialogue (Pokémon-style bottom box: typewriter line(s), then optional reply choices) ---
+  function startTalk(n: LiveNpc) {
+    if (talkOpen || dialogOpen) return;
+    talkOpen = true;
+    keys.clear(); joyActive = false;
+    prompt.style.display = 'none';
+    n.faceLeft = selfX < n.x; // turn to face the player
+
+    // Build the page list: one flavour line, then (if any) the question + its chosen reply.
+    type Page = { text: string; choices?: readonly [NpcChoice, NpcChoice] };
+    const pages: Page[] = [{ text: n.def.lines[n.lineIdx % n.def.lines.length] }];
+    n.lineIdx++;
+    if (n.def.ask) pages.push({ text: n.def.ask.q, choices: n.def.ask.choices });
+
+    npcName.textContent = n.def.name;
+    npcBox.style.display = 'block';
+
+    let pageI = 0;
+    let typing = false;
+    let timer = 0;
+    let full = '';
+
+    const renderChoices = (choices: readonly [NpcChoice, NpcChoice]) => {
+      npcHint.style.display = 'none';
+      npcChoices.style.display = 'flex';
+      npcChoices.replaceChildren();
+      for (const ch of choices) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = ch.label;
+        b.style.cssText =
+          'flex:1;cursor:pointer;background:#21305a;color:#e8eefc;border:2px solid #4a64a0;' +
+          'border-radius:10px;padding:11px;font-size:15px;font-weight:700;font-family:ui-monospace,monospace;';
+        b.onmouseenter = () => { b.style.background = '#2c4079'; };
+        b.onmouseleave = () => { b.style.background = '#21305a'; };
+        b.onclick = (ev) => {
+          ev.stopPropagation();
+          selectBlip();
+          npcChoices.style.display = 'none';
+          pages.push({ text: ch.reply }); // append the comeback as the next page
+          pageI++; showPage();
+        };
+        npcChoices.appendChild(b);
+      }
+    };
+
+    function showPage() {
+      const page = pages[pageI];
+      if (!page) { closeTalk(); return; }
+      npcChoices.style.display = 'none';
+      // typewriter with a campaign-style blip every couple of characters
+      full = page.text;
+      let shown = 0;
+      typing = true;
+      npcText.textContent = '';
+      npcHint.style.display = 'none';
+      timer = window.setInterval(() => {
+        shown++;
+        npcText.textContent = full.slice(0, shown);
+        if (shown % 2 === 0) textBlip();
+        if (shown >= full.length) {
+          window.clearInterval(timer);
+          typing = false;
+          if (page.choices) renderChoices(page.choices);
+          else npcHint.style.display = 'block';
+        }
+      }, 30);
+    }
+
+    // Advance: finish the typewriter instantly, else move to the next page (choice pages wait for a tap).
+    npcAdvance = () => {
+      if (typing) {
+        window.clearInterval(timer);
+        typing = false;
+        npcText.textContent = full;
+        const page = pages[pageI];
+        if (page?.choices) renderChoices(page.choices);
+        else npcHint.style.display = 'block';
+        return;
+      }
+      if (pages[pageI]?.choices) return; // must pick a choice, not skip
+      pageI++;
+      if (pageI >= pages.length) closeTalk();
+      else showPage();
+    };
+
+    function closeTalk() {
+      window.clearInterval(timer);
+      talkOpen = false;
+      npcAdvance = null;
+      npcClose = null;
+      npcBox.style.display = 'none';
+      npcChoices.style.display = 'none';
+    }
+    npcClose = closeTalk;
+
+    showPage();
+  }
+  npcBox.onclick = () => npcAdvance?.();
+
   function triggerNear() {
-    if (dialogOpen) return;
+    if (dialogOpen || talkOpen) return;
+    if (nearNpc) { startTalk(nearNpc); return; }
     const b = WORLD_BUILDINGS.find((x) => x.id === nearId);
     if (b) enterBuilding(b.kind);
   }
@@ -442,13 +701,21 @@ export function startWorld(net: WorldNet): void {
     const k = e.key.toLowerCase();
     if (k === 'escape') {
       e.preventDefault(); e.stopPropagation();
-      if (dialogOpen) closeDialog(); else exit();
+      if (talkOpen) npcClose?.(); else if (dialogOpen) closeDialog(); else exit();
+      return;
+    }
+    // While chatting, Enter / Space / E advances the dialogue; movement is frozen.
+    if (talkOpen) {
+      if (k === 'enter' || k === ' ' || k === 'e') { e.preventDefault(); e.stopPropagation(); npcAdvance?.(); }
+      else if (MOVE_KEYS.has(k)) { e.preventDefault(); e.stopPropagation(); }
       return;
     }
     if (dialogOpen) return;
     if (k === 'f') { e.preventDefault(); e.stopPropagation(); toggleDrive(); return; }
-    if (k === 'enter' || k === 'e') {
-      if (nearId) { e.preventDefault(); e.stopPropagation(); triggerNear(); }
+    if (k === 'enter' || k === 'e' || k === ' ') {
+      // Always swallow Space so the page never scrolls; interact if something's in range.
+      e.preventDefault(); e.stopPropagation();
+      if (nearId || nearNpc) triggerNear();
       return;
     }
     if (MOVE_KEYS.has(k)) { keys.add(k); e.preventDefault(); e.stopPropagation(); }
@@ -459,8 +726,8 @@ export function startWorld(net: WorldNet): void {
   }
   function onPointerDown(e: PointerEvent) {
     unlockAudio();
-    // Ignore drags that start on a chrome button (Drive / Back / prompt / dialog).
-    if (dialogOpen || (e.target instanceof Element && e.target.closest('button'))) return;
+    // Ignore drags that start on a chrome button or while a modal/dialogue is up.
+    if (dialogOpen || talkOpen || (e.target instanceof Element && e.target.closest('button'))) return;
     joyActive = true;
     joyOX = joyCX = e.clientX;
     joyOY = joyCY = e.clientY;
@@ -552,6 +819,8 @@ export function startWorld(net: WorldNet): void {
   }
 
   function updateNearBuilding() {
+    if (talkOpen) { prompt.style.display = 'none'; return; } // freeze targeting mid-chat
+    // nearest building door
     let best: string | null = null;
     let bestD = Infinity;
     for (const b of WORLD_BUILDINGS) {
@@ -559,12 +828,23 @@ export function startWorld(net: WorldNet): void {
       const reach = (driving ? CAR_LEN * 0.5 : R) + TRIGGER_PAD;
       if (d <= reach && d < bestD) { bestD = d; best = b.id; }
     }
-    if (best !== nearId) {
-      nearId = best;
-      const b = best ? WORLD_BUILDINGS.find((x) => x.id === best) : null;
-      prompt.textContent = b ? labelFor(b.kind) : '';
+    nearId = best;
+    // nearest townsperson (can't chat from inside a car) — buildings win ties.
+    nearNpc = null;
+    if (!best && !driving) {
+      let bD = R + TRIGGER_PAD + 12;
+      for (const n of npcs) {
+        const d = Math.hypot(n.x - selfX, n.y - selfY);
+        if (d < bD) { bD = d; nearNpc = n; }
+      }
     }
-    prompt.style.display = nearId && !dialogOpen ? 'block' : 'none';
+    if (best) {
+      const b = WORLD_BUILDINGS.find((x) => x.id === best)!;
+      prompt.textContent = labelFor(b.kind);
+    } else if (nearNpc) {
+      prompt.textContent = `💬 Talk to ${nearNpc.def.name}`;
+    }
+    prompt.style.display = (nearId || nearNpc) && !dialogOpen && !talkOpen ? 'block' : 'none';
   }
 
   function maybeSendMove(now: number) {
@@ -637,6 +917,8 @@ export function startWorld(net: WorldNet): void {
     else tone(210, 0.22, 'sawtooth', 0.15, 80);
   }
   function selectBlip() { tone(660, 0.05, 'square', 0.12, 880); }
+  // The dialogue typewriter blip — lifted straight from campaign.ts's text chatter (square 440→720).
+  function textBlip() { tone(440, 0.04, 'square', 0.05, 720); }
 
   // ============================================================================================
   // PHASER SCENE — texture generation + rendering. All draw state lives in `scene`-scoped vars
@@ -686,6 +968,46 @@ export function startWorld(net: WorldNet): void {
       else { px(9, 0, 6, 3, WTR_L); px(7, 4, 2, 2, WTR_L); px(15, 4, 2, 2, WTR_L); }
       g.generateTexture(`w-fountain-${f}`, 24, 24);
     }
+
+    // --- NPC townsperson: three stacked 12×16 layers (all same canvas so they align in a
+    // container). 'head' is fixed skin + eyes + dark legs; 'hair' and 'body' are white so they can
+    // be tinted per-NPC. Distinct little-person silhouette vs the ball-players. ---
+    const SKIN = 0xf1c9a0, SKIN_D = 0xd9a87e;
+    g.clear(); // head + face + legs/feet (untinted)
+    px(4, 2, 5, 5, SKIN); px(4, 6, 5, 1, SKIN_D);   // head
+    px(5, 4, 1, 1, 0x2a1f1a); px(7, 4, 1, 1, 0x2a1f1a); // eyes
+    px(4, 13, 2, 3, 0x39424f); px(7, 13, 2, 3, 0x39424f); // legs
+    px(4, 15, 2, 1, 0x222831); px(7, 15, 2, 1, 0x222831); // shoes
+    g.generateTexture('w-npc-head', 12, 16);
+    g.clear(); // hair cap (tint = hair color)
+    px(4, 1, 5, 2, 0xffffff); px(3, 2, 1, 2, 0xffffff); px(8, 2, 1, 2, 0xffffff);
+    g.generateTexture('w-npc-hair', 12, 16);
+    g.clear(); // round specs across the eyes (overlay; Waldo & friends)
+    px(4, 4, 2, 2, 0x20242c); px(7, 4, 2, 2, 0x20242c); px(6, 4, 1, 1, 0x20242c); // two rims + bridge
+    px(5, 5, 1, 1, 0xbfe0ff); px(8, 5, 1, 1, 0xbfe0ff);                            // glint
+    g.generateTexture('w-npc-glasses', 12, 16);
+    g.clear(); // torso + arms (tint = shirt color)
+    px(3, 7, 6, 6, 0xffffff); px(2, 8, 1, 4, 0xffffff); px(9, 8, 1, 4, 0xffffff);
+    g.generateTexture('w-npc-body', 12, 16);
+    g.clear(); // Waldo's red/white striped torso (baked, not tinted)
+    const RED = 0xd23b3b, WHT = 0xf4f4f4;
+    for (let yy = 0; yy < 6; yy++) px(3, 7 + yy, 6, 1, yy % 2 === 0 ? RED : WHT);
+    px(2, 8, 1, 4, RED); px(9, 8, 1, 4, RED); // arms (solid red sleeves)
+    px(3, 7, 6, 1, RED);
+    g.generateTexture('w-npc-body-stripe', 12, 16);
+
+    // --- Kevin the minion: yellow capsule, blue overalls, single goggle (12×16) ---
+    const YEL = 0xfdd835, YEL_D = 0xe0bd2a, DENIM = 0x2f6fc4, DENIM_D = 0x255aa0;
+    g.clear();
+    px(3, 2, 6, 12, YEL); px(2, 4, 8, 9, YEL); px(3, 13, 6, 1, YEL_D); // body
+    px(2, 9, 1, 3, YEL); px(9, 9, 1, 3, YEL);                          // arms
+    px(3, 11, 6, 4, DENIM); px(3, 14, 6, 1, DENIM_D);                  // overalls
+    px(4, 9, 1, 3, DENIM); px(7, 9, 1, 3, DENIM);                      // straps
+    px(2, 6, 8, 1, 0x595959);                                          // goggle strap
+    px(4, 5, 4, 3, 0xc9ccd4); px(5, 6, 2, 2, 0xffffff); px(6, 6, 1, 1, 0x1a1a1a); // goggle + eye
+    px(4, 2, 1, 1, 0x111111); px(6, 1, 1, 1, 0x111111); px(8, 2, 1, 1, 0x111111); // hair tufts
+    px(4, 15, 2, 1, 0x1a1a1a); px(7, 15, 2, 1, 0x1a1a1a);              // feet
+    g.generateTexture('w-minion', 12, 16);
 
     // --- soft round shadow (12×6 texels) ---
     g.clear();
@@ -852,6 +1174,9 @@ export function startWorld(net: WorldNet): void {
         sign.setOrigin(0.5, 1).setDepth(100000);
       }
 
+      // --- townsfolk ---
+      for (const def of NPCS) npcs.push(makeNpc(sc, def));
+
       // --- our own avatar ---
       self = makeAvatar(sc, net.name() || 'you', net.color());
       sc.cameras.main.startFollow(self.c, true, 0.18, 0.18);
@@ -867,12 +1192,13 @@ export function startWorld(net: WorldNet): void {
       // gentle breeze: each tree sways on its own phase (cheap, ~150 rotations/frame)
       for (const t of swayers) t.rotation = Math.sin(time / 700 + t.x * 0.012) * 0.035;
 
-      if (!dialogOpen) {
+      if (!dialogOpen && !talkOpen) {
         const car = driving ? myCar() : null;
         if (car) stepCar(car, dt);
         else stepFoot(dt);
       }
 
+      updateNpcs(now, dt);
       updateNearBuilding();
       maybeSendMove(now);
 
@@ -929,6 +1255,55 @@ export function startWorld(net: WorldNet): void {
       const spec = carById((others.find((o) => o.name === name)?.car) ?? net.car());
       av.carBody.setTint(spec ? hexToInt(spec.body) : tint);
       av.carRoof.setTint(spec ? hexToInt(spec.accent) : 0xffffff);
+    }
+  }
+
+  // --- townsfolk: build sprite + per-frame wander ---
+  function makeNpc(sc: Phaser.Scene, def: NpcDef): LiveNpc {
+    const shadow = sc.add.image(0, -1, 'w-shadow').setScale(TEXEL * 1.05).setAlpha(0.4);
+    let parts: Phaser.GameObjects.Image[];
+    if (def.kind === 'minion') {
+      parts = [sc.add.image(0, 0, 'w-minion').setScale(TEXEL * 1.15).setOrigin(0.5, 0.95)];
+    } else {
+      const bodyKey = def.stripes ? 'w-npc-body-stripe' : 'w-npc-body';
+      const body = sc.add.image(0, 0, bodyKey).setScale(TEXEL).setOrigin(0.5, 0.95);
+      if (!def.stripes) body.setTint(def.shirt);
+      const head = sc.add.image(0, 0, 'w-npc-head').setScale(TEXEL).setOrigin(0.5, 0.95);
+      const hair = sc.add.image(0, 0, 'w-npc-hair').setScale(TEXEL).setOrigin(0.5, 0.95).setTint(def.hair);
+      parts = [body, head, hair];
+      if (def.glasses) parts.push(sc.add.image(0, 0, 'w-npc-glasses').setScale(TEXEL).setOrigin(0.5, 0.95));
+    }
+    const bob = sc.add.container(0, 0, parts);
+    const label = sc.add.text(0, -R - 26, def.name, NAME_STYLE).setOrigin(0.5, 1);
+    const c = sc.add.container(def.x, def.y, [shadow, bob, label]);
+    return { def, x: def.x, y: def.y, tx: def.x, ty: def.y, pauseUntil: 0, faceLeft: false, walking: false, lineIdx: 0, c, bob };
+  }
+
+  function updateNpcs(now: number, dt: number) {
+    for (const n of npcs) {
+      const talking = talkOpen && nearNpc === n;
+      if (!talking && now >= n.pauseUntil) {
+        const dx = n.tx - n.x, dy = n.ty - n.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 6) {
+          n.walking = false;
+          n.pauseUntil = now + 700 + Math.random() * 2400;       // loiter, then pick a new spot
+          const a = Math.random() * Math.PI * 2, r = Math.random() * n.def.roam;
+          n.tx = n.def.x + Math.cos(a) * r; n.ty = n.def.y + Math.sin(a) * r;
+        } else {
+          n.walking = true;
+          const sp = 64; // gentle stroll
+          const m = resolveCollisions(n.x + (dx / dist) * sp * dt, n.y + (dy / dist) * sp * dt, R * 0.7);
+          if (m.hit) { n.pauseUntil = now + 400; n.tx = n.def.x; n.ty = n.def.y; }
+          n.x = m.x; n.y = m.y;
+          n.faceLeft = dx < 0;
+        }
+      } else if (talking) {
+        n.walking = false;
+      }
+      n.c.setPosition(n.x, n.y).setDepth(n.y);
+      n.bob.scaleX = n.faceLeft ? -1 : 1;
+      n.bob.y = n.walking ? Math.sin(now / 110) * 1.4 - 1 : 0; // little walk bob
     }
   }
 
