@@ -4,9 +4,12 @@
 // a building and an in-world prompt lets you enter it: the Arena (the classic tsong game), the
 // Casino (roulette), or the Bank (stocks / loans).
 //
-// Like the other arcade toys (doom.ts / nuketown.ts), it is deliberately self-contained: it
-// builds its own fullscreen overlay, canvas, input handlers and animation loop, and tears them
-// all down on exit. It never touches the Pong render/state. Loaded lazily on first open.
+// RENDERING: this overlay is drawn with **Phaser 3** (pixelArt mode) for a crunchy GBA-Pokémon
+// look. All the art is generated procedurally at a low "texel" resolution and upscaled with
+// nearest-neighbour sampling — so there are no external image assets to license, and the whole
+// thing stays self-contained like the other arcade toys (doom.ts / nuketown.ts). Phaser owns the
+// game loop, camera and the canvas; the surrounding chrome (top bar, Drive button, door prompt,
+// building dialog) is still plain DOM layered over the canvas.
 //
 // Networking is client-authoritative: we own our avatar's position (+ heading + driven car when
 // in a car), stream it ~15/s, and the server fans everyone's state back to whoever's in the
@@ -14,8 +17,10 @@
 // latest `world` broadcast (fed in via feedWorld).
 //
 // Built to grow: a new venue is a WORLD_BUILDINGS entry (shared/types.ts) + a branch in
-// enterBuilding() and a draw function here. The map/camera/collision/labels key off shared data.
+// enterBuilding() and a building-texture case here. The map/camera/collision/labels key off
+// shared data.
 
+import Phaser from 'phaser';
 import {
   WORLD,
   WORLD_AVATAR,
@@ -25,8 +30,6 @@ import {
   WorldBuildingKind,
   CarSpec,
   carById,
-  STOCKS,
-  NETIZEN_DIALOGUE,
 } from '../shared/types';
 
 // What the world needs from the rest of the app. main.ts supplies these (see startWorld call).
@@ -41,7 +44,6 @@ export interface WorldNet {
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
   openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'stocks' | 'loans'): void; // open a Casino/Bank feature
-  onNetizenClick?(netizenId: string): void; // user tapped a netizen avatar in the world
 }
 
 // --- module-level controller so feedWorld()/isWorldOpen() can reach the live overlay ---
@@ -67,11 +69,26 @@ export function reenterWorld(): void {
 
 const SPEED = WORLD_AVATAR.speed; // on-foot walk speed
 const R = WORLD_AVATAR.r;
-const SCALE = 0.8;          // pixels per world unit (camera zoom)
 const TRIGGER_PAD = 34;     // how close (world units, beyond the wall) counts as "at the door"
 const JOY_DEADZONE = 14;    // screen px of drag before the virtual joystick engages
 const CAR_LEN = 52;         // car body length, world units (for drawing + collision feel)
 const CAR_WID = 28;         // car body width, world units
+
+// --- pixel-art scale knobs -------------------------------------------------------------------
+// Everything is authored in "texels". One texel = TEXEL world units; sprites are drawn at their
+// texel resolution and scaled up by TEXEL, then the camera zooms by ZOOM. The net result is each
+// source texel covers TEXEL*ZOOM screen pixels — crank that ratio up for a chunkier GBA look.
+const TEXEL = 2;            // world units per source texel (also the Kenney sprite/tile upscale)
+const ZOOM = 2;            // camera zoom (screen px per world unit)
+const TILE = 32;           // ground tile size, world units (a 16px Kenney tile drawn at TEXEL×)
+
+// --- Kenney "Tiny Town" tileset (16×16, packed 12×11). Frame indices we use, named for clarity. ---
+const TT = {
+  grass: [0, 1, 2],                       // plain / textured / flowered grass
+  // grass-bordered dirt, as a 3×3 autotile: [topLeft,top,topRight, left,center,right, botL,bot,botR]
+  dirt: [12, 13, 14, 24, 25, 26, 36, 37, 38],
+  trees: [16, 4], pines: [27, 15], bush: 5, mushroom: 29, sapling: 17,
+} as const;
 
 // --- the town layout: roads + decorations, computed once and shared by every session ---
 
@@ -99,6 +116,10 @@ function nearPlaza(px: number, py: number, pad = 0): boolean {
 function inAnyBuilding(px: number, py: number, pad = 0): boolean {
   return WORLD_BUILDINGS.some((b) => pointInRect(px, py, b, pad));
 }
+// "Bare" ground = roads + the plaza: dirt under your feet, autotiled against the surrounding grass.
+function isBare(px: number, py: number): boolean {
+  return onRoad(px, py) || nearPlaza(px, py);
+}
 
 // Deterministic 0..1 hash so decoration placement is stable across frames/sessions without any
 // Math.random (which would make the scenery jitter every repaint).
@@ -108,37 +129,70 @@ function hash(i: number, j: number): number {
   return (h % 1000) / 1000;
 }
 
-type Decor = { type: 'tree' | 'bush' | 'flower'; x: number; y: number; s: number };
-// Scatter trees/bushes/flowers across the grass on a jittered grid, skipping roads, the plaza and
-// building footprints. Decoration is non-solid (you can walk/drift over the grass freely) — only
-// buildings and the map border collide, which keeps driving fun.
+type DecorType = 'tree' | 'pine' | 'bush' | 'flower' | 'shrub';
+type Decor = { type: DecorType; x: number; y: number; s: number };
+// Scatter scenery across the grass on a tight jittered grid, skipping roads, the plaza and building
+// footprints. Decoration is non-solid (you can walk/drift over the grass freely) — only buildings
+// and the map border collide, which keeps driving fun.
 const DECOR: Decor[] = (() => {
   const out: Decor[] = [];
-  const cell = 150;
-  for (let gx = 90; gx < WORLD.w - 60; gx += cell) {
-    for (let gy = 90; gy < WORLD.h - 60; gy += cell) {
-      const x = gx + (hash(gx, gy * 3) - 0.5) * 95;
-      const y = gy + (hash(gx * 3, gy) - 0.5) * 95;
-      if (inAnyBuilding(x, y, 90) || onRoad(x, y, 30) || nearPlaza(x, y, 30)) continue;
+  const cell = 96; // tight grid → a full, lush map
+  for (let gx = 70; gx < WORLD.w - 50; gx += cell) {
+    for (let gy = 70; gy < WORLD.h - 50; gy += cell) {
+      const x = gx + (hash(gx, gy * 3) - 0.5) * 80;
+      const y = gy + (hash(gx * 3, gy) - 0.5) * 80;
+      if (inAnyBuilding(x, y, 90) || onRoad(x, y, 28) || nearPlaza(x, y, 28)) continue;
+      // Leave some cells empty so it reads organic rather than wall-to-wall.
+      if (hash(gx + 5, gy + 9) < 0.2) continue;
       const r = hash(gx, gy);
-      if (r < 0.5) out.push({ type: 'tree', x, y, s: 0.82 + hash(gy, gx) * 0.55 });
-      else if (r < 0.68) out.push({ type: 'bush', x, y, s: 0.9 + hash(gy * 2, gx) * 0.4 });
-      else if (r < 0.8) out.push({ type: 'flower', x, y, s: 1 });
+      const type: DecorType =
+        r < 0.34 ? 'tree' : r < 0.5 ? 'pine' : r < 0.7 ? 'bush' :
+        r < 0.86 ? 'shrub' : 'flower';
+      out.push({ type, x, y, s: 0.85 + hash(gy, gx) * 0.5 });
     }
   }
   return out;
 })();
 
+// A ring of bushes hugging the plaza paving (leaving gaps where the roads enter).
+const HEDGE_RING: { x: number; y: number }[] = (() => {
+  const out: { x: number; y: number }[] = [];
+  const ringR = PLAZA.r + 24;
+  for (let i = 0; i < 30; i++) {
+    const a = (i / 30) * Math.PI * 2;
+    const x = PLAZA.x + Math.cos(a) * ringR, y = PLAZA.y + Math.sin(a) * ringR;
+    if (onRoad(x, y, 36)) continue;
+    out.push({ x, y });
+  }
+  return out;
+})();
+
+// --- small helpers ---
+function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+function hexToInt(c: string): number {
+  if (c[0] === '#') c = c.slice(1);
+  if (c.length === 3) c = c[0] + c[0] + c[1] + c[1] + c[2] + c[2];
+  return parseInt(c, 16) >>> 0;
+}
+// Shade a 0xRRGGBB color toward black (f<1) or white (f>1) — for cheap pixel-art highlights/shadows.
+function shade(int: number, f: number): number {
+  const ch = (v: number) => clamp(Math.round(v * Math.min(f, 1) + (f > 1 ? 255 * (f - 1) : 0)), 0, 255);
+  const r = ch((int >> 16) & 0xff);
+  const g = ch((int >> 8) & 0xff);
+  const b = ch(int & 0xff);
+  return (r << 16) | (g << 8) | b;
+}
+
 export function startWorld(net: WorldNet): void {
   if (controller) return; // already open
 
   // --- local avatar state ---
-  let selfX = WORLD.spawnX;
-  let selfY = WORLD.spawnY;
+  let selfX: number = WORLD.spawnX;
+  let selfY: number = WORLD.spawnY;
   let facing = -Math.PI / 2; // radians; on foot = look dir, in car = heading. Start facing "up".
   let others: WorldAvatar[] = [];
-  // Per-bot dialogue state: id → { line, nextAt } (nextAt = epoch ms to show next line).
-  const botDialogue = new Map<string, { line: string; nextAt: number }>();
 
   // --- car state ---
   let driving = false;
@@ -155,28 +209,41 @@ export function startWorld(net: WorldNet): void {
   // --- network send throttle ---
   let lastSentX = NaN, lastSentY = NaN, lastSentAt = 0;
 
-  // --- DOM ---
+  // --- DOM chrome (everything but the canvas, which Phaser injects) ---
   const overlay = document.createElement('div');
   overlay.id = 'worldOverlay';
   overlay.style.cssText =
     'position:fixed;inset:0;z-index:9998;background:#0b1020;overflow:hidden;' +
     'font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;touch-action:none;user-select:none;';
 
-  const canvas = document.createElement('canvas');
-  canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block;';
-  const ctx = canvas.getContext('2d')!;
-  overlay.appendChild(canvas);
+  // Phaser mounts its canvas into this host (kept behind the chrome).
+  const gameHost = document.createElement('div');
+  gameHost.style.cssText = 'position:absolute;inset:0;';
+  overlay.appendChild(gameHost);
+
+  // --- atmosphere: a warm sun tint + a soft vignette, blended over the canvas. This is the single
+  // biggest "it looks lit, not flat" win and costs nothing (two non-interactive CSS layers). ---
+  const sunTint = document.createElement('div');
+  sunTint.style.cssText =
+    'position:absolute;inset:0;z-index:1;pointer-events:none;mix-blend-mode:soft-light;' +
+    'background:radial-gradient(120% 90% at 64% 24%, rgba(255,236,170,.85), rgba(255,180,120,.25) 55%, rgba(40,60,120,.35) 100%);';
+  overlay.appendChild(sunTint);
+  const vignette = document.createElement('div');
+  vignette.style.cssText =
+    'position:absolute;inset:0;z-index:1;pointer-events:none;' +
+    'background:radial-gradient(120% 100% at 50% 46%, rgba(0,0,0,0) 52%, rgba(8,12,30,.42) 100%);';
+  overlay.appendChild(vignette);
 
   // Top bar: title + live player count + drive toggle + exit.
   const topbar = document.createElement('div');
   topbar.style.cssText =
     'position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:12px;' +
-    'padding:10px 14px;background:linear-gradient(#0b1020dd,#0b102000);pointer-events:none;';
+    'padding:10px 14px;background:linear-gradient(#0b1020dd,#0b102000);pointer-events:none;z-index:2;';
   const title = document.createElement('div');
   title.innerHTML = '🌍 <b>TSONG WORLD</b> <span style="opacity:.6;font-size:12px">beta</span>';
-  title.style.cssText = 'color:#e8eefc;font-size:18px;letter-spacing:.5px;';
+  title.style.cssText = 'color:#e8eefc;font-size:18px;letter-spacing:.5px;text-shadow:0 2px 6px #000a;';
   const count = document.createElement('div');
-  count.style.cssText = 'color:#8aa0d8;font-size:13px;margin-left:auto;pointer-events:none;';
+  count.style.cssText = 'color:#8aa0d8;font-size:13px;margin-left:auto;pointer-events:none;text-shadow:0 1px 4px #000a;';
   const driveBtn = document.createElement('button');
   driveBtn.type = 'button';
   driveBtn.style.cssText =
@@ -194,7 +261,7 @@ export function startWorld(net: WorldNet): void {
   // Controls hint (bottom-left).
   const help = document.createElement('div');
   help.style.cssText =
-    'position:absolute;left:14px;bottom:12px;color:#7d8cbb;font-size:12px;pointer-events:none;line-height:1.5;';
+    'position:absolute;left:14px;bottom:12px;color:#cdd8f5;font-size:12px;pointer-events:none;line-height:1.5;z-index:2;text-shadow:0 1px 4px #000a;';
   overlay.appendChild(help);
 
   // Door prompt (bottom-center). A real button so tapping works on touch; Enter/E does the same.
@@ -203,13 +270,13 @@ export function startWorld(net: WorldNet): void {
   prompt.style.cssText =
     'position:absolute;left:50%;bottom:42px;transform:translateX(-50%);display:none;cursor:pointer;' +
     'background:#e8b84b;color:#1a1408;border:none;border-radius:10px;padding:11px 18px;font-size:15px;' +
-    'font-weight:700;box-shadow:0 6px 20px #0008;';
+    'font-weight:700;box-shadow:0 6px 20px #0008;z-index:2;';
   overlay.appendChild(prompt);
 
   // Building dialog ("what do you want to do?") — a centered modal over the map.
   const dialog = document.createElement('div');
   dialog.style.cssText =
-    'position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:#0008;';
+    'position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:#0008;z-index:3;';
   const dialogBox = document.createElement('div');
   dialogBox.style.cssText =
     'min-width:260px;max-width:90vw;background:#141c33;border:1px solid #2c3a63;border-radius:14px;' +
@@ -218,32 +285,6 @@ export function startWorld(net: WorldNet): void {
   overlay.appendChild(dialog);
 
   document.body.appendChild(overlay);
-
-  // --- canvas sizing (DPR-aware) ---
-  let cssW = 0, cssH = 0;
-  function resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    cssW = overlay.clientWidth;
-    cssH = overlay.clientHeight;
-    canvas.width = Math.round(cssW * dpr);
-    canvas.height = Math.round(cssH * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }
-  resize();
-  window.addEventListener('resize', resize);
-
-  // --- camera (follows the avatar, clamped to the map; centers if the map < view) ---
-  let camX = 0, camY = 0;
-  function updateCamera() {
-    const viewW = cssW / SCALE;
-    const viewH = cssH / SCALE;
-    camX = viewW >= WORLD.w ? (WORLD.w - viewW) / 2 : clamp(selfX - viewW / 2, 0, WORLD.w - viewW);
-    camY = viewH >= WORLD.h ? (WORLD.h - viewH) / 2 : clamp(selfY - viewH / 2, 0, WORLD.h - viewH);
-  }
-  const sx = (wx: number) => (wx - camX) * SCALE;
-  const sy = (wy: number) => (wy - camY) * SCALE;
-  const onScreen = (wx: number, wy: number, m: number) =>
-    wx > camX - m && wx < camX + cssW / SCALE + m && wy > camY - m && wy < camY + cssH / SCALE + m;
 
   // --- collision: keep the avatar/car outside every building rectangle ---
   function resolveCollisions(x: number, y: number, rad: number): { x: number; y: number; hit: boolean } {
@@ -290,9 +331,11 @@ export function startWorld(net: WorldNet): void {
       if (!myCar()) { flashHelp("You don't own a car — buy one in the 🪙 Shop (Cars tab)."); return; }
       driving = true;
       vx = vy = 0;
+      revSound(true);
     } else {
       driving = false;
       vx = vy = 0;
+      revSound(false);
     }
     syncDriveBtn();
   }
@@ -327,6 +370,7 @@ export function startWorld(net: WorldNet): void {
     }
   }
   function enterBuilding(kind: WorldBuildingKind) {
+    enterChime();
     if (kind === 'arena') { exit(); net.enterArena(); return; }
     if (kind === 'casino') {
       openDialog('🎰 Casino', 'What are you feeling lucky for?', [
@@ -366,7 +410,7 @@ export function startWorld(net: WorldNet): void {
         'border:1px solid #38508f;border-radius:10px;padding:13px;font-size:15px;font-weight:600;';
       b.onmouseenter = () => { b.style.background = '#2c4079'; };
       b.onmouseleave = () => { b.style.background = '#21305a'; };
-      b.onclick = c.onPick;
+      b.onclick = () => { selectBlip(); c.onPick(); };
       dialogBox.appendChild(b);
     }
     const close = document.createElement('button');
@@ -394,6 +438,7 @@ export function startWorld(net: WorldNet): void {
   // --- input (capture phase so the main game's global shortcuts don't also fire) ---
   const MOVE_KEYS = new Set(['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright']);
   function onKeyDown(e: KeyboardEvent) {
+    unlockAudio();
     const k = e.key.toLowerCase();
     if (k === 'escape') {
       e.preventDefault(); e.stopPropagation();
@@ -413,18 +458,9 @@ export function startWorld(net: WorldNet): void {
     if (MOVE_KEYS.has(k)) { keys.delete(k); e.stopPropagation(); }
   }
   function onPointerDown(e: PointerEvent) {
-    if (dialogOpen || e.target !== canvas) return;
-    // Check if we tapped a netizen avatar (bot trader) to start a challenge.
-    const wx = e.clientX / SCALE + camX;
-    const wy = e.clientY / SCALE + camY;
-    for (const a of others) {
-      if ((a.id.startsWith('netizen:') || a.bot) && Math.hypot(wx - a.x, wy - a.y) <= R * 2) {
-        dialogOpen = true;
-        joyActive = false;
-        net.onNetizenClick?.(a.id);
-        return;
-      }
-    }
+    unlockAudio();
+    // Ignore drags that start on a chrome button (Drive / Back / prompt / dialog).
+    if (dialogOpen || (e.target instanceof Element && e.target.closest('button'))) return;
     joyActive = true;
     joyOX = joyCX = e.clientX;
     joyOY = joyCY = e.clientY;
@@ -437,32 +473,13 @@ export function startWorld(net: WorldNet): void {
 
   window.addEventListener('keydown', onKeyDown, true);
   window.addEventListener('keyup', onKeyUp, true);
-  canvas.addEventListener('pointerdown', onPointerDown);
+  overlay.addEventListener('pointerdown', onPointerDown);
   window.addEventListener('pointermove', onPointerMove);
   window.addEventListener('pointerup', onPointerUp);
   window.addEventListener('pointercancel', onPointerUp);
   backBtn.onclick = exit;
 
-  // --- main loop ---
-  let raf = 0;
-  let last = performance.now();
-  function loop(now: number) {
-    const dt = Math.min((now - last) / 1000, 0.05);
-    last = now;
-    if (helpFlash && now >= helpFlashUntil) { helpFlash = ''; updateHelp(); }
-
-    if (!dialogOpen) {
-      const car = driving ? myCar() : null;
-      if (car) stepCar(car, dt);
-      else stepFoot(dt);
-    }
-
-    updateNearBuilding();
-    maybeSendMove(now);
-    updateCamera();
-    render(now / 1000);
-    raf = requestAnimationFrame(loop);
-  }
+  // --- movement physics (identical to the canvas version; Phaser just renders the result) ---
 
   // Walk: 8-direction movement at a constant speed.
   function stepFoot(dt: number) {
@@ -481,6 +498,8 @@ export function startWorld(net: WorldNet): void {
     facing = Math.atan2(dy, dx);
     const moved = resolveCollisions(selfX + dx * SPEED * dt, selfY + dy * SPEED * dt, R);
     selfX = moved.x; selfY = moved.y;
+    if (moved.hit) bumpSound(false);
+    else stepSound();
   }
 
   // Drive: arcade physics with drift. Throttle accelerates along the heading; steering rotates the
@@ -525,7 +544,10 @@ export function startWorld(net: WorldNet): void {
     vy = hy * fwd + hx * lat;
 
     const moved = resolveCollisions(selfX + vx * dt, selfY + vy * dt, CAR_WID * 0.5);
-    if (moved.hit) { vx *= 0.3; vy *= 0.3; } // crunch into a wall → kill most momentum
+    if (moved.hit) {
+      if (Math.hypot(vx, vy) > 60) bumpSound(true); // crunch (skip silent scrapes when crawling)
+      vx *= 0.3; vy *= 0.3;                          // kill most momentum
+    }
     selfX = moved.x; selfY = moved.y;
   }
 
@@ -552,347 +574,389 @@ export function startWorld(net: WorldNet): void {
     net.move(selfX, selfY, driving ? facing : undefined, driving ? net.car() : null);
   }
 
-  // --- rendering ---
-  function render(t: number) {
-    ctx.clearRect(0, 0, cssW, cssH);
+  // ============================================================================================
+  // AUDIO — Pokémon-style chiptune SFX, synthesized on the fly (same WebAudio idiom as doom.ts /
+  // campaign.ts: a lazy AudioContext + tiny square/saw one-shots and filtered-noise bursts). The
+  // star is the bump: walk into a tree/wall/lake and you get that satisfying low GBA "boop".
+  // ============================================================================================
+  let actx: AudioContext | null = null;
+  const ac = () => (actx ??= new AudioContext());
+  function unlockAudio() { try { const a = ac(); if (a.state === 'suspended') void a.resume(); } catch { /* ignore */ } }
+  // One note with an exponential decay; optional pitch slide gives the chirpy GBA character.
+  function tone(freq: number, dur: number, type: OscillatorType, vol: number, slideTo?: number) {
+    try {
+      const a = ac(); const t = a.currentTime;
+      const o = a.createOscillator(); const g = a.createGain();
+      o.type = type;
+      o.frequency.setValueAtTime(freq, t);
+      if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+      g.gain.setValueAtTime(vol, t);
+      g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+      o.connect(g); g.connect(a.destination); o.start(t); o.stop(t + dur + 0.02);
+    } catch { /* ignore */ }
+  }
+  // A short band-passed noise burst — grass rustle on foot, tyre skid in a car.
+  function noise(dur: number, vol: number, cutoff: number) {
+    try {
+      const a = ac(); const t = a.currentTime;
+      const buf = a.createBuffer(1, Math.max(1, Math.floor(a.sampleRate * dur)), a.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / d.length, 2);
+      const src = a.createBufferSource(); src.buffer = buf;
+      const bp = a.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = cutoff; bp.Q.value = 0.7;
+      const g = a.createGain(); g.gain.value = vol;
+      src.connect(bp); bp.connect(g); g.connect(a.destination); src.start(t);
+    } catch { /* ignore */ }
+  }
+  let lastBumpAt = 0, lastStepAt = 0, stepToggle = false;
+  // The collision "boop" — a quick low square that drops in pitch. Throttled so holding against a
+  // wall doesn't machine-gun. `hard` (a car crunch) is louder and adds a little skid.
+  function bumpSound(hard: boolean) {
+    const now = performance.now();
+    if (now - lastBumpAt < 150) return;
+    lastBumpAt = now;
+    tone(hard ? 150 : 138, 0.11, 'square', hard ? 0.22 : 0.16, hard ? 68 : 92);
+    if (hard) noise(0.13, 0.13, 520);
+  }
+  // Soft alternating grass-shuffle footsteps while walking.
+  function stepSound() {
+    const now = performance.now();
+    if (now - lastStepAt < 250) return;
+    lastStepAt = now;
+    stepToggle = !stepToggle;
+    noise(0.05, 0.03, stepToggle ? 1700 : 1300);
+  }
+  // The "step through the door" jingle — a bright ascending square arpeggio.
+  function enterChime() {
+    tone(523, 0.09, 'square', 0.16);
+    window.setTimeout(() => tone(659, 0.09, 'square', 0.16), 85);
+    window.setTimeout(() => tone(784, 0.15, 'square', 0.16), 170);
+  }
+  function revSound(starting: boolean) {
+    if (starting) tone(80, 0.26, 'sawtooth', 0.18, 230);
+    else tone(210, 0.22, 'sawtooth', 0.15, 80);
+  }
+  function selectBlip() { tone(660, 0.05, 'square', 0.12, 880); }
 
-    // Grass base + a soft checker so movement reads.
-    ctx.fillStyle = '#3f8a4a';
-    ctx.fillRect(0, 0, cssW, cssH);
-    const tile = 80;
-    const tx0 = Math.floor(camX / tile), ty0 = Math.floor(camY / tile);
-    for (let i = tx0; i * tile < camX + cssW / SCALE; i++) {
-      for (let j = ty0; j * tile < camY + cssH / SCALE; j++) {
-        if (((i + j) & 1) === 0) {
-          ctx.fillStyle = '#46974f';
-          ctx.fillRect(sx(i * tile), sy(j * tile), tile * SCALE + 1, tile * SCALE + 1);
-        }
-      }
+  // ============================================================================================
+  // PHASER SCENE — texture generation + rendering. All draw state lives in `scene`-scoped vars
+  // assigned in create() and read in update(); movement/physics above stay the source of truth.
+  // ============================================================================================
+
+  // One rendered avatar (self or remote): a container with a shadow, a person sprite, a car sprite
+  // and a name label. We toggle person/car visibility by whether they're driving.
+  interface Av {
+    c: Phaser.GameObjects.Container;
+    person: Phaser.GameObjects.Image;
+    car: Phaser.GameObjects.Container;
+    carBody: Phaser.GameObjects.Image;
+    carRoof: Phaser.GameObjects.Image;
+    label: Phaser.GameObjects.Text;
+    // smoothed render position for remote avatars (we lerp toward the broadcast)
+    rx: number; ry: number; ra: number;
+  }
+  const remote = new Map<string, Av>();
+  let self: Av | null = null;
+  const swayers: Phaser.GameObjects.Image[] = []; // trees/pines that gently sway in update()
+
+  const NAME_STYLE: Phaser.Types.GameObjects.Text.TextStyle = {
+    fontFamily: 'system-ui, sans-serif', fontSize: '11px', color: '#ffffff',
+    stroke: '#0b1020', strokeThickness: 4, resolution: 2,
+  };
+
+  function makeTextures(scene: Phaser.Scene) {
+    const g = scene.make.graphics({ x: 0, y: 0 }, false);
+    const px = (x: number, y: number, w: number, h: number, color: number, a = 1) => {
+      g.fillStyle(color, a); g.fillRect(x, y, w, h);
+    };
+
+    // Ground tiles + scenery now come from the Kenney "Tiny Town" sheet (loaded in preload). What's
+    // left here is the bits Kenney doesn't provide: the tsong-ball avatar, the cars, the themed
+    // fountain, and shadows.
+
+    // --- fountain: stone basin + animated water (two frames, 24×24 texels) ---
+    const STONEC = 0xb8b2a4, STONEC_D = 0x938d80, WTR = 0x4a93d6, WTR_L = 0x8fc6ee;
+    for (let f = 0; f < 2; f++) {
+      g.clear();
+      px(2, 14, 20, 8, STONEC_D); px(3, 12, 18, 9, STONEC);     // basin
+      px(5, 13, 14, 6, WTR); px(6, 13, 12, 2, WTR_L);            // water pool
+      px(10, 4, 4, 11, STONEC); px(11, 4, 2, 11, STONEC_D);     // central pillar
+      // spray plume — alternates between frames for a little shimmer
+      if (f === 0) { px(10, 1, 4, 3, WTR_L); px(8, 3, 2, 2, WTR_L); px(14, 3, 2, 2, WTR_L); }
+      else { px(9, 0, 6, 3, WTR_L); px(7, 4, 2, 2, WTR_L); px(15, 4, 2, 2, WTR_L); }
+      g.generateTexture(`w-fountain-${f}`, 24, 24);
     }
 
-    drawRoads();
-    drawPlaza(t);
+    // --- soft round shadow (12×6 texels) ---
+    g.clear();
+    px(2, 1, 8, 4, 0x000000, 0.28); px(1, 2, 10, 2, 0x000000, 0.28);
+    g.generateTexture('w-shadow', 12, 6);
 
-    // Decorations behind buildings/avatars (only what's on screen).
-    for (const d of DECOR) {
-      if (!onScreen(d.x, d.y, 80)) continue;
-      if (d.type === 'tree') drawTree(d.x, d.y, d.s);
-      else if (d.type === 'bush') drawBush(d.x, d.y, d.s);
-      else drawFlower(d.x, d.y);
+    // --- avatar: the tsong ball with eyes (tintable white body) (10×10 texels) ---
+    g.clear();
+    px(2, 1, 6, 8, 0xffffff); px(1, 2, 8, 6, 0xffffff); // round body
+    px(3, 3, 1, 2, 0x1a1a1a); px(6, 3, 1, 2, 0x1a1a1a); // eyes (kept dark even when tinted? no — tint
+    // multiplies; eyes drawn dark stay near-dark. good enough for the charm.)
+    g.generateTexture('w-avatar', 10, 10);
+
+    // --- car body + roof (tintable) — pointing +x (east), 26×14 texels ---
+    g.clear();
+    px(1, 4, 24, 6, 0xffffff); px(3, 2, 20, 10, 0xffffff); px(0, 5, 26, 4, 0xffffff);
+    g.generateTexture('w-car-body', 26, 14);
+    g.clear();
+    px(8, 4, 11, 6, 0xffffff);   // cabin/roof patch (tinted with the accent color)
+    px(20, 6, 4, 2, 0xffffff);   // a little nose stripe
+    g.generateTexture('w-car-roof', 26, 14);
+
+    g.destroy();
+  }
+
+  // Build a pixel building image keyed by id, sized to its footprint (in texels).
+  function makeBuildingTexture(scene: Phaser.Scene, b: WorldBuilding) {
+    const W = Math.round(b.w / TEXEL), H = Math.round(b.h / TEXEL);
+    const g = scene.make.graphics({ x: 0, y: 0 }, false);
+    const px = (x: number, y: number, w: number, h: number, color: number, a = 1) => {
+      g.fillStyle(color, a); g.fillRect(x, y, w, h);
+    };
+    const wall = hexToInt(b.color);
+    const roof = shade(wall, 1.28);
+    const dark = shade(wall, 0.62);
+    const roofH = Math.round(H * 0.42);
+
+    // body + base shadow + outline
+    px(0, 0, W, H, dark);
+    px(1, roofH, W - 2, H - roofH - 1, shade(wall, 0.92));
+    px(2, roofH + 1, W - 4, H - roofH - 3, wall);
+    // roof block with a lighter cap + eave line
+    px(2, 1, W - 4, roofH, roof);
+    px(2, 1, W - 4, 2, shade(wall, 1.5));
+    px(1, roofH - 1, W - 2, 2, dark);
+
+    if (b.kind === 'arena') {
+      // a green pitch with a center net stripe set into the wall
+      const fx = Math.round(W * 0.16), fy = roofH + Math.round(H * 0.18);
+      const fw = W - fx * 2, fh = Math.round(H * 0.42);
+      px(fx, fy, fw, fh, 0x2f8f43); px(fx + 1, fy + 1, fw - 2, fh - 2, 0x3fa850);
+      px(Math.round(W / 2), fy, 1, fh, 0xffffff);
+      // light towers
+      px(3, 0, 2, 4, 0xdfe6f0); px(W - 5, 0, 2, 4, 0xdfe6f0);
+    } else if (b.kind === 'casino') {
+      // marquee bulbs + a 777 panel
+      for (let x = 4; x < W - 4; x += 5) px(x, 2, 2, 2, 0xffe14d);
+      const pw = Math.round(W * 0.4), pxx = Math.round((W - pw) / 2), pyy = roofH + 4;
+      px(pxx, pyy, pw, Math.round(H * 0.28), 0x1a1020);
+      px(pxx + 2, pyy + 2, pw - 4, Math.round(H * 0.28) - 4, 0xffd23f);
+    } else if (b.kind === 'bank') {
+      // marble columns + pediment
+      const colTop = roofH + 2, colH = H - roofH - 6;
+      for (let x = 4; x < W - 4; x += 6) px(x, colTop, 3, colH, 0xeef0e8);
+      px(2, roofH - 3, W - 4, 4, shade(wall, 1.1));
     }
+    // door (bottom center)
+    const dw = Math.max(4, Math.round(W * 0.12)), dh = Math.round(H * 0.22);
+    px(Math.round((W - dw) / 2), H - dh - 1, dw, dh, 0x241a12);
+    px(Math.round((W - dw) / 2), H - dh - 1, dw, 2, 0x000000);
 
-    // Map border fence.
-    ctx.strokeStyle = '#2c5d36';
-    ctx.lineWidth = 8;
-    ctx.strokeRect(sx(0), sy(0), WORLD.w * SCALE, WORLD.h * SCALE);
+    const key = `w-bldg-${b.id}`;
+    g.generateTexture(key, W, H);
+    g.destroy();
+    return key;
+  }
 
-    for (const b of WORLD_BUILDINGS) {
-      if (onScreen(b.x + b.w / 2, b.y + b.h / 2, Math.max(b.w, b.h))) drawBuilding(b, t);
-    }
+  // --- the Phaser scene ---
+  let game: Phaser.Game | null = null;
 
-    // Avatars: everyone else first, then us on top.
-    const selfId = net.selfId();
-    for (const a of others) {
-      if (a.id === selfId) continue;
-      if (!onScreen(a.x, a.y, 120)) continue;
-      if (a.car) drawCar(a.x, a.y, a.a ?? 0, carById(a.car), a.name, false, a.color);
-      else drawAvatar(a.x, a.y, a.color, a.name, a.bot ? true : false, 0);
-      // Speech bubble for bots.
-      if (a.bot) {
-        const d = botDialogue.get(a.id);
-        // Update dialogue every 4–7s.
-        const now = performance.now();
-        if (!d || now >= d.nextAt) {
-          botDialogue.set(a.id, { line: botLine(), nextAt: now + 4000 + Math.random() * 3000 });
+  const scene = {
+    preload(this: Phaser.Scene) {
+      // The Kenney "Tiny Town" sheet, served from client/public. Loaded both as a tilemap tileset
+      // (for the ground layer) and as a 16×16 spritesheet (for scenery frames).
+      this.load.image('townTiles', '/tiles/tiny-town.png');
+      this.load.spritesheet('townFrames', '/tiles/tiny-town.png', { frameWidth: 16, frameHeight: 16 });
+    },
+
+    create(this: Phaser.Scene) {
+      const sc = this;
+      makeTextures(sc);
+
+      sc.cameras.main.setBounds(0, 0, WORLD.w, WORLD.h);
+      sc.cameras.main.setZoom(ZOOM);
+      sc.cameras.main.setBackgroundColor(0x3f7a3a);
+
+      // --- ground tilemap: grass + grass-bordered dirt (roads + plaza), from Kenney tiles ---
+      const COLS = Math.ceil(WORLD.w / TILE), ROWS = Math.ceil(WORLD.h / TILE);
+      const map = sc.make.tilemap({ tileWidth: 16, tileHeight: 16, width: COLS, height: ROWS });
+      const ts = map.addTilesetImage('townTiles', 'townTiles', 16, 16, 0, 0)!;
+      const layer = map.createBlankLayer('ground', ts, 0, 0)!;
+      layer.setScale(TILE / 16).setDepth(-1000); // 16px tile → TILE world units
+      const bareCell = (c: number, r: number) => isBare(c * TILE + TILE / 2, r * TILE + TILE / 2);
+      for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+        let idx: number;
+        if (bareCell(c, r)) {
+          // 3×3 autotile: pick the frame whose grass border matches the grass neighbours.
+          const col = !bareCell(c - 1, r) ? 0 : !bareCell(c + 1, r) ? 2 : 1;
+          const row = !bareCell(c, r - 1) ? 0 : !bareCell(c, r + 1) ? 2 : 1;
+          idx = TT.dirt[row * 3 + col];
         } else {
-          ctx.font = '600 12px system-ui,sans-serif';
-          label(d.line, sx(a.x), sy(a.y) - 66, '#1b2542cc', '#ffeb3b');
+          const h = hash(c, r); // mostly plain/textured grass, occasional flower tile
+          idx = h > 0.93 ? TT.grass[2] : h > 0.5 ? TT.grass[1] : TT.grass[0];
         }
+        layer.putTileAt(idx, c, r);
       }
-    }
-    if (driving) drawCar(selfX, selfY, facing, myCar(), net.name() || 'you', true, net.color());
-    else drawAvatar(selfX, selfY, net.color(), net.name() || 'you', true, facing);
 
-    // Virtual joystick.
-    if (joyActive) {
-      ctx.strokeStyle = '#ffffff44';
-      ctx.fillStyle = '#ffffff22';
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(joyOX, joyOY, 34, 0, Math.PI * 2); ctx.stroke();
-      const jx = joyCX - joyOX, jy = joyCY - joyOY;
-      const m = Math.hypot(jx, jy) || 1;
-      const cap = Math.min(m, 34);
-      ctx.beginPath(); ctx.arc(joyOX + (jx / m) * cap, joyOY + (jy / m) * cap, 16, 0, Math.PI * 2); ctx.fill();
-    }
-  }
+      // --- pixel fountain at the plaza center (animated water shimmer) ---
+      const fountain = sc.add.image(PLAZA.x, PLAZA.y, 'w-fountain-0').setScale(TEXEL * 1.6).setDepth(PLAZA.y);
+      sc.time.addEvent({
+        delay: 320, loop: true,
+        callback: () => fountain.setTexture(fountain.texture.key === 'w-fountain-0' ? 'w-fountain-1' : 'w-fountain-0'),
+      });
 
-  function drawRoads() {
-    for (const r of ROADS) {
-      ctx.fillStyle = '#b8a37e';
-      ctx.fillRect(sx(r.x), sy(r.y), r.w * SCALE, r.h * SCALE);
-      ctx.strokeStyle = '#9c8763';
-      ctx.lineWidth = 3;
-      ctx.strokeRect(sx(r.x), sy(r.y), r.w * SCALE, r.h * SCALE);
-      // Dashed centre line down the long axis.
-      ctx.strokeStyle = '#fff6d6';
-      ctx.lineWidth = 3;
-      ctx.setLineDash([14, 16]);
-      ctx.beginPath();
-      if (r.w >= r.h) { ctx.moveTo(sx(r.x), sy(r.y + r.h / 2)); ctx.lineTo(sx(r.x + r.w), sy(r.y + r.h / 2)); }
-      else { ctx.moveTo(sx(r.x + r.w / 2), sy(r.y)); ctx.lineTo(sx(r.x + r.w / 2), sy(r.y + r.h)); }
-      ctx.stroke();
-      ctx.setLineDash([]);
-    }
-  }
+      // --- scenery (Kenney frames, placed once; depth-sorted by y so you walk "behind" them) ---
+      const frameFor = (d: Decor): number => {
+        switch (d.type) {
+          case 'tree': return TT.trees[Math.floor(hash(d.x | 0, d.y | 0) * TT.trees.length)];
+          case 'pine': return TT.pines[Math.floor(hash(d.y | 0, d.x | 0) * TT.pines.length)];
+          case 'bush': return TT.bush;
+          case 'shrub': return TT.sapling;
+          case 'flower': return TT.mushroom;
+        }
+      };
+      const tallType = (t: DecorType) => t === 'tree' || t === 'pine';
+      for (const d of DECOR) {
+        const tall = tallType(d.type);
+        const boost = tall ? 1.7 : d.type === 'bush' ? 1.15 : 1;
+        if (tall || d.type === 'bush') {
+          sc.add.image(d.x + 3, d.y + 1, 'w-shadow')
+            .setScale(TEXEL * d.s * (tall ? 1.5 : 1)).setOrigin(0.5, 0.4).setDepth(d.y - 1).setAlpha(0.45);
+        }
+        const img = sc.add.image(d.x, d.y, 'townFrames', frameFor(d)).setScale(TEXEL * d.s * boost);
+        img.setOrigin(0.5, 0.92).setDepth(d.y);
+        if (tall) swayers.push(img); // pivots near the trunk → canopy sways, trunk stays
+      }
 
-  function drawPlaza(t: number) {
-    const cx = sx(PLAZA.x), cy = sy(PLAZA.y), r = PLAZA.r * SCALE;
-    ctx.fillStyle = '#cdbd9b';
-    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = '#b3a17c'; ctx.lineWidth = 4; ctx.stroke();
-    // Fountain.
-    ctx.fillStyle = '#8aa6c8';
-    ctx.beginPath(); ctx.arc(cx, cy, 46 * SCALE, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#cfe6ff';
-    ctx.beginPath(); ctx.arc(cx, cy, 30 * SCALE, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#9fc2e8';
-    const jets = 6;
-    for (let i = 0; i < jets; i++) {
-      const a = (i / jets) * Math.PI * 2 + t;
-      ctx.beginPath();
-      ctx.arc(cx + Math.cos(a) * 16 * SCALE, cy + Math.sin(a) * 16 * SCALE, (3 + Math.sin(t * 4 + i) * 1.5) * SCALE + 2, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
+      // --- bush hedge ring hugging the plaza ---
+      for (const p of HEDGE_RING) {
+        sc.add.image(p.x, p.y, 'townFrames', TT.bush).setScale(TEXEL * 1.1).setOrigin(0.5, 0.92).setDepth(p.y);
+      }
 
-  function drawTree(wx: number, wy: number, s: number) {
-    const x = sx(wx), y = sy(wy), sc = SCALE * s;
-    ctx.fillStyle = '#00000022';
-    ctx.beginPath(); ctx.ellipse(x, y + 18 * sc, 22 * sc, 8 * sc, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#6b4a2b';
-    ctx.fillRect(x - 4 * sc, y, 8 * sc, 22 * sc);
-    ctx.fillStyle = '#2f7d3f';
-    for (const [ox, oy, rr] of [[0, -20, 22], [-14, -10, 16], [14, -10, 16], [0, -4, 18]] as const) {
-      ctx.beginPath(); ctx.arc(x + ox * sc, y + oy * sc, rr * sc, 0, Math.PI * 2); ctx.fill();
-    }
-    ctx.fillStyle = '#3a9750';
-    ctx.beginPath(); ctx.arc(x - 6 * sc, y - 18 * sc, 10 * sc, 0, Math.PI * 2); ctx.fill();
-  }
-  function drawBush(wx: number, wy: number, s: number) {
-    const x = sx(wx), y = sy(wy), sc = SCALE * s;
-    ctx.fillStyle = '#2f7d3f';
-    for (const [ox, rr] of [[-10, 11], [0, 14], [10, 11]] as const) {
-      ctx.beginPath(); ctx.arc(x + ox * sc, y, rr * sc, 0, Math.PI * 2); ctx.fill();
-    }
-  }
-  function drawFlower(wx: number, wy: number) {
-    const x = sx(wx), y = sy(wy), sc = SCALE;
-    const colors = ['#ff6b6b', '#ffd166', '#cc8cff', '#7ee0ff'];
-    const col = colors[Math.floor(hash(Math.round(wx), Math.round(wy)) * colors.length)];
-    ctx.fillStyle = col;
-    for (let i = 0; i < 5; i++) {
-      const a = (i / 5) * Math.PI * 2;
-      ctx.beginPath(); ctx.arc(x + Math.cos(a) * 4 * sc, y + Math.sin(a) * 4 * sc, 3 * sc, 0, Math.PI * 2); ctx.fill();
-    }
-    ctx.fillStyle = '#ffe066';
-    ctx.beginPath(); ctx.arc(x, y, 2.5 * sc, 0, Math.PI * 2); ctx.fill();
-  }
+      // --- buildings + name signs ---
+      for (const b of WORLD_BUILDINGS) {
+        const key = makeBuildingTexture(sc, b);
+        // ground shadow cast down-right
+        sc.add.rectangle(b.x + 14, b.y + 18, b.w, b.h, 0x0a1226, 0.32)
+          .setOrigin(0, 0).setDepth(b.y + b.h - 1);
+        sc.add.image(b.x, b.y, key).setOrigin(0, 0).setScale(TEXEL).setDepth(b.y + b.h);
+        const sign = sc.add.text(b.x + b.w / 2, b.y - 6, b.name, {
+          fontFamily: 'system-ui, sans-serif', fontSize: '15px', fontStyle: 'bold',
+          color: '#ffffff', stroke: '#0b1020', strokeThickness: 5, resolution: 2,
+        });
+        sign.setOrigin(0.5, 1).setDepth(100000);
+      }
 
-  // --- buildings (distinct architecture per kind) ---
-  function drawBuilding(b: WorldBuilding, t: number) {
-    const x = sx(b.x), y = sy(b.y), w = b.w * SCALE, h = b.h * SCALE;
-    const near = b.id === nearId;
-    ctx.fillStyle = '#00000044';
-    ctx.fillRect(x + 8, y + 12, w, h);
-    if (b.kind === 'arena') drawArena(b, x, y, w, h, t);
-    else if (b.kind === 'casino') drawCasino(b, x, y, w, h, t);
-    else drawBank(b, x, y, w, h);
-    if (near) {
-      ctx.strokeStyle = '#ffe08a'; ctx.lineWidth = 5;
-      ctx.strokeRect(x - 3, y - 3, w + 6, h + 6);
-    }
-    // Sign over the door.
-    ctx.font = '800 16px system-ui,sans-serif';
-    ctx.textBaseline = 'alphabetic';
-    label(b.name, x + w / 2, y - 10, '#0009', '#fff');
+      // --- our own avatar ---
+      self = makeAvatar(sc, net.name() || 'you', net.color());
+      sc.cameras.main.startFollow(self.c, true, 0.18, 0.18);
+      sc.cameras.main.roundPixels = true;
+    },
+
+    update(this: Phaser.Scene, time: number, delta: number) {
+      const sc = this;
+      const now = performance.now();
+      const dt = Math.min(delta / 1000, 0.05);
+      if (helpFlash && now >= helpFlashUntil) { helpFlash = ''; updateHelp(); }
+
+      // gentle breeze: each tree sways on its own phase (cheap, ~150 rotations/frame)
+      for (const t of swayers) t.rotation = Math.sin(time / 700 + t.x * 0.012) * 0.035;
+
+      if (!dialogOpen) {
+        const car = driving ? myCar() : null;
+        if (car) stepCar(car, dt);
+        else stepFoot(dt);
+      }
+
+      updateNearBuilding();
+      maybeSendMove(now);
+
+      // place our avatar straight from authoritative state (zero latency)
+      if (self) placeAvatar(self, selfX, selfY, facing, driving, net.color(), net.name() || 'you');
+
+      // reconcile + lerp remote avatars
+      const seen = new Set<string>();
+      const selfId = net.selfId();
+      for (const a of others) {
+        if (a.id === selfId) continue;
+        seen.add(a.id);
+        let av = remote.get(a.id);
+        if (!av) { av = makeAvatar(sc, a.name, a.color); av.rx = a.x; av.ry = a.y; av.ra = a.a ?? 0; remote.set(a.id, av); }
+        // smooth toward the latest broadcast
+        av.rx += (a.x - av.rx) * Math.min(1, dt * 12);
+        av.ry += (a.y - av.ry) * Math.min(1, dt * 12);
+        const ta = a.a ?? av.ra;
+        av.ra += angDelta(av.ra, ta) * Math.min(1, dt * 12);
+        placeAvatar(av, av.rx, av.ry, av.ra, !!a.car, a.color, a.name);
+      }
+      // drop avatars that left
+      for (const [id, av] of remote) if (!seen.has(id)) { av.c.destroy(); remote.delete(id); }
+    },
+  };
+
+  function angDelta(from: number, to: number): number {
+    let d = (to - from) % (Math.PI * 2);
+    if (d > Math.PI) d -= Math.PI * 2;
+    if (d < -Math.PI) d += Math.PI * 2;
+    return d;
   }
 
-  function drawArena(_b: WorldBuilding, x: number, y: number, w: number, h: number, _t: number) {
-    // Stadium: rounded bowl, green field with a centre net, two light towers.
-    ctx.fillStyle = '#3a4ea8';
-    roundRect(x, y, w, h, 22); ctx.fill();
-    ctx.fillStyle = '#2c3c84';
-    roundRect(x + 8, y + 8, w - 16, h * 0.32, 14); ctx.fill();
-    // Field.
-    ctx.fillStyle = '#2f8f55';
-    ctx.beginPath(); ctx.ellipse(x + w / 2, y + h * 0.62, w * 0.36, h * 0.26, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.strokeStyle = '#eaffea'; ctx.lineWidth = 3;
-    ctx.beginPath(); ctx.moveTo(x + w / 2, y + h * 0.40); ctx.lineTo(x + w / 2, y + h * 0.84); ctx.stroke();
-    // Light towers (post + glowing lamp head).
-    for (const lx of [x + 14, x + w - 22]) {
-      ctx.fillStyle = '#dfe6f5';
-      ctx.fillRect(lx, y - 14, 8, 18);
-      ctx.fillStyle = '#fff3bf';
-      ctx.fillRect(lx - 6, y - 22, 20, 10);
+  function makeAvatar(sc: Phaser.Scene, name: string, color: string): Av {
+    const tint = hexToInt(color);
+    const shadow = sc.add.image(0, R * 0.7, 'w-shadow').setScale(TEXEL);
+    const person = sc.add.image(0, 0, 'w-avatar').setScale(TEXEL).setOrigin(0.5, 0.7).setTint(tint);
+    const carBody = sc.add.image(0, 0, 'w-car-body').setScale(TEXEL);
+    const carRoof = sc.add.image(0, 0, 'w-car-roof').setScale(TEXEL);
+    const car = sc.add.container(0, 0, [carBody, carRoof]).setVisible(false);
+    const label = sc.add.text(0, -R - 14, name, NAME_STYLE).setOrigin(0.5, 1);
+    const c = sc.add.container(selfX, selfY, [shadow, car, person, label]);
+    return { c, person, car, carBody, carRoof, label, rx: selfX, ry: selfY, ra: 0 };
+  }
+
+  function placeAvatar(av: Av, x: number, y: number, a: number, drivingNow: boolean, color: string, name: string) {
+    av.c.setPosition(x, y).setDepth(y);
+    if (av.label.text !== name) av.label.setText(name);
+    const tint = hexToInt(color);
+    av.person.setVisible(!drivingNow).setTint(tint);
+    av.car.setVisible(drivingNow);
+    if (drivingNow) {
+      av.car.setRotation(a);
+      const spec = carById((others.find((o) => o.name === name)?.car) ?? net.car());
+      av.carBody.setTint(spec ? hexToInt(spec.body) : tint);
+      av.carRoof.setTint(spec ? hexToInt(spec.accent) : 0xffffff);
     }
-    // 🏓 glyph.
-    ctx.font = `${Math.round(Math.min(w, h) * 0.3)}px serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('🏓', x + w / 2, y + h * 0.62);
   }
 
-  function drawCasino(_b: WorldBuilding, x: number, y: number, w: number, h: number, t: number) {
-    ctx.fillStyle = '#a8323a';
-    roundRect(x, y, w, h, 14); ctx.fill();
-    // Dark marquee band.
-    ctx.fillStyle = '#5e1820';
-    ctx.fillRect(x + 6, y + 6, w - 12, h * 0.26);
-    // Chasing bulbs around the marquee.
-    const bulbs = Math.max(8, Math.floor(w / 26));
-    for (let i = 0; i < bulbs; i++) {
-      const on = (Math.floor(t * 6) + i) % 2 === 0;
-      ctx.fillStyle = on ? '#ffe066' : '#7a5a14';
-      const bx = x + 12 + (i / (bulbs - 1)) * (w - 24);
-      ctx.beginPath(); ctx.arc(bx, y + 12, 3.5, 0, Math.PI * 2); ctx.fill();
-    }
-    // Neon "777".
-    ctx.fillStyle = '#ffd34d';
-    ctx.font = `800 ${Math.round(h * 0.16)}px system-ui,sans-serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('🎰 777', x + w / 2, y + h * 0.19);
-    // Doors.
-    ctx.fillStyle = '#2a0e12';
-    ctx.fillRect(x + w / 2 - 22, y + h - 46, 44, 46);
-    ctx.font = `${Math.round(Math.min(w, h) * 0.26)}px serif`;
-    ctx.fillText('🎲', x + w * 0.28, y + h * 0.62);
-    ctx.fillText('🃏', x + w * 0.72, y + h * 0.62);
-  }
+  // --- launch Phaser ---
+  game = new Phaser.Game({
+    type: Phaser.AUTO,
+    parent: gameHost,
+    backgroundColor: '#3f7a3a',
+    pixelArt: true,
+    roundPixels: true,
+    scale: { mode: Phaser.Scale.RESIZE, width: '100%', height: '100%' },
+    scene: { preload: scene.preload, create: scene.create, update: scene.update },
+    banner: false,
+    audio: { noAudio: true },
+  });
 
-  function drawBank(_b: WorldBuilding, x: number, y: number, w: number, h: number) {
-    // Marble neoclassical block with a pediment and columns.
-    ctx.fillStyle = '#e8e6da';
-    ctx.fillRect(x, y + h * 0.2, w, h * 0.8);
-    // Pediment.
-    ctx.fillStyle = '#2f7d4f';
-    ctx.beginPath();
-    ctx.moveTo(x - 6, y + h * 0.22); ctx.lineTo(x + w / 2, y - 6); ctx.lineTo(x + w + 6, y + h * 0.22);
-    ctx.closePath(); ctx.fill();
-    // Columns.
-    ctx.fillStyle = '#cfccbe';
-    const cols = 5;
-    for (let i = 0; i < cols; i++) {
-      const cx = x + 18 + (i / (cols - 1)) * (w - 36);
-      ctx.fillRect(cx - 6, y + h * 0.28, 12, h * 0.62);
-    }
-    // Steps.
-    ctx.fillStyle = '#bdb9a8';
-    ctx.fillRect(x - 4, y + h - 12, w + 8, 12);
-    // $ marker.
-    ctx.fillStyle = '#1f5e3a';
-    ctx.font = `800 ${Math.round(h * 0.16)}px system-ui,sans-serif`;
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText('🏦 $', x + w / 2, y + h * 0.12);
-  }
-
-  // --- avatars + cars ---
-  function drawAvatar(wx: number, wy: number, color: string, name: string, isSelf: boolean, face: number) {
-    const x = sx(wx), y = sy(wy), r = R * SCALE;
-    ctx.fillStyle = '#0005';
-    ctx.beginPath(); ctx.ellipse(x, y + r * 0.7, r * 0.9, r * 0.4, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = color;
-    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-    ctx.lineWidth = isSelf ? 3 : 2;
-    ctx.strokeStyle = isSelf ? '#fff' : '#0007';
-    ctx.stroke();
-    if (isSelf) {
-      ctx.fillStyle = '#1a1a1a';
-      const ex = Math.cos(face) * r * 0.4, ey = Math.sin(face) * r * 0.4;
-      const px = -Math.sin(face) * r * 0.32, py = Math.cos(face) * r * 0.32;
-      ctx.beginPath(); ctx.arc(x + ex + px, y + ey + py, r * 0.13, 0, Math.PI * 2); ctx.fill();
-      ctx.beginPath(); ctx.arc(x + ex - px, y + ey - py, r * 0.13, 0, Math.PI * 2); ctx.fill();
-    }
-    ctx.font = '700 13px system-ui,sans-serif';
-    label(name, x, y - r - 7, isSelf ? '#1b2542cc' : '#000a', isSelf ? '#ffe08a' : '#fff');
-  }
-
-  function drawCar(wx: number, wy: number, angle: number, spec: CarSpec | null, name: string, isSelf: boolean, fallback: string) {
-    const x = sx(wx), y = sy(wy);
-    const body = spec?.body ?? fallback;
-    const accent = spec?.accent ?? '#222';
-    const L = CAR_LEN * SCALE, W = CAR_WID * SCALE;
-    // Shadow (unrotated, on the ground).
-    ctx.fillStyle = '#0005';
-    ctx.beginPath(); ctx.ellipse(x, y + 5, L * 0.55, W * 0.5, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(angle);
-    // Wheels.
-    ctx.fillStyle = '#15171c';
-    for (const [wxo, wyo] of [[-L * 0.28, -W * 0.5], [L * 0.28, -W * 0.5], [-L * 0.28, W * 0.5], [L * 0.28, W * 0.5]] as const) {
-      ctx.fillRect(wxo - 5, wyo - 3, 10, 6);
-    }
-    // Body.
-    ctx.fillStyle = body;
-    roundRect(-L / 2, -W / 2, L, W, 7); ctx.fill();
-    ctx.strokeStyle = isSelf ? '#fff' : '#0007'; ctx.lineWidth = isSelf ? 2.5 : 1.5; ctx.stroke();
-    // Roof / cabin.
-    ctx.fillStyle = accent;
-    roundRect(-L * 0.12, -W * 0.34, L * 0.4, W * 0.68, 4); ctx.fill();
-    // Windshield.
-    ctx.fillStyle = '#bfe0ff';
-    roundRect(L * 0.16, -W * 0.28, L * 0.12, W * 0.56, 3); ctx.fill();
-    // Headlights (front = +x).
-    ctx.fillStyle = '#fff7c2';
-    ctx.beginPath(); ctx.arc(L * 0.46, -W * 0.32, 3, 0, Math.PI * 2); ctx.fill();
-    ctx.beginPath(); ctx.arc(L * 0.46, W * 0.32, 3, 0, Math.PI * 2); ctx.fill();
-    ctx.restore();
-    // Name above (unrotated).
-    ctx.font = '700 13px system-ui,sans-serif';
-    label(name, x, y - W * 0.5 - 12, isSelf ? '#1b2542cc' : '#000a', isSelf ? '#ffe08a' : '#fff');
-  }
-
-  function label(text: string, cx: number, baselineY: number, bg: string, fg = '#fff') {
-    ctx.textAlign = 'center';
-    const w = ctx.measureText(text).width;
-    const padX = 6, h = 18;
-    ctx.fillStyle = bg;
-    roundRect(cx - w / 2 - padX, baselineY - 13, w + padX * 2, h, 5); ctx.fill();
-    ctx.fillStyle = fg;
-    ctx.fillText(text, cx, baselineY);
-  }
-  function roundRect(x: number, y: number, w: number, h: number, r: number) {
-    const rr = Math.min(r, w / 2, h / 2);
-    ctx.beginPath();
-    ctx.moveTo(x + rr, y);
-    ctx.arcTo(x + w, y, x + w, y + h, rr);
-    ctx.arcTo(x + w, y + h, x, y + h, rr);
-    ctx.arcTo(x, y + h, x, y, rr);
-    ctx.arcTo(x, y, x + w, y, rr);
-    ctx.closePath();
-  }
-
-  // Pick a random dialogue line for a bot, using live market/leaderboard context where available.
-  function botLine(): string {
-    const pools = [
-      ...NETIZEN_DIALOGUE.buyLong,
-      ...NETIZEN_DIALOGUE.sellProfit,
-      ...NETIZEN_DIALOGUE.idleBanter,
-    ];
-    return pools[Math.floor(Math.random() * pools.length)]
-      .replace('{ticker}', STOCKS[Math.floor(Math.random() * STOCKS.length)].ticker);
-  }
-
-  // --- teardown ---
   function exit() {
     if (!controller) return;
-    cancelAnimationFrame(raf);
-    window.removeEventListener('resize', resize);
     window.removeEventListener('keydown', onKeyDown, true);
     window.removeEventListener('keyup', onKeyUp, true);
-    canvas.removeEventListener('pointerdown', onPointerDown);
+    overlay.removeEventListener('pointerdown', onPointerDown);
     window.removeEventListener('pointermove', onPointerMove);
     window.removeEventListener('pointerup', onPointerUp);
     window.removeEventListener('pointercancel', onPointerUp);
+    game?.destroy(true);
+    game = null;
+    try { void actx?.close(); } catch { /* ignore */ }
+    actx = null;
     overlay.remove();
     controller = null;
     net.leave();
@@ -902,17 +966,11 @@ export function startWorld(net: WorldNet): void {
   controller = {
     feed(avatars) {
       others = avatars;
-      const humans = avatars.filter((a) => !a.bot).length;
-      count.textContent = humans === 1 ? '1 player here' : `${humans} players here`;
+      const n = avatars.length;
+      count.textContent = n === 1 ? '1 player here' : `${n} players here`;
     },
     reenter() { net.enter(); },
   };
   syncDriveBtn();
   net.enter();
-  raf = requestAnimationFrame(loop);
-}
-
-// --- small helpers ---
-function clamp(v: number, lo: number, hi: number): number {
-  return v < lo ? lo : v > hi ? hi : v;
 }
