@@ -33,6 +33,16 @@ const MESSAGES: { text: string; cls: string }[] = [
   { text: '🛸 ask me about extending your paddle warranty', cls: 'fo-fun' },
 ];
 
+// Banners flown only when someone summons a plane with the secret word (see initFlyover).
+// These answer the eternal question — yes, your airplane finally came.
+const SUMMON_MESSAGES: { text: string; cls: string }[] = [
+  { text: '🛬 your airplane has arrived. boarding at gate ↑↑↓', cls: 'fo-fun' },
+  { text: '✈️ flight TSONG-316 — you are the only passenger', cls: 'fo-fun' },
+  { text: '🛫 yes. your airplane finally came.', cls: 'fo-fun' },
+  { text: '🧳 now arriving: the plane you kept asking about', cls: 'fo-fun' },
+  { text: '🌤 cleared for landing, just for you ✨', cls: 'fo-fun' },
+];
+
 // --- tuning -----------------------------------------------------------------------------
 const MIN_GAP_MS = 1.5 * 60 * 60 * 1000;  // soonest the next flight can come (~1.5h)
 const MAX_GAP_MS = 2.5 * 60 * 60 * 1000;  // latest (~2.5h)  → averages ~every 2 hours
@@ -241,6 +251,22 @@ export function initFlyover() {
 
   // Manual triggers for testing / mischief.
   (window as Window & { flyover?: (m?: Mode) => void }).flyover = (m: Mode = 'nocrash') => launch(m);
+
+  // 🤫 Secret: type the magic word anywhere (outside a text field) and a plane comes
+  // for you on demand — banner and all. The eternal answer to "will my airplane ever come?"
+  const SECRET = 'airplane';
+  let typed = '';
+  window.addEventListener('keydown', (e) => {
+    // Ignore while typing into chat / nickname / any editable field.
+    const t = e.target as HTMLElement | null;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    if (e.key.length !== 1 || !/[a-z]/i.test(e.key)) return;
+    typed = (typed + e.key.toLowerCase()).slice(-SECRET.length);
+    if (typed === SECRET) {
+      typed = '';
+      if (!flying) launch('nocrash', SUMMON_MESSAGES[Math.floor(Math.random() * SUMMON_MESSAGES.length)]);
+    }
+  });
 }
 
 /** Begin the random flyover schedule. Safe to call more than once (idempotent). */
@@ -264,12 +290,12 @@ function syncRotation() {
   if (root && fx) root.classList.toggle('rotated', fx.classList.contains('rotated'));
 }
 
-function launch(mode: Mode) {
+function launch(mode: Mode, forced?: { text: string; cls: string }) {
   if (!root || !group || !planeEl || !bannerSpan || flying) return;
   flying = true;
   syncRotation();
 
-  const pick = MESSAGES[Math.floor(Math.random() * MESSAGES.length)];
+  const pick = forced ?? MESSAGES[Math.floor(Math.random() * MESSAGES.length)];
   bannerSpan.textContent = pick.text;
   const bannerEl = group.querySelector('.fo-banner') as HTMLDivElement;
   bannerEl.className = `fo-banner ${pick.cls}`;
