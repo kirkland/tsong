@@ -34,8 +34,18 @@ const MESSAGES: { text: string; cls: string }[] = [
 ];
 
 // Banners flown only when someone summons a plane with the secret word (see initFlyover).
-// These answer the eternal question — yes, your airplane finally came.
+// These answer the eternal question — yes, your airplane finally came — in the same three
+// flavors as the scheduled flights: scripture, comradely, and irreverent.
 const SUMMON_MESSAGES: { text: string; cls: string }[] = [
+  // Scripture
+  { text: '✝ Ask, and it shall be given you — your airplane has come (Matthew 7:7)', cls: 'fo-bible' },
+  { text: '✝ They that wait upon the LORD shall mount up with wings — Isaiah 40:31', cls: 'fo-bible' },
+  { text: '✝ Lift up your eyes: your airplane draweth nigh', cls: 'fo-bible' },
+  // Comradely
+  { text: '☭ The people\'s airplane arrives for all, on schedule at last', cls: 'fo-red' },
+  { text: '☭ Seize the means of aviation — your flight is here, comrade', cls: 'fo-red' },
+  { text: '☭ No passenger left behind: the collective airplane has landed', cls: 'fo-red' },
+  // Irreverent
   { text: '🛬 your airplane has arrived. boarding at gate ↑↑↓', cls: 'fo-fun' },
   { text: '✈️ flight TSONG-316 — you are the only passenger', cls: 'fo-fun' },
   { text: '🛫 yes. your airplane finally came.', cls: 'fo-fun' },
