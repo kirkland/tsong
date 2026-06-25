@@ -1956,6 +1956,15 @@ worldBtn.addEventListener('click', async () => {
           setTimeout(() => { void openFishing(); }, 0);
           return;
         }
+        // Arcade cabinets launch the solo/co-op minigames via their toolbar buttons.
+        if (feature === 'campaign' || feature === 'typedie' || feature === 'racing' || feature === 'superbros') {
+          const btn = feature === 'campaign' ? campaignBtn
+                    : feature === 'typedie' ? typeDieBtn
+                    : feature === 'racing' ? streetDemonsBtn
+                    : sbBtn;
+          setTimeout(() => btn.click(), 0);
+          return;
+        }
         const id = feature === 'roulette' ? 'rouletteBtn'
                  : feature === 'blackjack' ? 'bjBtn'
                  : feature === 'craps'     ? 'crapsBtn'

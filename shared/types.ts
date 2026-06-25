@@ -394,7 +394,7 @@ export function petById(id: string | null | undefined) {
 
 // What entering a building does (the client maps each `kind` to an action). Add a kind here
 // and a handler on the client to introduce a new venue.
-export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament';
+export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament' | 'arcade';
 // A venue's footprint on the map. The rectangle (top-left origin, world units) is solid —
 // avatars collide with it — and an apron just outside the door is the entry trigger zone.
 export interface WorldBuilding {
@@ -426,6 +426,9 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
   // Parliament — a stately marble hall in the upper-left, home of the Nomic rules game. Walk in to
   // join the perpetual game where the players legislate their own rulebook.
   { id: 'parliament', kind: 'parliament', name: 'PARLIAMENT', emoji: '🏛️', x: 470, y: 420, w: 340, h: 240, color: '#7c8aa3' },
+  // The Arcade — a neon-lit hall between Parliament and the Arena, home to the solo/co-op minigames
+  // (Campaign, Type or Die, Street Demons racing, Super Tsong Bros).
+  { id: 'arcade', kind: 'arcade', name: 'ARCADE', emoji: '🎮', x: 900, y: 430, w: 280, h: 200, color: '#3a2a5a' },
 ] as const;
 
 // The town JAIL — a tiny barred cell just east of the Tavern. Try to drive after 2+ beers and the

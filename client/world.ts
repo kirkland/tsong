@@ -55,7 +55,7 @@ export interface WorldNet {
   pet(): string | null;          // our equipped pet id (null = none → nothing trails us)
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'stocks' | 'loans' | 'petshop' | 'doom' | 'fishing'): void; // open a Casino/Bank/Pet-Shop/DOOM/Fishing feature
+  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'stocks' | 'loans' | 'petshop' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros'): void; // open a Casino/Bank/Pet-Shop/DOOM/Fishing/Arcade feature
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
   onNetizenClick?(netizenId: string): void; // user tapped a netizen avatar in the world (→ challenge)
@@ -130,6 +130,8 @@ const ROADS: Rect[] = [
   { x: 2485, y: 1290, w: 110, h: 200 }, // spur down to the Bank
   { x: 2475, y: 600, w: 110, h: 600 },  // spur up to the Pet shack (NE), clearing the pond to its west
   { x: 1060, y: 1300, w: 110, h: 300 }, // spur down to the Tavern (south of centre)
+  { x: 585, y: 640, w: 110, h: 560 },   // spur up to Parliament (NW)
+  { x: 985, y: 630, w: 110, h: 570 },   // spur up to the Arcade (N, between Parliament & Arena)
 ];
 const PLAZA = { x: 1600, y: 1100, r: 240 }; // paved circle + fountain at town center
 // The Tavern's INTERIOR lives off the main map. When you step inside, the camera bounds switch to
@@ -708,6 +710,69 @@ export function startWorld(net: WorldNet): void {
     document.head.appendChild(st);
   }
 
+  // --- minimap (always-on, top-right) + full map (toggled with M) ---
+  const minimap = document.createElement('canvas');
+  minimap.width = 200; minimap.height = Math.round(200 * WORLD.h / WORLD.w);
+  minimap.style.cssText =
+    'position:absolute;top:10px;right:10px;width:200px;border:2px solid #2a3550;border-radius:8px;' +
+    'box-shadow:0 6px 20px #0008;background:#1a2a1c;cursor:pointer;z-index:3;';
+  minimap.title = 'Open full map (M)';
+  overlay.appendChild(minimap);
+  const fullMap = document.createElement('div');
+  fullMap.style.cssText =
+    'position:absolute;inset:0;display:none;align-items:center;justify-content:center;' +
+    'background:#060a12d8;z-index:9;flex-direction:column;gap:10px;';
+  const fullMapCanvas = document.createElement('canvas');
+  fullMapCanvas.style.cssText = 'border:2px solid #38508f;border-radius:10px;box-shadow:0 12px 40px #000b;background:#1a2a1c;max-width:92vw;max-height:80vh;';
+  const fullMapTitle = document.createElement('div');
+  fullMapTitle.textContent = '🗺️  TSONG WORLD';
+  fullMapTitle.style.cssText = 'color:#e8eefc;font:700 20px ui-monospace,monospace;letter-spacing:1px;';
+  const fullMapHint = document.createElement('div');
+  fullMapHint.textContent = 'Press M or Esc to close';
+  fullMapHint.style.cssText = 'color:#8aa0d8;font:600 12px ui-monospace,monospace;';
+  fullMap.append(fullMapTitle, fullMapCanvas, fullMapHint);
+  overlay.appendChild(fullMap);
+  let fullMapOpen = false;
+  let lastMapDraw = 0;
+  minimap.addEventListener('click', () => toggleFullMap());
+  fullMap.addEventListener('click', () => toggleFullMap());
+  function toggleFullMap() {
+    fullMapOpen = !fullMapOpen;
+    fullMap.style.display = fullMapOpen ? 'flex' : 'none';
+    if (fullMapOpen) {
+      const sz = Math.min(window.innerWidth * 0.9, window.innerHeight * 0.78 * WORLD.w / WORLD.h);
+      fullMapCanvas.width = Math.round(sz); fullMapCanvas.height = Math.round(sz * WORLD.h / WORLD.w);
+      drawMap(fullMapCanvas, true);
+    }
+  }
+  // Draw the world to a canvas (scaled): grass, roads, plaza, building icons, jail, avatars, you.
+  function drawMap(cv: HTMLCanvasElement, full: boolean) {
+    const ctx = cv.getContext('2d'); if (!ctx) return;
+    const W = cv.width, H = cv.height, sx = W / WORLD.w, sy = H / WORLD.h;
+    ctx.fillStyle = '#2f5d36'; ctx.fillRect(0, 0, W, H); // grass
+    ctx.fillStyle = '#8a7448';                            // roads
+    for (const r of ROADS) ctx.fillRect(r.x * sx, r.y * sy, r.w * sx, r.h * sy);
+    ctx.fillStyle = '#a8975e';                            // plaza
+    ctx.beginPath(); ctx.arc(PLAZA.x * sx, PLAZA.y * sy, PLAZA.r * sx, 0, Math.PI * 2); ctx.fill();
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (const b of WORLD_BUILDINGS) {                    // buildings: footprint + emoji icon
+      ctx.fillStyle = b.color;
+      ctx.fillRect(b.x * sx, b.y * sy, Math.max(2, b.w * sx), Math.max(2, b.h * sy));
+      const cx = (b.x + b.w / 2) * sx, cy = (b.y + b.h / 2) * sy;
+      ctx.font = `${full ? 24 : 13}px serif`; ctx.fillText(b.emoji, cx, cy);
+      if (full) { ctx.fillStyle = '#fff'; ctx.font = '700 12px system-ui'; ctx.fillText(b.name, cx, cy + 22); }
+    }
+    ctx.fillStyle = '#6b7079';                            // jail
+    ctx.fillRect(JAIL.x * sx, JAIL.y * sy, JAIL.w * sx, JAIL.h * sy);
+    ctx.font = `${full ? 22 : 12}px serif`; ctx.fillStyle = '#6b7079';
+    ctx.fillText('🚔', (JAIL.x + JAIL.w / 2) * sx, (JAIL.y + JAIL.h / 2) * sy);
+    ctx.fillStyle = 'rgba(220,230,255,0.55)';             // other avatars
+    for (const a of others) { ctx.beginPath(); ctx.arc(a.x * sx, a.y * sy, full ? 4 : 2, 0, Math.PI * 2); ctx.fill(); }
+    ctx.fillStyle = '#ffe14d';                            // you (bright dot)
+    ctx.beginPath(); ctx.arc(selfX * sx, selfY * sy, full ? 7 : 4, 0, Math.PI * 2); ctx.fill();
+    ctx.lineWidth = full ? 2 : 1.5; ctx.strokeStyle = '#1a1408'; ctx.stroke();
+  }
+
   document.body.appendChild(overlay);
 
   // --- collision: keep the avatar/car outside every building rectangle ---
@@ -832,6 +897,7 @@ export function startWorld(net: WorldNet): void {
       case 'pond': return '🎣 Cast a line';
       case 'bar': return '🍺 Enter the Tavern — grab a beer';
       case 'parliament': return '🏛️ Enter Parliament — play Nomic';
+      case 'arcade': return '🎮 Enter the Arcade';
     }
   }
   function enterBuilding(kind: WorldBuildingKind) {
@@ -877,6 +943,15 @@ export function startWorld(net: WorldNet): void {
     if (kind === 'parliament') {
       openDialog('🏛️ Parliament', 'The perpetual game of Nomic is in session. The only rule that cannot change is that the rules can.', [
         { label: '🏛️ Take your seat', onPick: () => { exit(); net.openParliament(); } },
+      ]);
+      return;
+    }
+    if (kind === 'arcade') {
+      openDialog('🎮 The Arcade', 'Rows of glowing cabinets hum and bleep. Pick your poison.', [
+        { label: '🏓 Davis Collects (Campaign)', onPick: () => { exit(); net.openFeature('campaign'); } },
+        { label: '⌨️ Type or Die', onPick: () => { exit(); net.openFeature('typedie'); } },
+        { label: '🏎️ Street Demons (Racing)', onPick: () => { exit(); net.openFeature('racing'); } },
+        { label: '🥊 Super Tsong Bros', onPick: () => { exit(); net.openFeature('superbros'); } },
       ]);
       return;
     }
@@ -1302,9 +1377,10 @@ export function startWorld(net: WorldNet): void {
     const k = e.key.toLowerCase();
     if (k === 'escape') {
       e.preventDefault(); e.stopPropagation();
-      if (talkOpen) npcClose?.(); else if (dialogOpen) closeDialog(); else exit();
+      if (fullMapOpen) toggleFullMap(); else if (talkOpen) npcClose?.(); else if (dialogOpen) closeDialog(); else exit();
       return;
     }
+    if (k === 'm') { e.preventDefault(); e.stopPropagation(); toggleFullMap(); return; } // M → full map
     // While chatting, Enter / Space / E advances the dialogue; movement is frozen.
     if (talkOpen) {
       if (k === 'enter' || k === ' ' || k === 'e') { e.preventDefault(); e.stopPropagation(); npcAdvance?.(); }
@@ -2734,6 +2810,13 @@ export function startWorld(net: WorldNet): void {
       for (const [id, av] of remote) if (!seen.has(id)) { av.c.destroy(); remote.delete(id); }
 
       updatePets(dt);
+
+      // redraw the minimap ~8×/s (and the full map while it's open)
+      if (now - lastMapDraw > 120) {
+        lastMapDraw = now;
+        drawMap(minimap, false);
+        if (fullMapOpen) drawMap(fullMapCanvas, true);
+      }
     },
   };
 
