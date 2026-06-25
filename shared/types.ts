@@ -442,6 +442,11 @@ export type ClientMsg =
   | { type: 'ntStart' } // (host only) start the Nuketown match from the waiting room
   | { type: 'ntEnd'; team: number } // (host only) report the winning team so the server pays the winners
   | { type: 'ntRelay'; data: unknown } // forward an opaque Nuketown payload to all other participants
+  | { type: 'srJoin' } // take a grid slot in the "Street Demons: Grand Prix" race lobby (up to 4)
+  | { type: 'srLeave' } // leave the Street Demons lobby / race
+  | { type: 'srStart' } // (host only) start the race (bots fill the grid up to 4)
+  | { type: 'srEnd'; winner: number } // (host only) report the winning slot so the server pays the racer (-1 = a bot won)
+  | { type: 'srRelay'; data: unknown } // forward an opaque Street Demons payload to all other racers
   | { type: 'tdJoin' } // join the shared co-op "Type or Die" arena
   | { type: 'tdLeave' } // leave the Type or Die arena
   | { type: 'tdStart' } // (any participant) start the next Type or Die run from the waiting room
@@ -848,6 +853,8 @@ export type ServerMsg =
   | DoomEndMsg
   | NtLobbyMsg
   | NtRelayMsg
+  | SrLobbyMsg
+  | SrRelayMsg
   | DoomLeaderboardMsg
   | TypeDieStateMsg
   | TypeDieLeaderboardMsg
@@ -1166,6 +1173,25 @@ export interface NtLobbyMsg {
 // snapshot / guest input). Clients pick out the messages they care about.
 export interface NtRelayMsg {
   type: 'ntRelay';
+  data: unknown;
+}
+// --- "Street Demons: Grand Prix" (4-player pseudo-3D racer) ---
+// Up to 4 human racers; the host (slot 0) is the authority and fills any empty grid slots with
+// bots, so a lone player still races a full field. Mirrors Nuketown's host-authoritative relay:
+// the server only runs the lobby + opaque fan-out and pays the winning racer. `slot` is which
+// grid slot this client holds (0 = host). 'playing' kicks off the race; 'ended' bails everyone
+// back to the menu (the host left).
+export interface SrLobbyMsg {
+  type: 'srLobby';
+  status: 'waiting' | 'playing' | 'ended';
+  slot: number; // this client's grid slot (0 = host / authority)
+  hostSlot: number; // which slot is the authority (0)
+  players: { name: string; slot: number }[]; // every human in the lobby
+}
+// An opaque payload broadcast from one Street Demons racer to all others (host world snapshot /
+// guest input). Clients pick out the messages they care about.
+export interface SrRelayMsg {
+  type: 'srRelay';
   data: unknown;
 }
 // High-round leaderboards for the DOOM minigame (separate solo / co-op tables).

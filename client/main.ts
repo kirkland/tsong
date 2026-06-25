@@ -622,6 +622,10 @@ const net = connect(
       nuketownMod?.feedNtLobby(msg);
     } else if (msg.type === 'ntRelay') {
       nuketownMod?.feedNtRelay(msg.data);
+    } else if (msg.type === 'srLobby') {
+      streetDemonsMod?.feedSrLobby(msg);
+    } else if (msg.type === 'srRelay') {
+      streetDemonsMod?.feedSrRelay(msg.data);
     } else if (msg.type === 'doomLeaderboard') {
       doomScores = { solo: msg.solo, coop: msg.coop };
     } else if (msg.type === 'tdState') {
@@ -1536,6 +1540,27 @@ nuketownBtn.addEventListener('click', async () => {
     });
   } catch (e) {
     console.error('Nuketown failed to load:', e);
+  }
+});
+
+// --- Street Demons: Grand Prix racer (lazy-loaded, self-contained). Host-authoritative over the
+// server's sr* broadcast relay (routed above): slot 0 (first joiner) runs the whole sim, fills
+// empty grid slots with bots, and streams snapshots; guests send input and render from them. ---
+const streetDemonsBtn = document.getElementById('streetDemonsBtn') as HTMLButtonElement;
+let streetDemonsMod: typeof import('./streetdemons') | null = null;
+streetDemonsBtn.addEventListener('click', async () => {
+  try {
+    streetDemonsMod = await import('./streetdemons');
+    streetDemonsMod.startStreetDemons({
+      join: () => net.send({ type: 'srJoin' }),
+      leave: () => net.send({ type: 'srLeave' }),
+      start: () => net.send({ type: 'srStart' }),
+      relay: (data) => net.send({ type: 'srRelay', data }),
+      end: (winner) => net.send({ type: 'srEnd', winner }),
+      name: () => myName,
+    });
+  } catch (e) {
+    console.error('Street Demons failed to load:', e);
   }
 });
 

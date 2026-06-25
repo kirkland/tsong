@@ -291,6 +291,21 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'ntRelay':
         if (msg.data !== undefined) lobby.ntRelay(ws, msg.data);
         break;
+      case 'srJoin':
+        lobby.srJoin(ws);
+        break;
+      case 'srLeave':
+        lobby.srLeave(ws);
+        break;
+      case 'srStart':
+        lobby.srStart(ws);
+        break;
+      case 'srEnd':
+        if (typeof msg.winner === 'number') lobby.srEnd(ws, msg.winner);
+        break;
+      case 'srRelay':
+        if (msg.data !== undefined) lobby.srRelay(ws, msg.data);
+        break;
       case 'tdJoin':
         lobby.tdJoin(ws);
         break;

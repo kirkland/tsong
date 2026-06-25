@@ -761,6 +761,96 @@ export class Lobby {
     });
   }
 
+  // --- Street Demons: Grand Prix (4-player pseudo-3D racer) ---
+  // Mirrors the Nuketown subsystem exactly: host-authoritative over a dumb broadcast relay. The
+  // server only matchmakes (up to 4 human racers), tracks 'waiting'|'playing' status, fans relay
+  // payloads out, and pays the winning racer. The host (slot 0) runs the whole sim and fills any
+  // empty grid slots with bots, so a single player can still race a full 4-car field. None of the
+  // Pong game state is touched.
+  private srSlots: WebSocket[] = [];
+  private srStatus: 'waiting' | 'playing' = 'waiting';
+  private srStartedAt = 0; // epoch ms the current race started (anti-farm reward guard)
+
+  private static readonly SR_CAP = 4;            // most human racers (rest of the grid is bots)
+  private static readonly SR_WIN_REWARD = 600;   // coins the winning human racer earns
+  private static readonly SR_MIN_MATCH_MS = 30_000; // races shorter than this don't pay out
+
+  /** Take a grid slot in the Street Demons lobby (max 4 humans). */
+  srJoin(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return;
+    if (this.srSlots.includes(ws) || this.srSlots.length >= Lobby.SR_CAP) return;
+    this.srSlots.push(ws);
+    this.broadcastSrLobby();
+  }
+
+  /** Leave the Street Demons lobby/race. If the HOST (slot 0) left, end the race for everyone. */
+  srLeave(ws: WebSocket) {
+    const i = this.srSlots.indexOf(ws);
+    if (i === -1) return;
+    const wasHost = i === 0;
+    this.srSlots.splice(i, 1);
+    if (wasHost) {
+      // The authority is gone — no one to run the sim, so tear it down for everyone remaining.
+      for (const other of this.srSlots) {
+        this.tell(other, { type: 'srLobby', status: 'ended', slot: 0, hostSlot: 0, players: [] });
+      }
+      this.srSlots = [];
+      this.srStatus = 'waiting';
+      return;
+    }
+    this.broadcastSrLobby();
+  }
+
+  /** (Host only) flip the lobby to 'playing' — kicks off the race. A lone host is fine: it fills
+   *  the rest of the grid with bots client-side. */
+  srStart(ws: WebSocket) {
+    if (this.srSlots[0] !== ws) return; // only the host (slot 0) may start
+    if (this.srSlots.length < 1) return;
+    this.srStatus = 'playing';
+    this.srStartedAt = Date.now();
+    this.broadcastSrLobby();
+  }
+
+  /** (Host only) settle a finished race: pay the winning human racer the win reward. Guards mirror
+   *  ntEnd — only the host may report, only while a race is live (status flips to 'waiting' so it
+   *  pays exactly once), the winning slot must map to a seated human (a bot win reports -1 and pays
+   *  no one), and the race must have lasted a minimum length so a host can't farm instant wins. */
+  srEnd(ws: WebSocket, winner: number) {
+    if (this.srSlots[0] !== ws) return;       // only the authoritative host reports the result
+    if (this.srStatus !== 'playing') return;  // already settled, or never started — ignore
+    this.srStatus = 'waiting';                // settle once; any further srEnd is a no-op
+    const sock = this.srSlots[winner];
+    if (!sock) return;                        // a bot won (or invalid slot) → no payout
+    if (Date.now() - this.srStartedAt < Lobby.SR_MIN_MATCH_MS) return; // too short to be real
+    const conn = this.conns.get(sock);
+    if (!conn || !conn.pid) return;
+    this.housePay(conn.pid, conn.nickname, Lobby.SR_WIN_REWARD)
+      .then((paid) => {
+        this.sendWallet(sock); this.refreshNetWorth().catch(() => {});
+        if (paid > 0) this.notify(sock, `🏁 You won the Grand Prix — +${paid.toLocaleString()} coins!`);
+      })
+      .catch((e) => console.error('street demons reward failed:', e));
+  }
+
+  /** Forward an opaque Street Demons payload to every OTHER racer (dumb fan-out). */
+  srRelay(ws: WebSocket, data: unknown) {
+    if (!this.srSlots.includes(ws)) return;
+    for (const other of this.srSlots) {
+      if (other !== ws) this.tell(other, { type: 'srRelay', data });
+    }
+  }
+
+  private broadcastSrLobby() {
+    const players = this.srSlots.map((sock, slot) => ({
+      name: this.conns.get(sock)?.nickname ?? `P${slot}`,
+      slot,
+    }));
+    this.srSlots.forEach((sock, slot) => {
+      this.tell(sock, { type: 'srLobby', status: this.srStatus, slot, hostSlot: 0, players });
+    });
+  }
+
   // --- Beta World (free-roam overworld) ---
 
   /** Step a player into the world map. Sends them the current roster right away so they see
@@ -2706,6 +2796,7 @@ export class Lobby {
   remove(ws: WebSocket) {
     this.doomLeave(ws); // drop any co-op DOOM slot (and notify the partner)
     this.ntLeave(ws);   // drop any Nuketown slot (ends the match if the host left)
+    this.srLeave(ws);   // drop any Street Demons grid slot (ends the race if the host left)
     this.tdLeave(ws);   // drop out of the Type or Die arena
     this.world.leave(ws); // drop their avatar from the free-roam world map
     const leavingPid = this.conns.get(ws)?.pid ?? '';
