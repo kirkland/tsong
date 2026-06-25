@@ -1402,6 +1402,64 @@ export async function setMarketInstability(n: number): Promise<void> {
   );
 }
 
+// --- Generic doom_meta KV (for the Fed: coefficients, trickle fund, MTM, bonds, auctions) ---
+/** Read an arbitrary doom_meta value (string), or null if unset / no DB. */
+export async function getMeta(key: string): Promise<string | null> {
+  if (!pool) return null;
+  const { rows } = await pool.query(`SELECT v FROM doom_meta WHERE k = $1`, [key]);
+  return rows.length ? String(rows[0].v) : null;
+}
+/** Read a numeric doom_meta value, falling back to `dflt` when unset / unparseable. */
+export async function getMetaNum(key: string, dflt = 0): Promise<number> {
+  const v = await getMeta(key);
+  if (v === null) return dflt;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : dflt;
+}
+/** Upsert an arbitrary doom_meta value (stringified). */
+export async function setMeta(key: string, val: string | number): Promise<void> {
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO doom_meta (k, v) VALUES ($1, $2) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+    [key, String(val)],
+  );
+}
+/** Total outstanding loan principal across everyone (for the House-balance loan cap). */
+export async function getTotalOutstandingLoans(): Promise<number> {
+  if (!pool) return 0;
+  const { rows } = await pool.query(`SELECT COALESCE(SUM(amount), 0) AS s FROM loans`);
+  return Number(rows[0]?.s ?? 0);
+}
+/** Sum of every player's liquid coins (for the House dashboard's "coins in circulation"). */
+export async function getTotalCoins(): Promise<number> {
+  if (!pool) return 0;
+  const { rows } = await pool.query(`SELECT COALESCE(SUM(coins), 0) AS s FROM players`);
+  return Number(rows[0]?.s ?? 0);
+}
+/** Per-stock locked supply: shares held in long positions older than `olderThanMs`, by coin. Drives
+ *  the supply-scarcity price drift (cornered low-supply coins get a premium). */
+export async function getLockedShares(olderThanMs: number): Promise<Record<string, number>> {
+  if (!pool) return {};
+  const cutoff = Date.now() - olderThanMs;
+  const { rows } = await pool.query<{ coin: string; s: string }>(
+    `SELECT coin, COALESCE(SUM(shares), 0) AS s FROM stock_holdings
+       WHERE side = 'long' AND COALESCE(opened_at, 0) < $1 GROUP BY coin`,
+    [cutoff],
+  );
+  const out: Record<string, number> = {};
+  for (const r of rows) out[r.coin] = Number(r.s) || 0;
+  return out;
+}
+/** Total shares a player already holds (long+short) of one coin — for the concentration cap. */
+export async function getPlayerShares(pid: string, coin: string): Promise<number> {
+  if (!pool || !pid) return 0;
+  const { rows } = await pool.query<{ s: string }>(
+    `SELECT COALESCE(SUM(shares), 0) AS s FROM stock_holdings WHERE pid = $1 AND coin = $2`,
+    [pid, coin],
+  );
+  return Number(rows[0]?.s ?? 0);
+}
+
 // The room's armed game-mode toggles (gravity, turbo, arena, view mode, …) live as one small
 // JSON blob in doom_meta so the operator's chosen modes survive a server reboot/redeploy.
 export type GameModes = Record<string, boolean | string>;

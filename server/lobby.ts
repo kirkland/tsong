@@ -93,8 +93,6 @@ import {
   NEWS_TEMPLATES_BEARISH,
   LOOT_TABLE,
   minBet,
-  FAST_SELL_TAX_MS,
-  FAST_SELL_TAX_RATE,
   FIGHTERS,
   NomProposalKind, NomEffect, NomVote,
 } from '../shared/types';
@@ -107,6 +105,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   setStockCrashAt, getMarketInstability, setMarketInstability,
   getLoan, takeLoan, repayLoan, collectDefaultedLoans, realignLoansToDeadline, getOpenLoans,
   houseAdjust, getHouseBalance,
+  setMeta, getMetaNum, getTotalOutstandingLoans, getLockedShares, getPlayerShares,
   mintExclusive, getExclusiveSupply, getExclusiveLastSale,
   listExclusive, cancelListing, getMarketListings, buyLowestAsk,
   getNetizens, seedNetizen,
@@ -170,14 +169,18 @@ interface Conn {
 // (symmetric, so it doesn't drag the typical trajectory below the drift): usually ±~5% per
 // tick, with a 1-in-12 chance of a bigger swing on top. Clamped to [base/100, base×1000] and
 // rounded to cents (so it can dip below the starting price for real downside, never to zero).
-function rollPrice(price: number, base: number, pressure = 0): number {
+function rollPrice(price: number, base: number, pressure = 0, lockedRatio = 0): number {
   const ticksPerDay = 86_400_000 / STOCK_UPDATE_MS;
   const drift = Math.pow(2, 1 / ticksPerDay); // typical ×2 per day — a gentle climb
   let g = (Math.random() * 2 - 1) * 0.05; // ±5% jitter (log space)
   if (Math.random() < 0.08) g += (Math.random() * 2 - 1) * 0.18; // occasional bigger swing
-  // Economy Overhaul: blend the existing drift/noise (60%) with order-flow pressure (40%). Buying
-  // pushes the price up, selling/shorting pushes it down, but only as a minority influence — the
-  // long-term drift still wins and the base×1000 / base/100 clamp keeps cornering impossible.
+  // The Fed — supply scarcity: a stock with a large fraction of its supply locked up in long
+  // positions older than a day gets a small upward drift premium (cornered low-supply coins like
+  // FRITZ/BACON become naturally more premium + volatile). Capped so the clamp still rules.
+  g += Math.min(0.5, Math.max(0, lockedRatio)) * 0.06;
+  // Blend the drift/noise (60%) with order-flow pressure (40%). Buying pushes up, selling/shorting
+  // down, but only as a minority influence — the long-term drift wins and the clamp keeps cornering
+  // impossible.
   const driftMult = drift * Math.exp(g);
   const flowMult = 1 + Math.max(-0.5, Math.min(0.5, pressure));
   const mult = Math.pow(driftMult, 0.6) * Math.pow(flowMult, 0.4);
@@ -251,11 +254,12 @@ const DRUNK_MS = 180_000;     // each drunkenness level lasts 3 minutes
 // the slice of a balance inside each band is taxed at that band's rate. A big tax-free allowance
 // keeps casual/poorer players untouched, and rates stay modest so it nudges rather than punishes.
 const TAX_BRACKETS: { upTo: number; rate: number }[] = [
-  { upTo: 5_000, rate: 0.00 },     // tax-free allowance — most players never pay a coin
-  { upTo: 25_000, rate: 0.02 },    // 2% on 5k–25k
-  { upTo: 100_000, rate: 0.04 },   // 4% on 25k–100k
-  { upTo: 500_000, rate: 0.06 },   // 6% on 100k–500k
-  { upTo: Infinity, rate: 0.08 },  // 8% on everything above 500k
+  { upTo: 5_000, rate: 0.00 },        // tax-free allowance — most players never pay a coin
+  { upTo: 25_000, rate: 0.02 },       // 2% on 5k–25k
+  { upTo: 100_000, rate: 0.04 },      // 4% on 25k–100k
+  { upTo: 500_000, rate: 0.06 },      // 6% on 100k–500k
+  { upTo: 1_000_000, rate: 0.08 },    // 8% on 500k–1M
+  { upTo: Infinity, rate: 0.10 },     // 10% on everything above 1M (Fed can push this to 15%)
 ];
 // Tax owed for a raw coin balance. Marginal across brackets.
 function progressiveTax(coins: number): number {
@@ -266,6 +270,39 @@ function progressiveTax(coins: number): number {
     const band = Math.min(coins, cap) - prev;
     tax += band * b.rate;
     prev = cap;
+  }
+  return Math.floor(tax);
+}
+
+// --- The Fed: trading frictions (all route coins to the House — the primary refill engine) ---
+const BROKER_FEE = 0.005;            // 0.5% on every trade (both sides); doubles after hours
+const STOCK_CONCENTRATION_CAP = 0.25; // a player can hold at most 25% of any one stock's supply
+// Progressive fast-sell tax on the gross payout, by how long the position was held.
+const FAST_SELL_BRACKETS: { underMs: number; rate: number }[] = [
+  { underMs: 5 * 60_000, rate: 0.25 },
+  { underMs: 15 * 60_000, rate: 0.20 },
+  { underMs: 30 * 60_000, rate: 0.15 },
+  { underMs: 60 * 60_000, rate: 0.10 },
+  { underMs: 180 * 60_000, rate: 0.05 },
+];
+function fastSellRate(heldMs: number): number {
+  for (const b of FAST_SELL_BRACKETS) if (heldMs < b.underMs) return b.rate;
+  return 0; // 3h+ — no fast-sell tax
+}
+// Realized capital-gains tax on profit only (never principal). Marginal brackets.
+const CAPGAIN_BRACKETS: { upTo: number; rate: number }[] = [
+  { upTo: 10_000, rate: 0.00 },
+  { upTo: 100_000, rate: 0.05 },
+  { upTo: 500_000, rate: 0.10 },
+  { upTo: Infinity, rate: 0.15 },
+];
+function capitalGainsTax(gain: number): number {
+  if (gain <= 0) return 0;
+  let tax = 0, prev = 0;
+  for (const b of CAPGAIN_BRACKETS) {
+    if (gain <= prev) break;
+    tax += (Math.min(gain, b.upTo) - prev) * b.rate;
+    prev = b.upTo;
   }
   return Math.floor(tax);
 }
@@ -410,6 +447,7 @@ export class Lobby {
   // Cached House treasury balance, hydrated on boot and kept in sync after each adjust. Broadcast
   // to clients so the market/casino header can show it (and "payouts reduced" when low).
   private houseBalance = 0;
+  private lockedShares: Record<string, number> = {}; // per-coin shares locked in long >24h positions (supply scarcity)
   // Netizen avatar wander state: position, target (tx/ty), pause timer, spawn delay.
   private netizenPos = new Map<string, { x: number; y: number; tx: number; ty: number; pauseUntil: number; spawnAt: number }>();
   // Staggered netizen reactions to news, drained in tickStocks.
@@ -2896,6 +2934,23 @@ export class Lobby {
     if (after !== null) { this.houseBalance = after; this.broadcastHouse(); }
   }
 
+  /** Earmark coins to the Trickle Fund (the coins stay in the House balance — this is an accounting
+   *  number the Fed draws against for stimulus, so stimulus doesn't deplete the lending pool). */
+  private async addTrickle(amount: number): Promise<void> {
+    if (!(amount > 0)) return;
+    const cur = await getMetaNum('trickle_fund', 0);
+    await setMeta('trickle_fund', cur + amount);
+  }
+
+  /** Charge a broker fee on a `tradeCoins`-sized trade (player → House). 0.5%, doubled after hours. */
+  private async chargeBrokerFee(pid: string, tradeCoins: number): Promise<void> {
+    const rate = isMarketHours(Date.now()) ? BROKER_FEE : BROKER_FEE * 2;
+    const fee = Math.floor(tradeCoins * rate);
+    if (fee <= 0) return;
+    const taken = await spendCoins(pid, fee);
+    if (taken) await this.houseCredit(fee);
+  }
+
   /** Mint the House's per-match cut (a NEW mint, not a transfer — pong is the faucet that funds the
    *  treasury). Called once per recorded PvP match alongside the winner's own minted reward. */
   private mintMatchHouse() {
@@ -3346,22 +3401,34 @@ export class Lobby {
   stockInvest(ws: WebSocket, coin: string, amount: number, side: StockSide) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
-    if (!STOCKS.some((s) => s.id === coin)) return; // unknown coin
+    const stock = STOCKS.find((s) => s.id === coin);
+    if (!stock) return; // unknown coin
     const amt = Math.floor(amount);
     if (!Number.isFinite(amt) || amt < 1) return; // positive whole coins only
     const price = this.stockPrices.get(coin)?.price;
     if (!price || !(price > 0)) return;
-    investStock(conn.pid, conn.nickname, coin, amt, price, side)
-      .then(async (w) => {
-        if (!w) { this.sendStocks(ws); return; } // couldn't afford — just refresh the view
-        // Economy Overhaul: the escrowed coins are held in the position's `cost` column (the
-        // invariant counts that escrow), so they leave circulation without being minted. The trade
-        // exerts buy/cover pressure on the price (recorded after the DB write lands).
-        this.recordFlow(coin, side === 'short' ? -amt : amt);
+    const pid = conn.pid, name = conn.nickname;
+    // Concentration cap: no one may corner > 25% of a stock's supply (longs only — shorting doesn't
+    // accumulate supply). Checked before escrowing so we never half-commit a rejected trade.
+    const newShares = amt / price;
+    const capCheck = side === 'long'
+      ? getPlayerShares(pid, coin).then((have) => have + newShares <= STOCK_CONCENTRATION_CAP * stock.supply)
+      : Promise.resolve(true);
+    capCheck.then(async (ok) => {
+      if (!ok) {
+        this.notify(ws, `📊 Position cap: you can hold at most 25% of ${stock.ticker}'s supply. Trade rejected.`);
         this.sendStocks(ws);
-        this.sendWallet(ws);
-      })
-      .catch((e) => console.error('stock invest failed:', e));
+        return;
+      }
+      const w = await investStock(pid, name, coin, amt, price, side);
+      if (!w) { this.sendStocks(ws); return; } // couldn't afford — just refresh the view
+      // The escrowed coins live in the position's `cost` column (counted by the invariant), so they
+      // leave circulation without being minted. The trade exerts buy/cover pressure on the price.
+      this.recordFlow(coin, side === 'short' ? -amt : amt);
+      await this.chargeBrokerFee(pid, amt); // broker fee on the trade → House
+      this.sendStocks(ws);
+      this.sendWallet(ws);
+    }).catch((e) => console.error('stock invest failed:', e));
   }
 
   /** Cash-out used by both players and netizens. The position's `cost` (escrow) is released back
@@ -3391,15 +3458,28 @@ export class Lobby {
       const toHouse = cost - back;
       if (toHouse > 0) await this.houseCredit(toHouse);
     }
-    // Fast-sell tax: a position closed within FAST_SELL_TAX_MS pays a cut of the payout to the House.
-    if (payout > 0 && openedAt > 0 && Date.now() - openedAt < FAST_SELL_TAX_MS) {
-      const tax = Math.floor(payout * FAST_SELL_TAX_RATE);
-      if (tax > 0) {
-        const taken = await spendCoins(pid, tax); // claw the tax back out of what we just paid
-        if (taken) { await this.houseCredit(tax); credited -= tax; }
+    // The Fed's exit frictions, all clawed back out of what we just credited and routed to the House:
+    //   • capital-gains tax on the realized profit (gain = payout − cost), progressive
+    //   • progressive fast-sell tax on the gross payout (steeper the faster you flip)
+    //   • broker fee on the gross payout (0.5%, doubles after hours)
+    // The capital-gains share is earmarked to the Trickle Fund (for Fed stimulus) — the coins still
+    // live in the House balance; trickle_fund is just an accounting number the Fed draws against.
+    const heldMs = openedAt > 0 ? Date.now() - openedAt : Number.POSITIVE_INFINITY;
+    const gross = Math.max(0, payout);
+    const capGain = capitalGainsTax(payout - cost);
+    const fastSell = Math.floor(gross * fastSellRate(heldMs));
+    const brokerRate = isMarketHours(Date.now()) ? BROKER_FEE : BROKER_FEE * 2;
+    const broker = Math.floor(gross * brokerRate);
+    const totalTax = capGain + fastSell + broker;
+    if (totalTax > 0) {
+      const taken = await spendCoins(pid, totalTax); // all-or-nothing; they were just paid, so it clears
+      if (taken) {
+        await this.houseCredit(totalTax);
+        credited -= totalTax;
+        if (capGain > 0) await this.addTrickle(capGain);
       }
     }
-    return { gross: Math.max(0, payout), credited };
+    return { gross, credited };
   }
 
   /** Close the whole long or short position in a crypto. Principal is returned in full; profit is
@@ -3437,24 +3517,33 @@ export class Lobby {
   getLoanFor(ws: WebSocket, amount: number) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
+    const pid = conn.pid, name = conn.nickname;
     const amt = Math.floor(amount);
     if (!Number.isFinite(amt) || amt < 1) return; // positive whole coins only
     // Deadline is the next daily 5pm collection; if one somehow isn't booked, compute it directly.
     const dueAt = this.nextStockCrashAt || nextFivePmEtMs(Date.now());
-    takeLoan(conn.pid, conn.nickname, amt, dueAt)
-      .then(async (res) => {
-        if (!res) { this.sendLoan(ws); return; } // already had a loan / rejected — just refresh
-        // Economy Overhaul: the loan principal is House-funded — Davis lends the House's coins, so
-        // the principal is debited from the treasury rather than minted (keeps coins conserved).
-        // The credit to the player already happened in takeLoan; we just balance the House here.
-        // The debit is best-effort: if the House is short, the shortfall is the one place coins can
-        // enter circulation outside a mint (a documented rough edge — see the conservation notes).
-        const after = await houseAdjust(-amt);
-        if (after !== null) { this.houseBalance = after; this.broadcastHouse(); }
-        this.sendWallet(ws);
-        this.sendLoan(ws);
-        this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
-        this.notify(ws, `💸 Davis fronted you ${amt}🪙 — bring back ${res.loan.owed}🪙 by 5pm. Miss it and the market takes the hit. Keep grinding.`);
+    // Loan cap: total outstanding principal + this loan can't exceed the House lending pool (unless
+    // the Fed has waived the cap during an emergency). This makes credit tight when the House is
+    // drained and loose when it's flush — and guarantees the House can fund the principal debit
+    // below, closing the old "loans mint coins when the House is short" rough edge.
+    Promise.all([getTotalOutstandingLoans(), getMetaNum('fed_loan_cap_waived', 0)])
+      .then(([outstanding, waived]) => {
+        if (!waived && outstanding + amt > this.houseBalance) {
+          this.notify(ws, '🏦 Loan denied — the House lending pool is tapped out. Try a smaller amount, or wait for it to refill.');
+          this.sendLoan(ws);
+          return;
+        }
+        return takeLoan(pid, name, amt, dueAt).then(async (res) => {
+          if (!res) { this.sendLoan(ws); return; } // already had a loan / rejected — just refresh
+          // The loan principal is House-funded: Davis lends the treasury's coins (debited here, not
+          // minted). With the cap above, this debit always clears.
+          const after = await houseAdjust(-amt);
+          if (after !== null) { this.houseBalance = after; this.broadcastHouse(); }
+          this.sendWallet(ws);
+          this.sendLoan(ws);
+          this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
+          this.notify(ws, `💸 Davis fronted you ${amt}🪙 — bring back ${res.loan.owed}🪙 by 5pm. Miss it and the market takes the hit. Keep grinding.`);
+        });
       })
       .catch((e) => console.error('loan failed:', e));
   }
@@ -3718,13 +3807,17 @@ export class Lobby {
     }
     if (now < this.nextStockUpdateAt) return;
     this.nextStockUpdateAt = now + STOCK_UPDATE_MS;
+    // Refresh the locked-supply snapshot (long positions >24h) for the supply-scarcity premium.
+    // Fire-and-forget: at most one tick stale, which is fine for a slow drift bonus.
+    getLockedShares(86_400_000).then((m) => { this.lockedShares = m; }).catch(() => {});
     for (const s of STOCKS) {
       const cur = this.stockPrices.get(s.id) ?? { price: s.base, prev: s.base };
-      // Economy Overhaul: decay the order-flow pressure FIRST (p *= 0.5 per tick), then blend it
-      // into the new price. Decaying first keeps a single burst of trading from compounding.
+      // Decay the order-flow pressure FIRST (p *= 0.5 per tick), then blend it into the new price.
+      // Decaying first keeps a single burst of trading from compounding.
       const p = (this.pressure.get(s.id) ?? 0) * 0.5;
       this.pressure.set(s.id, p);
-      this.stockPrices.set(s.id, { price: rollPrice(cur.price, s.base, p), prev: cur.price });
+      const lockedRatio = s.supply > 0 ? (this.lockedShares[s.id] ?? 0) / s.supply : 0;
+      this.stockPrices.set(s.id, { price: rollPrice(cur.price, s.base, p, lockedRatio), prev: cur.price });
     }
     this.recordStockHistory();
     saveStockPrices(this.priceBoard()).catch((e) => console.error('stock price save failed:', e));
