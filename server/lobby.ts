@@ -106,7 +106,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   setStockCrashAt, getMarketInstability, setMarketInstability,
   getLoan, takeLoan, repayLoan, collectDefaultedLoans, realignLoansToDeadline, getOpenLoans,
   houseAdjust, getHouseBalance,
-  setMeta, getMetaNum, getTotalOutstandingLoans, getTotalCoins, getLockedShares, getPlayerShares, getNetWorthConcentration, getActivePlayers,
+  getMeta, setMeta, getMetaNum, getTotalOutstandingLoans, getTotalCoins, getLockedShares, getPlayerShares, getNetWorthConcentration, getActivePlayers,
   mintExclusive, getExclusiveSupply, getExclusiveLastSale,
   listExclusive, cancelListing, getMarketListings, buyLowestAsk,
   getNetizens, seedNetizen,
@@ -309,6 +309,16 @@ function capitalGainsTax(gain: number): number {
   }
   return Math.floor(tax);
 }
+// Treasury bonds: lock coins for a term, get paid principal + interest from the House at maturity.
+const BOND_TERMS: { termDays: number; rate: number }[] = [
+  { termDays: 7, rate: 0.05 },
+  { termDays: 30, rate: 0.12 },
+];
+const BOND_EARLY_PENALTY = 0.05;          // forfeit interest + 5% of principal on early withdrawal
+const AUCTION_DURATION_MS = 24 * 3_600_000; // exclusive auctions run 24h
+interface Bond { id: string; pid: string; name: string; amount: number; termDays: number; rate: number; purchasedAt: number }
+interface Auction { item: string; name: string; startBid: number; highBid: number; highPid: string; highName: string | null; endsAt: number }
+
 // Idle decay: a small daily fee on the net worth of dormant accounts (active players never pay).
 function idleFeeRate(daysIdle: number): number {
   if (daysIdle < 7) return 0;
@@ -461,6 +471,7 @@ export class Lobby {
   // The Fed: in-memory coefficient cache (persisted in doom_meta, hydrated on boot).
   private fed = { tightening: false, wealthTaxTop: 0.10, loanCapWaived: false };
   private nextFedAt = 0; // throttle the Fed convening (5-min cadence during market hours)
+  private nextBondCheckAt = 0; // throttle the 24/7 bond-maturity + auction-deadline check (10-min)
   // Netizen avatar wander state: position, target (tx/ty), pause timer, spawn delay.
   private netizenPos = new Map<string, { x: number; y: number; tx: number; ty: number; pauseUntil: number; spawnAt: number }>();
   // Staggered netizen reactions to news, drained in tickStocks.
@@ -3346,6 +3357,8 @@ export class Lobby {
     }
     // Stimulus: when the Trickle Fund has built up (and on a cooldown), wire it to active players.
     if (await this.maybeStimulus()) announced = true;
+    // Occasionally put a scarce exclusive up for auction.
+    await this.maybeStartAuction();
     // Otherwise an occasional "no action" statement keeps the Fed present in the feed.
     if (!announced && Math.random() < 0.12) this.publishFedNews('hold', 0);
   }
@@ -3376,16 +3389,168 @@ export class Lobby {
     return true;
   }
 
-  /** Push a Fed statement into the news feed (🪙-prefixed) + broadcast it. */
-  private publishFedNews(event: string, n: number): void {
-    const pool = FED_TEMPLATES[event];
-    if (!pool || !pool.length) return;
-    const headline = pool[Math.floor(Math.random() * pool.length)].replace('{n}', n.toLocaleString());
+  /** Push a literal headline into the news feed + broadcast it. */
+  private pushNews(headline: string): void {
     const item: NewsItem = { id: `fed_${Date.now()}_${Math.floor(Math.random() * 1000)}`, ts: Date.now(), coin: '', headline };
     this.newsFeed.unshift(item);
     if (this.newsFeed.length > 30) this.newsFeed.length = 30;
     saveNewsFeed(this.newsFeed).catch(() => {});
     for (const ws of this.conns.keys()) if (ws.readyState === ws.OPEN) this.sendNews(ws);
+  }
+
+  /** Pick a templated Fed statement and publish it. */
+  private publishFedNews(event: string, n: number): void {
+    const pool = FED_TEMPLATES[event];
+    if (!pool || !pool.length) return;
+    this.pushNews(pool[Math.floor(Math.random() * pool.length)].replace('{n}', n.toLocaleString()));
+  }
+
+  // --- Treasury bonds (state persisted as JSON in doom_meta) ---
+  private async getBonds(): Promise<Bond[]> {
+    try { return JSON.parse((await getMeta('bonds')) || '[]') as Bond[]; } catch { return []; }
+  }
+  private async setBonds(bonds: Bond[]): Promise<void> { await setMeta('bonds', JSON.stringify(bonds)); }
+
+  /** Buy a Treasury bond: lock `amount` coins (escrowed into the House) for the term; principal +
+   *  interest are paid back from the House at maturity. */
+  buyBond(ws: WebSocket, amount: number, termDays: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    const term = BOND_TERMS.find((t) => t.termDays === termDays);
+    if (!term) return;
+    const amt = Math.floor(amount);
+    if (!Number.isFinite(amt) || amt < 100) { this.notify(ws, 'Bonds start at 100🪙.'); return; }
+    const pid = conn.pid, name = conn.nickname;
+    spendCoins(pid, amt)
+      .then(async (w) => {
+        if (!w) { this.notify(ws, "You can't afford that bond."); this.sendWallet(ws); return; }
+        await this.houseCredit(amt); // the locked coins sit in the House for the term
+        const bonds = await this.getBonds();
+        bonds.push({ id: `b_${Date.now()}_${Math.floor(Math.random() * 1e6)}`, pid, name, amount: amt, termDays: term.termDays, rate: term.rate, purchasedAt: Date.now() });
+        await this.setBonds(bonds);
+        stampActivity(pid).catch(() => {});
+        this.sendWallet(ws);
+        this.sendHouseState(ws);
+        this.notify(ws, `🏦 Bought a ${term.termDays}-day Treasury bond for ${amt.toLocaleString()}🪙 at ${(term.rate * 100).toFixed(0)}%.`);
+      })
+      .catch((e) => console.error('bond buy failed:', e));
+  }
+
+  /** Redeem a bond early: forfeit all interest and 5% of principal (penalty stays in the House). */
+  withdrawBond(ws: WebSocket, id: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    const pid = conn.pid, name = conn.nickname;
+    this.getBonds()
+      .then(async (bonds) => {
+        const i = bonds.findIndex((b) => b.id === id && b.pid === pid);
+        if (i < 0) { this.sendHouseState(ws); return; }
+        const b = bonds[i];
+        const refund = Math.floor(b.amount * (1 - BOND_EARLY_PENALTY)); // 95% of principal back
+        const after = await houseAdjust(-refund);
+        if (after !== null) { this.houseBalance = after; await addCoins(pid, name, refund); this.broadcastHouse(); }
+        bonds.splice(i, 1);
+        await this.setBonds(bonds);
+        this.sendWallet(ws);
+        this.sendHouseState(ws);
+        this.notify(ws, `🏦 Redeemed a bond early — ${refund.toLocaleString()}🪙 back (forfeited interest + 5% penalty).`);
+        this.refreshNetWorth().catch(() => {});
+      })
+      .catch((e) => console.error('bond withdraw failed:', e));
+  }
+
+  /** Pay out any bonds that have reached maturity (principal + interest from the House). 24/7. */
+  private async settleMaturedBonds(now: number): Promise<void> {
+    const bonds = await this.getBonds();
+    if (!bonds.length) return;
+    const due = bonds.filter((b) => now >= b.purchasedAt + b.termDays * 86_400_000);
+    if (!due.length) return;
+    const keep = bonds.filter((b) => !due.includes(b));
+    for (const b of due) {
+      const interest = Math.floor(b.amount * b.rate);
+      let pay = b.amount + interest;
+      let after = await houseAdjust(-pay);
+      if (after === null) { pay = Math.floor(this.houseBalance); after = pay > 0 ? await houseAdjust(-pay) : 0 as number | null; } // House short → pay what it has
+      if (after !== null && pay > 0) {
+        this.houseBalance = after; await addCoins(b.pid, b.name, pay);
+        for (const ws of this.conns.keys()) { const c = this.conns.get(ws); if (c?.pid === b.pid) { this.sendWallet(ws); this.notify(ws, `🏦 Your ${b.termDays}-day bond matured: ${pay.toLocaleString()}🪙 (${b.amount.toLocaleString()} + ${interest.toLocaleString()} interest).`); } }
+      }
+    }
+    await this.setBonds(keep);
+    this.broadcastHouse();
+    this.refreshNetWorth().catch(() => {});
+  }
+
+  // --- Exclusive auctions (state persisted as JSON in doom_meta) ---
+  private async getAuction(): Promise<Auction | null> {
+    try { const v = await getMeta('auction'); return v ? JSON.parse(v) as Auction : null; } catch { return null; }
+  }
+  private async setAuction(a: Auction | null): Promise<void> { await setMeta('auction', a ? JSON.stringify(a) : ''); }
+
+  /** Occasionally start an auction for an exclusive that still has supply (called from the Fed tick). */
+  private async maybeStartAuction(): Promise<void> {
+    if (await this.getAuction()) return;       // one at a time
+    if (Math.random() > 0.18) return;          // ~18% chance per Fed tick when idle
+    const supply = await getExclusiveSupply();
+    const available = EXCLUSIVES.filter((x) => (supply[x.id] ?? 0) < x.cap);
+    if (!available.length) return;
+    const item = available[Math.floor(Math.random() * available.length)];
+    const startBid = 5_000 + Math.floor(Math.random() * 5_000);
+    await this.setAuction({ item: item.id, name: item.name, startBid, highBid: 0, highPid: '', highName: null, endsAt: Date.now() + AUCTION_DURATION_MS });
+    this.pushNews(`🪙 FED: A scarce ${item.name} goes to auction — opening bid ${startBid.toLocaleString()}🪙. Bids close in 24h (House → 🏦 Economy).`);
+  }
+
+  /** Place a bid on the live auction: escrow the new bid into the House, refund the prior high bidder. */
+  auctionBid(ws: WebSocket, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    const pid = conn.pid, name = conn.nickname;
+    const amt = Math.floor(amount);
+    this.getAuction()
+      .then(async (a) => {
+        if (!a || Date.now() >= a.endsAt) { this.notify(ws, 'No auction is running right now.'); this.sendHouseState(ws); return; }
+        if (a.highPid === pid) { this.notify(ws, "You're already the high bidder."); return; }
+        const min = Math.max(a.startBid, a.highBid + 1);
+        if (amt < min) { this.notify(ws, `Bid must be at least ${min.toLocaleString()}🪙.`); this.sendHouseState(ws); return; }
+        const w = await spendCoins(pid, amt);
+        if (!w) { this.notify(ws, "You can't afford that bid."); this.sendWallet(ws); return; }
+        await this.houseCredit(amt); // escrow into the House
+        if (a.highPid && a.highBid > 0) { // refund the outbid leader from the House
+          const after = await houseAdjust(-a.highBid);
+          if (after !== null) {
+            this.houseBalance = after; await addCoins(a.highPid, a.highName ?? 'bidder', a.highBid); this.broadcastHouse();
+            for (const ws2 of this.conns.keys()) { const c = this.conns.get(ws2); if (c?.pid === a.highPid) { this.sendWallet(ws2); this.notify(ws2, `🔨 You were outbid on ${a.name} — your ${a.highBid.toLocaleString()}🪙 was refunded.`); } }
+          }
+        }
+        a.highBid = amt; a.highPid = pid; a.highName = name;
+        await this.setAuction(a);
+        stampActivity(pid).catch(() => {});
+        this.sendWallet(ws);
+        this.sendHouseState(ws);
+        this.notify(ws, `🔨 You're the high bidder on ${a.name} at ${amt.toLocaleString()}🪙.`);
+      })
+      .catch((e) => console.error('auction bid failed:', e));
+  }
+
+  /** Resolve the auction once its deadline passes: grant the item to the high bidder (their bid is
+   *  already in the House as the sale proceeds), or return it to the pool if there were no bids. */
+  private async checkAuctionDeadline(now: number): Promise<void> {
+    const a = await this.getAuction();
+    if (!a || now < a.endsAt) return;
+    await this.setAuction(null);
+    if (!a.highPid || a.highBid <= 0) { this.pushNews(`🪙 FED: The ${a.name} auction closed with no bids. It returns to the pool.`); return; }
+    const item = EXCLUSIVES.find((x) => x.id === a.item);
+    if (!item) return;
+    const serial = await mintExclusive(a.highPid, item.id, item.cap, now);
+    if (serial === null) { // minted out in the meantime — refund the winner
+      const after = await houseAdjust(-a.highBid);
+      if (after !== null) { this.houseBalance = after; await addCoins(a.highPid, a.highName ?? 'bidder', a.highBid); this.broadcastHouse(); }
+      this.pushNews(`🪙 FED: The ${a.name} auction was voided (supply exhausted) — ${a.highName} was refunded.`);
+      return;
+    }
+    this.pushNews(`🪙 FED: ${a.highName} won the auction for ${a.name} at ${a.highBid.toLocaleString()}🪙! Congratulations.`);
+    for (const ws of this.conns.keys()) { const c = this.conns.get(ws); if (c?.pid === a.highPid) { this.sendWallet(ws); this.notify(ws, `🏆 You won ${a.name} (#${serial}) at auction for ${a.highBid.toLocaleString()}🪙! Equip it in the Shop.`); } }
+    this.refreshNetWorth().catch(() => {});
   }
 
   /** The global price board, in STOCKS order. `flow` is the sign of the current order-flow
@@ -3455,9 +3620,18 @@ export class Lobby {
 
   /** Assemble + send the House/Fed dashboard snapshot (in reply to houseReq). */
   sendHouseState(ws: WebSocket) {
-    Promise.all([getMetaNum('trickle_fund', 0), getTotalCoins(), getNetWorthConcentration()])
-      .then(([trickle, totalCoins, conc]) => {
+    const conn0 = this.conns.get(ws);
+    const myPid = conn0?.pid ?? '';
+    Promise.all([getMetaNum('trickle_fund', 0), getTotalCoins(), getNetWorthConcentration(), this.getBonds(), this.getAuction()])
+      .then(([trickle, totalCoins, conc, bonds, auction]) => {
         if (!this.conns.has(ws)) return;
+        const myBonds = bonds.filter((b) => b.pid === myPid).map((b) => ({
+          id: b.id, amount: b.amount, termDays: b.termDays, rate: b.rate,
+          maturesAt: b.purchasedAt + b.termDays * 86_400_000,
+        }));
+        const auctionView = auction && Date.now() < auction.endsAt
+          ? { item: auction.item, name: auction.name, startBid: auction.startBid, highBid: auction.highBid, highName: auction.highName, endsAt: auction.endsAt }
+          : null;
         const top5Pct = conc.total > 0 ? Math.round((conc.top5 / conc.total) * 1000) / 10 : 0;
         const wealthBrackets = TAX_BRACKETS.map((b) => ({
           upTo: b.upTo === Infinity ? -1 : b.upTo,
@@ -3481,6 +3655,9 @@ export class Lobby {
           loanCapWaived: this.fed.loanCapWaived,
           tightening: this.fed.tightening,
           wealthBrackets, capGainBrackets, fastSell, idleTiers, fedNews,
+          bondRates: BOND_TERMS,
+          myBonds,
+          auction: auctionView,
         });
       })
       .catch((e) => console.error('house state send failed:', e));
@@ -3925,6 +4102,12 @@ export class Lobby {
    *  event when its time arrives. Cheap to call every tick. */
   private tickStocks() {
     const now = Date.now();
+    // Bond maturities + auction deadlines settle 24/7 (independent of market hours), on a 10-min check.
+    if (now >= this.nextBondCheckAt) {
+      this.nextBondCheckAt = now + 10 * 60_000;
+      this.settleMaturedBonds(now).catch((e) => console.error('bond settle failed:', e));
+      this.checkAuctionDeadline(now).catch((e) => console.error('auction resolve failed:', e));
+    }
     // The Fed convenes every few minutes during market hours: reads concentration/liquidity, adjusts
     // its coefficients, distributes stimulus, and announces. Throttled + fire-and-forget.
     if (now >= this.nextFedAt && isMarketHours(now)) {

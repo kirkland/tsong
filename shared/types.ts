@@ -707,6 +707,9 @@ export type ClientMsg =
   | { type: 'netizenChallenge'; netizenId: string; wager: number }
   | { type: 'newsReq' }
   | { type: 'houseReq' } // request the House/Fed dashboard snapshot
+  | { type: 'bondBuy'; amount: number; termDays: number } // buy a Treasury bond (locks coins for a term)
+  | { type: 'bondWithdraw'; id: string } // redeem a bond early (forfeit interest + 5% penalty)
+  | { type: 'auctionBid'; amount: number } // bid on the current Fed exclusive auction
   | { type: 'buyBeer' } // buy a beer at the Tavern (20🪙 → House); ups your drunk level (cut off at 6)
   | { type: 'jail' } // self-report: tried to drunk-drive (server verifies drunkLevel ≥ 2 and jails you)
   | { type: 'bail'; targetId: string } // pay 500🪙 to bail a jailed player out (targetId = their avatar id; may be your own)
@@ -1253,6 +1256,9 @@ export interface HouseStateMsg {
   fastSell: { underMin: number; rate: number }[];   // minutes held → rate
   idleTiers: { days: number; rate: number }[];       // days idle → rate
   fedNews: { ts: number; headline: string }[];       // recent 🪙 FED statements
+  bondRates: { termDays: number; rate: number }[];   // available Treasury bond terms
+  myBonds: { id: string; amount: number; termDays: number; rate: number; maturesAt: number }[]; // this player's bonds
+  auction: { item: string; name: string; startBid: number; highBid: number; highName: string | null; endsAt: number } | null;
 }
 
 // A market news headline — published hourly during market hours with a hidden price move.

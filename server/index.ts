@@ -494,6 +494,15 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'houseReq':
         lobby.sendHouseState(ws);
         break;
+      case 'bondBuy':
+        if (typeof msg.amount === 'number' && Number.isFinite(msg.amount) && typeof msg.termDays === 'number') lobby.buyBond(ws, msg.amount, msg.termDays);
+        break;
+      case 'bondWithdraw':
+        if (typeof msg.id === 'string') lobby.withdrawBond(ws, msg.id);
+        break;
+      case 'auctionBid':
+        if (typeof msg.amount === 'number' && Number.isFinite(msg.amount)) lobby.auctionBid(ws, msg.amount);
+        break;
       case 'migrate': {
         // Only honour the request if the socket is authenticated — prevents spoofing.
         const authSession = wsSessions.get(ws);
