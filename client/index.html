@@ -801,32 +801,36 @@
       /* Grouped nav dropdowns (Arcade, Casino, Economy, Work) — collapse related toolbar buttons into menus. */
       #arcade, #casino, #economy, #workMenu { position: relative; }
       #arcadeBtn, #casinoBtn, #economyBtn, #workMenuBtn {
-        display: flex; align-items: center; gap: 6px;
+        display: flex; align-items: center; justify-content: center; gap: 6px;
         font: inherit; font-size: 12px; letter-spacing: 1px; padding: 7px 12px;
+        min-width: 108px;
         border-radius: 6px; border: 1px solid #2a3550; background: #0e1424;
         color: #7da2ff; cursor: pointer;
       }
       #arcadeBtn:hover, #casinoBtn:hover, #economyBtn:hover, #workMenuBtn:hover { background: #18203a; }
-      /* Ambient glow: steady tinted buttons (Arcade red, Casino green, Economy gold) with a soft, slow
-         breathing halo — noticeable but not blinky. */
-      #arcadeBtn { color: #ff8a8a; border-color: #6e2a2f; background: #1c0e10; animation: arcadeGlow 3.2s ease-in-out infinite; }
-      #casinoBtn { color: #7ff0b0; border-color: #2a6e45; background: #0e1c14; animation: casinoGlow 3.2s ease-in-out infinite; }
+      /* Ambient glow: each nav button breathes in its own accent colour. */
+      #arcadeBtn  { color: #ff8a8a; border-color: #6e2a2f; background: #1c0e10; animation: arcadeGlow  3.2s ease-in-out infinite; }
+      #casinoBtn  { color: #7ff0b0; border-color: #2a6e45; background: #0e1c14; animation: casinoGlow  3.2s ease-in-out infinite; }
       #economyBtn { color: #ffd86e; border-color: #6e5a1f; background: #1a1608; animation: economyGlow 3.2s ease-in-out infinite; }
-      #workMenuBtn { color: #a8b8ff; border-color: #2a3560; background: #0c1022; }
+      #workMenuBtn{ color: #d09fff; border-color: #5a2a8e; background: #150c22; animation: workGlow    3.2s ease-in-out infinite; }
       @keyframes arcadeGlow {
         0%, 100% { box-shadow: 0 0 4px rgba(255,80,80,0.25); }
-        50% { box-shadow: 0 0 13px rgba(255,80,80,0.6); }
+        50%       { box-shadow: 0 0 13px rgba(255,80,80,0.6); }
       }
       @keyframes casinoGlow {
         0%, 100% { box-shadow: 0 0 4px rgba(60,255,140,0.25); }
-        50% { box-shadow: 0 0 13px rgba(60,255,140,0.6); }
+        50%       { box-shadow: 0 0 13px rgba(60,255,140,0.6); }
       }
       @keyframes economyGlow {
         0%, 100% { box-shadow: 0 0 4px rgba(255,210,80,0.25); }
-        50% { box-shadow: 0 0 13px rgba(255,210,80,0.6); }
+        50%       { box-shadow: 0 0 13px rgba(255,210,80,0.6); }
+      }
+      @keyframes workGlow {
+        0%, 100% { box-shadow: 0 0 4px rgba(180,100,255,0.25); }
+        50%       { box-shadow: 0 0 13px rgba(180,100,255,0.6); }
       }
       @media (prefers-reduced-motion: reduce) {
-        #arcadeBtn, #casinoBtn, #economyBtn { animation: none; }
+        #arcadeBtn, #casinoBtn, #economyBtn, #workMenuBtn { animation: none; }
       }
       #arcadeBtn .caret, #casinoBtn .caret, #economyBtn .caret, #workMenuBtn .caret { font-size: 10px; transition: transform 0.15s; }
       #arcadeBtn[aria-expanded='true'] .caret, #casinoBtn[aria-expanded='true'] .caret, #economyBtn[aria-expanded='true'] .caret, #workMenuBtn[aria-expanded='true'] .caret { transform: rotate(180deg); }
