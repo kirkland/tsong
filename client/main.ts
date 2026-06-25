@@ -1965,11 +1965,14 @@ worldBtn.addEventListener('click', async () => {
           setTimeout(() => btn.click(), 0);
           return;
         }
-        const id = feature === 'roulette' ? 'rouletteBtn'
+        const id = feature === 'roulette'  ? 'rouletteBtn'
                  : feature === 'blackjack' ? 'bjBtn'
                  : feature === 'craps'     ? 'crapsBtn'
                  : feature === 'crash'     ? 'crashBtn'
                  : feature === 'slots'     ? 'slotsBtn'
+                 : feature === 'plinko'    ? 'plinkoBtn'
+                 : feature === 'horse'     ? 'horseBtn'
+                 : feature === 'hilo'      ? 'hiloBtn'
                  : feature === 'stocks'    ? 'marketBtn'
                  : 'loanBtn';
         setTimeout(() => (document.getElementById(id) as HTMLButtonElement | null)?.click(), 0);
