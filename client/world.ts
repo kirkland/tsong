@@ -146,6 +146,29 @@ function hash(i: number, j: number): number {
   return (h % 1000) / 1000;
 }
 
+// --- Day/night cycle + weather (all clients agree by deriving purely from the wall clock) ---
+const HOUR_MS = 3_600_000;
+// A full day→night→day loop takes 8 real hours, so it's "day" for ~4h then "night" for ~4h:
+// the world flips between bright and dark every 4 hours, smoothly through dawn/dusk.
+const DAYNIGHT_CYCLE_MS = 8 * HOUR_MS;
+const PHASE_MS = DAYNIGHT_CYCLE_MS / 2; // one day-or-night phase = 4 hours
+// Weather is rolled once per phase: every time day/night flips (every 4h) there's a 25% chance the
+// whole phase is rainy. Deterministic from the clock, so all clients see the same sky.
+const RAIN_CHANCE = 0.25;
+
+// 0 = full daylight … 1 = deepest night, as a smooth cosine over the cycle.
+function nightFactor(nowMs: number): number {
+  const t = (nowMs % DAYNIGHT_CYCLE_MS) / DAYNIGHT_CYCLE_MS; // 0..1 across the 8h loop
+  return (1 - Math.cos(t * Math.PI * 2)) / 2;                // bright at t=0/1, darkest at t=0.5 (4h in)
+}
+// Deterministic per-phase coin-flip for rain: 25% of 4-hour phases are wet (stable across clients).
+function isRaining(nowMs: number): boolean {
+  const phase = Math.floor(nowMs / PHASE_MS);
+  let h = (Math.imul(phase ^ 0x9e3779b9, 2654435761)) >>> 0;
+  h = (h ^ (h >>> 15)) >>> 0;
+  return (h % 1000) / 1000 < RAIN_CHANCE;
+}
+
 type DecorType = 'tree' | 'pine' | 'bush' | 'flower' | 'shrub';
 type Decor = { type: DecorType; x: number; y: number; s: number };
 // Scatter scenery across the grass on a tight jittered grid, skipping roads, the plaza and building
@@ -1322,6 +1345,10 @@ export function startWorld(net: WorldNet): void {
   let petScene: Phaser.Scene | null = null; // set in create(); needed to spawn pet text objects
   const petSprites = new Map<string, PetSprite>();
   const swayers: Phaser.GameObjects.Image[] = []; // trees/pines that gently sway in update()
+  // Day/night + weather overlays (camera-fixed, set in create(), animated in update()).
+  let nightOverlay: Phaser.GameObjects.Rectangle | null = null;
+  let rainLayer: Phaser.GameObjects.TileSprite | null = null;
+  let warmOverlay: Phaser.GameObjects.Rectangle | null = null;
   // DOOM-portal flame sprites: little orange/yellow tongues layered over the archway. Each carries
   // its own phase/anchor so update() can jitter alpha/scale/offset and make them dance ("on fire").
   interface Flame { img: Phaser.GameObjects.Image; bx: number; by: number; phase: number; amp: number; base: number }
@@ -1995,7 +2022,41 @@ export function startWorld(net: WorldNet): void {
       const warm = sc.add.rectangle(0, 0, 10, 10, 0xffe2b0).setOrigin(0).setScrollFactor(0)
         .setBlendMode(Phaser.BlendModes.MULTIPLY).setAlpha(0.34).setDepth(50000);
       const vig = sc.add.image(0, 0, VIG).setOrigin(0).setScrollFactor(0).setDepth(50001);
-      const fitAtmo = (w: number, h: number) => { warm.setSize(w, h); vig.setDisplaySize(w, h); };
+      warmOverlay = warm;
+
+      // --- night overlay: a deep-navy wash whose alpha rises after dark (depth above the warm/vignette
+      // light layer so it actually darkens the scene). Animated each frame in update(). ---
+      const night = sc.add.rectangle(0, 0, 10, 10, 0x0a1530).setOrigin(0).setScrollFactor(0)
+        .setAlpha(0).setDepth(50002);
+      nightOverlay = night;
+
+      // --- rain: a tiled sheet of pale diagonal streaks, scrolled downward in update() when it's
+      // raining. Baked once to a transparent canvas texture, then tiled over the viewport. ---
+      const RAIN = 'w-rain';
+      if (!sc.textures.exists(RAIN)) {
+        const sz = 128;
+        const ct = sc.textures.createCanvas(RAIN, sz, sz);
+        if (ct) {
+          const c2 = ct.getContext();
+          c2.clearRect(0, 0, sz, sz);
+          c2.strokeStyle = 'rgba(200,220,255,0.55)';
+          c2.lineWidth = 1.4;
+          for (let n = 0; n < 60; n++) {
+            const x = (Math.imul(n, 2654435761) >>> 0) % sz;
+            const y = (Math.imul(n ^ 0x5bd1e995, 40503) >>> 0) % sz;
+            const len = 9 + ((n * 7) % 7);
+            c2.beginPath(); c2.moveTo(x, y); c2.lineTo(x - 3, y + len); c2.stroke();
+          }
+          ct.refresh();
+        }
+      }
+      const rain = sc.add.tileSprite(0, 0, 10, 10, RAIN).setOrigin(0).setScrollFactor(0)
+        .setAlpha(0).setDepth(50003).setVisible(false);
+      rainLayer = rain;
+
+      const fitAtmo = (w: number, h: number) => {
+        warm.setSize(w, h); vig.setDisplaySize(w, h); night.setSize(w, h); rain.setSize(w, h);
+      };
       fitAtmo(sc.scale.width, sc.scale.height);
       sc.scale.on('resize', (gs: Phaser.Structs.Size) => fitAtmo(gs.width, gs.height));
     },
@@ -2005,6 +2066,21 @@ export function startWorld(net: WorldNet): void {
       const now = performance.now();
       const dt = Math.min(delta / 1000, 0.05);
       if (helpFlash && now >= helpFlashUntil) { helpFlash = ''; updateHelp(); }
+
+      // --- day/night + weather: derive purely from the wall clock so every client's sky matches ---
+      {
+        const nowMs = Date.now();
+        const night = nightFactor(nowMs);
+        const rainy = isRaining(nowMs);
+        if (nightOverlay) nightOverlay.setAlpha(night * 0.6 + (rainy ? 0.12 : 0)); // darker at night; rain dims the day a touch
+        if (warmOverlay) warmOverlay.setAlpha(0.34 * (1 - night * 0.8) * (rainy ? 0.6 : 1)); // golden glow fades after dark / under clouds
+        if (rainLayer) {
+          const target = rainy ? 0.55 : 0;
+          rainLayer.setAlpha(rainLayer.alpha + (target - rainLayer.alpha) * Math.min(1, dt * 2)); // ease showers in/out
+          rainLayer.setVisible(rainLayer.alpha > 0.01);
+          if (rainLayer.visible) { rainLayer.tilePositionY += 620 * dt; rainLayer.tilePositionX += 70 * dt; } // streaks fall (slightly slanted)
+        }
+      }
 
       // gentle breeze: each tree sways on its own phase (cheap, ~150 rotations/frame)
       for (const t of swayers) t.rotation = Math.sin(time / 700 + t.x * 0.012) * 0.035;
