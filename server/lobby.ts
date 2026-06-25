@@ -2115,7 +2115,11 @@ export class Lobby {
     const cosmetic = COSMETICS.find((c) => c.id === item);
     if (!cosmetic || cosmetic.locked) return; // locked items (e.g. Davis Slayer) can't be bought
     buyItem(conn.pid, conn.nickname, cosmetic.id, cosmetic.price)
-      .then((w) => { if (w) this.sendWallet(ws); })
+      .then(async (w) => {
+        if (!w) return;                            // already owned or couldn't afford it
+        await this.houseCredit(cosmetic.price);    // purchases are a transfer — the coins go to the House
+        this.sendWallet(ws);
+      })
       .catch((e) => console.error('shop buy failed:', e));
   }
 
