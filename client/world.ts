@@ -157,6 +157,9 @@ function nearPlaza(px: number, py: number, pad = 0): boolean {
 function inAnyBuilding(px: number, py: number, pad = 0): boolean {
   return WORLD_BUILDINGS.some((b) => pointInRect(px, py, b, pad));
 }
+function inJail(px: number, py: number, pad = 0): boolean {
+  return pointInRect(px, py, JAIL, pad);
+}
 // "Bare" ground = roads + the plaza: dirt under your feet, autotiled against the surrounding grass.
 function isBare(px: number, py: number): boolean {
   return onRoad(px, py) || nearPlaza(px, py);
@@ -194,7 +197,7 @@ const DECOR: Decor[] = (() => {
     for (let gy = 70; gy < WORLD.h - 50; gy += cell) {
       const x = gx + (hash(gx, gy * 3) - 0.5) * 80;
       const y = gy + (hash(gx * 3, gy) - 0.5) * 80;
-      if (inAnyBuilding(x, y, 90) || onRoad(x, y, 28) || nearPlaza(x, y, 28)) continue;
+      if (inAnyBuilding(x, y, 90) || inJail(x, y, 40) || onRoad(x, y, 28) || nearPlaza(x, y, 28)) continue;
       // Leave some cells empty so it reads organic rather than wall-to-wall.
       if (hash(gx + 5, gy + 9) < 0.2) continue;
       const r = hash(gx, gy);
@@ -441,7 +444,7 @@ const NPCS: NpcDef[] = [
   {
     // Permanent fixture outside the Tavern, swaying gently (his roam makes him stumble about).
     id: 'barfly', name: 'Sloshed Sal', shirt: 0x8a3b2e, hair: 0x3a2a1a, skin: SKINS[2],
-    hairStyle: 'short', x: 1300, y: 1690, roam: 70,
+    hairStyle: 'short', x: 1130, y: 1830, roam: 55,
     lines: [
       '*hic* …you ever REALLY look at a pong ball? I mean really?',
       "I'm not drunk, you're drunk. The FOUNTAIN'S drunk.",
@@ -638,22 +641,16 @@ export function startWorld(net: WorldNet): void {
     'font-weight:700;box-shadow:0 6px 20px #0008;z-index:2;';
   overlay.appendChild(prompt);
 
-  // Jail banner (top-center) — shown while you're locked up, with a "post your own bail" button.
+  // Jail banner (top-center) — shown while you're locked up. You can't bail yourself; you have to
+  // wait for another player to walk up to the bars and post your bail.
   const jailBanner = document.createElement('div');
   jailBanner.style.cssText =
     'position:absolute;left:50%;top:64px;transform:translateX(-50%);display:none;align-items:center;gap:12px;' +
     'background:#3a1414ee;color:#ffd9d0;border:2px solid #8a2a2a;border-radius:12px;padding:12px 18px;' +
-    'font-size:15px;font-weight:700;box-shadow:0 8px 28px #000a;z-index:3;';
+    'font-size:15px;font-weight:700;box-shadow:0 8px 28px #000a;z-index:3;max-width:80vw;text-align:center;';
   const jailText = document.createElement('span');
-  jailText.textContent = '🚔 You\'re in the drunk tank. Wait for a bail — or post your own.';
-  const jailBailBtn = document.createElement('button');
-  jailBailBtn.type = 'button';
-  jailBailBtn.textContent = `💸 Post bail (${BAIL_COST}🪙)`;
-  jailBailBtn.style.cssText =
-    'cursor:pointer;background:#e8b84b;color:#1a1408;border:none;border-radius:8px;padding:8px 14px;' +
-    'font-size:14px;font-weight:700;';
-  jailBailBtn.onclick = () => net.bail(net.selfId());
-  jailBanner.append(jailText, jailBailBtn);
+  jailText.textContent = `🚔 You're in the drunk tank. Only another player can post your ${BAIL_COST}🪙 bail — sit tight.`;
+  jailBanner.append(jailText);
   overlay.appendChild(jailBanner);
 
   // Building dialog ("what do you want to do?") — a centered modal over the map.
@@ -760,11 +757,19 @@ export function startWorld(net: WorldNet): void {
   function toggleDrive() {
     if (inInterior || net.amJailed()) return; // no cars in the bar or the slammer
     if (!driving) {
-      // Drunk driving: 2+ beers in and you get hauled to the drunk tank instead of the driver's seat.
+      // Drunk driving (2+ beers): a coin-flip says whether the cops catch you.
       if (net.drunkLevel() >= 2) {
-        openDialog('🚨 ALERT', 'YOU ARE TOO DRUNK TO DRIVE.', []);
-        net.jail();
-        return;
+        if (Math.random() < 0.5) {
+          // BUSTED → off to the drunk tank (server verifies + jails; a popup explains what happened).
+          openDialog('🚨 BUSTED FOR DRUNK DRIVING',
+            'The cops pulled you over before you even hit the gas. You\'ve been thrown in the drunk tank — ' +
+            'you can\'t play, drive, or leave until another player posts your 500🪙 bail. Should\'ve called a cab.',
+            []);
+          net.jail();
+          return;
+        }
+        // Got away with it — but driving this wasted is a white-knuckle disaster (see stepCar).
+        flashHelp('😵 You slipped past the cops… but you can barely keep it on the road.');
       }
       if (!myCar()) { flashHelp("You don't own a car — buy one in the 🪙 Shop (Cars tab)."); return; }
       driving = true;
@@ -1389,6 +1394,13 @@ export function startWorld(net: WorldNet): void {
     // Steering needs speed to bite; near-stationary you can barely turn.
     const authority = Math.min(1, sp / 120);
     facing += steer * car.turn * authority * dt;
+    // Drunk driving (you got away with the stop, but you're hammered): a violent, ever-worsening
+    // weave layered on top, so keeping it on the road is brutal. Scales hard with the booze.
+    const drunk = net.drunkLevel();
+    if (drunk > 0) {
+      const w = Date.now() / 1000;
+      facing += (Math.sin(w * 3.7) * 0.9 + Math.sin(w * 9.3 + 1.7) * 0.6) * drunk * dt;
+    }
 
     const hx = Math.cos(facing), hy = Math.sin(facing);
     // Accelerate along the heading (reverse at 60% power).
