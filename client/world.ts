@@ -127,8 +127,9 @@ const PLAZA = { x: 1600, y: 1100, r: 240 }; // paved circle + fountain at town c
 // The Tavern's INTERIOR lives off the main map. When you step inside, the camera bounds switch to
 // this rect (so the town never shows) and movement is clamped to it. Its NPCs sit here permanently
 // with roam 0, so the world-bounds clamp never drags them back onto the map.
-const TAVERN_INT = { x: 4200, y: 300, w: 1280, h: 860 };
-const TAVERN_WALL = 40; // interior wall thickness (play area is inset by this)
+const TAVERN_INT = { x: 4200, y: 300, w: 880, h: 560 };
+const TAVERN_WALL = 28; // interior wall thickness (play area is inset by this)
+const TAVERN_ZOOM = 3;  // zoom in while inside so the small cozy room fills the viewport
 
 function pointInRect(px: number, py: number, r: Rect, pad = 0): boolean {
   return px >= r.x - pad && px <= r.x + r.w + pad && py >= r.y - pad && py <= r.y + r.h + pad;
@@ -456,12 +457,12 @@ const NPCS: NpcDef[] = [
   // --- Tavern INTERIOR cast (stationary, off-map at TAVERN_INT; only reachable once you're inside) ---
   {
     id: 'bartender', name: 'Barkeep', shirt: 0x3a3f4a, hair: 0x2a2a2a, skin: SKINS[2],
-    hairStyle: 'short', x: TAVERN_INT.x + TAVERN_INT.w / 2, y: TAVERN_INT.y + 250, roam: 0,
+    hairStyle: 'short', x: TAVERN_INT.x + TAVERN_INT.w / 2, y: TAVERN_INT.y + 95, roam: 0,
     lines: ['What\'ll it be?'], // talking to him opens the beer dialog (handled in triggerNear)
   },
   {
     id: 'bar-drunk', name: 'Wobbly Pete', shirt: 0x9c4a2e, hair: 0x4a3320, skin: SKINS[1],
-    hairStyle: 'spiky', x: TAVERN_INT.x + 280, y: TAVERN_INT.y + 580, roam: 0,
+    hairStyle: 'spiky', x: TAVERN_INT.x + TAVERN_INT.w * 0.30, y: TAVERN_INT.y + TAVERN_INT.h - 95, roam: 0,
     lines: [
       'heyyy… *hic*… you got beautiful paddles, anyone ever tell you that?',
       'I had ONE beer. …ok maybe the one was a six.',
@@ -473,7 +474,7 @@ const NPCS: NpcDef[] = [
   },
   {
     id: 'bar-suit', name: 'Stressed Exec', shirt: 0x202833, hair: 0x1a1a1a, skin: SKINS[3],
-    hairStyle: 'short', glasses: true, x: TAVERN_INT.x + TAVERN_INT.w - 300, y: TAVERN_INT.y + 580, roam: 0,
+    hairStyle: 'short', glasses: true, x: TAVERN_INT.x + TAVERN_INT.w * 0.72, y: TAVERN_INT.y + TAVERN_INT.h - 120, roam: 0,
     lines: [
       'The market\'s down. The market\'s ALWAYS down. *downs drink*',
       'I had it all in OMEGADAVIS. Don\'t. Just don\'t.',
@@ -796,28 +797,47 @@ export function startWorld(net: WorldNet): void {
     if (interiorBuilt) return;
     interiorBuilt = true;
     const T = TAVERN_WALL, ix = TAVERN_INT.x, iy = TAVERN_INT.y, iw = TAVERN_INT.w, ih = TAVERN_INT.h;
-    const rect = (x: number, y: number, w: number, h: number, color: number, depth: number) =>
-      sc.add.rectangle(x, y, w, h, color).setOrigin(0, 0).setDepth(depth);
-    rect(ix, iy, iw, ih, 0x3a2a1c, iy - 100);                    // plank floor
-    // walls (drawn; collision is a simple clamp to the inset play area)
-    rect(ix, iy, iw, T, 0x241811, iy + ih + 50);                 // top
-    rect(ix, iy + ih - T, iw, T, 0x241811, iy + ih + 50);        // bottom
-    rect(ix, iy, T, ih, 0x241811, iy + ih + 50);                 // left
-    rect(ix + iw - T, iy, T, ih, 0x241811, iy + ih + 50);        // right
-    // back bar: counter slab + a shelf of bottles behind it
-    rect(ix + 160, iy + 150, iw - 320, 54, 0x5a3d24, iy + 150);  // counter
-    rect(ix + 160, iy + 150, iw - 320, 10, 0x6e4d2e, iy + 150);  // counter highlight
-    for (let i = 0; i < 14; i++) {                               // bottles on the back shelf
-      const bx = ix + 220 + i * ((iw - 440) / 13);
-      rect(bx, iy + 86, 10, 30, [0x6fae6f, 0xb9794a, 0x8aa0d8][i % 3], iy + 80);
-    }
-    rect(ix + 150, iy + 116, iw - 300, 8, 0x2a1d12, iy + 110);   // shelf board
-    // a couple of tables + the exit mat
-    const tbl = (cx: number, cy: number) => sc.add.circle(cx, cy, 34, 0x4a3320).setDepth(cy);
-    tbl(ix + 360, iy + ih - 230); tbl(ix + iw - 360, iy + ih - 230);
-    rect(ix + iw / 2 - 90, iy + ih - T - 100, 180, 100, 0x55402a, iy - 90); // exit mat
-    sc.add.text(ix + iw / 2, iy + ih - T - 52, '🚪 EXIT', { fontFamily: 'system-ui, sans-serif', fontSize: '18px', fontStyle: 'bold', color: '#ffe2b0' })
-      .setOrigin(0.5).setDepth(iy - 80);
+    // tiled surface helper (floor / wall / rug), tiles repeat at TEXEL scale to match the world
+    const tile = (key: string, x: number, y: number, w: number, h: number, depth: number) =>
+      sc.add.tileSprite(x, y, w, h, key).setOrigin(0, 0).setTileScale(TEXEL, TEXEL).setDepth(depth);
+    // baseline-anchored pixel prop (y is the floor contact point; depth sorts with the avatar)
+    const prop = (key: string, x: number, y: number, depth = y) =>
+      sc.add.image(x, y, key).setScale(TEXEL).setOrigin(0.5, 1).setDepth(depth);
+
+    // dark surround so a large viewport never shows green grass past the room edges
+    sc.add.rectangle(ix - 800, iy - 800, iw + 1600, ih + 1600, 0x140d08).setOrigin(0, 0).setDepth(iy - 1000);
+    tile('w-tav-floor', ix, iy, iw, ih, iy - 900);                          // plank floor
+    tile('w-tav-rug', ix + iw / 2 - 190, iy + ih - 250, 380, 190, iy - 880); // hearth rug
+    // back + side walls (drawn; collision is a clamp to the inset play area)
+    tile('w-tav-wall', ix, iy, iw, 76, iy - 800);                           // back wall band
+    tile('w-tav-wall', ix, iy, T + 10, ih, iy - 800);                       // left wall
+    tile('w-tav-wall', ix + iw - T - 10, iy, T + 10, ih, iy - 800);         // right wall
+    tile('w-tav-wall', ix, iy + ih - T, iw, T, iy - 790);                   // bottom baseboard
+    // window + warm wall lanterns on the back wall
+    sc.add.image(ix + 130, iy + 50, 'w-tav-window').setScale(TEXEL).setOrigin(0.5, 0.5).setDepth(iy - 795);
+    const lantern = (x: number) => {
+      sc.add.circle(x, iy + 44, 30, 0xffd98a, 0.16).setDepth(iy - 794);
+      sc.add.image(x, iy + 44, 'w-tav-lantern').setScale(TEXEL).setOrigin(0.5, 0.5).setDepth(iy - 793);
+    };
+    lantern(ix + iw * 0.5); lantern(ix + iw * 0.78);
+    // the bar: a shelf of bottles, then the paneled counter in front of it
+    const barX = ix + 210, barW = iw - 420;
+    tile('w-tav-shelf', barX, iy + 70, barW, 32, iy + 84);                  // bottle shelf
+    tile('w-tav-bar', barX, iy + 120, barW, 46, iy + 166);                 // counter (front baseline = depth)
+    // barrels stacked in the left corner
+    prop('w-tav-barrel', ix + 70, iy + ih - 60); prop('w-tav-barrel', ix + 104, iy + ih - 46);
+    prop('w-tav-barrel', ix + 86, iy + ih - 96);
+    // stools at the bar + a couple of tables with mugs
+    prop('w-tav-stool', barX + 80, iy + 196); prop('w-tav-stool', barX + barW - 80, iy + 196);
+    const table = (cx: number, cy: number) => {
+      prop('w-tav-table', cx, cy);
+      prop('w-tav-stool', cx - 44, cy + 8, cy + 8); prop('w-tav-stool', cx + 44, cy + 8, cy + 8);
+    };
+    table(ix + iw * 0.30, iy + ih - 130); table(ix + iw * 0.72, iy + ih - 165);
+    // exit mat by the door
+    tile('w-tav-rug', ix + iw / 2 - 70, iy + ih - T - 70, 140, 60, iy - 870);
+    sc.add.text(ix + iw / 2, iy + ih - T - 38, '🚪 EXIT', { fontFamily: 'system-ui, sans-serif', fontSize: '16px', fontStyle: 'bold', color: '#ffe2b0', stroke: '#1a0f08', strokeThickness: 4 })
+      .setOrigin(0.5).setDepth(iy - 200);
   }
   function enterTavern() {
     const sc = petScene; if (!sc) return;
@@ -827,7 +847,7 @@ export function startWorld(net: WorldNet): void {
     driving = false; vx = 0; vy = 0; // you're on foot inside
     keys.clear(); joyActive = false;
     selfX = TAVERN_INT.x + TAVERN_INT.w / 2;
-    selfY = TAVERN_INT.y + TAVERN_INT.h - 210; // just above the exit mat
+    selfY = TAVERN_INT.y + TAVERN_INT.h - 180; // by the door, clear of the exit mat
     mainCam?.setBounds(TAVERN_INT.x, TAVERN_INT.y, TAVERN_INT.w, TAVERN_INT.h);
   }
   function leaveTavern() {
@@ -1349,7 +1369,7 @@ export function startWorld(net: WorldNet): void {
     nearNpc = null;
     nearNetizen = null;
     if (!best && !driving) {
-      let bD = R + TRIGGER_PAD + 12;
+      let bD = R + TRIGGER_PAD + (inInterior ? 80 : 12); // reach across the bar counter when inside
       for (const n of npcs) {
         const d = Math.hypot(n.x - selfX, n.y - selfY);
         if (d < bD) { bD = d; nearNpc = n; }
@@ -1731,6 +1751,102 @@ export function startWorld(net: WorldNet): void {
       px(2, 3, 1, 3, CAT); px(1, 2, 1, 2, CAT_D);            // curled tail (left, raised)
       px(4, 8, 1, 2, CAT_D); px(6, 8, 1, 2, CAT_D); px(8, 8, 1, 2, CAT_D); // legs
       g.generateTexture('w-cat', 14, 12);
+    }
+
+    // ============================================================================================
+    // TAVERN INTERIOR PROPS — cozy SNES/FF6 pixel art, baked once and assembled in buildInterior().
+    // ============================================================================================
+    {
+      // wood plank floor tile (16×16), warm browns with seams + a little grain
+      const F1 = 0x8a5a32, F2 = 0x7a4d2a, SEAM = 0x5c3a20, GR = 0x96663a;
+      g.clear();
+      px(0, 0, 16, 8, F1); px(0, 8, 16, 8, F2);
+      px(0, 7, 16, 1, SEAM); px(0, 15, 16, 1, SEAM);
+      px(5, 0, 1, 8, SEAM); px(11, 8, 1, 8, SEAM);          // staggered plank ends
+      px(2, 2, 3, 1, GR); px(9, 3, 4, 1, GR); px(6, 10, 4, 1, GR); px(12, 12, 2, 1, GR); // grain flecks
+      g.generateTexture('w-tav-floor', 16, 16);
+    }
+    {
+      // patterned rug tile (16×16): deep red field, cream border + diamond motif
+      const RUG = 0x7e2b2b, RUG_D = 0x5e1d1d, CREAM = 0xd9b779, GOLD = 0xb98b3a;
+      g.clear();
+      px(0, 0, 16, 16, RUG); px(0, 0, 16, 2, CREAM); px(0, 14, 16, 2, CREAM);
+      px(0, 0, 2, 16, CREAM); px(14, 0, 2, 16, CREAM);
+      px(2, 2, 12, 12, RUG_D);
+      px(7, 4, 2, 2, GOLD); px(5, 6, 2, 2, GOLD); px(9, 6, 2, 2, GOLD); px(7, 8, 2, 2, GOLD); // diamond
+      g.generateTexture('w-tav-rug', 16, 16);
+    }
+    {
+      // dark wood wall panel tile (16×16) for the top wall band
+      const W1 = 0x4a3220, W2 = 0x3c281a, LINE = 0x2a1b10, HI = 0x5a3e28;
+      g.clear();
+      px(0, 0, 16, 16, W1); px(0, 0, 16, 1, HI);
+      px(0, 0, 8, 16, W1); px(8, 0, 8, 16, W2);
+      px(7, 0, 1, 16, LINE); px(15, 0, 1, 16, LINE); px(0, 15, 16, 1, LINE);
+      g.generateTexture('w-tav-wall', 16, 16);
+    }
+    {
+      // bar counter segment (24×20): wood front with a paneled face + a lighter countertop lip
+      const C = 0x6e4827, C_D = 0x553619, TOP = 0x8a5e34, TOP_HI = 0xa6764a, PANEL = 0x4d3016;
+      g.clear();
+      px(0, 0, 24, 4, TOP); px(0, 0, 24, 1, TOP_HI); px(0, 4, 24, 1, C_D); // countertop + lip
+      px(0, 5, 24, 15, C);
+      px(2, 8, 8, 9, PANEL); px(14, 8, 8, 9, PANEL);        // two recessed panels
+      px(11, 5, 2, 15, C_D);                                 // center stile
+      g.generateTexture('w-tav-bar', 24, 20);
+    }
+    {
+      // back shelf with bottles (28×16)
+      const SH = 0x3a2616, SH_HI = 0x4d3320;
+      g.clear();
+      px(0, 11, 28, 3, SH); px(0, 11, 28, 1, SH_HI);         // shelf board
+      const cols = [0x5fae6f, 0xb9794a, 0x8aa0d8, 0xd0607a, 0x6fae6f, 0xc9a23a];
+      for (let i = 0; i < 6; i++) { const x = 2 + i * 4.5 | 0; px(x, 4, 2, 7, cols[i]); px(x, 3, 2, 1, 0xffffff); } // bottles + glint
+      g.generateTexture('w-tav-shelf', 28, 16);
+    }
+    {
+      // barrel/keg (16×18): banded cask
+      const BR = 0x8a5a30, BR_D = 0x6e4423, BAND = 0x42566a, BAND_HI = 0x5b7088, LID = 0x9c6a3c;
+      g.clear();
+      px(2, 1, 12, 16, BR); px(2, 1, 12, 2, LID); px(3, 0, 10, 1, LID);
+      px(1, 4, 14, 2, BR); px(1, 11, 14, 2, BR);             // bulge
+      px(2, 5, 12, 1, BAND); px(2, 12, 12, 1, BAND); px(2, 5, 12, 1, BAND_HI);
+      px(13, 2, 1, 14, BR_D);                                 // shadow side
+      g.generateTexture('w-tav-barrel', 16, 18);
+    }
+    {
+      // round table top with a frothy mug on it (20×16)
+      const T = 0x7a4d2a, T_HI = 0x96663a, T_SH = 0x5c3a20, MUG = 0xcaa05a, FOAM = 0xf3ead2;
+      g.clear();
+      px(3, 4, 14, 8, T); px(3, 4, 14, 2, T_HI); px(3, 11, 14, 1, T_SH);
+      px(2, 6, 1, 4, T); px(17, 6, 1, 4, T);                 // rounded edges
+      px(9, 2, 4, 4, MUG); px(9, 1, 4, 1, FOAM); px(13, 3, 1, 2, MUG); // little mug + foam + handle
+      g.generateTexture('w-tav-table', 20, 16);
+    }
+    {
+      // stool (10×10)
+      const S = 0x6e4827, S_D = 0x523417;
+      g.clear();
+      px(1, 2, 8, 3, S); px(1, 2, 8, 1, 0x8a5e34); px(2, 5, 1, 4, S_D); px(7, 5, 1, 4, S_D);
+      g.generateTexture('w-tav-stool', 10, 10);
+    }
+    {
+      // wall lantern (10×12): little caged candle that throws warm light (glow added separately)
+      const FR = 0x2a1c10, GLASS = 0xffd98a, FLAME = 0xffb43a;
+      g.clear();
+      px(3, 0, 4, 1, FR); px(4, 1, 2, 1, FR);                 // hook
+      px(2, 2, 6, 8, FR); px(3, 3, 4, 6, GLASS); px(4, 5, 2, 3, FLAME); px(4, 4, 2, 1, 0xfff0c0);
+      px(2, 9, 6, 1, FR);
+      g.generateTexture('w-tav-lantern', 10, 12);
+    }
+    {
+      // window onto a warm dusk sky (24×20)
+      const FRM = 0x3a2616, SKY = 0x3d5a8a, SKY2 = 0x8a6a9a, GLOW = 0xe7b97a;
+      g.clear();
+      px(0, 0, 24, 20, FRM);
+      px(2, 2, 20, 16, SKY); px(2, 12, 20, 6, SKY2); px(2, 16, 20, 2, GLOW); // sky gradient + horizon glow
+      px(11, 2, 2, 16, FRM); px(2, 9, 20, 2, FRM);            // muntins
+      g.generateTexture('w-tav-window', 24, 20);
     }
 
     // --- soft round shadow (12×6 texels) ---
@@ -2255,8 +2371,9 @@ export function startWorld(net: WorldNet): void {
         if (drunkOverlay) drunkOverlay.setAlpha(drunk > 0 ? Math.min(0.5, drunk * 0.06) : 0);
         if (mainCam) {
           const w = time / 1000;
+          const baseZoom = inInterior ? TAVERN_ZOOM : ZOOM; // zoomed-in & cozy while inside the Tavern
           mainCam.setRotation(drunk > 0 ? Math.sin(w * 1.1) * 0.012 * drunk : 0);            // tilt sway (~4° at lvl 6)
-          mainCam.setZoom(drunk > 0 ? ZOOM * (1 + Math.sin(w * 0.8) * 0.02 * drunk) : ZOOM); // breathing zoom
+          mainCam.setZoom(drunk > 0 ? baseZoom * (1 + Math.sin(w * 0.8) * 0.02 * drunk) : baseZoom); // breathing zoom
         }
       }
 
