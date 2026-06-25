@@ -199,7 +199,7 @@ interface NpcDef {
   body?: 'pants' | 'dress'; // silhouette, default 'pants'
   hat?: 'cap' | 'sun';  // optional headwear
   hatColor?: number;    // cap tint (sun hat is fixed straw)
-  kind?: 'minion' | 'kenny' | 'demon' | 'soul' | 'angler'; // special one-off sprite; default is the little-person
+  kind?: 'minion' | 'kenny' | 'demon' | 'soul' | 'angler' | 'protester'; // special one-off sprite; default is the little-person
   glasses?: boolean;    // overlay specs
   stripes?: boolean;    // red/white striped shirt instead of a flat tinted one (Waldo!)
   x: number; y: number; // home anchor (NPC roams around this)
@@ -386,6 +386,20 @@ const NPCS: NpcDef[] = [
       "Fuck off, I'm fishing.",
       "...I'm fishing. Go away.",
       "You're scaring the fish. Beat it.",
+    ],
+  },
+  {
+    // Picketing the east edge of the central plaza, sign held high, perpetually mid-chant.
+    id: 'protester', name: 'Protester', shirt: 0xc0392b, hair: 0x33271a, kind: 'protester',
+    x: 1820, y: 1090, roam: 36,
+    lines: [
+      'TAX THE RICH!',
+      'Lasso has gone too far!',
+      'Boam has too much money!',
+      'Whose coins? OUR coins!',
+      'Redistribute the treasury!',
+      'No kings in the arena!',
+      'Eat the rich… ball!',
     ],
   },
   {
@@ -1492,6 +1506,28 @@ export function startWorld(net: WorldNet): void {
       g.generateTexture('w-angler', 16, 16);
     }
 
+    // --- Protester: an angry little person hoisting a cardboard picket sign on a stick, mouth open
+    // mid-chant (16×16 so the raised sign can sit up top). ---
+    {
+      const SHIRT = 0xc0392b, SHIRT_D = 0x8e2a20, SKN3 = 0xe7b98e, HAIR3 = 0x33271a;
+      const PANTS3 = 0x2f3a4a, BOOT = 0x1b2230, POLE = 0x8a5a2a, CARD = 0xeae0c8, CARD_D = 0xc7b990, INK = 0x222428;
+      g.clear();
+      // picket sign — board across the top, a few ink strokes hinting at slogans
+      px(7, 0, 9, 4, CARD); px(7, 0, 9, 1, CARD_D); px(7, 3, 9, 1, CARD_D);
+      px(8, 1, 2, 1, INK); px(11, 1, 1, 2, INK); px(13, 1, 2, 1, INK); px(9, 2, 4, 1, INK);
+      px(10, 4, 1, 4, POLE);                                  // pole down to the raised hand
+      // body
+      px(4, 13, 2, 3, PANTS3); px(7, 13, 2, 3, PANTS3); px(4, 15, 2, 1, BOOT); px(7, 15, 2, 1, BOOT); // legs + boots
+      px(3, 7, 7, 6, SHIRT); px(3, 12, 7, 1, SHIRT_D);        // shirt
+      px(2, 8, 1, 4, SKN3);                                   // lowered fist (left)
+      px(9, 6, 1, 3, SKN3); px(10, 7, 1, 1, SKN3);            // raised arm gripping the pole
+      px(4, 3, 5, 4, SKN3);                                   // head
+      px(4, 2, 5, 1, HAIR3); px(4, 3, 1, 2, HAIR3);           // tousled hair
+      px(5, 4, 1, 1, INK); px(7, 4, 1, 1, INK);               // furious eyes
+      px(5, 6, 3, 1, INK);                                    // mouth open, shouting
+      g.generateTexture('w-protester', 16, 16);
+    }
+
     // --- soft round shadow (12×6 texels) ---
     g.clear();
     px(2, 1, 8, 4, 0x000000, 0.28); px(1, 2, 10, 2, 0x000000, 0.28);
@@ -2144,6 +2180,8 @@ export function startWorld(net: WorldNet): void {
       parts = [sc.add.image(0, 0, 'w-tortured-soul').setScale(TEXEL * 1.05).setOrigin(0.5, 0.95).setAlpha(0.82)];
     } else if (def.kind === 'angler') {
       parts = [sc.add.image(0, 0, 'w-angler').setScale(TEXEL * 1.2).setOrigin(0.5, 0.95)];
+    } else if (def.kind === 'protester') {
+      parts = [sc.add.image(0, 0, 'w-protester').setScale(TEXEL * 1.2).setOrigin(0.5, 0.95)];
     } else {
       const layer = (key: string, tint?: number) => {
         const im = sc.add.image(0, 0, key).setScale(TEXEL).setOrigin(0.5, 0.95);

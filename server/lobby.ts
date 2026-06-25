@@ -98,7 +98,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
   recordFishCatch, getFishingLeaderboard, FishingScoreRow,
-  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS,
+  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS, getTaxablePlayers,
   getHoldings, investStock, closePosition, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
   setStockCrashAt, getMarketInstability, setMarketInstability,
   getLoan, takeLoan, repayLoan, collectDefaultedLoans, realignLoansToDeadline, getOpenLoans,
@@ -226,6 +226,32 @@ const TOURNEY_INTER_MS = 5000; // pause between tournament matches so the result
 const TOURNEY_DONE_MS = 12000; // how long the champion screen lingers before the tournament tears down
 const MAX_TIP = 1_000_000; // sanity cap on a single /tip (balance is the real limit)
 const MAX_BOUNTY = 1_000_000; // sanity cap on a single bounty contribution (balance is the real limit)
+
+// --- Progressive daily wealth tax ---------------------------------------------------------
+// The economy skews "top heavy" and the House runs dry funding payouts, so once a day we skim a
+// gentle, MARGINAL tax off liquid balances and route it back into the House (a conserving transfer
+// — nothing minted). Brackets are in DISPLAY coins; only the slice of a balance inside each band is
+// taxed at that band's rate. A big tax-free allowance keeps casual/poorer players untouched, and the
+// rates stay modest so it nudges the curve rather than punishing success.
+const TAX_BRACKETS: { upTo: number; rate: number }[] = [
+  { upTo: 5_000, rate: 0.00 },     // tax-free allowance — most players never pay a coin
+  { upTo: 25_000, rate: 0.02 },    // 2% on 5k–25k
+  { upTo: 100_000, rate: 0.04 },   // 4% on 25k–100k
+  { upTo: 500_000, rate: 0.06 },   // 6% on 100k–500k
+  { upTo: Infinity, rate: 0.08 },  // 8% on everything above 500k
+];
+// Tax owed for a balance (both in DB units, i.e. display × COIN_SCALE). Marginal across brackets.
+function progressiveTax(coins: number): number {
+  let tax = 0, prev = 0;
+  for (const b of TAX_BRACKETS) {
+    const cap = b.upTo === Infinity ? Infinity : b.upTo * COIN_SCALE;
+    if (coins <= prev) break;
+    const band = Math.min(coins, cap) - prev;
+    tax += band * b.rate;
+    prev = cap;
+  }
+  return Math.floor(tax);
+}
 
 // What a seat / queue spot needs to be reclaimed by the same identity after a restart.
 interface SeatInfo {
@@ -2894,6 +2920,7 @@ export class Lobby {
    *  which point the pool resets to 0. Books the next event, then refreshes/announces and repushes. */
   private runDailyCollection() {
     this.scheduleNextCollect(); // book the next daily event immediately (so we never re-fire next tick)
+    this.runWealthTax();        // tax day: skim the top of the economy back into the House
     collectDefaultedLoans(Date.now())
       .then(({ pids, totalOwed, seized }) => {
         // The wallet coins Davis seized are real coins — route them INTO the House so they stay
@@ -2929,6 +2956,39 @@ export class Lobby {
         this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
       })
       .catch((e) => console.error('daily collection failed:', e));
+  }
+
+  /** Daily progressive wealth tax: skim a gentle marginal cut off the richest liquid balances and
+   *  route it into the House so it can keep funding payouts. A conserving transfer — coins move from
+   *  players to the treasury, none are burned or minted. Most accounts (under the allowance) pay 0. */
+  private runWealthTax() {
+    getTaxablePlayers()
+      .then(async (players) => {
+        const taxed: { pid: string; tax: number }[] = [];
+        let collected = 0;
+        for (const p of players) {
+          const tax = progressiveTax(p.coins);
+          if (tax <= 0) continue;          // under the allowance, or rounds to nothing
+          const after = await spendCoins(p.pid, tax);
+          if (!after) continue;            // lost a race on their balance — skip, never overdraw
+          collected += tax;
+          taxed.push({ pid: p.pid, tax });
+        }
+        if (collected <= 0) return;        // nobody rich enough today
+        await this.houseCredit(collected); // the skim lands in the treasury (+broadcasts House)
+        // Push fresh wallets + a receipt to any taxed player who's online.
+        const byPid = new Map(taxed.map((t) => [t.pid, t.tax]));
+        for (const ws of this.conns.keys()) {
+          const conn = this.conns.get(ws);
+          const owed = conn?.pid ? byPid.get(conn.pid) : undefined;
+          if (owed === undefined) continue;
+          this.sendWallet(ws);
+          this.notify(ws, `🧾 Tax day! The House skimmed ${Math.round(owed / COIN_SCALE)}🪙 of wealth tax from your balance.`);
+        }
+        this.announce(`🧾 TAX DAY — the House collected ${Math.round(collected / COIN_SCALE)}🪙 in wealth tax from the top ${taxed.length} account${taxed.length === 1 ? '' : 's'}. Spread the love.`);
+        this.refreshNetWorth().catch((e) => console.error('net worth update after tax failed:', e));
+      })
+      .catch((e) => console.error('wealth tax failed:', e));
   }
 
   /** The global price board, in STOCKS order. `flow` is the sign of the current order-flow
