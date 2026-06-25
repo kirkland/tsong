@@ -144,10 +144,22 @@ function renderLog(s: NomStateMsg) {
   host.innerHTML = `<h3>The record</h3><ul class="nom-loglist">${lines || '<li class="nom-empty">No business yet.</li>'}</ul>`;
 }
 
+// Tracks what the floor currently shows so we don't rebuild an in-progress propose form on every
+// broadcast — re-running host.innerHTML would wipe whatever the Speaker is mid-typing (and drop
+// focus) the instant another legislator enters, votes, or proposes.
+let floorMode = '';
 function renderFloor(s: NomStateMsg) {
   const host = overlay!.querySelector('.nom-floor') as HTMLElement;
-  if (s.proposal) { renderProposalOnFloor(s, host); return; }
-  if (s.yourTurn) { renderProposeForm(host); return; }
+  if (s.proposal) { floorMode = 'proposal'; renderProposalOnFloor(s, host); return; }
+  if (s.yourTurn) {
+    // Build the form once when the floor first becomes ours; leave it alone (and its typed text)
+    // on subsequent broadcasts while it's still our turn with nothing on the floor.
+    if (floorMode === 'propose' && host.querySelector('.nom-form')) return;
+    floorMode = 'propose';
+    renderProposeForm(host);
+    return;
+  }
+  floorMode = 'wait';
   host.innerHTML = `<h3>The floor</h3><p class="nom-wait">Waiting for <b>${esc(nameOf(s.turn))}</b> to take the floor…</p>`;
 }
 
