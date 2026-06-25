@@ -118,6 +118,7 @@ const ROADS: Rect[] = [
   { x: 1560, y: 630, w: 110, h: 600 },  // spur up to the Arena
   { x: 605, y: 1290, w: 110, h: 200 },  // spur down to the Casino
   { x: 2485, y: 1290, w: 110, h: 200 }, // spur down to the Bank
+  { x: 2475, y: 600, w: 110, h: 600 },  // spur up to the Pet shack (NE), clearing the pond to its west
 ];
 const PLAZA = { x: 1600, y: 1100, r: 240 }; // paved circle + fountain at town center
 
@@ -1345,6 +1346,12 @@ export function startWorld(net: WorldNet): void {
   let petScene: Phaser.Scene | null = null; // set in create(); needed to spawn pet text objects
   const petSprites = new Map<string, PetSprite>();
   const swayers: Phaser.GameObjects.Image[] = []; // trees/pines that gently sway in update()
+  // Strays milling around the pet shack: each ambles to a random spot near home, pauses, repeats.
+  interface Critter {
+    spr: Phaser.GameObjects.Image; shadow: Phaser.GameObjects.Image;
+    hx: number; hy: number; tx: number; ty: number; spd: number; pause: number;
+  }
+  const critters: Critter[] = [];
   // Day/night + weather overlays (camera-fixed, set in create(), animated in update()).
   let nightOverlay: Phaser.GameObjects.Rectangle | null = null;
   let rainLayer: Phaser.GameObjects.TileSprite | null = null;
@@ -1553,6 +1560,30 @@ export function startWorld(net: WorldNet): void {
       px(5, 4, 1, 1, INK); px(7, 4, 1, 1, INK);               // furious eyes
       px(5, 6, 3, 1, INK);                                    // mouth open, shouting
       g.generateTexture('w-protester', 16, 16);
+    }
+
+    // --- shelter critters: little dogs & cats milling around the pet shack (14×10, face +x) ---
+    {
+      const DOG = 0x9a6b3f, DOG_D = 0x744d28, EAR = 0x5e3d20, NOSE = 0x2a1c12;
+      g.clear();
+      px(2, 4, 8, 4, DOG); px(2, 7, 8, 1, DOG_D);            // body
+      px(9, 3, 4, 4, DOG); px(12, 4, 1, 2, NOSE);            // head + snout (right)
+      px(9, 2, 2, 2, EAR);                                   // floppy ear
+      px(11, 4, 1, 1, NOSE);                                 // eye
+      px(2, 4, 2, 2, DOG); px(1, 3, 1, 3, DOG_D);            // upright tail (left)
+      px(3, 8, 1, 2, DOG_D); px(5, 8, 1, 2, DOG_D); px(7, 8, 1, 2, DOG_D); px(9, 8, 1, 2, DOG_D); // legs
+      g.generateTexture('w-dog', 14, 12);
+    }
+    {
+      const CAT = 0x6b6b73, CAT_D = 0x4c4c54, EAR = 0x39393f, NOSE = 0xe79ab0;
+      g.clear();
+      px(3, 5, 7, 3, CAT); px(3, 7, 7, 1, CAT_D);            // body
+      px(9, 4, 3, 3, CAT); px(11, 5, 1, 1, NOSE);            // head + pink nose (right)
+      px(9, 2, 1, 2, EAR); px(11, 2, 1, 2, EAR);             // pointy ears
+      px(10, 5, 1, 1, NOSE);                                 // eye
+      px(2, 3, 1, 3, CAT); px(1, 2, 1, 2, CAT_D);            // curled tail (left, raised)
+      px(4, 8, 1, 2, CAT_D); px(6, 8, 1, 2, CAT_D); px(8, 8, 1, 2, CAT_D); // legs
+      g.generateTexture('w-cat', 14, 12);
     }
 
     // --- soft round shadow (12×6 texels) ---
@@ -1994,6 +2025,22 @@ export function startWorld(net: WorldNet): void {
         sign.setOrigin(0.5, 1).setDepth(100000);
       }
 
+      // --- strays around the pet shack: a few dogs & cats ambling about outside ---
+      {
+        const shack = WORLD_BUILDINGS.find((x) => x.kind === 'petshop');
+        if (shack) {
+          const cx = shack.x + shack.w / 2, cy = shack.y + shack.h + 70; // gather just south of the shack (toward the path)
+          const kinds = ['w-dog', 'w-cat', 'w-dog', 'w-cat', 'w-dog'];
+          for (let i = 0; i < kinds.length; i++) {
+            const a = (i / kinds.length) * Math.PI * 2;
+            const x = cx + Math.cos(a) * 60, y = cy + Math.sin(a) * 40;
+            const shadow = sc.add.image(x, y + 2, 'w-shadow').setScale(TEXEL * 0.7).setDepth(y - 1).setAlpha(0.5);
+            const spr = sc.add.image(x, y, kinds[i]).setScale(TEXEL * 1.1).setOrigin(0.5, 0.9).setDepth(y);
+            critters.push({ spr, shadow, hx: cx, hy: cy, tx: x, ty: y, spd: 26 + (i % 3) * 8, pause: i * 0.4 });
+          }
+        }
+      }
+
       // --- townsfolk ---
       for (const def of NPCS) npcs.push(makeNpc(sc, def));
 
@@ -2079,6 +2126,24 @@ export function startWorld(net: WorldNet): void {
           rainLayer.setAlpha(rainLayer.alpha + (target - rainLayer.alpha) * Math.min(1, dt * 2)); // ease showers in/out
           rainLayer.setVisible(rainLayer.alpha > 0.01);
           if (rainLayer.visible) { rainLayer.tilePositionY += 620 * dt; rainLayer.tilePositionX += 70 * dt; } // streaks fall (slightly slanted)
+        }
+      }
+
+      // strays amble around the pet shack: walk toward a target, pause, then pick a new nearby spot
+      for (const c of critters) {
+        if (c.pause > 0) { c.pause -= dt; continue; }
+        const dx = c.tx - c.spr.x, dy = c.ty - c.spr.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 3) {
+          c.pause = 0.6 + Math.random() * 2.4; // loiter a beat
+          const a = Math.random() * Math.PI * 2, r = Math.random() * 90;
+          c.tx = c.hx + Math.cos(a) * r; c.ty = c.hy + Math.sin(a) * r * 0.6; // wander an oval patch
+        } else {
+          const step = Math.min(dist, c.spd * dt);
+          c.spr.x += (dx / dist) * step; c.spr.y += (dy / dist) * step;
+          c.spr.setFlipX(dx < 0); // face travel direction (sprites are drawn facing +x)
+          c.spr.setDepth(c.spr.y);
+          c.shadow.setPosition(c.spr.x, c.spr.y + 2).setDepth(c.spr.y - 1);
         }
       }
 
