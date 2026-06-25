@@ -226,13 +226,17 @@ const TOURNEY_INTER_MS = 5000; // pause between tournament matches so the result
 const TOURNEY_DONE_MS = 12000; // how long the champion screen lingers before the tournament tears down
 const MAX_TIP = 1_000_000; // sanity cap on a single /tip (balance is the real limit)
 const MAX_BOUNTY = 1_000_000; // sanity cap on a single bounty contribution (balance is the real limit)
+// Pong is the economy's faucet. Each recorded PvP match MINTS fresh coins: the winner already gets
+// their WIN_REWARD minted by recordResult(), and we mint the SAME amount again into the House — so
+// every match nets the treasury +MATCH_HOUSE_MINT (think "200 minted, 100 to the winner, 100 kept").
+const MATCH_HOUSE_MINT = 100; // matches the per-win reward minted in db.recordResult()
 
 // --- Progressive daily wealth tax ---------------------------------------------------------
 // The economy skews "top heavy" and the House runs dry funding payouts, so once a day we skim a
 // gentle, MARGINAL tax off liquid balances and route it back into the House (a conserving transfer
-// — nothing minted). Brackets are in DISPLAY coins; only the slice of a balance inside each band is
-// taxed at that band's rate. A big tax-free allowance keeps casual/poorer players untouched, and the
-// rates stay modest so it nudges the curve rather than punishing success.
+// — nothing burned). Thresholds are in raw coins (exactly what a player sees in their wallet); only
+// the slice of a balance inside each band is taxed at that band's rate. A big tax-free allowance
+// keeps casual/poorer players untouched, and rates stay modest so it nudges rather than punishes.
 const TAX_BRACKETS: { upTo: number; rate: number }[] = [
   { upTo: 5_000, rate: 0.00 },     // tax-free allowance — most players never pay a coin
   { upTo: 25_000, rate: 0.02 },    // 2% on 5k–25k
@@ -240,11 +244,11 @@ const TAX_BRACKETS: { upTo: number; rate: number }[] = [
   { upTo: 500_000, rate: 0.06 },   // 6% on 100k–500k
   { upTo: Infinity, rate: 0.08 },  // 8% on everything above 500k
 ];
-// Tax owed for a balance (both in DB units, i.e. display × COIN_SCALE). Marginal across brackets.
+// Tax owed for a raw coin balance. Marginal across brackets.
 function progressiveTax(coins: number): number {
   let tax = 0, prev = 0;
   for (const b of TAX_BRACKETS) {
-    const cap = b.upTo === Infinity ? Infinity : b.upTo * COIN_SCALE;
+    const cap = b.upTo;
     if (coins <= prev) break;
     const band = Math.min(coins, cap) - prev;
     tax += band * b.rate;
@@ -1684,6 +1688,7 @@ export class Lobby {
         recordResult(winRefs, loseRefs)
           .then(() => { this.refreshLeaderboard(); this.refreshWalletsFor(winners); })
           .catch((e) => console.error('leaderboard update failed:', e));
+        this.mintMatchHouse(); // pong mines coins for the treasury
       }
       this.settleBets(winnerSide); // pay out spectator wagers on this match
       // Winning the championship pays 100 coins per player in the field (400 or 800),
@@ -2675,6 +2680,14 @@ export class Lobby {
     if (after !== null) { this.houseBalance = after; this.broadcastHouse(); }
   }
 
+  /** Mint the House's per-match cut (a NEW mint, not a transfer — pong is the faucet that funds the
+   *  treasury). Called once per recorded PvP match alongside the winner's own minted reward. */
+  private mintMatchHouse() {
+    houseAdjust(MATCH_HOUSE_MINT)
+      .then((after) => { if (after !== null) { this.houseBalance = after; this.broadcastHouse(); } })
+      .catch((e) => console.error('match house mint failed:', e));
+  }
+
   /** Broadcast the latest House balance to every client (drives the header readout). */
   private broadcastHouse() {
     const data = JSON.stringify({ type: 'house', balance: Math.round(this.houseBalance) });
@@ -2983,9 +2996,9 @@ export class Lobby {
           const owed = conn?.pid ? byPid.get(conn.pid) : undefined;
           if (owed === undefined) continue;
           this.sendWallet(ws);
-          this.notify(ws, `🧾 Tax day! The House skimmed ${Math.round(owed / COIN_SCALE)}🪙 of wealth tax from your balance.`);
+          this.notify(ws, `🧾 Tax day! The House skimmed ${owed.toLocaleString()}🪙 of wealth tax from your balance.`);
         }
-        this.announce(`🧾 TAX DAY — the House collected ${Math.round(collected / COIN_SCALE)}🪙 in wealth tax from the top ${taxed.length} account${taxed.length === 1 ? '' : 's'}. Spread the love.`);
+        this.announce(`🧾 TAX DAY — the House collected ${collected.toLocaleString()}🪙 in wealth tax from the top ${taxed.length} account${taxed.length === 1 ? '' : 's'}. Spread the love.`);
         this.refreshNetWorth().catch((e) => console.error('net worth update after tax failed:', e));
       })
       .catch((e) => console.error('wealth tax failed:', e));
@@ -4115,6 +4128,7 @@ export class Lobby {
       recordResult(winners, losers)
         .then(() => { this.refreshLeaderboard(); this.refreshWalletsFor(winnerConns); })
         .catch((e) => console.error('leaderboard update failed:', e));
+      this.mintMatchHouse(); // pong mines coins for the treasury
     }
   }
 
@@ -4201,6 +4215,7 @@ export class Lobby {
           recordResult(winRefs, loseRefs)
             .then(() => { this.refreshLeaderboard(); this.refreshWalletsFor(winners); })
             .catch((e) => console.error('leaderboard update failed:', e));
+          this.mintMatchHouse(); // pong mines coins for the treasury
         }
         this.settleBets(winnerSide); // pay out spectator wagers on this match
         this.settleBounty(winners, losers); // pay any bounty on the loser to the winner
