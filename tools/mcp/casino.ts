@@ -308,4 +308,203 @@ export function registerCasinoTools(server: McpServer, ctx: McpContext) {
       }
     },
   );
+
+  server.tool(
+    'plinko',
+    'Drop a ball through 8 rows of pegs (max 50k bet). Ball lands in one of 9 slots with multipliers ranging from 0.2× to 26×.',
+    { amount: z.number().int().positive().max(50000) },
+    async ({ amount }) => {
+      const g = guarded(ctx);
+      if (g) return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: g }) }], isError: true };
+      const dr = await dryRunGuard(ctx, 'plinko', { amount });
+      if (dr) return dr;
+
+      const before = ctx.conn.getState().wallet?.coins ?? null;
+      ctx.conn.send({ type: 'plinko', amount });
+      try {
+        const result = await ctx.conn.awaitMsg('plinkoResult', undefined, 8000);
+        try {
+          await ctx.conn.awaitMsg('wallet', undefined, 1500);
+        } catch { /* ok */ }
+        const after = ctx.conn.getState().wallet?.coins ?? null;
+        const delta = before !== null && after !== null ? after - before : null;
+        writeAudit(ctx.cfg.auditLog, {
+          ts: Date.now(), identity: { name: ctx.identity.name }, autonomy: ctx.autonomy,
+          tool: 'plinko', params: { amount },
+          coinsBefore: before, coinsAfter: after, delta,
+          result: 'ok', note: `slot ${result.slot}, ${result.multiplier}x, payout ${result.payout}`,
+        }, ctx.identity);
+        return { content: [{ type: 'text', text: JSON.stringify({
+          ok: true,
+          path: result.path.map((r: boolean) => r ? 'R' : 'L').join(''),
+          slot: result.slot,
+          multiplier: result.multiplier,
+          bet: result.bet,
+          payout: result.payout,
+          coins: after,
+        }, null, 2) }] };
+      } catch {
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: 'plinko timed out' }) }], isError: true };
+      }
+    },
+  );
+
+  server.tool(
+    'horse_req',
+    'Request a horse racing card: get 5 horses with shuffled names and odds. Must call horse_bet next to place your wager.',
+    {},
+    async () => {
+      const g = guarded(ctx);
+      if (g) return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: g }) }], isError: true };
+
+      ctx.conn.send({ type: 'horseReq' });
+      try {
+        const card = await ctx.conn.awaitMsg('horseCard', undefined, 6000);
+        return { content: [{ type: 'text', text: JSON.stringify({
+          ok: true,
+          horses: card.horses.map((h: { name: string; odds: number }, i: number) => ({ index: i, name: h.name, odds: h.odds })),
+          note: 'call horse_bet with the index (0–4) of your chosen horse and your wager amount',
+        }, null, 2) }] };
+      } catch {
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: 'horse req timed out' }) }], isError: true };
+      }
+    },
+  );
+
+  server.tool(
+    'horse_bet',
+    'Bet on one of the 5 horses from your active race card (call horse_req first). horse is the 0-indexed position; max 50k.',
+    { horse: z.number().int().min(0).max(4), amount: z.number().int().positive().max(50000) },
+    async ({ horse, amount }) => {
+      const g = guarded(ctx);
+      if (g) return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: g }) }], isError: true };
+      const dr = await dryRunGuard(ctx, 'horse_bet', { horse, amount });
+      if (dr) return dr;
+
+      const before = ctx.conn.getState().wallet?.coins ?? null;
+      ctx.conn.send({ type: 'horseBet', horse, amount });
+      try {
+        const result = await ctx.conn.awaitMsg('horseResult', undefined, 8000);
+        try {
+          await ctx.conn.awaitMsg('wallet', undefined, 1500);
+        } catch { /* ok */ }
+        const after = ctx.conn.getState().wallet?.coins ?? null;
+        const delta = before !== null && after !== null ? after - before : null;
+        writeAudit(ctx.cfg.auditLog, {
+          ts: Date.now(), identity: { name: ctx.identity.name }, autonomy: ctx.autonomy,
+          tool: 'horse_bet', params: { horse, amount },
+          coinsBefore: before, coinsAfter: after, delta,
+          result: 'ok',
+          note: `picked #${horse} (${result.horses[horse]?.name}), winner #${result.winner} (${result.horses[result.winner]?.name}), payout ${result.payout}`,
+        }, ctx.identity);
+        return { content: [{ type: 'text', text: JSON.stringify({
+          ok: true,
+          horses: result.horses.map((h: { name: string; odds: number }, i: number) => ({ index: i, name: h.name, odds: h.odds })),
+          winner: result.winner,
+          winnerName: result.horses[result.winner]?.name,
+          yourHorse: result.horse,
+          won: result.winner === result.horse,
+          bet: result.bet,
+          payout: result.payout,
+          coins: after,
+        }, null, 2) }] };
+      } catch {
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: 'horse bet timed out' }) }], isError: true };
+      }
+    },
+  );
+
+  server.tool(
+    'hilo_bet',
+    'Start a Hi-Lo hand. You get a card (1–13), then call hilo_guess to go higher or lower. Cash out any time with hilo_cashout. Max 50k.',
+    { amount: z.number().int().positive().max(50000) },
+    async ({ amount }) => {
+      const g = guarded(ctx);
+      if (g) return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: g }) }], isError: true };
+      const dr = await dryRunGuard(ctx, 'hilo_bet', { amount });
+      if (dr) return dr;
+
+      ctx.conn.send({ type: 'hiloBet', amount });
+      try {
+        const state = await ctx.conn.awaitMsg('hiloState', undefined, 6000);
+        return { content: [{ type: 'text', text: JSON.stringify({
+          ok: true, card: state.card, multiplier: state.multiplier, bet: state.bet, pendingPayout: state.pendingPayout,
+          note: 'call hilo_guess with "hi" or "lo"; call hilo_cashout to lock in winnings',
+        }, null, 2) }] };
+      } catch {
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: 'hilo bet timed out (already in a hand?)' }) }], isError: true };
+      }
+    },
+  );
+
+  server.tool(
+    'hilo_guess',
+    'Guess whether the next card is higher ("hi") or lower ("lo"). Correct = multiplier grows; wrong = lose your bet.',
+    { guess: z.enum(['hi', 'lo']) },
+    async ({ guess }) => {
+      const g = guarded(ctx);
+      if (g) return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: g }) }], isError: true };
+      const dr = await dryRunGuard(ctx, 'hilo_guess', { guess });
+      if (dr) return dr;
+
+      ctx.conn.send({ type: 'hiloGuess', guess });
+      try {
+        const msg = await Promise.race([
+          ctx.conn.awaitMsg('hiloResult', undefined, 6000).then((r) => ({ phase: 'result' as const, msg: r })),
+          ctx.conn.awaitMsg('hiloState', undefined, 6000).then((r) => ({ phase: 'state' as const, msg: r })),
+        ]);
+        if (msg.phase === 'result') {
+          const r = msg.msg;
+          writeAudit(ctx.cfg.auditLog, {
+            ts: Date.now(), identity: { name: ctx.identity.name }, autonomy: ctx.autonomy,
+            tool: 'hilo_guess', params: { guess },
+            coinsBefore: null, coinsAfter: null, delta: r.net,
+            result: 'ok', note: `wrong guess, lost bet; newCard ${r.newCard}, net ${r.net}`,
+          }, ctx.identity);
+          return { content: [{ type: 'text', text: JSON.stringify({
+            ok: true, phase: 'lost', won: false, newCard: r.newCard, payout: r.payout, net: r.net,
+          }, null, 2) }] };
+        }
+        const s = msg.msg;
+        return { content: [{ type: 'text', text: JSON.stringify({
+          ok: true, phase: 'playing', card: s.card, multiplier: s.multiplier, bet: s.bet, pendingPayout: s.pendingPayout,
+        }, null, 2) }] };
+      } catch {
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: 'hilo guess timed out' }) }], isError: true };
+      }
+    },
+  );
+
+  server.tool(
+    'hilo_cashout',
+    'Cash out your active Hi-Lo hand at the current multiplier. Must have at least one correct guess first.',
+    {},
+    async () => {
+      const g = guarded(ctx);
+      if (g) return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: g }) }], isError: true };
+      const dr = await dryRunGuard(ctx, 'hilo_cashout', {});
+      if (dr) return dr;
+
+      const before = ctx.conn.getState().wallet?.coins ?? null;
+      ctx.conn.send({ type: 'hiloCashout' });
+      try {
+        const result = await ctx.conn.awaitMsg('hiloResult', undefined, 6000);
+        try {
+          await ctx.conn.awaitMsg('wallet', undefined, 1500);
+        } catch { /* ok */ }
+        const after = ctx.conn.getState().wallet?.coins ?? null;
+        writeAudit(ctx.cfg.auditLog, {
+          ts: Date.now(), identity: { name: ctx.identity.name }, autonomy: ctx.autonomy,
+          tool: 'hilo_cashout', params: {},
+          coinsBefore: before, coinsAfter: after, delta: result.net,
+          result: 'ok', note: `cashed out, payout ${result.payout}, net ${result.net}`,
+        }, ctx.identity);
+        return { content: [{ type: 'text', text: JSON.stringify({
+          ok: true, won: result.won, payout: result.payout, net: result.net, coins: after,
+        }, null, 2) }] };
+      } catch {
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: 'hilo cashout timed out' }) }], isError: true };
+      }
+    },
+  );
 }
