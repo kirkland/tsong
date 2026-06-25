@@ -164,7 +164,7 @@ export interface CosmeticItem {
   name: string;
   slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'pet';
   price: number;
-  locked?: 'campaign' | 'fishing'; // not buyable — unlocked by an in-game achievement (clearing the campaign, landing a legendary fish, …)
+  locked?: 'campaign' | 'fishing' | 'fishing_rare'; // not buyable — unlocked by in-game achievements
   audio?: string; // for 'song' items: path to the mp3 that plays during your matches
 }
 // Static cosmetics cost 1000 coins; animated ones cost 2000 (10×/20× the COIN_SCALE base).
@@ -214,6 +214,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   // is NOT buyable — it's unlocked only by clearing the campaign.
   { id: 'davisslayer', name: '🏆 Davis Slayer', slot: 'title', price: 0, locked: 'campaign' },
   { id: 'flawless', name: '💯 Flawless', slot: 'title', price: 0, locked: 'campaign' }, // perfect campaign run only
+  { id: 'bigcatch', name: '🐟 Big Catch', slot: 'title', price: 0, locked: 'fishing_rare' }, // land a rare-or-better fish
   { id: 'angler', name: '🎣 Angler', slot: 'title', price: 0, locked: 'fishing' }, // land a legendary fish
   { id: 'clown', name: '🤡 Clown', slot: 'title', price: 1000 },
   { id: 'sharpshooter', name: '🎯 Sharpshooter', slot: 'title', price: 3000 },
@@ -570,25 +571,29 @@ export type FishTier = 'junk' | 'common' | 'uncommon' | 'rare' | 'legendary';
 export interface FishSpecies { id: string; name: string; tier: FishTier; minLb: number; maxLb: number; }
 export const FISH: readonly FishSpecies[] = [
   // junk — barely worth reeling in
-  { id: 'boot',     name: '🥾 Old Boot',    tier: 'junk',      minLb: 0.5, maxLb: 3 },
-  { id: 'can',      name: '🥫 Soda Can',    tier: 'junk',      minLb: 0.1, maxLb: 1 },
-  { id: 'seaweed',  name: '🌿 Seaweed',     tier: 'junk',      minLb: 0.2, maxLb: 2 },
+  { id: 'boot',      name: '🥾 Old Boot',       tier: 'junk',      minLb: 0.5, maxLb: 3 },
+  { id: 'can',       name: '🥫 Soda Can',       tier: 'junk',      minLb: 0.1, maxLb: 1 },
+  { id: 'seaweed',   name: '🌿 Seaweed',        tier: 'junk',      minLb: 0.2, maxLb: 2 },
   // common
-  { id: 'minnow',   name: '🐟 Minnow',      tier: 'common',    minLb: 0.1, maxLb: 0.8 },
-  { id: 'perch',    name: '🐟 Perch',       tier: 'common',    minLb: 0.5, maxLb: 3 },
-  { id: 'sunfish',  name: '🐠 Sunfish',     tier: 'common',    minLb: 0.4, maxLb: 2.5 },
+  { id: 'minnow',    name: '🐟 Minnow',         tier: 'common',    minLb: 0.1, maxLb: 0.8 },
+  { id: 'perch',     name: '🐟 Perch',          tier: 'common',    minLb: 0.5, maxLb: 3 },
+  { id: 'sunfish',   name: '🐠 Sunfish',        tier: 'common',    minLb: 0.4, maxLb: 2.5 },
   // uncommon
-  { id: 'bass',     name: '🐟 Largemouth Bass', tier: 'uncommon', minLb: 2, maxLb: 12 },
-  { id: 'trout',    name: '🐟 Rainbow Trout',   tier: 'uncommon', minLb: 1.5, maxLb: 9 },
+  { id: 'bass',      name: '🐟 Largemouth Bass', tier: 'uncommon', minLb: 2, maxLb: 12 },
+  { id: 'trout',     name: '🐟 Rainbow Trout',   tier: 'uncommon', minLb: 1.5, maxLb: 9 },
+  { id: 'bluegill',  name: '🐠 Bluegill',        tier: 'uncommon', minLb: 0.3, maxLb: 3 },
   // rare
-  { id: 'catfish',  name: '🐱 Giant Catfish', tier: 'rare',    minLb: 10, maxLb: 60 },
-  { id: 'koi',      name: '✨ Golden Koi',    tier: 'rare',    minLb: 5, maxLb: 30 },
-  // legendary — a tsong-themed monster of the deep
-  { id: 'daviswhale', name: '🐋 Davis Whale', tier: 'legendary', minLb: 200, maxLb: 1500 },
+  { id: 'catfish',   name: '🐱 Giant Catfish',  tier: 'rare',      minLb: 10, maxLb: 60 },
+  { id: 'koi',       name: '✨ Golden Koi',      tier: 'rare',      minLb: 5, maxLb: 30 },
+  { id: 'salmon',    name: '🐟 King Salmon',     tier: 'rare',      minLb: 15, maxLb: 80 },
+  { id: 'sturgeon',  name: '🦈 Sturgeon',        tier: 'rare',      minLb: 20, maxLb: 150 },
+  // legendary — tsong-themed monsters of the deep
+  { id: 'daviswhale', name: '🐋 Davis Whale',   tier: 'legendary', minLb: 200, maxLb: 1500 },
+  { id: 'kraken',     name: '🦑 Ancient Kraken', tier: 'legendary', minLb: 500, maxLb: 5000 },
 ] as const;
-// Tier roll weights (sum 100): junk 18 / common 50 / uncommon 22 / rare 8 / legendary 2.
+// Tier roll weights (sum 100): junk 10 / common 46 / uncommon 27 / rare 13 / legendary 4.
 export const FISH_TIER_WEIGHTS: Readonly<Record<FishTier, number>> = {
-  junk: 18, common: 50, uncommon: 22, rare: 8, legendary: 2,
+  junk: 10, common: 46, uncommon: 27, rare: 13, legendary: 4,
 };
 export const FISH_TIERS: readonly FishTier[] = ['junk', 'common', 'uncommon', 'rare', 'legendary'];
 

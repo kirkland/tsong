@@ -1462,7 +1462,7 @@ export class Lobby {
   // House-funded reward range per tier (server picks an amount within the range; client only
   // sends the tier, never a coin amount). Legendary is a flat jackpot + the Angler title.
   private static readonly FISH_REWARDS: Record<string, [number, number]> = {
-    junk: [0, 10], common: [50, 120], uncommon: [160, 360], rare: [600, 1200], legendary: [3000, 3000],
+    junk: [0, 10], common: [50, 120], uncommon: [160, 360], rare: [700, 1500], legendary: [3500, 3500],
   };
 
   /** Reload the DOOM leaderboards from the DB and push them to everyone. */
@@ -1555,7 +1555,8 @@ export class Lobby {
     };
 
     if (legendary) {
-      // Landing a legendary unlocks the locked "Angler" title (own it + auto-wear it if untitled).
+      // Landing a legendary unlocks the "Angler" title (and "Big Catch" if not yet held).
+      awardTitle(pid, nick, 'bigcatch').catch(() => {});
       awardTitle(pid, nick, 'angler')
         .then((w) => {
           if (w) { conn.title = w.title; this.refreshLeaderboard(); }
@@ -1564,6 +1565,15 @@ export class Lobby {
           this.announce(`🎣 ${nick} landed a LEGENDARY catch (${Math.round(sizeLb)} lb) and earned the Angler title!`);
         })
         .catch((e) => { console.error('angler title award failed:', e); finish(); });
+    } else if (tier === 'rare') {
+      // Landing a rare fish for the first time unlocks the "Big Catch" title.
+      awardTitle(pid, nick, 'bigcatch')
+        .then((w) => {
+          if (w) { conn.title = w.title; this.refreshLeaderboard(); }
+          const cos = COSMETICS.find((c) => c.id === 'bigcatch');
+          finish(cos && w ? { id: cos.id, name: cos.name } : undefined);
+        })
+        .catch((e) => { console.error('bigcatch title award failed:', e); finish(); });
     } else {
       finish();
     }

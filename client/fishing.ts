@@ -16,6 +16,11 @@ import {
   FishLeaderboardRow,
 } from '../shared/types';
 
+// Server-side reward ranges mirrored here for the guide panel only (display-only; server is authoritative).
+const FISH_REWARD_DISPLAY: Record<FishTier, string> = {
+  junk: '0–10', common: '50–120', uncommon: '160–360', rare: '700–1500', legendary: '3500',
+};
+
 // Networking hook into the shared websocket (provided by main.ts).
 export interface FishingNet {
   // Report a landed fish: the server picks + grants the House-funded reward by tier.
@@ -106,6 +111,27 @@ export function startFishing(net: FishingNet): void {
     'border-radius:10px;padding:10px 14px;color:#cfe0ff;font:700 13px ui-monospace,monospace;' +
     'pointer-events:none;text-shadow:1px 1px 0 #000;';
   overlay.appendChild(board);
+
+  // Rewards guide panel (bottom-right): always shows tier chances + coin ranges.
+  const guide = document.createElement('div');
+  guide.style.cssText =
+    'position:absolute;right:16px;bottom:16px;min-width:210px;background:#0a1c2cdd;border:1px solid #1f4a68;' +
+    'border-radius:10px;padding:10px 14px;color:#cfe0ff;font:700 13px ui-monospace,monospace;' +
+    'pointer-events:none;text-shadow:1px 1px 0 #000;';
+  const total = FISH_TIERS.reduce((s, t) => s + FISH_TIER_WEIGHTS[t], 0);
+  const guideRows = FISH_TIERS.slice().reverse().map((t) => {
+    const pct = Math.round((FISH_TIER_WEIGHTS[t] / total) * 100);
+    const color = TIER_INFO[t].color;
+    const label = TIER_INFO[t].label;
+    const reward = FISH_REWARD_DISPLAY[t];
+    return `<div style="display:flex;justify-content:space-between;gap:10px;margin:2px 0">` +
+      `<span style="color:${color}">${label}</span>` +
+      `<span style="color:#9fc6e8">${pct}%</span>` +
+      `<span style="color:#ffd166">🪙 ${reward}</span>` +
+      `</div>`;
+  }).join('');
+  guide.innerHTML = `<div style="color:#7fd1ff;margin-bottom:6px">📊 FISH GUIDE</div>${guideRows}`;
+  overlay.appendChild(guide);
 
   // Exit button (top-right).
   const exitBtn = document.createElement('button');
@@ -290,10 +316,15 @@ export function startFishing(net: FishingNet): void {
     ctx.fillStyle = '#f4f4f4'; ctx.beginPath(); ctx.arc(cx, cy, 12, 0, Math.PI); ctx.fill();
     ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(cx, cy, 12, 0, Math.PI * 2); ctx.stroke();
     if (phase === 'bite') {
-      ctx.fillStyle = '#ffd23f'; ctx.font = '900 44px ui-monospace,monospace'; ctx.textAlign = 'center';
+      const tierInfo = pending ? TIER_INFO[pending.species.tier] : TIER_INFO.common;
+      ctx.fillStyle = tierInfo.color;
+      ctx.font = '900 44px ui-monospace,monospace'; ctx.textAlign = 'center';
       ctx.fillText('!', cx, cy - 26);
+      // tier label above the "!" so you know what you hooked
+      ctx.font = '700 15px ui-monospace,monospace';
+      ctx.fillText(tierInfo.label, cx, cy - 74);
       // ripple
-      ctx.strokeStyle = 'rgba(255,210,63,0.6)'; ctx.lineWidth = 2;
+      ctx.strokeStyle = tierInfo.color + '99'; ctx.lineWidth = 2;
       ctx.beginPath(); ctx.arc(cx, cy, 18 + (0.8 - hookWindow) * 30, 0, Math.PI * 2); ctx.stroke();
     }
   }
