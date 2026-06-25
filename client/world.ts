@@ -157,6 +157,9 @@ function nearPlaza(px: number, py: number, pad = 0): boolean {
 function inAnyBuilding(px: number, py: number, pad = 0): boolean {
   return WORLD_BUILDINGS.some((b) => pointInRect(px, py, b, pad));
 }
+function inJail(px: number, py: number, pad = 0): boolean {
+  return pointInRect(px, py, JAIL, pad);
+}
 // "Bare" ground = roads + the plaza: dirt under your feet, autotiled against the surrounding grass.
 function isBare(px: number, py: number): boolean {
   return onRoad(px, py) || nearPlaza(px, py);
@@ -194,7 +197,7 @@ const DECOR: Decor[] = (() => {
     for (let gy = 70; gy < WORLD.h - 50; gy += cell) {
       const x = gx + (hash(gx, gy * 3) - 0.5) * 80;
       const y = gy + (hash(gx * 3, gy) - 0.5) * 80;
-      if (inAnyBuilding(x, y, 90) || onRoad(x, y, 28) || nearPlaza(x, y, 28)) continue;
+      if (inAnyBuilding(x, y, 90) || inJail(x, y, 40) || onRoad(x, y, 28) || nearPlaza(x, y, 28)) continue;
       // Leave some cells empty so it reads organic rather than wall-to-wall.
       if (hash(gx + 5, gy + 9) < 0.2) continue;
       const r = hash(gx, gy);
@@ -441,7 +444,7 @@ const NPCS: NpcDef[] = [
   {
     // Permanent fixture outside the Tavern, swaying gently (his roam makes him stumble about).
     id: 'barfly', name: 'Sloshed Sal', shirt: 0x8a3b2e, hair: 0x3a2a1a, skin: SKINS[2],
-    hairStyle: 'short', x: 1300, y: 1690, roam: 70,
+    hairStyle: 'short', x: 1130, y: 1830, roam: 55,
     lines: [
       '*hic* …you ever REALLY look at a pong ball? I mean really?',
       "I'm not drunk, you're drunk. The FOUNTAIN'S drunk.",
