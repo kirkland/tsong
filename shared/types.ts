@@ -414,7 +414,8 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
   { id: 'arena',  kind: 'arena',  name: 'TSONG ARENA', emoji: '🏓', x: 1425, y: 345,  w: 350, h: 250, color: '#3a4ea8' },
   { id: 'casino', kind: 'casino', name: 'CASINO',      emoji: '🎰', x: 500,  y: 1525, w: 320, h: 230, color: '#a8323a' },
   { id: 'bank',   kind: 'bank',   name: 'BANK',        emoji: '🏦', x: 2380, y: 1525, w: 320, h: 230, color: '#2f7d4f' },
-  { id: 'petshop', kind: 'petshop', name: 'PET SHOP',  emoji: '🐾', x: 2370, y: 335,  w: 320, h: 230, color: '#7a4fa8' },
+  // A tiny dingy shack (not a real store) with a 'PETS' sign — strays mill around outside.
+  { id: 'petshop', kind: 'petshop', name: 'PETS',  emoji: '🐾', x: 2455, y: 470,  w: 150, h: 130, color: '#7a4fa8' },
   // Hellfire portal to DOOM — small footprint just south of the central fountain, on the path.
   { id: 'doomportal', kind: 'doomportal', name: 'DOOM', emoji: '🔥', x: 1520, y: 1380, w: 160, h: 190, color: '#3a0000' },
   // Fishing pond — a body of water east of the plaza with a wooden pier on its west (plaza) side.

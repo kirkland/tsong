@@ -118,6 +118,7 @@ const ROADS: Rect[] = [
   { x: 1560, y: 630, w: 110, h: 600 },  // spur up to the Arena
   { x: 605, y: 1290, w: 110, h: 200 },  // spur down to the Casino
   { x: 2485, y: 1290, w: 110, h: 200 }, // spur down to the Bank
+  { x: 2475, y: 600, w: 110, h: 600 },  // spur up to the Pet shack (NE), clearing the pond to its west
 ];
 const PLAZA = { x: 1600, y: 1100, r: 240 }; // paved circle + fountain at town center
 
@@ -144,6 +145,29 @@ function hash(i: number, j: number): number {
   let h = (Math.imul(i, 73856093) ^ Math.imul(j, 19349663)) >>> 0;
   h = (h ^ (h >>> 13)) >>> 0;
   return (h % 1000) / 1000;
+}
+
+// --- Day/night cycle + weather (all clients agree by deriving purely from the wall clock) ---
+const HOUR_MS = 3_600_000;
+// A full day→night→day loop takes 8 real hours, so it's "day" for ~4h then "night" for ~4h:
+// the world flips between bright and dark every 4 hours, smoothly through dawn/dusk.
+const DAYNIGHT_CYCLE_MS = 8 * HOUR_MS;
+const PHASE_MS = DAYNIGHT_CYCLE_MS / 2; // one day-or-night phase = 4 hours
+// Weather is rolled once per phase: every time day/night flips (every 4h) there's a 25% chance the
+// whole phase is rainy. Deterministic from the clock, so all clients see the same sky.
+const RAIN_CHANCE = 0.25;
+
+// 0 = full daylight … 1 = deepest night, as a smooth cosine over the cycle.
+function nightFactor(nowMs: number): number {
+  const t = (nowMs % DAYNIGHT_CYCLE_MS) / DAYNIGHT_CYCLE_MS; // 0..1 across the 8h loop
+  return (1 - Math.cos(t * Math.PI * 2)) / 2;                // bright at t=0/1, darkest at t=0.5 (4h in)
+}
+// Deterministic per-phase coin-flip for rain: 25% of 4-hour phases are wet (stable across clients).
+function isRaining(nowMs: number): boolean {
+  const phase = Math.floor(nowMs / PHASE_MS);
+  let h = (Math.imul(phase ^ 0x9e3779b9, 2654435761)) >>> 0;
+  h = (h ^ (h >>> 15)) >>> 0;
+  return (h % 1000) / 1000 < RAIN_CHANCE;
 }
 
 type DecorType = 'tree' | 'pine' | 'bush' | 'flower' | 'shrub';
@@ -1322,6 +1346,16 @@ export function startWorld(net: WorldNet): void {
   let petScene: Phaser.Scene | null = null; // set in create(); needed to spawn pet text objects
   const petSprites = new Map<string, PetSprite>();
   const swayers: Phaser.GameObjects.Image[] = []; // trees/pines that gently sway in update()
+  // Strays milling around the pet shack: each ambles to a random spot near home, pauses, repeats.
+  interface Critter {
+    spr: Phaser.GameObjects.Image; shadow: Phaser.GameObjects.Image;
+    hx: number; hy: number; tx: number; ty: number; spd: number; pause: number;
+  }
+  const critters: Critter[] = [];
+  // Day/night + weather overlays (camera-fixed, set in create(), animated in update()).
+  let nightOverlay: Phaser.GameObjects.Rectangle | null = null;
+  let rainLayer: Phaser.GameObjects.TileSprite | null = null;
+  let warmOverlay: Phaser.GameObjects.Rectangle | null = null;
   // DOOM-portal flame sprites: little orange/yellow tongues layered over the archway. Each carries
   // its own phase/anchor so update() can jitter alpha/scale/offset and make them dance ("on fire").
   interface Flame { img: Phaser.GameObjects.Image; bx: number; by: number; phase: number; amp: number; base: number }
@@ -1526,6 +1560,30 @@ export function startWorld(net: WorldNet): void {
       px(5, 4, 1, 1, INK); px(7, 4, 1, 1, INK);               // furious eyes
       px(5, 6, 3, 1, INK);                                    // mouth open, shouting
       g.generateTexture('w-protester', 16, 16);
+    }
+
+    // --- shelter critters: little dogs & cats milling around the pet shack (14×10, face +x) ---
+    {
+      const DOG = 0x9a6b3f, DOG_D = 0x744d28, EAR = 0x5e3d20, NOSE = 0x2a1c12;
+      g.clear();
+      px(2, 4, 8, 4, DOG); px(2, 7, 8, 1, DOG_D);            // body
+      px(9, 3, 4, 4, DOG); px(12, 4, 1, 2, NOSE);            // head + snout (right)
+      px(9, 2, 2, 2, EAR);                                   // floppy ear
+      px(11, 4, 1, 1, NOSE);                                 // eye
+      px(2, 4, 2, 2, DOG); px(1, 3, 1, 3, DOG_D);            // upright tail (left)
+      px(3, 8, 1, 2, DOG_D); px(5, 8, 1, 2, DOG_D); px(7, 8, 1, 2, DOG_D); px(9, 8, 1, 2, DOG_D); // legs
+      g.generateTexture('w-dog', 14, 12);
+    }
+    {
+      const CAT = 0x6b6b73, CAT_D = 0x4c4c54, EAR = 0x39393f, NOSE = 0xe79ab0;
+      g.clear();
+      px(3, 5, 7, 3, CAT); px(3, 7, 7, 1, CAT_D);            // body
+      px(9, 4, 3, 3, CAT); px(11, 5, 1, 1, NOSE);            // head + pink nose (right)
+      px(9, 2, 1, 2, EAR); px(11, 2, 1, 2, EAR);             // pointy ears
+      px(10, 5, 1, 1, NOSE);                                 // eye
+      px(2, 3, 1, 3, CAT); px(1, 2, 1, 2, CAT_D);            // curled tail (left, raised)
+      px(4, 8, 1, 2, CAT_D); px(6, 8, 1, 2, CAT_D); px(8, 8, 1, 2, CAT_D); // legs
+      g.generateTexture('w-cat', 14, 12);
     }
 
     // --- soft round shadow (12×6 texels) ---
@@ -1967,6 +2025,22 @@ export function startWorld(net: WorldNet): void {
         sign.setOrigin(0.5, 1).setDepth(100000);
       }
 
+      // --- strays around the pet shack: a few dogs & cats ambling about outside ---
+      {
+        const shack = WORLD_BUILDINGS.find((x) => x.kind === 'petshop');
+        if (shack) {
+          const cx = shack.x + shack.w / 2, cy = shack.y + shack.h + 70; // gather just south of the shack (toward the path)
+          const kinds = ['w-dog', 'w-cat', 'w-dog', 'w-cat', 'w-dog'];
+          for (let i = 0; i < kinds.length; i++) {
+            const a = (i / kinds.length) * Math.PI * 2;
+            const x = cx + Math.cos(a) * 60, y = cy + Math.sin(a) * 40;
+            const shadow = sc.add.image(x, y + 2, 'w-shadow').setScale(TEXEL * 0.7).setDepth(y - 1).setAlpha(0.5);
+            const spr = sc.add.image(x, y, kinds[i]).setScale(TEXEL * 1.1).setOrigin(0.5, 0.9).setDepth(y);
+            critters.push({ spr, shadow, hx: cx, hy: cy, tx: x, ty: y, spd: 26 + (i % 3) * 8, pause: i * 0.4 });
+          }
+        }
+      }
+
       // --- townsfolk ---
       for (const def of NPCS) npcs.push(makeNpc(sc, def));
 
@@ -1995,7 +2069,41 @@ export function startWorld(net: WorldNet): void {
       const warm = sc.add.rectangle(0, 0, 10, 10, 0xffe2b0).setOrigin(0).setScrollFactor(0)
         .setBlendMode(Phaser.BlendModes.MULTIPLY).setAlpha(0.34).setDepth(50000);
       const vig = sc.add.image(0, 0, VIG).setOrigin(0).setScrollFactor(0).setDepth(50001);
-      const fitAtmo = (w: number, h: number) => { warm.setSize(w, h); vig.setDisplaySize(w, h); };
+      warmOverlay = warm;
+
+      // --- night overlay: a deep-navy wash whose alpha rises after dark (depth above the warm/vignette
+      // light layer so it actually darkens the scene). Animated each frame in update(). ---
+      const night = sc.add.rectangle(0, 0, 10, 10, 0x0a1530).setOrigin(0).setScrollFactor(0)
+        .setAlpha(0).setDepth(50002);
+      nightOverlay = night;
+
+      // --- rain: a tiled sheet of pale diagonal streaks, scrolled downward in update() when it's
+      // raining. Baked once to a transparent canvas texture, then tiled over the viewport. ---
+      const RAIN = 'w-rain';
+      if (!sc.textures.exists(RAIN)) {
+        const sz = 128;
+        const ct = sc.textures.createCanvas(RAIN, sz, sz);
+        if (ct) {
+          const c2 = ct.getContext();
+          c2.clearRect(0, 0, sz, sz);
+          c2.strokeStyle = 'rgba(200,220,255,0.55)';
+          c2.lineWidth = 1.4;
+          for (let n = 0; n < 60; n++) {
+            const x = (Math.imul(n, 2654435761) >>> 0) % sz;
+            const y = (Math.imul(n ^ 0x5bd1e995, 40503) >>> 0) % sz;
+            const len = 9 + ((n * 7) % 7);
+            c2.beginPath(); c2.moveTo(x, y); c2.lineTo(x - 3, y + len); c2.stroke();
+          }
+          ct.refresh();
+        }
+      }
+      const rain = sc.add.tileSprite(0, 0, 10, 10, RAIN).setOrigin(0).setScrollFactor(0)
+        .setAlpha(0).setDepth(50003).setVisible(false);
+      rainLayer = rain;
+
+      const fitAtmo = (w: number, h: number) => {
+        warm.setSize(w, h); vig.setDisplaySize(w, h); night.setSize(w, h); rain.setSize(w, h);
+      };
       fitAtmo(sc.scale.width, sc.scale.height);
       sc.scale.on('resize', (gs: Phaser.Structs.Size) => fitAtmo(gs.width, gs.height));
     },
@@ -2005,6 +2113,39 @@ export function startWorld(net: WorldNet): void {
       const now = performance.now();
       const dt = Math.min(delta / 1000, 0.05);
       if (helpFlash && now >= helpFlashUntil) { helpFlash = ''; updateHelp(); }
+
+      // --- day/night + weather: derive purely from the wall clock so every client's sky matches ---
+      {
+        const nowMs = Date.now();
+        const night = nightFactor(nowMs);
+        const rainy = isRaining(nowMs);
+        if (nightOverlay) nightOverlay.setAlpha(night * 0.6 + (rainy ? 0.12 : 0)); // darker at night; rain dims the day a touch
+        if (warmOverlay) warmOverlay.setAlpha(0.34 * (1 - night * 0.8) * (rainy ? 0.6 : 1)); // golden glow fades after dark / under clouds
+        if (rainLayer) {
+          const target = rainy ? 0.55 : 0;
+          rainLayer.setAlpha(rainLayer.alpha + (target - rainLayer.alpha) * Math.min(1, dt * 2)); // ease showers in/out
+          rainLayer.setVisible(rainLayer.alpha > 0.01);
+          if (rainLayer.visible) { rainLayer.tilePositionY += 620 * dt; rainLayer.tilePositionX += 70 * dt; } // streaks fall (slightly slanted)
+        }
+      }
+
+      // strays amble around the pet shack: walk toward a target, pause, then pick a new nearby spot
+      for (const c of critters) {
+        if (c.pause > 0) { c.pause -= dt; continue; }
+        const dx = c.tx - c.spr.x, dy = c.ty - c.spr.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 3) {
+          c.pause = 0.6 + Math.random() * 2.4; // loiter a beat
+          const a = Math.random() * Math.PI * 2, r = Math.random() * 90;
+          c.tx = c.hx + Math.cos(a) * r; c.ty = c.hy + Math.sin(a) * r * 0.6; // wander an oval patch
+        } else {
+          const step = Math.min(dist, c.spd * dt);
+          c.spr.x += (dx / dist) * step; c.spr.y += (dy / dist) * step;
+          c.spr.setFlipX(dx < 0); // face travel direction (sprites are drawn facing +x)
+          c.spr.setDepth(c.spr.y);
+          c.shadow.setPosition(c.spr.x, c.spr.y + 2).setDepth(c.spr.y - 1);
+        }
+      }
 
       // gentle breeze: each tree sways on its own phase (cheap, ~150 rotations/frame)
       for (const t of swayers) t.rotation = Math.sin(time / 700 + t.x * 0.012) * 0.035;
