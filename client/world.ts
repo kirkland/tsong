@@ -757,11 +757,19 @@ export function startWorld(net: WorldNet): void {
   function toggleDrive() {
     if (inInterior || net.amJailed()) return; // no cars in the bar or the slammer
     if (!driving) {
-      // Drunk driving: 2+ beers in and you get hauled to the drunk tank instead of the driver's seat.
+      // Drunk driving (2+ beers): a coin-flip says whether the cops catch you.
       if (net.drunkLevel() >= 2) {
-        openDialog('🚨 ALERT', 'YOU ARE TOO DRUNK TO DRIVE.', []);
-        net.jail();
-        return;
+        if (Math.random() < 0.5) {
+          // BUSTED → off to the drunk tank (server verifies + jails; a popup explains what happened).
+          openDialog('🚨 BUSTED FOR DRUNK DRIVING',
+            'The cops pulled you over before you even hit the gas. You\'ve been thrown in the drunk tank — ' +
+            'you can\'t play, drive, or leave until another player posts your 500🪙 bail. Should\'ve called a cab.',
+            []);
+          net.jail();
+          return;
+        }
+        // Got away with it — but driving this wasted is a white-knuckle disaster (see stepCar).
+        flashHelp('😵 You slipped past the cops… but you can barely keep it on the road.');
       }
       if (!myCar()) { flashHelp("You don't own a car — buy one in the 🪙 Shop (Cars tab)."); return; }
       driving = true;
@@ -1386,6 +1394,13 @@ export function startWorld(net: WorldNet): void {
     // Steering needs speed to bite; near-stationary you can barely turn.
     const authority = Math.min(1, sp / 120);
     facing += steer * car.turn * authority * dt;
+    // Drunk driving (you got away with the stop, but you're hammered): a violent, ever-worsening
+    // weave layered on top, so keeping it on the road is brutal. Scales hard with the booze.
+    const drunk = net.drunkLevel();
+    if (drunk > 0) {
+      const w = Date.now() / 1000;
+      facing += (Math.sin(w * 3.7) * 0.9 + Math.sin(w * 9.3 + 1.7) * 0.6) * drunk * dt;
+    }
 
     const hx = Math.cos(facing), hy = Math.sin(facing);
     // Accelerate along the heading (reverse at 60% power).
