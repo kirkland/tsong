@@ -1249,6 +1249,14 @@ export function startDoom(net: DoomNet): void {
     if (document.pointerLockElement !== canvas) { canvas.requestPointerLock(); return; }
     localFire();
   };
+  // Boss key (Cmd+X spreadsheet mode in main.ts): force-pause while the disguise is up, resume on
+  // exit — so the run doesn't keep going behind the spreadsheet. Works in any mode (not just solo).
+  const onBossKey = (e: Event) => {
+    paused = !!(e as CustomEvent).detail?.active;
+    if (paused && document.pointerLockElement === canvas) document.exitPointerLock();
+    syncBossMusic();
+  };
+  window.addEventListener('bosskey', onBossKey);
   window.addEventListener('keydown', onKeyDown, true);
   window.addEventListener('keyup', onKeyUp, true);
   window.addEventListener('mousemove', onMouseMove);
@@ -1277,6 +1285,7 @@ export function startDoom(net: DoomNet): void {
     if (!doomOpen) return;
     doomOpen = false;
     cancelAnimationFrame(raf);
+    window.removeEventListener('bosskey', onBossKey);
     window.removeEventListener('keydown', onKeyDown, true);
     window.removeEventListener('keyup', onKeyUp, true);
     window.removeEventListener('mousemove', onMouseMove);

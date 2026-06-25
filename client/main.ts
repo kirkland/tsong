@@ -4325,8 +4325,17 @@ function setWorkMode(on: boolean) {
   workOn = on;
   workModeEl.hidden = !on;
   workModeEl.setAttribute('aria-hidden', String(!on));
-  if (on) { enterDisguise('FY25_Operating_Model.xlsx - Google Sheets'); renderWorkGrid(); }
-  else exitDisguise();
+  if (on) {
+    // The boss key can fire mid-game: freeze a running DOOM run (the 'bosskey' event) and close
+    // the open world, so nothing keeps simulating (and getting you killed) behind the spreadsheet.
+    worldMod?.exitWorld();
+    window.dispatchEvent(new CustomEvent('bosskey', { detail: { active: true } }));
+    enterDisguise('FY25_Operating_Model.xlsx - Google Sheets');
+    renderWorkGrid();
+  } else {
+    exitDisguise();
+    window.dispatchEvent(new CustomEvent('bosskey', { detail: { active: false } })); // resume DOOM
+  }
 }
 workBtn.addEventListener('click', () => setWorkMode(true));
 
@@ -4362,8 +4371,19 @@ wmGridEl.addEventListener('click', wmMenuClick);
 tmTabsEl.addEventListener('click', wmMenuClick);
 // Recompute after any other click (e.g. clicking the body closes an open dropdown).
 document.addEventListener('click', () => { if (inDisguise()) wmSyncMenus(); });
-// Esc is the boss-key exit. Capture phase so it fires regardless of focus.
+// Whether focus is in a place where Cmd+X should still mean "cut" (chat box, name field…).
+function isEditableTarget(el: EventTarget | null): boolean {
+  const n = el as HTMLElement | null;
+  return !!n && (n.tagName === 'INPUT' || n.tagName === 'TEXTAREA' || n.isContentEditable);
+}
+// Boss key + Esc. Capture phase so they fire regardless of focus or which game overlay is up.
+// Cmd/Ctrl+X toggles the spreadsheet disguise from ANY mode (pong, DOOM, open world…); Esc exits.
 window.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'x' || e.key === 'X') && !isEditableTarget(document.activeElement)) {
+    e.preventDefault(); e.stopImmediatePropagation();
+    setWorkMode(!workOn);
+    return;
+  }
   if (e.key !== 'Escape') return;
   if (workOn) { e.preventDefault(); e.stopPropagation(); setWorkMode(false); }
   else if (termOn) { e.preventDefault(); e.stopPropagation(); setTermMode(false); }
