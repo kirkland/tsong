@@ -680,6 +680,8 @@ const net = connect(
       superBrosMod?.feedSbRelay(msg.data);
     } else if (msg.type === 'doomLeaderboard') {
       doomScores = { solo: msg.solo, coop: msg.coop };
+    } else if (msg.type === 'nomState') {
+      nomicMod?.feedNomState(msg);
     } else if (msg.type === 'tdState') {
       typeDieMod?.feedTdState(msg);
     } else if (msg.type === 'tdLeaderboard') {
@@ -1779,6 +1781,24 @@ typeDieBtn.addEventListener('click', async () => {
   }
 });
 
+// --- The Parliament (Nomic), reached by walking into the Parliament building in the World. A
+// lazy-loaded DOM overlay; the server is authoritative (nomState in, nom* messages out). ---
+let nomicMod: typeof import('./nomic') | null = null;
+async function openParliament(): Promise<void> {
+  try {
+    nomicMod = await import('./nomic');
+    nomicMod.startNomic({
+      enter: () => net.send({ type: 'nomEnter' }),
+      leave: () => net.send({ type: 'nomLeave' }),
+      propose: (kind, text, target, effect, ruleClass) => net.send({ type: 'nomPropose', kind, text, target, effect, ruleClass }),
+      vote: (vote) => net.send({ type: 'nomVote', vote }),
+      resolve: () => net.send({ type: 'nomResolve' }),
+    });
+  } catch (e) {
+    console.error('Parliament failed to load:', e);
+  }
+}
+
 // --- Fake banner ad (bottom of page). Spammy clickbait for the game's own features that, when
 // clicked, actually launches them. Built now (hidden); revealed once the player joins. ---
 initAds({
@@ -1897,6 +1917,7 @@ worldBtn.addEventListener('click', async () => {
       jail: () => net.send({ type: 'jail' }),                 // tried to drunk-drive → bust
       bail: (targetId) => net.send({ type: 'bail', targetId }), // post 500🪙 bail for a jailed avatar
       amJailed: () => worldJailed,                            // are WE locked up right now?
+      openParliament: () => { setTimeout(() => { void openParliament(); }, 0); }, // walk in → Nomic overlay
     });
   } catch (e) {
     console.error('World failed to load:', e);

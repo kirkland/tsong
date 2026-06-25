@@ -56,6 +56,7 @@ export interface WorldNet {
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
   openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'stocks' | 'loans' | 'petshop' | 'doom' | 'fishing'): void; // open a Casino/Bank/Pet-Shop/DOOM/Fishing feature
+  openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
   onNetizenClick?(netizenId: string): void; // user tapped a netizen avatar in the world (→ challenge)
   buyBeer(): void;               // buy a beer at the Tavern (server charges 20🪙 + ups drunk level)
@@ -814,6 +815,7 @@ export function startWorld(net: WorldNet): void {
       case 'doomportal': return '🔥 Enter the gates of DOOM';
       case 'pond': return '🎣 Cast a line';
       case 'bar': return '🍺 Enter the Tavern — grab a beer';
+      case 'parliament': return '🏛️ Enter Parliament — play Nomic';
     }
   }
   function enterBuilding(kind: WorldBuildingKind) {
@@ -856,6 +858,12 @@ export function startWorld(net: WorldNet): void {
       return;
     }
     if (kind === 'bar') { enterTavern(); return; }
+    if (kind === 'parliament') {
+      openDialog('🏛️ Parliament', 'The perpetual game of Nomic is in session. The only rule that cannot change is that the rules can.', [
+        { label: '🏛️ Take your seat', onPick: () => { exit(); net.openParliament(); } },
+      ]);
+      return;
+    }
   }
 
   // --- Tavern interior: a walkable room off the map. Entering swaps the camera bounds + collision
