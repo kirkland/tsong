@@ -425,6 +425,18 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
   { id: 'bar', kind: 'bar', name: 'THE TAVERN', emoji: '🍺', x: 1020, y: 1600, w: 230, h: 180, color: '#5a3d2a' },
 ] as const;
 
+// The town JAIL — a tiny barred cell just east of the Tavern. Try to drive after 2+ beers and the
+// drunk-tank claims you: your avatar is locked behind these bars (server-persisted, so you can't
+// log out to escape) until someone posts your 500🪙 bail. Walls are solid; the front is bars you can
+// see (and be bailed) through. `cell` is the walkable interior the jailed avatar is clamped to.
+export const JAIL = { x: 1330, y: 1610, w: 170, h: 150 } as const;
+export const JAIL_WALL = 16;        // wall/bar thickness (world units)
+export const BAIL_COST = 500;       // coins to post bail (→ the House)
+export const JAIL_CELL = {
+  x: JAIL.x + JAIL_WALL, y: JAIL.y + JAIL_WALL,
+  w: JAIL.w - JAIL_WALL * 2, h: JAIL.h - JAIL_WALL * 2,
+} as const;
+
 // --- Fishing minigame ---
 // The solo fishing overlay (client/fishing.ts) rolls a tier, then a species within that tier,
 // then a size between minLb/maxLb. Rarer tiers fight harder in the reel mini-game and pay more
@@ -469,6 +481,7 @@ export interface WorldAvatar {
   car?: string | null; // car id being driven, or null/undefined when on foot
   pet?: string | null; // pet id trailing behind this avatar, or null/undefined when none
   bot?: boolean;       // true for netizen avatars
+  jailed?: boolean;    // true while locked in the jail cell (others can pay to bail them out)
 }
 export interface WorldMsg {
   type: 'world';
@@ -573,6 +586,8 @@ export type ClientMsg =
   | { type: 'netizenChallenge'; netizenId: string; wager: number }
   | { type: 'newsReq' }
   | { type: 'buyBeer' } // buy a beer at the Tavern (20🪙 → House); ups your drunk level (cut off at 6)
+  | { type: 'jail' } // self-report: tried to drunk-drive (server verifies drunkLevel ≥ 2 and jails you)
+  | { type: 'bail'; targetId: string } // pay 500🪙 to bail a jailed player out (targetId = their avatar id; may be your own)
   | { type: 'eloProfileReq'; rank: number; self?: true };
 
 // --- Server -> Client ---
@@ -1018,6 +1033,7 @@ export type ServerMsg =
   | NetizenChallengeResultMsg
   | NewsMsg
   | DrunkMsg
+  | JailMsg
   | EloProfileMsg;
 
 // Your current drunkenness level (0 = sober … 6 = cut off). Sent only to the affected client.
@@ -1026,6 +1042,13 @@ export type ServerMsg =
 export interface DrunkMsg {
   type: 'drunk';
   level: number;
+}
+
+// Whether YOU are currently locked in the jail. Sent only to the affected client when it changes
+// (jailed on a drunk-drive attempt, freed once bailed). Drives the movement lock + the bail banner.
+export interface JailMsg {
+  type: 'jailed';
+  jailed: boolean;
 }
 
 // --- Economy Overhaul server → client messages ---

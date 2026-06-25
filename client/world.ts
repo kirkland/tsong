@@ -29,6 +29,9 @@ import {
   WORLD,
   WORLD_AVATAR,
   WORLD_BUILDINGS,
+  JAIL,
+  JAIL_WALL,
+  BAIL_COST,
   WorldAvatar,
   WorldBuilding,
   WorldBuildingKind,
@@ -57,6 +60,9 @@ export interface WorldNet {
   onNetizenClick?(netizenId: string): void; // user tapped a netizen avatar in the world (→ challenge)
   buyBeer(): void;               // buy a beer at the Tavern (server charges 20🪙 + ups drunk level)
   drunkLevel(): number;          // current drunkenness 0–6 (drives movement wobble + camera sway)
+  jail(): void;                  // self-report a drunk-drive attempt (server jails you if 2+ beers in)
+  bail(targetId: string): void;  // pay 500🪙 to bail a jailed avatar out (id; may be your own)
+  amJailed(): boolean;           // are WE currently locked in the jail cell?
 }
 
 // --- module-level controller so feedWorld()/isWorldOpen() can reach the live overlay ---
@@ -127,6 +133,14 @@ const PLAZA = { x: 1600, y: 1100, r: 240 }; // paved circle + fountain at town c
 // The Tavern's INTERIOR lives off the main map. When you step inside, the camera bounds switch to
 // this rect (so the town never shows) and movement is clamped to it. Its NPCs sit here permanently
 // with roam 0, so the world-bounds clamp never drags them back onto the map.
+// The jail's solid walls — back + sides + a barred front. Both jailed (kept in) and free (kept out)
+// avatars collide with these; the cell interior between them stays clear so a jailed avatar can shuffle.
+const JAIL_WALLS: Rect[] = [
+  { x: JAIL.x, y: JAIL.y, w: JAIL.w, h: JAIL_WALL },                       // back
+  { x: JAIL.x, y: JAIL.y, w: JAIL_WALL, h: JAIL.h },                       // left
+  { x: JAIL.x + JAIL.w - JAIL_WALL, y: JAIL.y, w: JAIL_WALL, h: JAIL.h },  // right
+  { x: JAIL.x, y: JAIL.y + JAIL.h - JAIL_WALL, w: JAIL.w, h: JAIL_WALL },  // front bars
+];
 const TAVERN_INT = { x: 4200, y: 300, w: 880, h: 560 };
 const TAVERN_WALL = 28; // interior wall thickness (play area is inset by this)
 const TAVERN_ZOOM = 3;  // zoom in while inside so the small cozy room fills the viewport
@@ -532,6 +546,9 @@ export function startWorld(net: WorldNet): void {
   let inInterior = false;   // true while inside the Tavern (camera + collision switch to TAVERN_INT)
   let interiorBuilt = false;// the interior's Phaser props are lazily built on first entry
   let nearExit = false;     // standing on the interior's exit mat (Enter → leave)
+  // --- jail state ---
+  let nearJailed: { id: string; name: string } | null = null; // a jailed avatar in bail range (free players)
+  let wasJailed = false;    // tracks the jailed transition so we can teleport in/out once
 
   // --- NPC state ---
   const npcs: LiveNpc[] = [];          // populated in create()
@@ -621,6 +638,24 @@ export function startWorld(net: WorldNet): void {
     'font-weight:700;box-shadow:0 6px 20px #0008;z-index:2;';
   overlay.appendChild(prompt);
 
+  // Jail banner (top-center) — shown while you're locked up, with a "post your own bail" button.
+  const jailBanner = document.createElement('div');
+  jailBanner.style.cssText =
+    'position:absolute;left:50%;top:64px;transform:translateX(-50%);display:none;align-items:center;gap:12px;' +
+    'background:#3a1414ee;color:#ffd9d0;border:2px solid #8a2a2a;border-radius:12px;padding:12px 18px;' +
+    'font-size:15px;font-weight:700;box-shadow:0 8px 28px #000a;z-index:3;';
+  const jailText = document.createElement('span');
+  jailText.textContent = '🚔 You\'re in the drunk tank. Wait for a bail — or post your own.';
+  const jailBailBtn = document.createElement('button');
+  jailBailBtn.type = 'button';
+  jailBailBtn.textContent = `💸 Post bail (${BAIL_COST}🪙)`;
+  jailBailBtn.style.cssText =
+    'cursor:pointer;background:#e8b84b;color:#1a1408;border:none;border-radius:8px;padding:8px 14px;' +
+    'font-size:14px;font-weight:700;';
+  jailBailBtn.onclick = () => net.bail(net.selfId());
+  jailBanner.append(jailText, jailBailBtn);
+  overlay.appendChild(jailBanner);
+
   // Building dialog ("what do you want to do?") — a centered modal over the map.
   const dialog = document.createElement('div');
   dialog.style.cssText =
@@ -664,7 +699,28 @@ export function startWorld(net: WorldNet): void {
   // --- collision: keep the avatar/car outside every building rectangle ---
   function resolveCollisions(x: number, y: number, rad: number): { x: number; y: number; hit: boolean } {
     let hit = false;
-    for (const b of WORLD_BUILDINGS) {
+    for (const b of WORLD_BUILDINGS as readonly Rect[]) {
+      const nx = clamp(x, b.x, b.x + b.w);
+      const ny = clamp(y, b.y, b.y + b.h);
+      const dx = x - nx, dy = y - ny;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= rad * rad) continue;
+      hit = true;
+      if (d2 > 0.0001) {
+        const d = Math.sqrt(d2);
+        x = nx + (dx / d) * rad;
+        y = ny + (dy / d) * rad;
+      } else {
+        const left = x - b.x, right = b.x + b.w - x, top = y - b.y, bottom = b.y + b.h - y;
+        const m = Math.min(left, right, top, bottom);
+        if (m === left) x = b.x - rad;
+        else if (m === right) x = b.x + b.w + rad;
+        else if (m === top) y = b.y - rad;
+        else y = b.y + b.h + rad;
+      }
+    }
+    // ...and the jail's solid walls/bars (same circle-vs-rect pushout)
+    for (const b of JAIL_WALLS) {
       const nx = clamp(x, b.x, b.x + b.w);
       const ny = clamp(y, b.y, b.y + b.h);
       const dx = x - nx, dy = y - ny;
@@ -702,8 +758,14 @@ export function startWorld(net: WorldNet): void {
     return carById(net.car());
   }
   function toggleDrive() {
-    if (inInterior) return; // no cars in the bar
+    if (inInterior || net.amJailed()) return; // no cars in the bar or the slammer
     if (!driving) {
+      // Drunk driving: 2+ beers in and you get hauled to the drunk tank instead of the driver's seat.
+      if (net.drunkLevel() >= 2) {
+        openDialog('🚨 ALERT', 'YOU ARE TOO DRUNK TO DRIVE.', []);
+        net.jail();
+        return;
+      }
       if (!myCar()) { flashHelp("You don't own a car — buy one in the 🪙 Shop (Cars tab)."); return; }
       driving = true;
       vx = vy = 0;
@@ -1071,6 +1133,7 @@ export function startWorld(net: WorldNet): void {
     if (nearNpc && nearNpc.def.id === 'bartender') { orderBeer(); return; }
     if (nearNpc) { startTalk(nearNpc); return; }
     if (nearExit) { leaveTavern(); return; }
+    if (nearJailed) { net.bail(nearJailed.id); return; } // post their bail
     const b = WORLD_BUILDINGS.find((x) => x.id === nearId);
     if (b) enterBuilding(b.kind);
   }
@@ -1387,6 +1450,16 @@ export function startWorld(net: WorldNet): void {
       const mx = TAVERN_INT.x + TAVERN_INT.w / 2, my = TAVERN_INT.y + TAVERN_INT.h - TAVERN_WALL - 50;
       if (Math.abs(selfX - mx) < 110 && Math.abs(selfY - my) < 80) nearExit = true;
     }
+    // A jailed avatar within reach (and we're free) → offer to post their bail.
+    nearJailed = null;
+    if (!best && !nearNpc && !nearNetizen && !driving && !net.amJailed() && !inInterior) {
+      let jD = R + TRIGGER_PAD + 90; // reach through the bars
+      for (const a of others) {
+        if (!a.jailed) continue;
+        const d = Math.hypot(a.x - selfX, a.y - selfY);
+        if (d < jD) { jD = d; nearJailed = { id: a.id, name: a.name }; }
+      }
+    }
     if (best) {
       const b = WORLD_BUILDINGS.find((x) => x.id === best)!;
       prompt.textContent = labelFor(b.kind);
@@ -1397,8 +1470,10 @@ export function startWorld(net: WorldNet): void {
       prompt.textContent = nearNpc.def.id === 'bartender' ? '🍺 Order from the Barkeep' : `💬 Talk to ${nearNpc.def.name}`;
     } else if (nearExit) {
       prompt.textContent = '🚪 Leave the Tavern';
+    } else if (nearJailed) {
+      prompt.textContent = `🔓 Bail out ${nearJailed.name} (${BAIL_COST}🪙)`;
     }
-    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit) && !dialogOpen && !talkOpen ? 'block' : 'none';
+    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearJailed) && !dialogOpen && !talkOpen ? 'block' : 'none';
   }
 
   function maybeSendMove(now: number) {
@@ -2288,6 +2363,24 @@ export function startWorld(net: WorldNet): void {
         sign.setOrigin(0.5, 1).setDepth(100000);
       }
 
+      // --- the drunk tank: a tiny barred stone cell; jailed avatars are visible behind the bars ---
+      {
+        const { x, y, w, h } = JAIL, T = JAIL_WALL;
+        sc.add.rectangle(x + 12, y + 16, w, h, 0x0a1226, 0.32).setOrigin(0, 0).setDepth(y + h - 1); // ground shadow
+        sc.add.rectangle(x, y, w, h, 0x6b7079).setOrigin(0, 0).setDepth(y - 2);          // floor base
+        sc.add.rectangle(x + T, y + T, w - 2 * T, h - 2 * T, 0x7c828c).setOrigin(0, 0).setDepth(y - 1); // cell floor
+        const wallC = 0x3a3e46, wallHi = 0x4a4f59;
+        sc.add.rectangle(x, y, w, T, wallC).setOrigin(0, 0).setDepth(y); sc.add.rectangle(x, y, w, 3, wallHi).setOrigin(0, 0).setDepth(y); // back
+        sc.add.rectangle(x, y, T, h, wallC).setOrigin(0, 0).setDepth(y);                  // left
+        sc.add.rectangle(x + w - T, y, T, h, wallC).setOrigin(0, 0).setDepth(y);          // right
+        // front face = metal bars (in front of the jailed avatar so they read as "behind bars")
+        const barC = 0xaab0ba, fd = y + h + 1;
+        sc.add.rectangle(x, y + h - T, w, 4, barC).setOrigin(0, 0).setDepth(fd);          // top rail
+        sc.add.rectangle(x, y + h - 5, w, 5, 0x2a2e36).setOrigin(0, 0).setDepth(fd);      // bottom rail
+        for (let bx = x + T; bx <= x + w - T; bx += 17) sc.add.rectangle(bx, y + 8, 4, h - 14, barC).setOrigin(0, 0).setDepth(fd);
+        sc.add.text(x + w / 2, y - 6, '🚔 JAIL', { fontFamily: 'system-ui, sans-serif', fontSize: '15px', fontStyle: 'bold', color: '#ffffff', stroke: '#0b1020', strokeThickness: 5, resolution: 2 }).setOrigin(0.5, 1).setDepth(100000);
+      }
+
       // --- strays around the pet shack: a few dogs & cats ambling about outside ---
       {
         const shack = WORLD_BUILDINGS.find((x) => x.kind === 'petshop');
@@ -2414,6 +2507,16 @@ export function startWorld(net: WorldNet): void {
         const cycle = ((time / 2600 + rp.phase / (Math.PI * 2)) % 1 + 1) % 1; // 0→1 loop
         rp.ring.setRadius(2 + cycle * rp.maxR);
         rp.ring.setStrokeStyle(2, 0xbfe6ff, 0.5 * (1 - cycle));
+      }
+
+      // jail transitions: snap into the cell when busted, out the front when bailed
+      const jailedNow = net.amJailed();
+      if (jailedNow !== wasJailed) {
+        wasJailed = jailedNow;
+        driving = false; vx = vy = 0; keys.clear(); joyActive = false;
+        if (jailedNow) { selfX = JAIL.x + JAIL.w / 2; selfY = JAIL.y + JAIL.h / 2; }
+        else { selfX = JAIL.x + JAIL.w / 2; selfY = JAIL.y + JAIL.h + R + 18; } // released out front
+        jailBanner.style.display = jailedNow ? 'flex' : 'none';
       }
 
       if (!dialogOpen && !talkOpen) {
@@ -2638,6 +2741,7 @@ export function startWorld(net: WorldNet): void {
 
   function exit() {
     if (!controller) return;
+    if (net.amJailed()) { flashHelp('🚔 You\'re in jail. You can\'t leave until someone posts your bail.'); return; }
     window.removeEventListener('keydown', onKeyDown, true);
     window.removeEventListener('keyup', onKeyUp, true);
     overlay.removeEventListener('pointerdown', onPointerDown);
