@@ -394,7 +394,7 @@ export function petById(id: string | null | undefined) {
 
 // What entering a building does (the client maps each `kind` to an action). Add a kind here
 // and a handler on the client to introduce a new venue.
-export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar';
+export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament';
 // A venue's footprint on the map. The rectangle (top-left origin, world units) is solid —
 // avatars collide with it — and an apron just outside the door is the entry trigger zone.
 export interface WorldBuilding {
@@ -423,6 +423,9 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
   { id: 'pond', kind: 'pond', name: 'FISHING POND', emoji: '🎣', x: 2020, y: 860, w: 300, h: 260, color: '#2a6f97' },
   // The Tavern — south-of-centre off a path spur. Buy a beer, get progressively drunker.
   { id: 'bar', kind: 'bar', name: 'THE TAVERN', emoji: '🍺', x: 1020, y: 1600, w: 230, h: 180, color: '#5a3d2a' },
+  // Parliament — a stately marble hall in the upper-left, home of the Nomic rules game. Walk in to
+  // join the perpetual game where the players legislate their own rulebook.
+  { id: 'parliament', kind: 'parliament', name: 'PARLIAMENT', emoji: '🏛️', x: 470, y: 420, w: 340, h: 240, color: '#7c8aa3' },
 ] as const;
 
 // The town JAIL — a tiny barred cell just east of the Tavern. Try to drive after 2+ beers and the
@@ -436,6 +439,124 @@ export const JAIL_CELL = {
   x: JAIL.x + JAIL_WALL, y: JAIL.y + JAIL_WALL,
   w: JAIL.w - JAIL_WALL * 2, h: JAIL.h - JAIL_WALL * 2,
 } as const;
+
+// --- Nomic (the Parliament sub-game) ---------------------------------------------------
+// A standalone, self-amending RULES game in its own World building (🏛️ PARLIAMENT). NOT connected
+// to the Pong game. The server enforces the *procedure* (turns, voting, scoring, rule numbering,
+// mutability, win); humans write + interpret the free-text rule *bodies*. A proposal carries an
+// English `text` PLUS an optional structured `effect` that moves exactly one enforced parameter —
+// that's what makes self-amendment real and not just a comment box with vote buttons.
+// One perpetual communal game for the whole server; winning a season seals the rulebook into the
+// Hall and reseeds (rules carry forward, scores reset). See docs/nomic.md.
+
+export type NomThreshold = 'majority' | 'twothirds' | 'unanimous';
+export type NomProposalKind = 'enact' | 'amend' | 'repeal' | 'transmute';
+export type NomVote = 'for' | 'against' | 'abstain';
+
+// The enforced, self-amendable parameters — the procedural skeleton. Each is backed by a seed rule;
+// a proposal `effect` mutates exactly one of them. Stored authoritatively in nomic_state.
+export interface NomParams {
+  threshold: NomThreshold;   // votes needed to pass a normal proposal (transmutes always need unanimity)
+  pointsPerAdoption: number; // points the proposer scores when their change is adopted
+  votesPerPlayer: number;    // votes each legislator may cast (currently a display/flavor cap; 1 = classic)
+  winScore: number;          // points to win the season
+  turnDir: 1 | -1;           // rotation direction through the seating order
+  allowAbstain: boolean;     // whether Abstain is offered (abstentions never count toward the threshold)
+}
+export const NOM_DEFAULT_PARAMS: NomParams = {
+  threshold: 'majority',
+  pointsPerAdoption: 5,
+  votesPerPlayer: 1,
+  winScore: 100,
+  turnDir: 1,
+  allowAbstain: true,
+};
+// Bounds the server clamps proposal effects to, so nobody can legislate a stuck/unplayable game.
+export const NOM_LIMITS = {
+  minPoints: 1, maxPoints: 50,
+  minVotes: 1, maxVotes: 5,
+  minWin: 10, maxWin: 1000,
+} as const;
+
+// A structured mutation a proposal carries alongside its English body. Each variant names one knob
+// and its new value. A proposal with no effect (null) is a pure-text rule — flavor / honor-system.
+export type NomEffect =
+  | { param: 'threshold'; value: NomThreshold }
+  | { param: 'pointsPerAdoption'; value: number }
+  | { param: 'votesPerPlayer'; value: number }
+  | { param: 'winScore'; value: number }
+  | { param: 'turnDir'; value: 1 | -1 }
+  | { param: 'allowAbstain'; value: boolean };
+
+// One rule in the live rulebook. num < 200 = immutable Constitution; >= 200 = mutable Body.
+export interface NomRule {
+  num: number;
+  text: string;              // the free-text body humans read + interpret
+  mutable: boolean;
+  effect?: NomEffect | null; // the enforced knob this rule backs, if any
+}
+
+// The TSONG-flavored starting rulebook a fresh game (the very first season) seeds from.
+export const NOM_SEED_RULES: readonly NomRule[] = [
+  // Immutable Constitution (100s) — a transmute-to-mutable (unanimous) must come first to touch these.
+  { num: 101, mutable: false, text: 'All players must obey the rules in force.' },
+  { num: 102, mutable: false, text: 'Immutable rules (the 100s) outrank mutable rules (the 200s); where a mutable rule conflicts with an immutable one, the immutable rule wins.' },
+  { num: 103, mutable: false, text: 'A “rule change” means enacting a new rule, amending or repealing a rule, or transmuting a rule between immutable and mutable.' },
+  { num: 104, mutable: false, text: 'Players take turns in the rotation shown on the floor. On your turn you put exactly one rule change to the floor.' },
+  { num: 105, mutable: false, text: 'A rule change passes by the threshold then in force and is adopted. Transmutations always require unanimity.' },
+  { num: 106, mutable: false, text: 'An adopted new rule takes the lowest unused number in its class (immutable 100s, mutable 200s+).' },
+  { num: 107, mutable: false, text: 'Adopting your proposed rule change scores you the points then in force.' },
+  { num: 108, mutable: false, text: 'The first player to reach the winning score wins the season; the rulebook is sealed into the Hall of Rulebooks and a new season begins from where it left off.' },
+  { num: 109, mutable: false, text: 'Whatever is not prohibited by a rule is permitted. 🏓' },
+  { num: 110, mutable: false, text: 'If the rules contradict or fall silent on a question, the Speaker (the current turn-holder) — or a Judge they appoint — rules on it; the ruling stands until a rule change overturns it.' },
+  // Mutable Body (200s) — each backs an enforced knob, so turn one teaches that the numbers are yours.
+  { num: 201, mutable: true, text: 'A proposal passes by a simple majority of the votes cast.', effect: { param: 'threshold', value: 'majority' } },
+  { num: 202, mutable: true, text: 'Adopting a rule change scores its proposer 5 points.', effect: { param: 'pointsPerAdoption', value: 5 } },
+  { num: 203, mutable: true, text: 'Players vote For, Against, or Abstain; abstentions do not count toward the threshold.', effect: { param: 'allowAbstain', value: true } },
+  { num: 204, mutable: true, text: 'Each player has one vote.', effect: { param: 'votesPerPlayer', value: 1 } },
+  { num: 205, mutable: true, text: 'The winning score is 100 points.', effect: { param: 'winScore', value: 100 } },
+  { num: 206, mutable: true, text: 'Turn order runs in seating order and wraps around.', effect: { param: 'turnDir', value: 1 } },
+  { num: 207, mutable: true, text: 'Every rule body shall be written in good cheer.' },
+] as const;
+
+// A seated legislator (persisted by stable player id so scores survive sessions/reconnects).
+export interface NomScore { id: string; name: string; color: string; points: number; }
+
+// One vote on the floor.
+export interface NomVoteRecord { id: string; name: string; vote: NomVote; }
+
+// The proposal currently on the floor (or a resolved one kept for the log).
+export interface NomProposal {
+  id: number;
+  kind: NomProposalKind;
+  proposer: string;            // member id
+  proposerName: string;
+  text: string;                // English body (enact/amend) or rationale (repeal/transmute)
+  target?: number | null;      // rule number for amend / repeal / transmute
+  effect?: NomEffect | null;   // structured knob change, if any
+  ruleClass?: 'immutable' | 'mutable'; // for enact: which class to number the new rule into
+  votes: NomVoteRecord[];
+  status: 'open' | 'passed' | 'failed';
+}
+
+// One line of parliamentary history.
+export interface NomLogEntry { id: number; text: string; time: number; }
+
+// The full parliament snapshot broadcast to everyone in the building.
+export interface NomStateMsg {
+  type: 'nomState';
+  you: string;                  // this client's member id ('' if not seated)
+  yourTurn: boolean;            // convenience: is it this client's turn to propose?
+  season: number;
+  params: NomParams;
+  rules: NomRule[];             // the live rulebook, ascending by number
+  scores: NomScore[];           // every legislator who has ever played this season, by points desc
+  members: string[];            // seated legislator ids, in turn order
+  turn: string | null;          // member id whose turn it is (the Speaker), null if nobody seated
+  proposal: NomProposal | null; // what's on the floor, or null between turns
+  log: NomLogEntry[];           // recent history, oldest → newest
+  winner: string | null;        // winner's name, set briefly when a season is won before the reseed
+}
 
 // --- Fishing minigame ---
 // The solo fishing overlay (client/fishing.ts) rolls a tier, then a species within that tier,
@@ -588,6 +709,12 @@ export type ClientMsg =
   | { type: 'buyBeer' } // buy a beer at the Tavern (20🪙 → House); ups your drunk level (cut off at 6)
   | { type: 'jail' } // self-report: tried to drunk-drive (server verifies drunkLevel ≥ 2 and jails you)
   | { type: 'bail'; targetId: string } // pay 500🪙 to bail a jailed player out (targetId = their avatar id; may be your own)
+  // --- Nomic (the Parliament sub-game) ---
+  | { type: 'nomEnter' } // enter the Parliament: seat as a legislator + subscribe to its state
+  | { type: 'nomLeave' } // leave the Parliament (unseat + unsubscribe)
+  | { type: 'nomPropose'; kind: NomProposalKind; text: string; target?: number; effect?: NomEffect | null; ruleClass?: 'immutable' | 'mutable' } // (your turn) put a rule change on the floor
+  | { type: 'nomVote'; vote: NomVote } // cast your vote on the proposal currently on the floor
+  | { type: 'nomResolve' } // (the Speaker / proposer) call the vote and resolve the floor early
   | { type: 'eloProfileReq'; rank: number; self?: true };
 
 // --- Server -> Client ---
@@ -1035,6 +1162,7 @@ export type ServerMsg =
   | NewsMsg
   | DrunkMsg
   | JailMsg
+  | NomStateMsg
   | EloProfileMsg;
 
 // Your current drunkenness level (0 = sober … 6 = cut off). Sent only to the affected client.

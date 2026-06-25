@@ -354,6 +354,28 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'tdKill':
         if (typeof msg.id === 'number' && Number.isFinite(msg.id)) lobby.tdKill(ws, msg.id);
         break;
+      case 'nomEnter':
+        lobby.nomEnter(ws);
+        break;
+      case 'nomLeave':
+        lobby.nomLeave(ws);
+        break;
+      case 'nomPropose':
+        if (typeof msg.kind === 'string' && typeof msg.text === 'string') {
+          lobby.nomPropose(
+            ws, msg.kind, msg.text,
+            typeof msg.target === 'number' ? msg.target : undefined,
+            msg.effect ?? null,
+            msg.ruleClass === 'immutable' || msg.ruleClass === 'mutable' ? msg.ruleClass : undefined,
+          );
+        }
+        break;
+      case 'nomVote':
+        if (msg.vote === 'for' || msg.vote === 'against' || msg.vote === 'abstain') lobby.nomVote(ws, msg.vote);
+        break;
+      case 'nomResolve':
+        lobby.nomResolve(ws);
+        break;
       case 'campaignScore':
         if (typeof msg.score === 'number' && typeof msg.stage === 'number' && typeof msg.won === 'boolean') {
           lobby.campaignScore(ws, msg.score, msg.stage, msg.won);

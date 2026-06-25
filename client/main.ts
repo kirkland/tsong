@@ -682,6 +682,8 @@ const net = connect(
       superBrosMod?.feedSbRelay(msg.data);
     } else if (msg.type === 'doomLeaderboard') {
       doomScores = { solo: msg.solo, coop: msg.coop };
+    } else if (msg.type === 'nomState') {
+      nomicMod?.feedNomState(msg);
     } else if (msg.type === 'tdState') {
       typeDieMod?.feedTdState(msg);
     } else if (msg.type === 'tdLeaderboard') {
@@ -1781,6 +1783,24 @@ typeDieBtn.addEventListener('click', async () => {
   }
 });
 
+// --- The Parliament (Nomic), reached by walking into the Parliament building in the World. A
+// lazy-loaded DOM overlay; the server is authoritative (nomState in, nom* messages out). ---
+let nomicMod: typeof import('./nomic') | null = null;
+async function openParliament(): Promise<void> {
+  try {
+    nomicMod = await import('./nomic');
+    nomicMod.startNomic({
+      enter: () => net.send({ type: 'nomEnter' }),
+      leave: () => net.send({ type: 'nomLeave' }),
+      propose: (kind, text, target, effect, ruleClass) => net.send({ type: 'nomPropose', kind, text, target, effect, ruleClass }),
+      vote: (vote) => net.send({ type: 'nomVote', vote }),
+      resolve: () => net.send({ type: 'nomResolve' }),
+    });
+  } catch (e) {
+    console.error('Parliament failed to load:', e);
+  }
+}
+
 // --- Fake banner ad (bottom of page). Spammy clickbait for the game's own features that, when
 // clicked, actually launches them. Built now (hidden); revealed once the player joins. ---
 initAds({
@@ -1900,6 +1920,7 @@ worldBtn.addEventListener('click', async () => {
       bail: (targetId) => net.send({ type: 'bail', targetId }), // post 500🪙 bail for a jailed avatar
       amJailed: () => worldJailed,                            // are WE locked up right now?
       dayNightOffset: () => dayNightOffset,                   // per-deploy day/night clock offset
+      openParliament: () => { setTimeout(() => { void openParliament(); }, 0); }, // walk in → Nomic overlay
     });
   } catch (e) {
     console.error('World failed to load:', e);
@@ -4350,8 +4371,17 @@ function setWorkMode(on: boolean) {
   workOn = on;
   workModeEl.hidden = !on;
   workModeEl.setAttribute('aria-hidden', String(!on));
-  if (on) { enterDisguise('FY25_Operating_Model.xlsx - Google Sheets'); renderWorkGrid(); }
-  else exitDisguise();
+  if (on) {
+    // The boss key can fire mid-game: freeze a running DOOM run (the 'bosskey' event) and close
+    // the open world, so nothing keeps simulating (and getting you killed) behind the spreadsheet.
+    worldMod?.exitWorld();
+    window.dispatchEvent(new CustomEvent('bosskey', { detail: { active: true } }));
+    enterDisguise('FY25_Operating_Model.xlsx - Google Sheets');
+    renderWorkGrid();
+  } else {
+    exitDisguise();
+    window.dispatchEvent(new CustomEvent('bosskey', { detail: { active: false } })); // resume DOOM
+  }
 }
 workBtn.addEventListener('click', () => setWorkMode(true));
 
@@ -4387,8 +4417,19 @@ wmGridEl.addEventListener('click', wmMenuClick);
 tmTabsEl.addEventListener('click', wmMenuClick);
 // Recompute after any other click (e.g. clicking the body closes an open dropdown).
 document.addEventListener('click', () => { if (inDisguise()) wmSyncMenus(); });
-// Esc is the boss-key exit. Capture phase so it fires regardless of focus.
+// Whether focus is in a place where Cmd+X should still mean "cut" (chat box, name field…).
+function isEditableTarget(el: EventTarget | null): boolean {
+  const n = el as HTMLElement | null;
+  return !!n && (n.tagName === 'INPUT' || n.tagName === 'TEXTAREA' || n.isContentEditable);
+}
+// Boss key + Esc. Capture phase so they fire regardless of focus or which game overlay is up.
+// Cmd/Ctrl+X toggles the spreadsheet disguise from ANY mode (pong, DOOM, open world…); Esc exits.
 window.addEventListener('keydown', (e) => {
+  if ((e.metaKey || e.ctrlKey) && (e.key === 'x' || e.key === 'X') && !isEditableTarget(document.activeElement)) {
+    e.preventDefault(); e.stopImmediatePropagation();
+    setWorkMode(!workOn);
+    return;
+  }
   if (e.key !== 'Escape') return;
   if (workOn) { e.preventDefault(); e.stopPropagation(); setWorkMode(false); }
   else if (termOn) { e.preventDefault(); e.stopPropagation(); setTermMode(false); }

@@ -5,6 +5,7 @@ import { WebSocket } from 'ws';
 import { Game } from './game';
 import { PolyGame } from './polygame';
 import { TypeGame } from './typegame';
+import { NomicGame } from './nomic';
 import { World } from './world';
 import { Tournament, Participant } from './tournament';
 import {
@@ -95,6 +96,7 @@ import {
   FAST_SELL_TAX_MS,
   FAST_SELL_TAX_RATE,
   FIGHTERS,
+  NomProposalKind, NomEffect, NomVote,
 } from '../shared/types';
 import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSelfElo, getSelfNetWorth, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
@@ -112,7 +114,8 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   challengedToday, recordChallenge,
   getNetizenByPid, getNetizenCount, getNetWorthRank,
   getNewsFeed, saveNewsFeed,
-  getGameModes, saveGameModes } from './db';
+  getGameModes, saveGameModes,
+  loadNomic, saveNomic, archiveNomicSeason } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR } from '../shared/types';
 
@@ -449,6 +452,12 @@ export class Lobby {
   private tdBoard: TypeDieScoreRow[] = [];          // cached best-wave leaderboard, pushed to clients
   private tdBroadcastTick = 0;                       // throttle counter for tdState fan-out
 
+  // --- Nomic (the Parliament sub-game) ---
+  // A single perpetual, server-authoritative, DB-persisted rules game. Event-driven: it broadcasts
+  // on every change (not per tick). Keyed by stable pid so scores survive sessions + restarts.
+  private nomGame!: NomicGame;
+  private nomSockets = new Map<string, WebSocket>(); // member pid → socket of players in the Parliament
+
   constructor(private game: Game) {
     this.typeGame = new TypeGame({
       // A coin-monster kill pays the player who landed it.
@@ -478,6 +487,30 @@ export class Lobby {
       },
       announce: (text) => this.announce(text),
     });
+    // The Parliament (Nomic). Persists to the DB on every change and rebroadcasts to whoever's in
+    // the building. Hydrated from the DB once below (nobody's connected yet at construction).
+    this.nomGame = new NomicGame({
+      onChange: (snap) => {
+        saveNomic(snap).catch((e) => console.error('nomic save failed:', e));
+        this.broadcastNomic();
+      },
+      announce: (text) => this.announce(text),
+      award: (pid, coins) => {
+        const ws = this.nomSockets.get(pid);
+        const conn = ws && this.conns.get(ws);
+        if (ws && conn && conn.pid) {
+          this.housePay(conn.pid, conn.nickname, coins * COIN_SCALE)
+            .then(() => this.sendWallet(ws))
+            .catch((e) => console.error('nomic prize failed:', e));
+        }
+      },
+      archive: (season, winner, rules) => {
+        archiveNomicSeason(season, winner, rules).catch((e) => console.error('nomic archive failed:', e));
+      },
+    });
+    loadNomic()
+      .then((snap) => { if (snap) this.nomGame.restore(snap); })
+      .catch((e) => console.error('nomic load failed:', e));
     // Kick off the perpetual Crash casino game.
     this.crashPhaseStart = Date.now();
     setInterval(() => this.crashTick(), CRASH_TICK_MS);
@@ -1503,6 +1536,55 @@ export class Lobby {
     const conn = this.conns.get(ws);
     if (!conn || !this.tdSockets.has(conn.id)) return;
     this.typeGame.claimKill(conn.id, id);
+  }
+
+  // --- Nomic (the Parliament) ---
+
+  /** A player walks into the Parliament: seat them as a legislator + subscribe to the floor. */
+  nomEnter(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    this.nomSockets.set(conn.pid, ws);
+    this.nomGame.enter(conn.pid, conn.nickname, conn.color); // → onChange → broadcast (reaches the new socket)
+  }
+
+  /** A player leaves the Parliament (or disconnects): drop them from the rotation (score persists). */
+  nomLeave(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    if (!this.nomSockets.delete(conn.pid)) return;
+    this.nomGame.leave(conn.pid);
+  }
+
+  /** The Speaker puts a rule change on the floor. */
+  nomPropose(ws: WebSocket, kind: NomProposalKind, text: string, target?: number, effect?: NomEffect | null, ruleClass?: 'immutable' | 'mutable') {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !this.nomSockets.has(conn.pid)) return;
+    const err = this.nomGame.propose(conn.pid, kind, text, target, effect, ruleClass);
+    if (err) this.tell(ws, { type: 'announce', text: `🏛️ ${err}`, toast: true });
+  }
+
+  /** Cast a vote on the proposal currently on the floor. */
+  nomVote(ws: WebSocket, vote: NomVote) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !this.nomSockets.has(conn.pid)) return;
+    const err = this.nomGame.vote(conn.pid, vote);
+    if (err) this.tell(ws, { type: 'announce', text: `🏛️ ${err}`, toast: true });
+  }
+
+  /** The Speaker calls the vote and resolves the floor early. */
+  nomResolve(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !this.nomSockets.has(conn.pid)) return;
+    const err = this.nomGame.resolve(conn.pid);
+    if (err) this.tell(ws, { type: 'announce', text: `🏛️ ${err}`, toast: true });
+  }
+
+  /** Fan the parliament state out to everyone in the building (per-recipient `you`/`yourTurn`). */
+  private broadcastNomic() {
+    for (const [pid, ws] of this.nomSockets) {
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(this.nomGame.viewFor(pid)));
+    }
   }
 
   /** Reload the Type or Die best-wave leaderboard from the DB and push it to everyone. */
@@ -4130,6 +4212,7 @@ export class Lobby {
     this.srLeave(ws);   // drop any Street Demons grid slot (ends the race if the host left)
     this.sbLeave(ws);   // drop any Super Tsong Bros slot (ends the match if the host left)
     this.tdLeave(ws);   // drop out of the Type or Die arena
+    this.nomLeave(ws);  // drop out of the Parliament (Nomic) rotation
     this.world.leave(ws); // drop their avatar from the free-roam world map
     const leavingPid = this.conns.get(ws)?.pid ?? '';
     // Tournament participant left: advance their opponent / free their slot before the
