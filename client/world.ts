@@ -124,6 +124,11 @@ const ROADS: Rect[] = [
   { x: 1060, y: 1300, w: 110, h: 300 }, // spur down to the Tavern (south of centre)
 ];
 const PLAZA = { x: 1600, y: 1100, r: 240 }; // paved circle + fountain at town center
+// The Tavern's INTERIOR lives off the main map. When you step inside, the camera bounds switch to
+// this rect (so the town never shows) and movement is clamped to it. Its NPCs sit here permanently
+// with roam 0, so the world-bounds clamp never drags them back onto the map.
+const TAVERN_INT = { x: 4200, y: 300, w: 1280, h: 860 };
+const TAVERN_WALL = 40; // interior wall thickness (play area is inset by this)
 
 function pointInRect(px: number, py: number, r: Rect, pad = 0): boolean {
   return px >= r.x - pad && px <= r.x + r.w + pad && py >= r.y - pad && py <= r.y + r.h + pad;
@@ -448,6 +453,36 @@ const NPCS: NpcDef[] = [
       ],
     },
   },
+  // --- Tavern INTERIOR cast (stationary, off-map at TAVERN_INT; only reachable once you're inside) ---
+  {
+    id: 'bartender', name: 'Barkeep', shirt: 0x3a3f4a, hair: 0x2a2a2a, skin: SKINS[2],
+    hairStyle: 'short', x: TAVERN_INT.x + TAVERN_INT.w / 2, y: TAVERN_INT.y + 250, roam: 0,
+    lines: ['What\'ll it be?'], // talking to him opens the beer dialog (handled in triggerNear)
+  },
+  {
+    id: 'bar-drunk', name: 'Wobbly Pete', shirt: 0x9c4a2e, hair: 0x4a3320, skin: SKINS[1],
+    hairStyle: 'spiky', x: TAVERN_INT.x + 280, y: TAVERN_INT.y + 580, roam: 0,
+    lines: [
+      'heyyy… *hic*… you got beautiful paddles, anyone ever tell you that?',
+      'I had ONE beer. …ok maybe the one was a six.',
+      'The trick to pong is… is… wait where\'d the ball go.',
+      'I\'m gonna challenge the fountain to a duel. it\'s been LOOKIN at me.',
+      '*slides off stool* …I meant to do that.',
+      'You ever notice the floor is also the ceiling if you lie down?',
+    ],
+  },
+  {
+    id: 'bar-suit', name: 'Stressed Exec', shirt: 0x202833, hair: 0x1a1a1a, skin: SKINS[3],
+    hairStyle: 'short', glasses: true, x: TAVERN_INT.x + TAVERN_INT.w - 300, y: TAVERN_INT.y + 580, roam: 0,
+    lines: [
+      'The market\'s down. The market\'s ALWAYS down. *downs drink*',
+      'I had it all in OMEGADAVIS. Don\'t. Just don\'t.',
+      'My portfolio and my marriage, both underwater. Same week.',
+      'Do you know what a margin call FEELS like? I do now.',
+      'I\'m not crying, it\'s the… the hops. It\'s the hops.',
+      'One more and I\'m emailing my broker something I\'ll regret.',
+    ],
+  },
 ];
 
 // A spawned, live townsperson.
@@ -492,6 +527,10 @@ export function startWorld(net: WorldNet): void {
   let joyCX = 0, joyCY = 0; // joystick current (screen px)
   let dialogOpen = false;   // movement pauses while a building dialog is up
   let nearId: string | null = null; // building the avatar is currently at the door of
+  // --- Tavern interior state ---
+  let inInterior = false;   // true while inside the Tavern (camera + collision switch to TAVERN_INT)
+  let interiorBuilt = false;// the interior's Phaser props are lazily built on first entry
+  let nearExit = false;     // standing on the interior's exit mat (Enter → leave)
 
   // --- NPC state ---
   const npcs: LiveNpc[] = [];          // populated in create()
@@ -662,6 +701,7 @@ export function startWorld(net: WorldNet): void {
     return carById(net.car());
   }
   function toggleDrive() {
+    if (inInterior) return; // no cars in the bar
     if (!driving) {
       if (!myCar()) { flashHelp("You don't own a car — buy one in the 🪙 Shop (Cars tab)."); return; }
       driving = true;
@@ -747,16 +787,57 @@ export function startWorld(net: WorldNet): void {
       ]);
       return;
     }
-    if (kind === 'bar') {
-      const lvl = net.drunkLevel();
-      const sub = lvl >= 6 ? "The bartender shakes his head. You're cut off."
-        : lvl > 0 ? `You've had ${lvl}. The bartender slides another your way…`
-        : 'Dim, sticky, and friendly. What\'ll it be?';
-      openDialog('🍺 The Tavern', sub, [
-        { label: '🍺 Buy a beer (20🪙)', onPick: () => { exit(); net.buyBeer(); } },
-      ]);
-      return;
+    if (kind === 'bar') { enterTavern(); return; }
+  }
+
+  // --- Tavern interior: a walkable room off the map. Entering swaps the camera bounds + collision
+  // to TAVERN_INT and drops you by the door; the bartender (an NPC) sells beer; an exit mat leaves. ---
+  function buildInterior(sc: Phaser.Scene) {
+    if (interiorBuilt) return;
+    interiorBuilt = true;
+    const T = TAVERN_WALL, ix = TAVERN_INT.x, iy = TAVERN_INT.y, iw = TAVERN_INT.w, ih = TAVERN_INT.h;
+    const rect = (x: number, y: number, w: number, h: number, color: number, depth: number) =>
+      sc.add.rectangle(x, y, w, h, color).setOrigin(0, 0).setDepth(depth);
+    rect(ix, iy, iw, ih, 0x3a2a1c, iy - 100);                    // plank floor
+    // walls (drawn; collision is a simple clamp to the inset play area)
+    rect(ix, iy, iw, T, 0x241811, iy + ih + 50);                 // top
+    rect(ix, iy + ih - T, iw, T, 0x241811, iy + ih + 50);        // bottom
+    rect(ix, iy, T, ih, 0x241811, iy + ih + 50);                 // left
+    rect(ix + iw - T, iy, T, ih, 0x241811, iy + ih + 50);        // right
+    // back bar: counter slab + a shelf of bottles behind it
+    rect(ix + 160, iy + 150, iw - 320, 54, 0x5a3d24, iy + 150);  // counter
+    rect(ix + 160, iy + 150, iw - 320, 10, 0x6e4d2e, iy + 150);  // counter highlight
+    for (let i = 0; i < 14; i++) {                               // bottles on the back shelf
+      const bx = ix + 220 + i * ((iw - 440) / 13);
+      rect(bx, iy + 86, 10, 30, [0x6fae6f, 0xb9794a, 0x8aa0d8][i % 3], iy + 80);
     }
+    rect(ix + 150, iy + 116, iw - 300, 8, 0x2a1d12, iy + 110);   // shelf board
+    // a couple of tables + the exit mat
+    const tbl = (cx: number, cy: number) => sc.add.circle(cx, cy, 34, 0x4a3320).setDepth(cy);
+    tbl(ix + 360, iy + ih - 230); tbl(ix + iw - 360, iy + ih - 230);
+    rect(ix + iw / 2 - 90, iy + ih - T - 100, 180, 100, 0x55402a, iy - 90); // exit mat
+    sc.add.text(ix + iw / 2, iy + ih - T - 52, '🚪 EXIT', { fontFamily: 'system-ui, sans-serif', fontSize: '18px', fontStyle: 'bold', color: '#ffe2b0' })
+      .setOrigin(0.5).setDepth(iy - 80);
+  }
+  function enterTavern() {
+    const sc = petScene; if (!sc) return;
+    buildInterior(sc);
+    enterChime();
+    inInterior = true;
+    driving = false; vx = 0; vy = 0; // you're on foot inside
+    keys.clear(); joyActive = false;
+    selfX = TAVERN_INT.x + TAVERN_INT.w / 2;
+    selfY = TAVERN_INT.y + TAVERN_INT.h - 210; // just above the exit mat
+    mainCam?.setBounds(TAVERN_INT.x, TAVERN_INT.y, TAVERN_INT.w, TAVERN_INT.h);
+  }
+  function leaveTavern() {
+    inInterior = false;
+    nearExit = false;
+    keys.clear(); joyActive = false;
+    mainCam?.setBounds(0, 0, WORLD.w, WORLD.h);
+    const bar = WORLD_BUILDINGS.find((b) => b.kind === 'bar');
+    if (bar) { selfX = bar.x + bar.w / 2; selfY = bar.y + bar.h + 44; } // step back out the door
+    enterChime();
   }
   function openDialog(heading: string, sub: string, choices: { label: string; onPick: () => void }[]) {
     dialogOpen = true;
@@ -966,9 +1047,30 @@ export function startWorld(net: WorldNet): void {
       startNetizenTalk(a);
       return;
     }
+    // The bartender takes your order (the beer dialog) instead of plain chatter.
+    if (nearNpc && nearNpc.def.id === 'bartender') { orderBeer(); return; }
     if (nearNpc) { startTalk(nearNpc); return; }
+    if (nearExit) { leaveTavern(); return; }
     const b = WORLD_BUILDINGS.find((x) => x.id === nearId);
     if (b) enterBuilding(b.kind);
+  }
+
+  // The Barkeep's order dialog: a quip + a buy button. Buying keeps you IN the bar (closeDialog,
+  // not exit) — it just sends the purchase; the wallet/drunk updates arrive from the server.
+  function orderBeer() {
+    const lvl = net.drunkLevel();
+    if (lvl >= 6) {
+      openDialog('🍺 Barkeep', "\"You're done, pal. Cut off. Go home.\"", []);
+      return;
+    }
+    const quips = [
+      '"What\'ll it be?"', '"Rough day? …yeah, you have the look."',
+      '"You sure? You\'re lookin\' a little sideways already."', '"First one\'s still 20. So\'s the sixth."',
+      '"Drink up. The House thanks you for your patronage."',
+    ];
+    openDialog('🍺 Barkeep', quips[Math.floor(Math.random() * quips.length)], [
+      { label: '🍺 Buy a beer (20🪙)', onPick: () => { closeDialog(); net.buyBeer(); showToast('🍺 *glug glug glug*'); } },
+    ]);
   }
 
   /** Start a simple dialogue with a netizen: flavor text, then challenge option. */
@@ -1168,6 +1270,13 @@ export function startWorld(net: WorldNet): void {
       dx = ndx; dy = ndy;
     }
     facing = Math.atan2(dy, dx);
+    if (inInterior) {
+      // inside the Tavern: no town collision, just clamp to the inset play area
+      selfX = clamp(selfX + dx * SPEED * dt, TAVERN_INT.x + TAVERN_WALL + R, TAVERN_INT.x + TAVERN_INT.w - TAVERN_WALL - R);
+      selfY = clamp(selfY + dy * SPEED * dt, TAVERN_INT.y + TAVERN_WALL + R, TAVERN_INT.y + TAVERN_INT.h - TAVERN_WALL - R);
+      stepSound();
+      return;
+    }
     const moved = resolveCollisions(selfX + dx * SPEED * dt, selfY + dy * SPEED * dt, R);
     selfX = moved.x; selfY = moved.y;
     if (moved.hit) bumpSound(false);
@@ -1225,13 +1334,15 @@ export function startWorld(net: WorldNet): void {
 
   function updateNearBuilding() {
     if (talkOpen) { prompt.style.display = 'none'; return; } // freeze targeting mid-chat
-    // nearest building door
+    // nearest building door — skipped inside the Tavern (town buildings are off-map from here)
     let best: string | null = null;
     let bestD = Infinity;
-    for (const b of WORLD_BUILDINGS) {
-      const d = distToBuilding(b);
-      const reach = (driving ? CAR_LEN * 0.5 : R) + TRIGGER_PAD;
-      if (d <= reach && d < bestD) { bestD = d; best = b.id; }
+    if (!inInterior) {
+      for (const b of WORLD_BUILDINGS) {
+        const d = distToBuilding(b);
+        const reach = (driving ? CAR_LEN * 0.5 : R) + TRIGGER_PAD;
+        if (d <= reach && d < bestD) { bestD = d; best = b.id; }
+      }
     }
     nearId = best;
     // nearest townsperson (can't chat from inside a car) — buildings win ties.
@@ -1250,6 +1361,12 @@ export function startWorld(net: WorldNet): void {
         if (d < bD) { bD = d; nearNetizen = a.id; nearNpc = null; }
       }
     }
+    // Inside the Tavern: standing on the exit mat (and not chatting up someone) → leave prompt.
+    nearExit = false;
+    if (inInterior && !nearNpc) {
+      const mx = TAVERN_INT.x + TAVERN_INT.w / 2, my = TAVERN_INT.y + TAVERN_INT.h - TAVERN_WALL - 50;
+      if (Math.abs(selfX - mx) < 110 && Math.abs(selfY - my) < 80) nearExit = true;
+    }
     if (best) {
       const b = WORLD_BUILDINGS.find((x) => x.id === best)!;
       prompt.textContent = labelFor(b.kind);
@@ -1257,12 +1374,15 @@ export function startWorld(net: WorldNet): void {
       const a = others.find((o) => o.id === nearNetizen);
       prompt.textContent = `💬 Talk to ${a?.name ?? 'Netizen'}`;
     } else if (nearNpc) {
-      prompt.textContent = `💬 Talk to ${nearNpc.def.name}`;
+      prompt.textContent = nearNpc.def.id === 'bartender' ? '🍺 Order from the Barkeep' : `💬 Talk to ${nearNpc.def.name}`;
+    } else if (nearExit) {
+      prompt.textContent = '🚪 Leave the Tavern';
     }
-    prompt.style.display = (nearId || nearNpc || nearNetizen) && !dialogOpen && !talkOpen ? 'block' : 'none';
+    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit) && !dialogOpen && !talkOpen ? 'block' : 'none';
   }
 
   function maybeSendMove(now: number) {
+    if (inInterior) return; // don't stream off-map interior coords — others see you parked at the door
     if (now - lastSentAt < 66) return; // ~15 Hz cap
     if (Math.abs(selfX - lastSentX) < 0.5 && Math.abs(selfY - lastSentY) < 0.5) return;
     lastSentX = selfX; lastSentY = selfY; lastSentAt = now;
