@@ -240,7 +240,7 @@ interface NpcDef {
   body?: 'pants' | 'dress'; // silhouette, default 'pants'
   hat?: 'cap' | 'sun';  // optional headwear
   hatColor?: number;    // cap tint (sun hat is fixed straw)
-  kind?: 'minion' | 'kenny' | 'demon' | 'soul' | 'angler' | 'protester'; // special one-off sprite; default is the little-person
+  kind?: 'minion' | 'kenny' | 'demon' | 'soul' | 'angler' | 'protester' | 'fed'; // special one-off sprite; default is the little-person
   glasses?: boolean;    // overlay specs
   stripes?: boolean;    // red/white striped shirt instead of a flat tinted one (Waldo!)
   x: number; y: number; // home anchor (NPC roams around this)
@@ -501,6 +501,21 @@ const NPCS: NpcDef[] = [
       'Do you know what a margin call FEELS like? I do now.',
       'I\'m not crying, it\'s the… the hops. It\'s the hops.',
       'One more and I\'m emailing my broker something I\'ll regret.',
+    ],
+  },
+  {
+    // The Fed Chair, stationed outside Parliament (x:470,y:420,w:340,h:240). Speaks in careful riddles.
+    id: 'fed', name: 'The Fed', shirt: 0x222a36, hair: 0xb9bdc6, skin: SKINS[1], kind: 'fed',
+    x: 640, y: 700, roam: 70,
+    lines: [
+      '*adjusts glasses* The committee has decided to hold rates steady.',
+      'I see you\'ve been accumulating. Interesting choice. We are… watching.',
+      'Market conditions warrant… continued observation.',
+      'We have the tools. We will use them as needed.',
+      'Wealth concentration is a number. Numbers can be adjusted.',
+      'Broker fees fund the House. The House funds everyone. Circulate.',
+      'Price stability is a marathon, not a pump.',
+      'I cannot confirm or deny the existence of a stimulus check.',
     ],
   },
 ];
@@ -1833,6 +1848,23 @@ export function startWorld(net: WorldNet): void {
       g.generateTexture('w-protester', 16, 16);
     }
 
+    // --- The Fed Chair: dark suit, grey comb-over, glasses, a little flag pin. Picture of restraint. ---
+    {
+      const SUIT = 0x222a36, SUIT_D = 0x161c26, SHIRT = 0xe8ecf2, TIE = 0x8a1f2a, SKN = 0xe7c2a0;
+      const HAIR = 0xb9bdc6, GLASS = 0x2a2f3a, FLAG = 0x3a5bbf;
+      g.clear();
+      px(5, 13, 2, 3, SUIT_D); px(8, 13, 2, 3, SUIT_D); px(5, 15, 2, 1, 0x12161e); px(8, 15, 2, 1, 0x12161e); // trousers + shoes
+      px(4, 7, 7, 6, SUIT); px(4, 12, 7, 1, SUIT_D);          // jacket
+      px(6, 7, 3, 6, SHIRT); px(7, 7, 1, 4, TIE);             // shirt placket + tie
+      px(3, 8, 1, 4, SUIT); px(11, 8, 1, 4, SUIT);            // sleeves
+      px(4, 7, 1, 1, FLAG);                                   // lapel flag pin
+      px(5, 3, 5, 4, SKN);                                    // head
+      px(5, 2, 5, 1, HAIR); px(4, 3, 1, 2, HAIR); px(9, 3, 1, 2, HAIR); px(5, 3, 4, 1, HAIR); // neat comb-over
+      px(5, 4, 4, 1, GLASS); px(5, 5, 1, 1, GLASS); px(8, 5, 1, 1, GLASS); // glasses
+      px(6, 6, 3, 1, 0x6b4f3a);                               // measured frown
+      g.generateTexture('w-fed', 16, 16);
+    }
+
     // --- shelter critters: little dogs & cats milling around the pet shack (14×10, face +x) ---
     {
       const DOG = 0x9a6b3f, DOG_D = 0x744d28, EAR = 0x5e3d20, NOSE = 0x2a1c12;
@@ -2819,6 +2851,8 @@ export function startWorld(net: WorldNet): void {
       parts = [sc.add.image(0, 0, 'w-angler').setScale(TEXEL * 1.2).setOrigin(0.5, 0.95)];
     } else if (def.kind === 'protester') {
       parts = [sc.add.image(0, 0, 'w-protester').setScale(TEXEL * 1.2).setOrigin(0.5, 0.95)];
+    } else if (def.kind === 'fed') {
+      parts = [sc.add.image(0, 0, 'w-fed').setScale(TEXEL * 1.2).setOrigin(0.5, 0.95)];
     } else {
       const layer = (key: string, tint?: number) => {
         const im = sc.add.image(0, 0, key).setScale(TEXEL).setOrigin(0.5, 0.95);

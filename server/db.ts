@@ -927,6 +927,70 @@ export async function getTaxablePlayers(): Promise<Array<{ pid: string; name: st
   return rows.map((r) => ({ pid: r.id, name: String(r.name), coins: Number(r.coins) }));
 }
 
+/** Full wealth assessment for the daily sweep: liquid coins, current stock-position market value
+ *  (longs = shares×price; shorts = 2·cost − shares×price, valued at the DB's saved prices), total
+ *  net worth, and last-activity timestamp. Feeds the wealth tax, mark-to-market capital-gains tax,
+ *  and idle decay in one query. */
+export async function getAssessableWealth(): Promise<Array<{ pid: string; name: string; coins: number; posValue: number; netWorth: number; lastPlayed: number }>> {
+  if (!pool) return [];
+  const { rows } = await pool.query(
+    `SELECT p.id AS pid, p.name, p.coins, COALESCE(p.last_played, 0) AS last_played,
+            COALESCE(h.val, 0) AS pos_value,
+            p.coins + COALESCE(h.val, 0) - COALESCE(l.owed, 0) AS net
+       FROM players p
+       LEFT JOIN (
+         SELECT sh.pid,
+                SUM(CASE WHEN sh.side = 'short' THEN 2 * sh.cost - sh.shares * sp.price
+                         ELSE sh.shares * sp.price END) AS val
+           FROM stock_holdings sh JOIN stock_prices sp ON sp.coin = sh.coin
+          WHERE sh.shares > 0 GROUP BY sh.pid
+       ) h ON h.pid = p.id
+       LEFT JOIN loans l ON l.pid = p.id
+      WHERE p.coins <> 0 OR h.val IS NOT NULL`,
+  );
+  return rows.map((r) => ({
+    pid: r.pid, name: String(r.name), coins: Number(r.coins) || 0,
+    posValue: Math.max(0, Number(r.pos_value) || 0), netWorth: Number(r.net) || 0,
+    lastPlayed: Number(r.last_played) || 0,
+  }));
+}
+
+/** Stamp a player's last-activity time (any money-touching action), so idle decay only ever hits
+ *  genuinely dormant accounts. Best-effort, fire-and-forget. */
+export async function stampActivity(pid: string): Promise<void> {
+  if (!pool || !pid) return;
+  await pool.query(`UPDATE players SET last_played = $2 WHERE id = $1`, [pid, Date.now()]);
+}
+
+/** Top-5 net-worth concentration: the sum of the five richest net worths and the total across all
+ *  positive net worths. The Fed tightens when top5/total climbs and eases when it falls. */
+export async function getNetWorthConcentration(): Promise<{ top5: number; total: number }> {
+  if (!pool) return { top5: 0, total: 0 };
+  const { rows } = await pool.query<{ top5: string; total: string }>(
+    `WITH nw AS (
+       SELECT p.coins + COALESCE(h.val, 0) - COALESCE(l.owed, 0) AS net
+         FROM players p
+         LEFT JOIN (
+           SELECT sh.pid, SUM(CASE WHEN sh.side='short' THEN 2*sh.cost - sh.shares*sp.price ELSE sh.shares*sp.price END) AS val
+             FROM stock_holdings sh JOIN stock_prices sp ON sp.coin=sh.coin WHERE sh.shares>0 GROUP BY sh.pid
+         ) h ON h.pid = p.id
+         LEFT JOIN loans l ON l.pid = p.id
+     )
+     SELECT (SELECT COALESCE(SUM(net),0) FROM nw WHERE net > 0) AS total,
+            (SELECT COALESCE(SUM(net),0) FROM (SELECT net FROM nw WHERE net > 0 ORDER BY net DESC LIMIT 5) t) AS top5`,
+  );
+  return { top5: Number(rows[0]?.top5 ?? 0), total: Number(rows[0]?.total ?? 0) };
+}
+
+/** Players active since `sinceMs` (last_played) — the recipients of Fed stimulus checks. */
+export async function getActivePlayers(sinceMs: number): Promise<Array<{ pid: string; name: string }>> {
+  if (!pool) return [];
+  const { rows } = await pool.query(
+    `SELECT id, name FROM players WHERE COALESCE(last_played, 0) >= $1`, [sinceMs],
+  );
+  return rows.map((r) => ({ pid: r.id, name: String(r.name) }));
+}
+
 // --- Bounties ---
 
 /** Add `amount` coins to the bounty on `targetPid` (creating it if none). Returns the new pot. */
@@ -1427,6 +1491,64 @@ export async function setMarketInstability(n: number): Promise<void> {
        ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
     [String(n)],
   );
+}
+
+// --- Generic doom_meta KV (for the Fed: coefficients, trickle fund, MTM, bonds, auctions) ---
+/** Read an arbitrary doom_meta value (string), or null if unset / no DB. */
+export async function getMeta(key: string): Promise<string | null> {
+  if (!pool) return null;
+  const { rows } = await pool.query(`SELECT v FROM doom_meta WHERE k = $1`, [key]);
+  return rows.length ? String(rows[0].v) : null;
+}
+/** Read a numeric doom_meta value, falling back to `dflt` when unset / unparseable. */
+export async function getMetaNum(key: string, dflt = 0): Promise<number> {
+  const v = await getMeta(key);
+  if (v === null) return dflt;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : dflt;
+}
+/** Upsert an arbitrary doom_meta value (stringified). */
+export async function setMeta(key: string, val: string | number): Promise<void> {
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO doom_meta (k, v) VALUES ($1, $2) ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+    [key, String(val)],
+  );
+}
+/** Total outstanding loan principal across everyone (for the House-balance loan cap). */
+export async function getTotalOutstandingLoans(): Promise<number> {
+  if (!pool) return 0;
+  const { rows } = await pool.query(`SELECT COALESCE(SUM(amount), 0) AS s FROM loans`);
+  return Number(rows[0]?.s ?? 0);
+}
+/** Sum of every player's liquid coins (for the House dashboard's "coins in circulation"). */
+export async function getTotalCoins(): Promise<number> {
+  if (!pool) return 0;
+  const { rows } = await pool.query(`SELECT COALESCE(SUM(coins), 0) AS s FROM players`);
+  return Number(rows[0]?.s ?? 0);
+}
+/** Per-stock locked supply: shares held in long positions older than `olderThanMs`, by coin. Drives
+ *  the supply-scarcity price drift (cornered low-supply coins get a premium). */
+export async function getLockedShares(olderThanMs: number): Promise<Record<string, number>> {
+  if (!pool) return {};
+  const cutoff = Date.now() - olderThanMs;
+  const { rows } = await pool.query<{ coin: string; s: string }>(
+    `SELECT coin, COALESCE(SUM(shares), 0) AS s FROM stock_holdings
+       WHERE side = 'long' AND COALESCE(opened_at, 0) < $1 GROUP BY coin`,
+    [cutoff],
+  );
+  const out: Record<string, number> = {};
+  for (const r of rows) out[r.coin] = Number(r.s) || 0;
+  return out;
+}
+/** Total shares a player already holds (long+short) of one coin — for the concentration cap. */
+export async function getPlayerShares(pid: string, coin: string): Promise<number> {
+  if (!pool || !pid) return 0;
+  const { rows } = await pool.query<{ s: string }>(
+    `SELECT COALESCE(SUM(shares), 0) AS s FROM stock_holdings WHERE pid = $1 AND coin = $2`,
+    [pid, coin],
+  );
+  return Number(rows[0]?.s ?? 0);
 }
 
 // The room's armed game-mode toggles (gravity, turbo, arena, view mode, …) live as one small

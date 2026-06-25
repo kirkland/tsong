@@ -53,6 +53,7 @@ import {
   LoanBookMsg,
   NetizenInfoMsg,
   NewsItem,
+  HouseStateMsg,
   LOOT_TABLE,
   minBet,
 } from '../shared/types';
@@ -789,6 +790,9 @@ const net = connect(
     } else if (msg.type === 'house') {
       houseBalance = msg.balance;
       renderHouse();
+    } else if (msg.type === 'houseState') {
+      houseState = msg;
+      if (!housePanel.hidden) renderHouseDashboard();
     } else if (msg.type === 'lootResult') {
       onLootResult(msg);
     } else if (msg.type === 'market') {
@@ -2003,6 +2007,112 @@ function renderNews() {
     return `<div class="news-item"><span class="news-time">${time}</span><span class="news-headline">${escapeHtml(item.headline)}</span></div>`;
   }).join('');
 }
+
+// --- House / Fed dashboard ---
+const houseBtn = document.getElementById('houseBtn') as HTMLButtonElement;
+const housePanel = document.getElementById('housePanel') as HTMLDivElement;
+const houseBody = document.getElementById('houseBody') as HTMLDivElement;
+let houseState: HouseStateMsg | null = null;
+houseBtn.addEventListener('click', () => {
+  const open = housePanel.hidden;
+  housePanel.hidden = !open;
+  houseBtn.setAttribute('aria-expanded', String(open));
+  if (open) { net.send({ type: 'houseReq' }); renderHouseDashboard(); } // always refresh on open
+});
+document.addEventListener('click', (e) => {
+  if (housePanel.hidden) return;
+  const t = e.target as Node;
+  if (t instanceof Node && !t.isConnected) return;
+  if (!housePanel.contains(t) && !houseBtn.contains(t)) { housePanel.hidden = true; houseBtn.setAttribute('aria-expanded', 'false'); }
+});
+function renderHouseDashboard() {
+  const s = houseState;
+  if (!s) { houseBody.innerHTML = '<div style="color:#5a647e">Loading treasury data…</div>'; return; }
+  const c = (n: number) => n.toLocaleString();
+  const pct = (r: number) => `${(r * 100).toFixed(r < 0.01 ? 1 : 0)}%`;
+  const cap = (u: number) => (u < 0 ? '∞' : c(u));
+  const policy = s.tightening
+    ? '<span style="color:#ff8a6a">● TIGHTENING</span>'
+    : '<span style="color:#6ad19a">● EASING / NEUTRAL</span>';
+  const wealthRows = s.wealthBrackets.map((b, i) => {
+    const lo = i === 0 ? 0 : s.wealthBrackets[i - 1].upTo;
+    return `<tr><td>${cap(lo)} – ${cap(b.upTo)}</td><td>${pct(b.rate)}</td></tr>`;
+  }).join('');
+  const gainRows = s.capGainBrackets.map((b, i) => {
+    const lo = i === 0 ? 0 : s.capGainBrackets[i - 1].upTo;
+    return `<tr><td>${cap(lo)} – ${cap(b.upTo)}</td><td>${pct(b.rate)}</td></tr>`;
+  }).join('');
+  const fastRows = s.fastSell.map((b) => `<tr><td>&lt; ${b.underMin >= 60 ? `${b.underMin / 60}h` : `${b.underMin}m`}</td><td>${pct(b.rate)}</td></tr>`).join('') + '<tr><td>3h+</td><td>0%</td></tr>';
+  const idleRows = s.idleTiers.map((t, i) => {
+    const next = s.idleTiers[i + 1];
+    return `<tr><td>${t.days}${next ? `–${next.days}` : '+'} days</td><td>${pct(t.rate)}</td></tr>`;
+  }).join('');
+  const fed = s.fedNews.length
+    ? s.fedNews.map((n) => {
+        const time = new Date(n.ts).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' });
+        return `<div class="news-item"><span class="news-time">${time}</span><span class="news-headline">${escapeHtml(n.headline.replace('🪙 FED: ', ''))}</span></div>`;
+      }).join('')
+    : '<div style="color:#5a647e">No Fed statements yet.</div>';
+  houseBody.innerHTML = `
+    <div class="house-grid">
+      <div class="house-card"><h4>🏦 Treasury</h4>
+        <div>Balance: <b>${c(s.balance)}🪙</b></div>
+        <div>Trickle Fund: <b>${c(s.trickleFund)}🪙</b></div>
+        <div>Loan window: <b>${s.loanCapWaived ? '🔓 WAIVED' : '🔒 capped'}</b></div>
+      </div>
+      <div class="house-card"><h4>📊 Market State</h4>
+        <div>Coins in circulation: <b>${c(s.totalCoins)}🪙</b></div>
+        <div>Top-5 concentration: <b>${s.top5Pct}%</b></div>
+        <div>Per-stock cap: <b>${s.concentrationCap}%</b></div>
+        <div>Broker fee: <b>${s.brokerFeePct.toFixed(1)}%</b></div>
+      </div>
+      <div class="house-card"><h4>📈 Fed Policy</h4><div>${policy}</div>
+        <div style="color:#8aa0d8;font-size:12px;margin-top:4px">Tightens &gt;50% concentration, eases &lt;30%.</div>
+      </div>
+      <div class="house-card"><h4>💰 Wealth Tax (daily)</h4><table class="house-tbl">${wealthRows}</table></div>
+      <div class="house-card"><h4>💹 Capital Gains</h4><table class="house-tbl">${gainRows}</table></div>
+      <div class="house-card"><h4>⏱ Fast-Sell Tax</h4><table class="house-tbl">${fastRows}</table></div>
+      <div class="house-card"><h4>💤 Idle Decay</h4><table class="house-tbl">${idleRows}</table></div>
+      <div class="house-card house-wide"><h4>🏦 Treasury Bonds</h4>
+        <div style="color:#8aa0d8;font-size:11px;margin-bottom:6px">Lock coins for a term, collect interest from the House at maturity. Early redemption forfeits interest + 5%.</div>
+        <div class="house-bondbuy">
+          <input id="bondAmt" type="number" min="100" step="100" placeholder="amount" />
+          ${s.bondRates.map((b) => `<button class="house-act" data-act="bond" data-term="${b.termDays}">Buy ${b.termDays}d · ${(b.rate * 100).toFixed(0)}%</button>`).join('')}
+        </div>
+        ${s.myBonds.length ? `<table class="house-tbl">${s.myBonds.map((b) => {
+          const left = b.maturesAt - Date.now();
+          const when = left <= 0 ? 'matured ✓' : left > 86400000 ? `${Math.ceil(left / 86400000)}d` : `${Math.ceil(left / 3600000)}h`;
+          return `<tr><td>${c(b.amount)}🪙 · ${b.termDays}d @ ${(b.rate * 100).toFixed(0)}% · ${when}</td><td><button class="house-act" data-act="bondw" data-id="${b.id}">redeem</button></td></tr>`;
+        }).join('')}</table>` : '<div style="color:#5a647e;font-size:11px">No active bonds.</div>'}
+      </div>
+      <div class="house-card house-wide"><h4>🔨 Fed Exclusive Auction</h4>
+        ${s.auction ? (() => {
+          const left = s.auction.endsAt - Date.now();
+          const when = left <= 0 ? 'closing…' : left > 3600000 ? `${Math.ceil(left / 3600000)}h left` : `${Math.ceil(left / 60000)}m left`;
+          const min = Math.max(s.auction.startBid, s.auction.highBid + 1);
+          return `<div><b>${escapeHtml(s.auction.name)}</b> · ${when}</div>
+            <div>High bid: <b>${s.auction.highBid ? `${c(s.auction.highBid)}🪙 (${escapeHtml(s.auction.highName ?? '')})` : 'none yet'}</b></div>
+            <div class="house-bondbuy"><input id="bidAmt" type="number" min="${min}" step="100" placeholder="min ${c(min)}" /><button class="house-act" data-act="bid">Place bid</button></div>`;
+        })() : '<div style="color:#5a647e;font-size:11px">No auction running. The Fed posts one when scarce items are available.</div>'}
+      </div>
+      <div class="house-card house-wide"><h4>📰 Fed Activity</h4>${fed}</div>
+    </div>`;
+}
+// Delegated controls for the House dashboard (re-rendered each update, so bind once here).
+houseBody.addEventListener('click', (e) => {
+  const btn = (e.target as HTMLElement).closest('.house-act') as HTMLElement | null;
+  if (!btn) return;
+  const act = btn.dataset.act;
+  if (act === 'bond') {
+    const amt = Math.floor(Number((document.getElementById('bondAmt') as HTMLInputElement)?.value));
+    if (amt >= 100) net.send({ type: 'bondBuy', amount: amt, termDays: Number(btn.dataset.term) });
+  } else if (act === 'bondw') {
+    if (btn.dataset.id) net.send({ type: 'bondWithdraw', id: btn.dataset.id });
+  } else if (act === 'bid') {
+    const amt = Math.floor(Number((document.getElementById('bidAmt') as HTMLInputElement)?.value));
+    if (amt > 0) net.send({ type: 'auctionBid', amount: amt });
+  }
+});
 
 // --- Arcade & Casino nav dropdowns: group the minigame / economy buttons into menus to keep
 // the toolbar tidy. The grouped buttons keep their own IDs and click handlers; these toggles

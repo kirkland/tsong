@@ -91,10 +91,9 @@ import {
   NETIZEN_DIALOGUE,
   NEWS_TEMPLATES_BULLISH,
   NEWS_TEMPLATES_BEARISH,
+  FED_TEMPLATES,
   LOOT_TABLE,
   minBet,
-  FAST_SELL_TAX_MS,
-  FAST_SELL_TAX_RATE,
   FIGHTERS,
   NomProposalKind, NomEffect, NomVote,
 } from '../shared/types';
@@ -102,11 +101,12 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
   recordFishCatch, getFishingLeaderboard, FishingScoreRow,
-  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS, getTaxablePlayers, getJailed, setJailed,
+  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS, getAssessableWealth, stampActivity, getJailed, setJailed,
   getHoldings, investStock, closePosition, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
   setStockCrashAt, getMarketInstability, setMarketInstability,
   getLoan, takeLoan, repayLoan, collectDefaultedLoans, realignLoansToDeadline, getOpenLoans,
   houseAdjust, getHouseBalance,
+  getMeta, setMeta, getMetaNum, getTotalOutstandingLoans, getTotalCoins, getLockedShares, getPlayerShares, getNetWorthConcentration, getActivePlayers,
   mintExclusive, getExclusiveSupply, getExclusiveLastSale,
   listExclusive, cancelListing, getMarketListings, buyLowestAsk,
   getNetizens, seedNetizen,
@@ -171,14 +171,18 @@ interface Conn {
 // (symmetric, so it doesn't drag the typical trajectory below the drift): usually ±~5% per
 // tick, with a 1-in-12 chance of a bigger swing on top. Clamped to [base/100, base×1000] and
 // rounded to cents (so it can dip below the starting price for real downside, never to zero).
-function rollPrice(price: number, base: number, pressure = 0): number {
+function rollPrice(price: number, base: number, pressure = 0, lockedRatio = 0): number {
   const ticksPerDay = 86_400_000 / STOCK_UPDATE_MS;
   const drift = Math.pow(2, 1 / ticksPerDay); // typical ×2 per day — a gentle climb
   let g = (Math.random() * 2 - 1) * 0.05; // ±5% jitter (log space)
   if (Math.random() < 0.08) g += (Math.random() * 2 - 1) * 0.18; // occasional bigger swing
-  // Economy Overhaul: blend the existing drift/noise (60%) with order-flow pressure (40%). Buying
-  // pushes the price up, selling/shorting pushes it down, but only as a minority influence — the
-  // long-term drift still wins and the base×1000 / base/100 clamp keeps cornering impossible.
+  // The Fed — supply scarcity: a stock with a large fraction of its supply locked up in long
+  // positions older than a day gets a small upward drift premium (cornered low-supply coins like
+  // FRITZ/BACON become naturally more premium + volatile). Capped so the clamp still rules.
+  g += Math.min(0.5, Math.max(0, lockedRatio)) * 0.06;
+  // Blend the drift/noise (60%) with order-flow pressure (40%). Buying pushes up, selling/shorting
+  // down, but only as a minority influence — the long-term drift wins and the clamp keeps cornering
+  // impossible.
   const driftMult = drift * Math.exp(g);
   const flowMult = 1 + Math.max(-0.5, Math.min(0.5, pressure));
   const mult = Math.pow(driftMult, 0.6) * Math.pow(flowMult, 0.4);
@@ -252,23 +256,76 @@ const DRUNK_MS = 180_000;     // each drunkenness level lasts 3 minutes
 // the slice of a balance inside each band is taxed at that band's rate. A big tax-free allowance
 // keeps casual/poorer players untouched, and rates stay modest so it nudges rather than punishes.
 const TAX_BRACKETS: { upTo: number; rate: number }[] = [
-  { upTo: 5_000, rate: 0.00 },     // tax-free allowance — most players never pay a coin
-  { upTo: 25_000, rate: 0.02 },    // 2% on 5k–25k
-  { upTo: 100_000, rate: 0.04 },   // 4% on 25k–100k
-  { upTo: 500_000, rate: 0.06 },   // 6% on 100k–500k
-  { upTo: Infinity, rate: 0.08 },  // 8% on everything above 500k
+  { upTo: 5_000, rate: 0.00 },        // tax-free allowance — most players never pay a coin
+  { upTo: 25_000, rate: 0.02 },       // 2% on 5k–25k
+  { upTo: 100_000, rate: 0.04 },      // 4% on 25k–100k
+  { upTo: 500_000, rate: 0.06 },      // 6% on 100k–500k
+  { upTo: 1_000_000, rate: 0.08 },    // 8% on 500k–1M
+  { upTo: Infinity, rate: 0.10 },     // 10% on everything above 1M (Fed can push this to 15%)
 ];
 // Tax owed for a raw coin balance. Marginal across brackets.
-function progressiveTax(coins: number): number {
+function progressiveTax(coins: number, topRate?: number): number {
   let tax = 0, prev = 0;
   for (const b of TAX_BRACKETS) {
     const cap = b.upTo;
     if (coins <= prev) break;
+    // The Fed can override the top (1M+) bracket rate when it tightens.
+    const rate = (cap === Infinity && topRate !== undefined) ? topRate : b.rate;
     const band = Math.min(coins, cap) - prev;
-    tax += band * b.rate;
+    tax += band * rate;
     prev = cap;
   }
   return Math.floor(tax);
+}
+
+// --- The Fed: trading frictions (all route coins to the House — the primary refill engine) ---
+const BROKER_FEE = 0.005;            // 0.5% on every trade (both sides); doubles after hours
+const STOCK_CONCENTRATION_CAP = 0.25; // a player can hold at most 25% of any one stock's supply
+// Progressive fast-sell tax on the gross payout, by how long the position was held.
+const FAST_SELL_BRACKETS: { underMs: number; rate: number }[] = [
+  { underMs: 5 * 60_000, rate: 0.25 },
+  { underMs: 15 * 60_000, rate: 0.20 },
+  { underMs: 30 * 60_000, rate: 0.15 },
+  { underMs: 60 * 60_000, rate: 0.10 },
+  { underMs: 180 * 60_000, rate: 0.05 },
+];
+function fastSellRate(heldMs: number): number {
+  for (const b of FAST_SELL_BRACKETS) if (heldMs < b.underMs) return b.rate;
+  return 0; // 3h+ — no fast-sell tax
+}
+// Realized capital-gains tax on profit only (never principal). Marginal brackets.
+const CAPGAIN_BRACKETS: { upTo: number; rate: number }[] = [
+  { upTo: 10_000, rate: 0.00 },
+  { upTo: 100_000, rate: 0.05 },
+  { upTo: 500_000, rate: 0.10 },
+  { upTo: Infinity, rate: 0.15 },
+];
+function capitalGainsTax(gain: number): number {
+  if (gain <= 0) return 0;
+  let tax = 0, prev = 0;
+  for (const b of CAPGAIN_BRACKETS) {
+    if (gain <= prev) break;
+    tax += (Math.min(gain, b.upTo) - prev) * b.rate;
+    prev = b.upTo;
+  }
+  return Math.floor(tax);
+}
+// Treasury bonds: lock coins for a term, get paid principal + interest from the House at maturity.
+const BOND_TERMS: { termDays: number; rate: number }[] = [
+  { termDays: 7, rate: 0.05 },
+  { termDays: 30, rate: 0.12 },
+];
+const BOND_EARLY_PENALTY = 0.05;          // forfeit interest + 5% of principal on early withdrawal
+const AUCTION_DURATION_MS = 24 * 3_600_000; // exclusive auctions run 24h
+interface Bond { id: string; pid: string; name: string; amount: number; termDays: number; rate: number; purchasedAt: number }
+interface Auction { item: string; name: string; startBid: number; highBid: number; highPid: string; highName: string | null; endsAt: number }
+
+// Idle decay: a small daily fee on the net worth of dormant accounts (active players never pay).
+function idleFeeRate(daysIdle: number): number {
+  if (daysIdle < 7) return 0;
+  if (daysIdle < 14) return 0.01;
+  if (daysIdle < 30) return 0.03;
+  return 0.05;
 }
 
 // What a seat / queue spot needs to be reclaimed by the same identity after a restart.
@@ -411,6 +468,11 @@ export class Lobby {
   // Cached House treasury balance, hydrated on boot and kept in sync after each adjust. Broadcast
   // to clients so the market/casino header can show it (and "payouts reduced" when low).
   private houseBalance = 0;
+  private lockedShares: Record<string, number> = {}; // per-coin shares locked in long >24h positions (supply scarcity)
+  // The Fed: in-memory coefficient cache (persisted in doom_meta, hydrated on boot).
+  private fed = { tightening: false, wealthTaxTop: 0.10, loanCapWaived: false };
+  private nextFedAt = 0; // throttle the Fed convening (5-min cadence during market hours)
+  private nextBondCheckAt = 0; // throttle the 24/7 bond-maturity + auction-deadline check (10-min)
   // Netizen avatar wander state: position, target (tx/ty), pause timer, spawn delay.
   private netizenPos = new Map<string, { x: number; y: number; tx: number; ty: number; pauseUntil: number; spawnAt: number }>();
   // Staggered netizen reactions to news, drained in tickStocks.
@@ -2925,6 +2987,23 @@ export class Lobby {
     if (after !== null) { this.houseBalance = after; this.broadcastHouse(); }
   }
 
+  /** Earmark coins to the Trickle Fund (the coins stay in the House balance — this is an accounting
+   *  number the Fed draws against for stimulus, so stimulus doesn't deplete the lending pool). */
+  private async addTrickle(amount: number): Promise<void> {
+    if (!(amount > 0)) return;
+    const cur = await getMetaNum('trickle_fund', 0);
+    await setMeta('trickle_fund', cur + amount);
+  }
+
+  /** Charge a broker fee on a `tradeCoins`-sized trade (player → House). 0.5%, doubled after hours. */
+  private async chargeBrokerFee(pid: string, tradeCoins: number): Promise<void> {
+    const rate = isMarketHours(Date.now()) ? BROKER_FEE : BROKER_FEE * 2;
+    const fee = Math.floor(tradeCoins * rate);
+    if (fee <= 0) return;
+    const taken = await spendCoins(pid, fee);
+    if (taken) await this.houseCredit(fee);
+  }
+
   /** Mint the House's per-match cut (a NEW mint, not a transfer — pong is the faucet that funds the
    *  treasury). Called once per recorded PvP match alongside the winner's own minted reward. */
   private mintMatchHouse() {
@@ -3000,6 +3079,7 @@ export class Lobby {
     // Economy Overhaul: hydrate the House treasury and seed the netizen bot traders (funded from
     // the House). Both are best-effort — without a DB they no-op cleanly.
     this.houseBalance = await getHouseBalance().catch(() => 0);
+    await this.loadFed().catch((e) => console.error('fed load failed:', e));
     await this.seedNetizens().catch((e) => console.error('netizen seed failed:', e));
     // Seed netizen world avatar positions around the centre plaza with a short staggered spawn
     this.netizenPos.clear();
@@ -3061,19 +3141,26 @@ export class Lobby {
             continue;
           }
           const idx = Number(n.pid.split(':')[1] ?? 0);
-          const archetype = idx % 3; // 0 momentum, 1 mean-reversion, 2 random-upbias
+          const archetype = idx % 4; // 0 momentum, 1 mean-reversion, 2 random-upbias, 3 Fed-watcher
           const stock = STOCKS[Math.floor(Math.random() * STOCKS.length)];
           const press = this.pressure.get(stock.id) ?? 0;
           const board = this.stockPrices.get(stock.id);
           const move = board && board.prev > 0 ? board.price / board.prev - 1 : 0;
           // Decide buy vs sell-existing by archetype.
           let buy = true;
+          let sizeLo = 0.04, sizeHi = 0.12; // 4–12% of balance per trade (Fed-watchers size up on stimulus)
           if (archetype === 0) buy = press >= 0;            // momentum: follow the flow
           else if (archetype === 1) buy = move <= 0;        // mean-reversion: buy dips, sell rips
-          else buy = Math.random() < 0.62;                  // random with a mild upward bias
+          else if (archetype === 2) buy = Math.random() < 0.62; // random with a mild upward bias
+          else {
+            // Fed-watcher: trades the Fed's policy, not the price. Bearish when tightening, bullish
+            // when easing, and leans in harder when the cap is waived (cheap liquidity).
+            buy = !this.fed.tightening;
+            if (this.fed.loanCapWaived) { sizeLo = 0.08; sizeHi = 0.20; }
+          }
           let tradedSide: 'buy' | 'sell' | null = null;
           if (buy) {
-            const amt = Math.max(1, Math.floor(n.coins * (0.04 + Math.random() * 0.08))); // 4–12% of balance
+            const amt = Math.max(1, Math.floor(n.coins * (sizeLo + Math.random() * (sizeHi - sizeLo))));
             await this.netizenInvest(n.pid, n.name, stock.id, amt, 'long');
             tradedSide = 'buy';
           } else {
@@ -3220,33 +3307,279 @@ export class Lobby {
    *  route it into the House so it can keep funding payouts. A conserving transfer — coins move from
    *  players to the treasury, none are burned or minted. Most accounts (under the allowance) pay 0. */
   private runWealthTax() {
-    getTaxablePlayers()
+    const now = Date.now();
+    getAssessableWealth()
       .then(async (players) => {
-        const taxed: { pid: string; tax: number }[] = [];
-        let collected = 0;
+        const byPid = new Map<string, number>(); // total taken per pid (for online receipts)
+        let collected = 0;   // total → House
+        let trickled = 0;    // capital-gains portion earmarked to the Trickle Fund
+        let taxedCount = 0;
         for (const p of players) {
-          const tax = progressiveTax(p.coins);
-          if (tax <= 0) continue;          // under the allowance, or rounds to nothing
-          const after = await spendCoins(p.pid, tax);
-          if (!after) continue;            // lost a race on their balance — skip, never overdraw
-          collected += tax;
-          taxed.push({ pid: p.pid, tax });
+          // 1) Liquid wealth tax on coins (progressive; top bracket follows the Fed's current cap).
+          const wealth = progressiveTax(p.coins, this.fed.wealthTaxTop);
+          // 2) Unrealized mark-to-market capital gains: tax the rise in position value since the last
+          //    assessment (catches wealth parked in stocks whether or not it's ever sold).
+          const prevMtm = await getMetaNum(`mtm:${p.pid}`, p.posValue); // first time → 0 delta
+          const mtm = capitalGainsTax(p.posValue - prevMtm);
+          await setMeta(`mtm:${p.pid}`, Math.round(p.posValue)); // remember today's value for tomorrow
+          // 3) Idle decay: a fee on net worth for dormant accounts (active players: 0).
+          const idleDays = p.lastPlayed > 0 ? (now - p.lastPlayed) / 86_400_000 : 0;
+          const idle = Math.floor(Math.max(0, p.netWorth) * idleFeeRate(idleDays));
+          let owed = wealth + mtm + idle;
+          if (owed <= 0) continue;
+          owed = Math.min(owed, p.coins); // can only ever take liquid coins
+          if (owed <= 0) continue;
+          const after = await spendCoins(p.pid, owed);
+          if (!after) continue;           // lost a race on their balance — skip, never overdraw
+          collected += owed;
+          trickled += Math.min(mtm, owed); // capital-gains share (clamped to what we actually took)
+          taxedCount++;
+          byPid.set(p.pid, owed);
         }
-        if (collected <= 0) return;        // nobody rich enough today
-        await this.houseCredit(collected); // the skim lands in the treasury (+broadcasts House)
-        // Push fresh wallets + a receipt to any taxed player who's online.
-        const byPid = new Map(taxed.map((t) => [t.pid, t.tax]));
+        if (collected <= 0) return;       // nobody assessable today
+        await this.houseCredit(collected);
+        if (trickled > 0) await this.addTrickle(trickled);
+        // Push fresh wallets + a receipt to any assessed player who's online.
         for (const ws of this.conns.keys()) {
           const conn = this.conns.get(ws);
           const owed = conn?.pid ? byPid.get(conn.pid) : undefined;
           if (owed === undefined) continue;
           this.sendWallet(ws);
-          this.notify(ws, `🧾 Tax day! The House skimmed ${owed.toLocaleString()}🪙 of wealth tax from your balance.`);
+          this.notify(ws, `🧾 Tax day! The House assessed ${owed.toLocaleString()}🪙 (wealth · capital gains · idle) from your accounts.`);
         }
-        this.announce(`🧾 TAX DAY — the House collected ${collected.toLocaleString()}🪙 in wealth tax from the top ${taxed.length} account${taxed.length === 1 ? '' : 's'}. Spread the love.`);
+        this.announce(`🧾 TAX DAY — the House assessed ${collected.toLocaleString()}🪙 across ${taxedCount} account${taxedCount === 1 ? '' : 's'} (wealth, capital gains, idle decay). Spread the love.`);
         this.refreshNetWorth().catch((e) => console.error('net worth update after tax failed:', e));
       })
       .catch((e) => console.error('wealth tax failed:', e));
+  }
+
+  /** Hydrate the Fed's coefficients from doom_meta on boot (survives restarts). */
+  private async loadFed(): Promise<void> {
+    this.fed.tightening = (await getMetaNum('fed_tightening', 0)) > 0;
+    this.fed.wealthTaxTop = await getMetaNum('fed_wealth_tax_cap', 0.10);
+    this.fed.loanCapWaived = (await getMetaNum('fed_loan_cap_waived', 0)) > 0;
+  }
+
+  /** The Fed convenes: read concentration + House liquidity, tighten/ease, distribute stimulus, and
+   *  announce. Coefficients are cached in memory (read on hot paths) and persisted to doom_meta. */
+  private async tickFed(): Promise<void> {
+    const { top5, total } = await getNetWorthConcentration();
+    const conc = total > 0 ? top5 / total : 0;
+    let announced = false;
+    // Concentration → tighten (raise the top wealth bracket) / ease (back to baseline).
+    if (conc > 0.5 && !this.fed.tightening) {
+      this.fed.tightening = true; this.fed.wealthTaxTop = 0.15;
+      await setMeta('fed_tightening', 1); await setMeta('fed_wealth_tax_cap', this.fed.wealthTaxTop);
+      this.publishFedNews('tighten', Math.round(this.fed.wealthTaxTop * 100)); announced = true;
+    } else if (conc < 0.3 && this.fed.tightening) {
+      this.fed.tightening = false; this.fed.wealthTaxTop = 0.10;
+      await setMeta('fed_tightening', 0); await setMeta('fed_wealth_tax_cap', this.fed.wealthTaxTop);
+      this.publishFedNews('ease', Math.round(conc * 100)); announced = true;
+    }
+    // House liquidity → waive / restore the loan cap (emergency credit window).
+    if (this.houseBalance < 10_000 && !this.fed.loanCapWaived) {
+      this.fed.loanCapWaived = true; await setMeta('fed_loan_cap_waived', 1);
+      await setMeta('trickle_fund', 0); // release the stimulus earmark to the lending pool
+      this.publishFedNews('liquidity', 0); announced = true;
+    } else if (this.houseBalance >= 25_000 && this.fed.loanCapWaived) {
+      this.fed.loanCapWaived = false; await setMeta('fed_loan_cap_waived', 0);
+    }
+    // Stimulus: when the Trickle Fund has built up (and on a cooldown), wire it to active players.
+    if (await this.maybeStimulus()) announced = true;
+    // Occasionally put a scarce exclusive up for auction.
+    await this.maybeStartAuction();
+    // Otherwise an occasional "no action" statement keeps the Fed present in the feed.
+    if (!announced && Math.random() < 0.12) this.publishFedNews('hold', 0);
+  }
+
+  /** Distribute the Trickle Fund to recently-active players (House-funded; the coins were earmarked
+   *  there). Throttled to ~once every 3h. Returns true if a stimulus actually went out. */
+  private async maybeStimulus(): Promise<boolean> {
+    const now = Date.now();
+    const last = await getMetaNum('fed_last_stimulus', 0);
+    if (now - last < 3 * 3_600_000) return false; // cooldown
+    const fund = await getMetaNum('trickle_fund', 0);
+    if (fund < 1_000) return false;
+    const active = await getActivePlayers(now - 86_400_000);
+    if (!active.length) return false;
+    const budget = Math.min(Math.floor(fund * 0.6), Math.floor(this.houseBalance * 0.4));
+    const per = Math.floor(budget / active.length);
+    if (per < 10) return false; // too thin to bother
+    let paid = 0;
+    for (const a of active) paid += await this.housePay(a.pid, a.name, per);
+    if (paid <= 0) return false;
+    await setMeta('trickle_fund', Math.max(0, fund - paid));
+    await setMeta('fed_last_stimulus', now);
+    // Refresh online recipients' wallets.
+    const got = new Set(active.map((a) => a.pid));
+    for (const ws of this.conns.keys()) { const c = this.conns.get(ws); if (c?.pid && got.has(c.pid)) this.sendWallet(ws); }
+    this.publishFedNews('stimulus', paid);
+    this.refreshNetWorth().catch(() => {});
+    return true;
+  }
+
+  /** Push a literal headline into the news feed + broadcast it. */
+  private pushNews(headline: string): void {
+    const item: NewsItem = { id: `fed_${Date.now()}_${Math.floor(Math.random() * 1000)}`, ts: Date.now(), coin: '', headline };
+    this.newsFeed.unshift(item);
+    if (this.newsFeed.length > 30) this.newsFeed.length = 30;
+    saveNewsFeed(this.newsFeed).catch(() => {});
+    for (const ws of this.conns.keys()) if (ws.readyState === ws.OPEN) this.sendNews(ws);
+  }
+
+  /** Pick a templated Fed statement and publish it. */
+  private publishFedNews(event: string, n: number): void {
+    const pool = FED_TEMPLATES[event];
+    if (!pool || !pool.length) return;
+    this.pushNews(pool[Math.floor(Math.random() * pool.length)].replace('{n}', n.toLocaleString()));
+  }
+
+  // --- Treasury bonds (state persisted as JSON in doom_meta) ---
+  private async getBonds(): Promise<Bond[]> {
+    try { return JSON.parse((await getMeta('bonds')) || '[]') as Bond[]; } catch { return []; }
+  }
+  private async setBonds(bonds: Bond[]): Promise<void> { await setMeta('bonds', JSON.stringify(bonds)); }
+
+  /** Buy a Treasury bond: lock `amount` coins (escrowed into the House) for the term; principal +
+   *  interest are paid back from the House at maturity. */
+  buyBond(ws: WebSocket, amount: number, termDays: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    const term = BOND_TERMS.find((t) => t.termDays === termDays);
+    if (!term) return;
+    const amt = Math.floor(amount);
+    if (!Number.isFinite(amt) || amt < 100) { this.notify(ws, 'Bonds start at 100🪙.'); return; }
+    const pid = conn.pid, name = conn.nickname;
+    spendCoins(pid, amt)
+      .then(async (w) => {
+        if (!w) { this.notify(ws, "You can't afford that bond."); this.sendWallet(ws); return; }
+        await this.houseCredit(amt); // the locked coins sit in the House for the term
+        const bonds = await this.getBonds();
+        bonds.push({ id: `b_${Date.now()}_${Math.floor(Math.random() * 1e6)}`, pid, name, amount: amt, termDays: term.termDays, rate: term.rate, purchasedAt: Date.now() });
+        await this.setBonds(bonds);
+        stampActivity(pid).catch(() => {});
+        this.sendWallet(ws);
+        this.sendHouseState(ws);
+        this.notify(ws, `🏦 Bought a ${term.termDays}-day Treasury bond for ${amt.toLocaleString()}🪙 at ${(term.rate * 100).toFixed(0)}%.`);
+      })
+      .catch((e) => console.error('bond buy failed:', e));
+  }
+
+  /** Redeem a bond early: forfeit all interest and 5% of principal (penalty stays in the House). */
+  withdrawBond(ws: WebSocket, id: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    const pid = conn.pid, name = conn.nickname;
+    this.getBonds()
+      .then(async (bonds) => {
+        const i = bonds.findIndex((b) => b.id === id && b.pid === pid);
+        if (i < 0) { this.sendHouseState(ws); return; }
+        const b = bonds[i];
+        const refund = Math.floor(b.amount * (1 - BOND_EARLY_PENALTY)); // 95% of principal back
+        const after = await houseAdjust(-refund);
+        if (after !== null) { this.houseBalance = after; await addCoins(pid, name, refund); this.broadcastHouse(); }
+        bonds.splice(i, 1);
+        await this.setBonds(bonds);
+        this.sendWallet(ws);
+        this.sendHouseState(ws);
+        this.notify(ws, `🏦 Redeemed a bond early — ${refund.toLocaleString()}🪙 back (forfeited interest + 5% penalty).`);
+        this.refreshNetWorth().catch(() => {});
+      })
+      .catch((e) => console.error('bond withdraw failed:', e));
+  }
+
+  /** Pay out any bonds that have reached maturity (principal + interest from the House). 24/7. */
+  private async settleMaturedBonds(now: number): Promise<void> {
+    const bonds = await this.getBonds();
+    if (!bonds.length) return;
+    const due = bonds.filter((b) => now >= b.purchasedAt + b.termDays * 86_400_000);
+    if (!due.length) return;
+    const keep = bonds.filter((b) => !due.includes(b));
+    for (const b of due) {
+      const interest = Math.floor(b.amount * b.rate);
+      let pay = b.amount + interest;
+      let after = await houseAdjust(-pay);
+      if (after === null) { pay = Math.floor(this.houseBalance); after = pay > 0 ? await houseAdjust(-pay) : 0 as number | null; } // House short → pay what it has
+      if (after !== null && pay > 0) {
+        this.houseBalance = after; await addCoins(b.pid, b.name, pay);
+        for (const ws of this.conns.keys()) { const c = this.conns.get(ws); if (c?.pid === b.pid) { this.sendWallet(ws); this.notify(ws, `🏦 Your ${b.termDays}-day bond matured: ${pay.toLocaleString()}🪙 (${b.amount.toLocaleString()} + ${interest.toLocaleString()} interest).`); } }
+      }
+    }
+    await this.setBonds(keep);
+    this.broadcastHouse();
+    this.refreshNetWorth().catch(() => {});
+  }
+
+  // --- Exclusive auctions (state persisted as JSON in doom_meta) ---
+  private async getAuction(): Promise<Auction | null> {
+    try { const v = await getMeta('auction'); return v ? JSON.parse(v) as Auction : null; } catch { return null; }
+  }
+  private async setAuction(a: Auction | null): Promise<void> { await setMeta('auction', a ? JSON.stringify(a) : ''); }
+
+  /** Occasionally start an auction for an exclusive that still has supply (called from the Fed tick). */
+  private async maybeStartAuction(): Promise<void> {
+    if (await this.getAuction()) return;       // one at a time
+    if (Math.random() > 0.18) return;          // ~18% chance per Fed tick when idle
+    const supply = await getExclusiveSupply();
+    const available = EXCLUSIVES.filter((x) => (supply[x.id] ?? 0) < x.cap);
+    if (!available.length) return;
+    const item = available[Math.floor(Math.random() * available.length)];
+    const startBid = 5_000 + Math.floor(Math.random() * 5_000);
+    await this.setAuction({ item: item.id, name: item.name, startBid, highBid: 0, highPid: '', highName: null, endsAt: Date.now() + AUCTION_DURATION_MS });
+    this.pushNews(`🪙 FED: A scarce ${item.name} goes to auction — opening bid ${startBid.toLocaleString()}🪙. Bids close in 24h (House → 🏦 Economy).`);
+  }
+
+  /** Place a bid on the live auction: escrow the new bid into the House, refund the prior high bidder. */
+  auctionBid(ws: WebSocket, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    const pid = conn.pid, name = conn.nickname;
+    const amt = Math.floor(amount);
+    this.getAuction()
+      .then(async (a) => {
+        if (!a || Date.now() >= a.endsAt) { this.notify(ws, 'No auction is running right now.'); this.sendHouseState(ws); return; }
+        if (a.highPid === pid) { this.notify(ws, "You're already the high bidder."); return; }
+        const min = Math.max(a.startBid, a.highBid + 1);
+        if (amt < min) { this.notify(ws, `Bid must be at least ${min.toLocaleString()}🪙.`); this.sendHouseState(ws); return; }
+        const w = await spendCoins(pid, amt);
+        if (!w) { this.notify(ws, "You can't afford that bid."); this.sendWallet(ws); return; }
+        await this.houseCredit(amt); // escrow into the House
+        if (a.highPid && a.highBid > 0) { // refund the outbid leader from the House
+          const after = await houseAdjust(-a.highBid);
+          if (after !== null) {
+            this.houseBalance = after; await addCoins(a.highPid, a.highName ?? 'bidder', a.highBid); this.broadcastHouse();
+            for (const ws2 of this.conns.keys()) { const c = this.conns.get(ws2); if (c?.pid === a.highPid) { this.sendWallet(ws2); this.notify(ws2, `🔨 You were outbid on ${a.name} — your ${a.highBid.toLocaleString()}🪙 was refunded.`); } }
+          }
+        }
+        a.highBid = amt; a.highPid = pid; a.highName = name;
+        await this.setAuction(a);
+        stampActivity(pid).catch(() => {});
+        this.sendWallet(ws);
+        this.sendHouseState(ws);
+        this.notify(ws, `🔨 You're the high bidder on ${a.name} at ${amt.toLocaleString()}🪙.`);
+      })
+      .catch((e) => console.error('auction bid failed:', e));
+  }
+
+  /** Resolve the auction once its deadline passes: grant the item to the high bidder (their bid is
+   *  already in the House as the sale proceeds), or return it to the pool if there were no bids. */
+  private async checkAuctionDeadline(now: number): Promise<void> {
+    const a = await this.getAuction();
+    if (!a || now < a.endsAt) return;
+    await this.setAuction(null);
+    if (!a.highPid || a.highBid <= 0) { this.pushNews(`🪙 FED: The ${a.name} auction closed with no bids. It returns to the pool.`); return; }
+    const item = EXCLUSIVES.find((x) => x.id === a.item);
+    if (!item) return;
+    const serial = await mintExclusive(a.highPid, item.id, item.cap, now);
+    if (serial === null) { // minted out in the meantime — refund the winner
+      const after = await houseAdjust(-a.highBid);
+      if (after !== null) { this.houseBalance = after; await addCoins(a.highPid, a.highName ?? 'bidder', a.highBid); this.broadcastHouse(); }
+      this.pushNews(`🪙 FED: The ${a.name} auction was voided (supply exhausted) — ${a.highName} was refunded.`);
+      return;
+    }
+    this.pushNews(`🪙 FED: ${a.highName} won the auction for ${a.name} at ${a.highBid.toLocaleString()}🪙! Congratulations.`);
+    for (const ws of this.conns.keys()) { const c = this.conns.get(ws); if (c?.pid === a.highPid) { this.sendWallet(ws); this.notify(ws, `🏆 You won ${a.name} (#${serial}) at auction for ${a.highBid.toLocaleString()}🪙! Equip it in the Shop.`); } }
+    this.refreshNetWorth().catch(() => {});
   }
 
   /** The global price board, in STOCKS order. `flow` is the sign of the current order-flow
@@ -3314,6 +3647,51 @@ export class Lobby {
     this.tell(ws, { type: 'news', items: this.newsFeed });
   }
 
+  /** Assemble + send the House/Fed dashboard snapshot (in reply to houseReq). */
+  sendHouseState(ws: WebSocket) {
+    const conn0 = this.conns.get(ws);
+    const myPid = conn0?.pid ?? '';
+    Promise.all([getMetaNum('trickle_fund', 0), getTotalCoins(), getNetWorthConcentration(), this.getBonds(), this.getAuction()])
+      .then(([trickle, totalCoins, conc, bonds, auction]) => {
+        if (!this.conns.has(ws)) return;
+        const myBonds = bonds.filter((b) => b.pid === myPid).map((b) => ({
+          id: b.id, amount: b.amount, termDays: b.termDays, rate: b.rate,
+          maturesAt: b.purchasedAt + b.termDays * 86_400_000,
+        }));
+        const auctionView = auction && Date.now() < auction.endsAt
+          ? { item: auction.item, name: auction.name, startBid: auction.startBid, highBid: auction.highBid, highName: auction.highName, endsAt: auction.endsAt }
+          : null;
+        const top5Pct = conc.total > 0 ? Math.round((conc.top5 / conc.total) * 1000) / 10 : 0;
+        const wealthBrackets = TAX_BRACKETS.map((b) => ({
+          upTo: b.upTo === Infinity ? -1 : b.upTo,
+          rate: b.upTo === Infinity ? this.fed.wealthTaxTop : b.rate,
+        }));
+        const capGainBrackets = CAPGAIN_BRACKETS.map((b) => ({ upTo: b.upTo === Infinity ? -1 : b.upTo, rate: b.rate }));
+        const fastSell = FAST_SELL_BRACKETS.map((b) => ({ underMin: b.underMs / 60_000, rate: b.rate }));
+        const idleTiers = [
+          { days: 7, rate: 0.01 }, { days: 14, rate: 0.03 }, { days: 30, rate: 0.05 },
+        ];
+        const fedNews = this.newsFeed.filter((i) => i.headline.startsWith('🪙 FED')).slice(0, 10)
+          .map((i) => ({ ts: i.ts, headline: i.headline }));
+        this.tell(ws, {
+          type: 'houseState',
+          balance: Math.round(this.houseBalance),
+          trickleFund: Math.round(trickle),
+          totalCoins: Math.round(totalCoins),
+          top5Pct,
+          brokerFeePct: (isMarketHours(Date.now()) ? BROKER_FEE : BROKER_FEE * 2) * 100,
+          concentrationCap: STOCK_CONCENTRATION_CAP * 100,
+          loanCapWaived: this.fed.loanCapWaived,
+          tightening: this.fed.tightening,
+          wealthBrackets, capGainBrackets, fastSell, idleTiers, fedNews,
+          bondRates: BOND_TERMS,
+          myBonds,
+          auction: auctionView,
+        });
+      })
+      .catch((e) => console.error('house state send failed:', e));
+  }
+
   /** Publish a new market headline: pick a coin, build the item, push to feed + DB, broadcast to
    *  all clients, and schedule the hidden price-pressure injection 7–30 min later. */
   private publishNews() {
@@ -3375,22 +3753,35 @@ export class Lobby {
   stockInvest(ws: WebSocket, coin: string, amount: number, side: StockSide) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
-    if (!STOCKS.some((s) => s.id === coin)) return; // unknown coin
+    const stock = STOCKS.find((s) => s.id === coin);
+    if (!stock) return; // unknown coin
     const amt = Math.floor(amount);
     if (!Number.isFinite(amt) || amt < 1) return; // positive whole coins only
     const price = this.stockPrices.get(coin)?.price;
     if (!price || !(price > 0)) return;
-    investStock(conn.pid, conn.nickname, coin, amt, price, side)
-      .then(async (w) => {
-        if (!w) { this.sendStocks(ws); return; } // couldn't afford — just refresh the view
-        // Economy Overhaul: the escrowed coins are held in the position's `cost` column (the
-        // invariant counts that escrow), so they leave circulation without being minted. The trade
-        // exerts buy/cover pressure on the price (recorded after the DB write lands).
-        this.recordFlow(coin, side === 'short' ? -amt : amt);
+    const pid = conn.pid, name = conn.nickname;
+    // Concentration cap: no one may corner > 25% of a stock's supply (longs only — shorting doesn't
+    // accumulate supply). Checked before escrowing so we never half-commit a rejected trade.
+    const newShares = amt / price;
+    const capCheck = side === 'long'
+      ? getPlayerShares(pid, coin).then((have) => have + newShares <= STOCK_CONCENTRATION_CAP * stock.supply)
+      : Promise.resolve(true);
+    capCheck.then(async (ok) => {
+      if (!ok) {
+        this.notify(ws, `📊 Position cap: you can hold at most 25% of ${stock.ticker}'s supply. Trade rejected.`);
         this.sendStocks(ws);
-        this.sendWallet(ws);
-      })
-      .catch((e) => console.error('stock invest failed:', e));
+        return;
+      }
+      const w = await investStock(pid, name, coin, amt, price, side);
+      if (!w) { this.sendStocks(ws); return; } // couldn't afford — just refresh the view
+      // The escrowed coins live in the position's `cost` column (counted by the invariant), so they
+      // leave circulation without being minted. The trade exerts buy/cover pressure on the price.
+      this.recordFlow(coin, side === 'short' ? -amt : amt);
+      await this.chargeBrokerFee(pid, amt); // broker fee on the trade → House
+      stampActivity(pid).catch(() => {});   // trading counts as activity (idle-decay shield)
+      this.sendStocks(ws);
+      this.sendWallet(ws);
+    }).catch((e) => console.error('stock invest failed:', e));
   }
 
   /** Cash-out used by both players and netizens. The position's `cost` (escrow) is released back
@@ -3420,15 +3811,28 @@ export class Lobby {
       const toHouse = cost - back;
       if (toHouse > 0) await this.houseCredit(toHouse);
     }
-    // Fast-sell tax: a position closed within FAST_SELL_TAX_MS pays a cut of the payout to the House.
-    if (payout > 0 && openedAt > 0 && Date.now() - openedAt < FAST_SELL_TAX_MS) {
-      const tax = Math.floor(payout * FAST_SELL_TAX_RATE);
-      if (tax > 0) {
-        const taken = await spendCoins(pid, tax); // claw the tax back out of what we just paid
-        if (taken) { await this.houseCredit(tax); credited -= tax; }
+    // The Fed's exit frictions, all clawed back out of what we just credited and routed to the House:
+    //   • capital-gains tax on the realized profit (gain = payout − cost), progressive
+    //   • progressive fast-sell tax on the gross payout (steeper the faster you flip)
+    //   • broker fee on the gross payout (0.5%, doubles after hours)
+    // The capital-gains share is earmarked to the Trickle Fund (for Fed stimulus) — the coins still
+    // live in the House balance; trickle_fund is just an accounting number the Fed draws against.
+    const heldMs = openedAt > 0 ? Date.now() - openedAt : Number.POSITIVE_INFINITY;
+    const gross = Math.max(0, payout);
+    const capGain = capitalGainsTax(payout - cost);
+    const fastSell = Math.floor(gross * fastSellRate(heldMs));
+    const brokerRate = isMarketHours(Date.now()) ? BROKER_FEE : BROKER_FEE * 2;
+    const broker = Math.floor(gross * brokerRate);
+    const totalTax = capGain + fastSell + broker;
+    if (totalTax > 0) {
+      const taken = await spendCoins(pid, totalTax); // all-or-nothing; they were just paid, so it clears
+      if (taken) {
+        await this.houseCredit(totalTax);
+        credited -= totalTax;
+        if (capGain > 0) await this.addTrickle(capGain);
       }
     }
-    return { gross: Math.max(0, payout), credited };
+    return { gross, credited };
   }
 
   /** Close the whole long or short position in a crypto. Principal is returned in full; profit is
@@ -3444,6 +3848,7 @@ export class Lobby {
         if (!res) { this.sendStocks(ws); return; } // held nothing on that side
         // A close exerts sell (long) / cover (short) pressure on the price.
         this.recordFlow(coin, side === 'short' ? res.gross : -res.gross);
+        stampActivity(conn.pid!).catch(() => {}); // trading counts as activity (idle-decay shield)
         this.sendStocks(ws);
         this.sendWallet(ws);
         this.refreshNetWorth().catch(() => {});
@@ -3466,24 +3871,33 @@ export class Lobby {
   getLoanFor(ws: WebSocket, amount: number) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
+    const pid = conn.pid, name = conn.nickname;
     const amt = Math.floor(amount);
     if (!Number.isFinite(amt) || amt < 1) return; // positive whole coins only
     // Deadline is the next daily 5pm collection; if one somehow isn't booked, compute it directly.
     const dueAt = this.nextStockCrashAt || nextFivePmEtMs(Date.now());
-    takeLoan(conn.pid, conn.nickname, amt, dueAt)
-      .then(async (res) => {
-        if (!res) { this.sendLoan(ws); return; } // already had a loan / rejected — just refresh
-        // Economy Overhaul: the loan principal is House-funded — Davis lends the House's coins, so
-        // the principal is debited from the treasury rather than minted (keeps coins conserved).
-        // The credit to the player already happened in takeLoan; we just balance the House here.
-        // The debit is best-effort: if the House is short, the shortfall is the one place coins can
-        // enter circulation outside a mint (a documented rough edge — see the conservation notes).
-        const after = await houseAdjust(-amt);
-        if (after !== null) { this.houseBalance = after; this.broadcastHouse(); }
-        this.sendWallet(ws);
-        this.sendLoan(ws);
-        this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
-        this.notify(ws, `💸 Davis fronted you ${amt}🪙 — bring back ${res.loan.owed}🪙 by 5pm. Miss it and the market takes the hit. Keep grinding.`);
+    // Loan cap: total outstanding principal + this loan can't exceed the House lending pool (unless
+    // the Fed has waived the cap during an emergency). This makes credit tight when the House is
+    // drained and loose when it's flush — and guarantees the House can fund the principal debit
+    // below, closing the old "loans mint coins when the House is short" rough edge.
+    Promise.all([getTotalOutstandingLoans(), getMetaNum('fed_loan_cap_waived', 0)])
+      .then(([outstanding, waived]) => {
+        if (!waived && outstanding + amt > this.houseBalance) {
+          this.notify(ws, '🏦 Loan denied — the House lending pool is tapped out. Try a smaller amount, or wait for it to refill.');
+          this.sendLoan(ws);
+          return;
+        }
+        return takeLoan(pid, name, amt, dueAt).then(async (res) => {
+          if (!res) { this.sendLoan(ws); return; } // already had a loan / rejected — just refresh
+          // The loan principal is House-funded: Davis lends the treasury's coins (debited here, not
+          // minted). With the cap above, this debit always clears.
+          const after = await houseAdjust(-amt);
+          if (after !== null) { this.houseBalance = after; this.broadcastHouse(); }
+          this.sendWallet(ws);
+          this.sendLoan(ws);
+          this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
+          this.notify(ws, `💸 Davis fronted you ${amt}🪙 — bring back ${res.loan.owed}🪙 by 5pm. Miss it and the market takes the hit. Keep grinding.`);
+        });
       })
       .catch((e) => console.error('loan failed:', e));
   }
@@ -3717,6 +4131,18 @@ export class Lobby {
    *  event when its time arrives. Cheap to call every tick. */
   private tickStocks() {
     const now = Date.now();
+    // Bond maturities + auction deadlines settle 24/7 (independent of market hours), on a 10-min check.
+    if (now >= this.nextBondCheckAt) {
+      this.nextBondCheckAt = now + 10 * 60_000;
+      this.settleMaturedBonds(now).catch((e) => console.error('bond settle failed:', e));
+      this.checkAuctionDeadline(now).catch((e) => console.error('auction resolve failed:', e));
+    }
+    // The Fed convenes every few minutes during market hours: reads concentration/liquidity, adjusts
+    // its coefficients, distributes stimulus, and announces. Throttled + fire-and-forget.
+    if (now >= this.nextFedAt && isMarketHours(now)) {
+      this.nextFedAt = now + 5 * 60_000;
+      this.tickFed().catch((e) => console.error('fed tick failed:', e));
+    }
     // The daily collection takes precedence (it may crash + repush the market itself), so handle
     // it first and bail.
     if (this.nextStockCrashAt && now >= this.nextStockCrashAt) {
@@ -3747,13 +4173,17 @@ export class Lobby {
     }
     if (now < this.nextStockUpdateAt) return;
     this.nextStockUpdateAt = now + STOCK_UPDATE_MS;
+    // Refresh the locked-supply snapshot (long positions >24h) for the supply-scarcity premium.
+    // Fire-and-forget: at most one tick stale, which is fine for a slow drift bonus.
+    getLockedShares(86_400_000).then((m) => { this.lockedShares = m; }).catch(() => {});
     for (const s of STOCKS) {
       const cur = this.stockPrices.get(s.id) ?? { price: s.base, prev: s.base };
-      // Economy Overhaul: decay the order-flow pressure FIRST (p *= 0.5 per tick), then blend it
-      // into the new price. Decaying first keeps a single burst of trading from compounding.
+      // Decay the order-flow pressure FIRST (p *= 0.5 per tick), then blend it into the new price.
+      // Decaying first keeps a single burst of trading from compounding.
       const p = (this.pressure.get(s.id) ?? 0) * 0.5;
       this.pressure.set(s.id, p);
-      this.stockPrices.set(s.id, { price: rollPrice(cur.price, s.base, p), prev: cur.price });
+      const lockedRatio = s.supply > 0 ? (this.lockedShares[s.id] ?? 0) / s.supply : 0;
+      this.stockPrices.set(s.id, { price: rollPrice(cur.price, s.base, p, lockedRatio), prev: cur.price });
     }
     this.recordStockHistory();
     saveStockPrices(this.priceBoard()).catch((e) => console.error('stock price save failed:', e));
