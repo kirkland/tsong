@@ -162,8 +162,36 @@ function getCookie(name: string): string | null {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
+// --- user settings: cookie-backed (works for anonymous users + fast local reads) and, for
+// signed-in players, synced to their account via the server so they follow them across devices.
+// On join the server sends the stored set, which seeds `prefs` and wins over the local cookie. ---
+const prefs: Record<string, string> = {};
+function prefGet(key: string, fallback: string): string {
+  return prefs[key] ?? getCookie('tsong_' + key) ?? fallback;
+}
+function prefSet(key: string, value: string) {
+  prefs[key] = value;
+  setCookie('tsong_' + key, value);
+  net.send({ type: 'prefs', prefs: { [key]: value } }); // no-op until the socket is open
+}
+// Checkbox-backed prefs register an applier here so a server sync can re-check + re-apply them.
+const checkboxAppliers = new Map<string, (checked: boolean) => void>();
+function bindCheckboxPref(el: HTMLInputElement, key: string, apply: (checked: boolean) => void) {
+  const set = (checked: boolean) => { el.checked = checked; apply(checked); };
+  set(prefGet(key, '0') === '1'); // initial value from cookie / default
+  el.addEventListener('change', () => { apply(el.checked); prefSet(key, el.checked ? '1' : '0'); });
+  checkboxAppliers.set(key, set);
+}
+// Apply the full synced set to the UI (called when the server pushes the stored prefs on join).
+function applyPrefs() {
+  const m = prefGet('muted', '0') === '1';
+  if (m !== muted) { muted = m; applyMute(); }
+  for (const [key, set] of checkboxAppliers) set(prefGet(key, '0') === '1');
+  setBossKeyTarget(prefGet('bosskey', 'spreadsheet') === 'terminal' ? 'terminal' : 'spreadsheet', false);
+}
+
 // --- mute toggle ---
-let muted = getCookie('tsong_muted') === '1';
+let muted = prefGet('muted', '0') === '1';
 function applyMute() {
   muteBtn.setAttribute('aria-pressed', String(muted));
   muteBtn.textContent = muted ? '🔇' : '🔊';
@@ -181,7 +209,7 @@ function applyMute() {
 }
 muteBtn.addEventListener('click', () => {
   muted = !muted;
-  setCookie('tsong_muted', muted ? '1' : '0');
+  prefSet('muted', muted ? '1' : '0');
   applyMute();
 });
 // M key toggles mute from anywhere (except when typing in an input)
@@ -189,7 +217,7 @@ window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLInputElement) return;
   if (e.key.toLowerCase() === 'm') {
     muted = !muted;
-    setCookie('tsong_muted', muted ? '1' : '0');
+    prefSet('muted', muted ? '1' : '0');
     applyMute();
   }
 });
@@ -704,6 +732,10 @@ const net = connect(
       showToast(text);
     } else if (msg.type === 'world') {
       worldMod?.feedWorld(msg.avatars);
+    } else if (msg.type === 'prefs') {
+      // Account-stored settings arriving on join: seed the local set (server wins over cookie) and apply.
+      for (const [k, v] of Object.entries(msg.prefs)) { prefs[k] = v; setCookie('tsong_' + k, v); }
+      applyPrefs();
     } else if (msg.type === 'wallet') {
       wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, car: msg.car, pet: msg.pet, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
       rouletteHandle.setCoins(msg.coins);
@@ -1629,22 +1661,38 @@ function addChatLine(line: ChatLine) {
   chatLog.scrollTop = chatLog.scrollHeight;
 }
 
-hideCmdsEl.addEventListener('change', () => {
-  const hide = hideCmdsEl.checked;
+// Chat display toggles — synced as user prefs (cookie + account).
+bindCheckboxPref(hideCmdsEl, 'hideCmds', (hide) => {
   for (const row of chatLog.querySelectorAll<HTMLElement>('.chat-row-cmd')) {
     row.style.display = hide ? 'none' : '';
   }
 });
 
-hideTimestampsEl.addEventListener('change', () => {
-  chatEl.classList.toggle('hide-timestamps', hideTimestampsEl.checked);
+bindCheckboxPref(hideTimestampsEl, 'hideTimestamps', (hide) => {
+  chatEl.classList.toggle('hide-timestamps', hide);
 });
 
-hideNetizenChatEl.addEventListener('change', () => {
-  const hide = hideNetizenChatEl.checked;
+bindCheckboxPref(hideNetizenChatEl, 'hideNetizenChat', (hide) => {
   for (const row of chatLog.querySelectorAll<HTMLElement>('.chat-row-np')) {
     row.style.display = hide ? 'none' : '';
   }
+});
+
+// --- Boss-key target setting (lives in the Work menu; synced as a pref). ---
+// Which disguise Cmd/Ctrl+X drops into.
+let bossKeyTarget: 'spreadsheet' | 'terminal' =
+  prefGet('bosskey', 'spreadsheet') === 'terminal' ? 'terminal' : 'spreadsheet';
+function setBossKeyTarget(t: 'spreadsheet' | 'terminal', persist: boolean) {
+  bossKeyTarget = t;
+  for (const r of document.querySelectorAll<HTMLInputElement>('input[name="bossKeyTarget"]')) {
+    r.checked = r.value === t;
+  }
+  if (persist) prefSet('bosskey', t);
+}
+setBossKeyTarget(bossKeyTarget, false); // reflect the loaded value in the radios
+document.addEventListener('change', (e) => {
+  const r = e.target as HTMLInputElement;
+  if (r?.name === 'bossKeyTarget') setBossKeyTarget(r.value === 'terminal' ? 'terminal' : 'spreadsheet', true);
 });
 
 // Small name-pop at the court location where a power-up was just collected.
@@ -4356,6 +4404,10 @@ function enterDisguise(title: string) {
   workPrevMuted = muted;
   if (!muted) { muted = true; applyMute(); }
   document.title = title;
+  // The boss key can fire mid-game: freeze a running DOOM run (the 'bosskey' event) and close the
+  // open world, so nothing keeps simulating (and getting you killed) behind the disguise.
+  worldMod?.exitWorld();
+  window.dispatchEvent(new CustomEvent('bosskey', { detail: { active: true } }));
 }
 function exitDisguise() {
   if (muted && !workPrevMuted) { muted = false; applyMute(); }
@@ -4363,6 +4415,7 @@ function exitDisguise() {
   // Close any dropdown opened from the disguise so it doesn't linger on the game view.
   document.querySelectorAll(WM_PANEL_SEL).forEach((b) => (b as HTMLElement).click());
   document.body.classList.remove('wm-menus');
+  window.dispatchEvent(new CustomEvent('bosskey', { detail: { active: false } })); // resume DOOM
 }
 
 function setWorkMode(on: boolean) {
@@ -4371,17 +4424,8 @@ function setWorkMode(on: boolean) {
   workOn = on;
   workModeEl.hidden = !on;
   workModeEl.setAttribute('aria-hidden', String(!on));
-  if (on) {
-    // The boss key can fire mid-game: freeze a running DOOM run (the 'bosskey' event) and close
-    // the open world, so nothing keeps simulating (and getting you killed) behind the spreadsheet.
-    worldMod?.exitWorld();
-    window.dispatchEvent(new CustomEvent('bosskey', { detail: { active: true } }));
-    enterDisguise('FY25_Operating_Model.xlsx - Google Sheets');
-    renderWorkGrid();
-  } else {
-    exitDisguise();
-    window.dispatchEvent(new CustomEvent('bosskey', { detail: { active: false } })); // resume DOOM
-  }
+  if (on) { enterDisguise('FY25_Operating_Model.xlsx - Google Sheets'); renderWorkGrid(); }
+  else exitDisguise();
 }
 workBtn.addEventListener('click', () => setWorkMode(true));
 
@@ -4427,7 +4471,9 @@ function isEditableTarget(el: EventTarget | null): boolean {
 window.addEventListener('keydown', (e) => {
   if ((e.metaKey || e.ctrlKey) && (e.key === 'x' || e.key === 'X') && !isEditableTarget(document.activeElement)) {
     e.preventDefault(); e.stopImmediatePropagation();
-    setWorkMode(!workOn);
+    if (workOn || termOn) { setWorkMode(false); setTermMode(false); } // a disguise is up → drop it
+    else if (bossKeyTarget === 'terminal') setTermMode(true); // open the chosen disguise
+    else setWorkMode(true);
     return;
   }
   if (e.key !== 'Escape') return;

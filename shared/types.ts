@@ -613,6 +613,9 @@ export interface WorldMsg {
 export type ClientMsg =
   // pid = stable per-browser identity; color = chosen paddle color
   | { type: 'join'; nickname: string; pid: string; color?: string }
+  // User settings (mute, chat toggles, boss-key target…) to persist on the account. Partial:
+  // only the changed keys are sent; the server merges them into the stored set.
+  | { type: 'prefs'; prefs: Record<string, string> }
   | { type: 'claim'; side?: Side } // preferred side; omitted = auto-assign to the smaller team
   | { type: 'paddle'; y: number; x?: number } // desired paddle center Y (and optional roam inset X), in court units
   | { type: 'chat'; text: string }
@@ -1108,6 +1111,7 @@ export const BALL_REACTION = 'ball';
 
 export type ServerMsg =
   | YouMsg
+  | { type: 'prefs'; prefs: Record<string, string> } // the account's stored user settings, on join
   | StateMsg
   | LeaderboardMsg
   | NetWorthMsg

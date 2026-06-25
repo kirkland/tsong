@@ -114,6 +114,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   challengedToday, recordChallenge,
   getNetizenByPid, getNetizenCount, getNetWorthRank,
   getNewsFeed, saveNewsFeed,
+  getPrefs, savePrefs,
   getGameModes, saveGameModes,
   loadNomic, saveNomic, archiveNomicSeason } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
@@ -2003,6 +2004,8 @@ export class Lobby {
       .catch((e) => console.error('name update failed:', e));
     // Load this player's wallet/cosmetics and push it to them.
     this.loadWallet(ws);
+    // Send their saved settings (mute, chat toggles, boss-key target) so they sync across devices.
+    this.sendPrefs(ws);
     // Send the stock market: global price board + this player's positions.
     this.sendStocks(ws);
     // Send their loan status (so the Get Loan panel knows whether they owe Davis).
@@ -2016,6 +2019,32 @@ export class Lobby {
     // Now that we know who they are, re-send the standings pinned with their own row even if
     // they're below the visible top-N.
     this.sendBoardsTo(ws).catch((e) => console.error('board personalise failed:', e));
+  }
+
+  /** Push this player's stored settings to them (so they sync across devices on sign-in). */
+  private sendPrefs(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    getPrefs(conn.pid)
+      .then((prefs) => { if (this.conns.has(ws)) this.tell(ws, { type: 'prefs', prefs }); })
+      .catch((e) => console.error('prefs send failed:', e));
+  }
+
+  /** Persist a partial settings update for this player (merged into their stored set). Sanitized:
+   *  string→string only, bounded key/value length and count, so a tampered client can't bloat it. */
+  setPrefs(ws: WebSocket, patch: Record<string, unknown>) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    const clean: Record<string, string> = {};
+    let n = 0;
+    for (const [k, v] of Object.entries(patch)) {
+      if (typeof k !== 'string' || typeof v !== 'string') continue;
+      if (k.length > 40 || v.length > 200) continue;
+      clean[k] = v;
+      if (++n >= 30) break;
+    }
+    if (!Object.keys(clean).length) return;
+    savePrefs(conn.pid, conn.nickname ?? 'anon', clean).catch((e) => console.error('prefs save failed:', e));
   }
 
   /** Load a connection's wallet from the DB into memory and send it to that client. */

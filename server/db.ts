@@ -65,6 +65,8 @@ export async function initDb(): Promise<void> {
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS pet TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS email TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_played BIGINT`);
+  // User settings (mute, chat toggles, boss-key target…) as a JSON blob, synced across devices.
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS prefs TEXT`);
   // Head-to-head matchups: one row per unordered pair, with per-player win counts.
   // Both player1 < player2 lexicographically so the pair is always stored the same way.
   await pool.query(`
@@ -1078,6 +1080,31 @@ export async function upsertPlayer(pid: string, name: string, email?: string): P
        ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name,
          email = COALESCE(EXCLUDED.email, players.email)`,
     [pid, name, email ?? null],
+  );
+}
+
+// --- User settings (synced across devices for signed-in players) ---
+
+/** Read a player's stored settings blob (key→value strings). Empty object if none/unparseable. */
+export async function getPrefs(pid: string): Promise<Record<string, string>> {
+  if (!pool || !pid) return {};
+  const { rows } = await pool.query(`SELECT prefs FROM players WHERE id = $1`, [pid]);
+  if (!rows.length || !rows[0].prefs) return {};
+  try {
+    const o = JSON.parse(rows[0].prefs as string);
+    return o && typeof o === 'object' && !Array.isArray(o) ? (o as Record<string, string>) : {};
+  } catch { return {}; }
+}
+
+/** Merge `patch` into a player's stored settings (creating the row if needed). Partial updates
+ *  don't clobber keys they omit. `name` seeds a brand-new row (players.name is NOT NULL). */
+export async function savePrefs(pid: string, name: string, patch: Record<string, string>): Promise<void> {
+  if (!pool || !pid) return;
+  const merged = { ...(await getPrefs(pid)), ...patch };
+  await pool.query(
+    `INSERT INTO players (id, name, prefs) VALUES ($1, $2, $3)
+       ON CONFLICT (id) DO UPDATE SET prefs = EXCLUDED.prefs`,
+    [pid, (name || 'anon').slice(0, 20), JSON.stringify(merged)],
   );
 }
 

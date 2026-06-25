@@ -142,6 +142,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'claim':
         lobby.claim(ws, msg.side === 'left' || msg.side === 'right' ? msg.side : undefined);
         break;
+      case 'prefs':
+        if (msg.prefs && typeof msg.prefs === 'object') lobby.setPrefs(ws, msg.prefs as Record<string, unknown>);
+        break;
       case 'paddle':
         if (typeof msg.y === 'number' && Number.isFinite(msg.y)) {
           const x = typeof msg.x === 'number' && Number.isFinite(msg.x) ? msg.x : undefined;

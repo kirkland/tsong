@@ -872,6 +872,12 @@
         color: #7da2ff; cursor: pointer;
       }
       #termBtn:hover { background: #18203a; }
+      /* Boss-key target picker inside the Work menu. */
+      .wm-setting { border-top: 1px solid #2a3550; margin-top: 4px; padding-top: 6px; display: flex; flex-direction: column; gap: 3px; }
+      .wm-setting-label { font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; padding: 0 2px 1px; }
+      .wm-radio { display: flex; align-items: center; gap: 7px; padding: 4px 6px; border-radius: 6px; cursor: pointer; font-size: 12px; color: #cdd7f5; }
+      .wm-radio:hover { background: #18203a; }
+      .wm-radio input { accent-color: #7da2ff; cursor: pointer; }
       #doomBtn {
         font: inherit;
         font-size: 12px;
@@ -3538,6 +3544,11 @@
         <div id="workMenuPanel" class="nav-menu" hidden>
           <button id="workBtn" type="button" title="Work mode — disguise as a spreadsheet (Esc to exit)">📊 Spreadsheet</button>
           <button id="termBtn" type="button" title="Terminal mode — disguise as a terminal (Esc to exit)">💻 Term</button>
+          <div class="wm-setting">
+            <span class="wm-setting-label">⌘/Ctrl + X opens</span>
+            <label class="wm-radio"><input type="radio" name="bossKeyTarget" value="spreadsheet" /> 📊 Spreadsheet</label>
+            <label class="wm-radio"><input type="radio" name="bossKeyTarget" value="terminal" /> 💻 Terminal</label>
+          </div>
         </div>
       </div>
       <div id="arcade">
