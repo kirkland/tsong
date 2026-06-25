@@ -1294,6 +1294,13 @@ export class Lobby {
   worldEnter(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return; // must have joined (need a name to show)
+    // Evict any STALE avatar of this same identity still in the world (e.g. a previous tab/socket
+    // that hasn't closed yet) — otherwise it lingers as a frozen "clone" of you (most obvious in jail).
+    if (conn.pid) {
+      for (const other of [...this.world.sockets()]) {
+        if (other !== ws && this.conns.get(other)?.pid === conn.pid) this.world.leave(other);
+      }
+    }
     this.world.enter(ws);
     if (conn.jailed) {
       // Walked in already locked up (persisted lockup) → drop them straight into the cell.
