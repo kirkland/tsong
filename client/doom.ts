@@ -273,7 +273,7 @@ export function startDoom(net: DoomNet): void {
   title.style.cssText =
     'position:absolute;top:14px;left:0;right:0;text-align:center;font:700 14px ui-monospace,monospace;' +
     'color:#9fb0d8;text-shadow:1px 1px 0 #000;pointer-events:none;';
-  title.textContent = 'WASD move · mouse/←→ turn · click shoot · SPACE grenade · SHIFT dash · ESC quit';
+  title.textContent = 'WASD move · mouse/←→ turn · click shoot · SPACE grenade · SHIFT dash · P pause · ESC quit';
   overlay.appendChild(title);
 
   const banner = document.createElement('div');
@@ -320,7 +320,7 @@ export function startDoom(net: DoomNet): void {
     'max-width:520px;font:600 13px ui-monospace,monospace;color:#9fb0d8;line-height:1.7;text-align:center;';
   menuInfo.innerHTML =
     '<div style="color:#cdd7f5;font-weight:700;margin-bottom:4px">CONTROLS</div>' +
-    'WASD move · A/D strafe · mouse or ←/→ turn · click to shoot · <b>SPACE</b> grenade · <b>SHIFT</b> dash (2-tile burst, 1.5s cooldown) · ESC quit' +
+    'WASD move · A/D strafe · mouse or ←/→ turn · click to shoot · <b>SPACE</b> grenade · <b>SHIFT</b> dash (2-tile burst, 1.5s cooldown) · <b>P</b> pause (solo) · ESC quit' +
     '<div style="color:#cdd7f5;font-weight:700;margin:12px 0 4px">SURVIVE THE ROUNDS</div>' +
     'Each round spawns more (and tougher) enemies. Clear them all to advance. <b style="color:#ffd166">Coins stack each round you reach</b> (round 1 = 50, round 2 = +100, …) and pay out when your run ends. Special enemies show up on a schedule:' +
     '<div style="margin-top:8px;text-align:left;display:inline-block">' +
@@ -366,6 +366,7 @@ export function startDoom(net: DoomNet): void {
   let bossCoins = 0; // coins banked from minion-boss kills this run (100 each)
   let betweenTimer = 0; // seconds of the "ROUND N" intermission remaining (0 = fighting)
   let over: 'dead' | null = null; // survival mode: you only ever lose
+  let paused = false; // solo-only: P freezes the sim (co-op is server-authoritative, can't pause)
   let scoreSubmitted = false;
   // Pickups dropped by slain enemies: ammo crates (when low), full-health packs (fritz),
   // and grenades (jsav).
@@ -407,7 +408,7 @@ export function startDoom(net: DoomNet): void {
   let bossMusicOn = false;
   // Start/stop the boss music to match whether a live boss round is in progress.
   function syncBossMusic() {
-    const want = isBossRound(round) && !over && betweenTimer <= 0
+    const want = isBossRound(round) && !over && !paused && betweenTimer <= 0
       && (mode === 'solo' || mode === 'host' || mode === 'guest');
     if (want && !bossMusicOn) { bossMusicOn = true; try { bossMusic.currentTime = 0; void bossMusic.play(); } catch { /* ignore */ } }
     else if (!want && bossMusicOn) { bossMusicOn = false; bossMusic.pause(); }
@@ -1108,7 +1109,12 @@ export function startDoom(net: DoomNet): void {
     }
     const bossTag = isBossRound(round) ? ' (BOSS BATTLE)' : '';
     killsEl.textContent = betweenTimer > 0 ? `ROUND ${round}${bossTag} ▸` : `ROUND ${round}${bossTag} · ${alive} left`;
-    if (over === 'dead') {
+    if (paused) {
+      banner.textContent = 'PAUSED\npress P to resume · ESC to quit';
+      banner.style.color = '#9fd8ff';
+      banner.style.fontSize = '48px';
+      banner.style.display = 'flex';
+    } else if (over === 'dead') {
       banner.textContent = `GAME OVER\nReached round ${round}\n🪙 ${earned.toLocaleString()} coins earned\n${mode === 'solo' ? 'press R to retry · ' : ''}ESC to quit`;
       banner.style.color = '#ff2d2d';
       banner.style.fontSize = '40px';
@@ -1127,7 +1133,7 @@ export function startDoom(net: DoomNet): void {
   function startSolo() {
     mode = 'solo'; selfIdx = 0;
     players = [freshPlayer(2.5, 2.5)];
-    round = 1; kills = 0; bossCoins = 0; over = null; myAngle = 0; scoreSubmitted = false; betweenTimer = 0;
+    round = 1; kills = 0; bossCoins = 0; over = null; paused = false; myAngle = 0; scoreSubmitted = false; betweenTimer = 0;
     drops = []; grenades = []; blasts = [];
     powerRoundActive = false; dashCd = 0; dashFlash = 0; myDashSeq = 0;
     enemies = spawnEnemiesForRound(round, players);
@@ -1137,7 +1143,7 @@ export function startDoom(net: DoomNet): void {
     selfIdx = slot;
     mode = slot === 0 ? 'host' : 'guest';
     players = [freshPlayer(2.5, 2.5), freshPlayer(3.5, 2.5)];
-    round = 1; kills = 0; bossCoins = 0; over = null; myAngle = 0; scoreSubmitted = false; betweenTimer = 0;
+    round = 1; kills = 0; bossCoins = 0; over = null; paused = false; myAngle = 0; scoreSubmitted = false; betweenTimer = 0;
     drops = []; grenades = []; blasts = [];
     powerRoundActive = false; dashCd = 0; dashFlash = 0; myDashSeq = 0;
     enemies = slot === 0 ? spawnEnemiesForRound(round, players) : [];
@@ -1213,16 +1219,25 @@ export function startDoom(net: DoomNet): void {
   };
 
   // --- input ---
+  // Pause is solo-only — co-op runs on the server, so one client can't freeze it. Toggling P
+  // halts the sim (the loop skips update) while still rendering the frozen scene + a banner,
+  // and frees the mouse so you can step away.
+  function togglePause() {
+    paused = !paused;
+    if (paused && document.pointerLockElement === canvas) document.exitPointerLock();
+    syncBossMusic();
+  }
   const onKeyDown = (e: KeyboardEvent) => {
     const k = e.key.toLowerCase();
     if (k === 'escape') { close(); return; }
     if (k === 'r' && over && mode === 'solo') { restartSolo(); return; }
+    if (k === 'p' && mode === 'solo' && !over) { e.preventDefault(); e.stopImmediatePropagation(); togglePause(); return; }
     if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'w', 'a', 's', 'd', ' ', 'shift'].includes(k)) {
       e.preventDefault(); e.stopImmediatePropagation();
     }
-    // Shooting is mouse-click only; space throws a grenade; shift dashes.
-    if (k === ' ' && !e.repeat) throwGrenade();
-    if (k === 'shift' && !e.repeat) localDash();
+    // Shooting is mouse-click only; space throws a grenade; shift dashes. (No actions while paused.)
+    if (!paused && k === ' ' && !e.repeat) throwGrenade();
+    if (!paused && k === 'shift' && !e.repeat) localDash();
     keys.add(k);
   };
   const onKeyUp = (e: KeyboardEvent) => { keys.delete(e.key.toLowerCase()); e.stopImmediatePropagation(); };
@@ -1230,7 +1245,7 @@ export function startDoom(net: DoomNet): void {
     if (document.pointerLockElement === canvas) myAngle += e.movementX * 0.0026;
   };
   const onMouseDown = () => {
-    if (mode === 'menu' || mode === 'wait') return;
+    if (mode === 'menu' || mode === 'wait' || paused) return;
     if (document.pointerLockElement !== canvas) { canvas.requestPointerLock(); return; }
     localFire();
   };
@@ -1246,7 +1261,7 @@ export function startDoom(net: DoomNet): void {
   function loop(now: number) {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
-    if (mode !== 'menu' && mode !== 'wait' && mode !== 'ended') update(dt);
+    if (mode !== 'menu' && mode !== 'wait' && mode !== 'ended' && !paused) update(dt);
     render();
     syncHud();
     syncBossMusic();
