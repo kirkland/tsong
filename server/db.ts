@@ -4,6 +4,7 @@
 
 import pg from 'pg';
 import { LeaderboardRow, NetWorthRow, LEADERBOARD_SIZE, CampaignScoreRow, StockSide, StockTf, positionWorth, EXCLUSIVES, isExclusive } from '../shared/types';
+import type { NomicSnapshot } from './nomic';
 
 // Economy Overhaul: the House treasury is seeded ONCE with a genesis allocation. This is the
 // only mint besides match wins and the one-time campaign clear/flawless bonuses — every other
@@ -223,6 +224,17 @@ export async function initDb(): Promise<void> {
       pid     TEXT PRIMARY KEY,
       name    TEXT NOT NULL,
       best_lb DOUBLE PRECISION NOT NULL DEFAULT 0
+    )
+  `);
+  // Nomic (the Parliament sub-game) — ONE perpetual communal game persisted as a single JSON
+  // snapshot row (rulebook, params, scores, log). Won seasons are sealed into nomic_hall.
+  await pool.query(`CREATE TABLE IF NOT EXISTS nomic_state (id INTEGER PRIMARY KEY, data TEXT NOT NULL)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS nomic_hall (
+      season    INTEGER PRIMARY KEY,
+      winner    TEXT NOT NULL,
+      rules     TEXT NOT NULL,
+      sealed_at BIGINT NOT NULL
     )
   `);
   // Co-op scores used to be recorded per-player; they're now one combined team entry keyed
@@ -510,6 +522,34 @@ export async function recordTypeDieScore(pid: string, name: string, wave: number
        ON CONFLICT (pid) DO UPDATE
        SET wave = GREATEST(typedie_scores.wave, EXCLUDED.wave), name = EXCLUDED.name`,
     [pid, name, wave],
+  );
+}
+
+// --- Nomic (the Parliament sub-game) persistence -------------------------------------------
+// The whole game is a single JSON snapshot in row 1. Save on every change, load once on boot.
+export async function loadNomic(): Promise<NomicSnapshot | null> {
+  if (!pool) return null;
+  const { rows } = await pool.query(`SELECT data FROM nomic_state WHERE id = 1`);
+  if (!rows.length) return null;
+  try { return JSON.parse(rows[0].data) as NomicSnapshot; } catch { return null; }
+}
+
+export async function saveNomic(snap: NomicSnapshot): Promise<void> {
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO nomic_state (id, data) VALUES (1, $1)
+       ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data`,
+    [JSON.stringify(snap)],
+  );
+}
+
+// Seal a won season's final rulebook into the Hall of Rulebooks (idempotent on season number).
+export async function archiveNomicSeason(season: number, winner: string, rules: unknown): Promise<void> {
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO nomic_hall (season, winner, rules, sealed_at) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (season) DO NOTHING`,
+    [season, winner, JSON.stringify(rules), Date.now()],
   );
 }
 
