@@ -706,6 +706,7 @@ export type ClientMsg =
   | { type: 'netizenInfoReq'; netizenId: string }
   | { type: 'netizenChallenge'; netizenId: string; wager: number }
   | { type: 'newsReq' }
+  | { type: 'houseReq' } // request the House/Fed dashboard snapshot
   | { type: 'buyBeer' } // buy a beer at the Tavern (20🪙 → House); ups your drunk level (cut off at 6)
   | { type: 'jail' } // self-report: tried to drunk-drive (server verifies drunkLevel ≥ 2 and jails you)
   | { type: 'bail'; targetId: string } // pay 500🪙 to bail a jailed player out (targetId = their avatar id; may be your own)
@@ -1157,6 +1158,7 @@ export type ServerMsg =
   | LoanBookMsg
   | WorldMsg
   | HouseMsg
+  | HouseStateMsg
   | NetizenInfoMsg
   | NetizenChallengeResultMsg
   | NewsMsg
@@ -1233,6 +1235,24 @@ export interface LoanBookMsg {
 export interface HouseMsg {
   type: 'house';
   balance: number;
+}
+
+// Full House/Fed dashboard snapshot (sent in reply to houseReq). Drives the 🏦 House panel.
+export interface HouseStateMsg {
+  type: 'houseState';
+  balance: number;
+  trickleFund: number;
+  totalCoins: number;
+  top5Pct: number;            // top-5 net-worth concentration, %
+  brokerFeePct: number;       // current broker fee, % (0.5 in-hours / 1.0 after-hours)
+  concentrationCap: number;   // max % of a stock one player may hold
+  loanCapWaived: boolean;
+  tightening: boolean;
+  wealthBrackets: { upTo: number; rate: number }[]; // current (top reflects the Fed cap)
+  capGainBrackets: { upTo: number; rate: number }[];
+  fastSell: { underMin: number; rate: number }[];   // minutes held → rate
+  idleTiers: { days: number; rate: number }[];       // days idle → rate
+  fedNews: { ts: number; headline: string }[];       // recent 🪙 FED statements
 }
 
 // A market news headline — published hourly during market hours with a hidden price move.

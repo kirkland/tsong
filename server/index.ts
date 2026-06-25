@@ -491,6 +491,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'newsReq':
         lobby.sendNews(ws);
         break;
+      case 'houseReq':
+        lobby.sendHouseState(ws);
+        break;
       case 'migrate': {
         // Only honour the request if the socket is authenticated — prevents spoofing.
         const authSession = wsSessions.get(ws);

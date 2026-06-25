@@ -1148,6 +1148,23 @@
       .news-time { font-size: 9px; color: #5a647e; white-space: nowrap; margin-top: 1px; min-width: 52px; }
       .news-headline { font-size: 11px; color: #c8d4f0; line-height: 1.35; }
       .news-note { font-size: 10px; color: #5a647e; margin-top: 8px; line-height: 1.4; }
+      /* House / Fed dashboard (reuses the news panel chrome) */
+      #housePanel {
+        position: fixed; top: 52px; left: 12px; width: 400px; max-height: 84vh; overflow-y: auto;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #housePanel[hidden] { display: none; }
+      #housePanel h3 { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; margin: 8px 0 6px; }
+      .house-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .house-card { background: #0b1020; border: 1px solid #243049; border-radius: 6px; padding: 8px 10px; font-size: 12px; color: #c8d4f0; }
+      .house-card h4 { margin: 0 0 6px; font-size: 10px; letter-spacing: .5px; text-transform: uppercase; color: #7e8cb0; }
+      .house-card div { line-height: 1.5; }
+      .house-card b { color: #e8eefc; }
+      .house-wide { grid-column: 1 / -1; }
+      .house-tbl { width: 100%; border-collapse: collapse; font-size: 11px; }
+      .house-tbl td { padding: 2px 4px; border-bottom: 1px solid #1a2336; color: #b6c4e4; }
+      .house-tbl td:last-child { text-align: right; color: #ffd479; font-weight: 600; }
       .loot-blurb { font-size: 11px; color: #8693b3; line-height: 1.4; margin-bottom: 8px; }
       .loot-odds { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 8px; }
       .loot-odds td { padding: 3px 4px; }
@@ -3398,7 +3415,7 @@
         /* Mobile panels: full-width sheets for usability */
         #marketPanel, #shopPanel, #loanPanel, #roulettePanel, #bjPanel,
         #crapsPanel, #crashPanel, #slotsPanel, #lootPanel, #marketplacePanel,
-        #newsPanel, #plinkoPanel, #horsePanel, #hiloPanel {
+        #newsPanel, #housePanel, #plinkoPanel, #horsePanel, #hiloPanel {
           position: fixed; left: 0; right: 0; top: auto; bottom: 0;
           max-width: 100vw; max-height: 80vh; overflow-y: auto;
           border-radius: 12px 12px 0 0; z-index: 70;
@@ -3573,6 +3590,7 @@
         <button id="economyBtn" type="button" aria-expanded="false" title="Crypto market &amp; news">📰 Economy <span class="caret">▾</span></button>
         <div id="economyPanel" class="nav-menu" hidden>
           <button id="newsBtn" type="button" aria-expanded="false" title="Market news — hourly headlines &amp; whispers">📰 News</button>
+          <button id="houseBtn" type="button" aria-expanded="false" title="The Fed: treasury, taxes &amp; policy">🏦 House</button>
           <button id="marketBtn" type="button" aria-expanded="false" title="Invest coins in joke cryptos">📈 Market</button>
         </div>
       </div>
@@ -3609,6 +3627,11 @@
         <h3>📰 Market News</h3>
         <div id="newsBody"></div>
         <div class="news-note">Headlines appear hourly during market hours (M–F 9am–5pm ET). Each one hints at a move that may land at any time — read the room wisely.</div>
+      </div>
+      <div id="housePanel" hidden>
+        <h3>🏦 The House &amp; The Fed</h3>
+        <div id="houseBody"></div>
+        <div class="news-note">The Fed convenes during market hours: it tightens when wealth concentrates, eases when it spreads, and wires Trickle-Fund stimulus to active players. Frictions (broker fees, taxes, idle decay) keep coins moving.</div>
       </div>
       <div id="loanPanel" hidden>
         <h3>Davis @ Citizens</h3>

@@ -106,7 +106,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   setStockCrashAt, getMarketInstability, setMarketInstability,
   getLoan, takeLoan, repayLoan, collectDefaultedLoans, realignLoansToDeadline, getOpenLoans,
   houseAdjust, getHouseBalance,
-  setMeta, getMetaNum, getTotalOutstandingLoans, getLockedShares, getPlayerShares, getNetWorthConcentration, getActivePlayers,
+  setMeta, getMetaNum, getTotalOutstandingLoans, getTotalCoins, getLockedShares, getPlayerShares, getNetWorthConcentration, getActivePlayers,
   mintExclusive, getExclusiveSupply, getExclusiveLastSale,
   listExclusive, cancelListing, getMarketListings, buyLowestAsk,
   getNetizens, seedNetizen,
@@ -3451,6 +3451,39 @@ export class Lobby {
   /** Send the cached news feed to a single client. */
   sendNews(ws: WebSocket) {
     this.tell(ws, { type: 'news', items: this.newsFeed });
+  }
+
+  /** Assemble + send the House/Fed dashboard snapshot (in reply to houseReq). */
+  sendHouseState(ws: WebSocket) {
+    Promise.all([getMetaNum('trickle_fund', 0), getTotalCoins(), getNetWorthConcentration()])
+      .then(([trickle, totalCoins, conc]) => {
+        if (!this.conns.has(ws)) return;
+        const top5Pct = conc.total > 0 ? Math.round((conc.top5 / conc.total) * 1000) / 10 : 0;
+        const wealthBrackets = TAX_BRACKETS.map((b) => ({
+          upTo: b.upTo === Infinity ? -1 : b.upTo,
+          rate: b.upTo === Infinity ? this.fed.wealthTaxTop : b.rate,
+        }));
+        const capGainBrackets = CAPGAIN_BRACKETS.map((b) => ({ upTo: b.upTo === Infinity ? -1 : b.upTo, rate: b.rate }));
+        const fastSell = FAST_SELL_BRACKETS.map((b) => ({ underMin: b.underMs / 60_000, rate: b.rate }));
+        const idleTiers = [
+          { days: 7, rate: 0.01 }, { days: 14, rate: 0.03 }, { days: 30, rate: 0.05 },
+        ];
+        const fedNews = this.newsFeed.filter((i) => i.headline.startsWith('🪙 FED')).slice(0, 10)
+          .map((i) => ({ ts: i.ts, headline: i.headline }));
+        this.tell(ws, {
+          type: 'houseState',
+          balance: Math.round(this.houseBalance),
+          trickleFund: Math.round(trickle),
+          totalCoins: Math.round(totalCoins),
+          top5Pct,
+          brokerFeePct: (isMarketHours(Date.now()) ? BROKER_FEE : BROKER_FEE * 2) * 100,
+          concentrationCap: STOCK_CONCENTRATION_CAP * 100,
+          loanCapWaived: this.fed.loanCapWaived,
+          tightening: this.fed.tightening,
+          wealthBrackets, capGainBrackets, fastSell, idleTiers, fedNews,
+        });
+      })
+      .catch((e) => console.error('house state send failed:', e));
   }
 
   /** Publish a new market headline: pick a coin, build the item, push to feed + DB, broadcast to
