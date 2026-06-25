@@ -1637,6 +1637,69 @@
       .plinko-lose { color: #6b7796; }
       .plinko-note { font-size: 10px; color: #5a647e; line-height: 1.4; margin-top: 8px; }
 
+      /* --- Mines panel --- */
+      #minesBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #4a2a10;
+        background: #1a0e06; color: #fb923c; cursor: pointer;
+      }
+      #minesBtn:hover { background: #2a1606; }
+      #minesPanel {
+        position: fixed; top: 52px; left: 12px; width: 340px;
+        max-height: 84vh; overflow-y: auto;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 14px 14px; z-index: 50;
+      }
+      #minesPanel[hidden] { display: none; }
+      #minesPanel h3 { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; margin: 8px 0 10px; }
+      .mines-setup { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+      .mines-setup label { font-size: 11px; color: #6b7796; white-space: nowrap; }
+      .mines-setup input, .mines-setup select {
+        flex: 1; min-width: 60px; font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 5px;
+        border: 1px solid #2a3550; background: #060912; color: #fff;
+      }
+      .mines-start-btn {
+        font: inherit; font-size: 12px; font-weight: 700; padding: 6px 16px;
+        border-radius: 6px; border: none; background: #fb923c; color: #1a0800; cursor: pointer; white-space: nowrap;
+      }
+      .mines-start-btn:hover:not(:disabled) { background: #fdba74; }
+      .mines-start-btn:disabled { opacity: 0.4; cursor: default; }
+      .mines-grid {
+        display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; margin: 10px 0;
+      }
+      .mine-tile {
+        aspect-ratio: 1; border-radius: 8px; border: 2px solid #1e2e50;
+        background: #111827; cursor: pointer; font-size: 22px;
+        display: flex; align-items: center; justify-content: center;
+        transition: background 0.12s, transform 0.08s, border-color 0.12s;
+        user-select: none;
+      }
+      .mine-tile:hover:not(.revealed):not(.mine-tile-disabled) { background: #1e2d4a; border-color: #3a5090; transform: scale(1.06); }
+      .mine-tile.safe { background: #052e16; border-color: #16a34a; cursor: default; }
+      .mine-tile.boom { background: #450a0a; border-color: #dc2626; cursor: default; animation: mineShake 0.35s ease-out; }
+      .mine-tile.mine-reveal { background: #3b0a0a; border-color: #991b1b; cursor: default; opacity: 0.75; }
+      .mine-tile.mine-tile-disabled { cursor: default; }
+      @keyframes mineShake {
+        0%,100% { transform: translateX(0); }
+        20% { transform: translateX(-4px) rotate(-3deg); }
+        40% { transform: translateX(4px) rotate(3deg); }
+        60% { transform: translateX(-3px); }
+        80% { transform: translateX(3px); }
+      }
+      .mines-hud { display: flex; align-items: center; gap: 10px; margin: 6px 0; }
+      .mines-mult { font: 800 18px ui-monospace, monospace; color: #fb923c; }
+      .mines-payout { font-size: 12px; color: #9ca3af; }
+      .mines-cashout-btn {
+        margin-left: auto; font: inherit; font-size: 12px; font-weight: 700;
+        padding: 6px 14px; border-radius: 6px; border: none;
+        background: #16a34a; color: #fff; cursor: pointer;
+      }
+      .mines-cashout-btn:hover:not(:disabled) { background: #22c55e; }
+      .mines-cashout-btn:disabled { opacity: 0.35; cursor: default; }
+      .mines-result { font: 800 13px ui-monospace, monospace; min-height: 18px; text-align: center; margin: 6px 0; }
+      .mines-win  { color: #6ee7a8; }
+      .mines-lose { color: #f87171; }
+
       /* --- Horse Racing panel --- */
       #horseBtn {
         font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
@@ -3431,7 +3494,7 @@
         /* Mobile panels: full-width sheets for usability */
         #marketPanel, #shopPanel, #loanPanel, #roulettePanel, #bjPanel,
         #crapsPanel, #crashPanel, #slotsPanel, #lootPanel, #marketplacePanel,
-        #newsPanel, #housePanel, #plinkoPanel, #horsePanel, #hiloPanel {
+        #newsPanel, #housePanel, #plinkoPanel, #horsePanel, #hiloPanel, #minesPanel {
           position: fixed; left: 0; right: 0; top: auto; bottom: 0;
           max-width: 100vw; max-height: 80vh; overflow-y: auto;
           border-radius: 12px 12px 0 0; z-index: 70;
@@ -3629,6 +3692,7 @@
           <button id="plinkoBtn" type="button" aria-expanded="false" title="Drop a ball down the pegboard">🎯 Plinko</button>
           <button id="horseBtn" type="button" aria-expanded="false" title="Pick a horse and bet on the race">🏇 Horses</button>
           <button id="hiloBtn" type="button" aria-expanded="false" title="Guess higher or lower, chain multipliers">🃏 Hi-Lo</button>
+          <button id="minesBtn" type="button" aria-expanded="false" title="Flip tiles, dodge mines, cash out before you blow up">💣 Mines</button>
         </div>
       </div>
       <div id="marketPanel" hidden>
@@ -3819,6 +3883,33 @@
         <button id="hiloNewGame" type="button" class="hilo-new-btn" hidden>↩ New Game</button>
         <div id="hiloResult" class="hilo-result"></div>
         <div class="hilo-note">Get a card, guess Higher or Lower, multiply your winnings. Wrong guess = bust. A = 1, K = 13. Ties re-draw. Max bet 50,000 🪙.</div>
+      </div>
+      <!-- Mines panel -->
+      <div id="minesPanel" hidden>
+        <h3>Mines · <span id="minesCoins">0</span> 🪙</h3>
+        <div class="mines-setup">
+          <label>Bet 🪙</label>
+          <input id="minesBetInput" type="number" min="1" max="50000" value="100" />
+          <label>Mines</label>
+          <select id="minesMineCount">
+            <option value="1">1</option>
+            <option value="3" selected>3</option>
+            <option value="5">5</option>
+            <option value="10">10</option>
+            <option value="15">15</option>
+            <option value="20">20</option>
+            <option value="24">24</option>
+          </select>
+          <button id="minesStartBtn" type="button" class="mines-start-btn">▶ Start</button>
+        </div>
+        <div class="mines-hud">
+          <span class="mines-mult" id="minesMult">1.00×</span>
+          <span class="mines-payout" id="minesPayout"></span>
+          <button id="minesCashoutBtn" type="button" class="mines-cashout-btn" disabled>💰 Cash Out</button>
+        </div>
+        <div class="mines-grid" id="minesGrid"></div>
+        <div id="minesResult" class="mines-result"></div>
+        <div class="plinko-note">Flip tiles to find gems — avoid mines. Cash out any time after your first safe reveal. More mines = higher multipliers. Max bet 50,000 🪙.</div>
       </div>
       <div id="lootPanel" hidden>
         <h3>🎁 Loot Box</h3>

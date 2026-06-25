@@ -55,7 +55,7 @@ export interface WorldNet {
   pet(): string | null;          // our equipped pet id (null = none → nothing trails us)
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'stocks' | 'loans' | 'petshop' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros'): void; // open a Casino/Bank/Pet-Shop/DOOM/Fishing/Arcade feature
+  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'stocks' | 'loans' | 'petshop' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros'): void; // open a Casino/Bank/Pet-Shop/DOOM/Fishing/Arcade feature
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
   onNetizenClick?(netizenId: string): void; // user tapped a netizen avatar in the world (→ challenge)
@@ -913,6 +913,7 @@ export function startWorld(net: WorldNet): void {
         { label: '🎯 Plinko',     onPick: () => { exit(); net.openFeature('plinko');    } },
         { label: '🏇 Horse Racing', onPick: () => { exit(); net.openFeature('horse');   } },
         { label: '🃏 Hi-Lo',      onPick: () => { exit(); net.openFeature('hilo');      } },
+        { label: '💣 Mines',      onPick: () => { exit(); net.openFeature('mines');     } },
       ]);
       return;
     }

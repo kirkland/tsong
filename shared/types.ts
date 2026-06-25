@@ -698,6 +698,9 @@ export type ClientMsg =
   | { type: 'hiloBet'; amount: number } // start a Hi-Lo hand with this wager
   | { type: 'hiloGuess'; guess: 'hi' | 'lo' } // guess Higher or Lower than the current card
   | { type: 'hiloCashout' } // cash out the current Hi-Lo streak
+  | { type: 'minesBet'; amount: number; mines: number } // start a Mines hand (1–24 mines on a 5×5 grid)
+  | { type: 'minesReveal'; cell: number } // flip tile at index 0–24
+  | { type: 'minesCashout' } // collect winnings on the current Mines hand
   | { type: 'balanceSheetReq'; rank: number } // peek at a net-worth board player's balance sheet (by current rank)
   | { type: 'lootBoxOpen' } // open a loot box: spend coins, roll a weighted prize (common cosmetic / House coins / capped-rare exclusive)
   | { type: 'marketList'; instanceId: number; ask: number } // list an owned exclusive instance on the marketplace for `ask` coins
@@ -1158,6 +1161,8 @@ export type ServerMsg =
   | HorseResultMsg
   | HiLoStateMsg
   | HiLoResultMsg
+  | MinesStateMsg
+  | MinesResultMsg
   | CrashStateMsg
   | TipMsg
   | BountyBoardMsg
@@ -1712,6 +1717,32 @@ export interface HorseResultMsg {
   horse: number;   // which horse the player bet on
   bet: number;
   payout: number;
+}
+
+// --- Mines ---
+// Bet coins, choose 1–24 mines hidden in a 5×5 grid, then flip tiles. Each safe reveal grows the
+// multiplier; hit a mine and lose everything. Cash out any time after at least one safe reveal.
+export const MINES_COLS = 5;
+export const MINES_ROWS_COUNT = 5;
+export const MINES_GRID = MINES_COLS * MINES_ROWS_COUNT; // 25 tiles
+export const MINES_MAX_BET = 50_000;
+export const MINES_HOUSE_EDGE = 0.01; // 1%
+export interface MinesStateMsg {
+  type: 'minesState';
+  revealed: boolean[];      // length 25: true = this tile was flipped and was safe
+  safeCount: number;        // how many safe tiles revealed so far
+  multiplier: number;       // current cashout multiplier (1× before first reveal)
+  bet: number;
+  mines: number;
+  pendingPayout: number;    // floor(bet × multiplier); 0 before first safe reveal
+}
+export interface MinesResultMsg {
+  type: 'minesResult';
+  won: boolean;             // true = cashed out, false = hit a mine
+  hitCell: number;          // tile index that ended the game (-1 on cashout)
+  minePositions: number[];  // all mine indices (revealed at end)
+  payout: number;
+  net: number;
 }
 
 // --- Hi-Lo ---

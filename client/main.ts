@@ -10,6 +10,7 @@ import { initSlots } from './slots';
 import { initPlinko } from './plinko';
 import { initHorse } from './horse';
 import { initHilo } from './hilo';
+import { initMines } from './mines';
 import { initAds, revealAds } from './ads';
 import { initFlyover, startFlyovers, flySummoned } from './flyover';
 import { draw, drawLegendIcon, setBlasterAim, drawCosmeticPreview } from './render';
@@ -746,6 +747,7 @@ const net = connect(
       plinkoHandle.setCoins(msg.coins);
       horseHandle.setCoins(msg.coins);
       hiloHandle.setCoins(msg.coins);
+      minesHandle.setCoins(msg.coins);
       if (!lootPanel.hidden) renderLoot();
       if (!marketplacePanel.hidden) renderMarketplace();
       // During a roulette spin, hold every coin-total display (toolbar tab, shop, market) at its
@@ -779,6 +781,10 @@ const net = connect(
       hiloHandle.onState(msg);
     } else if (msg.type === 'hiloResult') {
       hiloHandle.onResult(msg);
+    } else if (msg.type === 'minesState') {
+      minesHandle.onState(msg);
+    } else if (msg.type === 'minesResult') {
+      minesHandle.onResult(msg);
     } else if (msg.type === 'crashState') {
       crashHandle.onState(msg);
     } else if (msg.type === 'loan') {
@@ -898,6 +904,14 @@ const hiloHandle = initHilo({
   sendBet: (amount) => net.send({ type: 'hiloBet', amount }),
   sendGuess: (guess) => net.send({ type: 'hiloGuess', guess }),
   sendCashout: () => net.send({ type: 'hiloCashout' }),
+  playWin: playYay,
+  onSettled: refreshWallet,
+});
+
+const minesHandle = initMines({
+  sendBet: (amount, mines) => net.send({ type: 'minesBet', amount, mines }),
+  sendReveal: (cell) => net.send({ type: 'minesReveal', cell }),
+  sendCashout: () => net.send({ type: 'minesCashout' }),
   playWin: playYay,
   onSettled: refreshWallet,
 });
@@ -1972,6 +1986,7 @@ worldBtn.addEventListener('click', async () => {
                  : feature === 'plinko'    ? 'plinkoBtn'
                  : feature === 'horse'     ? 'horseBtn'
                  : feature === 'hilo'      ? 'hiloBtn'
+                 : feature === 'mines'     ? 'minesBtn'
                  : feature === 'stocks'    ? 'marketBtn'
                  : 'loanBtn';
         setTimeout(() => (document.getElementById(id) as HTMLButtonElement | null)?.click(), 0);

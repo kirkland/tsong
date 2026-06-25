@@ -459,6 +459,15 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'hiloCashout':
         lobby.hiloCashout(ws);
         break;
+      case 'minesBet':
+        if (typeof msg.amount === 'number' && typeof msg.mines === 'number') lobby.minesBet(ws, msg.amount, msg.mines);
+        break;
+      case 'minesReveal':
+        if (typeof msg.cell === 'number') lobby.minesReveal(ws, msg.cell);
+        break;
+      case 'minesCashout':
+        lobby.minesCashout(ws);
+        break;
       case 'balanceSheetReq':
         if (typeof msg.rank === 'number') lobby.sendBalanceSheet(ws, msg.rank);
         break;

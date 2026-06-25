@@ -507,4 +507,100 @@ export function registerCasinoTools(server: McpServer, ctx: McpContext) {
       }
     },
   );
+
+  server.tool(
+    'mines_bet',
+    'Start a Mines hand on the 5×5 grid. Pick how many mines (1–24) are hidden; more mines = higher multiplier per safe reveal. Max 50k bet.',
+    { amount: z.number().int().positive().max(50000), mines: z.number().int().min(1).max(24) },
+    async ({ amount, mines }) => {
+      const g = guarded(ctx);
+      if (g) return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: g }) }], isError: true };
+      const dr = await dryRunGuard(ctx, 'mines_bet', { amount, mines });
+      if (dr) return dr;
+
+      ctx.conn.send({ type: 'minesBet', amount, mines });
+      try {
+        const state = await ctx.conn.awaitMsg('minesState', undefined, 6000);
+        return { content: [{ type: 'text', text: JSON.stringify({
+          ok: true, mines, bet: amount,
+          multiplier: state.multiplier, safeCount: state.safeCount,
+          note: 'call mines_reveal with a cell index (0–24) to flip a tile; call mines_cashout to collect after at least one safe reveal',
+        }, null, 2) }] };
+      } catch {
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: 'mines bet timed out (already in a hand?)' }) }], isError: true };
+      }
+    },
+  );
+
+  server.tool(
+    'mines_reveal',
+    'Flip a tile on your active Mines grid. cell is 0-indexed left-to-right, top-to-bottom (0=top-left, 24=bottom-right). Safe = multiplier grows; mine = lose.',
+    { cell: z.number().int().min(0).max(24) },
+    async ({ cell }) => {
+      const g = guarded(ctx);
+      if (g) return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: g }) }], isError: true };
+      const dr = await dryRunGuard(ctx, 'mines_reveal', { cell });
+      if (dr) return dr;
+
+      ctx.conn.send({ type: 'minesReveal', cell });
+      try {
+        const msg = await Promise.race([
+          ctx.conn.awaitMsg('minesResult', undefined, 6000).then((r) => ({ phase: 'result' as const, msg: r })),
+          ctx.conn.awaitMsg('minesState',  undefined, 6000).then((r) => ({ phase: 'state'  as const, msg: r })),
+        ]);
+        if (msg.phase === 'result') {
+          const r = msg.msg;
+          writeAudit(ctx.cfg.auditLog, {
+            ts: Date.now(), identity: { name: ctx.identity.name }, autonomy: ctx.autonomy,
+            tool: 'mines_reveal', params: { cell },
+            coinsBefore: null, coinsAfter: null, delta: r.net,
+            result: 'ok', note: r.won ? `cashed out, net ${r.net}` : `hit mine at cell ${r.hitCell}, lost`,
+          }, ctx.identity);
+          return { content: [{ type: 'text', text: JSON.stringify({
+            ok: true, phase: r.won ? 'cashed_out' : 'exploded',
+            won: r.won, hitCell: r.hitCell, minePositions: r.minePositions, payout: r.payout, net: r.net,
+          }, null, 2) }] };
+        }
+        const s = msg.msg;
+        return { content: [{ type: 'text', text: JSON.stringify({
+          ok: true, phase: 'safe',
+          safeCount: s.safeCount, multiplier: s.multiplier, pendingPayout: s.pendingPayout,
+        }, null, 2) }] };
+      } catch {
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: 'mines reveal timed out' }) }], isError: true };
+      }
+    },
+  );
+
+  server.tool(
+    'mines_cashout',
+    'Cash out your active Mines hand. Must have revealed at least one safe tile first.',
+    {},
+    async () => {
+      const g = guarded(ctx);
+      if (g) return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: g }) }], isError: true };
+      const dr = await dryRunGuard(ctx, 'mines_cashout', {});
+      if (dr) return dr;
+
+      const before = ctx.conn.getState().wallet?.coins ?? null;
+      ctx.conn.send({ type: 'minesCashout' });
+      try {
+        const result = await ctx.conn.awaitMsg('minesResult', undefined, 6000);
+        try { await ctx.conn.awaitMsg('wallet', undefined, 1500); } catch { /* ok */ }
+        const after = ctx.conn.getState().wallet?.coins ?? null;
+        writeAudit(ctx.cfg.auditLog, {
+          ts: Date.now(), identity: { name: ctx.identity.name }, autonomy: ctx.autonomy,
+          tool: 'mines_cashout', params: {},
+          coinsBefore: before, coinsAfter: after, delta: result.net,
+          result: 'ok', note: `cashed out, payout ${result.payout}, net ${result.net}`,
+        }, ctx.identity);
+        return { content: [{ type: 'text', text: JSON.stringify({
+          ok: true, payout: result.payout, net: result.net,
+          minePositions: result.minePositions, coins: after,
+        }, null, 2) }] };
+      } catch {
+        return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: 'mines cashout timed out' }) }], isError: true };
+      }
+    },
+  );
 }

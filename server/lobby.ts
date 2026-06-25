@@ -62,6 +62,11 @@ import {
   HILO_HOUSE_EDGE,
   HiLoStateMsg,
   HiLoResultMsg,
+  MINES_GRID,
+  MINES_MAX_BET,
+  MINES_HOUSE_EDGE,
+  MinesStateMsg,
+  MinesResultMsg,
   CRASH_BETTING_MS,
   CRASH_TICK_MS,
   CRASH_ENDED_MS,
@@ -158,6 +163,7 @@ interface Conn {
   crapsPoint: number | null;   // current craps point (null = come-out phase)
   horseCard?: { name: string; odds: number }[]; // pending race card (5 horses); undefined = no race started
   hiloHand?: { bet: number; card: number; multiplier: number }; // active Hi-Lo hand
+  minesHand?: { bet: number; mines: number; grid: boolean[]; revealed: boolean[]; safeCount: number };
   // Tavern: drunkenness level (0–6) + when the current level expires. Each beer bumps the level and
   // (re)starts a 3-min timer; on expiry you sober down one level at a time.
   drunkLevel: number;
@@ -2804,6 +2810,78 @@ export class Lobby {
     const payout = await this.housePay(conn.pid, conn.nickname, want).catch((e) => { console.error('hilo cashout failed:', e); return 0; });
     const msg: HiLoResultMsg = { type: 'hiloResult', won: true, newCard: hand.card, payout, net: payout - hand.bet };
     this.tell(ws, msg);
+    this.sendWallet(ws);
+  }
+
+  // --- Mines ---
+
+  /** Multiplier after `safeReveals` safe tiles on a MINES_GRID board with `mines` mines.
+   *  Formula: C(n,k)/C(n-m,k) × (1-houseEdge) = ∏_{i=0}^{k-1} (n-i)/(n-m-i) × (1-edge). */
+  private minesMultiplier(mines: number, safeReveals: number): number {
+    if (safeReveals === 0) return 1;
+    const n = MINES_GRID;
+    let num = 1, den = 1;
+    for (let i = 0; i < safeReveals; i++) { num *= (n - i); den *= (n - mines - i); }
+    return (1 - MINES_HOUSE_EDGE) * num / den;
+  }
+
+  minesBet(ws: WebSocket, amount: number, mines: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    if (conn.minesHand) { this.sendWallet(ws); return; }
+    if (!Number.isInteger(amount) || amount <= 0 || amount > MINES_MAX_BET) { this.sendWallet(ws); return; }
+    if (!Number.isInteger(mines) || mines < 1 || mines > MINES_GRID - 1) { this.sendWallet(ws); return; }
+    spendCoins(conn.pid, amount)
+      .then(async (w) => {
+        if (!w) { this.sendWallet(ws); return; }
+        await this.houseCredit(amount);
+        const indices = Array.from({ length: MINES_GRID }, (_, i) => i);
+        for (let i = indices.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1));
+          [indices[i], indices[j]] = [indices[j], indices[i]];
+        }
+        const grid = new Array<boolean>(MINES_GRID).fill(false);
+        for (let i = 0; i < mines; i++) grid[indices[i]] = true;
+        conn.minesHand = { bet: amount, mines, grid, revealed: new Array<boolean>(MINES_GRID).fill(false), safeCount: 0 };
+        const state: MinesStateMsg = { type: 'minesState', revealed: conn.minesHand.revealed.slice(), safeCount: 0, multiplier: 1, bet: amount, mines, pendingPayout: 0 };
+        this.tell(ws, state);
+        this.sendWallet(ws);
+      })
+      .catch((e) => console.error('mines bet failed:', e));
+  }
+
+  minesReveal(ws: WebSocket, cell: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    const hand = conn.minesHand;
+    if (!hand) return;
+    if (!Number.isInteger(cell) || cell < 0 || cell >= MINES_GRID || hand.revealed[cell]) return;
+    hand.revealed[cell] = true;
+    if (hand.grid[cell]) {
+      conn.minesHand = undefined;
+      const minePositions = hand.grid.reduce<number[]>((a, m, i) => (m ? [...a, i] : a), []);
+      const result: MinesResultMsg = { type: 'minesResult', won: false, hitCell: cell, minePositions, payout: 0, net: -hand.bet };
+      this.tell(ws, result);
+      this.sendWallet(ws);
+    } else {
+      hand.safeCount++;
+      const multiplier = this.minesMultiplier(hand.mines, hand.safeCount);
+      const state: MinesStateMsg = { type: 'minesState', revealed: hand.revealed.slice(), safeCount: hand.safeCount, multiplier, bet: hand.bet, mines: hand.mines, pendingPayout: Math.floor(hand.bet * multiplier) };
+      this.tell(ws, state);
+    }
+  }
+
+  async minesCashout(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    const hand = conn.minesHand;
+    if (!hand || hand.safeCount === 0) { this.sendWallet(ws); return; }
+    conn.minesHand = undefined;
+    const want = Math.floor(hand.bet * this.minesMultiplier(hand.mines, hand.safeCount));
+    const payout = await this.housePay(conn.pid, conn.nickname, want).catch((e) => { console.error('mines cashout failed:', e); return 0; });
+    const minePositions = hand.grid.reduce<number[]>((a, m, i) => (m ? [...a, i] : a), []);
+    const result: MinesResultMsg = { type: 'minesResult', won: true, hitCell: -1, minePositions, payout, net: payout - hand.bet };
+    this.tell(ws, result);
     this.sendWallet(ws);
   }
 
