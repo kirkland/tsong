@@ -151,6 +151,10 @@ interface Conn {
   crapsPoint: number | null;   // current craps point (null = come-out phase)
   horseCard?: { name: string; odds: number }[]; // pending race card (5 horses); undefined = no race started
   hiloHand?: { bet: number; card: number; multiplier: number }; // active Hi-Lo hand
+  // Tavern: drunkenness level (0–6) + when the current level expires. Each beer bumps the level and
+  // (re)starts a 3-min timer; on expiry you sober down one level at a time.
+  drunkLevel: number;
+  drunkUntil: number;
 }
 
 // One step of a crypto's price random walk. Pure RNG — never tied to who invested or how
@@ -230,6 +234,9 @@ const MAX_BOUNTY = 1_000_000; // sanity cap on a single bounty contribution (bal
 // their WIN_REWARD minted by recordResult(), and we mint the SAME amount again into the House — so
 // every match nets the treasury +MATCH_HOUSE_MINT (think "200 minted, 100 to the winner, 100 kept").
 const MATCH_HOUSE_MINT = 100; // matches the per-win reward minted in db.recordResult()
+const BEER_COST = 20;         // coins per beer at the Tavern (a sink → the House)
+const DRUNK_MAX = 6;          // the bartender cuts you off at six
+const DRUNK_MS = 180_000;     // each drunkenness level lasts 3 minutes
 
 // --- Progressive daily wealth tax ---------------------------------------------------------
 // The economy skews "top heavy" and the House runs dry funding payouts, so once a day we skim a
@@ -482,6 +489,20 @@ export class Lobby {
       this.game.tick(dt);
     }
     this.typeGame.tick(dt); // the typing minigame runs in parallel, independent of the pong sim
+    this.tickDrunk();       // sober players down one level per 3-min timer
+  }
+
+  /** Sober drinkers down a level at a time as each 3-minute timer lapses. */
+  private tickDrunk() {
+    const now = Date.now();
+    for (const [ws, conn] of this.conns) {
+      if (conn.drunkLevel > 0 && now >= conn.drunkUntil) {
+        conn.drunkLevel--;
+        conn.drunkUntil = conn.drunkLevel > 0 ? now + DRUNK_MS : 0;
+        this.tell(ws, { type: 'drunk', level: conn.drunkLevel });
+        if (conn.drunkLevel === 0) this.notify(ws, '😌 You\'ve sobered up.');
+      }
+    }
   }
 
   /** Match status for the deploy gate (/api/status): true while a real rally is running. */
@@ -505,6 +526,8 @@ export class Lobby {
       title: null,
       song: null,
       crapsPoint: null,
+      drunkLevel: 0,
+      drunkUntil: 0,
     };
     this.conns.set(ws, conn);
     this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
@@ -1762,6 +1785,8 @@ export class Lobby {
       title: null,
       song: null,
       crapsPoint: null,
+      drunkLevel: 0,
+      drunkUntil: 0,
     };
     this.conns.set(ws, conn);
     this.teams[side].push(ws);
@@ -2054,6 +2079,36 @@ export class Lobby {
   // --- Shop (cosmetics) ---
 
   /** Buy a cosmetic from the shop, spending coins. Cosmetics are visual-only. */
+  /** Buy a beer at the Tavern: 20🪙 into the House (a sink), one level drunker, 3-min timer reset.
+   *  The bartender cuts you off at 6. */
+  buyBeer(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    if (conn.drunkLevel >= DRUNK_MAX) {
+      this.notify(ws, '🍺 The bartender cuts you off — six is plenty. Go sleep it off.');
+      return;
+    }
+    spendCoins(conn.pid, BEER_COST)
+      .then(async (w) => {
+        if (!w) { this.notify(ws, '💸 You can\'t even afford a beer (20🪙). Rough.'); this.sendWallet(ws); return; }
+        await this.houseCredit(BEER_COST); // the bar's takings go to the House
+        conn.drunkLevel++;
+        conn.drunkUntil = Date.now() + DRUNK_MS;
+        this.sendWallet(ws);
+        this.tell(ws, { type: 'drunk', level: conn.drunkLevel });
+        const quip = [
+          '🍺 Ahh, refreshing. (1)',
+          '🍺 Two beers in. The room\'s a little warmer.',
+          '🍺 Threeee. You feel GREAT. (the floor is moving though)',
+          '🍺 Four! Everyone here is your best friend.',
+          '🍺 Fiiive *hic* — who put all these walls up??',
+          '🍺 Six. The bartender is eyeing you. This is your last one.',
+        ][Math.min(conn.drunkLevel, DRUNK_MAX) - 1];
+        this.notify(ws, quip);
+      })
+      .catch((e) => console.error('buy beer failed:', e));
+  }
+
   shopBuy(ws: WebSocket, item: string) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;

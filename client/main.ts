@@ -296,6 +296,7 @@ let myColor = '#e8eefc';
 let state: StateMsg | null = null;
 let ballColor = '#e8eefc'; // live pong-ball color, mirrored onto the ball reaction
 let joined = false; // true once the player has entered a nickname (gates reactions)
+let drunkLevel = 0; // 0 = sober … 6 = cut off (from the Tavern); wobbles the paddle + blurs the canvas
 
 // Last rows each board was rendered with, so we can repaint (e.g. to add tip buttons the
 // moment you join) without waiting for the next server push. Declared up here so the
@@ -761,6 +762,13 @@ const net = connect(
     } else if (msg.type === 'news') {
       newsFeed = msg.items;
       if (!newsPanel.hidden) renderNews();
+    } else if (msg.type === 'drunk') {
+      drunkLevel = msg.level;
+      // escalating booze haze on the pong canvas: blur + woozy hue/saturation that grows per level
+      canvas.style.filter = drunkLevel > 0
+        ? `blur(${(drunkLevel * 0.35).toFixed(2)}px) hue-rotate(${drunkLevel * 6}deg) saturate(${1 + drunkLevel * 0.12}) brightness(${1 + drunkLevel * 0.03})`
+        : '';
+      canvas.style.transition = 'filter 0.6s ease';
     }
   },
   () => {
@@ -1875,6 +1883,8 @@ worldBtn.addEventListener('click', async () => {
         setTimeout(() => (document.getElementById(id) as HTMLButtonElement | null)?.click(), 0);
       },
       claimQuest: (quest) => net.send({ type: 'questClaim', quest }),
+      buyBeer: () => net.send({ type: 'buyBeer' }),
+      drunkLevel: () => drunkLevel, // the world reads this live to wobble movement + the camera
     });
   } catch (e) {
     console.error('World failed to load:', e);
@@ -4451,11 +4461,20 @@ function loop(t: number) {
     // Once roaming ends, relax the local inset so the next pickup starts at the wall.
     if (myRoamHits() <= 0) targetX = 0;
 
+    // Drunk wobble: a smooth low-frequency sway added to the SENT paddle Y (your intended `target`
+    // stays put, but the paddle the server sees drifts), so higher levels are harder to control.
+    let sendY = target;
+    if (drunkLevel > 0) {
+      const amp = drunkLevel * 4; // ~4px/level per wave → up to ~36px sway at level 6
+      const sway = Math.sin(t / 470) * amp + Math.sin(t / 230) * amp * 0.5;
+      sendY = Math.max(PADDLE.h / 2, Math.min(COURT.h - PADDLE.h / 2, target + sway));
+    }
     // Send when Y (or, while roaming, the inset X) changed meaningfully, throttled to ~30/s.
+    // While drunk the sway is always moving, so keep streaming so the wobble actually reaches the server.
     const roaming = myRoamHits() > 0;
-    const changed = Math.abs(target - lastSent) > 0.5 || (roaming && Math.abs(targetX - lastSentX) > 0.5);
+    const changed = Math.abs(target - lastSent) > 0.5 || (roaming && Math.abs(targetX - lastSentX) > 0.5) || drunkLevel > 0;
     if (changed && t - lastSendAt > 33) {
-      net.send(roaming ? { type: 'paddle', y: target, x: targetX } : { type: 'paddle', y: target });
+      net.send(roaming ? { type: 'paddle', y: sendY, x: targetX } : { type: 'paddle', y: sendY });
       lastSent = target;
       lastSentX = targetX;
       lastSendAt = t;

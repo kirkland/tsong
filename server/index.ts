@@ -282,6 +282,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'questClaim':
         if (typeof msg.quest === 'string') lobby.questClaim(ws, msg.quest);
         break;
+      case 'buyBeer':
+        lobby.buyBeer(ws);
+        break;
       case 'ntJoin':
         lobby.ntJoin(ws);
         break;
