@@ -394,7 +394,7 @@ export function petById(id: string | null | undefined) {
 
 // What entering a building does (the client maps each `kind` to an action). Add a kind here
 // and a handler on the client to introduce a new venue.
-export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond';
+export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar';
 // A venue's footprint on the map. The rectangle (top-left origin, world units) is solid —
 // avatars collide with it — and an apron just outside the door is the entry trigger zone.
 export interface WorldBuilding {
@@ -421,6 +421,8 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
   // Fishing pond — a body of water east of the plaza with a wooden pier on its west (plaza) side.
   // Footprint clears the plaza (x ends 1840), the petshop (x starts 2370) and the bank (y 1525+).
   { id: 'pond', kind: 'pond', name: 'FISHING POND', emoji: '🎣', x: 2020, y: 860, w: 300, h: 260, color: '#2a6f97' },
+  // The Tavern — south-of-centre off a path spur. Buy a beer, get progressively drunker.
+  { id: 'bar', kind: 'bar', name: 'THE TAVERN', emoji: '🍺', x: 1020, y: 1600, w: 230, h: 180, color: '#5a3d2a' },
 ] as const;
 
 // --- Fishing minigame ---
@@ -570,6 +572,7 @@ export type ClientMsg =
   | { type: 'netizenInfoReq'; netizenId: string }
   | { type: 'netizenChallenge'; netizenId: string; wager: number }
   | { type: 'newsReq' }
+  | { type: 'buyBeer' } // buy a beer at the Tavern (20🪙 → House); ups your drunk level (cut off at 6)
   | { type: 'eloProfileReq'; rank: number; self?: true };
 
 // --- Server -> Client ---
@@ -1014,7 +1017,16 @@ export type ServerMsg =
   | NetizenInfoMsg
   | NetizenChallengeResultMsg
   | NewsMsg
+  | DrunkMsg
   | EloProfileMsg;
+
+// Your current drunkenness level (0 = sober … 6 = cut off). Sent only to the affected client.
+// The client applies escalating visual + control-wobble effects; the server owns the 3-min-per-level
+// countdown and sobers you down one level at a time.
+export interface DrunkMsg {
+  type: 'drunk';
+  level: number;
+}
 
 // --- Economy Overhaul server → client messages ---
 

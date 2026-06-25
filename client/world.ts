@@ -55,6 +55,8 @@ export interface WorldNet {
   openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'stocks' | 'loans' | 'petshop' | 'doom' | 'fishing'): void; // open a Casino/Bank/Pet-Shop/DOOM/Fishing feature
   claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
   onNetizenClick?(netizenId: string): void; // user tapped a netizen avatar in the world (→ challenge)
+  buyBeer(): void;               // buy a beer at the Tavern (server charges 20🪙 + ups drunk level)
+  drunkLevel(): number;          // current drunkenness 0–6 (drives movement wobble + camera sway)
 }
 
 // --- module-level controller so feedWorld()/isWorldOpen() can reach the live overlay ---
@@ -119,6 +121,7 @@ const ROADS: Rect[] = [
   { x: 605, y: 1290, w: 110, h: 200 },  // spur down to the Casino
   { x: 2485, y: 1290, w: 110, h: 200 }, // spur down to the Bank
   { x: 2475, y: 600, w: 110, h: 600 },  // spur up to the Pet shack (NE), clearing the pond to its west
+  { x: 1060, y: 1300, w: 110, h: 300 }, // spur down to the Tavern (south of centre)
 ];
 const PLAZA = { x: 1600, y: 1100, r: 240 }; // paved circle + fountain at town center
 
@@ -416,6 +419,20 @@ const NPCS: NpcDef[] = [
     ],
   },
   {
+    // Permanent fixture outside the Tavern, swaying gently (his roam makes him stumble about).
+    id: 'barfly', name: 'Sloshed Sal', shirt: 0x8a3b2e, hair: 0x3a2a1a, skin: SKINS[2],
+    hairStyle: 'short', x: 1300, y: 1690, roam: 70,
+    lines: [
+      '*hic* …you ever REALLY look at a pong ball? I mean really?',
+      "I'm not drunk, you're drunk. The FOUNTAIN'S drunk.",
+      'One more an\' I\'m goin\' home. Said that six beers ago.',
+      'I could beat anyone at pong right now. *falls over*',
+      'The room\'s spinnin\' but in a GOOD way, y\'know?',
+      'Shhh… the ball can hear us.',
+      'Buy me a beer? …no? …fair.',
+    ],
+  },
+  {
     id: 'kevin', name: 'Kevin', shirt: 0xfdd835, hair: 0x111111, kind: 'minion', x: 1880, y: 1240, roam: 140,
     lines: [
       'Bello! ...Banana?',
@@ -688,6 +705,7 @@ export function startWorld(net: WorldNet): void {
       case 'petshop': return '🐾 Enter the Pet Shop';
       case 'doomportal': return '🔥 Enter the gates of DOOM';
       case 'pond': return '🎣 Cast a line';
+      case 'bar': return '🍺 Enter the Tavern — grab a beer';
     }
   }
   function enterBuilding(kind: WorldBuildingKind) {
@@ -726,6 +744,16 @@ export function startWorld(net: WorldNet): void {
     if (kind === 'pond') {
       openDialog('🎣 Fishing Pond', 'The water is calm. A good day for fishing.', [
         { label: '🎣 Fish', onPick: () => { exit(); net.openFeature('fishing'); } },
+      ]);
+      return;
+    }
+    if (kind === 'bar') {
+      const lvl = net.drunkLevel();
+      const sub = lvl >= 6 ? "The bartender shakes his head. You're cut off."
+        : lvl > 0 ? `You've had ${lvl}. The bartender slides another your way…`
+        : 'Dim, sticky, and friendly. What\'ll it be?';
+      openDialog('🍺 The Tavern', sub, [
+        { label: '🍺 Buy a beer (20🪙)', onPick: () => { exit(); net.buyBeer(); } },
       ]);
       return;
     }
@@ -1129,6 +1157,16 @@ export function startWorld(net: WorldNet): void {
     const mag = Math.hypot(dx, dy);
     if (mag === 0) return;
     dx /= mag; dy /= mag;
+    // Drunk stagger: rotate your intended heading by a wandering angle that grows with the level, so
+    // walking a straight line gets harder the more you've had.
+    const drunk = net.drunkLevel();
+    if (drunk > 0) {
+      const w = Date.now() / 1000;
+      const wob = (Math.sin(w * 3.1) * 0.06 + Math.sin(w * 1.3 + 1) * 0.03) * drunk; // radians, up to ~0.54 at lvl 6
+      const ca = Math.cos(wob), sa = Math.sin(wob);
+      const ndx = dx * ca - dy * sa, ndy = dx * sa + dy * ca;
+      dx = ndx; dy = ndy;
+    }
     facing = Math.atan2(dy, dx);
     const moved = resolveCollisions(selfX + dx * SPEED * dt, selfY + dy * SPEED * dt, R);
     selfX = moved.x; selfY = moved.y;
@@ -1344,6 +1382,7 @@ export function startWorld(net: WorldNet): void {
   // Day/night overlays (camera-fixed, set in create(), animated in update()).
   let nightOverlay: Phaser.GameObjects.Rectangle | null = null;
   let warmOverlay: Phaser.GameObjects.Rectangle | null = null;
+  let drunkOverlay: Phaser.GameObjects.Rectangle | null = null; // amber booze haze, alpha scales with drunk level
   // DOOM-portal flame sprites: little orange/yellow tongues layered over the archway. Each carries
   // its own phase/anchor so update() can jitter alpha/scale/offset and make them dance ("on fire").
   interface Flame { img: Phaser.GameObjects.Image; bx: number; by: number; phase: number; amp: number; base: number }
@@ -2065,8 +2104,13 @@ export function startWorld(net: WorldNet): void {
         .setAlpha(0).setDepth(50002);
       nightOverlay = night;
 
+      // amber booze haze that fades in with drunkenness (above everything else)
+      const booze = sc.add.rectangle(0, 0, 10, 10, 0xd98b2b).setOrigin(0).setScrollFactor(0)
+        .setBlendMode(Phaser.BlendModes.MULTIPLY).setAlpha(0).setDepth(50004);
+      drunkOverlay = booze;
+
       const fitAtmo = (w: number, h: number) => {
-        warm.setSize(w, h); vig.setDisplaySize(w, h); night.setSize(w, h);
+        warm.setSize(w, h); vig.setDisplaySize(w, h); night.setSize(w, h); booze.setSize(w, h);
       };
       fitAtmo(sc.scale.width, sc.scale.height);
       sc.scale.on('resize', (gs: Phaser.Structs.Size) => fitAtmo(gs.width, gs.height));
@@ -2083,6 +2127,17 @@ export function startWorld(net: WorldNet): void {
         const night = nightFactor(Date.now());
         if (nightOverlay) nightOverlay.setAlpha(night * 0.6);            // darker after dusk
         if (warmOverlay) warmOverlay.setAlpha(0.34 * (1 - night * 0.8)); // golden glow fades after dark
+      }
+
+      // --- drunkenness: an amber haze + a woozy camera sway that grow with the level ---
+      {
+        const drunk = net.drunkLevel();
+        if (drunkOverlay) drunkOverlay.setAlpha(drunk > 0 ? Math.min(0.5, drunk * 0.06) : 0);
+        if (mainCam) {
+          const w = time / 1000;
+          mainCam.setRotation(drunk > 0 ? Math.sin(w * 1.1) * 0.012 * drunk : 0);            // tilt sway (~4° at lvl 6)
+          mainCam.setZoom(drunk > 0 ? ZOOM * (1 + Math.sin(w * 0.8) * 0.02 * drunk) : ZOOM); // breathing zoom
+        }
       }
 
       // strays amble around the pet shack: walk toward a target, pause, then pick a new nearby spot
