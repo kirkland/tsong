@@ -63,6 +63,7 @@ export interface WorldNet {
   jail(): void;                  // self-report a drunk-drive attempt (server jails you if 2+ beers in)
   bail(targetId: string): void;  // pay 500🪙 to bail a jailed avatar out (id; may be your own)
   amJailed(): boolean;           // are WE currently locked in the jail cell?
+  dayNightOffset(): number;      // ms offset for the day/night clock (randomized per server boot)
 }
 
 // --- module-level controller so feedWorld()/isWorldOpen() can reach the live overlay ---
@@ -1609,6 +1610,11 @@ export function startWorld(net: WorldNet): void {
   // A flock of birds that occasionally drifts across the sky (camera-fixed, gentle flap). Ambience only.
   const birds: { img: Phaser.GameObjects.Image; vx: number; phase: number }[] = [];
   let nextBirdsAt = 0;
+  // Warm/neon glows that fade in after dark (alpha = nightFactor × max, with a per-light fire flicker).
+  const nightLights: { obj: Phaser.GameObjects.Image; max: number; phase: number; fire: number }[] = [];
+  // Casino marquee: colorful bulbs that chase around the building + cycle colors (lit day & night).
+  const casinoBulbs: { obj: Phaser.GameObjects.Image; i: number }[] = [];
+  const CASINO_PAL = [0xff2a6a, 0xffd11a, 0x2ad1ff, 0xb23aff, 0x3aff7a, 0xff7a1a];
   // Day/night overlays (camera-fixed, set in create(), animated in update()).
   let nightOverlay: Phaser.GameObjects.Rectangle | null = null;
   let warmOverlay: Phaser.GameObjects.Rectangle | null = null;
@@ -2465,6 +2471,76 @@ export function startWorld(net: WorldNet): void {
       };
       fitAtmo(sc.scale.width, sc.scale.height);
       sc.scale.on('resize', (gs: Phaser.Structs.Size) => fitAtmo(gs.width, gs.height));
+
+      // --- cozy night lighting: soft glows that bloom after dark (drawn ABOVE the night wash so they
+      // shine through it). A soft radial-gradient texture, tinted + ADD-blended per light. ---
+      const GLOW = 'w-glow';
+      if (!sc.textures.exists(GLOW)) {
+        const sz = 128;
+        const ct = sc.textures.createCanvas(GLOW, sz, sz);
+        if (ct) {
+          const c2 = ct.getContext();
+          const g2 = c2.createRadialGradient(sz / 2, sz / 2, 0, sz / 2, sz / 2, sz / 2);
+          g2.addColorStop(0, 'rgba(255,255,255,1)');
+          g2.addColorStop(0.45, 'rgba(255,255,255,0.45)');
+          g2.addColorStop(1, 'rgba(255,255,255,0)');
+          c2.fillStyle = g2; c2.fillRect(0, 0, sz, sz); ct.refresh();
+        }
+      }
+      // `fire` is the flicker depth (0 = steady neon, ~0.2 = lively firelight). Each light gets its
+      // own random phase so they shimmer out of sync, like real flames.
+      const glow = (x: number, y: number, radius: number, color: number, max: number, fire = 0.05) => {
+        const im = sc.add.image(x, y, GLOW).setTint(color).setBlendMode(Phaser.BlendModes.ADD)
+          .setDepth(50003).setAlpha(0).setDisplaySize(radius * 2, radius * 2);
+        nightLights.push({ obj: im, max, phase: hash(x | 0, y | 0) * 6.28, fire });
+      };
+      // a little lamp post: dark pole + head (always visible) and a warm bulb glow that flickers like a flame
+      const lampPost = (x: number, y: number) => {
+        sc.add.rectangle(x, y, 4, 30, 0x26221c).setOrigin(0.5, 1).setDepth(y);
+        sc.add.rectangle(x, y - 30, 11, 7, 0x363029).setOrigin(0.5, 0.5).setDepth(y);
+        sc.add.circle(x, y - 30, 3, 0xffe7b0).setDepth(y);
+        glow(x, y - 30, 34, 0xffb347, 1.05, 0.2); // warm, fiery flicker
+      };
+      const bm = (b: WorldBuilding) => ({ cx: b.x + b.w / 2, cy: b.y + b.h / 2 });
+      const byKind = (k: string) => WORLD_BUILDINGS.find((b) => b.kind === k);
+      // Plaza: a ring of warm lamp posts around the fountain — the cozy heart of town at night.
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2 + 0.2;
+        lampPost(PLAZA.x + Math.cos(a) * (PLAZA.r - 14), PLAZA.y + Math.sin(a) * (PLAZA.r - 14));
+      }
+      glow(PLAZA.x, PLAZA.y, 230, 0xffb86a, 0.4, 0.12); // soft, breathing fire-warmth over the whole plaza
+      // Tavern: a lantern by the door + glowing windows.
+      const bar = byKind('bar'); if (bar) {
+        lampPost(bar.x + bar.w + 16, bar.y + bar.h - 10);
+        lampPost(bar.x - 16, bar.y + bar.h - 10);
+        glow(bar.x + bar.w * 0.32, bar.y + bar.h * 0.55, 36, 0xffb648, 0.9, 0.1); // windows
+        glow(bar.x + bar.w * 0.68, bar.y + bar.h * 0.55, 36, 0xffb648, 0.9, 0.1);
+        glow(bar.x + bar.w / 2, bar.y + bar.h, 46, 0xffc24a, 0.85, 0.12);          // doorway spill
+      }
+      // Casino: FULL VEGAS — a big colored bloom plus a marquee of chasing, color-cycling bulbs
+      // strung right around the building (lit day and night so it always screams "CASINO").
+      const cas = byKind('casino'); if (cas) { const { cx, cy } = bm(cas);
+        glow(cx, cy, 150, 0xff2a6a, 0.45, 0.08); glow(cx, cas.y + 10, 110, 0xb23aff, 0.4, 0.08);
+        // bulbs evenly around the rectangle perimeter
+        const inset = 8, x0 = cas.x - inset, y0 = cas.y - inset, x1 = cas.x + cas.w + inset, y1 = cas.y + cas.h + inset;
+        const per = [x0, y0, x1, y0, x1, y1, x0, y1, x0, y0]; // closed loop of corners
+        let idx = 0;
+        for (let s = 0; s < 4; s++) {
+          const ax = per[s * 2], ay = per[s * 2 + 1], bx = per[s * 2 + 2], by = per[s * 2 + 3];
+          const segLen = Math.hypot(bx - ax, by - ay), n = Math.max(2, Math.round(segLen / 34));
+          for (let k = 0; k < n; k++) {
+            const t = k / n, px2 = ax + (bx - ax) * t, py2 = ay + (by - ay) * t;
+            const im = sc.add.image(px2, py2, GLOW).setBlendMode(Phaser.BlendModes.ADD).setDepth(50003).setDisplaySize(34, 34).setAlpha(0);
+            casinoBulbs.push({ obj: im, i: idx++ });
+          }
+        }
+      }
+      // Hell portal: an angry red bloom.
+      const doom = byKind('doomportal'); if (doom) { const { cx, cy } = bm(doom); glow(cx, cy, 110, 0xff3a0a, 1.0, 0.22); glow(cx, cy + 20, 70, 0xffa020, 0.7, 0.22); }
+      // Arena / Bank / Pet shack: a modest warm window glow each, for cohesion.
+      for (const k of ['arena', 'bank', 'petshop']) { const b = byKind(k); if (b) { const { cx, cy } = bm(b); glow(cx, cy, 70, 0xffd081, 0.55); } }
+      // A few street lamps lining the main road by the plaza (just south of the tarmac).
+      lampPost(PLAZA.x - 360, 1330); lampPost(PLAZA.x + 360, 1330); lampPost(PLAZA.x - 700, 1330); lampPost(PLAZA.x + 700, 1330);
     },
 
     update(this: Phaser.Scene, time: number, delta: number) {
@@ -2475,9 +2551,24 @@ export function startWorld(net: WorldNet): void {
 
       // --- day/night: derive purely from the wall clock so every client's sky matches ---
       {
-        const night = nightFactor(Date.now());
-        if (nightOverlay) nightOverlay.setAlpha(night * 0.6);            // darker after dusk
+        const night = nightFactor(Date.now() + net.dayNightOffset());
+        if (nightOverlay) nightOverlay.setAlpha(night * 0.62);           // darker after dusk
         if (warmOverlay) warmOverlay.setAlpha(0.34 * (1 - night * 0.8)); // golden glow fades after dark
+        // lights bloom in as it gets dark, each flickering like a flame on its own phase
+        for (const l of nightLights) {
+          const t = now / 1000;
+          const f = 1 + l.fire * (Math.sin(t * 7.3 + l.phase) * 0.6 + Math.sin(t * 2.9 + l.phase * 1.7) * 0.4);
+          l.obj.setAlpha(night * l.max * f);
+        }
+        // casino marquee: bulbs chase around the building and cycle colors — lit always, louder at night
+        if (casinoBulbs.length) {
+          const t = now / 1000, brightness = 0.5 + 0.5 * night;
+          for (const b of casinoBulbs) {
+            b.obj.setTint(CASINO_PAL[(b.i + Math.floor(t * 4)) % CASINO_PAL.length]);
+            const chase = 0.45 + 0.55 * Math.max(0, Math.sin(t * 6 - b.i * 0.6)); // running light
+            b.obj.setAlpha(brightness * chase);
+          }
+        }
       }
 
       // --- birds: every so often a little flock drifts across the sky (camera-fixed, flapping) ---

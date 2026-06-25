@@ -832,6 +832,7 @@ export interface YouMsg {
   type: 'you';
   id: string;
   role: Role;
+  tOff?: number; // day/night clock offset (ms), randomized per server boot — only on the first 'you'
 }
 
 export interface LeaderboardRow {
