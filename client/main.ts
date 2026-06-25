@@ -2580,15 +2580,30 @@ document.addEventListener('click', (e) => {
   if (!marketPanel.contains(t) && !marketBtn.contains(t)) { marketPanel.hidden = true; marketBtn.setAttribute('aria-expanded', 'false'); }
 });
 
-// Fast-sell tax window (FAST_SELL_TAX_MS, shared with server/lobby.ts settleCashOut): closing a
-// position within that window of opening — or topping it up — taxes FAST_SELL_TAX_RATE of the
-// payout. Show a live countdown so it's clear when the position is safe to close tax-free.
+// Fast-sell tax countdown. The server uses tiered brackets (fastSell on houseState) that step
+// down from 25% → 0% over 3 hours. Show the current rate and count down to the next bracket.
 function taxBadge(openedAt: number): { text: string; cls: string } {
-  const left = openedAt > 0 ? Math.max(0, FAST_SELL_TAX_MS - (Date.now() - openedAt)) : 0;
+  if (!openedAt) return { text: '✅ tax-free', cls: 'tax-free' };
+  const heldMs = Date.now() - openedAt;
+  const brackets = houseState?.fastSell;
+  if (brackets && brackets.length > 0) {
+    for (const b of brackets) {
+      const threshMs = b.underMin * 60_000;
+      if (heldMs < threshMs) {
+        const left = threshMs - heldMs;
+        const secs = Math.ceil(left / 1000);
+        const clock = secs >= 60 ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : `${secs}s`;
+        return { text: `🔒 ${Math.round(b.rate * 100)}% tax · drops in ${clock}`, cls: 'tax-wait' };
+      }
+    }
+    return { text: '✅ tax-free', cls: 'tax-free' };
+  }
+  // Fallback to legacy constants while houseState loads.
+  const left = Math.max(0, FAST_SELL_TAX_MS - heldMs);
   if (left <= 0) return { text: '✅ tax-free', cls: 'tax-free' };
   const secs = Math.ceil(left / 1000);
   const clock = secs >= 60 ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : `${secs}s`;
-  return { text: `🔒 ${Math.round(FAST_SELL_TAX_RATE * 100)}% tax · safe in ${clock}`, cls: 'tax-wait' };
+  return { text: `🔒 ${Math.round(FAST_SELL_TAX_RATE * 100)}% tax · drops in ${clock}`, cls: 'tax-wait' };
 }
 
 function renderMarket() {
