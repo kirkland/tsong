@@ -1533,14 +1533,14 @@ export interface SpinResultMsg {
 }
 
 // --- Loot box rebalance ---
-// Whale-gamble box: ~1% cosmetic, ~0.3% exclusive, ~35% partial coin-back, ~63.7% nothing.
+// Whale-gamble box: ~3% cosmetic, ~2% exclusive, ~65% partial coin-back, ~30% nothing.
 export const LOOT_TABLE = {
-  cosmeticWeight: 1.0,
-  exclusiveWeight: 0.3,
-  coinBackWeight: 35.0,
-  nothingWeight: 63.7,
+  cosmeticWeight: 3.0,
+  exclusiveWeight: 2.0,
+  coinBackWeight: 65.0,
+  nothingWeight: 30.0,
   coinBackMin: 500,
-  coinBackMax: 1500,
+  coinBackMax: 2000,
 };
 
 // --- Wealth-scaled minimum bets ---
