@@ -31,11 +31,11 @@ export interface FishingNet {
 
 // Per-tier flavour: a color for the reveal pop and how hard the reel mini-game fights.
 const TIER_INFO: Record<FishTier, { color: string; label: string; fishSpeed: number; erratic: number; drainMul: number }> = {
-  junk:      { color: '#9aa4b0', label: 'JUNK',      fishSpeed: 70,  erratic: 0.2, drainMul: 0.6 },
-  common:    { color: '#cfe0ff', label: 'COMMON',    fishSpeed: 95,  erratic: 0.4, drainMul: 0.8 },
-  uncommon:  { color: '#6bd06b', label: 'UNCOMMON',  fishSpeed: 130, erratic: 0.7, drainMul: 1.0 },
-  rare:      { color: '#4aa3ff', label: 'RARE',      fishSpeed: 175, erratic: 1.1, drainMul: 1.25 },
-  legendary: { color: '#ffd23f', label: 'LEGENDARY', fishSpeed: 230, erratic: 1.6, drainMul: 1.55 },
+  junk:      { color: '#9aa4b0', label: 'JUNK',      fishSpeed: 60,  erratic: 0.15, drainMul: 0.45 },
+  common:    { color: '#cfe0ff', label: 'COMMON',    fishSpeed: 80,  erratic: 0.30, drainMul: 0.65 },
+  uncommon:  { color: '#6bd06b', label: 'UNCOMMON',  fishSpeed: 105, erratic: 0.50, drainMul: 0.80 },
+  rare:      { color: '#4aa3ff', label: 'RARE',      fishSpeed: 140, erratic: 0.75, drainMul: 1.00 },
+  legendary: { color: '#ffd23f', label: 'LEGENDARY', fishSpeed: 180, erratic: 1.05, drainMul: 1.20 },
 };
 
 // Roll a tier by weight, then a species within it, then a size.
@@ -188,7 +188,7 @@ export function startFishing(net: FishingNet): void {
   let revealPop = 0;      // pop animation (counts down)
   let bobberBob = 0;      // bobber idle bob phase
 
-  const ZONE_H = 0.18; // catch-zone height as a fraction of the bar
+  const ZONE_H = 0.22; // catch-zone height as a fraction of the bar
 
   function setStatus(text: string) { status.textContent = text; }
 
@@ -218,7 +218,7 @@ export function startFishing(net: FishingNet): void {
     fishVel = 0;
     zoneY = 0.5;
     zoneVel = 0;
-    progress = 0.25; // start with a little buffer
+    progress = 0.35; // start with a little buffer
     setStatus('Keep the marker in the zone!');
   }
 
@@ -268,8 +268,8 @@ export function startFishing(net: FishingNet): void {
       if (zoneY > 1 - ZONE_H / 2) { zoneY = 1 - ZONE_H / 2; zoneVel = 0; }
       // Fill while the fish is inside the zone, drain otherwise.
       const inZone = Math.abs(fishY - zoneY) < ZONE_H / 2;
-      if (inZone) { progress += dt * 0.42; if (Math.random() < dt * 8) reelTick(); }
-      else progress -= dt * 0.30 * info.drainMul;
+      if (inZone) { progress += dt * 0.52; if (Math.random() < dt * 8) reelTick(); }
+      else progress -= dt * 0.22 * info.drainMul;
       progress = Math.max(0, Math.min(1, progress));
       if (progress >= 1) landed();
       else if (progress <= 0) missed();
