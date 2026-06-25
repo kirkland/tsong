@@ -4,6 +4,14 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>tsong — multiplayer pong</title>
+    <!-- Phaser is externalized from the bundle (too big to build on the 1 GB VPS) and loaded from a
+         CDN. The build emits ESM, where Rollup's `output.globals` is ignored, so `import 'phaser'`
+         survives as a bare specifier — this import map resolves it to Phaser's CDN ESM build so the
+         lazy-loaded World overlay (client/world.ts) can import it in the browser. Must precede any
+         module <script>. (Unused in dev: Vite pre-bundles phaser from node_modules there.) -->
+    <script type="importmap">
+      { "imports": { "phaser": "https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.esm.js" } }
+    </script>
     <style>
       :root {
         color-scheme: dark;
@@ -199,6 +207,13 @@
         color: #7da2ff;
         text-align: right;
       }
+      #leaderboard .self-row, #netWorth .self-row {
+        border-top: 1px dashed #3a4a6a;
+        background: #0a1020;
+        color: #b8c8e8;
+      }
+      #leaderboard .self-row .rank, #netWorth .self-row .rank { color: #7a8aaa; }
+      #leaderboard .self-row .pct, #netWorth .self-row .worth { color: #ffd23f; }
       /* Net Worth board — same column look as the leaderboard, gold accents.
          coins + live stock holdings − debt owed to Davis. */
       #netWorth {
@@ -783,32 +798,42 @@
         gap: 8px;
         align-items: flex-start;
       }
-      /* Grouped nav dropdowns (Arcade, Casino) — collapse related toolbar buttons into menus. */
-      #arcade, #casino { position: relative; }
-      #arcadeBtn, #casinoBtn {
-        display: flex; align-items: center; gap: 6px;
+      /* Grouped nav dropdowns (Arcade, Casino, Economy, Work) — collapse related toolbar buttons into menus. */
+      #arcade, #casino, #economy, #workMenu { position: relative; }
+      #arcadeBtn, #casinoBtn, #economyBtn, #workMenuBtn {
+        display: flex; align-items: center; justify-content: center; gap: 6px;
         font: inherit; font-size: 12px; letter-spacing: 1px; padding: 7px 12px;
+        min-width: 108px;
         border-radius: 6px; border: 1px solid #2a3550; background: #0e1424;
         color: #7da2ff; cursor: pointer;
       }
-      #arcadeBtn:hover, #casinoBtn:hover { background: #18203a; }
-      /* Ambient glow: steady tinted buttons (Arcade red, Casino green) with a soft, slow
-         breathing halo — noticeable but not blinky. */
-      #arcadeBtn { color: #ff8a8a; border-color: #6e2a2f; background: #1c0e10; animation: arcadeGlow 3.2s ease-in-out infinite; }
-      #casinoBtn { color: #7ff0b0; border-color: #2a6e45; background: #0e1c14; animation: casinoGlow 3.2s ease-in-out infinite; }
+      #arcadeBtn:hover, #casinoBtn:hover, #economyBtn:hover, #workMenuBtn:hover { background: #18203a; }
+      /* Ambient glow: each nav button breathes in its own accent colour. */
+      #arcadeBtn  { color: #ff8a8a; border-color: #6e2a2f; background: #1c0e10; animation: arcadeGlow  3.2s ease-in-out infinite; }
+      #casinoBtn  { color: #7ff0b0; border-color: #2a6e45; background: #0e1c14; animation: casinoGlow  3.2s ease-in-out infinite; }
+      #economyBtn { color: #ffd86e; border-color: #6e5a1f; background: #1a1608; animation: economyGlow 3.2s ease-in-out infinite; }
+      #workMenuBtn{ color: #d09fff; border-color: #5a2a8e; background: #150c22; animation: workGlow    3.2s ease-in-out infinite; }
       @keyframes arcadeGlow {
         0%, 100% { box-shadow: 0 0 4px rgba(255,80,80,0.25); }
-        50% { box-shadow: 0 0 13px rgba(255,80,80,0.6); }
+        50%       { box-shadow: 0 0 13px rgba(255,80,80,0.6); }
       }
       @keyframes casinoGlow {
         0%, 100% { box-shadow: 0 0 4px rgba(60,255,140,0.25); }
-        50% { box-shadow: 0 0 13px rgba(60,255,140,0.6); }
+        50%       { box-shadow: 0 0 13px rgba(60,255,140,0.6); }
+      }
+      @keyframes economyGlow {
+        0%, 100% { box-shadow: 0 0 4px rgba(255,210,80,0.25); }
+        50%       { box-shadow: 0 0 13px rgba(255,210,80,0.6); }
+      }
+      @keyframes workGlow {
+        0%, 100% { box-shadow: 0 0 4px rgba(180,100,255,0.25); }
+        50%       { box-shadow: 0 0 13px rgba(180,100,255,0.6); }
       }
       @media (prefers-reduced-motion: reduce) {
-        #arcadeBtn, #casinoBtn { animation: none; }
+        #arcadeBtn, #casinoBtn, #economyBtn, #workMenuBtn { animation: none; }
       }
-      #arcadeBtn .caret, #casinoBtn .caret { font-size: 10px; transition: transform 0.15s; }
-      #arcadeBtn[aria-expanded='true'] .caret, #casinoBtn[aria-expanded='true'] .caret { transform: rotate(180deg); }
+      #arcadeBtn .caret, #casinoBtn .caret, #economyBtn .caret, #workMenuBtn .caret { font-size: 10px; transition: transform 0.15s; }
+      #arcadeBtn[aria-expanded='true'] .caret, #casinoBtn[aria-expanded='true'] .caret, #economyBtn[aria-expanded='true'] .caret, #workMenuBtn[aria-expanded='true'] .caret { transform: rotate(180deg); }
       .nav-menu {
         position: absolute; top: calc(100% + 6px); left: 0; min-width: 170px;
         display: flex; flex-direction: column; gap: 5px;
@@ -816,9 +841,11 @@
         box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55); padding: 6px; z-index: 60;
       }
       .nav-menu[hidden] { display: none; }
-      /* Menu rows: arcade + casino trigger buttons fill the menu width, left-aligned. */
+      /* Menu rows: all nav trigger buttons fill the menu width, left-aligned. */
       #arcadePanel > button,
-      #casinoPanel > button { display: flex; width: 100%; justify-content: flex-start; }
+      #casinoPanel > button,
+      #economyPanel > button,
+      #workMenuPanel > button { display: flex; width: 100%; justify-content: flex-start; }
       /* Mute button */
       #muteBtn {
         font: inherit;
@@ -914,6 +941,33 @@
         cursor: pointer;
       }
       #streetDemonsBtn:hover { background: #2a0a18; color: #ff7591; }
+      #fishingBtn {
+        font: inherit;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        padding: 7px 10px;
+        border-radius: 6px;
+        border: 1px solid #1f5a6a;
+        background: #0a1a20;
+        color: #5fd0e0;
+        cursor: pointer;
+      }
+      #fishingBtn:hover { background: #0e2630; color: #8fe6f0; }
+      /* Super Tsong Bros launch: a punchy red/orange brawler vibe, distinct from the others. */
+      #sbBtn {
+        font: inherit;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        padding: 7px 10px;
+        border-radius: 6px;
+        border: 1px solid #7a3322;
+        background: #200f0a;
+        color: #ff7a4f;
+        cursor: pointer;
+      }
+      #sbBtn:hover { background: #2e150c; color: #ff9d77; }
       /* Beta "World" launch: a cool teal "explore" vibe, set apart from the toolbar greys. */
       #worldBtn {
         border: 1px solid #2c6f6a;
@@ -1034,6 +1088,12 @@
       #betBoard .bet-total { margin-top: 4px; border-top: 1px solid #1c2640; padding-top: 3px; color: #9fb0d8; }
       /* Crypto market dropdown (sibling of #shop in #topLeft) */
       #market { position: relative; }
+      #newsBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #2a4a6a;
+        background: #0a1420; color: #7ab8e8; cursor: pointer;
+      }
+      #newsBtn:hover { background: #102030; }
       #marketBtn {
         font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
         padding: 7px 12px; border-radius: 6px; border: 1px solid #1f5a3a;
@@ -1076,6 +1136,18 @@
       #lootPanel h3, #marketplacePanel h3 {
         font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; margin: 8px 0 6px;
       }
+      #newsPanel {
+        position: fixed; top: 52px; left: 12px; width: 360px; max-height: 84vh; overflow-y: auto;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #newsPanel[hidden] { display: none; }
+      #newsPanel h3 { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; margin: 8px 0 6px; }
+      #newsBody { display: flex; flex-direction: column; gap: 6px; max-height: 60vh; overflow-y: auto; }
+      .news-item { display: flex; gap: 8px; align-items: flex-start; padding: 6px 6px; border-radius: 4px; background: #0b1020; border-left: 2px solid #3a5070; }
+      .news-time { font-size: 9px; color: #5a647e; white-space: nowrap; margin-top: 1px; min-width: 52px; }
+      .news-headline { font-size: 11px; color: #c8d4f0; line-height: 1.35; }
+      .news-note { font-size: 10px; color: #5a647e; margin-top: 8px; line-height: 1.4; }
       .loot-blurb { font-size: 11px; color: #8693b3; line-height: 1.4; margin-bottom: 8px; }
       .loot-odds { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 8px; }
       .loot-odds td { padding: 3px 4px; }
@@ -1266,6 +1338,413 @@
       #rouletteSpin:hover:not(:disabled) { filter: brightness(1.1); }
       #rouletteSpin:disabled { opacity: 0.45; cursor: default; }
       #rouletteNote { font-size: 10px; color: #5a647e; margin-top: 8px; line-height: 1.4; }
+
+      /* --- Blackjack --- */
+      #bjBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #3a5520;
+        background: #121e0a; color: #8df06a; cursor: pointer;
+      }
+      #bjBtn:hover { background: #1c2e12; }
+      #bjPanel {
+        position: fixed; top: 52px; left: 12px; width: 320px;
+        max-height: 84vh; overflow-y: auto;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #bjPanel[hidden] { display: none; }
+      #bjPanel h3 { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; margin: 8px 0 6px; }
+      .bj-table { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+      .bj-label { font-size: 10px; color: #6b7796; text-transform: uppercase; letter-spacing: 1px; }
+      .bj-cards { display: flex; gap: 6px; flex-wrap: wrap; min-height: 60px; }
+      .bj-card {
+        width: 38px; height: 56px; border-radius: 5px; border: 1px solid #3a4566;
+        background: #f0f0f0; color: #1a1a2e; font: 800 13px ui-monospace, monospace;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 2px; user-select: none; box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+      }
+      .bj-card.red { color: #cc1122; }
+      .bj-card.back { background: #1a2a5a; color: #3a5580; border-color: #2a3a60; font-size: 20px; }
+      .bj-card span { font-size: 15px; line-height: 1; }
+      .bj-status { font: 700 12px ui-monospace, monospace; color: #cdd7f5; margin-bottom: 6px; min-height: 16px; }
+      .bj-result { font: 800 14px ui-monospace, monospace; min-height: 18px; margin-bottom: 8px; }
+      .bj-win { color: #6ee7a8; } .bj-win.bj-bj { color: #ffd166; font-size: 16px; }
+      .bj-lose { color: #ff7a7a; } .bj-push { color: #a0b0d0; }
+      .bj-controls { display: flex; flex-direction: column; gap: 8px; }
+      .bj-bet-row { display: flex; align-items: center; gap: 8px; }
+      .bj-label-sm { font-size: 11px; color: #6b7796; }
+      .bj-bet-row input {
+        flex: 1; font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 5px;
+        border: 1px solid #2a3550; background: #060912; color: #fff; min-width: 0;
+      }
+      .bj-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+      .bj-deal-btn, .bj-action-btn {
+        font: inherit; font-size: 12px; font-weight: 700; padding: 6px 14px;
+        border-radius: 6px; cursor: pointer;
+      }
+      .bj-deal-btn { border: none; background: #22cc66; color: #0a1a0a; }
+      .bj-deal-btn:hover { background: #28e870; }
+      .bj-action-btn { border: 1px solid #2a3550; background: #11182c; color: #cdd7f5; }
+      .bj-action-btn:hover:not(:disabled) { background: #1a2238; }
+      .bj-action-btn:disabled { opacity: 0.4; cursor: default; }
+      .bj-deal-btn:disabled { opacity: 0.4; cursor: default; }
+      .bj-note { font-size: 10px; color: #5a647e; margin-top: 8px; line-height: 1.4; }
+
+      /* --- Craps --- */
+      #crapsBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #5a3a0a;
+        background: #1c1208; color: #f0a030; cursor: pointer;
+      }
+      #crapsBtn:hover { background: #261a0c; }
+      #crapsPanel {
+        position: fixed; top: 52px; left: 12px; width: 300px;
+        max-height: 84vh; overflow-y: auto;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #crapsPanel[hidden] { display: none; }
+      #crapsPanel h3 { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; margin: 8px 0 6px; }
+      .craps-dice { font-size: 40px; text-align: center; margin: 8px 0; letter-spacing: 8px; }
+      @keyframes crapsPop { 0% { transform: scale(1.4) rotate(-8deg); } 100% { transform: scale(1); } }
+      .craps-roll-pop { animation: crapsPop 0.5s ease-out; }
+      .craps-point-comeout { font: 700 11px ui-monospace, monospace; color: #9fb0d8; padding: 5px 8px; border-radius: 5px; background: #11182c; margin-bottom: 8px; }
+      .craps-point-active { font: 700 11px ui-monospace, monospace; color: #ffd166; padding: 5px 8px; border-radius: 5px; background: #1c1a0a; border: 1px solid #5a4a0a; margin-bottom: 8px; }
+      .craps-result { font: 800 13px ui-monospace, monospace; min-height: 18px; margin-bottom: 8px; }
+      .craps-win { color: #6ee7a8; } .craps-lose { color: #ff7a7a; }
+      .craps-push { color: #a0b0d0; } .craps-neutral { color: #cdd7f5; } .craps-rolling { color: #8898b8; }
+      .craps-bets { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
+      .craps-bet-row { display: flex; align-items: center; gap: 8px; }
+      .craps-bet-row label { font-size: 11px; color: #9fb0d8; white-space: nowrap; }
+      .craps-bet-row input {
+        flex: 1; font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 5px;
+        border: 1px solid #2a3550; background: #060912; color: #fff; min-width: 0;
+      }
+      .craps-roll-btn {
+        width: 100%; font: inherit; font-size: 13px; font-weight: 700; padding: 8px;
+        border-radius: 6px; border: none; background: #f0a030; color: #1a0c00; cursor: pointer;
+      }
+      .craps-roll-btn:hover { background: #ffc050; }
+      .craps-roll-btn:disabled { opacity: 0.4; cursor: default; }
+      .craps-note { font-size: 10px; color: #5a647e; margin-top: 8px; line-height: 1.4; }
+
+      /* --- Crash --- */
+      #crashBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #3a1a50;
+        background: #120a1c; color: #d080ff; cursor: pointer;
+      }
+      #crashBtn:hover { background: #1c1030; }
+      #crashPanel {
+        position: fixed; top: 52px; left: 12px; width: 320px;
+        max-height: 84vh; overflow-y: auto;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #crashPanel[hidden] { display: none; }
+      #crashPanel h3 { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; margin: 8px 0 6px; }
+      #crashCanvas { display: block; width: 100%; border-radius: 6px; border: 1px solid #1a2238; margin-bottom: 6px; }
+      .crash-mult {
+        font: 900 32px ui-monospace, monospace; text-align: center; letter-spacing: 2px;
+        padding: 4px 0 8px; transition: color 0.1s;
+      }
+      .crash-mult.idle { color: #6b7796; }
+      .crash-mult.live { color: #22e8ff; text-shadow: 0 0 14px rgba(34,232,255,0.5); }
+      .crash-mult.crashed { color: #ff4466; text-shadow: 0 0 14px rgba(255,68,102,0.5); }
+      .crash-status { font: 700 12px ui-monospace, monospace; color: #cdd7f5; min-height: 18px; margin-bottom: 8px; text-align: center; }
+      .crash-betters { max-height: 100px; overflow-y: auto; margin-bottom: 8px; display: flex; flex-direction: column; gap: 3px; }
+      .crash-no-bets { font-size: 11px; color: #4a5570; text-align: center; padding: 6px 0; }
+      .crash-row { display: flex; align-items: center; gap: 6px; font-size: 11px; padding: 2px 4px; border-radius: 4px; background: #0a1018; }
+      .crash-row-name { flex: 1; color: #9fb0d8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .crash-row-amt { color: #ffd166; font-weight: 700; }
+      .crash-badge { font-size: 11px; font-weight: 700; }
+      .crash-badge.cashed { color: #6ee7a8; }
+      .crash-badge.lost { color: #ff7a7a; }
+      .crash-badge.live { color: #22e8ff; }
+      .crash-controls { display: flex; flex-direction: column; gap: 6px; }
+      .crash-input-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+      .crash-label { font-size: 10px; color: #6b7796; white-space: nowrap; }
+      .crash-input-row input {
+        width: 70px; font: inherit; font-size: 12px; padding: 5px 6px; border-radius: 5px;
+        border: 1px solid #2a3550; background: #060912; color: #fff;
+      }
+      .crash-btn-row { display: flex; gap: 8px; }
+      .crash-bet-btn {
+        flex: 1; font: inherit; font-size: 12px; font-weight: 700; padding: 7px 0;
+        border-radius: 6px; border: none; background: #d080ff; color: #1a0a28; cursor: pointer;
+      }
+      .crash-bet-btn:hover:not(:disabled) { background: #e8a8ff; }
+      .crash-bet-btn:disabled { opacity: 0.4; cursor: default; }
+      .crash-cancel-btn {
+        flex: 0 0 auto; font: inherit; font-size: 12px; font-weight: 700; padding: 7px 12px;
+        border-radius: 6px; border: 1px solid #554455; background: #1a1020; color: #cc88cc; cursor: pointer;
+      }
+      .crash-cancel-btn:hover { background: #241630; }
+      .crash-cancel-btn[hidden] { display: none; }
+      .crash-cashout-btn {
+        flex: 1; font: inherit; font-size: 12px; font-weight: 700; padding: 7px 0;
+        border-radius: 6px; border: none; background: #22cc66; color: #0a1a0a; cursor: pointer;
+        animation: cashoutPulse 0.7s ease-in-out infinite alternate;
+      }
+      .crash-cashout-btn:hover { background: #28e870; }
+      .crash-cashout-btn[hidden] { display: none; }
+      @keyframes cashoutPulse { from { box-shadow: 0 0 4px #22cc66; } to { box-shadow: 0 0 18px #22cc66; } }
+      .crash-note { font-size: 10px; color: #5a647e; margin-top: 8px; line-height: 1.4; }
+
+      /* --- Slots --- */
+      #slotsBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #5a3a10;
+        background: #1c1208; color: #ffb830; cursor: pointer;
+      }
+      #slotsBtn:hover { background: #2a1c0e; }
+      #slotsPanel {
+        position: fixed; top: 52px; left: 12px; width: 280px;
+        max-height: 84vh; overflow-y: auto;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #slotsPanel[hidden] { display: none; }
+      #slotsPanel h3 { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; margin: 8px 0 6px; }
+      .slots-machine {
+        position: relative; background: #060c18; border: 2px solid #3a4566;
+        border-radius: 8px; padding: 8px; margin-bottom: 8px;
+        box-shadow: inset 0 2px 12px rgba(0,0,0,0.5);
+      }
+      .slots-reels { display: flex; gap: 6px; justify-content: center; }
+      .slots-reel {
+        flex: 1; background: #0a1020; border: 1px solid #2a3550; border-radius: 5px;
+        padding: 4px 0; display: flex; flex-direction: column; gap: 2px;
+        overflow: hidden;
+      }
+      .slots-sym {
+        font-size: 26px; text-align: center; line-height: 1.1; padding: 3px 0;
+        transition: transform 0.05s;
+      }
+      .slots-sym.center {
+        background: rgba(255,255,255,0.04); border-radius: 3px;
+      }
+      .slots-sym.win-sym {
+        animation: slotWinPop 0.4s ease-out;
+      }
+      @keyframes slotWinPop {
+        0% { transform: scale(1.5); } 60% { transform: scale(0.9); } 100% { transform: scale(1); }
+      }
+      /* Highlight bar on the center (pay) line */
+      .slots-payline {
+        position: absolute; left: 8px; right: 8px;
+        top: calc(8px + (100% - 16px) / 3 + 4px);
+        height: calc((100% - 16px) / 3);
+        border-top: 2px solid rgba(255,214,102,0.35);
+        border-bottom: 2px solid rgba(255,214,102,0.35);
+        border-radius: 3px; pointer-events: none;
+      }
+      .slots-result {
+        font: 800 13px ui-monospace, monospace; min-height: 20px; text-align: center; margin-bottom: 8px;
+      }
+      .slots-win { color: #6ee7a8; }
+      .slots-lose { color: #6b7796; }
+      @keyframes jackpotFlash { 0%,100% { color: #ffd166; } 50% { color: #ff6b9d; } }
+      .slots-jackpot { animation: jackpotFlash 0.4s ease-in-out 4; font-size: 15px; }
+      .slots-controls { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+      .slots-label { font-size: 11px; color: #6b7796; white-space: nowrap; }
+      .slots-controls input {
+        flex: 1; font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 5px;
+        border: 1px solid #2a3550; background: #060912; color: #fff; min-width: 0;
+      }
+      .slots-spin-btn {
+        font: inherit; font-size: 12px; font-weight: 700; padding: 6px 14px;
+        border-radius: 6px; border: none; background: #ffb830; color: #1a0c00; cursor: pointer; white-space: nowrap;
+      }
+      .slots-spin-btn:hover:not(:disabled) { background: #ffd060; }
+      .slots-spin-btn:disabled { opacity: 0.4; cursor: default; }
+      .slots-pay-table {
+        display: flex; flex-direction: column; gap: 3px;
+        background: #060c18; border: 1px solid #1a2238; border-radius: 6px; padding: 6px 8px;
+        margin-bottom: 8px;
+      }
+      .slots-pay-row {
+        display: flex; justify-content: space-between; align-items: center;
+        font: 12px ui-monospace, monospace; color: #9fb0d8;
+      }
+      .slots-pay-mult { color: #ffd166; font-weight: 700; }
+      .slots-note { font-size: 10px; color: #5a647e; line-height: 1.4; }
+
+      /* --- Plinko panel --- */
+      #plinkoBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #1e4a3a;
+        background: #0a1a14; color: #22d3ee; cursor: pointer;
+      }
+      #plinkoBtn:hover { background: #0e2a1c; }
+      #plinkoPanel {
+        position: fixed; top: 52px; left: 12px; width: 320px;
+        max-height: 84vh; overflow-y: auto;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #plinkoPanel[hidden] { display: none; }
+      #plinkoPanel h3 { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; margin: 8px 0 6px; }
+      .plinko-controls { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+      .plinko-label { font-size: 11px; color: #6b7796; white-space: nowrap; }
+      .plinko-controls input {
+        flex: 1; font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 5px;
+        border: 1px solid #2a3550; background: #060912; color: #fff; min-width: 0;
+      }
+      .plinko-drop-btn {
+        font: inherit; font-size: 12px; font-weight: 700; padding: 6px 14px;
+        border-radius: 6px; border: none; background: #22d3ee; color: #040d14; cursor: pointer; white-space: nowrap;
+      }
+      .plinko-drop-btn:hover:not(:disabled) { background: #5ee7f7; }
+      .plinko-drop-btn:disabled { opacity: 0.4; cursor: default; }
+      .plinko-result {
+        font: 800 13px ui-monospace, monospace; min-height: 20px; text-align: center; margin: 6px 0;
+      }
+      .plinko-win { color: #6ee7a8; }
+      .plinko-lose { color: #6b7796; }
+      .plinko-note { font-size: 10px; color: #5a647e; line-height: 1.4; margin-top: 8px; }
+
+      /* --- Horse Racing panel --- */
+      #horseBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #4a3a10;
+        background: #1a1208; color: #f59e0b; cursor: pointer;
+      }
+      #horseBtn:hover { background: #2a1c08; }
+      #horsePanel {
+        position: fixed; top: 52px; left: 12px; width: 320px;
+        max-height: 84vh; overflow-y: auto;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #horsePanel[hidden] { display: none; }
+      #horsePanel h3 { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; margin: 8px 0 6px; }
+      .horse-row {
+        display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px;
+        border: 1px solid transparent; margin-bottom: 4px; background: #060c18; cursor: pointer;
+        transition: border-color 0.1s;
+      }
+      .horse-row.selected { border-color: #22d3ee; background: #061824; }
+      .horse-row.winner { border-color: #22c55e; background: #061806; }
+      .horse-row.loser { opacity: 0.5; }
+      .horse-emoji { font-size: 20px; }
+      .horse-name { flex: 1; font-size: 12px; color: #cdd7f5; }
+      .horse-odds { font: 700 12px ui-monospace, monospace; color: #ffd166; }
+      .horse-sel-btn {
+        font: inherit; font-size: 11px; padding: 3px 8px; border-radius: 4px;
+        border: 1px solid #22d3ee; background: transparent; color: #22d3ee; cursor: pointer;
+      }
+      .horse-sel-btn:hover { background: #0e2030; }
+      .horse-loading { font-size: 13px; color: #6b7796; text-align: center; padding: 12px 0; }
+      .horse-bet-row { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+      .horse-bet-row label { font-size: 11px; color: #6b7796; white-space: nowrap; }
+      .horse-bet-row input {
+        flex: 1; font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 5px;
+        border: 1px solid #2a3550; background: #060912; color: #fff; min-width: 0;
+      }
+      .horse-place-btn {
+        font: inherit; font-size: 12px; font-weight: 700; padding: 6px 14px;
+        border-radius: 6px; border: none; background: #f59e0b; color: #1a0c00; cursor: pointer; white-space: nowrap;
+      }
+      .horse-place-btn:hover:not(:disabled) { background: #fbbf24; }
+      .horse-place-btn:disabled { opacity: 0.4; cursor: default; }
+      .horse-new-btn {
+        font: inherit; font-size: 12px; font-weight: 700; padding: 6px 14px;
+        border-radius: 6px; border: 1px solid #3b82f6; background: transparent; color: #3b82f6; cursor: pointer;
+      }
+      .horse-new-btn:hover { background: #0e1830; }
+      .horse-result {
+        font: 800 13px ui-monospace, monospace; min-height: 20px; text-align: center; margin: 6px 0;
+      }
+      .horse-win { color: #6ee7a8; }
+      .horse-lose { color: #6b7796; }
+      .horse-note { font-size: 10px; color: #5a647e; line-height: 1.4; margin-top: 8px; }
+
+      /* --- Hi-Lo panel --- */
+      #hiloBtn {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
+        padding: 7px 12px; border-radius: 6px; border: 1px solid #3a1050;
+        background: #150820; color: #a855f7; cursor: pointer;
+      }
+      #hiloBtn:hover { background: #1e0e30; }
+      #hiloPanel {
+        position: fixed; top: 52px; left: 12px; width: 300px;
+        max-height: 84vh; overflow-y: auto;
+        background: #0e1424; border: 1px solid #2a3550; border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
+      }
+      #hiloPanel[hidden] { display: none; }
+      #hiloPanel h3 { font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: #6b7796; margin: 8px 0 6px; }
+      #hiloCard {
+        width: 90px; height: 126px; margin: 0 auto 10px; border-radius: 10px;
+        background: #e0e8f0; display: flex; align-items: center; justify-content: center;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.5); position: relative; overflow: hidden;
+      }
+      .hilo-card-inner {
+        width: 100%; height: 100%; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; font-family: 'Georgia', serif;
+        position: relative; user-select: none;
+      }
+      .hilo-card-back {
+        font-size: 48px; color: #a855f7; background: #1a0a2e; border-radius: 10px;
+        display: flex; align-items: center; justify-content: center; width: 100%; height: 100%;
+      }
+      .hilo-card-corner {
+        position: absolute; font-size: 14px; font-weight: 700; line-height: 1.1; text-align: center;
+      }
+      .hilo-card-corner.tl { top: 5px; left: 6px; }
+      .hilo-card-corner.br { bottom: 5px; right: 6px; transform: rotate(180deg); }
+      .hilo-card-center { font-size: 36px; line-height: 1; }
+      .hilo-info {
+        display: flex; justify-content: space-between; font-size: 11px; color: #9fb0d8;
+        margin-bottom: 8px; padding: 6px 8px; background: #060c18; border-radius: 6px;
+      }
+      .hilo-info strong { color: #ffd166; }
+      .hilo-bet-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+      .hilo-bet-row label { font-size: 11px; color: #6b7796; white-space: nowrap; }
+      .hilo-bet-row input {
+        flex: 1; font: inherit; font-size: 13px; padding: 5px 8px; border-radius: 5px;
+        border: 1px solid #2a3550; background: #060912; color: #fff; min-width: 0;
+      }
+      .hilo-deal-btn {
+        font: inherit; font-size: 12px; font-weight: 700; padding: 6px 14px;
+        border-radius: 6px; border: none; background: #a855f7; color: #fff; cursor: pointer;
+        white-space: nowrap; width: 100%; margin-bottom: 8px;
+      }
+      .hilo-deal-btn:hover:not(:disabled) { background: #c084fc; }
+      .hilo-deal-btn:disabled { opacity: 0.4; cursor: default; }
+      .hilo-action-row {
+        display: flex; gap: 6px; margin-bottom: 6px;
+      }
+      .hilo-hi-btn, .hilo-lo-btn {
+        flex: 1; font: inherit; font-size: 13px; font-weight: 700; padding: 8px 0;
+        border-radius: 6px; border: none; cursor: pointer;
+      }
+      .hilo-hi-btn { background: #22c55e; color: #042410; }
+      .hilo-hi-btn:hover:not(:disabled) { background: #4ade80; }
+      .hilo-lo-btn { background: #ef4444; color: #200808; }
+      .hilo-lo-btn:hover:not(:disabled) { background: #f87171; }
+      .hilo-hi-btn:disabled, .hilo-lo-btn:disabled { opacity: 0.4; cursor: default; }
+      .hilo-cashout-btn {
+        width: 100%; font: inherit; font-size: 12px; font-weight: 700; padding: 6px;
+        border-radius: 6px; border: 1px solid #22c55e; background: transparent; color: #22c55e;
+        cursor: pointer; margin-bottom: 6px;
+      }
+      .hilo-cashout-btn:hover:not(:disabled) { background: #042410; }
+      .hilo-cashout-btn:disabled { opacity: 0.4; cursor: default; }
+      .hilo-new-btn {
+        width: 100%; font: inherit; font-size: 12px; font-weight: 700; padding: 6px;
+        border-radius: 6px; border: 1px solid #6b7796; background: transparent; color: #9fb0d8;
+        cursor: pointer; margin-bottom: 6px;
+      }
+      .hilo-new-btn:hover { background: #0e1424; }
+      .hilo-result {
+        font: 800 13px ui-monospace, monospace; min-height: 20px; text-align: center; margin: 4px 0;
+      }
+      .hilo-win { color: #6ee7a8; }
+      .hilo-lose { color: #6b7796; }
+      .hilo-note { font-size: 10px; color: #5a647e; line-height: 1.4; margin-top: 8px; }
+
       .coin-row {
         display: grid; grid-template-columns: 34px 1fr auto; gap: 8px; align-items: center;
         padding: 7px 0; border-top: 1px solid #1c2640;
@@ -1283,6 +1762,9 @@
       .coin-pos { font-size: 11px; color: #ffd166; margin-top: 2px; }
       .coin-pos .pl-up { color: #6ee7a8; }
       .coin-pos .pl-down { color: #ff7a7a; }
+      .pos-tax { font-size: 10px; font-weight: 700; }
+      .pos-tax.tax-wait { color: #ffb454; }
+      .pos-tax.tax-free { color: #6ee7a8; }
       .coin-actions { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
       .coin-buy { display: flex; align-items: center; gap: 3px; }
       .coin-trade { display: flex; gap: 4px; }
@@ -1321,7 +1803,6 @@
       #screenFx .fx.on { display: block; }
       .fx-blackout { background: radial-gradient(ellipse at center, rgba(0,0,0,0) 16%, rgba(0,0,0,0.5) 44%, rgba(0,0,0,0.96) 74%); animation: fxPulse 2.6s ease-in-out infinite; }
       @keyframes fxPulse { 0%,100% { opacity: 0.85; } 50% { opacity: 1; } }
-      .fx-bullet { background: rgba(40,90,220,0.22); box-shadow: inset 0 0 120px rgba(20,40,160,0.6); }
       .fx-vortex { background: conic-gradient(from 0deg, rgba(180,120,255,0), rgba(180,120,255,0.28), rgba(120,200,255,0), rgba(180,120,255,0.28), rgba(180,120,255,0)); animation: fxSpin 2.2s linear infinite; mix-blend-mode: screen; }
       @keyframes fxSpin { to { transform: rotate(360deg); } }
       .fx-glitch { background: repeating-linear-gradient(0deg, rgba(0,0,0,0) 0 2px, rgba(0,0,0,0.28) 2px 4px); mix-blend-mode: overlay; animation: fxGlitch 0.16s steps(2) infinite; }
@@ -1934,6 +2415,63 @@
         font-size: 12px;
         padding: 4px 0;
       }
+      /* Elo profile modal — opened by clicking a leaderboard row. Reuses the same card
+         shape as the balance-sheet modal (#balanceCard) via the shared #balanceCard id
+         pattern, but lives in its own overlay so both modals can coexist. */
+      #eloModal {
+        position: fixed;
+        inset: 0;
+        z-index: 130;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(4, 7, 16, 0.72);
+      }
+      #eloModal[hidden] {
+        display: none;
+      }
+      #eloCard {
+        width: min(92vw, 380px);
+        max-height: 80vh;
+        overflow-y: auto;
+        background: #0e1424;
+        border: 1px solid #3a3320;
+        border-radius: 12px;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
+        padding: 16px 18px 18px;
+      }
+      #eloHead {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 0.5px;
+        color: #4ade80;
+        margin-bottom: 12px;
+      }
+      #eloName {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #eloClose {
+        font: inherit;
+        font-size: 15px;
+        line-height: 1;
+        flex: 0 0 auto;
+        padding: 4px 8px;
+        border-radius: 6px;
+        border: 1px solid #2a3550;
+        background: #0e1424;
+        color: #9fb0d8;
+        cursor: pointer;
+      }
+      #eloClose:hover {
+        background: #18203a;
+        color: #e8eefc;
+      }
       /* Small gold "tip" button shown next to a player's name on the boards. */
       .tip-btn {
         font: inherit;
@@ -2107,6 +2645,55 @@
       #tipSend:hover {
         background: #ffdf6b;
       }
+      /* Netizen Challenge dialog — centered card, same family as the tip/balance modals. */
+      #netizenChallengeModal {
+        position: fixed; inset: 0; z-index: 9999;
+        display: flex; align-items: center; justify-content: center;
+        background: rgba(4, 7, 16, 0.72);
+      }
+      #netizenChallengeModal[hidden] { display: none; }
+      #netizenChallengeCard {
+        width: min(92vw, 320px); background: #0e1424; border: 1px solid #3a3a6a;
+        border-radius: 12px; box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
+        padding: 16px 18px 18px;
+      }
+      #netizenChallengeHead {
+        display: flex; align-items: center; justify-content: space-between; gap: 10px;
+        font-size: 16px; font-weight: 700; letter-spacing: 0.5px; color: #e8eefc; margin-bottom: 12px;
+      }
+      #netizenChallengeName { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      #netizenChallengeClose {
+        font: inherit; font-size: 15px; line-height: 1; flex: 0 0 auto; padding: 4px 8px;
+        border-radius: 6px; border: 1px solid #2a3550; background: #0e1424; color: #9fb0d8; cursor: pointer;
+      }
+      #netizenChallengeClose:hover { background: #18203a; color: #e8eefc; }
+      #netizenChallengeBody { display: flex; flex-direction: column; gap: 10px; }
+      #netizenChallengeInfo { font-size: 13px; color: #cdd7f5; line-height: 1.5; }
+      #netizenChallengeNetWorth { color: #ffd23f; font-weight: 700; }
+      .nc-warn { font-size: 12px; color: #ff8a8a; background: #2a1411; border: 1px solid #6b2a1f; border-radius: 6px; padding: 8px 10px; }
+      #netizenChallengeRow { display: flex; align-items: center; gap: 6px; }
+      #netizenChallengeRow .nc-label { font-size: 12px; color: #9fb0d8; white-space: nowrap; }
+      #netizenChallengeRow input {
+        flex: 1; font: inherit; font-size: 14px; font-weight: 700; padding: 6px 8px; border-radius: 6px;
+        border: 1px solid #2a3550; background: #060a14; color: #ffd166; min-width: 0; text-align: center;
+      }
+      #netizenChallengeRow input::-webkit-inner-spin-button,
+      #netizenChallengeRow input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+      #netizenChallengeRow input { -moz-appearance: textfield; appearance: textfield; }
+      #netizenChallengeRow button {
+        font: inherit; font-size: 16px; font-weight: 700; line-height: 1; padding: 5px 10px;
+        border-radius: 6px; border: 1px solid #2a3550; background: #1a2035; color: #cdd7f5; cursor: pointer;
+      }
+      #netizenChallengeRow button:hover { background: #2d4070; color: #fff; }
+      .nc-note { font-size: 11px; color: #6b7796; }
+      #netizenChallengeBtn {
+        width: 100%; font: inherit; font-size: 14px; font-weight: 700; padding: 10px 0;
+        border-radius: 8px; border: none; background: #ff5cc8; color: #1a1020; cursor: pointer;
+        text-shadow: 0 1px 0 rgba(255,255,255,0.3);
+      }
+      #netizenChallengeBtn:hover:not(:disabled) { filter: brightness(1.1); }
+      #netizenChallengeBtn:disabled { opacity: 0.45; cursor: default; }
+
       /* CHANGELOG dropdown, pinned to the top-right corner. */
       #changelog {
         position: fixed;
@@ -2699,7 +3286,7 @@
       @media (max-width: 768px) {
         body {
           gap: 8px;
-          padding: 0 6px;
+          padding: 0 6px 76px;
           /* The sticky tab bar handles top clearance; no extra padding needed. */
           padding-top: 0;
         }
@@ -2750,15 +3337,16 @@
           width: 100%;
           height: 60vh;
         }
-        #leaderboard {
+        #boards {
           width: 100%;
         }
         #topLeft {
           top: 6px;
           left: 6px;
           gap: 4px;
+          flex-wrap: wrap;
         }
-        #viewModeBtn, #muteBtn, #workBtn, #termBtn, #gameModesBtn, #powerupInfoBtn, #marketBtn, #loanBtn, #rouletteBtn, #arcadeBtn, #casinoBtn {
+        #viewModeBtn, #muteBtn, #workMenuBtn, #gameModesBtn, #powerupInfoBtn, #loanBtn, #rouletteBtn, #arcadeBtn, #casinoBtn, #economyBtn {
           font-size: 10px;
           padding: 4px 8px;
         }
@@ -2807,6 +3395,16 @@
           font-size: 11px;
           padding: 3px 8px;
         }
+        /* Mobile panels: full-width sheets for usability */
+        #marketPanel, #shopPanel, #loanPanel, #roulettePanel, #bjPanel,
+        #crapsPanel, #crashPanel, #slotsPanel, #lootPanel, #marketplacePanel,
+        #newsPanel, #plinkoPanel, #horsePanel, #hiloPanel {
+          position: fixed; left: 0; right: 0; top: auto; bottom: 0;
+          max-width: 100vw; max-height: 80vh; overflow-y: auto;
+          border-radius: 12px 12px 0 0; z-index: 70;
+          box-shadow: 0 -6px 24px rgba(0,0,0,0.5);
+        }
+        #marketPanel, #shopPanel { top: 0; max-height: 90vh; } /* taller sheets for content-heavy panels */
       }
 
       /* --- Work mode: a full-screen spreadsheet disguise ("boss key"). Covers everything,
@@ -2935,8 +3533,13 @@
     <div id="topLeft">
       <button id="muteBtn" type="button" aria-pressed="false" title="Toggle sound on/off (M)">🔊</button>
       <button id="worldBtn" type="button" aria-pressed="false" title="Walk around the TSONG world (beta) — a free-roam map with everyone on it">🌍 World</button>
-      <button id="workBtn" type="button" title="Work mode — disguise as a spreadsheet (Esc to exit)">📊 Work</button>
-      <button id="termBtn" type="button" title="Terminal mode — disguise as a terminal (Esc to exit)">💻 Term</button>
+      <div id="workMenu">
+        <button id="workMenuBtn" type="button" aria-expanded="false" title="Boss-key disguises">📊 Work <span class="caret">▾</span></button>
+        <div id="workMenuPanel" class="nav-menu" hidden>
+          <button id="workBtn" type="button" title="Work mode — disguise as a spreadsheet (Esc to exit)">📊 Spreadsheet</button>
+          <button id="termBtn" type="button" title="Terminal mode — disguise as a terminal (Esc to exit)">💻 Term</button>
+        </div>
+      </div>
       <div id="arcade">
         <button id="arcadeBtn" type="button" aria-expanded="false" title="Minigames">🎮 Arcade <span class="caret">▾</span></button>
         <div id="arcadePanel" class="nav-menu" hidden>
@@ -2945,6 +3548,8 @@
           <button id="typeDieBtn" type="button" title="Type or Die — co-op typing horde defense. Type to survive, together.">⌨️ Type or Die</button>
           <button id="nuketownBtn" type="button" title="Nuketown — up to 3v3 team deathmatch (FPS)">💣 Nuketown</button>
           <button id="streetDemonsBtn" type="button" title="Street Demons: Grand Prix — 4-player pseudo-3D racer. Boost, retire your rivals, win the cup.">🏁 Street Demons</button>
+          <button id="fishingBtn" type="button" title="Fishing — cast a line at the pond">🎣 Fishing</button>
+          <button id="sbBtn" type="button" title="Super Tsong Bros — 2–4 player platform fighter (Smash-like)">🥊 Super Tsong Bros</button>
         </div>
       </div>
       <div id="shop">
@@ -2959,18 +3564,32 @@
             <button id="tabTitles" class="shop-tab" type="button">Titles</button>
             <button id="tabSongs" class="shop-tab" type="button">🎵 Songs</button>
             <button id="tabCars" class="shop-tab" type="button">🚗 Cars</button>
+            <button id="tabPets" class="shop-tab" type="button">🐾 Pets</button>
           </div>
           <div id="shopItems"></div>
         </div>
       </div>
-      <div id="casino">
-        <button id="casinoBtn" type="button" aria-expanded="false" title="Market, loans &amp; roulette">🎰 Casino <span class="caret">▾</span></button>
-        <div id="casinoPanel" class="nav-menu" hidden>
+      <div id="economy">
+        <button id="economyBtn" type="button" aria-expanded="false" title="Crypto market &amp; news">📰 Economy <span class="caret">▾</span></button>
+        <div id="economyPanel" class="nav-menu" hidden>
+          <button id="newsBtn" type="button" aria-expanded="false" title="Market news — hourly headlines &amp; whispers">📰 News</button>
           <button id="marketBtn" type="button" aria-expanded="false" title="Invest coins in joke cryptos">📈 Market</button>
+        </div>
+      </div>
+      <div id="casino">
+        <button id="casinoBtn" type="button" aria-expanded="false" title="Casino games &amp; loans">🎰 Casino <span class="caret">▾</span></button>
+        <div id="casinoPanel" class="nav-menu" hidden>
           <button id="lootBtn" type="button" aria-expanded="false" title="Open loot boxes — roll for scarce, capped exclusives">🎁 Loot Box</button>
           <button id="marketplaceBtn" type="button" aria-expanded="false" title="Black Market — buy &amp; sell scarce exclusives with other players">🛒 Black Market</button>
           <button id="loanBtn" type="button" aria-expanded="false" title="Borrow coins from Davis — pay back 1.5× by the daily reset">💸 Get Loan</button>
           <button id="rouletteBtn" type="button" aria-expanded="false" title="Play roulette — bet coins on the wheel">🎡 Roulette</button>
+          <button id="bjBtn" type="button" aria-expanded="false" title="Play blackjack — beat the dealer to 21">🃏 Blackjack</button>
+          <button id="crapsBtn" type="button" aria-expanded="false" title="Shoot craps — pass or don't pass">🎲 Craps</button>
+          <button id="crashBtn" type="button" aria-expanded="false" title="Crash — cash out before the multiplier crashes">🚀 Crash</button>
+          <button id="slotsBtn" type="button" aria-expanded="false" title="Slots — spin the 3-reel machine">🎰 Slots</button>
+          <button id="plinkoBtn" type="button" aria-expanded="false" title="Drop a ball down the pegboard">🎯 Plinko</button>
+          <button id="horseBtn" type="button" aria-expanded="false" title="Pick a horse and bet on the race">🏇 Horses</button>
+          <button id="hiloBtn" type="button" aria-expanded="false" title="Guess higher or lower, chain multipliers">🃏 Hi-Lo</button>
         </div>
       </div>
       <div id="marketPanel" hidden>
@@ -2985,6 +3604,11 @@
         </div>
         <div id="marketList"></div>
         <div id="marketNote"><b>Buy</b> to bet a coin rises; <b>Short</b> to bet it falls. A short profits as the price drops (toward +100% near zero), but if the price climbs past your entry it goes <b>negative</b> — covering then <b>costs</b> you coins, so a short gone wrong can drain far more than you staked. Prices update every 30s and drift up over the day. ⚠️ Unpaid loans build market instability; at 100% a <b>CRASH</b> tanks a random handful of coins by random amounts — while one random coin <b>spikes up</b> (you never know which, or how hard), so blanket-shorting is never safe.</div>
+      </div>
+      <div id="newsPanel" hidden>
+        <h3>📰 Market News</h3>
+        <div id="newsBody"></div>
+        <div class="news-note">Headlines appear hourly during market hours (M–F 9am–5pm ET). Each one hints at a move that may land at any time — read the room wisely.</div>
       </div>
       <div id="loanPanel" hidden>
         <h3>Davis @ Citizens</h3>
@@ -3017,6 +3641,140 @@
           </div>
         </div>
         <div id="rouletteNote">Single-zero wheel. Straight number pays 35:1, dozens 2:1, red/black/odd/even/half 1:1. The green 0 is the house edge. Pick a chip, click the board to stake, then Spin.</div>
+      </div>
+      <!-- Blackjack panel -->
+      <div id="bjPanel" hidden>
+        <h3>Blackjack · <span id="bjCoins">0</span> 🪙</h3>
+        <div class="bj-table">
+          <div class="bj-label">Dealer</div>
+          <div id="bjDealerCards" class="bj-cards"></div>
+          <div class="bj-label">You</div>
+          <div id="bjPlayerCards" class="bj-cards"></div>
+        </div>
+        <div id="bjStatus" class="bj-status"></div>
+        <div id="bjResult" class="bj-result"></div>
+        <div class="bj-controls">
+          <div class="bj-bet-row">
+            <span class="bj-label-sm">Bet 🪙</span>
+            <input id="bjBet" type="number" min="1" max="5000" value="100" />
+          </div>
+          <div class="bj-btns">
+            <button id="bjDeal" type="button" class="bj-deal-btn">Deal</button>
+            <button id="bjHit" type="button" class="bj-action-btn" disabled>Hit</button>
+            <button id="bjStand" type="button" class="bj-action-btn" disabled>Stand</button>
+            <button id="bjDouble" type="button" class="bj-action-btn" disabled>Double</button>
+          </div>
+        </div>
+        <div class="bj-note">Beat the dealer's hand without going over 21. Blackjack pays 3:2. Dealer stands on all 17s. Max bet 5,000 🪙.</div>
+      </div>
+      <!-- Craps panel -->
+      <div id="crapsPanel" hidden>
+        <h3>Street Craps · <span id="crapsCoins">0</span> 🪙</h3>
+        <div id="crapsDice" class="craps-dice">⚀ ⚀</div>
+        <div id="crapsPoint" class="craps-point-comeout">Come-out roll</div>
+        <div id="crapsResult" class="craps-result"></div>
+        <div class="craps-bets">
+          <div class="craps-bet-row">
+            <label>Pass Line 🪙</label>
+            <input id="crapsPass" type="number" min="0" max="2000" value="100" />
+          </div>
+          <div class="craps-bet-row">
+            <label>Don't Pass 🪙</label>
+            <input id="crapsDontPass" type="number" min="0" max="2000" value="0" />
+          </div>
+        </div>
+        <button id="crapsRoll" type="button" class="craps-roll-btn">🎲 Roll</button>
+        <div class="craps-note">Come-out: 7/11 = Pass wins · 2/3 = Don't Pass wins · 12 = Don't Pass pushes · any other sets the point. Max 2,000 🪙 per bet.</div>
+      </div>
+      <!-- Crash panel -->
+      <div id="crashPanel" hidden>
+        <h3>Crash · <span id="crashCoins">0</span> 🪙</h3>
+        <canvas id="crashCanvas" width="300" height="120"></canvas>
+        <div id="crashMult" class="crash-mult idle">1.00×</div>
+        <div id="crashStatus" class="crash-status">Waiting for next round…</div>
+        <div id="crashBetters" class="crash-betters"></div>
+        <div class="crash-controls">
+          <div class="crash-input-row">
+            <span class="crash-label">Bet 🪙</span>
+            <input id="crashBet" type="number" min="1" max="3000" value="50" />
+            <span class="crash-label">Auto cashout ×</span>
+            <input id="crashAuto" type="number" min="1.01" step="0.1" placeholder="—" />
+          </div>
+          <div class="crash-btn-row">
+            <button id="crashBetBtn" type="button" class="crash-bet-btn">Place Bet</button>
+            <button id="crashCancelBetBtn" type="button" class="crash-cancel-btn" hidden>✖ Cancel</button>
+            <button id="crashCashoutBtn" type="button" class="crash-cashout-btn" hidden>💰 Cash Out</button>
+          </div>
+        </div>
+        <div class="crash-note">Bet during the 12s window. Multiplier rises from 1×. Cash out any time — or lose everything when it crashes. Max 3,000 🪙.</div>
+      </div>
+      <!-- Slots panel -->
+      <div id="slotsPanel" hidden>
+        <h3>Slots · <span id="slotsCoins">0</span> 🪙</h3>
+        <div id="slotsMachine" class="slots-machine">
+          <div class="slots-reels">
+            <div id="slotsReel0" class="slots-reel"></div>
+            <div id="slotsReel1" class="slots-reel"></div>
+            <div id="slotsReel2" class="slots-reel"></div>
+          </div>
+          <div class="slots-payline"></div>
+        </div>
+        <div id="slotsResult" class="slots-result"></div>
+        <div class="slots-controls">
+          <span class="slots-label">Bet 🪙</span>
+          <input id="slotsBet" type="number" min="1" max="1000" value="10" />
+          <button id="slotsSpin" type="button" class="slots-spin-btn">🎰 Spin</button>
+        </div>
+        <div id="slotsPayTable" class="slots-pay-table"></div>
+        <div class="slots-note">Match 3 identical symbols on the center row to win. 7️⃣ jackpot = 100× your bet. Max bet 1,000 🪙.</div>
+      </div>
+      <!-- Plinko panel -->
+      <div id="plinkoPanel" hidden>
+        <h3>Plinko · <span id="plinkoCoins">0</span> 🪙</h3>
+        <canvas id="plinkoCanvas" width="296" height="260"></canvas>
+        <div id="plinkoResult" class="plinko-result"></div>
+        <div class="plinko-controls">
+          <span class="plinko-label">Bet 🪙</span>
+          <input id="plinkoBet" type="number" min="1" max="50000" value="100" />
+          <button id="plinkoDrop" type="button" class="plinko-drop-btn">🎯 Drop</button>
+        </div>
+        <div class="plinko-note">Ball bounces left/right at each of 8 pegs. Center slot pays 26×, edges also 26×, with lower multipliers in between. Max bet 50,000 🪙.</div>
+      </div>
+      <!-- Horse Racing panel -->
+      <div id="horsePanel" hidden>
+        <h3>Horse Racing · <span id="horseCoins">0</span> 🪙</h3>
+        <div id="horseList"><div class="horse-loading">🐎 Loading race…</div></div>
+        <div class="horse-bet-row">
+          <label>Bet 🪙</label>
+          <input id="horseBet" type="number" min="1" max="50000" value="100" />
+          <button id="horsePlaceBet" type="button" class="horse-place-btn" disabled>Place Bet</button>
+        </div>
+        <div id="horseResult" class="horse-result"></div>
+        <canvas id="horseCanvas" width="296" height="120"></canvas>
+        <button id="horseNewRace" type="button" class="horse-new-btn" hidden>🏇 New Race</button>
+        <div class="horse-note">Pick your horse, place your bet, watch the race. Lower odds = more likely to win, lower payout. Max bet 50,000 🪙.</div>
+      </div>
+      <!-- Hi-Lo panel -->
+      <div id="hiloPanel" hidden>
+        <h3>Hi-Lo · <span id="hiloCoins">0</span> 🪙</h3>
+        <div id="hiloCard"></div>
+        <div class="hilo-info">
+          <span>Multiplier: <strong id="hiloMult">1.00×</strong></span>
+          <span>Payout: <strong id="hiloPending">0</strong> 🪙</span>
+        </div>
+        <div class="hilo-bet-row">
+          <label>Bet 🪙</label>
+          <input id="hiloBet" type="number" min="1" max="50000" value="100" />
+        </div>
+        <button id="hiloDeal" type="button" class="hilo-deal-btn">Deal Card</button>
+        <div class="hilo-action-row">
+          <button id="hiloHi" type="button" class="hilo-hi-btn" hidden>Higher 🔼</button>
+          <button id="hiloLo" type="button" class="hilo-lo-btn" hidden>Lower 🔽</button>
+        </div>
+        <button id="hiloCashoutBtn" type="button" class="hilo-cashout-btn" hidden>💰 Cash Out</button>
+        <button id="hiloNewGame" type="button" class="hilo-new-btn" hidden>↩ New Game</button>
+        <div id="hiloResult" class="hilo-result"></div>
+        <div class="hilo-note">Get a card, guess Higher or Lower, multiply your winnings. Wrong guess = bust. A = 1, K = 13. Ties re-draw. Max bet 50,000 🪙.</div>
       </div>
       <div id="lootPanel" hidden>
         <h3>🎁 Loot Box</h3>
@@ -3356,13 +4114,7 @@
                 <span class="pu-desc">The court goes dark for the point</span>
               </div>
             </div>
-            <div class="pu-row">
-              <canvas class="pu-icon" data-kind="bullettime" width="40" height="40"></canvas>
-              <div class="pu-info">
-                <span class="pu-name" style="color:#5aa0ff">bullet time</span>
-                <span class="pu-desc">Everything slows down with a blue tint</span>
-              </div>
-            </div>
+
             <div class="pu-row">
               <canvas class="pu-icon" data-kind="vortex" width="40" height="40"></canvas>
               <div class="pu-info">
@@ -3438,6 +4190,15 @@
         <div id="balanceBody"></div>
       </div>
     </div>
+    <div id="eloModal" hidden>
+      <div id="eloCard" role="dialog" aria-modal="true" aria-label="ELO profile">
+        <div id="eloHead">
+          <span id="eloName">ELO Profile</span>
+          <button id="eloClose" type="button" aria-label="Close">✕</button>
+        </div>
+        <div id="eloBody"></div>
+      </div>
+    </div>
     <div id="tipModal" hidden>
       <div id="tipCard" role="dialog" aria-modal="true" aria-label="Tip a player">
         <div id="tipHead">
@@ -3458,6 +4219,29 @@
           </div>
           <div id="tipStatus"></div>
           <button id="tipSend" type="button">Send tip 🪙</button>
+        </div>
+      </div>
+    </div>
+    <!-- Netizen Challenge dialog -->
+    <div id="netizenChallengeModal" hidden>
+      <div id="netizenChallengeCard" role="dialog" aria-modal="true" aria-label="Challenge a Netizen">
+        <div id="netizenChallengeHead">
+          <span id="netizenChallengeName">Netizen</span>
+          <button id="netizenChallengeClose" type="button" aria-label="Close">✕</button>
+        </div>
+        <div id="netizenChallengeBody">
+          <div id="netizenChallengeInfo">
+            <span id="netizenChallengeNetWorth">Net worth: 0 🪙</span>
+          </div>
+          <div id="netizenChallengeWarn" class="nc-warn" hidden>Already challenged today — try again tomorrow.</div>
+          <div id="netizenChallengeRow">
+            <span class="nc-label">Wager 🪙</span>
+            <button id="ncWagerMinus" type="button">−</button>
+            <input id="ncWager" type="number" min="100" step="1" value="100" inputmode="numeric" />
+            <button id="ncWagerPlus" type="button">+</button>
+          </div>
+          <div id="ncMaxWin" class="nc-note">Max win: — 🪙</div>
+          <button id="netizenChallengeBtn" type="button">Challenge to a Duel!</button>
         </div>
       </div>
     </div>
@@ -3528,7 +4312,6 @@
              the board in any view; layers are toggled by main.ts. Never intercepts input. -->
         <div id="screenFx" aria-hidden="true">
           <div class="fx fx-blackout"></div>
-          <div class="fx fx-bullet"></div>
           <div class="fx fx-vortex"></div>
           <div class="fx fx-glitch"></div>
           <div class="fx fx-smoke"></div>
@@ -3595,6 +4378,7 @@
         <h2>Chat
           <label style="font-size:12px;font-weight:normal;color:#4a5580;cursor:pointer;margin-left:6px;"><input type="checkbox" id="hideCmds" style="vertical-align:middle;margin-right:3px;">hide commands</label>
           <label style="font-size:12px;font-weight:normal;color:#4a5580;cursor:pointer;margin-left:6px;"><input type="checkbox" id="hideTimestamps" style="vertical-align:middle;margin-right:3px;">hide times</label>
+          <label style="font-size:12px;font-weight:normal;color:#4a5580;cursor:pointer;margin-left:6px;"><input type="checkbox" id="hideNetizenChat" style="vertical-align:middle;margin-right:3px;">market chatter</label>
         </h2>
         <div id="chatlog"></div>
         <form id="chatForm">

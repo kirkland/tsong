@@ -144,7 +144,7 @@ export const TARGET = {
 //   rotate — the entire court rotates 90° for the rest of the match
 export const POWERUPS = [
   'grow', 'shrink', 'smash', 'slow', 'multi',
-  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate', 'fritz', 'disco', 'blaster', 'minion', 'earthquake', 'coins', 'blackout', 'bullettime', 'vortex', 'glitch', 'smoke', 'tilt', 'roam',
+  'freeze', 'curve', 'blind', 'mirror', 'shield', 'ghost', 'tiny', 'warp', 'bigball', 'rotate', 'fritz', 'disco', 'blaster', 'minion', 'earthquake', 'coins', 'blackout', 'vortex', 'glitch', 'smoke', 'tilt', 'roam',
 ] as const;
 export type PowerupKind = (typeof POWERUPS)[number];
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
@@ -162,9 +162,9 @@ export const COIN_SCALE = 100;
 export interface CosmeticItem {
   id: string;
   name: string;
-  slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car';
+  slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'pet';
   price: number;
-  locked?: 'campaign'; // not buyable — unlocked by an in-game achievement (e.g. clearing the campaign)
+  locked?: 'campaign' | 'fishing'; // not buyable — unlocked by an in-game achievement (clearing the campaign, landing a legendary fish, …)
   audio?: string; // for 'song' items: path to the mp3 that plays during your matches
 }
 // Static cosmetics cost 1000 coins; animated ones cost 2000 (10×/20× the COIN_SCALE base).
@@ -202,6 +202,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'wood', name: 'Wood', slot: 'skin', price: 1000 },
   { id: 'hologram', name: 'Hologram', slot: 'skin', price: 2000 }, // animated
   { id: 'venom', name: 'Venom', slot: 'skin', price: 2000 }, // animated
+  { id: 'pickle', name: 'Pickle Rick', slot: 'skin', price: 2000 }, // animated — I turned myself into a paddle, Morty!
   // Paddle trails — a fading streak behind the paddle as it moves. Animated ones cost 2000.
   { id: 'comet', name: 'Comet', slot: 'trail', price: 1000 },
   { id: 'frostwake', name: 'Frost Wake', slot: 'trail', price: 1000 },
@@ -213,6 +214,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   // is NOT buyable — it's unlocked only by clearing the campaign.
   { id: 'davisslayer', name: '🏆 Davis Slayer', slot: 'title', price: 0, locked: 'campaign' },
   { id: 'flawless', name: '💯 Flawless', slot: 'title', price: 0, locked: 'campaign' }, // perfect campaign run only
+  { id: 'angler', name: '🎣 Angler', slot: 'title', price: 0, locked: 'fishing' }, // land a legendary fish
   { id: 'clown', name: '🤡 Clown', slot: 'title', price: 1000 },
   { id: 'sharpshooter', name: '🎯 Sharpshooter', slot: 'title', price: 3000 },
   { id: 'champion', name: '🏅 Champion', slot: 'title', price: 3000 },
@@ -247,6 +249,15 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'car-coupe', name: '🚗 Coupe', slot: 'car', price: 8000 },
   { id: 'car-drifter', name: '🏎️ Drift King', slot: 'car', price: 20000 },
   { id: 'car-muscle', name: '🚙 Muscle', slot: 'car', price: 35000 },
+  // Pets (slot 'pet') — follow you around the World map; look/animation keyed by PETS below.
+  { id: 'pet-rock', name: '🪨 Pet Rock', slot: 'pet', price: 50000 },
+  { id: 'pet-pikachu', name: '⚡ Pikachu', slot: 'pet', price: 100000 },
+  { id: 'pet-pacman', name: '🟡 Pac-Man', slot: 'pet', price: 150000 },
+  // New common loot-box refresh items
+  { id: 'beret', name: 'Beret', slot: 'hat', price: 1000 },
+  { id: 'catears', name: 'Cat Ears', slot: 'hat', price: 2000 }, // animated
+  { id: 'carbon', name: 'Carbon Fiber', slot: 'skin', price: 2000 }, // animated
+  { id: 'mermaid', name: 'Mermaid', slot: 'skin', price: 2000 }, // animated
 ] as const;
 // --- Economy Overhaul: scarce "exclusive" cosmetics ---
 // Loot-box-only cosmetics with a HARD global mint cap (see exclusive_supply in the DB). They are
@@ -265,10 +276,13 @@ export interface ExclusiveItem {
 export const EXCLUSIVES: readonly ExclusiveItem[] = [
   { id: 'x-voidcrown',   name: '🕳️ Void Crown',      slot: 'hat',   cap: 1, rarity: 'mythic' },     // one-of-one grail
   { id: 'x-genesis',     name: '🌌 Genesis Skin',     slot: 'skin',  cap: 1, rarity: 'mythic' },     // one-of-one grail
+  { id: 'x-singularity', name: '🌀 Singularity',      slot: 'trail', cap: 1, rarity: 'mythic' },     // one-of-one grail
   { id: 'x-eclipse',     name: '🌑 Eclipse Trail',    slot: 'trail', cap: 3, rarity: 'legendary' },
   { id: 'x-prismhalo',   name: '💠 Prism Halo',       slot: 'hat',   cap: 3, rarity: 'legendary' },
+  { id: 'x-jackpot',     name: '🎰 Jackpot Crown',    slot: 'hat',   cap: 3, rarity: 'legendary' },
   { id: 'x-founder',     name: '🪙 Founder',          slot: 'title', cap: 3, rarity: 'epic' },
   { id: 'x-quantum',     name: '⚛️ Quantum Skin',     slot: 'skin',  cap: 3, rarity: 'epic' },
+  { id: 'x-midas',       name: '👑 Midas Touch',      slot: 'skin',  cap: 3, rarity: 'epic' },
 ] as const;
 export function isExclusive(id: string): boolean {
   return EXCLUSIVES.some((x) => x.id === id);
@@ -324,12 +338,12 @@ export type BotLevel = (typeof BOT_LEVELS)[number];
 // Built to grow: to put a new venue on the map (a car dealership, a house you can buy, …),
 // add a WORLD_BUILDINGS entry and a handler for its `kind` on the client. Nothing else in
 // the protocol needs to change.
-export const WORLD = {
-  w: 3200,      // map width, world units
-  h: 2200,      // map height, world units
-  spawnX: 1600, // where a fresh avatar appears (the central plaza)
+export const WORLD: { w: number; h: number; spawnX: number; spawnY: number } = {
+  w: 3200,
+  h: 2200,
+  spawnX: 1600,
   spawnY: 1240,
-} as const;
+};
 export const WORLD_AVATAR = {
   r: 16,        // avatar body radius, world units
   speed: 280,   // on-foot walk speed, world units / second
@@ -362,9 +376,25 @@ export function carById(id: string | null | undefined): CarSpec | null {
   return CARS.find((c) => c.id === id) ?? null;
 }
 
+// --- Pets -------------------------------------------------------------------------------
+// A pet is a cosmetic that TRAILS BEHIND your avatar in the World — a little sprite that
+// follows you around (unlike a car, which replaces/IS the avatar while driving). A pet id
+// matches a COSMETICS entry with slot 'pet'. `kind` selects the custom drawn sprite in the
+// World renderer; `emoji` is just the small shop-tile preview glyph.
+export type PetKind = 'rock' | 'pikachu' | 'pacman';
+export const PETS: readonly { id: string; emoji: string; kind: PetKind }[] = [
+  { id: 'pet-rock', emoji: '🪨', kind: 'rock' },       // a googly-eyed rock
+  { id: 'pet-pikachu', emoji: '⚡', kind: 'pikachu' },  // Pikachu
+  { id: 'pet-pacman', emoji: '🟡', kind: 'pacman' },    // Pac-Man, chomping as it follows
+];
+export function petById(id: string | null | undefined) {
+  if (!id) return null;
+  return PETS.find((p) => p.id === id) ?? null;
+}
+
 // What entering a building does (the client maps each `kind` to an action). Add a kind here
 // and a handler on the client to introduce a new venue.
-export type WorldBuildingKind = 'arena' | 'casino' | 'bank';
+export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond';
 // A venue's footprint on the map. The rectangle (top-left origin, world units) is solid —
 // avatars collide with it — and an apron just outside the door is the entry trigger zone.
 export interface WorldBuilding {
@@ -379,10 +409,49 @@ export interface WorldBuilding {
   color: string; // wall color
 }
 export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
-  { id: 'arena',  kind: 'arena',  name: 'TSONG ARENA', emoji: '🏓', x: 1360, y: 300,  w: 480, h: 340, color: '#3a4ea8' },
-  { id: 'casino', kind: 'casino', name: 'CASINO',      emoji: '🎰', x: 440,  y: 1480, w: 440, h: 320, color: '#a8323a' },
-  { id: 'bank',   kind: 'bank',   name: 'BANK',        emoji: '🏦', x: 2320, y: 1480, w: 440, h: 320, color: '#2f7d4f' },
+  // Shrunk to ~0.72× their old footprints and re-centred near their old spots (so the auto-tuned
+  // roads still meet their doors). Old: arena 480×340, casino/bank 440×320, petshop 420×300.
+  { id: 'arena',  kind: 'arena',  name: 'TSONG ARENA', emoji: '🏓', x: 1425, y: 345,  w: 350, h: 250, color: '#3a4ea8' },
+  { id: 'casino', kind: 'casino', name: 'CASINO',      emoji: '🎰', x: 500,  y: 1525, w: 320, h: 230, color: '#a8323a' },
+  { id: 'bank',   kind: 'bank',   name: 'BANK',        emoji: '🏦', x: 2380, y: 1525, w: 320, h: 230, color: '#2f7d4f' },
+  { id: 'petshop', kind: 'petshop', name: 'PET SHOP',  emoji: '🐾', x: 2370, y: 335,  w: 320, h: 230, color: '#7a4fa8' },
+  // Hellfire portal to DOOM — small footprint just south of the central fountain, on the path.
+  { id: 'doomportal', kind: 'doomportal', name: 'DOOM', emoji: '🔥', x: 1520, y: 1380, w: 160, h: 190, color: '#3a0000' },
+  // Fishing pond — a body of water east of the plaza with a wooden pier on its west (plaza) side.
+  // Footprint clears the plaza (x ends 1840), the petshop (x starts 2370) and the bank (y 1525+).
+  { id: 'pond', kind: 'pond', name: 'FISHING POND', emoji: '🎣', x: 2020, y: 860, w: 300, h: 260, color: '#2a6f97' },
 ] as const;
+
+// --- Fishing minigame ---
+// The solo fishing overlay (client/fishing.ts) rolls a tier, then a species within that tier,
+// then a size between minLb/maxLb. Rarer tiers fight harder in the reel mini-game and pay more
+// (House-funded, server-picked — see lobby.fishCatch). The client only sends tier + sizeLb back;
+// it never names a coin amount, so a tampered client can't mint money.
+export type FishTier = 'junk' | 'common' | 'uncommon' | 'rare' | 'legendary';
+export interface FishSpecies { id: string; name: string; tier: FishTier; minLb: number; maxLb: number; }
+export const FISH: readonly FishSpecies[] = [
+  // junk — barely worth reeling in
+  { id: 'boot',     name: '🥾 Old Boot',    tier: 'junk',      minLb: 0.5, maxLb: 3 },
+  { id: 'can',      name: '🥫 Soda Can',    tier: 'junk',      minLb: 0.1, maxLb: 1 },
+  { id: 'seaweed',  name: '🌿 Seaweed',     tier: 'junk',      minLb: 0.2, maxLb: 2 },
+  // common
+  { id: 'minnow',   name: '🐟 Minnow',      tier: 'common',    minLb: 0.1, maxLb: 0.8 },
+  { id: 'perch',    name: '🐟 Perch',       tier: 'common',    minLb: 0.5, maxLb: 3 },
+  { id: 'sunfish',  name: '🐠 Sunfish',     tier: 'common',    minLb: 0.4, maxLb: 2.5 },
+  // uncommon
+  { id: 'bass',     name: '🐟 Largemouth Bass', tier: 'uncommon', minLb: 2, maxLb: 12 },
+  { id: 'trout',    name: '🐟 Rainbow Trout',   tier: 'uncommon', minLb: 1.5, maxLb: 9 },
+  // rare
+  { id: 'catfish',  name: '🐱 Giant Catfish', tier: 'rare',    minLb: 10, maxLb: 60 },
+  { id: 'koi',      name: '✨ Golden Koi',    tier: 'rare',    minLb: 5, maxLb: 30 },
+  // legendary — a tsong-themed monster of the deep
+  { id: 'daviswhale', name: '🐋 Davis Whale', tier: 'legendary', minLb: 200, maxLb: 1500 },
+] as const;
+// Tier roll weights (sum 100): junk 18 / common 50 / uncommon 22 / rare 8 / legendary 2.
+export const FISH_TIER_WEIGHTS: Readonly<Record<FishTier, number>> = {
+  junk: 18, common: 50, uncommon: 22, rare: 8, legendary: 2,
+};
+export const FISH_TIERS: readonly FishTier[] = ['junk', 'common', 'uncommon', 'rare', 'legendary'];
 
 // One avatar as broadcast to everyone in the world. `id` matches YouMsg.id, so a client can
 // skip drawing its own avatar from this list — it renders that one straight from its own
@@ -395,6 +464,8 @@ export interface WorldAvatar {
   y: number;
   a?: number;          // heading in radians (only meaningful while driving)
   car?: string | null; // car id being driven, or null/undefined when on foot
+  pet?: string | null; // pet id trailing behind this avatar, or null/undefined when none
+  bot?: boolean;       // true for netizen avatars
 }
 export interface WorldMsg {
   type: 'world';
@@ -409,6 +480,7 @@ export type ClientMsg =
   | { type: 'paddle'; y: number; x?: number } // desired paddle center Y (and optional roam inset X), in court units
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
+  | { type: 'summonPlane' } // secret: summon the banner-plane for the whole room to see
   | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean } // toggle game modes
   | { type: 'fatality'; move: string } // winner-only, validated server-side
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
@@ -437,6 +509,7 @@ export type ClientMsg =
   | { type: 'doomRelay'; data: unknown } // forward an opaque DOOM payload to the co-op partner
   | { type: 'doomScore'; round: number; coop: boolean; name?: string } // record a DOOM run's reached round (name = combined team label for co-op)
   | { type: 'doomReward' } // grant the player 1 coin (killed the DOOM minion boss)
+  | { type: 'questClaim'; quest: string } // claim a World objective reward (server grants once per player)
   | { type: 'ntJoin' } // take a slot in the Nuketown team-deathmatch lobby (up to 6)
   | { type: 'ntLeave' } // leave the Nuketown lobby / match
   | { type: 'ntStart' } // (host only) start the Nuketown match from the waiting room
@@ -447,14 +520,21 @@ export type ClientMsg =
   | { type: 'srStart' } // (host only) start the race (bots fill the grid up to 4)
   | { type: 'srEnd'; winner: number } // (host only) report the winning slot so the server pays the racer (-1 = a bot won)
   | { type: 'srRelay'; data: unknown } // forward an opaque Street Demons payload to all other racers
+  | { type: 'sbJoin' } // take a slot in the Super Tsong Bros lobby (2–4 players)
+  | { type: 'sbLeave' } // leave the Super Tsong Bros lobby / match
+  | { type: 'sbPick'; fighter: string } // lock in a fighter for the character-select gate
+  | { type: 'sbStart' } // (host only) start the Super Tsong Bros match (needs ≥2 players, all locked)
+  | { type: 'sbEnd'; winner: number } // (host only) report the winning slot so the server pays the winner
+  | { type: 'sbRelay'; data: unknown } // forward an opaque Super Tsong Bros payload to all other participants
   | { type: 'tdJoin' } // join the shared co-op "Type or Die" arena
   | { type: 'tdLeave' } // leave the Type or Die arena
   | { type: 'tdStart' } // (any participant) start the next Type or Die run from the waiting room
   | { type: 'tdTarget'; id: number | null } // soft-lock the monster you're currently typing (null = release)
   | { type: 'tdKill'; id: number } // claim a kill: you finished typing this monster's word
   | { type: 'campaignScore'; score: number; stage: number; won: boolean } // record a campaign run (arcade score, furthest stage, whether Davis fell)
+  | { type: 'fishCatch'; tier: string; sizeLb: number } // landed a fish — server picks the House-funded coin reward by tier (client never sends coins)
   | { type: 'shopBuy'; item: string } // buy a cosmetic from the shop
-  | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car'; item: string | null } // equip (item) or unequip (null) a cosmetic
+  | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'pet'; item: string | null } // equip (item) or unequip (null) a cosmetic
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
   | { type: 'dailySpin' } // claim the once-per-24h reward spin
   | { type: 'stockInvest'; coin: string; amount: number; side?: StockSide } // open a long or short position
@@ -462,6 +542,19 @@ export type ClientMsg =
   | { type: 'getLoan'; amount: number } // borrow `amount` coins from Davis (owe 1.5× back by the daily 5pm collection)
   | { type: 'repayLoan' } // pay Davis the full 1.5× owed and clear the loan
   | { type: 'roulette'; bets: RouletteBet[] } // stake coins on a single spin of the casino wheel
+  | { type: 'bjBet'; amount: number } // start a blackjack hand with this wager
+  | { type: 'bjAction'; action: BjAction } // hit, stand, or double down
+  | { type: 'crapsRoll'; pass: number; dontPass: number } // roll the dice with pass/don't-pass bets
+  | { type: 'crashBet'; amount: number; autoCashout?: number } // bet on the next crash round (optional auto-cashout multiplier)
+  | { type: 'crashCancelBet' } // cancel a placed bet while the betting window is still open
+  | { type: 'crashCashout' } // cash out of the current live crash round
+  | { type: 'slotsSpin'; amount: number } // spin the 3-reel slot machine with this wager
+  | { type: 'plinko'; amount: number } // drop a ball down the 8-row pegboard
+  | { type: 'horseReq' } // request a fresh race card (5 horses with shuffled odds)
+  | { type: 'horseBet'; horse: number; amount: number } // 0-indexed horse choice + wager
+  | { type: 'hiloBet'; amount: number } // start a Hi-Lo hand with this wager
+  | { type: 'hiloGuess'; guess: 'hi' | 'lo' } // guess Higher or Lower than the current card
+  | { type: 'hiloCashout' } // cash out the current Hi-Lo streak
   | { type: 'balanceSheetReq'; rank: number } // peek at a net-worth board player's balance sheet (by current rank)
   | { type: 'lootBoxOpen' } // open a loot box: spend coins, roll a weighted prize (common cosmetic / House coins / capped-rare exclusive)
   | { type: 'marketList'; instanceId: number; ask: number } // list an owned exclusive instance on the marketplace for `ask` coins
@@ -471,8 +564,12 @@ export type ClientMsg =
   | { type: 'loanBookReq' } // request the public open-loan book (for the clickable stability-bar modal)
   | { type: 'worldEnter' } // step into the free-roam world map (start sending/receiving avatar positions)
   | { type: 'worldLeave' } // leave the world map
-  | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null } // client-authoritative avatar position (world units), heading + car when driving
-  | { type: 'migrate'; oldPid: string }; // one-time: merge a UUID guest account into the signed-in Google account
+  | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null; pet?: string | null } // client-authoritative avatar position (world units), heading + car when driving, pet trailing
+  | { type: 'migrate'; oldPid: string } // one-time: merge a UUID guest account into the signed-in Google account
+  | { type: 'netizenInfoReq'; netizenId: string }
+  | { type: 'netizenChallenge'; netizenId: string; wager: number }
+  | { type: 'newsReq' }
+  | { type: 'eloProfileReq'; rank: number; self?: true };
 
 // --- Server -> Client ---
 
@@ -582,7 +679,6 @@ export interface StateMsg {
   minion: boolean; // "minion" power-up: both paddles are drawn as a minion for the point
   earthquake: boolean; // "earthquake" power-up: court shakes and the ball jitters for the point
   blackout: boolean; // "blackout": heavy dark vignette obscures the court
-  bullettime: boolean; // "bullet time": ball slows + blue tint
   vortex: boolean; // "vortex": swirling overlay + ball pulled toward center
   glitch: boolean; // "glitch": TV-static / RGB-split overlay
   smoke: boolean; // "smoke bomb": drifting smoke clouds obscure the court
@@ -731,6 +827,8 @@ export interface LeaderboardRow {
 export interface LeaderboardMsg {
   type: 'leaderboard';
   rows: LeaderboardRow[];
+  selfElo?: number;
+  selfRank?: number;
 }
 
 // One row of the Net Worth board: total liquid + invested coins, net of any
@@ -749,6 +847,10 @@ export interface NetWorthRow {
 export interface NetWorthMsg {
   type: 'netWorth';
   rows: NetWorthRow[];
+  // The recipient's own row + global rank, sent when they fall below the visible top-N so the
+  // client can pin them to the bottom of the board. Omitted when they're already shown.
+  selfRow?: NetWorthRow;
+  selfRank?: number;
 }
 
 // One line item on a player's balance sheet: an open stock position valued live.
@@ -773,6 +875,19 @@ export interface BalanceSheetMsg {
   stockValue: number;               // total live value of all holdings
   loan: number;                     // outstanding debt owed to Davis (0 if none)
   net: number;                      // coins + stockValue − loan
+}
+
+// Server → client: an Elo leaderboard drill-down card (mirrors the net-worth balance sheet).
+export interface EloProfileMsg {
+  type: 'eloProfile';
+  rank: number;
+  name: string;
+  wins: number;
+  losses: number;
+  elo: number;
+  winPct: number;
+  lastPlayed: number | null;
+  rival: { name: string; wins: number; losses: number } | null;
 }
 
 export interface ChatLine {
@@ -808,6 +923,13 @@ export interface AnnounceMsg {
 export interface PingMsg {
   type: 'ping';
   from: string;
+}
+
+// Someone summoned the banner-plane via the secret word; the whole room flies it. `idx`
+// selects which "your airplane has arrived" banner so everyone sees the same one.
+export interface FlyoverMsg {
+  type: 'flyover';
+  idx: number;
 }
 
 // A snapshot of the authoritative loop's health, sampled over a rolling window. The
@@ -847,6 +969,7 @@ export type ServerMsg =
   | ReactionMsg
   | AnnounceMsg
   | PingMsg
+  | FlyoverMsg
   | RttMsg
   | DoomLobbyMsg
   | DoomRelayMsg
@@ -855,15 +978,29 @@ export type ServerMsg =
   | NtRelayMsg
   | SrLobbyMsg
   | SrRelayMsg
+  | SbLobbyMsg
+  | SbRelayMsg
   | DoomLeaderboardMsg
   | TypeDieStateMsg
   | TypeDieLeaderboardMsg
   | CampaignLeaderboardMsg
+  | FishRewardMsg
+  | FishLeaderboardMsg
   | WalletMsg
   | StockMsg
   | LoanMsg
   | SpinResultMsg
   | RouletteResultMsg
+  | BjStateMsg
+  | BjResultMsg
+  | CrapsResultMsg
+  | SlotsResultMsg
+  | PlinkoResultMsg
+  | HorseCardMsg
+  | HorseResultMsg
+  | HiLoStateMsg
+  | HiLoResultMsg
+  | CrashStateMsg
   | TipMsg
   | BountyBoardMsg
   | BountyHitMsg
@@ -872,7 +1009,11 @@ export type ServerMsg =
   | MarketMsg
   | LoanBookMsg
   | WorldMsg
-  | HouseMsg;
+  | HouseMsg
+  | NetizenInfoMsg
+  | NetizenChallengeResultMsg
+  | NewsMsg
+  | EloProfileMsg;
 
 // --- Economy Overhaul server → client messages ---
 
@@ -882,7 +1023,7 @@ export type ServerMsg =
 // coin payout server-side, so the client only ever sees a real, paid result.
 export interface LootResultMsg {
   type: 'lootResult';
-  kind: 'coins' | 'cosmetic' | 'exclusive';
+  kind: 'coins' | 'cosmetic' | 'exclusive' | 'nothing';
   coins?: number;             // coins paid (kind === 'coins')
   item?: string;              // item id (cosmetic or exclusive)
   name?: string;              // display name of the item
@@ -929,6 +1070,53 @@ export interface HouseMsg {
   balance: number;
 }
 
+// A market news headline — published hourly during market hours with a hidden price move.
+export interface NewsItem {
+  id: string;
+  ts: number;         // publish epoch ms
+  coin: string;       // affected coin id
+  headline: string;   // allusive flavor text (no numbers, no explicit direction)
+}
+export interface NewsMsg {
+  type: 'news';
+  items: NewsItem[];  // newest-first, up to ~30
+}
+// Headline templates — allude without stating direction or timing.
+export const NEWS_TEMPLATES_BULLISH = [
+  'Whispers in the Casino district: someone\'s been quietly loading up on {name} — and they might not be the only one circling the {sector} sector.',
+  '{ticker} chatter is heating up across the trading floor — the smart money looks interested, and a few shell companies just lit up on the order book.',
+  'A well-known whale was seen eyeing {name} early this morning, and word is they\'re shopping the whole {sector} basket.',
+  'Insiders are unusually optimistic about {ticker} lately — chatter among the floor traders suggests the quiet accumulation has already begun.',
+  'Rumors are swirling that {name} is about to catch a bid, and a handful of algo funds have started positioning across the {sector} board.',
+  'Something is brewing with {ticker} — the order book is thickening at the ask, and the options flow is starting to look interesting.',
+  'A prominent trader just moved a sizable position into {name}, and their recent track record has the rest of the floor paying attention.',
+  'The vibe around {ticker} is shifting — the murmurs are getting louder, and the consolidated tape shows unusual activity rippling through {sector}.',
+  'Deep pockets are circling {name}: a series of dark-pool prints just crossed the tape, and the street is starting to take notice of the broader {sector} bid.',
+  'Calls are stacking up on {ticker} — someone with a big book is betting this {sector} name has room to run, and the gamma flow is starting to accelerate.',
+  'Whisper number on {name} is creeping higher — three independent analysts just revised their outlook, and the algo flow is turning increasingly constructive across the sector.',
+  'Accumulation alert: {ticker} just saw its heaviest volume in weeks, and the tape reads like a coordinated bid across multiple {sector} names.',
+  'A large institutional flip into {name} just registered on the consolidated tape — the kind of print that usually precedes a broader rotation into {sector}.',
+  'Sources close to the exchange report that a major {sector} player has been steadily adding {ticker} through dark pools for the past three sessions.',
+  'The put/call ratio on {name} just hit a multi-week low — the options market is screaming that the bears have thrown in the towel on this one.',
+];
+export const NEWS_TEMPLATES_BEARISH = [
+  'Analysts are growing wary of {name}\'s recent run — the momentum looks tired, and a few second-tier holders have started trimming their {sector} exposure.',
+  'Something feels off about {ticker} — insiders are getting quiet, and the bid depth has been thinning out across the {sector} board.',
+  'Rumblings that {name} holders are heading for the exits — a cluster of large sell orders just hit the tape, and the algo flow is turning defensive across {sector}.',
+  'A cold wind is blowing through {ticker} — the consolidated tape shows distribution, not accumulation, and the whole {sector} sector is starting to feel the chill.',
+  'The smart money appears to be rotating out of {name} — a couple of known funds have marked down their {sector} exposure in recent filings.',
+  '{ticker} is looking wobbly — profit-takers are circling and the volume profile suggests the easy money has already been made in this {sector} name.',
+  'Volume on {name} is drying up — the silence is telling, and the lack of bids below the market has the floor worried about a broader {sector} shakeout.',
+  'A shadow has fallen over {ticker} — traders are hedging, the options skew is flipping bearish, and the entire {sector} sector is starting to trade heavy.',
+  'Distribution day for {name}: the tape shows large blocks printing on the ask, and the market-makers are leaning short across the {sector} complex.',
+  'The high-frequency flow just flipped negative on {ticker} — the algo community smells weakness, and the short interest in {sector} names is ticking up.',
+  'A well-known bear just published a note on {name}, and the initial reaction in the {sector} pit has been noticeably defensive — bids are pulling fast.',
+  'Open interest is collapsing on {ticker} — the longs are throwing in the towel, and the options market is pricing in a rough stretch for the {sector} group.',
+  'Dark-pool activity on {name} just spiked — but the prints are all on the sell side, and the whisper on the street is that a big holder is quietly exiting {sector}.',
+  'The macro headwinds are starting to hit {ticker}: a broader risk-off move is taking shape, and the {sector} names are bearing the brunt of the selling.',
+  'Liquidity is drying up on {name} — the bid-ask spread just widened to its highest in weeks, and the order book looks thin across the entire {sector} board.',
+];
+
 // Broadcast when a match kicks off and a seated player has a theme song equipped — every client
 // loops `audio` for the duration of the match (until status leaves 'playing'). `owner` is the
 // nickname whose song was picked (random among the match's players who have one equipped).
@@ -972,6 +1160,7 @@ export interface WalletMsg {
   title: string | null; // equipped name title (flair shown by your name)
   song: string | null; // equipped theme song (plays during your matches)
   car: string | null; // equipped car (driven in the World map)
+  pet: string | null; // equipped pet (trails behind you in the World map)
   // Owned scarce exclusives (loot-box mints / marketplace buys): item id + mint serial +
   // instance id (the marketplace lists a specific instance). Kept OUT of the `owned` CSV —
   // exclusives are tracked per-instance in their own table.
@@ -1023,6 +1212,14 @@ export const STOCKS = [
   { id: 'omega', name: 'Omega Davis',      ticker: 'OMEGA', img: '/davis-cosmic.jpg',   base: 100, supply: 10000 },
 ] as const;
 export type StockId = (typeof STOCKS)[number]['id'];
+
+// Market sectors — a news headline about one coin can pressure the whole sector.
+export const SECTORS: { name: string; ids: StockId[] }[] = [
+  { name: 'Creators', ids: ['kenny', 'chugs', 'davis'] },
+  { name: 'Meme',     ids: ['otto', 'bacon', 'fritz'] },
+  { name: 'Derivatives', ids: ['omega'] },
+];
+
 export const STOCK_UPDATE_MS = 30 * 1000; // prices re-roll every 30 seconds
 // Market stability: the market no longer resets on a daily timer. Instead, each day's loan
 // collection adds every defaulter's unpaid debt (the 1.5× `owed`) to a global instability
@@ -1049,6 +1246,11 @@ export type StockTf = keyof typeof STOCK_HISTORY; // '5m' | '1h' | '6h' | '1d'
 
 // Direction of a stock position. A player can hold long and short of the same coin at once.
 export type StockSide = 'long' | 'short';
+// Fast-sell tax: closing a position (long cash-out / short cover) within this window of opening —
+// or topping it up, which restamps the clock — taxes this fraction of the payout to the House.
+// Single source of truth so the server's charge and the client's countdown can't drift apart.
+export const FAST_SELL_TAX_MS = 300_000; // 5 minutes
+export const FAST_SELL_TAX_RATE = 0.10;  // 10% of the (positive) payout
 // Current value of a position: long pays shares×price; short pays 2×cost − shares×price
 // (goes negative if price climbs past entry — covering then costs the holder extra coins).
 export function positionWorth(side: StockSide, shares: number, cost: number, price: number): number {
@@ -1065,8 +1267,9 @@ export interface StockMsg {
   prices: { id: string; price: number; prev: number; flow?: number }[];
   // This player's open positions (only coins they actually hold). `shares` is fractional;
   // `cost` is the total coins poured in (cost basis); `worth` is floor(shares × price) — the
-  // coins they'd get if they cashed out right now.
-  holdings: { id: string; side: StockSide; shares: number; cost: number; worth: number }[];
+  // coins they'd get if they cashed out right now. `openedAt` is the server-time stamp of the
+  // last open/top-up, used to count down the 60s fast-sell-tax window.
+  holdings: { id: string; side: StockSide; shares: number; cost: number; worth: number; openedAt: number }[];
   // Price history for the per-coin graphs, in STOCKS order — one array per timeframe (oldest
   // first). See STOCK_HISTORY for the cadence/length of each series.
   history: { id: string; series: Record<StockTf, number[]> }[];
@@ -1084,6 +1287,30 @@ export interface SpinResultMsg {
   reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string };
 }
 
+// --- Loot box rebalance ---
+// Whale-gamble box: ~1% cosmetic, ~0.3% exclusive, ~35% partial coin-back, ~63.7% nothing.
+export const LOOT_TABLE = {
+  cosmeticWeight: 1.0,
+  exclusiveWeight: 0.3,
+  coinBackWeight: 35.0,
+  nothingWeight: 63.7,
+  coinBackMin: 500,
+  coinBackMax: 1500,
+};
+
+// --- Wealth-scaled minimum bets ---
+// Anti-hoarding lever: the wealthier a player is, the higher their minimum bet floor.
+// The bottom tier is 1 so low-wealth players are unaffected — the floor only rises for
+// those sitting on large coin piles. Used across roulette, blackjack, PvP bets, and netizen challenges.
+export const MIN_BET_TIERS: readonly [number, number][] = [
+  [1_000_000, 10_000], [500_000, 5_000], [100_000, 1_000],
+  [10_000, 100], [1_000, 10], [0, 1],
+]; // [thresholdCoins, minBet], checked high→low
+export function minBet(wealth: number): number {
+  for (const [t, m] of MIN_BET_TIERS) if (wealth >= t) return m;
+  return 1;
+}
+
 // --- Roulette (single-zero European wheel) ---
 // A casino roulette table: stake coins on where the ball lands on a 0–36 wheel. The wheel
 // is the European single-zero layout, so the lone green 0 gives the house its edge. The
@@ -1098,7 +1325,7 @@ export const ROULETTE_WHEEL: readonly number[] = [
   0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10,
   5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26,
 ];
-export const ROULETTE_MAX_TOTAL = 10000; // most coins that may be staked across all bets on one spin
+export const ROULETTE_MAX_TOTAL = 50000; // most coins that may be staked across all bets on one spin
 
 // The bet kinds offered. `straight` needs a target `number` (0–36); the rest are the
 // classic "outside" bets. The value is the profit-to-stake ratio — a winning bet returns
@@ -1139,6 +1366,142 @@ export interface RouletteResultMsg {
   number: number; // winning pocket, 0–36
   staked: number; // total coins wagered this spin
   payout: number; // total coins paid back (0 if all bets lost)
+}
+
+// --- Blackjack ---
+// Six-deck shoe. Cards as rank+suit strings: A2–9TJQK + SHDC (e.g. 'AS', 'TD', 'KH').
+// Server is authoritative: it holds the shoe, deals, resolves, and settles the wallet.
+export const BJ_MAX_BET = 50_000;
+export type BjAction = 'hit' | 'stand' | 'double';
+export type BjOutcome = 'blackjack' | 'win' | 'push' | 'lose';
+export interface BjStateMsg {
+  type: 'bjState';
+  playerCards: string[]; // e.g. ['AS', 'TD']
+  dealerCard: string;    // face-up card (hidden one not revealed until stand / double)
+  playerTotal: number;   // best soft/hard total ≤ 21 (busted = bust total)
+  canDouble: boolean;    // true only before the first hit
+  status: 'playing';
+}
+export interface BjResultMsg {
+  type: 'bjResult';
+  playerCards: string[];
+  dealerCards: string[]; // both dealer cards revealed
+  playerTotal: number;
+  dealerTotal: number;
+  outcome: BjOutcome;   // 'blackjack'=3:2, 'win'=1:1, 'push'=even, 'lose'=0
+  bet: number;
+  payout: number;        // coins returned (0=lose, bet=push, bet×2=win, floor(bet×2.5)=BJ)
+}
+
+// --- Street Craps ---
+// Pass Line / Don't Pass bets with a come-out → point-phase state machine.
+export const CRAPS_MAX_BET = 50_000;
+export interface CrapsResultMsg {
+  type: 'crapsResult';
+  dice: [number, number]; // individual die values, 1–6
+  total: number;
+  prevPoint: number | null; // craps point before this roll (null = was on come-out)
+  newPoint: number | null;  // point after this roll (null = come-out phase; number = point active)
+  outcome: 'win' | 'lose' | 'point'; // 'point' = no resolution, keep rolling
+  push12: boolean;          // come-out 12: pass loses, don't-pass pushes (not loses)
+  passPayout: number;       // coins returned for the Pass Line bet (0 = lost)
+  dontPassPayout: number;   // coins returned for the Don't Pass bet
+}
+
+// --- Crash ---
+// Lobby-wide multiplayer crash: multiplier rises from 1.00× and crashes at a server-chosen
+// point. Players bet during the 8s window and cash out before the crash. House edge ≈ 3%.
+export const CRASH_BETTING_MS = 12_000;
+export const CRASH_TICK_MS = 100;        // live-phase tick interval (ms)
+export const CRASH_ENDED_MS = 4_000;     // how long the crash result lingers before next round
+export const CRASH_MAX_BET = 50_000;
+export const CRASH_GROWTH = 1.02;        // multiplier per 100ms tick (~7× per minute at the start)
+// --- Slots ---
+// Classic 3-reel slot machine. Each reel shows 3 symbols; the center row is the pay line.
+// Symbol weights skew rare symbols low. Server rolls, evaluates, settles the wallet.
+export const SLOTS_MAX_BET = 50_000;
+// Symbol pool (index 0–6), listed rarest→most-common for human readability.
+// Weights are sampled on each reel independently. The '7' jackpot is weighted 1/64.
+export const SLOTS_SYMBOLS = ['7️⃣', '💎', '🍀', '⭐', '🍊', '🍋', '🍒'] as const;
+export type SlotsSymbol = typeof SLOTS_SYMBOLS[number];
+// Payout multipliers for a 3-of-a-kind center-row match (applied to the bet).
+export const SLOTS_PAYOUTS: Record<SlotsSymbol, number> = {
+  '7️⃣': 100, '💎': 40, '🍀': 20, '⭐': 10, '🍊': 5, '🍋': 3, '🍒': 2,
+};
+// Per-reel symbol weights (index matches SLOTS_SYMBOLS). Total = 64.
+export const SLOTS_WEIGHTS = [1, 2, 3, 6, 10, 14, 28] as const;
+export interface SlotsResultMsg {
+  type: 'slotsResult';
+  // reels[reel][row]: 3 reels × 3 rows (row 1 is the pay line)
+  reels: [SlotsSymbol[], SlotsSymbol[], SlotsSymbol[]];
+  win: SlotsSymbol | null; // the matching symbol on the pay line, or null (no win)
+  bet: number;
+  payout: number;          // coins returned (0 on loss)
+}
+
+// --- Plinko ---
+// 8-row pegboard. Ball drops from center, bounces left/right at each peg. Lands in 1 of 9 slots.
+export const PLINKO_ROWS = 8;
+export const PLINKO_PAYOUTS = [26, 3, 1.4, 0.4, 0.2, 0.4, 1.4, 3, 26] as const;
+export const PLINKO_MAX_BET = 50_000;
+export interface PlinkoResultMsg {
+  type: 'plinkoResult';
+  path: boolean[];   // 8 booleans: false=left, true=right at each peg row
+  slot: number;      // sum of 'true' values (0–8)
+  multiplier: number;
+  bet: number;
+  payout: number;
+}
+
+// --- Horse Racing ---
+// 5 horses with shuffled odds. Player picks one, bets, then the server runs the race.
+export const HORSE_NAMES = [
+  'Davis Destroyer', 'Kirkland King', 'Bacon Roll',
+  'Minion Madness', 'Avery Express', 'The Pong Ball', 'Jsav Jr.', 'Ping Ponger',
+] as const;
+export const HORSE_ODDS = [1.8, 2.5, 4.0, 7.0, 14.0] as const;
+export const HORSE_MAX_BET = 50_000;
+export interface HorseCardMsg {
+  type: 'horseCard';
+  horses: { name: string; odds: number }[]; // 5 entries
+}
+export interface HorseResultMsg {
+  type: 'horseResult';
+  horses: { name: string; odds: number }[];
+  winner: number;  // 0-indexed winning horse
+  horse: number;   // which horse the player bet on
+  bet: number;
+  payout: number;
+}
+
+// --- Hi-Lo ---
+// Bet coins → get a card (1–13) → guess Higher or Lower → correct = multiplier grows, cashout any time → wrong = lose bet.
+export const HILO_MAX_BET = 50_000;
+export const HILO_HOUSE_EDGE = 0.05;
+export interface HiLoStateMsg {
+  type: 'hiloState';
+  card: number;          // current card 1-13
+  multiplier: number;    // accumulated return multiplier (1.0 at start)
+  bet: number;
+  pendingPayout: number; // floor(bet × multiplier); 0 before first correct guess
+}
+export interface HiLoResultMsg {
+  type: 'hiloResult';
+  won: boolean;    // true = cashed out; false = wrong guess
+  newCard: number; // card that was revealed
+  payout: number;  // coins received (0 on loss)
+  net: number;     // payout - bet (negative = lost)
+}
+
+export interface CrashStateMsg {
+  type: 'crashState';
+  phase: 'betting' | 'live' | 'ended';
+  multiplier: number;          // 1.00 during betting; rising during live; crash value when ended
+  timeLeft: number;            // ms remaining in the betting window (0 during live/ended)
+  bets: { name: string; amount: number; cashedAt: number | null }[];
+  yourBet: number | null;      // null = not in this round
+  yourCashedAt: number | null; // multiplier at which you cashed out (null = still live or lost)
+  crashedAt: number | null;    // the final crash multiplier (non-null only when ended)
 }
 
 // Co-op DOOM lobby status (2 slots). `slot` is which slot this client holds (0 = host,
@@ -1192,6 +1555,24 @@ export interface SrLobbyMsg {
 // guest input). Clients pick out the messages they care about.
 export interface SrRelayMsg {
   type: 'srRelay';
+  data: unknown;
+}
+// Super Tsong Bros lobby (2–4 slots, free-for-all platform fighter). `slot` is which slot this
+// client holds (0 = host/authority). Each player carries their chosen `fighter` id (null until
+// they lock in). The match can only start once every player has a non-null fighter AND ≥2 are
+// present (the all-locked gate). On 'playing', slot 0 simulates the whole match; on 'ended'
+// everyone bails to the menu (the host left).
+export interface SbLobbyMsg {
+  type: 'sbLobby';
+  status: 'waiting' | 'playing' | 'ended';
+  slot: number; // this client's slot (0 = host)
+  hostSlot: number; // which slot is the authority (0)
+  players: { name: string; slot: number; fighter: string | null }[]; // everyone in the lobby + their pick
+}
+// An opaque payload broadcast from one Super Tsong Bros participant to all others (host state
+// snapshot / guest input). Clients pick out the messages they care about.
+export interface SbRelayMsg {
+  type: 'sbRelay';
   data: unknown;
 }
 // High-round leaderboards for the DOOM minigame (separate solo / co-op tables).
@@ -1254,3 +1635,286 @@ export interface CampaignLeaderboardMsg {
   rows: CampaignScoreRow[];
 }
 export const CAMPAIGN_STAGE_COUNT = 5;
+
+// --- Fishing minigame messages ---
+// Sent back to the angler after a validated catch: the House-funded coin reward, plus the
+// (one-time) Angler title item if a legendary was landed.
+export interface FishRewardMsg {
+  type: 'fishReward';
+  coins: number;
+  item?: { id: string; name: string };
+}
+// Biggest-catch leaderboard (top N by best landed weight), pushed on each catch.
+export interface FishLeaderboardRow { name: string; lb: number; }
+export interface FishLeaderboardMsg {
+  type: 'fishLeaderboard';
+  rows: FishLeaderboardRow[];
+}
+
+// --- Netizen Challenge (Plan 10) ---
+export const NETIZEN_CHALLENGE_MAX_FRAC = 0.20;
+export const NETIZEN_CHALLENGE_HARDEST_REACT = 0.09;
+export const NETIZEN_CHALLENGE_HARDEST_ERROR = 22;
+export const NETIZEN_CHALLENGE_EASIEST_REACT = 0.30;
+export const NETIZEN_CHALLENGE_EASIEST_ERROR = 95;
+
+export interface NetizenInfoMsg {
+  type: 'netizenInfo';
+  netizenId: string;
+  netizenName: string;
+  netWorth: number;
+  maxWin: number;
+  challengedToday: boolean;
+}
+export interface NetizenChallengeResultMsg {
+  type: 'netizenChallengeResult';
+  won: boolean;
+  delta: number;
+  netizenName: string;
+}
+
+// --- Market news (Plan 01) ---
+export interface NewsItem { id: string; ts: number; coin: string; headline: string; }
+export interface NewsMsg { type: 'news'; items: NewsItem[]; }
+
+// --- Netizen dialogue corpus (Plan 02 + Plan 03) ---
+export const NETIZEN_DIALOGUE = {
+  buyLong: [
+    'aped into {ticker} 🚀', 'loading {ticker} here', '{ticker} looking juicy ngl',
+    'all in {ticker} lfg', 'yolo {ticker} 🚀', 'adding {ticker} to the bag', '{ticker} dip is tasty',
+    'hearing good things about {ticker} rn', 'just doubled my {ticker} position', 'stacking {ticker} while its cheap',
+    'whale alert — someone just bought a wall of {ticker}', 'chart says {ticker} going higher 📈',
+    'filling my bags with {ticker} before the next leg up',
+  ],
+  sellProfit: [
+    'took profit on {ticker} 💰', 'out of {ticker}, ty market', '{ticker} paid the bills today',
+    'locked in gains on {ticker} ✅', 'trimmed {ticker} for some profit',
+    'scalp successful — out of {ticker} with a bag 💼', 'that {ticker} pump was generous, i took half off',
+    'profit is profit, even on {ticker}', 'called that {ticker} rip perfectly ngl',
+  ],
+  sellLoss: [
+    'got rekt on {ticker} 💀', 'paperhanded {ticker} again', '{ticker} bagholder no more',
+    'sold {ticker} at a loss rip 💸', 'dyor they said {ticker} they said',
+    '{ticker} just dumped on me hard', 'why do i always buy the top on {ticker}',
+    'giving up on {ticker}, too much pain', 'that {ticker} trade went exactly as expected — badly',
+    'my {ticker} position just got liquidated oof',
+  ],
+  newsBullish: [
+    'something brewing with {ticker}? 👀', "i'm not not buying {ticker} rn",
+    'feels like {ticker} szn', '{ticker} definitely up to something', 'heard a rumor about {ticker} 😏',
+    'just read the news — {ticker} about to moon 🌙', 'the signs are all pointing to {ticker}',
+    'if you are not buying {ticker} right now what are you doing', 'momentum is building for {ticker}',
+    'algo flow just turned positive on {ticker}', '{ticker} looking primed for a breakout',
+    'the tape on {ticker} is screaming accumulation',
+  ],
+  newsBearish: [
+    'staying away from {ticker} today', '{ticker} giving me bad vibes',
+    'might short {ticker} ngl', 'something off with {ticker} energy', 'not touching {ticker} with a pole',
+    '{ticker} looking like a falling knife rn', 'the news on {ticker} is not good at all',
+    'everyone piling into {ticker} is a sign to get out', 'shorting {ticker} feels like free money',
+    'that {ticker} chart is a disaster', 'smart money is leaving {ticker} fast',
+  ],
+  idleBanter: [
+    "who's this lasso guy with 1M net worth", 'new exclusive dropped in the black market 👀',
+    'anyone else watching the leaderboard?', 'market looking spicy today 🌶️',
+    'feels like a dead cat bounce', 'chart says up but my gut says down 🤷',
+    'has anyone actually beaten the top elo player', 'heard the casino has a new game dropping soon',
+    'these loan interest rates are criminal smh', 'the house always wins eventually',
+    'anyone know what time the lootbox resets', 'the economy in this game is wild',
+    'i swear the market moves when i look away', 'net worth go brr 📈 or should i say brr 📉',
+  ],
+};
+
+// =====================================================================================
+// Super Tsong Bros — a 2–4 player PvP platform fighter (Smash-like). Wire contract + the
+// fighter roster and the stage list shared by client (sim + render) and server (lobby gate).
+// The sim itself lives in client/superbros.ts; these are the tunable data tables.
+// =====================================================================================
+
+// Per-fighter melee attack: an instant arc/hitbox in front of the fighter.
+export interface FighterMelee {
+  name: string;     // move name, shown in HUD / select
+  range: number;    // 1–10 reach in front of the fighter
+  dmg: number;      // 1–10 damage dealt (→ damage-% added)
+  startup: number;  // 1–10 wind-up frames (lower = snappier; high = slow but strong)
+}
+// Per-fighter projectile (K). Fired forward; despawns off-screen or after a lifetime.
+export interface FighterProjectile {
+  name: string;                          // projectile name
+  speed: number;                         // 1–10 launch speed
+  dmg: number;                           // 1–10 damage on hit
+  cooldown: number;                      // 1–10 reuse delay (lower = more rapid fire)
+  arc: 'straight' | 'lob' | 'bounce';    // trajectory: flat, gravity-lobbed, or floor-bouncing
+}
+// A playable fighter. All stats are on a 1–10 "feel" scale; the engine (client/superbros.ts)
+// converts them to physics units. `color` is the flat select-screen / fallback tint; `useImage`
+// (jsav only) means the sprite is the /jsav.jpg asset rather than pixel-baked art.
+export interface Fighter {
+  id: string;
+  name: string;
+  blurb: string;       // one-line archetype shown on the select screen
+  color: string;       // portrait / fallback body tint
+  speed: number;       // ground run speed
+  strength: number;    // knockback dealt (attacker strength)
+  weight: number;      // knockback resistance (heavier = launched less)
+  jump: number;        // jump + recovery (up-burst) height
+  fallSpeed: number;   // gravity / fast-fall feel
+  size: number;        // hurtbox size (also visual scale)
+  melee: FighterMelee;
+  projectile: FighterProjectile;
+  useImage?: boolean;  // jsav: draw the /jsav.jpg image instead of pixel art
+}
+
+// The roster. Six fighters, tuned for clear variety across the feel scale.
+// TO ADD MORE FIGHTERS: append an entry here (and a matching draw routine + portrait swatch in
+// client/superbros.ts's FIGHTER_ART / drawFighter). Nothing else needs to change — the lobby,
+// select gate and sim all read this table.
+export const FIGHTERS: Fighter[] = [
+  {
+    id: 'minion', name: 'Minion', blurb: 'Rushdown lightweight — fast, frail, annoying.',
+    color: '#ffd836', speed: 8, strength: 4, weight: 3, jump: 7, fallSpeed: 5, size: 4,
+    melee: { name: 'Slap', range: 3, dmg: 3, startup: 2 },
+    projectile: { name: 'Banana', speed: 4, dmg: 3, cooldown: 4, arc: 'lob' },
+  },
+  {
+    id: 'pikachu', name: 'Pikachu', blurb: 'Fast floaty zoner — shock from range.',
+    color: '#f6d02f', speed: 9, strength: 4, weight: 3, jump: 8, fallSpeed: 4, size: 4,
+    melee: { name: 'Tail Whip', range: 3, dmg: 4, startup: 2 },
+    projectile: { name: 'Lightning Bolt', speed: 10, dmg: 5, cooldown: 5, arc: 'straight' },
+  },
+  {
+    id: 'rob', name: 'Rob', blurb: 'Balanced all-rounder — no glaring weakness.',
+    color: '#e8862e', speed: 6, strength: 6, weight: 5, jump: 6, fallSpeed: 5, size: 5,
+    melee: { name: 'Jab', range: 4, dmg: 5, startup: 3 },
+    projectile: { name: 'Knife', speed: 8, dmg: 5, cooldown: 5, arc: 'straight' },
+  },
+  {
+    id: 'lebron', name: 'LeBron James', blurb: 'Athletic heavyweight — huge hops, huge hits.',
+    color: '#552583', speed: 6, strength: 8, weight: 7, jump: 8, fallSpeed: 6, size: 7,
+    melee: { name: 'Dunk Slam', range: 5, dmg: 8, startup: 6 },
+    projectile: { name: 'Basketball', speed: 6, dmg: 7, cooldown: 6, arc: 'bounce' },
+  },
+  {
+    id: 'jsav', name: 'jsav', blurb: 'Machine-gun zoner — bury them in bullets.',
+    color: '#7a6a55', speed: 5, strength: 5, weight: 5, jump: 5, fallSpeed: 6, size: 5,
+    melee: { name: 'Pistol-Whip', range: 4, dmg: 5, startup: 3 },
+    projectile: { name: 'Bullet', speed: 10, dmg: 2, cooldown: 1, arc: 'straight' },
+    useImage: true,
+  },
+  {
+    id: 'kenny', name: 'Kenny', blurb: 'Wheelchair bat-swinger — heavy, rolls fast, no recovery.',
+    color: '#2bbfae', speed: 7, strength: 7, weight: 8, jump: 3, fallSpeed: 7, size: 6,
+    melee: { name: 'Bat Swing', range: 6, dmg: 7, startup: 4 },
+    projectile: { name: 'Baseball', speed: 7, dmg: 5, cooldown: 5, arc: 'lob' },
+  },
+  // ↑ add more fighters here.
+];
+
+// A solid or pass-through platform rect, in stage-space (origin top-left, y down).
+export interface StagePlatform {
+  x: number; y: number; w: number; h: number;
+  passThrough: boolean; // true = jump up through it / hold ↓ to drop down
+  // optional oscillation: dx = horizontal amplitude (px), dy = vertical amplitude (px),
+  // period = seconds per full cycle, phase = 0..1 offset so platforms desync.
+  moves?: { dx: number; period: number; dy?: number; phase?: number };
+}
+// A damaging hazard region (e.g. lava). Touching it deals damage + a strong upward launch.
+export interface StageHazard {
+  x: number; y: number; w: number; h: number;
+  kind: 'lava';
+  dmg: number;     // damage-% added per touch tick
+  launch: number;  // upward launch impulse strength
+}
+// A stage. Coordinates are in a fixed 1280×720 stage-space; the renderer scales to the canvas.
+// Blast zones: a fighter launched past these bounds loses a stock. `spawns` are respawn points.
+export interface Stage {
+  id: string;
+  name: string;
+  blurb: string;
+  backdrop: string;          // base sky/background tint
+  platforms: StagePlatform[];
+  hazards: StageHazard[];
+  spawns: { x: number; y: number }[]; // up to 4 spawn points
+  blast: { left: number; right: number; top: number; bottom: number }; // ring-out bounds
+}
+
+// Stage-space is 1280 wide × 720 tall. Blast zones sit OUTSIDE that so there's margin off-screen.
+export const SB_STAGE_W = 1280;
+export const SB_STAGE_H = 720;
+
+// The three stages. TO ADD MORE STAGES: append here (and the renderer in client/superbros.ts
+// already draws platforms/hazards generically; add a backdrop case for extra flavor).
+export const STAGES: Stage[] = [
+  {
+    id: 'plaza', name: 'Plaza Showdown',
+    blurb: 'Open & beginner-friendly. A long floor + two small floats.',
+    backdrop: '#7fb2e8',
+    platforms: [
+      { x: 240, y: 560, w: 800, h: 40, passThrough: false }, // long solid main floor
+      { x: 360, y: 400, w: 200, h: 20, passThrough: true },  // left float
+      { x: 720, y: 400, w: 200, h: 20, passThrough: true },  // right float
+    ],
+    hazards: [],
+    spawns: [
+      { x: 420, y: 480 }, { x: 860, y: 480 }, { x: 560, y: 340 }, { x: 720, y: 340 },
+    ],
+    blast: { left: -160, right: 1440, top: -260, bottom: 880 },
+  },
+  {
+    id: 'paddlepark', name: 'Paddle Park',
+    blurb: 'Aerial & vertical. NO floor — staggered pong-paddle platforms with gaps.',
+    backdrop: '#10202b',
+    platforms: [
+      { x: 200, y: 560, w: 220, h: 22, passThrough: true },  // low-left paddle
+      { x: 860, y: 560, w: 220, h: 22, passThrough: true },  // low-right paddle
+      { x: 520, y: 420, w: 240, h: 22, passThrough: true, moves: { dx: 180, period: 7 } }, // moving mid paddle
+      { x: 340, y: 280, w: 200, h: 22, passThrough: true },  // high-left paddle
+      { x: 740, y: 280, w: 200, h: 22, passThrough: true },  // high-right paddle
+    ],
+    hazards: [],
+    spawns: [
+      { x: 300, y: 500 }, { x: 960, y: 500 }, { x: 440, y: 220 }, { x: 820, y: 220 },
+    ],
+    blast: { left: -160, right: 1440, top: -260, bottom: 860 },
+  },
+  {
+    id: 'hellpit', name: 'Hell Pit',
+    blurb: 'DOOM hazard stage. A central lava pit between two ledges — touch it and fly.',
+    backdrop: '#1a0808',
+    platforms: [
+      { x: 160, y: 560, w: 360, h: 60, passThrough: false }, // left ground
+      { x: 760, y: 560, w: 360, h: 60, passThrough: false }, // right ground
+      { x: 540, y: 360, w: 200, h: 20, passThrough: true },  // center float over the pit
+    ],
+    hazards: [
+      { x: 520, y: 600, w: 240, h: 120, kind: 'lava', dmg: 12, launch: 9 }, // central lava pit
+    ],
+    spawns: [
+      { x: 300, y: 480 }, { x: 980, y: 480 }, { x: 240, y: 480 }, { x: 1040, y: 480 },
+    ],
+    blast: { left: -160, right: 1440, top: -260, bottom: 880 },
+  },
+  {
+    id: 'gauntlet', name: 'The Gauntlet',
+    blurb: 'Everything moves. Sliding platforms + two out-of-phase risers — time your landings.',
+    backdrop: '#141a2e',
+    platforms: [
+      { x: 100, y: 590, w: 240, h: 30, passThrough: false }, // left anchor ground
+      { x: 940, y: 590, w: 240, h: 30, passThrough: false }, // right anchor ground
+      { x: 540, y: 500, w: 220, h: 20, passThrough: true, moves: { dx: 280, period: 5 } },                 // wide low slider
+      { x: 330, y: 380, w: 180, h: 20, passThrough: true, moves: { dx: 0, period: 4, dy: 140 } },           // left riser
+      { x: 770, y: 380, w: 180, h: 20, passThrough: true, moves: { dx: 0, period: 4, dy: 140, phase: 0.5 } }, // right riser (opposite)
+      { x: 560, y: 250, w: 160, h: 20, passThrough: true, moves: { dx: 220, period: 6.5, phase: 0.25 } },   // high slider
+    ],
+    hazards: [],
+    spawns: [
+      { x: 200, y: 510 }, { x: 1040, y: 510 }, { x: 540, y: 420 }, { x: 700, y: 420 },
+    ],
+    blast: { left: -160, right: 1440, top: -260, bottom: 900 },
+  },
+];
+
+// Super Tsong Bros match rules (shared so client sim + any future server checks agree).
+export const SB_STOCKS = 3;          // lives per fighter
+export const SB_MAX_PLAYERS = 4;     // lobby cap
+export const SB_MIN_PLAYERS = 2;     // min to start

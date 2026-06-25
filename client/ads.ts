@@ -65,6 +65,19 @@ let dismissed = false;
 
 const ROTATE_MS = 13000;
 
+// Once the player dismisses the ad, stay gone for a week (persisted across reloads).
+const DISMISS_KEY = 'tsong.adDismissedAt';
+const DISMISS_COOLDOWN_MS = 7 * 24 * 60 * 60 * 1000;
+
+function dismissedRecently(): boolean {
+  try {
+    const at = Number(localStorage.getItem(DISMISS_KEY));
+    return Number.isFinite(at) && at > 0 && Date.now() - at < DISMISS_COOLDOWN_MS;
+  } catch {
+    return false; // private mode / storage blocked — just show the ad
+  }
+}
+
 /** Build the (hidden) banner and remember how to launch each feature. Call once at startup. */
 export function initAds(launchers: Record<AdAction, () => void>) {
   if (root) return;
@@ -146,7 +159,7 @@ export function initAds(launchers: Record<AdAction, () => void>) {
 
 /** Show the banner and start the rotation. Call once the player has joined. */
 export function revealAds() {
-  if (!root || dismissed) return;
+  if (!root || dismissed || dismissedRecently()) return;
   document.body.style.paddingBottom = '76px';
   root.style.display = 'flex';
   liftCorner('88px'); // float the bottom-right "Add bot" control clear of the banner
@@ -186,6 +199,7 @@ function onClose() {
     return;
   }
   dismissed = true;
+  try { localStorage.setItem(DISMISS_KEY, String(Date.now())); } catch { /* storage blocked — in-memory dismiss still holds for this session */ }
   clearInterval(rotateTimer);
   if (root) root.style.display = 'none';
   document.body.style.paddingBottom = '';

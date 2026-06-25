@@ -61,7 +61,20 @@ export async function initDb(): Promise<void> {
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS title TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS song TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS car TEXT`);
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS pet TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS email TEXT`);
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_played BIGINT`);
+  // Head-to-head matchups: one row per unordered pair, with per-player win counts.
+  // Both player1 < player2 lexicographically so the pair is always stored the same way.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS head_to_head (
+      player1 TEXT NOT NULL,
+      player2 TEXT NOT NULL,
+      p1_wins INTEGER NOT NULL DEFAULT 0,
+      p2_wins INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (player1, player2)
+    )
+  `);
   // Stock market: per-player positions (fractional shares + coins-escrowed cost basis), keyed
   // by player + coin id + side ('long'/'short' — a player can hold both at once); and the
   // global price board (one row per coin).
@@ -200,6 +213,14 @@ export async function initDb(): Promise<void> {
       score INTEGER NOT NULL DEFAULT 0,
       stage INTEGER NOT NULL DEFAULT 1,
       won   BOOLEAN NOT NULL DEFAULT FALSE
+    )
+  `);
+  // Fishing minigame — biggest catch (lb) ever landed, one row per player.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fishing_scores (
+      pid     TEXT PRIMARY KEY,
+      name    TEXT NOT NULL,
+      best_lb DOUBLE PRECISION NOT NULL DEFAULT 0
     )
   `);
   // Co-op scores used to be recorded per-player; they're now one combined team entry keyed
@@ -402,6 +423,30 @@ export async function initDb(): Promise<void> {
       console.warn(`tsong→lasso transfer skipped — src(${srcPid ?? 'none'}) / dst(${dstPid ?? 'none'}); will retry next boot`);
     }
   }
+  // One-time: delete the account(s) named exactly "matt" (per request) — NOT "matty supreme" or any
+  // other name. Matched on the normalized exact name so it can't catch a near-namesake. Removes the
+  // player row plus its dependent rows across the economy/score tables. Gated so it runs once.
+  const delMatt = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'delete_matt_v1'`);
+  if (delMatt.rowCount === 0) {
+    const victims = await pool.query<{ id: string }>(
+      `SELECT id FROM players WHERE LOWER(TRIM(name)) = 'matt'`,
+    );
+    for (const v of victims.rows) {
+      const pid = v.id;
+      await pool.query(`DELETE FROM stock_holdings     WHERE pid = $1`, [pid]);
+      await pool.query(`DELETE FROM loans              WHERE pid = $1`, [pid]);
+      await pool.query(`DELETE FROM exclusive_instances WHERE owner_pid = $1`, [pid]);
+      await pool.query(`DELETE FROM listings           WHERE seller_pid = $1`, [pid]);
+      await pool.query(`DELETE FROM bounties           WHERE target_pid = $1`, [pid]);
+      await pool.query(`DELETE FROM doom_scores        WHERE pid = $1`, [pid]);
+      await pool.query(`DELETE FROM typedie_scores     WHERE pid = $1`, [pid]);
+      await pool.query(`DELETE FROM campaign_scores    WHERE pid = $1`, [pid]);
+      await pool.query(`DELETE FROM players            WHERE id  = $1`, [pid]);
+      console.log(`deleted account 'matt' (${pid})`);
+    }
+    await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('delete_matt_v1', now()::text)`);
+  }
+  await ensureNetizenChallengesTable();
   console.log('leaderboard DB ready');
 }
 
@@ -429,6 +474,28 @@ export async function getDoomLeaderboards(): Promise<{ solo: DoomScoreRow[]; coo
     return rows.map((r) => ({ name: r.name, round: r.round }));
   };
   return { solo: await fetchMode(false), coop: await fetchMode(true) };
+}
+
+export interface FishingScoreRow { name: string; lb: number; }
+
+// Record a fishing catch: keep only each player's biggest (heaviest) fish ever landed.
+export async function recordFishCatch(pid: string, name: string, lb: number): Promise<void> {
+  if (!pool || !pid || !Number.isFinite(lb) || lb <= 0) return;
+  await pool.query(
+    `INSERT INTO fishing_scores (pid, name, best_lb) VALUES ($1, $2, $3)
+       ON CONFLICT (pid) DO UPDATE
+       SET best_lb = GREATEST(fishing_scores.best_lb, EXCLUDED.best_lb), name = EXCLUDED.name`,
+    [pid, name, lb],
+  );
+}
+
+// Biggest catches across all anglers (top N by best landed weight).
+export async function getFishingLeaderboard(): Promise<FishingScoreRow[]> {
+  if (!pool) return [];
+  const { rows } = await pool.query(
+    `SELECT name, best_lb FROM fishing_scores ORDER BY best_lb DESC, name ASC LIMIT 10`,
+  );
+  return rows.map((r) => ({ name: r.name, lb: Number(r.best_lb) }));
 }
 
 export interface TypeDieScoreRow { name: string; wave: number; }
@@ -509,18 +576,19 @@ export async function recordResult(winners: PlayerRef[], losers: PlayerRef[]): P
 
   // Upsert all players so they exist before we read ELO. Each winner also earns 100 coins
   // (1 win reward × COIN_SCALE — the whole economy is scaled ×100).
+  const now = Date.now();
   for (const w of winners) {
     await pool.query(
-      `INSERT INTO players (id, name, wins, coins) VALUES ($1, $2, 1, 100)
-         ON CONFLICT (id) DO UPDATE SET wins = players.wins + 1, coins = players.coins + 100, name = EXCLUDED.name`,
-      [w.pid, w.name],
+      `INSERT INTO players (id, name, wins, coins, last_played) VALUES ($1, $2, 1, 100, $3)
+         ON CONFLICT (id) DO UPDATE SET wins = players.wins + 1, coins = players.coins + 100, name = EXCLUDED.name, last_played = EXCLUDED.last_played`,
+      [w.pid, w.name, now],
     );
   }
   for (const l of losers) {
     await pool.query(
-      `INSERT INTO players (id, name, losses) VALUES ($1, $2, 1)
-         ON CONFLICT (id) DO UPDATE SET losses = players.losses + 1, name = EXCLUDED.name`,
-      [l.pid, l.name],
+      `INSERT INTO players (id, name, losses, last_played) VALUES ($1, $2, 1, $3)
+         ON CONFLICT (id) DO UPDATE SET losses = players.losses + 1, name = EXCLUDED.name, last_played = EXCLUDED.last_played`,
+      [l.pid, l.name, now],
     );
   }
 
@@ -548,6 +616,23 @@ export async function recordResult(winners: PlayerRef[], losers: PlayerRef[]): P
     const newElo = Math.max(1, Math.round(eloOf(l.pid) + ELO_K * (0 - eL)));
     await pool.query(`UPDATE players SET elo = $2 WHERE id = $1`, [l.pid, newElo]);
   }
+
+  // Head-to-head: for every winner↔loser pair, increment the winning player's
+  // counter in the unordered pair row (player1 < player2 lexicographically).
+  for (const w of winners) {
+    for (const l of losers) {
+      const [p1, p2] = w.pid < l.pid ? [w.pid, l.pid] : [l.pid, w.pid];
+      const wIsP1 = w.pid === p1;
+      await pool.query(
+        `INSERT INTO head_to_head (player1, player2, p1_wins, p2_wins)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (player1, player2) DO UPDATE SET
+             p1_wins = head_to_head.p1_wins + $3,
+             p2_wins = head_to_head.p2_wins + $4`,
+        [p1, p2, wIsP1 ? 1 : 0, wIsP1 ? 0 : 1],
+      );
+    }
+  }
 }
 
 /** Update an existing player's display name (for renames). Returns rows changed. */
@@ -568,13 +653,14 @@ export interface Wallet {
   title: string | null; // equipped name-title item id
   song: string | null; // equipped theme-song item id
   car: string | null; // equipped car item id (driven in the World map)
+  pet: string | null; // equipped pet item id (trails behind you in the World map)
   exclusives: { id: string; serial: number; instanceId: number }[]; // owned scarce exclusives (per-instance)
   lastSpin: number; // epoch ms of the last daily spin (0 = never)
   bonusSpins: number; // free extra wheel spins (e.g. from winning a tournament)
 }
-const EMPTY_WALLET: Wallet = { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, car: null, exclusives: [], lastSpin: 0, bonusSpins: 0 };
+const EMPTY_WALLET: Wallet = { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, car: null, pet: null, exclusives: [], lastSpin: 0, bonusSpins: 0 };
 
-function rowToWallet(r: { coins: number; owned: string; hat: string | null; skin: string | null; trail?: string | null; title?: string | null; song?: string | null; car?: string | null; last_spin?: string | number; bonus_spins?: number }): Wallet {
+function rowToWallet(r: { coins: number; owned: string; hat: string | null; skin: string | null; trail?: string | null; title?: string | null; song?: string | null; car?: string | null; pet?: string | null; last_spin?: string | number; bonus_spins?: number }): Wallet {
   return {
     coins: r.coins,
     owned: (r.owned || '').split(',').filter(Boolean),
@@ -584,6 +670,7 @@ function rowToWallet(r: { coins: number; owned: string; hat: string | null; skin
     title: r.title ?? null,
     song: r.song ?? null,
     car: r.car ?? null,
+    pet: r.pet ?? null,
     // Exclusives come from their own table, not the players row; callers using a RETURNING row
     // (equip/spend/etc.) leave this empty — only getWallet hydrates it (see below).
     exclusives: [],
@@ -620,7 +707,7 @@ export async function getElos(pids: string[]): Promise<Map<string, { elo: number
 /** Read a player's wallet (coins + owned items + equipped cosmetics + spin state). */
 export async function getWallet(pid: string): Promise<Wallet> {
   if (!pool || !pid) return { ...EMPTY_WALLET };
-  const { rows } = await pool.query(`SELECT coins, owned, hat, skin, trail, title, song, car, last_spin, bonus_spins FROM players WHERE id = $1`, [pid]);
+  const { rows } = await pool.query(`SELECT coins, owned, hat, skin, trail, title, song, car, pet, last_spin, bonus_spins FROM players WHERE id = $1`, [pid]);
   if (!rows.length) return { ...EMPTY_WALLET };
   const w = rowToWallet(rows[0]);
   w.exclusives = await getExclusives(pid); // hydrate owned scarce exclusives (their own table)
@@ -726,7 +813,7 @@ export async function buyItem(pid: string, name: string, item: string, price: nu
 }
 
 /** Equip (or unequip with item=null) a cosmetic in a slot. Only equips owned items. */
-export async function equipItem(pid: string, slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car', item: string | null): Promise<Wallet | null> {
+export async function equipItem(pid: string, slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'pet', item: string | null): Promise<Wallet | null> {
   if (!pool || !pid) return null;
   const cur = await getWallet(pid);
   // Ownership check: a scarce exclusive isn't in the `owned` CSV — verify it via the per-instance
@@ -737,9 +824,9 @@ export async function equipItem(pid: string, slot: 'hat' | 'skin' | 'trail' | 't
       : cur.owned.includes(item);
     if (!owns) return null; // can't equip what you don't own
   }
-  const col = slot === 'hat' ? 'hat' : slot === 'skin' ? 'skin' : slot === 'trail' ? 'trail' : slot === 'song' ? 'song' : slot === 'car' ? 'car' : 'title';
+  const col = slot === 'hat' ? 'hat' : slot === 'skin' ? 'skin' : slot === 'trail' ? 'trail' : slot === 'song' ? 'song' : slot === 'car' ? 'car' : slot === 'pet' ? 'pet' : 'title';
   const { rows } = await pool.query(
-    `UPDATE players SET ${col} = $2 WHERE id = $1 RETURNING coins, owned, hat, skin, trail, title, song, car`,
+    `UPDATE players SET ${col} = $2 WHERE id = $1 RETURNING coins, owned, hat, skin, trail, title, song, car, pet`,
     [pid, item],
   );
   return rows.length ? rowToWallet(rows[0]) : null;
@@ -926,13 +1013,14 @@ export async function upsertPlayer(pid: string, name: string, email?: string): P
 }
 
 // --- Stock market ---
-export interface Holding { coin: string; side: StockSide; shares: number; cost: number; }
+export interface Holding { coin: string; side: StockSide; shares: number; cost: number; openedAt: number; }
 
-/** Read all of a player's open stock positions (longs and shorts). */
+/** Read all of a player's open stock positions (longs and shorts). `openedAt` stamps the
+ *  fast-sell-tax window so clients can show a countdown to tax-free. */
 export async function getHoldings(pid: string): Promise<Holding[]> {
   if (!pool || !pid) return [];
-  const { rows } = await pool.query(`SELECT coin, side, shares, cost FROM stock_holdings WHERE pid = $1 AND shares > 0`, [pid]);
-  return rows.map((r) => ({ coin: r.coin, side: (r.side === 'short' ? 'short' : 'long') as StockSide, shares: Number(r.shares), cost: Number(r.cost) }));
+  const { rows } = await pool.query(`SELECT coin, side, shares, cost, opened_at FROM stock_holdings WHERE pid = $1 AND shares > 0`, [pid]);
+  return rows.map((r) => ({ coin: r.coin, side: (r.side === 'short' ? 'short' : 'long') as StockSide, shares: Number(r.shares), cost: Number(r.cost), openedAt: Number(r.opened_at ?? 0) }));
 }
 
 /** Open (or add to) a position in `coin` at the given price: escrows `amount` coins (fails —
@@ -1207,6 +1295,26 @@ export async function setStockCrashAt(ts: number): Promise<void> {
   );
 }
 
+/** Read the persisted news feed (up to ~30 items, newest-first). Empty if no DB. */
+export async function getNewsFeed(): Promise<import('../shared/types').NewsItem[]> {
+  if (!pool) return [];
+  try {
+    const { rows } = await pool.query(`SELECT v FROM doom_meta WHERE k = 'news_feed'`);
+    if (!rows.length) return [];
+    const parsed = JSON.parse(rows[0].v);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+/** Persist the news feed (upsert in place). */
+export async function saveNewsFeed(items: import('../shared/types').NewsItem[]): Promise<void> {
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO doom_meta (k, v) VALUES ('news_feed', $1)
+       ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+    [JSON.stringify(items.slice(0, 30))],
+  );
+}
+
 /** Read the running market-instability pool (total defaulted-loan debt since the last crash).
  *  0 if never set / no DB. Drives the "Market Stability" bar and the crash trigger. */
 export async function getMarketInstability(): Promise<number> {
@@ -1222,6 +1330,31 @@ export async function setMarketInstability(n: number): Promise<void> {
     `INSERT INTO doom_meta (k, v) VALUES ('market_instability', $1)
        ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
     [String(n)],
+  );
+}
+
+// The room's armed game-mode toggles (gravity, turbo, arena, view mode, …) live as one small
+// JSON blob in doom_meta so the operator's chosen modes survive a server reboot/redeploy.
+export type GameModes = Record<string, boolean | string>;
+
+/** Read the persisted game-mode toggles. null if never set / no DB. */
+export async function getGameModes(): Promise<GameModes | null> {
+  if (!pool) return null;
+  try {
+    const { rows } = await pool.query(`SELECT v FROM doom_meta WHERE k = 'game_modes'`);
+    if (!rows.length) return null;
+    const parsed = JSON.parse(rows[0].v);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch { return null; }
+}
+
+/** Persist the room's game-mode toggles (upsert in place). */
+export async function saveGameModes(modes: GameModes): Promise<void> {
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO doom_meta (k, v) VALUES ('game_modes', $1)
+       ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v`,
+    [JSON.stringify(modes)],
   );
 }
 
@@ -1399,6 +1532,141 @@ export async function getLeaderboard(): Promise<LeaderboardRow[]> {
   return rows.map((r) => ({ name: r.name, wins: r.wins, losses: r.losses, elo: r.elo, title: r.title ?? null }));
 }
 
+/** Full Elo leaderboard including the stable pid (server-only — pid is never sent to clients),
+ *  used by the lobby to resolve a board rank back to a player for the profile drilldown. */
+export async function getEloBoard(): Promise<(LeaderboardRow & { pid: string })[]> {
+  if (!pool) return [];
+  const { rows } = await pool.query(
+    `SELECT id AS pid, name, wins, losses, elo, title
+       FROM players
+      WHERE wins + losses > 0
+      ORDER BY elo DESC, name ASC
+      LIMIT $1`,
+    [LEADERBOARD_SIZE],
+  );
+  return rows.map((r) => ({
+    pid: r.pid,
+    name: r.name,
+    wins: Number(r.wins),
+    losses: Number(r.losses),
+    elo: Number(r.elo),
+    title: r.title ?? null,
+  }));
+}
+
+/** This player's own Elo standing across the WHOLE field (not just the visible top-N), so
+ *  the client can pin their row to the board even when they sit below the cutoff. null if
+ *  they haven't played / no DB. Rank ordering mirrors getEloBoard exactly. */
+export async function getSelfElo(pid: string): Promise<{ rank: number; elo: number } | null> {
+  if (!pool) return null;
+  const { rows } = await pool.query(
+    `SELECT rnk, elo FROM (
+       SELECT id, elo,
+              ROW_NUMBER() OVER (ORDER BY elo DESC, name ASC) AS rnk
+         FROM players
+        WHERE wins + losses > 0
+     ) sub WHERE id = $1`,
+    [pid],
+  );
+  return rows.length ? { rank: Number(rows[0].rnk), elo: Number(rows[0].elo) } : null;
+}
+
+/** This player's own Net Worth standing across the WHOLE field (not just the visible top-N).
+ *  Mirrors getNetWorthLeaderboard's ordering/filter so the pinned self-row is consistent with
+ *  the board. null if they don't qualify / no DB. */
+export async function getSelfNetWorth(pid: string): Promise<(NetWorthRow & { rank: number }) | null> {
+  if (!pool) return null;
+  const { rows } = await pool.query(
+    `SELECT rnk, name, title, net, coins, loan FROM (
+       SELECT p.id AS pid, p.name, p.title,
+              p.coins + COALESCE(h.val, 0) - COALESCE(l.owed, 0) AS net,
+              p.coins,
+              COALESCE(l.owed, 0) AS loan,
+              ROW_NUMBER() OVER (
+                ORDER BY p.coins + COALESCE(h.val, 0) - COALESCE(l.owed, 0) DESC, p.name ASC
+              ) AS rnk
+         FROM players p
+         LEFT JOIN (
+           SELECT sh.pid,
+                  SUM(CASE WHEN sh.side = 'short'
+                           THEN 2 * sh.cost - sh.shares * sp.price
+                           ELSE sh.shares * sp.price END) AS val
+             FROM stock_holdings sh
+             JOIN stock_prices sp ON sp.coin = sh.coin
+            WHERE sh.shares > 0
+            GROUP BY sh.pid
+         ) h ON h.pid = p.id
+         LEFT JOIN loans l ON l.pid = p.id
+        WHERE p.wins + p.losses > 0
+           OR p.coins <> 0
+           OR h.val IS NOT NULL
+           OR l.owed IS NOT NULL
+     ) sub WHERE pid = $1`,
+    [pid],
+  );
+  if (!rows.length) return null;
+  const r = rows[0];
+  return {
+    rank: Number(r.rnk),
+    name: r.name,
+    title: r.title ?? null,
+    net: Math.round(Number(r.net)),
+    coins: Number(r.coins),
+    loan: Math.round(Number(r.loan)),
+  };
+}
+
+/** A player's public profile for the Elo drilldown. Returns null when the player
+ *  doesn't exist (or there's no DB). */
+export interface PlayerProfile {
+  name: string;
+  wins: number;
+  losses: number;
+  elo: number;
+  winPct: number;
+  lastPlayed: number | null;
+}
+export async function getPlayerProfile(pid: string): Promise<PlayerProfile | null> {
+  if (!pool || !pid) return null;
+  const { rows } = await pool.query(
+    `SELECT name, wins, losses, elo, last_played FROM players WHERE id = $1`,
+    [pid],
+  );
+  if (!rows.length) return null;
+  const r = rows[0];
+  const total = Number(r.wins) + Number(r.losses);
+  return {
+    name: r.name,
+    wins: Number(r.wins),
+    losses: Number(r.losses),
+    elo: Number(r.elo),
+    winPct: total > 0 ? Math.round((Number(r.wins) / total) * 100) : 0,
+    lastPlayed: r.last_played ? Number(r.last_played) : null,
+  };
+}
+
+/** Head-to-head record between two players: the first argument's wins/losses
+ *  against the second, or null if they've never met (or there's no DB). */
+export async function getRival(pid: string, rivalPid: string): Promise<{ name: string; wins: number; losses: number } | null> {
+  if (!pool || !pid || !rivalPid || pid === rivalPid) return null;
+  const [p1, p2] = pid < rivalPid ? [pid, rivalPid] : [rivalPid, pid];
+  const { rows } = await pool.query(
+    `SELECT h.p1_wins, h.p2_wins, p.name AS rival_name
+       FROM head_to_head h
+       JOIN players p ON p.id = $3
+       WHERE h.player1 = $1 AND h.player2 = $2`,
+    [p1, p2, rivalPid],
+  );
+  if (!rows.length) return null;
+  const r = rows[0];
+  const pidIsP1 = pid === p1;
+  return {
+    name: r.rival_name,
+    wins: pidIsP1 ? Number(r.p1_wins) : Number(r.p2_wins),
+    losses: pidIsP1 ? Number(r.p2_wins) : Number(r.p1_wins),
+  };
+}
+
 /** Net worth board: each player's coins + the live value of their stock holdings
  *  (shares × the latest persisted price) minus any loan they owe Davis. Ranked by
  *  net worth, top LEADERBOARD_SIZE. Includes anyone who has played, holds coins, has
@@ -1441,4 +1709,85 @@ export async function getNetWorthLeaderboard(): Promise<(NetWorthRow & { pid: st
     coins: Number(r.coins),
     loan: Math.round(Number(r.loan)),
   }));
+}
+
+// --- Netizen Challenge (Plan 10) ---
+
+/** Ensure the netizen_challenges table exists. */
+export async function ensureNetizenChallengesTable(): Promise<void> {
+  if (!pool) return;
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS netizen_challenges (
+      player_pid  TEXT NOT NULL,
+      netizen_pid TEXT NOT NULL,
+      ts          BIGINT NOT NULL,
+      PRIMARY KEY (player_pid, netizen_pid)
+    )
+  `);
+}
+
+/** Check if `playerPid` has challenged `netizenPid` today (since the last 5pm ET boundary). */
+export async function challengedToday(playerPid: string, netizenPid: string, boundaryMs: number): Promise<boolean> {
+  if (!pool) return false;
+  const { rows } = await pool.query(
+    `SELECT 1 FROM netizen_challenges WHERE player_pid = $1 AND netizen_pid = $2 AND ts >= $3`,
+    [playerPid, netizenPid, boundaryMs],
+  );
+  return rows.length > 0;
+}
+
+/** Record that `playerPid` challenged `netizenPid` now. */
+export async function recordChallenge(playerPid: string, netizenPid: string, nowMs: number): Promise<void> {
+  if (!pool) return;
+  await pool.query(
+    `INSERT INTO netizen_challenges (player_pid, netizen_pid, ts) VALUES ($1, $2, $3)
+       ON CONFLICT (player_pid, netizen_pid) DO UPDATE SET ts = EXCLUDED.ts`,
+    [playerPid, netizenPid, nowMs],
+  );
+}
+
+/** Look up a netizen by pid. */
+export async function getNetizenByPid(pid: string): Promise<{ pid: string; name: string; net: number } | null> {
+  if (!pool) return null;
+  const { rows } = await pool.query(
+    `SELECT id AS pid, name, coins + COALESCE(h.val, 0) - COALESCE(l.owed, 0) AS net
+       FROM players p
+       LEFT JOIN (
+         SELECT sh.pid,
+                SUM(CASE WHEN sh.side = 'short'
+                         THEN 2 * sh.cost - sh.shares * sp.price
+                         ELSE sh.shares * sp.price END) AS val
+           FROM stock_holdings sh
+           JOIN stock_prices sp ON sp.coin = sh.coin
+          WHERE sh.shares > 0
+          GROUP BY sh.pid
+       ) h ON h.pid = p.id
+       LEFT JOIN loans l ON l.pid = p.id
+       WHERE p.id = $1 AND p.bot = true`,
+    [pid],
+  );
+  return rows.length ? { pid: rows[0].pid, name: rows[0].name, net: Number(rows[0].net) } : null;
+}
+
+/** Count total netizens. */
+export async function getNetizenCount(): Promise<number> {
+  if (!pool) return 0;
+  const { rows } = await pool.query(`SELECT COUNT(*) AS c FROM players WHERE bot = true`);
+  return Number(rows[0].c);
+}
+
+/** Rank of a netizen by net worth (1 = highest). */
+export async function getNetWorthRank(pid: string): Promise<number> {
+  if (!pool) return 1;
+  const { rows } = await pool.query(
+    `SELECT rnk FROM (
+       SELECT p.id,
+              ROW_NUMBER() OVER (ORDER BY p.coins - COALESCE(l.owed, 0) DESC) AS rnk
+         FROM players p
+         LEFT JOIN loans l ON l.pid = p.id
+        WHERE p.bot = true
+     ) sub WHERE id = $1`,
+    [pid],
+  );
+  return rows.length ? Number(rows[0].rnk) : 1;
 }

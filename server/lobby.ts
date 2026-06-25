@@ -1,7 +1,7 @@
 // Tracks every connected socket, which two of them hold the paddle spots, and turns
 // the Game's raw state into the broadcast message (attaching nicknames / watchers).
 
-import type { WebSocket } from 'ws';
+import { WebSocket } from 'ws';
 import { Game } from './game';
 import { PolyGame } from './polygame';
 import { TypeGame } from './typegame';
@@ -36,6 +36,37 @@ import {
   RouletteBet,
   RouletteBetKind,
   rouletteWins,
+  BJ_MAX_BET,
+  BjAction,
+  BjStateMsg,
+  BjResultMsg,
+  CRAPS_MAX_BET,
+  CrapsResultMsg,
+  SLOTS_MAX_BET,
+  SLOTS_SYMBOLS,
+  SLOTS_WEIGHTS,
+  SLOTS_PAYOUTS,
+  SlotsSymbol,
+  SlotsResultMsg,
+  PLINKO_ROWS,
+  PLINKO_PAYOUTS,
+  PLINKO_MAX_BET,
+  PlinkoResultMsg,
+  HORSE_NAMES,
+  HORSE_ODDS,
+  HORSE_MAX_BET,
+  HorseCardMsg,
+  HorseResultMsg,
+  HILO_MAX_BET,
+  HILO_HOUSE_EDGE,
+  HiLoStateMsg,
+  HiLoResultMsg,
+  CRASH_BETTING_MS,
+  CRASH_TICK_MS,
+  CRASH_ENDED_MS,
+  CRASH_MAX_BET,
+  CRASH_GROWTH,
+  CrashStateMsg,
   StateMsg,
   STOCKS,
   STOCK_UPDATE_MS,
@@ -53,10 +84,20 @@ import {
   MarketItemView,
   MarketListingView,
   WorldAvatar,
+  NewsItem,
+  NETIZEN_DIALOGUE,
+  NEWS_TEMPLATES_BULLISH,
+  NEWS_TEMPLATES_BEARISH,
+  LOOT_TABLE,
+  minBet,
+  FAST_SELL_TAX_MS,
+  FAST_SELL_TAX_RATE,
+  FIGHTERS,
 } from '../shared/types';
-import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
+import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSelfElo, getSelfNetWorth, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
+  recordFishCatch, getFishingLeaderboard, FishingScoreRow,
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS,
   getHoldings, investStock, closePosition, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
   setStockCrashAt, getMarketInstability, setMarketInstability,
@@ -65,9 +106,13 @@ import { getLeaderboard, getNetWorthLeaderboard, recordResult, updateName, recor
   mintExclusive, getExclusiveSupply, getExclusiveLastSale,
   listExclusive, cancelListing, getMarketListings, buyLowestAsk,
   getNetizens, seedNetizen,
-  addBounty, getBountyOn, clearBounty, getBounties } from './db';
+  addBounty, getBountyOn, clearBounty, getBounties,
+  challengedToday, recordChallenge,
+  getNetizenByPid, getNetizenCount, getNetWorthRank,
+  getNewsFeed, saveNewsFeed,
+  getGameModes, saveGameModes } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
-import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA } from '../shared/types';
+import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
 // emoji code points (pictographs, components, ZWJ, variation selectors, flags).
@@ -77,6 +122,13 @@ const EMOJI_ONLY =
 function isValidReaction(emoji: string): boolean {
   if (emoji === BALL_REACTION) return true;
   return emoji.length > 0 && emoji.length <= 16 && EMOJI_ONLY.test(emoji);
+}
+
+interface BjHand {
+  playerCards: string[];
+  dealerCards: string[]; // both cards held server-side; second one revealed at showdown
+  bet: number;           // current wager (doubled if player doubled down)
+  shoe: string[];        // remaining shoe to draw from
 }
 
 interface Conn {
@@ -94,6 +146,11 @@ interface Conn {
   trail: string | null;
   title: string | null;
   song: string | null; // equipped theme song id (plays during this player's matches)
+  // Casino games
+  bjHand?: BjHand;             // active blackjack hand (undefined = not playing)
+  crapsPoint: number | null;   // current craps point (null = come-out phase)
+  horseCard?: { name: string; odds: number }[]; // pending race card (5 horses); undefined = no race started
+  hiloHand?: { bet: number; card: number; multiplier: number }; // active Hi-Lo hand
 }
 
 // One step of a crypto's price random walk. Pure RNG — never tied to who invested or how
@@ -134,6 +191,25 @@ function nextFivePmEtMs(nowMs: number): number {
   let delta = target - secsNow;
   if (delta <= 0) delta += 24 * 3600; // already past 5pm in NY → the next one is tomorrow
   return nowMs + delta * 1000;
+}
+
+// Market-hours check: M–F 9:00–16:59 America/New_York.
+function isMarketHours(nowMs: number): boolean {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour12: false, weekday: 'short', hour: '2-digit',
+  }).formatToParts(new Date(nowMs));
+  const day = parts.find(p => p.type === 'weekday')?.value;
+  const hour = Number(parts.find(p => p.type === 'hour')?.value) || 0;
+  return !['Sat','Sun'].includes(day ?? '') && hour >= 9 && hour < 17;
+}
+// Epoch ms of the next top-of-hour boundary (xx:00:00) in real time.
+function nextTopOfHourMs(nowMs: number): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', hour12: false, minute: '2-digit', second: '2-digit',
+  }).formatToParts(new Date(nowMs));
+  const m = Number(parts.find(p => p.type === 'minute')?.value) || 0;
+  const s = Number(parts.find(p => p.type === 'second')?.value) || 0;
+  return nowMs + ((3600 - (m * 60 + s)) % 3600 || 3600) * 1000;
 }
 
 // Epoch ms when the daily spin is next available (0 = available now).
@@ -204,6 +280,7 @@ export class Lobby {
   private leaderboard: LeaderboardRow[] = []; // cached standings, pushed to clients
   private netWorth: NetWorthRow[] = []; // cached net-worth board (coins + holdings − debt)
   private netWorthPids: string[] = []; // pid per net-worth row (server-only; resolves a rank → player)
+  private eloPids: string[] = []; // pid per Elo leaderboard row (server-only; resolves a rank → player)
   private chatLog: ChatLine[] = []; // recent chat, replayed to new connections
   private nextId = 1;
 
@@ -223,12 +300,24 @@ export class Lobby {
   private bot: {
     ws: WebSocket;
     side: Side;
-    id: string;
-    level: BotLevel;
-    reactTimer: number; // seconds until the bot re-aims (its reaction lag)
-    aimY: number; // current target Y the bot is steering toward
-  } | null = null;
+      id: string;
+      level: BotLevel;
+      reactTimer: number; // seconds until the bot re-aims (its reaction lag)
+      aimY: number; // current target Y the bot is steering toward
+      reactOverride?: number; // challenge difficulty: override reaction time
+      errorPxOverride?: number; // challenge difficulty: override aim error in px
+    } | null = null;
   private botOverTimer = 0; // seconds the post-match screen lingers before the bot leaves
+
+  // Active netizen challenge: set when a player challenges a netizen, settled when the bot match ends.
+  private pendingChallenge: {
+    playerPid: string;
+    playerName: string;
+    playerWs: WebSocket;
+    netizenPid: string;
+    netizenName: string;
+    wager: number;
+  } | null = null;
 
   // Streamer mode: fake chat bots spam the chat to distract players.
   private streamerMode = false;
@@ -268,9 +357,22 @@ export class Lobby {
   // accumulated by recordFlow and decayed each re-roll. Drives 40% of the price move. Lives only
   // in memory (decays to zero, harmless on restart) — never persisted.
   private pressure = new Map<string, number>();
+  // --- Market News Engine ---
+  // Pending price-pressure injections from published news headlines, waiting to fire at fireAt.
+  private pendingNews: { coin: string; magnitude: number; fireAt: number }[] = [];
+  // Epoch ms of the next scheduled headline publish (top of the next market hour).
+  private nextNewsAt = nextTopOfHourMs(Date.now());
+  // Cached news feed (newest-first items). Hydrated on boot from DB, updated on each publish.
+  private newsFeed: NewsItem[] = [];
   // Cached House treasury balance, hydrated on boot and kept in sync after each adjust. Broadcast
   // to clients so the market/casino header can show it (and "payouts reduced" when low).
   private houseBalance = 0;
+  // Netizen avatar wander state: position, target (tx/ty), pause timer, spawn delay.
+  private netizenPos = new Map<string, { x: number; y: number; tx: number; ty: number; pauseUntil: number; spawnAt: number }>();
+  // Staggered netizen reactions to news, drained in tickStocks.
+  private newsReactions: { name: string; pid: string; text: string; at: number }[] = [];
+  // Global throttle for netizen chat: don't post more than once per ~10s.
+  private lastNetizenChatAt = 0;
   // Epoch ms of the next daily loan-collection event — the next 5:00pm America/New_York. At this
   // tick Davis collects on overdue loans and each defaulter's unpaid debt is added to the
   // instability pool; the market only crashes when that pool fills (see runDailyCollection).
@@ -289,6 +391,14 @@ export class Lobby {
   private stockHistTick = 0; // re-roll counter, to decide which series to sample each tick
   private liveMatchId: number | null = null; // bracket match currently on the court
   private tourneyInterMs = 0; // ms left on the "next match" interstitial between games
+
+  // --- Crash casino game ---
+  private crashPhase: 'betting' | 'live' | 'ended' = 'betting';
+  private crashPhaseStart = 0;           // Date.now() when the current phase began
+  private crashAt = 0;                   // predetermined crash multiplier (secret until crash)
+  private crashTicksNeeded = 0;          // live-phase ticks until crashAt is reached
+  private crashTicks = 0;               // elapsed live-phase ticks
+  private crashBets: Array<{ ws: WebSocket; pid: string; name: string; amount: number; autoCashout: number | null; cashedAt: number | null }> = [];
 
   // --- "Type or Die" (co-op typing horde-defense) ---
   // A single shared, server-authoritative arena that runs alongside everything else. Players
@@ -328,6 +438,9 @@ export class Lobby {
       },
       announce: (text) => this.announce(text),
     });
+    // Kick off the perpetual Crash casino game.
+    this.crashPhaseStart = Date.now();
+    setInterval(() => this.crashTick(), CRASH_TICK_MS);
   }
 
   /** Advance whichever simulation is live this tick (called by the server loop). */
@@ -361,15 +474,20 @@ export class Lobby {
       trail: null,
       title: null,
       song: null,
+      crapsPoint: null,
     };
     this.conns.set(ws, conn);
     this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
+    // Fresh observer: no pid yet, so just the plain boards. Once they join, sendBoardsTo
+    // re-sends these personalised with the player's own pinned row.
     this.tell(ws, { type: 'leaderboard', rows: this.leaderboard });
     this.tell(ws, { type: 'netWorth', rows: this.netWorth });
     this.tell(ws, { type: 'doomLeaderboard', solo: this.doomBoards.solo, coop: this.doomBoards.coop });
     this.tell(ws, { type: 'tdLeaderboard', rows: this.tdBoard });
     this.tell(ws, { type: 'campaignLeaderboard', rows: this.campaignBoard });
+    this.tell(ws, { type: 'fishLeaderboard', rows: this.fishBoard });
     if (this.chatLog.length) this.tell(ws, { type: 'chat', lines: this.chatLog });
+    this.tell(ws, this.buildCrashState(ws));
   }
 
   chat(ws: WebSocket, text: string) {
@@ -406,6 +524,21 @@ export class Lobby {
     conn.lastChatAt = now;
 
     const data = JSON.stringify({ type: 'reaction', emoji });
+    for (const sock of this.conns.keys()) {
+      if (sock.readyState === sock.OPEN) sock.send(data);
+    }
+  }
+
+  // Secret: a player typed the magic word — fly the banner-plane for the whole room. The
+  // banner choice (idx) is picked here so everyone sees the same arrival message.
+  summonPlane(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return; // must have joined
+    const now = Date.now();
+    if (now - conn.lastChatAt < 3000) return; // gentle throttle: no plane spam
+    conn.lastChatAt = now;
+
+    const data = JSON.stringify({ type: 'flyover', idx: Math.floor(Math.random() * 1000) });
     for (const sock of this.conns.keys()) {
       if (sock.readyState === sock.OPEN) sock.send(data);
     }
@@ -583,6 +716,81 @@ export class Lobby {
     this.refreshPause();
   }
 
+  // --- Netizen Challenge (Plan 10) ---
+
+  /** Return info about a netizen for the challenge dialog. */
+  async sendNetizenInfo(ws: WebSocket, netizenId: string) {
+    const conn = this.conns.get(ws);
+    const row = await getNetizenByPid(netizenId);
+    if (!row) return;
+    const boundaryMs = latest5pmEtBoundary();
+    const today = await challengedToday(conn?.pid || '', netizenId, boundaryMs);
+    const netWorth = Number(row.net);
+    const maxWin = Math.round(netWorth * NETIZEN_CHALLENGE_MAX_FRAC);
+    this.tell(ws, { type: 'netizenInfo', netizenId, netWorth, maxWin, challengedToday: today, netizenName: row.name });
+  }
+
+  /** Challenge a netizen to a coin-wager Pong duel. */
+  async netizenChallenge(ws: WebSocket, netizenId: string, wager: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    if (this.bot || this.pendingChallenge) return;
+    if (this.tournament) return;
+    if (this.mode === 'poly' || this.arena) return;
+    if (this.game.layered) return;
+
+    const row = await getNetizenByPid(netizenId);
+    if (!row) return;
+
+    const boundaryMs = latest5pmEtBoundary();
+    const today = await challengedToday(conn.pid, netizenId, boundaryMs);
+    if (today) return;
+
+    const netWorth = Number(row.net);
+    const maxWager = Math.round(netWorth * NETIZEN_CHALLENGE_MAX_FRAC);
+    // Wealth-scaled minimum bet: can't wager below the player's floor.
+    const wallet = await getWallet(conn.pid);
+    const minWager = minBet(wallet.coins);
+    const effectiveMin = Math.min(minWager, maxWager);
+    if (wager < effectiveMin || wager > maxWager) return;
+    if (wallet.coins < wager) return;
+
+    // Escrow: deduct from human, credit to netizen so net worth is accurate during the match.
+    await addCoins(conn.pid, conn.nickname || 'Player', -wager);
+    await addCoins(netizenId, row.name, wager);
+    await recordChallenge(conn.pid, netizenId, Date.now());
+
+    // Determine bot difficulty from the netizen's net worth.
+    const netRank = await getNetWorthRank(netizenId);
+    const totalNetizens = await getNetizenCount();
+    const t = totalNetizens > 1 ? 1 - (netRank - 1) / (totalNetizens - 1) : 0.5;
+    const react = NETIZEN_CHALLENGE_EASIEST_REACT + t * (NETIZEN_CHALLENGE_HARDEST_REACT - NETIZEN_CHALLENGE_EASIEST_REACT);
+    const errPx = Math.round(NETIZEN_CHALLENGE_EASIEST_ERROR + t * (NETIZEN_CHALLENGE_HARDEST_ERROR - NETIZEN_CHALLENGE_EASIEST_ERROR));
+
+    if (conn.role === 'observer') {
+      const open = SIDES.find((s) => this.teams[s].length === 0);
+      if (!open) return;
+      this.claim(ws, open);
+    }
+    const botSide = SIDES.find((s) => this.teams[s].length === 0);
+    if (!botSide) return;
+
+    this.pendingChallenge = {
+      playerPid: conn.pid,
+      playerName: conn.nickname || 'Player',
+      playerWs: ws,
+      netizenPid: netizenId,
+      netizenName: row.name,
+      wager,
+    };
+    this.spawnBot(botSide, 'hard', { reactOverride: react, errorPxOverride: errPx });
+
+    if (this.teams.left.length && this.teams.right.length && this.game.status === 'waiting') {
+      this.game.start();
+    }
+    this.refreshPause();
+  }
+
   // --- Co-op DOOM ---
   // A tiny 2-slot lobby + opaque relay. The DOOM game itself runs on the clients
   // (slot 0 is the authority); the server only matchmakes the pair and forwards their
@@ -622,6 +830,23 @@ export class Lobby {
       .catch((e) => console.error('doom reward failed:', e));
   }
 
+  // World "weekly objective" rewards, in coins (NOT win-units — these are paid as-is, not ×COIN_SCALE).
+  // Granted once per player per quest (tracked in-memory for the server's lifetime), paid from the House.
+  private static QUEST_REWARDS: Record<string, number> = { 'find-waldo': 400, 'give-banana': 400, 'win-ten': 1000 };
+  private claimedQuests = new Set<string>(); // `${pid}:${quest}`
+  questClaim(ws: WebSocket, quest: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    const reward = Lobby.QUEST_REWARDS[quest];
+    if (!reward) return;
+    const key = `${conn.pid}:${quest}`;
+    if (this.claimedQuests.has(key)) return; // already paid
+    this.claimedQuests.add(key);
+    this.housePay(conn.pid, conn.nickname, reward) // already in coins — do NOT ×COIN_SCALE
+      .then(() => this.sendWallet(ws))
+      .catch((e) => { this.claimedQuests.delete(key); console.error('quest reward failed:', e); });
+  }
+
   /** Forward an opaque DOOM payload to the co-op partner. */
   doomRelay(ws: WebSocket, data: unknown) {
     if (!this.doomSlots.includes(ws)) return;
@@ -659,15 +884,24 @@ export class Lobby {
   // Economy Overhaul: netizen bot traders. Seeded once from the House; they appear on the
   // net-worth board automatically (getNetWorthLeaderboard includes everyone).
   private static readonly NETIZEN_START_COINS = 5000;
+  // Netizens mill around the town-centre plaza (mirrors client/world.ts PLAZA at 1600,1100 r240).
+  private static readonly PLAZA = { x: 1600, y: 1100 };
   private static readonly NETIZEN_NAMES = [
     'satoshi_jr', 'diamond_paws', 'moonboy420', 'hodl_hannah', 'paperhands_pete',
     'algo_andy', 'bagholder_bo', 'shorty_sue', 'whale_watcher', 'degen_dana',
   ];
+  private static readonly NETIZEN_COLORS = [
+    '#f0a030', '#30c8f0', '#e040e0', '#f06080', '#80c870',
+    '#c8a0f0', '#f0d060', '#50e0b0', '#ff7a50', '#78c0f0',
+  ];
+  private static netizenColor(pid: string): string {
+    const idx = Number(pid.split(':')[1] ?? 0);
+    return Lobby.NETIZEN_COLORS[idx % Lobby.NETIZEN_COLORS.length] ?? '#888';
+  }
 
   // Loot box: a fixed coin price (flows to the House) that rolls a weighted prize. A coin roll
   // (or a degraded capped-out exclusive) pays this much from the House.
   private static readonly LOOT_PRICE = 2500;
-  private static readonly LOOT_COIN_REWARD = 1500;
 
   private static readonly NT_CAP = 6;
   private static readonly NT_WIN_REWARD = 750; // coins each winning-team player earns per match
@@ -851,6 +1085,113 @@ export class Lobby {
     });
   }
 
+  // --- Super Tsong Bros (PvP platform fighter) ---
+  // A clone of the Nuketown subsystem: up to 4 players free-for-all, host-authoritative over a
+  // dumb broadcast relay. The server only matchmakes the lobby, tracks each player's chosen
+  // fighter (for the all-locked start gate), tracks 'waiting'|'playing' status, and fans relay
+  // payloads out. Slot 0 (first joiner) is the host/authority and runs the whole match client-side.
+  // The win reward is House-funded and paid once per match to the reported winning slot, behind
+  // host-only + status + min-length guards (same anti-farm shape as Nuketown). No Pong state touched.
+  private sbSlots: WebSocket[] = [];
+  private sbFighters = new Map<WebSocket, string | null>(); // ws → locked fighter id (null = not picked)
+  private sbStatus: 'waiting' | 'playing' = 'waiting';
+  private sbStartedAt = 0; // epoch ms the current match started (min-length reward guard)
+  private static readonly SB_CAP = 4;
+  private static readonly SB_WIN_REWARD = 1000; // coins the winner earns per match
+  private static readonly SB_MIN_MATCH_MS = 30_000; // matches shorter than this don't pay (anti-farm)
+
+  /** Take a slot in the Super Tsong Bros lobby (max 4). Joins with no fighter picked yet. */
+  sbJoin(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return;
+    if (this.sbSlots.includes(ws) || this.sbSlots.length >= Lobby.SB_CAP) return;
+    if (this.sbStatus === 'playing') return; // can't hop into a running match (pick before the next one)
+    this.sbSlots.push(ws);
+    this.sbFighters.set(ws, null);
+    this.broadcastSbLobby();
+  }
+
+  /** Lock in (or change, while waiting) the fighter for this player's slot. */
+  sbPick(ws: WebSocket, fighter: string) {
+    if (!this.sbSlots.includes(ws)) return;
+    if (this.sbStatus === 'playing') return; // locked once the match is live
+    if (!FIGHTERS.some((f) => f.id === fighter)) return; // must be a real fighter id
+    this.sbFighters.set(ws, fighter);
+    this.broadcastSbLobby();
+  }
+
+  /** Leave the lobby/match. If the HOST (slot 0) left, end the match for everyone. */
+  sbLeave(ws: WebSocket) {
+    const i = this.sbSlots.indexOf(ws);
+    if (i === -1) return;
+    const wasHost = i === 0;
+    this.sbSlots.splice(i, 1);
+    this.sbFighters.delete(ws);
+    if (wasHost) {
+      // The authority is gone — no one can simulate the match. Tear it down for everyone left.
+      for (const other of this.sbSlots) {
+        this.tell(other, { type: 'sbLobby', status: 'ended', slot: 0, hostSlot: 0, players: [] });
+      }
+      this.sbSlots = [];
+      this.sbFighters.clear();
+      this.sbStatus = 'waiting';
+      return;
+    }
+    if (this.sbSlots.length <= 1) this.sbStatus = 'waiting';
+    this.broadcastSbLobby();
+  }
+
+  /** (Host only) start the match. Requires ≥2 players AND every player to have locked a fighter. */
+  sbStart(ws: WebSocket) {
+    if (this.sbSlots[0] !== ws) return;            // only the host (slot 0) may start
+    if (this.sbSlots.length < 2) return;           // need at least 2 players
+    if (!this.sbSlots.every((s) => this.sbFighters.get(s))) return; // all-locked gate
+    this.sbStatus = 'playing';
+    this.sbStartedAt = Date.now();
+    this.broadcastSbLobby();
+  }
+
+  /** (Host only) settle a finished match: pay the reported winning slot the House-funded reward.
+   *  Guards: host-only, only while live (status flips to 'waiting' so it pays exactly once), the
+   *  winner slot must be valid, and the match must have lasted a minimum length (anti-farm). */
+  sbEnd(ws: WebSocket, winnerSlot: number) {
+    if (this.sbSlots[0] !== ws) return;          // only the authoritative host reports
+    if (this.sbStatus !== 'playing') return;     // already settled / never started — ignore
+    this.sbStatus = 'waiting';                   // settle once; any further sbEnd is a no-op
+    const winSock = this.sbSlots[winnerSlot];
+    if (winnerSlot < 0 || !winSock) { this.broadcastSbLobby(); return; } // invalid → no payout
+    if (Date.now() - this.sbStartedAt < Lobby.SB_MIN_MATCH_MS) { this.broadcastSbLobby(); return; }
+    const conn = this.conns.get(winSock);
+    if (conn && conn.pid) {
+      this.housePay(conn.pid, conn.nickname, Lobby.SB_WIN_REWARD)
+        .then((paid) => {
+          this.sendWallet(winSock); this.refreshNetWorth().catch(() => {});
+          if (paid > 0) this.notify(winSock, `🥊 You won Super Tsong Bros — +${paid.toLocaleString()} coins!`);
+        })
+        .catch((e) => console.error('super tsong bros reward failed:', e));
+    }
+    this.broadcastSbLobby();
+  }
+
+  /** Forward an opaque Super Tsong Bros payload to every OTHER participant (dumb fan-out). */
+  sbRelay(ws: WebSocket, data: unknown) {
+    if (!this.sbSlots.includes(ws)) return;
+    for (const other of this.sbSlots) {
+      if (other !== ws) this.tell(other, { type: 'sbRelay', data });
+    }
+  }
+
+  private broadcastSbLobby() {
+    const players = this.sbSlots.map((sock, slot) => ({
+      name: this.conns.get(sock)?.nickname ?? `P${slot}`,
+      slot,
+      fighter: this.sbFighters.get(sock) ?? null,
+    }));
+    this.sbSlots.forEach((sock, slot) => {
+      this.tell(sock, { type: 'sbLobby', status: this.sbStatus, slot, hostSlot: 0, players });
+    });
+  }
+
   // --- Beta World (free-roam overworld) ---
 
   /** Step a player into the world map. Sends them the current roster right away so they see
@@ -867,27 +1208,65 @@ export class Lobby {
     this.world.leave(ws);
   }
 
-  /** Record a client's self-reported avatar position + heading + driven car (clamped in World.move). */
-  worldMove(ws: WebSocket, x: number, y: number, a?: number, car?: string | null) {
-    this.world.move(ws, x, y, a, car);
+  /** Record a client's self-reported avatar position + heading + driven car + trailing pet (clamped in World.move). */
+  worldMove(ws: WebSocket, x: number, y: number, a?: number, car?: string | null, pet?: string | null) {
+    this.world.move(ws, x, y, a, car, pet);
   }
 
-  /** Snapshot every in-world avatar, joining each socket's identity (id/name/color) from its Conn. */
+  /** Snapshot every in-world avatar (human + netizen). */
   private worldAvatars(): WorldAvatar[] {
     const out: WorldAvatar[] = [];
     for (const ws of this.world.sockets()) {
       const c = this.conns.get(ws);
       const p = this.world.positionOf(ws);
       if (!c || !p) continue;
-      out.push({ id: c.id, name: c.nickname || 'anon', color: c.color, x: p.x, y: p.y, a: p.a, car: p.car });
+      out.push({ id: c.id, name: c.nickname || 'anon', color: c.color, x: p.x, y: p.y, a: p.a, car: p.car, pet: p.pet });
+    }
+    // Append spawned netizen avatars.
+    for (let i = 0; i < Lobby.NETIZEN_NAMES.length; i++) {
+      const pid = `netizen:${i}`;
+      const pos = this.netizenPos.get(pid);
+      if (!pos || Date.now() < pos.spawnAt) continue;
+      out.push({
+        id: pid,
+        name: Lobby.NETIZEN_NAMES[i],
+        color: Lobby.netizenColor(pid),
+        x: pos.x, y: pos.y,
+        bot: true,
+      });
     }
     return out;
   }
 
-  /** Fan everyone-in-the-world's positions out to everyone in the world. Called every tick by
-   *  broadcast(); throttled to ~15 Hz and a no-op when the world is empty. */
+  /** Wander netizen avatars and fan everyone's positions out. Called every tick by broadcast();
+   *  throttled to ~15 Hz. Also runs when no humans are in the world to keep netizens moving. */
   broadcastWorld() {
-    if (this.world.size === 0) return;
+    const now = Date.now();
+    const dt = 1 / 60;
+    const speed = 64;
+    for (let i = 0; i < Lobby.NETIZEN_NAMES.length; i++) {
+      const pid = `netizen:${i}`;
+      const pos = this.netizenPos.get(pid);
+      if (!pos || now < pos.spawnAt) continue;
+      if (now >= pos.pauseUntil) {
+        // Walk toward the current target.
+        const dx = pos.tx - pos.x, dy = pos.ty - pos.y;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 8) {
+          // Reached target — pause, then pick a new random spot.
+          pos.pauseUntil = now + 800 + Math.random() * 2500;
+          // Roam the whole town, not just the fountain: targets anywhere within ~1000 units of the
+          // plaza so the netizens spread out around the map instead of clustering at the centre.
+          const a = Math.random() * Math.PI * 2, r = 200 + Math.random() * 800;
+          pos.tx = Lobby.PLAZA.x + Math.cos(a) * r;
+          pos.ty = Lobby.PLAZA.y + Math.sin(a) * r;
+        } else {
+          pos.x += (dx / dist) * speed * dt;
+          pos.y += (dy / dist) * speed * dt;
+        }
+      }
+    }
+    if (this.world.size === 0) return; // no humans to send to
     if (++this.worldBcTick % Lobby.WORLD_BROADCAST_EVERY !== 0) return;
     const data = JSON.stringify({ type: 'world', avatars: this.worldAvatars() });
     for (const ws of this.world.sockets()) {
@@ -898,6 +1277,16 @@ export class Lobby {
   // DOOM high-round leaderboards (solo + co-op), cached and pushed to clients.
   private doomBoards: { solo: DoomScoreRow[]; coop: DoomScoreRow[] } = { solo: [], coop: [] };
   private campaignBoard: CampaignScoreRow[] = [];
+  private fishBoard: FishingScoreRow[] = [];
+  // Anti-abuse: last fishing payout time per pid (ms). Claims faster than FISH_COOLDOWN_MS are
+  // ignored, so a scripted client can't spam the House for coins.
+  private lastFishAt = new Map<string, number>();
+  private static readonly FISH_COOLDOWN_MS = 2500;
+  // House-funded reward range per tier (server picks an amount within the range; client only
+  // sends the tier, never a coin amount). Legendary is a flat jackpot + the Angler title.
+  private static readonly FISH_REWARDS: Record<string, [number, number]> = {
+    junk: [0, 10], common: [50, 120], uncommon: [160, 360], rare: [600, 1200], legendary: [3000, 3000],
+  };
 
   /** Reload the DOOM leaderboards from the DB and push them to everyone. */
   async refreshDoomLeaderboards() {
@@ -927,10 +1316,11 @@ export class Lobby {
     recordDoomScore(key, label, coop, r)
       .then(() => this.refreshDoomLeaderboards())
       .catch((e) => console.error('doom score save failed:', e));
-    // Reward 50 coins × the round reached — every run, no gating. DOOM is a grindable coin
-    // faucet on purpose; early rounds pay little (50, 100, …) so it scales with how far you get.
+    // Reward stacks per round: round 1 pays 50, round 2 adds 100, round 3 adds 150, … so the
+    // total for reaching round r is 50·(1+2+…+r) = 25·r·(r+1) (e.g. R2 → 150, R5 → 750). Every
+    // run, no gating — DOOM is a grindable coin faucet on purpose that scales with how far you get.
     if (conn.pid) {
-      const reward = 50 * r;
+      const reward = 25 * r * (r + 1);
       // House-funded (throttled when the treasury is low). Surface the CREDITED amount, not the ask.
       this.housePay(conn.pid, conn.nickname, reward)
         .then((paid) => {
@@ -938,6 +1328,67 @@ export class Lobby {
           if (paid > 0) this.notify(ws, `🪙 +${paid.toLocaleString()} coins for reaching round ${r} in DOOM!`);
         })
         .catch((e) => console.error('doom reward failed:', e));
+    }
+  }
+
+  // --- Fishing minigame ---
+
+  /** Reload the biggest-catch leaderboard from the DB and push it to everyone. */
+  async refreshFishLeaderboard() {
+    this.fishBoard = await getFishingLeaderboard();
+    const msg = JSON.stringify({ type: 'fishLeaderboard', rows: this.fishBoard });
+    for (const sock of this.conns.keys()) {
+      if (sock.readyState === sock.OPEN) sock.send(msg);
+    }
+  }
+
+  /** A landed fish: validate the tier + size, rate-limit, pay a House-funded reward by tier, and
+   *  (for legendaries) grant the one-time Angler title. The client never sends a coin amount — the
+   *  server picks the payout from the tier's range, so a tampered client can't mint money. */
+  fishCatch(ws: WebSocket, tier: string, sizeLb: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    const range = Lobby.FISH_REWARDS[tier];
+    if (!range) return;                                   // unknown tier
+    if (!Number.isFinite(sizeLb) || sizeLb <= 0) return;  // bad size
+    const pid = conn.pid, nick = conn.nickname;
+    // Rate-limit: at most one payout per FISH_COOLDOWN_MS per player (stops scripted spam).
+    const now = Date.now();
+    const last = this.lastFishAt.get(pid) ?? 0;
+    if (now - last < Lobby.FISH_COOLDOWN_MS) return;
+    this.lastFishAt.set(pid, now);
+
+    // Record the catch for the biggest-catch board (keeps each player's max).
+    recordFishCatch(pid, nick, sizeLb)
+      .then(() => this.refreshFishLeaderboard())
+      .catch((e) => console.error('fish catch save failed:', e));
+
+    // House-funded reward: a server-picked amount within the tier's range.
+    const [lo, hi] = range;
+    const reward = lo + Math.floor(Math.random() * (hi - lo + 1));
+    const legendary = tier === 'legendary';
+
+    const finish = (item?: { id: string; name: string }) => {
+      this.housePay(pid, nick, reward)
+        .then((paid) => {
+          this.sendWallet(ws); this.refreshNetWorth().catch(() => {});
+          this.tell(ws, { type: 'fishReward', coins: paid, item });
+        })
+        .catch((e) => console.error('fish reward failed:', e));
+    };
+
+    if (legendary) {
+      // Landing a legendary unlocks the locked "Angler" title (own it + auto-wear it if untitled).
+      awardTitle(pid, nick, 'angler')
+        .then((w) => {
+          if (w) { conn.title = w.title; this.refreshLeaderboard(); }
+          const cos = COSMETICS.find((c) => c.id === 'angler');
+          finish(cos ? { id: cos.id, name: cos.name } : undefined);
+          this.announce(`🎣 ${nick} landed a LEGENDARY catch (${Math.round(sizeLb)} lb) and earned the Angler title!`);
+        })
+        .catch((e) => { console.error('angler title award failed:', e); finish(); });
+    } else {
+      finish();
     }
   }
 
@@ -1263,7 +1714,7 @@ export class Lobby {
   }
 
   // Seat a synthetic bot connection on a side and start steering its paddle.
-  private spawnBot(side: Side, level: BotLevel) {
+  private spawnBot(side: Side, level: BotLevel, overrides?: { reactOverride?: number; errorPxOverride?: number }) {
     const ws = makeBotSocket();
     const conn: Conn = {
       id: String(this.nextId++),
@@ -1279,22 +1730,48 @@ export class Lobby {
       trail: null,
       title: null,
       song: null,
+      crapsPoint: null,
     };
     this.conns.set(ws, conn);
     this.teams[side].push(ws);
     this.game.addPlayer(side, conn.id);
-    this.bot = { ws, side, id: conn.id, level, reactTimer: 0, aimY: COURT.h / 2 };
+    this.bot = {
+      ws, side, id: conn.id, level, reactTimer: 0, aimY: COURT.h / 2,
+      reactOverride: overrides?.reactOverride,
+      errorPxOverride: overrides?.errorPxOverride,
+    };
   }
 
   // Tear the bot out of its seat. A bot leaving never crowns a king and never leaves the
   // duel frozen on an 'over' screen — it always returns the room to a clean waiting state.
   private removeBotInternal() {
     if (!this.bot) return;
-    const { ws, side, id } = this.bot;
+    const { ws, side: botSide, id } = this.bot;
+    // Settle an active netizen challenge before tearing down the bot.
+    if (this.pendingChallenge) {
+      const c = this.pendingChallenge;
+      const winnerSide = this.game.winnerSide;
+      const humanWon = winnerSide && winnerSide !== botSide;
+      const delta = humanWon ? c.wager : -c.wager;
+      addCoins(c.playerPid, c.playerName, delta).then(() => {
+        if (this.conns.has(c.playerWs)) this.sendWallet(c.playerWs);
+      }).catch(() => {});
+      addCoins(c.netizenPid, c.netizenName, -delta).then(() => {
+        this.refreshNetWorth().catch(() => {});
+      }).catch(() => {});
+      this.tell(c.playerWs, {
+        type: 'netizenChallengeResult',
+        won: !!humanWon,
+        delta: Math.abs(delta),
+        netizenName: c.netizenName,
+      });
+      this.refreshNetWorth().catch(() => {});
+      this.pendingChallenge = null;
+    }
     this.bot = null;
     this.botOverTimer = 0;
-    this.teams[side] = this.teams[side].filter((s) => s !== ws);
-    this.game.removePlayer(side, id);
+    this.teams[botSide] = this.teams[botSide].filter((s) => s !== ws);
+    this.game.removePlayer(botSide, id);
     this.conns.delete(ws);
     this.king = null;
     if (this.game.status !== 'waiting') {
@@ -1320,10 +1797,12 @@ export class Lobby {
     if (!this.bot) return;
     if (this.game.status !== 'playing' || this.game.paused) return;
     const cfg = BOT_CFG[this.bot.level];
+    const react = this.bot.reactOverride ?? cfg.react;
+    const errPx = this.bot.errorPxOverride ?? cfg.error;
     this.bot.reactTimer -= dt;
     if (this.bot.reactTimer <= 0) {
-      this.bot.reactTimer = cfg.react;
-      this.bot.aimY = this.botAim(this.bot.side, cfg);
+      this.bot.reactTimer = react;
+      this.bot.aimY = this.botAim(this.bot.side, { ...cfg, error: errPx });
     }
     this.game.setTarget(this.bot.side, this.bot.id, this.bot.aimY);
   }
@@ -1365,6 +1844,11 @@ export class Lobby {
     this.sendBounties(ws);
     // Send the House treasury balance (drives the market/casino header readout).
     this.tell(ws, { type: 'house', balance: Math.round(this.houseBalance) });
+    // Send the news feed.
+    this.sendNews(ws);
+    // Now that we know who they are, re-send the standings pinned with their own row even if
+    // they're below the visible top-N.
+    this.sendBoardsTo(ws).catch((e) => console.error('board personalise failed:', e));
   }
 
   /** Load a connection's wallet from the DB into memory and send it to that client. */
@@ -1380,7 +1864,7 @@ export class Lobby {
         c.trail = w.trail;
         c.title = w.title;
         c.song = w.song;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, pet: w.pet, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet load failed:', e));
   }
@@ -1394,7 +1878,7 @@ export class Lobby {
         const c = this.conns.get(ws);
         if (!c) return;
         c.hat = w.hat; c.skin = w.skin; c.trail = w.trail; c.title = w.title; c.song = w.song;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, pet: w.pet, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet send failed:', e));
   }
@@ -1550,7 +2034,7 @@ export class Lobby {
   }
 
   /** Equip (item) or unequip (null) a cosmetic in its slot. */
-  shopEquip(ws: WebSocket, slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car', item: string | null) {
+  shopEquip(ws: WebSocket, slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'pet', item: string | null) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     if (item !== null) {
@@ -1636,8 +2120,11 @@ export class Lobby {
       total += b.amount;
     }
     if (total <= 0 || total > ROULETTE_MAX_TOTAL) { this.sendWallet(ws); return; }
-    // Escrow the whole stake up front; if it doesn't clear, the player can't afford it.
-    spendCoins(conn.pid, total)
+    // Wealth-scaled minimum bet: refuse a stake below the player's floor.
+    getWallet(conn.pid).then((w) => {
+      if (!w || total < minBet(w.coins)) { this.sendWallet(ws); return; }
+      // Escrow the whole stake up front; if it doesn't clear, the player can't afford it.
+      spendCoins(conn.pid, total)
       .then(async (w) => {
         if (!w) { this.sendWallet(ws); return; } // insufficient coins (or no DB) — nothing wagered
         // The staked coins flow into the House first (a sink); winnings are paid back from it.
@@ -1654,6 +2141,479 @@ export class Lobby {
         this.sendWallet(ws);
       })
       .catch((e) => console.error('roulette failed:', e));
+    })
+    .catch((e) => console.error('getWallet failed:', e));
+  }
+
+  // --- Blackjack ---
+
+  blackjackBet(ws: WebSocket, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    if (conn.bjHand) { this.sendWallet(ws); return; } // already in a hand
+    if (!Number.isInteger(amount) || amount <= 0 || amount > BJ_MAX_BET) { this.sendWallet(ws); return; }
+    getWallet(conn.pid).then((w) => {
+      if (!w || amount < minBet(w.coins)) { this.sendWallet(ws); return; }
+      spendCoins(conn.pid, amount)
+        .then(async (w) => {
+          if (!w) { this.sendWallet(ws); return; }
+          await this.houseCredit(amount);
+          const shoe = bjFreshShoe();
+          const hand: BjHand = {
+            playerCards: [bjDeal(shoe), bjDeal(shoe)],
+            dealerCards: [bjDeal(shoe), bjDeal(shoe)],
+            bet: amount,
+            shoe,
+          };
+          conn.bjHand = hand;
+          const pt = bjTotal(hand.playerCards);
+          const playerBJ = hand.playerCards.length === 2 && pt === 21;
+          const dealerBJ = bjTotal(hand.dealerCards) === 21;
+          if (playerBJ) {
+            const outcome = dealerBJ ? 'push' : 'blackjack';
+            const want = dealerBJ ? amount : Math.floor(amount * 2.5);
+            const payout = want > 0 ? await this.housePay(conn.pid, conn.nickname, want) : 0;
+            conn.bjHand = undefined;
+            const msg: BjResultMsg = { type: 'bjResult', playerCards: hand.playerCards, dealerCards: hand.dealerCards, playerTotal: pt, dealerTotal: bjTotal(hand.dealerCards), outcome, bet: amount, payout };
+            this.tell(ws, msg);
+            this.sendWallet(ws);
+            return;
+          }
+          const state: BjStateMsg = { type: 'bjState', playerCards: hand.playerCards, dealerCard: hand.dealerCards[0], playerTotal: pt, canDouble: true, status: 'playing' };
+          this.tell(ws, state);
+          this.sendWallet(ws);
+        })
+        .catch((e) => console.error('blackjack bet failed:', e));
+    })
+    .catch((e) => console.error('getWallet failed:', e));
+  }
+
+  blackjackAction(ws: WebSocket, action: BjAction) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.bjHand || !conn.pid || !conn.nickname) return;
+    const hand = conn.bjHand;
+    if (action === 'double') {
+      if (hand.playerCards.length !== 2) return;
+      spendCoins(conn.pid, hand.bet)
+        .then(async (w) => {
+          if (!w) {
+            // Can't afford double — treat as hit
+            hand.playerCards.push(bjDeal(hand.shoe));
+            await this.bjFinishOrContinue(ws, conn, hand, false);
+            return;
+          }
+          await this.houseCredit(hand.bet);
+          hand.bet *= 2;
+          hand.playerCards.push(bjDeal(hand.shoe));
+          await this.bjStandAndSettle(ws, conn, hand);
+        })
+        .catch((e) => console.error('blackjack double failed:', e));
+      return;
+    }
+    if (action === 'hit') {
+      hand.playerCards.push(bjDeal(hand.shoe));
+      this.bjFinishOrContinue(ws, conn, hand, false).catch((e) => console.error('blackjack hit failed:', e));
+      return;
+    }
+    if (action === 'stand') {
+      this.bjStandAndSettle(ws, conn, hand).catch((e) => console.error('blackjack stand failed:', e));
+    }
+  }
+
+  private async bjFinishOrContinue(ws: WebSocket, conn: Conn, hand: BjHand, canDouble: boolean) {
+    const pt = bjTotal(hand.playerCards);
+    if (pt > 21) {
+      conn.bjHand = undefined;
+      const msg: BjResultMsg = { type: 'bjResult', playerCards: hand.playerCards, dealerCards: hand.dealerCards, playerTotal: pt, dealerTotal: bjTotal(hand.dealerCards), outcome: 'lose', bet: hand.bet, payout: 0 };
+      this.tell(ws, msg);
+      this.sendWallet(ws);
+      return;
+    }
+    const state: BjStateMsg = { type: 'bjState', playerCards: hand.playerCards, dealerCard: hand.dealerCards[0], playerTotal: pt, canDouble, status: 'playing' };
+    this.tell(ws, state);
+  }
+
+  private async bjStandAndSettle(ws: WebSocket, conn: Conn, hand: BjHand) {
+    while (bjTotal(hand.dealerCards) < 17) hand.dealerCards.push(bjDeal(hand.shoe));
+    const pt = bjTotal(hand.playerCards);
+    const dt = bjTotal(hand.dealerCards);
+    let outcome: 'win' | 'push' | 'lose';
+    let want: number;
+    if (dt > 21 || pt > dt) { outcome = 'win'; want = hand.bet * 2; }
+    else if (pt === dt) { outcome = 'push'; want = hand.bet; }
+    else { outcome = 'lose'; want = 0; }
+    conn.bjHand = undefined;
+    const payout = want > 0 ? await this.housePay(conn.pid!, conn.nickname!, want) : 0;
+    const msg: BjResultMsg = { type: 'bjResult', playerCards: hand.playerCards, dealerCards: hand.dealerCards, playerTotal: pt, dealerTotal: dt, outcome, bet: hand.bet, payout };
+    this.tell(ws, msg);
+    this.sendWallet(ws);
+  }
+
+  // --- Street Craps ---
+
+  crapsRoll(ws: WebSocket, pass: number, dontPass: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    if (!Number.isInteger(pass) || pass < 0 || pass > CRAPS_MAX_BET) { this.sendWallet(ws); return; }
+    if (!Number.isInteger(dontPass) || dontPass < 0 || dontPass > CRAPS_MAX_BET) { this.sendWallet(ws); return; }
+    const total = pass + dontPass;
+    if (total <= 0) return;
+    const prevPoint = conn.crapsPoint;
+    spendCoins(conn.pid, total)
+      .then(async (w) => {
+        if (!w) { this.sendWallet(ws); return; }
+        await this.houseCredit(total);
+        const d1 = Math.ceil(Math.random() * 6);
+        const d2 = Math.ceil(Math.random() * 6);
+        const sum = d1 + d2;
+        let outcome: 'win' | 'lose' | 'point';
+        let newPoint: number | null = prevPoint;
+        let push12 = false;
+        let passWant = 0, dontWant = 0;
+        if (prevPoint === null) {
+          if (sum === 7 || sum === 11) {
+            outcome = 'win'; newPoint = null;
+            passWant = pass * 2;
+          } else if (sum === 2 || sum === 3) {
+            outcome = 'lose'; newPoint = null;
+            dontWant = dontPass * 2;
+          } else if (sum === 12) {
+            outcome = 'lose'; newPoint = null; push12 = true;
+            dontWant = dontPass; // push: return the don't-pass bet
+          } else {
+            outcome = 'point'; newPoint = sum;
+            conn.crapsPoint = sum;
+          }
+        } else {
+          if (sum === prevPoint) {
+            outcome = 'win'; newPoint = null; conn.crapsPoint = null;
+            passWant = pass * 2;
+          } else if (sum === 7) {
+            outcome = 'lose'; newPoint = null; conn.crapsPoint = null;
+            dontWant = dontPass * 2;
+          } else {
+            outcome = 'point'; newPoint = prevPoint;
+          }
+        }
+        const passPayout = passWant > 0 ? await this.housePay(conn.pid!, conn.nickname!, passWant) : 0;
+        const dontPassPayout = dontWant > 0 ? await this.housePay(conn.pid!, conn.nickname!, dontWant) : 0;
+        const msg: CrapsResultMsg = { type: 'crapsResult', dice: [d1, d2], total: sum, prevPoint, newPoint, outcome, push12, passPayout, dontPassPayout };
+        this.tell(ws, msg);
+        this.sendWallet(ws);
+      })
+      .catch((e) => console.error('craps roll failed:', e));
+  }
+
+  // --- Slots ---
+
+  slotsSpin(ws: WebSocket, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    if (!Number.isInteger(amount) || amount <= 0 || amount > SLOTS_MAX_BET) { this.sendWallet(ws); return; }
+    spendCoins(conn.pid, amount)
+      .then(async (w) => {
+        if (!w) { this.sendWallet(ws); return; }
+        await this.houseCredit(amount);
+        // Roll each reel: pick 3 symbols (top, center, bottom) per reel using weighted sampling.
+        const totalWeight = (SLOTS_WEIGHTS as readonly number[]).reduce((a, b) => a + b, 0);
+        const spinReel = (): SlotsSymbol[] =>
+          [0, 1, 2].map(() => {
+            let r = Math.floor(Math.random() * totalWeight);
+            for (let i = 0; i < SLOTS_SYMBOLS.length; i++) {
+              r -= SLOTS_WEIGHTS[i];
+              if (r < 0) return SLOTS_SYMBOLS[i];
+            }
+            return SLOTS_SYMBOLS[SLOTS_SYMBOLS.length - 1];
+          });
+        const reels = [spinReel(), spinReel(), spinReel()] as [SlotsSymbol[], SlotsSymbol[], SlotsSymbol[]];
+        // Evaluate center row (index 1 of each reel).
+        const [a, b, c] = [reels[0][1], reels[1][1], reels[2][1]];
+        const win = (a === b && b === c) ? a : null;
+        const want = win ? amount * SLOTS_PAYOUTS[win] : 0;
+        const payout = want > 0 ? await this.housePay(conn.pid!, conn.nickname!, want) : 0;
+        const msg: SlotsResultMsg = { type: 'slotsResult', reels, win, bet: amount, payout };
+        this.tell(ws, msg);
+        this.sendWallet(ws);
+      })
+      .catch((e) => console.error('slots spin failed:', e));
+  }
+
+  // --- Plinko ---
+
+  plinkoPlay(ws: WebSocket, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    if (!Number.isInteger(amount) || amount <= 0 || amount > PLINKO_MAX_BET) { this.sendWallet(ws); return; }
+    const bet = amount;
+    spendCoins(conn.pid, bet)
+      .then(async (w) => {
+        if (!w) { this.sendWallet(ws); return; }
+        await this.houseCredit(bet);
+        // Roll the path: 8 random booleans (false=left, true=right)
+        const path: boolean[] = [];
+        for (let i = 0; i < PLINKO_ROWS; i++) path.push(Math.random() < 0.5);
+        const slot = path.filter(Boolean).length;
+        const multiplier = PLINKO_PAYOUTS[slot];
+        const want = Math.floor(bet * multiplier);
+        const payout = want > 0 ? await this.housePay(conn.pid!, conn.nickname!, want) : 0;
+        const msg: PlinkoResultMsg = { type: 'plinkoResult', path, slot, multiplier, bet, payout };
+        this.tell(ws, msg);
+        this.sendWallet(ws);
+      })
+      .catch((e) => console.error('plinko play failed:', e));
+  }
+
+  // --- Horse Racing ---
+
+  horseReq(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    // Shuffle HORSE_NAMES and pick 5; shuffle HORSE_ODDS; pair them up
+    const names = [...HORSE_NAMES].sort(() => Math.random() - 0.5).slice(0, 5);
+    const odds = [...HORSE_ODDS].sort(() => Math.random() - 0.5);
+    const horses = names.map((name, i) => ({ name, odds: odds[i] }));
+    conn.horseCard = horses;
+    const msg: HorseCardMsg = { type: 'horseCard', horses };
+    this.tell(ws, msg);
+  }
+
+  horseBet(ws: WebSocket, horse: number, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    if (!conn.horseCard) { this.sendWallet(ws); return; } // no race card
+    if (!Number.isInteger(horse) || horse < 0 || horse > 4) { this.sendWallet(ws); return; }
+    if (!Number.isInteger(amount) || amount <= 0 || amount > HORSE_MAX_BET) { this.sendWallet(ws); return; }
+    const horses = conn.horseCard;
+    conn.horseCard = undefined; // consume the card
+    spendCoins(conn.pid, amount)
+      .then(async (w) => {
+        if (!w) { this.sendWallet(ws); return; }
+        await this.houseCredit(amount);
+        // Pick winner: weighted by 1/odds (horses with lower odds win more often)
+        const weights = horses.map((h) => 1 / h.odds);
+        const totalW = weights.reduce((a, b) => a + b, 0);
+        let r = Math.random() * totalW;
+        let winner = horses.length - 1;
+        for (let i = 0; i < weights.length; i++) {
+          r -= weights[i];
+          if (r <= 0) { winner = i; break; }
+        }
+        const won = winner === horse;
+        const want = won ? Math.floor(amount * horses[horse].odds) : 0;
+        const payout = want > 0 ? await this.housePay(conn.pid!, conn.nickname!, want) : 0;
+        const msg: HorseResultMsg = { type: 'horseResult', horses, winner, horse, bet: amount, payout };
+        this.tell(ws, msg);
+        this.sendWallet(ws);
+      })
+      .catch((e) => console.error('horse bet failed:', e));
+  }
+
+  // --- Hi-Lo ---
+
+  hiloBet(ws: WebSocket, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    if (conn.hiloHand) { this.sendWallet(ws); return; } // already in a hand
+    if (!Number.isInteger(amount) || amount <= 0 || amount > HILO_MAX_BET) { this.sendWallet(ws); return; }
+    getWallet(conn.pid).then((w) => {
+      if (!w || amount < minBet(w.coins)) { this.sendWallet(ws); return; }
+      spendCoins(conn.pid, amount)
+        .then(async (w2) => {
+          if (!w2) { this.sendWallet(ws); return; }
+          await this.houseCredit(amount);
+          const card = Math.ceil(Math.random() * 13);
+          conn.hiloHand = { bet: amount, card, multiplier: 1.0 };
+          const state: HiLoStateMsg = { type: 'hiloState', card, multiplier: 1.0, bet: amount, pendingPayout: 0 };
+          this.tell(ws, state);
+          this.sendWallet(ws);
+        })
+        .catch((e) => console.error('hilo bet failed:', e));
+    }).catch((e) => console.error('hilo getWallet failed:', e));
+  }
+
+  hiloGuess(ws: WebSocket, guess: 'hi' | 'lo') {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    const hand = conn.hiloHand;
+    if (!hand) { this.sendWallet(ws); return; }
+    // Guard impossible guesses
+    if (guess === 'hi' && hand.card === 13) { this.tell(ws, { type: 'announce', text: 'Already at the highest card — guess Lower!', toast: true }); return; }
+    if (guess === 'lo' && hand.card === 1) { this.tell(ws, { type: 'announce', text: 'Already at the lowest card — guess Higher!', toast: true }); return; }
+    // Draw next card (re-draw on tie)
+    let nextCard: number;
+    do { nextCard = Math.ceil(Math.random() * 13); } while (nextCard === hand.card);
+    const correct = (guess === 'hi' && nextCard > hand.card) || (guess === 'lo' && nextCard < hand.card);
+    if (!correct) {
+      conn.hiloHand = undefined;
+      const msg: HiLoResultMsg = { type: 'hiloResult', won: false, newCard: nextCard, payout: 0, net: -hand.bet };
+      this.tell(ws, msg);
+      // Wallet already spent — no extra update needed; re-push so client sees current balance
+      this.sendWallet(ws);
+      return;
+    }
+    // Correct — compute step multiplier
+    const stepFactor = guess === 'hi'
+      ? (1 - HILO_HOUSE_EDGE) * 12 / (13 - hand.card)
+      : (1 - HILO_HOUSE_EDGE) * 12 / (hand.card - 1);
+    hand.multiplier *= stepFactor;
+    hand.card = nextCard;
+    const pendingPayout = Math.floor(hand.bet * hand.multiplier);
+    const state: HiLoStateMsg = { type: 'hiloState', card: nextCard, multiplier: hand.multiplier, bet: hand.bet, pendingPayout };
+    this.tell(ws, state);
+  }
+
+  async hiloCashout(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    const hand = conn.hiloHand;
+    if (!hand || hand.multiplier <= 1.0) { this.sendWallet(ws); return; } // nothing to cash out
+    conn.hiloHand = undefined;
+    const want = Math.floor(hand.bet * hand.multiplier);
+    const payout = await this.housePay(conn.pid, conn.nickname, want).catch((e) => { console.error('hilo cashout failed:', e); return 0; });
+    const msg: HiLoResultMsg = { type: 'hiloResult', won: true, newCard: hand.card, payout, net: payout - hand.bet };
+    this.tell(ws, msg);
+    this.sendWallet(ws);
+  }
+
+  // --- Crash casino game ---
+
+  crashBetAction(ws: WebSocket, amount: number, autoCashout?: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    if (this.crashPhase !== 'betting') return; // betting window closed
+    if (this.crashBets.some((b) => b.ws === ws)) return; // already bet this round
+    if (!Number.isInteger(amount) || amount <= 0 || amount > CRASH_MAX_BET) { this.sendWallet(ws); return; }
+    const auto = (typeof autoCashout === 'number' && autoCashout > 1) ? Math.round(autoCashout * 100) / 100 : null;
+    spendCoins(conn.pid, amount)
+      .then(async (w) => {
+        if (!w) { this.sendWallet(ws); return; }
+        await this.houseCredit(amount);
+        this.crashBets.push({ ws, pid: conn.pid, name: conn.nickname, amount, autoCashout: auto, cashedAt: null });
+        this.sendWallet(ws);
+        this.crashBroadcastAll();
+      })
+      .catch((e) => console.error('crash bet failed:', e));
+  }
+
+  crashCancelBet(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    if (this.crashPhase !== 'betting') return;
+    const idx = this.crashBets.findIndex((b) => b.ws === ws);
+    if (idx === -1) return;
+    const bet = this.crashBets[idx];
+    this.crashBets.splice(idx, 1);
+    this.housePay(conn.pid, conn.nickname ?? '', bet.amount)
+      .then(() => { if (this.conns.has(ws)) this.sendWallet(ws); })
+      .catch((e) => console.error('crash cancel failed:', e));
+    this.crashBroadcastAll();
+  }
+
+  crashCashout(ws: WebSocket) {
+    if (this.crashPhase !== 'live') return;
+    const bet = this.crashBets.find((b) => b.ws === ws);
+    if (!bet || bet.cashedAt !== null) return;
+    const mult = Math.round(Math.pow(CRASH_GROWTH, this.crashTicks) * 100) / 100;
+    bet.cashedAt = mult;
+    const conn = this.conns.get(ws);
+    if (conn?.pid) {
+      const payout = Math.floor(bet.amount * mult);
+      this.housePay(conn.pid, conn.nickname, payout)
+        .then(() => { if (this.conns.has(ws)) this.sendWallet(ws); })
+        .catch((e) => console.error('crash cashout failed:', e));
+    }
+    this.crashBroadcastAll();
+  }
+
+  private crashTick() {
+    const now = Date.now();
+    if (this.crashPhase === 'betting') {
+      if (now - this.crashPhaseStart >= CRASH_BETTING_MS) {
+        this.crashPhase = 'live';
+        this.crashPhaseStart = now;
+        this.crashTicks = 0;
+        this.crashAt = bjCrashPoint();
+        this.crashTicksNeeded = Math.ceil(Math.log(this.crashAt) / Math.log(CRASH_GROWTH));
+      }
+    } else if (this.crashPhase === 'live') {
+      this.crashTicks++;
+      const mult = Math.round(Math.pow(CRASH_GROWTH, this.crashTicks) * 100) / 100;
+      // Process auto-cashouts
+      for (const b of this.crashBets) {
+        if (b.cashedAt !== null) continue;
+        if (b.autoCashout !== null && mult >= b.autoCashout) {
+          b.cashedAt = b.autoCashout;
+          const conn = this.conns.get(b.ws);
+          if (conn?.pid) {
+            const payout = Math.floor(b.amount * b.autoCashout);
+            this.housePay(conn.pid, conn.nickname, payout)
+              .then(() => { if (this.conns.has(b.ws)) this.sendWallet(b.ws); })
+              .catch((e) => console.error('crash auto-cashout failed:', e));
+          }
+        }
+      }
+      // Check crash
+      if (this.crashTicks >= this.crashTicksNeeded) {
+        this.crashPhase = 'ended';
+        this.crashPhaseStart = now;
+        this.crashBroadcastAll();
+        return;
+      }
+    } else {
+      // ended
+      if (now - this.crashPhaseStart >= CRASH_ENDED_MS) {
+        this.crashPhase = 'betting';
+        this.crashPhaseStart = now;
+        this.crashBets = [];
+        this.crashAt = 0;
+        this.crashTicks = 0;
+      }
+    }
+    this.crashBroadcastAll();
+  }
+
+  private buildCrashState(ws: WebSocket): CrashStateMsg {
+    const mult = this.crashPhase === 'live'
+      ? Math.round(Math.pow(CRASH_GROWTH, this.crashTicks) * 100) / 100
+      : this.crashPhase === 'ended' ? this.crashAt : 1.00;
+    const timeLeft = this.crashPhase === 'betting'
+      ? Math.max(0, CRASH_BETTING_MS - (Date.now() - this.crashPhaseStart))
+      : 0;
+    const myBet = this.crashBets.find((b) => b.ws === ws);
+    return {
+      type: 'crashState',
+      phase: this.crashPhase,
+      multiplier: mult,
+      timeLeft,
+      bets: this.crashBets.map((b) => ({ name: b.name, amount: b.amount, cashedAt: b.cashedAt })),
+      yourBet: myBet?.amount ?? null,
+      yourCashedAt: myBet?.cashedAt ?? null,
+      crashedAt: this.crashPhase === 'ended' ? this.crashAt : null,
+    };
+  }
+
+  private crashBroadcastAll() {
+    const now = Date.now();
+    const mult = this.crashPhase === 'live'
+      ? Math.round(Math.pow(CRASH_GROWTH, this.crashTicks) * 100) / 100
+      : this.crashPhase === 'ended' ? this.crashAt : 1.00;
+    const timeLeft = this.crashPhase === 'betting' ? Math.max(0, CRASH_BETTING_MS - (now - this.crashPhaseStart)) : 0;
+    const betsView = this.crashBets.map((b) => ({ name: b.name, amount: b.amount, cashedAt: b.cashedAt }));
+    for (const [ws] of this.conns) {
+      if (ws.readyState !== ws.OPEN) continue;
+      const myBet = this.crashBets.find((b) => b.ws === ws);
+      const msg: CrashStateMsg = {
+        type: 'crashState',
+        phase: this.crashPhase,
+        multiplier: mult,
+        timeLeft,
+        bets: betsView,
+        yourBet: myBet?.amount ?? null,
+        yourCashedAt: myBet?.cashedAt ?? null,
+        crashedAt: this.crashPhase === 'ended' ? this.crashAt : null,
+      };
+      ws.send(JSON.stringify(msg));
+    }
   }
 
   // --- House treasury (coin-conservation backbone) ---
@@ -1757,6 +2717,25 @@ export class Lobby {
     // the House). Both are best-effort — without a DB they no-op cleanly.
     this.houseBalance = await getHouseBalance().catch(() => 0);
     await this.seedNetizens().catch((e) => console.error('netizen seed failed:', e));
+    // Seed netizen world avatar positions around the centre plaza with a short staggered spawn
+    this.netizenPos.clear();
+    for (let i = 0; i < Lobby.NETIZEN_NAMES.length; i++) {
+      const pid = `netizen:${i}`;
+      // Scatter the initial positions across the town (radially, up to ~900 units) so they don't
+      // all start piled on the fountain.
+      const a0 = Math.random() * Math.PI * 2, r0 = Math.random() * 900;
+      const x = Lobby.PLAZA.x + Math.cos(a0) * r0;
+      const y = Lobby.PLAZA.y + Math.sin(a0) * r0;
+      this.netizenPos.set(pid, {
+        x, y,
+        tx: x, ty: y,
+        pauseUntil: Date.now() + 1000 + Math.random() * 3000, // stagger initial stroll
+        spawnAt: 0, // no delay — appear right away
+      });
+    }
+    // Market News Engine: hydrate the cached feed, schedule the next top-of-hour.
+    this.newsFeed = await getNewsFeed().catch(() => []);
+    this.nextNewsAt = nextTopOfHourMs(Date.now());
   }
 
   // --- Netizens (bot traders) ---
@@ -1808,17 +2787,25 @@ export class Lobby {
           if (archetype === 0) buy = press >= 0;            // momentum: follow the flow
           else if (archetype === 1) buy = move <= 0;        // mean-reversion: buy dips, sell rips
           else buy = Math.random() < 0.62;                  // random with a mild upward bias
+          let tradedSide: 'buy' | 'sell' | null = null;
           if (buy) {
             const amt = Math.max(1, Math.floor(n.coins * (0.04 + Math.random() * 0.08))); // 4–12% of balance
             await this.netizenInvest(n.pid, n.name, stock.id, amt, 'long');
+            tradedSide = 'buy';
           } else {
             const holds = (await getHoldings(n.pid).catch(() => [])).filter((h) => h.coin === stock.id);
-            if (holds.length) await this.netizenCashOut(n.pid, n.name, stock.id, holds[0].side);
+            if (holds.length) { await this.netizenCashOut(n.pid, n.name, stock.id, holds[0].side); tradedSide = 'sell'; }
             else {
-              // Nothing to sell — buy a little instead so the bot stays active.
               const amt = Math.max(1, Math.floor(n.coins * 0.05));
               await this.netizenInvest(n.pid, n.name, stock.id, amt, 'long');
+              tradedSide = 'buy';
             }
+          }
+          // Trade chatter: reduced frequency (was 0.25 → ≈0.06 so ~1/4 as often).
+          if (tradedSide && isMarketHours(Date.now()) && Math.random() < 0.06) {
+            const pool = tradedSide === 'buy' ? NETIZEN_DIALOGUE.buyLong : NETIZEN_DIALOGUE.sellProfit;
+            const tmpl = pool[Math.floor(Math.random() * pool.length)];
+            this.netizenSay(n.pid, n.name, tmpl.replace('{ticker}', stock.ticker));
           }
         }
         // Netizen wallets/holdings moved → the net-worth board shifted.
@@ -1994,7 +2981,7 @@ export class Lobby {
         if (!this.conns.has(ws)) return;
         const holdings = h.map((hd) => {
           const price = this.stockPrices.get(hd.coin)?.price ?? 0;
-          return { id: hd.coin, side: hd.side, shares: hd.shares, cost: hd.cost, worth: Math.floor(positionWorth(hd.side, hd.shares, hd.cost, price)) };
+          return { id: hd.coin, side: hd.side, shares: hd.shares, cost: hd.cost, worth: Math.floor(positionWorth(hd.side, hd.shares, hd.cost, price)), openedAt: hd.openedAt };
         });
         this.tell(ws, {
           type: 'stocks', prices, holdings, history, nextUpdateAt: this.nextStockUpdateAt,
@@ -2002,6 +2989,68 @@ export class Lobby {
         });
       })
       .catch((e) => console.error('stocks send failed:', e));
+  }
+
+  /** Send the cached news feed to a single client. */
+  sendNews(ws: WebSocket) {
+    this.tell(ws, { type: 'news', items: this.newsFeed });
+  }
+
+  /** Publish a new market headline: pick a coin, build the item, push to feed + DB, broadcast to
+   *  all clients, and schedule the hidden price-pressure injection 7–30 min later. */
+  private publishNews() {
+    const now = Date.now();
+    // Pick a coin, lightly weighted toward those with older or no recent news.
+    const lastNewsTs = new Map<string, number>();
+    for (const item of this.newsFeed) {
+      const existing = lastNewsTs.get(item.coin) ?? 0;
+      if (item.ts > existing) lastNewsTs.set(item.coin, item.ts);
+    }
+    const scored = STOCKS.map((s) => {
+      const last = lastNewsTs.get(s.id) ?? 0;
+      const recency = Math.max(0, now - last); // ms since last news
+      return { id: s.id, name: s.name, ticker: s.ticker, weight: 1 + recency / 3_600_000 };
+    });
+    const totalW = scored.reduce((a, b) => a + b.weight, 0);
+    let roll = Math.random() * totalW;
+    const pick = scored.find((s) => { roll -= s.weight; return roll <= 0; }) ?? scored[0];
+
+    const sector = SECTORS.find((s) => (s.ids as readonly string[]).includes(pick.id));
+    const sectorName = sector?.name ?? 'market';
+
+    const dir = Math.random() < 0.5 ? 'bullish' : 'bearish';
+    const templates = dir === 'bullish' ? NEWS_TEMPLATES_BULLISH : NEWS_TEMPLATES_BEARISH;
+    const tmpl = templates[Math.floor(Math.random() * templates.length)];
+    const headline = tmpl.replace('{name}', pick.name).replace('{ticker}', pick.ticker).replace('{sector}', sectorName);
+
+    const item: NewsItem = {
+      id: `news_${now}`,
+      ts: now,
+      coin: pick.id,
+      headline,
+    };
+    this.newsFeed.unshift(item);
+    if (this.newsFeed.length > 30) this.newsFeed.length = 30;
+    saveNewsFeed(this.newsFeed).catch((e: unknown) => console.error('news feed save failed:', e));
+
+    // Schedule hidden injections: primary coin gets full pressure, sector-mates get a fraction.
+    const magnitude = (dir === 'bullish' ? 1 : -1) * (0.25 + Math.random() * 0.35);
+    const delay = (25 + Math.random() * 35) * 60_000;
+    this.pendingNews.push({ coin: pick.id, magnitude, fireAt: now + delay });
+    if (sector) {
+      for (const sid of sector.ids) {
+        if (sid === pick.id) continue;
+        if (Math.random() < 0.6) { // 60 % chance each sector sibling catches a piece
+          const siblingMag = magnitude * (0.3 + Math.random() * 0.4); // 30–70 % of the primary
+          this.pendingNews.push({ coin: sid, magnitude: siblingMag, fireAt: now + Math.floor(delay * (0.5 + Math.random() * 0.5)) });
+        }
+      }
+    }
+
+    // Broadcast to all connected clients.
+    for (const ws of this.conns.keys()) {
+      if (ws.readyState === ws.OPEN) this.sendNews(ws);
+    }
   }
 
   /** Open a long or short position in a crypto at its current price. Coins are escrowed. */
@@ -2053,9 +3102,9 @@ export class Lobby {
       const toHouse = cost - back;
       if (toHouse > 0) await this.houseCredit(toHouse);
     }
-    // Fast-sell tax: a position closed within 60s pays 10% of the (positive) payout to the House.
-    if (payout > 0 && openedAt > 0 && Date.now() - openedAt < 60_000) {
-      const tax = Math.floor(payout * 0.10);
+    // Fast-sell tax: a position closed within FAST_SELL_TAX_MS pays a cut of the payout to the House.
+    if (payout > 0 && openedAt > 0 && Date.now() - openedAt < FAST_SELL_TAX_MS) {
+      const tax = Math.floor(payout * FAST_SELL_TAX_RATE);
       if (tax > 0) {
         const taken = await spendCoins(pid, tax); // claw the tax back out of what we just paid
         if (taken) { await this.houseCredit(tax); credited -= tax; }
@@ -2160,25 +3209,22 @@ export class Lobby {
         try {
         // The price flows into the House (it funds the coin/exclusive payouts).
         await this.houseCredit(Lobby.LOOT_PRICE);
-        // Pay a coin prize from the House — but NEVER take a player's money for nothing: if the
-        // House can't fund a prize (returns 0), refund the box price instead (pull it back out of
-        // the House it was just credited to, keeping coins conserved).
-        const payLootCoins = async (): Promise<void> => {
-          const paid = await this.housePay(pid, nick, Lobby.LOOT_COIN_REWARD);
+        // Partial coin-back: pay a random fraction of the price from the House, always < 2500.
+        // If the House can't fund it (returns 0), refund the full box price instead.
+        const payLootCoins = async (amount: number): Promise<void> => {
+          const paid = await this.housePay(pid, nick, amount);
           if (paid > 0) { this.tell(ws, { type: 'lootResult', kind: 'coins', coins: paid }); return; }
           await addCoins(pid, nick, Lobby.LOOT_PRICE);
           await houseAdjust(-Lobby.LOOT_PRICE);
           this.notify(ws, 'Loot box fizzled — your coins were refunded.');
           this.tell(ws, { type: 'lootResult', kind: 'coins', coins: Lobby.LOOT_PRICE });
         };
-        // Weighted roll (same idiom as the daily spin): common / coins / rare. Reused below.
-        const weights = [55, 30, 15]; // common cosmetic, coins, rare exclusive
-        const total = weights.reduce((a, b) => a + b, 0);
-        let roll = Math.random() * total;
-        let bucket = 0;
-        for (let i = 0; i < weights.length; i++) { roll -= weights[i]; if (roll < 0) { bucket = i; break; } }
-
-        if (bucket === 0) {
+        // 4-bucket weighted roll: cosmetic / exclusive / partial coin-back / nothing.
+        const W = LOOT_TABLE;
+        const totalW = W.cosmeticWeight + W.exclusiveWeight + W.coinBackWeight + W.nothingWeight;
+        let roll = Math.random() * totalW;
+        roll -= W.cosmeticWeight;
+        if (roll < 0) {
           // Common cosmetic: grant a random UNOWNED regular cosmetic (skip locked + already-owned).
           const owned = new Set((await getWallet(pid)).owned);
           const pool = COSMETICS.filter((c) => !c.locked && !owned.has(c.id));
@@ -2187,22 +3233,32 @@ export class Lobby {
             await grantItem(pid, nick, item.id);
             this.tell(ws, { type: 'lootResult', kind: 'cosmetic', item: item.id, name: item.name });
           } else {
-            // Owns everything common → degrade to coins from the House.
-            await payLootCoins();
+            // Owns everything common → degrade to partial coin-back.
+            await payLootCoins(W.coinBackMin + Math.floor(Math.random() * (W.coinBackMax - W.coinBackMin)));
           }
-        } else if (bucket === 1) {
-          await payLootCoins();
         } else {
-          // Rare exclusive: pick one weighted toward higher-cap (more common) items, attempt the
-          // atomic capped mint, and degrade to coins if it's sold out globally.
-          const pick = this.rollExclusive();
-          const serial = await mintExclusive(pid, pick.id, pick.cap);
-          if (serial !== null) {
-            this.tell(ws, { type: 'lootResult', kind: 'exclusive', item: pick.id, name: pick.name, serial, cap: pick.cap, rarity: pick.rarity });
-            this.announce(`✨ ${nick} pulled an EXCLUSIVE: ${pick.name} (#${serial} of ${pick.cap})!`);
+          roll -= W.exclusiveWeight;
+          if (roll < 0) {
+            // Rare exclusive: pick one weighted toward higher-cap items, attempt the atomic capped
+            // mint, and degrade to partial coin-back if it's sold out globally.
+            const pick = this.rollExclusive();
+            const serial = await mintExclusive(pid, pick.id, pick.cap);
+            if (serial !== null) {
+              this.tell(ws, { type: 'lootResult', kind: 'exclusive', item: pick.id, name: pick.name, serial, cap: pick.cap, rarity: pick.rarity });
+              this.announce(`✨ ${nick} pulled an EXCLUSIVE: ${pick.name} (#${serial} of ${pick.cap})!`);
+            } else {
+              // Capped out — degrade to partial coin-back.
+              await payLootCoins(W.coinBackMin + Math.floor(Math.random() * (W.coinBackMax - W.coinBackMin)));
+            }
           } else {
-            // Capped out — no over-mint. Degrade to a House coin payout (refunds if House is dry).
-            await payLootCoins();
+            roll -= W.coinBackWeight;
+            if (roll < 0) {
+              // Partial coin-back: always less than the box price (negative EV).
+              await payLootCoins(W.coinBackMin + Math.floor(Math.random() * (W.coinBackMax - W.coinBackMin)));
+            } else {
+              // Nothing: the price stays in the House. No refund.
+              this.tell(ws, { type: 'lootResult', kind: 'nothing' });
+            }
           }
         }
         this.sendWallet(ws);
@@ -2342,14 +3398,37 @@ export class Lobby {
    *  the fresh (revalued) market to every connected client. Also fires the daily loan-collection
    *  event when its time arrives. Cheap to call every tick. */
   private tickStocks() {
+    const now = Date.now();
     // The daily collection takes precedence (it may crash + repush the market itself), so handle
     // it first and bail.
-    if (this.nextStockCrashAt && Date.now() >= this.nextStockCrashAt) {
+    if (this.nextStockCrashAt && now >= this.nextStockCrashAt) {
       this.runDailyCollection();
       return;
     }
-    if (Date.now() < this.nextStockUpdateAt) return;
-    this.nextStockUpdateAt = Date.now() + STOCK_UPDATE_MS;
+    // --- Market News Engine: fire pending price injections ---
+    for (let i = this.pendingNews.length - 1; i >= 0; i--) {
+      const pn = this.pendingNews[i];
+      if (now >= pn.fireAt) {
+        const cur = this.pressure.get(pn.coin) ?? 0;
+        this.pressure.set(pn.coin, Math.max(-1, Math.min(1, cur + pn.magnitude)));
+        this.pendingNews.splice(i, 1);
+      }
+    }
+    // --- Market News Engine: publish check (hourly during market hours) ---
+    if (now >= this.nextNewsAt) {
+      if (isMarketHours(now)) this.publishNews();
+      this.nextNewsAt = nextTopOfHourMs(now);
+    }
+    // --- News Engine: drain staggered netizen reactions ---
+    for (let i = this.newsReactions.length - 1; i >= 0; i--) {
+      const r = this.newsReactions[i];
+      if (now >= r.at) {
+        this.netizenSay(r.pid, r.name, r.text);
+        this.newsReactions.splice(i, 1);
+      }
+    }
+    if (now < this.nextStockUpdateAt) return;
+    this.nextStockUpdateAt = now + STOCK_UPDATE_MS;
     for (const s of STOCKS) {
       const cur = this.stockPrices.get(s.id) ?? { price: s.base, prev: s.base };
       // Economy Overhaul: decay the order-flow pressure FIRST (p *= 0.5 per tick), then blend it
@@ -2432,8 +3511,11 @@ export class Lobby {
     if (!Number.isFinite(amt) || amt < 1) return;
     const odds = this.currentOdds()[side]; // lock the odds shown at this instant
     const { pid, nickname: name } = conn;
-    // Escrow the stake atomically — spendCoins returns null if they can't actually afford it.
-    spendCoins(pid, amt)
+    // Wealth-scaled minimum bet: check against the player's floor.
+    getWallet(pid).then((w) => {
+      if (!w || amt < minBet(w.coins)) { this.sendWallet(ws); return; }
+      // Escrow the stake atomically — spendCoins returns null if they can't actually afford it.
+      spendCoins(pid, amt)
       .then((w) => {
         if (!w) { this.sendWallet(ws); return; } // insufficient coins — refresh their view, no bet
         this.bets.push({ pid, side, amount: amt, ws, name, odds });
@@ -2441,6 +3523,8 @@ export class Lobby {
         this.announce(`🎲 ${name} bet ${amt} on ${side} @ ${odds.toFixed(2)}×`, true);
       })
       .catch((e) => console.error('bet failed:', e));
+    })
+    .catch((e) => console.error('getWallet failed:', e));
   }
 
   /** Settle all open wagers against the winning side: correct calls pay stake × locked odds. */
@@ -2671,6 +3755,53 @@ export class Lobby {
       this.viewMode = opts.viewMode;
       this.syncPowerupPool();
     }
+    // Remember the room's chosen modes so they survive a reboot/redeploy.
+    this.persistModes();
+  }
+
+  /** Snapshot of the room's armed mode toggles — the set persisted across reboots. */
+  private currentModes(): import('./db').GameModes {
+    return {
+      closing: this.game.closing,
+      gravity: this.game.gravity,
+      turbo: this.game.turbo,
+      streamer: this.streamerMode,
+      diamond: this.game.diamond,
+      pinata: this.game.pinata,
+      layered: this.game.layered,
+      arena: this.arena,
+      breakout: this.game.breakout,
+      fog: this.game.fog,
+      portal: this.game.portal,
+      viewMode: this.viewMode,
+    };
+  }
+
+  /** Fire-and-forget persist of the current mode toggles. */
+  private persistModes() {
+    saveGameModes(this.currentModes()).catch((e: unknown) => console.error('game modes save failed:', e));
+  }
+
+  /** Re-apply mode toggles persisted from a previous run. Called once on boot after the DB
+   *  is ready. Each flag flows through its normal setter so behaviour matches a live toggle. */
+  async loadModes() {
+    const m = await getGameModes().catch(() => null);
+    if (!m) return;
+    if (typeof m.closing === 'boolean') this.game.setClosing(m.closing);
+    if (typeof m.gravity === 'boolean') this.game.setGravity(m.gravity);
+    if (typeof m.turbo === 'boolean') this.game.setTurbo(m.turbo);
+    if (typeof m.streamer === 'boolean') this.streamerMode = m.streamer;
+    if (typeof m.diamond === 'boolean') this.game.setDiamond(m.diamond);
+    if (typeof m.pinata === 'boolean') this.game.setPinata(m.pinata);
+    if (typeof m.layered === 'boolean') this.game.setLayered(m.layered);
+    if (typeof m.arena === 'boolean') this.setArena(m.arena);
+    if (typeof m.breakout === 'boolean') this.game.setBreakout(m.breakout);
+    if (typeof m.fog === 'boolean') this.game.setFog(m.fog);
+    if (typeof m.portal === 'boolean') this.game.setPortal(m.portal);
+    if ((m.viewMode === 'normal' || m.viewMode === '3d' || m.viewMode === 'firstperson') && this.game.status !== 'playing') {
+      this.viewMode = m.viewMode;
+      this.syncPowerupPool();
+    }
   }
 
   /** Sync which powerups are eligible based on the current view mode.
@@ -2797,6 +3928,7 @@ export class Lobby {
     this.doomLeave(ws); // drop any co-op DOOM slot (and notify the partner)
     this.ntLeave(ws);   // drop any Nuketown slot (ends the match if the host left)
     this.srLeave(ws);   // drop any Street Demons grid slot (ends the race if the host left)
+    this.sbLeave(ws);   // drop any Super Tsong Bros slot (ends the match if the host left)
     this.tdLeave(ws);   // drop out of the Type or Die arena
     this.world.leave(ws); // drop their avatar from the free-roam world map
     const leavingPid = this.conns.get(ws)?.pid ?? '';
@@ -3085,13 +4217,50 @@ export class Lobby {
 
   /** Re-query the standings, cache them, and push to every connected client. */
   async refreshLeaderboard() {
-    this.leaderboard = await getLeaderboard();
-    const data = JSON.stringify({ type: 'leaderboard', rows: this.leaderboard });
+    const board = await getEloBoard();
+    this.leaderboard = board.map(({ pid: _p, ...row }) => row);
+    this.eloPids = board.map((r) => r.pid);
     for (const ws of this.conns.keys()) {
-      if (ws.readyState === ws.OPEN) ws.send(data);
+      if (ws.readyState !== ws.OPEN) continue;
+      const extra = await this.selfEloData(ws);
+      ws.send(JSON.stringify({ type: 'leaderboard', rows: this.leaderboard, ...extra }));
     }
     // Net worth tracks the same population, so refresh it on the same beat.
     this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
+  }
+
+  /** Produce `selfElo` / `selfRank` for a single connection so the client can always pin the
+   *  player to the board. Uses the cached top-N when they're on it; otherwise looks up their
+   *  true field-wide rank. `{}` for observers / players who haven't played yet. */
+  private async selfEloData(ws: WebSocket): Promise<{ selfElo?: number; selfRank?: number }> {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return {};
+    const idx = this.eloPids.indexOf(conn.pid);
+    if (idx !== -1) return { selfElo: this.leaderboard[idx]?.elo, selfRank: idx + 1 };
+    const self = await getSelfElo(conn.pid).catch(() => null);
+    return self ? { selfElo: self.elo, selfRank: self.rank } : {};
+  }
+
+  /** Produce `selfRow` / `selfRank` for the Net Worth board when the player sits below the
+   *  visible top-N. `{}` when they're already shown, are observers, or don't qualify. */
+  private async selfNetWorthData(ws: WebSocket): Promise<{ selfRow?: NetWorthRow; selfRank?: number }> {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return {};
+    if (this.netWorthPids.includes(conn.pid)) return {}; // already on the visible board
+    const self = await getSelfNetWorth(conn.pid).catch(() => null);
+    if (!self) return {};
+    const { rank, ...row } = self;
+    return { selfRow: row, selfRank: rank };
+  }
+
+  /** Send both standings boards to one client, personalised with their own pinned row when
+   *  they fall outside the visible top-N. */
+  private async sendBoardsTo(ws: WebSocket) {
+    if (ws.readyState !== ws.OPEN) return;
+    const elo = await this.selfEloData(ws);
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'leaderboard', rows: this.leaderboard, ...elo }));
+    const nw = await this.selfNetWorthData(ws);
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'netWorth', rows: this.netWorth, ...nw }));
   }
 
   /** Recompute the Net Worth board (coins + live holdings − debt) and push it to everyone.
@@ -3101,9 +4270,10 @@ export class Lobby {
     const full = await getNetWorthLeaderboard();
     this.netWorthPids = full.map((r) => r.pid);
     this.netWorth = full.map(({ pid: _pid, ...row }) => row);
-    const data = JSON.stringify({ type: 'netWorth', rows: this.netWorth });
     for (const ws of this.conns.keys()) {
-      if (ws.readyState === ws.OPEN) ws.send(data);
+      if (ws.readyState !== ws.OPEN) continue;
+      const extra = await this.selfNetWorthData(ws);
+      ws.send(JSON.stringify({ type: 'netWorth', rows: this.netWorth, ...extra }));
     }
   }
 
@@ -3130,6 +4300,38 @@ export class Lobby {
     this.tell(ws, {
       type: 'balanceSheet', rank, name,
       coins: wallet.coins, holdings: rows, stockValue, loan: owed, net,
+    });
+  }
+
+  /** Build and send the Elo profile for the player at `rank` on the current leaderboard,
+   *  or for the requesting player when `self` is true. Sends record, ELO, win%, last played,
+   *  plus head-to-head against the #1 player (if not yourself). */
+  async sendEloProfile(ws: WebSocket, rank: number, self?: boolean) {
+    let pid: string;
+    if (self) {
+      const conn = this.conns.get(ws);
+      if (!conn || !conn.pid) return;
+      pid = conn.pid;
+    } else {
+      if (!Number.isInteger(rank) || rank < 0 || rank >= this.eloPids.length) return;
+      pid = this.eloPids[rank];
+    }
+    const profile = await getPlayerProfile(pid);
+    if (!profile) return;
+    let rival: { name: string; wins: number; losses: number } | null = null;
+    if (rank !== 0 && this.eloPids.length > 1) {
+      rival = await getRival(pid, this.eloPids[0]);
+    }
+    this.tell(ws, {
+      type: 'eloProfile',
+      rank,
+      name: profile.name,
+      wins: profile.wins,
+      losses: profile.losses,
+      elo: profile.elo,
+      winPct: profile.winPct,
+      lastPlayed: profile.lastPlayed,
+      rival,
     });
   }
 
@@ -3174,6 +4376,14 @@ export class Lobby {
     for (const sock of this.conns.keys()) {
       if (sock.readyState === sock.OPEN) sock.send(data);
     }
+  }
+
+  /** Post a chat message as a netizen (name + its own color), respecting the global throttle. */
+  private netizenSay(pid: string, name: string, text: string) {
+    const now = Date.now();
+    if (now - this.lastNetizenChatAt < 40_000) return; // throttle: ~1 line per 40s (was 10s)
+    this.lastNetizenChatAt = now;
+    this.botChat(name, text, Lobby.netizenColor(pid));
   }
 
   /** Inject a fake chat message from a streamer bot (bypasses rate limiting). */
@@ -3367,7 +4577,7 @@ export class Lobby {
       disco: this.game.disco,
       minion: this.game.minion,
       earthquake: this.game.earthquake,
-      blackout: this.game.blackout, bullettime: this.game.bullettime, vortex: this.game.vortex,
+      blackout: this.game.blackout, vortex: this.game.vortex,
       glitch: this.game.glitch, smoke: this.game.smoke, tilt: this.game.tilt,
       viewMode: this.viewMode,
       pinata: this.game.pinata,
@@ -3584,6 +4794,53 @@ export class Lobby {
   }
 }
 
+// --- Blackjack helpers ---
+
+const BJ_RANKS = ['A','2','3','4','5','6','7','8','9','T','J','Q','K'];
+const BJ_SUITS = ['S','H','D','C'];
+
+function bjFreshShoe(): string[] {
+  const shoe: string[] = [];
+  for (let d = 0; d < 6; d++)
+    for (const r of BJ_RANKS)
+      for (const s of BJ_SUITS)
+        shoe.push(r + s);
+  for (let i = shoe.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shoe[i], shoe[j]] = [shoe[j], shoe[i]];
+  }
+  return shoe;
+}
+
+function bjDeal(shoe: string[]): string {
+  if (shoe.length < 26) shoe.push(...bjFreshShoe());
+  return shoe.pop()!;
+}
+
+function bjCardVal(card: string): number {
+  const r = card[0];
+  if (r === 'A') return 11;
+  if ('TJQK'.includes(r)) return 10;
+  return Number(r);
+}
+
+function bjTotal(cards: string[]): number {
+  let total = 0, aces = 0;
+  for (const c of cards) { const v = bjCardVal(c); total += v; if (v === 11) aces++; }
+  while (total > 21 && aces > 0) { total -= 10; aces--; }
+  return total;
+}
+
+// Crash point generator: ~3% chance of instant crash; otherwise exponential distribution
+// weighted toward low multipliers (median ≈ 2×). House keeps uncashed bets.
+function bjCrashPoint(): number {
+  const u = Math.random();
+  if (u < 0.01) return 1.00;
+  // mild power transform pushes more rounds to higher multipliers
+  const v = Math.pow((u - 0.01) / 0.99, 0.85);
+  return Math.max(1.01, Math.round(100 * 0.97 / (1 - v * 0.94)) / 100);
+}
+
 // --- AI opponent (bot) data ---
 
 const CAMPAIGN_CLEAR_BONUS = 2500; // one-time coin reward for a first-ever full clear of the campaign
@@ -3604,6 +4861,18 @@ const BOT_CFG: Record<BotLevel, BotCfg> = {
   medium: { react: 0.14, error: 42, predict: false, idleCenter: true },
   hard: { react: 0.05, error: 10, predict: true, idleCenter: false },
 };
+
+/** Latest 5pm ET boundary in ms since epoch. */
+function latest5pmEtBoundary(): number {
+  const now = Date.now();
+  const d = new Date(now);
+  const etOffset = d.getTimezoneOffset() <= 240 ? 4 : 5; // EDT=-4, EST=-5
+  const etNow = now - etOffset * 3600000;
+  const etDayStart = Math.floor(etNow / 86400000) * 86400000;
+  const et5pm = etDayStart + 17 * 3600000;
+  // If the current time in ET is before 5pm, use yesterday's 5pm.
+  return etNow < et5pm ? et5pm - 86400000 : et5pm;
+}
 
 const BOT_NAMES: Record<BotLevel, string> = {
   easy: '🤖 Bot (easy)',

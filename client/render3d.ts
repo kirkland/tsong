@@ -403,6 +403,7 @@ export function createRenderer(container: HTMLElement): Renderer3D {
     neon: (mat, t) => { const p = 0.4 + 0.4 * Math.sin(t / 200); mat.color.set('#0a0a12'); mat.emissive.setRGB(0.2 * p, p, 0.08 * p); },
     stripes: (mat) => { mat.color.set('#f4c20d'); mat.emissive.set('#222'); },
     glitch: (mat, t) => { const c = new THREE.Color(['#ff003c', '#00fff0', '#b16bff'][Math.floor(t / 80) % 3]); mat.color.copy(c); mat.emissive.copy(c).multiplyScalar(0.4); },
+    pickle: (mat) => { mat.color.set('#7cb342'); mat.emissive.set('#2e4310'); },
   };
 
   function getPaddle(i: number) {

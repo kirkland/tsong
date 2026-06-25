@@ -40,7 +40,7 @@ if (snap) {
 // Bring up the leaderboard DB and prime the cache. The server starts serving
 // immediately; standings populate once the DB is ready (no-op without DATABASE_URL).
 initDb()
-  .then(() => Promise.all([lobby.refreshLeaderboard(), lobby.refreshDoomLeaderboards(), lobby.refreshCampaignLeaderboards(), lobby.loadStockPrices()]))
+  .then(() => Promise.all([lobby.refreshLeaderboard(), lobby.refreshDoomLeaderboards(), lobby.refreshCampaignLeaderboards(), lobby.loadStockPrices(), lobby.loadModes()]))
   .catch((e) => console.error('DB init failed:', e));
 
 // Static client (only exists after `npm run build`; harmless in dev where Vite serves it).
@@ -164,6 +164,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'reaction':
         if (typeof msg.emoji === 'string') lobby.reaction(ws, msg.emoji);
         break;
+      case 'summonPlane':
+        lobby.summonPlane(ws);
+        break;
       case 'mode':
         lobby.setMode(ws, {
           closing: typeof msg.closing === 'boolean' ? msg.closing : undefined,
@@ -264,7 +267,7 @@ wss.on('connection', (ws: WebSocket, req) => {
         if (typeof msg.item === 'string') lobby.shopBuy(ws, msg.item);
         break;
       case 'shopEquip':
-        if ((msg.slot === 'hat' || msg.slot === 'skin' || msg.slot === 'trail' || msg.slot === 'title' || msg.slot === 'song' || msg.slot === 'car') && (msg.item === null || typeof msg.item === 'string')) {
+        if ((msg.slot === 'hat' || msg.slot === 'skin' || msg.slot === 'trail' || msg.slot === 'title' || msg.slot === 'song' || msg.slot === 'car' || msg.slot === 'pet') && (msg.item === null || typeof msg.item === 'string')) {
           lobby.shopEquip(ws, msg.slot, msg.item);
         }
         break;
@@ -275,6 +278,9 @@ wss.on('connection', (ws: WebSocket, req) => {
         break;
       case 'doomReward':
         lobby.doomReward(ws);
+        break;
+      case 'questClaim':
+        if (typeof msg.quest === 'string') lobby.questClaim(ws, msg.quest);
         break;
       case 'ntJoin':
         lobby.ntJoin(ws);
@@ -306,6 +312,24 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'srRelay':
         if (msg.data !== undefined) lobby.srRelay(ws, msg.data);
         break;
+      case 'sbJoin':
+        lobby.sbJoin(ws);
+        break;
+      case 'sbLeave':
+        lobby.sbLeave(ws);
+        break;
+      case 'sbPick':
+        if (typeof msg.fighter === 'string') lobby.sbPick(ws, msg.fighter);
+        break;
+      case 'sbStart':
+        lobby.sbStart(ws);
+        break;
+      case 'sbEnd':
+        if (typeof msg.winner === 'number') lobby.sbEnd(ws, msg.winner);
+        break;
+      case 'sbRelay':
+        if (msg.data !== undefined) lobby.sbRelay(ws, msg.data);
+        break;
       case 'tdJoin':
         lobby.tdJoin(ws);
         break;
@@ -326,6 +350,11 @@ wss.on('connection', (ws: WebSocket, req) => {
           lobby.campaignScore(ws, msg.score, msg.stage, msg.won);
         }
         break;
+      case 'fishCatch':
+        if (typeof msg.tier === 'string' && typeof msg.sizeLb === 'number') {
+          lobby.fishCatch(ws, msg.tier, msg.sizeLb);
+        }
+        break;
       case 'worldEnter':
         lobby.worldEnter(ws);
         break;
@@ -334,7 +363,7 @@ wss.on('connection', (ws: WebSocket, req) => {
         break;
       case 'worldMove':
         if (typeof msg.x === 'number' && typeof msg.y === 'number') {
-          lobby.worldMove(ws, msg.x, msg.y, typeof msg.a === 'number' ? msg.a : undefined, typeof msg.car === 'string' ? msg.car : null);
+          lobby.worldMove(ws, msg.x, msg.y, typeof msg.a === 'number' ? msg.a : undefined, typeof msg.car === 'string' ? msg.car : null, typeof msg.pet === 'string' ? msg.pet : null);
         }
         break;
       case 'dailySpin':
@@ -357,8 +386,50 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'roulette':
         if (Array.isArray(msg.bets)) lobby.roulette(ws, msg.bets);
         break;
+      case 'bjBet':
+        if (typeof msg.amount === 'number') lobby.blackjackBet(ws, msg.amount);
+        break;
+      case 'bjAction':
+        if (typeof msg.action === 'string') lobby.blackjackAction(ws, msg.action as import('../shared/types').BjAction);
+        break;
+      case 'crapsRoll':
+        if (typeof msg.pass === 'number' && typeof msg.dontPass === 'number') lobby.crapsRoll(ws, msg.pass, msg.dontPass);
+        break;
+      case 'crashBet':
+        if (typeof msg.amount === 'number') lobby.crashBetAction(ws, msg.amount, msg.autoCashout);
+        break;
+      case 'crashCancelBet':
+        lobby.crashCancelBet(ws);
+        break;
+      case 'crashCashout':
+        lobby.crashCashout(ws);
+        break;
+      case 'slotsSpin':
+        if (typeof msg.amount === 'number') lobby.slotsSpin(ws, msg.amount);
+        break;
+      case 'plinko':
+        if (typeof msg.amount === 'number') lobby.plinkoPlay(ws, msg.amount);
+        break;
+      case 'horseReq':
+        lobby.horseReq(ws);
+        break;
+      case 'horseBet':
+        if (typeof msg.horse === 'number' && typeof msg.amount === 'number') lobby.horseBet(ws, msg.horse, msg.amount);
+        break;
+      case 'hiloBet':
+        if (typeof msg.amount === 'number') lobby.hiloBet(ws, msg.amount);
+        break;
+      case 'hiloGuess':
+        if (msg.guess === 'hi' || msg.guess === 'lo') lobby.hiloGuess(ws, msg.guess);
+        break;
+      case 'hiloCashout':
+        lobby.hiloCashout(ws);
+        break;
       case 'balanceSheetReq':
         if (typeof msg.rank === 'number') lobby.sendBalanceSheet(ws, msg.rank);
+        break;
+      case 'eloProfileReq':
+        if (typeof msg.rank === 'number') lobby.sendEloProfile(ws, msg.rank, msg.self);
         break;
       case 'lootBoxOpen':
         lobby.openLootBox(ws);
@@ -379,6 +450,15 @@ wss.on('connection', (ws: WebSocket, req) => {
         break;
       case 'loanBookReq':
         lobby.sendLoanBook(ws);
+        break;
+      case 'netizenInfoReq':
+        if (typeof msg.netizenId === 'string') lobby.sendNetizenInfo(ws, msg.netizenId);
+        break;
+      case 'netizenChallenge':
+        if (typeof msg.netizenId === 'string' && typeof msg.wager === 'number') lobby.netizenChallenge(ws, msg.netizenId, msg.wager);
+        break;
+      case 'newsReq':
+        lobby.sendNews(ws);
         break;
       case 'migrate': {
         // Only honour the request if the socket is authenticated — prevents spoofing.

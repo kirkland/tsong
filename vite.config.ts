@@ -11,9 +11,19 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      // Phaser (~6 MB) is too large to bundle on the 1 GB VPS without OOM.
+      // Load it from CDN instead; the matching <script> tag is in index.html.
+      external: ['phaser'],
+      output: {
+        globals: { phaser: 'Phaser' },
+      },
+    },
   },
   server: {
     port: 5173,
+    // Allow tunneled hostnames (ngrok etc.) so a second device can join over the internet in dev.
+    allowedHosts: true,
     proxy: {
       '/ws': {
         target: `ws://localhost:${serverPort}`,

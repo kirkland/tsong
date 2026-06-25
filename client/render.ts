@@ -1,11 +1,12 @@
 // Pure drawing: takes the latest server state and paints one frame. No game logic.
 
-import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, TARGET, BREAKOUT, COSMETICS, PowerupKind, StateMsg, PolyState, Role, Side } from '../shared/types';
+import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, TARGET, BREAKOUT, COSMETICS, EXCLUSIVES, PowerupKind, StateMsg, PolyState, Role, Side } from '../shared/types';
 
 // The display flair for an equipped title id (e.g. 'davisslayer' → '🏆 Davis Slayer'), or ''.
+// Also searches EXCLUSIVES for exclusive titles (e.g. 'x-founder' → '🪙 Founder').
 function titleFlair(id: string | null | undefined): string {
   if (!id) return '';
-  const t = COSMETICS.find((c) => c.id === id && c.slot === 'title');
+  const t = COSMETICS.find((c) => c.id === id && c.slot === 'title') ?? EXCLUSIVES.find((e) => e.id === id && e.slot === 'title');
   return t ? t.name : '';
 }
 // Title flair colour — most are gold; the "Ops Task Duty" title cycles the rainbow.
@@ -672,8 +673,14 @@ const SKIN_RENDERERS: Record<string, CosmeticDraw> = {
   wood: fillWood,
   hologram: fillHologram,
   venom: fillVenom,
+  pickle: fillPickle,
   obsidian: fillObsidian,
   aurora: fillAurora,
+  carbon: fillCarbon,
+  mermaid: fillMermaid,
+  'x-midas': fillMidas,
+  'x-genesis': fillGenesis,
+  'x-quantum': fillQuantum,
 };
 // Draw a live skin/hat preview onto a small canvas element (used in the shop UI).
 // The canvas is scaled so the paddle fills it, then the skin is applied at full quality.
@@ -701,8 +708,16 @@ const TRAIL_TINTS: Record<string, TrailTint> = {
     const light = 18 + f * 42 + pulse * 12;  // dark → blazing, animated
     return `hsl(${hue},100%,${light}%)`;
   },
+  'x-singularity': (i, n, t) => {
+    const f = i / n;
+    // Spaghettification ring: white-hot at center → deep space blue at edges, with a rotating hue
+    const hue = (t / 20 + 240 + f * 120) % 360;
+    const light = 30 + f * 50 + 15 * Math.sin(t / 400 + i * 0.7);
+    const sat = 70 + f * 30;
+    return `hsl(${hue},${sat}%,${light}%)`;
+  },
 };
-const TRAIL_GLOW = new Set(['comet', 'frostwake', 'ember', 'neonstreak', 'rainbowtrail', 'stardust', 'inferno', 'lightning', 'phoenix', 'x-eclipse']); // additive blend
+const TRAIL_GLOW = new Set(['comet', 'frostwake', 'ember', 'neonstreak', 'rainbowtrail', 'stardust', 'inferno', 'lightning', 'phoenix', 'x-eclipse', 'x-singularity']); // additive blend
 const TRAIL_LEN = 14; // samples of paddle history kept for the streak
 const trailHistory = new Map<string, { x: number; y: number }[]>();
 function drawTrail(ctx: CanvasRenderingContext2D, key: string, cx: number, cy: number, h: number, id: string) {
@@ -817,6 +832,11 @@ const HAT_RENDERERS: Record<string, CosmeticDraw> = {
   propeller: drawPropeller,
   flamingcrown: drawFlamingCrown,
   diamondtiara: drawDiamondTiara,
+  'x-jackpot': drawJackpotCrown,
+  beret: drawBeret,
+  catears: drawCatEars,
+  'x-voidcrown': drawVoidCrown,
+  'x-prismhalo': drawPrismHalo,
 };
 
 // Cosmetic "top hat": a little hat perched at the top end of the paddle. Visual only.
@@ -951,6 +971,122 @@ function drawDiamondTiara(ctx: CanvasRenderingContext2D, cx: number, cy: number,
     ctx.fillStyle = i === 1 ? '#9fe0ff' : '#eaf4ff';
     ctx.beginPath(); ctx.moveTo(gx[i], gyv[i] - 3); ctx.lineTo(gx[i] + 2.4, gyv[i]); ctx.lineTo(gx[i], gyv[i] + 3); ctx.lineTo(gx[i] - 2.4, gyv[i]); ctx.closePath(); ctx.fill();
   }
+  ctx.restore();
+}
+// --- Loot-box refresh hats ---
+function drawBeret(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2, w = PADDLE.w + 10;
+  ctx.save();
+  ctx.fillStyle = '#c41e3a';
+  ctx.beginPath();
+  ctx.ellipse(cx, top - 4, w / 2, 6, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#8a1528';
+  ctx.fillRect(cx - w / 2, top - 1, w, 3);
+  ctx.fillStyle = '#5a0e1a';
+  ctx.fillRect(cx - 1.5, top - 12, 3, 4);
+  ctx.restore();
+}
+function drawCatEars(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2, t = Date.now() / 300;
+  ctx.save();
+  const wiggle = Math.sin(t) * 1.5;
+  ctx.fillStyle = '#2a1a3a';
+  ctx.beginPath();
+  ctx.moveTo(cx - 10, top - 2);
+  ctx.lineTo(cx - 14 + wiggle, top - 16);
+  ctx.lineTo(cx - 4 + wiggle, top - 2);
+  ctx.closePath(); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx + 10, top - 2);
+  ctx.lineTo(cx + 14 - wiggle, top - 16);
+  ctx.lineTo(cx + 4 - wiggle, top - 2);
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#ff9eb5';
+  ctx.beginPath();
+  ctx.moveTo(cx - 8, top - 3);
+  ctx.lineTo(cx - 11 + wiggle, top - 12);
+  ctx.lineTo(cx - 5 + wiggle, top - 3);
+  ctx.closePath(); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx + 8, top - 3);
+  ctx.lineTo(cx + 11 - wiggle, top - 12);
+  ctx.lineTo(cx + 5 - wiggle, top - 3);
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+function drawJackpotCrown(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2, w = PADDLE.w + 8, t = Date.now() / 400;
+  ctx.save();
+  const gold = `hsl(${45 + Math.sin(t) * 5},90%,${55 + Math.sin(t * 1.3) * 8}%)`;
+  ctx.fillStyle = gold;
+  ctx.shadowColor = '#ffd700';
+  ctx.shadowBlur = 10;
+  ctx.beginPath();
+  ctx.moveTo(cx - w / 2, top - 2);
+  for (let i = 0; i < 5; i++) {
+    const px = cx - w / 2 + (w / 4) * i;
+    const py = (i % 2 === 0) ? top - 14 : top - 4;
+    ctx.lineTo(px, py);
+  }
+  ctx.lineTo(cx + w / 2, top - 2);
+  ctx.closePath(); ctx.fill();
+  ctx.shadowBlur = 0;
+  for (let i = 0; i < 3; i++) {
+    const gx = cx - w / 4 + (w / 4) * i;
+    const gy = top - 10 + Math.sin(t + i * 2) * 1.5;
+    const hue = (t * 50 + i * 120) % 360;
+    ctx.fillStyle = `hsl(${hue},95%,60%)`;
+    ctx.shadowColor = `hsl(${hue},95%,60%)`;
+    ctx.shadowBlur = 6;
+    ctx.beginPath(); ctx.arc(gx, gy, 2.5, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+// --- Exclusive hats ---
+function drawVoidCrown(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2, w = PADDLE.w + 6, x = cx - w / 2, t = Date.now() / 600;
+  ctx.save();
+  ctx.fillStyle = '#0a0012';
+  ctx.shadowColor = '#6a00b0';
+  ctx.shadowBlur = 12;
+  ctx.beginPath();
+  ctx.moveTo(x, top - 2);
+  ctx.lineTo(x + w * 0.2, top - 14);
+  ctx.lineTo(x + w * 0.35, top - 6);
+  ctx.lineTo(x + w * 0.5, top - 18);
+  ctx.lineTo(x + w * 0.65, top - 6);
+  ctx.lineTo(x + w * 0.8, top - 14);
+  ctx.lineTo(x + w, top - 2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  for (let i = 0; i < 4; i++) {
+    const px = cx + Math.sin(t + i * 2) * w * 0.3;
+    const py = top - 8 + Math.cos(t * 1.3 + i) * 6;
+    const size = 1.2 + 0.8 * Math.sin(t + i * 1.7);
+    ctx.fillStyle = i % 2 ? '#c77dff' : '#9b30ff';
+    ctx.beginPath(); ctx.arc(px, py, size, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+function drawPrismHalo(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const t = Date.now() / 500;
+  const bob = Math.sin(t * 0.7) * 2;
+  const top = cy - h / 2 - 7 + bob;
+  ctx.save();
+  ctx.translate(cx, top);
+  ctx.rotate(t * 0.3);
+  ctx.lineWidth = 2.8;
+  ctx.strokeStyle = `hsl(${(t * 45) % 360},95%,62%)`;
+  ctx.shadowColor = `hsl(${(t * 45 + 120) % 360},95%,62%)`;
+  ctx.shadowBlur = 14;
+  ctx.beginPath(); ctx.ellipse(0, 0, PADDLE.w * 0.7, 4, 0, 0, Math.PI * 2); ctx.stroke();
+  ctx.rotate(-t * 0.6);
+  ctx.lineWidth = 1.8;
+  ctx.strokeStyle = `hsl(${(t * 45 + 180) % 360},90%,72%)`;
+  ctx.shadowColor = `hsl(${(t * 45 + 300) % 360},90%,72%)`;
+  ctx.beginPath(); ctx.ellipse(0, 0, PADDLE.w * 0.55, 3, 0, 0, Math.PI * 2); ctx.stroke();
   ctx.restore();
 }
 function drawCowboy(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
@@ -1195,6 +1331,141 @@ function fillAurora(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: nu
   g.addColorStop(0.7, `hsl(${275 + s},75%,62%)`);
   g.addColorStop(1, `hsl(${150 + s},80%,50%)`);
   ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  skinHighlight(ctx, cx, cy, h); ctx.restore();
+}
+// --- Loot-box refresh skins ---
+function fillCarbon(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save(); clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 600;
+  const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  g.addColorStop(0, '#1a1a1a'); g.addColorStop(0.3, '#2d2d2d'); g.addColorStop(0.5, '#404040'); g.addColorStop(0.7, '#2d2d2d'); g.addColorStop(1, '#1a1a1a');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  for (let i = 0; i < 4; i++) {
+    const wy = r.y + r.h * (0.1 + 0.27 * i);
+    ctx.strokeStyle = `rgba(80,80,80,${0.2 + 0.1 * Math.sin(t + i)})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(r.x, wy); ctx.lineTo(r.x + r.w, wy); ctx.stroke();
+  }
+  skinHighlight(ctx, cx, cy, h); ctx.restore();
+}
+function fillMermaid(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save(); clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 900;
+  const g = ctx.createLinearGradient(0, r.y, 0, r.y + r.h);
+  g.addColorStop(0, '#004d40'); g.addColorStop(0.5, '#00897b'); g.addColorStop(1, '#004d40');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  for (let i = 0; i < 5; i++) {
+    const sy = r.y + r.h * (0.1 + 0.2 * i);
+    const sh = 4 + 3 * Math.sin(t + i * 1.5);
+    ctx.fillStyle = `rgba(178,223,219,${0.15 + 0.1 * Math.sin(t + i * 0.7)})`;
+    ctx.beginPath();
+    ctx.ellipse(r.x + r.w / 2, sy, r.w * 0.3, sh, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  skinHighlight(ctx, cx, cy, h); ctx.restore();
+}
+function fillMidas(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save(); clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 500;
+  const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  g.addColorStop(0, '#8a6d10'); g.addColorStop(0.3, '#d4a820'); g.addColorStop(0.5, '#ffd700'); g.addColorStop(0.7, '#d4a820'); g.addColorStop(1, '#8a6d10');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  const wave = Math.sin(t) * 0.3 + 0.5;
+  const glint = ctx.createLinearGradient(0, r.y - 8 + r.h * wave, 0, r.y + 8 + r.h * wave);
+  glint.addColorStop(0, 'rgba(255,235,120,0)');
+  glint.addColorStop(0.5, `rgba(255,235,120,${0.4 + 0.3 * Math.sin(t * 1.5)})`);
+  glint.addColorStop(1, 'rgba(255,235,120,0)');
+  ctx.fillStyle = glint; ctx.fillRect(r.x, r.y, r.w, r.h);
+  skinHighlight(ctx, cx, cy, h); ctx.restore();
+}
+// Pickle Rick — "I turned myself into a paddle, Morty!" A bumpy green pickle with
+// Rick's wide, darting eyes and worried grimace. Animated: the eyes glance around.
+function fillPickle(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save(); clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 1000;
+  // Pickle body — glossy green, darker at the edges
+  const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  g.addColorStop(0, '#3d5f1a'); g.addColorStop(0.45, '#7cb342'); g.addColorStop(0.6, '#9ccc65'); g.addColorStop(1, '#3d5f1a');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  // Warts / bumps speckled down the pickle
+  for (let i = 0; i < 9; i++) {
+    const bx = r.x + r.w * (0.3 + 0.4 * ((i * 0.37) % 1));
+    const by = r.y + r.h * ((i + 0.5) / 9);
+    ctx.fillStyle = 'rgba(40,70,15,0.55)';
+    ctx.beginPath(); ctx.arc(bx, by, 1.3, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(200,230,150,0.35)';
+    ctx.beginPath(); ctx.arc(bx - 0.6, by - 0.6, 0.6, 0, Math.PI * 2); ctx.fill();
+  }
+  // Rick's face, near the top of the paddle
+  const fy = r.y + r.h * 0.2;
+  const er = r.w * 0.22;          // eye radius
+  const ex = r.w * 0.24;          // eye horizontal offset from center
+  const dart = Math.sin(t * 1.7) * er * 0.4; // pupils glance side to side
+  const blink = (t % 5) > 4.85 ? 0.15 : 1;   // occasional quick blink
+  for (const dir of [-1, 1]) {
+    const px = cx + dir * ex;
+    ctx.fillStyle = '#f5f5f0';
+    ctx.beginPath(); ctx.ellipse(px, fy, er, er * blink, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#1a1a1a';
+    ctx.beginPath(); ctx.arc(px + dart, fy, er * 0.45 * blink, 0, Math.PI * 2); ctx.fill();
+  }
+  // Worried unibrow
+  ctx.strokeStyle = '#2e4310'; ctx.lineWidth = 1.6; ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx - ex - er, fy - er * 1.1);
+  ctx.quadraticCurveTo(cx, fy - er * 1.7, cx + ex + er, fy - er * 1.1);
+  ctx.stroke();
+  // Small grimace mouth
+  ctx.lineWidth = 1.2;
+  ctx.beginPath();
+  ctx.moveTo(cx - er, fy + er * 1.8);
+  ctx.quadraticCurveTo(cx, fy + er * 1.3, cx + er, fy + er * 1.8);
+  ctx.stroke();
+  skinHighlight(ctx, cx, cy, h); ctx.restore();
+}
+// --- Exclusive skins ---
+function fillGenesis(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save(); clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 800;
+  const g = ctx.createLinearGradient(r.x, r.y, r.x + r.w, r.y + r.h);
+  g.addColorStop(0, '#05001a'); g.addColorStop(0.5, '#1a0033'); g.addColorStop(1, '#05001a');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  for (let i = 0; i < 3; i++) {
+    const wx = r.x + r.w * (0.2 + 0.6 * ((t + i * 1.2) % 1));
+    const wy = r.y + r.h * (0.2 + 0.6 * ((t * 0.7 + i * 0.8) % 1));
+    const wr = 12 + 8 * Math.sin(t + i);
+    const wg = ctx.createRadialGradient(wx, wy, 0, wx, wy, wr);
+    wg.addColorStop(0, `hsla(${270 + i * 30},80%,60%,0.25)`);
+    wg.addColorStop(1, 'rgba(100,0,200,0)');
+    ctx.fillStyle = wg; ctx.fillRect(r.x, r.y, r.w, r.h);
+  }
+  skinHighlight(ctx, cx, cy, h); ctx.restore();
+}
+function fillQuantum(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save(); clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 400;
+  const g = ctx.createLinearGradient(r.x, 0, r.x + r.w, 0);
+  g.addColorStop(0, '#002626'); g.addColorStop(0.3, '#004d4d'); g.addColorStop(0.5, '#00b3b3'); g.addColorStop(0.7, '#004d4d'); g.addColorStop(1, '#002626');
+  ctx.fillStyle = g; ctx.fillRect(r.x, r.y, r.w, r.h);
+  for (let i = 0; i < 6; i++) {
+    const waveY = r.y + r.h * (0.15 + 0.7 * ((t * 0.3 + i * 0.17) % 1));
+    const waveA = Math.sin(t + i * 1.1) * 0.3 + 0.3;
+    ctx.fillStyle = `rgba(0,255,255,${waveA * 0.15})`;
+    ctx.fillRect(r.x, waveY - 2, r.w, 4);
+  }
+  for (let i = 0; i < 8; i++) {
+    const dx = r.x + r.w * ((t * 0.2 + i * 0.12) % 1);
+    const dy = r.y + r.h * ((t * 0.25 + i * 0.09) % 1);
+    const ds = 1.5 + Math.sin(t * 2 + i) * 0.8;
+    ctx.fillStyle = `rgba(0,255,200,${0.4 + 0.3 * Math.sin(t + i)})`;
+    ctx.beginPath(); ctx.arc(dx, dy, ds, 0, Math.PI * 2); ctx.fill();
+  }
   skinHighlight(ctx, cx, cy, h); ctx.restore();
 }
 function fillGold(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
@@ -1783,7 +2054,6 @@ const TARGET_STYLE: Record<PowerupKind, { stroke: string; fill: string }> = {
   earthquake: { stroke: '#b07a3a', fill: 'rgba(176, 122,  58, 0.16)' }, // dusty brown
   coins:   { stroke: '#ffcf33', fill: 'rgba(255, 207,  51, 0.18)' }, // gold
   blackout:   { stroke: '#9aa0b0', fill: 'rgba(20, 22, 30, 0.4)' }, // dark
-  bullettime: { stroke: '#5aa0ff', fill: 'rgba(40, 90, 220, 0.16)' }, // blue
   vortex:     { stroke: '#b97cff', fill: 'rgba(180, 120, 255, 0.16)' }, // purple
   glitch:     { stroke: '#00fff0', fill: 'rgba(0, 255, 240, 0.14)' }, // cyan
   smoke:      { stroke: '#c8c8d2', fill: 'rgba(190, 190, 200, 0.16)' }, // grey
@@ -2090,11 +2360,6 @@ const GLYPHS: Record<PowerupKind, (ctx: CanvasRenderingContext2D, x: number, y: 
   blackout(ctx, x, y) {
     ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2); ctx.stroke();
     ctx.beginPath(); ctx.arc(x, y, 11, -Math.PI / 2, Math.PI / 2); ctx.fill();
-  },
-  // bullettime: a clock with a slowed hand → "time slows"
-  bullettime(ctx, x, y) {
-    ctx.beginPath(); ctx.arc(x, y, 11, 0, Math.PI * 2); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y - 7); ctx.moveTo(x, y); ctx.lineTo(x + 5, y + 2); ctx.stroke();
   },
   // vortex: a spiral → "swirl"
   vortex(ctx, x, y) {
@@ -3959,3 +4224,19 @@ function toRgb(h: string): [number, number, number] {
   const v = n.length === 3 ? n.split('').map((c) => c + c).join('') : n;
   return [parseInt(v.slice(0, 2), 16), parseInt(v.slice(2, 4), 16), parseInt(v.slice(4, 6), 16)];
 }
+
+// Startup guard: warn about any exclusive cosmetic missing its client renderer entry.
+(() => {
+  const registries: Record<string, Record<string, unknown>> = {
+    hat: HAT_RENDERERS,
+    skin: SKIN_RENDERERS,
+    trail: TRAIL_TINTS,
+  };
+  for (const ex of EXCLUSIVES) {
+    const reg = registries[ex.slot === 'title' ? '' : ex.slot];
+    if (ex.slot === 'title') continue; // titles use name lookup, not a draw registry
+    if (reg && !(ex.id in reg)) {
+      console.warn(`[render] Missing renderer for exclusive "${ex.id}" (slot:${ex.slot}) — it will render as nothing!`);
+    }
+  }
+})();

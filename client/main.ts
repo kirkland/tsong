@@ -3,7 +3,15 @@
 
 import { connect } from './net';
 import { initRoulette } from './roulette';
+import { initBlackjack } from './blackjack';
+import { initCraps } from './craps';
+import { initCrash } from './crash';
+import { initSlots } from './slots';
+import { initPlinko } from './plinko';
+import { initHorse } from './horse';
+import { initHilo } from './hilo';
 import { initAds, revealAds } from './ads';
+import { initFlyover, startFlyovers, flySummoned } from './flyover';
 import { draw, drawLegendIcon, setBlasterAim, drawCosmeticPreview } from './render';
 import {
   COURT,
@@ -20,6 +28,7 @@ import {
   LeaderboardRow,
   NetWorthRow,
   BalanceSheetMsg,
+  EloProfileMsg,
   Role,
   Side,
   StateMsg,
@@ -28,17 +37,24 @@ import {
   TEAM_MAX,
   COSMETICS,
   carById,
+  petById,
   SPIN_SEGMENTS,
   STOCKS,
   StockSide,
   StockTf,
   positionWorth,
+  FAST_SELL_TAX_MS,
+  FAST_SELL_TAX_RATE,
   TickHealth,
   EXCLUSIVES,
   ExclusiveItem,
   LootResultMsg,
   MarketItemView,
   LoanBookMsg,
+  NetizenInfoMsg,
+  NewsItem,
+  LOOT_TABLE,
+  minBet,
 } from '../shared/types';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -69,6 +85,7 @@ const chatForm = document.getElementById('chatForm') as HTMLFormElement;
 const chatInput = document.getElementById('chatInput') as HTMLInputElement;
 const hideCmdsEl = document.getElementById('hideCmds') as HTMLInputElement;
 const hideTimestampsEl = document.getElementById('hideTimestamps') as HTMLInputElement;
+const hideNetizenChatEl = document.getElementById('hideNetizenChat') as HTMLInputElement;
 const closingModeEl = document.getElementById('closingMode') as HTMLInputElement;
 const gravityModeEl = document.getElementById('gravityMode') as HTMLInputElement;
 const turboModeEl = document.getElementById('turboMode') as HTMLInputElement;
@@ -104,6 +121,11 @@ const balanceCard = document.getElementById('balanceCard') as HTMLDivElement;
 const balanceClose = document.getElementById('balanceClose') as HTMLButtonElement;
 const balanceName = document.getElementById('balanceName') as HTMLSpanElement;
 const balanceBody = document.getElementById('balanceBody') as HTMLDivElement;
+const eloModal = document.getElementById('eloModal') as HTMLDivElement;
+const eloCard = document.getElementById('eloCard') as HTMLDivElement;
+const eloClose = document.getElementById('eloClose') as HTMLButtonElement;
+const eloNameEl = document.getElementById('eloName') as HTMLSpanElement;
+const eloBody = document.getElementById('eloBody') as HTMLDivElement;
 const tipModal = document.getElementById('tipModal') as HTMLDivElement;
 const tipCard = document.getElementById('tipCard') as HTMLDivElement;
 const tipClose = document.getElementById('tipClose') as HTMLButtonElement;
@@ -114,6 +136,19 @@ const tipAmount = document.getElementById('tipAmount') as HTMLInputElement;
 const tipStatus = document.getElementById('tipStatus') as HTMLDivElement;
 const tipSend = document.getElementById('tipSend') as HTMLButtonElement;
 const mobileControlsEl = document.getElementById('mobileControls') as HTMLDivElement;
+
+// --- Netizen Challenge dialog ---
+const ncModal = document.getElementById('netizenChallengeModal') as HTMLDivElement;
+const ncName = document.getElementById('netizenChallengeName') as HTMLSpanElement;
+const ncNetWorth = document.getElementById('netizenChallengeNetWorth') as HTMLSpanElement;
+const ncWarn = document.getElementById('netizenChallengeWarn') as HTMLDivElement;
+const ncRow = document.getElementById('netizenChallengeRow') as HTMLDivElement;
+const ncWager = document.getElementById('ncWager') as HTMLInputElement;
+const ncMaxWin = document.getElementById('ncMaxWin') as HTMLDivElement;
+const ncChallengeBtn = document.getElementById('netizenChallengeBtn') as HTMLButtonElement;
+const ncClose = document.getElementById('netizenChallengeClose') as HTMLButtonElement;
+const ncMinus = document.getElementById('ncWagerMinus') as HTMLButtonElement;
+const ncPlus = document.getElementById('ncWagerPlus') as HTMLButtonElement;
 const mobUpBtn = document.getElementById('mobUp') as HTMLButtonElement;
 const mobDownBtn = document.getElementById('mobDown') as HTMLButtonElement;
 
@@ -267,6 +302,12 @@ let joined = false; // true once the player has entered a nickname (gates reacti
 // auto-rejoin path (which can run enableChat during module init) never hits them in the TDZ.
 let lastLbRows: LeaderboardRow[] = [];
 let lastNwRows: NetWorthRow[] = [];
+// Cached "self" pin-rows so plain re-renders (e.g. on a bounty update) keep showing the
+// player's own row when they're below the visible top-N.
+let lastLbSelfElo: number | undefined;
+let lastLbSelfRank: number | undefined;
+let lastNwSelfRow: NetWorthRow | undefined;
+let lastNwSelfRank: number | undefined;
 // Rolling buffer of recent chat lines, surfaced as a "memos" column in Work mode.
 const workChat: string[] = [];
 // Active bounties, keyed by lowercased player name → pot. Drives the 🎯 badge on the boards.
@@ -313,6 +354,7 @@ const FATALITIES = [
 const COMBO_KEYS = new Set(FATALITIES.flatMap((f) => f.seq as readonly string[]));
 const COMBO_WINDOW_MS = 1500; // presses older than this are forgotten
 let fatalityDone = false; // already fired (or skipped) for the current 'over' screen
+let pongWinCounted = false; // counted this 'over' screen toward the World "win 10 games" objective
 
 // "FINISH HIM!" announcer sting, played once when a match ends with fatalities armed.
 const finishSound = new Audio('/finish-him.mp3');
@@ -579,11 +621,13 @@ const net = connect(
       syncViewMode(msg.viewMode ?? 'normal');
       updateUI();
     } else if (msg.type === 'leaderboard') {
-      renderLeaderboard(msg.rows);
+      renderLeaderboard(msg.rows, msg.selfElo, msg.selfRank);
     } else if (msg.type === 'netWorth') {
-      renderNetWorth(msg.rows);
+      renderNetWorth(msg.rows, msg.selfRow, msg.selfRank);
     } else if (msg.type === 'balanceSheet') {
       showBalanceSheet(msg);
+    } else if (msg.type === 'eloProfile') {
+      showEloProfile(msg);
     } else if (msg.type === 'chat') {
       msg.lines.forEach(addChatLine);
       // Notify via tab title for a single new message while the tab is backgrounded.
@@ -609,6 +653,8 @@ const net = connect(
       showAnnouncement(msg.text, { toast: msg.toast });
     } else if (msg.type === 'ping') {
       onPing(msg.from);
+    } else if (msg.type === 'flyover') {
+      flySummoned(msg.idx); // someone summoned the plane with the secret word — everyone flies it
     } else if (msg.type === 'rtt') {
       if (msg.tick) serverTick = msg.tick;
       recordRtt(performance.now() - msg.t);
@@ -626,6 +672,10 @@ const net = connect(
       streetDemonsMod?.feedSrLobby(msg);
     } else if (msg.type === 'srRelay') {
       streetDemonsMod?.feedSrRelay(msg.data);
+    } else if (msg.type === 'sbLobby') {
+      superBrosMod?.feedSbLobby(msg);
+    } else if (msg.type === 'sbRelay') {
+      superBrosMod?.feedSbRelay(msg.data);
     } else if (msg.type === 'doomLeaderboard') {
       doomScores = { solo: msg.solo, coop: msg.coop };
     } else if (msg.type === 'tdState') {
@@ -634,11 +684,30 @@ const net = connect(
       typeDieScores = msg.rows;
     } else if (msg.type === 'campaignLeaderboard') {
       campaignScores = msg.rows;
+    } else if (msg.type === 'fishLeaderboard') {
+      fishScores = msg.rows;
+      fishingMod?.feedFishLeaderboard(msg.rows);
+    } else if (msg.type === 'fishReward') {
+      fishingMod?.feedFishReward(msg.coins, msg.item);
+    } else if (msg.type === 'netizenInfo') {
+      showNetizenChallenge(msg);
+    } else if (msg.type === 'netizenChallengeResult') {
+      const text = msg.won
+        ? `🏆 Beat ${msg.netizenName} — won ${msg.delta}🪙!`
+        : `💸 Lost to ${msg.netizenName} — lost ${msg.delta}🪙.`;
+      showToast(text);
     } else if (msg.type === 'world') {
       worldMod?.feedWorld(msg.avatars);
     } else if (msg.type === 'wallet') {
-      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, car: msg.car, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
+      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, car: msg.car, pet: msg.pet, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
       rouletteHandle.setCoins(msg.coins);
+      bjHandle.setCoins(msg.coins);
+      crapsHandle.setCoins(msg.coins);
+      crashHandle.setCoins(msg.coins);
+      slotsHandle.setCoins(msg.coins);
+      plinkoHandle.setCoins(msg.coins);
+      horseHandle.setCoins(msg.coins);
+      hiloHandle.setCoins(msg.coins);
       if (!lootPanel.hidden) renderLoot();
       if (!marketplacePanel.hidden) renderMarketplace();
       // During a roulette spin, hold every coin-total display (toolbar tab, shop, market) at its
@@ -654,6 +723,26 @@ const net = connect(
       celebrateSpin(msg.reward, msg.segment);
     } else if (msg.type === 'rouletteResult') {
       rouletteHandle.onResult(msg);
+    } else if (msg.type === 'bjState') {
+      bjHandle.onState(msg);
+    } else if (msg.type === 'bjResult') {
+      bjHandle.onResult(msg);
+    } else if (msg.type === 'crapsResult') {
+      crapsHandle.onResult(msg);
+    } else if (msg.type === 'slotsResult') {
+      slotsHandle.onResult(msg);
+    } else if (msg.type === 'plinkoResult') {
+      plinkoHandle.onResult(msg);
+    } else if (msg.type === 'horseCard') {
+      horseHandle.onCard(msg);
+    } else if (msg.type === 'horseResult') {
+      horseHandle.onResult(msg);
+    } else if (msg.type === 'hiloState') {
+      hiloHandle.onState(msg);
+    } else if (msg.type === 'hiloResult') {
+      hiloHandle.onResult(msg);
+    } else if (msg.type === 'crashState') {
+      crashHandle.onState(msg);
     } else if (msg.type === 'loan') {
       loan = msg.loan;
       // Taking/repaying resets the conversation; collecting (loan→null) drops back to the intro.
@@ -669,6 +758,9 @@ const net = connect(
       if (!marketplacePanel.hidden) renderMarketplace();
     } else if (msg.type === 'loanBook') {
       showLoanBook(msg);
+    } else if (msg.type === 'news') {
+      newsFeed = msg.items;
+      if (!newsPanel.hidden) renderNews();
     }
   },
   () => {
@@ -701,6 +793,56 @@ const rouletteHandle = initRoulette({
   send: (bets) => net.send({ type: 'roulette', bets }),
   playWin: playYay,
   // Fires when the wheel finishes; reveal the settled balance everywhere now, not mid-spin.
+  onSettled: refreshWallet,
+});
+
+// Blackjack panel.
+const bjHandle = initBlackjack({
+  send: (type, payload) => net.send({ type, ...payload } as Parameters<typeof net.send>[0]),
+  playWin: playYay,
+  onSettled: refreshWallet,
+});
+
+// Craps panel.
+const crapsHandle = initCraps({
+  send: (pass, dontPass) => net.send({ type: 'crapsRoll', pass, dontPass }),
+  playWin: playYay,
+  onSettled: refreshWallet,
+});
+
+// Slots panel.
+const slotsHandle = initSlots({
+  send: (amount) => net.send({ type: 'slotsSpin', amount }),
+  playWin: playYay,
+  onSettled: refreshWallet,
+});
+
+// Crash panel — live state streamed from server every 100ms.
+const crashHandle = initCrash({
+  sendBet: (amount, autoCashout) => net.send({ type: 'crashBet', amount, ...(autoCashout ? { autoCashout } : {}) }),
+  sendCancelBet: () => net.send({ type: 'crashCancelBet' }),
+  sendCashout: () => net.send({ type: 'crashCashout' }),
+  playWin: playYay,
+});
+
+const plinkoHandle = initPlinko({
+  send: (amount) => net.send({ type: 'plinko', amount }),
+  playWin: playYay,
+  onSettled: refreshWallet,
+});
+
+const horseHandle = initHorse({
+  sendReq: () => net.send({ type: 'horseReq' }),
+  sendBet: (horse, amount) => net.send({ type: 'horseBet', horse, amount }),
+  playWin: playYay,
+  onSettled: refreshWallet,
+});
+
+const hiloHandle = initHilo({
+  sendBet: (amount) => net.send({ type: 'hiloBet', amount }),
+  sendGuess: (guess) => net.send({ type: 'hiloGuess', guess }),
+  sendCashout: () => net.send({ type: 'hiloCashout' }),
+  playWin: playYay,
   onSettled: refreshWallet,
 });
 
@@ -751,6 +893,7 @@ joinForm.addEventListener('submit', (e) => {
   overlay.style.display = 'none';
   enableChat();
   revealAds(); // the fake banner ad only appears once you're in (never over the join screen)
+  startFlyovers();
 });
 
 // --- ping: notify everyone you want players ---
@@ -1442,7 +1585,9 @@ function addChatLine(line: ChatLine) {
     chatLog.append(sep);
   }
   const row = document.createElement('div');
-  row.className = line.command ? 'chat-row chat-row-cmd' : 'chat-row';
+  const isNonPlayer = !line.player;
+  const classes = line.command ? 'chat-row chat-row-cmd' : 'chat-row';
+  row.className = classes + (isNonPlayer ? ' chat-row-np' : '');
   const stamp = document.createElement('span');
   stamp.className = 'chatstamp';
   stamp.textContent = timeStr;
@@ -1457,6 +1602,7 @@ function addChatLine(line: ChatLine) {
   content.className = 'chatbody';
   content.append(who, body);
   row.append(stamp, content);
+  if (isNonPlayer && hideNetizenChatEl.checked) row.style.display = 'none';
   chatLog.append(row);
   while (chatLog.childElementCount > 100) chatLog.firstElementChild!.remove();
   chatLog.scrollTop = chatLog.scrollHeight;
@@ -1471,6 +1617,13 @@ hideCmdsEl.addEventListener('change', () => {
 
 hideTimestampsEl.addEventListener('change', () => {
   chatEl.classList.toggle('hide-timestamps', hideTimestampsEl.checked);
+});
+
+hideNetizenChatEl.addEventListener('change', () => {
+  const hide = hideNetizenChatEl.checked;
+  for (const row of chatLog.querySelectorAll<HTMLElement>('.chat-row-np')) {
+    row.style.display = hide ? 'none' : '';
+  }
 });
 
 // Small name-pop at the court location where a power-up was just collected.
@@ -1564,6 +1717,29 @@ streetDemonsBtn.addEventListener('click', async () => {
   }
 });
 
+// --- Super Tsong Bros PvP platform fighter (lazy-loaded, self-contained). Host-authoritative:
+// the server is only a lobby (with a per-slot fighter pick + all-locked start gate) + broadcast
+// relay (sb* messages, routed above). Slot 0 (first joiner) simulates the whole match and
+// streams snapshots; guests send input and render from them. ---
+const sbBtn = document.getElementById('sbBtn') as HTMLButtonElement;
+let superBrosMod: typeof import('./superbros') | null = null;
+sbBtn.addEventListener('click', async () => {
+  try {
+    superBrosMod = await import('./superbros');
+    superBrosMod.startSuperBros({
+      join: () => net.send({ type: 'sbJoin' }),
+      leave: () => net.send({ type: 'sbLeave' }),
+      pick: (fighter) => net.send({ type: 'sbPick', fighter }),
+      start: () => net.send({ type: 'sbStart' }),
+      end: (winner) => net.send({ type: 'sbEnd', winner }),
+      relay: (data) => net.send({ type: 'sbRelay', data }),
+      name: () => myName,
+    });
+  } catch (e) {
+    console.error('Super Tsong Bros failed to load:', e);
+  }
+});
+
 // --- "Type or Die" co-op typing horde-defense (lazy-loaded). Server-authoritative: the
 // overlay just renders tdState and sends keystroke outcomes (td* messages, routed above). ---
 const typeDieBtn = document.getElementById('typeDieBtn') as HTMLButtonElement;
@@ -1594,6 +1770,7 @@ initAds({
   typedie: () => typeDieBtn.click(),
   shop: () => shopBtn.click(),
 });
+initFlyover(() => net.send({ type: 'summonPlane' })); // the occasional banner-plane flyover (and rarer crash); secret word summons one room-wide
 
 // --- Campaign ("Davis Collects", lazy-loaded, self-contained). Runs its own 2D Pong + VN;
 // the server is used only to persist arcade scores (campaignScore / campaignLeaderboard). ---
@@ -1613,6 +1790,28 @@ campaignBtn.addEventListener('click', async () => {
   }
 });
 
+// --- Fishing minigame ("Cast a line", lazy-loaded, self-contained). Reached from the World pond's
+// pier. Solo Canvas overlay: it rolls a fish, runs the skill game, and reports tier+size to the
+// server, which pays a House-funded reward and tracks the biggest catch. ---
+let fishingMod: typeof import('./fishing') | null = null;
+// Latest biggest-catch leaderboard, pushed by the server.
+let fishScores: import('../shared/types').FishLeaderboardRow[] = [];
+async function openFishing(): Promise<void> {
+  try {
+    fishingMod = await import('./fishing');
+    fishingMod.startFishing({
+      catchFish: (tier, sizeLb) => net.send({ type: 'fishCatch', tier, sizeLb }),
+      leaderboard: () => fishScores,
+      name: () => myName,
+    });
+  } catch (e) {
+    console.error('Fishing failed to load:', e);
+  }
+}
+// Arcade-menu entry: same fishing overlay you get from walking into the pond in the World.
+const fishingBtn = document.getElementById('fishingBtn') as HTMLButtonElement;
+fishingBtn.addEventListener('click', () => { void openFishing(); });
+
 // --- Beta "World": a free-roam 2D overworld you walk around as a named avatar, seeing everyone
 // else who's currently in the world. It's the future main UI; for now its buildings deep-link
 // into existing features — the Arena (tsong itself, via the play queue), the Casino (roulette)
@@ -1628,11 +1827,12 @@ worldBtn.addEventListener('click', async () => {
     worldMod.startWorld({
       enter: () => net.send({ type: 'worldEnter' }),
       leave: () => net.send({ type: 'worldLeave' }),
-      move: (x, y, a, car) => net.send({ type: 'worldMove', x, y, a, car }),
+      move: (x, y, a, car, pet) => net.send({ type: 'worldMove', x, y, a, car, pet }),
       name: () => myName,
       color: () => myColor,
       selfId: () => myId,
       car: () => wallet.car, // the car you've equipped in the shop (null = on foot only)
+      pet: () => wallet.pet, // the pet you've equipped in the shop — trails behind you (null = none)
       onExit: () => worldBtn.setAttribute('aria-pressed', 'false'),
       // Walk into the Arena → hop into the play queue (you'll be seated when a spot opens).
       enterArena: () => net.send({ type: 'queueJoin' }),
@@ -1641,15 +1841,74 @@ worldBtn.addEventListener('click', async () => {
       // synchronously let the originating click keep bubbling to the panel's "close on outside
       // click" handler — which instantly re-closed the panel (the casino bug). A 0ms gap lets the
       // current click finish first, so the panel opens cleanly.
+      // Tapping a netizen avatar in the world requests its info for the challenge dialog.
+      onNetizenClick: (netizenId) => { net.send({ type: 'netizenInfoReq', netizenId }); },
       openFeature: (feature) => {
-        const id = feature === 'roulette' ? 'rouletteBtn' : feature === 'stocks' ? 'marketBtn' : 'loanBtn';
+        // The Pet Shop is a cosmetic venue, not a gambling/bank feature: open the Shop panel and
+        // jump straight to the Pets tab (deferred like the others to dodge the outside-click race).
+        if (feature === 'petshop') {
+          setTimeout(() => {
+            if (shopPanel.hidden) shopBtn.click(); // open the shop if it isn't already
+            selectShopTab('pet', tabPets);
+          }, 0);
+          return;
+        }
+        // The DOOM portal launches DOOM the same way the toolbar's Doom button does (deferred a
+        // tick like the others, so the world's teardown click finishes first).
+        if (feature === 'doom') {
+          setTimeout(() => doomBtn.click(), 0);
+          return;
+        }
+        // The pond's pier opens the solo Fishing overlay (lazy-loaded, like DOOM/campaign),
+        // deferred a tick so the world's teardown click finishes first.
+        if (feature === 'fishing') {
+          setTimeout(() => { void openFishing(); }, 0);
+          return;
+        }
+        const id = feature === 'roulette' ? 'rouletteBtn'
+                 : feature === 'blackjack' ? 'bjBtn'
+                 : feature === 'craps'     ? 'crapsBtn'
+                 : feature === 'crash'     ? 'crashBtn'
+                 : feature === 'slots'     ? 'slotsBtn'
+                 : feature === 'stocks'    ? 'marketBtn'
+                 : 'loanBtn';
         setTimeout(() => (document.getElementById(id) as HTMLButtonElement | null)?.click(), 0);
       },
+      claimQuest: (quest) => net.send({ type: 'questClaim', quest }),
     });
   } catch (e) {
     console.error('World failed to load:', e);
   }
 });
+
+// --- Market news panel (restored) ---
+// NOTE: an earlier "Fix duplicate news panel declarations" commit deleted the ONLY copy of this
+// block, leaving the `news` message handler referencing newsFeed/newsPanel/renderNews that no
+// longer existed — main hasn't compiled since. Restored here so the build is green again.
+const newsBtn = document.getElementById('newsBtn') as HTMLButtonElement;
+const newsPanel = document.getElementById('newsPanel') as HTMLDivElement;
+const newsBody = document.getElementById('newsBody') as HTMLDivElement;
+let newsFeed: NewsItem[] = [];
+newsBtn.addEventListener('click', () => {
+  const open = newsPanel.hidden;
+  newsPanel.hidden = !open;
+  newsBtn.setAttribute('aria-expanded', String(open));
+  if (open) { if (!newsFeed.length) net.send({ type: 'newsReq' }); renderNews(); }
+});
+document.addEventListener('click', (e) => {
+  if (newsPanel.hidden) return;
+  const t = e.target as Node;
+  if (t instanceof Node && !t.isConnected) return;
+  if (!newsPanel.contains(t) && !newsBtn.contains(t)) { newsPanel.hidden = true; newsBtn.setAttribute('aria-expanded', 'false'); }
+});
+function renderNews() {
+  if (!newsFeed.length) { newsBody.innerHTML = '<div class="news-item" style="color:#5a647e">No news yet. Check back during market hours (M–F 9am–5pm ET).</div>'; return; }
+  newsBody.innerHTML = newsFeed.map((item) => {
+    const d = new Date(item.ts);
+    const time = d.toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' });
+    return `<div class="news-item"><span class="news-time">${time}</span><span class="news-headline">${escapeHtml(item.headline)}</span></div>`;
+  }).join('');
+}
 
 // --- Arcade & Casino nav dropdowns: group the minigame / economy buttons into menus to keep
 // the toolbar tidy. The grouped buttons keep their own IDs and click handlers; these toggles
@@ -1658,6 +1917,10 @@ const arcadeBtn = document.getElementById('arcadeBtn') as HTMLButtonElement;
 const arcadePanel = document.getElementById('arcadePanel') as HTMLDivElement;
 const casinoBtn = document.getElementById('casinoBtn') as HTMLButtonElement;
 const casinoPanel = document.getElementById('casinoPanel') as HTMLDivElement;
+const economyBtn = document.getElementById('economyBtn') as HTMLButtonElement;
+const economyPanel = document.getElementById('economyPanel') as HTMLDivElement;
+const workMenuBtn = document.getElementById('workMenuBtn') as HTMLButtonElement;
+const workMenuPanel = document.getElementById('workMenuPanel') as HTMLDivElement;
 function closeNavMenu(btn: HTMLButtonElement, panel: HTMLDivElement) {
   panel.hidden = true;
   btn.setAttribute('aria-expanded', 'false');
@@ -1669,25 +1932,33 @@ function toggleNavMenu(btn: HTMLButtonElement, panel: HTMLDivElement) {
 }
 arcadeBtn.addEventListener('click', () => toggleNavMenu(arcadeBtn, arcadePanel));
 casinoBtn.addEventListener('click', () => toggleNavMenu(casinoBtn, casinoPanel));
+economyBtn.addEventListener('click', () => toggleNavMenu(economyBtn, economyPanel));
+workMenuBtn.addEventListener('click', () => toggleNavMenu(workMenuBtn, workMenuPanel));
 // Picking an item closes its menu — the launched minigame / opened panel takes over from there.
 arcadePanel.addEventListener('click', (e) => { if ((e.target as HTMLElement).closest('button')) closeNavMenu(arcadeBtn, arcadePanel); });
 casinoPanel.addEventListener('click', (e) => { if ((e.target as HTMLElement).closest('button')) closeNavMenu(casinoBtn, casinoPanel); });
+economyPanel.addEventListener('click', (e) => { if ((e.target as HTMLElement).closest('button')) closeNavMenu(economyBtn, economyPanel); });
+workMenuPanel.addEventListener('click', (e) => { if ((e.target as HTMLElement).closest('button')) closeNavMenu(workMenuBtn, workMenuPanel); });
 document.addEventListener('click', (e) => {
   const t = e.target as Node;
   if (!arcadePanel.hidden && !arcadeBtn.contains(t) && !arcadePanel.contains(t)) closeNavMenu(arcadeBtn, arcadePanel);
   if (!casinoPanel.hidden && !casinoBtn.contains(t) && !casinoPanel.contains(t)) closeNavMenu(casinoBtn, casinoPanel);
+  if (!economyPanel.hidden && !economyBtn.contains(t) && !economyPanel.contains(t)) closeNavMenu(economyBtn, economyPanel);
+  if (!workMenuPanel.hidden && !workMenuBtn.contains(t) && !workMenuPanel.contains(t)) closeNavMenu(workMenuBtn, workMenuPanel);
 });
 document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return;
   if (!arcadePanel.hidden) closeNavMenu(arcadeBtn, arcadePanel);
   if (!casinoPanel.hidden) closeNavMenu(casinoBtn, casinoPanel);
+  if (!economyPanel.hidden) closeNavMenu(economyBtn, economyPanel);
+  if (!workMenuPanel.hidden) closeNavMenu(workMenuBtn, workMenuPanel);
 });
 
 // --- Coins, cosmetics shop & betting ---
-let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; song: string | null; car: string | null; exclusives: { id: string; serial: number; instanceId: number }[]; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
-  { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, car: null, exclusives: [], bets: [], nextSpinAt: 0, bonusSpins: 0 };
+let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; song: string | null; car: string | null; pet: string | null; exclusives: { id: string; serial: number; instanceId: number }[]; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
+  { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, car: null, pet: null, exclusives: [], bets: [], nextSpinAt: 0, bonusSpins: 0 };
 let betAmount = 100; // default wager (economy is scaled ×100); min is still 1
-let shopTab: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' = 'hat';
+let shopTab: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'pet' = 'hat';
 const shopBtn = document.getElementById('shopBtn') as HTMLButtonElement;
 const shopPanel = document.getElementById('shopPanel') as HTMLDivElement;
 const coinCount = document.getElementById('coinCount') as HTMLSpanElement;
@@ -1699,8 +1970,9 @@ const tabTrails = document.getElementById('tabTrails') as HTMLButtonElement;
 const tabTitles = document.getElementById('tabTitles') as HTMLButtonElement;
 const tabSongs = document.getElementById('tabSongs') as HTMLButtonElement;
 const tabCars = document.getElementById('tabCars') as HTMLButtonElement;
-const shopTabs = [tabHats, tabSkins, tabTrails, tabTitles, tabSongs, tabCars];
-function selectShopTab(tab: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car', el: HTMLButtonElement) {
+const tabPets = document.getElementById('tabPets') as HTMLButtonElement;
+const shopTabs = [tabHats, tabSkins, tabTrails, tabTitles, tabSongs, tabCars, tabPets];
+function selectShopTab(tab: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'pet', el: HTMLButtonElement) {
   shopTab = tab;
   for (const t of shopTabs) t.classList.toggle('active', t === el);
   renderShop();
@@ -1711,6 +1983,7 @@ tabTrails.addEventListener('click', () => selectShopTab('trail', tabTrails));
 tabTitles.addEventListener('click', () => selectShopTab('title', tabTitles));
 tabSongs.addEventListener('click', () => selectShopTab('song', tabSongs));
 tabCars.addEventListener('click', () => selectShopTab('car', tabCars));
+tabPets.addEventListener('click', () => selectShopTab('pet', tabPets));
 const spinBtn = document.getElementById('spinBtn') as HTMLButtonElement;
 let spinning = false; // a spin animation is currently playing
 spinBtn.addEventListener('click', () => {
@@ -1753,7 +2026,7 @@ function renderShop() {
   for (const item of COSMETICS) {
     if (item.slot !== shopTab) continue; // show only the active tab's items
     const owned = wallet.owned.includes(item.id);
-    const equipped = (item.slot === 'hat' ? wallet.hat : item.slot === 'skin' ? wallet.skin : item.slot === 'trail' ? wallet.trail : item.slot === 'song' ? wallet.song : item.slot === 'car' ? wallet.car : wallet.title) === item.id;
+    const equipped = (item.slot === 'hat' ? wallet.hat : item.slot === 'skin' ? wallet.skin : item.slot === 'trail' ? wallet.trail : item.slot === 'song' ? wallet.song : item.slot === 'car' ? wallet.car : item.slot === 'pet' ? wallet.pet : wallet.title) === item.id;
     const row = document.createElement('div');
     row.className = 'shop-row';
     // Titles are text flair and songs are audio — neither has a paddle preview. Songs get a ▶
@@ -1771,6 +2044,13 @@ function renderShop() {
       sw.className = 'shop-preview-car';
       sw.style.cssText = `display:inline-block;width:28px;height:18px;border-radius:4px;background:${car?.body ?? '#888'};border:2px solid ${car?.accent ?? '#222'};`;
       sw.title = car ? `top speed ${car.speed}, grip ${car.grip}` : '';
+      row.appendChild(sw);
+    } else if (item.slot === 'pet') {
+      // Pets show their emoji as the row preview (the look lives in PETS, keyed by id).
+      const sw = document.createElement('span');
+      sw.className = 'shop-preview-pet';
+      sw.style.cssText = 'display:inline-block;width:28px;text-align:center;font-size:20px;line-height:1;';
+      sw.textContent = petById(item.id)?.emoji ?? '🐾';
       row.appendChild(sw);
     } else if (item.slot !== 'title') {
       const preview = document.createElement('canvas') as HTMLCanvasElement;
@@ -1818,12 +2098,15 @@ function syncBetSection() {
   const canBet = !!state && state.status === 'playing' && !state.poly && myRole === 'observer' && !state.bot;
   betSection.hidden = !canBet;
   if (!canBet || !state) return;
-  // The stake is a positive whole number. We deliberately DON'T cap it to the wallet here —
-  // typing more than you have surfaces the "insufficient funds" hint below rather than being
-  // silently swallowed. Don't clobber the field while it's being edited.
-  betAmount = Math.max(1, Math.floor(betAmount) || 1);
+  // The stake is a positive whole number no lower than the wealth-scaled minimum.
+  // We deliberately DON'T cap it to the wallet here — typing more than you have surfaces the
+  // "insufficient funds" hint below rather than being silently swallowed. Don't clobber the
+  // field while it's being edited.
+  const min = minBet(wallet.coins);
+  betAmount = Math.max(min, Math.floor(betAmount) || min);
   if (document.activeElement !== betAmountEl) betAmountEl.value = String(betAmount);
   betAmountEl.max = String(Math.max(1, wallet.coins));
+  betAmountEl.min = String(min);
   // Side labels + live odds on the buttons.
   const odds = state.odds; // { left, right } | null
   betLeftName.textContent = state.paddles.left.name ?? 'Left';
@@ -1853,12 +2136,13 @@ function syncBetSection() {
 
 const betLeftBtn = document.getElementById('betLeft') as HTMLButtonElement;
 const betRightBtn = document.getElementById('betRight') as HTMLButtonElement;
-document.getElementById('betMinus')!.addEventListener('click', () => { betAmount = Math.max(1, betAmount - 1); syncBetSection(); });
-document.getElementById('betPlus')!.addEventListener('click', () => { betAmount = Math.min(Math.max(1, wallet.coins), betAmount + 1); syncBetSection(); });
+document.getElementById('betMinus')!.addEventListener('click', () => { betAmount = Math.max(minBet(wallet.coins), betAmount - 1); syncBetSection(); });
+document.getElementById('betPlus')!.addEventListener('click', () => { betAmount = Math.min(Math.max(minBet(wallet.coins), wallet.coins), betAmount + 1); syncBetSection(); });
 // Free-type a specific stake. Parse to a positive integer; empty/garbage falls back to 1.
 betAmountEl.addEventListener('input', () => {
   const v = parseInt(betAmountEl.value, 10);
-  betAmount = Number.isFinite(v) ? Math.max(1, v) : 1;
+  const min = minBet(wallet.coins);
+  betAmount = Number.isFinite(v) ? Math.max(min, v) : min;
   syncBetSection();
 });
 // Normalize the field on blur (e.g. snap a half-typed value back to its parsed number).
@@ -2012,7 +2296,7 @@ function showToast(text: string) {
 // round(worth) — nearest whole coin — exactly what the server pays out.
 type Market = {
   prices: { id: string; price: number; prev: number; flow?: number }[];
-  holdings: { id: string; side: StockSide; shares: number; cost: number; worth: number }[];
+  holdings: { id: string; side: StockSide; shares: number; cost: number; worth: number; openedAt: number }[];
   history: { id: string; series: Record<StockTf, number[]> }[];
   nextUpdateAt: number;
 };
@@ -2083,6 +2367,17 @@ document.addEventListener('click', (e) => {
   if (!marketPanel.contains(t) && !marketBtn.contains(t)) { marketPanel.hidden = true; marketBtn.setAttribute('aria-expanded', 'false'); }
 });
 
+// Fast-sell tax window (FAST_SELL_TAX_MS, shared with server/lobby.ts settleCashOut): closing a
+// position within that window of opening — or topping it up — taxes FAST_SELL_TAX_RATE of the
+// payout. Show a live countdown so it's clear when the position is safe to close tax-free.
+function taxBadge(openedAt: number): { text: string; cls: string } {
+  const left = openedAt > 0 ? Math.max(0, FAST_SELL_TAX_MS - (Date.now() - openedAt)) : 0;
+  if (left <= 0) return { text: '✅ tax-free', cls: 'tax-free' };
+  const secs = Math.ceil(left / 1000);
+  const clock = secs >= 60 ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : `${secs}s`;
+  return { text: `🔒 ${Math.round(FAST_SELL_TAX_RATE * 100)}% tax · safe in ${clock}`, cls: 'tax-wait' };
+}
+
 function renderMarket() {
   marketCoins.textContent = String(wallet.coins);
   marketList.innerHTML = '';
@@ -2143,6 +2438,13 @@ function renderMarket() {
       const div = document.createElement('div');
       div.className = 'coin-pos';
       div.innerHTML = `${tag}${hold.cost}🪙 → <span class="${plClass}">${rawWorth.toFixed(2)}🪙 (${sign}${plPct.toFixed(0)}%)</span> · ${closeTxt}`;
+      // Live fast-sell-tax countdown, refreshed every second by updateMarketTimer.
+      const badge = taxBadge(hold.openedAt);
+      const taxEl = document.createElement('span');
+      taxEl.className = `pos-tax ${badge.cls}`;
+      taxEl.dataset.opened = String(hold.openedAt);
+      taxEl.textContent = ` · ${badge.text}`;
+      div.appendChild(taxEl);
       return div;
     };
     if (longPos) main.appendChild(posLine(longPos));
@@ -2233,9 +2535,16 @@ function renderMarket() {
   }
 }
 
-// Live countdown to the next price re-roll (the panel can stay open across a move).
+// Live countdown to the next price re-roll (the panel can stay open across a move), plus the
+// per-position fast-sell-tax countdowns.
 function updateMarketTimer() {
   if (marketPanel.hidden) return;
+  // Refresh each open position's tax-window badge in place (no full re-render).
+  for (const el of marketList.querySelectorAll<HTMLElement>('.pos-tax')) {
+    const badge = taxBadge(Number(el.dataset.opened));
+    el.textContent = ` · ${badge.text}`;
+    el.className = `pos-tax ${badge.cls}`;
+  }
   const ms = market.nextUpdateAt - Date.now();
   if (!market.nextUpdateAt || ms <= 0) { marketTimer.textContent = 'next move: any moment…'; return; }
   const m = Math.floor(ms / 60000), s = Math.floor((ms % 60000) / 1000);
@@ -2286,7 +2595,6 @@ const lootBtn = document.getElementById('lootBtn') as HTMLButtonElement | null;
 const lootPanel = document.getElementById('lootPanel') as HTMLDivElement;
 const lootBody = document.getElementById('lootBody') as HTMLDivElement;
 const LOOT_PRICE = 2500;       // mirror of server's Lobby.LOOT_PRICE (display only)
-const LOOT_COIN_REWARD = 1500; // mirror of server's Lobby.LOOT_COIN_REWARD
 let lootBusy = false;
 let lootTimer: number | undefined; // clears a hung "Opening…" if no lootResult arrives
 let lootRevealHtml = ''; // last prize reveal, kept across re-renders (wallet/house/market updates
@@ -2300,12 +2608,16 @@ function renderLoot() {
         return `<span class="loot-badge">${escapeHtml(def?.name ?? e.id)} <span class="loot-serial">#${e.serial}</span></span>`;
       }).join(' ')}</div>`
     : '';
+  const W = LOOT_TABLE;
+  const totalW = W.cosmeticWeight + W.exclusiveWeight + W.coinBackWeight + W.nothingWeight;
+  const pct = (w: number) => ((w / totalW) * 100).toFixed(1);
   lootBody.innerHTML = `
     <div class="loot-blurb">Spend ${LOOT_PRICE.toLocaleString()}🪙 to crack a box — you get one of:</div>
     <table class="loot-odds">
-      <tr><td>55%</td><td>🎨 Common cosmetic</td><td>hat / skin / trail / title</td></tr>
-      <tr><td>30%</td><td>🪙 Coin payout</td><td>+${LOOT_COIN_REWARD.toLocaleString()} coins</td></tr>
-      <tr><td>15%</td><td>✨ Scarce exclusive</td><td>hard mint cap · some 1-of-1</td></tr>
+      <tr><td>${pct(W.cosmeticWeight)}%</td><td>🎨 Common cosmetic</td><td>hat / skin / trail</td></tr>
+      <tr><td>${pct(W.exclusiveWeight)}%</td><td>✨ Scarce exclusive</td><td>hard mint cap · some 1-of-1</td></tr>
+      <tr><td>${pct(W.coinBackWeight)}%</td><td>🪙 Coin back</td><td>${W.coinBackMin.toLocaleString()}–${W.coinBackMax.toLocaleString()} coins</td></tr>
+      <tr><td>${pct(W.nothingWeight)}%</td><td>🫥 Nothing</td><td>the house thanks you</td></tr>
     </table>
     <button id="lootOpenBtn" type="button" ${canAfford && !lootBusy ? '' : 'disabled'}>${lootBusy ? 'Opening…' : canAfford ? `🎁 Open Box · ${LOOT_PRICE.toLocaleString()}🪙` : `Need ${LOOT_PRICE.toLocaleString()}🪙 — you have ${wallet.coins.toLocaleString()}`}</button>
     <div id="lootReveal" class="loot-reveal">${lootRevealHtml}</div>
@@ -2339,6 +2651,8 @@ function onLootResult(msg: LootResultMsg) {
     const cosm = COSMETICS.find((c) => c.id === (msg.item ?? ''));
     const slotLabel = cosm ? (SLOT_LABEL[cosm.slot] ?? cosm.slot) : '';
     lootRevealHtml = `<div class="loot-pop"><div class="loot-slot">${slotLabel}</div>🎨 <b>${escapeHtml(msg.name ?? '')}</b><div class="loot-added">Added to your wardrobe!</div></div>`;
+  } else if (msg.kind === 'nothing') {
+    lootRevealHtml = `<div class="loot-pop loot-nothing"><div class="loot-slot">Empty</div>🫥 <b>Better luck next time…</b><div class="loot-added">The house thanks you for your contribution.</div></div>`;
   } else {
     lootRevealHtml = `<div class="loot-pop"><div class="loot-slot">Coin Payout</div>🪙 <b>+${(msg.coins ?? 0).toLocaleString()}</b> coins</div>`;
     playChaChing();
@@ -2592,6 +2906,67 @@ function closeLoan() {
   loanPanel.hidden = true;
   loanBtn.setAttribute('aria-expanded', 'false');
 }
+
+// --- Netizen Challenge dialog ---
+let ncNetizenId = '';
+let ncMax = 0; // max wager (20% of net worth)
+
+function showNetizenChallenge(msg: NetizenInfoMsg) {
+  if (!joined) return;
+  ncNetizenId = msg.netizenId;
+  const netWorth = msg.netWorth;
+  ncMax = Math.max(100, Math.floor(netWorth * 0.2));
+  ncName.textContent = msg.netizenName;
+  ncNetWorth.textContent = `Net worth: ${netWorth.toLocaleString()} 🪙`;
+  ncWarn.hidden = !msg.challengedToday;
+  ncRow.hidden = msg.challengedToday;
+  ncChallengeBtn.hidden = msg.challengedToday;
+  const wager = Math.min(100, ncMax);
+  ncWager.value = String(wager);
+  ncWager.max = String(ncMax);
+  ncWager.min = '100';
+  ncMaxWin.textContent = `Max win: ${ncMax.toLocaleString()} 🪙 (20% of net worth)`;
+  ncChallengeBtn.disabled = ncMax < 100;
+  if (!ncModal.hidden) return;
+  ncModal.hidden = false;
+}
+
+function closeNetizenChallenge() {
+  ncModal.hidden = true;
+}
+
+function clampNcWager() {
+  let v = Math.floor(Number(ncWager.value));
+  if (!Number.isFinite(v) || v < 100) v = 100;
+  if (v > ncMax) v = ncMax;
+  ncWager.value = String(v);
+  ncChallengeBtn.disabled = v < 100 || v > ncMax;
+}
+
+ncClose.addEventListener('click', closeNetizenChallenge);
+ncModal.addEventListener('click', (e) => {
+  if (e.target === ncModal) closeNetizenChallenge();
+});
+ncWager.addEventListener('input', clampNcWager);
+ncWager.addEventListener('change', clampNcWager);
+ncMinus.addEventListener('click', () => {
+  ncWager.value = String(Math.max(100, Math.floor(Number(ncWager.value) || 100) - 10));
+  clampNcWager();
+});
+ncPlus.addEventListener('click', () => {
+  ncWager.value = String(Math.min(ncMax, Math.floor(Number(ncWager.value) || 100) + 10));
+  clampNcWager();
+});
+ncChallengeBtn.addEventListener('click', () => {
+  const wager = Math.floor(Number(ncWager.value));
+  if (wager < 100 || wager > ncMax || !ncNetizenId) return;
+  net.send({ type: 'netizenChallenge', netizenId: ncNetizenId, wager });
+  closeNetizenChallenge();
+  worldMod?.exitWorld();
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !ncModal.hidden) closeNetizenChallenge();
+});
 
 loanBtn.addEventListener('click', () => {
   const open = loanPanel.hidden;
@@ -3106,6 +3481,7 @@ if (remembered) {
   overlay.style.display = 'none';
   enableChat();
   revealAds(); // returning players skip the join form — still show the banner ad
+  startFlyovers();
 } else {
   nick.focus();
 }
@@ -3463,7 +3839,6 @@ function applyCanvasRotation(rotated: number) {
 // toggle overlay layers). All view-agnostic: works the same in 2D, 3D and first-person.
 const screenFx = document.getElementById('screenFx') as HTMLDivElement;
 const fxBlackout = screenFx.querySelector('.fx-blackout') as HTMLElement;
-const fxBullet = screenFx.querySelector('.fx-bullet') as HTMLElement;
 const fxVortex = screenFx.querySelector('.fx-vortex') as HTMLElement;
 const fxGlitch = screenFx.querySelector('.fx-glitch') as HTMLElement;
 const fxSmoke = screenFx.querySelector('.fx-smoke') as HTMLElement;
@@ -3488,7 +3863,6 @@ function applyScreenFx(s: StateMsg) {
   }
   // Overlay layers.
   fxBlackout.classList.toggle('on', live && s.blackout);
-  fxBullet.classList.toggle('on', live && s.bullettime);
   fxVortex.classList.toggle('on', live && s.vortex);
   fxGlitch.classList.toggle('on', live && s.glitch);
   fxSmoke.classList.toggle('on', live && s.smoke);
@@ -3503,12 +3877,10 @@ function isMobileView(): boolean {
 function resetMobileLayout() {
   const stage = document.getElementById('stage') as HTMLDivElement;
   const chat = document.getElementById('chat') as HTMLDivElement;
-  const lb = document.getElementById('leaderboard') as HTMLDivElement;
-  const nw = document.getElementById('netWorth') as HTMLDivElement;
+  const boards = document.getElementById('boards') as HTMLDivElement;
   stage.style.display = '';
   chat.style.display = '';
-  lb.style.display = '';
-  nw.style.display = '';
+  boards.style.display = '';
 }
 for (const btn of mobileTabs.querySelectorAll<HTMLButtonElement>('.mob-tab')) {
   btn.addEventListener('click', () => {
@@ -3518,23 +3890,19 @@ for (const btn of mobileTabs.querySelectorAll<HTMLButtonElement>('.mob-tab')) {
     const tab = btn.dataset.tab;
     const stage = document.getElementById('stage') as HTMLDivElement;
     const chat = document.getElementById('chat') as HTMLDivElement;
-    const lb = document.getElementById('leaderboard') as HTMLDivElement;
-    const nw = document.getElementById('netWorth') as HTMLDivElement;
+    const boards = document.getElementById('boards') as HTMLDivElement;
     if (tab === 'play') {
       stage.style.display = '';
       chat.style.display = 'none';
-      lb.style.display = '';
-      nw.style.display = '';
+      boards.style.display = '';
     } else if (tab === 'chat') {
       stage.style.display = 'none';
       chat.style.display = '';
-      lb.style.display = 'none';
-      nw.style.display = 'none';
+      boards.style.display = 'none';
     } else if (tab === 'leaderboard') {
       stage.style.display = 'none';
       chat.style.display = 'none';
-      lb.style.display = '';
-      nw.style.display = '';
+      boards.style.display = '';
     }
   });
 }
@@ -3545,12 +3913,10 @@ window.addEventListener('resize', () => {
 if (isMobileView()) {
   const stage = document.getElementById('stage') as HTMLDivElement;
   const chatEl = document.getElementById('chat') as HTMLDivElement;
-  const lb = document.getElementById('leaderboard') as HTMLDivElement;
-  const nw = document.getElementById('netWorth') as HTMLDivElement;
+  const boards = document.getElementById('boards') as HTMLDivElement;
   stage.style.display = '';
   chatEl.style.display = 'none';
-  lb.style.display = '';
-  nw.style.display = '';
+  boards.style.display = '';
 }
 
 // --- touch controls for paddle ---
@@ -3731,7 +4097,7 @@ const inDisguise = () => workOn || termOn;
 // when clicked, opens the genuine dropdown/modal. The cell shows the button's own
 // current label (icon, coin count, mute state…) so it reads exactly like the toolbar.
 const WM_MENU_IDS = [
-  'muteBtn', 'arcadeBtn', 'shopBtn', 'casinoBtn', 'viewModeBtn',
+  'muteBtn', 'arcadeBtn', 'shopBtn', 'economyBtn', 'casinoBtn', 'viewModeBtn',
   'gameModesBtn', 'tourneyBtn', 'powerupInfoBtn', 'changelogBtn', 'debugBtn',
 ];
 // The current visible text of a toolbar button, minus the dropdown caret.
@@ -4184,6 +4550,19 @@ function updateUI() {
   // Once the match is no longer over, re-arm the finishing move for next time.
   if (state.status !== 'over') fatalityDone = false;
 
+  // Count match wins toward the World "win 10 tsong games" objective (once per 'over' screen).
+  // The World panel reads this counter and claims the reward when you next visit town.
+  if (state.status !== 'over') pongWinCounted = false;
+  else if (!pongWinCounted) {
+    pongWinCounted = true;
+    if (state.winner && myName && state.winner === myName) {
+      try {
+        const k = 'tsong.world.pongWins';
+        localStorage.setItem(k, String((parseInt(localStorage.getItem(k) || '0', 10) || 0) + 1));
+      } catch { /* ignore */ }
+    }
+  }
+
   if (state.status === 'waiting') statusEl.textContent = 'Waiting for players…';
   else if (state.status === 'over') {
     if (state.fatality) statusEl.textContent = '☠  F A T A L I T Y  ☠';
@@ -4378,8 +4757,11 @@ for (const canvas of document.querySelectorAll<HTMLCanvasElement>('.pu-icon')) {
 // Track each player's last-known ELO so we can show a delta when it changes.
 const prevElo = new Map<string, number>();
 
-function renderLeaderboard(rows: LeaderboardRow[]) {
+function renderLeaderboard(rows: LeaderboardRow[], selfElo?: number, selfRank?: number) {
   lastLbRows = rows;
+  // A message carries fresh self data; a plain re-render reuses the last known values.
+  if (selfElo !== undefined || selfRank !== undefined) { lastLbSelfElo = selfElo; lastLbSelfRank = selfRank; }
+  else { selfElo = lastLbSelfElo; selfRank = lastLbSelfRank; }
   if (!rows.length) {
     leaderboardEl.innerHTML = '';
     return;
@@ -4400,21 +4782,24 @@ function renderLeaderboard(rows: LeaderboardRow[]) {
       prevElo.set(myName, mine.elo);
     }
   } else if (myName) {
-    // Seed on first load so we have a baseline.
     const mine = rows.find((r) => r.name === myName);
     if (mine && !prevElo.has(myName)) prevElo.set(myName, mine.elo);
   }
 
   const items = rows
     .map((r, i) => {
-      const t = r.title ? COSMETICS.find((c) => c.id === r.title) : undefined;
+      const t = r.title ? (COSMETICS.find((c) => c.id === r.title) ?? EXCLUSIVES.find((e) => e.id === r.title)) : undefined;
       const tag = t ? `<span class="lbtitle${r.title === 'opstask' ? ' rainbow' : ''}">${escapeHtml(t.name)}</span>` : '';
-      return `<li><span class="rank">${i + 1}</span><span class="lbname">${escapeHtml(
+      return `<li data-rank="${i}"><span class="rank">${i + 1}</span><span class="lbname">${escapeHtml(
         r.name,
       )}${tag}${bountyBadgeHtml(r.name)}</span><span class="pct">${r.elo ?? 500}</span>${rowActionsHtml(r.name)}</li>`;
     })
     .join('');
-  leaderboardEl.innerHTML = `<h2>Leaderboard</h2><ol>${items}</ol>`;
+  let selfRow = '';
+  if (selfElo !== undefined && selfRank !== undefined && myName && !rows.some((r) => r.name === myName)) {
+    selfRow = `<li class="self-row"><span class="rank">#${selfRank}</span><span class="lbname">${escapeHtml(myName)}</span><span class="pct">${selfElo}</span></li>`;
+  }
+  leaderboardEl.innerHTML = `<h2>Leaderboard</h2><ol>${items}${selfRow}</ol>`;
 }
 
 // A small gold "tip" button for a player's board row — omitted for your own name (you
@@ -4446,8 +4831,11 @@ function bountyBadgeHtml(name: string): string {
 // The Net Worth board: coins + live stock holdings − debt owed to Davis. The
 // richest player wears a 👑; anyone underwater (debt > assets) shows in red with
 // the amount they still owe. Ranks the whole economy, not just match wins.
-function renderNetWorth(rows: NetWorthRow[]) {
+function renderNetWorth(rows: NetWorthRow[], selfRow?: NetWorthRow, selfRank?: number) {
   lastNwRows = rows;
+  // A message carries fresh self data; a plain re-render reuses the last known values.
+  if (selfRow !== undefined || selfRank !== undefined) { lastNwSelfRow = selfRow; lastNwSelfRank = selfRank; }
+  else { selfRow = lastNwSelfRow; selfRank = lastNwSelfRank; }
   if (!rows.length) {
     netWorthEl.innerHTML = '';
     return;
@@ -4457,14 +4845,22 @@ function renderNetWorth(rows: NetWorthRow[]) {
       const crown = i === 0 ? '👑 ' : '';
       const broke = r.net < 0 ? ' broke' : '';
       const debt = r.loan > 0 ? `<span class="debt"> 🔻${r.loan}</span>` : '';
-      const t = r.title ? COSMETICS.find((c) => c.id === r.title) : undefined;
+      const t = r.title ? (COSMETICS.find((c) => c.id === r.title) ?? EXCLUSIVES.find((e) => e.id === r.title)) : undefined;
       const tag = t ? `<span class="lbtitle${r.title === 'opstask' ? ' rainbow' : ''}">${escapeHtml(t.name)}</span>` : '';
       return `<li data-rank="${i}" title="View balance sheet"><span class="rank">${i + 1}</span><span class="lbname">${crown}${escapeHtml(
         r.name,
       )}${tag}${debt}${bountyBadgeHtml(r.name)}</span><span class="worth${broke}">${r.net}🪙</span>${rowActionsHtml(r.name)}</li>`;
     })
     .join('');
-  netWorthEl.innerHTML = `<h2>💰 Net Worth</h2><ol>${items}</ol>`;
+  // Pin the player's own row to the bottom when they're below the visible top-N. No data-rank
+  // (it's not an index into the board), so the balance-sheet click handler skips it.
+  let selfLi = '';
+  if (selfRow && selfRank !== undefined && !rows.some((r) => r.name === selfRow!.name)) {
+    const broke = selfRow.net < 0 ? ' broke' : '';
+    const debt = selfRow.loan > 0 ? `<span class="debt"> 🔻${selfRow.loan}</span>` : '';
+    selfLi = `<li class="self-row"><span class="rank">#${selfRank}</span><span class="lbname">${escapeHtml(selfRow.name)}${debt}</span><span class="worth${broke}">${selfRow.net}🪙</span></li>`;
+  }
+  netWorthEl.innerHTML = `<h2>💰 Net Worth</h2><ol>${items}${selfLi}</ol>`;
 }
 
 // Click a Net Worth row to ask the server for that player's balance sheet (resolved by
@@ -4476,18 +4872,26 @@ netWorthEl.addEventListener('click', (e) => {
   if (bountyBtn) { openBountyDialog(bountyBtn.dataset.bountyName ?? ''); return; }
   const tipBtn = (e.target as HTMLElement).closest('.tip-btn') as HTMLElement | null;
   if (tipBtn) { openTipDialog(tipBtn.dataset.tipName ?? ''); return; }
+  const selfRow = (e.target as HTMLElement).closest('.self-row') as HTMLElement | null;
+  if (selfRow) { net.send({ type: 'eloProfileReq', rank: 0, self: true }); return; }
   const li = (e.target as HTMLElement).closest('li[data-rank]') as HTMLElement | null;
   if (!li) return;
   const rank = Number(li.dataset.rank);
   if (Number.isInteger(rank)) net.send({ type: 'balanceSheetReq', rank });
 });
 
-// Leaderboard rows aren't otherwise clickable — only their tip/bounty buttons do anything.
+// Click a leaderboard row to ask the server for that player's Elo profile.
 leaderboardEl.addEventListener('click', (e) => {
   const bountyBtn = (e.target as HTMLElement).closest('.bounty-btn') as HTMLElement | null;
   if (bountyBtn) { openBountyDialog(bountyBtn.dataset.bountyName ?? ''); return; }
   const tipBtn = (e.target as HTMLElement).closest('.tip-btn') as HTMLElement | null;
-  if (tipBtn) openTipDialog(tipBtn.dataset.tipName ?? '');
+  if (tipBtn) { openTipDialog(tipBtn.dataset.tipName ?? ''); return; }
+  const selfRow = (e.target as HTMLElement).closest('.self-row') as HTMLElement | null;
+  if (selfRow) { net.send({ type: 'eloProfileReq', rank: 0, self: true }); return; }
+  const li = (e.target as HTMLElement).closest('li[data-rank]') as HTMLElement | null;
+  if (!li) return;
+  const rank = Number(li.dataset.rank);
+  if (Number.isInteger(rank)) net.send({ type: 'eloProfileReq', rank });
 });
 
 // Render and open the balance-sheet modal from a server response.
@@ -4535,7 +4939,55 @@ balanceModal.addEventListener('click', (e) => {
 });
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !balanceModal.hidden) closeBalanceSheet();
+  if (e.key === 'Escape' && !eloModal.hidden) closeEloProfile();
 });
+
+// --- Elo profile modal (opened by clicking a leaderboard row) ---
+
+function showEloProfile(msg: EloProfileMsg) {
+  eloNameEl.textContent = `🏓 ${msg.name}`;
+  const total = msg.wins + msg.losses;
+  const lines: string[] = [];
+  lines.push(
+    `<div class="bs-row"><span class="bs-label">Wins</span><span class="bs-val">${msg.wins}</span></div>`,
+    `<div class="bs-row"><span class="bs-label">Losses</span><span class="bs-val">${msg.losses}</span></div>`,
+    `<div class="bs-row"><span class="bs-label">Games</span><span class="bs-val">${total}</span></div>`,
+    `<div class="bs-row"><span class="bs-label">Elo</span><span class="bs-val">${msg.elo}</span></div>`,
+    `<div class="bs-row"><span class="bs-label">Win rate</span><span class="bs-val">${msg.winPct}%</span></div>`,
+    `<div class="bs-row"><span class="bs-label">Last played</span><span class="bs-val">${fmtLastPlayed(msg.lastPlayed)}</span></div>`,
+  );
+  if (msg.rival) {
+    const r = msg.rival;
+    lines.push(`<hr class="bs-divider" />`);
+    lines.push(`<div class="bs-section">Head‑to‑head vs ${escapeHtml(r.name)}</div>`);
+    lines.push(
+      `<div class="bs-row"><span class="bs-label">Record</span><span class="bs-val">${r.wins}–${r.losses}</span></div>`,
+    );
+  }
+  eloBody.innerHTML = lines.join('');
+  eloModal.hidden = false;
+}
+function closeEloProfile() {
+  eloModal.hidden = true;
+}
+eloClose.addEventListener('click', closeEloProfile);
+eloModal.addEventListener('click', (e) => {
+  if (!eloCard.contains(e.target as Node)) closeEloProfile();
+});
+
+/** Format an epoch-ms timestamp as a friendly relative string (e.g. "3h ago"). */
+function fmtLastPlayed(ts: number | null): string {
+  if (!ts) return 'Never';
+  const diff = Date.now() - ts;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'Just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days < 30) return `${days}d ago`;
+  return new Date(ts).toLocaleDateString();
+}
 
 // --- tip / bounty dialog (opened by the 🪙 tip or 🎯 bounty button on the boards) ---
 // One modal serves both: `dialogMode` decides the labels and which message gets sent on submit.

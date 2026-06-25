@@ -10,3 +10,10 @@ HANDOFF.md
 
 # Claude Code local config + agent worktrees (not project code)
 .claude/
+tsong_plans/
+
+# MCP server — audit log (records all mutating actions with real coin balances)
+tools/mcp/audit.log
+
+# MCP client registration files — contain JWT secrets (never commit)
+.mcp.json
