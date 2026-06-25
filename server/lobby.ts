@@ -100,7 +100,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
   recordFishCatch, getFishingLeaderboard, FishingScoreRow,
-  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS, getTaxablePlayers, getJailed, setJailed,
+  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS, getAssessableWealth, stampActivity, getJailed, setJailed,
   getHoldings, investStock, closePosition, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
   setStockCrashAt, getMarketInstability, setMarketInstability,
   getLoan, takeLoan, repayLoan, collectDefaultedLoans, realignLoansToDeadline, getOpenLoans,
@@ -305,6 +305,13 @@ function capitalGainsTax(gain: number): number {
     prev = b.upTo;
   }
   return Math.floor(tax);
+}
+// Idle decay: a small daily fee on the net worth of dormant accounts (active players never pay).
+function idleFeeRate(daysIdle: number): number {
+  if (daysIdle < 7) return 0;
+  if (daysIdle < 14) return 0.01;
+  if (daysIdle < 30) return 0.03;
+  return 0.05;
 }
 
 // What a seat / queue spot needs to be reclaimed by the same identity after a restart.
@@ -3246,30 +3253,47 @@ export class Lobby {
    *  route it into the House so it can keep funding payouts. A conserving transfer — coins move from
    *  players to the treasury, none are burned or minted. Most accounts (under the allowance) pay 0. */
   private runWealthTax() {
-    getTaxablePlayers()
+    const now = Date.now();
+    getAssessableWealth()
       .then(async (players) => {
-        const taxed: { pid: string; tax: number }[] = [];
-        let collected = 0;
+        const byPid = new Map<string, number>(); // total taken per pid (for online receipts)
+        let collected = 0;   // total → House
+        let trickled = 0;    // capital-gains portion earmarked to the Trickle Fund
+        let taxedCount = 0;
         for (const p of players) {
-          const tax = progressiveTax(p.coins);
-          if (tax <= 0) continue;          // under the allowance, or rounds to nothing
-          const after = await spendCoins(p.pid, tax);
-          if (!after) continue;            // lost a race on their balance — skip, never overdraw
-          collected += tax;
-          taxed.push({ pid: p.pid, tax });
+          // 1) Liquid wealth tax on coins (progressive).
+          const wealth = progressiveTax(p.coins);
+          // 2) Unrealized mark-to-market capital gains: tax the rise in position value since the last
+          //    assessment (catches wealth parked in stocks whether or not it's ever sold).
+          const prevMtm = await getMetaNum(`mtm:${p.pid}`, p.posValue); // first time → 0 delta
+          const mtm = capitalGainsTax(p.posValue - prevMtm);
+          await setMeta(`mtm:${p.pid}`, Math.round(p.posValue)); // remember today's value for tomorrow
+          // 3) Idle decay: a fee on net worth for dormant accounts (active players: 0).
+          const idleDays = p.lastPlayed > 0 ? (now - p.lastPlayed) / 86_400_000 : 0;
+          const idle = Math.floor(Math.max(0, p.netWorth) * idleFeeRate(idleDays));
+          let owed = wealth + mtm + idle;
+          if (owed <= 0) continue;
+          owed = Math.min(owed, p.coins); // can only ever take liquid coins
+          if (owed <= 0) continue;
+          const after = await spendCoins(p.pid, owed);
+          if (!after) continue;           // lost a race on their balance — skip, never overdraw
+          collected += owed;
+          trickled += Math.min(mtm, owed); // capital-gains share (clamped to what we actually took)
+          taxedCount++;
+          byPid.set(p.pid, owed);
         }
-        if (collected <= 0) return;        // nobody rich enough today
-        await this.houseCredit(collected); // the skim lands in the treasury (+broadcasts House)
-        // Push fresh wallets + a receipt to any taxed player who's online.
-        const byPid = new Map(taxed.map((t) => [t.pid, t.tax]));
+        if (collected <= 0) return;       // nobody assessable today
+        await this.houseCredit(collected);
+        if (trickled > 0) await this.addTrickle(trickled);
+        // Push fresh wallets + a receipt to any assessed player who's online.
         for (const ws of this.conns.keys()) {
           const conn = this.conns.get(ws);
           const owed = conn?.pid ? byPid.get(conn.pid) : undefined;
           if (owed === undefined) continue;
           this.sendWallet(ws);
-          this.notify(ws, `🧾 Tax day! The House skimmed ${owed.toLocaleString()}🪙 of wealth tax from your balance.`);
+          this.notify(ws, `🧾 Tax day! The House assessed ${owed.toLocaleString()}🪙 (wealth · capital gains · idle) from your accounts.`);
         }
-        this.announce(`🧾 TAX DAY — the House collected ${collected.toLocaleString()}🪙 in wealth tax from the top ${taxed.length} account${taxed.length === 1 ? '' : 's'}. Spread the love.`);
+        this.announce(`🧾 TAX DAY — the House assessed ${collected.toLocaleString()}🪙 across ${taxedCount} account${taxedCount === 1 ? '' : 's'} (wealth, capital gains, idle decay). Spread the love.`);
         this.refreshNetWorth().catch((e) => console.error('net worth update after tax failed:', e));
       })
       .catch((e) => console.error('wealth tax failed:', e));
@@ -3426,6 +3450,7 @@ export class Lobby {
       // leave circulation without being minted. The trade exerts buy/cover pressure on the price.
       this.recordFlow(coin, side === 'short' ? -amt : amt);
       await this.chargeBrokerFee(pid, amt); // broker fee on the trade → House
+      stampActivity(pid).catch(() => {});   // trading counts as activity (idle-decay shield)
       this.sendStocks(ws);
       this.sendWallet(ws);
     }).catch((e) => console.error('stock invest failed:', e));
@@ -3495,6 +3520,7 @@ export class Lobby {
         if (!res) { this.sendStocks(ws); return; } // held nothing on that side
         // A close exerts sell (long) / cover (short) pressure on the price.
         this.recordFlow(coin, side === 'short' ? res.gross : -res.gross);
+        stampActivity(conn.pid!).catch(() => {}); // trading counts as activity (idle-decay shield)
         this.sendStocks(ws);
         this.sendWallet(ws);
         this.refreshNetWorth().catch(() => {});

@@ -925,6 +925,41 @@ export async function getTaxablePlayers(): Promise<Array<{ pid: string; name: st
   return rows.map((r) => ({ pid: r.id, name: String(r.name), coins: Number(r.coins) }));
 }
 
+/** Full wealth assessment for the daily sweep: liquid coins, current stock-position market value
+ *  (longs = shares×price; shorts = 2·cost − shares×price, valued at the DB's saved prices), total
+ *  net worth, and last-activity timestamp. Feeds the wealth tax, mark-to-market capital-gains tax,
+ *  and idle decay in one query. */
+export async function getAssessableWealth(): Promise<Array<{ pid: string; name: string; coins: number; posValue: number; netWorth: number; lastPlayed: number }>> {
+  if (!pool) return [];
+  const { rows } = await pool.query(
+    `SELECT p.id AS pid, p.name, p.coins, COALESCE(p.last_played, 0) AS last_played,
+            COALESCE(h.val, 0) AS pos_value,
+            p.coins + COALESCE(h.val, 0) - COALESCE(l.owed, 0) AS net
+       FROM players p
+       LEFT JOIN (
+         SELECT sh.pid,
+                SUM(CASE WHEN sh.side = 'short' THEN 2 * sh.cost - sh.shares * sp.price
+                         ELSE sh.shares * sp.price END) AS val
+           FROM stock_holdings sh JOIN stock_prices sp ON sp.coin = sh.coin
+          WHERE sh.shares > 0 GROUP BY sh.pid
+       ) h ON h.pid = p.id
+       LEFT JOIN loans l ON l.pid = p.id
+      WHERE p.coins <> 0 OR h.val IS NOT NULL`,
+  );
+  return rows.map((r) => ({
+    pid: r.pid, name: String(r.name), coins: Number(r.coins) || 0,
+    posValue: Math.max(0, Number(r.pos_value) || 0), netWorth: Number(r.net) || 0,
+    lastPlayed: Number(r.last_played) || 0,
+  }));
+}
+
+/** Stamp a player's last-activity time (any money-touching action), so idle decay only ever hits
+ *  genuinely dormant accounts. Best-effort, fire-and-forget. */
+export async function stampActivity(pid: string): Promise<void> {
+  if (!pool || !pid) return;
+  await pool.query(`UPDATE players SET last_played = $2 WHERE id = $1`, [pid, Date.now()]);
+}
+
 // --- Bounties ---
 
 /** Add `amount` coins to the bounty on `targetPid` (creating it if none). Returns the new pot. */
