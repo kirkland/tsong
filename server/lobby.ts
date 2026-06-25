@@ -91,6 +91,7 @@ import {
   NETIZEN_DIALOGUE,
   NEWS_TEMPLATES_BULLISH,
   NEWS_TEMPLATES_BEARISH,
+  FED_TEMPLATES,
   LOOT_TABLE,
   minBet,
   FIGHTERS,
@@ -105,7 +106,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   setStockCrashAt, getMarketInstability, setMarketInstability,
   getLoan, takeLoan, repayLoan, collectDefaultedLoans, realignLoansToDeadline, getOpenLoans,
   houseAdjust, getHouseBalance,
-  setMeta, getMetaNum, getTotalOutstandingLoans, getLockedShares, getPlayerShares,
+  setMeta, getMetaNum, getTotalOutstandingLoans, getLockedShares, getPlayerShares, getNetWorthConcentration, getActivePlayers,
   mintExclusive, getExclusiveSupply, getExclusiveLastSale,
   listExclusive, cancelListing, getMarketListings, buyLowestAsk,
   getNetizens, seedNetizen,
@@ -262,13 +263,15 @@ const TAX_BRACKETS: { upTo: number; rate: number }[] = [
   { upTo: Infinity, rate: 0.10 },     // 10% on everything above 1M (Fed can push this to 15%)
 ];
 // Tax owed for a raw coin balance. Marginal across brackets.
-function progressiveTax(coins: number): number {
+function progressiveTax(coins: number, topRate?: number): number {
   let tax = 0, prev = 0;
   for (const b of TAX_BRACKETS) {
     const cap = b.upTo;
     if (coins <= prev) break;
+    // The Fed can override the top (1M+) bracket rate when it tightens.
+    const rate = (cap === Infinity && topRate !== undefined) ? topRate : b.rate;
     const band = Math.min(coins, cap) - prev;
-    tax += band * b.rate;
+    tax += band * rate;
     prev = cap;
   }
   return Math.floor(tax);
@@ -455,6 +458,9 @@ export class Lobby {
   // to clients so the market/casino header can show it (and "payouts reduced" when low).
   private houseBalance = 0;
   private lockedShares: Record<string, number> = {}; // per-coin shares locked in long >24h positions (supply scarcity)
+  // The Fed: in-memory coefficient cache (persisted in doom_meta, hydrated on boot).
+  private fed = { tightening: false, wealthTaxTop: 0.10, loanCapWaived: false };
+  private nextFedAt = 0; // throttle the Fed convening (5-min cadence during market hours)
   // Netizen avatar wander state: position, target (tx/ty), pause timer, spawn delay.
   private netizenPos = new Map<string, { x: number; y: number; tx: number; ty: number; pauseUntil: number; spawnAt: number }>();
   // Staggered netizen reactions to news, drained in tickStocks.
@@ -3033,6 +3039,7 @@ export class Lobby {
     // Economy Overhaul: hydrate the House treasury and seed the netizen bot traders (funded from
     // the House). Both are best-effort — without a DB they no-op cleanly.
     this.houseBalance = await getHouseBalance().catch(() => 0);
+    await this.loadFed().catch((e) => console.error('fed load failed:', e));
     await this.seedNetizens().catch((e) => console.error('netizen seed failed:', e));
     // Seed netizen world avatar positions around the centre plaza with a short staggered spawn
     this.netizenPos.clear();
@@ -3094,19 +3101,26 @@ export class Lobby {
             continue;
           }
           const idx = Number(n.pid.split(':')[1] ?? 0);
-          const archetype = idx % 3; // 0 momentum, 1 mean-reversion, 2 random-upbias
+          const archetype = idx % 4; // 0 momentum, 1 mean-reversion, 2 random-upbias, 3 Fed-watcher
           const stock = STOCKS[Math.floor(Math.random() * STOCKS.length)];
           const press = this.pressure.get(stock.id) ?? 0;
           const board = this.stockPrices.get(stock.id);
           const move = board && board.prev > 0 ? board.price / board.prev - 1 : 0;
           // Decide buy vs sell-existing by archetype.
           let buy = true;
+          let sizeLo = 0.04, sizeHi = 0.12; // 4–12% of balance per trade (Fed-watchers size up on stimulus)
           if (archetype === 0) buy = press >= 0;            // momentum: follow the flow
           else if (archetype === 1) buy = move <= 0;        // mean-reversion: buy dips, sell rips
-          else buy = Math.random() < 0.62;                  // random with a mild upward bias
+          else if (archetype === 2) buy = Math.random() < 0.62; // random with a mild upward bias
+          else {
+            // Fed-watcher: trades the Fed's policy, not the price. Bearish when tightening, bullish
+            // when easing, and leans in harder when the cap is waived (cheap liquidity).
+            buy = !this.fed.tightening;
+            if (this.fed.loanCapWaived) { sizeLo = 0.08; sizeHi = 0.20; }
+          }
           let tradedSide: 'buy' | 'sell' | null = null;
           if (buy) {
-            const amt = Math.max(1, Math.floor(n.coins * (0.04 + Math.random() * 0.08))); // 4–12% of balance
+            const amt = Math.max(1, Math.floor(n.coins * (sizeLo + Math.random() * (sizeHi - sizeLo))));
             await this.netizenInvest(n.pid, n.name, stock.id, amt, 'long');
             tradedSide = 'buy';
           } else {
@@ -3261,8 +3275,8 @@ export class Lobby {
         let trickled = 0;    // capital-gains portion earmarked to the Trickle Fund
         let taxedCount = 0;
         for (const p of players) {
-          // 1) Liquid wealth tax on coins (progressive).
-          const wealth = progressiveTax(p.coins);
+          // 1) Liquid wealth tax on coins (progressive; top bracket follows the Fed's current cap).
+          const wealth = progressiveTax(p.coins, this.fed.wealthTaxTop);
           // 2) Unrealized mark-to-market capital gains: tax the rise in position value since the last
           //    assessment (catches wealth parked in stocks whether or not it's ever sold).
           const prevMtm = await getMetaNum(`mtm:${p.pid}`, p.posValue); // first time → 0 delta
@@ -3297,6 +3311,81 @@ export class Lobby {
         this.refreshNetWorth().catch((e) => console.error('net worth update after tax failed:', e));
       })
       .catch((e) => console.error('wealth tax failed:', e));
+  }
+
+  /** Hydrate the Fed's coefficients from doom_meta on boot (survives restarts). */
+  private async loadFed(): Promise<void> {
+    this.fed.tightening = (await getMetaNum('fed_tightening', 0)) > 0;
+    this.fed.wealthTaxTop = await getMetaNum('fed_wealth_tax_cap', 0.10);
+    this.fed.loanCapWaived = (await getMetaNum('fed_loan_cap_waived', 0)) > 0;
+  }
+
+  /** The Fed convenes: read concentration + House liquidity, tighten/ease, distribute stimulus, and
+   *  announce. Coefficients are cached in memory (read on hot paths) and persisted to doom_meta. */
+  private async tickFed(): Promise<void> {
+    const { top5, total } = await getNetWorthConcentration();
+    const conc = total > 0 ? top5 / total : 0;
+    let announced = false;
+    // Concentration → tighten (raise the top wealth bracket) / ease (back to baseline).
+    if (conc > 0.5 && !this.fed.tightening) {
+      this.fed.tightening = true; this.fed.wealthTaxTop = 0.15;
+      await setMeta('fed_tightening', 1); await setMeta('fed_wealth_tax_cap', this.fed.wealthTaxTop);
+      this.publishFedNews('tighten', Math.round(this.fed.wealthTaxTop * 100)); announced = true;
+    } else if (conc < 0.3 && this.fed.tightening) {
+      this.fed.tightening = false; this.fed.wealthTaxTop = 0.10;
+      await setMeta('fed_tightening', 0); await setMeta('fed_wealth_tax_cap', this.fed.wealthTaxTop);
+      this.publishFedNews('ease', Math.round(conc * 100)); announced = true;
+    }
+    // House liquidity → waive / restore the loan cap (emergency credit window).
+    if (this.houseBalance < 10_000 && !this.fed.loanCapWaived) {
+      this.fed.loanCapWaived = true; await setMeta('fed_loan_cap_waived', 1);
+      await setMeta('trickle_fund', 0); // release the stimulus earmark to the lending pool
+      this.publishFedNews('liquidity', 0); announced = true;
+    } else if (this.houseBalance >= 25_000 && this.fed.loanCapWaived) {
+      this.fed.loanCapWaived = false; await setMeta('fed_loan_cap_waived', 0);
+    }
+    // Stimulus: when the Trickle Fund has built up (and on a cooldown), wire it to active players.
+    if (await this.maybeStimulus()) announced = true;
+    // Otherwise an occasional "no action" statement keeps the Fed present in the feed.
+    if (!announced && Math.random() < 0.12) this.publishFedNews('hold', 0);
+  }
+
+  /** Distribute the Trickle Fund to recently-active players (House-funded; the coins were earmarked
+   *  there). Throttled to ~once every 3h. Returns true if a stimulus actually went out. */
+  private async maybeStimulus(): Promise<boolean> {
+    const now = Date.now();
+    const last = await getMetaNum('fed_last_stimulus', 0);
+    if (now - last < 3 * 3_600_000) return false; // cooldown
+    const fund = await getMetaNum('trickle_fund', 0);
+    if (fund < 1_000) return false;
+    const active = await getActivePlayers(now - 86_400_000);
+    if (!active.length) return false;
+    const budget = Math.min(Math.floor(fund * 0.6), Math.floor(this.houseBalance * 0.4));
+    const per = Math.floor(budget / active.length);
+    if (per < 10) return false; // too thin to bother
+    let paid = 0;
+    for (const a of active) paid += await this.housePay(a.pid, a.name, per);
+    if (paid <= 0) return false;
+    await setMeta('trickle_fund', Math.max(0, fund - paid));
+    await setMeta('fed_last_stimulus', now);
+    // Refresh online recipients' wallets.
+    const got = new Set(active.map((a) => a.pid));
+    for (const ws of this.conns.keys()) { const c = this.conns.get(ws); if (c?.pid && got.has(c.pid)) this.sendWallet(ws); }
+    this.publishFedNews('stimulus', paid);
+    this.refreshNetWorth().catch(() => {});
+    return true;
+  }
+
+  /** Push a Fed statement into the news feed (🪙-prefixed) + broadcast it. */
+  private publishFedNews(event: string, n: number): void {
+    const pool = FED_TEMPLATES[event];
+    if (!pool || !pool.length) return;
+    const headline = pool[Math.floor(Math.random() * pool.length)].replace('{n}', n.toLocaleString());
+    const item: NewsItem = { id: `fed_${Date.now()}_${Math.floor(Math.random() * 1000)}`, ts: Date.now(), coin: '', headline };
+    this.newsFeed.unshift(item);
+    if (this.newsFeed.length > 30) this.newsFeed.length = 30;
+    saveNewsFeed(this.newsFeed).catch(() => {});
+    for (const ws of this.conns.keys()) if (ws.readyState === ws.OPEN) this.sendNews(ws);
   }
 
   /** The global price board, in STOCKS order. `flow` is the sign of the current order-flow
@@ -3803,6 +3892,12 @@ export class Lobby {
    *  event when its time arrives. Cheap to call every tick. */
   private tickStocks() {
     const now = Date.now();
+    // The Fed convenes every few minutes during market hours: reads concentration/liquidity, adjusts
+    // its coefficients, distributes stimulus, and announces. Throttled + fire-and-forget.
+    if (now >= this.nextFedAt && isMarketHours(now)) {
+      this.nextFedAt = now + 5 * 60_000;
+      this.tickFed().catch((e) => console.error('fed tick failed:', e));
+    }
     // The daily collection takes precedence (it may crash + repush the market itself), so handle
     // it first and bail.
     if (this.nextStockCrashAt && now >= this.nextStockCrashAt) {

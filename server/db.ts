@@ -960,6 +960,35 @@ export async function stampActivity(pid: string): Promise<void> {
   await pool.query(`UPDATE players SET last_played = $2 WHERE id = $1`, [pid, Date.now()]);
 }
 
+/** Top-5 net-worth concentration: the sum of the five richest net worths and the total across all
+ *  positive net worths. The Fed tightens when top5/total climbs and eases when it falls. */
+export async function getNetWorthConcentration(): Promise<{ top5: number; total: number }> {
+  if (!pool) return { top5: 0, total: 0 };
+  const { rows } = await pool.query<{ top5: string; total: string }>(
+    `WITH nw AS (
+       SELECT p.coins + COALESCE(h.val, 0) - COALESCE(l.owed, 0) AS net
+         FROM players p
+         LEFT JOIN (
+           SELECT sh.pid, SUM(CASE WHEN sh.side='short' THEN 2*sh.cost - sh.shares*sp.price ELSE sh.shares*sp.price END) AS val
+             FROM stock_holdings sh JOIN stock_prices sp ON sp.coin=sh.coin WHERE sh.shares>0 GROUP BY sh.pid
+         ) h ON h.pid = p.id
+         LEFT JOIN loans l ON l.pid = p.id
+     )
+     SELECT (SELECT COALESCE(SUM(net),0) FROM nw WHERE net > 0) AS total,
+            (SELECT COALESCE(SUM(net),0) FROM (SELECT net FROM nw WHERE net > 0 ORDER BY net DESC LIMIT 5) t) AS top5`,
+  );
+  return { top5: Number(rows[0]?.top5 ?? 0), total: Number(rows[0]?.total ?? 0) };
+}
+
+/** Players active since `sinceMs` (last_played) — the recipients of Fed stimulus checks. */
+export async function getActivePlayers(sinceMs: number): Promise<Array<{ pid: string; name: string }>> {
+  if (!pool) return [];
+  const { rows } = await pool.query(
+    `SELECT id, name FROM players WHERE COALESCE(last_played, 0) >= $1`, [sinceMs],
+  );
+  return rows.map((r) => ({ pid: r.id, name: String(r.name) }));
+}
+
 // --- Bounties ---
 
 /** Add `amount` coins to the bounty on `targetPid` (creating it if none). Returns the new pot. */

@@ -1282,6 +1282,39 @@ export const NEWS_TEMPLATES_BEARISH = [
   'Liquidity is drying up on {name} — the bid-ask spread just widened to its highest in weeks, and the order book looks thin across the entire {sector} board.',
 ];
 
+// The Fed's public statements. Keyed by event so the actor can pick the right line. `{n}` is filled
+// with the relevant number (concentration %, stimulus amount, bond rate…). Shown in the news feed
+// under a 🪙 prefix alongside market headlines.
+export const FED_TEMPLATES: Record<string, string[]> = {
+  tighten: [
+    '🪙 FED: Wealth concentration triggered automatic tightening. The top bracket is now {n}%.',
+    '🪙 FED: The committee notes excessive accumulation at the top. Tightening measures are in effect.',
+    '🪙 FED: Reserve ratios skewed — we are raising the upper wealth bracket to {n}% to restore balance.',
+  ],
+  ease: [
+    '🪙 FED: Market stability improved — concentration eased to {n}%. Returning rates to baseline.',
+    '🪙 FED: Conditions warrant accommodation. Easing measures are now in effect.',
+    '🪙 FED: The distribution has normalized. We are standing down from tightening.',
+  ],
+  stimulus: [
+    '🪙 FED: Trickle Fund distributed {n}🪙 in stimulus to active players. Keep the economy moving.',
+    '🪙 FED: A {n}🪙 stimulus has been wired to recently-active accounts. Spend it wisely.',
+    '🪙 FED: Stimulus disbursed — {n}🪙 returned to the players keeping velocity up.',
+  ],
+  liquidity: [
+    '🪙 FED: Emergency liquidity injection — the loan cap is temporarily waived.',
+    '🪙 FED: The lending pool ran dry. We have opened the credit window and waived the cap.',
+  ],
+  drain: [
+    '🪙 FED: Treasury surplus detected — excess reserves swept into the Trickle Fund.',
+    '🪙 FED: The House is flush; we are reallocating the overflow toward stimulus.',
+  ],
+  hold: [
+    '🪙 FED: The committee has decided to hold rates steady. Reserve ratio stable.',
+    '🪙 FED: No action taken this cycle. We continue to monitor conditions.',
+  ],
+};
+
 // Broadcast when a match kicks off and a seated player has a theme song equipped — every client
 // loops `audio` for the duration of the match (until status leaves 'playing'). `owner` is the
 // nickname whose song was picked (random among the match's players who have one equipped).
