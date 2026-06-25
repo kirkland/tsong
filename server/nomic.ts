@@ -79,6 +79,13 @@ export class NomicGame {
     };
   }
 
+  /** Hydrate from a persisted snapshot post-construction (DB load is async). No-op once anyone's seated. */
+  restore(snap: NomicSnapshot) {
+    if (this.members.length > 0) return; // players already arrived — don't clobber a live game
+    this.load(snap);
+    this.changed(); // push the restored rulebook to anyone already watching
+  }
+
   /** Persist + rebroadcast after any state change. */
   private changed() { this.hooks.onChange(this.snapshot()); }
 
