@@ -2148,11 +2148,12 @@ export class Lobby {
     this.broadcastWorld();
   }
 
-  /** Post a jailed player's bail (500🪙 → House). `targetId` is their avatar id; bailing yourself
-   *  is allowed so nobody is ever soft-locked. */
+  /** Post a jailed player's bail (500🪙 → House). `targetId` is their avatar id. You CAN'T bail
+   *  yourself — someone else has to come spring you. */
   bail(ws: WebSocket, targetId: string) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.pid) return;
+    if (conn.id === targetId) { this.notify(ws, "🚔 You can't post your own bail — someone else has to come spring you."); return; }
     let tWs: WebSocket | null = null, tConn: Conn | null = null;
     for (const [w, c] of this.conns) { if (c.id === targetId) { tWs = w; tConn = c; break; } }
     if (!tWs || !tConn || !tConn.jailed) { this.notify(ws, "They're not locked up."); return; }

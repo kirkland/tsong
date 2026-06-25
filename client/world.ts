@@ -641,22 +641,16 @@ export function startWorld(net: WorldNet): void {
     'font-weight:700;box-shadow:0 6px 20px #0008;z-index:2;';
   overlay.appendChild(prompt);
 
-  // Jail banner (top-center) — shown while you're locked up, with a "post your own bail" button.
+  // Jail banner (top-center) — shown while you're locked up. You can't bail yourself; you have to
+  // wait for another player to walk up to the bars and post your bail.
   const jailBanner = document.createElement('div');
   jailBanner.style.cssText =
     'position:absolute;left:50%;top:64px;transform:translateX(-50%);display:none;align-items:center;gap:12px;' +
     'background:#3a1414ee;color:#ffd9d0;border:2px solid #8a2a2a;border-radius:12px;padding:12px 18px;' +
-    'font-size:15px;font-weight:700;box-shadow:0 8px 28px #000a;z-index:3;';
+    'font-size:15px;font-weight:700;box-shadow:0 8px 28px #000a;z-index:3;max-width:80vw;text-align:center;';
   const jailText = document.createElement('span');
-  jailText.textContent = '🚔 You\'re in the drunk tank. Wait for a bail — or post your own.';
-  const jailBailBtn = document.createElement('button');
-  jailBailBtn.type = 'button';
-  jailBailBtn.textContent = `💸 Post bail (${BAIL_COST}🪙)`;
-  jailBailBtn.style.cssText =
-    'cursor:pointer;background:#e8b84b;color:#1a1408;border:none;border-radius:8px;padding:8px 14px;' +
-    'font-size:14px;font-weight:700;';
-  jailBailBtn.onclick = () => net.bail(net.selfId());
-  jailBanner.append(jailText, jailBailBtn);
+  jailText.textContent = `🚔 You're in the drunk tank. Only another player can post your ${BAIL_COST}🪙 bail — sit tight.`;
+  jailBanner.append(jailText);
   overlay.appendChild(jailBanner);
 
   // Building dialog ("what do you want to do?") — a centered modal over the map.
