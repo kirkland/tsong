@@ -96,6 +96,7 @@ import {
   minBet,
   FIGHTERS,
   NomProposalKind, NomEffect, NomVote,
+  FAST_SELL_BRACKETS,
 } from '../shared/types';
 import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSelfElo, getSelfNetWorth, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
@@ -282,13 +283,6 @@ function progressiveTax(coins: number, topRate?: number): number {
 const BROKER_FEE = 0.005;            // 0.5% on every trade (both sides); doubles after hours
 const STOCK_CONCENTRATION_CAP = 0.25; // a player can hold at most 25% of any one stock's supply
 // Progressive fast-sell tax on the gross payout, by how long the position was held.
-const FAST_SELL_BRACKETS: { underMs: number; rate: number }[] = [
-  { underMs: 5 * 60_000, rate: 0.25 },
-  { underMs: 15 * 60_000, rate: 0.20 },
-  { underMs: 30 * 60_000, rate: 0.15 },
-  { underMs: 60 * 60_000, rate: 0.10 },
-  { underMs: 180 * 60_000, rate: 0.05 },
-];
 function fastSellRate(heldMs: number): number {
   for (const b of FAST_SELL_BRACKETS) if (heldMs < b.underMs) return b.rate;
   return 0; // 3h+ — no fast-sell tax

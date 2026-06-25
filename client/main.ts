@@ -43,8 +43,7 @@ import {
   StockSide,
   StockTf,
   positionWorth,
-  FAST_SELL_TAX_MS,
-  FAST_SELL_TAX_RATE,
+  FAST_SELL_BRACKETS,
   TickHealth,
   EXCLUSIVES,
   ExclusiveItem,
@@ -2583,30 +2582,20 @@ document.addEventListener('click', (e) => {
   if (!marketPanel.contains(t) && !marketBtn.contains(t)) { marketPanel.hidden = true; marketBtn.setAttribute('aria-expanded', 'false'); }
 });
 
-// Fast-sell tax countdown. The server uses tiered brackets (fastSell on houseState) that step
-// down from 25% → 0% over 3 hours. Show the current rate and count down to the next bracket.
+// Fast-sell tax countdown. Uses FAST_SELL_BRACKETS from shared/types — the same source the
+// server uses — so the countdown is always accurate without needing houseState to be loaded.
 function taxBadge(openedAt: number): { text: string; cls: string } {
   if (!openedAt) return { text: '✅ tax-free', cls: 'tax-free' };
   const heldMs = Date.now() - openedAt;
-  const brackets = houseState?.fastSell;
-  if (brackets && brackets.length > 0) {
-    for (const b of brackets) {
-      const threshMs = b.underMin * 60_000;
-      if (heldMs < threshMs) {
-        const left = threshMs - heldMs;
-        const secs = Math.ceil(left / 1000);
-        const clock = secs >= 60 ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : `${secs}s`;
-        return { text: `🔒 ${Math.round(b.rate * 100)}% tax · drops in ${clock}`, cls: 'tax-wait' };
-      }
+  for (const b of FAST_SELL_BRACKETS) {
+    if (heldMs < b.underMs) {
+      const left = b.underMs - heldMs;
+      const secs = Math.ceil(left / 1000);
+      const clock = secs >= 60 ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : `${secs}s`;
+      return { text: `🔒 ${Math.round(b.rate * 100)}% tax · drops in ${clock}`, cls: 'tax-wait' };
     }
-    return { text: '✅ tax-free', cls: 'tax-free' };
   }
-  // Fallback to legacy constants while houseState loads.
-  const left = Math.max(0, FAST_SELL_TAX_MS - heldMs);
-  if (left <= 0) return { text: '✅ tax-free', cls: 'tax-free' };
-  const secs = Math.ceil(left / 1000);
-  const clock = secs >= 60 ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : `${secs}s`;
-  return { text: `🔒 ${Math.round(FAST_SELL_TAX_RATE * 100)}% tax · drops in ${clock}`, cls: 'tax-wait' };
+  return { text: '✅ tax-free', cls: 'tax-free' };
 }
 
 function renderMarket() {

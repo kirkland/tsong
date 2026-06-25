@@ -1477,11 +1477,20 @@ export type StockTf = keyof typeof STOCK_HISTORY; // '5m' | '1h' | '6h' | '1d'
 
 // Direction of a stock position. A player can hold long and short of the same coin at once.
 export type StockSide = 'long' | 'short';
-// Fast-sell tax: closing a position (long cash-out / short cover) within this window of opening —
-// or topping it up, which restamps the clock — taxes this fraction of the payout to the House.
-// Single source of truth so the server's charge and the client's countdown can't drift apart.
-export const FAST_SELL_TAX_MS = 300_000; // 5 minutes
-export const FAST_SELL_TAX_RATE = 0.10;  // 10% of the (positive) payout
+// Fast-sell tax: closing a position within this window of opening — or topping it up, which
+// restamps the clock — taxes a fraction of the payout to the House. Tiered brackets step down
+// from 25% to 0% over 3 hours. Single source of truth so server charges and client countdowns
+// can never drift apart.
+export const FAST_SELL_BRACKETS: { underMs: number; rate: number }[] = [
+  { underMs:   5 * 60_000, rate: 0.25 },
+  { underMs:  15 * 60_000, rate: 0.20 },
+  { underMs:  30 * 60_000, rate: 0.15 },
+  { underMs:  60 * 60_000, rate: 0.10 },
+  { underMs: 180 * 60_000, rate: 0.05 },
+];
+// Legacy single-constant shims kept for any import sites not yet updated.
+export const FAST_SELL_TAX_MS   = FAST_SELL_BRACKETS[0].underMs; // 5 min (first bracket)
+export const FAST_SELL_TAX_RATE = FAST_SELL_BRACKETS[0].rate;    // 25% (first bracket)
 // Current value of a position: long pays shares×price; short pays 2×cost − shares×price
 // (goes negative if price climbs past entry — covering then costs the holder extra coins).
 export function positionWorth(side: StockSide, shares: number, cost: number, price: number): number {
