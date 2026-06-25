@@ -567,7 +567,7 @@ export class Lobby {
       jailed: false,
     };
     this.conns.set(ws, conn);
-    this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
+    this.tell(ws, { type: 'you', id: conn.id, role: 'observer', tOff: Lobby.DAY_NIGHT_OFFSET });
     // Fresh observer: no pid yet, so just the plain boards. Once they join, sendBoardsTo
     // re-sends these personalised with the player's own pinned row.
     this.tell(ws, { type: 'leaderboard', rows: this.leaderboard });
@@ -973,6 +973,9 @@ export class Lobby {
   private world = new World();
   private worldBcTick = 0;
   private static readonly WORLD_BROADCAST_EVERY = 4; // 60 Hz / 4 ≈ 15 Hz position updates
+  // Day/night clock offset, randomized once per server boot so each deploy starts at a random time
+  // of day (sent to clients in the first `you`). 8h cycle, so any ms in [0, 8h) shifts the phase.
+  private static readonly DAY_NIGHT_OFFSET = Math.floor(Math.random() * 8 * 3_600_000);
   // Economy Overhaul: netizen bot traders. Seeded once from the House; they appear on the
   // net-worth board automatically (getNetWorthLeaderboard includes everyone).
   private static readonly NETIZEN_START_COINS = 5000;
