@@ -1606,6 +1606,9 @@ export function startWorld(net: WorldNet): void {
     hx: number; hy: number; tx: number; ty: number; spd: number; pause: number;
   }
   const critters: Critter[] = [];
+  // A flock of birds that occasionally drifts across the sky (camera-fixed, gentle flap). Ambience only.
+  const birds: { img: Phaser.GameObjects.Image; vx: number; phase: number }[] = [];
+  let nextBirdsAt = 0;
   // Day/night overlays (camera-fixed, set in create(), animated in update()).
   let nightOverlay: Phaser.GameObjects.Rectangle | null = null;
   let warmOverlay: Phaser.GameObjects.Rectangle | null = null;
@@ -1838,6 +1841,13 @@ export function startWorld(net: WorldNet): void {
       px(2, 3, 1, 3, CAT); px(1, 2, 1, 2, CAT_D);            // curled tail (left, raised)
       px(4, 8, 1, 2, CAT_D); px(6, 8, 1, 2, CAT_D); px(8, 8, 1, 2, CAT_D); // legs
       g.generateTexture('w-cat', 14, 12);
+    }
+    {
+      // distant bird — a little dark seagull chevron (11×5), flap is done by squashing scaleY
+      const B = 0x2a2f3a;
+      g.clear();
+      px(0, 3, 2, 1, B); px(2, 2, 2, 1, B); px(4, 1, 3, 1, B); px(7, 2, 2, 1, B); px(9, 3, 2, 1, B);
+      g.generateTexture('w-bird', 11, 5);
     }
 
     // ============================================================================================
@@ -2468,6 +2478,30 @@ export function startWorld(net: WorldNet): void {
         const night = nightFactor(Date.now());
         if (nightOverlay) nightOverlay.setAlpha(night * 0.6);            // darker after dusk
         if (warmOverlay) warmOverlay.setAlpha(0.34 * (1 - night * 0.8)); // golden glow fades after dark
+      }
+
+      // --- birds: every so often a little flock drifts across the sky (camera-fixed, flapping) ---
+      {
+        if (now >= nextBirdsAt) {
+          nextBirdsAt = now + 12000 + Math.random() * 16000;
+          const sw = sc.scale.width, sh = sc.scale.height;
+          const dir = Math.random() < 0.5 ? 1 : -1;
+          const speed = (42 + Math.random() * 28) * dir;
+          const baseY = 50 + Math.random() * sh * 0.28;
+          const n = 4 + Math.floor(Math.random() * 4);
+          for (let k = 0; k < n; k++) {
+            const img = sc.add.image(dir > 0 ? -40 - k * 28 : sw + 40 + k * 28, baseY + (k % 2) * 18 + k * 3, 'w-bird')
+              .setScrollFactor(0).setScale(2.2).setDepth(60000).setAlpha(0.85).setFlipX(dir < 0);
+            birds.push({ img, vx: speed, phase: k * 0.7 });
+          }
+        }
+        for (let i = birds.length - 1; i >= 0; i--) {
+          const b = birds[i];
+          b.img.x += b.vx * dt;
+          b.img.scaleY = 2.2 * (1 + Math.sin(now / 110 + b.phase) * 0.45); // wing flap
+          const sw = sc.scale.width;
+          if ((b.vx > 0 && b.img.x > sw + 60) || (b.vx < 0 && b.img.x < -60)) { b.img.destroy(); birds.splice(i, 1); }
+        }
       }
 
       // --- drunkenness: an amber haze + a woozy camera sway that grow with the level ---
