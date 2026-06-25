@@ -856,6 +856,16 @@ export async function addCoins(pid: string, name: string, delta: number): Promis
   return rows.length ? rowToWallet(rows[0]) : null;
 }
 
+/** Every account holding a positive coin balance, richest first — the input to the daily
+ *  progressive wealth-tax sweep. Liquid coins only (stocks aren't seized). */
+export async function getTaxablePlayers(): Promise<Array<{ pid: string; name: string; coins: number }>> {
+  if (!pool) return [];
+  const { rows } = await pool.query(
+    `SELECT id, name, coins FROM players WHERE coins > 0 ORDER BY coins DESC`,
+  );
+  return rows.map((r) => ({ pid: r.id, name: String(r.name), coins: Number(r.coins) }));
+}
+
 // --- Bounties ---
 
 /** Add `amount` coins to the bounty on `targetPid` (creating it if none). Returns the new pot. */
