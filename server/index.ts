@@ -285,6 +285,12 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'buyBeer':
         lobby.buyBeer(ws);
         break;
+      case 'jail':
+        lobby.jail(ws);
+        break;
+      case 'bail':
+        if (typeof msg.targetId === 'string') lobby.bail(ws, msg.targetId);
+        break;
       case 'ntJoin':
         lobby.ntJoin(ws);
         break;

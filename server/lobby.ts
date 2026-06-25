@@ -84,6 +84,8 @@ import {
   MarketItemView,
   MarketListingView,
   WorldAvatar,
+  JAIL_CELL,
+  BAIL_COST,
   NewsItem,
   NETIZEN_DIALOGUE,
   NEWS_TEMPLATES_BULLISH,
@@ -98,7 +100,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
   recordFishCatch, getFishingLeaderboard, FishingScoreRow,
-  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS, getTaxablePlayers,
+  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS, getTaxablePlayers, getJailed, setJailed,
   getHoldings, investStock, closePosition, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
   setStockCrashAt, getMarketInstability, setMarketInstability,
   getLoan, takeLoan, repayLoan, collectDefaultedLoans, realignLoansToDeadline, getOpenLoans,
@@ -155,6 +157,7 @@ interface Conn {
   // (re)starts a 3-min timer; on expiry you sober down one level at a time.
   drunkLevel: number;
   drunkUntil: number;
+  jailed: boolean; // locked in the jail cell (loaded from the DB on join; cleared only by bail)
 }
 
 // One step of a crypto's price random walk. Pure RNG — never tied to who invested or how
@@ -528,6 +531,7 @@ export class Lobby {
       crapsPoint: null,
       drunkLevel: 0,
       drunkUntil: 0,
+      jailed: false,
     };
     this.conns.set(ws, conn);
     this.tell(ws, { type: 'you', id: conn.id, role: 'observer' });
@@ -653,6 +657,7 @@ export class Lobby {
   queueJoin(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return;
+    if (conn.jailed) { this.notify(ws, '🚔 No pong from the slammer. Post bail first.'); return; }
     if (this.tournament) return; // no spectator queue while a bracket is running
     if (this.queue.includes(ws)) return;
     // Don't queue if already holding a paddle
@@ -700,6 +705,7 @@ export class Lobby {
   /** Toggle ready state for a player. */
   setReady(ws: WebSocket) {
     if (this.mode === 'poly') return; // arena restarts on its own timer, no ready-up
+    if (this.conns.get(ws)?.jailed) return; // locked up → can't ready up
     const side = this.sideOf(ws);
     if (!side) return;
     if (this.game.status !== 'over') return;
@@ -1253,6 +1259,11 @@ export class Lobby {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return; // must have joined (need a name to show)
     this.world.enter(ws);
+    if (conn.jailed) {
+      // Walked in already locked up (persisted lockup) → drop them straight into the cell.
+      this.world.move(ws, JAIL_CELL.x + JAIL_CELL.w / 2, JAIL_CELL.y + JAIL_CELL.h / 2);
+      this.tell(ws, { type: 'jailed', jailed: true });
+    }
     this.tell(ws, { type: 'world', avatars: this.worldAvatars() });
   }
 
@@ -1261,8 +1272,15 @@ export class Lobby {
     this.world.leave(ws);
   }
 
-  /** Record a client's self-reported avatar position + heading + driven car + trailing pet (clamped in World.move). */
+  /** Record a client's self-reported avatar position. Jailed players are pinned to the cell. */
   worldMove(ws: WebSocket, x: number, y: number, a?: number, car?: string | null, pet?: string | null) {
+    const conn = this.conns.get(ws);
+    if (conn?.jailed) {
+      const cx = Math.max(JAIL_CELL.x, Math.min(JAIL_CELL.x + JAIL_CELL.w, x));
+      const cy = Math.max(JAIL_CELL.y, Math.min(JAIL_CELL.y + JAIL_CELL.h, y));
+      this.world.move(ws, cx, cy, a, null, pet); // no car while jailed
+      return;
+    }
     this.world.move(ws, x, y, a, car, pet);
   }
 
@@ -1273,7 +1291,7 @@ export class Lobby {
       const c = this.conns.get(ws);
       const p = this.world.positionOf(ws);
       if (!c || !p) continue;
-      out.push({ id: c.id, name: c.nickname || 'anon', color: c.color, x: p.x, y: p.y, a: p.a, car: p.car, pet: p.pet });
+      out.push({ id: c.id, name: c.nickname || 'anon', color: c.color, x: p.x, y: p.y, a: p.a, car: p.car, pet: p.pet, jailed: c.jailed });
     }
     // Append spawned netizen avatars.
     for (let i = 0; i < Lobby.NETIZEN_NAMES.length; i++) {
@@ -1787,6 +1805,7 @@ export class Lobby {
       crapsPoint: null,
       drunkLevel: 0,
       drunkUntil: 0,
+      jailed: false,
     };
     this.conns.set(ws, conn);
     this.teams[side].push(ws);
@@ -1911,6 +1930,13 @@ export class Lobby {
   private loadWallet(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.pid) return;
+    // Restore a persisted jail lockup so a relog can't escape the cell. Tell the client right away so
+    // a jailed player lands straight in the world-jail (not the pong menu) and can't start a match.
+    getJailed(conn.pid).then((j) => {
+      const c = this.conns.get(ws); if (!c) return;
+      c.jailed = j;
+      if (j) this.tell(ws, { type: 'jailed', jailed: true });
+    }).catch(() => {});
     getWallet(conn.pid)
       .then((w) => {
         const c = this.conns.get(ws);
@@ -2109,13 +2135,55 @@ export class Lobby {
       .catch((e) => console.error('buy beer failed:', e));
   }
 
+  /** Drunk-driving bust: the client self-reports a drive attempt; we verify they're actually 2+
+   *  beers deep, then lock them in the jail cell (persisted) until someone posts bail. */
+  jail(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || conn.jailed || conn.drunkLevel < 2) return;
+    conn.jailed = true;
+    setJailed(conn.pid, true).catch((e) => console.error('jail persist failed:', e));
+    if (this.world.has(ws)) this.world.move(ws, JAIL_CELL.x + JAIL_CELL.w / 2, JAIL_CELL.y + JAIL_CELL.h / 2);
+    this.tell(ws, { type: 'jailed', jailed: true });
+    this.notify(ws, `🚔 BUSTED for drunk driving! You're in the drunk tank until someone posts your ${BAIL_COST}🪙 bail.`);
+    this.broadcastWorld();
+  }
+
+  /** Post a jailed player's bail (500🪙 → House). `targetId` is their avatar id; bailing yourself
+   *  is allowed so nobody is ever soft-locked. */
+  bail(ws: WebSocket, targetId: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    let tWs: WebSocket | null = null, tConn: Conn | null = null;
+    for (const [w, c] of this.conns) { if (c.id === targetId) { tWs = w; tConn = c; break; } }
+    if (!tWs || !tConn || !tConn.jailed) { this.notify(ws, "They're not locked up."); return; }
+    const targetWs = tWs, target = tConn;
+    spendCoins(conn.pid, BAIL_COST)
+      .then(async (w) => {
+        if (!w) { this.notify(ws, `Bail is ${BAIL_COST}🪙 — you're short.`); this.sendWallet(ws); return; }
+        await this.houseCredit(BAIL_COST); // bail money goes to the House
+        target.jailed = false;
+        setJailed(target.pid, false).catch((e) => console.error('bail persist failed:', e));
+        this.sendWallet(ws);
+        this.tell(targetWs, { type: 'jailed', jailed: false });
+        const self = targetWs === ws;
+        this.notify(ws, self ? '🔓 You posted your own bail. Try to stay sober out there.' : `🔓 You bailed out ${target.nickname} for ${BAIL_COST}🪙. What a pal.`);
+        if (!self) this.notify(targetWs, `🔓 ${conn.nickname} posted your ${BAIL_COST}🪙 bail — you're free!`);
+        this.broadcastWorld();
+      })
+      .catch((e) => console.error('bail failed:', e));
+  }
+
   shopBuy(ws: WebSocket, item: string) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     const cosmetic = COSMETICS.find((c) => c.id === item);
     if (!cosmetic || cosmetic.locked) return; // locked items (e.g. Davis Slayer) can't be bought
     buyItem(conn.pid, conn.nickname, cosmetic.id, cosmetic.price)
-      .then((w) => { if (w) this.sendWallet(ws); })
+      .then(async (w) => {
+        if (!w) return;                            // already owned or couldn't afford it
+        await this.houseCredit(cosmetic.price);    // purchases are a transfer — the coins go to the House
+        this.sendWallet(ws);
+      })
       .catch((e) => console.error('shop buy failed:', e));
   }
 
@@ -3781,7 +3849,7 @@ export class Lobby {
   setCapture(ws: WebSocket, on: boolean) {
     const conn = this.conns.get(ws);
     if (!conn) return;
-    conn.captured = on;
+    conn.captured = on && !conn.jailed; // jailed players can't capture in to play
     this.refreshPause();
   }
 

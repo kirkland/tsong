@@ -128,6 +128,8 @@ export async function initDb(): Promise<void> {
   // is_netizen flags the synthetic bot "netizen" traders so they can be seeded/identified. They
   // are real player rows (they appear on the net-worth board) but never mint and are House-funded.
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS is_netizen BOOLEAN NOT NULL DEFAULT FALSE`);
+  // jailed persists the drunk-tank lockup, so logging out can't get you out — only bail can.
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS jailed BOOLEAN NOT NULL DEFAULT FALSE`);
   // Fast-sell tax window: when a long/short position was opened, so a cash-out within 60s is taxed.
   await pool.query(`ALTER TABLE stock_holdings ADD COLUMN IF NOT EXISTS opened_at BIGINT`);
   // Authoritative global mint count + cap gate, one row per exclusive (seeded below). The atomic
@@ -854,6 +856,23 @@ export async function addCoins(pid: string, name: string, delta: number): Promis
     [pid, name, delta],
   );
   return rows.length ? rowToWallet(rows[0]) : null;
+}
+
+/** Is this player currently locked in the jail? (Persisted so a relog can't escape it.) */
+export async function getJailed(pid: string): Promise<boolean> {
+  if (!pool || !pid) return false;
+  const { rows } = await pool.query(`SELECT jailed FROM players WHERE id = $1`, [pid]);
+  return rows.length ? !!rows[0].jailed : false;
+}
+
+/** Set/clear a player's jailed flag (drunk-drive lockup / bail release). */
+export async function setJailed(pid: string, jailed: boolean): Promise<void> {
+  if (!pool || !pid) return;
+  await pool.query(
+    `INSERT INTO players (id, name, jailed) VALUES ($1, $1, $2)
+       ON CONFLICT (id) DO UPDATE SET jailed = $2`,
+    [pid, jailed],
+  );
 }
 
 /** Every account holding a positive coin balance, richest first — the input to the daily

@@ -297,6 +297,7 @@ let state: StateMsg | null = null;
 let ballColor = '#e8eefc'; // live pong-ball color, mirrored onto the ball reaction
 let joined = false; // true once the player has entered a nickname (gates reactions)
 let drunkLevel = 0; // 0 = sober … 6 = cut off (from the Tavern); wobbles the paddle + blurs the canvas
+let worldJailed = false; // true while locked in the world's jail cell (drunk-driving bust)
 
 // Last rows each board was rendered with, so we can repaint (e.g. to add tip buttons the
 // moment you join) without waiting for the next server push. Declared up here so the
@@ -769,6 +770,14 @@ const net = connect(
         ? `blur(${(drunkLevel * 0.35).toFixed(2)}px) hue-rotate(${drunkLevel * 6}deg) saturate(${1 + drunkLevel * 0.12}) brightness(${1 + drunkLevel * 0.03})`
         : '';
       canvas.style.transition = 'filter 0.6s ease';
+    } else if (msg.type === 'jailed') {
+      worldJailed = msg.jailed;
+      // Locked up → your whole world IS the jail: force the overworld open (and out of pointer-lock /
+      // any pong screen). You can't play or leave until someone posts bail.
+      if (msg.jailed) {
+        if (document.pointerLockElement) document.exitPointerLock();
+        void import('./world').then((m) => { if (!m.isWorldOpen()) worldBtn.click(); });
+      }
     }
   },
   () => {
@@ -1885,6 +1894,9 @@ worldBtn.addEventListener('click', async () => {
       claimQuest: (quest) => net.send({ type: 'questClaim', quest }),
       buyBeer: () => net.send({ type: 'buyBeer' }),
       drunkLevel: () => drunkLevel, // the world reads this live to wobble movement + the camera
+      jail: () => net.send({ type: 'jail' }),                 // tried to drunk-drive → bust
+      bail: (targetId) => net.send({ type: 'bail', targetId }), // post 500🪙 bail for a jailed avatar
+      amJailed: () => worldJailed,                            // are WE locked up right now?
     });
   } catch (e) {
     console.error('World failed to load:', e);
