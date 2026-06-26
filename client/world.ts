@@ -294,14 +294,17 @@ const DUNGEON_B3 = [
 ];
 // B4 — the deep floor, ~4× B1 (47×31 = 1457), darkest + bloodiest. '<' up to B3 (reached via B3's
 // tucked-away '>'). Tier-4 mobs. Carved + connectivity-validated offline.
+// B4 carries a switch puzzle: 'X' = the chest-room door (OPEN only when the switch is thrown), 'Y' = the
+// boss-room door (OPEN by default, SHUTS when the switch is thrown), 'W' = the wall lever that toggles
+// both. So: throw the switch → grab the fart-trail chest behind 'X' → throw it back → '>' to the boss.
 const DUNGEON_B4 = [
   '###############################################',
   '#T######################T###########T########T#',
-  '##.......####....D...####.......####........###',
-  '##..<.c..####..~~~~..####....c~~~~##........###',
-  '##.......D.....~~~~...........~~~~..D.......###',
-  '##.............~~~~...........~~~~..........###',
-  '##.......####........####.....~~~~##........###',
+  '##.......######..D...####.......####........###',
+  '##..<.c..##...#~~~~..####....c~~~~##........###',
+  '##.......DX.c.#~~~~...........~~~~..D.......###',
+  '##........#...#~~~~...........~~~~..........###',
+  '##.......######......####.....~~~~##........###',
   '##.......####........####.......####........###',
   '#####..##########..##########..#####..........#',
   '#####..##########..##########..#####......##..#',
@@ -309,20 +312,20 @@ const DUNGEON_B4 = [
   '##.......#####.........#####........####..##..#',
   '##.......#####.........#####........###.......#',
   '##.~~~...#####.........#####........###.......#',
-  '##.~c~...D..........................D...~~~~..#',
-  '##.~~~..................................~~~~..#',
+  '##.~c~...D..................c.......D...~~~~..#',
+  '##.~~~..................................~~~~W.#',
   '##.~~~...##..#.........##..#..........#.~~~~..#',
   '#T.......##..#.........##..#..........#.~~~~..#',
   '#####..####..#.........##..####..###..#.......#',
   '#####..####..#####..#####..####..###..####..###',
   '#####..####..#####D.#####..####.......####..###',
   '##........#..#####..#####.............####..###',
-  '##........#..#.........###........##.D.......##',
-  '##........####..~~~~...###...~~~~.###........##',
-  '##..............~~~~.....D...c~~~.###.....c..##',
-  '##..............~~~~.........~~~~............##',
-  '##........####..~~~~...###...~~~~............##',
-  '##..c.....####.........###........###........##',
+  '##........#..#.........###........##.D.########',
+  '##........####..~~~~...###...~~~~.###..#....###',
+  '##..............~~~~.....D...~~~~.##...Y....###',
+  '##..............~~~~.........~~~~......#..>.###',
+  '##........####..~~~~...###...~~~~......#....###',
+  '##..c.....####.........###........###..########',
   '#T........####.........###........###........T#',
   '###############################################',
   '###############################################',
@@ -342,8 +345,9 @@ const DUNGEON_THEME: Record<string, { wall: number; floor: number; surround: num
   B3: { wall: 0x866e7c, floor: 0x7c7690, surround: 0x05050c, props: true, gore: true }, // darker than B2, sickly + bloodied, still readable
   B4: { wall: 0x6a5660, floor: 0x645f74, surround: 0x040309, props: true, gore: true }, // the deep: coldest, darkest, most blood
 };
-const dungeonIsWall = (ch: string): boolean => ch === '#' || ch === 'T' || ch === 'o' || ch === ' ';
-// what blocks movement: walls + solid props (a chest you bump into) + a locked door ('L')
+const dungeonIsWall = (ch: string): boolean => ch === '#' || ch === 'T' || ch === 'o' || ch === ' ' || ch === 'W';
+// what blocks movement: walls + solid props (a chest you bump into) + a locked door ('L'). Switch-doors
+// ('X'/'Y') are handled per-state in dungeonBlocked (open/shut depends on the lever).
 const dungeonBlocks = (ch: string): boolean => dungeonIsWall(ch) || ch === 'c' || ch === 'L';
 // Each floor's NEW-mob tier. Its roster = the 2 mobs of THIS tier (new) + the 2 of the tier above,
 // carried down (tier-1). Rewards key off the mob's tier (DUNGEON_TIER_COINS), not the floor. The
@@ -813,7 +817,11 @@ export function startWorld(net: WorldNet): void {
   const dungeonLockSprites: Record<string, Phaser.GameObjects.Image> = {};   // 'c,r' → locked-door sprite (to remove on unlock)
   let nearChestCell: { c: number; r: number } | null = null; // unopened chest within reach (→ Open prompt)
   let nearStairs: { dir: 'down' | 'up'; to: string } | null = null; // a stair tile within reach (→ descend/ascend)
+  let nearBossStairs = false; // standing on the deepest floor's '>' (the boss stairwell — sealed until the boss floor exists)
   let nearLockedDoor: { c: number; r: number } | null = null; // an 'L' locked door within reach (→ "needs a key")
+  let nearSwitch: { c: number; r: number } | null = null;     // a 'W' wall lever within reach (→ flip it)
+  let nearSwitchDoor: { c: number; r: number } | null = null; // a sealed 'X'/'Y' switch-door within reach (→ "find a switch")
+  let switchOn = false;       // B4 puzzle: false → boss door 'Y' open / chest door 'X' shut; true → flipped (run-scoped)
   let dungeonImp: { x: number; y: number } | null = null; // the friendly B2 imp's world position (talk for a potion)
   let nearDungeonImp = false; // the imp is within talk range
   let impGavePotion = false;  // he hands out one potion per run (no farming)
@@ -1460,6 +1468,8 @@ export function startWorld(net: WorldNet): void {
       const r = Math.floor((wy + oy - dInt.y) / DUNGEON_TILE);
       const ch = dungeonCell(c, r);
       if (ch === 'L' && doorIsOpen(c, r)) continue; // an opened door is passable
+      if (ch === 'X') { if (switchOn) continue; return true; }   // chest door: open only when the lever's thrown
+      if (ch === 'Y') { if (!switchOn) continue; return true; }  // boss door: shut once the lever's thrown
       if (dungeonBlocks(ch)) return true;
     }
     // NPCs are solid — you bump into them rather than walking through
@@ -1496,6 +1506,14 @@ export function startWorld(net: WorldNet): void {
           keep(sc.add.image(lx, ly, 'd-glow').setTint(0xffcf6e).setBlendMode(Phaser.BlendModes.ADD).setDepth(50003).setAlpha(0.8).setDisplaySize(T * 0.7, T * 0.7)); // the small flame itself
           dungeonTorches.push({ x: lx, y: ly, phase: hash(c, r) * 6.28, fire: 0.24 });
         }
+        if (ch === 'W') { // the wall lever that drives the switch puzzle — a steel plate + a handle (leans one way thrown)
+          const lx = wx + T / 2, ly = wy + T / 2;
+          keep(sc.add.image(lx, ly, 'd-glow').setTint(switchOn ? 0x8effa0 : 0xff8a4a).setBlendMode(Phaser.BlendModes.ADD).setDepth(50003).setAlpha(0.6).setDisplaySize(T * 0.55, T * 0.55)); // a glow so it's findable in the dark
+          keep(sc.add.rectangle(lx, ly, T * 0.36, T * 0.52, 0x2a2530).setStrokeStyle(2, 0x6b7480).setDepth(base + 3)); // the steel mounting plate
+          const handle = sc.add.rectangle(lx, ly + T * 0.18, T * 0.11, T * 0.38, switchOn ? 0xbfe6c4 : 0xd9a06a).setOrigin(0.5, 1).setDepth(base + 4); // the throw handle
+          handle.rotation = switchOn ? -0.6 : 0.6; // leans left thrown, right at rest
+          keep(handle);
+        }
       } else {
         const fr = hash(c * 3, r);
         const fkey = fr > 0.95 ? 'd-f5' : fr > 0.92 ? 'd-f6' : fr > 0.7 ? 'd-f' + (1 + Math.floor(fr * 40) % 4) : 'd-f0';
@@ -1507,6 +1525,9 @@ export function startWorld(net: WorldNet): void {
         if (ch === 'L' && sc.textures.exists('d-lock') && !doorIsOpen(c, r)) { // a sealed, barred locked door (gone once opened)
           const ls = sc.add.image(wx + T / 2, wy + T / 2, 'd-lock').setScale(sl).setOrigin(0.5).setDepth(base + 3);
           dungeonLockSprites[`${c},${r}`] = ls; keep(ls);
+        }
+        if ((ch === 'X' || ch === 'Y') && sc.textures.exists('d-lock') && (ch === 'X' ? !switchOn : switchOn)) { // a switch-sealed door — same barred look, cool steel tint so it reads mechanical (not key-locked)
+          keep(sc.add.image(wx + T / 2, wy + T / 2, 'd-lock').setScale(sl).setOrigin(0.5).setDepth(base + 3).setTint(0x9fb6c4));
         }
         if (theme.props) addFloorProp(sc, c, r, wx, wy, T, sl, base, keep, !!theme.gore); // deeper-floor ambient decals
         if (ch === 'c') { // a treasure chest — closed or already-opened per saved state
@@ -1584,6 +1605,7 @@ export function startWorld(net: WorldNet): void {
     vx = 0; vy = 0; keys.clear(); joyActive = false;
     mainCam?.setBounds(dInt.x, dInt.y, dInt.w, dInt.h);
     lastGrassKey = ''; grassDanger = 0; nearStairs = null; nearLockedDoor = null;
+    nearSwitch = null; nearSwitchDoor = null; switchOn = false; // each floor's switch puzzle resets to default
     newMobsSeen.clear(); recentMob = -1; recentMobRun = 0; // each floor re-forces its new mobs first
     stairSound(arriveChar === '<'); // arriving at an up-stair means we descended
     // NB: no dungeonSync here — that would reset the purse + provisional chests. The client already
@@ -1609,7 +1631,7 @@ export function startWorld(net: WorldNet): void {
     minimap.style.display = 'none'; help.style.display = 'none'; // no overworld minimap / drive hint underground
     dungeonHP = 100; lastGrassKey = ''; grassDanger = 0; potionCount = 0; // fresh run: no potions carried in
     newMobsSeen.clear(); recentMob = -1; recentMobRun = 0; impGavePotion = false;
-    hasKey = false; keyTaken = false; unlockedDoors.clear(); // fresh run: re-fetch the key, doors re-lock
+    hasKey = false; keyTaken = false; unlockedDoors.clear(); switchOn = false; // fresh run: re-fetch the key, doors re-lock, lever resets
     lootItems.length = 0; lootOpen = false; lootPanel.style.display = 'none'; // fresh run loot
     openedChestsServer.clear();
     net.dungeonSync(); // ask the server which chests this account has already opened
@@ -1742,6 +1764,28 @@ export function startWorld(net: WorldNet): void {
   function tryLockedDoor() {
     lockedSound();
     showToast(LOCKED_LINES[Math.floor(Math.random() * LOCKED_LINES.length)]);
+  }
+  // the lever throw: a chunky mechanical clack, then a long grinding-stone rumble of distant doors
+  function switchSound() {
+    tone(120, 0.09, 'square', 0.18, 70);
+    window.setTimeout(() => noise(0.7, 0.14, 240), 80);                  // the grind of stone on stone
+    window.setTimeout(() => tone(58, 0.55, 'sawtooth', 0.10, 40), 120); // a low rumble underneath it
+  }
+  // Throw the B4 wall lever: flip which switch-door is sealed, jolt the camera (earthquake-style),
+  // rumble + grind, and rebuild the floor so both doors + the lever re-render in their new state.
+  function flipSwitch() {
+    const sc = petScene; if (!sc) return;
+    switchOn = !switchOn;
+    buildFloor(sc);
+    mainCam?.shake(620, 0.011);
+    switchSound();
+    showToast('🔧 <b>KA-CHUNK.</b> Deep in the dark, stone grinds on stone — somewhere a door opens, and somewhere another slams shut…');
+    nearSwitch = null; updateNearBuilding();
+  }
+  // Try a switch-sealed 'X'/'Y' door by hand — no keyhole, won't budge. A nudge toward the lever.
+  function trySwitchDoor() {
+    lockedSound();
+    showToast("🔒 No keyhole — just a heavy mechanism, jammed shut. There's a switch somewhere on this floor that works it.");
   }
   function openChest(c: number, r: number) {
     if (chestIsOpen(c, r)) return;
@@ -2067,8 +2111,15 @@ export function startWorld(net: WorldNet): void {
     if (nearNpc) { startTalk(nearNpc); return; }
     if (nearExit) { if (inDungeon) leaveDungeon(); else leaveTavern(); return; }
     if (nearStairs) { changeFloor(nearStairs.to, nearStairs.dir === 'down' ? '<' : '>'); return; }
+    if (nearBossStairs) { // the deepest stairwell — boss floor not carved yet, so it just breathes at you
+      tone(48, 0.7, 'sawtooth', 0.12, 32); window.setTimeout(() => tone(40, 0.9, 'sine', 0.10, 28), 200);
+      showToast('⬇️ The stairs drop into a blackness that swallows your light. Something vast shifts far below… <i>not yet.</i>');
+      return;
+    }
     if (nearChestCell) { openChest(nearChestCell.c, nearChestCell.r); return; }
     if (nearLockedDoor) { if (hasKey) unlockDoor(nearLockedDoor.c, nearLockedDoor.r); else tryLockedDoor(); return; }
+    if (nearSwitch) { flipSwitch(); return; }
+    if (nearSwitchDoor) { trySwitchDoor(); return; }
     if (nearDungeonImp) { impTalk(); return; }
     if (nearDyingMan) { dyingManTalk(); return; }
     if (nearJailed) { net.bail(nearJailed.id); return; } // post their bail
@@ -2320,7 +2371,7 @@ export function startWorld(net: WorldNet): void {
       const cell = dungeonCell(cc, cr), key = cc + ',' + cr;
       if (key !== lastGrassKey) {
         lastGrassKey = key;
-        if (cell !== '@' && cell !== '>' && cell !== '<') { // no ambush on the entry/stairs tiles
+        if (cell !== '@' && cell !== '>' && cell !== '<' && cell !== 'X' && cell !== 'Y') { // no ambush on entry/stairs/door tiles
           grassDanger += cell === '~' ? 2 : 1;
           // You cross ~5 tiles/sec, so the per-tile slope must be tiny. ~70 tiles (~13s) avg between
           // fights, faster in grass. (Tune `slope`/`cap` if it still feels off.)
@@ -2432,12 +2483,13 @@ export function startWorld(net: WorldNet): void {
       if (Math.abs(selfX - e.x) < 44 && Math.abs(selfY - e.y) < 44) nearExit = true;
     }
     // Stairs within reach: '>' descends to the next floor, '<' ascends to the previous one.
-    nearStairs = null;
+    nearStairs = null; nearBossStairs = false;
     if (inDungeon && !nearExit) {
       const idx = DUNGEON_ORDER.indexOf(currentFloor);
       const down = cellWorldOf('>'), up = cellWorldOf('<');
-      if (down && Math.abs(selfX - down.x) < 40 && Math.abs(selfY - down.y) < 40 && idx < DUNGEON_ORDER.length - 1)
-        nearStairs = { dir: 'down', to: DUNGEON_ORDER[idx + 1] };
+      const onDown = down && Math.abs(selfX - down.x) < 40 && Math.abs(selfY - down.y) < 40;
+      if (onDown && idx < DUNGEON_ORDER.length - 1) nearStairs = { dir: 'down', to: DUNGEON_ORDER[idx + 1] };
+      else if (onDown) nearBossStairs = true; // deepest floor: the '>' plunges to the (not-yet-built) boss level
       else if (up && Math.abs(selfX - up.x) < 40 && Math.abs(selfY - up.y) < 40 && idx > 0)
         nearStairs = { dir: 'up', to: DUNGEON_ORDER[idx - 1] };
     }
@@ -2452,15 +2504,20 @@ export function startWorld(net: WorldNet): void {
         if (d2 < best) { best = d2; nearChestCell = { c: cc, r: cr }; }
       }
     }
-    nearLockedDoor = null;
-    if (inDungeon && !nearExit && !nearStairs && !nearChestCell) { // a sealed 'L' door within reach
+    nearLockedDoor = null; nearSwitch = null; nearSwitchDoor = null;
+    if (inDungeon && !nearExit && !nearStairs && !nearChestCell) { // a sealed door / wall lever within reach
       const pc = Math.floor((selfX - dInt.x) / DUNGEON_TILE), pr = Math.floor((selfY - dInt.y) / DUNGEON_TILE);
-      for (const [dc, dr] of [[0, -1], [0, 1], [-1, 0], [1, 0], [0, 0]] as const)
-        if (dungeonCell(pc + dc, pr + dr) === 'L' && !doorIsOpen(pc + dc, pr + dr)) { nearLockedDoor = { c: pc + dc, r: pr + dr }; break; }
+      for (const [dc, dr] of [[0, -1], [0, 1], [-1, 0], [1, 0], [0, 0]] as const) {
+        const ch = dungeonCell(pc + dc, pr + dr);
+        if (ch === 'L' && !doorIsOpen(pc + dc, pr + dr)) { nearLockedDoor = { c: pc + dc, r: pr + dr }; break; }
+        if (ch === 'W') { nearSwitch = { c: pc + dc, r: pr + dr }; break; }
+        if ((ch === 'X' && !switchOn) || (ch === 'Y' && switchOn)) { nearSwitchDoor = { c: pc + dc, r: pr + dr }; break; } // a switch-sealed door
+      }
     }
-    nearDungeonImp = !!(inDungeon && dungeonImp && !nearExit && !nearStairs && !nearChestCell && !nearLockedDoor
+    const nearDoorOrSwitch = nearLockedDoor || nearSwitch || nearSwitchDoor;
+    nearDungeonImp = !!(inDungeon && dungeonImp && !nearExit && !nearStairs && !nearChestCell && !nearDoorOrSwitch
       && Math.hypot(selfX - dungeonImp.x, selfY - dungeonImp.y) < DUNGEON_TILE * 1.4);
-    nearDyingMan = !!(inDungeon && dyingMan && !keyTaken && !nearExit && !nearStairs && !nearChestCell && !nearLockedDoor
+    nearDyingMan = !!(inDungeon && dyingMan && !keyTaken && !nearExit && !nearStairs && !nearChestCell && !nearDoorOrSwitch
       && Math.hypot(selfX - dyingMan.x, selfY - dyingMan.y) < DUNGEON_TILE * 1.4);
     // A jailed avatar within reach (and we're free) → offer to post their bail.
     nearJailed = null;
@@ -2495,10 +2552,16 @@ export function startWorld(net: WorldNet): void {
       prompt.textContent = inDungeon ? '🚪 Leave the Ruins' : '🚪 Leave the Tavern';
     } else if (nearStairs) {
       prompt.textContent = nearStairs.dir === 'down' ? `⬇️ Descend to ${nearStairs.to}` : `⬆️ Climb up to ${nearStairs.to}`;
+    } else if (nearBossStairs) {
+      prompt.textContent = '⬇️ A stairwell into the black';
     } else if (nearChestCell) {
       prompt.textContent = '📦 Open the chest';
     } else if (nearLockedDoor) {
       prompt.textContent = hasKey ? '🔑 Unlock the door' : '🔒 Locked door';
+    } else if (nearSwitch) {
+      prompt.textContent = '🔧 Throw the switch';
+    } else if (nearSwitchDoor) {
+      prompt.textContent = '🔒 Sealed door';
     } else if (nearDungeonImp) {
       prompt.textContent = '💬 Talk to the Imp';
     } else if (nearDyingMan) {
@@ -2508,7 +2571,7 @@ export function startWorld(net: WorldNet): void {
     } else if (nearParcel) {
       prompt.textContent = parcelPrompt(nearParcel);
     }
-    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearStairs || nearChestCell || nearLockedDoor || nearDungeonImp || nearDyingMan || nearJailed || nearParcel) && !dialogOpen && !talkOpen ? 'block' : 'none';
+    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDyingMan || nearJailed || nearParcel) && !dialogOpen && !talkOpen ? 'block' : 'none';
   }
 
   function maybeSendMove(now: number) {

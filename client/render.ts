@@ -768,6 +768,11 @@ const TRAIL_TINTS: Record<string, TrailTint> = {
   inferno: (i, n) => `hsl(${20 + (i / n) * 35},100%,${50 + (i / n) * 12}%)`, // red tail → yellow head
   lightning: () => '#8ab4ff',
   phoenix: (i, _n, t) => `hsl(${(t / 14 + i * 18) % 60},100%,58%)`, // animated red↔gold fire
+  'trail-fart': (i, _n, t) => { // a murky swamp-gas cloud — sickly yellow-green roiling into olive-brown (no glow → reads as opaque gas)
+    const hue = 74 + 16 * Math.sin(t / 480 + i * 0.6);
+    const light = 30 + 9 * Math.sin(t / 300 + i * 0.9);
+    return `hsl(${hue},42%,${light}%)`;
+  },
   // --- exclusive trails ---
   'x-eclipse': (i, n, t) => {
     const f = i / n;

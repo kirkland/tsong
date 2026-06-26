@@ -29,10 +29,41 @@ hall(9,36,40); vall(44,8,18);
 // ---- features ----
 carve(15,3,18,5,'~'); carve(3,13,5,16,'~'); carve(16,23,19,26,'~'); carve(29,23,32,26,'~'); carve(30,3,33,6,'~'); carve(40,14,43,17,'~');
 g[3][4]='<';                 // up to B3 (arrival, top-left)
-g[3][6]='c'; g[3][29]='c'; g[14][4]='c'; g[24][29]='c'; g[24][42]='c'; g[27][4]='c'; // six chests (6,3 = entrance potions)
+g[3][6]='c'; g[3][29]='c'; g[14][4]='c'; g[27][4]='c'; g[14][28]='c'; // coin/potion/spin chests (bottom-right repurposed for the puzzle)
+// ===== SWITCH PUZZLE =====
+// seal a rectangular room: wall it + a 1-tile border, then hollow the interior (single door added after)
+const sealRoom=(x0,y0,x1,y1)=>{for(let y=y0-1;y<=y1+1;y++)for(let x=x0-1;x<=x1+1;x++)if(x>=0&&y>=0&&x<W&&y<H)g[y][x]='#';carve(x0,y0,x1,y1);};
+// CHEST ROOM — right by the entrance (so the sealed door is one of the first things you see). 'X' door
+// opens only when the switch is ON. It hangs off the arrival room (open cols 2-8).
+sealRoom(11,3,13,5);
+carve(9,4,10,4);              // a stub from the arrival room (col 8 open) toward the door
+g[4][10]='X';                 // the 'X' door (chest-room side)
+g[4][12]='c';                 // the fart-trail chest
+// SWITCH — a lever way over on the far-right grass room's wall (you explore past the sealed door to it)
+g[15][44]='W';
+// BOSS ROOM — bottom-right, sealed by 'Y' (OPEN by default; CLOSES when the switch is ON). Stairs inside.
+sealRoom(40,23,43,26);
+carve(36,24,39,24);          // a stub from the maze toward the door
+g[24][39]='Y';               // the 'Y' door (boss-room side)
+g[25][42]='>';               // the boss stairs (to the boss floor)
 [[1,1],[45,1],[1,17],[1,28],[24,1],[45,17],[20,11],[45,28],[36,1]].forEach(([x,y])=>{if(g[y]&&g[y][x]==='#')g[y][x]='T';});
 g[4][9]='D'; g[2][17]='D'; g[4][36]='D'; g[14][9]='D'; g[20][18]='D'; g[24][25]='D'; g[22][37]='D'; g[14][36]='D';
 const rows=g.map(r=>r.join(''));
+// ---- dual-state switch validation: 'X' open iff switchOn, 'Y' open iff !switchOn ----
+function reach(switchOn){
+  const blk=(ch)=>{ if(ch==='X') return !switchOn; if(ch==='Y') return switchOn; return ch==='#'||ch==='T'||ch==='o'||ch===' '||ch==='c'; };
+  let sx,sy; rows.forEach((r,y)=>{const x=r.indexOf('<'); if(x>=0){sx=x;sy=y;}});
+  const seen=Array.from({length:H},()=>Array(W).fill(false));const st=[[sx,sy]];seen[sy][sx]=1;
+  while(st.length){const[x,y]=st.pop();for(const[dx,dy]of[[1,0],[-1,0],[0,1],[0,-1]]){const nx=x+dx,ny=y+dy;if(nx<0||ny<0||nx>=W||ny>=H||seen[ny][nx]||blk(rows[ny][nx]))continue;seen[ny][nx]=1;st.push([nx,ny]);}}
+  const adjAt=(cx,cy)=>[[1,0],[-1,0],[0,1],[0,-1]].some(([dx,dy])=>seen[cy+dy]&&seen[cy+dy][cx+dx]);
+  const find=(ch)=>{let p=null;rows.forEach((r,y)=>{const x=r.indexOf(ch);if(x>=0)p=[x,y];});return p;};
+  const w=find('W'), b=find('>'); // the fart chest is the puzzle one at 12,4
+  return {W:w&&adjAt(w[0],w[1]), boss:b&&adjAt(b[0],b[1]), c:adjAt(12,4)};
+}
+const off=reach(false), on=reach(true);
+console.log(rows.map(r=>`  '${r}',`).join('\n'));
+console.log(`\nSWITCH OFF (default): switch reachable=${off.W}  boss '>' reachable=${off.boss}  fart chest reachable=${off.c} (want: T T F)`);
+console.log(`SWITCH ON:            switch reachable=${on.W}  boss '>' reachable=${on.boss}  fart chest reachable=${on.c} (want: T F T)`);
 // ---- validate ----
 const blocked=ch=>ch==='#'||ch==='T'||ch==='o'||ch===' '||ch==='L'||ch==='c';
 let sx,sy; rows.forEach((r,y)=>{const x=r.indexOf('<'); if(x>=0){sx=x;sy=y;}});

@@ -251,6 +251,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'inferno', name: 'Inferno', slot: 'trail', price: 8000 },
   { id: 'lightning', name: 'Lightning', slot: 'trail', price: 10000 },
   { id: 'phoenix', name: 'Phoenix', slot: 'trail', price: 15000 }, // animated
+  { id: 'trail-fart', name: '💨 Fart Cloud', slot: 'trail', price: 0, locked: 'dungeon' }, // a Ruins chest prize (B4 switch room)
   // Titles (flex tier)
   { id: 'whale', name: '💎 Whale', slot: 'title', price: 25000 },
   { id: 'marketmaker', name: '📈 Market Maker', slot: 'title', price: 40000 },
@@ -469,12 +470,13 @@ export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potions?: 
   'B3:4,13': { potions: 2 },               // generous: 2 potions on a long floor
   'B3:29,23': { cosmetic: 'skin-hotdog' }, // 🌭 Hot Dog paddle skin
   'B3:38,24': { potions: 2 },
-  // B4 — the deep floor: a 5-potion chest right at the entrance, richest coins + another wheel spin.
+  // B4 — the deep floor: a 5-potion chest right at the entrance, richest coins, another wheel spin, and
+  // the switch-locked room's prize: a 💨 Fart Cloud trail.
   'B4:6,3': { potions: 5 },
   'B4:29,3': { coins: 500 },
+  'B4:12,4': { cosmetic: 'trail-fart' }, // behind the switch-sealed 'X' door
   'B4:4,14': { potions: 2 },
-  'B4:29,24': { coins: 500 },
-  'B4:42,24': { spin: true },
+  'B4:28,14': { spin: true },
   'B4:4,27': { coins: 450 },
 };
 // Encounter-win payout keyed by the MOB'S TIER [min, max], not the floor. The server picks the amount
