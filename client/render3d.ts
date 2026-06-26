@@ -11,7 +11,7 @@
 // fetches Three.js lazily and the default 2D bundle never references it. Keeping it out
 // of the Vite build also keeps the (small) production VPS from OOMing while bundling.
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js';
-import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, POWERUPS, TARGET, PowerupKind, Side, StateMsg } from '../shared/types';
+import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, POWERUPS, TARGET, BUMPER, BUMPER_POSITIONS, PowerupKind, Side, StateMsg } from '../shared/types';
 import { drawLegendIcon, drawDiamondIcon, blockHue } from './render';
 
 export interface BlasterAim { side: Side; angle: number; }
@@ -520,6 +520,22 @@ export function createRenderer(container: HTMLElement): Renderer3D {
     return m;
   }
 
+  // Bumper pegs: five glowing orange cylinders at fixed positions. Pre-created (count is fixed).
+  const BUMPER_H = 34;
+  const bumperGeo = new THREE.CylinderGeometry(BUMPER.r, BUMPER.r * 0.85, BUMPER_H, 32);
+  const bumperMats = BUMPER_POSITIONS.map(() =>
+    new THREE.MeshStandardMaterial({ color: '#d94f00', emissive: '#ff6010', emissiveIntensity: 0.5, roughness: 0.4, metalness: 0.3 }),
+  );
+  const bumperMeshes = BUMPER_POSITIONS.map((bp, i) => {
+    const m = new THREE.Mesh(bumperGeo, bumperMats[i]);
+    m.castShadow = true;
+    m.position.set(wx(bp.x), BUMPER_H / 2, wz(bp.y));
+    m.visible = false;
+    world.add(m);
+    return m;
+  });
+  const bumperHitAt3d: number[] = BUMPER_POSITIONS.map(() => -1e9);
+
   // Scores painted big on the ice either side of center; names painted smaller at each end.
   const scoreL = makeFloorText(150);
   const scoreR = makeFloorText(150);
@@ -756,6 +772,17 @@ export function createRenderer(container: HTMLElement): Renderer3D {
       pinata.visible = false;
       for (const m of stuckPool) m.visible = false;
     }
+
+    // Bumper pegs — show when bumpers mode is on; flash emissive on hit.
+    const now3d = performance.now();
+    bumperMeshes.forEach((m, i) => {
+      m.visible = s.bumpers;
+      if (!s.bumpers) return;
+      if (s.bumperFlash[i]) bumperHitAt3d[i] = now3d;
+      const t = Math.max(0, 1 - (now3d - bumperHitAt3d[i]) / 220);
+      bumperMats[i].emissiveIntensity = 0.5 + t * 2.5;
+      bumperMats[i].color.set(t > 0.05 ? '#fff8e0' : '#d94f00');
+    });
 
     // Spectator-dropped blocks — slate boxes scaled to each block's footprint.
     s.blocks.forEach((bl, i) => {
