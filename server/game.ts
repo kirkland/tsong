@@ -101,7 +101,7 @@ export interface GameSnapshot {
   diamondBlock: { x: number; y: number; vx: number; vy: number } | null;
   pinata: boolean;
   pinataObj: PinataObj | null;
-  blocks?: { x: number; y: number; w: number; h: number }[];
+  blocks?: { x: number; y: number; w: number; h: number; angle?: number }[];
   rotated: number;
   fritz?: boolean;
   disco?: boolean;
@@ -169,7 +169,7 @@ export class Game {
   // Spectator-dropped obstacles. Like breakout bricks: the ball caroms off them and the
   // block shatters on contact. Center + size, court units. They accumulate as spectators
   // drop them (capped), get knocked out by rallies, and clear at the next match start.
-  blocks: { x: number; y: number; w: number; h: number }[] = [];
+  blocks: { x: number; y: number; w: number; h: number; angle: number }[] = [];
   breakout = false; // "breakout" mode: destructible bricks across the centre of the court
   brickAlive: boolean[] = []; // which of the 28 bricks are still standing this point
   fog = false;    // "fog of war": server passes flag; visibility computed client-side
@@ -299,7 +299,7 @@ export class Game {
     this.pinataObj = s.pinataObj
       ? { ...s.pinataObj, stuck: (s.pinataObj.stuck ?? []).map((x) => ({ ...x })) }
       : null;
-    this.blocks = s.blocks ? s.blocks.map((bl) => ({ ...bl })) : [];
+    this.blocks = s.blocks ? s.blocks.map((bl) => ({ ...bl, angle: bl.angle ?? 0 })) : [];
     this.rotated = typeof s.rotated === 'number' ? s.rotated : (s.rotated ? 1 : 0);
     this.fritz = s.fritz ?? false;
     this.disco = s.disco ?? false;
@@ -552,48 +552,68 @@ export class Game {
     if (this.status !== 'playing') return false;
     if (this.blocks.length >= BLOCK.maxCount) return false;
     for (let attempt = 0; attempt < 12; attempt++) {
-      // Square, like a breakout brick (just bigger). One size drives both sides.
       const w = BLOCK.min + Math.random() * (BLOCK.max - BLOCK.min);
       const h = w;
       const x = COURT.w * 0.25 + Math.random() * COURT.w * 0.5;
       const y = (h / 2 + 16) + Math.random() * (COURT.h - h - 32);
       // Keep clear of the very center so it doesn't sit on the serve point.
       if (Math.hypot(x - COURT.w / 2, y - COURT.h / 2) < 90) continue;
-      // Avoid heavy overlap with an existing block (best effort — small overlap is fine).
+      // Avoid heavy overlap with an existing block (best effort; uses AABB even for angled blocks).
       const clash = this.blocks.some(
         (bl) => Math.abs(bl.x - x) < (bl.w + w) / 2 - 8 && Math.abs(bl.y - y) < (bl.h + h) / 2 - 8,
       );
       if (clash) continue;
-      this.blocks.push({ x, y, w, h });
+      // ~45% chance of a rotated "diamond" block (22.5°–67.5° either way).
+      const angle = Math.random() < 0.45
+        ? ((Math.floor(Math.random() * 3) + 1) * Math.PI / 8) * (Math.random() < 0.5 ? 1 : -1)
+        : 0;
+      this.blocks.push({ x, y, w, h, angle });
       return true;
     }
     return false;
   }
 
-  // Carom a ball off any spectator-dropped block: an axis-aligned box reflect that also
-  // pushes the ball back to the nearest face, so it can never wedge inside. No-op when the
-  // ball isn't overlapping the (radius-expanded) box.
+  // Carom a ball off any spectator-dropped block (axis-aligned or rotated OBB).
+  // Transforms the ball into the block's local frame, finds the closest point on the AABB,
+  // reflects about the surface normal, and pushes the ball clear. One hit shatters the block.
   private bounceBlocks(b: Ball) {
     const r = this.ballR();
-    // Just like breakout bricks: reflect on the face the ball hit first (smaller overlap),
-    // then destroy the block. One block per step so the ball can't tunnel through a seam.
     for (let i = this.blocks.length - 1; i >= 0; i--) {
       const bl = this.blocks[i];
-      const left = bl.x - bl.w / 2, right = bl.x + bl.w / 2;
-      const top = bl.y - bl.h / 2, bottom = bl.y + bl.h / 2;
-      if (b.x + r <= left || b.x - r >= right || b.y + r <= top || b.y - r >= bottom) continue; // no overlap
-      const overlapLeft = (b.x + r) - left;
-      const overlapRight = right - (b.x - r);
-      const overlapTop = (b.y + r) - top;
-      const overlapBot = bottom - (b.y - r);
-      const minH = Math.min(overlapLeft, overlapRight);
-      const minV = Math.min(overlapTop, overlapBot);
-      if (minH < minV) {
-        b.vx = overlapLeft < overlapRight ? -Math.abs(b.vx) : Math.abs(b.vx);
+      const angle = bl.angle ?? 0;
+      const cosA = Math.cos(-angle), sinA = Math.sin(-angle);
+      // Ball position in block's local frame.
+      const dx = b.x - bl.x, dy = b.y - bl.y;
+      const lx = cosA * dx - sinA * dy;
+      const ly = sinA * dx + cosA * dy;
+      const hw = bl.w / 2, hh = bl.h / 2;
+      // Closest point on the AABB to the ball center (local frame).
+      const cx = Math.max(-hw, Math.min(hw, lx));
+      const cy = Math.max(-hh, Math.min(hh, ly));
+      const px = lx - cx, py = ly - cy; // vector from closest point to ball center
+      const dist = Math.hypot(px, py);
+      if (dist >= r) continue; // no overlap
+      // Surface normal in local frame.
+      let nx_l: number, ny_l: number;
+      if (dist > 0) {
+        nx_l = px / dist; ny_l = py / dist;
       } else {
-        b.vy = overlapTop < overlapBot ? -Math.abs(b.vy) : Math.abs(b.vy);
+        // Ball center inside block — push out on the smallest penetration axis.
+        const ox = hw - Math.abs(lx), oy = hh - Math.abs(ly);
+        if (ox < oy) { nx_l = lx > 0 ? 1 : -1; ny_l = 0; }
+        else          { nx_l = 0; ny_l = ly > 0 ? 1 : -1; }
       }
-      this.blocks.splice(i, 1); // one hit shatters it, like a breakout brick
+      // Rotate normal back to world frame.
+      const cosF = Math.cos(angle), sinF = Math.sin(angle);
+      const nx = cosF * nx_l - sinF * ny_l;
+      const ny = sinF * nx_l + cosF * ny_l;
+      const vn = b.vx * nx + b.vy * ny;
+      if (vn >= 0) continue; // moving away — skip
+      b.vx -= 2 * vn * nx;
+      b.vy -= 2 * vn * ny;
+      b.x += nx * (r - dist);
+      b.y += ny * (r - dist);
+      this.blocks.splice(i, 1);
       break;
     }
   }

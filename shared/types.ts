@@ -872,7 +872,8 @@ export interface StateMsg {
   // null when breakout mode is off.
   bricks: boolean[] | null;
   // Spectator-dropped obstacle blocks currently on the court. Cleared at each match start.
-  blocks: { x: number; y: number; w: number; h: number }[];
+  // `angle` (radians) is 0 for axis-aligned; non-zero for diamond/rotated variants.
+  blocks: { x: number; y: number; w: number; h: number; angle?: number }[];
   fog: boolean;    // "fog of war": ball invisible except close to either paddle
   portal: boolean; // "portal walls": top/bottom walls teleport the ball to a random Y
   bumpers: boolean; // "bumpers" mode: five static pinball pegs in the center

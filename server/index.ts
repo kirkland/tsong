@@ -184,6 +184,7 @@ wss.on('connection', (ws: WebSocket, req) => {
           breakout: typeof msg.breakout === 'boolean' ? msg.breakout : undefined,
           fog: typeof msg.fog === 'boolean' ? msg.fog : undefined,
           portal: typeof msg.portal === 'boolean' ? msg.portal : undefined,
+          bumpers: typeof msg.bumpers === 'boolean' ? msg.bumpers : undefined,
         });
         break;
       case 'fatality':

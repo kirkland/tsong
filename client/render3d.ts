@@ -763,6 +763,7 @@ export function createRenderer(container: HTMLElement): Renderer3D {
       m.visible = true;
       m.position.set(wx(bl.x), BLOCK_H / 2, wz(bl.y));
       m.scale.set(bl.w, 1, bl.h);
+      m.rotation.y = bl.angle ?? 0;
       m.material.color.setHSL(blockHue(bl.x, bl.y) / 360, 0.68, 0.5);
     });
     for (let i = s.blocks.length; i < blockPool.length; i++) blockPool[i].visible = false;

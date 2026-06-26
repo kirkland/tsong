@@ -71,7 +71,7 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
   if (s.bumpers) drawBumpers(ctx, s.bumperFlash);
 
   // Spectator-dropped blocks (solid obstacles the ball bounces off)
-  for (const bl of s.blocks) drawBlock(ctx, bl.x, bl.y, bl.w, bl.h);
+  for (const bl of s.blocks) drawBlock(ctx, bl.x, bl.y, bl.w, bl.h, bl.angle);
 
   // Piñata collector + the balls stuck to it (under the live ball/paddles)
   if (s.pinataPos) drawPinata(ctx, s.pinataPos, s.ball.color);
@@ -559,13 +559,13 @@ export function blockHue(x: number, y: number): number {
 
 // A spectator-dropped block, drawn exactly like a breakout brick — a colorful rounded
 // rectangle with a top highlight and bottom shadow bar. Centered on (x, y).
-function drawBlock(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number) {
+function drawBlock(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, angle?: number) {
   const hue = blockHue(x, y);
-  const left = x - w / 2, top = y - h / 2;
-  const r = Math.min(6, Math.min(w, h) * 0.18); // brick-like rounded corners
-  const bar = Math.max(3, h * 0.08);            // highlight/shadow bar thickness
+  const r = Math.min(6, Math.min(w, h) * 0.18);
+  const bar = Math.max(3, h * 0.08);
   ctx.save();
-
+  if (angle) { ctx.translate(x, y); ctx.rotate(angle); ctx.translate(-x, -y); }
+  const left = x - w / 2, top = y - h / 2;
   // Body
   ctx.fillStyle = `hsl(${hue}, 68%, 48%)`;
   ctx.beginPath();
@@ -577,7 +577,6 @@ function drawBlock(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   // Bottom shadow
   ctx.fillStyle = `hsla(${hue}, 45%, 18%, 0.45)`;
   ctx.fillRect(left + 2, top + h - 2 - bar, w - 4, bar);
-
   ctx.restore();
 }
 
