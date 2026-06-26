@@ -460,6 +460,11 @@ export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potion?: b
   'B2:4,13': { potion: true },
   'B2:15,21': { coins: 120 },
   'B2:34,24': { coins: 500 },
+  // B3 — bigger, darker, tier-3 mobs; meatier loot + extra potions for the longer floor.
+  'B3:28,3': { coins: 300 },
+  'B3:4,13': { potion: true },
+  'B3:29,23': { coins: 350 },
+  'B3:38,24': { potion: true },
 };
 // Encounter-win payout keyed by the MOB'S TIER [min, max], not the floor. The server picks the amount
 // from the tier's range (it never trusts a client-sent number) after checking the tier is legal here.
@@ -474,6 +479,7 @@ export const DUNGEON_TIER_COINS: Record<number, readonly [number, number]> = {
 export const DUNGEON_FLOOR_TIERS: Record<string, readonly number[]> = {
   B1: [1],
   B2: [1, 2],
+  B3: [2, 3], // tier-3 new mobs + tier-2 carried down
 };
 
 // The town JAIL — a tiny barred cell just east of the Tavern. Try to drive after 2+ beers and the

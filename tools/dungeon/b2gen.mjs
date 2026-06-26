@@ -32,6 +32,7 @@ hall(24,29,31);              // reach the door
 // ---- features ----
 carve(15,3,17,4,'~'); carve(3,12,5,14,'~'); carve(15,20,17,23,'~'); carve(25,19,27,21,'~');
 g[3][4]='<';                 // up to B1
+g[18][28]='>';               // DOWN to B3
 g[3][26]='c'; g[13][4]='c'; g[21][15]='c'; // three open-area chests
 g[24][34]='c';               // locked-room prize
 [[1,1],[37,1],[1,15],[1,24],[20,1],[37,15],[10,9]].forEach(([x,y])=>{if(g[y]&&g[y][x]==='#')g[y][x]='T';});

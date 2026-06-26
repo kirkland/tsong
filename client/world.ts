@@ -221,7 +221,7 @@ const DUNGEON_B2 = [
   '#T.......##..##.......###......##..##T#',
   '##.......##..####..########..####..####',
   '#####..####..####..########..####..####',
-  '#####..####..####..####............####',
+  '#####..####..####..####.....>......####',
   '#####..####.....D...###..~~~......#####',
   '##.......##....~~~..###..~~~..#########',
   '##.............c~~..###..~~~...########',
@@ -231,13 +231,48 @@ const DUNGEON_B2 = [
   '#############################...#....##',
   '#######################################',
 ];
-const DUNGEON_FLOORS: Record<string, string[]> = { B1: DUNGEON_B1, B2: DUNGEON_B2 };
-const DUNGEON_ORDER = ['B1', 'B2']; // descent order; '>' goes to the next, '<' to the previous
+// B3 — bigger than B2 (43×29 = 1247), darker still, 2-wide corridors. The key to B2's locked room
+// comes from an NPC down here (not a floor pickup). Carved + connectivity-validated offline.
+const DUNGEON_B3 = [
+  '###########################################',
+  '#T####################T##################T#',
+  '##.......####....D...####.......###......##',
+  '##..<....####..~~~~..####...c...###......##',
+  '##.......D.....~~~~................D.....##',
+  '##.............~~~~......................##',
+  '##.......####........####.......###......##',
+  '##.......####........########..####.......#',
+  '#####..##########..##########.......#..#..#',
+  '#####..##########..##########.......#..#..#',
+  '#####..##########..########........##..#..#',
+  '##.......#####........#####........##..#..#',
+  '##.~~~...#####........#####..~~~~..#####..#',
+  '##.~c~...D...................~~~~.....##..#',
+  '##.~~~.......................~~~~.....##..#',
+  '##.~~~...##..#........##..#..~~~~..#####..#',
+  '#T.......##..#........##..#........###....#',
+  '#####..####..#........##..####..######....#',
+  '#####..####..####..#####..####..######....#',
+  '#####..####..####D.#####..####..####......#',
+  '##........#..####..#####..........##.....##',
+  '##........#..#........####..~~~~..##.....##',
+  '##........####..~~~...####..~~~~....D....##',
+  '##..............~~~.....D...~c~~.........##',
+  '##..............~~~.........~~~~......c..##',
+  '##........####..~~~...####...............##',
+  '#T........####........####........#######T#',
+  '###########################################',
+  '###########################################',
+];
+const DUNGEON_FLOORS: Record<string, string[]> = { B1: DUNGEON_B1, B2: DUNGEON_B2, B3: DUNGEON_B3 };
+const DUNGEON_ORDER = ['B1', 'B2', 'B3']; // descent order; '>' goes to the next, '<' to the previous
 // Each descent gets darker + colder in THEME (not lighting — the actual stone palette). `props`
-// turns on the deeper-floor ambient decals (bones, fungus, cobwebs, drips).
-const DUNGEON_THEME: Record<string, { wall: number; floor: number; surround: number; props: boolean }> = {
+// turns on the deeper-floor ambient decals (bones, fungus, cobwebs, drips); `gore` adds blood + claw
+// marks on the bloodier floors.
+const DUNGEON_THEME: Record<string, { wall: number; floor: number; surround: number; props: boolean; gore?: boolean }> = {
   B1: { wall: 0xffd49a, floor: 0xffffff, surround: 0x070905, props: false }, // warm amber sandstone
   B2: { wall: 0xa07b86, floor: 0x9aa0b4, surround: 0x05060a, props: true },  // colder, blue-grey, dimmer
+  B3: { wall: 0x6e5866, floor: 0x5f5a72, surround: 0x040308, props: true, gore: true }, // darker, sickly, bloodied
 };
 const dungeonIsWall = (ch: string): boolean => ch === '#' || ch === 'T' || ch === 'o' || ch === ' ';
 // what blocks movement: walls + solid props (a chest you bump into) + a locked door ('L')
@@ -245,7 +280,7 @@ const dungeonBlocks = (ch: string): boolean => dungeonIsWall(ch) || ch === 'c' |
 // Each floor's NEW-mob tier. Its roster = the 2 mobs of THIS tier (new) + the 2 of the tier above,
 // carried down (tier-1). Rewards key off the mob's tier (DUNGEON_TIER_COINS), not the floor. The
 // "new" mobs are forced first: you must meet BOTH new mobs before a carried-over mob can reappear.
-const DUNGEON_FLOOR_TIER: Record<string, number> = { B1: 1, B2: 2 };
+const DUNGEON_FLOOR_TIER: Record<string, number> = { B1: 1, B2: 2, B3: 3 };
 const mobsOfTier = (t: number): number[] => DUNGEON_MOBS.map((m, i) => (m.tier === t ? i : -1)).filter((i) => i >= 0);
 const floorNewMobs = (floor: string): number[] => mobsOfTier(DUNGEON_FLOOR_TIER[floor] ?? 1);
 const floorCarryMobs = (floor: string): number[] => { const t = DUNGEON_FLOOR_TIER[floor] ?? 1; return t > 1 ? mobsOfTier(t - 1) : []; };
@@ -891,7 +926,7 @@ export function startWorld(net: WorldNet): void {
   // Optional character portrait that floats above the text box (visual-novel style; used by the imp).
   const npcPortrait = document.createElement('img');
   npcPortrait.style.cssText =
-    'position:absolute;left:50%;bottom:calc(100% - 10px);transform:translateX(-50%);height:150px;display:none;' +
+    'position:absolute;left:50%;bottom:calc(100% - 12px);transform:translateX(-50%);height:200px;display:none;' +
     'image-rendering:pixelated;filter:drop-shadow(0 6px 12px #000b);pointer-events:none;';
   npcBox.append(npcName, npcText, npcChoices, npcHint, npcPortrait);
   overlay.appendChild(npcBox);
@@ -1281,7 +1316,7 @@ export function startWorld(net: WorldNet): void {
         if (ch === 'L' && sc.textures.exists('d-lock')) { // a sealed, barred locked door
           keep(sc.add.image(wx + T / 2, wy + T / 2, 'd-lock').setScale(sl).setOrigin(0.5).setDepth(base + 3));
         }
-        if (theme.props) addFloorProp(sc, c, r, wx, wy, T, sl, base, keep); // deeper-floor ambient decals
+        if (theme.props) addFloorProp(sc, c, r, wx, wy, T, sl, base, keep, !!theme.gore); // deeper-floor ambient decals
         if (ch === 'c') { // a treasure chest — closed or already-opened per saved state
           const spr = sc.add.image(wx + T / 2, wy + T - 3, chestIsOpen(c, r) ? 'w-chest-open' : 'w-chest').setScale(sl).setOrigin(0.5, 1).setDepth(base + 2);
           dungeonChestSprites[`${c},${r}`] = spr; keep(spr);
@@ -1310,17 +1345,24 @@ export function startWorld(net: WorldNet): void {
       }
     }
   }
-  // Deeper-floor ambient decals (B2+): bones, pale cave fungus, cobwebs in corners, ceiling drips.
-  // Deterministic by cell hash (stable across rebuilds), subtle, and never block movement.
-  function addFloorProp(sc: Phaser.Scene, c: number, r: number, wx: number, wy: number, T: number, sl: number, base: number, keep: (o: Phaser.GameObjects.GameObject) => Phaser.GameObjects.GameObject) {
+  // Deeper-floor ambient decals (B2+): bones, pale cave fungus, cobwebs in corners, ceiling drips,
+  // and on `gore` floors (B3+) dried blood + claw marks. Deterministic by cell hash (stable across
+  // rebuilds), subtle, and never block movement.
+  function addFloorProp(sc: Phaser.Scene, c: number, r: number, wx: number, wy: number, T: number, sl: number, base: number, keep: (o: Phaser.GameObjects.GameObject) => Phaser.GameObjects.GameObject, gore: boolean) {
     const h = hash(c * 13 + 5, r * 17 + 3);
-    if (h > 0.93 && sc.textures.exists('d-bones')) {
+    if (gore && h > 0.9 && sc.textures.exists('d-blood')) { // dried blood pooled / smeared on the stone
+      keep(sc.add.image(wx + T / 2, wy + T / 2, 'd-blood').setScale(sl).setOrigin(0.5).setDepth(base + 1).setAlpha(0.62).setAngle((hash(c * 2, r) * 360) | 0));
+    } else if (h > 0.93 && sc.textures.exists('d-bones')) {
       keep(sc.add.image(wx + T / 2, wy + T / 2, 'd-bones').setScale(sl).setOrigin(0.5).setDepth(base + 1).setAlpha(0.85).setAngle((hash(c, r) * 360) | 0));
     } else if (h > 0.86 && sc.textures.exists('d-mush')) { // pale glowing fungus clusters near walls
       const wallAdj = dungeonIsWall(dungeonCell(c, r - 1)) || dungeonIsWall(dungeonCell(c, r + 1)) || dungeonIsWall(dungeonCell(c - 1, r)) || dungeonIsWall(dungeonCell(c + 1, r));
       if (wallAdj) keep(sc.add.image(wx + T / 2, wy + T / 2, 'd-mush').setScale(sl).setOrigin(0.5).setDepth(base + 1).setAlpha(0.9));
     } else if (h > 0.82 && sc.textures.exists('d-drip')) { // a slow ceiling drip + faint puddle
       keep(sc.add.image(wx + T / 2, wy + T / 2, 'd-drip').setScale(sl).setOrigin(0.5).setDepth(base + 1).setAlpha(0.5));
+    }
+    // claw marks raked across a wall-adjacent floor tile (gore floors only)
+    if (gore && h > 0.5 && h < 0.56 && sc.textures.exists('d-claw')) {
+      keep(sc.add.image(wx + T / 2, wy + T / 2, 'd-claw').setScale(sl).setOrigin(0.5).setDepth(base + 1).setAlpha(0.5).setFlipX(h < 0.53));
     }
     // cobwebs cling in inside corners (a wall on two adjacent sides)
     if (h < 0.16 && sc.textures.exists('d-web')) {
@@ -2763,6 +2805,25 @@ export function startWorld(net: WorldNet): void {
       px(8, 3, 1, 2, 0x6a86b8); px(8, 5, 1, 1, 0x466294);          // bead
       px(5, 11, 6, 2, 0x37486a); px(6, 11, 3, 1, 0x6a86b8);        // puddle + glint
       g.generateTexture('d-drip', 16, 16);
+    }
+    // --- dried blood: an irregular dark-red pool with a few spatter flecks (gore floors) ---
+    {
+      const BL = 0x6e0f12, BL_D = 0x4a0a0d, BL_S = 0x8a1518;
+      g.clear();
+      px(5, 6, 6, 4, BL); px(4, 7, 8, 2, BL); px(6, 5, 4, 1, BL_D); px(5, 10, 5, 1, BL_D); // main pool
+      px(6, 7, 3, 1, BL_S);                                          // wet highlight
+      px(3, 5, 1, 1, BL); px(12, 8, 1, 1, BL); px(11, 4, 1, 1, BL_D); px(4, 11, 1, 1, BL_D); // spatter
+      px(13, 6, 1, 1, BL); px(2, 9, 1, 1, BL_D);
+      g.generateTexture('d-blood', 16, 16);
+    }
+    // --- claw marks: three parallel gashes raked across the stone (gore floors) ---
+    {
+      const CL = 0x2a1f22, CL_D = 0x140d0f;
+      g.clear();
+      px(4, 3, 1, 9, CL); px(4, 3, 1, 2, CL_D); px(4, 11, 1, 1, CL_D);
+      px(7, 4, 1, 9, CL); px(7, 4, 1, 2, CL_D); px(7, 12, 1, 1, CL_D);
+      px(10, 3, 1, 9, CL); px(10, 3, 1, 2, CL_D); px(10, 11, 1, 1, CL_D);
+      g.generateTexture('d-claw', 16, 16);
     }
 
     // --- car body + roof (tintable) — pointing +x (east), 26×14 texels ---
