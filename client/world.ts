@@ -696,6 +696,7 @@ export function startWorld(net: WorldNet): void {
   const dungeonChestSprites: Record<string, Phaser.GameObjects.Image> = {}; // 'c,r' → sprite (to swap on open)
   let nearChestCell: { c: number; r: number } | null = null; // unopened chest within reach (→ Open prompt)
   let nearStairs: { dir: 'down' | 'up'; to: string } | null = null; // a stair tile within reach (→ descend/ascend)
+  let nearLockedDoor: { c: number; r: number } | null = null; // an 'L' locked door within reach (→ "needs a key")
   const openedChestsServer = new Set<string>(); // 'floor:col,row' the server says this account has opened
   const chestIsOpen = (c: number, r: number) => openedChestsServer.has(`${currentFloor}:${c},${r}`);
   let lastGrassKey = '';    // last tall-grass cell rolled, so each new '~' tile rolls one encounter
@@ -1289,7 +1290,7 @@ export function startWorld(net: WorldNet): void {
     selfX = p.x; selfY = p.y;
     vx = 0; vy = 0; keys.clear(); joyActive = false;
     mainCam?.setBounds(dInt.x, dInt.y, dInt.w, dInt.h);
-    lastGrassKey = ''; grassDanger = 0; nearStairs = null;
+    lastGrassKey = ''; grassDanger = 0; nearStairs = null; nearLockedDoor = null;
     newMobsSeen.clear(); recentMob = -1; recentMobRun = 0; // each floor re-forces its new mobs first
     stairSound(arriveChar === '<'); // arriving at an up-stair means we descended
     // NB: no dungeonSync here — that would reset the purse + provisional chests. The client already
@@ -1338,6 +1339,23 @@ export function startWorld(net: WorldNet): void {
   function stairSound(down: boolean) {
     const seq = down ? [440, 330, 247] : [247, 330, 440];
     seq.forEach((f, i) => window.setTimeout(() => tone(f, 0.09, 'triangle', 0.12, f * 0.7), i * 90));
+  }
+  // a heavy, immovable lock: a dull iron thunk then a dead rattle (it does NOT give)
+  function lockedSound() {
+    tone(90, 0.13, 'square', 0.16, 60);
+    window.setTimeout(() => tone(70, 0.16, 'sawtooth', 0.10, 48), 120);
+    window.setTimeout(() => tone(150, 0.05, 'square', 0.06, 120), 180);
+  }
+  // Try the sealed door with no key — it won't budge. A creepy line + the dead-lock sound.
+  const LOCKED_LINES = [
+    "🔒 The lock is cold and won't turn. You need a key.",
+    "🔒 Something heavy holds this door shut. There's a key for it — not on you.",
+    "🔒 You rattle the iron. It doesn't give. A key must be down here somewhere…",
+    "🔒 Sealed tight. Whatever's behind it wants to stay behind it — find the key.",
+  ];
+  function tryLockedDoor() {
+    lockedSound();
+    showToast(LOCKED_LINES[Math.floor(Math.random() * LOCKED_LINES.length)]);
   }
   function openChest(c: number, r: number) {
     if (chestIsOpen(c, r)) return;
@@ -1643,6 +1661,7 @@ export function startWorld(net: WorldNet): void {
     if (nearExit) { if (inDungeon) leaveDungeon(); else leaveTavern(); return; }
     if (nearStairs) { changeFloor(nearStairs.to, nearStairs.dir === 'down' ? '<' : '>'); return; }
     if (nearChestCell) { openChest(nearChestCell.c, nearChestCell.r); return; }
+    if (nearLockedDoor) { tryLockedDoor(); return; }
     if (nearJailed) { net.bail(nearJailed.id); return; } // post their bail
     const b = WORLD_BUILDINGS.find((x) => x.id === nearId);
     if (b) enterBuilding(b.kind);
@@ -2022,6 +2041,12 @@ export function startWorld(net: WorldNet): void {
         if (d2 < best) { best = d2; nearChestCell = { c: cc, r: cr }; }
       }
     }
+    nearLockedDoor = null;
+    if (inDungeon && !nearExit && !nearStairs && !nearChestCell) { // a sealed 'L' door within reach
+      const pc = Math.floor((selfX - dInt.x) / DUNGEON_TILE), pr = Math.floor((selfY - dInt.y) / DUNGEON_TILE);
+      for (const [dc, dr] of [[0, -1], [0, 1], [-1, 0], [1, 0], [0, 0]] as const)
+        if (dungeonCell(pc + dc, pr + dr) === 'L') { nearLockedDoor = { c: pc + dc, r: pr + dr }; break; }
+    }
     // A jailed avatar within reach (and we're free) → offer to post their bail.
     nearJailed = null;
     if (!best && !nearNpc && !nearNetizen && !driving && !net.amJailed() && !inInterior && !inDungeon) {
@@ -2046,10 +2071,12 @@ export function startWorld(net: WorldNet): void {
       prompt.textContent = nearStairs.dir === 'down' ? `⬇️ Descend to ${nearStairs.to}` : `⬆️ Climb up to ${nearStairs.to}`;
     } else if (nearChestCell) {
       prompt.textContent = '📦 Open the chest';
+    } else if (nearLockedDoor) {
+      prompt.textContent = '🔒 Locked door';
     } else if (nearJailed) {
       prompt.textContent = `🔓 Bail out ${nearJailed.name} (${BAIL_COST}🪙)`;
     }
-    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearStairs || nearChestCell || nearJailed) && !dialogOpen && !talkOpen ? 'block' : 'none';
+    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearStairs || nearChestCell || nearLockedDoor || nearJailed) && !dialogOpen && !talkOpen ? 'block' : 'none';
   }
 
   function maybeSendMove(now: number) {

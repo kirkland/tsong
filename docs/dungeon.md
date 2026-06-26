@@ -229,8 +229,12 @@ Keep this legend in sync across `floors.js`, `preview.html`, and this doc.
 
 - **Click to capture mouse** — pointer-lock on click (battle and/or dungeon) so mouse control is
   smooth and doesn't drift out of the window.
-- **Locked room + key system** — the `+` locked doors / `K` keys: a key gates a room (Matt has the
-  specific design in mind).
+- **Locked room + key system** — B2 already has a sealed room: an `L` locked door blocks it, with a
+  500🪙 chest behind it (`DUNGEON_CHEST_CONTENTS['B2:34,24']`). Trying the door with no key shows a
+  flavored "you need a key" toast + dead-lock sound (`tryLockedDoor`, client/world.ts). **The key for
+  it lives on B3** — so the loop is: pass B2's sealed room → descend to B3 → find the key → climb back
+  up to open it. Still to build: the `K` key pickup on B3, a held-keys inventory, and unlocking the
+  `L` door when you have it (server-authoritative, like chests).
 
 ## Open questions (to settle before building)
 
