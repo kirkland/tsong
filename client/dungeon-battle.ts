@@ -569,6 +569,9 @@ export function startEncounter(opts: EncounterOpts): void {
       if (keys.has('w') || keys.has('arrowup')) inputY -= PADDLE.speed * dt;
       if (keys.has('s') || keys.has('arrowdown')) inputY += PADDLE.speed * dt;
       game.setTarget('left', 'me', inputY);
+      // the engine clears mirror/blaster on every scored point — re-assert these baked-in gimmicks
+      if (mob.mirror) game.mirrorTimer.left = Infinity;
+      if (mob.blaster) game.blasterAmmo.right = Infinity;
       stepAI(dt);
       const beforeL = game.score.left, beforeR = game.score.right;
       game.tick(dt);
