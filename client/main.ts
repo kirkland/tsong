@@ -738,6 +738,8 @@ const net = connect(
       // Account-stored settings arriving on join: seed the local set (server wins over cookie) and apply.
       for (const [k, v] of Object.entries(msg.prefs)) { prefs[k] = v; setCookie('tsong_' + k, v); }
       applyPrefs();
+    } else if (msg.type === 'land') {
+      worldMod?.feedLand(msg.parcels, msg.bankBought, msg.bankCap);
     } else if (msg.type === 'wallet') {
       wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, car: msg.car, pet: msg.pet, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
       rouletteHandle.setCoins(msg.coins);
@@ -2004,6 +2006,12 @@ worldBtn.addEventListener('click', async () => {
       amJailed: () => worldJailed,                            // are WE locked up right now?
       dayNightOffset: () => dayNightOffset,                   // per-deploy day/night clock offset
       openParliament: () => { setTimeout(() => { void openParliament(); }, 0); }, // walk in → Nomic overlay
+      // Robville land: buy from the bank, list/unlist your lots, buy listed lots off other owners.
+      landReq: () => net.send({ type: 'landReq' }),
+      landBuyBank: (id) => net.send({ type: 'landBuyBank', id }),
+      landList: (id, ask) => net.send({ type: 'landList', id, ask }),
+      landUnlist: (id) => net.send({ type: 'landUnlist', id }),
+      landBuy: (id) => net.send({ type: 'landBuy', id }),
     });
   } catch (e) {
     console.error('World failed to load:', e);

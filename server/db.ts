@@ -3,7 +3,7 @@
 // simply empty, so the rest of the app runs unchanged.
 
 import pg from 'pg';
-import { LeaderboardRow, NetWorthRow, LEADERBOARD_SIZE, CampaignScoreRow, StockSide, StockTf, positionWorth, EXCLUSIVES, isExclusive } from '../shared/types';
+import { LeaderboardRow, NetWorthRow, LEADERBOARD_SIZE, CampaignScoreRow, StockSide, StockTf, positionWorth, EXCLUSIVES, isExclusive, WORLD_PARCELS } from '../shared/types';
 import type { NomicSnapshot } from './nomic';
 
 // Economy Overhaul: the House treasury is seeded ONCE with a genesis allocation. This is the
@@ -58,6 +58,8 @@ export async function initDb(): Promise<void> {
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS skin TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS last_spin BIGINT NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS bonus_spins INTEGER NOT NULL DEFAULT 0`);
+  // Robville: lifetime count of lots this player has bought FROM THE BANK (the anti-monopoly cap).
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS bank_parcels INTEGER NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS trail TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS title TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS song TEXT`);
@@ -461,6 +463,22 @@ export async function initDb(): Promise<void> {
       console.log(`deleted account 'matt' (${pid})`);
     }
     await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('delete_matt_v1', now()::text)`);
+  }
+  // Robville land registry: one row per lot (the fixed WORLD_PARCELS set). owner_pid NULL = the
+  // lot is bank-owned (buyable); `ask` is the owner's asking price when listed for sale, else NULL.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS land_parcels (
+      id         TEXT PRIMARY KEY,
+      owner_pid  TEXT,
+      owner_name TEXT,
+      ask        INTEGER,
+      updated_at BIGINT NOT NULL DEFAULT 0
+    )
+  `);
+  // Seed a row for every lot so the buy txn can lock it FOR UPDATE. ON CONFLICT DO NOTHING keeps
+  // existing ownership; lots added to the layout later start bank-owned.
+  for (const p of WORLD_PARCELS) {
+    await pool.query(`INSERT INTO land_parcels (id) VALUES ($1) ON CONFLICT (id) DO NOTHING`, [p.id]);
   }
   await ensureNetizenChallengesTable();
   console.log('leaderboard DB ready');
@@ -1378,6 +1396,147 @@ export async function buyLowestAsk(item: string, buyerPid: string, _buyerName: s
     // Record the last sale (outside the txn; a best-effort cache).
     await setExclusiveLastSale(item, ask).catch(() => {});
     return { ok: true, ask, commission, sellerPid, sellerName, instanceId };
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// --- Robville land registry -----------------------------------------------------------------
+export interface LandRow { id: string; ownerPid: string | null; ownerName: string | null; ask: number | null; }
+
+/** Every lot's current ownership/market state (only rows that exist; lots are seeded on boot). */
+export async function getLandParcels(): Promise<LandRow[]> {
+  if (!pool) return [];
+  const { rows } = await pool.query(`SELECT id, owner_pid, owner_name, ask FROM land_parcels`);
+  return rows.map((r) => ({
+    id: r.id as string,
+    ownerPid: (r.owner_pid as string | null) ?? null,
+    ownerName: (r.owner_name as string | null) ?? null,
+    ask: r.ask === null || r.ask === undefined ? null : Number(r.ask),
+  }));
+}
+
+/** How many lots this player has bought from the bank so far (the anti-monopoly cap counter). */
+export async function getBankParcels(pid: string): Promise<number> {
+  if (!pool || !pid) return 0;
+  const { rows } = await pool.query(`SELECT bank_parcels FROM players WHERE id = $1`, [pid]);
+  return rows.length ? Number(rows[0].bank_parcels) || 0 : 0;
+}
+
+/** Buy an empty lot from the bank. Atomic: locks the lot, enforces the cap, debits the buyer,
+ *  credits the full price into the House, and assigns ownership. `cap` is BANK_PARCEL_CAP. */
+export async function buyParcelFromBank(
+  pid: string, name: string, id: string, price: number, cap: number, nowMs: number = Date.now(),
+): Promise<{ ok: true } | { ok: false; reason: 'nodb' | 'unknown' | 'taken' | 'cap' | 'afford' }> {
+  if (!pool || !pid) return { ok: false, reason: 'nodb' };
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Lock the lot first (same order as the owner-sale txn, so the two can't deadlock).
+    const lot = await client.query(`SELECT owner_pid FROM land_parcels WHERE id = $1 FOR UPDATE`, [id]);
+    if (!lot.rowCount) { await client.query('ROLLBACK'); return { ok: false, reason: 'unknown' }; }
+    if (lot.rows[0].owner_pid) { await client.query('ROLLBACK'); return { ok: false, reason: 'taken' }; }
+    // Ensure the player row exists (so the cap select + debit have something to grab).
+    await client.query(
+      `INSERT INTO players (id, name) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name`,
+      [pid, name],
+    );
+    const pc = await client.query(`SELECT bank_parcels FROM players WHERE id = $1 FOR UPDATE`, [pid]);
+    const bought = pc.rowCount ? Number(pc.rows[0].bank_parcels) || 0 : 0;
+    if (bought >= cap) { await client.query('ROLLBACK'); return { ok: false, reason: 'cap' }; }
+    const pay = await client.query(
+      `UPDATE players SET coins = coins - $2, bank_parcels = bank_parcels + 1 WHERE id = $1 AND coins >= $2`,
+      [pid, price],
+    );
+    if (!pay.rowCount) { await client.query('ROLLBACK'); return { ok: false, reason: 'afford' }; }
+    await client.query(
+      `UPDATE land_parcels SET owner_pid = $2, owner_name = $3, ask = NULL, updated_at = $4 WHERE id = $1`,
+      [id, pid, name, nowMs],
+    );
+    // The whole purchase price flows into the House treasury (the bank is the House).
+    await client.query(
+      `UPDATE doom_meta SET v = (GREATEST(0, v::numeric + $1))::text WHERE k = 'house_balance'`,
+      [price],
+    );
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/** List your lot for sale at `ask` coins (or re-price an existing listing). */
+export async function listParcel(pid: string, id: string, ask: number): Promise<boolean> {
+  if (!pool || !pid || !(ask > 0)) return false;
+  const res = await pool.query(
+    `UPDATE land_parcels SET ask = $3 WHERE id = $1 AND owner_pid = $2`,
+    [id, pid, Math.floor(ask)],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+/** Take your lot back off the market. */
+export async function unlistParcel(pid: string, id: string): Promise<boolean> {
+  if (!pool || !pid) return false;
+  const res = await pool.query(
+    `UPDATE land_parcels SET ask = NULL WHERE id = $1 AND owner_pid = $2`,
+    [id, pid],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+/** Buy a listed lot from its owner at the asking price. Atomic: locks the lot, debits the buyer,
+ *  pays the seller the full ask, and transfers ownership. Player-to-player — does NOT count toward
+ *  the bank cap. */
+export async function buyParcelFromOwner(
+  buyerPid: string, buyerName: string, id: string, nowMs: number = Date.now(),
+): Promise<
+  | { ok: true; ask: number; sellerPid: string; sellerName: string }
+  | { ok: false; reason: 'nodb' | 'unknown' | 'unavail' | 'self' | 'afford' }
+> {
+  if (!pool || !buyerPid) return { ok: false, reason: 'nodb' };
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const sel = await client.query(
+      `SELECT owner_pid, owner_name, ask FROM land_parcels WHERE id = $1 FOR UPDATE`,
+      [id],
+    );
+    if (!sel.rowCount) { await client.query('ROLLBACK'); return { ok: false, reason: 'unknown' }; }
+    const row = sel.rows[0];
+    const sellerPid = row.owner_pid as string | null;
+    const ask = row.ask === null || row.ask === undefined ? null : Number(row.ask);
+    if (!sellerPid || ask === null || !(ask > 0)) { await client.query('ROLLBACK'); return { ok: false, reason: 'unavail' }; }
+    if (sellerPid === buyerPid) { await client.query('ROLLBACK'); return { ok: false, reason: 'self' }; }
+    const sellerName = (row.owner_name as string | null) ?? 'someone';
+    // Ensure the buyer row exists, then charge them atomically (rowCount 0 => can't afford).
+    await client.query(
+      `INSERT INTO players (id, name) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name`,
+      [buyerPid, buyerName],
+    );
+    const pay = await client.query(
+      `UPDATE players SET coins = coins - $2 WHERE id = $1 AND coins >= $2`,
+      [buyerPid, ask],
+    );
+    if (!pay.rowCount) { await client.query('ROLLBACK'); return { ok: false, reason: 'afford' }; }
+    // The seller gets the full asking price (no House cut on private land sales).
+    await client.query(
+      `INSERT INTO players (id, name, coins) VALUES ($1, $2, GREATEST(0, $3))
+         ON CONFLICT (id) DO UPDATE SET coins = GREATEST(0, players.coins + $3), name = EXCLUDED.name`,
+      [sellerPid, sellerName, ask],
+    );
+    await client.query(
+      `UPDATE land_parcels SET owner_pid = $2, owner_name = $3, ask = NULL, updated_at = $4 WHERE id = $1`,
+      [id, buyerPid, buyerName, nowMs],
+    );
+    await client.query('COMMIT');
+    return { ok: true, ask, sellerPid, sellerName };
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     throw e;

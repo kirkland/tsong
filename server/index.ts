@@ -401,6 +401,21 @@ wss.on('connection', (ws: WebSocket, req) => {
           lobby.worldMove(ws, msg.x, msg.y, typeof msg.a === 'number' ? msg.a : undefined, typeof msg.car === 'string' ? msg.car : null, typeof msg.pet === 'string' ? msg.pet : null);
         }
         break;
+      case 'landReq':
+        lobby.sendLand(ws);
+        break;
+      case 'landBuyBank':
+        if (typeof msg.id === 'string') lobby.landBuyBank(ws, msg.id);
+        break;
+      case 'landList':
+        if (typeof msg.id === 'string' && typeof msg.ask === 'number') lobby.landList(ws, msg.id, msg.ask);
+        break;
+      case 'landUnlist':
+        if (typeof msg.id === 'string') lobby.landUnlist(ws, msg.id);
+        break;
+      case 'landBuy':
+        if (typeof msg.id === 'string') lobby.landBuy(ws, msg.id);
+        break;
       case 'dailySpin':
         lobby.dailySpin(ws);
         break;

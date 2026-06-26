@@ -29,6 +29,11 @@ import {
   WORLD,
   WORLD_AVATAR,
   WORLD_BUILDINGS,
+  WORLD_PARCELS,
+  ROBVILLE_BULBS,
+  PARCEL_PRICE,
+  BANK_PARCEL_CAP,
+  type LandParcelView,
   JAIL,
   JAIL_WALL,
   BAIL_COST,
@@ -65,11 +70,18 @@ export interface WorldNet {
   bail(targetId: string): void;  // pay 500🪙 to bail a jailed avatar out (id; may be your own)
   amJailed(): boolean;           // are WE currently locked in the jail cell?
   dayNightOffset(): number;      // ms offset for the day/night clock (randomized per server boot)
+  // --- Robville land ---
+  landReq(): void;                          // ask the server for the current parcel book
+  landBuyBank(id: string): void;            // buy an empty lot from the bank (PARCEL_PRICE)
+  landList(id: string, ask: number): void;  // list your lot for sale at `ask` coins
+  landUnlist(id: string): void;             // take your lot back off the market
+  landBuy(id: string): void;                // buy a listed lot from its owner at the asking price
 }
 
 // --- module-level controller so feedWorld()/isWorldOpen() can reach the live overlay ---
 interface Controller {
   feed(avatars: WorldAvatar[]): void;
+  feedLand(parcels: LandParcelView[], bankBought: number, bankCap: number): void; // Robville land book
   reenter(): void; // re-send worldEnter after a socket reconnect (server forgot us on drop)
 }
 let controller: Controller | null = null;
@@ -87,6 +99,11 @@ export function exitWorld(): void {
 /** Push the latest avatar roster (from a `world` server message) into the live overlay. */
 export function feedWorld(avatars: WorldAvatar[]): void {
   controller?.feed(avatars);
+}
+
+/** Push the latest Robville land book (from a `land` server message) into the live overlay. */
+export function feedLand(parcels: LandParcelView[], bankBought: number, bankCap: number): void {
+  controller?.feedLand(parcels, bankBought, bankCap);
 }
 
 /** Re-assert our presence in the world after a reconnect (the server drops us on socket close). */
@@ -132,6 +149,13 @@ const ROADS: Rect[] = [
   { x: 1060, y: 1300, w: 110, h: 300 }, // spur down to the Tavern (south of centre)
   { x: 585, y: 640, w: 110, h: 560 },   // spur up to Parliament (NW)
   { x: 985, y: 630, w: 110, h: 570 },   // spur up to the Arcade (N, between Parliament & Arena)
+  // --- Robville (the suburban neighborhood, east side) ---
+  { x: 2640, y: 1180, w: 1270, h: 120 }, // connector avenue off the main street
+  { x: 3790, y: 700,  w: 120,  h: 1010 }, // residential spine (vertical)
+  { x: 3500, y: 720,  w: 300,  h: 80 },   // stem → Maple Court (west, upper)
+  { x: 3910, y: 720,  w: 390,  h: 80 },   // stem → Birch Circle (east, upper)
+  { x: 3500, y: 1600, w: 300,  h: 80 },   // stem → Willow Court (west, lower)
+  { x: 3910, y: 1600, w: 390,  h: 80 },   // stem → Cedar Circle (east, lower)
 ];
 const PLAZA = { x: 1600, y: 1100, r: 240 }; // paved circle + fountain at town center
 // The Tavern's INTERIOR lives off the main map. When you step inside, the camera bounds switch to
@@ -145,7 +169,9 @@ const JAIL_WALLS: Rect[] = [
   { x: JAIL.x + JAIL.w - JAIL_WALL, y: JAIL.y, w: JAIL_WALL, h: JAIL.h },  // right
   { x: JAIL.x, y: JAIL.y + JAIL.h - JAIL_WALL, w: JAIL.w, h: JAIL_WALL },  // front bars
 ];
-const TAVERN_INT = { x: 4200, y: 300, w: 880, h: 560 };
+// The Tavern interior lives OFF the playable map. It used to sit at x:4200, but Robville widened
+// the world to 4800, so it was relocated east of the new bounds to stay out of sight.
+const TAVERN_INT = { x: 5400, y: 300, w: 880, h: 560 };
 const TAVERN_WALL = 28; // interior wall thickness (play area is inset by this)
 const TAVERN_ZOOM = 3;  // zoom in while inside so the small cozy room fills the viewport
 
@@ -158,15 +184,24 @@ function onRoad(px: number, py: number, pad = 0): boolean {
 function nearPlaza(px: number, py: number, pad = 0): boolean {
   return Math.hypot(px - PLAZA.x, py - PLAZA.y) <= PLAZA.r + pad;
 }
+// Inside a Robville cul-de-sac bulb (the paved circle at a street's dead end).
+function nearBulb(px: number, py: number, pad = 0): boolean {
+  return ROBVILLE_BULBS.some((b) => Math.hypot(px - b.cx, py - b.cy) <= b.r + pad);
+}
+// On a Robville lot footprint (kept clear of scattered scenery so houses have room).
+function onParcel(px: number, py: number, pad = 0): boolean {
+  return WORLD_PARCELS.some((p) => pointInRect(px, py, p, pad));
+}
 function inAnyBuilding(px: number, py: number, pad = 0): boolean {
   return WORLD_BUILDINGS.some((b) => pointInRect(px, py, b, pad));
 }
 function inJail(px: number, py: number, pad = 0): boolean {
   return pointInRect(px, py, JAIL, pad);
 }
-// "Bare" ground = roads + the plaza: dirt under your feet, autotiled against the surrounding grass.
+// "Bare" ground = roads + the plaza + Robville cul-de-sac bulbs: dirt under your feet, autotiled
+// against the surrounding grass.
 function isBare(px: number, py: number): boolean {
-  return onRoad(px, py) || nearPlaza(px, py);
+  return onRoad(px, py) || nearPlaza(px, py) || nearBulb(px, py);
 }
 
 // Deterministic 0..1 hash so decoration placement is stable across frames/sessions without any
@@ -202,6 +237,7 @@ const DECOR: Decor[] = (() => {
       const x = gx + (hash(gx, gy * 3) - 0.5) * 80;
       const y = gy + (hash(gx * 3, gy) - 0.5) * 80;
       if (inAnyBuilding(x, y, 90) || inJail(x, y, 40) || onRoad(x, y, 28) || nearPlaza(x, y, 28)) continue;
+      if (onParcel(x, y, 16) || nearBulb(x, y, 20)) continue; // keep Robville lots + cul-de-sacs clear
       // Leave some cells empty so it reads organic rather than wall-to-wall.
       if (hash(gx + 5, gy + 9) < 0.2) continue;
       const r = hash(gx, gy);
@@ -571,6 +607,14 @@ export function startWorld(net: WorldNet): void {
   // --- jail state ---
   let nearJailed: { id: string; name: string } | null = null; // a jailed avatar in bail range (free players)
   let wasJailed = false;    // tracks the jailed transition so we can teleport in/out once
+
+  // --- Robville land state ---
+  const land = new Map<string, LandParcelView>(); // lot id → its live ownership/market state
+  let myBankBought = 0;                            // lots I've bought from the bank so far
+  let myBankCap = BANK_PARCEL_CAP;                 // the per-player bank cap (server-authoritative)
+  let nearParcel: string | null = null;            // lot the avatar is currently standing on
+  // Per-lot Phaser objects (the tinted pad + its hovering sign), built once in create().
+  const parcelGfx = new Map<string, { pad: Phaser.GameObjects.Rectangle; sign: Phaser.GameObjects.Text }>();
 
   // --- NPC state ---
   const npcs: LiveNpc[] = [];          // populated in create()
@@ -961,6 +1005,84 @@ export function startWorld(net: WorldNet): void {
     }
   }
 
+  // --- Robville lots: each lot's tint + hovering sign reflect its ownership/market state. ---
+  // bank-owned (for sale) = green · yours = gold · listed by a neighbor = amber · owned, not listed = blue.
+  function refreshParcels() {
+    for (const p of WORLD_PARCELS) {
+      const g = parcelGfx.get(p.id);
+      if (!g) continue;
+      const st = land.get(p.id);
+      let fill = 0x6fbf73, fa = 0.16, stroke = 0xeaf7ea, label = `🪧 ${PARCEL_PRICE.toLocaleString()}🪙`;
+      if (st && st.ownerName) {
+        if (st.mine) {
+          fill = 0xe8c84b; fa = 0.22; stroke = 0xfff3c4;
+          label = st.ask != null ? `🏠 Yours · ${st.ask.toLocaleString()}🪙` : '🏠 Your lot';
+        } else if (st.ask != null) {
+          fill = 0xe09a3a; fa = 0.20; stroke = 0xffe0b0;
+          label = `🪧 ${st.ask.toLocaleString()}🪙\n${st.ownerName}`;
+        } else {
+          fill = 0x5a78c8; fa = 0.16; stroke = 0xcdd8f5;
+          label = `🏠 ${st.ownerName}`;
+        }
+      }
+      g.pad.setFillStyle(fill, fa);
+      g.pad.setStrokeStyle(3, stroke, 0.9);
+      g.sign.setText(label);
+    }
+  }
+
+  // The bottom-of-screen prompt text when standing on a lot.
+  function parcelPrompt(id: string): string {
+    const st = land.get(id);
+    if (!st || !st.ownerName) return `🏡 Buy this lot — ${PARCEL_PRICE.toLocaleString()}🪙`;
+    if (st.mine) return st.ask != null ? '🏠 Your lot — manage listing' : '🏠 Your lot — sell?';
+    if (st.ask != null) return `🏡 Buy ${st.ownerName}'s lot — ${st.ask.toLocaleString()}🪙`;
+    return `🏠 ${st.ownerName}'s lot`;
+  }
+
+  // Walk onto a lot + press E → this dialog. Branches on who owns it (bank / you / a neighbor).
+  function openLandDialog(id: string) {
+    if (!WORLD_PARCELS.some((x) => x.id === id)) return;
+    const st = land.get(id);
+    // Empty lot, owned by the bank → buy it (subject to the anti-monopoly cap).
+    if (!st || !st.ownerName) {
+      if (myBankBought >= myBankCap) {
+        openDialog('🏦 Robville Land Office',
+          `You've hit the bank's limit of ${myBankCap} lot${myBankCap === 1 ? '' : 's'} per buyer. You can still buy any number of lots directly from other owners.`, []);
+        return;
+      }
+      openDialog('🏡 Empty Lot for Sale',
+        `A tidy patch of Robville, yours from the bank for ${PARCEL_PRICE.toLocaleString()}🪙. (You've bought ${myBankBought} of your ${myBankCap} from the bank.)`, [
+        { label: `🤝 Buy this lot — ${PARCEL_PRICE.toLocaleString()}🪙`, onPick: () => { closeDialog(); net.landBuyBank(id); } },
+      ]);
+      return;
+    }
+    // Your own lot → manage the listing.
+    if (st.mine) {
+      const choices: { label: string; onPick: () => void }[] = [
+        { label: st.ask != null ? '🏷️ Change asking price…' : '🏷️ List for sale…', onPick: () => {
+          const raw = window.prompt('Set an asking price for your Robville lot (in coins):', st.ask != null ? String(st.ask) : '2000');
+          const ask = Math.floor(Number(raw));
+          if (raw != null && Number.isFinite(ask) && ask > 0) net.landList(id, ask);
+          closeDialog();
+        } },
+      ];
+      if (st.ask != null) choices.push({ label: '🚫 Take off the market', onPick: () => { closeDialog(); net.landUnlist(id); } });
+      openDialog('🏠 Your Robville Lot',
+        st.ask != null ? `Listed for sale at ${st.ask.toLocaleString()}🪙.` : "A fine plot. Build a house here soon™ — for now you can put it on the market.", choices);
+      return;
+    }
+    // A neighbor's lot — buyable only if they've listed it (no bank cap on private sales).
+    if (st.ask != null) {
+      openDialog(`🏡 ${st.ownerName}'s Lot`,
+        `${st.ownerName} is asking ${st.ask.toLocaleString()}🪙. No bank limit when you buy from a neighbor.`, [
+        { label: `🤝 Buy for ${st.ask.toLocaleString()}🪙`, onPick: () => { closeDialog(); net.landBuy(id); } },
+      ]);
+    } else {
+      openDialog(`🏠 ${st.ownerName}'s Lot`, `This lot belongs to ${st.ownerName}, and it isn't for sale right now.`, []);
+    }
+  }
+
   // --- Tavern interior: a walkable room off the map. Entering swaps the camera bounds + collision
   // to TAVERN_INT and drops you by the door; the bartender (an NPC) sells beer; an exit mat leaves. ---
   function buildInterior(sc: Phaser.Scene) {
@@ -1243,7 +1365,8 @@ export function startWorld(net: WorldNet): void {
     if (nearExit) { leaveTavern(); return; }
     if (nearJailed) { net.bail(nearJailed.id); return; } // post their bail
     const b = WORLD_BUILDINGS.find((x) => x.id === nearId);
-    if (b) enterBuilding(b.kind);
+    if (b) { enterBuilding(b.kind); return; }
+    if (nearParcel) openLandDialog(nearParcel); // walk onto a Robville lot → buy/sell it
   }
 
   // The Barkeep's order dialog: a quip + a buy button. Buying keeps you IN the bar (closeDialog,
@@ -1396,7 +1519,7 @@ export function startWorld(net: WorldNet): void {
     if (k === 'enter' || k === 'e' || k === ' ') {
       // Always swallow Space so the page never scrolls; interact if something's in range.
       e.preventDefault(); e.stopPropagation();
-      if (nearId || nearNpc || nearNetizen) triggerNear();
+      if (nearId || nearNpc || nearNetizen || nearParcel) triggerNear();
       return;
     }
     if (MOVE_KEYS.has(k)) { keys.add(k); e.preventDefault(); e.stopPropagation(); }
@@ -1576,6 +1699,17 @@ export function startWorld(net: WorldNet): void {
         if (d < jD) { jD = d; nearJailed = { id: a.id, name: a.name }; }
       }
     }
+    // A Robville lot you're standing on (or right beside) → buy/sell prompt. Lowest priority so it
+    // never steals focus from a door, person, or jailed neighbor.
+    nearParcel = null;
+    if (!best && !nearNpc && !nearNetizen && !nearJailed && !inInterior && !net.amJailed()) {
+      let pD = Infinity;
+      for (const p of WORLD_PARCELS) {
+        if (!pointInRect(selfX, selfY, p, R + 8)) continue; // must be on (or hugging) the lot
+        const d = Math.hypot(p.cx - selfX, p.cy - selfY);
+        if (d < pD) { pD = d; nearParcel = p.id; }
+      }
+    }
     if (best) {
       const b = WORLD_BUILDINGS.find((x) => x.id === best)!;
       prompt.textContent = labelFor(b.kind);
@@ -1588,8 +1722,10 @@ export function startWorld(net: WorldNet): void {
       prompt.textContent = '🚪 Leave the Tavern';
     } else if (nearJailed) {
       prompt.textContent = `🔓 Bail out ${nearJailed.name} (${BAIL_COST}🪙)`;
+    } else if (nearParcel) {
+      prompt.textContent = parcelPrompt(nearParcel);
     }
-    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearJailed) && !dialogOpen && !talkOpen ? 'block' : 'none';
+    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearJailed || nearParcel) && !dialogOpen && !talkOpen ? 'block' : 'none';
   }
 
   function maybeSendMove(now: number) {
@@ -2529,6 +2665,38 @@ export function startWorld(net: WorldNet): void {
         sc.add.text(x + w / 2, y - 6, '🚔 JAIL', { fontFamily: 'system-ui, sans-serif', fontSize: '15px', fontStyle: 'bold', color: '#ffffff', stroke: '#0b1020', strokeThickness: 5, resolution: 2 }).setOrigin(0.5, 1).setDepth(100000);
       }
 
+      // --- Robville: the suburban neighborhood (cul-de-sac planters + buyable lots) ---
+      {
+        // A leafy planter island in the middle of each cul-de-sac bulb.
+        for (const b of ROBVILLE_BULBS) {
+          sc.add.image(b.cx, b.cy, 'w-shadow').setScale(TEXEL * 1.6).setOrigin(0.5, 0.4).setDepth(b.cy - 1).setAlpha(0.4);
+          sc.add.image(b.cx, b.cy, 'townFrames', TT.bush).setScale(TEXEL * 1.5).setOrigin(0.5, 0.85).setDepth(b.cy);
+          for (let i = 0; i < 4; i++) {
+            const a = (i / 4) * Math.PI * 2 + 0.4;
+            sc.add.image(b.cx + Math.cos(a) * 30, b.cy + Math.sin(a) * 22, 'townFrames', TT.mushroom)
+              .setScale(TEXEL * 0.9).setOrigin(0.5, 0.85).setDepth(b.cy + Math.sin(a) * 22);
+          }
+        }
+        // Each buyable lot: a tinted pad with a picket-fence border + a hovering sign. Colors/text are
+        // set by refreshParcels() from the live land book (here we just build the objects).
+        for (const p of WORLD_PARCELS) {
+          const pad = sc.add.rectangle(p.x, p.y, p.w, p.h, 0x6fbf73, 0.16).setOrigin(0, 0).setDepth(-5);
+          pad.setStrokeStyle(3, 0xeaf7ea, 0.9);
+          const sign = sc.add.text(p.cx, p.y - 6, '', {
+            fontFamily: 'system-ui, sans-serif', fontSize: '12px', fontStyle: 'bold',
+            color: '#ffffff', stroke: '#13240f', strokeThickness: 4, align: 'center', resolution: 2,
+          });
+          sign.setOrigin(0.5, 1).setDepth(100000);
+          parcelGfx.set(p.id, { pad, sign });
+        }
+        refreshParcels();
+        // Neighborhood entrance sign where the avenue meets the residential spine.
+        sc.add.text(3850, 1150, '🏘️ ROBVILLE', {
+          fontFamily: 'system-ui, sans-serif', fontSize: '17px', fontStyle: 'bold',
+          color: '#ffffff', stroke: '#0b1020', strokeThickness: 5, resolution: 2,
+        }).setOrigin(0.5, 1).setDepth(100000);
+      }
+
       // --- strays around the pet shack: a few dogs & cats ambling about outside ---
       {
         const shack = WORLD_BUILDINGS.find((x) => x.kind === 'petshop');
@@ -3032,7 +3200,14 @@ export function startWorld(net: WorldNet): void {
       const n = avatars.filter((a) => !a.bot).length; // netizens don't count as players
       count.textContent = n === 1 ? '1 player here' : `${n} players here`;
     },
-    reenter() { net.enter(); },
+    feedLand(parcels, bankBought, bankCap) {
+      land.clear();
+      for (const p of parcels) land.set(p.id, p);
+      myBankBought = bankBought;
+      myBankCap = bankCap;
+      refreshParcels();
+    },
+    reenter() { net.enter(); net.landReq(); },
   };
   syncDriveBtn();
   net.enter();

@@ -119,6 +119,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   getMeta, setMeta, getMetaNum, getTotalOutstandingLoans, getTotalCoins, getLockedShares, getPlayerShares, getNetWorthConcentration, getActivePlayers,
   mintExclusive, getExclusiveSupply, getExclusiveLastSale,
   listExclusive, cancelListing, getMarketListings, buyLowestAsk,
+  getLandParcels, getBankParcels, buyParcelFromBank, listParcel, unlistParcel, buyParcelFromOwner,
   getNetizens, seedNetizen,
   addBounty, getBountyOn, clearBounty, getBounties,
   challengedToday, recordChallenge,
@@ -129,6 +130,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   loadNomic, saveNomic, archiveNomicSeason } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR } from '../shared/types';
+import { WORLD_PARCELS, BANK_PARCEL_CAP, PARCEL_PRICE, LandParcelView } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
 // emoji code points (pictographs, components, ZWJ, variation selectors, flags).
@@ -1376,6 +1378,7 @@ export class Lobby {
       this.tell(ws, { type: 'jailed', jailed: true });
     }
     this.tell(ws, { type: 'world', avatars: this.worldAvatars() });
+    this.sendLand(ws); // push the Robville land book so lots show their owners/for-sale signs
   }
 
   /** Step a player out of the world map. */
@@ -4288,6 +4291,122 @@ export class Lobby {
         this.refreshNetWorth().catch(() => {});
       })
       .catch((e) => console.error('market buy failed:', e));
+  }
+
+  // --- Robville land (the suburban neighborhood) ---
+
+  /** Build the per-player land book: every lot's ownership + market state, plus this player's
+   *  bank-purchase count (so the client can show the anti-monopoly cap). */
+  private async buildLand(forPid: string): Promise<{ parcels: LandParcelView[]; bankBought: number }> {
+    const [rows, bankBought] = await Promise.all([
+      getLandParcels(),
+      forPid ? getBankParcels(forPid) : Promise.resolve(0),
+    ]);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const parcels: LandParcelView[] = WORLD_PARCELS.map((p) => {
+      const r = byId.get(p.id);
+      const owned = !!r?.ownerPid;
+      return {
+        id: p.id,
+        ownerName: owned ? (r!.ownerName ?? '???') : null,
+        mine: owned && r!.ownerPid === forPid,
+        ask: owned ? (r!.ask ?? null) : null,
+      };
+    });
+    return { parcels, bankBought };
+  }
+
+  /** Send one client the current land book. */
+  sendLand(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn) return;
+    this.buildLand(conn.pid)
+      .then(({ parcels, bankBought }) => {
+        if (this.conns.has(ws)) this.tell(ws, { type: 'land', parcels, bankBought, bankCap: BANK_PARCEL_CAP });
+      })
+      .catch((e) => console.error('land send failed:', e));
+  }
+
+  /** Re-push the land book to everyone in the world (it's per-player, so send individually). */
+  private broadcastLand() {
+    for (const ws of this.world.sockets()) if (ws.readyState === ws.OPEN) this.sendLand(ws);
+  }
+
+  /** Buy an empty Robville lot from the bank for PARCEL_PRICE (subject to the bank cap). */
+  landBuyBank(ws: WebSocket, id: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    if (typeof id !== 'string' || !WORLD_PARCELS.some((p) => p.id === id)) return;
+    buyParcelFromBank(conn.pid, conn.nickname, id, PARCEL_PRICE, BANK_PARCEL_CAP)
+      .then((res) => {
+        if (!res.ok) {
+          const msg = res.reason === 'taken' ? 'That lot was just bought by someone else.'
+            : res.reason === 'cap' ? `🏦 The bank limits you to ${BANK_PARCEL_CAP} lot${BANK_PARCEL_CAP === 1 ? '' : 's'} — buy more from other owners instead.`
+            : res.reason === 'afford' ? `You can't afford the ${PARCEL_PRICE.toLocaleString()}🪙 deed.`
+            : '';
+          if (msg) this.notify(ws, msg);
+          this.sendLand(ws);
+          return;
+        }
+        // The full price flowed into the House (handled in the txn) — reflect it on the cache + clients.
+        this.houseBalance += PARCEL_PRICE;
+        this.broadcastHouse();
+        this.notify(ws, `🏡 Sold! You bought a Robville lot for ${PARCEL_PRICE.toLocaleString()}🪙. Welcome to the neighborhood.`);
+        this.sendWallet(ws);
+        this.broadcastLand();
+      })
+      .catch((e) => console.error('land buy (bank) failed:', e));
+  }
+
+  /** List your own lot for sale at `ask` coins. */
+  landList(ws: WebSocket, id: string, ask: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    const price = Math.floor(ask);
+    if (typeof id !== 'string' || !Number.isFinite(price) || price < 1 || price > 100_000_000) return;
+    listParcel(conn.pid, id, price)
+      .then((ok) => {
+        if (!ok) { this.notify(ws, "Couldn't list that lot (you don't own it)."); return; }
+        this.notify(ws, `🪧 Your Robville lot is on the market for ${price.toLocaleString()}🪙.`);
+        this.broadcastLand();
+      })
+      .catch((e) => console.error('land list failed:', e));
+  }
+
+  /** Take your lot back off the market. */
+  landUnlist(ws: WebSocket, id: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    if (typeof id !== 'string') return;
+    unlistParcel(conn.pid, id)
+      .then((ok) => { if (ok) { this.notify(ws, '🪧 Lot taken off the market.'); this.broadcastLand(); } })
+      .catch((e) => console.error('land unlist failed:', e));
+  }
+
+  /** Buy a listed lot from its owner at the asking price (one atomic transaction; no bank cap). */
+  landBuy(ws: WebSocket, id: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    if (typeof id !== 'string' || !WORLD_PARCELS.some((p) => p.id === id)) return;
+    buyParcelFromOwner(conn.pid, conn.nickname, id)
+      .then((res) => {
+        if (!res.ok) {
+          const msg = res.reason === 'self' ? "You already own that lot."
+            : res.reason === 'afford' ? "You can't afford that lot."
+            : res.reason === 'unavail' ? 'That lot is no longer for sale.' : '';
+          if (msg) this.notify(ws, msg);
+          this.sendLand(ws);
+          return;
+        }
+        // Coins moved buyer → seller inside the txn (no House cut on private sales).
+        this.notify(ws, `🏡 Bought ${res.sellerName}'s Robville lot for ${res.ask.toLocaleString()}🪙.`);
+        for (const [sock, c] of this.conns) {
+          if (c.pid === res.sellerPid) { this.notify(sock, `💰 ${conn.nickname} bought your Robville lot for ${res.ask.toLocaleString()}🪙!`); this.sendWallet(sock); }
+        }
+        this.sendWallet(ws);
+        this.broadcastLand();
+      })
+      .catch((e) => console.error('land buy (owner) failed:', e));
   }
 
   // --- Loan book (public, clickable from the stability bar) ---
