@@ -1013,6 +1013,12 @@ export class Lobby {
   private dungeonRunChests = new Map<string, Set<string>>(); // pid → chests opened THIS run (provisional)
   private dungeonPurse = new Map<string, number>(); // pid → run-purse coins (paid out only on a clean escape)
   private dungeonRunItems = new Map<string, { item: string; name: string }[]>(); // pid → cosmetics won this run (granted on escape)
+  private dungeonRunKeys = new Set<string>(); // pids holding the B3 key this run (gates the locked vault chest)
+  // Took the key from the dying B3 adventurer → mark the run-key so the locked vault chest will open.
+  dungeonTakeKey(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (conn && conn.pid) this.dungeonRunKeys.add(conn.pid);
+  }
   private sendPurse(ws: WebSocket, pid: string) {
     this.tell(ws, { type: 'dungeonPurse', coins: this.dungeonPurse.get(pid) ?? 0 });
   }
@@ -1038,6 +1044,7 @@ export class Lobby {
     this.dungeonPurse.set(conn.pid, 0);        // entering the Ruins starts a fresh, empty run purse
     this.dungeonRunChests.delete(conn.pid);    // …and a fresh provisional-chest slate
     this.dungeonRunItems.delete(conn.pid);     // …and no spin-won cosmetics yet
+    this.dungeonRunKeys.delete(conn.pid);      // …and no key (re-fetch it from the dying man on B3)
     const pfx = conn.pid + ':';
     const opened: string[] = [];
     for (const k of this.dungeonOpenedChests) if (k.startsWith(pfx)) opened.push(k.slice(pfx.length));
@@ -1049,6 +1056,7 @@ export class Lobby {
     if (!conn || !conn.pid) return;
     const contents = DUNGEON_CHEST_CONTENTS[chest];
     if (!contents) return;                          // unknown chest → ignore
+    if (contents.needsKey && !this.dungeonRunKeys.has(conn.pid)) return; // the sealed vault won't open without the key
     if (this.dungeonOpenedChests.has(`${conn.pid}:${chest}`)) return; // already banked → no re-farm
     let run = this.dungeonRunChests.get(conn.pid);
     if (!run) { run = new Set(); this.dungeonRunChests.set(conn.pid, run); }
@@ -1057,7 +1065,15 @@ export class Lobby {
     if (contents.spin) { this.dungeonSpinChest(ws, conn.pid, chest); return; } // roll the wheel in-dungeon
     const coins = contents.coins ?? 0, potion = !!contents.potion;
     if (coins > 0) this.dungeonPurse.set(conn.pid, (this.dungeonPurse.get(conn.pid) ?? 0) + coins);
-    this.tell(ws, { type: 'dungeonChestOpened', chest, coins, potion, spin: false });
+    let carName: string | undefined;
+    if (contents.car) { // a vehicle prize → bank it as a run-item (granted on escape, like spin cosmetics)
+      const def = COSMETICS.find((c) => c.id === contents.car);
+      carName = def?.name ?? 'a vehicle';
+      const list = this.dungeonRunItems.get(conn.pid) ?? [];
+      list.push({ item: contents.car, name: carName });
+      this.dungeonRunItems.set(conn.pid, list);
+    }
+    this.tell(ws, { type: 'dungeonChestOpened', chest, coins, potion, spin: false, car: carName });
     this.sendPurse(ws, conn.pid);
   }
   // A spin chest: roll the wheel server-side, drop the reward into the RUN loot (coins → purse,
@@ -1103,6 +1119,7 @@ export class Lobby {
     this.dungeonPurse.delete(conn.pid);
     this.dungeonRunChests.delete(conn.pid);
     this.dungeonRunItems.delete(conn.pid);
+    this.dungeonRunKeys.delete(conn.pid);
     this.tell(ws, { type: 'dungeonPurse', coins: 0 });
     if (escaped) {
       if (run) for (const chest of run) this.dungeonOpenedChests.add(`${conn.pid}:${chest}`); // bank the chests

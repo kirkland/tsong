@@ -64,6 +64,7 @@ export interface WorldNet {
   dungeonSync(): void;             // entering the Ruins → ask which chests we've opened
   dungeonChest(chest: string): void; // open a chest ('B1:col,row') → server pays coins from the House (once)
   dungeonWin(floor: string, tier: number): void; // won an encounter → adds a TIER-ranged amount to the run purse
+  dungeonTakeKey(): void; // took the key from the dying B3 adventurer (server marks the run-key)
   dungeonExit(escaped: boolean): void; // left the Ruins (escaped → server pays the run purse from the House)
   onNetizenClick?(netizenId: string): void; // user tapped a netizen avatar in the world (→ challenge)
   buyBeer(): void;               // buy a beer at the Tavern (server charges 20🪙 + ups drunk level)
@@ -79,7 +80,7 @@ interface Controller {
   feed(avatars: WorldAvatar[]): void;
   reenter(): void; // re-send worldEnter after a socket reconnect (server forgot us on drop)
   dungeonChests(opened: string[]): void;                          // server's list of chests we've opened
-  chestAccepted(chest: string, coins: number, potion: boolean, spin?: boolean): void; // server accepted a chest open
+  chestAccepted(chest: string, coins: number, potion: boolean, spin?: boolean, car?: string): void; // server accepted a chest open (car = vehicle prize name)
   dungeonSpinLoot(reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string }): void; // a spin chest's reward → run loot
   dungeonPurse(coins: number): void;                              // current run-purse total from the server
 }
@@ -106,8 +107,8 @@ export function feedDungeonChests(opened: string[]): void {
 }
 
 /** The server accepted a chest open (added the coins to the run purse / granted the potion). */
-export function dungeonChestAccepted(chest: string, coins: number, potion: boolean, spin?: boolean): void {
-  controller?.chestAccepted(chest, coins, potion, spin);
+export function dungeonChestAccepted(chest: string, coins: number, potion: boolean, spin?: boolean, car?: string): void {
+  controller?.chestAccepted(chest, coins, potion, spin, car);
 }
 export function dungeonSpinLoot(reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string }): void {
   controller?.dungeonSpinLoot(reward);
@@ -734,12 +735,19 @@ export function startWorld(net: WorldNet): void {
   let dungeonPurseDisplay = 0; // server's run-purse total (banner display); paid out only on a clean escape
   const dungeonObjs: Phaser.GameObjects.GameObject[] = []; // every sprite for the active floor (cleared on rebuild)
   const dungeonChestSprites: Record<string, Phaser.GameObjects.Image> = {}; // 'c,r' → sprite (to swap on open)
+  const dungeonLockSprites: Record<string, Phaser.GameObjects.Image> = {};   // 'c,r' → locked-door sprite (to remove on unlock)
   let nearChestCell: { c: number; r: number } | null = null; // unopened chest within reach (→ Open prompt)
   let nearStairs: { dir: 'down' | 'up'; to: string } | null = null; // a stair tile within reach (→ descend/ascend)
   let nearLockedDoor: { c: number; r: number } | null = null; // an 'L' locked door within reach (→ "needs a key")
   let dungeonImp: { x: number; y: number } | null = null; // the friendly B2 imp's world position (talk for a potion)
   let nearDungeonImp = false; // the imp is within talk range
   let impGavePotion = false;  // he hands out one potion per run (no farming)
+  let dyingMan: { x: number; y: number } | null = null; // the bleeding B3 NPC who gives the key
+  let dyingManSprite: Phaser.GameObjects.Image | null = null;
+  let nearDyingMan = false;
+  let hasKey = false;         // holding the key to B2's locked room (run-scoped; consumed on unlock)
+  let keyTaken = false;       // already looted the dying man this run → he's a corpse now
+  const unlockedDoors = new Set<string>(); // 'floor:c,r' of 'L' doors opened with the key this run
   const openedChestsServer = new Set<string>(); // 'floor:col,row' the server says this account has opened
   const chestIsOpen = (c: number, r: number) => openedChestsServer.has(`${currentFloor}:${c},${r}`);
   let lastGrassKey = '';    // last tall-grass cell rolled, so each new '~' tile rolls one encounter
@@ -1282,10 +1290,13 @@ export function startWorld(net: WorldNet): void {
     for (const ox of [-rad, rad]) for (const oy of [-rad, rad]) {
       const c = Math.floor((wx + ox - dInt.x) / DUNGEON_TILE);
       const r = Math.floor((wy + oy - dInt.y) / DUNGEON_TILE);
-      if (dungeonBlocks(dungeonCell(c, r))) return true;
+      const ch = dungeonCell(c, r);
+      if (ch === 'L' && unlockedDoors.has(`${currentFloor}:${c},${r}`)) continue; // an opened door is passable
+      if (dungeonBlocks(ch)) return true;
     }
-    // the imp is solid — you bump into him rather than walking through
+    // NPCs are solid — you bump into them rather than walking through
     if (dungeonImp && Math.hypot(wx - dungeonImp.x, wy - dungeonImp.y) < rad + DUNGEON_TILE * 0.4) return true;
+    if (dyingMan && Math.hypot(wx - dyingMan.x, wy - dyingMan.y) < rad + DUNGEON_TILE * 0.4) return true;
     return false;
   }
   // (Re)build the ACTIVE floor's geometry. Destroys the previous floor's sprites first, so it can be
@@ -1294,7 +1305,9 @@ export function startWorld(net: WorldNet): void {
     for (const o of dungeonObjs) o.destroy();
     dungeonObjs.length = 0;
     dungeonTorches.length = 0; dungeonFlies.length = 0; dungeonImp = null; nearDungeonImp = false;
+    dyingMan = null; dyingManSprite = null; nearDyingMan = false;
     for (const k in dungeonChestSprites) delete dungeonChestSprites[k];
+    for (const k in dungeonLockSprites) delete dungeonLockSprites[k];
     dungeonDarkRT?.destroy(); dungeonDarkRT = null;
     const theme = DUNGEON_THEME[currentFloor] ?? DUNGEON_THEME.B1;
     const ox = dInt.x, oy = dInt.y, T = DUNGEON_TILE, base = oy - 1000, sl = T / 16;
@@ -1323,8 +1336,9 @@ export function startWorld(net: WorldNet): void {
           keep(sc.add.image(wx + T / 2, wy + T / 2, 'd-stairs').setScale(sl).setOrigin(0.5).setDepth(base + 2)
             .setFlipY(ch === '<').setTint(ch === '>' ? 0xffe6b0 : 0xbfe4ff)); // down = warm, up = cool
         }
-        if (ch === 'L' && sc.textures.exists('d-lock')) { // a sealed, barred locked door
-          keep(sc.add.image(wx + T / 2, wy + T / 2, 'd-lock').setScale(sl).setOrigin(0.5).setDepth(base + 3));
+        if (ch === 'L' && sc.textures.exists('d-lock') && !unlockedDoors.has(`${currentFloor}:${c},${r}`)) { // a sealed, barred locked door (gone once opened)
+          const ls = sc.add.image(wx + T / 2, wy + T / 2, 'd-lock').setScale(sl).setOrigin(0.5).setDepth(base + 3);
+          dungeonLockSprites[`${c},${r}`] = ls; keep(ls);
         }
         if (theme.props) addFloorProp(sc, c, r, wx, wy, T, sl, base, keep, !!theme.gore); // deeper-floor ambient decals
         if (ch === 'c') { // a treasure chest — closed or already-opened per saved state
@@ -1341,6 +1355,15 @@ export function startWorld(net: WorldNet): void {
       const spr = sc.add.image(ix, iy, 'w-demon').setScale(sl).setOrigin(0.5, 0.62).setDepth(base + 4);
       dungeonObjs.push(spr);
       dungeonImp = { x: ix, y: iy };
+    }
+    // B3: a dying adventurer slumped in a far room — talk to him for the key (then he passes).
+    if (currentFloor === 'B3' && sc.textures.exists('d-fallen')) {
+      const mc = 4, mr = 23; // slumped in the quiet bottom-left room
+      const mx = ox + (mc + 0.5) * T, my = oy + (mr + 0.5) * T;
+      const spr = sc.add.image(mx, my, 'd-fallen').setScale(sl).setOrigin(0.5, 0.62).setDepth(base + 4);
+      if (keyTaken) spr.setTint(0x6a6a72); // already looted this run → a cold corpse
+      dungeonObjs.push(spr);
+      dyingMan = { x: mx, y: my }; dyingManSprite = spr;
     }
     // a few drifting fireflies (red / orange / purple) — twinkle over the darkness
     if (sc.textures.exists('d-glow')) {
@@ -1418,6 +1441,7 @@ export function startWorld(net: WorldNet): void {
     minimap.style.display = 'none'; help.style.display = 'none'; // no overworld minimap / drive hint underground
     dungeonHP = 100; lastGrassKey = ''; grassDanger = 0; potionCount = 0; // fresh run: no potions carried in
     newMobsSeen.clear(); recentMob = -1; recentMobRun = 0; impGavePotion = false;
+    hasKey = false; keyTaken = false; unlockedDoors.clear(); // fresh run: re-fetch the key, doors re-lock
     lootItems.length = 0; lootOpen = false; lootPanel.style.display = 'none'; // fresh run loot
     openedChestsServer.clear();
     net.dungeonSync(); // ask the server which chests this account has already opened
@@ -1483,6 +1507,56 @@ export function startWorld(net: WorldNet): void {
     function closeTalk() { window.clearInterval(timer); talkOpen = false; npcAdvance = null; npcClose = null; npcBox.style.display = 'none'; npcChoices.style.display = 'none'; npcPortrait.style.display = 'none'; }
     npcClose = closeTalk;
     showPage();
+  }
+  // The B3 dying adventurer — grim-but-funny. Hands over the key to B2's locked room, then expires.
+  function dyingManTalk() {
+    if (talkOpen || dialogOpen || keyTaken) return;
+    const pages = [
+      '*wet cough* …oh thank god. an audience.',
+      "Don't make that face. You'd reek too — gut's been open since Tuesday.",
+      "There's a thing down here wearing Fritz's face. Big grin. Came at me off the wall and opened me up like a letter.",
+      'But I grabbed the vault key first. Small victories. Take it — *presses a warm, sticky iron key into your hand*. Locked room upstairs is yours.',
+      'If you see that demon Fritz… ah, just run. Hits like my ex-wife. *he settles back and goes still*',
+    ];
+    talkOpen = true; keys.clear(); joyActive = false; prompt.style.display = 'none';
+    npcName.textContent = 'Dying Adventurer'; npcBox.style.display = 'block'; npcChoices.style.display = 'none';
+    if (!npcPortrait.src.endsWith('/dungeon/npc_dying.png')) npcPortrait.src = '/dungeon/npc_dying.png';
+    npcPortrait.style.display = 'block';
+    let pageI = 0, typing = false, timer = 0, full = '';
+    const giveKey = () => { // he hands it over on the 4th line (once)
+      if (keyTaken) return;
+      keyTaken = true; hasKey = true; net.dungeonTakeKey();
+      tone(660, 0.09, 'square', 0.12, 990); window.setTimeout(() => tone(880, 0.12, 'square', 0.12, 1320), 110); // got-key chime
+      dyingManSprite?.setTint(0x6a6a72); // he's a corpse now
+      updateDungeonHud();
+    };
+    function showPage() {
+      const text = pages[pageI];
+      if (text === undefined) { closeTalk(); return; }
+      full = text; let shown = 0; typing = true; npcText.textContent = ''; npcHint.style.display = 'none';
+      timer = window.setInterval(() => {
+        shown++; npcText.textContent = full.slice(0, shown);
+        if (shown % 2 === 0) textBlip();
+        if (shown >= full.length) { window.clearInterval(timer); typing = false; npcHint.style.display = 'block'; if (pageI >= 3) giveKey(); }
+      }, 30);
+    }
+    npcAdvance = () => {
+      if (typing) { window.clearInterval(timer); typing = false; npcText.textContent = full; npcHint.style.display = 'block'; if (pageI >= 3) giveKey(); return; }
+      pageI++; if (pageI >= pages.length) closeTalk(); else showPage();
+    };
+    function closeTalk() { window.clearInterval(timer); talkOpen = false; npcAdvance = null; npcClose = null; npcBox.style.display = 'none'; npcChoices.style.display = 'none'; npcPortrait.style.display = 'none'; nearDyingMan = false; }
+    npcClose = closeTalk;
+    showPage();
+  }
+  // Open B2's locked room with the key in hand: remove the door + sprite, spend the key, clunk open.
+  function unlockDoor(c: number, r: number) {
+    if (!hasKey) return;
+    hasKey = false;
+    unlockedDoors.add(`${currentFloor}:${c},${r}`);
+    dungeonLockSprites[`${c},${r}`]?.destroy(); delete dungeonLockSprites[`${c},${r}`];
+    tone(170, 0.1, 'square', 0.16, 90); window.setTimeout(() => tone(440, 0.13, 'triangle', 0.14, 660), 130); // clunk → unlatch
+    showToast('🔓 The lock turns over with a heavy clunk. The door grinds open.');
+    nearLockedDoor = null; updateNearBuilding();
   }
   // a heavy, immovable lock: a dull iron thunk then a dead rattle (it does NOT give)
   function lockedSound() {
@@ -1826,8 +1900,9 @@ export function startWorld(net: WorldNet): void {
     if (nearExit) { if (inDungeon) leaveDungeon(); else leaveTavern(); return; }
     if (nearStairs) { changeFloor(nearStairs.to, nearStairs.dir === 'down' ? '<' : '>'); return; }
     if (nearChestCell) { openChest(nearChestCell.c, nearChestCell.r); return; }
-    if (nearLockedDoor) { tryLockedDoor(); return; }
+    if (nearLockedDoor) { if (hasKey) unlockDoor(nearLockedDoor.c, nearLockedDoor.r); else tryLockedDoor(); return; }
     if (nearDungeonImp) { impTalk(); return; }
+    if (nearDyingMan) { dyingManTalk(); return; }
     if (nearJailed) { net.bail(nearJailed.id); return; } // post their bail
     const b = WORLD_BUILDINGS.find((x) => x.id === nearId);
     if (b) enterBuilding(b.kind);
@@ -2216,6 +2291,8 @@ export function startWorld(net: WorldNet): void {
     }
     nearDungeonImp = !!(inDungeon && dungeonImp && !nearExit && !nearStairs && !nearChestCell && !nearLockedDoor
       && Math.hypot(selfX - dungeonImp.x, selfY - dungeonImp.y) < DUNGEON_TILE * 1.4);
+    nearDyingMan = !!(inDungeon && dyingMan && !keyTaken && !nearExit && !nearStairs && !nearChestCell && !nearLockedDoor
+      && Math.hypot(selfX - dyingMan.x, selfY - dyingMan.y) < DUNGEON_TILE * 1.4);
     // A jailed avatar within reach (and we're free) → offer to post their bail.
     nearJailed = null;
     if (!best && !nearNpc && !nearNetizen && !driving && !net.amJailed() && !inInterior && !inDungeon) {
@@ -2241,13 +2318,15 @@ export function startWorld(net: WorldNet): void {
     } else if (nearChestCell) {
       prompt.textContent = '📦 Open the chest';
     } else if (nearLockedDoor) {
-      prompt.textContent = '🔒 Locked door';
+      prompt.textContent = hasKey ? '🔑 Unlock the door' : '🔒 Locked door';
     } else if (nearDungeonImp) {
       prompt.textContent = '💬 Talk to the Imp';
+    } else if (nearDyingMan) {
+      prompt.textContent = '🤢 Talk to the dying man (he reeks)';
     } else if (nearJailed) {
       prompt.textContent = `🔓 Bail out ${nearJailed.name} (${BAIL_COST}🪙)`;
     }
-    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearStairs || nearChestCell || nearLockedDoor || nearDungeonImp || nearJailed) && !dialogOpen && !talkOpen ? 'block' : 'none';
+    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearStairs || nearChestCell || nearLockedDoor || nearDungeonImp || nearDyingMan || nearJailed) && !dialogOpen && !talkOpen ? 'block' : 'none';
   }
 
   function maybeSendMove(now: number) {
@@ -2852,6 +2931,18 @@ export function startWorld(net: WorldNet): void {
       px(7, 4, 1, 9, CL); px(7, 4, 1, 2, CL_D); px(7, 12, 1, 1, CL_D);
       px(10, 3, 1, 9, CL); px(10, 3, 1, 2, CL_D); px(10, 11, 1, 1, CL_D);
       g.generateTexture('d-claw', 16, 16);
+    }
+    // --- a slumped, bleeding adventurer propped against a wall (B3 key NPC) — 16×16 ---
+    {
+      const CLK = 0x6b5a3a, CLK_D = 0x4a3d27, SKIN = 0xd6a982, HAIR = 0x7a5a36, BL = 0x6e0f12;
+      g.clear();
+      px(4, 14, 9, 2, BL); px(3, 15, 11, 1, 0x4a0a0d);          // blood pool under him
+      px(5, 6, 7, 8, CLK); px(5, 6, 7, 1, 0x7d6b46); px(5, 13, 7, 1, CLK_D); // hunched cloaked body
+      px(4, 8, 1, 5, CLK_D); px(12, 8, 1, 5, CLK_D);            // arms hanging
+      px(7, 9, 3, 3, BL);                                       // blood soaking the gut
+      px(7, 2, 4, 4, SKIN); px(7, 2, 4, 1, HAIR); px(6, 3, 1, 2, HAIR); // head lolled, hair
+      px(8, 4, 1, 1, 0x20140c); px(9, 5, 2, 1, BL);             // shut eye + blood at the mouth
+      g.generateTexture('d-fallen', 16, 16);
     }
 
     // --- car body + roof (tintable) — pointing +x (east), 26×14 texels ---
@@ -3868,10 +3959,11 @@ export function startWorld(net: WorldNet): void {
       for (const key in dungeonChestSprites) dungeonChestSprites[key].setTexture(openedChestsServer.has(currentFloor + ':' + key) ? 'w-chest-open' : 'w-chest');
       updateNearBuilding();
     },
-    chestAccepted(chest, coins, potion) {
+    chestAccepted(chest, coins, potion, _spin, car) {
       openedChestsServer.add(chest);
       if (chest.startsWith(currentFloor + ':')) dungeonChestSprites[chest.slice(currentFloor.length + 1)]?.setTexture('w-chest-open');
-      if (potion) { potionCount += 1; showToast('📦 Found a 🧪 Potion!'); }
+      if (car) { lootItems.push({ item: 'car', name: car }); showToast(`🛻 THE VAULT! You found a ${car} — escape to keep it!`); }
+      else if (potion) { potionCount += 1; showToast('📦 Found a 🧪 Potion!'); }
       else if (coins) showToast(`📦 ${coins}🪙 added to your purse — escape to keep it!`);
       // spin chests (coins:0/potion:false) say nothing here — the wheel + its own toast handle it
       updateDungeonHud(); updateDungeonControls();

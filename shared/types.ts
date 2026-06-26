@@ -178,7 +178,7 @@ export interface CosmeticItem {
   name: string;
   slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'pet';
   price: number;
-  locked?: 'campaign' | 'fishing' | 'fishing_rare'; // not buyable — unlocked by in-game achievements
+  locked?: 'campaign' | 'fishing' | 'fishing_rare' | 'dungeon'; // not buyable — unlocked by in-game achievements
   audio?: string; // for 'song' items: path to the mp3 that plays during your matches
 }
 // Static cosmetics cost 1000 coins; animated ones cost 2000 (10×/20× the COIN_SCALE base).
@@ -264,6 +264,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'car-coupe', name: '🚗 Coupe', slot: 'car', price: 8000 },
   { id: 'car-drifter', name: '🏎️ Drift King', slot: 'car', price: 20000 },
   { id: 'car-muscle', name: '🚙 Muscle', slot: 'car', price: 35000 },
+  { id: 'car-monster', name: '🛻 Monster Truck', slot: 'car', price: 0, locked: 'dungeon' }, // the Ruins locked-room prize
   // Pets (slot 'pet') — follow you around the World map; look/animation keyed by PETS below.
   { id: 'pet-rock', name: '🪨 Pet Rock', slot: 'pet', price: 50000 },
   { id: 'pet-pikachu', name: '⚡ Pikachu', slot: 'pet', price: 100000 },
@@ -385,6 +386,8 @@ export const CARS: readonly CarSpec[] = [
   { id: 'car-drifter', name: 'Drift King', body: '#2bd4c4', accent: '#10302d', speed: 600, accel: 760, turn: 3.0, grip: 0.70 },
   // The muscle: fastest and heaviest, wide drifts once it breaks loose.
   { id: 'car-muscle',  name: 'Muscle',    body: '#8a5cf6', accent: '#1c1430', speed: 660, accel: 620, turn: 2.2, grip: 0.78 },
+  // The Monster Truck: the Ruins' locked-room prize. Heavy, planted, monstrous low-end grunt.
+  { id: 'car-monster', name: 'Monster Truck', body: '#3a7d34', accent: '#1a1a1a', speed: 600, accel: 820, turn: 2.0, grip: 0.92 },
 ] as const;
 export function carById(id: string | null | undefined): CarSpec | null {
   if (!id) return null;
@@ -452,14 +455,14 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
 // --- The Ruins dungeon economy: SERVER-AUTHORITATIVE so a tampered client can't mint coins. ---
 // Chests keyed by 'floor:col,row'. The server pays a chest's coins (from the House) the first time
 // a given player opens it, and tracks opened chests per account.
-export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potion?: boolean; spin?: boolean }> = {
+export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potion?: boolean; spin?: boolean; car?: string; needsKey?: boolean }> = {
   'B1:18,2': { coins: 200 },
   'B1:9,9': { potion: true },
   // B2 — a free wheel-spin chest, a potion, a coin chest, plus the SEALED locked-room prize (34,24).
   'B2:26,3': { spin: true },   // spins the wheel in-dungeon; reward → run loot, granted on escape
   'B2:4,13': { potion: true },
   'B2:15,21': { coins: 120 },
-  'B2:34,24': { coins: 500 },
+  'B2:34,24': { car: 'car-monster', needsKey: true }, // the sealed vault: a MONSTER TRUCK (needs the B3 key)
   // B3 — bigger, darker, tier-3 mobs; meatier loot + extra potions for the longer floor.
   'B3:28,3': { coins: 300 },
   'B3:4,13': { potion: true },
@@ -782,6 +785,7 @@ export type ClientMsg =
   | { type: 'dungeonSync' } // entering the Ruins: ask which chests this player has already opened
   | { type: 'dungeonChest'; chest: string } // open a chest (server pays its coins from the House, once only)
   | { type: 'dungeonWin'; floor: string; tier: number } // won an encounter (adds a TIER-ranged amount to the run purse)
+  | { type: 'dungeonTakeKey' } // took the key from the dying B3 adventurer → server marks the run-key
   | { type: 'dungeonExit'; escaped: boolean } // left the Ruins: escaped=true pays the purse (from House); false forfeits
   // --- Nomic (the Parliament sub-game) ---
   | { type: 'nomEnter' } // enter the Parliament: seat as a legislator + subscribe to its state
@@ -1238,7 +1242,7 @@ export type ServerMsg =
   | LoanBookMsg
   | WorldMsg
   | { type: 'dungeonChests'; opened: string[] } // chests this player has opened (reply to dungeonSync)
-  | { type: 'dungeonChestOpened'; chest: string; coins: number; potion: boolean; spin?: boolean } // a chest open was accepted
+  | { type: 'dungeonChestOpened'; chest: string; coins: number; potion: boolean; spin?: boolean; car?: string } // a chest open was accepted (car = display name of a vehicle prize)
   | { type: 'dungeonSpin'; chest: string; segment: number; reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string } } // a spin chest: play the wheel, reward goes to run loot
   | { type: 'dungeonPurse'; coins: number } // current run-purse total (paid out only on a clean escape)
   | HouseMsg

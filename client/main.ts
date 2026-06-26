@@ -737,7 +737,7 @@ const net = connect(
     } else if (msg.type === 'dungeonChests') {
       worldMod?.feedDungeonChests(msg.opened);
     } else if (msg.type === 'dungeonChestOpened') {
-      worldMod?.dungeonChestAccepted(msg.chest, msg.coins, msg.potion, msg.spin);
+      worldMod?.dungeonChestAccepted(msg.chest, msg.coins, msg.potion, msg.spin, msg.car);
     } else if (msg.type === 'dungeonSpin') {
       // a spin chest: play the wheel right here in the dungeon; the reward drops into the run loot
       worldMod?.dungeonSpinLoot(msg.reward); // record it for the loot panel (coins also flow via dungeonPurse)
@@ -2010,6 +2010,7 @@ worldBtn.addEventListener('click', async () => {
       dungeonSync: () => net.send({ type: 'dungeonSync' }),
       dungeonChest: (chest) => net.send({ type: 'dungeonChest', chest }),
       dungeonWin: (floor, tier) => net.send({ type: 'dungeonWin', floor, tier }),
+      dungeonTakeKey: () => net.send({ type: 'dungeonTakeKey' }),
       dungeonExit: (escaped) => net.send({ type: 'dungeonExit', escaped }),
       buyBeer: () => net.send({ type: 'buyBeer' }),
       drunkLevel: () => drunkLevel, // the world reads this live to wobble movement + the camera
