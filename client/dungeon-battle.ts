@@ -53,7 +53,7 @@ export const DUNGEON_MOBS: MobDef[] = [
   // --- B3 (tier 3): deeper, bloodier. Demon Fritz hunts off his wall (roam); second mob TBD. ---
   {
     id: 'fritz', name: 'Demon Fritz', portrait: '😈', power: 12, color: '#b23026', tier: 3, bob: 'float',
-    bot: { react: 0.16, error: 42, predict: true, idleCenter: false }, roam: true,
+    bot: { react: 0.16, error: 42, predict: true, idleCenter: false }, roam: true, paddleScale: 1.5,
     gimmick: { name: 'Roam', desc: 'Pushes off his wall to hunt the ball down.' },
     flavor: 'heh. you look lost.', tag: 'Something wearing a friend’s face, and grinning about it.',
   },
@@ -259,11 +259,12 @@ export function startEncounter(opts: EncounterOpts): void {
         aiTarget = y + (Math.random() * 2 - 1) * mob.bot.error;
       }
     }
-    // Roam (Demon Fritz): push the paddle off its wall to meet an incoming ball, retreat otherwise.
+    // Roam (Demon Fritz): edge off the wall to pressure an incoming ball, but stay home enough that he
+    // doesn't lunge past it and leave the goal open (the big paddle covers the rest).
     let inset = 0;
     if (mob.roam && b.vx > 0) {
       const prog = Math.max(0, Math.min(1, (b.x - COURT.w * 0.35) / (COURT.w * 0.6)));
-      inset = prog * ROAM.maxInset * 0.85; // closer ball → further off the wall
+      inset = prog * ROAM.maxInset * 0.5; // modest forward pressure, not a reckless lunge
     }
     game.setTarget('right', mob.id, aiTarget, inset);
   }
