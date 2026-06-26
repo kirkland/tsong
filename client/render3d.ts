@@ -11,7 +11,7 @@
 // fetches Three.js lazily and the default 2D bundle never references it. Keeping it out
 // of the Vite build also keeps the (small) production VPS from OOMing while bundling.
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.184.0/build/three.module.js';
-import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, POWERUPS, TARGET, PowerupKind, Side, StateMsg } from '../shared/types';
+import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, POWERUPS, TARGET, BUMPER, BUMPER_POSITIONS, PowerupKind, Side, StateMsg } from '../shared/types';
 import { drawLegendIcon, drawDiamondIcon, blockHue } from './render';
 
 export interface BlasterAim { side: Side; angle: number; }
@@ -520,6 +520,38 @@ export function createRenderer(container: HTMLElement): Renderer3D {
     return m;
   }
 
+  // Bumper pegs: real pinball-style bumpers — a tapered body column + a wide glowing cap ring.
+  // The cap is wide and sits at eye level so it reads clearly in first-person view.
+  const BUMPER_BODY_H = 55;  // column height
+  const BUMPER_CAP_H  = 14;  // flat cap disk thickness
+  const BUMPER_CAP_R  = BUMPER.r * 1.45; // cap is wider than the body
+  const bodyGeo = new THREE.CylinderGeometry(BUMPER.r * 0.72, BUMPER.r, BUMPER_BODY_H, 32);
+  const capGeo  = new THREE.CylinderGeometry(BUMPER_CAP_R, BUMPER_CAP_R * 0.9, BUMPER_CAP_H, 32);
+  // Two materials per bumper (body + cap), so we can flash the cap brighter.
+  const bumperBodyMats = BUMPER_POSITIONS.map(() =>
+    new THREE.MeshStandardMaterial({ color: '#7a2800', emissive: '#c04000', emissiveIntensity: 0.4, roughness: 0.5, metalness: 0.4 }),
+  );
+  const bumperCapMats = BUMPER_POSITIONS.map(() =>
+    new THREE.MeshStandardMaterial({ color: '#d94f00', emissive: '#ff6010', emissiveIntensity: 0.7, roughness: 0.3, metalness: 0.5 }),
+  );
+  // Each bumper is a Group: body (column) + cap (disk on top).
+  const bumperGroups = BUMPER_POSITIONS.map((bp, i) => {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(bodyGeo, bumperBodyMats[i]);
+    body.castShadow = true;
+    body.position.y = BUMPER_BODY_H / 2;
+    const cap = new THREE.Mesh(capGeo, bumperCapMats[i]);
+    cap.castShadow = true;
+    cap.position.y = BUMPER_BODY_H + BUMPER_CAP_H / 2;
+    g.add(body);
+    g.add(cap);
+    g.position.set(wx(bp.x), 0, wz(bp.y));
+    g.visible = false;
+    world.add(g);
+    return { group: g, capMat: bumperCapMats[i], bodyMat: bumperBodyMats[i] };
+  });
+  const bumperHitAt3d: number[] = BUMPER_POSITIONS.map(() => -1e9);
+
   // Scores painted big on the ice either side of center; names painted smaller at each end.
   const scoreL = makeFloorText(150);
   const scoreR = makeFloorText(150);
@@ -756,6 +788,18 @@ export function createRenderer(container: HTMLElement): Renderer3D {
       pinata.visible = false;
       for (const m of stuckPool) m.visible = false;
     }
+
+    // Bumper pegs — show when bumpers mode is on; flash the cap on hit.
+    const now3d = performance.now();
+    bumperGroups.forEach(({ group, capMat, bodyMat }, i) => {
+      group.visible = s.bumpers;
+      if (!s.bumpers) return;
+      if (s.bumperFlash[i]) bumperHitAt3d[i] = now3d;
+      const t = Math.max(0, 1 - (now3d - bumperHitAt3d[i]) / 220);
+      capMat.emissiveIntensity  = 0.7 + t * 3.0;
+      capMat.color.set(t > 0.05 ? '#fff4c0' : '#d94f00');
+      bodyMat.emissiveIntensity = 0.4 + t * 1.0;
+    });
 
     // Spectator-dropped blocks — slate boxes scaled to each block's footprint.
     s.blocks.forEach((bl, i) => {

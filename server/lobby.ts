@@ -90,6 +90,8 @@ import {
   MarketItemView,
   MarketListingView,
   WorldAvatar,
+  JAIL,
+  JAIL_WALL,
   JAIL_CELL,
   BAIL_COST,
   NewsItem,
@@ -102,6 +104,8 @@ import {
   FIGHTERS,
   NomProposalKind, NomEffect, NomVote,
   FAST_SELL_BRACKETS,
+  WORLD,
+  WORLD_BUILDINGS,
 } from '../shared/types';
 import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSelfElo, getSelfNetWorth, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
@@ -116,6 +120,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   getMeta, setMeta, getMetaNum, getTotalOutstandingLoans, getTotalCoins, getLockedShares, getPlayerShares, getNetWorthConcentration, getActivePlayers,
   mintExclusive, getExclusiveSupply, getExclusiveLastSale,
   listExclusive, cancelListing, getMarketListings, buyLowestAsk,
+  getLandParcels, getBankParcels, buyParcelFromBank, listParcel, unlistParcel, buyParcelFromOwner,
   getNetizens, seedNetizen,
   addBounty, getBountyOn, clearBounty, getBounties,
   challengedToday, recordChallenge,
@@ -126,6 +131,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   loadNomic, saveNomic, archiveNomicSeason } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR, DUNGEON_CHEST_CONTENTS, DUNGEON_TIER_COINS, DUNGEON_FLOOR_TIERS } from '../shared/types';
+import { WORLD_PARCELS, BANK_PARCEL_CAP, PARCEL_PRICE, LandParcelView } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
 // emoji code points (pictographs, components, ZWJ, variation selectors, flags).
@@ -941,8 +947,9 @@ export class Lobby {
     };
     this.spawnBot(botSide, 'hard', { reactOverride: react, errorPxOverride: errPx });
 
-    if (this.teams.left.length && this.teams.right.length && this.game.status === 'waiting') {
-      this.game.start();
+    if (this.teams.left.length && this.teams.right.length) {
+      if (this.game.status === 'over') this.game.toWaiting();
+      if (this.game.status === 'waiting') this.game.start();
     }
     this.refreshPause();
   }
@@ -1511,6 +1518,7 @@ export class Lobby {
       this.tell(ws, { type: 'jailed', jailed: true });
     }
     this.tell(ws, { type: 'world', avatars: this.worldAvatars() });
+    this.sendLand(ws); // push the Robville land book so lots show their owners/for-sale signs
   }
 
   /** Step a player out of the world map. */
@@ -1555,12 +1563,52 @@ export class Lobby {
     return out;
   }
 
+  /** All solid rects netizens must avoid: buildings + jail walls. */
+  private static SOLID_RECTS: readonly { x: number; y: number; w: number; h: number }[] = [
+    ...WORLD_BUILDINGS,
+    // Jail walls (same layout as client/world.ts JAIL_WALLS).
+    { x: JAIL.x, y: JAIL.y, w: JAIL.w, h: JAIL_WALL },
+    { x: JAIL.x, y: JAIL.y, w: JAIL_WALL, h: JAIL.h },
+    { x: JAIL.x + JAIL.w - JAIL_WALL, y: JAIL.y, w: JAIL_WALL, h: JAIL.h },
+    { x: JAIL.x, y: JAIL.y + JAIL.h - JAIL_WALL, w: JAIL.w, h: JAIL_WALL },
+  ];
+
+  /** Push a point out of every solid rect it overlaps (mirrors client/resolveCollisions).
+   *  Returns the adjusted position and whether a collision occurred. */
+  private static resolveNetizenCollision(x: number, y: number, rad: number): { x: number; y: number; hit: boolean } {
+    let hit = false;
+    for (const b of Lobby.SOLID_RECTS) {
+      const nx = Math.max(b.x, Math.min(b.x + b.w, x));
+      const ny = Math.max(b.y, Math.min(b.y + b.h, y));
+      const dx = x - nx, dy = y - ny;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= rad * rad) continue;
+      hit = true;
+      if (d2 > 0.0001) {
+        const d = Math.sqrt(d2);
+        x = nx + (dx / d) * rad;
+        y = ny + (dy / d) * rad;
+      } else {
+        const left = x - b.x, right = b.x + b.w - x, top = y - b.y, bottom = b.y + b.h - y;
+        const m = Math.min(left, right, top, bottom);
+        if (m === left) x = b.x - rad;
+        else if (m === right) x = b.x + b.w + rad;
+        else if (m === top) y = b.y - rad;
+        else y = b.y + b.h + rad;
+      }
+    }
+    x = Math.max(rad, Math.min(WORLD.w - rad, x));
+    y = Math.max(rad, Math.min(WORLD.h - rad, y));
+    return { x, y, hit };
+  }
+
   /** Wander netizen avatars and fan everyone's positions out. Called every tick by broadcast();
    *  throttled to ~15 Hz. Also runs when no humans are in the world to keep netizens moving. */
   broadcastWorld() {
     const now = Date.now();
     const dt = 1 / 60;
     const speed = 64;
+    const netizenR = 16;
     for (let i = 0; i < Lobby.NETIZEN_NAMES.length; i++) {
       const pid = `netizen:${i}`;
       const pos = this.netizenPos.get(pid);
@@ -1578,8 +1626,21 @@ export class Lobby {
           pos.tx = Lobby.PLAZA.x + Math.cos(a) * r;
           pos.ty = Lobby.PLAZA.y + Math.sin(a) * r;
         } else {
-          pos.x += (dx / dist) * speed * dt;
-          pos.y += (dy / dist) * speed * dt;
+          const stepped = Lobby.resolveNetizenCollision(
+            pos.x + (dx / dist) * speed * dt,
+            pos.y + (dy / dist) * speed * dt,
+            netizenR,
+          );
+          pos.x = stepped.x;
+          pos.y = stepped.y;
+          if (stepped.hit) {
+            // Bumped into something — pick a new wander target so we don't keep
+            // walking into the same wall and getting stuck.
+            pos.pauseUntil = now + 400 + Math.random() * 800;
+            const a = Math.random() * Math.PI * 2, r = 200 + Math.random() * 800;
+            pos.tx = Lobby.PLAZA.x + Math.cos(a) * r;
+            pos.ty = Lobby.PLAZA.y + Math.sin(a) * r;
+          }
         }
       }
     }
@@ -3301,6 +3362,15 @@ export class Lobby {
     // Economy Overhaul: hydrate the House treasury and seed the netizen bot traders (funded from
     // the House). Both are best-effort — without a DB they no-op cleanly.
     this.houseBalance = await getHouseBalance().catch(() => 0);
+    // One-time mint to bring total coin supply (House + wallet cash) to a clean 5M.
+    const walletCash = await getTotalCoins().catch(() => 0);
+    const currentSupply = this.houseBalance + walletCash;
+    if (currentSupply < 5_000_000) {
+      const mint = 5_000_000 - Math.floor(currentSupply);
+      await houseAdjust(mint);
+      this.houseBalance += mint;
+      console.error(`house mint: +${mint} (supply ${Math.floor(currentSupply).toLocaleString()} → 5,000,000)`);
+    }
     await this.loadFed().catch((e) => console.error('fed load failed:', e));
     await this.seedNetizens().catch((e) => console.error('netizen seed failed:', e));
     // Seed netizen world avatar positions around the centre plaza with a short staggered spawn
@@ -3308,13 +3378,16 @@ export class Lobby {
     for (let i = 0; i < Lobby.NETIZEN_NAMES.length; i++) {
       const pid = `netizen:${i}`;
       // Scatter the initial positions across the town (radially, up to ~900 units) so they don't
-      // all start piled on the fountain.
+      // all start piled on the fountain. Push them out of any solid rect so nobody spawns inside a building.
       const a0 = Math.random() * Math.PI * 2, r0 = Math.random() * 900;
-      const x = Lobby.PLAZA.x + Math.cos(a0) * r0;
-      const y = Lobby.PLAZA.y + Math.sin(a0) * r0;
+      const spawn = Lobby.resolveNetizenCollision(
+        Lobby.PLAZA.x + Math.cos(a0) * r0,
+        Lobby.PLAZA.y + Math.sin(a0) * r0,
+        16,
+      );
       this.netizenPos.set(pid, {
-        x, y,
-        tx: x, ty: y,
+        x: spawn.x, y: spawn.y,
+        tx: spawn.x, ty: spawn.y,
         pauseUntil: Date.now() + 1000 + Math.random() * 3000, // stagger initial stroll
         spawnAt: 0, // no delay — appear right away
       });
@@ -3337,6 +3410,19 @@ export class Lobby {
       const pid = `netizen:${i}`;
       const ok = await seedNetizen(pid, name, Lobby.NETIZEN_START_COINS);
       if (!ok) break; // House couldn't fund — seed fewer
+    }
+    // Top-up any bankrupt netizen back to starting coins from the House treasury.
+    const nets = await getNetizens().catch(() => [] as { pid: string; name: string; coins: number }[]);
+    if (nets.length) {
+      await Promise.all(nets.map(async (n) => {
+        if (n.coins < Lobby.NETIZEN_START_COINS) {
+          const deficit = Lobby.NETIZEN_START_COINS - n.coins;
+          const funded = await houseAdjust(-deficit);
+          if (funded !== null) {
+            await addCoins(n.pid, n.name, deficit);
+          }
+        }
+      }));
     }
     // Reflect the funding cost on the cached balance + clients.
     this.houseBalance = await getHouseBalance().catch(() => this.houseBalance);
@@ -3586,17 +3672,20 @@ export class Lobby {
    *  announce. Coefficients are cached in memory (read on hot paths) and persisted to doom_meta. */
   private async tickFed(): Promise<void> {
     const { top5, total } = await getNetWorthConcentration();
-    const conc = total > 0 ? top5 / total : 0;
+    // Share of total economy = top 5 player net worth / (House balance + all player net worth).
+    // Measures the top 5's control of ALL coins, not just the player slice.
+    const economyTotal = this.houseBalance + total;
+    const share = economyTotal > 0 ? top5 / economyTotal : 0;
     let announced = false;
     // Concentration → tighten (raise the top wealth bracket) / ease (back to baseline).
-    if (conc > 0.5 && !this.fed.tightening) {
+    if (share > 0.40 && !this.fed.tightening) {
       this.fed.tightening = true; this.fed.wealthTaxTop = 0.15;
       await setMeta('fed_tightening', 1); await setMeta('fed_wealth_tax_cap', this.fed.wealthTaxTop);
       this.publishFedNews('tighten', Math.round(this.fed.wealthTaxTop * 100)); announced = true;
-    } else if (conc < 0.3 && this.fed.tightening) {
+    } else if (share < 0.20 && this.fed.tightening) {
       this.fed.tightening = false; this.fed.wealthTaxTop = 0.10;
       await setMeta('fed_tightening', 0); await setMeta('fed_wealth_tax_cap', this.fed.wealthTaxTop);
-      this.publishFedNews('ease', Math.round(conc * 100)); announced = true;
+      this.publishFedNews('ease', Math.round(share * 100)); announced = true;
     }
     // House liquidity → waive / restore the loan cap (emergency credit window).
     if (this.houseBalance < 10_000 && !this.fed.loanCapWaived) {
@@ -3884,6 +3973,8 @@ export class Lobby {
           ? { item: auction.item, name: auction.name, startBid: auction.startBid, highBid: auction.highBid, highName: auction.highName, endsAt: auction.endsAt }
           : null;
         const top5Pct = conc.total > 0 ? Math.round((conc.top5 / conc.total) * 1000) / 10 : 0;
+        const economyTotal = this.houseBalance + conc.total;
+        const top5ShareOfTotal = economyTotal > 0 ? Math.round((conc.top5 / economyTotal) * 1000) / 10 : 0;
         const wealthBrackets = TAX_BRACKETS.map((b) => ({
           upTo: b.upTo === Infinity ? -1 : b.upTo,
           rate: b.upTo === Infinity ? this.fed.wealthTaxTop : b.rate,
@@ -3901,6 +3992,9 @@ export class Lobby {
           trickleFund: Math.round(trickle),
           totalCoins: Math.round(totalCoins),
           top5Pct,
+          top5ShareOfTotal,
+          playerNetWorthTotal: Math.round(conc.total),
+          economyTotal: Math.round(economyTotal),
           brokerFeePct: (isMarketHours(Date.now()) ? BROKER_FEE : BROKER_FEE * 2) * 100,
           concentrationCap: STOCK_CONCENTRATION_CAP * 100,
           loanCapWaived: this.fed.loanCapWaived,
@@ -4337,6 +4431,122 @@ export class Lobby {
         this.refreshNetWorth().catch(() => {});
       })
       .catch((e) => console.error('market buy failed:', e));
+  }
+
+  // --- Robville land (the suburban neighborhood) ---
+
+  /** Build the per-player land book: every lot's ownership + market state, plus this player's
+   *  bank-purchase count (so the client can show the anti-monopoly cap). */
+  private async buildLand(forPid: string): Promise<{ parcels: LandParcelView[]; bankBought: number }> {
+    const [rows, bankBought] = await Promise.all([
+      getLandParcels(),
+      forPid ? getBankParcels(forPid) : Promise.resolve(0),
+    ]);
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const parcels: LandParcelView[] = WORLD_PARCELS.map((p) => {
+      const r = byId.get(p.id);
+      const owned = !!r?.ownerPid;
+      return {
+        id: p.id,
+        ownerName: owned ? (r!.ownerName ?? '???') : null,
+        mine: owned && r!.ownerPid === forPid,
+        ask: owned ? (r!.ask ?? null) : null,
+      };
+    });
+    return { parcels, bankBought };
+  }
+
+  /** Send one client the current land book. */
+  sendLand(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn) return;
+    this.buildLand(conn.pid)
+      .then(({ parcels, bankBought }) => {
+        if (this.conns.has(ws)) this.tell(ws, { type: 'land', parcels, bankBought, bankCap: BANK_PARCEL_CAP });
+      })
+      .catch((e) => console.error('land send failed:', e));
+  }
+
+  /** Re-push the land book to everyone in the world (it's per-player, so send individually). */
+  private broadcastLand() {
+    for (const ws of this.world.sockets()) if (ws.readyState === ws.OPEN) this.sendLand(ws);
+  }
+
+  /** Buy an empty Robville lot from the bank for PARCEL_PRICE (subject to the bank cap). */
+  landBuyBank(ws: WebSocket, id: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    if (typeof id !== 'string' || !WORLD_PARCELS.some((p) => p.id === id)) return;
+    buyParcelFromBank(conn.pid, conn.nickname, id, PARCEL_PRICE, BANK_PARCEL_CAP)
+      .then((res) => {
+        if (!res.ok) {
+          const msg = res.reason === 'taken' ? 'That lot was just bought by someone else.'
+            : res.reason === 'cap' ? `🏦 The bank limits you to ${BANK_PARCEL_CAP} lot${BANK_PARCEL_CAP === 1 ? '' : 's'} — buy more from other owners instead.`
+            : res.reason === 'afford' ? `You can't afford the ${PARCEL_PRICE.toLocaleString()}🪙 deed.`
+            : '';
+          if (msg) this.notify(ws, msg);
+          this.sendLand(ws);
+          return;
+        }
+        // The full price flowed into the House (handled in the txn) — reflect it on the cache + clients.
+        this.houseBalance += PARCEL_PRICE;
+        this.broadcastHouse();
+        this.notify(ws, `🏡 Sold! You bought a Robville lot for ${PARCEL_PRICE.toLocaleString()}🪙. Welcome to the neighborhood.`);
+        this.sendWallet(ws);
+        this.broadcastLand();
+      })
+      .catch((e) => console.error('land buy (bank) failed:', e));
+  }
+
+  /** List your own lot for sale at `ask` coins. */
+  landList(ws: WebSocket, id: string, ask: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    const price = Math.floor(ask);
+    if (typeof id !== 'string' || !Number.isFinite(price) || price < 1 || price > 100_000_000) return;
+    listParcel(conn.pid, id, price)
+      .then((ok) => {
+        if (!ok) { this.notify(ws, "Couldn't list that lot (you don't own it)."); return; }
+        this.notify(ws, `🪧 Your Robville lot is on the market for ${price.toLocaleString()}🪙.`);
+        this.broadcastLand();
+      })
+      .catch((e) => console.error('land list failed:', e));
+  }
+
+  /** Take your lot back off the market. */
+  landUnlist(ws: WebSocket, id: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    if (typeof id !== 'string') return;
+    unlistParcel(conn.pid, id)
+      .then((ok) => { if (ok) { this.notify(ws, '🪧 Lot taken off the market.'); this.broadcastLand(); } })
+      .catch((e) => console.error('land unlist failed:', e));
+  }
+
+  /** Buy a listed lot from its owner at the asking price (one atomic transaction; no bank cap). */
+  landBuy(ws: WebSocket, id: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    if (typeof id !== 'string' || !WORLD_PARCELS.some((p) => p.id === id)) return;
+    buyParcelFromOwner(conn.pid, conn.nickname, id)
+      .then((res) => {
+        if (!res.ok) {
+          const msg = res.reason === 'self' ? "You already own that lot."
+            : res.reason === 'afford' ? "You can't afford that lot."
+            : res.reason === 'unavail' ? 'That lot is no longer for sale.' : '';
+          if (msg) this.notify(ws, msg);
+          this.sendLand(ws);
+          return;
+        }
+        // Coins moved buyer → seller inside the txn (no House cut on private sales).
+        this.notify(ws, `🏡 Bought ${res.sellerName}'s Robville lot for ${res.ask.toLocaleString()}🪙.`);
+        for (const [sock, c] of this.conns) {
+          if (c.pid === res.sellerPid) { this.notify(sock, `💰 ${conn.nickname} bought your Robville lot for ${res.ask.toLocaleString()}🪙!`); this.sendWallet(sock); }
+        }
+        this.sendWallet(ws);
+        this.broadcastLand();
+      })
+      .catch((e) => console.error('land buy (owner) failed:', e));
   }
 
   // --- Loan book (public, clickable from the stability bar) ---

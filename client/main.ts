@@ -748,6 +748,8 @@ const net = connect(
       // Account-stored settings arriving on join: seed the local set (server wins over cookie) and apply.
       for (const [k, v] of Object.entries(msg.prefs)) { prefs[k] = v; setCookie('tsong_' + k, v); }
       applyPrefs();
+    } else if (msg.type === 'land') {
+      worldMod?.feedLand(msg.parcels, msg.bankBought, msg.bankCap);
     } else if (msg.type === 'wallet') {
       wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, car: msg.car, pet: msg.pet, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
       rouletteHandle.setCoins(msg.coins);
@@ -2019,6 +2021,12 @@ worldBtn.addEventListener('click', async () => {
       amJailed: () => worldJailed,                            // are WE locked up right now?
       dayNightOffset: () => dayNightOffset,                   // per-deploy day/night clock offset
       openParliament: () => { setTimeout(() => { void openParliament(); }, 0); }, // walk in → Nomic overlay
+      // Robville land: buy from the bank, list/unlist your lots, buy listed lots off other owners.
+      landReq: () => net.send({ type: 'landReq' }),
+      landBuyBank: (id) => net.send({ type: 'landBuyBank', id }),
+      landList: (id, ask) => net.send({ type: 'landList', id, ask }),
+      landUnlist: (id) => net.send({ type: 'landUnlist', id }),
+      landBuy: (id) => net.send({ type: 'landBuy', id }),
     });
   } catch (e) {
     console.error('World failed to load:', e);
@@ -2088,7 +2096,7 @@ function renderHouseDashboard() {
     const lo = i === 0 ? 0 : s.capGainBrackets[i - 1].upTo;
     return `<tr><td>${cap(lo)} – ${cap(b.upTo)}</td><td>${pct(b.rate)}</td></tr>`;
   }).join('');
-  const fastRows = s.fastSell.map((b) => `<tr><td>&lt; ${b.underMin >= 60 ? `${b.underMin / 60}h` : `${b.underMin}m`}</td><td>${pct(b.rate)}</td></tr>`).join('') + '<tr><td>3h+</td><td>0%</td></tr>';
+  const fastRows = s.fastSell.map((b) => `<tr><td>&lt; ${b.underMin >= 60 ? `${b.underMin / 60}h` : `${b.underMin}m`}</td><td>${pct(b.rate)}</td></tr>`).join('') + '<tr><td>60m+</td><td>0%</td></tr>';
   const idleRows = s.idleTiers.map((t, i) => {
     const next = s.idleTiers[i + 1];
     return `<tr><td>${t.days}${next ? `–${next.days}` : '+'} days</td><td>${pct(t.rate)}</td></tr>`;
@@ -2108,12 +2116,16 @@ function renderHouseDashboard() {
       </div>
       <div class="house-card"><h4>📊 Market State</h4>
         <div>Coins in circulation: <b>${c(s.totalCoins)}🪙</b></div>
-        <div>Top-5 concentration: <b>${s.top5Pct}%</b></div>
+        <div>Top-5 of players: <b>${s.top5Pct}%</b></div>
+        <div>Top-5 of total economy: <b>${s.top5ShareOfTotal}%</b></div>
+        <div>Player total: <b>${c(s.playerNetWorthTotal)}🪙</b></div>
+        <div>House / Player: <b>${(s.balance / s.playerNetWorthTotal).toFixed(1)}×</b></div>
+        <div>Economy total: <b>${c(s.economyTotal)}🪙</b></div>
         <div>Per-stock cap: <b>${s.concentrationCap}%</b></div>
         <div>Broker fee: <b>${s.brokerFeePct.toFixed(1)}%</b></div>
       </div>
       <div class="house-card"><h4>📈 Fed Policy</h4><div>${policy}</div>
-        <div style="color:#8aa0d8;font-size:12px;margin-top:4px">Tightens &gt;50% concentration, eases &lt;30%.</div>
+        <div style="color:#8aa0d8;font-size:12px;margin-top:4px">Tightens when top 5 hold &gt;40% of all coins, eases when &lt;20%.</div>
       </div>
       <div class="house-card"><h4>💰 Wealth Tax (daily)</h4><table class="house-tbl">${wealthRows}</table></div>
       <div class="house-card"><h4>💹 Capital Gains</h4><table class="house-tbl">${gainRows}</table></div>

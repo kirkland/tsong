@@ -664,7 +664,7 @@ export class Game {
       b.vx -= 2 * vn * nx;
       b.vy -= 2 * vn * ny;
       const speed = Math.hypot(b.vx, b.vy);
-      const boosted = Math.min(speed * BUMPER.speedBoost, BALL.speed * 3);
+      const boosted = Math.min(speed * BUMPER.speedBoost, BALL.speed * 1.5);
       b.vx = (b.vx / speed) * boosted;
       b.vy = (b.vy / speed) * boosted;
       b.x += nx * (minDist - dist);

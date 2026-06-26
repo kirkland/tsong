@@ -131,7 +131,7 @@ export const TARGET = {
 // Ball caroms off them with a small speed boost; each hit flashes the bumper.
 export const BUMPER = {
   r: 22,         // radius, court units
-  speedBoost: 1.12, // ball speed multiplier on each hit (capped at 3× base)
+  speedBoost: 1.04, // ball speed multiplier on each hit (capped at 1.5× base)
 } as const;
 export const BUMPER_POSITIONS: readonly { x: number; y: number }[] = [
   { x: 280, y: 130 },
@@ -355,7 +355,7 @@ export type BotLevel = (typeof BOT_LEVELS)[number];
 // add a WORLD_BUILDINGS entry and a handler for its `kind` on the client. Nothing else in
 // the protocol needs to change.
 export const WORLD: { w: number; h: number; spawnX: number; spawnY: number } = {
-  w: 3200,
+  w: 4800, // widened east to make room for Robville, the suburban neighborhood (see WORLD_PARCELS)
   h: 2200,
   spawnX: 1600,
   spawnY: 1240,
@@ -497,6 +497,53 @@ export const JAIL_CELL = {
   x: JAIL.x + JAIL_WALL, y: JAIL.y + JAIL_WALL,
   w: JAIL.w - JAIL_WALL * 2, h: JAIL.h - JAIL_WALL * 2,
 } as const;
+
+// --- Robville: the suburban neighborhood -----------------------------------------------
+// A charming subdivision on the east side of the map, reached by an avenue off the town's main
+// street. A residential spine threads four cul-de-sac bulbs, each ringed by buyable lots. Buy an
+// empty lot from the BANK for PARCEL_PRICE (coins → the House). Anti-monopoly rule: nobody may
+// buy more than BANK_PARCEL_CAP lots (1/10 of all lots) FROM THE BANK — but you can buy any number
+// from other players on the open market, where owners set their own asking price. (Building and
+// furnishing houses on your lots: coming soon.)
+export const PARCEL_PRICE = 1000; // coins to buy an empty lot from the bank
+
+// A cul-de-sac bulb: a paved circle at the dead end of a residential stem road. `stem` is the
+// compass direction (radians, +x = east) from the bulb back toward the spine — the side of the
+// ring kept clear of lots so the street can enter.
+export interface RobBulb { cx: number; cy: number; r: number; stem: number; }
+export const ROBVILLE_BULBS: readonly RobBulb[] = [
+  { cx: 3500, cy: 760,  r: 130, stem: 0 },        // Maple Court (west, upper)
+  { cx: 4300, cy: 760,  r: 130, stem: Math.PI },  // Birch Circle (east, upper)
+  { cx: 3500, cy: 1640, r: 130, stem: 0 },        // Willow Court (west, lower)
+  { cx: 4300, cy: 1640, r: 130, stem: Math.PI },  // Cedar Circle (east, lower)
+];
+
+// One buyable lot. `x,y,w,h` is the lot footprint (top-left origin, world units — the future
+// house pad); `cx,cy` is its center (where you stand to buy/sell, and where a house will sit).
+export interface LandParcel { id: string; x: number; y: number; w: number; h: number; cx: number; cy: number; }
+// The fixed set of lots, generated deterministically from the bulbs so the client (rendering +
+// proximity) and the server (validation) agree exactly. Six lots ring each bulb, spread over the
+// ~280° arc that faces away from the stem mouth.
+export const WORLD_PARCELS: readonly LandParcel[] = (() => {
+  const LOT = 120;                      // lot footprint side, world units
+  const PER_BULB = 6;                   // lots ringing each cul-de-sac
+  const ARC = (280 * Math.PI) / 180;    // arc the lots span (the rest is the stem mouth)
+  const out: LandParcel[] = [];
+  ROBVILLE_BULBS.forEach((b, bi) => {
+    const dist = b.r + 140;             // lot-center distance from the bulb center (clears neighbors)
+    for (let i = 0; i < PER_BULB; i++) {
+      // Center the lot arc opposite the stem (b.stem + π), then step across it.
+      const ang = b.stem + Math.PI - ARC / 2 + ((i + 0.5) / PER_BULB) * ARC;
+      const cx = b.cx + dist * Math.cos(ang);
+      const cy = b.cy + dist * Math.sin(ang);
+      out.push({ id: `rv-${bi}-${i}`, x: cx - LOT / 2, y: cy - LOT / 2, w: LOT, h: LOT, cx, cy });
+    }
+  });
+  return out;
+})();
+// Anti-monopoly cap: the most lots one player may EVER buy from the bank (1/10 of all lots, ≥1).
+// Player-to-player purchases don't count toward it and are unlimited.
+export const BANK_PARCEL_CAP = Math.max(1, Math.floor(WORLD_PARCELS.length / 10));
 
 // --- Nomic (the Parliament sub-game) ---------------------------------------------------
 // A standalone, self-amending RULES game in its own World building (🏛️ PARLIAMENT). NOT connected
@@ -671,6 +718,21 @@ export interface WorldMsg {
   avatars: WorldAvatar[];
 }
 
+// One Robville lot's ownership/market state. `mine` and the wallet-ish counters are
+// recipient-specific, so LandMsg is built per-player (like the marketplace book).
+export interface LandParcelView {
+  id: string;
+  ownerName: string | null; // null = bank-owned (buyable for PARCEL_PRICE); else the owner's nickname
+  mine: boolean;            // true if YOU own this lot
+  ask: number | null;       // asking price if the owner has it listed for sale, else null
+}
+export interface LandMsg {
+  type: 'land';
+  parcels: LandParcelView[];
+  bankBought: number; // how many lots YOU'VE bought from the bank so far (lifetime)
+  bankCap: number;    // BANK_PARCEL_CAP — so the client can show "2 of 2 used"
+}
+
 // --- Client -> Server ---
 export type ClientMsg =
   // pid = stable per-browser identity; color = chosen paddle color
@@ -683,7 +745,7 @@ export type ClientMsg =
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
   | { type: 'summonPlane' } // secret: summon the banner-plane for the whole room to see
-  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean } // toggle game modes
+  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean; bumpers?: boolean } // toggle game modes
   | { type: 'fatality'; move: string } // winner-only, validated server-side
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
   | { type: 'forfeit' } // "/ff": leave your paddle spot mid-game (and get shamed)
@@ -770,6 +832,12 @@ export type ClientMsg =
   | { type: 'worldEnter' } // step into the free-roam world map (start sending/receiving avatar positions)
   | { type: 'worldLeave' } // leave the world map
   | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null; pet?: string | null } // client-authoritative avatar position (world units), heading + car when driving, pet trailing
+  // --- Robville land (the suburban neighborhood) ---
+  | { type: 'landReq' } // request the current Robville parcel ownership/market book
+  | { type: 'landBuyBank'; id: string } // buy an empty lot from the bank for PARCEL_PRICE (subject to BANK_PARCEL_CAP)
+  | { type: 'landList'; id: string; ask: number } // list your lot for sale at `ask` coins
+  | { type: 'landUnlist'; id: string } // take your lot back off the market
+  | { type: 'landBuy'; id: string } // buy a listed lot from its owner at the asking price (no cap)
   | { type: 'migrate'; oldPid: string } // one-time: merge a UUID guest account into the signed-in Google account
   | { type: 'netizenInfoReq'; netizenId: string }
   | { type: 'netizenChallenge'; netizenId: string; wager: number }
@@ -1245,6 +1313,7 @@ export type ServerMsg =
   | { type: 'dungeonChestOpened'; chest: string; coins: number; potion: boolean; spin?: boolean; car?: string } // a chest open was accepted (car = display name of a vehicle prize)
   | { type: 'dungeonSpin'; chest: string; segment: number; reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string } } // a spin chest: play the wheel, reward goes to run loot
   | { type: 'dungeonPurse'; coins: number } // current run-purse total (paid out only on a clean escape)
+  | LandMsg
   | HouseMsg
   | HouseStateMsg
   | NetizenInfoMsg
@@ -1331,7 +1400,10 @@ export interface HouseStateMsg {
   balance: number;
   trickleFund: number;
   totalCoins: number;
-  top5Pct: number;            // top-5 net-worth concentration, %
+  top5Pct: number;            // top-5 net-worth concentration among players only, %
+  top5ShareOfTotal: number;   // top-5 net-worth / (House + all player net worth), %
+  playerNetWorthTotal: number; // sum of all positive player net worth
+  economyTotal: number;        // House balance + all player net worth
   brokerFeePct: number;       // current broker fee, % (0.5 in-hours / 1.0 after-hours)
   concentrationCap: number;   // max % of a stock one player may hold
   loanCapWaived: boolean;
@@ -1560,15 +1632,14 @@ export type StockSide = 'long' | 'short';
 // from 25% to 0% over 3 hours. Single source of truth so server charges and client countdowns
 // can never drift apart.
 export const FAST_SELL_BRACKETS: { underMs: number; rate: number }[] = [
-  { underMs:   5 * 60_000, rate: 0.25 },
-  { underMs:  15 * 60_000, rate: 0.20 },
-  { underMs:  30 * 60_000, rate: 0.15 },
-  { underMs:  60 * 60_000, rate: 0.10 },
-  { underMs: 180 * 60_000, rate: 0.05 },
+  { underMs:   5 * 60_000, rate: 0.20 },
+  { underMs:  15 * 60_000, rate: 0.15 },
+  { underMs:  30 * 60_000, rate: 0.10 },
+  { underMs:  60 * 60_000, rate: 0.05 },
 ];
 // Legacy single-constant shims kept for any import sites not yet updated.
-export const FAST_SELL_TAX_MS   = FAST_SELL_BRACKETS[0].underMs; // 5 min (first bracket)
-export const FAST_SELL_TAX_RATE = FAST_SELL_BRACKETS[0].rate;    // 25% (first bracket)
+export const FAST_SELL_TAX_MS   = FAST_SELL_BRACKETS[FAST_SELL_BRACKETS.length - 1].underMs; // 60 min (last bracket)
+export const FAST_SELL_TAX_RATE = FAST_SELL_BRACKETS[0].rate;                                 // 20% (first bracket)
 // Current value of a position: long pays shares×price; short pays 2×cost − shares×price
 // (goes negative if price climbs past entry — covering then costs the holder extra coins).
 export function positionWorth(side: StockSide, shares: number, cost: number, price: number): number {
