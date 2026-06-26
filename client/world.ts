@@ -92,7 +92,7 @@ interface Controller {
   feedLand(parcels: LandParcelView[], bankBought: number, bankCap: number): void; // Robville land book
   reenter(): void; // re-send worldEnter after a socket reconnect (server forgot us on drop)
   dungeonChests(opened: string[]): void;                          // server's list of chests we've opened
-  chestAccepted(chest: string, coins: number, potion: boolean, spin?: boolean, car?: string): void; // server accepted a chest open (car = vehicle prize name)
+  chestAccepted(chest: string, coins: number, potions: number, spin?: boolean, prize?: string): void; // server accepted a chest open (prize = cosmetic name)
   dungeonSpinLoot(reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string }): void; // a spin chest's reward → run loot
   dungeonPurse(coins: number): void;                              // current run-purse total from the server
 }
@@ -119,8 +119,8 @@ export function feedDungeonChests(opened: string[]): void {
 }
 
 /** The server accepted a chest open (added the coins to the run purse / granted the potion). */
-export function dungeonChestAccepted(chest: string, coins: number, potion: boolean, spin?: boolean, car?: string): void {
-  controller?.chestAccepted(chest, coins, potion, spin, car);
+export function dungeonChestAccepted(chest: string, coins: number, potions: number, spin?: boolean, prize?: string): void {
+  controller?.chestAccepted(chest, coins, potions, spin, prize);
 }
 export function dungeonSpinLoot(reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string }): void {
   controller?.dungeonSpinLoot(reward);
@@ -282,7 +282,7 @@ const DUNGEON_B3 = [
   '#####..####..#........##..####..######....#',
   '#####..####..####..#####..####..######....#',
   '#####..####..####D.#####..####..####......#',
-  '##........#..####..#####..........##.....##',
+  '##........#..####..#####..........##...>.##',
   '##........#..#........####..~~~~..##.....##',
   '##........####..~~~...####..~~~~....D....##',
   '##..............~~~.....D...~c~~.........##',
@@ -292,12 +292,47 @@ const DUNGEON_B3 = [
   '###########################################',
   '###########################################',
 ];
-const DUNGEON_FLOORS: Record<string, string[]> = { B1: DUNGEON_B1, B2: DUNGEON_B2, B3: DUNGEON_B3 };
+// B4 — the deep floor, ~4× B1 (47×31 = 1457), darkest + bloodiest. '<' up to B3 (reached via B3's
+// tucked-away '>'). Tier-4 mobs. Carved + connectivity-validated offline.
+const DUNGEON_B4 = [
+  '###############################################',
+  '#T######################T###########T########T#',
+  '##.......####....D...####.......####........###',
+  '##..<....####..~~~~..####....c~~~~##........###',
+  '##.......D.....~~~~...........~~~~..D.......###',
+  '##.............~~~~...........~~~~..........###',
+  '##.......####........####.....~~~~##........###',
+  '##.......####........####.......####........###',
+  '#####..##########..##########..#####..........#',
+  '#####..##########..##########..#####......##..#',
+  '#####..##########..##########..#####......##..#',
+  '##.......#####.........#####........####..##..#',
+  '##.......#####.........#####........###.......#',
+  '##.~~~...#####.........#####........###.......#',
+  '##.~c~...D..........................D...~~~~..#',
+  '##.~~~..................................~~~~..#',
+  '##.~~~...##..#.........##..#..........#.~~~~..#',
+  '#T.......##..#.........##..#..........#.~~~~..#',
+  '#####..####..#.........##..####..###..#.......#',
+  '#####..####..#####..#####..####..###..####..###',
+  '#####..####..#####D.#####..####.......####..###',
+  '##........#..#####..#####.............####..###',
+  '##........#..#.........###........##.D.......##',
+  '##........####..~~~~...###...~~~~.###........##',
+  '##..............~~~~.....D...c~~~.###.....c..##',
+  '##..............~~~~.........~~~~............##',
+  '##........####..~~~~...###...~~~~............##',
+  '##..c.....####.........###........###........##',
+  '#T........####.........###........###........T#',
+  '###############################################',
+  '###############################################',
+];
+const DUNGEON_FLOORS: Record<string, string[]> = { B1: DUNGEON_B1, B2: DUNGEON_B2, B3: DUNGEON_B3, B4: DUNGEON_B4 };
 const DUNGEON_TOTAL_CHESTS = Object.keys(DUNGEON_CHEST_CONTENTS).length; // for the x/y "chests found" counter
 // Locked 'L' doors → the chest they guard. A door stays open FOREVER once that chest is account-opened
 // (committed), exactly like the chest itself — no need to re-key it on later runs.
 const DUNGEON_LOCKED_DOORS: Record<string, string> = { 'B2:32,24': 'B2:34,24' };
-const DUNGEON_ORDER = ['B1', 'B2', 'B3']; // descent order; '>' goes to the next, '<' to the previous
+const DUNGEON_ORDER = ['B1', 'B2', 'B3', 'B4']; // descent order; '>' goes to the next, '<' to the previous
 // Each descent gets darker + colder in THEME (not lighting — the actual stone palette). `props`
 // turns on the deeper-floor ambient decals (bones, fungus, cobwebs, drips); `gore` adds blood + claw
 // marks on the bloodier floors.
@@ -305,6 +340,7 @@ const DUNGEON_THEME: Record<string, { wall: number; floor: number; surround: num
   B1: { wall: 0xffd49a, floor: 0xffffff, surround: 0x070905, props: false }, // warm amber sandstone
   B2: { wall: 0xa07b86, floor: 0x9aa0b4, surround: 0x05060a, props: true },  // colder, blue-grey, dimmer
   B3: { wall: 0x866e7c, floor: 0x7c7690, surround: 0x05050c, props: true, gore: true }, // darker than B2, sickly + bloodied, still readable
+  B4: { wall: 0x6a5660, floor: 0x645f74, surround: 0x040309, props: true, gore: true }, // the deep: coldest, darkest, most blood
 };
 const dungeonIsWall = (ch: string): boolean => ch === '#' || ch === 'T' || ch === 'o' || ch === ' ';
 // what blocks movement: walls + solid props (a chest you bump into) + a locked door ('L')
@@ -312,7 +348,7 @@ const dungeonBlocks = (ch: string): boolean => dungeonIsWall(ch) || ch === 'c' |
 // Each floor's NEW-mob tier. Its roster = the 2 mobs of THIS tier (new) + the 2 of the tier above,
 // carried down (tier-1). Rewards key off the mob's tier (DUNGEON_TIER_COINS), not the floor. The
 // "new" mobs are forced first: you must meet BOTH new mobs before a carried-over mob can reappear.
-const DUNGEON_FLOOR_TIER: Record<string, number> = { B1: 1, B2: 2, B3: 3 };
+const DUNGEON_FLOOR_TIER: Record<string, number> = { B1: 1, B2: 2, B3: 3, B4: 4 };
 const mobsOfTier = (t: number): number[] => DUNGEON_MOBS.map((m, i) => (m.tier === t ? i : -1)).filter((i) => i >= 0);
 const floorNewMobs = (floor: string): number[] => mobsOfTier(DUNGEON_FLOOR_TIER[floor] ?? 1);
 const floorCarryMobs = (floor: string): number[] => { const t = DUNGEON_FLOOR_TIER[floor] ?? 1; return t > 1 ? mobsOfTier(t - 1) : []; };
@@ -4208,13 +4244,13 @@ export function startWorld(net: WorldNet): void {
       updateDungeonHud(); // refresh the "📦 X/Y chests opened" counter now the banked list arrived
       updateNearBuilding();
     },
-    chestAccepted(chest, coins, potion, _spin, car) {
+    chestAccepted(chest, coins, potions, _spin, prize) {
       openedChestsServer.add(chest);
       if (chest.startsWith(currentFloor + ':')) dungeonChestSprites[chest.slice(currentFloor.length + 1)]?.setTexture('w-chest-open');
-      if (car) { lootItems.push({ item: 'car', name: car }); showToast(`🛻 THE VAULT! You found a ${car} — escape to keep it!`); }
-      else if (potion) { potionCount += 1; showToast('📦 Found a 🧪 Potion!'); }
+      if (prize) { lootItems.push({ item: 'cosmetic', name: prize }); showToast(`📦✨ You found ${prize} — escape to keep it!`); }
+      else if (potions > 0) { potionCount += potions; showToast(potions > 1 ? `📦 Found ${potions} 🧪 Potions!` : '📦 Found a 🧪 Potion!'); }
       else if (coins) showToast(`📦 ${coins}🪙 added to your purse — escape to keep it!`);
-      // spin chests (coins:0/potion:false) say nothing here — the wheel + its own toast handle it
+      // spin chests (coins:0/potions:0) say nothing here — the wheel + its own toast handle it
       updateDungeonHud(); updateDungeonControls();
     },
     dungeonSpinLoot(reward) {

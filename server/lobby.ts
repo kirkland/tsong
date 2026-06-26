@@ -1076,17 +1076,17 @@ export class Lobby {
     if (run.has(chest)) return;                     // already opened THIS run → no double-pay
     run.add(chest);
     if (contents.spin) { this.dungeonSpinChest(ws, conn.pid, chest); return; } // roll the wheel in-dungeon
-    const coins = contents.coins ?? 0, potion = !!contents.potion;
+    const coins = contents.coins ?? 0, potions = contents.potions ?? 0;
     if (coins > 0) this.dungeonPurse.set(conn.pid, (this.dungeonPurse.get(conn.pid) ?? 0) + coins);
-    let carName: string | undefined;
-    if (contents.car) { // a vehicle prize → bank it as a run-item (granted on escape, like spin cosmetics)
-      const def = COSMETICS.find((c) => c.id === contents.car);
-      carName = def?.name ?? 'a vehicle';
+    let prizeName: string | undefined;
+    if (contents.cosmetic) { // a cosmetic prize (truck, skin, …) → bank as a run-item, granted on escape
+      const def = COSMETICS.find((c) => c.id === contents.cosmetic);
+      prizeName = def?.name ?? 'a prize';
       const list = this.dungeonRunItems.get(conn.pid) ?? [];
-      list.push({ item: contents.car, name: carName });
+      list.push({ item: contents.cosmetic, name: prizeName });
       this.dungeonRunItems.set(conn.pid, list);
     }
-    this.tell(ws, { type: 'dungeonChestOpened', chest, coins, potion, spin: false, car: carName });
+    this.tell(ws, { type: 'dungeonChestOpened', chest, coins, potions, spin: false, prize: prizeName });
     this.sendPurse(ws, conn.pid);
   }
   // A spin chest: roll the wheel server-side, drop the reward into the RUN loot (coins → purse,
@@ -1103,7 +1103,7 @@ export class Lobby {
         list.push({ item: reward.item, name: reward.name });
         this.dungeonRunItems.set(pid, list);
       }
-      this.tell(ws, { type: 'dungeonChestOpened', chest, coins: 0, potion: false, spin: false }); // swap the sprite (no toast)
+      this.tell(ws, { type: 'dungeonChestOpened', chest, coins: 0, potions: 0, spin: false }); // swap the sprite (no toast)
       this.tell(ws, { type: 'dungeonSpin', chest, segment, reward });                              // play the wheel
       this.sendPurse(ws, pid);
     } catch (e) { console.error('dungeon spin chest failed:', e); }

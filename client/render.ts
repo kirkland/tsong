@@ -691,10 +691,42 @@ function fillRainbow(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: n
   ctx.restore();
 }
 
+// Cosmetic "hot dog" skin (the Ruins vault-floor prize): a bun-wrapped sausage running the length of
+// the paddle, with squiggles of ketchup + mustard down it.
+function fillHotdog(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
+  const x = cx - PADDLE.w / 2, y = cy - h / 2, w = PADDLE.w;
+  // bun (toasted, shaded toward the edges)
+  const bun = ctx.createLinearGradient(x, 0, x + w, 0);
+  bun.addColorStop(0, '#b07a36'); bun.addColorStop(0.5, '#ecc079'); bun.addColorStop(1, '#b07a36');
+  ctx.fillStyle = bun; ctx.fillRect(x, y, w, h);
+  // sausage down the middle
+  const sw = w * 0.6, sx = cx - sw / 2;
+  const saus = ctx.createLinearGradient(sx, 0, sx + sw, 0);
+  saus.addColorStop(0, '#7c271a'); saus.addColorStop(0.4, '#c2503a'); saus.addColorStop(1, '#7c271a');
+  ctx.fillStyle = saus; ctx.beginPath(); ctx.roundRect(sx, y + 2, sw, h - 4, sw / 2); ctx.fill();
+  // ketchup + mustard squiggles
+  const zig = (color: string, phase: number) => {
+    ctx.strokeStyle = color; ctx.lineWidth = Math.max(1.5, sw * 0.15); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.beginPath();
+    for (let yy = y + 5; yy <= y + h - 5; yy += 3) {
+      const xx = cx + Math.sin(yy * 0.45 + phase) * sw * 0.2;
+      if (yy === y + 5) ctx.moveTo(xx, yy); else ctx.lineTo(xx, yy);
+    }
+    ctx.stroke();
+  };
+  zig('#e8362a', 0);          // ketchup
+  zig('#f6c61b', Math.PI);    // mustard
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
+}
+
 // Cosmetic registries — add new skins/hats here (id must match shared/types COSMETICS).
 // Each draws purely visual decoration on the paddle; none affect the ball's collision.
 type CosmeticDraw = (ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) => void;
 const SKIN_RENDERERS: Record<string, CosmeticDraw> = {
+  'skin-hotdog': fillHotdog,
   rainbow: fillRainbow,
   gold: fillGold,
   chrome: fillChrome,

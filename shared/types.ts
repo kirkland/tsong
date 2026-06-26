@@ -245,6 +245,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   // Skins (animated)
   { id: 'obsidian', name: 'Obsidian', slot: 'skin', price: 6000 },
   { id: 'aurora', name: 'Aurora', slot: 'skin', price: 10000 },
+  { id: 'skin-hotdog', name: '🌭 Hot Dog', slot: 'skin', price: 0, locked: 'dungeon' }, // a Ruins chest prize
   // Trails
   { id: 'stardust', name: 'Stardust', slot: 'trail', price: 5000 },
   { id: 'inferno', name: 'Inferno', slot: 'trail', price: 8000 },
@@ -455,19 +456,25 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
 // --- The Ruins dungeon economy: SERVER-AUTHORITATIVE so a tampered client can't mint coins. ---
 // Chests keyed by 'floor:col,row'. The server pays a chest's coins (from the House) the first time
 // a given player opens it, and tracks opened chests per account.
-export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potion?: boolean; spin?: boolean; car?: string; needsKey?: boolean }> = {
+export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potions?: number; spin?: boolean; cosmetic?: string; needsKey?: boolean }> = {
   'B1:18,2': { coins: 200 },
-  'B1:9,9': { potion: true },
+  'B1:9,9': { potions: 1 },
   // B2 — a free wheel-spin chest, a potion, a coin chest, plus the SEALED locked-room prize (34,24).
   'B2:26,3': { spin: true },   // spins the wheel in-dungeon; reward → run loot, granted on escape
-  'B2:4,13': { potion: true },
+  'B2:4,13': { potions: 1 },
   'B2:15,21': { coins: 120 },
-  'B2:34,24': { car: 'car-monster', needsKey: true }, // the sealed vault: a MONSTER TRUCK (needs the B3 key)
-  // B3 — bigger, darker, tier-3 mobs; meatier loot + extra potions for the longer floor.
+  'B2:34,24': { cosmetic: 'car-monster', needsKey: true }, // the sealed vault: a MONSTER TRUCK (needs the B3 key)
+  // B3 — bigger, darker, tier-3 mobs; meatier loot for the longer floor.
   'B3:28,3': { coins: 300 },
-  'B3:4,13': { potion: true },
-  'B3:29,23': { coins: 350 },
-  'B3:38,24': { potion: true },
+  'B3:4,13': { potions: 2 },               // generous: 2 potions on a long floor
+  'B3:29,23': { cosmetic: 'skin-hotdog' }, // 🌭 Hot Dog paddle skin
+  'B3:38,24': { potions: 2 },
+  // B4 — the deep floor: richest coin chests + another wheel spin.
+  'B4:29,3': { coins: 500 },
+  'B4:4,14': { potions: 2 },
+  'B4:29,24': { coins: 500 },
+  'B4:42,24': { spin: true },
+  'B4:4,27': { coins: 450 },
 };
 // Encounter-win payout keyed by the MOB'S TIER [min, max], not the floor. The server picks the amount
 // from the tier's range (it never trusts a client-sent number) after checking the tier is legal here.
@@ -484,6 +491,7 @@ export const DUNGEON_FLOOR_TIERS: Record<string, readonly number[]> = {
   B1: [1],
   B2: [1, 2],
   B3: [2, 3], // tier-3 new mobs + tier-2 carried down
+  B4: [3, 4], // tier-4 new mobs + tier-3 carried down
 };
 
 // The town JAIL — a tiny barred cell just east of the Tavern. Try to drive after 2+ beers and the
@@ -1310,7 +1318,7 @@ export type ServerMsg =
   | LoanBookMsg
   | WorldMsg
   | { type: 'dungeonChests'; opened: string[] } // chests this player has opened (reply to dungeonSync)
-  | { type: 'dungeonChestOpened'; chest: string; coins: number; potion: boolean; spin?: boolean; car?: string } // a chest open was accepted (car = display name of a vehicle prize)
+  | { type: 'dungeonChestOpened'; chest: string; coins: number; potions: number; spin?: boolean; prize?: string } // a chest open was accepted (prize = display name of a cosmetic reward)
   | { type: 'dungeonSpin'; chest: string; segment: number; reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string } } // a spin chest: play the wheel, reward goes to run loot
   | { type: 'dungeonPurse'; coins: number } // current run-purse total (paid out only on a clean escape)
   | LandMsg

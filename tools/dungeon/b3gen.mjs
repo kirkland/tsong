@@ -33,6 +33,9 @@ g[3][28]='c'; g[13][4]='c'; g[23][29]='c'; g[24][38]='c'; // four chests
 [[1,1],[41,1],[1,16],[1,26],[22,1],[41,16],[18,10],[41,26]].forEach(([x,y])=>{if(g[y]&&g[y][x]==='#')g[y][x]='T';});
 // a few doors at room mouths
 g[4][9]='D'; g[2][17]='D'; g[4][35]='D'; g[13][9]='D'; g[19][17]='D'; g[23][24]='D'; g[22][36]='D';
+// ---- down-stairs to B4: TUCKED AWAY in the far bottom-right room (opposite corner from the arrival),
+//      so you have to wander the whole floor to find it — but it's in plain sight once you're there. ----
+g[20][39]='>';
 const rows=g.map(r=>r.join(''));
 // ---- validate ----
 const blocked=ch=>ch==='#'||ch==='T'||ch==='o'||ch===' '||ch==='L'||ch==='c';
@@ -45,3 +48,6 @@ console.log(rows.map(r=>`  '${r}',`).join('\n'));
 console.log(`\n${W}x${H}=${W*H}`);
 console.log('chests:',chests.join('  '));
 console.log('orphan (should be 0):',orphan.length, orphan.join(' '));
+let gx,gy;rows.forEach((r,y)=>{const x=r.indexOf('>');if(x>=0){gx=x;gy=y;}});
+const gopen=[[1,0],[-1,0],[0,1],[0,-1]].filter(([dx,dy])=>{const ch=rows[gy+dy]&&rows[gy+dy][gx+dx];return ch&&!blocked(ch);}).length;
+console.log(`hidden > at ${gx},${gy} reachable:`,seen[gy][gx],' open neighbors:',gopen,'(1 = good dead-end)');
