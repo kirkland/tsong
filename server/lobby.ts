@@ -4566,7 +4566,7 @@ export class Lobby {
   }
 
   // Any joined client may toggle game modes.
-  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean }) {
+  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean; bumpers?: boolean }) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return;
     if (opts.closing !== undefined) this.game.setClosing(opts.closing);
@@ -4580,6 +4580,7 @@ export class Lobby {
     if (opts.breakout !== undefined) this.game.setBreakout(opts.breakout);
     if (opts.fog !== undefined) this.game.setFog(opts.fog);
     if (opts.portal !== undefined) this.game.setPortal(opts.portal);
+    if (opts.bumpers !== undefined) this.game.setBumpers(opts.bumpers);
     // View mode is locked while a match is in progress to avoid disrupting players.
     if ((opts.viewMode === 'normal' || opts.viewMode === '3d' || opts.viewMode === 'firstperson') && this.game.status !== 'playing') {
       this.viewMode = opts.viewMode;
@@ -4603,6 +4604,7 @@ export class Lobby {
       breakout: this.game.breakout,
       fog: this.game.fog,
       portal: this.game.portal,
+      bumpers: this.game.bumpers,
       viewMode: this.viewMode,
     };
   }
@@ -4628,6 +4630,7 @@ export class Lobby {
     if (typeof m.breakout === 'boolean') this.game.setBreakout(m.breakout);
     if (typeof m.fog === 'boolean') this.game.setFog(m.fog);
     if (typeof m.portal === 'boolean') this.game.setPortal(m.portal);
+    if (typeof m.bumpers === 'boolean') this.game.setBumpers(m.bumpers);
     if ((m.viewMode === 'normal' || m.viewMode === '3d' || m.viewMode === 'firstperson') && this.game.status !== 'playing') {
       this.viewMode = m.viewMode;
       this.syncPowerupPool();
@@ -5441,6 +5444,8 @@ export class Lobby {
       bricks: this.game.breakout ? [...this.game.brickAlive] : null,
       fog: this.game.fog,
       portal: this.game.portal,
+      bumpers: this.game.bumpers,
+      bumperFlash: [...this.game.bumperFlash],
     };
   }
 

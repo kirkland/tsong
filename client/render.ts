@@ -1,6 +1,6 @@
 // Pure drawing: takes the latest server state and paints one frame. No game logic.
 
-import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, TARGET, BREAKOUT, COSMETICS, EXCLUSIVES, PowerupKind, StateMsg, PolyState, Role, Side } from '../shared/types';
+import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, TARGET, BREAKOUT, BUMPER, BUMPER_POSITIONS, COSMETICS, EXCLUSIVES, PowerupKind, StateMsg, PolyState, Role, Side } from '../shared/types';
 
 // The display flair for an equipped title id (e.g. 'davisslayer' → '🏆 Davis Slayer'), or ''.
 // Also searches EXCLUSIVES for exclusive titles (e.g. 'x-founder' → '🪙 Founder').
@@ -66,6 +66,9 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
 
   // Diamond-hands obstacle (drawn under the ball/paddles so they read on top)
   if (s.diamondPos) drawDiamond(ctx, s.diamondPos.x, s.diamondPos.y);
+
+  // Bumper pegs — drawn under ball/paddles
+  if (s.bumpers) drawBumpers(ctx, s.bumperFlash);
 
   // Spectator-dropped blocks (solid obstacles the ball bounces off)
   for (const bl of s.blocks) drawBlock(ctx, bl.x, bl.y, bl.w, bl.h);
@@ -457,6 +460,41 @@ function drawPortalWalls(ctx: CanvasRenderingContext2D) {
       ctx.ellipse(cx, cy, 36, 8, 0, 0, Math.PI * 2);
       ctx.stroke();
     }
+    ctx.restore();
+  }
+}
+
+// Bumper pegs — neon orange circles that flash white when hit.
+const bumperHitAt: number[] = BUMPER_POSITIONS.map(() => -1e9);
+function drawBumpers(ctx: CanvasRenderingContext2D, flash: boolean[]) {
+  const now = performance.now();
+  for (let i = 0; i < BUMPER_POSITIONS.length; i++) {
+    if (flash[i]) bumperHitAt[i] = now;
+    const { x, y } = BUMPER_POSITIONS[i];
+    const t = Math.max(0, 1 - (now - bumperHitAt[i]) / 220); // 0..1 flash intensity
+    const r = BUMPER.r;
+    ctx.save();
+    // Outer glow ring
+    ctx.beginPath();
+    ctx.arc(x, y, r + 4 + t * 8, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,120,20,${0.18 + t * 0.35})`;
+    ctx.fill();
+    // Body gradient
+    const grad = ctx.createRadialGradient(x - r * 0.3, y - r * 0.3, r * 0.1, x, y, r);
+    grad.addColorStop(0, t > 0.05 ? `rgba(255,255,220,${0.9 + t * 0.1})` : '#ff8c30');
+    grad.addColorStop(1, t > 0.05 ? `rgba(255,160,60,${0.95})` : '#c03a00');
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle = grad;
+    ctx.shadowColor = t > 0.05 ? '#ffffc0' : '#ff6010';
+    ctx.shadowBlur = 10 + t * 22;
+    ctx.fill();
+    // Shine dot
+    ctx.beginPath();
+    ctx.arc(x - r * 0.32, y - r * 0.32, r * 0.22, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,255,255,${0.45 + t * 0.4})`;
+    ctx.shadowBlur = 0;
+    ctx.fill();
     ctx.restore();
   }
 }

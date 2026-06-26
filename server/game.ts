@@ -37,6 +37,8 @@ import {
   POWERUPS,
   TARGET,
   BREAKOUT,
+  BUMPER,
+  BUMPER_POSITIONS,
   PowerupKind,
   Side,
   Status,
@@ -110,6 +112,8 @@ export interface GameSnapshot {
   brickAlive?: boolean[];
   fog?: boolean;
   portal?: boolean;
+  bumpers?: boolean;
+  bumperFlash?: boolean[];
   winnerSide: Side | null;
   lastHit: Side | null;
   target: { x: number; y: number; kind: PowerupKind } | null;
@@ -170,6 +174,8 @@ export class Game {
   brickAlive: boolean[] = []; // which of the 28 bricks are still standing this point
   fog = false;    // "fog of war": server passes flag; visibility computed client-side
   portal = false; // "portal walls": top/bottom walls teleport instead of bounce
+  bumpers = false; // "bumpers" mode: five static pinball pegs in the center
+  bumperFlash: boolean[] = BUMPER_POSITIONS.map(() => false); // one-frame hit signal per peg
   pinataBurstFlash = false; // set for the single tick a burst happens (drives a client pulse)
   private pinataPendingSpawns = 0; // replacement balls owed this tick (one per ball stuck)
   private pinataBurstPending = false; // a 5th ball stuck this tick → release everything
@@ -272,6 +278,7 @@ export class Game {
       brickAlive: [...this.brickAlive],
       fog: this.fog,
       portal: this.portal,
+      bumpers: this.bumpers,
     };
   }
 
@@ -304,6 +311,7 @@ export class Game {
     this.brickAlive = s.brickAlive ? [...s.brickAlive] : this.freshBricks();
     this.fog = s.fog ?? false;
     this.portal = s.portal ?? false;
+    this.bumpers = s.bumpers ?? false;
     this.winnerSide = s.winnerSide;
     this.lastHit = s.lastHit;
     this.target = s.target ? { ...s.target } : null;
@@ -469,8 +477,9 @@ export class Game {
     else    this.brickAlive = [];
   }
 
-  setFog(on: boolean)    { this.fog = on; }
-  setPortal(on: boolean) { this.portal = on; }
+  setFog(on: boolean)     { this.fog = on; }
+  setPortal(on: boolean)  { this.portal = on; }
+  setBumpers(on: boolean) { this.bumpers = on; }
 
   // Drift the piñata, spin it, and bounce it off the four walls (radius PINATA.r).
   private movePinata(dt: number, scale: number) {
@@ -613,6 +622,35 @@ export class Game {
     b.y += ny * push;
   }
 
+  // Carom a ball off any static bumper peg. Circle-vs-circle: reflect about the outward
+  // normal, apply a small speed boost (capped), push the ball clear, and flag the flash.
+  private bounceBumpers(b: Ball) {
+    if (!this.bumpers) return;
+    const r = this.ballR();
+    for (let i = 0; i < BUMPER_POSITIONS.length; i++) {
+      const bp = BUMPER_POSITIONS[i];
+      const dx = b.x - bp.x;
+      const dy = b.y - bp.y;
+      const dist = Math.hypot(dx, dy);
+      const minDist = BUMPER.r + r;
+      if (dist >= minDist) continue;
+      const nx = dist > 0 ? dx / dist : 1;
+      const ny = dist > 0 ? dy / dist : 0;
+      const vn = b.vx * nx + b.vy * ny;
+      if (vn >= 0) continue; // moving away — skip
+      b.vx -= 2 * vn * nx;
+      b.vy -= 2 * vn * ny;
+      const speed = Math.hypot(b.vx, b.vy);
+      const boosted = Math.min(speed * BUMPER.speedBoost, BALL.speed * 3);
+      b.vx = (b.vx / speed) * boosted;
+      b.vy = (b.vy / speed) * boosted;
+      b.x += nx * (minDist - dist);
+      b.y += ny * (minDist - dist);
+      b.spin = 0;
+      this.bumperFlash[i] = true;
+    }
+  }
+
   /** Center X of the i-th paddle on a side. In layered mode each later joiner sits a
    *  step further forward (toward mid-court), capped so no face crosses the middle.
    *  Stacks with the closing-walls inset, which moves the whole team's base X. */
@@ -741,6 +779,7 @@ export class Game {
 
   tick(dt: number) {
     this.pinataBurstFlash = false; // a burst this tick (if any) sets it back to true
+    this.bumperFlash.fill(false);  // any bumper hits this tick set their slot to true
     // Paddles ease toward their target each tick; frozen paddles don't move.
     const maxStep = PADDLE.speed * dt;
     for (const side of ['left', 'right'] as Side[]) {
@@ -930,6 +969,9 @@ export class Game {
 
     // Diamond obstacle carom (diamond-hands mode); no-op when the mode is off.
     this.bounceDiamond(b);
+
+    // Bumper peg caroms (bumpers mode); no-op when mode is off.
+    this.bounceBumpers(b);
 
     // Spectator-dropped blocks carom (no-op when there are none).
     this.bounceBlocks(b);

@@ -127,6 +127,20 @@ export const TARGET = {
   life: 7, // seconds an unclaimed target lingers before vanishing
 } as const;
 
+// "Bumpers" mode: five static circular pegs in a pinball formation across the center.
+// Ball caroms off them with a small speed boost; each hit flashes the bumper.
+export const BUMPER = {
+  r: 22,         // radius, court units
+  speedBoost: 1.12, // ball speed multiplier on each hit (capped at 3× base)
+} as const;
+export const BUMPER_POSITIONS: readonly { x: number; y: number }[] = [
+  { x: 280, y: 130 },
+  { x: 520, y: 130 },
+  { x: 400, y: 250 },
+  { x: 280, y: 370 },
+  { x: 520, y: 370 },
+] as const;
+
 // The power-up a target grants when the ball is bounced across it:
 //   grow   — your paddle grows for your next 3 hits
 //   shrink — the opponent's paddle shrinks for their next 3 hits
@@ -861,6 +875,9 @@ export interface StateMsg {
   blocks: { x: number; y: number; w: number; h: number }[];
   fog: boolean;    // "fog of war": ball invisible except close to either paddle
   portal: boolean; // "portal walls": top/bottom walls teleport the ball to a random Y
+  bumpers: boolean; // "bumpers" mode: five static pinball pegs in the center
+  // One-frame flash per bumper (index matches BUMPER_POSITIONS). True the tick the ball hit it.
+  bumperFlash: boolean[];
   winner: string | null; // nickname of the winner when status === 'over'
   // Shared, room-wide toggle: when true, the match winner can perform a finishing move.
   // It's one setting for everyone (not per-user), so it rides along in the state.

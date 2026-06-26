@@ -98,6 +98,7 @@ const arenaModeEl = document.getElementById('arenaMode') as HTMLInputElement;
 const breakoutModeEl = document.getElementById('breakoutMode') as HTMLInputElement;
 const fogModeEl = document.getElementById('fogMode') as HTMLInputElement;
 const portalModeEl = document.getElementById('portalMode') as HTMLInputElement;
+const bumpersModeEl = document.getElementById('bumpersMode') as HTMLInputElement;
 const reactionsEl = document.getElementById('reactions') as HTMLDivElement;
 const recentReactionsEl = document.getElementById('recentReactions') as HTMLDivElement;
 const ballReactionEl = document.getElementById('ballReaction') as HTMLDivElement;
@@ -1049,6 +1050,9 @@ fogModeEl.addEventListener('change', () =>
 portalModeEl.addEventListener('change', () =>
   net.send({ type: 'mode', portal: portalModeEl.checked }),
 );
+bumpersModeEl.addEventListener('change', () =>
+  net.send({ type: 'mode', bumpers: bumpersModeEl.checked }),
+);
 
 // --- win score selector ---
 for (const btn of winScoreOpts.querySelectorAll<HTMLButtonElement>('.ws-btn')) {
@@ -1336,6 +1340,7 @@ function enableChat() {
   breakoutModeEl.disabled = false;
   fogModeEl.disabled = false;
   portalModeEl.disabled = false;
+  bumpersModeEl.disabled = false;
   for (const btn of reactionsEl.querySelectorAll<HTMLButtonElement>('.reaction-btn')) {
     btn.disabled = false;
   }
@@ -4796,6 +4801,9 @@ function updateUI() {
   }
   if (document.activeElement !== portalModeEl && portalModeEl.checked !== state.portal) {
     portalModeEl.checked = state.portal;
+  }
+  if (document.activeElement !== bumpersModeEl && bumpersModeEl.checked !== state.bumpers) {
+    bumpersModeEl.checked = state.bumpers;
   }
 
   // Add/kick-bot button: show the right control for the current match state.
