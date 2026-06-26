@@ -25,6 +25,7 @@
 // from 'phaser'` only worked in dev because Vite synthesises a default; in prod the browser loads
 // the real ESM, finds no default, and the World chunk fails to instantiate (button does nothing).
 import * as Phaser from 'phaser';
+import { startEncounter, DUNGEON_MOBS, isEncounterOpen } from './dungeon-battle';
 import {
   WORLD,
   WORLD_AVATAR,
@@ -58,6 +59,10 @@ export interface WorldNet {
   openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'stocks' | 'loans' | 'petshop' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros'): void; // open a Casino/Bank/Pet-Shop/DOOM/Fishing/Arcade feature
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
+  dungeonSync(): void;             // entering the Ruins → ask which chests we've opened
+  dungeonChest(chest: string): void; // open a chest ('B1:col,row') → server pays coins from the House (once)
+  dungeonWin(floor: string): void; // won an encounter → adds a floor-ranged amount to the run purse
+  dungeonExit(escaped: boolean): void; // left the Ruins (escaped → server pays the run purse from the House)
   onNetizenClick?(netizenId: string): void; // user tapped a netizen avatar in the world (→ challenge)
   buyBeer(): void;               // buy a beer at the Tavern (server charges 20🪙 + ups drunk level)
   drunkLevel(): number;          // current drunkenness 0–6 (drives movement wobble + camera sway)
@@ -71,6 +76,9 @@ export interface WorldNet {
 interface Controller {
   feed(avatars: WorldAvatar[]): void;
   reenter(): void; // re-send worldEnter after a socket reconnect (server forgot us on drop)
+  dungeonChests(opened: string[]): void;                          // server's list of chests we've opened
+  chestAccepted(chest: string, coins: number, potion: boolean): void; // server accepted a chest open
+  dungeonPurse(coins: number): void;                              // current run-purse total from the server
 }
 let controller: Controller | null = null;
 let _exitWorld: (() => void) | null = null;
@@ -87,6 +95,21 @@ export function exitWorld(): void {
 /** Push the latest avatar roster (from a `world` server message) into the live overlay. */
 export function feedWorld(avatars: WorldAvatar[]): void {
   controller?.feed(avatars);
+}
+
+/** The server's list of dungeon chests this player has already opened (reply to dungeonSync). */
+export function feedDungeonChests(opened: string[]): void {
+  controller?.dungeonChests(opened);
+}
+
+/** The server accepted a chest open (added the coins to the run purse / granted the potion). */
+export function dungeonChestAccepted(chest: string, coins: number, potion: boolean): void {
+  controller?.chestAccepted(chest, coins, potion);
+}
+
+/** The current run-purse total (paid out only when you escape the Ruins). */
+export function feedDungeonPurse(coins: number): void {
+  controller?.dungeonPurse(coins);
 }
 
 /** Re-assert our presence in the world after a reconnect (the server drops us on socket close). */
@@ -148,6 +171,47 @@ const JAIL_WALLS: Rect[] = [
 const TAVERN_INT = { x: 4200, y: 300, w: 880, h: 560 };
 const TAVERN_WALL = 28; // interior wall thickness (play area is inset by this)
 const TAVERN_ZOOM = 3;  // zoom in while inside so the small cozy room fills the viewport
+
+// --- The Ruins dungeon: an off-map tile room (same trick as the Tavern interior). B1 layout —
+// '#'/'T'/'o' = wall, '.' = floor, '~' = tall-grass encounter, 'c' chest, '>' stairs down,
+// 'D' door, '@' arrival/exit, 'T' torch. Rendered with the 0x72 stone tiles; walls amber-tinted. ---
+const DUNGEON_TILE = 32; // world units per dungeon tile
+const DUNGEON_ZOOM = 2.6; // close camera so you only see your lit surroundings
+const DUNGEON_WALL_TINT = 0xffd49a; // amber sandstone multiply for wall tiles
+const DUNGEON_B1 = [
+  '#######################',
+  '#T....#.......#.....T.#',
+  '#.@...D..~~~..D...c...#',
+  '#.....D..~~~..D.......#',
+  '#.....#..~~~..#.......#',
+  '#..####..DD#..####....#',
+  '#..#...........#...#..#',
+  '#..#..######...#.#.#..#',
+  '#..#..#....#...#.#.#..#',
+  '#..#..#..c.#...#...#..#',
+  '#..#..#....#...#####..#',
+  '#..#..##DD##.........>#',
+  '#..#............#....##',
+  '#T.###############..T.#',
+  '#######################',
+];
+const DUNGEON_COLS = Math.max(...DUNGEON_B1.map((r) => r.length));
+const DUNGEON_ROWS = DUNGEON_B1.length;
+const DUNGEON_INT = { x: 5400, y: 300, w: DUNGEON_COLS * DUNGEON_TILE, h: DUNGEON_ROWS * DUNGEON_TILE };
+const dungeonCell = (cx: number, cy: number): string => (DUNGEON_B1[cy] && DUNGEON_B1[cy][cx]) || ' ';
+const dungeonIsWall = (ch: string): boolean => ch === '#' || ch === 'T' || ch === 'o' || ch === ' ';
+// what blocks movement: walls + solid props (a chest you bump into rather than walk through)
+const dungeonBlocks = (ch: string): boolean => dungeonIsWall(ch) || ch === 'c';
+// Chest contents by 'col,row'. Opening one is permanent per browser (localStorage) so the Ruins
+// can't be farmed — server/account persistence is the Task-4 upgrade. Coins are sourced from the
+// House when actually credited on exit (also Task 4).
+// The chest CELLS on B1 (which 'c' tiles are real chests). Contents + opened-state are
+// server-authoritative (see shared DUNGEON_CHEST_CONTENTS + lobby) — keyed 'B1:col,row'.
+const DUNGEON_CHEST_CELLS = ['17,2', '9,9'];
+// Potions held are still a light client-side consumable (per browser).
+const POTION_KEY = 'tsong:ruins:potions';
+const getPotions = () => { try { return parseInt(localStorage.getItem(POTION_KEY) || '0', 10) || 0; } catch { return 0; } };
+const setPotions = (n: number) => { try { localStorage.setItem(POTION_KEY, String(Math.max(0, n))); } catch { /* ignore */ } };
 
 function pointInRect(px: number, py: number, r: Rect, pad = 0): boolean {
   return px >= r.x - pad && px <= r.x + r.w + pad && py >= r.y - pad && py <= r.y + r.h + pad;
@@ -566,6 +630,18 @@ export function startWorld(net: WorldNet): void {
   let nearId: string | null = null; // building the avatar is currently at the door of
   // --- Tavern interior state ---
   let inInterior = false;   // true while inside the Tavern (camera + collision switch to TAVERN_INT)
+  let inDungeon = false;    // true while inside the Ruins dungeon (camera + tile collision → DUNGEON_INT)
+  let dungeonBuilt = false; // the dungeon room geometry is rendered once, lazily, on first entry
+  let dungeonHP = 100;      // run health — chipped by points a mob scores on you (0 → expelled)
+  let potionCount = 0;      // 🧪 potions held (persisted per browser); P drinks one for +10 HP
+  let dungeonPurseDisplay = 0; // server's run-purse total (banner display); paid out only on a clean escape
+  const dungeonChestSprites: Record<string, Phaser.GameObjects.Image> = {}; // 'c,r' → sprite (to swap on open)
+  let nearChestCell: { c: number; r: number } | null = null; // unopened chest within reach (→ Open prompt)
+  const openedChestsServer = new Set<string>(); // 'B1:col,row' the server says this account has opened
+  const chestIsOpen = (c: number, r: number) => openedChestsServer.has(`B1:${c},${r}`);
+  let lastGrassKey = '';    // last tall-grass cell rolled, so each new '~' tile rolls one encounter
+  let grassDanger = 0;      // ramps per grass tile crossed → rising encounter odds; resets on a fight
+  let recentMob = -1, recentMobRun = 0; // shuffle-bag: never the same mob more than twice in a row
   let interiorBuilt = false;// the interior's Phaser props are lazily built on first entry
   let nearExit = false;     // standing on the interior's exit mat (Enter → leave)
   // --- jail state ---
@@ -650,6 +726,22 @@ export function startWorld(net: WorldNet): void {
   help.style.cssText =
     'position:absolute;left:14px;bottom:12px;color:#cdd8f5;font-size:12px;pointer-events:none;line-height:1.5;z-index:2;text-shadow:0 1px 4px #000a;';
   overlay.appendChild(help);
+
+  // Small fixed banner naming the current dungeon floor (top-center). Hidden outside the Ruins.
+  const dungeonBanner = document.createElement('div');
+  dungeonBanner.style.cssText =
+    'position:absolute;left:50%;top:10px;transform:translateX(-50%);display:none;pointer-events:none;z-index:3;' +
+    'background:#0c0d0acc;border:1px solid #3a3320;border-radius:8px;padding:4px 12px;' +
+    'color:#cdb98a;font-size:12px;font-weight:700;letter-spacing:1px;text-shadow:0 1px 3px #000a;';
+  overlay.appendChild(dungeonBanner);
+
+  // Tiny controls panel (bottom-left) shown only in the Ruins.
+  const dungeonControls = document.createElement('div');
+  dungeonControls.style.cssText =
+    'position:absolute;left:14px;bottom:12px;display:none;pointer-events:none;z-index:3;' +
+    'background:#0c0d0acc;border:1px solid #3a3320;border-radius:8px;padding:7px 12px;' +
+    'color:#cdb98a;font-size:12px;line-height:1.7;text-shadow:0 1px 3px #000a;';
+  overlay.appendChild(dungeonControls);
 
   // Door prompt (bottom-center). A real button so tapping works on touch; Enter/E does the same.
   const prompt = document.createElement('button');
@@ -837,7 +929,7 @@ export function startWorld(net: WorldNet): void {
     return carById(net.car());
   }
   function toggleDrive() {
-    if (inInterior || net.amJailed()) return; // no cars in the bar or the slammer
+    if (inInterior || inDungeon || net.amJailed()) return; // no cars in the bar, the dungeon, or the slammer
     if (!driving) {
       // Drunk driving (2+ beers): a coin-flip says whether the cops catch you.
       if (net.drunkLevel() >= 2) {
@@ -898,6 +990,7 @@ export function startWorld(net: WorldNet): void {
       case 'bar': return '🍺 Enter the Tavern — grab a beer';
       case 'parliament': return '🏛️ Enter Parliament — play Nomic';
       case 'arcade': return '🎮 Enter the Arcade';
+      case 'dungeon': return '🏚️ Enter the Ruins — descend the dungeon';
     }
   }
   function enterBuilding(kind: WorldBuildingKind) {
@@ -944,6 +1037,7 @@ export function startWorld(net: WorldNet): void {
       return;
     }
     if (kind === 'bar') { enterTavern(); return; }
+    if (kind === 'dungeon') { enterDungeon(); return; }
     if (kind === 'parliament') {
       openDialog('🏛️ Parliament', 'The perpetual game of Nomic is in session. The only rule that cannot change is that the rules can.', [
         { label: '🏛️ Take your seat', onPick: () => { exit(); net.openParliament(); } },
@@ -1027,6 +1121,182 @@ export function startWorld(net: WorldNet): void {
     mainCam?.setBounds(0, 0, WORLD.w, WORLD.h);
     const bar = WORLD_BUILDINGS.find((b) => b.kind === 'bar');
     if (bar) { selfX = bar.x + bar.w / 2; selfY = bar.y + bar.h + 44; } // step back out the door
+    enterChime();
+  }
+
+  // --- The Ruins dungeon interior: an off-map tile room rendered from DUNGEON_B1. Same camera/
+  // collision swap as the Tavern, but movement collides per-tile against the walls. ---
+  const dungeonEntry = () => {                      // world centre of the '@' arrival cell
+    for (let r = 0; r < DUNGEON_ROWS; r++) for (let c = 0; c < DUNGEON_COLS; c++)
+      if (dungeonCell(c, r) === '@') return { x: DUNGEON_INT.x + (c + 0.5) * DUNGEON_TILE, y: DUNGEON_INT.y + (r + 0.5) * DUNGEON_TILE };
+    return { x: DUNGEON_INT.x + DUNGEON_INT.w / 2, y: DUNGEON_INT.y + DUNGEON_INT.h / 2 };
+  };
+  // wall test at a world point, with the avatar's body radius checked at its corners
+  function dungeonBlocked(wx: number, wy: number): boolean {
+    const rad = R * 0.42; // forgiving body radius so 1-tile doorways are easy to thread
+    for (const ox of [-rad, rad]) for (const oy of [-rad, rad]) {
+      const c = Math.floor((wx + ox - DUNGEON_INT.x) / DUNGEON_TILE);
+      const r = Math.floor((wy + oy - DUNGEON_INT.y) / DUNGEON_TILE);
+      if (dungeonBlocks(dungeonCell(c, r))) return true;
+    }
+    return false;
+  }
+  function buildDungeon(sc: Phaser.Scene) {
+    if (dungeonBuilt) return;
+    dungeonBuilt = true;
+    const ox = DUNGEON_INT.x, oy = DUNGEON_INT.y, T = DUNGEON_TILE, base = oy - 1000, sl = T / 16;
+    // dark surround so a big viewport never shows grass past the room
+    sc.add.rectangle(ox - 900, oy - 900, DUNGEON_INT.w + 1800, DUNGEON_INT.h + 1800, 0x070905).setOrigin(0, 0).setDepth(base - 1);
+    // world-space darkness layer covering the room — filled dark + light holes erased each frame
+    dungeonDarkRT = sc.add.renderTexture(ox, oy, DUNGEON_INT.w, DUNGEON_INT.h).setOrigin(0, 0).setDepth(50002).setVisible(false);
+    for (let r = 0; r < DUNGEON_ROWS; r++) for (let c = 0; c < DUNGEON_COLS; c++) {
+      const ch = dungeonCell(c, r);
+      if (ch === ' ') continue;
+      const wx = ox + c * T, wy = oy + r * T;
+      if (dungeonIsWall(ch)) {
+        const key = 'd-w' + (Math.floor(hash(c, r * 7) * 4) % 4);
+        sc.add.image(wx, wy, key).setOrigin(0, 0).setScale(sl).setTint(DUNGEON_WALL_TINT).setDepth(base + 1);
+        if (ch === 'T' && sc.textures.exists('d-glow')) { // a wall torch: small bright flame + a light source
+          const lx = wx + T / 2, ly = wy + T / 2;
+          sc.add.image(lx, ly, 'd-glow').setTint(0xffcf6e).setBlendMode(Phaser.BlendModes.ADD).setDepth(50003).setAlpha(0.8).setDisplaySize(T * 0.7, T * 0.7); // the small flame itself
+          dungeonTorches.push({ x: lx, y: ly, phase: hash(c, r) * 6.28, fire: 0.24 });
+        }
+      } else {
+        const fr = hash(c * 3, r);
+        const key = fr > 0.95 ? 'd-f5' : fr > 0.92 ? 'd-f6' : fr > 0.7 ? 'd-f' + (1 + Math.floor(fr * 40) % 4) : 'd-f0';
+        sc.add.image(wx, wy, key).setOrigin(0, 0).setScale(sl).setDepth(base);
+        if (ch === '>') sc.add.text(wx + T / 2, wy + T / 2, '▼', { fontSize: '18px', color: '#ffe08a', fontStyle: 'bold' }).setOrigin(0.5).setDepth(base + 2);
+        if (ch === 'c') { // a treasure chest — closed or already-opened per saved state
+          const spr = sc.add.image(wx + T / 2, wy + T - 3, chestIsOpen(c, r) ? 'w-chest-open' : 'w-chest').setScale(sl).setOrigin(0.5, 1).setDepth(base + 2);
+          dungeonChestSprites[`${c},${r}`] = spr;
+        }
+      }
+    }
+    // a few drifting fireflies (red / orange / purple) — twinkle over the darkness
+    if (sc.textures.exists('d-glow')) {
+      const FLY_COLS = [0xff5a4a, 0xffa838, 0xc176ff];
+      for (let i = 0; i < 9; i++) {
+        const fx = DUNGEON_INT.x + 40 + Math.random() * (DUNGEON_INT.w - 80);
+        const fy = DUNGEON_INT.y + 40 + Math.random() * (DUNGEON_INT.h - 80);
+        const col = FLY_COLS[i % 3];
+        const glow = sc.add.image(fx, fy, 'd-glow').setTint(col).setBlendMode(Phaser.BlendModes.ADD).setDepth(50006).setAlpha(0).setDisplaySize(T * 0.45, T * 0.45);
+        const core = sc.add.image(fx, fy, 'd-glow').setTint(0xffffff).setBlendMode(Phaser.BlendModes.ADD).setDepth(50007).setAlpha(0).setDisplaySize(T * 0.14, T * 0.14); // bright solid core
+        dungeonFlies.push({ glow, core, x: fx, y: fy, vx: (Math.random() * 2 - 1) * 12, vy: (Math.random() * 2 - 1) * 12, phase: Math.random() * 6.28 });
+      }
+    }
+  }
+  function enterDungeon() {
+    const sc = petScene; if (!sc) return;
+    buildDungeon(sc);
+    enterChime();
+    inDungeon = true;
+    driving = false; vx = 0; vy = 0;
+    keys.clear(); joyActive = false;
+    const e = dungeonEntry();
+    selfX = e.x; selfY = e.y;
+    mainCam?.setBounds(DUNGEON_INT.x, DUNGEON_INT.y, DUNGEON_INT.w, DUNGEON_INT.h);
+    // dungeon theme (FFVI "Mines of Narshe") — loops while exploring
+    if (!dungeonMusic) { dungeonMusic = new Audio('/dungeon.mp3'); dungeonMusic.loop = true; dungeonMusic.volume = 0.45; }
+    dungeonMusic.currentTime = 0;
+    void dungeonMusic.play().catch(() => { /* autoplay may need the gesture; entry IS one */ });
+    minimap.style.display = 'none'; help.style.display = 'none'; // no overworld minimap / drive hint underground
+    dungeonHP = 100; lastGrassKey = ''; grassDanger = 0; potionCount = getPotions();
+    openedChestsServer.clear();
+    net.dungeonSync(); // ask the server which chests this account has already opened
+    dungeonBanner.style.display = 'block'; dungeonControls.style.display = 'block';
+    updateDungeonHud(); updateDungeonControls();
+  }
+  function updateDungeonHud() {
+    dungeonBanner.textContent = `🏚️ THE RUINS · B1   ·   ❤️ ${Math.round(dungeonHP)}   ·   🧪 ${potionCount}`
+      + (dungeonPurseDisplay ? `   ·   💰 ${dungeonPurseDisplay}🪙 (escape to keep!)` : '');
+  }
+  function updateDungeonControls() {
+    dungeonControls.innerHTML = `<b>WASD</b> / arrows — move &nbsp;·&nbsp; <b>P</b> — drink potion (×${potionCount})`;
+  }
+  // synthesized chest-open: a wooden creak then an ascending gold chime
+  function chestSound() {
+    tone(150, 0.12, 'square', 0.14, 92);
+    window.setTimeout(() => tone(660, 0.07, 'square', 0.12, 880), 100);
+    window.setTimeout(() => tone(880, 0.07, 'square', 0.12, 1180), 180);
+    window.setTimeout(() => tone(1180, 0.13, 'square', 0.11, 1560), 260);
+  }
+  function openChest(c: number, r: number) {
+    if (chestIsOpen(c, r)) return;
+    const id = `B1:${c},${r}`;
+    openedChestsServer.add(id);                        // optimistic — the server confirms + pays/grants
+    dungeonChestSprites[`${c},${r}`]?.setTexture('w-chest-open');
+    chestSound();
+    net.dungeonChest(id);                              // → server: pay the coins from the House / grant the potion
+    nearChestCell = null;
+    updateNearBuilding();
+  }
+  function usePotion() {
+    if (potionCount <= 0) { showToast('🧪 No potions to drink.'); return; }
+    if (dungeonHP >= 100) { showToast('❤️ Already at full HP.'); return; }
+    potionCount = Math.max(0, getPotions() - 1); setPotions(potionCount);
+    dungeonHP = Math.min(100, dungeonHP + 10);
+    tone(523, 0.08, 'square', 0.12, 784); window.setTimeout(() => tone(784, 0.13, 'square', 0.12, 1046), 80);
+    showToast('🧪 +10 HP');
+    updateDungeonHud(); updateDungeonControls();
+  }
+  // Pick a mob index, shuffle-bagged: re-rolls if it would be the same mob a third time running.
+  function pickMobIdx(poolSize: number): number {
+    let idx = Math.floor(Math.random() * poolSize);
+    if (idx === recentMob && recentMobRun >= 2 && poolSize > 1) {
+      do { idx = Math.floor(Math.random() * poolSize); } while (idx === recentMob);
+    }
+    recentMobRun = idx === recentMob ? recentMobRun + 1 : 1;
+    recentMob = idx;
+    return idx;
+  }
+  // A tall-grass encounter: pause the dungeon theme and drop into a Pong duel vs a mob.
+  function triggerEncounter() {
+    if (isEncounterOpen()) return;
+    keys.clear(); joyActive = false; vx = 0; vy = 0;
+    dungeonMusic?.pause();
+    const mob = DUNGEON_MOBS[pickMobIdx(2)]; // B1: the two easiest (Bat, Slime), shuffle-bagged
+    // Snapshot the live dungeon view FIRST (loop must still be running), then sleep + open the
+    // battle — the snapshot is the world frame the Pokémon strip-transition animates apart.
+    const begin = (snap: HTMLImageElement | null) => {
+      game?.loop.sleep(); // freeze the World's render loop so the battle gets full frames (this client only)
+      if (game?.canvas) game.canvas.style.display = 'none'; // and stop the browser compositing it
+      startEncounter({
+        mob, hp: dungeonHP, introImage: snap,
+        coins: [35, 75], // B1 pays ~25% of the base (≈150–300) — the easy floor isn't worth farming
+        itemChance: 0,   // B1 mobs drop only coins — potions come from the chest
+        onResult: (r) => {
+          if (game?.canvas) game.canvas.style.display = 'block';
+          game?.loop.wake();
+          dungeonHP = Math.max(0, dungeonHP - r.hpLost);
+          if (r.result === 'win') {
+            net.dungeonWin('B1'); // the server credits the coins from the House (it picks the amount)
+            if (r.item) { potionCount = getPotions() + 1; setPotions(potionCount); }
+          }
+          if (dungeonHP <= 0) { showToast('💀 You black out — your loot is lost in the dark…'); leaveDungeon(false); }
+          else { dungeonMusic?.play().catch(() => { /* ignore */ }); updateDungeonHud(); updateDungeonControls(); }
+        },
+      });
+    };
+    const renderer = game?.renderer as unknown as { snapshot?: (cb: (img: unknown) => void) => void } | undefined;
+    if (renderer?.snapshot) {
+      let done = false;
+      const finish = (img: unknown) => { if (done) return; done = true; begin(img instanceof HTMLImageElement ? img : null); };
+      renderer.snapshot(finish);
+      window.setTimeout(() => finish(null), 250); // fallback if the snapshot never fires
+    } else begin(null);
+  }
+  function leaveDungeon(escaped = true) {
+    net.dungeonExit(escaped); // escaped (walked out via B1 / beat the boss) → server pays the purse; else forfeit
+    inDungeon = false;
+    nearExit = false;
+    dungeonPurseDisplay = 0;
+    keys.clear(); joyActive = false;
+    mainCam?.setBounds(0, 0, WORLD.w, WORLD.h);
+    dungeonMusic?.pause();
+    minimap.style.display = 'block'; help.style.display = 'block'; // restore overworld HUD
+    dungeonBanner.style.display = 'none'; dungeonControls.style.display = 'none';
+    const d = WORLD_BUILDINGS.find((b) => b.kind === 'dungeon');
+    if (d) { selfX = d.x + d.w / 2; selfY = d.y + d.h + 44; } // step back out the doorway
     enterChime();
   }
   function openDialog(heading: string, sub: string, choices: { label: string; onPick: () => void }[]) {
@@ -1240,7 +1510,8 @@ export function startWorld(net: WorldNet): void {
     // The bartender takes your order (the beer dialog) instead of plain chatter.
     if (nearNpc && nearNpc.def.id === 'bartender') { orderBeer(); return; }
     if (nearNpc) { startTalk(nearNpc); return; }
-    if (nearExit) { leaveTavern(); return; }
+    if (nearExit) { if (inDungeon) leaveDungeon(); else leaveTavern(); return; }
+    if (nearChestCell) { openChest(nearChestCell.c, nearChestCell.r); return; }
     if (nearJailed) { net.bail(nearJailed.id); return; } // post their bail
     const b = WORLD_BUILDINGS.find((x) => x.id === nearId);
     if (b) enterBuilding(b.kind);
@@ -1377,8 +1648,10 @@ export function startWorld(net: WorldNet): void {
   // --- input (capture phase so the main game's global shortcuts don't also fire) ---
   const MOVE_KEYS = new Set(['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright']);
   function onKeyDown(e: KeyboardEvent) {
+    if (isEncounterOpen()) return; // the battle overlay owns input while it's up
     unlockAudio();
     const k = e.key.toLowerCase();
+    if (inDungeon && k === 'p') { e.preventDefault(); usePotion(); return; } // drink a potion (+10 HP)
     if (k === 'escape') {
       e.preventDefault(); e.stopPropagation();
       if (fullMapOpen) toggleFullMap(); else if (talkOpen) npcClose?.(); else if (dialogOpen) closeDialog(); else exit();
@@ -1394,9 +1667,10 @@ export function startWorld(net: WorldNet): void {
     if (dialogOpen) return;
     if (k === 'f') { e.preventDefault(); e.stopPropagation(); toggleDrive(); return; }
     if (k === 'enter' || k === 'e' || k === ' ') {
-      // Always swallow Space so the page never scrolls; interact if something's in range.
+      // Always swallow Space so the page never scrolls; interact with whatever's in range
+      // (building, NPC, netizen, exit, chest, or jail — triggerNear no-ops if nothing is).
       e.preventDefault(); e.stopPropagation();
-      if (nearId || nearNpc) triggerNear();
+      triggerNear();
       return;
     }
     if (MOVE_KEYS.has(k)) { keys.add(k); e.preventDefault(); e.stopPropagation(); }
@@ -1439,6 +1713,7 @@ export function startWorld(net: WorldNet): void {
 
   // Walk: 8-direction movement at a constant speed.
   function stepFoot(dt: number) {
+    if (isEncounterOpen()) return; // frozen while a battle overlay is up
     let dx = 0, dy = 0;
     if (keys.has('a') || keys.has('arrowleft')) dx -= 1;
     if (keys.has('d') || keys.has('arrowright')) dx += 1;
@@ -1467,6 +1742,31 @@ export function startWorld(net: WorldNet): void {
       selfX = clamp(selfX + dx * SPEED * dt, TAVERN_INT.x + TAVERN_WALL + R, TAVERN_INT.x + TAVERN_INT.w - TAVERN_WALL - R);
       selfY = clamp(selfY + dy * SPEED * dt, TAVERN_INT.y + TAVERN_WALL + R, TAVERN_INT.y + TAVERN_INT.h - TAVERN_WALL - R);
       stepSound();
+      return;
+    }
+    if (inDungeon) {
+      // inside the Ruins: collide per-tile against the walls/chests (slide along each axis), and
+      // play the overworld's synthesized "boop" when you bump something solid.
+      const nx = selfX + dx * SPEED * dt, ny = selfY + dy * SPEED * dt;
+      let hit = false;
+      if (!dungeonBlocked(nx, selfY)) selfX = nx; else hit = true;
+      if (!dungeonBlocked(selfX, ny)) selfY = ny; else hit = true;
+      if (hit) bumpSound(false); else stepSound();
+      // Cave-style encounters: every new tile you step onto bumps a rising danger meter and rolls.
+      // Tall grass (~) ramps faster. The meter resets to 0 on a fight, so you get safe steps then
+      // the odds climb — never instant-spammy, never dead-quiet.
+      const cc = Math.floor((selfX - DUNGEON_INT.x) / DUNGEON_TILE), cr = Math.floor((selfY - DUNGEON_INT.y) / DUNGEON_TILE);
+      const cell = dungeonCell(cc, cr), key = cc + ',' + cr;
+      if (key !== lastGrassKey) {
+        lastGrassKey = key;
+        if (cell !== '@' && cell !== '>' && cell !== '<') { // no ambush on the entry/stairs tiles
+          grassDanger += cell === '~' ? 2 : 1;
+          // You cross ~5 tiles/sec, so the per-tile slope must be tiny. ~70 tiles (~13s) avg between
+          // fights, faster in grass. (Tune `slope`/`cap` if it still feels off.)
+          const chance = Math.min(0.75, 0.002 + grassDanger * 0.0015);
+          if (Math.random() < chance) { grassDanger = 0; triggerEncounter(); }
+        }
+      }
       return;
     }
     const moved = resolveCollisions(selfX + dx * SPEED * dt, selfY + dy * SPEED * dt, R);
@@ -1536,7 +1836,7 @@ export function startWorld(net: WorldNet): void {
     // nearest building door — skipped inside the Tavern (town buildings are off-map from here)
     let best: string | null = null;
     let bestD = Infinity;
-    if (!inInterior) {
+    if (!inInterior && !inDungeon) {
       for (const b of WORLD_BUILDINGS) {
         const d = distToBuilding(b);
         const reach = (driving ? CAR_LEN * 0.5 : R) + TRIGGER_PAD;
@@ -1566,9 +1866,24 @@ export function startWorld(net: WorldNet): void {
       const mx = TAVERN_INT.x + TAVERN_INT.w / 2, my = TAVERN_INT.y + TAVERN_INT.h - TAVERN_WALL - 50;
       if (Math.abs(selfX - mx) < 110 && Math.abs(selfY - my) < 80) nearExit = true;
     }
+    if (inDungeon) {
+      const e = dungeonEntry(); // the '@' arrival cell doubles as the way out
+      if (Math.abs(selfX - e.x) < 44 && Math.abs(selfY - e.y) < 44) nearExit = true;
+    }
+    nearChestCell = null;
+    if (inDungeon && !nearExit) { // nearest unopened chest within reach → Open prompt
+      let best = (DUNGEON_TILE * 1.5) ** 2;
+      for (const k of DUNGEON_CHEST_CELLS) {
+        const [cc, cr] = k.split(',').map(Number);
+        if (chestIsOpen(cc, cr)) continue;
+        const cxw = DUNGEON_INT.x + (cc + 0.5) * DUNGEON_TILE, cyw = DUNGEON_INT.y + (cr + 0.5) * DUNGEON_TILE;
+        const d2 = (selfX - cxw) ** 2 + (selfY - cyw) ** 2;
+        if (d2 < best) { best = d2; nearChestCell = { c: cc, r: cr }; }
+      }
+    }
     // A jailed avatar within reach (and we're free) → offer to post their bail.
     nearJailed = null;
-    if (!best && !nearNpc && !nearNetizen && !driving && !net.amJailed() && !inInterior) {
+    if (!best && !nearNpc && !nearNetizen && !driving && !net.amJailed() && !inInterior && !inDungeon) {
       let jD = R + TRIGGER_PAD + 90; // reach through the bars
       for (const a of others) {
         if (!a.jailed) continue;
@@ -1585,15 +1900,17 @@ export function startWorld(net: WorldNet): void {
     } else if (nearNpc) {
       prompt.textContent = nearNpc.def.id === 'bartender' ? '🍺 Order from the Barkeep' : `💬 Talk to ${nearNpc.def.name}`;
     } else if (nearExit) {
-      prompt.textContent = '🚪 Leave the Tavern';
+      prompt.textContent = inDungeon ? '🚪 Leave the Ruins' : '🚪 Leave the Tavern';
+    } else if (nearChestCell) {
+      prompt.textContent = '📦 Open the chest';
     } else if (nearJailed) {
       prompt.textContent = `🔓 Bail out ${nearJailed.name} (${BAIL_COST}🪙)`;
     }
-    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearJailed) && !dialogOpen && !talkOpen ? 'block' : 'none';
+    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearChestCell || nearJailed) && !dialogOpen && !talkOpen ? 'block' : 'none';
   }
 
   function maybeSendMove(now: number) {
-    if (inInterior) return; // don't stream off-map interior coords — others see you parked at the door
+    if (inInterior || inDungeon) return; // don't stream off-map interior/dungeon coords — others see you parked at the door
     if (now - lastSentAt < 66) return; // ~15 Hz cap
     if (Math.abs(selfX - lastSentX) < 0.5 && Math.abs(selfY - lastSentY) < 0.5) return;
     lastSentX = selfX; lastSentY = selfY; lastSentAt = now;
@@ -1722,6 +2039,19 @@ export function startWorld(net: WorldNet): void {
   let nightOverlay: Phaser.GameObjects.Rectangle | null = null;
   let warmOverlay: Phaser.GameObjects.Rectangle | null = null;
   let drunkOverlay: Phaser.GameObjects.Rectangle | null = null; // amber booze haze, alpha scales with drunk level
+  // Dungeon lighting: a near-black camera-fixed wash + warm flickering torch glows + a light you
+  // carry. All inert (alpha 0) unless you're in the Ruins. Built in create()/buildDungeon().
+  // Lighting = a camera-fixed darkness RenderTexture with soft holes ERASED at each torch + the
+  // player, so lit areas reveal the real tiles at full brightness (not a foggy additive wash) and
+  // unlit areas are only dimmed.
+  let dungeonDarkRT: Phaser.GameObjects.RenderTexture | null = null;
+  let dungeonLightBrush: Phaser.GameObjects.Image | null = null; // reused stamp for erasing light holes
+  const dungeonTorches: { x: number; y: number; phase: number; fire: number }[] = [];
+  // Drifting fireflies (red/orange/purple) that twinkle in the dark — a pleasant little touch.
+  const dungeonFlies: { glow: Phaser.GameObjects.Image; core: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number; phase: number }[] = [];
+  // Looping FFVI "Mines of Narshe" dungeon theme — starts on entry, pauses on exit (encounter
+  // music will pause/resume this later). Created lazily so it never autoplays before a gesture.
+  let dungeonMusic: HTMLAudioElement | null = null;
   // DOOM-portal flame sprites: little orange/yellow tongues layered over the archway. Each carries
   // its own phase/anchor so update() can jitter alpha/scale/offset and make them dance ("on fire").
   interface Flame { img: Phaser.GameObjects.Image; bx: number; by: number; phase: number; amp: number; base: number }
@@ -2084,6 +2414,32 @@ export function startWorld(net: WorldNet): void {
     // multiplies; eyes drawn dark stay near-dark. good enough for the charm.)
     g.generateTexture('w-avatar', 10, 10);
 
+    // --- dungeon treasure chest: wooden body + gold bands + lock plate w/ keyhole (16×14 texels) ---
+    {
+      g.clear();
+      const wd = 0x6e3f1c, wo = 0x8a5226, wl = 0xa86a32, gd = 0xe9c34d, gl = 0xf6e08a, gk = 0xa9852b;
+      px(1, 1, 14, 12, 0x241006);                                  // dark outline silhouette
+      px(2, 2, 12, 4, wo); px(2, 2, 12, 1, wl); px(2, 5, 12, 1, wd); // lid (highlight + shade)
+      px(2, 7, 12, 5, wo); px(2, 7, 12, 1, wl); px(2, 11, 12, 1, wd); // body (highlight + shade)
+      px(3, 2, 2, 4, gd); px(3, 2, 2, 1, gl);                       // left band — lid
+      px(11, 2, 2, 4, gd); px(11, 2, 2, 1, gl);                     // right band — lid
+      px(3, 7, 2, 5, gd); px(3, 11, 2, 1, gk);                      // left band — body
+      px(11, 7, 2, 5, gd); px(11, 11, 2, 1, gk);                    // right band — body
+      px(7, 5, 2, 4, gl); px(7, 5, 2, 1, gd); px(7, 7, 2, 1, 0x140a04); // lock plate + keyhole
+      g.generateTexture('w-chest', 16, 14);
+    }
+    // --- opened chest: lid swung back, gold treasure spilling out (16×15 texels) ---
+    {
+      g.clear();
+      const wd = 0x6e3f1c, wo = 0x8a5226, wl = 0xa86a32, gd = 0xe9c34d, gl = 0xf6e08a, gk = 0xa9852b;
+      px(2, 0, 12, 4, 0x241006); px(3, 1, 10, 2, wo); px(3, 1, 10, 1, wl); px(4, 3, 8, 1, gk); // open lid + gold trim
+      px(1, 6, 14, 8, 0x241006);                                                                // body outline
+      px(2, 7, 12, 6, wo); px(2, 7, 12, 1, wl); px(2, 12, 12, 1, wd);                            // body
+      px(3, 7, 2, 6, gd); px(3, 12, 2, 1, gk); px(11, 7, 2, 6, gd); px(11, 12, 2, 1, gk);        // body bands
+      px(4, 5, 8, 2, gl); px(5, 4, 6, 1, gd); px(6, 5, 1, 1, 0xffffff); px(9, 5, 1, 1, 0xffffff); // gold mound + sparkles
+      g.generateTexture('w-chest-open', 16, 15);
+    }
+
     // --- car body + roof (tintable) — pointing +x (east), 26×14 texels ---
     g.clear();
     px(1, 4, 24, 6, 0xffffff); px(3, 2, 20, 10, 0xffffff); px(0, 5, 26, 4, 0xffffff);
@@ -2425,6 +2781,9 @@ export function startWorld(net: WorldNet): void {
       // (for the ground layer) and as a 16×16 spritesheet (for scenery frames).
       this.load.image('townTiles', '/tiles/tiny-town.png');
       this.load.spritesheet('townFrames', '/tiles/tiny-town.png', { frameWidth: 16, frameHeight: 16 });
+      // Dungeon (the Ruins): 0x72 stone-floor variants (f0–f6) + wall variants (w0–w3).
+      for (let i = 0; i < 7; i++) this.load.image('d-f' + i, '/dungeon/f' + i + '.png');
+      for (let i = 0; i < 4; i++) this.load.image('d-w' + i, '/dungeon/w' + i + '.png');
     },
 
     create(this: Phaser.Scene) {
@@ -2607,6 +2966,26 @@ export function startWorld(net: WorldNet): void {
           c2.fillStyle = g2; c2.fillRect(0, 0, sz, sz); ct.refresh();
         }
       }
+      // A crisper glow than the town's soft 'w-glow': big bright plateau + a tight falloff, so
+      // dungeon torch pools read as defined light circles rather than fog.
+      const DGLOW = 'd-glow';
+      if (!sc.textures.exists(DGLOW)) {
+        const sz = 128, ct = sc.textures.createCanvas(DGLOW, sz, sz);
+        if (ct) {
+          const c2 = ct.getContext();
+          const g2 = c2.createRadialGradient(sz / 2, sz / 2, 0, sz / 2, sz / 2, sz / 2);
+          g2.addColorStop(0, 'rgba(255,255,255,1)');
+          g2.addColorStop(0.46, 'rgba(255,255,255,0.95)'); // wide bright core
+          g2.addColorStop(0.72, 'rgba(255,255,255,0.30)'); // then a tight edge
+          g2.addColorStop(1, 'rgba(255,255,255,0)');
+          c2.fillStyle = g2; c2.fillRect(0, 0, sz, sz); ct.refresh();
+        }
+      }
+      // A reusable soft-circle stamp for erasing light holes into the dungeon darkness layer. The
+      // RenderTexture itself is created in buildDungeon, sized to the room, in WORLD space (so the
+      // holes track world positions exactly — no camera-projection lag).
+      dungeonLightBrush = sc.make.image({ key: DGLOW, add: false }).setOrigin(0.5);
+
       // `fire` is the flicker depth (0 = steady neon, ~0.2 = lively firelight). Each light gets its
       // own random phase so they shimmer out of sync, like real flames.
       const glow = (x: number, y: number, radius: number, color: number, max: number, fire = 0.05) => {
@@ -2672,28 +3051,60 @@ export function startWorld(net: WorldNet): void {
       // --- day/night: derive purely from the wall clock so every client's sky matches ---
       {
         const night = nightFactor(Date.now() + net.dayNightOffset());
-        if (nightOverlay) nightOverlay.setAlpha(night * 0.62);           // darker after dusk
-        if (warmOverlay) warmOverlay.setAlpha(0.34 * (1 - night * 0.8)); // golden glow fades after dark
-        // lights bloom in as it gets dark, each flickering like a flame on its own phase
-        for (const l of nightLights) {
-          const t = now / 1000;
-          const f = 1 + l.fire * (Math.sin(t * 7.3 + l.phase) * 0.6 + Math.sin(t * 2.9 + l.phase * 1.7) * 0.4);
-          l.obj.setAlpha(night * l.max * f);
-        }
-        // casino marquee: bulbs chase around the building and cycle colors — lit always, louder at night
-        if (casinoBulbs.length) {
-          const t = now / 1000, brightness = 0.5 + 0.5 * night;
-          for (const b of casinoBulbs) {
-            b.obj.setTint(CASINO_PAL[(b.i + Math.floor(t * 4)) % CASINO_PAL.length]);
-            const chase = 0.45 + 0.55 * Math.max(0, Math.sin(t * 6 - b.i * 0.6)); // running light
-            b.obj.setAlpha(brightness * chase);
+        const t = now / 1000;
+        const flick = (l: { phase: number; fire: number }) =>
+          1 + l.fire * (Math.sin(t * 7.3 + l.phase) * 0.6 + Math.sin(t * 2.9 + l.phase * 1.7) * 0.4);
+        if (inDungeon) {
+          // The Ruins: a dim ambient dark with bright holes erased at the torches + the player, so
+          // you see the real tiles normally inside the light and dimly (not black) outside it.
+          if (nightOverlay) nightOverlay.setAlpha(0);
+          if (warmOverlay) warmOverlay.setAlpha(0.10);
+          if (dungeonDarkRT && dungeonLightBrush) {
+            // World-space layer: erase at room-local coords (worldPos − room origin), radii in world
+            // units — holes track exactly, zero camera lag. Darker ambient so the light matters.
+            const rt = dungeonDarkRT, brush = dungeonLightBrush;
+            rt.setVisible(true); rt.clear(); rt.fill(0x05070b, 0.86);
+            const stamp = (wx: number, wy: number, worldR: number) => {
+              brush.setPosition(wx - DUNGEON_INT.x, wy - DUNGEON_INT.y).setDisplaySize(worldR * 2, worldR * 2);
+              rt.erase(brush);
+            };
+            for (const tr of dungeonTorches) stamp(tr.x, tr.y, 78 * flick(tr)); // torch pools — same reveal as you
+            stamp(selfX, selfY, 74);                                            // tight light, centered on you, no lag
+          }
+          for (const f of dungeonFlies) {
+            f.vx = clamp(f.vx + (Math.random() * 2 - 1) * 9 * dt, -16, 16);
+            f.vy = clamp(f.vy + (Math.random() * 2 - 1) * 9 * dt, -16, 16);
+            f.x += f.vx * dt; f.y += f.vy * dt;
+            if (f.x < DUNGEON_INT.x + 24 || f.x > DUNGEON_INT.x + DUNGEON_INT.w - 24) f.vx *= -1;
+            if (f.y < DUNGEON_INT.y + 24 || f.y > DUNGEON_INT.y + DUNGEON_INT.h - 24) f.vy *= -1;
+            f.x = clamp(f.x, DUNGEON_INT.x + 24, DUNGEON_INT.x + DUNGEON_INT.w - 24);
+            f.y = clamp(f.y, DUNGEON_INT.y + 24, DUNGEON_INT.y + DUNGEON_INT.h - 24);
+            const tw = 0.3 + 0.6 * Math.max(0, Math.sin(t * 2.1 + f.phase));
+            f.glow.setPosition(f.x, f.y).setAlpha(0.5 * tw);
+            f.core.setPosition(f.x, f.y).setAlpha(0.95 * tw);
+          }
+        } else {
+          if (dungeonDarkRT) dungeonDarkRT.setVisible(false);
+          for (const f of dungeonFlies) { f.glow.setAlpha(0); f.core.setAlpha(0); }
+          if (nightOverlay) nightOverlay.setAlpha(night * 0.62);           // darker after dusk
+          if (warmOverlay) warmOverlay.setAlpha(0.34 * (1 - night * 0.8)); // golden glow fades after dark
+          // lights bloom in as it gets dark, each flickering like a flame on its own phase
+          for (const l of nightLights) l.obj.setAlpha(night * l.max * flick(l));
+          // casino marquee: bulbs chase around the building and cycle colors — lit always, louder at night
+          if (casinoBulbs.length) {
+            const brightness = 0.5 + 0.5 * night;
+            for (const b of casinoBulbs) {
+              b.obj.setTint(CASINO_PAL[(b.i + Math.floor(t * 4)) % CASINO_PAL.length]);
+              const chase = 0.45 + 0.55 * Math.max(0, Math.sin(t * 6 - b.i * 0.6)); // running light
+              b.obj.setAlpha(brightness * chase);
+            }
           }
         }
       }
 
       // --- birds: every so often a little flock drifts across the sky (camera-fixed, flapping) ---
       {
-        if (now >= nextBirdsAt) {
+        if (now >= nextBirdsAt && !inDungeon) {
           nextBirdsAt = now + 12000 + Math.random() * 16000;
           const sw = sc.scale.width, sh = sc.scale.height;
           const dir = Math.random() < 0.5 ? 1 : -1;
@@ -2708,6 +3119,7 @@ export function startWorld(net: WorldNet): void {
         }
         for (let i = birds.length - 1; i >= 0; i--) {
           const b = birds[i];
+          b.img.setVisible(!inDungeon); // no birds flying through the dungeon
           b.img.x += b.vx * dt;
           b.img.scaleY = 2.2 * (1 + Math.sin(now / 110 + b.phase) * 0.45); // wing flap
           const sw = sc.scale.width;
@@ -2721,7 +3133,7 @@ export function startWorld(net: WorldNet): void {
         if (drunkOverlay) drunkOverlay.setAlpha(drunk > 0 ? Math.min(0.5, drunk * 0.06) : 0);
         if (mainCam) {
           const w = time / 1000;
-          const baseZoom = inInterior ? TAVERN_ZOOM : ZOOM; // zoomed-in & cozy while inside the Tavern
+          const baseZoom = inInterior ? TAVERN_ZOOM : inDungeon ? DUNGEON_ZOOM : ZOOM; // cozy in the Tavern, close-in in the dungeon
           mainCam.setRotation(drunk > 0 ? Math.sin(w * 1.1) * 0.012 * drunk : 0);            // tilt sway (~4° at lvl 6)
           mainCam.setZoom(drunk > 0 ? baseZoom * (1 + Math.sin(w * 0.8) * 0.02 * drunk) : baseZoom); // breathing zoom
         }
@@ -3016,6 +3428,8 @@ export function startWorld(net: WorldNet): void {
     window.removeEventListener('pointercancel', onPointerUp);
     game?.destroy(true);
     game = null;
+    if (inDungeon) net.dungeonExit(false); // bailed out of the World mid-dungeon → forfeit the run purse
+    dungeonMusic?.pause(); dungeonMusic = null; inDungeon = false;
     try { void actx?.close(); } catch { /* ignore */ }
     actx = null;
     overlay.remove();
@@ -3033,6 +3447,20 @@ export function startWorld(net: WorldNet): void {
       count.textContent = n === 1 ? '1 player here' : `${n} players here`;
     },
     reenter() { net.enter(); },
+    dungeonChests(opened) {
+      openedChestsServer.clear();
+      for (const id of opened) openedChestsServer.add(id);
+      for (const key in dungeonChestSprites) dungeonChestSprites[key].setTexture(openedChestsServer.has('B1:' + key) ? 'w-chest-open' : 'w-chest');
+      updateNearBuilding();
+    },
+    chestAccepted(chest, coins, potion) {
+      openedChestsServer.add(chest);
+      dungeonChestSprites[chest.replace(/^B1:/, '')]?.setTexture('w-chest-open');
+      if (potion) { potionCount = getPotions() + 1; setPotions(potionCount); showToast('📦 Found a 🧪 Potion!'); }
+      else if (coins) showToast(`📦 ${coins}🪙 added to your purse — escape to keep it!`);
+      updateDungeonHud(); updateDungeonControls();
+    },
+    dungeonPurse(coins) { dungeonPurseDisplay = coins; updateDungeonHud(); },
   };
   syncDriveBtn();
   net.enter();

@@ -289,6 +289,18 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'buyBeer':
         lobby.buyBeer(ws);
         break;
+      case 'dungeonSync':
+        lobby.dungeonSync(ws);
+        break;
+      case 'dungeonChest':
+        if (typeof msg.chest === 'string') lobby.dungeonChest(ws, msg.chest);
+        break;
+      case 'dungeonWin':
+        if (typeof msg.floor === 'string') lobby.dungeonWin(ws, msg.floor);
+        break;
+      case 'dungeonExit':
+        lobby.dungeonExit(ws, !!msg.escaped);
+        break;
       case 'jail':
         lobby.jail(ws);
         break;

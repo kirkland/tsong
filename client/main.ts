@@ -734,6 +734,12 @@ const net = connect(
       showToast(text);
     } else if (msg.type === 'world') {
       worldMod?.feedWorld(msg.avatars);
+    } else if (msg.type === 'dungeonChests') {
+      worldMod?.feedDungeonChests(msg.opened);
+    } else if (msg.type === 'dungeonChestOpened') {
+      worldMod?.dungeonChestAccepted(msg.chest, msg.coins, msg.potion);
+    } else if (msg.type === 'dungeonPurse') {
+      worldMod?.feedDungeonPurse(msg.coins);
     } else if (msg.type === 'prefs') {
       // Account-stored settings arriving on join: seed the local set (server wins over cookie) and apply.
       for (const [k, v] of Object.entries(msg.prefs)) { prefs[k] = v; setCookie('tsong_' + k, v); }
@@ -1997,6 +2003,10 @@ worldBtn.addEventListener('click', async () => {
         setTimeout(() => (document.getElementById(id) as HTMLButtonElement | null)?.click(), 0);
       },
       claimQuest: (quest) => net.send({ type: 'questClaim', quest }),
+      dungeonSync: () => net.send({ type: 'dungeonSync' }),
+      dungeonChest: (chest) => net.send({ type: 'dungeonChest', chest }),
+      dungeonWin: (floor) => net.send({ type: 'dungeonWin', floor }),
+      dungeonExit: (escaped) => net.send({ type: 'dungeonExit', escaped }),
       buyBeer: () => net.send({ type: 'buyBeer' }),
       drunkLevel: () => drunkLevel, // the world reads this live to wobble movement + the camera
       jail: () => net.send({ type: 'jail' }),                 // tried to drunk-drive → bust

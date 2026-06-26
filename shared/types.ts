@@ -409,7 +409,7 @@ export function petById(id: string | null | undefined) {
 
 // What entering a building does (the client maps each `kind` to an action). Add a kind here
 // and a handler on the client to introduce a new venue.
-export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament' | 'arcade';
+export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament' | 'arcade' | 'dungeon';
 // A venue's footprint on the map. The rectangle (top-left origin, world units) is solid —
 // avatars collide with it — and an apron just outside the door is the entry trigger zone.
 export interface WorldBuilding {
@@ -444,7 +444,22 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
   // The Arcade — a neon-lit hall between Parliament and the Arena, home to the solo/co-op minigames
   // (Campaign, Type or Die, Street Demons racing, Super Tsong Bros).
   { id: 'arcade', kind: 'arcade', name: 'ARCADE', emoji: '🎮', x: 900, y: 430, w: 280, h: 200, color: '#3a2a5a' },
+  // The Ruins — a crumbling overgrown stone doorway east of the Arena. Step in to descend into the
+  // dungeon: torch-lit floors, random Pong encounters, loot, and a boss at the bottom.
+  { id: 'dungeon', kind: 'dungeon', name: 'THE RUINS', emoji: '🏚️', x: 1850, y: 380, w: 200, h: 170, color: '#5d6a4c' },
 ] as const;
+
+// --- The Ruins dungeon economy: SERVER-AUTHORITATIVE so a tampered client can't mint coins. ---
+// Chests keyed by 'floor:col,row'. The server pays a chest's coins (from the House) the first time
+// a given player opens it, and tracks opened chests per account.
+export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potion?: boolean }> = {
+  'B1:17,2': { coins: 200 },
+  'B1:9,9': { potion: true },
+};
+// Per-floor encounter-win coin payout [min, max]. The server picks the amount; the client never sends one.
+export const DUNGEON_FLOOR_COINS: Record<string, readonly [number, number]> = {
+  B1: [35, 75],
+};
 
 // The town JAIL — a tiny barred cell just east of the Tavern. Try to drive after 2+ beers and the
 // drunk-tank claims you: your avatar is locked behind these bars (server-persisted, so you can't
@@ -741,6 +756,11 @@ export type ClientMsg =
   | { type: 'buyBeer' } // buy a beer at the Tavern (20🪙 → House); ups your drunk level (cut off at 6)
   | { type: 'jail' } // self-report: tried to drunk-drive (server verifies drunkLevel ≥ 2 and jails you)
   | { type: 'bail'; targetId: string } // pay 500🪙 to bail a jailed player out (targetId = their avatar id; may be your own)
+  // --- The Ruins dungeon (server owns the coin awards + which chests you've opened) ---
+  | { type: 'dungeonSync' } // entering the Ruins: ask which chests this player has already opened
+  | { type: 'dungeonChest'; chest: string } // open a chest (server pays its coins from the House, once only)
+  | { type: 'dungeonWin'; floor: string } // won an encounter (adds a floor-ranged amount to the run purse)
+  | { type: 'dungeonExit'; escaped: boolean } // left the Ruins: escaped=true pays the purse (from House); false forfeits
   // --- Nomic (the Parliament sub-game) ---
   | { type: 'nomEnter' } // enter the Parliament: seat as a legislator + subscribe to its state
   | { type: 'nomLeave' } // leave the Parliament (unseat + unsubscribe)
@@ -1195,6 +1215,9 @@ export type ServerMsg =
   | MarketMsg
   | LoanBookMsg
   | WorldMsg
+  | { type: 'dungeonChests'; opened: string[] } // chests this player has opened (reply to dungeonSync)
+  | { type: 'dungeonChestOpened'; chest: string; coins: number; potion: boolean } // a chest open was accepted
+  | { type: 'dungeonPurse'; coins: number } // current run-purse total (paid out only on a clean escape)
   | HouseMsg
   | HouseStateMsg
   | NetizenInfoMsg

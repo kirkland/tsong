@@ -124,7 +124,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   getGameModes, saveGameModes,
   loadNomic, saveNomic, archiveNomicSeason } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
-import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR } from '../shared/types';
+import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR, DUNGEON_CHEST_CONTENTS, DUNGEON_FLOOR_COINS } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
 // emoji code points (pictographs, components, ZWJ, variation selectors, flags).
@@ -1000,6 +1000,61 @@ export class Lobby {
     this.housePay(conn.pid, conn.nickname, reward) // already in coins — do NOT ×COIN_SCALE
       .then(() => this.sendWallet(ws))
       .catch((e) => { this.claimedQuests.delete(key); console.error('quest reward failed:', e); });
+  }
+
+  // --- The Ruins dungeon: the server owns all coin awards (paid from the House → conserved) and
+  // tracks which chests each account has opened (in-memory, like quests), so chests can't be
+  // re-farmed and a tampered client can't mint coins. ---
+  private dungeonOpenedChests = new Set<string>(); // `${pid}:${chest}`
+  private dungeonPurse = new Map<string, number>(); // pid → run-purse coins (paid out only on a clean escape)
+  private sendPurse(ws: WebSocket, pid: string) {
+    this.tell(ws, { type: 'dungeonPurse', coins: this.dungeonPurse.get(pid) ?? 0 });
+  }
+  dungeonSync(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    this.dungeonPurse.set(conn.pid, 0); // entering the Ruins starts a fresh, empty run purse
+    const pfx = conn.pid + ':';
+    const opened: string[] = [];
+    for (const k of this.dungeonOpenedChests) if (k.startsWith(pfx)) opened.push(k.slice(pfx.length));
+    this.tell(ws, { type: 'dungeonChests', opened });
+    this.sendPurse(ws, conn.pid);
+  }
+  dungeonChest(ws: WebSocket, chest: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    const contents = DUNGEON_CHEST_CONTENTS[chest];
+    if (!contents) return;                          // unknown chest → ignore
+    const key = `${conn.pid}:${chest}`;
+    if (this.dungeonOpenedChests.has(key)) return;  // already opened by this player → no re-farm
+    this.dungeonOpenedChests.add(key);
+    const coins = contents.coins ?? 0, potion = !!contents.potion;
+    if (coins > 0) this.dungeonPurse.set(conn.pid, (this.dungeonPurse.get(conn.pid) ?? 0) + coins);
+    this.tell(ws, { type: 'dungeonChestOpened', chest, coins, potion });
+    this.sendPurse(ws, conn.pid);
+  }
+  dungeonWin(ws: WebSocket, floor: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    const range = DUNGEON_FLOOR_COINS[floor];
+    if (!range) return;
+    const coins = range[0] + Math.floor(Math.random() * (range[1] - range[0] + 1)); // server picks the amount
+    this.dungeonPurse.set(conn.pid, (this.dungeonPurse.get(conn.pid) ?? 0) + coins);
+    this.sendPurse(ws, conn.pid);
+  }
+  // Left the Ruins. escaped=true (walked out via B1 / beat the boss) → pay the purse from the House.
+  // escaped=false (died / bailed) → forfeit it. Either way the run purse is cleared.
+  dungeonExit(ws: WebSocket, escaped: boolean) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    const purse = this.dungeonPurse.get(conn.pid) ?? 0;
+    this.dungeonPurse.delete(conn.pid);
+    this.tell(ws, { type: 'dungeonPurse', coins: 0 });
+    if (escaped && purse > 0 && conn.nickname) {
+      this.housePay(conn.pid, conn.nickname, purse)
+        .then(() => { this.sendWallet(ws); this.refreshNetWorth().catch(() => {}); })
+        .catch((e) => console.error('dungeon exit payout failed:', e));
+    }
   }
 
   /** Forward an opaque DOOM payload to the co-op partner. */
