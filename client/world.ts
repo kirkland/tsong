@@ -272,7 +272,7 @@ const DUNGEON_ORDER = ['B1', 'B2', 'B3']; // descent order; '>' goes to the next
 const DUNGEON_THEME: Record<string, { wall: number; floor: number; surround: number; props: boolean; gore?: boolean }> = {
   B1: { wall: 0xffd49a, floor: 0xffffff, surround: 0x070905, props: false }, // warm amber sandstone
   B2: { wall: 0xa07b86, floor: 0x9aa0b4, surround: 0x05060a, props: true },  // colder, blue-grey, dimmer
-  B3: { wall: 0x6e5866, floor: 0x5f5a72, surround: 0x040308, props: true, gore: true }, // darker, sickly, bloodied
+  B3: { wall: 0x866e7c, floor: 0x7c7690, surround: 0x05050c, props: true, gore: true }, // darker than B2, sickly + bloodied, still readable
 };
 const dungeonIsWall = (ch: string): boolean => ch === '#' || ch === 'T' || ch === 'o' || ch === ' ';
 // what blocks movement: walls + solid props (a chest you bump into) + a locked door ('L')
