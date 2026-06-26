@@ -1162,7 +1162,9 @@ interface MenuItem {
 // Menu rows for what's typed after "/": command names while the name is being typed;
 // once a space follows a known command, that command's argument values instead.
 function matchingItems(): MenuItem[] {
-  const v = chatInput.value;
+  return matchingItemsFor(chatInput.value);
+}
+function matchingItemsFor(v: string): MenuItem[] {
   if (!v.startsWith('/')) return [];
   const m = v.slice(1).match(/^(\S*)(\s+(.*))?$/);
   if (!m) return [];
@@ -2042,6 +2044,26 @@ worldBtn.addEventListener('click', async () => {
       say: (text, asSay) => net.send({ type: 'worldChat', text, say: asSay }),
       sendChat: (text) => net.send({ type: 'chat', text }), // → main game chat (shows in the side feed)
       chatHistory: () => recentChat,
+      // Slash-command autocomplete, shared with the main chat so the in-world chat gets the same
+      // popup. worldChatMenu turns the typed text into menu rows; worldRunChatCommand runs one.
+      worldChatMenu: (text) => matchingItemsFor(text).map((it) => {
+        const ok = it.cmd.enabled();
+        const base = it.arg !== undefined ? (it.cmd.argHint?.(it.arg) ?? it.cmd.hint) : it.cmd.hint;
+        return {
+          label: it.arg !== undefined ? it.arg : `/${it.cmd.name}`,
+          hint: ok ? base : `${base} — ${it.cmd.disabledHint}`,
+          complete: it.arg !== undefined ? `/${it.cmd.name} ${it.arg}` : `/${it.cmd.name}${it.cmd.argOptions ? ' ' : ''}`,
+          enabled: ok,
+        };
+      }),
+      worldRunChatCommand: (text) => {
+        if (!text.startsWith('/')) return 'passthrough';
+        const [name, ...rest] = text.slice(1).split(/\s+/);
+        const cmd = COMMANDS.find((c) => c.name === name.toLowerCase());
+        if (!cmd) return 'passthrough';
+        if (!cmd.enabled()) return 'rejected';
+        return cmd.run(rest.join(' ') || undefined) === false ? 'rejected' : 'ran';
+      },
     });
   } catch (e) {
     console.error('World failed to load:', e);

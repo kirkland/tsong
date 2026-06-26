@@ -81,6 +81,9 @@ export interface WorldNet {
   say(text: string, asSay?: boolean): void; // → speech bubble over your avatar (+ to others in-world); asSay=true → purple "Say" bubble
   sendChat(text: string): void;             // → main game chat, so the line also shows in the side feed
   chatHistory(): ChatLine[];                // recent chat backlog, seeded (hidden) so it's there on T
+  // Slash-command autocomplete, shared with the main chat (same COMMANDS list).
+  worldChatMenu(text: string): { label: string; hint: string; complete: string; enabled: boolean }[];
+  worldRunChatCommand(text: string): 'ran' | 'rejected' | 'passthrough';
 }
 
 // --- module-level controller so feedWorld()/isWorldOpen() can reach the live overlay ---
@@ -741,9 +744,9 @@ export function startWorld(net: WorldNet): void {
   const chatLines = document.createElement('div');
   chatLines.style.cssText =
     'display:flex;flex-direction:column;gap:2px;max-height:26vh;overflow-y:auto;overflow-x:hidden;' +
-    'scrollbar-width:thin;scrollbar-color:#ffffff44 transparent;';
+    'padding-left:6px;scrollbar-width:thin;scrollbar-color:#ffffff44 transparent;';
   const chatInputRow = document.createElement('div');
-  chatInputRow.style.cssText = 'display:none;align-items:center;gap:7px;margin-top:8px;';
+  chatInputRow.style.cssText = 'display:none;align-items:center;gap:7px;margin-top:8px;padding-left:6px;';
   const chatPrompt = document.createElement('span');
   chatPrompt.textContent = 'Say:';
   chatPrompt.style.cssText =
@@ -757,8 +760,54 @@ export function startWorld(net: WorldNet): void {
     'color:#fff;font:600 15px system-ui,sans-serif;padding:5px 8px;outline:none;border-radius:5px 5px 0 0;' +
     'text-shadow:0 1px 2px #000;';
   chatInputRow.append(chatPrompt, chatInput);
-  chatWrap.append(chatLines, chatInputRow);
+  // Slash-command autocomplete popup (same COMMANDS as the main chat), shown just above the input.
+  const cmdMenu = document.createElement('div');
+  cmdMenu.style.cssText =
+    'display:none;flex-direction:column;gap:1px;margin-top:6px;pointer-events:auto;background:#0c1330f0;' +
+    'border:1px solid #3a4ea8;border-radius:8px;padding:4px;max-height:30vh;overflow-y:auto;' +
+    'box-shadow:0 6px 20px #0008;scrollbar-width:thin;scrollbar-color:#ffffff44 transparent;';
+  chatWrap.append(chatLines, cmdMenu, chatInputRow);
   overlay.appendChild(chatWrap);
+
+  // --- slash-command menu state + behaviour ---
+  let cmdItems: { label: string; hint: string; complete: string; enabled: boolean }[] = [];
+  let cmdIndex = 0;
+  function renderCmdMenu() {
+    cmdMenu.replaceChildren();
+    cmdItems.forEach((it, i) => {
+      const row = document.createElement('div');
+      row.style.cssText =
+        'display:flex;gap:8px;align-items:baseline;padding:4px 7px;border-radius:5px;cursor:pointer;' +
+        (i === cmdIndex ? 'background:#2a3a6e;' : '') + (it.enabled ? '' : 'opacity:.5;');
+      const name = document.createElement('span');
+      name.textContent = it.label;
+      name.style.cssText = 'color:#cfe0ff;font:800 13px system-ui,sans-serif;white-space:nowrap;';
+      const hint = document.createElement('span');
+      hint.textContent = it.hint;
+      hint.style.cssText = 'color:#8aa0d8;font:600 12px system-ui,sans-serif;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      row.append(name, hint);
+      row.addEventListener('mousedown', (e) => { e.preventDefault(); cmdIndex = i; completeCmd(); });
+      cmdMenu.append(row);
+      if (i === cmdIndex) row.scrollIntoView({ block: 'nearest' });
+    });
+    cmdMenu.style.display = 'flex';
+  }
+  function refreshCmdMenu() {
+    cmdItems = chatActive ? net.worldChatMenu(chatInput.value) : [];
+    if (!cmdItems.length) { cmdMenu.style.display = 'none'; return; }
+    if (cmdIndex >= cmdItems.length) cmdIndex = 0;
+    renderCmdMenu();
+  }
+  function closeCmdMenu() { cmdItems = []; cmdMenu.style.display = 'none'; }
+  // Autocomplete the highlighted row into the input (Tab, or click), then re-suggest.
+  function completeCmd() {
+    const it = cmdItems[cmdIndex];
+    if (!it) return;
+    chatInput.value = it.complete;
+    chatInput.focus();
+    chatInput.setSelectionRange(it.complete.length, it.complete.length);
+    refreshCmdMenu();
+  }
 
   function armFade(el: HTMLElement) {
     const anim = el.animate(
@@ -814,10 +863,12 @@ export function startWorld(net: WorldNet): void {
     chatInput.value = initial; // '/' opens pre-filled with a slash so you can type a command
     chatInput.focus();
     chatInput.setSelectionRange(initial.length, initial.length);
+    refreshCmdMenu(); // show command suggestions immediately if we opened on '/'
   }
   function closeChat() {
     if (!chatActive) return;
     chatActive = false;
+    closeCmdMenu();
     chatLines.style.pointerEvents = 'none'; // back to click-through so drag-to-walk works
     chatInputRow.style.display = 'none';
     chatBtn.style.display = 'flex';
@@ -827,25 +878,53 @@ export function startWorld(net: WorldNet): void {
       armFade(el);
     }
   }
-  chatInput.addEventListener('keydown', (e) => {
-    e.stopPropagation(); // keep the world's capture handler from acting on what we type
-    if (e.key === 'Enter') {
-      const text = chatInput.value.trim();
-      chatInput.value = '';
-      if (text) {
+  // Send the current input: run it as a slash command, or post it as a chat line (+ speech bubble).
+  function submitChat() {
+    const text = chatInput.value.trim();
+    chatInput.value = '';
+    closeCmdMenu();
+    if (text) {
+      const res = net.worldRunChatCommand(text); // /ff, /tip, /whisper, /powerup, …
+      if (res === 'rejected') { chatInput.value = text; refreshCmdMenu(); return; } // incomplete — keep it
+      if (res === 'passthrough') {
         net.sendChat(text);                    // → main game chat → shows in this side feed (+ main chat)
-        // Slash commands (e.g. /whisper) are private/functional — never pop a public speech bubble.
+        // Slash text that isn't a known command goes to chat but never pops a public speech bubble.
         if (!text.startsWith('/')) {
           const said = text.slice(0, WORLD_SAY_MAX);
           net.say(said, false);                // → yellow speech bubble over your avatar (chat line)
           // Optimistic local echo so your own bubble pops instantly (the server also echoes it back).
           says.set(net.selfId(), { text: said, until: performance.now() + SAY_MS, purple: false });
         }
+      } // 'ran' → the command already did its thing
+    }
+    closeChat();
+  }
+  chatInput.addEventListener('input', () => refreshCmdMenu());
+  chatInput.addEventListener('keydown', (e) => {
+    e.stopPropagation(); // keep the world's capture handler from acting on what we type
+    const menuOpen = cmdItems.length > 0;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      // With the menu open, Enter runs the highlighted command (completing it if it needs more).
+      if (menuOpen) {
+        const it = cmdItems[cmdIndex];
+        const res = net.worldRunChatCommand(it.complete.trimEnd());
+        if (res === 'ran') { chatInput.value = ''; closeCmdMenu(); closeChat(); }
+        else completeCmd(); // needs args (or disabled) — drop the completion in and keep suggesting
+        return;
       }
-      closeChat();
+      submitChat();
+    } else if (e.key === 'Tab' && menuOpen) {
+      e.preventDefault();
+      completeCmd();
+    } else if (e.key === 'ArrowDown' && menuOpen) {
+      e.preventDefault(); cmdIndex = (cmdIndex + 1) % cmdItems.length; renderCmdMenu();
+    } else if (e.key === 'ArrowUp' && menuOpen) {
+      e.preventDefault(); cmdIndex = (cmdIndex - 1 + cmdItems.length) % cmdItems.length; renderCmdMenu();
     } else if (e.key === 'Escape') {
-      chatInput.value = '';
-      closeChat();
+      e.preventDefault();
+      if (menuOpen) closeCmdMenu(); // first Esc closes the menu; next closes the chat
+      else { chatInput.value = ''; closeChat(); }
     }
   });
   chatInput.addEventListener('blur', () => { if (chatActive) closeChat(); });
