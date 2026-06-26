@@ -1413,8 +1413,8 @@ export function startWorld(net: WorldNet): void {
     mainCam?.setBounds(dInt.x, dInt.y, dInt.w, dInt.h);
     // dungeon theme (FFVI "Mines of Narshe") — loops while exploring
     if (!dungeonMusic) { dungeonMusic = new Audio('/dungeon.mp3'); dungeonMusic.loop = true; dungeonMusic.volume = 0.45; }
-    dungeonMusic.currentTime = 0;
-    void dungeonMusic.play().catch(() => { /* autoplay may need the gesture; entry IS one */ });
+    dungeonMusic.currentTime = 0; encounterPending = false;
+    setDungeonMusic(true);
     minimap.style.display = 'none'; help.style.display = 'none'; // no overworld minimap / drive hint underground
     dungeonHP = 100; lastGrassKey = ''; grassDanger = 0; potionCount = 0; // fresh run: no potions carried in
     newMobsSeen.clear(); recentMob = -1; recentMobRun = 0; impGavePotion = false;
@@ -1541,11 +1541,23 @@ export function startWorld(net: WorldNet): void {
     }
     return pickMobIdx([...floorNewMobs(currentFloor), ...floorCarryMobs(currentFloor)]);
   }
+  // Play/pause the dungeon theme race-safely. Calling pause() while a previous play() promise is still
+  // settling is silently ignored by the browser (the track keeps playing over the battle/fanfare), so
+  // we track the DESIRED state and re-assert it once the play promise resolves.
+  let dungeonMusicWanted = false;
+  function setDungeonMusic(on: boolean) {
+    dungeonMusicWanted = on;
+    if (!dungeonMusic) return;
+    if (on) dungeonMusic.play().then(() => { if (!dungeonMusicWanted) dungeonMusic?.pause(); }).catch(() => { /* gesture */ });
+    else dungeonMusic.pause();
+  }
+  let encounterPending = false; // a battle is being set up (snapshot in flight) — block re-triggering
   // A tall-grass encounter: pause the dungeon theme and drop into a Pong duel vs a mob.
   function triggerEncounter() {
-    if (isEncounterOpen()) return;
+    if (isEncounterOpen() || encounterPending) return;
+    encounterPending = true;
     keys.clear(); joyActive = false; vx = 0; vy = 0;
-    dungeonMusic?.pause();
+    setDungeonMusic(false);
     const mob = DUNGEON_MOBS[pickFloorMob()]; // new mobs forced first, then full pool, shuffle-bagged
     // Snapshot the live dungeon view FIRST (loop must still be running), then sleep + open the
     // battle — the snapshot is the world frame the Pokémon strip-transition animates apart.
@@ -1561,6 +1573,7 @@ export function startWorld(net: WorldNet): void {
           consume: () => { if (potionCount <= 0) return false; potionCount -= 1; updateDungeonHud(); updateDungeonControls(); return true; },
         },
         onResult: (r) => {
+          encounterPending = false;
           if (game?.canvas) game.canvas.style.display = 'block';
           game?.loop.wake();
           dungeonHP = Math.max(0, dungeonHP - r.hpLost);
@@ -1569,7 +1582,7 @@ export function startWorld(net: WorldNet): void {
             if (r.item) potionCount += 1;
           }
           if (dungeonHP <= 0) { showToast('💀 You black out — your loot is lost in the dark…'); leaveDungeon(false); }
-          else { dungeonMusic?.play().catch(() => { /* ignore */ }); updateDungeonHud(); updateDungeonControls(); }
+          else { setDungeonMusic(true); updateDungeonHud(); updateDungeonControls(); }
         },
       });
     };
@@ -1586,9 +1599,10 @@ export function startWorld(net: WorldNet): void {
     inDungeon = false;
     nearExit = false;
     dungeonPurseDisplay = 0;
+    encounterPending = false;
     keys.clear(); joyActive = false;
     mainCam?.setBounds(0, 0, WORLD.w, WORLD.h);
-    dungeonMusic?.pause();
+    setDungeonMusic(false);
     minimap.style.display = 'block'; help.style.display = 'block'; // restore overworld HUD
     dungeonBanner.style.display = 'none'; dungeonControls.style.display = 'none';
     dungeonChestCounter.style.display = 'none';
@@ -3830,7 +3844,7 @@ export function startWorld(net: WorldNet): void {
     game?.destroy(true);
     game = null;
     if (inDungeon) net.dungeonExit(false); // bailed out of the World mid-dungeon → forfeit the run purse
-    dungeonMusic?.pause(); dungeonMusic = null; inDungeon = false;
+    setDungeonMusic(false); dungeonMusic = null; inDungeon = false;
     try { void actx?.close(); } catch { /* ignore */ }
     actx = null;
     overlay.remove();

@@ -315,6 +315,7 @@ export function startEncounter(opts: EncounterOpts): void {
     cancelAnimationFrame(raf);
     window.removeEventListener('resize', fit);
     window.removeEventListener('keydown', kd, true); window.removeEventListener('keyup', ku, true);
+    window.removeEventListener('keydown', advKey, true); // don't leak the result-advance key listener
     song.pause(); fanfare.pause(); // audio + context are reused across battles, not torn down
     overlay.remove();
     // net HP lost = starting HP minus where we ended up (potions healed some of it back)
