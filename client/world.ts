@@ -2427,6 +2427,7 @@ export function startWorld(net: WorldNet): void {
     carBody: Phaser.GameObjects.Image;
     carRoof: Phaser.GameObjects.Image;
     carWheels: Phaser.GameObjects.Image; // big untinted tires — only shown for the Monster Truck
+    smokeT: number; sx: number; sy: number; // exhaust-smoke emit cooldown + last position (movement gate)
     label: Phaser.GameObjects.Text;
     bubble: Phaser.GameObjects.Text;  // netizen speech bubble (hidden for humans)
     bubbleNextAt: number;             // when this bot picks its next line
@@ -3791,21 +3792,27 @@ export function startWorld(net: WorldNet): void {
   // Trail a pet behind every avatar that has one equipped. The target is a point PET_TRAIL world
   // units behind the owner along its heading (`a`); when there's no heading (on foot) we fall back
   // to the owner's recent move direction, and finally to "below" so a standing-still pet still sits
-  // Exhaust smoke — the Monster Truck belches grey puffs from the back while it's moving.
+  // Exhaust smoke — EVERY Monster Truck belches grey puffs from the back while it's moving (self + remotes).
   const smokePuffs: { spr: Phaser.GameObjects.Image; t: number; max: number; vx: number; vy: number }[] = [];
-  let smokeTimer = 0;
   function updateSmoke(dt: number) {
     const sc = petScene; if (!sc) return;
-    smokeTimer -= dt;
-    const spec = driving ? myCar() : null;
-    if (spec?.id === 'car-monster' && Math.hypot(vx, vy) > 35 && smokeTimer <= 0) {
-      smokeTimer = 0.05;
-      const bx = selfX - Math.cos(facing) * CAR_LEN * 0.5, by = selfY - Math.sin(facing) * CAR_LEN * 0.5;
-      const spr = sc.add.image(bx + (Math.random() - 0.5) * 6, by + (Math.random() - 0.5) * 6, 'w-smoke')
-        .setScale(0.7).setTint(0x4a4a4a).setAlpha(0.55).setDepth(by - 3);
-      smokePuffs.push({ spr, t: 0, max: 0.65 + Math.random() * 0.35,
-        vx: -Math.cos(facing) * 16 + (Math.random() - 0.5) * 16, vy: -Math.sin(facing) * 16 - 14 + (Math.random() - 0.5) * 16 });
-    }
+    const emitFor = (av: Av) => {
+      const x = av.c.x, y = av.c.y;
+      const drivingMonster = av.car.visible && av.carWheels.visible; // wheels are only shown for the monster truck
+      const moved = Math.hypot(x - av.sx, y - av.sy); av.sx = x; av.sy = y;
+      av.smokeT -= dt;
+      if (drivingMonster && moved > 0.7 && av.smokeT <= 0) {
+        av.smokeT = 0.05;
+        const a = av.car.rotation;
+        const bx = x - Math.cos(a) * CAR_LEN * 0.5, by = y - Math.sin(a) * CAR_LEN * 0.5;
+        const spr = sc.add.image(bx + (Math.random() - 0.5) * 6, by + (Math.random() - 0.5) * 6, 'w-smoke')
+          .setScale(0.7).setTint(0x4a4a4a).setAlpha(0.55).setDepth(by - 3);
+        smokePuffs.push({ spr, t: 0, max: 0.65 + Math.random() * 0.35,
+          vx: -Math.cos(a) * 16 + (Math.random() - 0.5) * 16, vy: -Math.sin(a) * 16 - 14 + (Math.random() - 0.5) * 16 });
+      }
+    };
+    if (self) emitFor(self);
+    for (const av of remote.values()) emitFor(av);
     for (let i = smokePuffs.length - 1; i >= 0; i--) {
       const p = smokePuffs[i]; p.t += dt; const k = p.t / p.max;
       if (k >= 1) { p.spr.destroy(); smokePuffs.splice(i, 1); continue; }
@@ -3892,7 +3899,7 @@ export function startWorld(net: WorldNet): void {
       stroke: '#0b1020', strokeThickness: 2, resolution: 2,
     }).setOrigin(0.5, 1).setVisible(false);
     const c = sc.add.container(selfX, selfY, [shadow, car, person, label, bubble]);
-    return { c, person, car, carBody, carRoof, carWheels, label, bubble, bubbleNextAt: 0, rx: selfX, ry: selfY, ra: 0 };
+    return { c, person, car, carBody, carRoof, carWheels, label, bubble, bubbleNextAt: 0, rx: selfX, ry: selfY, ra: 0, smokeT: 0, sx: selfX, sy: selfY };
   }
 
   function placeAvatar(av: Av, x: number, y: number, a: number, drivingNow: boolean, color: string, name: string) {

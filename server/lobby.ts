@@ -108,6 +108,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
   recordFishCatch, getFishingLeaderboard, FishingScoreRow,
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS, getAssessableWealth, stampActivity, getJailed, setJailed,
+  getOpenedChests, addOpenedChests,
   getHoldings, investStock, closePosition, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
   setStockCrashAt, getMarketInstability, setMarketInstability,
   getLoan, takeLoan, repayLoan, collectDefaultedLoans, realignLoansToDeadline, getOpenLoans,
@@ -1041,15 +1042,20 @@ export class Lobby {
   dungeonSync(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.pid) return;
-    this.dungeonPurse.set(conn.pid, 0);        // entering the Ruins starts a fresh, empty run purse
-    this.dungeonRunChests.delete(conn.pid);    // …and a fresh provisional-chest slate
-    this.dungeonRunItems.delete(conn.pid);     // …and no spin-won cosmetics yet
-    this.dungeonRunKeys.delete(conn.pid);      // …and no key (re-fetch it from the dying man on B3)
-    const pfx = conn.pid + ':';
-    const opened: string[] = [];
-    for (const k of this.dungeonOpenedChests) if (k.startsWith(pfx)) opened.push(k.slice(pfx.length));
-    this.tell(ws, { type: 'dungeonChests', opened });
-    this.sendPurse(ws, conn.pid);
+    const pid = conn.pid;
+    this.dungeonPurse.set(pid, 0);        // entering the Ruins starts a fresh, empty run purse
+    this.dungeonRunChests.delete(pid);    // …and a fresh provisional-chest slate
+    this.dungeonRunItems.delete(pid);     // …and no spin-won cosmetics yet
+    this.dungeonRunKeys.delete(pid);      // …and no key (re-fetch it from the dying man on B3)
+    // load this account's permanently-opened chests from the DB into the in-memory set (survives restarts)
+    getOpenedChests(pid).then((banked) => {
+      for (const chest of banked) this.dungeonOpenedChests.add(`${pid}:${chest}`);
+      const pfx = pid + ':';
+      const opened: string[] = [];
+      for (const k of this.dungeonOpenedChests) if (k.startsWith(pfx)) opened.push(k.slice(pfx.length));
+      this.tell(ws, { type: 'dungeonChests', opened });
+    }).catch((e) => console.error('dungeonSync load failed:', e));
+    this.sendPurse(ws, pid);
   }
   dungeonChest(ws: WebSocket, chest: string) {
     const conn = this.conns.get(ws);
@@ -1122,7 +1128,10 @@ export class Lobby {
     this.dungeonRunKeys.delete(conn.pid);
     this.tell(ws, { type: 'dungeonPurse', coins: 0 });
     if (escaped) {
-      if (run) for (const chest of run) this.dungeonOpenedChests.add(`${conn.pid}:${chest}`); // bank the chests
+      if (run) {
+        for (const chest of run) this.dungeonOpenedChests.add(`${conn.pid}:${chest}`); // bank the chests (memory)
+        addOpenedChests(conn.pid, [...run]).catch((e) => console.error('dungeon chest persist failed:', e)); // …and to the DB
+      }
       // Pay the purse + grant every escaped-with cosmetic (spin prizes, the vault vehicle), THEN send
       // the wallet ONCE — so the shop reflects newly-owned items (no refresh-before-grant race).
       const grants: Promise<unknown>[] = [];
