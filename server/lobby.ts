@@ -90,6 +90,8 @@ import {
   MarketItemView,
   MarketListingView,
   WorldAvatar,
+  JAIL,
+  JAIL_WALL,
   JAIL_CELL,
   BAIL_COST,
   NewsItem,
@@ -942,8 +944,9 @@ export class Lobby {
     };
     this.spawnBot(botSide, 'hard', { reactOverride: react, errorPxOverride: errPx });
 
-    if (this.teams.left.length && this.teams.right.length && this.game.status === 'waiting') {
-      this.game.start();
+    if (this.teams.left.length && this.teams.right.length) {
+      if (this.game.status === 'over') this.game.toWaiting();
+      if (this.game.status === 'waiting') this.game.start();
     }
     this.refreshPause();
   }
@@ -1417,14 +1420,27 @@ export class Lobby {
     return out;
   }
 
-  /** Push a point out of every building it overlaps (mirrors client/resolveCollisions). */
-  private static resolveNetizenCollision(x: number, y: number, rad: number): { x: number; y: number } {
-    for (const b of WORLD_BUILDINGS) {
+  /** All solid rects netizens must avoid: buildings + jail walls. */
+  private static SOLID_RECTS: readonly { x: number; y: number; w: number; h: number }[] = [
+    ...WORLD_BUILDINGS,
+    // Jail walls (same layout as client/world.ts JAIL_WALLS).
+    { x: JAIL.x, y: JAIL.y, w: JAIL.w, h: JAIL_WALL },
+    { x: JAIL.x, y: JAIL.y, w: JAIL_WALL, h: JAIL.h },
+    { x: JAIL.x + JAIL.w - JAIL_WALL, y: JAIL.y, w: JAIL_WALL, h: JAIL.h },
+    { x: JAIL.x, y: JAIL.y + JAIL.h - JAIL_WALL, w: JAIL.w, h: JAIL_WALL },
+  ];
+
+  /** Push a point out of every solid rect it overlaps (mirrors client/resolveCollisions).
+   *  Returns the adjusted position and whether a collision occurred. */
+  private static resolveNetizenCollision(x: number, y: number, rad: number): { x: number; y: number; hit: boolean } {
+    let hit = false;
+    for (const b of Lobby.SOLID_RECTS) {
       const nx = Math.max(b.x, Math.min(b.x + b.w, x));
       const ny = Math.max(b.y, Math.min(b.y + b.h, y));
       const dx = x - nx, dy = y - ny;
       const d2 = dx * dx + dy * dy;
       if (d2 >= rad * rad) continue;
+      hit = true;
       if (d2 > 0.0001) {
         const d = Math.sqrt(d2);
         x = nx + (dx / d) * rad;
@@ -1440,7 +1456,7 @@ export class Lobby {
     }
     x = Math.max(rad, Math.min(WORLD.w - rad, x));
     y = Math.max(rad, Math.min(WORLD.h - rad, y));
-    return { x, y };
+    return { x, y, hit };
   }
 
   /** Wander netizen avatars and fan everyone's positions out. Called every tick by broadcast();
@@ -1474,6 +1490,14 @@ export class Lobby {
           );
           pos.x = stepped.x;
           pos.y = stepped.y;
+          if (stepped.hit) {
+            // Bumped into something — pick a new wander target so we don't keep
+            // walking into the same wall and getting stuck.
+            pos.pauseUntil = now + 400 + Math.random() * 800;
+            const a = Math.random() * Math.PI * 2, r = 200 + Math.random() * 800;
+            pos.tx = Lobby.PLAZA.x + Math.cos(a) * r;
+            pos.ty = Lobby.PLAZA.y + Math.sin(a) * r;
+          }
         }
       }
     }
@@ -3211,13 +3235,16 @@ export class Lobby {
     for (let i = 0; i < Lobby.NETIZEN_NAMES.length; i++) {
       const pid = `netizen:${i}`;
       // Scatter the initial positions across the town (radially, up to ~900 units) so they don't
-      // all start piled on the fountain.
+      // all start piled on the fountain. Push them out of any solid rect so nobody spawns inside a building.
       const a0 = Math.random() * Math.PI * 2, r0 = Math.random() * 900;
-      const x = Lobby.PLAZA.x + Math.cos(a0) * r0;
-      const y = Lobby.PLAZA.y + Math.sin(a0) * r0;
+      const spawn = Lobby.resolveNetizenCollision(
+        Lobby.PLAZA.x + Math.cos(a0) * r0,
+        Lobby.PLAZA.y + Math.sin(a0) * r0,
+        16,
+      );
       this.netizenPos.set(pid, {
-        x, y,
-        tx: x, ty: y,
+        x: spawn.x, y: spawn.y,
+        tx: spawn.x, ty: spawn.y,
         pauseUntil: Date.now() + 1000 + Math.random() * 3000, // stagger initial stroll
         spawnAt: 0, // no delay — appear right away
       });
