@@ -130,7 +130,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   loadNomic, saveNomic, archiveNomicSeason } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR } from '../shared/types';
-import { WORLD_PARCELS, BANK_PARCEL_CAP, PARCEL_PRICE, LandParcelView } from '../shared/types';
+import { WORLD_PARCELS, BANK_PARCEL_CAP, PARCEL_PRICE, LandParcelView, WORLD_SAY_MAX } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
 // emoji code points (pictographs, components, ZWJ, variation selectors, flags).
@@ -1396,6 +1396,17 @@ export class Lobby {
       return;
     }
     this.world.move(ws, x, y, a, car, pet);
+  }
+
+  /** A player pressed '/' in the World and said a line — fan it out to everyone in the world as a
+   *  transient speech bubble over their avatar. Must be in the world + joined; sanitized + capped. */
+  worldChat(ws: WebSocket, text: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !this.world.has(ws)) return;
+    const clean = text.replace(/\s+/g, ' ').trim().slice(0, WORLD_SAY_MAX);
+    if (!clean) return;
+    const data = JSON.stringify({ type: 'worldSay', id: conn.id, name: conn.nickname, text: clean });
+    for (const sock of this.world.sockets()) if (sock.readyState === sock.OPEN) sock.send(data);
   }
 
   /** Snapshot every in-world avatar (human + netizen). */

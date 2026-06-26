@@ -401,6 +401,9 @@ wss.on('connection', (ws: WebSocket, req) => {
           lobby.worldMove(ws, msg.x, msg.y, typeof msg.a === 'number' ? msg.a : undefined, typeof msg.car === 'string' ? msg.car : null, typeof msg.pet === 'string' ? msg.pet : null);
         }
         break;
+      case 'worldChat':
+        if (typeof msg.text === 'string') lobby.worldChat(ws, msg.text);
+        break;
       case 'landReq':
         lobby.sendLand(ws);
         break;

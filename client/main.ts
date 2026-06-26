@@ -740,6 +740,8 @@ const net = connect(
       applyPrefs();
     } else if (msg.type === 'land') {
       worldMod?.feedLand(msg.parcels, msg.bankBought, msg.bankCap);
+    } else if (msg.type === 'worldSay') {
+      worldMod?.feedSay(msg.id, msg.name, msg.text);
     } else if (msg.type === 'wallet') {
       wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, car: msg.car, pet: msg.pet, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
       rouletteHandle.setCoins(msg.coins);
@@ -2012,6 +2014,7 @@ worldBtn.addEventListener('click', async () => {
       landList: (id, ask) => net.send({ type: 'landList', id, ask }),
       landUnlist: (id) => net.send({ type: 'landUnlist', id }),
       landBuy: (id) => net.send({ type: 'landBuy', id }),
+      say: (text) => net.send({ type: 'worldChat', text }),
     });
   } catch (e) {
     console.error('World failed to load:', e);

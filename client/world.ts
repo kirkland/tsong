@@ -33,6 +33,7 @@ import {
   ROBVILLE_BULBS,
   PARCEL_PRICE,
   BANK_PARCEL_CAP,
+  WORLD_SAY_MAX,
   type LandParcelView,
   JAIL,
   JAIL_WALL,
@@ -76,12 +77,14 @@ export interface WorldNet {
   landList(id: string, ask: number): void;  // list your lot for sale at `ask` coins
   landUnlist(id: string): void;             // take your lot back off the market
   landBuy(id: string): void;                // buy a listed lot from its owner at the asking price
+  say(text: string): void;                  // press '/' → say a line as a speech bubble over your avatar
 }
 
 // --- module-level controller so feedWorld()/isWorldOpen() can reach the live overlay ---
 interface Controller {
   feed(avatars: WorldAvatar[]): void;
   feedLand(parcels: LandParcelView[], bankBought: number, bankCap: number): void; // Robville land book
+  feedSay(id: string, name: string, text: string): void; // an in-world chat line → speech bubble
   reenter(): void; // re-send worldEnter after a socket reconnect (server forgot us on drop)
 }
 let controller: Controller | null = null;
@@ -104,6 +107,11 @@ export function feedWorld(avatars: WorldAvatar[]): void {
 /** Push the latest Robville land book (from a `land` server message) into the live overlay. */
 export function feedLand(parcels: LandParcelView[], bankBought: number, bankCap: number): void {
   controller?.feedLand(parcels, bankBought, bankCap);
+}
+
+/** Pop a speech bubble over a world avatar (from a `worldSay` server message). */
+export function feedSay(id: string, name: string, text: string): void {
+  controller?.feedSay(id, name, text);
 }
 
 /** Re-assert our presence in the world after a reconnect (the server drops us on socket close). */
@@ -616,6 +624,11 @@ export function startWorld(net: WorldNet): void {
   // Per-lot Phaser objects (the tinted pad + its hovering sign), built once in create().
   const parcelGfx = new Map<string, { pad: Phaser.GameObjects.Rectangle; sign: Phaser.GameObjects.Text }>();
 
+  // --- in-world chat (press '/' to talk) ---
+  const SAY_MS = 5000;                                 // how long a speech bubble lingers
+  const says = new Map<string, { text: string; until: number }>(); // avatar id → its current bubble
+  let chatting = false;                                // true while the chat input is open
+
   // --- NPC state ---
   const npcs: LiveNpc[] = [];          // populated in create()
   let nearNpc: LiveNpc | null = null;  // townsperson within talking range
@@ -703,6 +716,31 @@ export function startWorld(net: WorldNet): void {
     'background:#e8b84b;color:#1a1408;border:none;border-radius:10px;padding:11px 18px;font-size:15px;' +
     'font-weight:700;box-shadow:0 6px 20px #0008;z-index:2;';
   overlay.appendChild(prompt);
+
+  // In-world chat box (bottom-center). Press '/' to talk: your line pops as a speech bubble over
+  // your avatar for everyone in the world. Enter sends, Esc cancels.
+  const chatBox = document.createElement('input');
+  chatBox.type = 'text';
+  chatBox.maxLength = WORLD_SAY_MAX;
+  chatBox.placeholder = 'Say something…  (Enter to send · Esc to cancel)';
+  chatBox.style.cssText =
+    'position:absolute;left:50%;bottom:84px;transform:translateX(-50%);display:none;width:min(440px,82vw);' +
+    'background:#0c1330ee;color:#eef3ff;border:1px solid #3a4ea8;border-radius:10px;padding:11px 14px;' +
+    'font-size:15px;font-family:inherit;outline:none;box-shadow:0 6px 20px #0008;z-index:4;';
+  overlay.appendChild(chatBox);
+
+  // Touch affordance: a little 💬 button (bottom-right) opens the same chat for players without a
+  // '/' key. Hidden while the box is already open.
+  const chatBtn = document.createElement('button');
+  chatBtn.type = 'button';
+  chatBtn.textContent = '💬';
+  chatBtn.title = 'Say something (/)';
+  chatBtn.style.cssText =
+    'position:absolute;right:14px;bottom:14px;display:flex;align-items:center;justify-content:center;' +
+    'width:48px;height:48px;cursor:pointer;background:#243a6bcc;color:#cfe0ff;border:1px solid #3a558f;' +
+    'border-radius:50%;font-size:22px;box-shadow:0 6px 20px #0008;z-index:3;';
+  chatBtn.onclick = () => openChat();
+  overlay.appendChild(chatBtn);
 
   // Jail banner (top-center) — shown while you're locked up. You can't bail yourself; you have to
   // wait for another player to walk up to the bars and post your bail.
@@ -926,8 +964,8 @@ export function startWorld(net: WorldNet): void {
     const now = performance.now();
     if (helpFlash && now < helpFlashUntil) { help.innerHTML = `<span style="color:#ffd166">${helpFlash}</span>`; return; }
     help.innerHTML = driving
-      ? 'W/S or ↑/↓ throttle · A/D or ←/→ steer · drag to drive · <b>F</b> get out'
-      : 'WASD / arrows or drag to walk · <b>F</b> to drive · <b>Space</b> to talk / enter';
+      ? 'W/S or ↑/↓ throttle · A/D or ←/→ steer · drag to drive · <b>F</b> get out · <b>/</b> chat'
+      : 'WASD / arrows or drag to walk · <b>F</b> to drive · <b>Space</b> enter · <b>/</b> chat';
   }
 
   // --- building entry ---
@@ -1497,17 +1535,52 @@ export function startWorld(net: WorldNet): void {
   prompt.onclick = triggerNear;
   driveBtn.onclick = toggleDrive;
 
+  // --- in-world chat controls ---
+  function openChat() {
+    if (chatting || talkOpen || dialogOpen) return;
+    chatting = true;
+    keys.clear(); joyActive = false; // stop walking while typing
+    chatBox.value = '';
+    chatBox.style.display = 'block';
+    chatBox.focus();
+    prompt.style.display = 'none';
+    chatBtn.style.display = 'none';
+  }
+  function closeChat() {
+    if (!chatting) return;
+    chatting = false;
+    chatBox.style.display = 'none';
+    chatBox.blur();
+    chatBtn.style.display = 'flex';
+  }
+  function sendChat() {
+    const text = chatBox.value.trim();
+    if (text) net.say(text);
+    closeChat();
+  }
+
   // --- input (capture phase so the main game's global shortcuts don't also fire) ---
   const MOVE_KEYS = new Set(['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright']);
   function onKeyDown(e: KeyboardEvent) {
     unlockAudio();
     const k = e.key.toLowerCase();
+    // While the chat box is open, swallow keys from the main game's global shortcuts (stopPropagation)
+    // but DON'T preventDefault normal keys — the focused input still needs them to type. Enter sends,
+    // Esc cancels.
+    if (chatting) {
+      e.stopPropagation();
+      if (k === 'enter') { e.preventDefault(); sendChat(); }
+      else if (k === 'escape') { e.preventDefault(); closeChat(); }
+      return;
+    }
     if (k === 'escape') {
       e.preventDefault(); e.stopPropagation();
       if (fullMapOpen) toggleFullMap(); else if (talkOpen) npcClose?.(); else if (dialogOpen) closeDialog(); else exit();
       return;
     }
     if (k === 'm') { e.preventDefault(); e.stopPropagation(); toggleFullMap(); return; } // M → full map
+    // '/' opens the chat box (unless a dialogue/menu is up). Swallow it so the slash isn't typed.
+    if (k === '/' && !talkOpen && !dialogOpen) { e.preventDefault(); e.stopPropagation(); openChat(); return; }
     // While chatting, Enter / Space / E advances the dialogue; movement is frozen.
     if (talkOpen) {
       if (k === 'enter' || k === ' ' || k === 'e') { e.preventDefault(); e.stopPropagation(); npcAdvance?.(); }
@@ -1530,6 +1603,8 @@ export function startWorld(net: WorldNet): void {
   }
   function onPointerDown(e: PointerEvent) {
     unlockAudio();
+    // A tap anywhere but the chat box dismisses it (and doesn't also start a walk).
+    if (chatting) { if (e.target !== chatBox) closeChat(); return; }
     // Ignore drags that start on a chrome button or while a modal/dialogue is up.
     if (dialogOpen || talkOpen || (e.target instanceof Element && e.target.closest('button'))) return;
     // Tapped a netizen avatar? → fire the challenge hook instead of starting to walk.
@@ -2955,7 +3030,7 @@ export function startWorld(net: WorldNet): void {
       maybeSendMove(now);
 
       // place our avatar straight from authoritative state (zero latency)
-      if (self) placeAvatar(self, selfX, selfY, facing, driving, net.color(), net.name() || 'you');
+      if (self) { placeAvatar(self, selfX, selfY, facing, driving, net.color(), net.name() || 'you'); applySay(self, net.selfId(), now); }
 
       // reconcile + lerp remote avatars
       const seen = new Set<string>();
@@ -2976,7 +3051,7 @@ export function startWorld(net: WorldNet): void {
         const ta = a.a ?? av.ra;
         av.ra += angDelta(av.ra, ta) * Math.min(1, dt * 12);
         placeAvatar(av, av.rx, av.ry, av.ra, !!a.car, a.color, a.name);
-        // Netizens are silent until approached — no auto speech bubbles.
+        applySay(av, a.id, now); // pop their speech bubble if they've said something recently
       }
       // drop avatars that left
       for (const [id, av] of remote) if (!seen.has(id)) { av.c.destroy(); remote.delete(id); }
@@ -3071,9 +3146,22 @@ export function startWorld(net: WorldNet): void {
       fontFamily: 'system-ui, sans-serif', fontSize: '11px', color: '#ffeb3b',
       backgroundColor: '#1b2542e6', padding: { x: 6, y: 3 }, align: 'center',
       stroke: '#0b1020', strokeThickness: 2, resolution: 2,
-    }).setOrigin(0.5, 1).setVisible(false);
+      wordWrap: { width: 180 },
+    }).setOrigin(0.5, 1).setVisible(false).setDepth(1);
     const c = sc.add.container(selfX, selfY, [shadow, car, person, label, bubble]);
     return { c, person, car, carBody, carRoof, label, bubble, bubbleNextAt: 0, rx: selfX, ry: selfY, ra: 0 };
+  }
+
+  // Show/hide an avatar's speech bubble from the live `says` book (expiring lines auto-clear).
+  function applySay(av: Av, id: string, now: number) {
+    const s = says.get(id);
+    if (s && s.until > now) {
+      if (av.bubble.text !== s.text) av.bubble.setText(s.text);
+      if (!av.bubble.visible) av.bubble.setVisible(true);
+    } else {
+      if (s) says.delete(id);
+      if (av.bubble.visible) av.bubble.setVisible(false);
+    }
   }
 
   function placeAvatar(av: Av, x: number, y: number, a: number, drivingNow: boolean, color: string, name: string) {
@@ -3206,6 +3294,11 @@ export function startWorld(net: WorldNet): void {
       myBankBought = bankBought;
       myBankCap = bankCap;
       refreshParcels();
+    },
+    feedSay(id, _name, text) {
+      const now = performance.now();
+      for (const [k, v] of says) if (v.until <= now) says.delete(k); // drop stale lines (e.g. speakers who left)
+      says.set(id, { text, until: now + SAY_MS });
     },
     reenter() { net.enter(); net.landReq(); },
   };

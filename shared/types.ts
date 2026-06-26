@@ -305,6 +305,7 @@ export function isExclusive(id: string): boolean {
 
 export const CHAT_MAX_LEN = 200; // max characters per chat message
 export const CHAT_HISTORY = 50; // recent messages kept/sent to new joiners
+export const WORLD_SAY_MAX = 120; // max characters in a World speech bubble (press '/' to talk)
 export const TICK_MS = 1000 / 60;
 export const MAX_BOUNCE = Math.PI / 3; // steepest deflection off a paddle edge
 export const SERVE_DELAY = 0.7; // seconds the ball pauses at center before launching
@@ -693,6 +694,15 @@ export interface LandMsg {
   bankCap: number;    // BANK_PARCEL_CAP — so the client can show "2 of 2 used"
 }
 
+// A live in-world chat line, fanned out to everyone in the World (not replayed on join). The
+// client pops `text` as a speech bubble over the avatar with id `id` for a few seconds.
+export interface WorldSayMsg {
+  type: 'worldSay';
+  id: string;   // speaker's avatar/connection id (matches WorldAvatar.id / YouMsg.id)
+  name: string; // speaker's nickname (for an optional log/fallback)
+  text: string;
+}
+
 // --- Client -> Server ---
 export type ClientMsg =
   // pid = stable per-browser identity; color = chosen paddle color
@@ -792,6 +802,7 @@ export type ClientMsg =
   | { type: 'worldEnter' } // step into the free-roam world map (start sending/receiving avatar positions)
   | { type: 'worldLeave' } // leave the world map
   | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null; pet?: string | null } // client-authoritative avatar position (world units), heading + car when driving, pet trailing
+  | { type: 'worldChat'; text: string } // press '/' in the World to say a line — pops as a speech bubble over your avatar for everyone in the world
   // --- Robville land (the suburban neighborhood) ---
   | { type: 'landReq' } // request the current Robville parcel ownership/market book
   | { type: 'landBuyBank'; id: string } // buy an empty lot from the bank for PARCEL_PRICE (subject to BANK_PARCEL_CAP)
@@ -1264,6 +1275,7 @@ export type ServerMsg =
   | LoanBookMsg
   | WorldMsg
   | LandMsg
+  | WorldSayMsg
   | HouseMsg
   | HouseStateMsg
   | NetizenInfoMsg
