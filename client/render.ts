@@ -768,10 +768,10 @@ const TRAIL_TINTS: Record<string, TrailTint> = {
   inferno: (i, n) => `hsl(${20 + (i / n) * 35},100%,${50 + (i / n) * 12}%)`, // red tail → yellow head
   lightning: () => '#8ab4ff',
   phoenix: (i, _n, t) => `hsl(${(t / 14 + i * 18) % 60},100%,58%)`, // animated red↔gold fire
-  'trail-fart': (i, _n, t) => { // a murky swamp-gas cloud — sickly yellow-green roiling into olive-brown (no glow → reads as opaque gas)
-    const hue = 74 + 16 * Math.sin(t / 480 + i * 0.6);
-    const light = 30 + 9 * Math.sin(t / 300 + i * 0.9);
-    return `hsl(${hue},42%,${light}%)`;
+  'trail-fart': (i, _n, t) => { // a sickly swamp-gas cloud — noxious yellow-green roiling into olive-brown (no glow → reads as opaque gas)
+    const hue = 66 + 18 * Math.sin(t / 480 + i * 0.6); // yellow-green ↔ olive
+    const light = 33 + 9 * Math.sin(t / 300 + i * 0.9);
+    return `hsl(${hue},52%,${light}%)`;
   },
   // --- exclusive trails ---
   'x-eclipse': (i, n, t) => {
@@ -813,6 +813,32 @@ function drawTrail(ctx: CanvasRenderingContext2D, key: string, cx: number, cy: n
   const glow = TRAIL_GLOW.has(id);
   ctx.save();
   if (glow) ctx.globalCompositeOperation = 'lighter';
+  if (id === 'trail-fart') {
+    // A proper gas cloud: soft, lumpy puffs that swell + fade as they drift back off the paddle —
+    // densest where it's freshly emitted, billowing bigger and thinner as it dissipates behind.
+    for (let i = 0; i < n; i++) {
+      const f = (i + 1) / n;                     // 0 = tail (old, dispersed) → 1 = head (fresh by the paddle)
+      const age = 1 - f;
+      const col = tint(i, n, t);
+      const clear = col.replace('hsl(', 'hsla(').replace(')', ',0)'); // same hue, fully transparent edge
+      const base = PADDLE.w * (0.6 + age * 1.7); // swells with age
+      const baseA = 0.06 + 0.18 * f;             // fresher = denser
+      for (let k = 0; k < 2; k++) {              // two jittered overlapping puffs → a billowy, uneven cloud
+        const wob = Math.sin(t / 260 + i * 1.3 + k * 2.3);
+        const ox = wob * base * 0.4 + (k - 0.5) * base * 0.5;
+        const oy = Math.cos(t / 300 + i + k * 1.9) * base * 0.35;
+        const pr = base * (0.6 + 0.3 * k);
+        const gx = pts[i].x + ox, gy = pts[i].y + oy;
+        const grad = ctx.createRadialGradient(gx, gy, 0, gx, gy, pr);
+        grad.addColorStop(0, col); grad.addColorStop(0.55, col); grad.addColorStop(1, clear);
+        ctx.globalAlpha = baseA;
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(gx, gy, pr, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    ctx.restore();
+    return;
+  }
   for (let i = 0; i < n; i++) {
     const f = (i + 1) / n;                 // 0 → tail, 1 → head
     const alpha = 0.3 * Math.pow(f, 1.5);  // translucent, fading toward the tail
@@ -847,7 +873,22 @@ export function drawCosmeticPreview(canvas: HTMLCanvasElement, id: string, slot:
     const n = 6;
     ctx.save();
     if (glow) ctx.globalCompositeOperation = 'lighter';
-    for (let i = 0; i < n; i++) {
+    if (id === 'trail-fart') { // billowing gas puffs rising off the paddle (matches the in-game cloud)
+      for (let i = 0; i < n; i++) {
+        const f = (i + 1) / n, age = 1 - f;
+        const col = tint ? tint(i, n, 0) : '#7a8a3a';
+        const clear = col.replace('hsl(', 'hsla(').replace(')', ',0)');
+        const r = PADDLE.w * (0.6 + age * 1.6), py = cy - h / 2 - (n - i) * 9;
+        for (let k = 0; k < 2; k++) {
+          const gx = cx + (k - 0.5) * r * 0.6;
+          const grad = ctx.createRadialGradient(gx, py, 0, gx, py, r);
+          grad.addColorStop(0, col); grad.addColorStop(0.55, col); grad.addColorStop(1, clear);
+          ctx.globalAlpha = 0.1 + 0.2 * f;
+          ctx.fillStyle = grad;
+          ctx.beginPath(); ctx.arc(gx, py, r, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+    } else for (let i = 0; i < n; i++) {
       const f = (i + 1) / n;
       ctx.globalAlpha = 0.32 * Math.pow(f, 1.4);
       ctx.fillStyle = tint ? tint(i, n, 0) : '#888';

@@ -2373,10 +2373,11 @@ export function startWorld(net: WorldNet): void {
         lastGrassKey = key;
         if (cell !== '@' && cell !== '>' && cell !== '<' && cell !== 'X' && cell !== 'Y') { // no ambush on entry/stairs/door tiles
           grassDanger += cell === '~' ? 2 : 1;
-          // You cross ~5 tiles/sec, so the per-tile slope must be tiny. ~70 tiles (~13s) avg between
-          // fights, faster in grass. (Tune `slope`/`cap` if it still feels off.)
-          const chance = Math.min(0.75, 0.002 + grassDanger * 0.0015);
-          if (Math.random() < chance) { grassDanger = 0; triggerEncounter(); }
+          // After a fight the meter resets to 0, and the first ~14 tiles are a GUARANTEED breather
+          // (no roll at all) so you never get jumped twice in a row. Past that the odds ramp gently —
+          // ~50 tiles (~10s) avg between fights, faster in grass. Big floors stay explorable, not spammy.
+          const steps = grassDanger - 14;
+          if (steps > 0 && Math.random() < Math.min(0.6, steps * 0.0011)) { grassDanger = 0; triggerEncounter(); }
         }
       }
       return;
