@@ -3260,7 +3260,7 @@ export function startWorld(net: WorldNet): void {
             // World-space layer: erase at room-local coords (worldPos − room origin), radii in world
             // units — holes track exactly, zero camera lag. Darker ambient so the light matters.
             const rt = dungeonDarkRT, brush = dungeonLightBrush;
-            rt.setVisible(true); rt.clear(); rt.fill(0x05070b, 0.86);
+            rt.setVisible(true); rt.clear(); rt.fill(0x05070b, 0.8);
             const stamp = (wx: number, wy: number, worldR: number) => {
               brush.setPosition(wx - dInt.x, wy - dInt.y).setDisplaySize(worldR * 2, worldR * 2);
               rt.erase(brush);
