@@ -701,6 +701,7 @@ export interface WorldSayMsg {
   id: string;   // speaker's avatar/connection id (matches WorldAvatar.id / YouMsg.id)
   name: string; // speaker's nickname (for an optional log/fallback)
   text: string;
+  say?: boolean; // true → spoken via the "Say" popup (Y); renders the bubble in purple
 }
 
 // --- Client -> Server ---
@@ -802,7 +803,7 @@ export type ClientMsg =
   | { type: 'worldEnter' } // step into the free-roam world map (start sending/receiving avatar positions)
   | { type: 'worldLeave' } // leave the world map
   | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null; pet?: string | null } // client-authoritative avatar position (world units), heading + car when driving, pet trailing
-  | { type: 'worldChat'; text: string } // press '/' in the World to say a line — pops as a speech bubble over your avatar for everyone in the world
+  | { type: 'worldChat'; text: string; say?: boolean } // say a line in the World — pops as a speech bubble over your avatar; say=true (the Y popup) renders it purple
   // --- Robville land (the suburban neighborhood) ---
   | { type: 'landReq' } // request the current Robville parcel ownership/market book
   | { type: 'landBuyBank'; id: string } // buy an empty lot from the bank for PARCEL_PRICE (subject to BANK_PARCEL_CAP)

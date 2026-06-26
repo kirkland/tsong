@@ -78,7 +78,7 @@ export interface WorldNet {
   landList(id: string, ask: number): void;  // list your lot for sale at `ask` coins
   landUnlist(id: string): void;             // take your lot back off the market
   landBuy(id: string): void;                // buy a listed lot from its owner at the asking price
-  say(text: string): void;                  // → speech bubble over your avatar (+ to others in-world)
+  say(text: string, asSay?: boolean): void; // → speech bubble over your avatar (+ to others in-world); asSay=true → purple "Say" bubble
   sendChat(text: string): void;             // → main game chat, so the line also shows in the side feed
   chatHistory(): ChatLine[];                // recent chat backlog, seeded (hidden) so it's there on T
 }
@@ -87,7 +87,7 @@ export interface WorldNet {
 interface Controller {
   feed(avatars: WorldAvatar[]): void;
   feedLand(parcels: LandParcelView[], bankBought: number, bankCap: number): void; // Robville land book
-  feedSay(id: string, name: string, text: string): void; // an in-world chat line → speech bubble
+  feedSay(id: string, name: string, text: string, say: boolean): void; // an in-world line → speech bubble (say=purple)
   feedChat(line: ChatLine): void; // a new chat line (mirrors the main chat into the side feed)
   reenter(): void; // re-send worldEnter after a socket reconnect (server forgot us on drop)
 }
@@ -114,8 +114,8 @@ export function feedLand(parcels: LandParcelView[], bankBought: number, bankCap:
 }
 
 /** Pop a speech bubble over a world avatar (from a `worldSay` server message). */
-export function feedSay(id: string, name: string, text: string): void {
-  controller?.feedSay(id, name, text);
+export function feedSay(id: string, name: string, text: string, say = false): void {
+  controller?.feedSay(id, name, text, say);
 }
 
 /** Mirror a chat line (from a `chat` server message) into the in-world side feed. No-op if closed. */
@@ -635,7 +635,9 @@ export function startWorld(net: WorldNet): void {
 
   // --- in-world speech bubbles (lines said via the chat box pop briefly over the avatar) ---
   const SAY_MS = 5000;                                 // how long a speech bubble lingers
-  const says = new Map<string, { text: string; until: number }>(); // avatar id → its current bubble
+  const SAY_COLOR = '#c9a8ff';                         // purple, for lines spoken via the "Say" popup (Y)
+  const CHAT_COLOR = '#ffeb3b';                         // yellow, for lines sent through the chat (T)
+  const says = new Map<string, { text: string; until: number; purple: boolean }>(); // avatar id → its current bubble
 
   // --- NPC state ---
   const npcs: LiveNpc[] = [];          // populated in create()
@@ -835,9 +837,9 @@ export function startWorld(net: WorldNet): void {
         // Slash commands (e.g. /whisper) are private/functional — never pop a public speech bubble.
         if (!text.startsWith('/')) {
           const said = text.slice(0, WORLD_SAY_MAX);
-          net.say(said);                       // → speech bubble over your avatar for everyone in-world
+          net.say(said, false);                // → yellow speech bubble over your avatar (chat line)
           // Optimistic local echo so your own bubble pops instantly (the server also echoes it back).
-          says.set(net.selfId(), { text: said, until: performance.now() + SAY_MS });
+          says.set(net.selfId(), { text: said, until: performance.now() + SAY_MS, purple: false });
         }
       }
       closeChat();
@@ -883,8 +885,8 @@ export function startWorld(net: WorldNet): void {
       const text = sayBox.value.trim();
       if (text) {
         const said = text.slice(0, WORLD_SAY_MAX);
-        net.say(said);                          // bubble only — not added to the chat feed
-        says.set(net.selfId(), { text: said, until: performance.now() + SAY_MS }); // instant local echo
+        net.say(said, true);                    // purple bubble only — not added to the chat feed
+        says.set(net.selfId(), { text: said, until: performance.now() + SAY_MS, purple: true }); // instant local echo
       }
       closeSay();
     } else if (e.key === 'Escape') {
@@ -3339,6 +3341,7 @@ export function startWorld(net: WorldNet): void {
       const changed = av.bubble.text !== s.text;
       if (changed) av.bubble.setText(s.text);
       if (changed || !av.bubble.visible) {
+        av.bubble.setColor(s.purple ? SAY_COLOR : CHAT_COLOR); // purple for /Say (Y), yellow for chat (T)
         av.bubble.setVisible(true);
         drawBubbleBg(av);          // re-fit the pill whenever the text (and thus its size) changes
         av.bubbleBg.setVisible(true);
@@ -3480,10 +3483,10 @@ export function startWorld(net: WorldNet): void {
       myBankCap = bankCap;
       refreshParcels();
     },
-    feedSay(id, _name, text) {
+    feedSay(id, _name, text, say) {
       const now = performance.now();
       for (const [k, v] of says) if (v.until <= now) says.delete(k); // drop stale lines (e.g. speakers who left)
-      says.set(id, { text, until: now + SAY_MS });
+      says.set(id, { text, until: now + SAY_MS, purple: say });
     },
     feedChat(line) { pushChatLine(line); },
     reenter() { net.enter(); net.landReq(); },

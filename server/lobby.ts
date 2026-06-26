@@ -1422,12 +1422,12 @@ export class Lobby {
 
   /** A player pressed '/' in the World and said a line — fan it out to everyone in the world as a
    *  transient speech bubble over their avatar. Must be in the world + joined; sanitized + capped. */
-  worldChat(ws: WebSocket, text: string) {
+  worldChat(ws: WebSocket, text: string, say = false) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !this.world.has(ws)) return;
     const clean = text.replace(/\s+/g, ' ').trim().slice(0, WORLD_SAY_MAX);
     if (!clean) return;
-    const data = JSON.stringify({ type: 'worldSay', id: conn.id, name: conn.nickname, text: clean });
+    const data = JSON.stringify({ type: 'worldSay', id: conn.id, name: conn.nickname, text: clean, say });
     for (const sock of this.world.sockets()) if (sock.readyState === sock.OPEN) sock.send(data);
   }
 

@@ -402,7 +402,7 @@ wss.on('connection', (ws: WebSocket, req) => {
         }
         break;
       case 'worldChat':
-        if (typeof msg.text === 'string') lobby.worldChat(ws, msg.text);
+        if (typeof msg.text === 'string') lobby.worldChat(ws, msg.text, msg.say === true);
         break;
       case 'landReq':
         lobby.sendLand(ws);
