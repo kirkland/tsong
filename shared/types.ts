@@ -465,8 +465,9 @@ export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potion?: b
 // from the tier's range (it never trusts a client-sent number) after checking the tier is legal here.
 export const DUNGEON_TIER_COINS: Record<number, readonly [number, number]> = {
   1: [35, 75],    // Cave Bat, Crypt Slime
-  2: [70, 140],   // Bone Rattler, Grave Wisp
-  3: [140, 260],  // Stone Gargoyle, Cursed Wraith
+  2: [70, 140],   // Cursed Jsav (5 lives), The Warden (big paddle)
+  3: [140, 260],  // Bone Rattler, Grave Wisp
+  4: [260, 460],  // Stone Gargoyle, Cursed Wraith
 };
 // Which mob tiers may legitimately appear on each floor = the floor's own NEW tier + the one above it
 // (carried down). The server uses this to reject a tampered win that claims a tier you couldn't fight.

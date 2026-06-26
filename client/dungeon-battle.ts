@@ -16,6 +16,8 @@ export interface MobDef {
   bot: { react: number; error: number; predict: boolean; idleCenter: boolean };
   gimmick: { name: string; desc: string }; // shown in its profile (mechanics come on deeper floors)
   flavor: string; tag: string;             // a one-line bestiary blurb shown on appearance
+  lives?: number;                          // points you must score to kill it (default 3; Cursed Jsav = 5)
+  bigPaddle?: boolean;                     // permanently oversized paddle (the grow power-up, baked in)
 }
 
 // Roster, grouped two-per-tier. A floor introduces 2 NEW mobs (its tier) and carries the 2 from the
@@ -33,10 +35,24 @@ export const DUNGEON_MOBS: MobDef[] = [
     gimmick: { name: 'Ooze', desc: 'Slow and sluggish — lazy on the return.' },
     flavor: '…bloop.', tag: 'It seeps along the wall, in no hurry to lose.',
   },
-  { id: 'rattler', name: 'Bone Rattler', portrait: '💀', power: 6, color: '#cdbfa0', tier: 2, bob: 'float', bot: { react: 0.24, error: 70, predict: false, idleCenter: true }, gimmick: { name: 'Rib Toss', desc: 'rattling bones' }, flavor: 'rattle… rattle…', tag: 'Clattering bones held together by spite.' },
-  { id: 'wisp', name: 'Grave Wisp', portrait: '🔵', power: 7, color: '#4aa6c0', tier: 2, bob: 'float', bot: { react: 0.20, error: 55, predict: true, idleCenter: true }, gimmick: { name: 'Gloom', desc: 'fogs your view' }, flavor: '…', tag: 'A cold light that drifts where the dead lie.' },
-  { id: 'gargoyle', name: 'Stone Gargoyle', portrait: '🗿', power: 9, color: '#8a8474', tier: 3, bob: 'float', bot: { react: 0.16, error: 40, predict: true, idleCenter: false }, gimmick: { name: 'Petrify', desc: 'stone wall' }, flavor: '*grinds awake*', tag: 'It was a statue a moment ago. Wasn’t it?' },
-  { id: 'wraith', name: 'Cursed Wraith', portrait: '👻', power: 10, color: '#b58fd6', tier: 3, bob: 'float', bot: { react: 0.14, error: 30, predict: true, idleCenter: true }, gimmick: { name: 'Hex', desc: 'inverts you' }, flavor: 'your fate is sealed.', tag: 'It remembers every soul it has taken.' },
+  // --- B2 (tier 2): the floor turns to horror. Cursed Jsav won't stay down; The Warden walls the goal. ---
+  {
+    id: 'jsav', name: 'Cursed Jsav', portrait: '🫠', power: 7, color: '#7a8a6a', tier: 2, bob: 'float',
+    bot: { react: 0.21, error: 58, predict: true, idleCenter: true }, lives: 5,
+    gimmick: { name: 'Five Lives', desc: "Won't stay down — takes FIVE to put away." },
+    flavor: 'you remember me…?', tag: 'A face you knew, dredged up wrong from the dark.',
+  },
+  {
+    id: 'warden', name: 'The Warden', portrait: '🫥', power: 8, color: '#2e3a36', tier: 2, bob: 'float',
+    bot: { react: 0.18, error: 48, predict: true, idleCenter: true }, bigPaddle: true,
+    gimmick: { name: 'Looming', desc: 'Its bulk fills the goal — a paddle twice your size.' },
+    flavor: '…', tag: 'A tall, patient thing that has waited here a very long time.',
+  },
+  // --- deeper floors (tier 3/4), not yet placed on a floor ---
+  { id: 'rattler', name: 'Bone Rattler', portrait: '💀', power: 9, color: '#cdbfa0', tier: 3, bob: 'float', bot: { react: 0.24, error: 70, predict: false, idleCenter: true }, gimmick: { name: 'Rib Toss', desc: 'rattling bones' }, flavor: 'rattle… rattle…', tag: 'Clattering bones held together by spite.' },
+  { id: 'wisp', name: 'Grave Wisp', portrait: '🔵', power: 10, color: '#4aa6c0', tier: 3, bob: 'float', bot: { react: 0.20, error: 55, predict: true, idleCenter: true }, gimmick: { name: 'Gloom', desc: 'fogs your view' }, flavor: '…', tag: 'A cold light that drifts where the dead lie.' },
+  { id: 'gargoyle', name: 'Stone Gargoyle', portrait: '🗿', power: 12, color: '#8a8474', tier: 4, bob: 'float', bot: { react: 0.16, error: 40, predict: true, idleCenter: false }, gimmick: { name: 'Petrify', desc: 'stone wall' }, flavor: '*grinds awake*', tag: 'It was a statue a moment ago. Wasn’t it?' },
+  { id: 'wraith', name: 'Cursed Wraith', portrait: '👻', power: 13, color: '#b58fd6', tier: 4, bob: 'float', bot: { react: 0.14, error: 30, predict: true, idleCenter: true }, gimmick: { name: 'Hex', desc: 'inverts you' }, flavor: 'your fate is sealed.', tag: 'It remembers every soul it has taken.' },
 ];
 
 // ── hand-drawn pixel creatures (per mob id). Built once into offscreen canvases, blitted in the
@@ -59,7 +75,7 @@ const MOB_SPRITES: Record<string, { w: number; h: number; rects: SRect[] }> = {
 // Generated creature art (magenta-keyed PNGs in /dungeon). Preloaded; falls back to the pixel
 // sprite then the emoji until/if an image is present.
 const MOB_IMG: Record<string, HTMLImageElement> = {};
-for (const [id, src] of Object.entries({ bat: '/dungeon/mob_bat.png', slime: '/dungeon/mob_slime.png' })) {
+for (const [id, src] of Object.entries({ bat: '/dungeon/mob_bat.png', slime: '/dungeon/mob_slime.png', jsav: '/dungeon/mob_jsav.png', warden: '/dungeon/mob_warden.png' })) {
   const im = new Image(); im.src = src; MOB_IMG[id] = im;
 }
 function mobImage(id: string): HTMLImageElement | null {
@@ -169,6 +185,9 @@ export function startEncounter(opts: EncounterOpts): void {
   game.addPlayer('left', 'me');
   game.addPlayer('right', mob.id);
   game.start();
+  // A "big paddle" mob has the grow power-up baked in permanently (growHits never reaches 0).
+  if (mob.bigPaddle) game.growHits.right = Infinity;
+  const mobLives = mob.lives ?? 3; // points you must put past it to kill it
 
   // player input → target Y (pointer drag / W-S). Stored in court coords.
   let inputY = COURT.h / 2;
@@ -313,7 +332,7 @@ export function startEncounter(opts: EncounterOpts): void {
     ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 10); ctx.fill(); ctx.stroke();
     ctx.font = '30px serif'; ctx.fillText(mob.portrait, bx + 12, by + 26);
     ctx.fillStyle = '#fff'; ctx.font = 'bold 15px ui-monospace'; ctx.fillText(mob.name, bx + 54, by + 18);
-    for (let i = 0; i < 3; i++) { ctx.fillStyle = i < (3 - game.score.left) ? '#d23a3a' : '#3a2030'; ctx.beginPath(); ctx.arc(bx + 60 + i * 16, by + 38, 6, 0, 7); ctx.fill(); }
+    for (let i = 0; i < mobLives; i++) { ctx.fillStyle = i < (mobLives - game.score.left) ? '#d23a3a' : '#3a2030'; ctx.beginPath(); ctx.arc(bx + 60 + i * 15, by + 38, 6, 0, 7); ctx.fill(); }
     ctx.fillStyle = '#c9a227'; ctx.font = 'bold 11px ui-monospace'; ctx.fillText(`✦ ${mob.gimmick.name}`, bx + 12, by + 58);
     ctx.fillStyle = '#9a90b0'; ctx.font = '10px ui-monospace'; ctx.fillText(mob.gimmick.desc, bx + 12, by + 72);
     // banner top-left, fades — name then a bestiary line
@@ -401,7 +420,7 @@ export function startEncounter(opts: EncounterOpts): void {
       // 3 points kills the mob (win). The mob never wins — it just chips your run HP each point,
       // and you fight on until that HP runs out (death).
       const curHP = opts.hp - game.score.right * mob.power;
-      if (game.score.left >= 3) { phase = 'win'; phaseT = 0; resultCoins = opts.coins[0] + Math.floor(Math.random() * (opts.coins[1] - opts.coins[0] + 1)); resultItem = Math.random() < opts.itemChance ? '🧪 Potion' : null; fanfare.currentTime = 0; song.pause(); fanfare.play().catch(() => {}); }
+      if (game.score.left >= mobLives) { phase = 'win'; phaseT = 0; resultCoins = opts.coins[0] + Math.floor(Math.random() * (opts.coins[1] - opts.coins[0] + 1)); resultItem = Math.random() < opts.itemChance ? '🧪 Potion' : null; fanfare.currentTime = 0; song.pause(); fanfare.play().catch(() => {}); }
       else if (curHP <= 0) { phase = 'lose'; phaseT = 0; song.pause(); tone(160, 0.5, 'sawtooth', 0.18, 70); }
     }
 
