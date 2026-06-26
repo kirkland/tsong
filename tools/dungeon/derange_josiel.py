@@ -24,7 +24,7 @@ def blob(cx, cy, rx, ry, fn):
             d = ((x-cx)/rx)**2 + ((y-cy)/ry)**2
             if d <= 1: fn(x, y, 1-math.sqrt(d))
 
-EYES = [(0.385*W, 0.305*H), (0.64*W, 0.305*H)]
+EYES = [(0.43*W, 0.305*H), (0.685*W, 0.305*H)]
 # 2) bloodshot wild eyes — brighten the whites (wide stare), red wash, a few veins, a tiny hot pupil glint
 for ex, ey in EYES:
     blob(ex, ey, 16, 9, lambda x, y, f: px.__setitem__((x, y), (min(255, int(px[x, y][0]+85*f)), min(255, int(px[x, y][1]+55*f)), min(255, int(px[x, y][2]+45*f)))))  # bright wide sclera
