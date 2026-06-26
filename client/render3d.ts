@@ -520,19 +520,35 @@ export function createRenderer(container: HTMLElement): Renderer3D {
     return m;
   }
 
-  // Bumper pegs: five glowing orange cylinders at fixed positions. Pre-created (count is fixed).
-  const BUMPER_H = 34;
-  const bumperGeo = new THREE.CylinderGeometry(BUMPER.r, BUMPER.r * 0.85, BUMPER_H, 32);
-  const bumperMats = BUMPER_POSITIONS.map(() =>
-    new THREE.MeshStandardMaterial({ color: '#d94f00', emissive: '#ff6010', emissiveIntensity: 0.5, roughness: 0.4, metalness: 0.3 }),
+  // Bumper pegs: real pinball-style bumpers — a tapered body column + a wide glowing cap ring.
+  // The cap is wide and sits at eye level so it reads clearly in first-person view.
+  const BUMPER_BODY_H = 55;  // column height
+  const BUMPER_CAP_H  = 14;  // flat cap disk thickness
+  const BUMPER_CAP_R  = BUMPER.r * 1.45; // cap is wider than the body
+  const bodyGeo = new THREE.CylinderGeometry(BUMPER.r * 0.72, BUMPER.r, BUMPER_BODY_H, 32);
+  const capGeo  = new THREE.CylinderGeometry(BUMPER_CAP_R, BUMPER_CAP_R * 0.9, BUMPER_CAP_H, 32);
+  // Two materials per bumper (body + cap), so we can flash the cap brighter.
+  const bumperBodyMats = BUMPER_POSITIONS.map(() =>
+    new THREE.MeshStandardMaterial({ color: '#7a2800', emissive: '#c04000', emissiveIntensity: 0.4, roughness: 0.5, metalness: 0.4 }),
   );
-  const bumperMeshes = BUMPER_POSITIONS.map((bp, i) => {
-    const m = new THREE.Mesh(bumperGeo, bumperMats[i]);
-    m.castShadow = true;
-    m.position.set(wx(bp.x), BUMPER_H / 2, wz(bp.y));
-    m.visible = false;
-    world.add(m);
-    return m;
+  const bumperCapMats = BUMPER_POSITIONS.map(() =>
+    new THREE.MeshStandardMaterial({ color: '#d94f00', emissive: '#ff6010', emissiveIntensity: 0.7, roughness: 0.3, metalness: 0.5 }),
+  );
+  // Each bumper is a Group: body (column) + cap (disk on top).
+  const bumperGroups = BUMPER_POSITIONS.map((bp, i) => {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(bodyGeo, bumperBodyMats[i]);
+    body.castShadow = true;
+    body.position.y = BUMPER_BODY_H / 2;
+    const cap = new THREE.Mesh(capGeo, bumperCapMats[i]);
+    cap.castShadow = true;
+    cap.position.y = BUMPER_BODY_H + BUMPER_CAP_H / 2;
+    g.add(body);
+    g.add(cap);
+    g.position.set(wx(bp.x), 0, wz(bp.y));
+    g.visible = false;
+    world.add(g);
+    return { group: g, capMat: bumperCapMats[i], bodyMat: bumperBodyMats[i] };
   });
   const bumperHitAt3d: number[] = BUMPER_POSITIONS.map(() => -1e9);
 
@@ -773,15 +789,16 @@ export function createRenderer(container: HTMLElement): Renderer3D {
       for (const m of stuckPool) m.visible = false;
     }
 
-    // Bumper pegs — show when bumpers mode is on; flash emissive on hit.
+    // Bumper pegs — show when bumpers mode is on; flash the cap on hit.
     const now3d = performance.now();
-    bumperMeshes.forEach((m, i) => {
-      m.visible = s.bumpers;
+    bumperGroups.forEach(({ group, capMat, bodyMat }, i) => {
+      group.visible = s.bumpers;
       if (!s.bumpers) return;
       if (s.bumperFlash[i]) bumperHitAt3d[i] = now3d;
       const t = Math.max(0, 1 - (now3d - bumperHitAt3d[i]) / 220);
-      bumperMats[i].emissiveIntensity = 0.5 + t * 2.5;
-      bumperMats[i].color.set(t > 0.05 ? '#fff8e0' : '#d94f00');
+      capMat.emissiveIntensity  = 0.7 + t * 3.0;
+      capMat.color.set(t > 0.05 ? '#fff4c0' : '#d94f00');
+      bodyMat.emissiveIntensity = 0.4 + t * 1.0;
     });
 
     // Spectator-dropped blocks — slate boxes scaled to each block's footprint.
