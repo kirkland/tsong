@@ -1234,6 +1234,8 @@ export function startWorld(net: WorldNet): void {
       const r = Math.floor((wy + oy - dInt.y) / DUNGEON_TILE);
       if (dungeonBlocks(dungeonCell(c, r))) return true;
     }
+    // the imp is solid — you bump into him rather than walking through
+    if (dungeonImp && Math.hypot(wx - dungeonImp.x, wy - dungeonImp.y) < rad + DUNGEON_TILE * 0.4) return true;
     return false;
   }
   // (Re)build the ACTIVE floor's geometry. Destroys the previous floor's sprites first, so it can be
@@ -1281,9 +1283,10 @@ export function startWorld(net: WorldNet): void {
         }
       }
     }
-    // B2: a friendly imp loiters near the entrance (talk → a free potion + the potion tutorial)
+    // B2: a friendly imp loiters in the arrival room (talk → a free potion + the potion tutorial).
+    // Kept in the open room (not a 1-wide corridor) since he's solid — you walk around, not through.
     if (currentFloor === 'B2' && sc.textures.exists('w-demon')) {
-      const ic = 5, ir = 5; // an open floor tile just inside the arrival room
+      const ic = 6, ir = 6; // an open floor tile a little deeper into the arrival room
       const ix = ox + (ic + 0.5) * T, iy = oy + (ir + 0.5) * T;
       const spr = sc.add.image(ix, iy, 'w-demon').setScale(sl).setOrigin(0.5, 0.62).setDepth(base + 4);
       dungeonObjs.push(spr);
@@ -1384,30 +1387,40 @@ export function startWorld(net: WorldNet): void {
     const seq = down ? [440, 330, 247] : [247, 330, 440];
     seq.forEach((f, i) => window.setTimeout(() => tone(f, 0.09, 'triangle', 0.12, f * 0.7), i * 90));
   }
-  // The B2 imp: a 3-beat chat that hands you one potion (per run) and teaches how potions work.
-  function talkToImp() {
-    openDialog('👹 Imp', '"Whoa— whoa! Easy, friend. Hands where I can see \'em. It\'s okay… I\'m not here to fight."', [
-      { label: '…go on', onPick: impBeat2 },
-    ]);
-  }
-  function impBeat2() {
-    openDialog('👹 Imp',
-      '"You\'re not the first adventurer to come scratching through these halls. I\'ve watched plenty go down those stairs all puffed up…" — he picks something from his teeth — "…not many come back up. The Ruins get hungrier the deeper you go."', [
-      { label: 'So why help me?', onPick: impBeat3 },
-    ]);
-  }
-  function impBeat3() {
+  // The B2 imp — short, snappy chat through the world's NPC text box. Hands you one potion per run.
+  function impTalk() {
+    if (talkOpen || dialogOpen) return;
     const gave = !impGavePotion;
-    if (gave) {
-      impGavePotion = true; potionCount += 1;
-      tone(523, 0.08, 'square', 0.12, 784); window.setTimeout(() => tone(784, 0.13, 'square', 0.12, 1046), 80);
-      updateDungeonHud(); updateDungeonControls();
+    const pages = gave
+      ? ['Easy — not here to fight.', 'Plenty came through. Few came back.', 'Here — a potion. Press P. +10 HP, even mid-fight.']
+      : ['Still alive? Good.', 'P to drink. Works mid-fight. +10 HP.'];
+    talkOpen = true; keys.clear(); joyActive = false; prompt.style.display = 'none';
+    npcName.textContent = 'Imp'; npcBox.style.display = 'block'; npcChoices.style.display = 'none';
+    let pageI = 0, typing = false, timer = 0, full = '';
+    const grantIfNeeded = () => { // he hands the potion over on his last line (once per run)
+      if (gave && pageI === pages.length - 1 && !impGavePotion) {
+        impGavePotion = true; potionCount += 1;
+        tone(523, 0.08, 'square', 0.12, 784); window.setTimeout(() => tone(784, 0.13, 'square', 0.12, 1046), 80);
+        updateDungeonHud(); updateDungeonControls();
+      }
+    };
+    function showPage() {
+      const text = pages[pageI];
+      if (text === undefined) { closeTalk(); return; }
+      full = text; let shown = 0; typing = true; npcText.textContent = ''; npcHint.style.display = 'none';
+      timer = window.setInterval(() => {
+        shown++; npcText.textContent = full.slice(0, shown);
+        if (shown % 2 === 0) textBlip();
+        if (shown >= full.length) { window.clearInterval(timer); typing = false; npcHint.style.display = 'block'; grantIfNeeded(); }
+      }, 30);
     }
-    openDialog('👹 Imp', gave
-      ? '"Bored, mostly. And I like a long shot." He flicks you a 🧪 potion. "Hit P to chug it — restores +10 HP. And listen: you can slam it MID-FIGHT, right in the middle of a rally. Don\'t be a hero with a sliver of health left. …Now go on. Try not to die. It\'s rude."'
-      : '"I already gave you one — quit milking me." He waves a clawed hand. "P to drink. Works mid-fight too. +10 HP. Use your head and maybe you\'ll see the surface again."', [
-      { label: gave ? 'Thanks, imp.' : 'Got it.', onPick: () => closeDialog() },
-    ]);
+    npcAdvance = () => {
+      if (typing) { window.clearInterval(timer); typing = false; npcText.textContent = full; npcHint.style.display = 'block'; grantIfNeeded(); return; }
+      pageI++; if (pageI >= pages.length) closeTalk(); else showPage();
+    };
+    function closeTalk() { window.clearInterval(timer); talkOpen = false; npcAdvance = null; npcClose = null; npcBox.style.display = 'none'; npcChoices.style.display = 'none'; }
+    npcClose = closeTalk;
+    showPage();
   }
   // a heavy, immovable lock: a dull iron thunk then a dead rattle (it does NOT give)
   function lockedSound() {
@@ -1736,7 +1749,7 @@ export function startWorld(net: WorldNet): void {
     if (nearStairs) { changeFloor(nearStairs.to, nearStairs.dir === 'down' ? '<' : '>'); return; }
     if (nearChestCell) { openChest(nearChestCell.c, nearChestCell.r); return; }
     if (nearLockedDoor) { tryLockedDoor(); return; }
-    if (nearDungeonImp) { talkToImp(); return; }
+    if (nearDungeonImp) { impTalk(); return; }
     if (nearJailed) { net.bail(nearJailed.id); return; } // post their bail
     const b = WORLD_BUILDINGS.find((x) => x.id === nearId);
     if (b) enterBuilding(b.kind);
