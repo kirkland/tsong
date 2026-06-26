@@ -7,7 +7,7 @@
 // win = fanfare + payout, lose = you took damage. Damage = points the mob scored × mob.power.
 
 import { Game } from '../server/game';
-import { COURT, PADDLE } from '../shared/types';
+import { COURT, PADDLE, ROAM } from '../shared/types';
 
 export interface MobDef {
   id: string; name: string; portrait: string; power: number; color: string;
@@ -18,6 +18,7 @@ export interface MobDef {
   flavor: string; tag: string;             // a one-line bestiary blurb shown on appearance
   lives?: number;                          // points you must score to kill it (default 3; Cursed Jsav = 4)
   paddleScale?: number;                    // permanent paddle-size multiplier (The Warden = 2.25×)
+  roam?: boolean;                          // permanently has the "roam" power-up — paddle hunts off its wall (Demon Fritz)
 }
 
 // Roster, grouped two-per-tier. A floor introduces 2 NEW mobs (its tier) and carries the 2 from the
@@ -48,11 +49,18 @@ export const DUNGEON_MOBS: MobDef[] = [
     gimmick: { name: 'Looming', desc: 'Its bulk fills the goal — a paddle twice your size.' },
     flavor: '…', tag: 'A tall, patient thing that has waited here a very long time.',
   },
-  // --- deeper floors (tier 3/4), not yet placed on a floor ---
-  { id: 'rattler', name: 'Bone Rattler', portrait: '💀', power: 9, color: '#cdbfa0', tier: 3, bob: 'float', bot: { react: 0.24, error: 70, predict: false, idleCenter: true }, gimmick: { name: 'Rib Toss', desc: 'rattling bones' }, flavor: 'rattle… rattle…', tag: 'Clattering bones held together by spite.' },
-  { id: 'wisp', name: 'Grave Wisp', portrait: '🔵', power: 10, color: '#4aa6c0', tier: 3, bob: 'float', bot: { react: 0.20, error: 55, predict: true, idleCenter: true }, gimmick: { name: 'Gloom', desc: 'fogs your view' }, flavor: '…', tag: 'A cold light that drifts where the dead lie.' },
-  { id: 'gargoyle', name: 'Stone Gargoyle', portrait: '🗿', power: 12, color: '#8a8474', tier: 4, bob: 'float', bot: { react: 0.16, error: 40, predict: true, idleCenter: false }, gimmick: { name: 'Petrify', desc: 'stone wall' }, flavor: '*grinds awake*', tag: 'It was a statue a moment ago. Wasn’t it?' },
-  { id: 'wraith', name: 'Cursed Wraith', portrait: '👻', power: 13, color: '#b58fd6', tier: 4, bob: 'float', bot: { react: 0.14, error: 30, predict: true, idleCenter: true }, gimmick: { name: 'Hex', desc: 'inverts you' }, flavor: 'your fate is sealed.', tag: 'It remembers every soul it has taken.' },
+  // --- B3 (tier 3): deeper, bloodier. Demon Fritz hunts off his wall (roam); second mob TBD. ---
+  {
+    id: 'fritz', name: 'Demon Fritz', portrait: '😈', power: 10, color: '#b23026', tier: 3, bob: 'float',
+    bot: { react: 0.23, error: 64, predict: false, idleCenter: false }, roam: true,
+    gimmick: { name: 'Roam', desc: 'Pushes off his wall to hunt the ball down.' },
+    flavor: 'heh. you look lost.', tag: 'Something wearing a friend’s face, and grinning about it.',
+  },
+  // --- deeper floors (tier 4/5), not yet placed on a floor ---
+  { id: 'rattler', name: 'Bone Rattler', portrait: '💀', power: 11, color: '#cdbfa0', tier: 4, bob: 'float', bot: { react: 0.22, error: 64, predict: false, idleCenter: true }, gimmick: { name: 'Rib Toss', desc: 'rattling bones' }, flavor: 'rattle… rattle…', tag: 'Clattering bones held together by spite.' },
+  { id: 'wisp', name: 'Grave Wisp', portrait: '🔵', power: 12, color: '#4aa6c0', tier: 4, bob: 'float', bot: { react: 0.20, error: 55, predict: true, idleCenter: true }, gimmick: { name: 'Gloom', desc: 'fogs your view' }, flavor: '…', tag: 'A cold light that drifts where the dead lie.' },
+  { id: 'gargoyle', name: 'Stone Gargoyle', portrait: '🗿', power: 13, color: '#8a8474', tier: 5, bob: 'float', bot: { react: 0.16, error: 40, predict: true, idleCenter: false }, gimmick: { name: 'Petrify', desc: 'stone wall' }, flavor: '*grinds awake*', tag: 'It was a statue a moment ago. Wasn’t it?' },
+  { id: 'wraith', name: 'Cursed Wraith', portrait: '👻', power: 14, color: '#b58fd6', tier: 5, bob: 'float', bot: { react: 0.14, error: 30, predict: true, idleCenter: true }, gimmick: { name: 'Hex', desc: 'inverts you' }, flavor: 'your fate is sealed.', tag: 'It remembers every soul it has taken.' },
 ];
 
 // ── hand-drawn pixel creatures (per mob id). Built once into offscreen canvases, blitted in the
@@ -75,7 +83,7 @@ const MOB_SPRITES: Record<string, { w: number; h: number; rects: SRect[] }> = {
 // Generated creature art (magenta-keyed PNGs in /dungeon). Preloaded; falls back to the pixel
 // sprite then the emoji until/if an image is present.
 const MOB_IMG: Record<string, HTMLImageElement> = {};
-for (const [id, src] of Object.entries({ bat: '/dungeon/mob_bat.png', slime: '/dungeon/mob_slime.png', jsav: '/dungeon/mob_jsav.png', warden: '/dungeon/mob_warden.png' })) {
+for (const [id, src] of Object.entries({ bat: '/dungeon/mob_bat.png', slime: '/dungeon/mob_slime.png', jsav: '/dungeon/mob_jsav.png', warden: '/dungeon/mob_warden.png', fritz: '/dungeon/mob_fritz.png' })) {
   const im = new Image(); im.src = src; MOB_IMG[id] = im;
 }
 function mobImage(id: string): HTMLImageElement | null {
@@ -188,6 +196,7 @@ export function startEncounter(opts: EncounterOpts): void {
   game.start();
   // A "big paddle" mob gets a permanent paddle-size multiplier (survives between points).
   if (mob.paddleScale) game.paddleScale.right = mob.paddleScale;
+  if (mob.roam) game.roamHits.right = Infinity; // Demon Fritz roams permanently (never decrements to 0)
   const mobLives = mob.lives ?? 3; // points you must put past it to kill it
   const POTION_HEAL = 10; let healed = 0; // HP restored by potions drunk mid-battle
   const curHP = () => Math.max(0, Math.min(100, opts.hp - game.score.right * mob.power + healed));
@@ -242,7 +251,13 @@ export function startEncounter(opts: EncounterOpts): void {
         aiTarget = y + (Math.random() * 2 - 1) * mob.bot.error;
       }
     }
-    game.setTarget('right', mob.id, aiTarget);
+    // Roam (Demon Fritz): push the paddle off its wall to meet an incoming ball, retreat otherwise.
+    let inset = 0;
+    if (mob.roam && b.vx > 0) {
+      const prog = Math.max(0, Math.min(1, (b.x - COURT.w * 0.35) / (COURT.w * 0.6)));
+      inset = prog * ROAM.maxInset * 0.85; // closer ball → further off the wall
+    }
+    game.setTarget('right', mob.id, aiTarget, inset);
   }
 
   // ── phases: transition → fight → result ──
@@ -295,7 +310,9 @@ export function startEncounter(opts: EncounterOpts): void {
     const drawPaddle = (side: 'left' | 'right', color: string) => {
       const y = game.paddleYOf(side, side === 'left' ? 'me' : mob.id);
       if (y == null) return;
-      const half = game.halfH(side), x = side === 'left' ? PADDLE.margin : COURT.w - PADDLE.margin;
+      const half = game.halfH(side);
+      // mirror the engine's roam offset so a roaming paddle is drawn off its wall (Demon Fritz)
+      const x = side === 'left' ? PADDLE.margin + game.roamX.left : COURT.w - PADDLE.margin - game.roamX.right;
       ctx.fillStyle = color;
       ctx.fillRect(cx(x) - pw / 2, cy(y - half), pw, (2 * half / COURT.h) * court.h);
     };
