@@ -1123,16 +1123,12 @@ export class Lobby {
     this.tell(ws, { type: 'dungeonPurse', coins: 0 });
     if (escaped) {
       if (run) for (const chest of run) this.dungeonOpenedChests.add(`${conn.pid}:${chest}`); // bank the chests
-      // spin-won cosmetics actually granted now that you've escaped with them
-      let granted: Promise<unknown> = Promise.resolve();
-      if (conn.nickname) for (const it of items) granted = grantItem(conn.pid, conn.nickname, it.item).catch((e) => console.error('dungeon item grant failed:', e));
-      if (purse > 0 && conn.nickname) {
-        this.housePay(conn.pid, conn.nickname, purse)
-          .then(() => { this.sendWallet(ws); this.refreshNetWorth().catch(() => {}); })
-          .catch((e) => console.error('dungeon exit payout failed:', e));
-      } else if (items.length) {
-        granted.then(() => this.sendWallet(ws)).catch(() => {}); // refresh owned cosmetics even if no coins
-      }
+      // Pay the purse + grant every escaped-with cosmetic (spin prizes, the vault vehicle), THEN send
+      // the wallet ONCE — so the shop reflects newly-owned items (no refresh-before-grant race).
+      const grants: Promise<unknown>[] = [];
+      if (conn.nickname) for (const it of items) grants.push(grantItem(conn.pid, conn.nickname, it.item).catch((e) => console.error('dungeon item grant failed:', e)));
+      if (purse > 0 && conn.nickname) grants.push(this.housePay(conn.pid, conn.nickname, purse).then(() => this.refreshNetWorth().catch(() => {})).catch((e) => console.error('dungeon exit payout failed:', e)));
+      if (grants.length) Promise.allSettled(grants).then(() => this.sendWallet(ws));
     }
     // escaped=false: run chests/items are simply discarded above (never committed) → re-lootable next run.
   }

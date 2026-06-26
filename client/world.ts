@@ -268,6 +268,9 @@ const DUNGEON_B3 = [
 ];
 const DUNGEON_FLOORS: Record<string, string[]> = { B1: DUNGEON_B1, B2: DUNGEON_B2, B3: DUNGEON_B3 };
 const DUNGEON_TOTAL_CHESTS = Object.keys(DUNGEON_CHEST_CONTENTS).length; // for the x/y "chests found" counter
+// Locked 'L' doors → the chest they guard. A door stays open FOREVER once that chest is account-opened
+// (committed), exactly like the chest itself — no need to re-key it on later runs.
+const DUNGEON_LOCKED_DOORS: Record<string, string> = { 'B2:32,24': 'B2:34,24' };
 const DUNGEON_ORDER = ['B1', 'B2', 'B3']; // descent order; '>' goes to the next, '<' to the previous
 // Each descent gets darker + colder in THEME (not lighting — the actual stone palette). `props`
 // turns on the deeper-floor ambient decals (bones, fungus, cobwebs, drips); `gore` adds blood + claw
@@ -750,6 +753,13 @@ export function startWorld(net: WorldNet): void {
   const unlockedDoors = new Set<string>(); // 'floor:c,r' of 'L' doors opened with the key this run
   const openedChestsServer = new Set<string>(); // 'floor:col,row' the server says this account has opened
   const chestIsOpen = (c: number, r: number) => openedChestsServer.has(`${currentFloor}:${c},${r}`);
+  // a locked door is open if unlocked THIS run (with the key) OR its guarded chest is already banked
+  const doorIsOpen = (c: number, r: number) => {
+    const id = `${currentFloor}:${c},${r}`;
+    if (unlockedDoors.has(id)) return true;
+    const guarded = DUNGEON_LOCKED_DOORS[id];
+    return !!guarded && openedChestsServer.has(guarded);
+  };
   let lastGrassKey = '';    // last tall-grass cell rolled, so each new '~' tile rolls one encounter
   let grassDanger = 0;      // ramps per grass tile crossed → rising encounter odds; resets on a fight
   let recentMob = -1, recentMobRun = 0; // shuffle-bag: never the same mob more than twice in a row
@@ -1291,7 +1301,7 @@ export function startWorld(net: WorldNet): void {
       const c = Math.floor((wx + ox - dInt.x) / DUNGEON_TILE);
       const r = Math.floor((wy + oy - dInt.y) / DUNGEON_TILE);
       const ch = dungeonCell(c, r);
-      if (ch === 'L' && unlockedDoors.has(`${currentFloor}:${c},${r}`)) continue; // an opened door is passable
+      if (ch === 'L' && doorIsOpen(c, r)) continue; // an opened door is passable
       if (dungeonBlocks(ch)) return true;
     }
     // NPCs are solid — you bump into them rather than walking through
@@ -1336,7 +1346,7 @@ export function startWorld(net: WorldNet): void {
           keep(sc.add.image(wx + T / 2, wy + T / 2, 'd-stairs').setScale(sl).setOrigin(0.5).setDepth(base + 2)
             .setFlipY(ch === '<').setTint(ch === '>' ? 0xffe6b0 : 0xbfe4ff)); // down = warm, up = cool
         }
-        if (ch === 'L' && sc.textures.exists('d-lock') && !unlockedDoors.has(`${currentFloor}:${c},${r}`)) { // a sealed, barred locked door (gone once opened)
+        if (ch === 'L' && sc.textures.exists('d-lock') && !doorIsOpen(c, r)) { // a sealed, barred locked door (gone once opened)
           const ls = sc.add.image(wx + T / 2, wy + T / 2, 'd-lock').setScale(sl).setOrigin(0.5).setDepth(base + 3);
           dungeonLockSprites[`${c},${r}`] = ls; keep(ls);
         }
@@ -2287,7 +2297,7 @@ export function startWorld(net: WorldNet): void {
     if (inDungeon && !nearExit && !nearStairs && !nearChestCell) { // a sealed 'L' door within reach
       const pc = Math.floor((selfX - dInt.x) / DUNGEON_TILE), pr = Math.floor((selfY - dInt.y) / DUNGEON_TILE);
       for (const [dc, dr] of [[0, -1], [0, 1], [-1, 0], [1, 0], [0, 0]] as const)
-        if (dungeonCell(pc + dc, pr + dr) === 'L') { nearLockedDoor = { c: pc + dc, r: pr + dr }; break; }
+        if (dungeonCell(pc + dc, pr + dr) === 'L' && !doorIsOpen(pc + dc, pr + dr)) { nearLockedDoor = { c: pc + dc, r: pr + dr }; break; }
     }
     nearDungeonImp = !!(inDungeon && dungeonImp && !nearExit && !nearStairs && !nearChestCell && !nearLockedDoor
       && Math.hypot(selfX - dungeonImp.x, selfY - dungeonImp.y) < DUNGEON_TILE * 1.4);

@@ -2322,10 +2322,17 @@ function renderShop() {
     row.appendChild(name);
     const btn = document.createElement('button');
     if (!owned && item.locked) {
-      // Locked items (e.g. Davis Slayer) can't be bought — unlocked by an achievement.
-      btn.textContent = '🔒 Campaign';
+      // Locked items can't be bought — each is unlocked by a specific in-game achievement.
+      const LOCK_LABEL: Record<string, { tag: string; how: string }> = {
+        campaign: { tag: '🔒 Campaign', how: 'Clear the campaign to unlock' },
+        fishing: { tag: '🔒 Fishing', how: 'Land a legendary fish to unlock' },
+        fishing_rare: { tag: '🔒 Fishing', how: 'Land a rare-or-better fish to unlock' },
+        dungeon: { tag: '🔒 The Ruins', how: 'Loot the sealed vault in The Ruins to unlock' },
+      };
+      const lk = LOCK_LABEL[item.locked] ?? { tag: '🔒 Locked', how: 'Unlocked by an in-game achievement' };
+      btn.textContent = lk.tag;
       btn.disabled = true;
-      btn.title = 'Clear the campaign to unlock';
+      btn.title = lk.how;
     } else if (!owned) {
       btn.textContent = 'Buy';
       btn.disabled = wallet.coins < item.price;
