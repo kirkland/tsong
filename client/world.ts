@@ -2426,6 +2426,7 @@ export function startWorld(net: WorldNet): void {
     car: Phaser.GameObjects.Container;
     carBody: Phaser.GameObjects.Image;
     carRoof: Phaser.GameObjects.Image;
+    carWheels: Phaser.GameObjects.Image; // big untinted tires — only shown for the Monster Truck
     label: Phaser.GameObjects.Text;
     bubble: Phaser.GameObjects.Text;  // netizen speech bubble (hidden for humans)
     bubbleNextAt: number;             // when this bot picks its next line
@@ -2963,6 +2964,33 @@ export function startWorld(net: WorldNet): void {
     px(8, 4, 11, 6, 0xffffff);   // cabin/roof patch (tinted with the accent color)
     px(20, 6, 4, 2, 0xffffff);   // a little nose stripe
     g.generateTexture('w-car-roof', 26, 14);
+
+    // --- MONSTER TRUCK (the Ruins vault prize) — top-down, pointing +x, 34×24 texels. Three layers:
+    //     untinted knobby wheels, a tintable beefy body, a dark cab roof. ---
+    {
+      // wheels: four huge black knobby tires at the corners (NOT tinted — baked dark)
+      g.clear();
+      const TY = 0x141414, TG = 0x2e2e2e;
+      const tire = (x: number, y: number) => {
+        px(x, y, 9, 8, TY);                                   // tire
+        px(x + 1, y + 1, 1, 6, TG); px(x + 4, y + 1, 1, 6, TG); px(x + 7, y + 1, 1, 6, TG); // tread lugs
+        px(x + 2, y + 3, 5, 2, 0x4a4a4a);                     // hub
+      };
+      tire(2, 1); tire(2, 15); tire(23, 1); tire(23, 15);     // FL, RL, FR, RR
+      g.generateTexture('w-monster-body-wheels', 34, 24);
+      // body: a tall, chunky lifted truck body (white → tinted with the car's body color)
+      g.clear();
+      px(7, 5, 21, 14, 0xffffff);                              // main body slab
+      px(9, 3, 17, 18, 0xffffff);                              // a touch wider midsection
+      px(28, 8, 3, 8, 0xffffff);                               // blunt front nose
+      g.generateTexture('w-monster-body', 34, 24);
+      // cab + roll bar (tinted with the accent color — dark on the green truck)
+      g.clear();
+      px(12, 8, 9, 8, 0xffffff);                               // cab
+      px(22, 10, 2, 4, 0xffffff);                              // windshield strip
+      px(10, 7, 11, 1, 0xffffff); px(10, 16, 11, 1, 0xffffff); // roll bars
+      g.generateTexture('w-monster-roof', 34, 24);
+    }
 
     // --- Pets ---------------------------------------------------------------------------
     // Pet Rock: a grey pebble with two googly eyes (12×10 texels).
@@ -3823,9 +3851,10 @@ export function startWorld(net: WorldNet): void {
     const tint = hexToInt(color);
     const shadow = sc.add.image(0, R * 0.7, 'w-shadow').setScale(TEXEL);
     const person = sc.add.image(0, 0, 'w-avatar').setScale(TEXEL).setOrigin(0.5, 0.7).setTint(tint);
+    const carWheels = sc.add.image(0, 0, 'w-monster-body-wheels').setScale(TEXEL).setVisible(false); // monster-truck tires (under the body)
     const carBody = sc.add.image(0, 0, 'w-car-body').setScale(TEXEL);
     const carRoof = sc.add.image(0, 0, 'w-car-roof').setScale(TEXEL);
-    const car = sc.add.container(0, 0, [carBody, carRoof]).setVisible(false);
+    const car = sc.add.container(0, 0, [carWheels, carBody, carRoof]).setVisible(false);
     const label = sc.add.text(0, -R - 14, name, NAME_STYLE).setOrigin(0.5, 1);
     const bubble = sc.add.text(0, -R - 32, '', {
       fontFamily: 'system-ui, sans-serif', fontSize: '11px', color: '#ffeb3b',
@@ -3833,7 +3862,7 @@ export function startWorld(net: WorldNet): void {
       stroke: '#0b1020', strokeThickness: 2, resolution: 2,
     }).setOrigin(0.5, 1).setVisible(false);
     const c = sc.add.container(selfX, selfY, [shadow, car, person, label, bubble]);
-    return { c, person, car, carBody, carRoof, label, bubble, bubbleNextAt: 0, rx: selfX, ry: selfY, ra: 0 };
+    return { c, person, car, carBody, carRoof, carWheels, label, bubble, bubbleNextAt: 0, rx: selfX, ry: selfY, ra: 0 };
   }
 
   function placeAvatar(av: Av, x: number, y: number, a: number, drivingNow: boolean, color: string, name: string) {
@@ -3845,6 +3874,10 @@ export function startWorld(net: WorldNet): void {
     if (drivingNow) {
       av.car.setRotation(a);
       const spec = carById((others.find((o) => o.name === name)?.car) ?? net.car());
+      const monster = spec?.id === 'car-monster';
+      av.carWheels.setVisible(monster);
+      av.carBody.setTexture(monster ? 'w-monster-body' : 'w-car-body');
+      av.carRoof.setTexture(monster ? 'w-monster-roof' : 'w-car-roof');
       av.carBody.setTint(spec ? hexToInt(spec.body) : tint);
       av.carRoof.setTint(spec ? hexToInt(spec.accent) : 0xffffff);
     }
