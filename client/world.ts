@@ -1396,7 +1396,7 @@ export function startWorld(net: WorldNet): void {
     if (k === 'enter' || k === 'e' || k === ' ') {
       // Always swallow Space so the page never scrolls; interact if something's in range.
       e.preventDefault(); e.stopPropagation();
-      if (nearId || nearNpc) triggerNear();
+      if (nearId || nearNpc || nearNetizen) triggerNear();
       return;
     }
     if (MOVE_KEYS.has(k)) { keys.add(k); e.preventDefault(); e.stopPropagation(); }
