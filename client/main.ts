@@ -343,6 +343,9 @@ let lastNwSelfRow: NetWorthRow | undefined;
 let lastNwSelfRank: number | undefined;
 // Rolling buffer of recent chat lines, surfaced as a "memos" column in Work mode.
 const workChat: string[] = [];
+// Rolling buffer of recent chat lines (full objects), replayed into the in-world chat when the
+// overworld opens so the side feed's backlog is already there the moment you press T.
+const recentChat: ChatLine[] = [];
 // Active bounties, keyed by lowercased player name → pot. Drives the 🎯 badge on the boards.
 const bounties = new Map<string, number>();
 
@@ -834,6 +837,7 @@ const net = connect(
     // The server replays recent chat history on every (re)connect. Clear the log first so
     // a reconnect (which keeps the page, and thus the old lines) doesn't duplicate them.
     chatLog.replaceChildren();
+    recentChat.length = 0; // history is about to be replayed — avoid duplicating the backlog
     lastChatDate = '';
     if (myName) net.send({ type: 'join', nickname: myName, pid: myPid, color: myColor });
     // Re-assert capture state after a (re)connect so the server's view stays in sync.
@@ -1685,6 +1689,11 @@ function addChatLine(line: ChatLine) {
   chatLog.append(row);
   while (chatLog.childElementCount > 100) chatLog.firstElementChild!.remove();
   chatLog.scrollTop = chatLog.scrollHeight;
+  // Keep a rolling backlog for the in-world side chat, and mirror live lines into it if the
+  // overworld is open (no-op otherwise).
+  recentChat.push(line);
+  if (recentChat.length > 60) recentChat.shift();
+  worldMod?.feedWorldChat(line);
 }
 
 // Chat display toggles — synced as user prefs (cookie + account).
@@ -2015,6 +2024,8 @@ worldBtn.addEventListener('click', async () => {
       landUnlist: (id) => net.send({ type: 'landUnlist', id }),
       landBuy: (id) => net.send({ type: 'landBuy', id }),
       say: (text) => net.send({ type: 'worldChat', text }),
+      sendChat: (text) => net.send({ type: 'chat', text }), // → main game chat (shows in the side feed)
+      chatHistory: () => recentChat,
     });
   } catch (e) {
     console.error('World failed to load:', e);

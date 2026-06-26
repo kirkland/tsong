@@ -658,6 +658,28 @@ export class Lobby {
     if (!clean) return;
     conn.lastChatAt = now;
 
+    // --- /whisper <name> <message> (aliases /w, /dm): a private line only the sender + target see.
+    // Never broadcast or logged to history. Works from any chat box (main or the in-world feed). ---
+    const wm = clean.match(/^\/(?:whisper|w|dm)\s+(\S+)\s+(.+)$/i);
+    if (wm) {
+      const targetName = wm[1], body = wm[2].trim();
+      if (!body) return;
+      let targetWs: WebSocket | undefined;
+      let targetNick = '';
+      for (const [sock, c] of this.conns) {
+        if (c.nickname && c.nickname.toLowerCase() === targetName.toLowerCase()) { targetWs = sock; targetNick = c.nickname; break; }
+      }
+      if (!targetWs) {
+        this.tell(ws, { type: 'chat', lines: [{ from: '🔒 whisper', text: `No player named "${targetName}" is online.`, player: false, color: '#9a86c4', time: now, command: true }] });
+        return;
+      }
+      const WHISPER_COLOR = '#c9a8ff';
+      const isPlayer = conn.role !== 'observer';
+      this.tell(ws, { type: 'chat', lines: [{ from: `🔒 you → ${targetNick}`, text: body, player: isPlayer, color: WHISPER_COLOR, time: now }] });
+      if (targetWs !== ws) this.tell(targetWs, { type: 'chat', lines: [{ from: `🔒 ${conn.nickname} whispers`, text: body, player: isPlayer, color: WHISPER_COLOR, time: now }] });
+      return;
+    }
+
     const line: ChatLine = {
       from: conn.nickname,
       text: clean,
