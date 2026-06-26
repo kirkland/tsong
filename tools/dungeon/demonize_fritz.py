@@ -66,7 +66,7 @@ for y in range(S):
             shade = 1 if d < 0.62 else max(0.35, 1-(d-0.62)*1.5)
             a = 255 if d < 0.93 else int(255*(1-(d-0.93)/0.07))
             op[x, y] = (int(o[0]*shade), int(o[1]*shade), int(o[2]*shade), max(0, a))
-        elif inHorn and (g.getpixel((x, y))[0] > 120 and g.getpixel((x, y))[1] > 90):  # horn pixels
+        elif inHorn and g.getpixel((x, y))[1] > 178 and g.getpixel((x, y))[2] > 148:  # true bone (excludes red bg + pink highlights)
             op[x, y] = (o[0], o[1], o[2], 255)
         else:
             op[x, y] = (o[0], o[1], o[2], 0)
