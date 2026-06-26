@@ -342,6 +342,17 @@ export function startEncounter(opts: EncounterOpts): void {
       ctx.fillStyle = '#cdb98a'; ctx.font = 'italic 13px ui-monospace'; ctx.fillText(mob.tag, 18, 50);
       ctx.globalAlpha = 1;
     }
+    // the creature's "cry" — its flavor line floats beside it as it appears, fading with the banner
+    if (bannerAlpha > 0.02 && mob.flavor) {
+      const right = court.x + court.w, gutter = W - right, cxp = right + gutter * 0.5;
+      ctx.globalAlpha = bannerAlpha;
+      ctx.textAlign = 'center'; ctx.font = 'italic bold 16px ui-monospace';
+      const quote = `“${mob.flavor}”`, tw = ctx.measureText(quote).width, qy = court.y + 16;
+      ctx.fillStyle = '#0c0a12d0'; ctx.strokeStyle = '#5a4a6a'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.roundRect(cxp - tw / 2 - 12, qy - 16, tw + 24, 27, 9); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = '#e6d2a8'; ctx.fillText(quote, cxp, qy);
+      ctx.textAlign = 'left'; ctx.globalAlpha = 1;
+    }
     // your HP (bottom band)
     const hp = Math.max(0, opts.hp - game.score.right * mob.power);
     const hx = 18, hy = cv.height - 40, hw = 240;
