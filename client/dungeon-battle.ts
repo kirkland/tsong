@@ -141,19 +141,29 @@ export function isEncounterOpen(): boolean { return active; }
 // 4 battle themes, cycled one per encounter (1→2→3→4→1…) so every fight rotates the music.
 const BATTLE_THEMES = ['/encounter.mp3', '/encounter2.mp3', '/encounter3.mp3', '/encounter4.mp3'];
 let battleThemeIdx = 0;
+// Preload + REUSE the audio (don't `new Audio()` per encounter — that decodes the mp3 on the main
+// thread at battle start, a random hitch depending on which cycled theme was already cached).
+const THEME_AUDIO = BATTLE_THEMES.map((s) => { const a = new Audio(s); a.loop = true; a.volume = 0.6; a.preload = 'auto'; return a; });
+const FANFARE = new Audio('/victory.mp3'); FANFARE.volume = 0.85; FANFARE.preload = 'auto';
+// One shared AudioContext for the synth blips, created/resumed lazily and never closed (creating &
+// closing one per battle also hitches, and browsers cap the number of contexts).
+let sharedActx: AudioContext | null = null;
+const sharedAc = () => {
+  sharedActx ??= new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+  if (sharedActx.state === 'suspended') void sharedActx.resume();
+  return sharedActx;
+};
 
 export function startEncounter(opts: EncounterOpts): void {
   if (active) return;
   active = true;
   const { mob } = opts;
 
-  // ── audio: encounter loop + victory fanfare + a tiny synth for blips ──
-  const song = new Audio(BATTLE_THEMES[battleThemeIdx % BATTLE_THEMES.length]); song.loop = true; song.volume = 0.6;
+  // ── audio: reuse a preloaded encounter loop + victory fanfare + the shared synth ──
+  const song = THEME_AUDIO[battleThemeIdx % THEME_AUDIO.length]; song.currentTime = 0;
   battleThemeIdx++; // next encounter gets the next theme, wrapping after the 4th
-
-  const fanfare = new Audio('/victory.mp3'); fanfare.volume = 0.85;
-  let actx: AudioContext | null = null;
-  const ac = () => (actx ??= new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)());
+  const fanfare = FANFARE; fanfare.currentTime = 0;
+  const ac = sharedAc;
   const tone = (f: number, dur: number, type: OscillatorType, vol: number, slide?: number) => {
     try {
       const a = ac(), t = a.currentTime, o = a.createOscillator(), g = a.createGain();
@@ -305,7 +315,7 @@ export function startEncounter(opts: EncounterOpts): void {
     cancelAnimationFrame(raf);
     window.removeEventListener('resize', fit);
     window.removeEventListener('keydown', kd, true); window.removeEventListener('keyup', ku, true);
-    song.pause(); fanfare.pause(); try { void actx?.close(); } catch { /* ignore */ }
+    song.pause(); fanfare.pause(); // audio + context are reused across battles, not torn down
     overlay.remove();
     // net HP lost = starting HP minus where we ended up (potions healed some of it back)
     opts.onResult({ result, coins: resultCoins, item: resultItem, hpLost: opts.hp - curHP() });
