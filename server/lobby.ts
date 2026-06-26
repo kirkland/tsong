@@ -675,8 +675,8 @@ export class Lobby {
       }
       const WHISPER_COLOR = '#c9a8ff';
       const isPlayer = conn.role !== 'observer';
-      this.tell(ws, { type: 'chat', lines: [{ from: `🔒 you → ${targetNick}`, text: body, player: isPlayer, color: WHISPER_COLOR, time: now }] });
-      if (targetWs !== ws) this.tell(targetWs, { type: 'chat', lines: [{ from: `🔒 ${conn.nickname} whispers`, text: body, player: isPlayer, color: WHISPER_COLOR, time: now }] });
+      this.tell(ws, { type: 'chat', lines: [{ from: `You whispered to ${targetNick}`, text: body, player: isPlayer, color: WHISPER_COLOR, whisper: true, time: now }] });
+      if (targetWs !== ws) this.tell(targetWs, { type: 'chat', lines: [{ from: `${conn.nickname} whispered`, text: body, player: isPlayer, color: WHISPER_COLOR, whisper: true, time: now }] });
       return;
     }
 

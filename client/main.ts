@@ -1123,6 +1123,20 @@ const COMMANDS: ChatCommand[] = [
     },
   },
   {
+    name: 'whisper',
+    hint: 'Private message — /whisper <name> <message>. Only they see it.',
+    enabled: () => joined,
+    disabledHint: 'join the game first',
+    argOptions: () => knownPlayerNames(),
+    argHint: (arg) => `Whisper to ${arg} — then type your message`,
+    run: (arg) => {
+      const tokens = (arg ?? '').trim().split(/\s+/).filter(Boolean);
+      if (tokens.length < 2) return false; // need a name AND a message — keep the text visible
+      // Re-send as chat text so the server's /whisper parser routes it privately (one code path).
+      net.send({ type: 'chat', text: `/whisper ${(arg ?? '').trim()}` });
+    },
+  },
+  {
     name: 'powerup',
     hint: 'Spawn a power-up — add a name to pick one (e.g. /powerup smash)',
     enabled: () => !isPlayer() && state?.status === 'playing',
@@ -1676,11 +1690,13 @@ function addChatLine(line: ChatLine) {
   stamp.textContent = timeStr;
   const who = document.createElement('span');
   who.className = line.player ? 'chatfrom tag' : 'chatfrom';
-  who.textContent = line.player ? `${line.from} (playing)` : line.from;
+  // Whisper "from" is already a full phrase ("You whispered to Bob") — don't tack on "(playing)".
+  who.textContent = line.player && !line.whisper ? `${line.from} (playing)` : line.from;
   who.style.color = line.color;
   const body = document.createElement('span');
   body.className = line.command ? 'chattext chatcmd' : 'chattext';
   body.textContent = `: ${line.text}`;
+  if (line.whisper) body.style.color = line.color; // whole whisper line in purple
   const content = document.createElement('span');
   content.className = 'chatbody';
   content.append(who, body);

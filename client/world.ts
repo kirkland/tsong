@@ -778,12 +778,12 @@ export function startWorld(net: WorldNet): void {
       'font:600 14px system-ui,sans-serif;line-height:1.35;word-break:break-word;' +
       'text-shadow:0 1px 3px #000,0 0 5px #000,0 0 2px #000;';
     const who = document.createElement('span');
-    who.textContent = line.player ? `${line.from} (playing)` : line.from;
+    who.textContent = line.player && !line.whisper ? `${line.from} (playing)` : line.from;
     who.style.color = line.color || '#cdd8f5';
     who.style.fontWeight = '800';
     const body = document.createElement('span');
     body.textContent = `: ${line.text}`;
-    body.style.color = line.command ? '#ffd27d' : '#f3f6ff';
+    body.style.color = line.whisper ? (line.color || '#c9a8ff') : (line.command ? '#ffd27d' : '#f3f6ff');
     row.append(who, body);
     chatLines.append(row);
     while (chatLines.childElementCount > 60) chatLines.firstElementChild!.remove();
