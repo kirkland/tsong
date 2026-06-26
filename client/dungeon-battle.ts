@@ -54,13 +54,13 @@ export const DUNGEON_MOBS: MobDef[] = [
   // --- B3 (tier 3): deeper, bloodier. Demon Fritz hunts off his wall (roam); second mob TBD. ---
   {
     id: 'fritz', name: 'Demon Fritz', portrait: '😈', power: 16, color: '#b23026', tier: 3, bob: 'float',
-    bot: { react: 0.16, error: 42, predict: true, idleCenter: false }, roam: true, paddleScale: 1.5, dropChance: 0.6,
+    bot: { react: 0.16, error: 42, predict: true, idleCenter: false }, roam: true, dropChance: 0.6,
     gimmick: { name: 'Roam', desc: 'Hunts the ball off his wall — and hits like a truck.' },
     flavor: 'heh. you look lost.', tag: 'Something wearing a friend’s face, and grinning about it.',
   },
   {
     id: 'hound', name: 'The Flayed Hound', portrait: '🐺', power: 11, color: '#9a2b32', tier: 3, bob: 'float',
-    bot: { react: 0.24, error: 70, predict: false, idleCenter: false }, turbo: true,
+    bot: { react: 0.22, error: 62, predict: false, idleCenter: false }, turbo: true,
     gimmick: { name: 'Frenzy', desc: 'The ball serves fast and blurs faster with every hit.' },
     flavor: '*wet snarl*', tag: 'Skinned, starving, and far too quick. It has your scent.',
   },
