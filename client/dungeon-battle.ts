@@ -19,6 +19,7 @@ export interface MobDef {
   lives?: number;                          // points you must score to kill it (default 3; Cursed Jsav = 4)
   paddleScale?: number;                    // permanent paddle-size multiplier (The Warden = 2.25×)
   roam?: boolean;                          // permanently has the "roam" power-up — paddle hunts off its wall (Demon Fritz)
+  turbo?: boolean;                         // the ball serves fast and accelerates harder each hit (The Flayed Hound)
 }
 
 // Roster, grouped two-per-tier. A floor introduces 2 NEW mobs (its tier) and carries the 2 from the
@@ -56,6 +57,12 @@ export const DUNGEON_MOBS: MobDef[] = [
     gimmick: { name: 'Roam', desc: 'Pushes off his wall to hunt the ball down.' },
     flavor: 'heh. you look lost.', tag: 'Something wearing a friend’s face, and grinning about it.',
   },
+  {
+    id: 'hound', name: 'The Flayed Hound', portrait: '🐺', power: 9, color: '#9a2b32', tier: 3, bob: 'float',
+    bot: { react: 0.23, error: 66, predict: false, idleCenter: false }, turbo: true,
+    gimmick: { name: 'Frenzy', desc: 'The ball serves fast and blurs faster with every hit.' },
+    flavor: '*wet snarl*', tag: 'Skinned, starving, and far too quick. It has your scent.',
+  },
   // --- deeper floors (tier 4/5), not yet placed on a floor ---
   { id: 'rattler', name: 'Bone Rattler', portrait: '💀', power: 11, color: '#cdbfa0', tier: 4, bob: 'float', bot: { react: 0.22, error: 64, predict: false, idleCenter: true }, gimmick: { name: 'Rib Toss', desc: 'rattling bones' }, flavor: 'rattle… rattle…', tag: 'Clattering bones held together by spite.' },
   { id: 'wisp', name: 'Grave Wisp', portrait: '🔵', power: 12, color: '#4aa6c0', tier: 4, bob: 'float', bot: { react: 0.20, error: 55, predict: true, idleCenter: true }, gimmick: { name: 'Gloom', desc: 'fogs your view' }, flavor: '…', tag: 'A cold light that drifts where the dead lie.' },
@@ -83,7 +90,7 @@ const MOB_SPRITES: Record<string, { w: number; h: number; rects: SRect[] }> = {
 // Generated creature art (magenta-keyed PNGs in /dungeon). Preloaded; falls back to the pixel
 // sprite then the emoji until/if an image is present.
 const MOB_IMG: Record<string, HTMLImageElement> = {};
-for (const [id, src] of Object.entries({ bat: '/dungeon/mob_bat.png', slime: '/dungeon/mob_slime.png', jsav: '/dungeon/mob_jsav.png', warden: '/dungeon/mob_warden.png', fritz: '/dungeon/mob_fritz.png' })) {
+for (const [id, src] of Object.entries({ bat: '/dungeon/mob_bat.png', slime: '/dungeon/mob_slime.png', jsav: '/dungeon/mob_jsav.png', warden: '/dungeon/mob_warden.png', fritz: '/dungeon/mob_fritz.png', hound: '/dungeon/mob_hound.png' })) {
   const im = new Image(); im.src = src; MOB_IMG[id] = im;
 }
 function mobImage(id: string): HTMLImageElement | null {
@@ -197,6 +204,7 @@ export function startEncounter(opts: EncounterOpts): void {
   // A "big paddle" mob gets a permanent paddle-size multiplier (survives between points).
   if (mob.paddleScale) game.paddleScale.right = mob.paddleScale;
   if (mob.roam) game.roamHits.right = Infinity; // Demon Fritz roams permanently (never decrements to 0)
+  if (mob.turbo) game.setTurbo(true);           // The Flayed Hound: fast serve + steeper per-hit speedup
   const mobLives = mob.lives ?? 3; // points you must put past it to kill it
   const POTION_HEAL = 10; let healed = 0; // HP restored by potions drunk mid-battle
   const curHP = () => Math.max(0, Math.min(100, opts.hp - game.score.right * mob.power + healed));
