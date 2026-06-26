@@ -7,7 +7,7 @@
 // win = fanfare + payout, lose = you took damage. Damage = points the mob scored × mob.power.
 
 import { Game } from '../server/game';
-import { COURT, PADDLE, ROAM } from '../shared/types';
+import { COURT, PADDLE, ROAM, BLASTER } from '../shared/types';
 
 export interface MobDef {
   id: string; name: string; portrait: string; power: number; color: string;
@@ -20,6 +20,9 @@ export interface MobDef {
   paddleScale?: number;                    // permanent paddle-size multiplier (The Warden = 2.25×)
   roam?: boolean;                          // permanently has the "roam" power-up — paddle hunts off its wall (Demon Fritz)
   turbo?: boolean;                         // the ball serves fast and accelerates harder each hit (The Flayed Hound)
+  mirror?: boolean;                        // permanently inverts YOUR controls (Possessed Noam)
+  blaster?: boolean;                       // fires freezing blaster shots you must dodge (Deranged Josiel)
+  fireRate?: number;                       // seconds between blaster shots
   dropChance?: number;                     // 0–1 chance a win drops a potion (default 0; Demon Fritz is high)
 }
 
@@ -64,9 +67,22 @@ export const DUNGEON_MOBS: MobDef[] = [
     gimmick: { name: 'Frenzy', desc: 'The ball serves fast and blurs faster with every hit.' },
     flavor: '*wet snarl*', tag: 'Skinned, starving, and far too quick. It has your scent.',
   },
-  // --- deeper floors (tier 4/5), not yet placed on a floor ---
-  { id: 'rattler', name: 'Bone Rattler', portrait: '💀', power: 11, color: '#cdbfa0', tier: 4, bob: 'float', bot: { react: 0.22, error: 64, predict: false, idleCenter: true }, gimmick: { name: 'Rib Toss', desc: 'rattling bones' }, flavor: 'rattle… rattle…', tag: 'Clattering bones held together by spite.' },
-  { id: 'wisp', name: 'Grave Wisp', portrait: '🔵', power: 12, color: '#4aa6c0', tier: 4, bob: 'float', bot: { react: 0.20, error: 55, predict: true, idleCenter: true }, gimmick: { name: 'Gloom', desc: 'fogs your view' }, flavor: '…', tag: 'A cold light that drifts where the dead lie.' },
+  // --- B4 (tier 4): the deep. Possessed Noam flips your controls; Grave Wisp drifts the cold dark. ---
+  {
+    id: 'noam', name: 'Possessed Noam', portrait: '👁️', power: 13, color: '#5a6a5e', tier: 4, bob: 'float',
+    bot: { react: 0.15, error: 34, predict: true, idleCenter: true }, mirror: true,
+    gimmick: { name: 'Possession', desc: 'Black-eyed and grinning — it FLIPS your controls.' },
+    flavor: 'you know me… look closer.', tag: "Your friend's face, smiling. The eyes are all wrong.",
+  },
+  {
+    id: 'josiel', name: 'Deranged Josiel', portrait: '🔫', power: 11, color: '#7a8a5a', tier: 4, bob: 'float',
+    bot: { react: 0.24, error: 60, predict: false, idleCenter: true }, blaster: true, fireRate: 1.7,
+    gimmick: { name: 'Blaster', desc: 'Fires shots that FREEZE your paddle — dodge them.' },
+    flavor: 'hold still. this\'ll only sting.', tag: 'Wide-eyed, bloodshot, and far too happy to see you.',
+  },
+  // --- deeper floors (tier 5+), not yet placed on a floor ---
+  { id: 'wisp', name: 'Grave Wisp', portrait: '🔵', power: 13, color: '#4aa6c0', tier: 5, bob: 'float', bot: { react: 0.20, error: 55, predict: true, idleCenter: true }, gimmick: { name: 'Gloom', desc: 'fogs your view' }, flavor: '…', tag: 'A cold light that drifts where the dead lie.' },
+  { id: 'rattler', name: 'Bone Rattler', portrait: '💀', power: 11, color: '#cdbfa0', tier: 5, bob: 'float', bot: { react: 0.22, error: 64, predict: false, idleCenter: true }, gimmick: { name: 'Rib Toss', desc: 'rattling bones' }, flavor: 'rattle… rattle…', tag: 'Clattering bones held together by spite.' },
   { id: 'gargoyle', name: 'Stone Gargoyle', portrait: '🗿', power: 13, color: '#8a8474', tier: 5, bob: 'float', bot: { react: 0.16, error: 40, predict: true, idleCenter: false }, gimmick: { name: 'Petrify', desc: 'stone wall' }, flavor: '*grinds awake*', tag: 'It was a statue a moment ago. Wasn’t it?' },
   { id: 'wraith', name: 'Cursed Wraith', portrait: '👻', power: 14, color: '#b58fd6', tier: 5, bob: 'float', bot: { react: 0.14, error: 30, predict: true, idleCenter: true }, gimmick: { name: 'Hex', desc: 'inverts you' }, flavor: 'your fate is sealed.', tag: 'It remembers every soul it has taken.' },
 ];
@@ -104,7 +120,7 @@ function buildScaled(id: string, im: HTMLImageElement) {
   c.drawImage(im, 0, 0, cw, ch);
   MOB_SCALED[id] = cn;
 }
-for (const [id, src] of Object.entries({ bat: '/dungeon/mob_bat.png', slime: '/dungeon/mob_slime.png', jsav: '/dungeon/mob_jsav.png', warden: '/dungeon/mob_warden.png', fritz: '/dungeon/mob_fritz.png', hound: '/dungeon/mob_hound.png' })) {
+for (const [id, src] of Object.entries({ bat: '/dungeon/mob_bat.png', slime: '/dungeon/mob_slime.png', jsav: '/dungeon/mob_jsav.png', warden: '/dungeon/mob_warden.png', fritz: '/dungeon/mob_fritz.png', hound: '/dungeon/mob_hound.png', noam: '/dungeon/mob_noam.png', josiel: '/dungeon/mob_josiel.png' })) {
   const im = new Image(); MOB_IMG[id] = im;
   im.onload = () => buildScaled(id, im);
   im.src = src;
@@ -242,6 +258,9 @@ export function startEncounter(opts: EncounterOpts): void {
   if (mob.paddleScale) game.paddleScale.right = mob.paddleScale;
   if (mob.roam) game.roamHits.right = Infinity; // Demon Fritz roams permanently (never decrements to 0)
   if (mob.turbo) game.setTurbo(true);           // The Flayed Hound: fast serve + steeper per-hit speedup
+  if (mob.mirror) game.mirrorTimer.left = Infinity; // Possessed Noam: permanently invert the player's controls
+  if (mob.blaster) game.blasterAmmo.right = Infinity; // Deranged Josiel: never runs out of freezing shots
+  let fireTimer = (mob.fireRate ?? 1.6) * 1.4;      // delay the first blaster shot a touch
   const mobLives = mob.lives ?? 3; // points you must put past it to kill it
   const POTION_HEAL = 10; let healed = 0; // HP restored by potions drunk mid-battle
   const curHP = () => Math.max(0, Math.min(100, opts.hp - game.score.right * mob.power + healed));
@@ -311,6 +330,19 @@ export function startEncounter(opts: EncounterOpts): void {
       inset = prog * ROAM.maxInset * 0.5; // modest forward pressure, not a reckless lunge
     }
     game.setTarget('right', mob.id, aiTarget, inset);
+    // Blaster (Deranged Josiel): periodically fire a freezing shot aimed at the player's paddle.
+    if (mob.blaster && game.disabledTimer.left <= 0) { // don't pile shots on while you're already frozen
+      fireTimer -= dt;
+      if (fireTimer <= 0) {
+        fireTimer = mob.fireRate ?? 1.6;
+        const myY = game.paddleYOf('right', mob.id) ?? COURT.h / 2;
+        const youY = game.paddleYOf('left', 'me') ?? COURT.h / 2;
+        const dx = COURT.w - PADDLE.margin * 2;
+        const aim = Math.atan2((youY - myY) + (Math.random() - 0.5) * 90, dx); // lead the player's Y, slight spread
+        game.fire('right', aim);
+        tone(180, 0.07, 'sawtooth', 0.1, 90); // a nasty little pew
+      }
+    }
   }
 
   // ── phases: transition → fight → result ──
@@ -372,11 +404,26 @@ export function startEncounter(opts: EncounterOpts): void {
       ctx.fillStyle = color;
       ctx.fillRect(cx(x) - pw / 2, cy(y - half), pw, (2 * half / COURT.h) * court.h);
     };
-    drawPaddle('left', '#5ad1c0'); drawPaddle('right', mob.color);
+    // your paddle goes icy-blue + jitters while frozen by a blaster shot
+    const frozen = game.disabledTimer.left > 0;
+    drawPaddle('left', frozen ? '#8fdcff' : '#5ad1c0'); drawPaddle('right', mob.color);
+    // blaster projectiles — glowing orange-red orbs
+    for (const p of game.projectiles) {
+      const px = cx(p.x), py = cy(p.y), pr = Math.max(3, (BLASTER.r / COURT.w) * court.w);
+      const gr = ctx.createRadialGradient(px, py, 0, px, py, pr * 2.2);
+      gr.addColorStop(0, '#fff2c0'); gr.addColorStop(0.4, '#ff8a2a'); gr.addColorStop(1, 'rgba(255,60,20,0)');
+      ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(px, py, pr * 2.2, 0, 7); ctx.fill();
+      ctx.fillStyle = '#fff7d8'; ctx.beginPath(); ctx.arc(px, py, pr * 0.7, 0, 7); ctx.fill();
+    }
     // ball(s)
     ctx.fillStyle = '#fff';
     for (const b of [game.ball, ...game.extraBalls]) {
       ctx.beginPath(); ctx.arc(cx(b.x), cy(b.y), Math.max(3, (8 / COURT.w) * court.w), 0, 7); ctx.fill();
+    }
+    if (frozen) { // a little "FROZEN" tag by your paddle
+      const yY = game.paddleYOf('left', 'me') ?? COURT.h / 2;
+      ctx.fillStyle = '#bdeaff'; ctx.font = 'bold 13px ui-monospace'; ctx.textAlign = 'left';
+      ctx.fillText('❄ FROZEN', cx(PADDLE.margin) + 8, cy(yY));
     }
     drawCreature();
   }
