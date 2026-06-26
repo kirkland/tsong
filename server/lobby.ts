@@ -3161,6 +3161,15 @@ export class Lobby {
     // Economy Overhaul: hydrate the House treasury and seed the netizen bot traders (funded from
     // the House). Both are best-effort — without a DB they no-op cleanly.
     this.houseBalance = await getHouseBalance().catch(() => 0);
+    // One-time mint to bring total coin supply (House + wallet cash) to a clean 5M.
+    const walletCash = await getTotalCoins().catch(() => 0);
+    const currentSupply = this.houseBalance + walletCash;
+    if (currentSupply < 5_000_000) {
+      const mint = 5_000_000 - Math.floor(currentSupply);
+      await houseAdjust(mint);
+      this.houseBalance += mint;
+      console.error(`house mint: +${mint} (supply ${Math.floor(currentSupply).toLocaleString()} → 5,000,000)`);
+    }
     await this.loadFed().catch((e) => console.error('fed load failed:', e));
     await this.seedNetizens().catch((e) => console.error('netizen seed failed:', e));
     // Seed netizen world avatar positions around the centre plaza with a short staggered spawn
@@ -3446,17 +3455,20 @@ export class Lobby {
    *  announce. Coefficients are cached in memory (read on hot paths) and persisted to doom_meta. */
   private async tickFed(): Promise<void> {
     const { top5, total } = await getNetWorthConcentration();
-    const conc = total > 0 ? top5 / total : 0;
+    // Share of total economy = top 5 player net worth / (House balance + all player net worth).
+    // Measures the top 5's control of ALL coins, not just the player slice.
+    const economyTotal = this.houseBalance + total;
+    const share = economyTotal > 0 ? top5 / economyTotal : 0;
     let announced = false;
     // Concentration → tighten (raise the top wealth bracket) / ease (back to baseline).
-    if (conc > 0.5 && !this.fed.tightening) {
+    if (share > 0.40 && !this.fed.tightening) {
       this.fed.tightening = true; this.fed.wealthTaxTop = 0.15;
       await setMeta('fed_tightening', 1); await setMeta('fed_wealth_tax_cap', this.fed.wealthTaxTop);
       this.publishFedNews('tighten', Math.round(this.fed.wealthTaxTop * 100)); announced = true;
-    } else if (conc < 0.3 && this.fed.tightening) {
+    } else if (share < 0.20 && this.fed.tightening) {
       this.fed.tightening = false; this.fed.wealthTaxTop = 0.10;
       await setMeta('fed_tightening', 0); await setMeta('fed_wealth_tax_cap', this.fed.wealthTaxTop);
-      this.publishFedNews('ease', Math.round(conc * 100)); announced = true;
+      this.publishFedNews('ease', Math.round(share * 100)); announced = true;
     }
     // House liquidity → waive / restore the loan cap (emergency credit window).
     if (this.houseBalance < 10_000 && !this.fed.loanCapWaived) {
@@ -3744,6 +3756,8 @@ export class Lobby {
           ? { item: auction.item, name: auction.name, startBid: auction.startBid, highBid: auction.highBid, highName: auction.highName, endsAt: auction.endsAt }
           : null;
         const top5Pct = conc.total > 0 ? Math.round((conc.top5 / conc.total) * 1000) / 10 : 0;
+        const economyTotal = this.houseBalance + conc.total;
+        const top5ShareOfTotal = economyTotal > 0 ? Math.round((conc.top5 / economyTotal) * 1000) / 10 : 0;
         const wealthBrackets = TAX_BRACKETS.map((b) => ({
           upTo: b.upTo === Infinity ? -1 : b.upTo,
           rate: b.upTo === Infinity ? this.fed.wealthTaxTop : b.rate,
@@ -3761,6 +3775,9 @@ export class Lobby {
           trickleFund: Math.round(trickle),
           totalCoins: Math.round(totalCoins),
           top5Pct,
+          top5ShareOfTotal,
+          playerNetWorthTotal: Math.round(conc.total),
+          economyTotal: Math.round(economyTotal),
           brokerFeePct: (isMarketHours(Date.now()) ? BROKER_FEE : BROKER_FEE * 2) * 100,
           concentrationCap: STOCK_CONCENTRATION_CAP * 100,
           loanCapWaived: this.fed.loanCapWaived,

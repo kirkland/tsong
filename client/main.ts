@@ -2093,12 +2093,16 @@ function renderHouseDashboard() {
       </div>
       <div class="house-card"><h4>📊 Market State</h4>
         <div>Coins in circulation: <b>${c(s.totalCoins)}🪙</b></div>
-        <div>Top-5 concentration: <b>${s.top5Pct}%</b></div>
+        <div>Top-5 of players: <b>${s.top5Pct}%</b></div>
+        <div>Top-5 of total economy: <b>${s.top5ShareOfTotal}%</b></div>
+        <div>Player total: <b>${c(s.playerNetWorthTotal)}🪙</b></div>
+        <div>House / Player: <b>${(s.balance / s.playerNetWorthTotal).toFixed(1)}×</b></div>
+        <div>Economy total: <b>${c(s.economyTotal)}🪙</b></div>
         <div>Per-stock cap: <b>${s.concentrationCap}%</b></div>
         <div>Broker fee: <b>${s.brokerFeePct.toFixed(1)}%</b></div>
       </div>
       <div class="house-card"><h4>📈 Fed Policy</h4><div>${policy}</div>
-        <div style="color:#8aa0d8;font-size:12px;margin-top:4px">Tightens &gt;50% concentration, eases &lt;30%.</div>
+        <div style="color:#8aa0d8;font-size:12px;margin-top:4px">Tightens when top 5 hold &gt;40% of all coins, eases when &lt;20%.</div>
       </div>
       <div class="house-card"><h4>💰 Wealth Tax (daily)</h4><table class="house-tbl">${wealthRows}</table></div>
       <div class="house-card"><h4>💹 Capital Gains</h4><table class="house-tbl">${gainRows}</table></div>

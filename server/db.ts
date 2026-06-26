@@ -962,11 +962,11 @@ export async function stampActivity(pid: string): Promise<void> {
   await pool.query(`UPDATE players SET last_played = $2 WHERE id = $1`, [pid, Date.now()]);
 }
 
-/** Top-5 net-worth concentration: the sum of the five richest net worths and the total across all
- *  positive net worths. The Fed tightens when top5/total climbs and eases when it falls. */
-export async function getNetWorthConcentration(): Promise<{ top5: number; total: number }> {
-  if (!pool) return { top5: 0, total: 0 };
-  const { rows } = await pool.query<{ top5: string; total: string }>(
+/** Top-5 net-worth concentration: the sum of the five richest net worths, the total across all
+ *  positive net worths, and the count of positive-net players. */
+export async function getNetWorthConcentration(): Promise<{ top5: number; total: number; count: number }> {
+  if (!pool) return { top5: 0, total: 0, count: 0 };
+  const { rows } = await pool.query<{ top5: string; total: string; count: string }>(
     `WITH nw AS (
        SELECT p.coins + COALESCE(h.val, 0) - COALESCE(l.owed, 0) AS net
          FROM players p
@@ -977,9 +977,10 @@ export async function getNetWorthConcentration(): Promise<{ top5: number; total:
          LEFT JOIN loans l ON l.pid = p.id
      )
      SELECT (SELECT COALESCE(SUM(net),0) FROM nw WHERE net > 0) AS total,
-            (SELECT COALESCE(SUM(net),0) FROM (SELECT net FROM nw WHERE net > 0 ORDER BY net DESC LIMIT 5) t) AS top5`,
+            (SELECT COALESCE(SUM(net),0) FROM (SELECT net FROM nw WHERE net > 0 ORDER BY net DESC LIMIT 5) t) AS top5,
+            (SELECT COUNT(*) FROM nw WHERE net > 0) AS count`,
   );
-  return { top5: Number(rows[0]?.top5 ?? 0), total: Number(rows[0]?.total ?? 0) };
+  return { top5: Number(rows[0]?.top5 ?? 0), total: Number(rows[0]?.total ?? 0), count: Number(rows[0]?.count ?? 0) };
 }
 
 /** Players active since `sinceMs` (last_played) — the recipients of Fed stimulus checks. */

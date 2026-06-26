@@ -121,16 +121,34 @@ export function registerReadTools(server: McpServer, ctx: McpContext) {
 
   server.tool(
     'get_house',
-    'House treasury balance. Surfaces payout-throttle warning when low.',
+    'Full House/Fed dashboard: treasury balance, economy totals, concentration, Fed policy, tax brackets, bonds, auctions, FED news.',
     {},
-    () => {
+    async () => {
       const err = requireVerified(ctx);
       if (err) return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: err }) }], isError: true };
-      const h = ctx.conn.getState().house;
-      if (!h) return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: 'house not loaded' }) }] };
+      ctx.conn.send({ type: 'houseReq' });
+      const s = await ctx.conn.awaitMsg('houseState');
       return { content: [{ type: 'text', text: JSON.stringify({
-        balance: h.balance,
-        low: h.balance < 10000,
+        balance: s.balance,
+        low: s.balance < 10000,
+        trickleFund: s.trickleFund,
+        totalCoins: s.totalCoins,
+        top5Pct: s.top5Pct,
+        top5ShareOfTotal: s.top5ShareOfTotal,
+        playerNetWorthTotal: s.playerNetWorthTotal,
+        economyTotal: s.economyTotal,
+        loanCapWaived: s.loanCapWaived,
+        tightening: s.tightening,
+        brokerFeePct: s.brokerFeePct,
+        concentrationCap: s.concentrationCap,
+        wealthBrackets: s.wealthBrackets,
+        capGainBrackets: s.capGainBrackets,
+        fastSell: s.fastSell,
+        idleTiers: s.idleTiers,
+        fedNews: s.fedNews,
+        bondRates: s.bondRates,
+        myBonds: s.myBonds,
+        auction: s.auction,
       }, null, 2) }] };
     },
   );
@@ -231,7 +249,7 @@ export function registerReadTools(server: McpServer, ctx: McpContext) {
         })),
         coins: w?.coins ?? 0,
         netWorth: nw?.selfRow ? { net: nw.selfRow.net, rank: nw.selfRank, gapToFirst: nw.rows.length > 0 ? nw.rows[0].net - nw.selfRow.net : null } : null,
-        house: h ? { balance: h.balance, low: h.balance < 10000 } : null,
+        house: h ? { balance: h.balance, low: h.balance < 10000, note: 'call get_house for full dashboard' } : null,
         stability: st?.stability ?? null,
         news: (news?.items ?? []).slice(0, 5),
         nextUpdateAt: st?.nextUpdateAt ?? null,
