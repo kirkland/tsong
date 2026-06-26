@@ -180,6 +180,14 @@ export function startEncounter(opts: EncounterOpts): void {
   const cv = document.createElement('canvas');
   cv.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;image-rendering:pixelated;touch-action:none;';
   overlay.appendChild(cv);
+  // "click to capture the mouse" hint (pointer-lock), like the main game / campaign
+  const capturePrompt = document.createElement('div');
+  capturePrompt.textContent = '🖱️ Click to capture the mouse';
+  capturePrompt.style.cssText =
+    'position:absolute;left:50%;bottom:54px;transform:translateX(-50%);z-index:2;pointer-events:none;display:none;' +
+    'background:#0c1330d8;border:1px solid #4a64a0;border-radius:10px;padding:8px 16px;color:#cfe0ff;' +
+    'font:700 14px ui-monospace,monospace;text-shadow:0 1px 3px #000a;';
+  overlay.appendChild(capturePrompt);
   document.body.appendChild(overlay);
   const ctx = cv.getContext('2d')!;
   // Static ruins backdrop is rendered ONCE to an offscreen canvas (rebuilt on resize) and blitted
@@ -262,10 +270,17 @@ export function startEncounter(opts: EncounterOpts): void {
   const onPointer = (e: PointerEvent) => {
     if (!court.h) return;
     const yScale = cv.height / Math.max(1, overlay.clientHeight); // client px → canvas px
-    inputY = ((e.clientY * yScale - court.y) / court.h) * COURT.h;
+    if (document.pointerLockElement === cv) { // captured: relative mouse movement drives the paddle
+      inputY = Math.max(0, Math.min(COURT.h, inputY + (e.movementY * yScale / court.h) * COURT.h));
+    } else { // not captured: the paddle follows the absolute cursor position
+      inputY = ((e.clientY * yScale - court.y) / court.h) * COURT.h;
+    }
   };
   cv.addEventListener('pointermove', onPointer);
   cv.addEventListener('pointerdown', onPointer);
+  // click to capture the mouse (pointer-lock) during the fight; on the result screen a click advances
+  const onLockChange = () => { if (document.pointerLockElement !== cv) { /* re-prompt shown by frame() */ } };
+  document.addEventListener('pointerlockchange', onLockChange);
 
   // ── AI: re-aim every `react` seconds toward the ball Y (+ error), optionally predicting the
   //    wall-bounced landing; drift to centre when the ball heads away if idleCenter. ──
@@ -316,6 +331,8 @@ export function startEncounter(opts: EncounterOpts): void {
     window.removeEventListener('resize', fit);
     window.removeEventListener('keydown', kd, true); window.removeEventListener('keyup', ku, true);
     window.removeEventListener('keydown', advKey, true); // don't leak the result-advance key listener
+    document.removeEventListener('pointerlockchange', onLockChange);
+    if (document.pointerLockElement === cv) document.exitPointerLock();
     song.pause(); fanfare.pause(); // audio + context are reused across battles, not torn down
     overlay.remove();
     // net HP lost = starting HP minus where we ended up (potions healed some of it back)
@@ -487,7 +504,11 @@ export function startEncounter(opts: EncounterOpts): void {
 
   // advance result on click / space
   const advance = () => { if (phase === 'win' || phase === 'lose') endBattle(phase === 'win' ? 'win' : 'lose'); };
-  overlay.addEventListener('click', advance);
+  const onOverlayClick = () => {
+    if (phase === 'win' || phase === 'lose') { advance(); return; }       // result screen → continue
+    if (phase === 'fight' && document.pointerLockElement !== cv) cv.requestPointerLock(); // capture the mouse
+  };
+  overlay.addEventListener('click', onOverlayClick);
   const advKey = (e: KeyboardEvent) => { if ((e.key === ' ' || e.key === 'Enter') && (phase === 'win' || phase === 'lose')) { e.preventDefault(); advance(); } };
   window.addEventListener('keydown', advKey, true);
 
@@ -524,6 +545,9 @@ export function startEncounter(opts: EncounterOpts): void {
       if (phase === 'ready' && phaseT >= 1.8) { phase = 'fight'; phaseT = 0; } // read the matchup, then serve
       if (phase === 'win' || phase === 'lose') drawResult();
     }
+    // show the "click to capture" hint only while fighting un-captured
+    const wantPrompt = phase === 'fight' && document.pointerLockElement !== cv ? 'block' : 'none';
+    if (capturePrompt.style.display !== wantPrompt) capturePrompt.style.display = wantPrompt;
 
     raf = requestAnimationFrame(frame);
   }
