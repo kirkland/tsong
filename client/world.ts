@@ -842,8 +842,8 @@ export function startWorld(net: WorldNet): void {
   // Chests-opened progress counter (top-right) — persists across runs so you know if you left loot behind.
   const dungeonChestCounter = document.createElement('div');
   dungeonChestCounter.style.cssText =
-    'position:absolute;right:14px;top:10px;display:none;pointer-events:none;z-index:3;' +
-    'background:#0c0d0acc;border:1px solid #3a3320;border-radius:8px;padding:4px 12px;' +
+    'position:absolute;right:96px;bottom:14px;display:none;pointer-events:none;z-index:4;' +
+    'background:#0c0d0acc;border:1px solid #3a3320;border-radius:8px;padding:7px 12px;' +
     'color:#cdb98a;font-size:12px;font-weight:700;letter-spacing:.5px;text-shadow:0 1px 3px #000a;';
   overlay.appendChild(dungeonChestCounter);
 
