@@ -456,9 +456,9 @@ export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potion?: b
   'B1:18,2': { coins: 200 },
   'B1:9,9': { potion: true },
   // B2 — a free wheel-spin chest, a potion, a coin chest, plus the SEALED locked-room prize (34,24).
-  'B2:24,3': { spin: true },   // a banked free spin (claim at the shop wheel) — granted on escape
-  'B2:4,11': { potion: true },
-  'B2:6,18': { coins: 120 },
+  'B2:26,3': { spin: true },   // spins the wheel in-dungeon; reward → run loot, granted on escape
+  'B2:4,13': { potion: true },
+  'B2:15,21': { coins: 120 },
   'B2:34,24': { coins: 500 },
 };
 // Encounter-win payout keyed by the MOB'S TIER [min, max], not the floor. The server picks the amount
