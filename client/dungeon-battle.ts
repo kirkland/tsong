@@ -97,6 +97,7 @@ export interface EncounterOpts {
   coins: [number, number];    // [min, max] coin payout on a win (set per floor by the caller)
   itemChance: number;         // 0–1 chance a win also drops a potion (B1 = 0; deeper floors > 0)
   introImage?: HTMLImageElement | null; // a snapshot of the world, animated into the transition
+  potions?: { count: () => number; consume: () => boolean }; // mid-battle potion use (P): heals +10 HP
   onResult: (r: { result: 'win' | 'lose' | 'flee'; coins: number; item: string | null; hpLost: number }) => void;
 }
 
@@ -188,6 +189,9 @@ export function startEncounter(opts: EncounterOpts): void {
   // A "big paddle" mob gets a permanent paddle-size multiplier (survives between points).
   if (mob.paddleScale) game.paddleScale.right = mob.paddleScale;
   const mobLives = mob.lives ?? 3; // points you must put past it to kill it
+  const POTION_HEAL = 10; let healed = 0; // HP restored by potions drunk mid-battle
+  const curHP = () => Math.max(0, Math.min(100, opts.hp - game.score.right * mob.power + healed));
+  let lowBeepAt = 0; // throttles the low-HP warning beep
 
   // player input → target Y (pointer drag / W-S). Stored in court coords.
   let inputY = COURT.h / 2;
@@ -196,7 +200,15 @@ export function startEncounter(opts: EncounterOpts): void {
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     if (k === 'w' || k === 's' || k === 'arrowup' || k === 'arrowdown') { down ? keys.add(k) : keys.delete(k); e.preventDefault(); }
     if (down && (k === 'f')) flee();
+    if (down && k === 'p') drinkPotion();
   };
+  // Drink a potion mid-battle: +10 HP, capped at 100. No-op if you have none or you're already full.
+  function drinkPotion() {
+    if (phase !== 'fight' || !opts.potions || curHP() >= 100 || opts.potions.count() <= 0) return;
+    if (!opts.potions.consume()) return;
+    healed += POTION_HEAL;
+    tone(523, 0.08, 'square', 0.12, 784); setTimeout(() => tone(784, 0.13, 'square', 0.12, 1046), 80); // heal chime
+  }
   const kd = (e: KeyboardEvent) => onKey(e, true), ku = (e: KeyboardEvent) => onKey(e, false);
   window.addEventListener('keydown', kd, true); window.addEventListener('keyup', ku, true);
   // map a screen Y to court Y using the current court rect
@@ -252,8 +264,8 @@ export function startEncounter(opts: EncounterOpts): void {
     window.removeEventListener('keydown', kd, true); window.removeEventListener('keyup', ku, true);
     song.pause(); fanfare.pause(); try { void actx?.close(); } catch { /* ignore */ }
     overlay.remove();
-    const conceded = game.score.right;
-    opts.onResult({ result, coins: resultCoins, item: resultItem, hpLost: conceded * mob.power });
+    // net HP lost = starting HP minus where we ended up (potions healed some of it back)
+    opts.onResult({ result, coins: resultCoins, item: resultItem, hpLost: opts.hp - curHP() });
   }
   function flee() { if (phase === 'fight') { resultCoins = 0; endBattle('flee'); } }
 
@@ -353,14 +365,21 @@ export function startEncounter(opts: EncounterOpts): void {
       ctx.fillStyle = '#e6d2a8'; ctx.fillText(quote, cxp, qy);
       ctx.textAlign = 'left'; ctx.globalAlpha = 1;
     }
-    // your HP (bottom band)
-    const hp = Math.max(0, opts.hp - game.score.right * mob.power);
+    // your HP (bottom band) — turns red + flashes when low (≤15%); potions shown to its right
+    const hp = curHP();
     const hx = 18, hy = cv.height - 40, hw = 240;
+    const frac = hp / 100, low = frac <= 0.15 && hp > 0;
     ctx.fillStyle = '#9a90b0'; ctx.font = '11px ui-monospace'; ctx.fillText('YOUR HP', hx, hy - 8);
-    ctx.fillStyle = '#2a1620'; ctx.strokeStyle = '#5a2530'; ctx.lineWidth = 2;
+    ctx.fillStyle = '#2a1620'; ctx.strokeStyle = low ? '#ff5a5a' : '#5a2530'; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.roundRect(hx, hy, hw, 14, 7); ctx.fill(); ctx.stroke();
-    ctx.fillStyle = '#46d06a'; const frac = hp / 100;
-    ctx.beginPath(); ctx.roundRect(hx + 1, hy + 1, (hw - 2) * frac, 12, 6); ctx.fill();
+    // bar color: green → amber → red; when low it pulses
+    const pulse = low ? 0.55 + 0.45 * Math.abs(Math.sin(performance.now() / 140)) : 1;
+    ctx.fillStyle = low ? `rgba(255,60,60,${pulse})` : frac <= 0.35 ? '#e8b23a' : '#46d06a';
+    ctx.beginPath(); ctx.roundRect(hx + 1, hy + 1, Math.max(0, (hw - 2) * frac), 12, 6); ctx.fill();
+    // potions held, to the right of the bar (drink with P, mid-battle)
+    const pc = opts.potions ? opts.potions.count() : 0;
+    ctx.fillStyle = pc > 0 ? '#cdb98a' : '#5a5266'; ctx.font = 'bold 13px ui-monospace'; ctx.textBaseline = 'middle';
+    ctx.fillText(`🧪 ×${pc}  (P)`, hx + hw + 14, hy + 7); ctx.textBaseline = 'alphabetic';
     // flee hint
     ctx.fillStyle = '#6f6688'; ctx.font = '11px ui-monospace'; ctx.textAlign = 'right';
     ctx.fillText('F to flee', W - 18, cv.height - 16); ctx.textAlign = 'left';
@@ -428,11 +447,12 @@ export function startEncounter(opts: EncounterOpts): void {
       game.tick(dt);
       if (game.score.left > beforeL || game.score.right > beforeR) tone(game.score.left > beforeL ? 660 : 200, 0.08, 'square', 0.1, game.score.left > beforeL ? 880 : 120);
       bannerAlpha = Math.max(0, 1 - Math.max(0, phaseT - 1.4) / 0.6);
-      // 3 points kills the mob (win). The mob never wins — it just chips your run HP each point,
-      // and you fight on until that HP runs out (death).
-      const curHP = opts.hp - game.score.right * mob.power;
+      // mobLives points kills the mob (win). The mob never wins — it just chips your run HP each
+      // point, and you fight on until that HP runs out (death). Potions (P) heal you mid-fight.
       if (game.score.left >= mobLives) { phase = 'win'; phaseT = 0; resultCoins = opts.coins[0] + Math.floor(Math.random() * (opts.coins[1] - opts.coins[0] + 1)); resultItem = Math.random() < opts.itemChance ? '🧪 Potion' : null; fanfare.currentTime = 0; song.pause(); fanfare.play().catch(() => {}); }
-      else if (curHP <= 0) { phase = 'lose'; phaseT = 0; song.pause(); tone(160, 0.5, 'sawtooth', 0.18, 70); }
+      else if (curHP() <= 0) { phase = 'lose'; phaseT = 0; song.pause(); tone(160, 0.5, 'sawtooth', 0.18, 70); }
+      // low-HP warning: a Pokémon-style beep every ~0.6s while you're in the red
+      if (curHP() > 0 && curHP() / 100 <= 0.15 && now - lowBeepAt > 600) { lowBeepAt = now; tone(950, 0.09, 'square', 0.09, 950); }
     }
 
     // ── draw ──
