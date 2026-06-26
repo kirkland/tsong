@@ -1012,14 +1012,32 @@ export class Lobby {
   private dungeonOpenedChests = new Set<string>(); // `${pid}:${chest}` — COMMITTED (banked on escape)
   private dungeonRunChests = new Map<string, Set<string>>(); // pid → chests opened THIS run (provisional)
   private dungeonPurse = new Map<string, number>(); // pid → run-purse coins (paid out only on a clean escape)
+  private dungeonRunItems = new Map<string, { item: string; name: string }[]>(); // pid → cosmetics won this run (granted on escape)
   private sendPurse(ws: WebSocket, pid: string) {
     this.tell(ws, { type: 'dungeonPurse', coins: this.dungeonPurse.get(pid) ?? 0 });
+  }
+  // Roll the daily-spin wheel (weighted; drops a cosmetic slot the player already completed). Returns
+  // the landed segment + the reward, WITHOUT granting anything — callers decide when to grant.
+  private rollSpin(owned: string[]): { segment: number; reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string } } {
+    const hasUnowned = (slot: 'hat' | 'skin') => COSMETICS.some((c) => c.slot === slot && !owned.includes(c.id));
+    const weights = [36, 24, 16, 11, 6, 2, 3, 2]; // index-aligned to SPIN_SEGMENTS
+    if (!hasUnowned('hat')) weights[6] = 0;
+    if (!hasUnowned('skin')) weights[7] = 0;
+    const total = weights.reduce((a, b) => a + b, 0);
+    let roll = Math.random() * total, seg = 0;
+    for (let i = 0; i < weights.length; i++) { roll -= weights[i]; if (roll < 0) { seg = i; break; } }
+    const def = SPIN_SEGMENTS[seg];
+    if (def.kind === 'coins') return { segment: seg, reward: { kind: 'coins', amount: def.value } };
+    const avail = COSMETICS.filter((c) => c.slot === def.kind && !owned.includes(c.id));
+    const item = avail[Math.floor(Math.random() * avail.length)];
+    return { segment: seg, reward: { kind: 'item', item: item.id, name: item.name } };
   }
   dungeonSync(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.pid) return;
     this.dungeonPurse.set(conn.pid, 0);        // entering the Ruins starts a fresh, empty run purse
     this.dungeonRunChests.delete(conn.pid);    // …and a fresh provisional-chest slate
+    this.dungeonRunItems.delete(conn.pid);     // …and no spin-won cosmetics yet
     const pfx = conn.pid + ':';
     const opened: string[] = [];
     for (const k of this.dungeonOpenedChests) if (k.startsWith(pfx)) opened.push(k.slice(pfx.length));
@@ -1036,11 +1054,30 @@ export class Lobby {
     if (!run) { run = new Set(); this.dungeonRunChests.set(conn.pid, run); }
     if (run.has(chest)) return;                     // already opened THIS run → no double-pay
     run.add(chest);
-    const coins = contents.coins ?? 0, potion = !!contents.potion, spin = !!contents.spin;
+    if (contents.spin) { this.dungeonSpinChest(ws, conn.pid, chest); return; } // roll the wheel in-dungeon
+    const coins = contents.coins ?? 0, potion = !!contents.potion;
     if (coins > 0) this.dungeonPurse.set(conn.pid, (this.dungeonPurse.get(conn.pid) ?? 0) + coins);
-    // a spin chest grants a banked free wheel-spin — but only on escape (committed with the chest)
-    this.tell(ws, { type: 'dungeonChestOpened', chest, coins, potion, spin });
+    this.tell(ws, { type: 'dungeonChestOpened', chest, coins, potion, spin: false });
     this.sendPurse(ws, conn.pid);
+  }
+  // A spin chest: roll the wheel server-side, drop the reward into the RUN loot (coins → purse,
+  // cosmetic → run-items), and tell the client to play the wheel landing on that segment. Like every
+  // chest it's provisional — the coins/item only bank when you escape (forfeited on death).
+  private async dungeonSpinChest(ws: WebSocket, pid: string, chest: string) {
+    try {
+      const owned = (await getWallet(pid)).owned;
+      const { segment, reward } = this.rollSpin(owned);
+      if (reward.kind === 'coins') {
+        this.dungeonPurse.set(pid, (this.dungeonPurse.get(pid) ?? 0) + reward.amount);
+      } else {
+        const list = this.dungeonRunItems.get(pid) ?? [];
+        list.push({ item: reward.item, name: reward.name });
+        this.dungeonRunItems.set(pid, list);
+      }
+      this.tell(ws, { type: 'dungeonChestOpened', chest, coins: 0, potion: false, spin: false }); // swap the sprite (no toast)
+      this.tell(ws, { type: 'dungeonSpin', chest, segment, reward });                              // play the wheel
+      this.sendPurse(ws, pid);
+    } catch (e) { console.error('dungeon spin chest failed:', e); }
   }
   dungeonWin(ws: WebSocket, floor: string, tier: number) {
     const conn = this.conns.get(ws);
@@ -1062,27 +1099,25 @@ export class Lobby {
     if (!conn || !conn.pid) return;
     const purse = this.dungeonPurse.get(conn.pid) ?? 0;
     const run = this.dungeonRunChests.get(conn.pid);
+    const items = this.dungeonRunItems.get(conn.pid) ?? [];
     this.dungeonPurse.delete(conn.pid);
     this.dungeonRunChests.delete(conn.pid);
+    this.dungeonRunItems.delete(conn.pid);
     this.tell(ws, { type: 'dungeonPurse', coins: 0 });
     if (escaped) {
+      if (run) for (const chest of run) this.dungeonOpenedChests.add(`${conn.pid}:${chest}`); // bank the chests
+      // spin-won cosmetics actually granted now that you've escaped with them
       let granted: Promise<unknown> = Promise.resolve();
-      if (run) for (const chest of run) {
-        this.dungeonOpenedChests.add(`${conn.pid}:${chest}`); // bank them
-        // a spin chest grants its banked free wheel-spin now that the loot's actually escaped with
-        if (DUNGEON_CHEST_CONTENTS[chest]?.spin && conn.nickname) {
-          granted = addBonusSpin(conn.pid, conn.nickname).catch((e) => console.error('dungeon spin grant failed:', e));
-        }
-      }
+      if (conn.nickname) for (const it of items) granted = grantItem(conn.pid, conn.nickname, it.item).catch((e) => console.error('dungeon item grant failed:', e));
       if (purse > 0 && conn.nickname) {
         this.housePay(conn.pid, conn.nickname, purse)
           .then(() => { this.sendWallet(ws); this.refreshNetWorth().catch(() => {}); })
           .catch((e) => console.error('dungeon exit payout failed:', e));
-      } else {
-        granted.then(() => this.sendWallet(ws)).catch(() => {}); // refresh banked-spins even if no coins
+      } else if (items.length) {
+        granted.then(() => this.sendWallet(ws)).catch(() => {}); // refresh owned cosmetics even if no coins
       }
     }
-    // escaped=false: run chests are simply discarded above (never committed) → re-lootable next run.
+    // escaped=false: run chests/items are simply discarded above (never committed) → re-lootable next run.
   }
 
   /** Forward an opaque DOOM payload to the co-op partner. */

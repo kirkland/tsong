@@ -1232,6 +1232,7 @@ export type ServerMsg =
   | WorldMsg
   | { type: 'dungeonChests'; opened: string[] } // chests this player has opened (reply to dungeonSync)
   | { type: 'dungeonChestOpened'; chest: string; coins: number; potion: boolean; spin?: boolean } // a chest open was accepted
+  | { type: 'dungeonSpin'; chest: string; segment: number; reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string } } // a spin chest: play the wheel, reward goes to run loot
   | { type: 'dungeonPurse'; coins: number } // current run-purse total (paid out only on a clean escape)
   | HouseMsg
   | HouseStateMsg

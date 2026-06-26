@@ -79,6 +79,7 @@ interface Controller {
   reenter(): void; // re-send worldEnter after a socket reconnect (server forgot us on drop)
   dungeonChests(opened: string[]): void;                          // server's list of chests we've opened
   chestAccepted(chest: string, coins: number, potion: boolean, spin?: boolean): void; // server accepted a chest open
+  dungeonSpinLoot(reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string }): void; // a spin chest's reward → run loot
   dungeonPurse(coins: number): void;                              // current run-purse total from the server
 }
 let controller: Controller | null = null;
@@ -106,6 +107,9 @@ export function feedDungeonChests(opened: string[]): void {
 /** The server accepted a chest open (added the coins to the run purse / granted the potion). */
 export function dungeonChestAccepted(chest: string, coins: number, potion: boolean, spin?: boolean): void {
   controller?.chestAccepted(chest, coins, potion, spin);
+}
+export function dungeonSpinLoot(reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string }): void {
+  controller?.dungeonSpinLoot(reward);
 }
 
 /** The current run-purse total (paid out only when you escape the Ruins). */
@@ -689,12 +693,16 @@ export function startWorld(net: WorldNet): void {
   };
   let dungeonHP = 100;      // run health — chipped by points a mob scores on you (0 → expelled)
   let potionCount = 0;      // 🧪 potions held this run (in-memory; reset on entry, not carried out); P drinks one for +10 HP
+  const lootItems: { item: string; name: string }[] = []; // 🎁 cosmetics won from spin chests this run (granted on escape)
   let dungeonPurseDisplay = 0; // server's run-purse total (banner display); paid out only on a clean escape
   const dungeonObjs: Phaser.GameObjects.GameObject[] = []; // every sprite for the active floor (cleared on rebuild)
   const dungeonChestSprites: Record<string, Phaser.GameObjects.Image> = {}; // 'c,r' → sprite (to swap on open)
   let nearChestCell: { c: number; r: number } | null = null; // unopened chest within reach (→ Open prompt)
   let nearStairs: { dir: 'down' | 'up'; to: string } | null = null; // a stair tile within reach (→ descend/ascend)
   let nearLockedDoor: { c: number; r: number } | null = null; // an 'L' locked door within reach (→ "needs a key")
+  let dungeonImp: { x: number; y: number } | null = null; // the friendly B2 imp's world position (talk for a potion)
+  let nearDungeonImp = false; // the imp is within talk range
+  let impGavePotion = false;  // he hands out one potion per run (no farming)
   const openedChestsServer = new Set<string>(); // 'floor:col,row' the server says this account has opened
   const chestIsOpen = (c: number, r: number) => openedChestsServer.has(`${currentFloor}:${c},${r}`);
   let lastGrassKey = '';    // last tall-grass cell rolled, so each new '~' tile rolls one encounter
@@ -801,6 +809,34 @@ export function startWorld(net: WorldNet): void {
     'background:#0c0d0acc;border:1px solid #3a3320;border-radius:8px;padding:7px 12px;' +
     'color:#cdb98a;font-size:12px;line-height:1.7;text-shadow:0 1px 3px #000a;';
   overlay.appendChild(dungeonControls);
+
+  // 🎒 Loot button (bottom-right) + a toggled panel of everything collected this run.
+  const lootBtn = document.createElement('button');
+  lootBtn.type = 'button';
+  lootBtn.textContent = '🎒 Loot';
+  lootBtn.style.cssText =
+    'position:absolute;right:14px;bottom:12px;display:none;pointer-events:auto;z-index:4;cursor:pointer;' +
+    'background:#1b1710;border:1px solid #5a4a2a;border-radius:8px;padding:8px 14px;color:#f0d8a0;' +
+    'font-size:13px;font-weight:700;text-shadow:0 1px 3px #000a;';
+  overlay.appendChild(lootBtn);
+  const lootPanel = document.createElement('div');
+  lootPanel.style.cssText =
+    'position:absolute;right:14px;bottom:52px;display:none;pointer-events:none;z-index:4;min-width:220px;max-width:300px;' +
+    'background:#0c0d0aee;border:1px solid #5a4a2a;border-radius:10px;padding:12px 14px;color:#cdb98a;' +
+    'font-size:13px;line-height:1.6;text-shadow:0 1px 3px #000a;box-shadow:0 6px 24px #000a;';
+  overlay.appendChild(lootPanel);
+  let lootOpen = false;
+  function renderLootPanel() {
+    if (!lootOpen) return;
+    const items = lootItems.length ? lootItems.map((i) => `🎁 ${i.name}`).join('<br>') : '<span style="opacity:.55">— none yet —</span>';
+    lootPanel.innerHTML =
+      '<div style="font-weight:800;color:#f0d8a0;margin-bottom:6px;border-bottom:1px solid #3a3320;padding-bottom:5px;">🎒 RUN LOOT</div>' +
+      `💰 Coins: <b>${dungeonPurseDisplay}</b>🪙<br>🧪 Potions: <b>${potionCount}</b>` +
+      `<div style="margin-top:6px;">${items}</div>` +
+      '<div style="margin-top:9px;font-size:11px;color:#8fae9b;opacity:.9;">Escape via B1 to claim it. Die or bail and you lose it all.</div>';
+  }
+  function toggleLoot() { lootOpen = !lootOpen; lootPanel.style.display = lootOpen ? 'block' : 'none'; renderLootPanel(); }
+  lootBtn.onclick = toggleLoot;
 
   // Door prompt (bottom-center). A real button so tapping works on touch; Enter/E does the same.
   const prompt = document.createElement('button');
@@ -1205,7 +1241,7 @@ export function startWorld(net: WorldNet): void {
   function buildFloor(sc: Phaser.Scene) {
     for (const o of dungeonObjs) o.destroy();
     dungeonObjs.length = 0;
-    dungeonTorches.length = 0; dungeonFlies.length = 0;
+    dungeonTorches.length = 0; dungeonFlies.length = 0; dungeonImp = null; nearDungeonImp = false;
     for (const k in dungeonChestSprites) delete dungeonChestSprites[k];
     dungeonDarkRT?.destroy(); dungeonDarkRT = null;
     const theme = DUNGEON_THEME[currentFloor] ?? DUNGEON_THEME.B1;
@@ -1244,6 +1280,14 @@ export function startWorld(net: WorldNet): void {
           dungeonChestSprites[`${c},${r}`] = spr; keep(spr);
         }
       }
+    }
+    // B2: a friendly imp loiters near the entrance (talk → a free potion + the potion tutorial)
+    if (currentFloor === 'B2' && sc.textures.exists('w-demon')) {
+      const ic = 5, ir = 5; // an open floor tile just inside the arrival room
+      const ix = ox + (ic + 0.5) * T, iy = oy + (ir + 0.5) * T;
+      const spr = sc.add.image(ix, iy, 'w-demon').setScale(sl).setOrigin(0.5, 0.62).setDepth(base + 4);
+      dungeonObjs.push(spr);
+      dungeonImp = { x: ix, y: iy };
     }
     // a few drifting fireflies (red / orange / purple) — twinkle over the darkness
     if (sc.textures.exists('d-glow')) {
@@ -1313,18 +1357,20 @@ export function startWorld(net: WorldNet): void {
     void dungeonMusic.play().catch(() => { /* autoplay may need the gesture; entry IS one */ });
     minimap.style.display = 'none'; help.style.display = 'none'; // no overworld minimap / drive hint underground
     dungeonHP = 100; lastGrassKey = ''; grassDanger = 0; potionCount = 0; // fresh run: no potions carried in
-    newMobsSeen.clear(); recentMob = -1; recentMobRun = 0;
+    newMobsSeen.clear(); recentMob = -1; recentMobRun = 0; impGavePotion = false;
+    lootItems.length = 0; lootOpen = false; lootPanel.style.display = 'none'; // fresh run loot
     openedChestsServer.clear();
     net.dungeonSync(); // ask the server which chests this account has already opened
-    dungeonBanner.style.display = 'block'; dungeonControls.style.display = 'block';
+    dungeonBanner.style.display = 'block'; dungeonControls.style.display = 'block'; lootBtn.style.display = 'block';
     updateDungeonHud(); updateDungeonControls();
   }
   function updateDungeonHud() {
     dungeonBanner.textContent = `🏚️ THE RUINS · ${currentFloor}   ·   ❤️ ${Math.round(dungeonHP)}   ·   🧪 ${potionCount}`
       + (dungeonPurseDisplay ? `   ·   💰 ${dungeonPurseDisplay}🪙 (escape to keep!)` : '');
+    renderLootPanel();
   }
   function updateDungeonControls() {
-    dungeonControls.innerHTML = `<b>WASD</b> / arrows — move &nbsp;·&nbsp; <b>P</b> — drink potion (×${potionCount})`;
+    dungeonControls.innerHTML = `<b>WASD</b> / arrows — move &nbsp;·&nbsp; <b>P</b> — drink potion (×${potionCount}) &nbsp;·&nbsp; <b>L</b> — loot`;
   }
   // synthesized chest-open: a wooden creak then an ascending gold chime
   function chestSound() {
@@ -1337,6 +1383,31 @@ export function startWorld(net: WorldNet): void {
   function stairSound(down: boolean) {
     const seq = down ? [440, 330, 247] : [247, 330, 440];
     seq.forEach((f, i) => window.setTimeout(() => tone(f, 0.09, 'triangle', 0.12, f * 0.7), i * 90));
+  }
+  // The B2 imp: a 3-beat chat that hands you one potion (per run) and teaches how potions work.
+  function talkToImp() {
+    openDialog('👹 Imp', '"Whoa— whoa! Easy, friend. Hands where I can see \'em. It\'s okay… I\'m not here to fight."', [
+      { label: '…go on', onPick: impBeat2 },
+    ]);
+  }
+  function impBeat2() {
+    openDialog('👹 Imp',
+      '"You\'re not the first adventurer to come scratching through these halls. I\'ve watched plenty go down those stairs all puffed up…" — he picks something from his teeth — "…not many come back up. The Ruins get hungrier the deeper you go."', [
+      { label: 'So why help me?', onPick: impBeat3 },
+    ]);
+  }
+  function impBeat3() {
+    const gave = !impGavePotion;
+    if (gave) {
+      impGavePotion = true; potionCount += 1;
+      tone(523, 0.08, 'square', 0.12, 784); window.setTimeout(() => tone(784, 0.13, 'square', 0.12, 1046), 80);
+      updateDungeonHud(); updateDungeonControls();
+    }
+    openDialog('👹 Imp', gave
+      ? '"Bored, mostly. And I like a long shot." He flicks you a 🧪 potion. "Hit P to chug it — restores +10 HP. And listen: you can slam it MID-FIGHT, right in the middle of a rally. Don\'t be a hero with a sliver of health left. …Now go on. Try not to die. It\'s rude."'
+      : '"I already gave you one — quit milking me." He waves a clawed hand. "P to drink. Works mid-fight too. +10 HP. Use your head and maybe you\'ll see the surface again."', [
+      { label: gave ? 'Thanks, imp.' : 'Got it.', onPick: () => closeDialog() },
+    ]);
   }
   // a heavy, immovable lock: a dull iron thunk then a dead rattle (it does NOT give)
   function lockedSound() {
@@ -1410,6 +1481,10 @@ export function startWorld(net: WorldNet): void {
         mob, hp: dungeonHP, introImage: snap,
         coins: [...(DUNGEON_TIER_COINS[mob.tier] ?? DUNGEON_TIER_COINS[1])] as [number, number], // display only — server is authoritative
         itemChance: 0,    // mobs drop only coins — potions come from chests
+        potions: { // drink a potion mid-battle (P): consumes one of the run's potions for +10 HP
+          count: () => potionCount,
+          consume: () => { if (potionCount <= 0) return false; potionCount -= 1; updateDungeonHud(); updateDungeonControls(); return true; },
+        },
         onResult: (r) => {
           if (game?.canvas) game.canvas.style.display = 'block';
           game?.loop.wake();
@@ -1441,6 +1516,7 @@ export function startWorld(net: WorldNet): void {
     dungeonMusic?.pause();
     minimap.style.display = 'block'; help.style.display = 'block'; // restore overworld HUD
     dungeonBanner.style.display = 'none'; dungeonControls.style.display = 'none';
+    lootBtn.style.display = 'none'; lootPanel.style.display = 'none'; lootOpen = false;
     const d = WORLD_BUILDINGS.find((b) => b.kind === 'dungeon');
     if (d) { selfX = d.x + d.w / 2; selfY = d.y + d.h + 44; } // step back out the doorway
     enterChime();
@@ -1660,6 +1736,7 @@ export function startWorld(net: WorldNet): void {
     if (nearStairs) { changeFloor(nearStairs.to, nearStairs.dir === 'down' ? '<' : '>'); return; }
     if (nearChestCell) { openChest(nearChestCell.c, nearChestCell.r); return; }
     if (nearLockedDoor) { tryLockedDoor(); return; }
+    if (nearDungeonImp) { talkToImp(); return; }
     if (nearJailed) { net.bail(nearJailed.id); return; } // post their bail
     const b = WORLD_BUILDINGS.find((x) => x.id === nearId);
     if (b) enterBuilding(b.kind);
@@ -1800,6 +1877,7 @@ export function startWorld(net: WorldNet): void {
     unlockAudio();
     const k = e.key.toLowerCase();
     if (inDungeon && k === 'p') { e.preventDefault(); usePotion(); return; } // drink a potion (+10 HP)
+    if (inDungeon && k === 'l') { e.preventDefault(); toggleLoot(); return; } // 🎒 toggle the run-loot panel
     if (k === 'escape') {
       e.preventDefault(); e.stopPropagation();
       if (fullMapOpen) toggleFullMap(); else if (talkOpen) npcClose?.(); else if (dialogOpen) closeDialog(); else exit();
@@ -2045,6 +2123,8 @@ export function startWorld(net: WorldNet): void {
       for (const [dc, dr] of [[0, -1], [0, 1], [-1, 0], [1, 0], [0, 0]] as const)
         if (dungeonCell(pc + dc, pr + dr) === 'L') { nearLockedDoor = { c: pc + dc, r: pr + dr }; break; }
     }
+    nearDungeonImp = !!(inDungeon && dungeonImp && !nearExit && !nearStairs && !nearChestCell && !nearLockedDoor
+      && Math.hypot(selfX - dungeonImp.x, selfY - dungeonImp.y) < DUNGEON_TILE * 1.4);
     // A jailed avatar within reach (and we're free) → offer to post their bail.
     nearJailed = null;
     if (!best && !nearNpc && !nearNetizen && !driving && !net.amJailed() && !inInterior && !inDungeon) {
@@ -2071,10 +2151,12 @@ export function startWorld(net: WorldNet): void {
       prompt.textContent = '📦 Open the chest';
     } else if (nearLockedDoor) {
       prompt.textContent = '🔒 Locked door';
+    } else if (nearDungeonImp) {
+      prompt.textContent = '💬 Talk to the Imp';
     } else if (nearJailed) {
       prompt.textContent = `🔓 Bail out ${nearJailed.name} (${BAIL_COST}🪙)`;
     }
-    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearStairs || nearChestCell || nearLockedDoor || nearJailed) && !dialogOpen && !talkOpen ? 'block' : 'none';
+    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearStairs || nearChestCell || nearLockedDoor || nearDungeonImp || nearJailed) && !dialogOpen && !talkOpen ? 'block' : 'none';
   }
 
   function maybeSendMove(now: number) {
@@ -3675,15 +3757,20 @@ export function startWorld(net: WorldNet): void {
       for (const key in dungeonChestSprites) dungeonChestSprites[key].setTexture(openedChestsServer.has(currentFloor + ':' + key) ? 'w-chest-open' : 'w-chest');
       updateNearBuilding();
     },
-    chestAccepted(chest, coins, potion, spin) {
+    chestAccepted(chest, coins, potion) {
       openedChestsServer.add(chest);
       if (chest.startsWith(currentFloor + ':')) dungeonChestSprites[chest.slice(currentFloor.length + 1)]?.setTexture('w-chest-open');
       if (potion) { potionCount += 1; showToast('📦 Found a 🧪 Potion!'); }
-      else if (spin) showToast('📦🎰 A FREE WHEEL SPIN! Escape to claim it at the shop.');
       else if (coins) showToast(`📦 ${coins}🪙 added to your purse — escape to keep it!`);
+      // spin chests (coins:0/potion:false) say nothing here — the wheel + its own toast handle it
       updateDungeonHud(); updateDungeonControls();
     },
-    dungeonPurse(coins) { dungeonPurseDisplay = coins; updateDungeonHud(); },
+    dungeonSpinLoot(reward) {
+      if (reward.kind === 'item') { lootItems.push({ item: reward.item, name: reward.name }); }
+      // coins from the spin flow in via the dungeonPurse message; just refresh the panel if open
+      renderLootPanel();
+    },
+    dungeonPurse(coins) { dungeonPurseDisplay = coins; updateDungeonHud(); renderLootPanel(); },
   };
   syncDriveBtn();
   net.enter();

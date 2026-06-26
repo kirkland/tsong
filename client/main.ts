@@ -738,6 +738,10 @@ const net = connect(
       worldMod?.feedDungeonChests(msg.opened);
     } else if (msg.type === 'dungeonChestOpened') {
       worldMod?.dungeonChestAccepted(msg.chest, msg.coins, msg.potion, msg.spin);
+    } else if (msg.type === 'dungeonSpin') {
+      // a spin chest: play the wheel right here in the dungeon; the reward drops into the run loot
+      worldMod?.dungeonSpinLoot(msg.reward); // record it for the loot panel (coins also flow via dungeonPurse)
+      celebrateSpin(msg.reward, msg.segment, { heading: '🎁 RELIC WHEEL', note: 'Escape the Ruins to claim it!' });
     } else if (msg.type === 'dungeonPurse') {
       worldMod?.feedDungeonPurse(msg.coins);
     } else if (msg.type === 'prefs') {
@@ -2418,7 +2422,7 @@ setInterval(updateSpinButton, 1000);
 
 // The spinning reel: a horizontal strip of the wheel segments that scrolls and eases to a
 // stop with the won segment under the center pointer, then reveals the prize + plays "yay".
-function celebrateSpin(reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string }, segment: number) {
+function celebrateSpin(reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string }, segment: number, opts?: { heading?: string; note?: string }) {
   const CW = 104; // card width incl. gap
   const VIS = 5;  // visible cards
   const VW = CW * VIS;
@@ -2429,7 +2433,7 @@ function celebrateSpin(reward: { kind: 'coins'; amount: number } | { kind: 'item
     'position:fixed;inset:0;z-index:10000;display:flex;flex-direction:column;align-items:center;' +
     'justify-content:center;gap:18px;background:rgba(4,6,13,0.88);';
   const heading = document.createElement('div');
-  heading.textContent = '🎰 DAILY SPIN';
+  heading.textContent = opts?.heading ?? '🎰 DAILY SPIN';
   heading.style.cssText = 'font:900 30px ui-monospace,monospace;color:#ff5cc8;text-shadow:0 2px 0 #000;';
   const viewport = document.createElement('div');
   viewport.style.cssText =
@@ -2480,6 +2484,7 @@ function celebrateSpin(reward: { kind: 'coins'; amount: number } | { kind: 'item
     updateSpinButton();
     playYay();
     prize.textContent = reward.kind === 'coins' ? `You won ${reward.amount} 🪙!` : `You won a free ${reward.name}! 🎉`;
+    if (opts?.note) { const n = document.createElement('div'); n.textContent = opts.note; n.style.cssText = 'font:700 13px ui-monospace,monospace;color:#9fb4ff;'; back.insertBefore(n, prize.nextSibling); }
     // brief confetti-ish flash on the viewport
     viewport.style.boxShadow = '0 0 40px rgba(255,209,102,0.8)';
     const closeBtn = document.createElement('button');
