@@ -839,6 +839,14 @@ export function startWorld(net: WorldNet): void {
     'color:#cdb98a;font-size:12px;font-weight:700;letter-spacing:1px;text-shadow:0 1px 3px #000a;';
   overlay.appendChild(dungeonBanner);
 
+  // Chests-opened progress counter (top-right) — persists across runs so you know if you left loot behind.
+  const dungeonChestCounter = document.createElement('div');
+  dungeonChestCounter.style.cssText =
+    'position:absolute;right:14px;top:10px;display:none;pointer-events:none;z-index:3;' +
+    'background:#0c0d0acc;border:1px solid #3a3320;border-radius:8px;padding:4px 12px;' +
+    'color:#cdb98a;font-size:12px;font-weight:700;letter-spacing:.5px;text-shadow:0 1px 3px #000a;';
+  overlay.appendChild(dungeonChestCounter);
+
   // Tiny controls panel (bottom-left) shown only in the Ruins.
   const dungeonControls = document.createElement('div');
   dungeonControls.style.cssText =
@@ -1414,12 +1422,14 @@ export function startWorld(net: WorldNet): void {
     openedChestsServer.clear();
     net.dungeonSync(); // ask the server which chests this account has already opened
     dungeonBanner.style.display = 'block'; dungeonControls.style.display = 'block'; lootBtn.style.display = 'block';
+    dungeonChestCounter.style.display = 'block';
     updateDungeonHud(); updateDungeonControls();
   }
   const chestsFound = () => [...openedChestsServer].filter((id) => DUNGEON_CHEST_CONTENTS[id]).length;
   function updateDungeonHud() {
-    dungeonBanner.textContent = `🏚️ THE RUINS · ${currentFloor}   ·   ❤️ ${Math.round(dungeonHP)}   ·   🧪 ${potionCount}   ·   📦 ${chestsFound()}/${DUNGEON_TOTAL_CHESTS}`
+    dungeonBanner.textContent = `🏚️ THE RUINS · ${currentFloor}   ·   ❤️ ${Math.round(dungeonHP)}   ·   🧪 ${potionCount}`
       + (dungeonPurseDisplay ? `   ·   💰 ${dungeonPurseDisplay}🪙 (escape to keep!)` : '');
+    dungeonChestCounter.textContent = `📦 Chests opened  ${chestsFound()}/${DUNGEON_TOTAL_CHESTS}`;
     renderLootPanel();
   }
   function updateDungeonControls() {
@@ -1581,6 +1591,7 @@ export function startWorld(net: WorldNet): void {
     dungeonMusic?.pause();
     minimap.style.display = 'block'; help.style.display = 'block'; // restore overworld HUD
     dungeonBanner.style.display = 'none'; dungeonControls.style.display = 'none';
+    dungeonChestCounter.style.display = 'none';
     lootBtn.style.display = 'none'; lootPanel.style.display = 'none'; lootOpen = false;
     const d = WORLD_BUILDINGS.find((b) => b.kind === 'dungeon');
     if (d) { selfX = d.x + d.w / 2; selfY = d.y + d.h + 44; } // step back out the doorway
