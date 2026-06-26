@@ -453,7 +453,7 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
 // Chests keyed by 'floor:col,row'. The server pays a chest's coins (from the House) the first time
 // a given player opens it, and tracks opened chests per account.
 export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potion?: boolean }> = {
-  'B1:17,2': { coins: 200 },
+  'B1:18,2': { coins: 200 },
   'B1:9,9': { potion: true },
   // B2 — three open-area chests, plus the SEALED locked-room prize (34,24, behind the 'L' door).
   'B2:24,3': { coins: 120 },
