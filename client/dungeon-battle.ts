@@ -91,10 +91,28 @@ const MOB_SPRITES: Record<string, { w: number; h: number; rects: SRect[] }> = {
 // Generated creature art (magenta-keyed PNGs in /dungeon). Preloaded; falls back to the pixel
 // sprite then the emoji until/if an image is present.
 const MOB_IMG: Record<string, HTMLImageElement> = {};
-for (const [id, src] of Object.entries({ bat: '/dungeon/mob_bat.png', slime: '/dungeon/mob_slime.png', jsav: '/dungeon/mob_jsav.png', warden: '/dungeon/mob_warden.png', fritz: '/dungeon/mob_fritz.png', hound: '/dungeon/mob_hound.png' })) {
-  const im = new Image(); im.src = src; MOB_IMG[id] = im;
+// Source PNGs are large (the hound is 1207×620). Re-sampling that down every frame in drawCreature
+// hitches, so we downscale ONCE into a small offscreen canvas on load and blit that cheap copy.
+const MOB_SCALED: Record<string, HTMLCanvasElement> = {};
+const MOB_CAP = 360; // max px on the long side of the cached copy (plenty for the gutter at any size)
+function buildScaled(id: string, im: HTMLImageElement) {
+  const s = Math.min(1, MOB_CAP / Math.max(im.naturalWidth, im.naturalHeight));
+  const cw = Math.max(1, Math.round(im.naturalWidth * s)), ch = Math.max(1, Math.round(im.naturalHeight * s));
+  const cn = document.createElement('canvas'); cn.width = cw; cn.height = ch;
+  const c = cn.getContext('2d'); if (!c) return;
+  c.imageSmoothingEnabled = true; c.imageSmoothingQuality = 'high'; // smooth ONCE, here
+  c.drawImage(im, 0, 0, cw, ch);
+  MOB_SCALED[id] = cn;
 }
-function mobImage(id: string): HTMLImageElement | null {
+for (const [id, src] of Object.entries({ bat: '/dungeon/mob_bat.png', slime: '/dungeon/mob_slime.png', jsav: '/dungeon/mob_jsav.png', warden: '/dungeon/mob_warden.png', fritz: '/dungeon/mob_fritz.png', hound: '/dungeon/mob_hound.png' })) {
+  const im = new Image(); MOB_IMG[id] = im;
+  im.onload = () => buildScaled(id, im);
+  im.src = src;
+  if (im.complete && im.naturalWidth > 0) buildScaled(id, im); // already cached
+}
+// the small cached canvas (preferred), else the raw image once it has loaded
+function mobImage(id: string): HTMLCanvasElement | HTMLImageElement | null {
+  if (MOB_SCALED[id]) return MOB_SCALED[id];
   const im = MOB_IMG[id]; return im && im.complete && im.naturalWidth > 0 ? im : null;
 }
 const _spriteCache: Record<string, HTMLCanvasElement> = {};
@@ -344,16 +362,19 @@ export function startEncounter(opts: EncounterOpts): void {
     if (mob.bob === 'flutter') { ox = Math.sin(t * 17) * 4; oy = Math.sin(t * 12 + 1) * 6; }
     else if (mob.bob === 'squish') { const s = Math.sin(t * 2.6); oy = (1 - Math.abs(s)) * 5; sy = 1 + s * 0.12; sx = 1 - s * 0.08; }
     else { oy = Math.sin(t * 1.6) * 7; }
-    ctx.imageSmoothingEnabled = false;
     const img = mobImage(mob.id);
     if (img) { // generated art — fit to a tall target, constrained by the gutter width
-      const scale = Math.min((court.h * 0.36) / img.naturalHeight, (gutter * 0.96) / img.naturalWidth);
-      const dw = img.naturalWidth * scale, dh = img.naturalHeight * scale;
+      const iw = img instanceof HTMLCanvasElement ? img.width : img.naturalWidth;
+      const ih = img instanceof HTMLCanvasElement ? img.height : img.naturalHeight;
+      ctx.imageSmoothingEnabled = true; // blitting the small cached copy — cheap + clean
+      const scale = Math.min((court.h * 0.36) / ih, (gutter * 0.96) / iw);
+      const dw = iw * scale, dh = ih * scale;
       baseY = Math.max(court.y + dh / 2, Math.min(court.y + court.h - dh / 2, baseY));
       ctx.save(); ctx.translate(cxp + ox, baseY + oy); ctx.scale(sx, sy);
       ctx.drawImage(img, -dw / 2, -dh / 2, dw, dh); ctx.restore();
       return;
     }
+    ctx.imageSmoothingEnabled = false;
     const size = Math.min(court.h * 0.26, gutter * 0.95);
     ctx.save(); ctx.translate(cxp + ox, baseY + oy); ctx.scale(sx, sy);
     const spr = mobSprite(mob.id);
