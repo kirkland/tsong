@@ -469,7 +469,8 @@ export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potions?: 
   'B3:4,13': { potions: 2 },               // generous: 2 potions on a long floor
   'B3:29,23': { cosmetic: 'skin-hotdog' }, // 🌭 Hot Dog paddle skin
   'B3:38,24': { potions: 2 },
-  // B4 — the deep floor: richest coin chests + another wheel spin.
+  // B4 — the deep floor: a 5-potion chest right at the entrance, richest coins + another wheel spin.
+  'B4:6,3': { potions: 5 },
   'B4:29,3': { coins: 500 },
   'B4:4,14': { potions: 2 },
   'B4:29,24': { coins: 500 },
