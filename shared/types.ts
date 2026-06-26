@@ -131,7 +131,7 @@ export const TARGET = {
 // Ball caroms off them with a small speed boost; each hit flashes the bumper.
 export const BUMPER = {
   r: 22,         // radius, court units
-  speedBoost: 1.12, // ball speed multiplier on each hit (capped at 3× base)
+  speedBoost: 1.04, // ball speed multiplier on each hit (capped at 1.5× base)
 } as const;
 export const BUMPER_POSITIONS: readonly { x: number; y: number }[] = [
   { x: 280, y: 130 },
