@@ -20,25 +20,7 @@ g = Image.merge('RGB', (r, gr, b))
 g = ImageChops.add(g, Image.new('RGB', (S, S), (28, 0, 0)))  # warm the blacks toward ember
 px = g.load()
 
-def blob(cx, cy, rx, ry, fn):
-    for y in range(max(0, int(cy-ry)), min(S, int(cy+ry))):
-        for x in range(max(0, int(cx-rx)), min(S, int(cx+rx))):
-            d = ((x-cx)/rx)**2 + ((y-cy)/ry)**2
-            if d <= 1: fn(x, y, 1-math.sqrt(d))
-
-EYES = [(0.40*S, 0.42*S), (0.60*S, 0.42*S)]
-# 2) sink/darken sockets then glowing infernal eyes (hot yellow core, orange halo)
-for ex, ey in EYES:
-    blob(ex, ey, 18, 15, lambda x, y, f: px.__setitem__((x, y), tuple(int(c*(1-0.45*f)) for c in px[x, y])))
-def glow(cx, cy, rr, col):
-    for y in range(max(0, int(cy-rr)), min(S, int(cy+rr))):
-        for x in range(max(0, int(cx-rr)), min(S, int(cx+rr))):
-            d = math.hypot(x-cx, y-cy)
-            if d < rr:
-                f = (1-d/rr)**1.5; o = px[x, y]
-                px[x, y] = tuple(min(255, int(o[i]+col[i]*f)) for i in range(3))
-for ex, ey in EYES:
-    glow(ex, ey, 12, (190, 90, 10)); glow(ex, ey, 5, (255, 230, 120))
+# (no painted-on eyes/fangs — his real features read fine through the red; just demon skin + horns)
 
 # 3) horns — two big curved bone horns, anchored into the hairline, curving out then up to a point
 draw = ImageDraw.Draw(g)
@@ -62,11 +44,6 @@ def horn(bx, by, dirx):
 horn(0.37*S, 0.265*S, -1)   # left horn
 horn(0.63*S, 0.265*S, 1)    # right horn
 px = g.load()
-
-# 4) fangs — two little white triangles at the mouth
-MW = 0.5*S; MY = 0.66*S
-for fx in (MW-10, MW+6):
-    draw.polygon([(fx, MY), (fx+5, MY), (fx+2, MY+9)], fill=(240, 235, 220))
 
 # 5) grain + slight sharpen
 g = g.filter(ImageFilter.UnsharpMask(radius=2, percent=70))
