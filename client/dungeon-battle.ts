@@ -44,7 +44,7 @@ export const DUNGEON_MOBS: MobDef[] = [
   },
   {
     id: 'warden', name: 'The Warden', portrait: '🫥', power: 8, color: '#2e3a36', tier: 2, bob: 'float',
-    bot: { react: 0.28, error: 82, predict: false, idleCenter: true }, paddleScale: 2.25,
+    bot: { react: 0.28, error: 82, predict: false, idleCenter: true }, paddleScale: 2.0,
     gimmick: { name: 'Looming', desc: 'Its bulk fills the goal — a paddle twice your size.' },
     flavor: '…', tag: 'A tall, patient thing that has waited here a very long time.',
   },
