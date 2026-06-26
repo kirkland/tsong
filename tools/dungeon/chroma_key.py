@@ -70,16 +70,24 @@ for sy in range(H):
         if px[sx, sy][3] != 0 and (sx, sy) not in keepmask:
             c = px[sx, sy]; px[sx, sy] = (c[0], c[1], c[2], 0)
 
-# 3) despill: pull magenta fringe back toward neutral (cap R and B at G level)
+# 3) despill: pull TRUE-magenta fringe back toward neutral — but only on EDGE pixels (next to
+#    transparency) and only when the pixel is genuinely magenta (R≈B, both well above G). This avoids
+#    nuking red/crimson skin (high R, low B), which an over-eager despill would otherwise desaturate.
+def is_edge(x, y):
+    for dx, dy in ((1,0),(-1,0),(0,1),(0,-1)):
+        nx, ny = x+dx, y+dy
+        if 0 <= nx < W and 0 <= ny < H and px[nx, ny][3] == 0:
+            return True
+    return False
 for y in range(H):
     for x in range(W):
         c = px[x, y]
-        if c[3] == 0:
+        if c[3] == 0 or not is_edge(x, y):
             continue
         r, g, b, a = c
-        if r > g and b > g and (r - g) + (b - g) > 40:   # purple-ish fringe
-            r = min(r, g + 18); b = min(b, g + 18)
-            px[x, y] = (r, g, b, a)
+        if (r - g) > 55 and (b - g) > 55 and abs(r - b) < 55:   # genuinely magenta fringe (not red skin)
+            g2 = g + 14
+            px[x, y] = (min(r, g2), g, min(b, g2), a)
 
 # 4) crop to content + save
 bbox = im.getbbox()

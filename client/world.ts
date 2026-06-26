@@ -888,7 +888,12 @@ export function startWorld(net: WorldNet): void {
   const npcHint = document.createElement('div');
   npcHint.textContent = '▼';
   npcHint.style.cssText = 'position:absolute;right:16px;bottom:8px;color:#9fd1ff;font-size:15px;animation:wBlink 1s steps(2) infinite;';
-  npcBox.append(npcName, npcText, npcChoices, npcHint);
+  // Optional character portrait that floats above the text box (visual-novel style; used by the imp).
+  const npcPortrait = document.createElement('img');
+  npcPortrait.style.cssText =
+    'position:absolute;left:50%;bottom:calc(100% - 10px);transform:translateX(-50%);height:150px;display:none;' +
+    'image-rendering:pixelated;filter:drop-shadow(0 6px 12px #000b);pointer-events:none;';
+  npcBox.append(npcName, npcText, npcChoices, npcHint, npcPortrait);
   overlay.appendChild(npcBox);
   if (!document.getElementById('wKeyframes')) {
     const st = document.createElement('style');
@@ -1396,6 +1401,8 @@ export function startWorld(net: WorldNet): void {
       : ['Still alive? Good.', 'P to drink. Works mid-fight. +10 HP.'];
     talkOpen = true; keys.clear(); joyActive = false; prompt.style.display = 'none';
     npcName.textContent = 'Imp'; npcBox.style.display = 'block'; npcChoices.style.display = 'none';
+    if (!npcPortrait.src.endsWith('/dungeon/imp_portrait.png')) npcPortrait.src = '/dungeon/imp_portrait.png';
+    npcPortrait.style.display = 'block'; // his portrait floats above the box
     let pageI = 0, typing = false, timer = 0, full = '';
     const grantIfNeeded = () => { // he hands the potion over on his last line (once per run)
       if (gave && pageI === pages.length - 1 && !impGavePotion) {
@@ -1418,7 +1425,7 @@ export function startWorld(net: WorldNet): void {
       if (typing) { window.clearInterval(timer); typing = false; npcText.textContent = full; npcHint.style.display = 'block'; grantIfNeeded(); return; }
       pageI++; if (pageI >= pages.length) closeTalk(); else showPage();
     };
-    function closeTalk() { window.clearInterval(timer); talkOpen = false; npcAdvance = null; npcClose = null; npcBox.style.display = 'none'; npcChoices.style.display = 'none'; }
+    function closeTalk() { window.clearInterval(timer); talkOpen = false; npcAdvance = null; npcClose = null; npcBox.style.display = 'none'; npcChoices.style.display = 'none'; npcPortrait.style.display = 'none'; }
     npcClose = closeTalk;
     showPage();
   }
@@ -1649,6 +1656,7 @@ export function startWorld(net: WorldNet): void {
 
     npcName.textContent = n.def.name;
     npcBox.style.display = 'block';
+    npcPortrait.style.display = 'none'; // world NPCs have no portrait (only the imp, for now)
 
     let pageI = 0;
     let typing = false;
