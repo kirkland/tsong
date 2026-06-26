@@ -2838,6 +2838,13 @@ export function startWorld(net: WorldNet): void {
     px(2, 1, 8, 4, 0x000000, 0.28); px(1, 2, 10, 2, 0x000000, 0.28);
     g.generateTexture('w-shadow', 12, 6);
 
+    // --- soft smoke puff (white, tinted grey + faded at render) ---
+    g.clear();
+    g.fillStyle(0xffffff, 0.22); g.fillCircle(10, 10, 10);
+    g.fillStyle(0xffffff, 0.35); g.fillCircle(10, 10, 6.5);
+    g.fillStyle(0xffffff, 0.55); g.fillCircle(10, 10, 3.5);
+    g.generateTexture('w-smoke', 20, 20);
+
     // --- avatar: the tsong ball with eyes (tintable white body) (10×10 texels) ---
     g.clear();
     px(2, 1, 6, 8, 0xffffff); px(1, 2, 8, 6, 0xffffff); // round body
@@ -3770,6 +3777,7 @@ export function startWorld(net: WorldNet): void {
       for (const [id, av] of remote) if (!seen.has(id)) { av.c.destroy(); remote.delete(id); }
 
       updatePets(dt);
+      updateSmoke(dt);
 
       // redraw the minimap ~8×/s (and the full map while it's open)
       if (now - lastMapDraw > 120) {
@@ -3783,6 +3791,28 @@ export function startWorld(net: WorldNet): void {
   // Trail a pet behind every avatar that has one equipped. The target is a point PET_TRAIL world
   // units behind the owner along its heading (`a`); when there's no heading (on foot) we fall back
   // to the owner's recent move direction, and finally to "below" so a standing-still pet still sits
+  // Exhaust smoke — the Monster Truck belches grey puffs from the back while it's moving.
+  const smokePuffs: { spr: Phaser.GameObjects.Image; t: number; max: number; vx: number; vy: number }[] = [];
+  let smokeTimer = 0;
+  function updateSmoke(dt: number) {
+    const sc = petScene; if (!sc) return;
+    smokeTimer -= dt;
+    const spec = driving ? myCar() : null;
+    if (spec?.id === 'car-monster' && Math.hypot(vx, vy) > 35 && smokeTimer <= 0) {
+      smokeTimer = 0.05;
+      const bx = selfX - Math.cos(facing) * CAR_LEN * 0.5, by = selfY - Math.sin(facing) * CAR_LEN * 0.5;
+      const spr = sc.add.image(bx + (Math.random() - 0.5) * 6, by + (Math.random() - 0.5) * 6, 'w-smoke')
+        .setScale(0.7).setTint(0x4a4a4a).setAlpha(0.55).setDepth(by - 3);
+      smokePuffs.push({ spr, t: 0, max: 0.65 + Math.random() * 0.35,
+        vx: -Math.cos(facing) * 16 + (Math.random() - 0.5) * 16, vy: -Math.sin(facing) * 16 - 14 + (Math.random() - 0.5) * 16 });
+    }
+    for (let i = smokePuffs.length - 1; i >= 0; i--) {
+      const p = smokePuffs[i]; p.t += dt; const k = p.t / p.max;
+      if (k >= 1) { p.spr.destroy(); smokePuffs.splice(i, 1); continue; }
+      p.spr.x += p.vx * dt; p.spr.y += p.vy * dt; p.vx *= 0.94; p.vy *= 0.95;
+      p.spr.setScale(0.7 + k * 1.6).setAlpha(0.55 * (1 - k)).setDepth(p.spr.y - 3);
+    }
+  }
   // in a sensible spot. Each pet lerps toward its target so it lags and swings like a real tagalong.
   function updatePets(dt: number) {
     const sc = petScene;

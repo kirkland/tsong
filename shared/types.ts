@@ -387,7 +387,7 @@ export const CARS: readonly CarSpec[] = [
   // The muscle: fastest and heaviest, wide drifts once it breaks loose.
   { id: 'car-muscle',  name: 'Muscle',    body: '#8a5cf6', accent: '#1c1430', speed: 660, accel: 620, turn: 2.2, grip: 0.78 },
   // The Monster Truck: the Ruins' locked-room prize. Heavy, planted, monstrous low-end grunt.
-  { id: 'car-monster', name: 'Monster Truck', body: '#3a7d34', accent: '#1a1a1a', speed: 600, accel: 820, turn: 2.0, grip: 0.92 },
+  { id: 'car-monster', name: 'Monster Truck', body: '#cc2222', accent: '#1a1a1a', speed: 600, accel: 820, turn: 2.0, grip: 0.92 },
 ] as const;
 export function carById(id: string | null | undefined): CarSpec | null {
   if (!id) return null;
