@@ -246,9 +246,7 @@ const mobsOfTier = (t: number): number[] => DUNGEON_MOBS.map((m, i) => (m.tier =
 const floorNewMobs = (floor: string): number[] => mobsOfTier(DUNGEON_FLOOR_TIER[floor] ?? 1);
 const floorCarryMobs = (floor: string): number[] => { const t = DUNGEON_FLOOR_TIER[floor] ?? 1; return t > 1 ? mobsOfTier(t - 1) : []; };
 // Potions held are still a light client-side consumable (per browser).
-const POTION_KEY = 'tsong:ruins:potions';
-const getPotions = () => { try { return parseInt(localStorage.getItem(POTION_KEY) || '0', 10) || 0; } catch { return 0; } };
-const setPotions = (n: number) => { try { localStorage.setItem(POTION_KEY, String(Math.max(0, n))); } catch { /* ignore */ } };
+// Potions are a RUN resource (like the purse) — held in memory only, reset on entry, lost on leave.
 
 function pointInRect(px: number, py: number, r: Rect, pad = 0): boolean {
   return px >= r.x - pad && px <= r.x + r.w + pad && py >= r.y - pad && py <= r.y + r.h + pad;
@@ -690,7 +688,7 @@ export function startWorld(net: WorldNet): void {
     return null;
   };
   let dungeonHP = 100;      // run health — chipped by points a mob scores on you (0 → expelled)
-  let potionCount = 0;      // 🧪 potions held (persisted per browser); P drinks one for +10 HP
+  let potionCount = 0;      // 🧪 potions held this run (in-memory; reset on entry, not carried out); P drinks one for +10 HP
   let dungeonPurseDisplay = 0; // server's run-purse total (banner display); paid out only on a clean escape
   const dungeonObjs: Phaser.GameObjects.GameObject[] = []; // every sprite for the active floor (cleared on rebuild)
   const dungeonChestSprites: Record<string, Phaser.GameObjects.Image> = {}; // 'c,r' → sprite (to swap on open)
@@ -1314,7 +1312,7 @@ export function startWorld(net: WorldNet): void {
     dungeonMusic.currentTime = 0;
     void dungeonMusic.play().catch(() => { /* autoplay may need the gesture; entry IS one */ });
     minimap.style.display = 'none'; help.style.display = 'none'; // no overworld minimap / drive hint underground
-    dungeonHP = 100; lastGrassKey = ''; grassDanger = 0; potionCount = getPotions();
+    dungeonHP = 100; lastGrassKey = ''; grassDanger = 0; potionCount = 0; // fresh run: no potions carried in
     newMobsSeen.clear(); recentMob = -1; recentMobRun = 0;
     openedChestsServer.clear();
     net.dungeonSync(); // ask the server which chests this account has already opened
@@ -1370,7 +1368,7 @@ export function startWorld(net: WorldNet): void {
   function usePotion() {
     if (potionCount <= 0) { showToast('🧪 No potions to drink.'); return; }
     if (dungeonHP >= 100) { showToast('❤️ Already at full HP.'); return; }
-    potionCount = Math.max(0, getPotions() - 1); setPotions(potionCount);
+    potionCount = Math.max(0, potionCount - 1);
     dungeonHP = Math.min(100, dungeonHP + 10);
     tone(523, 0.08, 'square', 0.12, 784); window.setTimeout(() => tone(784, 0.13, 'square', 0.12, 1046), 80);
     showToast('🧪 +10 HP');
@@ -1418,7 +1416,7 @@ export function startWorld(net: WorldNet): void {
           dungeonHP = Math.max(0, dungeonHP - r.hpLost);
           if (r.result === 'win') {
             net.dungeonWin(currentFloor, mob.tier); // server credits the coins (by mob tier) from the House
-            if (r.item) { potionCount = getPotions() + 1; setPotions(potionCount); }
+            if (r.item) potionCount += 1;
           }
           if (dungeonHP <= 0) { showToast('💀 You black out — your loot is lost in the dark…'); leaveDungeon(false); }
           else { dungeonMusic?.play().catch(() => { /* ignore */ }); updateDungeonHud(); updateDungeonControls(); }
@@ -3680,7 +3678,7 @@ export function startWorld(net: WorldNet): void {
     chestAccepted(chest, coins, potion) {
       openedChestsServer.add(chest);
       if (chest.startsWith(currentFloor + ':')) dungeonChestSprites[chest.slice(currentFloor.length + 1)]?.setTexture('w-chest-open');
-      if (potion) { potionCount = getPotions() + 1; setPotions(potionCount); showToast('📦 Found a 🧪 Potion!'); }
+      if (potion) { potionCount += 1; showToast('📦 Found a 🧪 Potion!'); }
       else if (coins) showToast(`📦 ${coins}🪙 added to your purse — escape to keep it!`);
       updateDungeonHud(); updateDungeonControls();
     },
