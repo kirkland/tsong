@@ -40,27 +40,27 @@ def glow(cx, cy, rr, col):
 for ex, ey in EYES:
     glow(ex, ey, 12, (190, 90, 10)); glow(ex, ey, 5, (255, 230, 120))
 
-# 3) horns — two bony horns curving up & out from the top of the head
+# 3) horns — two big curved bone horns, anchored into the hairline, curving out then up to a point
 draw = ImageDraw.Draw(g)
-HORN, HORN_D = (224, 206, 170), (150, 120, 80)
-def horn(x0, y0, dirx):
+HORN, HORN_HI, HORN_D = (222, 204, 168), (245, 234, 205), (120, 95, 60)
+def horn(bx, by, dirx):
+    # quadratic bezier: base sits IN the hairline, sweeps OUT then UP to a sharp tip (classic devil horn)
+    midx, midy = bx + dirx * 30, by - 18
+    tipx, tipy = bx + dirx * 46, by - 46
+    n = 26
     pts = []
-    n = 16
     for i in range(n):
-        t = i/(n-1)
-        w = (1-t)*11 + 1                  # taper to a point
-        x = x0 + dirx*(t*t*26) ; y = y0 - t*54
-        pts.append((x - w, y));
-    back = []
-    for i in range(n):
-        t = i/(n-1); w = (1-t)*11 + 1
-        x = x0 + dirx*(t*t*26); y = y0 - t*54
-        back.append((x + w, y))
-    poly = pts + back[::-1]
-    draw.polygon(poly, fill=HORN)
-    draw.line(pts, fill=HORN_D, width=2)
-horn(0.36*S, 0.20*S, -1)   # left horn curves left
-horn(0.64*S, 0.20*S, 1)    # right horn curves right
+        t = i / (n - 1)
+        x = (1-t)**2*bx + 2*(1-t)*t*midx + t*t*tipx
+        y = (1-t)**2*by + 2*(1-t)*t*midy + t*t*tipy
+        w = (1 - t) * 12 + 1.5   # thick base → sharp point
+        pts.append((x, y, w))
+    for (x, y, w) in pts:                         # body
+        draw.ellipse([x-w, y-w, x+w, y+w], fill=HORN)
+    for (x, y, w) in pts:                         # front highlight ridge
+        draw.ellipse([x-w*0.45+dirx*w*0.35, y-w*0.45, x+w*0.45+dirx*w*0.35, y+w*0.45], fill=HORN_HI)
+horn(0.37*S, 0.265*S, -1)   # left horn
+horn(0.63*S, 0.265*S, 1)    # right horn
 px = g.load()
 
 # 4) fangs — two little white triangles at the mouth
