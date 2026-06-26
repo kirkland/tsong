@@ -1982,7 +1982,7 @@ export async function getNetizenByPid(pid: string): Promise<{ pid: string; name:
           GROUP BY sh.pid
        ) h ON h.pid = p.id
        LEFT JOIN loans l ON l.pid = p.id
-       WHERE p.id = $1 AND p.bot = true`,
+       WHERE p.id = $1 AND p.is_netizen = TRUE`,
     [pid],
   );
   return rows.length ? { pid: rows[0].pid, name: rows[0].name, net: Number(rows[0].net) } : null;
@@ -1991,7 +1991,7 @@ export async function getNetizenByPid(pid: string): Promise<{ pid: string; name:
 /** Count total netizens. */
 export async function getNetizenCount(): Promise<number> {
   if (!pool) return 0;
-  const { rows } = await pool.query(`SELECT COUNT(*) AS c FROM players WHERE bot = true`);
+  const { rows } = await pool.query(`SELECT COUNT(*) AS c FROM players WHERE is_netizen = TRUE`);
   return Number(rows[0].c);
 }
 
@@ -2004,7 +2004,7 @@ export async function getNetWorthRank(pid: string): Promise<number> {
               ROW_NUMBER() OVER (ORDER BY p.coins - COALESCE(l.owed, 0) DESC) AS rnk
          FROM players p
          LEFT JOIN loans l ON l.pid = p.id
-        WHERE p.bot = true
+         WHERE p.is_netizen = TRUE
      ) sub WHERE id = $1`,
     [pid],
   );

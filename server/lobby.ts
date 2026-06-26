@@ -102,6 +102,8 @@ import {
   FIGHTERS,
   NomProposalKind, NomEffect, NomVote,
   FAST_SELL_BRACKETS,
+  WORLD,
+  WORLD_BUILDINGS,
 } from '../shared/types';
 import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSelfElo, getSelfNetWorth, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
@@ -1415,12 +1417,39 @@ export class Lobby {
     return out;
   }
 
+  /** Push a point out of every building it overlaps (mirrors client/resolveCollisions). */
+  private static resolveNetizenCollision(x: number, y: number, rad: number): { x: number; y: number } {
+    for (const b of WORLD_BUILDINGS) {
+      const nx = Math.max(b.x, Math.min(b.x + b.w, x));
+      const ny = Math.max(b.y, Math.min(b.y + b.h, y));
+      const dx = x - nx, dy = y - ny;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= rad * rad) continue;
+      if (d2 > 0.0001) {
+        const d = Math.sqrt(d2);
+        x = nx + (dx / d) * rad;
+        y = ny + (dy / d) * rad;
+      } else {
+        const left = x - b.x, right = b.x + b.w - x, top = y - b.y, bottom = b.y + b.h - y;
+        const m = Math.min(left, right, top, bottom);
+        if (m === left) x = b.x - rad;
+        else if (m === right) x = b.x + b.w + rad;
+        else if (m === top) y = b.y - rad;
+        else y = b.y + b.h + rad;
+      }
+    }
+    x = Math.max(rad, Math.min(WORLD.w - rad, x));
+    y = Math.max(rad, Math.min(WORLD.h - rad, y));
+    return { x, y };
+  }
+
   /** Wander netizen avatars and fan everyone's positions out. Called every tick by broadcast();
    *  throttled to ~15 Hz. Also runs when no humans are in the world to keep netizens moving. */
   broadcastWorld() {
     const now = Date.now();
     const dt = 1 / 60;
     const speed = 64;
+    const netizenR = 16;
     for (let i = 0; i < Lobby.NETIZEN_NAMES.length; i++) {
       const pid = `netizen:${i}`;
       const pos = this.netizenPos.get(pid);
@@ -1438,8 +1467,13 @@ export class Lobby {
           pos.tx = Lobby.PLAZA.x + Math.cos(a) * r;
           pos.ty = Lobby.PLAZA.y + Math.sin(a) * r;
         } else {
-          pos.x += (dx / dist) * speed * dt;
-          pos.y += (dy / dist) * speed * dt;
+          const stepped = Lobby.resolveNetizenCollision(
+            pos.x + (dx / dist) * speed * dt,
+            pos.y + (dy / dist) * speed * dt,
+            netizenR,
+          );
+          pos.x = stepped.x;
+          pos.y = stepped.y;
         }
       }
     }
