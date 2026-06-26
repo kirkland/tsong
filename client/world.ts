@@ -751,11 +751,11 @@ export function startWorld(net: WorldNet): void {
   let currentFloor = 'B1';
   let dmap: string[] = DUNGEON_FLOORS.B1;       // the active floor's tile rows
   let dCols = 0, dRows = 0;                       // its dimensions in tiles
-  let dInt = { x: 5400, y: 300, w: 0, h: 0 };    // its world-space rect (off-map, like the Tavern)
+  let dInt = { x: 7200, y: 300, w: 0, h: 0 };    // its world-space rect (off-map, EAST of the Tavern so they don't overlap)
   const setFloorGeom = (id: string) => {
     currentFloor = id; dmap = DUNGEON_FLOORS[id];
     dCols = Math.max(...dmap.map((r) => r.length)); dRows = dmap.length;
-    dInt = { x: 5400, y: 300, w: dCols * DUNGEON_TILE, h: dRows * DUNGEON_TILE };
+    dInt = { x: 7200, y: 300, w: dCols * DUNGEON_TILE, h: dRows * DUNGEON_TILE };
   };
   const dungeonCell = (cx: number, cy: number): string => (dmap[cy] && dmap[cy][cx]) || ' ';
   const chestCells = (): string[] => { // the 'c' tiles on the active floor → ['col,row', …]
@@ -4205,6 +4205,7 @@ export function startWorld(net: WorldNet): void {
       openedChestsServer.clear();
       for (const id of opened) openedChestsServer.add(id);
       for (const key in dungeonChestSprites) dungeonChestSprites[key].setTexture(openedChestsServer.has(currentFloor + ':' + key) ? 'w-chest-open' : 'w-chest');
+      updateDungeonHud(); // refresh the "📦 X/Y chests opened" counter now the banked list arrived
       updateNearBuilding();
     },
     chestAccepted(chest, coins, potion, _spin, car) {
