@@ -38,13 +38,13 @@ export const DUNGEON_MOBS: MobDef[] = [
   // --- B2 (tier 2): the floor turns to horror. Cursed Jsav won't stay down; The Warden walls the goal. ---
   {
     id: 'jsav', name: 'Cursed Jsav', portrait: '🫠', power: 7, color: '#7a8a6a', tier: 2, bob: 'float',
-    bot: { react: 0.21, error: 58, predict: true, idleCenter: true }, lives: 5,
+    bot: { react: 0.30, error: 88, predict: false, idleCenter: true }, lives: 5,
     gimmick: { name: 'Five Lives', desc: "Won't stay down — takes FIVE to put away." },
     flavor: 'you remember me…?', tag: 'A face you knew, dredged up wrong from the dark.',
   },
   {
     id: 'warden', name: 'The Warden', portrait: '🫥', power: 8, color: '#2e3a36', tier: 2, bob: 'float',
-    bot: { react: 0.18, error: 48, predict: true, idleCenter: true }, bigPaddle: true,
+    bot: { react: 0.28, error: 82, predict: false, idleCenter: true }, bigPaddle: true,
     gimmick: { name: 'Looming', desc: 'Its bulk fills the goal — a paddle twice your size.' },
     flavor: '…', tag: 'A tall, patient thing that has waited here a very long time.',
   },
