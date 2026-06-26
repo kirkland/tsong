@@ -3455,7 +3455,8 @@ export function startWorld(net: WorldNet): void {
               rt.erase(brush);
             };
             for (const tr of dungeonTorches) stamp(tr.x, tr.y, 78 * flick(tr)); // torch pools — same reveal as you
-            stamp(selfX, selfY, 74);                                            // tight light, centered on you, no lag
+            stamp(selfX, selfY, 90);                                            // your light — slightly bigger radius
+            stamp(selfX, selfY, 60);                                            // second pass brightens the core (fuller reveal)
           }
           for (const f of dungeonFlies) {
             f.vx = clamp(f.vx + (Math.random() * 2 - 1) * 9 * dt, -16, 16);
