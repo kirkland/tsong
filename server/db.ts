@@ -806,6 +806,11 @@ export async function claimSpin(pid: string, name: string, nowMs: number): Promi
 /** Grant an item for free (daily-spin prize). No-op if already owned. Returns updated wallet. */
 export async function grantItem(pid: string, _name: string, item: string): Promise<Wallet | null> {
   if (!pool || !pid) return null;
+  // ensure the player row exists, so the grant can't silently no-op for a not-yet-persisted player
+  await pool.query(
+    `INSERT INTO players (id, name) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name`,
+    [pid, _name || pid],
+  );
   const cur = await getWallet(pid);
   if (cur.owned.includes(item)) return cur;
   const owned = [...cur.owned, item].join(',');
