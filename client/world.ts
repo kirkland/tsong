@@ -43,6 +43,7 @@ import {
   NETIZEN_DIALOGUE,
   STOCKS,
   DUNGEON_TIER_COINS,
+  DUNGEON_CHEST_CONTENTS,
 } from '../shared/types';
 
 // What the world needs from the rest of the app. main.ts supplies these (see startWorld call).
@@ -265,6 +266,7 @@ const DUNGEON_B3 = [
   '###########################################',
 ];
 const DUNGEON_FLOORS: Record<string, string[]> = { B1: DUNGEON_B1, B2: DUNGEON_B2, B3: DUNGEON_B3 };
+const DUNGEON_TOTAL_CHESTS = Object.keys(DUNGEON_CHEST_CONTENTS).length; // for the x/y "chests found" counter
 const DUNGEON_ORDER = ['B1', 'B2', 'B3']; // descent order; '>' goes to the next, '<' to the previous
 // Each descent gets darker + colder in THEME (not lighting — the actual stone palette). `props`
 // turns on the deeper-floor ambient decals (bones, fungus, cobwebs, drips); `gore` adds blood + claw
@@ -866,7 +868,7 @@ export function startWorld(net: WorldNet): void {
     const items = lootItems.length ? lootItems.map((i) => `🎁 ${i.name}`).join('<br>') : '<span style="opacity:.55">— none yet —</span>';
     lootPanel.innerHTML =
       '<div style="font-weight:800;color:#f0d8a0;margin-bottom:6px;border-bottom:1px solid #3a3320;padding-bottom:5px;">🎒 RUN LOOT</div>' +
-      `💰 Coins: <b>${dungeonPurseDisplay}</b>🪙<br>🧪 Potions: <b>${potionCount}</b>` +
+      `💰 Coins: <b>${dungeonPurseDisplay}</b>🪙<br>🧪 Potions: <b>${potionCount}</b><br>📦 Chests found: <b>${chestsFound()}/${DUNGEON_TOTAL_CHESTS}</b>` +
       `<div style="margin-top:6px;">${items}</div>` +
       '<div style="margin-top:9px;font-size:11px;color:#8fae9b;opacity:.9;">Escape via B1 to claim it. Die or bail and you lose it all.</div>';
   }
@@ -1414,8 +1416,9 @@ export function startWorld(net: WorldNet): void {
     dungeonBanner.style.display = 'block'; dungeonControls.style.display = 'block'; lootBtn.style.display = 'block';
     updateDungeonHud(); updateDungeonControls();
   }
+  const chestsFound = () => [...openedChestsServer].filter((id) => DUNGEON_CHEST_CONTENTS[id]).length;
   function updateDungeonHud() {
-    dungeonBanner.textContent = `🏚️ THE RUINS · ${currentFloor}   ·   ❤️ ${Math.round(dungeonHP)}   ·   🧪 ${potionCount}`
+    dungeonBanner.textContent = `🏚️ THE RUINS · ${currentFloor}   ·   ❤️ ${Math.round(dungeonHP)}   ·   🧪 ${potionCount}   ·   📦 ${chestsFound()}/${DUNGEON_TOTAL_CHESTS}`
       + (dungeonPurseDisplay ? `   ·   💰 ${dungeonPurseDisplay}🪙 (escape to keep!)` : '');
     renderLootPanel();
   }
@@ -1542,7 +1545,7 @@ export function startWorld(net: WorldNet): void {
       startEncounter({
         mob, hp: dungeonHP, introImage: snap,
         coins: [...(DUNGEON_TIER_COINS[mob.tier] ?? DUNGEON_TIER_COINS[1])] as [number, number], // display only — server is authoritative
-        itemChance: 0,    // mobs drop only coins — potions come from chests
+        itemChance: mob.dropChance ?? 0, // most mobs drop only coins; some (Demon Fritz) drop a potion on a win
         potions: { // drink a potion mid-battle (P): consumes one of the run's potions for +10 HP
           count: () => potionCount,
           consume: () => { if (potionCount <= 0) return false; potionCount -= 1; updateDungeonHud(); updateDungeonControls(); return true; },

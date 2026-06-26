@@ -20,6 +20,7 @@ export interface MobDef {
   paddleScale?: number;                    // permanent paddle-size multiplier (The Warden = 2.25×)
   roam?: boolean;                          // permanently has the "roam" power-up — paddle hunts off its wall (Demon Fritz)
   turbo?: boolean;                         // the ball serves fast and accelerates harder each hit (The Flayed Hound)
+  dropChance?: number;                     // 0–1 chance a win drops a potion (default 0; Demon Fritz is high)
 }
 
 // Roster, grouped two-per-tier. A floor introduces 2 NEW mobs (its tier) and carries the 2 from the
@@ -52,9 +53,9 @@ export const DUNGEON_MOBS: MobDef[] = [
   },
   // --- B3 (tier 3): deeper, bloodier. Demon Fritz hunts off his wall (roam); second mob TBD. ---
   {
-    id: 'fritz', name: 'Demon Fritz', portrait: '😈', power: 12, color: '#b23026', tier: 3, bob: 'float',
-    bot: { react: 0.16, error: 42, predict: true, idleCenter: false }, roam: true, paddleScale: 1.5,
-    gimmick: { name: 'Roam', desc: 'Pushes off his wall to hunt the ball down.' },
+    id: 'fritz', name: 'Demon Fritz', portrait: '😈', power: 16, color: '#b23026', tier: 3, bob: 'float',
+    bot: { react: 0.16, error: 42, predict: true, idleCenter: false }, roam: true, paddleScale: 1.5, dropChance: 0.6,
+    gimmick: { name: 'Roam', desc: 'Hunts the ball off his wall — and hits like a truck.' },
     flavor: 'heh. you look lost.', tag: 'Something wearing a friend’s face, and grinning about it.',
   },
   {
