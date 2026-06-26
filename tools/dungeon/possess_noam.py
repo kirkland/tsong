@@ -24,7 +24,7 @@ def blob(cx, cy, rx, ry, fn):
             d = ((x-cx)/rx)**2 + ((y-cy)/ry)**2
             if d <= 1: fn(x, y, 1-math.sqrt(d))
 
-EYES = [(0.31*W, 0.465*H), (0.59*W, 0.465*H)]
+EYES = [(0.275*W, 0.465*H), (0.555*W, 0.465*H)]
 # 2) black demon eyes — fill the whole socket black, faint dark bleed underneath
 for ex, ey in EYES:
     blob(ex, ey, 22, 15, lambda x, y, f: px.__setitem__((x, y), (0, 0, 0) if f > 0.25 else tuple(int(c*(1-0.6*f)) for c in px[x, y])))

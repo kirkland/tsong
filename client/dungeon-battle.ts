@@ -69,8 +69,8 @@ export const DUNGEON_MOBS: MobDef[] = [
   },
   // --- B4 (tier 4): the deep. Possessed Noam flips your controls; Grave Wisp drifts the cold dark. ---
   {
-    id: 'noam', name: 'Possessed Noam', portrait: '👁️', power: 13, color: '#5a6a5e', tier: 4, bob: 'float',
-    bot: { react: 0.15, error: 34, predict: true, idleCenter: true }, mirror: true,
+    id: 'noam', name: 'Possessed Noam', portrait: '👁️', power: 11, color: '#5a6a5e', tier: 4, bob: 'float',
+    bot: { react: 0.23, error: 54, predict: false, idleCenter: true }, mirror: true,
     gimmick: { name: 'Possession', desc: 'Black-eyed and grinning — it FLIPS your controls.' },
     flavor: 'you know me… look closer.', tag: "Your friend's face, smiling. The eyes are all wrong.",
   },
