@@ -78,7 +78,7 @@ interface Controller {
   feed(avatars: WorldAvatar[]): void;
   reenter(): void; // re-send worldEnter after a socket reconnect (server forgot us on drop)
   dungeonChests(opened: string[]): void;                          // server's list of chests we've opened
-  chestAccepted(chest: string, coins: number, potion: boolean): void; // server accepted a chest open
+  chestAccepted(chest: string, coins: number, potion: boolean, spin?: boolean): void; // server accepted a chest open
   dungeonPurse(coins: number): void;                              // current run-purse total from the server
 }
 let controller: Controller | null = null;
@@ -104,8 +104,8 @@ export function feedDungeonChests(opened: string[]): void {
 }
 
 /** The server accepted a chest open (added the coins to the run purse / granted the potion). */
-export function dungeonChestAccepted(chest: string, coins: number, potion: boolean): void {
-  controller?.chestAccepted(chest, coins, potion);
+export function dungeonChestAccepted(chest: string, coins: number, potion: boolean, spin?: boolean): void {
+  controller?.chestAccepted(chest, coins, potion, spin);
 }
 
 /** The current run-purse total (paid out only when you escape the Ruins). */
@@ -3675,10 +3675,11 @@ export function startWorld(net: WorldNet): void {
       for (const key in dungeonChestSprites) dungeonChestSprites[key].setTexture(openedChestsServer.has(currentFloor + ':' + key) ? 'w-chest-open' : 'w-chest');
       updateNearBuilding();
     },
-    chestAccepted(chest, coins, potion) {
+    chestAccepted(chest, coins, potion, spin) {
       openedChestsServer.add(chest);
       if (chest.startsWith(currentFloor + ':')) dungeonChestSprites[chest.slice(currentFloor.length + 1)]?.setTexture('w-chest-open');
       if (potion) { potionCount += 1; showToast('📦 Found a 🧪 Potion!'); }
+      else if (spin) showToast('📦🎰 A FREE WHEEL SPIN! Escape to claim it at the shop.');
       else if (coins) showToast(`📦 ${coins}🪙 added to your purse — escape to keep it!`);
       updateDungeonHud(); updateDungeonControls();
     },

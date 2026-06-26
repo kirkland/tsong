@@ -452,11 +452,11 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
 // --- The Ruins dungeon economy: SERVER-AUTHORITATIVE so a tampered client can't mint coins. ---
 // Chests keyed by 'floor:col,row'. The server pays a chest's coins (from the House) the first time
 // a given player opens it, and tracks opened chests per account.
-export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potion?: boolean }> = {
+export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potion?: boolean; spin?: boolean }> = {
   'B1:18,2': { coins: 200 },
   'B1:9,9': { potion: true },
-  // B2 — three open-area chests, plus the SEALED locked-room prize (34,24, behind the 'L' door).
-  'B2:24,3': { coins: 120 },
+  // B2 — a free wheel-spin chest, a potion, a coin chest, plus the SEALED locked-room prize (34,24).
+  'B2:24,3': { spin: true },   // a banked free spin (claim at the shop wheel) — granted on escape
   'B2:4,11': { potion: true },
   'B2:6,18': { coins: 120 },
   'B2:34,24': { coins: 500 },
@@ -1231,7 +1231,7 @@ export type ServerMsg =
   | LoanBookMsg
   | WorldMsg
   | { type: 'dungeonChests'; opened: string[] } // chests this player has opened (reply to dungeonSync)
-  | { type: 'dungeonChestOpened'; chest: string; coins: number; potion: boolean } // a chest open was accepted
+  | { type: 'dungeonChestOpened'; chest: string; coins: number; potion: boolean; spin?: boolean } // a chest open was accepted
   | { type: 'dungeonPurse'; coins: number } // current run-purse total (paid out only on a clean escape)
   | HouseMsg
   | HouseStateMsg

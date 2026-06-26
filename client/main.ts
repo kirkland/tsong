@@ -737,7 +737,7 @@ const net = connect(
     } else if (msg.type === 'dungeonChests') {
       worldMod?.feedDungeonChests(msg.opened);
     } else if (msg.type === 'dungeonChestOpened') {
-      worldMod?.dungeonChestAccepted(msg.chest, msg.coins, msg.potion);
+      worldMod?.dungeonChestAccepted(msg.chest, msg.coins, msg.potion, msg.spin);
     } else if (msg.type === 'dungeonPurse') {
       worldMod?.feedDungeonPurse(msg.coins);
     } else if (msg.type === 'prefs') {

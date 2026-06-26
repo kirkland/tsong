@@ -1036,9 +1036,10 @@ export class Lobby {
     if (!run) { run = new Set(); this.dungeonRunChests.set(conn.pid, run); }
     if (run.has(chest)) return;                     // already opened THIS run → no double-pay
     run.add(chest);
-    const coins = contents.coins ?? 0, potion = !!contents.potion;
+    const coins = contents.coins ?? 0, potion = !!contents.potion, spin = !!contents.spin;
     if (coins > 0) this.dungeonPurse.set(conn.pid, (this.dungeonPurse.get(conn.pid) ?? 0) + coins);
-    this.tell(ws, { type: 'dungeonChestOpened', chest, coins, potion });
+    // a spin chest grants a banked free wheel-spin — but only on escape (committed with the chest)
+    this.tell(ws, { type: 'dungeonChestOpened', chest, coins, potion, spin });
     this.sendPurse(ws, conn.pid);
   }
   dungeonWin(ws: WebSocket, floor: string, tier: number) {
@@ -1065,11 +1066,20 @@ export class Lobby {
     this.dungeonRunChests.delete(conn.pid);
     this.tell(ws, { type: 'dungeonPurse', coins: 0 });
     if (escaped) {
-      if (run) for (const chest of run) this.dungeonOpenedChests.add(`${conn.pid}:${chest}`); // bank them
+      let granted: Promise<unknown> = Promise.resolve();
+      if (run) for (const chest of run) {
+        this.dungeonOpenedChests.add(`${conn.pid}:${chest}`); // bank them
+        // a spin chest grants its banked free wheel-spin now that the loot's actually escaped with
+        if (DUNGEON_CHEST_CONTENTS[chest]?.spin && conn.nickname) {
+          granted = addBonusSpin(conn.pid, conn.nickname).catch((e) => console.error('dungeon spin grant failed:', e));
+        }
+      }
       if (purse > 0 && conn.nickname) {
         this.housePay(conn.pid, conn.nickname, purse)
           .then(() => { this.sendWallet(ws); this.refreshNetWorth().catch(() => {}); })
           .catch((e) => console.error('dungeon exit payout failed:', e));
+      } else {
+        granted.then(() => this.sendWallet(ws)).catch(() => {}); // refresh banked-spins even if no coins
       }
     }
     // escaped=false: run chests are simply discarded above (never committed) → re-lootable next run.
