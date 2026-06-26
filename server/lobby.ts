@@ -124,7 +124,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   getGameModes, saveGameModes,
   loadNomic, saveNomic, archiveNomicSeason } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
-import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR, DUNGEON_CHEST_CONTENTS, DUNGEON_FLOOR_COINS } from '../shared/types';
+import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR, DUNGEON_CHEST_CONTENTS, DUNGEON_TIER_COINS, DUNGEON_FLOOR_TIERS } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
 // emoji code points (pictographs, components, ZWJ, variation selectors, flags).
@@ -1005,7 +1005,12 @@ export class Lobby {
   // --- The Ruins dungeon: the server owns all coin awards (paid from the House → conserved) and
   // tracks which chests each account has opened (in-memory, like quests), so chests can't be
   // re-farmed and a tampered client can't mint coins. ---
-  private dungeonOpenedChests = new Set<string>(); // `${pid}:${chest}`
+  // Chests, like the purse, are PROVISIONAL during a run: opening one adds its coins to the purse and
+  // marks it open for the run, but it only becomes permanently-opened when you escape with the loot.
+  // Die / bail → the run's chests roll back (re-lootable) along with the forfeited purse. So you can
+  // never lose a chest's reward forever just because a mob got you on the way out.
+  private dungeonOpenedChests = new Set<string>(); // `${pid}:${chest}` — COMMITTED (banked on escape)
+  private dungeonRunChests = new Map<string, Set<string>>(); // pid → chests opened THIS run (provisional)
   private dungeonPurse = new Map<string, number>(); // pid → run-purse coins (paid out only on a clean escape)
   private sendPurse(ws: WebSocket, pid: string) {
     this.tell(ws, { type: 'dungeonPurse', coins: this.dungeonPurse.get(pid) ?? 0 });
@@ -1013,7 +1018,8 @@ export class Lobby {
   dungeonSync(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.pid) return;
-    this.dungeonPurse.set(conn.pid, 0); // entering the Ruins starts a fresh, empty run purse
+    this.dungeonPurse.set(conn.pid, 0);        // entering the Ruins starts a fresh, empty run purse
+    this.dungeonRunChests.delete(conn.pid);    // …and a fresh provisional-chest slate
     const pfx = conn.pid + ':';
     const opened: string[] = [];
     for (const k of this.dungeonOpenedChests) if (k.startsWith(pfx)) opened.push(k.slice(pfx.length));
@@ -1025,36 +1031,48 @@ export class Lobby {
     if (!conn || !conn.pid) return;
     const contents = DUNGEON_CHEST_CONTENTS[chest];
     if (!contents) return;                          // unknown chest → ignore
-    const key = `${conn.pid}:${chest}`;
-    if (this.dungeonOpenedChests.has(key)) return;  // already opened by this player → no re-farm
-    this.dungeonOpenedChests.add(key);
+    if (this.dungeonOpenedChests.has(`${conn.pid}:${chest}`)) return; // already banked → no re-farm
+    let run = this.dungeonRunChests.get(conn.pid);
+    if (!run) { run = new Set(); this.dungeonRunChests.set(conn.pid, run); }
+    if (run.has(chest)) return;                     // already opened THIS run → no double-pay
+    run.add(chest);
     const coins = contents.coins ?? 0, potion = !!contents.potion;
     if (coins > 0) this.dungeonPurse.set(conn.pid, (this.dungeonPurse.get(conn.pid) ?? 0) + coins);
     this.tell(ws, { type: 'dungeonChestOpened', chest, coins, potion });
     this.sendPurse(ws, conn.pid);
   }
-  dungeonWin(ws: WebSocket, floor: string) {
+  dungeonWin(ws: WebSocket, floor: string, tier: number) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.pid) return;
-    const range = DUNGEON_FLOOR_COINS[floor];
+    const allowed = DUNGEON_FLOOR_TIERS[floor];
+    if (!allowed || !allowed.includes(tier)) return;  // reject a tier you couldn't legally fight here
+    const range = DUNGEON_TIER_COINS[tier];
     if (!range) return;
     const coins = range[0] + Math.floor(Math.random() * (range[1] - range[0] + 1)); // server picks the amount
     this.dungeonPurse.set(conn.pid, (this.dungeonPurse.get(conn.pid) ?? 0) + coins);
     this.sendPurse(ws, conn.pid);
   }
-  // Left the Ruins. escaped=true (walked out via B1 / beat the boss) → pay the purse from the House.
-  // escaped=false (died / bailed) → forfeit it. Either way the run purse is cleared.
+  // Left the Ruins. escaped=true (walked out via B1 / beat the boss) → pay the purse from the House AND
+  // commit this run's chests as permanently-opened. escaped=false (died / bailed) → forfeit the purse
+  // and ROLL BACK the run's chests (they re-lock, so the loot isn't lost forever). Either way the run
+  // state is cleared.
   dungeonExit(ws: WebSocket, escaped: boolean) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.pid) return;
     const purse = this.dungeonPurse.get(conn.pid) ?? 0;
+    const run = this.dungeonRunChests.get(conn.pid);
     this.dungeonPurse.delete(conn.pid);
+    this.dungeonRunChests.delete(conn.pid);
     this.tell(ws, { type: 'dungeonPurse', coins: 0 });
-    if (escaped && purse > 0 && conn.nickname) {
-      this.housePay(conn.pid, conn.nickname, purse)
-        .then(() => { this.sendWallet(ws); this.refreshNetWorth().catch(() => {}); })
-        .catch((e) => console.error('dungeon exit payout failed:', e));
+    if (escaped) {
+      if (run) for (const chest of run) this.dungeonOpenedChests.add(`${conn.pid}:${chest}`); // bank them
+      if (purse > 0 && conn.nickname) {
+        this.housePay(conn.pid, conn.nickname, purse)
+          .then(() => { this.sendWallet(ws); this.refreshNetWorth().catch(() => {}); })
+          .catch((e) => console.error('dungeon exit payout failed:', e));
+      }
     }
+    // escaped=false: run chests are simply discarded above (never committed) → re-lootable next run.
   }
 
   /** Forward an opaque DOOM payload to the co-op partner. */

@@ -42,6 +42,7 @@ import {
   type PetKind,
   NETIZEN_DIALOGUE,
   STOCKS,
+  DUNGEON_TIER_COINS,
 } from '../shared/types';
 
 // What the world needs from the rest of the app. main.ts supplies these (see startWorld call).
@@ -61,7 +62,7 @@ export interface WorldNet {
   claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
   dungeonSync(): void;             // entering the Ruins → ask which chests we've opened
   dungeonChest(chest: string): void; // open a chest ('B1:col,row') → server pays coins from the House (once)
-  dungeonWin(floor: string): void; // won an encounter → adds a floor-ranged amount to the run purse
+  dungeonWin(floor: string, tier: number): void; // won an encounter → adds a TIER-ranged amount to the run purse
   dungeonExit(escaped: boolean): void; // left the Ruins (escaped → server pays the run purse from the House)
   onNetizenClick?(netizenId: string): void; // user tapped a netizen avatar in the world (→ challenge)
   buyBeer(): void;               // buy a beer at the Tavern (server charges 20🪙 + ups drunk level)
@@ -172,12 +173,12 @@ const TAVERN_INT = { x: 4200, y: 300, w: 880, h: 560 };
 const TAVERN_WALL = 28; // interior wall thickness (play area is inset by this)
 const TAVERN_ZOOM = 3;  // zoom in while inside so the small cozy room fills the viewport
 
-// --- The Ruins dungeon: an off-map tile room (same trick as the Tavern interior). B1 layout —
-// '#'/'T'/'o' = wall, '.' = floor, '~' = tall-grass encounter, 'c' chest, '>' stairs down,
-// 'D' door, '@' arrival/exit, 'T' torch. Rendered with the 0x72 stone tiles; walls amber-tinted. ---
+// --- The Ruins dungeon: off-map tile floors (same trick as the Tavern interior). Tile legend —
+// '#'/'T'/'o' = wall, '.' = floor, '~' = tall-grass encounter, 'c' chest, '>' stairs DOWN,
+// '<' stairs UP, 'L' locked door, 'D' door, '@' arrival/world-exit, 'T' torch. Rendered with the
+// 0x72 stone tiles; each floor descends into a darker, colder theme (see DUNGEON_THEME). ---
 const DUNGEON_TILE = 32; // world units per dungeon tile
 const DUNGEON_ZOOM = 2.6; // close camera so you only see your lit surroundings
-const DUNGEON_WALL_TINT = 0xffd49a; // amber sandstone multiply for wall tiles
 const DUNGEON_B1 = [
   '#######################',
   '#T....#.......#.....T.#',
@@ -195,19 +196,55 @@ const DUNGEON_B1 = [
   '#T.###############..T.#',
   '#######################',
 ];
-const DUNGEON_COLS = Math.max(...DUNGEON_B1.map((r) => r.length));
-const DUNGEON_ROWS = DUNGEON_B1.length;
-const DUNGEON_INT = { x: 5400, y: 300, w: DUNGEON_COLS * DUNGEON_TILE, h: DUNGEON_ROWS * DUNGEON_TILE };
-const dungeonCell = (cx: number, cy: number): string => (DUNGEON_B1[cy] && DUNGEON_B1[cy][cx]) || ' ';
+// B2 — ~3× B1's area (39×27 = 1053 vs 345), maze-trickier, with a SEALED locked room (the 'L' door
+// blocks; the chest behind it waits on the key system). Carved + connectivity-validated offline.
+const DUNGEON_B2 = [
+  '#######################################',
+  '#T#################T#################T#',
+  '##......###..D...###.......###......###',
+  '##..<...###..~~~.###....c..###......###',
+  '##......D....~~~..........D.........###',
+  '##......###......###.......###......###',
+  '##......#####.######.......######.#####',
+  '####.########.#########.#########.#####',
+  '####.########.#########.#########.#####',
+  '##......###......###.......###.##.#####',
+  '##.~~~..###......###.......###.##.#####',
+  '##.~c~..D......................##.#####',
+  '#T.~~~..#T#......###.......###.##.###T#',
+  '##......###......###..............#####',
+  '####.########.#########.######.##.#####',
+  '####.########.#######.......##.##.#####',
+  '##................###..~~~..##.##.#####',
+  '##......#.#..~~~..###..~~~..##.########',
+  '##....c.#D#..~~~.......~~~..##.########',
+  '##......#.#..~~~..###.......##.########',
+  '##...........~~~..................#####',
+  '##......#.#.......#############.#######',
+  '#######.#######################.#######',
+  '##.....D........................#....##',
+  '###############################.L.c..##',
+  '#T##############################....##',
+  '#######################################',
+];
+const DUNGEON_FLOORS: Record<string, string[]> = { B1: DUNGEON_B1, B2: DUNGEON_B2 };
+const DUNGEON_ORDER = ['B1', 'B2']; // descent order; '>' goes to the next, '<' to the previous
+// Each descent gets darker + colder in THEME (not lighting — the actual stone palette). `props`
+// turns on the deeper-floor ambient decals (bones, fungus, cobwebs, drips).
+const DUNGEON_THEME: Record<string, { wall: number; floor: number; surround: number; props: boolean }> = {
+  B1: { wall: 0xffd49a, floor: 0xffffff, surround: 0x070905, props: false }, // warm amber sandstone
+  B2: { wall: 0xa07b86, floor: 0x9aa0b4, surround: 0x05060a, props: true },  // colder, blue-grey, dimmer
+};
 const dungeonIsWall = (ch: string): boolean => ch === '#' || ch === 'T' || ch === 'o' || ch === ' ';
-// what blocks movement: walls + solid props (a chest you bump into rather than walk through)
-const dungeonBlocks = (ch: string): boolean => dungeonIsWall(ch) || ch === 'c';
-// Chest contents by 'col,row'. Opening one is permanent per browser (localStorage) so the Ruins
-// can't be farmed — server/account persistence is the Task-4 upgrade. Coins are sourced from the
-// House when actually credited on exit (also Task 4).
-// The chest CELLS on B1 (which 'c' tiles are real chests). Contents + opened-state are
-// server-authoritative (see shared DUNGEON_CHEST_CONTENTS + lobby) — keyed 'B1:col,row'.
-const DUNGEON_CHEST_CELLS = ['17,2', '9,9'];
+// what blocks movement: walls + solid props (a chest you bump into) + a locked door ('L')
+const dungeonBlocks = (ch: string): boolean => dungeonIsWall(ch) || ch === 'c' || ch === 'L';
+// Each floor's NEW-mob tier. Its roster = the 2 mobs of THIS tier (new) + the 2 of the tier above,
+// carried down (tier-1). Rewards key off the mob's tier (DUNGEON_TIER_COINS), not the floor. The
+// "new" mobs are forced first: you must meet BOTH new mobs before a carried-over mob can reappear.
+const DUNGEON_FLOOR_TIER: Record<string, number> = { B1: 1, B2: 2 };
+const mobsOfTier = (t: number): number[] => DUNGEON_MOBS.map((m, i) => (m.tier === t ? i : -1)).filter((i) => i >= 0);
+const floorNewMobs = (floor: string): number[] => mobsOfTier(DUNGEON_FLOOR_TIER[floor] ?? 1);
+const floorCarryMobs = (floor: string): number[] => { const t = DUNGEON_FLOOR_TIER[floor] ?? 1; return t > 1 ? mobsOfTier(t - 1) : []; };
 // Potions held are still a light client-side consumable (per browser).
 const POTION_KEY = 'tsong:ruins:potions';
 const getPotions = () => { try { return parseInt(localStorage.getItem(POTION_KEY) || '0', 10) || 0; } catch { return 0; } };
@@ -630,18 +667,41 @@ export function startWorld(net: WorldNet): void {
   let nearId: string | null = null; // building the avatar is currently at the door of
   // --- Tavern interior state ---
   let inInterior = false;   // true while inside the Tavern (camera + collision switch to TAVERN_INT)
-  let inDungeon = false;    // true while inside the Ruins dungeon (camera + tile collision → DUNGEON_INT)
-  let dungeonBuilt = false; // the dungeon room geometry is rendered once, lazily, on first entry
+  let inDungeon = false;    // true while inside the Ruins dungeon (camera + tile collision → dInt)
+  // --- current-floor geometry (swapped by setFloorGeom on entry/descent) ---
+  let currentFloor = 'B1';
+  let dmap: string[] = DUNGEON_FLOORS.B1;       // the active floor's tile rows
+  let dCols = 0, dRows = 0;                       // its dimensions in tiles
+  let dInt = { x: 5400, y: 300, w: 0, h: 0 };    // its world-space rect (off-map, like the Tavern)
+  const setFloorGeom = (id: string) => {
+    currentFloor = id; dmap = DUNGEON_FLOORS[id];
+    dCols = Math.max(...dmap.map((r) => r.length)); dRows = dmap.length;
+    dInt = { x: 5400, y: 300, w: dCols * DUNGEON_TILE, h: dRows * DUNGEON_TILE };
+  };
+  const dungeonCell = (cx: number, cy: number): string => (dmap[cy] && dmap[cy][cx]) || ' ';
+  const chestCells = (): string[] => { // the 'c' tiles on the active floor → ['col,row', …]
+    const out: string[] = [];
+    for (let r = 0; r < dRows; r++) for (let c = 0; c < dCols; c++) if (dungeonCell(c, r) === 'c') out.push(c + ',' + r);
+    return out;
+  };
+  const cellWorldOf = (ch: string): { x: number; y: number } | null => { // world centre of the first `ch` tile
+    for (let r = 0; r < dRows; r++) for (let c = 0; c < dCols; c++)
+      if (dungeonCell(c, r) === ch) return { x: dInt.x + (c + 0.5) * DUNGEON_TILE, y: dInt.y + (r + 0.5) * DUNGEON_TILE };
+    return null;
+  };
   let dungeonHP = 100;      // run health — chipped by points a mob scores on you (0 → expelled)
   let potionCount = 0;      // 🧪 potions held (persisted per browser); P drinks one for +10 HP
   let dungeonPurseDisplay = 0; // server's run-purse total (banner display); paid out only on a clean escape
+  const dungeonObjs: Phaser.GameObjects.GameObject[] = []; // every sprite for the active floor (cleared on rebuild)
   const dungeonChestSprites: Record<string, Phaser.GameObjects.Image> = {}; // 'c,r' → sprite (to swap on open)
   let nearChestCell: { c: number; r: number } | null = null; // unopened chest within reach (→ Open prompt)
-  const openedChestsServer = new Set<string>(); // 'B1:col,row' the server says this account has opened
-  const chestIsOpen = (c: number, r: number) => openedChestsServer.has(`B1:${c},${r}`);
+  let nearStairs: { dir: 'down' | 'up'; to: string } | null = null; // a stair tile within reach (→ descend/ascend)
+  const openedChestsServer = new Set<string>(); // 'floor:col,row' the server says this account has opened
+  const chestIsOpen = (c: number, r: number) => openedChestsServer.has(`${currentFloor}:${c},${r}`);
   let lastGrassKey = '';    // last tall-grass cell rolled, so each new '~' tile rolls one encounter
   let grassDanger = 0;      // ramps per grass tile crossed → rising encounter odds; resets on a fight
   let recentMob = -1, recentMobRun = 0; // shuffle-bag: never the same mob more than twice in a row
+  const newMobsSeen = new Set<number>(); // this floor's NEW mobs already met (both required before carry mobs reappear)
   let interiorBuilt = false;// the interior's Phaser props are lazily built on first entry
   let nearExit = false;     // standing on the interior's exit mat (Enter → leave)
   // --- jail state ---
@@ -1127,48 +1187,62 @@ export function startWorld(net: WorldNet): void {
   // --- The Ruins dungeon interior: an off-map tile room rendered from DUNGEON_B1. Same camera/
   // collision swap as the Tavern, but movement collides per-tile against the walls. ---
   const dungeonEntry = () => {                      // world centre of the '@' arrival cell
-    for (let r = 0; r < DUNGEON_ROWS; r++) for (let c = 0; c < DUNGEON_COLS; c++)
-      if (dungeonCell(c, r) === '@') return { x: DUNGEON_INT.x + (c + 0.5) * DUNGEON_TILE, y: DUNGEON_INT.y + (r + 0.5) * DUNGEON_TILE };
-    return { x: DUNGEON_INT.x + DUNGEON_INT.w / 2, y: DUNGEON_INT.y + DUNGEON_INT.h / 2 };
+    for (let r = 0; r < dRows; r++) for (let c = 0; c < dCols; c++)
+      if (dungeonCell(c, r) === '@') return { x: dInt.x + (c + 0.5) * DUNGEON_TILE, y: dInt.y + (r + 0.5) * DUNGEON_TILE };
+    return { x: dInt.x + dInt.w / 2, y: dInt.y + dInt.h / 2 };
   };
   // wall test at a world point, with the avatar's body radius checked at its corners
   function dungeonBlocked(wx: number, wy: number): boolean {
     const rad = R * 0.42; // forgiving body radius so 1-tile doorways are easy to thread
     for (const ox of [-rad, rad]) for (const oy of [-rad, rad]) {
-      const c = Math.floor((wx + ox - DUNGEON_INT.x) / DUNGEON_TILE);
-      const r = Math.floor((wy + oy - DUNGEON_INT.y) / DUNGEON_TILE);
+      const c = Math.floor((wx + ox - dInt.x) / DUNGEON_TILE);
+      const r = Math.floor((wy + oy - dInt.y) / DUNGEON_TILE);
       if (dungeonBlocks(dungeonCell(c, r))) return true;
     }
     return false;
   }
-  function buildDungeon(sc: Phaser.Scene) {
-    if (dungeonBuilt) return;
-    dungeonBuilt = true;
-    const ox = DUNGEON_INT.x, oy = DUNGEON_INT.y, T = DUNGEON_TILE, base = oy - 1000, sl = T / 16;
+  // (Re)build the ACTIVE floor's geometry. Destroys the previous floor's sprites first, so it can be
+  // called on entry and on every descent/ascent. Theme (wall/floor tint, ambient props) per-floor.
+  function buildFloor(sc: Phaser.Scene) {
+    for (const o of dungeonObjs) o.destroy();
+    dungeonObjs.length = 0;
+    dungeonTorches.length = 0; dungeonFlies.length = 0;
+    for (const k in dungeonChestSprites) delete dungeonChestSprites[k];
+    dungeonDarkRT?.destroy(); dungeonDarkRT = null;
+    const theme = DUNGEON_THEME[currentFloor] ?? DUNGEON_THEME.B1;
+    const ox = dInt.x, oy = dInt.y, T = DUNGEON_TILE, base = oy - 1000, sl = T / 16;
+    const keep = (o: Phaser.GameObjects.GameObject) => { dungeonObjs.push(o); return o; };
     // dark surround so a big viewport never shows grass past the room
-    sc.add.rectangle(ox - 900, oy - 900, DUNGEON_INT.w + 1800, DUNGEON_INT.h + 1800, 0x070905).setOrigin(0, 0).setDepth(base - 1);
+    keep(sc.add.rectangle(ox - 900, oy - 900, dInt.w + 1800, dInt.h + 1800, theme.surround).setOrigin(0, 0).setDepth(base - 1));
     // world-space darkness layer covering the room — filled dark + light holes erased each frame
-    dungeonDarkRT = sc.add.renderTexture(ox, oy, DUNGEON_INT.w, DUNGEON_INT.h).setOrigin(0, 0).setDepth(50002).setVisible(false);
-    for (let r = 0; r < DUNGEON_ROWS; r++) for (let c = 0; c < DUNGEON_COLS; c++) {
+    dungeonDarkRT = sc.add.renderTexture(ox, oy, dInt.w, dInt.h).setOrigin(0, 0).setDepth(50002).setVisible(false);
+    for (let r = 0; r < dRows; r++) for (let c = 0; c < dCols; c++) {
       const ch = dungeonCell(c, r);
       if (ch === ' ') continue;
       const wx = ox + c * T, wy = oy + r * T;
       if (dungeonIsWall(ch)) {
         const key = 'd-w' + (Math.floor(hash(c, r * 7) * 4) % 4);
-        sc.add.image(wx, wy, key).setOrigin(0, 0).setScale(sl).setTint(DUNGEON_WALL_TINT).setDepth(base + 1);
+        keep(sc.add.image(wx, wy, key).setOrigin(0, 0).setScale(sl).setTint(theme.wall).setDepth(base + 1));
         if (ch === 'T' && sc.textures.exists('d-glow')) { // a wall torch: small bright flame + a light source
           const lx = wx + T / 2, ly = wy + T / 2;
-          sc.add.image(lx, ly, 'd-glow').setTint(0xffcf6e).setBlendMode(Phaser.BlendModes.ADD).setDepth(50003).setAlpha(0.8).setDisplaySize(T * 0.7, T * 0.7); // the small flame itself
+          keep(sc.add.image(lx, ly, 'd-glow').setTint(0xffcf6e).setBlendMode(Phaser.BlendModes.ADD).setDepth(50003).setAlpha(0.8).setDisplaySize(T * 0.7, T * 0.7)); // the small flame itself
           dungeonTorches.push({ x: lx, y: ly, phase: hash(c, r) * 6.28, fire: 0.24 });
         }
       } else {
         const fr = hash(c * 3, r);
-        const key = fr > 0.95 ? 'd-f5' : fr > 0.92 ? 'd-f6' : fr > 0.7 ? 'd-f' + (1 + Math.floor(fr * 40) % 4) : 'd-f0';
-        sc.add.image(wx, wy, key).setOrigin(0, 0).setScale(sl).setDepth(base);
-        if (ch === '>') sc.add.text(wx + T / 2, wy + T / 2, '▼', { fontSize: '18px', color: '#ffe08a', fontStyle: 'bold' }).setOrigin(0.5).setDepth(base + 2);
+        const fkey = fr > 0.95 ? 'd-f5' : fr > 0.92 ? 'd-f6' : fr > 0.7 ? 'd-f' + (1 + Math.floor(fr * 40) % 4) : 'd-f0';
+        keep(sc.add.image(wx, wy, fkey).setOrigin(0, 0).setScale(sl).setTint(theme.floor).setDepth(base));
+        if ((ch === '>' || ch === '<') && sc.textures.exists('d-stairs')) { // a proper stone stairwell
+          keep(sc.add.image(wx + T / 2, wy + T / 2, 'd-stairs').setScale(sl).setOrigin(0.5).setDepth(base + 2)
+            .setFlipY(ch === '<').setTint(ch === '>' ? 0xffe6b0 : 0xbfe4ff)); // down = warm, up = cool
+        }
+        if (ch === 'L' && sc.textures.exists('d-lock')) { // a sealed, barred locked door
+          keep(sc.add.image(wx + T / 2, wy + T / 2, 'd-lock').setScale(sl).setOrigin(0.5).setDepth(base + 3));
+        }
+        if (theme.props) addFloorProp(sc, c, r, wx, wy, T, sl, base, keep); // deeper-floor ambient decals
         if (ch === 'c') { // a treasure chest — closed or already-opened per saved state
           const spr = sc.add.image(wx + T / 2, wy + T - 3, chestIsOpen(c, r) ? 'w-chest-open' : 'w-chest').setScale(sl).setOrigin(0.5, 1).setDepth(base + 2);
-          dungeonChestSprites[`${c},${r}`] = spr;
+          dungeonChestSprites[`${c},${r}`] = spr; keep(spr);
         }
       }
     }
@@ -1176,38 +1250,78 @@ export function startWorld(net: WorldNet): void {
     if (sc.textures.exists('d-glow')) {
       const FLY_COLS = [0xff5a4a, 0xffa838, 0xc176ff];
       for (let i = 0; i < 9; i++) {
-        const fx = DUNGEON_INT.x + 40 + Math.random() * (DUNGEON_INT.w - 80);
-        const fy = DUNGEON_INT.y + 40 + Math.random() * (DUNGEON_INT.h - 80);
+        const fx = dInt.x + 40 + Math.random() * (dInt.w - 80);
+        const fy = dInt.y + 40 + Math.random() * (dInt.h - 80);
         const col = FLY_COLS[i % 3];
-        const glow = sc.add.image(fx, fy, 'd-glow').setTint(col).setBlendMode(Phaser.BlendModes.ADD).setDepth(50006).setAlpha(0).setDisplaySize(T * 0.45, T * 0.45);
-        const core = sc.add.image(fx, fy, 'd-glow').setTint(0xffffff).setBlendMode(Phaser.BlendModes.ADD).setDepth(50007).setAlpha(0).setDisplaySize(T * 0.14, T * 0.14); // bright solid core
+        const glow = keep(sc.add.image(fx, fy, 'd-glow').setTint(col).setBlendMode(Phaser.BlendModes.ADD).setDepth(50006).setAlpha(0).setDisplaySize(T * 0.45, T * 0.45)) as Phaser.GameObjects.Image;
+        const core = keep(sc.add.image(fx, fy, 'd-glow').setTint(0xffffff).setBlendMode(Phaser.BlendModes.ADD).setDepth(50007).setAlpha(0).setDisplaySize(T * 0.14, T * 0.14)) as Phaser.GameObjects.Image; // bright solid core
         dungeonFlies.push({ glow, core, x: fx, y: fy, vx: (Math.random() * 2 - 1) * 12, vy: (Math.random() * 2 - 1) * 12, phase: Math.random() * 6.28 });
       }
     }
   }
+  // Deeper-floor ambient decals (B2+): bones, pale cave fungus, cobwebs in corners, ceiling drips.
+  // Deterministic by cell hash (stable across rebuilds), subtle, and never block movement.
+  function addFloorProp(sc: Phaser.Scene, c: number, r: number, wx: number, wy: number, T: number, sl: number, base: number, keep: (o: Phaser.GameObjects.GameObject) => Phaser.GameObjects.GameObject) {
+    const h = hash(c * 13 + 5, r * 17 + 3);
+    if (h > 0.93 && sc.textures.exists('d-bones')) {
+      keep(sc.add.image(wx + T / 2, wy + T / 2, 'd-bones').setScale(sl).setOrigin(0.5).setDepth(base + 1).setAlpha(0.85).setAngle((hash(c, r) * 360) | 0));
+    } else if (h > 0.86 && sc.textures.exists('d-mush')) { // pale glowing fungus clusters near walls
+      const wallAdj = dungeonIsWall(dungeonCell(c, r - 1)) || dungeonIsWall(dungeonCell(c, r + 1)) || dungeonIsWall(dungeonCell(c - 1, r)) || dungeonIsWall(dungeonCell(c + 1, r));
+      if (wallAdj) keep(sc.add.image(wx + T / 2, wy + T / 2, 'd-mush').setScale(sl).setOrigin(0.5).setDepth(base + 1).setAlpha(0.9));
+    } else if (h > 0.82 && sc.textures.exists('d-drip')) { // a slow ceiling drip + faint puddle
+      keep(sc.add.image(wx + T / 2, wy + T / 2, 'd-drip').setScale(sl).setOrigin(0.5).setDepth(base + 1).setAlpha(0.5));
+    }
+    // cobwebs cling in inside corners (a wall on two adjacent sides)
+    if (h < 0.16 && sc.textures.exists('d-web')) {
+      const up = dungeonIsWall(dungeonCell(c, r - 1)), dn = dungeonIsWall(dungeonCell(c, r + 1));
+      const lf = dungeonIsWall(dungeonCell(c - 1, r)), rt = dungeonIsWall(dungeonCell(c + 1, r));
+      const corner = (up && lf) ? { fx: false, fy: false } : (up && rt) ? { fx: true, fy: false } : (dn && lf) ? { fx: false, fy: true } : (dn && rt) ? { fx: true, fy: true } : null;
+      if (corner) keep(sc.add.image(wx + T / 2, wy + T / 2, 'd-web').setScale(sl).setOrigin(0.5).setDepth(base + 1).setAlpha(0.5).setFlipX(corner.fx).setFlipY(corner.fy));
+    }
+  }
+  // A descent/ascent: rebuild for the new floor and drop the player at the matching stairwell. Does
+  // NOT touch the run-purse — your loot rides with you between floors; you still must escape via B1.
+  function changeFloor(toId: string, arriveChar: string) {
+    const sc = petScene; if (!sc) return;
+    setFloorGeom(toId);
+    buildFloor(sc);
+    const p = cellWorldOf(arriveChar) ?? { x: dInt.x + dInt.w / 2, y: dInt.y + dInt.h / 2 };
+    selfX = p.x; selfY = p.y;
+    vx = 0; vy = 0; keys.clear(); joyActive = false;
+    mainCam?.setBounds(dInt.x, dInt.y, dInt.w, dInt.h);
+    lastGrassKey = ''; grassDanger = 0; nearStairs = null;
+    newMobsSeen.clear(); recentMob = -1; recentMobRun = 0; // each floor re-forces its new mobs first
+    stairSound(arriveChar === '<'); // arriving at an up-stair means we descended
+    // NB: no dungeonSync here — that would reset the purse + provisional chests. The client already
+    // holds every committed-open chest (from the entry sync) plus its own run-opens, so the rebuilt
+    // floor renders chests correctly. The run (purse + provisional chests) rides between floors.
+    updateDungeonHud();
+  }
   function enterDungeon() {
     const sc = petScene; if (!sc) return;
-    buildDungeon(sc);
+    setFloorGeom('B1');
+    buildFloor(sc);
     enterChime();
     inDungeon = true;
     driving = false; vx = 0; vy = 0;
     keys.clear(); joyActive = false;
     const e = dungeonEntry();
     selfX = e.x; selfY = e.y;
-    mainCam?.setBounds(DUNGEON_INT.x, DUNGEON_INT.y, DUNGEON_INT.w, DUNGEON_INT.h);
+    mainCam?.setBounds(dInt.x, dInt.y, dInt.w, dInt.h);
     // dungeon theme (FFVI "Mines of Narshe") — loops while exploring
     if (!dungeonMusic) { dungeonMusic = new Audio('/dungeon.mp3'); dungeonMusic.loop = true; dungeonMusic.volume = 0.45; }
     dungeonMusic.currentTime = 0;
     void dungeonMusic.play().catch(() => { /* autoplay may need the gesture; entry IS one */ });
     minimap.style.display = 'none'; help.style.display = 'none'; // no overworld minimap / drive hint underground
     dungeonHP = 100; lastGrassKey = ''; grassDanger = 0; potionCount = getPotions();
+    newMobsSeen.clear(); recentMob = -1; recentMobRun = 0;
     openedChestsServer.clear();
     net.dungeonSync(); // ask the server which chests this account has already opened
     dungeonBanner.style.display = 'block'; dungeonControls.style.display = 'block';
     updateDungeonHud(); updateDungeonControls();
   }
   function updateDungeonHud() {
-    dungeonBanner.textContent = `🏚️ THE RUINS · B1   ·   ❤️ ${Math.round(dungeonHP)}   ·   🧪 ${potionCount}`
+    dungeonBanner.textContent = `🏚️ THE RUINS · ${currentFloor}   ·   ❤️ ${Math.round(dungeonHP)}   ·   🧪 ${potionCount}`
       + (dungeonPurseDisplay ? `   ·   💰 ${dungeonPurseDisplay}🪙 (escape to keep!)` : '');
   }
   function updateDungeonControls() {
@@ -1220,9 +1334,14 @@ export function startWorld(net: WorldNet): void {
     window.setTimeout(() => tone(880, 0.07, 'square', 0.12, 1180), 180);
     window.setTimeout(() => tone(1180, 0.13, 'square', 0.11, 1560), 260);
   }
+  // stone-stair footsteps: a short three-note run — descending pitch going down, ascending going up.
+  function stairSound(down: boolean) {
+    const seq = down ? [440, 330, 247] : [247, 330, 440];
+    seq.forEach((f, i) => window.setTimeout(() => tone(f, 0.09, 'triangle', 0.12, f * 0.7), i * 90));
+  }
   function openChest(c: number, r: number) {
     if (chestIsOpen(c, r)) return;
-    const id = `B1:${c},${r}`;
+    const id = `${currentFloor}:${c},${r}`;
     openedChestsServer.add(id);                        // optimistic — the server confirms + pays/grants
     dungeonChestSprites[`${c},${r}`]?.setTexture('w-chest-open');
     chestSound();
@@ -1239,22 +1358,33 @@ export function startWorld(net: WorldNet): void {
     showToast('🧪 +10 HP');
     updateDungeonHud(); updateDungeonControls();
   }
-  // Pick a mob index, shuffle-bagged: re-rolls if it would be the same mob a third time running.
-  function pickMobIdx(poolSize: number): number {
-    let idx = Math.floor(Math.random() * poolSize);
-    if (idx === recentMob && recentMobRun >= 2 && poolSize > 1) {
-      do { idx = Math.floor(Math.random() * poolSize); } while (idx === recentMob);
+  // Pick a mob from the floor's pool, shuffle-bagged: re-rolls if it would be the same mob 3× running.
+  function pickMobIdx(pool: number[]): number {
+    let idx = pool[Math.floor(Math.random() * pool.length)];
+    if (idx === recentMob && recentMobRun >= 2 && pool.length > 1) {
+      do { idx = pool[Math.floor(Math.random() * pool.length)]; } while (idx === recentMob);
     }
     recentMobRun = idx === recentMob ? recentMobRun + 1 : 1;
     recentMob = idx;
     return idx;
+  }
+  // Floor mob selection: force BOTH of this floor's NEW mobs (random order) before any carried-over
+  // mob can appear. Once both new mobs are met, spawn from the full pool (new + carry), shuffle-bagged.
+  function pickFloorMob(): number {
+    const unseen = floorNewMobs(currentFloor).filter((i) => !newMobsSeen.has(i));
+    if (unseen.length > 0) {
+      const idx = unseen[Math.floor(Math.random() * unseen.length)];
+      newMobsSeen.add(idx); recentMob = idx; recentMobRun = 1;
+      return idx;
+    }
+    return pickMobIdx([...floorNewMobs(currentFloor), ...floorCarryMobs(currentFloor)]);
   }
   // A tall-grass encounter: pause the dungeon theme and drop into a Pong duel vs a mob.
   function triggerEncounter() {
     if (isEncounterOpen()) return;
     keys.clear(); joyActive = false; vx = 0; vy = 0;
     dungeonMusic?.pause();
-    const mob = DUNGEON_MOBS[pickMobIdx(2)]; // B1: the two easiest (Bat, Slime), shuffle-bagged
+    const mob = DUNGEON_MOBS[pickFloorMob()]; // new mobs forced first, then full pool, shuffle-bagged
     // Snapshot the live dungeon view FIRST (loop must still be running), then sleep + open the
     // battle — the snapshot is the world frame the Pokémon strip-transition animates apart.
     const begin = (snap: HTMLImageElement | null) => {
@@ -1262,14 +1392,14 @@ export function startWorld(net: WorldNet): void {
       if (game?.canvas) game.canvas.style.display = 'none'; // and stop the browser compositing it
       startEncounter({
         mob, hp: dungeonHP, introImage: snap,
-        coins: [35, 75], // B1 pays ~25% of the base (≈150–300) — the easy floor isn't worth farming
-        itemChance: 0,   // B1 mobs drop only coins — potions come from the chest
+        coins: [...(DUNGEON_TIER_COINS[mob.tier] ?? DUNGEON_TIER_COINS[1])] as [number, number], // display only — server is authoritative
+        itemChance: 0,    // mobs drop only coins — potions come from chests
         onResult: (r) => {
           if (game?.canvas) game.canvas.style.display = 'block';
           game?.loop.wake();
           dungeonHP = Math.max(0, dungeonHP - r.hpLost);
           if (r.result === 'win') {
-            net.dungeonWin('B1'); // the server credits the coins from the House (it picks the amount)
+            net.dungeonWin(currentFloor, mob.tier); // server credits the coins (by mob tier) from the House
             if (r.item) { potionCount = getPotions() + 1; setPotions(potionCount); }
           }
           if (dungeonHP <= 0) { showToast('💀 You black out — your loot is lost in the dark…'); leaveDungeon(false); }
@@ -1511,6 +1641,7 @@ export function startWorld(net: WorldNet): void {
     if (nearNpc && nearNpc.def.id === 'bartender') { orderBeer(); return; }
     if (nearNpc) { startTalk(nearNpc); return; }
     if (nearExit) { if (inDungeon) leaveDungeon(); else leaveTavern(); return; }
+    if (nearStairs) { changeFloor(nearStairs.to, nearStairs.dir === 'down' ? '<' : '>'); return; }
     if (nearChestCell) { openChest(nearChestCell.c, nearChestCell.r); return; }
     if (nearJailed) { net.bail(nearJailed.id); return; } // post their bail
     const b = WORLD_BUILDINGS.find((x) => x.id === nearId);
@@ -1755,7 +1886,7 @@ export function startWorld(net: WorldNet): void {
       // Cave-style encounters: every new tile you step onto bumps a rising danger meter and rolls.
       // Tall grass (~) ramps faster. The meter resets to 0 on a fight, so you get safe steps then
       // the odds climb — never instant-spammy, never dead-quiet.
-      const cc = Math.floor((selfX - DUNGEON_INT.x) / DUNGEON_TILE), cr = Math.floor((selfY - DUNGEON_INT.y) / DUNGEON_TILE);
+      const cc = Math.floor((selfX - dInt.x) / DUNGEON_TILE), cr = Math.floor((selfY - dInt.y) / DUNGEON_TILE);
       const cell = dungeonCell(cc, cr), key = cc + ',' + cr;
       if (key !== lastGrassKey) {
         lastGrassKey = key;
@@ -1866,17 +1997,27 @@ export function startWorld(net: WorldNet): void {
       const mx = TAVERN_INT.x + TAVERN_INT.w / 2, my = TAVERN_INT.y + TAVERN_INT.h - TAVERN_WALL - 50;
       if (Math.abs(selfX - mx) < 110 && Math.abs(selfY - my) < 80) nearExit = true;
     }
-    if (inDungeon) {
-      const e = dungeonEntry(); // the '@' arrival cell doubles as the way out
+    if (inDungeon && cellWorldOf('@')) { // the '@' arrival cell (B1 only) doubles as the way out
+      const e = dungeonEntry();
       if (Math.abs(selfX - e.x) < 44 && Math.abs(selfY - e.y) < 44) nearExit = true;
     }
+    // Stairs within reach: '>' descends to the next floor, '<' ascends to the previous one.
+    nearStairs = null;
+    if (inDungeon && !nearExit) {
+      const idx = DUNGEON_ORDER.indexOf(currentFloor);
+      const down = cellWorldOf('>'), up = cellWorldOf('<');
+      if (down && Math.abs(selfX - down.x) < 40 && Math.abs(selfY - down.y) < 40 && idx < DUNGEON_ORDER.length - 1)
+        nearStairs = { dir: 'down', to: DUNGEON_ORDER[idx + 1] };
+      else if (up && Math.abs(selfX - up.x) < 40 && Math.abs(selfY - up.y) < 40 && idx > 0)
+        nearStairs = { dir: 'up', to: DUNGEON_ORDER[idx - 1] };
+    }
     nearChestCell = null;
-    if (inDungeon && !nearExit) { // nearest unopened chest within reach → Open prompt
+    if (inDungeon && !nearExit && !nearStairs) { // nearest unopened chest within reach → Open prompt
       let best = (DUNGEON_TILE * 1.5) ** 2;
-      for (const k of DUNGEON_CHEST_CELLS) {
+      for (const k of chestCells()) {
         const [cc, cr] = k.split(',').map(Number);
         if (chestIsOpen(cc, cr)) continue;
-        const cxw = DUNGEON_INT.x + (cc + 0.5) * DUNGEON_TILE, cyw = DUNGEON_INT.y + (cr + 0.5) * DUNGEON_TILE;
+        const cxw = dInt.x + (cc + 0.5) * DUNGEON_TILE, cyw = dInt.y + (cr + 0.5) * DUNGEON_TILE;
         const d2 = (selfX - cxw) ** 2 + (selfY - cyw) ** 2;
         if (d2 < best) { best = d2; nearChestCell = { c: cc, r: cr }; }
       }
@@ -1901,12 +2042,14 @@ export function startWorld(net: WorldNet): void {
       prompt.textContent = nearNpc.def.id === 'bartender' ? '🍺 Order from the Barkeep' : `💬 Talk to ${nearNpc.def.name}`;
     } else if (nearExit) {
       prompt.textContent = inDungeon ? '🚪 Leave the Ruins' : '🚪 Leave the Tavern';
+    } else if (nearStairs) {
+      prompt.textContent = nearStairs.dir === 'down' ? `⬇️ Descend to ${nearStairs.to}` : `⬆️ Climb up to ${nearStairs.to}`;
     } else if (nearChestCell) {
       prompt.textContent = '📦 Open the chest';
     } else if (nearJailed) {
       prompt.textContent = `🔓 Bail out ${nearJailed.name} (${BAIL_COST}🪙)`;
     }
-    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearChestCell || nearJailed) && !dialogOpen && !talkOpen ? 'block' : 'none';
+    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearStairs || nearChestCell || nearJailed) && !dialogOpen && !talkOpen ? 'block' : 'none';
   }
 
   function maybeSendMove(now: number) {
@@ -2040,7 +2183,7 @@ export function startWorld(net: WorldNet): void {
   let warmOverlay: Phaser.GameObjects.Rectangle | null = null;
   let drunkOverlay: Phaser.GameObjects.Rectangle | null = null; // amber booze haze, alpha scales with drunk level
   // Dungeon lighting: a near-black camera-fixed wash + warm flickering torch glows + a light you
-  // carry. All inert (alpha 0) unless you're in the Ruins. Built in create()/buildDungeon().
+  // carry. All inert (alpha 0) unless you're in the Ruins. Built in create()/buildFloor().
   // Lighting = a camera-fixed darkness RenderTexture with soft holes ERASED at each torch + the
   // player, so lit areas reveal the real tiles at full brightness (not a foggy additive wash) and
   // unlit areas are only dimmed.
@@ -2438,6 +2581,60 @@ export function startWorld(net: WorldNet): void {
       px(3, 7, 2, 6, gd); px(3, 12, 2, 1, gk); px(11, 7, 2, 6, gd); px(11, 12, 2, 1, gk);        // body bands
       px(4, 5, 8, 2, gl); px(5, 4, 6, 1, gd); px(6, 5, 1, 1, 0xffffff); px(9, 5, 1, 1, 0xffffff); // gold mound + sparkles
       g.generateTexture('w-chest-open', 16, 15);
+    }
+
+    // --- dungeon stairwell: stone steps descending into a dark hole (tinted warm=down / cool=up) ---
+    {
+      g.clear();
+      px(2, 2, 12, 12, 0x090a0e);                                  // dark pit
+      px(2, 2, 12, 2, 0x8a8470); px(4, 4, 8, 2, 0x726c5c);         // top two steps (bright→dim)
+      px(5, 6, 6, 2, 0x5a5547); px(6, 8, 4, 2, 0x423d31);          // deeper steps
+      px(7, 10, 2, 2, 0x14120d);                                   // bottom into black
+      px(2, 2, 12, 1, 0xa59a80); px(4, 4, 8, 1, 0x8c8268);         // step highlights
+      g.generateTexture('d-stairs', 16, 16);
+    }
+    // --- locked door: dark wood, iron bars, a brass padlock (the sealed-room gate) ---
+    {
+      g.clear();
+      px(2, 1, 12, 14, 0x241608); px(3, 2, 10, 12, 0x523a20);      // frame + planks
+      px(4, 2, 1, 12, 0x6b7079); px(7, 2, 1, 12, 0x6b7079); px(10, 2, 1, 12, 0x6b7079); // iron bars
+      px(4, 7, 7, 1, 0x7a808a);                                    // cross brace
+      px(6, 6, 4, 2, 0xb38b2e); px(7, 8, 2, 3, 0xc9a13c);          // padlock shackle + body
+      px(7, 9, 2, 1, 0x20180a);                                    // keyhole
+      g.generateTexture('d-lock', 16, 16);
+    }
+    // --- bones: a little skull + scattered ribs (deeper-floor decor) ---
+    {
+      g.clear();
+      px(6, 7, 4, 4, 0xd9d3c2); px(6, 11, 4, 1, 0xb7b1a0);         // skull + jaw
+      px(7, 8, 1, 1, 0x2a2622); px(9, 8, 1, 1, 0x2a2622);         // eye sockets
+      px(2, 12, 8, 1, 0xcdc7b6); px(4, 13, 6, 1, 0xb7b1a0);       // ribs/long bones
+      px(3, 11, 1, 2, 0xcdc7b6); px(11, 12, 1, 2, 0xcdc7b6);
+      g.generateTexture('d-bones', 16, 16);
+    }
+    // --- pale cave fungus: a few glowing mushroom caps on slender stems ---
+    {
+      g.clear();
+      px(5, 10, 1, 3, 0x8fae9b); px(8, 9, 1, 4, 0x8fae9b); px(11, 11, 1, 2, 0x8fae9b); // stems
+      px(4, 8, 3, 2, 0x9fe6d0); px(7, 6, 3, 2, 0xb4f0dc); px(10, 9, 3, 2, 0x9fe6d0);   // caps
+      px(5, 7, 1, 1, 0xe8fff6); px(8, 5, 1, 1, 0xe8fff6);                               // glints
+      g.generateTexture('d-mush', 16, 16);
+    }
+    // --- cobweb (top-left corner orientation; flipped to reach the other three) ---
+    {
+      g.clear();
+      px(0, 0, 8, 1, 0xc2c8d2); px(0, 0, 1, 8, 0xc2c8d2);          // anchor edges
+      px(2, 2, 1, 1, 0xb0b6c0); px(4, 4, 1, 1, 0xb0b6c0); px(6, 6, 1, 1, 0xb0b6c0); // diagonal
+      px(5, 1, 1, 1, 0x9aa0aa); px(1, 5, 1, 1, 0x9aa0aa); px(3, 1, 1, 1, 0x9aa0aa); px(1, 3, 1, 1, 0x9aa0aa); // strands
+      px(6, 2, 1, 1, 0x8a909a); px(2, 6, 1, 1, 0x8a909a);
+      g.generateTexture('d-web', 16, 16);
+    }
+    // --- water drip: a falling bead above a small puddle ---
+    {
+      g.clear();
+      px(8, 3, 1, 2, 0x6a86b8); px(8, 5, 1, 1, 0x466294);          // bead
+      px(5, 11, 6, 2, 0x37486a); px(6, 11, 3, 1, 0x6a86b8);        // puddle + glint
+      g.generateTexture('d-drip', 16, 16);
     }
 
     // --- car body + roof (tintable) — pointing +x (east), 26×14 texels ---
@@ -2982,7 +3179,7 @@ export function startWorld(net: WorldNet): void {
         }
       }
       // A reusable soft-circle stamp for erasing light holes into the dungeon darkness layer. The
-      // RenderTexture itself is created in buildDungeon, sized to the room, in WORLD space (so the
+      // RenderTexture itself is created in buildFloor, sized to the room, in WORLD space (so the
       // holes track world positions exactly — no camera-projection lag).
       dungeonLightBrush = sc.make.image({ key: DGLOW, add: false }).setOrigin(0.5);
 
@@ -3065,7 +3262,7 @@ export function startWorld(net: WorldNet): void {
             const rt = dungeonDarkRT, brush = dungeonLightBrush;
             rt.setVisible(true); rt.clear(); rt.fill(0x05070b, 0.86);
             const stamp = (wx: number, wy: number, worldR: number) => {
-              brush.setPosition(wx - DUNGEON_INT.x, wy - DUNGEON_INT.y).setDisplaySize(worldR * 2, worldR * 2);
+              brush.setPosition(wx - dInt.x, wy - dInt.y).setDisplaySize(worldR * 2, worldR * 2);
               rt.erase(brush);
             };
             for (const tr of dungeonTorches) stamp(tr.x, tr.y, 78 * flick(tr)); // torch pools — same reveal as you
@@ -3075,10 +3272,10 @@ export function startWorld(net: WorldNet): void {
             f.vx = clamp(f.vx + (Math.random() * 2 - 1) * 9 * dt, -16, 16);
             f.vy = clamp(f.vy + (Math.random() * 2 - 1) * 9 * dt, -16, 16);
             f.x += f.vx * dt; f.y += f.vy * dt;
-            if (f.x < DUNGEON_INT.x + 24 || f.x > DUNGEON_INT.x + DUNGEON_INT.w - 24) f.vx *= -1;
-            if (f.y < DUNGEON_INT.y + 24 || f.y > DUNGEON_INT.y + DUNGEON_INT.h - 24) f.vy *= -1;
-            f.x = clamp(f.x, DUNGEON_INT.x + 24, DUNGEON_INT.x + DUNGEON_INT.w - 24);
-            f.y = clamp(f.y, DUNGEON_INT.y + 24, DUNGEON_INT.y + DUNGEON_INT.h - 24);
+            if (f.x < dInt.x + 24 || f.x > dInt.x + dInt.w - 24) f.vx *= -1;
+            if (f.y < dInt.y + 24 || f.y > dInt.y + dInt.h - 24) f.vy *= -1;
+            f.x = clamp(f.x, dInt.x + 24, dInt.x + dInt.w - 24);
+            f.y = clamp(f.y, dInt.y + 24, dInt.y + dInt.h - 24);
             const tw = 0.3 + 0.6 * Math.max(0, Math.sin(t * 2.1 + f.phase));
             f.glow.setPosition(f.x, f.y).setAlpha(0.5 * tw);
             f.core.setPosition(f.x, f.y).setAlpha(0.95 * tw);
@@ -3450,12 +3647,12 @@ export function startWorld(net: WorldNet): void {
     dungeonChests(opened) {
       openedChestsServer.clear();
       for (const id of opened) openedChestsServer.add(id);
-      for (const key in dungeonChestSprites) dungeonChestSprites[key].setTexture(openedChestsServer.has('B1:' + key) ? 'w-chest-open' : 'w-chest');
+      for (const key in dungeonChestSprites) dungeonChestSprites[key].setTexture(openedChestsServer.has(currentFloor + ':' + key) ? 'w-chest-open' : 'w-chest');
       updateNearBuilding();
     },
     chestAccepted(chest, coins, potion) {
       openedChestsServer.add(chest);
-      dungeonChestSprites[chest.replace(/^B1:/, '')]?.setTexture('w-chest-open');
+      if (chest.startsWith(currentFloor + ':')) dungeonChestSprites[chest.slice(currentFloor.length + 1)]?.setTexture('w-chest-open');
       if (potion) { potionCount = getPotions() + 1; setPotions(potionCount); showToast('📦 Found a 🧪 Potion!'); }
       else if (coins) showToast(`📦 ${coins}🪙 added to your purse — escape to keep it!`);
       updateDungeonHud(); updateDungeonControls();

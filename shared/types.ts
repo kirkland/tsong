@@ -455,10 +455,24 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
 export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potion?: boolean }> = {
   'B1:17,2': { coins: 200 },
   'B1:9,9': { potion: true },
+  // B2 — three open-area chests, plus the SEALED locked-room prize (34,24, behind the 'L' door).
+  'B2:24,3': { coins: 120 },
+  'B2:4,11': { potion: true },
+  'B2:6,18': { coins: 120 },
+  'B2:34,24': { coins: 500 },
 };
-// Per-floor encounter-win coin payout [min, max]. The server picks the amount; the client never sends one.
-export const DUNGEON_FLOOR_COINS: Record<string, readonly [number, number]> = {
-  B1: [35, 75],
+// Encounter-win payout keyed by the MOB'S TIER [min, max], not the floor. The server picks the amount
+// from the tier's range (it never trusts a client-sent number) after checking the tier is legal here.
+export const DUNGEON_TIER_COINS: Record<number, readonly [number, number]> = {
+  1: [35, 75],    // Cave Bat, Crypt Slime
+  2: [70, 140],   // Bone Rattler, Grave Wisp
+  3: [140, 260],  // Stone Gargoyle, Cursed Wraith
+};
+// Which mob tiers may legitimately appear on each floor = the floor's own NEW tier + the one above it
+// (carried down). The server uses this to reject a tampered win that claims a tier you couldn't fight.
+export const DUNGEON_FLOOR_TIERS: Record<string, readonly number[]> = {
+  B1: [1],
+  B2: [1, 2],
 };
 
 // The town JAIL — a tiny barred cell just east of the Tavern. Try to drive after 2+ beers and the
@@ -759,7 +773,7 @@ export type ClientMsg =
   // --- The Ruins dungeon (server owns the coin awards + which chests you've opened) ---
   | { type: 'dungeonSync' } // entering the Ruins: ask which chests this player has already opened
   | { type: 'dungeonChest'; chest: string } // open a chest (server pays its coins from the House, once only)
-  | { type: 'dungeonWin'; floor: string } // won an encounter (adds a floor-ranged amount to the run purse)
+  | { type: 'dungeonWin'; floor: string; tier: number } // won an encounter (adds a TIER-ranged amount to the run purse)
   | { type: 'dungeonExit'; escaped: boolean } // left the Ruins: escaped=true pays the purse (from House); false forfeits
   // --- Nomic (the Parliament sub-game) ---
   | { type: 'nomEnter' } // enter the Parliament: seat as a legislator + subscribe to its state

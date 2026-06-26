@@ -11,30 +11,32 @@ import { COURT, PADDLE } from '../shared/types';
 
 export interface MobDef {
   id: string; name: string; portrait: string; power: number; color: string;
+  tier: number;                            // reward/difficulty tier (1 = B1 mobs). Coins scale with TIER, not floor.
   bob: 'flutter' | 'squish' | 'float';     // how the creature animates on the court
   bot: { react: number; error: number; predict: boolean; idleCenter: boolean };
   gimmick: { name: string; desc: string }; // shown in its profile (mechanics come on deeper floors)
   flavor: string; tag: string;             // a one-line bestiary blurb shown on appearance
 }
 
-// Roster (mirrors tools/dungeon/mobs.js). B1 uses only the two easiest; deeper floors add the rest.
+// Roster, grouped two-per-tier. A floor introduces 2 NEW mobs (its tier) and carries the 2 from the
+// tier above (see DUNGEON_FLOORS in world.ts). Rewards key off the mob's TIER, not the floor depth.
 export const DUNGEON_MOBS: MobDef[] = [
   {
-    id: 'bat', name: 'Cave Bat', portrait: '🦇', power: 4, color: '#7a6cae', bob: 'flutter',
+    id: 'bat', name: 'Cave Bat', portrait: '🦇', power: 4, color: '#7a6cae', tier: 1, bob: 'flutter',
     bot: { react: 0.29, error: 90, predict: false, idleCenter: false },
     gimmick: { name: 'Flit', desc: 'Jittery — hard to read, easy to fool.' },
     flavor: 'Screeeee!', tag: 'A twitchy little thing that never holds still.',
   },
   {
-    id: 'slime', name: 'Crypt Slime', portrait: '🟢', power: 5, color: '#5fae54', bob: 'squish',
+    id: 'slime', name: 'Crypt Slime', portrait: '🟢', power: 5, color: '#5fae54', tier: 1, bob: 'squish',
     bot: { react: 0.26, error: 72, predict: false, idleCenter: true },
     gimmick: { name: 'Ooze', desc: 'Slow and sluggish — lazy on the return.' },
     flavor: '…bloop.', tag: 'It seeps along the wall, in no hurry to lose.',
   },
-  { id: 'rattler', name: 'Bone Rattler', portrait: '💀', power: 6, color: '#cdbfa0', bob: 'float', bot: { react: 0.24, error: 70, predict: false, idleCenter: true }, gimmick: { name: 'Rib Toss', desc: 'rattling bones' }, flavor: 'rattle… rattle…', tag: 'Clattering bones held together by spite.' },
-  { id: 'wisp', name: 'Grave Wisp', portrait: '🔵', power: 7, color: '#4aa6c0', bob: 'float', bot: { react: 0.20, error: 55, predict: true, idleCenter: true }, gimmick: { name: 'Gloom', desc: 'fogs your view' }, flavor: '…', tag: 'A cold light that drifts where the dead lie.' },
-  { id: 'gargoyle', name: 'Stone Gargoyle', portrait: '🗿', power: 9, color: '#8a8474', bob: 'float', bot: { react: 0.16, error: 40, predict: true, idleCenter: false }, gimmick: { name: 'Petrify', desc: 'stone wall' }, flavor: '*grinds awake*', tag: 'It was a statue a moment ago. Wasn’t it?' },
-  { id: 'wraith', name: 'Cursed Wraith', portrait: '👻', power: 10, color: '#b58fd6', bob: 'float', bot: { react: 0.14, error: 30, predict: true, idleCenter: true }, gimmick: { name: 'Hex', desc: 'inverts you' }, flavor: 'your fate is sealed.', tag: 'It remembers every soul it has taken.' },
+  { id: 'rattler', name: 'Bone Rattler', portrait: '💀', power: 6, color: '#cdbfa0', tier: 2, bob: 'float', bot: { react: 0.24, error: 70, predict: false, idleCenter: true }, gimmick: { name: 'Rib Toss', desc: 'rattling bones' }, flavor: 'rattle… rattle…', tag: 'Clattering bones held together by spite.' },
+  { id: 'wisp', name: 'Grave Wisp', portrait: '🔵', power: 7, color: '#4aa6c0', tier: 2, bob: 'float', bot: { react: 0.20, error: 55, predict: true, idleCenter: true }, gimmick: { name: 'Gloom', desc: 'fogs your view' }, flavor: '…', tag: 'A cold light that drifts where the dead lie.' },
+  { id: 'gargoyle', name: 'Stone Gargoyle', portrait: '🗿', power: 9, color: '#8a8474', tier: 3, bob: 'float', bot: { react: 0.16, error: 40, predict: true, idleCenter: false }, gimmick: { name: 'Petrify', desc: 'stone wall' }, flavor: '*grinds awake*', tag: 'It was a statue a moment ago. Wasn’t it?' },
+  { id: 'wraith', name: 'Cursed Wraith', portrait: '👻', power: 10, color: '#b58fd6', tier: 3, bob: 'float', bot: { react: 0.14, error: 30, predict: true, idleCenter: true }, gimmick: { name: 'Hex', desc: 'inverts you' }, flavor: 'your fate is sealed.', tag: 'It remembers every soul it has taken.' },
 ];
 
 // ── hand-drawn pixel creatures (per mob id). Built once into offscreen canvases, blitted in the

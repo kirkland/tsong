@@ -296,7 +296,7 @@ wss.on('connection', (ws: WebSocket, req) => {
         if (typeof msg.chest === 'string') lobby.dungeonChest(ws, msg.chest);
         break;
       case 'dungeonWin':
-        if (typeof msg.floor === 'string') lobby.dungeonWin(ws, msg.floor);
+        if (typeof msg.floor === 'string' && typeof msg.tier === 'number') lobby.dungeonWin(ws, msg.floor, msg.tier);
         break;
       case 'dungeonExit':
         lobby.dungeonExit(ws, !!msg.escaped);

@@ -6,7 +6,8 @@
 //   1. Conservation     — house_balance + SUM(player coins) is invariant across every dungeon flow.
 //                         (escape payout is a pure House→player transfer; chests/wins only move the
 //                          in-memory purse, which is not "real" coins until escape.)
-//   2. No minting        — encounter wins pay within DUNGEON_FLOOR_COINS[floor]; chests pay exactly
+//   2. No minting        — encounter wins pay within DUNGEON_TIER_COINS[tier] (and only for tiers
+//                          legal on the floor, per DUNGEON_FLOOR_TIERS); chests pay exactly
 //                          DUNGEON_CHEST_CONTENTS[chest].coins. The client never sends an amount.
 //   3. Chest once/account— a chest pays its coins the FIRST time an account opens it, then never
 //                          again (no re-farming across runs, no double-pay within a run).
@@ -23,7 +24,7 @@
 //
 // Exit code 0 = all invariants held, 1 = a violation was detected (the offending flow is printed).
 
-import { DUNGEON_CHEST_CONTENTS, DUNGEON_FLOOR_COINS } from '../shared/types';
+import { DUNGEON_CHEST_CONTENTS, DUNGEON_TIER_COINS, DUNGEON_FLOOR_TIERS } from '../shared/types';
 
 // ----------------------------------------------------------------------------
 // In-memory ledger (stands in for the db: House balance + per-player coins).
@@ -55,37 +56,50 @@ function housePay(pid: string, requested: number): number {
 // ----------------------------------------------------------------------------
 // Faithful mirror of the Lobby dungeon methods (server/lobby.ts ~1005-1058).
 // ----------------------------------------------------------------------------
-const dungeonOpenedChests = new Set<string>(); // `${pid}:${chest}`  (persists across runs, per account)
+const dungeonOpenedChests = new Set<string>();        // `${pid}:${chest}` — COMMITTED (banked on escape)
+const dungeonRunChests = new Map<string, Set<string>>(); // pid → chests opened THIS run (provisional)
 const dungeonPurse = new Map<string, number>();
 
 function dungeonSync(pid: string) {
-  dungeonPurse.set(pid, 0); // entering the Ruins starts a fresh, empty run purse
+  dungeonPurse.set(pid, 0);        // entering the Ruins starts a fresh, empty run purse…
+  dungeonRunChests.delete(pid);    // …and a fresh provisional-chest slate
 }
 /** Returns the coins this open ADDED to the purse (0 if unknown / already opened / potion-only). */
 function dungeonChest(pid: string, chest: string): number {
   const contents = DUNGEON_CHEST_CONTENTS[chest];
   if (!contents) return 0;
-  const key = `${pid}:${chest}`;
-  if (dungeonOpenedChests.has(key)) return 0;    // already opened by this account → no re-farm
-  dungeonOpenedChests.add(key);
+  if (dungeonOpenedChests.has(`${pid}:${chest}`)) return 0; // already banked → no re-farm
+  let run = dungeonRunChests.get(pid);
+  if (!run) { run = new Set(); dungeonRunChests.set(pid, run); }
+  if (run.has(chest)) return 0;    // already opened this run → no double-pay
+  run.add(chest);
   const c = contents.coins ?? 0;
   if (c > 0) dungeonPurse.set(pid, (dungeonPurse.get(pid) ?? 0) + c);
   return c;
 }
-/** Returns the coins the server picked for this win (0 for an unknown floor). */
-function dungeonWin(pid: string, floor: string): number {
-  const range = DUNGEON_FLOOR_COINS[floor];
+/** Returns the coins the server picked for this win — by MOB TIER, validated against the floor.
+ *  0 if the floor is unknown or the tier can't legally appear there (a tampered claim). */
+function dungeonWin(pid: string, floor: string, tier: number): number {
+  const allowed = DUNGEON_FLOOR_TIERS[floor];
+  if (!allowed || !allowed.includes(tier)) return 0;   // reject — the client tried a tier it couldn't fight
+  const range = DUNGEON_TIER_COINS[tier];
   if (!range) return 0;
   const c = range[0] + Math.floor(Math.random() * (range[1] - range[0] + 1)); // server picks the amount
   dungeonPurse.set(pid, (dungeonPurse.get(pid) ?? 0) + c);
   return c;
 }
-/** Returns the coins actually paid out (0 on forfeit / empty purse / drained House). */
+/** Returns the coins actually paid out (0 on forfeit / empty purse / drained House). On escape the
+ *  run's chests are COMMITTED; on death/bail they roll back (re-lootable next run). */
 function dungeonExit(pid: string, escaped: boolean): number {
   const purse = dungeonPurse.get(pid) ?? 0;
+  const run = dungeonRunChests.get(pid);
   dungeonPurse.delete(pid);
-  if (escaped && purse > 0) return housePay(pid, purse);
-  return 0;
+  dungeonRunChests.delete(pid);
+  if (escaped) {
+    if (run) for (const chest of run) dungeonOpenedChests.add(`${pid}:${chest}`); // bank them
+    if (purse > 0) return housePay(pid, purse);
+  }
+  return 0; // death/bail: run chests discarded above (never committed) → re-lootable
 }
 
 // ----------------------------------------------------------------------------
@@ -95,9 +109,10 @@ let failures = 0;
 function fail(msg: string) { console.log(`❌ ${msg}`); failures++; }
 function ok(msg: string) { console.log(`✅ ${msg}`); }
 
-const [WIN_MIN, WIN_MAX] = DUNGEON_FLOOR_COINS.B1;
 const CHEST_COINS = DUNGEON_CHEST_CONTENTS['B1:17,2'].coins!; // 200
 const CHEST_KEYS = Object.keys(DUNGEON_CHEST_CONTENTS);
+const FLOORS = Object.keys(DUNGEON_FLOOR_TIERS);
+const ALL_TIERS = Object.keys(DUNGEON_TIER_COINS).map(Number);
 const rint = (n: number) => Math.floor(Math.random() * n);
 const pick = <T,>(a: T[]) => a[rint(a.length)];
 
@@ -118,6 +133,7 @@ function hammer() {
 
   const RUNS = 50_000;
   let winSamples = 0, winOutOfRange = 0;
+  let illegalTierPaid = 0;          // a tier illegal for the floor that still paid out (must be 0)
   let chestDoublePays = 0;          // a chest that paid coins a 2nd time for the same account
   let purseMismatch = 0;            // exit payout != min(purse, cap) accounting
   let forfeitLeak = 0;              // death/bail credited the player anything
@@ -135,23 +151,34 @@ function hammer() {
 
     // expectedPurse = what the in-memory purse SHOULD hold given what we added.
     let expectedPurse = 0;
+    const openedThisRun = new Set<string>(); // mirror: chests already opened during THIS run iteration
 
     // Random sequence of encounters + chest opens.
     const actions = 1 + rint(8);
     for (let a = 0; a < actions; a++) {
       if (Math.random() < 0.5) {
-        const c = dungeonWin(pid, 'B1');
+        const floor = pick(FLOORS);
+        const tier = pick(ALL_TIERS);                 // sometimes a tier this floor can't actually spawn
+        const legal = DUNGEON_FLOOR_TIERS[floor].includes(tier);
+        const c = dungeonWin(pid, floor, tier);
         winSamples++;
-        if (c < WIN_MIN || c > WIN_MAX) winOutOfRange++;
+        if (legal) {
+          const [lo, hi] = DUNGEON_TIER_COINS[tier];
+          if (c < lo || c > hi) winOutOfRange++;       // legal win must land in the tier's range
+        } else if (c !== 0) {
+          illegalTierPaid++;                            // illegal tier must pay nothing
+        }
         expectedPurse += c;
         totalWins += c;
       } else {
         const chest = pick(CHEST_KEYS);
-        const everOpened = dungeonOpenedChests.has(`${pid}:${chest}`);
-        const added = dungeonChest(pid, chest);
+        const committed = dungeonOpenedChests.has(`${pid}:${chest}`); // banked on a past escape
         const contentCoins = DUNGEON_CHEST_CONTENTS[chest].coins ?? 0;
-        if (everOpened && added !== 0) chestDoublePays++;            // re-farm: must be 0
-        if (!everOpened && added !== contentCoins) chestDoublePays++; // first open: exact coins
+        // Expected: banked or already-opened-this-run → 0; otherwise the chest's exact coins, once.
+        const expectAdded = (committed || openedThisRun.has(chest)) ? 0 : contentCoins;
+        const added = dungeonChest(pid, chest);
+        openedThisRun.add(chest);
+        if (added !== expectAdded) chestDoublePays++;
         expectedPurse += added;
         totalChestPays += added;
       }
@@ -186,15 +213,18 @@ function hammer() {
 
   // ---- Report ----
   console.log(`\nhammered ${RUNS} runs across ${PLAYERS.length} accounts:`);
-  console.log(`  encounter wins sampled : ${winSamples}  (range ${WIN_MIN}-${WIN_MAX})`);
+  console.log(`  encounter wins sampled : ${winSamples}  (tiers ${ALL_TIERS.join('/')}, ranges ${ALL_TIERS.map((t) => DUNGEON_TIER_COINS[t].join('-')).join(' ')})`);
   console.log(`  total win coins        : ${totalWins}`);
-  console.log(`  total chest coins      : ${totalChestPays}  (chest=${CHEST_COINS})`);
+  console.log(`  total chest coins      : ${totalChestPays}  (B1 coin-chest=${CHEST_COINS})`);
   console.log(`  total paid out (escape): ${totalPaidOut}`);
   console.log(`  total forfeited (death): ${totalForfeited}`);
   console.log(`  House: ${GENESIS} → ${house}  (Δ=${house - GENESIS}, should equal -paidOut=${-totalPaidOut})\n`);
 
-  if (winOutOfRange === 0) ok(`no minting: all ${winSamples} encounter wins within [${WIN_MIN}, ${WIN_MAX}]`);
-  else fail(`${winOutOfRange} encounter wins OUTSIDE [${WIN_MIN}, ${WIN_MAX}] — coins minted out of range`);
+  if (winOutOfRange === 0) ok(`no minting: every legal win landed in its tier's coin range`);
+  else fail(`${winOutOfRange} legal wins OUTSIDE their tier range — coins minted out of range`);
+
+  if (illegalTierPaid === 0) ok('a tier illegal for the floor pays nothing (anti-tamper)');
+  else fail(`${illegalTierPaid} illegal-tier claims got paid`);
 
   if (chestDoublePays === 0) ok('chests pay exactly once per account (no re-farm, exact coins on first open)');
   else fail(`${chestDoublePays} chest pay violations (re-farm or wrong amount)`);
@@ -252,8 +282,47 @@ function houseCapEdge() {
   else fail(`${conservationViolations} conservation violations under cap`);
 }
 
+// ============================================================================
+// Edge: a chest opened then FORFEITED (death/bail) must be re-lootable on the next run; a chest
+// opened then ESCAPED-with must be permanently banked (never pays again). This is the exact thing
+// we don't want to get wrong: "open a chest, get the loot, then die — is it lost forever?" → no.
+// ============================================================================
+function chestRollbackEdge() {
+  console.log('\n--- chest rollback (die = re-lootable, escape = banked) ---');
+  house = 10_000_000; coins.clear();
+  dungeonOpenedChests.clear(); dungeonRunChests.clear(); dungeonPurse.clear();
+  const CHEST = 'B1:17,2', VALUE = DUNGEON_CHEST_CONTENTS[CHEST].coins!;
+  let dieReloot = 0, escapeBanked = 0, banked = 0;
+
+  // 50 die-then-retry cycles: each run opens the chest (gets VALUE into purse) then dies → next run
+  // the chest must be openable AGAIN (provisional, never committed).
+  const pid = 'rb';
+  coins.set(pid, 0);
+  for (let i = 0; i < 50; i++) {
+    dungeonSync(pid);
+    const added = dungeonChest(pid, CHEST);
+    if (added !== VALUE) dieReloot++;      // every run it should re-pay into the purse
+    dungeonExit(pid, false);               // died → forfeit + rollback
+  }
+  if (dieReloot === 0) ok(`a chest opened then died-on is re-lootable every run (×50, ${VALUE}🪙 each)`);
+  else fail(`${dieReloot} runs failed to re-loot a forfeited chest`);
+
+  // Now open + ESCAPE: it banks. A subsequent run must NOT re-pay it.
+  dungeonSync(pid);
+  const first = dungeonChest(pid, CHEST);
+  dungeonExit(pid, true);                   // escaped → commit + pay
+  if (first === VALUE) banked++;
+  dungeonSync(pid);
+  const again = dungeonChest(pid, CHEST);   // same account, new run
+  if (again !== 0) escapeBanked++;
+  dungeonExit(pid, true);
+  if (banked === 1 && escapeBanked === 0) ok('a chest opened then escaped-with is permanently banked (no re-farm)');
+  else fail('escaped chest was not banked correctly');
+}
+
 console.log('The Ruins — dungeon economy hammer\n==================================');
 hammer();
 houseCapEdge();
+chestRollbackEdge();
 console.log(failures === 0 ? '\n🏓 all dungeon-economy invariants held.' : `\n💥 ${failures} invariant violation(s).`);
 process.exit(failures === 0 ? 0 : 1);
