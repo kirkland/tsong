@@ -1281,7 +1281,10 @@ export interface HouseStateMsg {
   balance: number;
   trickleFund: number;
   totalCoins: number;
-  top5Pct: number;            // top-5 net-worth concentration, %
+  top5Pct: number;            // top-5 net-worth concentration among players only, %
+  top5ShareOfTotal: number;   // top-5 net-worth / (House + all player net worth), %
+  playerNetWorthTotal: number; // sum of all positive player net worth
+  economyTotal: number;        // House balance + all player net worth
   brokerFeePct: number;       // current broker fee, % (0.5 in-hours / 1.0 after-hours)
   concentrationCap: number;   // max % of a stock one player may hold
   loanCapWaived: boolean;
