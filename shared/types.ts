@@ -1513,15 +1513,14 @@ export type StockSide = 'long' | 'short';
 // from 25% to 0% over 3 hours. Single source of truth so server charges and client countdowns
 // can never drift apart.
 export const FAST_SELL_BRACKETS: { underMs: number; rate: number }[] = [
-  { underMs:   5 * 60_000, rate: 0.25 },
-  { underMs:  15 * 60_000, rate: 0.20 },
-  { underMs:  30 * 60_000, rate: 0.15 },
-  { underMs:  60 * 60_000, rate: 0.10 },
-  { underMs: 180 * 60_000, rate: 0.05 },
+  { underMs:   5 * 60_000, rate: 0.20 },
+  { underMs:  15 * 60_000, rate: 0.15 },
+  { underMs:  30 * 60_000, rate: 0.10 },
+  { underMs:  60 * 60_000, rate: 0.05 },
 ];
 // Legacy single-constant shims kept for any import sites not yet updated.
-export const FAST_SELL_TAX_MS   = FAST_SELL_BRACKETS[0].underMs; // 5 min (first bracket)
-export const FAST_SELL_TAX_RATE = FAST_SELL_BRACKETS[0].rate;    // 25% (first bracket)
+export const FAST_SELL_TAX_MS   = FAST_SELL_BRACKETS[FAST_SELL_BRACKETS.length - 1].underMs; // 60 min (last bracket)
+export const FAST_SELL_TAX_RATE = FAST_SELL_BRACKETS[0].rate;                                 // 20% (first bracket)
 // Current value of a position: long pays shares×price; short pays 2×cost − shares×price
 // (goes negative if price climbs past entry — covering then costs the holder extra coins).
 export function positionWorth(side: StockSide, shares: number, cost: number, price: number): number {

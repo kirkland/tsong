@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { McpContext } from './context.js';
-import { FAST_SELL_TAX_MS, FAST_SELL_TAX_RATE } from '../../shared/types.js';
+import { FAST_SELL_BRACKETS, FAST_SELL_TAX_MS, FAST_SELL_TAX_RATE } from '../../shared/types.js';
 
 function requireVerified(ctx: McpContext): string | null {
   if (!ctx.identity.verified) {

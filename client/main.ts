@@ -2073,7 +2073,7 @@ function renderHouseDashboard() {
     const lo = i === 0 ? 0 : s.capGainBrackets[i - 1].upTo;
     return `<tr><td>${cap(lo)} – ${cap(b.upTo)}</td><td>${pct(b.rate)}</td></tr>`;
   }).join('');
-  const fastRows = s.fastSell.map((b) => `<tr><td>&lt; ${b.underMin >= 60 ? `${b.underMin / 60}h` : `${b.underMin}m`}</td><td>${pct(b.rate)}</td></tr>`).join('') + '<tr><td>3h+</td><td>0%</td></tr>';
+  const fastRows = s.fastSell.map((b) => `<tr><td>&lt; ${b.underMin >= 60 ? `${b.underMin / 60}h` : `${b.underMin}m`}</td><td>${pct(b.rate)}</td></tr>`).join('') + '<tr><td>60m+</td><td>0%</td></tr>';
   const idleRows = s.idleTiers.map((t, i) => {
     const next = s.idleTiers[i + 1];
     return `<tr><td>${t.days}${next ? `–${next.days}` : '+'} days</td><td>${pct(t.rate)}</td></tr>`;

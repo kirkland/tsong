@@ -3268,6 +3268,19 @@ export class Lobby {
       const ok = await seedNetizen(pid, name, Lobby.NETIZEN_START_COINS);
       if (!ok) break; // House couldn't fund — seed fewer
     }
+    // Top-up any bankrupt netizen back to starting coins from the House treasury.
+    const nets = await getNetizens().catch(() => [] as { pid: string; name: string; coins: number }[]);
+    if (nets.length) {
+      await Promise.all(nets.map(async (n) => {
+        if (n.coins < Lobby.NETIZEN_START_COINS) {
+          const deficit = Lobby.NETIZEN_START_COINS - n.coins;
+          const funded = await houseAdjust(-deficit);
+          if (funded !== null) {
+            await addCoins(n.pid, n.name, deficit);
+          }
+        }
+      }));
+    }
     // Reflect the funding cost on the cached balance + clients.
     this.houseBalance = await getHouseBalance().catch(() => this.houseBalance);
     this.broadcastHouse();
