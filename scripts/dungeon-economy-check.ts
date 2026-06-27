@@ -109,7 +109,7 @@ let failures = 0;
 function fail(msg: string) { console.log(`❌ ${msg}`); failures++; }
 function ok(msg: string) { console.log(`✅ ${msg}`); }
 
-const CHEST_COINS = DUNGEON_CHEST_CONTENTS['B3:28,3'].coins!; // 300 — a coin chest fixture
+const CHEST_COINS = DUNGEON_CHEST_CONTENTS['B2:15,21'].coins!; // 2500 — a coin chest fixture
 const CHEST_KEYS = Object.keys(DUNGEON_CHEST_CONTENTS);
 const FLOORS = Object.keys(DUNGEON_FLOOR_TIERS);
 const ALL_TIERS = Object.keys(DUNGEON_TIER_COINS).map(Number);
@@ -291,7 +291,7 @@ function chestRollbackEdge() {
   console.log('\n--- chest rollback (die = re-lootable, escape = banked) ---');
   house = 10_000_000; coins.clear();
   dungeonOpenedChests.clear(); dungeonRunChests.clear(); dungeonPurse.clear();
-  const CHEST = 'B3:28,3', VALUE = DUNGEON_CHEST_CONTENTS[CHEST].coins!;
+  const CHEST = 'B2:15,21', VALUE = DUNGEON_CHEST_CONTENTS[CHEST].coins!;
   let dieReloot = 0, escapeBanked = 0, banked = 0;
 
   // 50 die-then-retry cycles: each run opens the chest (gets VALUE into purse) then dies → next run

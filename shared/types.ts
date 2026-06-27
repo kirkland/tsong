@@ -253,6 +253,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'lightning', name: 'Lightning', slot: 'trail', price: 10000 },
   { id: 'phoenix', name: 'Phoenix', slot: 'trail', price: 15000 }, // animated
   { id: 'trail-fart', name: '💨 Fart Cloud', slot: 'trail', price: 0, locked: 'dungeon' }, // a Ruins chest prize (B4 switch room)
+  { id: 'trail-blood', name: '🩸 Blood Trail', slot: 'trail', price: 0, locked: 'dungeon' }, // a Ruins chest prize (B3 gore floor)
   // Titles (flex tier)
   { id: 'whale', name: '💎 Whale', slot: 'title', price: 25000 },
   { id: 'marketmaker', name: '📈 Market Maker', slot: 'title', price: 40000 },
@@ -467,8 +468,8 @@ export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potions?: 
   'B2:15,21': { coins: 2500 },
   'B2:34,24': { cosmetic: 'car-monster', needsKey: true }, // the sealed vault: a MONSTER TRUCK (needs the B3 key)
   // B3 — bigger, darker, tier-3 mobs; meatier loot for the longer floor.
-  'B3:28,3': { coins: 300 },
-  'B3:4,13': { potions: 2 },               // generous: 2 potions on a long floor
+  'B3:28,3': { cosmetic: 'trail-blood' }, // 🩸 Blood Trail — the gore-floor cosmetic
+  'B3:4,13': { potions: 4 },               // generous: 4 potions on a long floor
   'B3:29,23': { cosmetic: 'skin-hotdog' }, // 🌭 Hot Dog paddle skin
   'B3:38,24': { potions: 2 },
   // B4 — the deep floor: a 5-potion chest right at the entrance, richest coins, another wheel spin, and

@@ -773,6 +773,10 @@ const TRAIL_TINTS: Record<string, TrailTint> = {
     const light = 33 + 9 * Math.sin(t / 300 + i * 0.9);
     return `hsl(${hue},52%,${light}%)`;
   },
+  'trail-blood': (i, n) => { // wet crimson at the head → dark clotted maroon at the tail (no glow → reads as opaque blood)
+    const f = n > 1 ? i / (n - 1) : 1;
+    return `hsl(${352 - f * 6},88%,${17 + f * 27}%)`;
+  },
   // --- exclusive trails ---
   'x-eclipse': (i, n, t) => {
     const f = i / n;
@@ -836,6 +840,25 @@ function drawTrail(ctx: CanvasRenderingContext2D, key: string, cx: number, cy: n
         ctx.fillStyle = grad;
         ctx.beginPath(); ctx.arc(gx, gy, pr, 0, Math.PI * 2); ctx.fill();
       }
+    }
+    ctx.restore();
+    return;
+  }
+  if (id === 'trail-blood') {
+    // Wet, opaque blood: rounded globs that sag downward (gravity) and stretch longer + lower as they
+    // age, bright crimson at the head smearing to dark clotted maroon behind.
+    const sag = h * 0.16;
+    for (let i = 0; i < n; i++) {
+      const f = (i + 1) / n, age = 1 - f;
+      const a = 0.45 * Math.pow(f, 1.1);
+      if (a < 0.02) continue;
+      const w = PADDLE.w * (0.4 + 0.55 * f);
+      const hh = h * (0.4 + 0.5 * f) + age * sag * 1.4; // older globs elongate as they drip
+      ctx.globalAlpha = a;
+      ctx.fillStyle = tint(i, n, t);
+      ctx.beginPath();
+      ctx.ellipse(pts[i].x, pts[i].y + age * sag, w / 2, hh / 2, 0, 0, Math.PI * 2);
+      ctx.fill();
     }
     ctx.restore();
     return;
