@@ -877,6 +877,7 @@ export function startWorld(net: WorldNet): void {
   let robBoss: { x: number; y: number; sprite: Phaser.GameObjects.Image } | null = null; // B6: Rob, seated at his PC
   let nearRob = false;          // standing next to Rob (→ "Interrupt him" prompt)
   let robDefeated = false;      // B6: beaten Rob this run? (run-scoped)
+  const b6Minions: { spr: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number }[] = []; // little minions milling about the office
   let dungeonImp: { x: number; y: number } | null = null; // the friendly B2 imp's world position (talk for a potion)
   let nearDungeonImp = false; // the imp is within talk range
   let impGavePotion = false;  // he hands out one potion per run (no farming)
@@ -1539,7 +1540,7 @@ export function startWorld(net: WorldNet): void {
     dungeonObjs.length = 0;
     dungeonTorches.length = 0; dungeonFlies.length = 0; dungeonImp = null; nearDungeonImp = false;
     dyingMan = null; dyingManSprite = null; nearDyingMan = false;
-    clarenceSprite = null; clarenceAnim = null; robBoss = null; nearRob = false;
+    clarenceSprite = null; clarenceAnim = null; robBoss = null; nearRob = false; b6Minions.length = 0;
     for (const k in dungeonChestSprites) delete dungeonChestSprites[k];
     for (const k in dungeonLockSprites) delete dungeonLockSprites[k];
     dungeonDarkRT?.destroy(); dungeonDarkRT = null;
@@ -1641,6 +1642,14 @@ export function startWorld(net: WorldNet): void {
       place('w-deskpc', 8, 2.4, 1.5, 0.95);             // desk + monitor (its map screen glowing) up top
       const rob = place('w-robpc', 8, 4.3, 1.15, 0.95, 1); // Rob, seated below it, back to the door
       robBoss = { x: rob.x, y: rob.y, sprite: rob };
+      // a few minions milling about the office, just for fun (they wander the open floor)
+      if (sc.textures.exists('w-minion')) for (let i = 0; i < 3; i++) {
+        const mx = ox + (3 + Math.random() * 11) * T, my = oy + (6 + Math.random() * 4) * T;
+        const spr = sc.add.image(mx, my, 'w-minion').setScale(sl * 1.1).setOrigin(0.5, 0.95).setDepth(my);
+        dungeonObjs.push(spr);
+        const a = Math.random() * 6.28;
+        b6Minions.push({ spr, x: mx, y: my, vx: Math.cos(a) * 26, vy: Math.sin(a) * 26 });
+      }
     }
     // a few drifting fireflies (red / orange / purple) — twinkle over the darkness
     if (sc.textures.exists('d-glow')) {
@@ -1888,6 +1897,16 @@ export function startWorld(net: WorldNet): void {
     function closeTalk() {
       window.clearInterval(timer); talkOpen = false; npcAdvance = null; npcClose = null;
       npcBox.style.display = 'none'; npcChoices.style.display = 'none'; npcChoices.replaceChildren(); npcPortrait.style.display = 'none'; nearRob = false;
+      // the dialogue's over → the duel. Beating Rob conquers the Ruins (escape with everything).
+      const rob = DUNGEON_MOBS.find((m) => m.id === 'rob');
+      triggerEncounter({
+        mob: rob, song: '/inthend.mp3',
+        onWin: () => {
+          robDefeated = true; robBoss?.sprite.destroy(); robBoss = null;
+          showToast('🏆 You beat Rob — the Ruins are conquered! Banking your haul…');
+          window.setTimeout(() => leaveDungeon(true), 1900);
+        },
+      });
     }
     npcClose = closeTalk;
     showPage();
@@ -1940,7 +1959,7 @@ export function startWorld(net: WorldNet): void {
       window.clearInterval(timer); talkOpen = false; npcAdvance = null; npcClose = null;
       npcBox.style.display = 'none'; npcChoices.style.display = 'none'; npcPortrait.style.display = 'none';
       const clarence = DUNGEON_MOBS.find((m) => m.id === 'clarence'); // → the fight, on the battle theme
-      triggerEncounter({ mob: clarence, song: '/battle.mp3', winPotions: 5, fleeWins: true, onWin: () => { clarenceDefeated = true; clarenceSprite?.destroy(); clarenceSprite = null; const sc = petScene; if (sc) buildFloor(sc); } }); // fleeWins is TEMP for testing; rebuild → the chamber's chests appear
+      triggerEncounter({ mob: clarence, song: '/battle.mp3', winPotions: 5, onWin: () => { clarenceDefeated = true; clarenceSprite?.destroy(); clarenceSprite = null; const sc = petScene; if (sc) buildFloor(sc); } }); // fleeWins is TEMP for testing; rebuild → the chamber's chests appear
     }
     npcClose = closeTalk;
     showPage();
@@ -2103,11 +2122,12 @@ export function startWorld(net: WorldNet): void {
               markBox(); net.dungeonChest(cfg.chestId);
               showToast(`📦 You smashed it! ${cfg.coins?.[0] ?? 0}🪙 — escape to keep!`);
             } else if (cfg?.winPotions != null) {                  // a boss (Clarence) → potions, not coins; no server credit
-              potionCount += cfg.winPotions; cfg.onWin?.();
+              potionCount += cfg.winPotions;
               showToast(`🏆 You bested ${mob.name}! +${cfg.winPotions} 🧪 Potions — the way is open.`);
-            } else {
+            } else if (!cfg?.onWin) {
               net.dungeonWin(currentFloor, mob.tier);              // a normal mob win → coins by tier from the House
             }
+            cfg?.onWin?.();                                        // bosses (Clarence/Rob) run their own follow-up
             if (r.item) potionCount += 1;
           }
           if (dungeonHP <= 0) { showToast('💀 You black out — your loot is lost in the dark…'); leaveDungeon(false); }
@@ -4275,6 +4295,15 @@ export function startWorld(net: WorldNet): void {
           if (nightOverlay) nightOverlay.setAlpha(0);
           if (warmOverlay) warmOverlay.setAlpha(0);
           if (dungeonDarkRT) dungeonDarkRT.setVisible(false);
+          // minions mill about the open floor, bouncing off the walls with a little waddle
+          const xlo = dInt.x + 2.2 * DUNGEON_TILE, xhi = dInt.x + 15.5 * DUNGEON_TILE, ylo = dInt.y + 5.4 * DUNGEON_TILE, yhi = dInt.y + 10.6 * DUNGEON_TILE;
+          for (const m of b6Minions) {
+            if (Math.random() < 0.02) { const a = Math.random() * 6.28; m.vx = Math.cos(a) * 26; m.vy = Math.sin(a) * 26; } // occasional turn
+            m.x += m.vx * dt; m.y += m.vy * dt;
+            if (m.x < xlo || m.x > xhi) { m.vx *= -1; m.x = clamp(m.x, xlo, xhi); }
+            if (m.y < ylo || m.y > yhi) { m.vy *= -1; m.y = clamp(m.y, ylo, yhi); }
+            m.spr.setPosition(m.x, m.y + Math.sin(t * 9 + m.x) * 1.2).setDepth(m.y).setFlipX(m.vx < 0);
+          }
         } else if (inDungeon) {
           // The Ruins: a dim ambient dark with bright holes erased at the torches + the player, so
           // you see the real tiles normally inside the light and dimly (not black) outside it.

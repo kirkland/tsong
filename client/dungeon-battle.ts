@@ -8,6 +8,7 @@
 
 import { Game } from '../server/game';
 import { COURT, PADDLE, ROAM, BLASTER, DIAMOND } from '../shared/types';
+import { askMapTap, randomPlace } from './maptap';
 
 export interface MobDef {
   id: string; name: string; portrait: string; power: number; color: string;
@@ -26,6 +27,8 @@ export interface MobDef {
   dropChance?: number;                     // 0–1 chance a win drops a potion (default 0; Demon Fritz is high)
   rotate?: number;                         // permanent "rotate" power-up: the whole court is turned (1–3 quarter-turns; Clarence = 2 = 180°)
   diamond?: boolean;                       // "diamond hands" mode: a drifting gem obstacle bounces around the court (Clarence)
+  boss?: boolean;                          // a multi-phase boss: every 4 points pauses for a MapTap question, then he powers up
+  bossPowers?: string[];                   // the gimmick granted at each checkpoint, in order (Rob)
 }
 
 // Roster, grouped two-per-tier. A floor introduces 2 NEW mobs (its tier) and carries the 2 from the
@@ -95,6 +98,14 @@ export const DUNGEON_MOBS: MobDef[] = [
     gimmick: { name: 'Vertigo', desc: 'The entire arena is turned on its side.' },
     flavor: "you won't reach the boss.", tag: 'He guards the last door. Reality tilts wrong around him.',
   },
+  // --- THE FINAL BOSS: Rob, fought at his desk. 12 lives; every 4, a MapTap question gates his next
+  //     power-up (a wrong answer costs you HP + a screen of red). ---
+  {
+    id: 'rob', name: 'Rob', portrait: '🗺️', power: 8, color: '#23408a', tier: 5, bob: 'float',
+    bot: { react: 0.17, error: 36, predict: true, idleCenter: true }, lives: 12, boss: true, bossPowers: ['turbo', 'mirror'],
+    gimmick: { name: 'Sore Loser', desc: 'He escalates every four points — and quizzes you between rounds.' },
+    flavor: 'this is MY room.', tag: 'You interrupted his MapTap. He will make you regret it.',
+  },
 ];
 
 // ── hand-drawn pixel creatures (per mob id). Built once into offscreen canvases, blitted in the
@@ -130,7 +141,7 @@ function buildScaled(id: string, im: HTMLImageElement) {
   c.drawImage(im, 0, 0, cw, ch);
   MOB_SCALED[id] = cn;
 }
-for (const [id, src] of Object.entries({ bat: '/dungeon/mob_bat.png', slime: '/dungeon/mob_slime.png', jsav: '/dungeon/mob_jsav.png', warden: '/dungeon/mob_warden.png', fritz: '/dungeon/mob_fritz.png', hound: '/dungeon/mob_hound.png', noam: '/dungeon/mob_noam.png', josiel: '/dungeon/mob_josiel.png', clarence: '/dungeon/mob_clarence.png' })) {
+for (const [id, src] of Object.entries({ bat: '/dungeon/mob_bat.png', slime: '/dungeon/mob_slime.png', jsav: '/dungeon/mob_jsav.png', warden: '/dungeon/mob_warden.png', fritz: '/dungeon/mob_fritz.png', hound: '/dungeon/mob_hound.png', noam: '/dungeon/mob_noam.png', josiel: '/dungeon/mob_josiel.png', clarence: '/dungeon/mob_clarence.png', rob: '/dungeon/mob_rob.png' })) {
   const im = new Image(); MOB_IMG[id] = im;
   im.onload = () => buildScaled(id, im);
   im.src = src;
@@ -281,7 +292,7 @@ export function startEncounter(opts: EncounterOpts): void {
   let fireTimer = (mob.fireRate ?? 1.6) * 1.4;      // delay the first blaster shot a touch
   const mobLives = mob.lives ?? 3; // points you must put past it to kill it
   const POTION_HEAL = 10; let healed = 0; // HP restored by potions drunk mid-battle
-  const curHP = () => Math.max(0, Math.min(100, opts.hp - game.score.right * mob.power + healed));
+  const curHP = () => Math.max(0, Math.min(100, opts.hp - game.score.right * mob.power + healed - mapPenalty));
   let lowBeepAt = 0; // throttles the low-HP warning beep
 
   // player input → target Y (pointer drag / W-S). Stored in court coords.
@@ -372,7 +383,7 @@ export function startEncounter(opts: EncounterOpts): void {
   }
 
   // ── phases: transition → fight → result (+ the optional capture detour) ──
-  type Phase = 'intro' | 'ready' | 'fight' | 'win' | 'lose' | 'capturePrompt' | 'capturing' | 'captured';
+  type Phase = 'intro' | 'ready' | 'fight' | 'win' | 'lose' | 'capturePrompt' | 'capturing' | 'captured' | 'maptap';
   let phase: Phase = 'intro';
   let phaseT = 0;           // seconds in the current phase
   let bannerAlpha = 1;
@@ -380,6 +391,11 @@ export function startEncounter(opts: EncounterOpts): void {
   let raf = 0;
   let resultCoins = 0, resultItem: string | null = null;
   // ── capture state (only used when opts.capturable) ──
+  // boss (Rob): MapTap checkpoints, escalating powers, a wrong-answer HP penalty + DOOM-style red flash
+  let bossCheckpoints = 0;            // how many 4-point checkpoints already cleared
+  let mapPenalty = 0;                 // HP docked by wrong MapTap answers
+  let flashT = 0;                     // red damage-flash timer (seconds), decays each frame
+  let robRotate = 0, robMirror = false; // boss powers granted at checkpoints (turbo is applied directly)
   let captureDeclined = false;       // said "no" → finish the fight normally
   let captureScale = 1;              // the mob's draw-scale during capture (1 → 0 as it's sucked into the ball)
   const captureMob = { x: 0, y: 0 }; // where the mob sat when the ball flew
@@ -403,6 +419,12 @@ export function startEncounter(opts: EncounterOpts): void {
     opts.onResult({ result, coins: result === 'capture' ? 0 : resultCoins, item: resultItem, hpLost: opts.hp - curHP() });
   }
   function flee() { if (phase === 'fight') { resultCoins = 0; endBattle('flee'); } }
+  // grant the boss his next escalation power (placeholders for now — Rob: turbo → mirror)
+  function applyBossPower(pw?: string) {
+    if (pw === 'turbo') game.setTurbo(true);
+    else if (pw === 'mirror') robMirror = true;
+    else if (pw === 'rotate') robRotate = 2;
+  }
 
   // ── capture dialogue: a small Yes/No box shown when a capturable mob hits its last life ──
   const captureBox = document.createElement('div');
@@ -720,6 +742,7 @@ export function startEncounter(opts: EncounterOpts): void {
   function frame() {
     const now = performance.now(), dt = Math.min(0.033, (now - last) / 1000); last = now;
     phaseT += dt;
+    if (flashT > 0) flashT = Math.max(0, flashT - dt); // decay the DOOM damage flash
     layoutCourt();
 
     if (phase === 'fight') {
@@ -731,6 +754,8 @@ export function startEncounter(opts: EncounterOpts): void {
       if (mob.mirror) game.mirrorTimer.left = Infinity;
       if (mob.blaster) game.blasterAmmo.right = Infinity;
       if (mob.rotate) game.rotated = mob.rotate;
+      if (robRotate) game.rotated = robRotate;            // boss powers granted mid-fight (re-asserted)
+      if (robMirror) game.mirrorTimer.left = Infinity;
       stepAI(dt);
       const beforeL = game.score.left, beforeR = game.score.right;
       game.tick(dt);
@@ -738,8 +763,25 @@ export function startEncounter(opts: EncounterOpts): void {
       bannerAlpha = Math.max(0, 1 - Math.max(0, phaseT - 1.4) / 0.6);
       // mobLives points kills the mob (win). The mob never wins — it just chips your run HP each
       // point, and you fight on until that HP runs out (death). Potions (P) heal you mid-fight.
+      // BOSS (Rob): every 4 points, pause for a MapTap question — a wrong answer docks HP + flashes the
+      // screen red — then he gains his next power and the fight resumes.
+      if (mob.boss && game.score.left > 0 && game.score.left % 4 === 0 && game.score.left < mobLives && bossCheckpoints < game.score.left / 4) {
+        bossCheckpoints = game.score.left / 4;
+        phase = 'maptap'; phaseT = 0;
+        if (document.pointerLockElement === cv) document.exitPointerLock();
+        song.pause();
+        const pl = randomPlace();
+        askMapTap({
+          prompt: pl.name, lat: pl.lat, lon: pl.lon, onDone: (correct) => {
+            if (!correct) { mapPenalty += 10; flashT = 0.8; tone(150, 0.45, 'sawtooth', 0.2, 64); } // a wrong guess HURTS
+            applyBossPower(mob.bossPowers?.[bossCheckpoints - 1]);
+            if (curHP() <= 0) { phase = 'lose'; phaseT = 0; tone(160, 0.5, 'sawtooth', 0.18, 70); }
+            else { phase = 'fight'; phaseT = 0; song.play().catch(() => {}); }
+          },
+        });
+      }
       // A capturable "monster box" mob, brought to its LAST life, pauses for the Poké Ball offer.
-      if (opts.capturable && !captureDeclined && game.score.left >= 1 && game.score.left === mobLives - 1) {
+      else if (opts.capturable && !captureDeclined && game.score.left >= 1 && game.score.left === mobLives - 1) {
         phase = 'capturePrompt'; phaseT = 0;
         if (document.pointerLockElement === cv) document.exitPointerLock();
         song.volume = 0.3;
@@ -764,6 +806,8 @@ export function startEncounter(opts: EncounterOpts): void {
       if (phase === 'capturing') drawCapture();
       if (phase === 'captured') drawCaptureResult();
     }
+    // DOOM-style damage flash: a red wash over the whole screen, fading out (from a wrong MapTap answer)
+    if (flashT > 0) { ctx.fillStyle = `rgba(200,20,12,${Math.min(0.6, flashT * 0.8)})`; ctx.fillRect(0, 0, cv.width, cv.height); }
     // show the "click to capture" hint only while fighting un-captured
     const wantPrompt = phase === 'fight' && document.pointerLockElement !== cv ? 'block' : 'none';
     if (capturePrompt.style.display !== wantPrompt) capturePrompt.style.display = wantPrompt;
