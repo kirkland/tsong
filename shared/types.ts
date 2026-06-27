@@ -773,7 +773,7 @@ export type ClientMsg =
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
   | { type: 'dailySpin' } // claim the once-per-24h reward spin
   | { type: 'stockInvest'; coin: string; amount: number; side?: StockSide } // open a long or short position
-  | { type: 'stockCashOut'; coin: string; side?: StockSide } // close a long or short position
+  | { type: 'stockCashOut'; coin: string; side?: StockSide; fraction?: number } // close a long/short position — all of it, or a 0–1 fraction (partial cash-out)
   | { type: 'getLoan'; amount: number } // borrow `amount` coins from Davis (owe 1.5× back by the daily 5pm collection)
   | { type: 'repayLoan' } // pay Davis the full 1.5× owed and clear the loan
   | { type: 'roulette'; bets: RouletteBet[] } // stake coins on a single spin of the casino wheel

@@ -2316,9 +2316,28 @@ document.addEventListener('click', (e) => {
 // Keep track of preview canvases so the animation loop can repaint them.
 const shopPreviewCanvases: { canvas: HTMLCanvasElement; id: string; slot: 'hat' | 'skin' | 'trail' }[] = [];
 
+// Floating "+N" (green) / "−N" (red) that pops under the toolbar coin counter whenever your liquid
+// balance changes. shownCoins tracks the last *displayed* total, so the flash only fires on a real
+// change — and naturally waits for the roulette-spin hold (the toolbar isn't re-rendered mid-spin).
+let shownCoins: number | null = null;
+function flashCoinDelta(delta: number) {
+  if (!delta || !coinCount.isConnected) return;
+  const r = coinCount.getBoundingClientRect();
+  if (r.width === 0 && r.height === 0) return; // counter not visible right now
+  const el = document.createElement('div');
+  el.className = 'coin-delta ' + (delta > 0 ? 'pos' : 'neg');
+  el.textContent = (delta > 0 ? '+' : '−') + fmtCoins(Math.abs(delta));
+  el.style.left = `${r.left + r.width / 2}px`;
+  el.style.top = `${r.bottom + 1}px`;
+  document.body.appendChild(el);
+  el.addEventListener('animationend', () => el.remove());
+}
+
 function renderShop() {
-  coinCount.textContent = String(wallet.coins);
-  shopCoins.textContent = String(wallet.coins);
+  if (shownCoins !== null && wallet.coins !== shownCoins) flashCoinDelta(wallet.coins - shownCoins);
+  shownCoins = wallet.coins;
+  coinCount.textContent = fmtCoins(wallet.coins);
+  shopCoins.textContent = fmtCoins(wallet.coins);
   updateSpinButton();
   shopItems.innerHTML = '';
   shopPreviewCanvases.length = 0;
@@ -2420,7 +2439,7 @@ function syncBetSection() {
   const payout = (amt: number, o: number) => Math.max(amt, Math.round(amt * o));
   betStatus.classList.toggle('warn', !affordable);
   if (!affordable) {
-    betStatus.textContent = `💸 Insufficient funds — you have ${wallet.coins}🪙. Consider taking out a loan from Davis.`;
+    betStatus.textContent = `💸 Insufficient funds — you have ${fmtCoins(wallet.coins)}🪙. Consider taking out a loan from Davis.`;
   } else if (wallet.bets.length) {
     const mine = wallet.bets
       .map((b) => `${b.amount}🪙 on ${b.side} @ ${b.odds.toFixed(2)}× → ${payout(b.amount, b.odds)}🪙`)
@@ -2682,8 +2701,111 @@ function taxBadge(openedAt: number): { text: string; cls: string } {
   return { text: '✅ tax-free', cls: 'tax-free' };
 }
 
+// Number formatting with thousands separators: coins (whole), prices (2dp), percents (≤1dp).
+function fmtCoins(n: number): string { return Math.round(n).toLocaleString('en-US'); }
+function fmtPrice(n: number): string { return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function fmtPct(n: number, dp = 1): string { return n.toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp }); }
+
+// --- Sell modal: close a position fully, or sell a custom slice of it. Reads the live price +
+// holding from `market`, sends a `stockCashOut` with a 0–1 fraction (the server splits the cost
+// basis proportionally and keeps the remainder open). ---
+let sellModalEl: HTMLDivElement | null = null;
+function closeSellModal() {
+  sellModalEl?.remove();
+  sellModalEl = null;
+  document.removeEventListener('keydown', sellModalKey, true);
+}
+function sellModalKey(e: KeyboardEvent) { if (e.key === 'Escape') { e.preventDefault(); closeSellModal(); } }
+function openSellModal(coinId: string, ticker: string, side: StockSide) {
+  closeSellModal();
+  const hold = market.holdings.find((h) => h.id === coinId && h.side === side);
+  const price = market.prices.find((p) => p.id === coinId)?.price ?? 0;
+  if (!hold || !(price > 0)) return;
+  const isShort = side === 'short';
+  const worth = positionWorth(side, hold.shares, hold.cost, price);
+  const maxCoins = Math.round(worth);       // negative for an underwater short
+  const usable = maxCoins > 0;              // a coin-amount field only makes sense when worth > 0
+
+  const overlay = document.createElement('div');
+  overlay.className = 'sell-modal';
+  const box = document.createElement('div');
+  box.className = 'sell-box';
+
+  const title = document.createElement('div');
+  title.className = 'sell-title';
+  title.textContent = `${isShort ? 'Cover' : 'Sell'} ${ticker}`;
+
+  const summary = document.createElement('div');
+  summary.className = 'sell-sum';
+  const plPct = hold.cost > 0 ? (worth / hold.cost - 1) * 100 : 0;
+  summary.innerHTML = `Worth <b>${fmtCoins(worth)}🪙</b> · cost ${fmtCoins(hold.cost)}🪙 · <span class="${plPct >= 0 ? 'pl-up' : 'pl-down'}">${plPct >= 0 ? '+' : ''}${fmtPct(plPct, 0)}%</span>`;
+
+  const slider = document.createElement('input');
+  slider.type = 'range'; slider.min = '1'; slider.max = '100'; slider.step = '1'; slider.value = '50';
+  slider.className = 'sell-slider';
+
+  const amtRow = document.createElement('div');
+  amtRow.className = 'sell-amt-row';
+  const amtInput = document.createElement('input');
+  amtInput.type = 'number'; amtInput.min = '0'; amtInput.max = String(Math.max(0, maxCoins));
+  amtInput.className = 'sell-amt'; amtInput.setAttribute('inputmode', 'numeric');
+  const amtLabel = document.createElement('span');
+  amtLabel.textContent = `🪙 of ${fmtCoins(Math.max(0, maxCoins))}`;
+  amtRow.append(amtInput, amtLabel);
+  if (!usable) amtRow.style.display = 'none';
+
+  const preview = document.createElement('div');
+  preview.className = 'sell-preview';
+
+  const pct = () => Math.min(100, Math.max(1, Math.round(Number(slider.value) || 1)));
+  const updatePreview = () => {
+    const f = pct() / 100;
+    const amount = worth * f;
+    if (isShort && amount < 0) {
+      preview.innerHTML = `Cover <b>${pct()}%</b> → costs ≈ <b>${fmtCoins(-amount)}🪙</b>`;
+    } else {
+      preview.innerHTML = `${isShort ? 'Cover' : 'Sell'} <b>${pct()}%</b> → receive ≈ <b>${fmtCoins(amount)}🪙</b> <span class="sell-note">(before tax)</span>`;
+    }
+  };
+  const syncFromSlider = () => { if (usable) amtInput.value = String(Math.round(worth * (pct() / 100))); updatePreview(); };
+  slider.addEventListener('input', syncFromSlider);
+  amtInput.addEventListener('input', () => {
+    const coins = Math.max(0, Math.min(maxCoins, Math.floor(Number(amtInput.value) || 0)));
+    slider.value = String(Math.min(100, Math.max(1, Math.round((coins / maxCoins) * 100))));
+    updatePreview();
+  });
+
+  const send = (fraction: number) => {
+    net.send({ type: 'stockCashOut', coin: coinId, side, fraction: fraction >= 1 ? 1 : fraction });
+    playChaChing();
+    closeSellModal();
+  };
+  const btns = document.createElement('div');
+  btns.className = 'sell-btns';
+  const cancel = document.createElement('button');
+  cancel.className = 'sell-cancel'; cancel.textContent = 'Cancel';
+  cancel.onclick = () => closeSellModal();
+  const all = document.createElement('button');
+  all.className = `sell-all ${isShort ? 'coin-cover' : 'coin-cash'}`;
+  all.textContent = isShort ? 'Cover all' : 'Cash out all';
+  all.onclick = () => send(1);
+  const go = document.createElement('button');
+  go.className = `sell-go ${isShort ? 'coin-cover' : 'coin-cash'}`;
+  go.textContent = isShort ? 'Cover %' : 'Sell %';
+  go.onclick = () => send(pct() / 100);
+  btns.append(cancel, all, go);
+
+  box.append(title, summary, slider, amtRow, preview, btns);
+  overlay.append(box);
+  overlay.addEventListener('mousedown', (e) => { if (e.target === overlay) closeSellModal(); });
+  document.body.appendChild(overlay);
+  sellModalEl = overlay;
+  document.addEventListener('keydown', sellModalKey, true);
+  syncFromSlider();
+}
+
 function renderMarket() {
-  marketCoins.textContent = String(wallet.coins);
+  marketCoins.textContent = fmtCoins(wallet.coins);
   marketList.innerHTML = '';
   for (const stock of STOCKS) {
     const p = market.prices.find((x) => x.id === stock.id);
@@ -2725,7 +2847,7 @@ function renderMarket() {
     const flow = p?.flow ?? 0;
     const flowTag = flow > 0 ? '<span class="coin-flow up" title="buy pressure">▲</span>'
       : flow < 0 ? '<span class="coin-flow down" title="sell pressure">▼</span>' : '';
-    priceLine.innerHTML = `${price.toFixed(2)} 🪙<span class="coin-chg ${dir}">${arrow} ${Math.abs(pct).toFixed(1)}%</span>${flowTag}`;
+    priceLine.innerHTML = `${fmtPrice(price)} 🪙<span class="coin-chg ${dir}">${arrow} ${fmtPct(Math.abs(pct))}%</span>${flowTag}`;
     main.appendChild(priceLine);
     // One read-out line per open position. A long profits as the price rises; a short profits
     // as it falls — and goes negative (covering costs coins) once the price passes its entry.
@@ -2738,10 +2860,10 @@ function renderMarket() {
       const tag = hold.side === 'short' ? '<span class="pos-short">SHORT</span> ' : '';
       const verb = hold.side === 'short' ? 'cover' : 'cash out';
       // A negative worth means closing costs you coins instead of paying out.
-      const closeTxt = cashOut >= 0 ? `${verb} ${cashOut}` : `${verb} costs ${-cashOut}`;
+      const closeTxt = cashOut >= 0 ? `${verb} ${fmtCoins(cashOut)}` : `${verb} costs ${fmtCoins(-cashOut)}`;
       const div = document.createElement('div');
       div.className = 'coin-pos';
-      div.innerHTML = `${tag}${hold.cost}🪙 → <span class="${plClass}">${rawWorth.toFixed(2)}🪙 (${sign}${plPct.toFixed(0)}%)</span> · ${closeTxt}`;
+      div.innerHTML = `${tag}${fmtCoins(hold.cost)}🪙 → <span class="${plClass}">${fmtPrice(rawWorth)}🪙 (${sign}${fmtPct(plPct, 0)}%)</span> · ${closeTxt}`;
       // Live fast-sell-tax countdown, refreshed every second by updateMarketTimer.
       const badge = taxBadge(hold.openedAt);
       const taxEl = document.createElement('span');
@@ -2817,22 +2939,20 @@ function renderMarket() {
     minus.onclick = () => setAmt((investAmt.get(stock.id) ?? 100) - 1);
     plus.onclick = () => setAmt((investAmt.get(stock.id) ?? 100) + 1);
 
-    // Close-position buttons: only shown for the side(s) actually held.
-    if (longPos) {
-      const cash = document.createElement('button');
-      cash.className = 'coin-cash';
-      cash.textContent = `Cash out ${Math.round(positionWorth('long', longPos.shares, longPos.cost, price))}🪙`;
-      cash.onclick = () => { net.send({ type: 'stockCashOut', coin: stock.id, side: 'long' }); playChaChing(); };
-      actions.appendChild(cash);
-    }
-    if (shortPos) {
-      const cover = document.createElement('button');
-      cover.className = 'coin-cover';
-      const cv = Math.round(positionWorth('short', shortPos.shares, shortPos.cost, price));
-      cover.textContent = cv >= 0 ? `Cover ${cv}🪙` : `Cover (pay ${-cv}🪙)`;
-      cover.onclick = () => { net.send({ type: 'stockCashOut', coin: stock.id, side: 'short' }); playChaChing(); };
-      actions.appendChild(cover);
-    }
+    // Close-position button: opens a modal to sell a custom amount or cash out the whole position.
+    const sellBtn = (hold: typeof longPos & {}) => {
+      const b = document.createElement('button');
+      const isShort = hold.side === 'short';
+      b.className = isShort ? 'coin-cover' : 'coin-cash';
+      const cv = Math.round(positionWorth(hold.side, hold.shares, hold.cost, price));
+      b.textContent = isShort
+        ? (cv >= 0 ? `Cover (${fmtCoins(cv)}🪙)` : `Cover (pay ${fmtCoins(-cv)}🪙)`)
+        : `Sell (${fmtCoins(cv)}🪙)`;
+      b.onclick = () => openSellModal(stock.id, stock.ticker, hold.side);
+      return b;
+    };
+    if (longPos) actions.appendChild(sellBtn(longPos));
+    if (shortPos) actions.appendChild(sellBtn(shortPos));
 
     row.appendChild(actions);
     marketList.appendChild(row);
@@ -4448,8 +4568,8 @@ function buildWorkCells(): { cells: Map<string, { v: string; cls?: string; btn?:
     const val = (longH?.worth ?? 0) + (shortH?.worth ?? 0);
     total += val;
     put(r, 1, s.ticker);
-    put(r, 2, price.toFixed(2), 'wm-num');
-    put(r, 3, `${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%`, `wm-num ${chg >= 0 ? 'wm-pos' : 'wm-neg'}`);
+    put(r, 2, fmtPrice(price), 'wm-num');
+    put(r, 3, `${chg >= 0 ? '+' : ''}${fmtPct(chg, 2)}%`, `wm-num ${chg >= 0 ? 'wm-pos' : 'wm-neg'}`);
     put(r, 4, qty > 0 ? qty.toFixed(2) : '', 'wm-num');
     put(r, 5, val > 0 ? fmt(val) : '', 'wm-num');
     r++;
@@ -5178,12 +5298,12 @@ function renderNetWorth(rows: NetWorthRow[], selfRow?: NetWorthRow, selfRank?: n
     .map((r, i) => {
       const crown = i === 0 ? '👑 ' : '';
       const broke = r.net < 0 ? ' broke' : '';
-      const debt = r.loan > 0 ? `<span class="debt"> 🔻${r.loan}</span>` : '';
+      const debt = r.loan > 0 ? `<span class="debt"> 🔻${fmtCoins(r.loan)}</span>` : '';
       const t = r.title ? (COSMETICS.find((c) => c.id === r.title) ?? EXCLUSIVES.find((e) => e.id === r.title)) : undefined;
       const tag = t ? `<span class="lbtitle${r.title === 'opstask' ? ' rainbow' : ''}">${escapeHtml(t.name)}</span>` : '';
       return `<li data-rank="${i}" title="View balance sheet"><span class="rank">${i + 1}</span><span class="lbname">${crown}${escapeHtml(
         r.name,
-      )}${tag}${debt}${bountyBadgeHtml(r.name)}</span><span class="worth${broke}">${r.net}🪙</span>${rowActionsHtml(r.name)}</li>`;
+      )}${tag}${debt}${bountyBadgeHtml(r.name)}</span><span class="worth${broke}">${fmtCoins(r.net)}🪙</span>${rowActionsHtml(r.name)}</li>`;
     })
     .join('');
   // Pin the player's own row to the bottom when they're below the visible top-N. No data-rank
@@ -5191,8 +5311,8 @@ function renderNetWorth(rows: NetWorthRow[], selfRow?: NetWorthRow, selfRank?: n
   let selfLi = '';
   if (selfRow && selfRank !== undefined && !rows.some((r) => r.name === selfRow!.name)) {
     const broke = selfRow.net < 0 ? ' broke' : '';
-    const debt = selfRow.loan > 0 ? `<span class="debt"> 🔻${selfRow.loan}</span>` : '';
-    selfLi = `<li class="self-row"><span class="rank">#${selfRank}</span><span class="lbname">${escapeHtml(selfRow.name)}${debt}</span><span class="worth${broke}">${selfRow.net}🪙</span></li>`;
+    const debt = selfRow.loan > 0 ? `<span class="debt"> 🔻${fmtCoins(selfRow.loan)}</span>` : '';
+    selfLi = `<li class="self-row"><span class="rank">#${selfRank}</span><span class="lbname">${escapeHtml(selfRow.name)}${debt}</span><span class="worth${broke}">${fmtCoins(selfRow.net)}🪙</span></li>`;
   }
   netWorthEl.innerHTML = `<h2>💰 Net Worth</h2><ol>${items}${selfLi}</ol>`;
 }

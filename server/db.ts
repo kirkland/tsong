@@ -1232,16 +1232,33 @@ export async function investStock(pid: string, _name: string, coin: string, amou
  *  to keep coins conserved. `cost` is the cost basis (House-held escrow), `payout` is
  *  round(positionWorth) at the close price, `openedAt` stamps the fast-sell window. Returns null
  *  when the player holds nothing on that side. */
-export async function closePosition(pid: string, coin: string, price: number, side: StockSide = 'long'): Promise<{ cost: number; payout: number; openedAt: number } | null> {
+// Close a position — all of it (fraction >= 1, the default) or just a slice (0 < fraction < 1, a
+// partial cash-out). A partial close splits the cost basis proportionally and UPDATEs the row with
+// the remainder (keeping its original opened_at, so the held-shares' fast-sell timer doesn't reset);
+// the returned cost/payout describe ONLY the slice that was closed. Never deletes data on a partial.
+export async function closePosition(pid: string, coin: string, price: number, side: StockSide = 'long', fraction = 1): Promise<{ cost: number; payout: number; openedAt: number } | null> {
   if (!pool || !pid) return null;
   const { rows } = await pool.query(`SELECT shares, cost, opened_at FROM stock_holdings WHERE pid = $1 AND coin = $2 AND side = $3`, [pid, coin, side]);
   if (!rows.length || Number(rows[0].shares) <= 0) return null;
   const shares = Number(rows[0].shares);
   const cost = Number(rows[0].cost);
   const openedAt = Number(rows[0].opened_at ?? 0);
-  const payout = Math.round(positionWorth(side, shares, cost, price));
-  await pool.query(`DELETE FROM stock_holdings WHERE pid = $1 AND coin = $2 AND side = $3`, [pid, coin, side]);
-  return { cost, payout, openedAt };
+  const f = Math.min(1, Math.max(0, fraction));
+  // Slice to close. Treat ~full (or a remainder that would be dust) as a full close, to avoid
+  // leaving an un-closeable sliver behind.
+  const closeShares = shares * f;
+  const closeCost = Math.round(cost * f);
+  const remShares = shares - closeShares;
+  const remCost = cost - closeCost;
+  const fullClose = f >= 0.999 || remShares <= 1e-9 || remCost <= 0 || closeShares <= 0 || closeCost <= 0;
+  if (fullClose) {
+    const payout = Math.round(positionWorth(side, shares, cost, price));
+    await pool.query(`DELETE FROM stock_holdings WHERE pid = $1 AND coin = $2 AND side = $3`, [pid, coin, side]);
+    return { cost, payout, openedAt };
+  }
+  const payout = Math.round(positionWorth(side, closeShares, closeCost, price));
+  await pool.query(`UPDATE stock_holdings SET shares = $4, cost = $5 WHERE pid = $1 AND coin = $2 AND side = $3`, [pid, coin, side, remShares, remCost]);
+  return { cost: closeCost, payout, openedAt };
 }
 
 // --- Economy Overhaul: exclusives (loot boxes) + player marketplace ---

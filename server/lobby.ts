@@ -4001,8 +4001,8 @@ export class Lobby {
    *  10% of the payout into the House. Conservation is exact: the escrow that left circulation at
    *  invest comes back as principal + House (loss) or principal + House gain (win). Returns the
    *  gross payout (for the pressure model) + the net credited to the player. */
-  private async settleCashOut(pid: string, name: string, coin: string, price: number, side: StockSide): Promise<{ gross: number; credited: number } | null> {
-    const pos = await closePosition(pid, coin, price, side);
+  private async settleCashOut(pid: string, name: string, coin: string, price: number, side: StockSide, fraction = 1): Promise<{ gross: number; credited: number } | null> {
+    const pos = await closePosition(pid, coin, price, side, fraction);
     if (!pos) return null;
     const { cost, payout, openedAt } = pos;
     let credited = 0;
@@ -4046,13 +4046,15 @@ export class Lobby {
 
   /** Close the whole long or short position in a crypto. Principal is returned in full; profit is
    *  House-throttled; a fast-sell is taxed (see settleCashOut). */
-  stockCashOut(ws: WebSocket, coin: string, side: StockSide) {
+  stockCashOut(ws: WebSocket, coin: string, side: StockSide, fraction = 1) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     if (!STOCKS.some((s) => s.id === coin)) return;
     const price = this.stockPrices.get(coin)?.price;
     if (!price || !(price > 0)) return;
-    this.settleCashOut(conn.pid, conn.nickname, coin, price, side)
+    const frac = Number.isFinite(fraction) ? Math.min(1, Math.max(0, fraction)) : 1;
+    if (frac <= 0) { this.sendStocks(ws); return; }
+    this.settleCashOut(conn.pid, conn.nickname, coin, price, side, frac)
       .then((res) => {
         if (!res) { this.sendStocks(ws); return; } // held nothing on that side
         // A close exerts sell (long) / cover (short) pressure on the price.
