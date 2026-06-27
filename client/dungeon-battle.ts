@@ -401,7 +401,7 @@ export function startEncounter(opts: EncounterOpts): void {
   let powerAnnounce = '', powerAnnounceT = 0; // big centre banner when Rob gains a power
   // "clutch": once every few rallies Rob locks in (near-perfect + a fast ball) and almost certainly
   // takes the point — forcing you to spend potions — while staying beatable the rest of the time.
-  let clutchRally = false, ralliesLeft = 2 + Math.floor(Math.random() * 3);
+  let clutchRally = false, ralliesLeft = 1 + Math.floor(Math.random() * 2);
   let captureDeclined = false;       // said "no" → finish the fight normally
   let captureScale = 1;              // the mob's draw-scale during capture (1 → 0 as it's sucked into the ball)
   const captureMob = { x: 0, y: 0 }; // where the mob sat when the ball flew
@@ -638,7 +638,6 @@ export function startEncounter(opts: EncounterOpts): void {
     if (robMirror) chips.push(['🔄 Reversed', '#9a6cff']);
     if (game.paddleScale.right > 1) chips.push(['📏 Big Paddle', '#5ad1c0']);
     if (robQuake) chips.push(['🌋 Quake', '#d8a13a']);
-    if (clutchRally) chips.push(['🎯 LOCKED IN', '#ff4a4a']);
     if (chips.length) {
       ctx.textBaseline = 'middle'; ctx.font = 'bold 12px ui-monospace';
       const cw2 = 104, gap = 8, total = chips.length * cw2 + (chips.length - 1) * gap;
@@ -796,9 +795,8 @@ export function startEncounter(opts: EncounterOpts): void {
         tone(game.score.left > beforeL ? 660 : 200, 0.08, 'square', 0.1, game.score.left > beforeL ? 880 : 120);
         if (mob.boss) {
           if (clutchRally) { clutchRally = false; game.setTurbo(false); } // the locked-in rally resolved → back to normal
-          if (--ralliesLeft <= 0 && game.score.left < mobLives - 1) {     // arm the next "clutch" rally (not on the final point)
-            clutchRally = true; game.setTurbo(true); ralliesLeft = 3 + Math.floor(Math.random() * 3);
-            announce('🎯 Rob locks in — survive this rally!');
+          if (--ralliesLeft <= 0 && game.score.left < mobLives - 1) {     // silently arm the next "clutch" rally (not on the final point)
+            clutchRally = true; game.setTurbo(true); ralliesLeft = 2 + Math.floor(Math.random() * 2);
           }
         }
       }
