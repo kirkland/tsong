@@ -338,7 +338,7 @@ const DUNGEON_B5 = [
   '##############################T###T###T###T###T##',
   '###########################....................##',
   '###########################....................##',
-  '##########################T....................##',
+  '##########################T.....c....c....c....##',
   '###########################....................T#',
   '###########################....o...o...o...o...##',
   '###########################....................##',
@@ -1564,7 +1564,7 @@ export function startWorld(net: WorldNet): void {
           keep(sc.add.image(wx + T / 2, wy + T / 2, 'd-lock').setScale(sl).setOrigin(0.5).setDepth(base + 3).setTint(0x9fb6c4));
         }
         if (theme.props) addFloorProp(sc, c, r, wx, wy, T, sl, base, keep, !!theme.gore); // deeper-floor ambient decals
-        if (ch === 'c') { // a treasure chest — closed or already-opened per saved state
+        if (ch === 'c' && !(currentFloor === 'B5' && !clarenceDefeated)) { // a chest (B5's appear only after Clarence falls)
           const spr = sc.add.image(wx + T / 2, wy + T - 3, chestIsOpen(c, r) ? 'w-chest-open' : 'w-chest').setScale(sl).setOrigin(0.5, 1).setDepth(base + 2);
           dungeonChestSprites[`${c},${r}`] = spr; keep(spr);
         }
@@ -1829,7 +1829,7 @@ export function startWorld(net: WorldNet): void {
       window.clearInterval(timer); talkOpen = false; npcAdvance = null; npcClose = null;
       npcBox.style.display = 'none'; npcChoices.style.display = 'none'; npcPortrait.style.display = 'none';
       const clarence = DUNGEON_MOBS.find((m) => m.id === 'clarence'); // → the fight, on the battle theme
-      triggerEncounter({ mob: clarence, song: '/battle.mp3', winPotions: 5, onWin: () => { clarenceDefeated = true; clarenceSprite?.destroy(); clarenceSprite = null; } });
+      triggerEncounter({ mob: clarence, song: '/battle.mp3', winPotions: 5, onWin: () => { clarenceDefeated = true; clarenceSprite?.destroy(); clarenceSprite = null; const sc = petScene; if (sc) buildFloor(sc); } }); // rebuild → the chamber's chests appear
     }
     npcClose = closeTalk;
     showPage();
@@ -2634,7 +2634,7 @@ export function startWorld(net: WorldNet): void {
         nearStairs = { dir: 'up', to: DUNGEON_ORDER[idx - 1] };
     }
     nearChestCell = null;
-    if (inDungeon && !nearExit && !nearStairs) { // nearest unopened chest within reach → Open prompt
+    if (inDungeon && !nearExit && !nearStairs && !(currentFloor === 'B5' && !clarenceDefeated)) { // nearest unopened chest within reach → Open prompt (B5 chests are sealed until Clarence falls)
       let best = (DUNGEON_TILE * 1.5) ** 2;
       for (const k of chestCells()) {
         const [cc, cr] = k.split(',').map(Number);

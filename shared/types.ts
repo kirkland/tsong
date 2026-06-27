@@ -247,6 +247,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'obsidian', name: 'Obsidian', slot: 'skin', price: 6000 },
   { id: 'aurora', name: 'Aurora', slot: 'skin', price: 10000 },
   { id: 'skin-hotdog', name: '🌭 Hot Dog', slot: 'skin', price: 0, locked: 'dungeon' }, // a Ruins chest prize
+  { id: 'skin-suit', name: '🤵 Suit & Tie', slot: 'skin', price: 0, locked: 'dungeon' }, // a Ruins chest prize (B5, post-Clarence)
   // Trails
   { id: 'stardust', name: 'Stardust', slot: 'trail', price: 5000 },
   { id: 'inferno', name: 'Inferno', slot: 'trail', price: 8000 },
@@ -483,6 +484,10 @@ export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potions?: 
   'B4:4,14': { potions: 2 },
   'B4:28,14': { spin: true },
   'B4:4,27': { monster: 'slime', coins: 450, pet: 'pet-slime' }, // a MONSTER BOX: fight the slime — kill it for 450🪙, or capture it as a pet
+  // B5 — the boss sanctum. These three only become lootable AFTER you beat Clarence the Gatekeeper.
+  'B5:32,5': { potions: 5 },               // a potion stash to prep for the final room
+  'B5:37,5': { coins: 5000 },              // the deepest coin haul in the Ruins
+  'B5:42,5': { cosmetic: 'skin-suit' },    // 🤵 Suit & Tie paddle skin
 };
 // Encounter-win payout keyed by the MOB'S TIER [min, max], not the floor. The server picks the amount
 // from the tier's range (it never trusts a client-sent number) after checking the tier is legal here.
