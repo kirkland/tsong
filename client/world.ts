@@ -851,6 +851,8 @@ export function startWorld(net: WorldNet): void {
   let nearSwitch: { c: number; r: number } | null = null;     // a 'W' wall lever within reach (→ flip it)
   let nearSwitchDoor: { c: number; r: number } | null = null; // a sealed 'X'/'Y' switch-door within reach (→ "find a switch")
   let switchOn = false;       // B4 puzzle: false → boss door 'Y' open / chest door 'X' shut; true → flipped (run-scoped)
+  let clarenceDefeated = false; // B5: beaten the Gatekeeper this run? (run-scoped; he stays down once bested)
+  let clarenceArmed = false;    // re-arms when you retreat into the hallway, so a flee doesn't instantly re-trigger
   let dungeonImp: { x: number; y: number } | null = null; // the friendly B2 imp's world position (talk for a potion)
   let nearDungeonImp = false; // the imp is within talk range
   let impGavePotion = false;  // he hands out one potion per run (no farming)
@@ -1662,6 +1664,7 @@ export function startWorld(net: WorldNet): void {
     dungeonHP = 100; lastGrassKey = ''; grassDanger = 0; potionCount = 0; // fresh run: no potions carried in
     newMobsSeen.clear(); recentMob = -1; recentMobRun = 0; impGavePotion = false;
     hasKey = false; keyTaken = false; unlockedDoors.clear(); switchOn = false; // fresh run: re-fetch the key, doors re-lock, lever resets
+    clarenceDefeated = false; clarenceArmed = false; // fresh run: the Gatekeeper bars the way again
     lootItems.length = 0; lootOpen = false; lootPanel.style.display = 'none'; // fresh run loot
     openedChestsServer.clear();
     net.dungeonSync(); // ask the server which chests this account has already opened
@@ -1765,6 +1768,44 @@ export function startWorld(net: WorldNet): void {
       pageI++; if (pageI >= pages.length) closeTalk(); else showPage();
     };
     function closeTalk() { window.clearInterval(timer); talkOpen = false; npcAdvance = null; npcClose = null; npcBox.style.display = 'none'; npcChoices.style.display = 'none'; npcPortrait.style.display = 'none'; nearDyingMan = false; }
+    npcClose = closeTalk;
+    showPage();
+  }
+  // B5 GATEKEEPER: as you step out of the long hall into the grand chamber, Clarence bars the way with
+  // a few ominous lines (his portrait floats above the box) — then the fight begins on the battle theme.
+  function meetClarence() {
+    if (talkOpen || dialogOpen || isEncounterOpen() || encounterPending) return;
+    const pages = [
+      'Far enough.',
+      'I know what waits past that door. You are not ready — none of you ever are.',
+      'I am Clarence. The last lock. And I do not turn.',
+      'Here — let me show you which way is up.',
+    ];
+    talkOpen = true; keys.clear(); joyActive = false; vx = 0; vy = 0; prompt.style.display = 'none';
+    npcName.textContent = 'Clarence, the Gatekeeper'; npcBox.style.display = 'block'; npcChoices.style.display = 'none';
+    if (!npcPortrait.src.endsWith('/dungeon/mob_clarence.png')) npcPortrait.src = '/dungeon/mob_clarence.png';
+    npcPortrait.style.display = 'block';
+    let pageI = 0, typing = false, timer = 0, full = '';
+    function showPage() {
+      const text = pages[pageI];
+      if (text === undefined) { closeTalk(); return; }
+      full = text; let shown = 0; typing = true; npcText.textContent = ''; npcHint.style.display = 'none';
+      timer = window.setInterval(() => {
+        shown++; npcText.textContent = full.slice(0, shown);
+        if (shown % 2 === 0) textBlip();
+        if (shown >= full.length) { window.clearInterval(timer); typing = false; npcHint.style.display = 'block'; }
+      }, 30);
+    }
+    npcAdvance = () => {
+      if (typing) { window.clearInterval(timer); typing = false; npcText.textContent = full; npcHint.style.display = 'block'; return; }
+      pageI++; if (pageI >= pages.length) closeTalk(); else showPage();
+    };
+    function closeTalk() {
+      window.clearInterval(timer); talkOpen = false; npcAdvance = null; npcClose = null;
+      npcBox.style.display = 'none'; npcChoices.style.display = 'none'; npcPortrait.style.display = 'none';
+      const clarence = DUNGEON_MOBS.find((m) => m.id === 'clarence'); // → the fight, on the battle theme
+      triggerEncounter({ mob: clarence, song: '/battle.mp3', winPotions: 5, onWin: () => { clarenceDefeated = true; } });
+    }
     npcClose = closeTalk;
     showPage();
   }
@@ -1886,7 +1927,7 @@ export function startWorld(net: WorldNet): void {
   let encounterPending = false; // a battle is being set up (snapshot in flight) — block re-triggering
   // A tall-grass encounter: pause the dungeon theme and drop into a Pong duel vs a mob. `cfg` lets a
   // "monster box" chest force a specific mob, mark it capturable, and route its reward through the chest.
-  type EncounterCfg = { mob?: (typeof DUNGEON_MOBS)[number]; capturable?: boolean; chestId?: string; chestC?: number; chestR?: number; coins?: [number, number] };
+  type EncounterCfg = { mob?: (typeof DUNGEON_MOBS)[number]; capturable?: boolean; chestId?: string; chestC?: number; chestR?: number; coins?: [number, number]; song?: string; winPotions?: number; onWin?: () => void };
   function triggerEncounter(cfg?: EncounterCfg) {
     if (isEncounterOpen() || encounterPending) return;
     encounterPending = true;
@@ -1903,6 +1944,7 @@ export function startWorld(net: WorldNet): void {
         coins: cfg?.coins ?? [...(DUNGEON_TIER_COINS[mob.tier] ?? DUNGEON_TIER_COINS[1])] as [number, number], // display only — server is authoritative
         itemChance: cfg?.chestId ? 0 : (mob.dropChance ?? 0), // most mobs drop only coins; some (Demon Fritz) drop a potion on a win
         capturable: cfg?.capturable,
+        song: cfg?.song, // a boss fight overrides the cycled theme (Clarence → the battle theme)
         potions: { // drink a potion mid-battle (P): consumes one of the run's potions for +10 HP
           count: () => potionCount,
           consume: () => { if (potionCount <= 0) return false; potionCount -= 1; updateDungeonHud(); updateDungeonControls(); return true; },
@@ -1924,6 +1966,9 @@ export function startWorld(net: WorldNet): void {
             if (cfg?.chestId) {                                    // killed the box-mob → server pays the chest's coins
               markBox(); net.dungeonChest(cfg.chestId);
               showToast(`📦 You smashed it! ${cfg.coins?.[0] ?? 0}🪙 — escape to keep!`);
+            } else if (cfg?.winPotions != null) {                  // a boss (Clarence) → potions, not coins; no server credit
+              potionCount += cfg.winPotions; cfg.onWin?.();
+              showToast(`🏆 You bested ${mob.name}! +${cfg.winPotions} 🧪 Potions — the way is open.`);
             } else {
               net.dungeonWin(currentFloor, mob.tier);              // a normal mob win → coins by tier from the House
             }
@@ -2441,6 +2486,13 @@ export function startWorld(net: WorldNet): void {
           const steps = grassDanger - 14;
           if (steps > 0 && Math.random() < Math.min(0.6, steps * 0.0011)) { grassDanger = 0; triggerEncounter(); }
         }
+      }
+      // B5: stepping out of the long hall into the grand chamber summons the Gatekeeper. He re-arms only
+      // once you've retreated back down the hall, so fleeing doesn't instantly re-trigger him.
+      if (currentFloor === 'B5' && !clarenceDefeated && !talkOpen && !dialogOpen && !isEncounterOpen() && !encounterPending) {
+        const pcol = Math.floor((selfX - dInt.x) / DUNGEON_TILE);
+        if (pcol < 24) clarenceArmed = true;
+        else if (clarenceArmed && pcol >= 27) { clarenceArmed = false; meetClarence(); }
       }
       return;
     }

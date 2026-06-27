@@ -24,6 +24,7 @@ export interface MobDef {
   blaster?: boolean;                       // fires freezing blaster shots you must dodge (Deranged Josiel)
   fireRate?: number;                       // seconds between blaster shots
   dropChance?: number;                     // 0–1 chance a win drops a potion (default 0; Demon Fritz is high)
+  rotate?: number;                         // permanent "rotate" power-up: the whole court is turned (1–3 quarter-turns; Clarence = 2 = 180°)
 }
 
 // Roster, grouped two-per-tier. A floor introduces 2 NEW mobs (its tier) and carries the 2 from the
@@ -85,6 +86,14 @@ export const DUNGEON_MOBS: MobDef[] = [
   { id: 'rattler', name: 'Bone Rattler', portrait: '💀', power: 11, color: '#cdbfa0', tier: 5, bob: 'float', bot: { react: 0.22, error: 64, predict: false, idleCenter: true }, gimmick: { name: 'Rib Toss', desc: 'rattling bones' }, flavor: 'rattle… rattle…', tag: 'Clattering bones held together by spite.' },
   { id: 'gargoyle', name: 'Stone Gargoyle', portrait: '🗿', power: 13, color: '#8a8474', tier: 5, bob: 'float', bot: { react: 0.16, error: 40, predict: true, idleCenter: false }, gimmick: { name: 'Petrify', desc: 'stone wall' }, flavor: '*grinds awake*', tag: 'It was a statue a moment ago. Wasn’t it?' },
   { id: 'wraith', name: 'Cursed Wraith', portrait: '👻', power: 14, color: '#b58fd6', tier: 5, bob: 'float', bot: { react: 0.14, error: 30, predict: true, idleCenter: true }, gimmick: { name: 'Hex', desc: 'inverts you' }, flavor: 'your fate is sealed.', tag: 'It remembers every soul it has taken.' },
+  // --- B5 GATEKEEPER: a mini-boss that bars the way to the boss. Sharper than Noam, 5 lives, and the
+  //     whole arena is turned 180° the entire fight (his permanent "rotate"). ---
+  {
+    id: 'clarence', name: 'Clarence, the Gatekeeper', portrait: '🌀', power: 12, color: '#7c5ec0', tier: 5, bob: 'float',
+    bot: { react: 0.15, error: 28, predict: true, idleCenter: true }, rotate: 2, lives: 5,
+    gimmick: { name: 'Vertigo', desc: 'The entire arena is turned upside-down.' },
+    flavor: "you won't reach the boss.", tag: 'He guards the last door. Reality tilts wrong around him.',
+  },
 ];
 
 // ── hand-drawn pixel creatures (per mob id). Built once into offscreen canvases, blitted in the
@@ -120,7 +129,7 @@ function buildScaled(id: string, im: HTMLImageElement) {
   c.drawImage(im, 0, 0, cw, ch);
   MOB_SCALED[id] = cn;
 }
-for (const [id, src] of Object.entries({ bat: '/dungeon/mob_bat.png', slime: '/dungeon/mob_slime.png', jsav: '/dungeon/mob_jsav.png', warden: '/dungeon/mob_warden.png', fritz: '/dungeon/mob_fritz.png', hound: '/dungeon/mob_hound.png', noam: '/dungeon/mob_noam.png', josiel: '/dungeon/mob_josiel.png' })) {
+for (const [id, src] of Object.entries({ bat: '/dungeon/mob_bat.png', slime: '/dungeon/mob_slime.png', jsav: '/dungeon/mob_jsav.png', warden: '/dungeon/mob_warden.png', fritz: '/dungeon/mob_fritz.png', hound: '/dungeon/mob_hound.png', noam: '/dungeon/mob_noam.png', josiel: '/dungeon/mob_josiel.png', clarence: '/dungeon/mob_clarence.png' })) {
   const im = new Image(); MOB_IMG[id] = im;
   im.onload = () => buildScaled(id, im);
   im.src = src;
@@ -149,6 +158,7 @@ export interface EncounterOpts {
   introImage?: HTMLImageElement | null; // a snapshot of the world, animated into the transition
   potions?: { count: () => number; consume: () => boolean }; // mid-battle potion use (P): heals +10 HP
   capturable?: boolean;       // a "monster box" mob: at its last life, pause and offer a Poké Ball capture
+  song?: string;              // override the cycled battle theme with a specific track (Clarence → /battle.mp3)
   onResult: (r: { result: 'win' | 'lose' | 'flee' | 'capture'; coins: number; item: string | null; hpLost: number }) => void;
 }
 
@@ -162,6 +172,9 @@ let battleThemeIdx = 0;
 // thread at battle start, a random hitch depending on which cycled theme was already cached).
 const THEME_AUDIO = BATTLE_THEMES.map((s) => { const a = new Audio(s); a.loop = true; a.volume = 0.6; a.preload = 'auto'; return a; });
 const FANFARE = new Audio('/victory.mp3'); FANFARE.volume = 0.85; FANFARE.preload = 'auto';
+// Specific boss tracks (e.g. Clarence → /battle.mp3), reused across fights so they don't re-decode.
+const SONG_CACHE: Record<string, HTMLAudioElement> = {};
+function songFor(url: string): HTMLAudioElement { return SONG_CACHE[url] ??= Object.assign(new Audio(url), { loop: true, volume: 0.6, preload: 'auto' }); }
 // One shared AudioContext for the synth blips, created/resumed lazily and never closed (creating &
 // closing one per battle also hitches, and browsers cap the number of contexts).
 let sharedActx: AudioContext | null = null;
@@ -176,9 +189,10 @@ export function startEncounter(opts: EncounterOpts): void {
   active = true;
   const { mob } = opts;
 
-  // ── audio: reuse a preloaded encounter loop + victory fanfare + the shared synth ──
-  const song = THEME_AUDIO[battleThemeIdx % THEME_AUDIO.length]; song.currentTime = 0;
-  battleThemeIdx++; // next encounter gets the next theme, wrapping after the 4th
+  // ── audio: a specific track if the caller asked (boss fights), else the cycled encounter loop ──
+  const song = opts.song ? songFor(opts.song) : THEME_AUDIO[battleThemeIdx % THEME_AUDIO.length];
+  song.currentTime = 0;
+  if (!opts.song) battleThemeIdx++; // only the cycled themes advance the rotation
   const fanfare = FANFARE; fanfare.currentTime = 0;
   const ac = sharedAc;
   const tone = (f: number, dur: number, type: OscillatorType, vol: number, slide?: number) => {
@@ -261,6 +275,7 @@ export function startEncounter(opts: EncounterOpts): void {
   if (mob.turbo) game.setTurbo(true);           // The Flayed Hound: fast serve + steeper per-hit speedup
   if (mob.mirror) game.mirrorTimer.left = Infinity; // Possessed Noam: permanently invert the player's controls
   if (mob.blaster) game.blasterAmmo.right = Infinity; // Deranged Josiel: never runs out of freezing shots
+  if (mob.rotate) game.rotated = mob.rotate;        // Clarence: the whole arena is turned (re-asserted each tick below)
   let fireTimer = (mob.fireRate ?? 1.6) * 1.4;      // delay the first blaster shot a touch
   const mobLives = mob.lives ?? 3; // points you must put past it to kill it
   const POTION_HEAL = 10; let healed = 0; // HP restored by potions drunk mid-battle
@@ -432,6 +447,11 @@ export function startEncounter(opts: EncounterOpts): void {
   function drawRuinsBackground() { ctx.clearRect(0, 0, cv.width, cv.height); } // backdrop is a CSS layer behind the canvas
 
   function drawCourt() {
+    // Clarence's "rotate" gimmick: spin the whole court (frame, paddles, ball, projectiles) about its
+    // centre. The creature in the gutter is drawn AFTER this (outside the transform) so it stays upright.
+    const rot = game.rotated ? game.rotated * Math.PI / 2 : 0;
+    ctx.save();
+    if (rot) { const ccx = court.x + court.w / 2, ccy = court.y + court.h / 2; ctx.translate(ccx, ccy); ctx.rotate(rot); ctx.translate(-ccx, -ccy); }
     // court frame + mid line
     ctx.strokeStyle = '#3a4a52'; ctx.lineWidth = 3;
     ctx.strokeRect(court.x, court.y, court.w, court.h);
@@ -468,6 +488,7 @@ export function startEncounter(opts: EncounterOpts): void {
       ctx.fillStyle = '#bdeaff'; ctx.font = 'bold 13px ui-monospace'; ctx.textAlign = 'left';
       ctx.fillText('❄ FROZEN', cx(PADDLE.margin) + 8, cy(yY));
     }
+    ctx.restore(); // end the rotate transform — the creature (next) stays upright
     drawCreature();
   }
   // the mob sits in the right gutter, just behind its paddle, bobbing by its personality
@@ -679,9 +700,10 @@ export function startEncounter(opts: EncounterOpts): void {
       if (keys.has('w') || keys.has('arrowup')) inputY -= PADDLE.speed * dt;
       if (keys.has('s') || keys.has('arrowdown')) inputY += PADDLE.speed * dt;
       game.setTarget('left', 'me', inputY);
-      // the engine clears mirror/blaster on every scored point — re-assert these baked-in gimmicks
+      // the engine clears mirror/blaster/rotate on every scored point — re-assert these baked-in gimmicks
       if (mob.mirror) game.mirrorTimer.left = Infinity;
       if (mob.blaster) game.blasterAmmo.right = Infinity;
+      if (mob.rotate) game.rotated = mob.rotate;
       stepAI(dt);
       const beforeL = game.score.left, beforeR = game.score.right;
       game.tick(dt);
