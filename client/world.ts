@@ -987,7 +987,7 @@ export function startWorld(net: WorldNet): void {
       '<div style="font-weight:800;color:#f0d8a0;margin-bottom:6px;border-bottom:1px solid #3a3320;padding-bottom:5px;">🎒 RUN LOOT</div>' +
       `💰 Coins: <b>${dungeonPurseDisplay}</b>🪙<br>🧪 Potions: <b>${potionCount}</b><br>📦 Chests found: <b>${chestsFound()}/${DUNGEON_TOTAL_CHESTS}</b>` +
       `<div style="margin-top:6px;">${items}</div>` +
-      '<div style="margin-top:9px;font-size:11px;color:#8fae9b;opacity:.9;">Escape via B1 to claim it. Die or bail and you lose it all.</div>';
+      '<div style="margin-top:9px;font-size:11px;color:#8fae9b;opacity:.9;">Climb out through the B1 entrance — or beat the boss — to claim it. Die or bail and you lose it all.</div>';
   }
   function toggleLoot() { lootOpen = !lootOpen; lootPanel.style.display = lootOpen ? 'block' : 'none'; renderLootPanel(); }
   lootBtn.onclick = toggleLoot;
