@@ -5327,7 +5327,7 @@ netWorthEl.addEventListener('click', (e) => {
   const tipBtn = (e.target as HTMLElement).closest('.tip-btn') as HTMLElement | null;
   if (tipBtn) { openTipDialog(tipBtn.dataset.tipName ?? ''); return; }
   const selfRow = (e.target as HTMLElement).closest('.self-row') as HTMLElement | null;
-  if (selfRow) { net.send({ type: 'eloProfileReq', rank: 0, self: true }); return; }
+  if (selfRow) { net.send({ type: 'balanceSheetReq', self: true }); return; }
   const li = (e.target as HTMLElement).closest('li[data-rank]') as HTMLElement | null;
   if (!li) return;
   const rank = Number(li.dataset.rank);
@@ -5353,7 +5353,7 @@ function showBalanceSheet(msg: BalanceSheetMsg) {
   balanceName.textContent = `💰 ${msg.name}`;
   const rows: string[] = [];
   rows.push(
-    `<div class="bs-row"><span class="bs-label">Coins on hand</span><span class="bs-val">${msg.coins}🪙</span></div>`,
+    `<div class="bs-row"><span class="bs-label">Coins on hand</span><span class="bs-val">${fmtCoins(msg.coins)}🪙</span></div>`,
   );
   rows.push(`<div class="bs-section">Stock holdings</div>`);
   if (msg.holdings.length) {
@@ -5361,25 +5361,25 @@ function showBalanceSheet(msg: BalanceSheetMsg) {
       const tag = h.side === 'short' ? '<span class="pos-short">SHORT</span> ' : '';
       rows.push(
         `<div class="bs-row"><span class="bs-label">${tag}${escapeHtml(h.ticker)} ` +
-          `<span class="bs-sub">${h.shares.toFixed(2)} sh @ ${Math.round(h.price)}🪙</span></span>` +
-          `<span class="bs-val">${h.value}🪙</span></div>`,
+          `<span class="bs-sub">${h.shares.toFixed(2)} sh @ ${fmtCoins(Math.round(h.price))}🪙</span></span>` +
+          `<span class="bs-val">${fmtCoins(h.value)}🪙</span></div>`,
       );
     }
     rows.push(
-      `<div class="bs-row"><span class="bs-label">Stock subtotal</span><span class="bs-val">${msg.stockValue}🪙</span></div>`,
+      `<div class="bs-row"><span class="bs-label">Stock subtotal</span><span class="bs-val">${fmtCoins(msg.stockValue)}🪙</span></div>`,
     );
   } else {
     rows.push(`<div class="bs-empty">No open positions.</div>`);
   }
   if (msg.loan > 0) {
     rows.push(
-      `<div class="bs-row bs-debt"><span class="bs-label">Owed to Davis</span><span class="bs-val">−${msg.loan}🪙</span></div>`,
+      `<div class="bs-row bs-debt"><span class="bs-label">Owed to Davis</span><span class="bs-val">−${fmtCoins(msg.loan)}🪙</span></div>`,
     );
   }
   rows.push(`<hr class="bs-divider" />`);
   const broke = msg.net < 0 ? ' bs-broke' : '';
   rows.push(
-    `<div class="bs-row bs-total${broke}"><span class="bs-label">Net worth</span><span class="bs-val">${msg.net}🪙</span></div>`,
+    `<div class="bs-row bs-total${broke}"><span class="bs-label">Net worth</span><span class="bs-val">${fmtCoins(msg.net)}🪙</span></div>`,
   );
   balanceBody.innerHTML = rows.join('');
   balanceModal.hidden = false;

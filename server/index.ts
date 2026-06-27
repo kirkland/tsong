@@ -491,7 +491,7 @@ wss.on('connection', (ws: WebSocket, req) => {
         lobby.minesCashout(ws);
         break;
       case 'balanceSheetReq':
-        if (typeof msg.rank === 'number') lobby.sendBalanceSheet(ws, msg.rank);
+        lobby.sendBalanceSheet(ws, msg.rank, msg.self);
         break;
       case 'eloProfileReq':
         if (typeof msg.rank === 'number') lobby.sendEloProfile(ws, msg.rank, msg.self);
