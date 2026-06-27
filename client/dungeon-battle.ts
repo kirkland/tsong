@@ -90,8 +90,8 @@ export const DUNGEON_MOBS: MobDef[] = [
   //     whole arena is turned 180° the entire fight (his permanent "rotate"). ---
   {
     id: 'clarence', name: 'Clarence, the Gatekeeper', portrait: '🌀', power: 12, color: '#7c5ec0', tier: 5, bob: 'float',
-    bot: { react: 0.15, error: 28, predict: true, idleCenter: true }, rotate: 2, lives: 5,
-    gimmick: { name: 'Vertigo', desc: 'The entire arena is turned upside-down.' },
+    bot: { react: 0.15, error: 28, predict: true, idleCenter: true }, rotate: 1, lives: 5,
+    gimmick: { name: 'Vertigo', desc: 'The entire arena is turned on its side.' },
     flavor: "you won't reach the boss.", tag: 'He guards the last door. Reality tilts wrong around him.',
   },
 ];
@@ -304,11 +304,19 @@ export function startEncounter(opts: EncounterOpts): void {
   let court = { x: 0, y: 0, w: 0, h: 0 };
   const onPointer = (e: PointerEvent) => {
     if (!court.h) return;
-    const yScale = cv.height / Math.max(1, overlay.clientHeight); // client px → canvas px
-    if (document.pointerLockElement === cv) { // captured: relative mouse movement drives the paddle
-      inputY = Math.max(0, Math.min(COURT.h, inputY + (e.movementY * yScale / court.h) * COURT.h));
+    const xScale = cv.width / Math.max(1, overlay.clientWidth), yScale = cv.height / Math.max(1, overlay.clientHeight);
+    // The view may be rotated (Clarence). Inverse-rotate the input into un-rotated court space and read
+    // its Y, so the paddle always tracks the mouse along its *visible* axis at any rotation.
+    const rot = game.rotated ? game.rotated * Math.PI / 2 : 0;
+    const cosr = Math.cos(rot), sinr = Math.sin(rot);
+    if (document.pointerLockElement === cv) { // captured: relative mouse delta drives the paddle
+      const courtDy = -(e.movementX * xScale) * sinr + (e.movementY * yScale) * cosr;
+      inputY = Math.max(0, Math.min(COURT.h, inputY + (courtDy / court.h) * COURT.h));
     } else { // not captured: the paddle follows the absolute cursor position
-      inputY = ((e.clientY * yScale - court.y) / court.h) * COURT.h;
+      const ccx = court.x + court.w / 2, ccy = court.y + court.h / 2;
+      const dx = e.clientX * xScale - ccx, dy = e.clientY * yScale - ccy;
+      const uy = ccy + (-dx * sinr + dy * cosr); // un-rotate about the court centre
+      inputY = ((uy - court.y) / court.h) * COURT.h;
     }
   };
   cv.addEventListener('pointermove', onPointer);
@@ -437,9 +445,15 @@ export function startEncounter(opts: EncounterOpts): void {
     const topBand = 92, botBand = 64, leftM = Math.max(20, W * 0.035), rightM = Math.max(200, W * 0.18);
     const availW = W - leftM - rightM, availH = H - topBand - botBand;
     const aspect = COURT.w / COURT.h;
-    let cw = availW, ch = cw / aspect;
-    if (ch > availH) { ch = availH; cw = ch * aspect; }
-    court = { x: leftM, y: topBand + (availH - ch) / 2, w: cw, h: ch };
+    // When the court is turned 90°/270° (Clarence's "rotate"), its on-screen footprint is the un-rotated
+    // rect with width/height swapped — so fit it against the SWAPPED available area, then centre it (the
+    // rotation in drawCourt spins about the court centre, so we just place that centre in the middle).
+    const odd = game.rotated === 1 || game.rotated === 3;
+    const fitW = odd ? availH : availW, fitH = odd ? availW : availH;
+    let cw = fitW, ch = cw / aspect;
+    if (ch > fitH) { ch = fitH; cw = ch * aspect; }
+    const ccx = leftM + availW / 2, ccy = topBand + availH / 2;
+    court = { x: ccx - cw / 2, y: ccy - ch / 2, w: cw, h: ch };
   }
   const cx = (x: number) => court.x + (x / COURT.w) * court.w;
   const cy = (y: number) => court.y + (y / COURT.h) * court.h;

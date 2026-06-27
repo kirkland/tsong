@@ -853,6 +853,8 @@ export function startWorld(net: WorldNet): void {
   let switchOn = false;       // B4 puzzle: false → boss door 'Y' open / chest door 'X' shut; true → flipped (run-scoped)
   let clarenceDefeated = false; // B5: beaten the Gatekeeper this run? (run-scoped; he stays down once bested)
   let clarenceArmed = false;    // re-arms when you retreat into the hallway, so a flee doesn't instantly re-trigger
+  let clarenceSprite: Phaser.GameObjects.Image | null = null; // his world sprite, standing at the chamber's far end
+  let clarenceAnim: { t: number; fromX: number; toX: number; y: number } | null = null; // his approach slide → opens dialogue when done
   let dungeonImp: { x: number; y: number } | null = null; // the friendly B2 imp's world position (talk for a potion)
   let nearDungeonImp = false; // the imp is within talk range
   let impGavePotion = false;  // he hands out one potion per run (no farming)
@@ -1515,6 +1517,7 @@ export function startWorld(net: WorldNet): void {
     dungeonObjs.length = 0;
     dungeonTorches.length = 0; dungeonFlies.length = 0; dungeonImp = null; nearDungeonImp = false;
     dyingMan = null; dyingManSprite = null; nearDyingMan = false;
+    clarenceSprite = null; clarenceAnim = null;
     for (const k in dungeonChestSprites) delete dungeonChestSprites[k];
     for (const k in dungeonLockSprites) delete dungeonLockSprites[k];
     dungeonDarkRT?.destroy(); dungeonDarkRT = null;
@@ -1584,6 +1587,14 @@ export function startWorld(net: WorldNet): void {
       if (keyTaken) spr.setTint(0x6a6a72); // already looted this run → a cold corpse
       dungeonObjs.push(spr);
       dyingMan = { x: mx, y: my }; dyingManSprite = spr;
+    }
+    // B5: the Gatekeeper stands waiting at the far end of the grand chamber (until you've bested him).
+    if (currentFloor === 'B5' && !clarenceDefeated && sc.textures.exists('d-clarence')) {
+      const cc = 43, cr = 10; // dead centre of the chamber's far wall, facing the entrance
+      const cxw = ox + (cc + 0.5) * T, cyw = oy + (cr + 0.5) * T;
+      const spr = sc.add.image(cxw, cyw, 'd-clarence').setOrigin(0.5, 0.62).setDepth(cyw)
+        .setDisplaySize(T * 2.4 * (458 / 427), T * 2.4); // ~2.4 tiles tall, keep the portrait's aspect
+      dungeonObjs.push(spr); clarenceSprite = spr; clarenceAnim = null;
     }
     // a few drifting fireflies (red / orange / purple) — twinkle over the darkness
     if (sc.textures.exists('d-glow')) {
@@ -1771,10 +1782,25 @@ export function startWorld(net: WorldNet): void {
     npcClose = closeTalk;
     showPage();
   }
-  // B5 GATEKEEPER: as you step out of the long hall into the grand chamber, Clarence bars the way with
-  // a few ominous lines (his portrait floats above the box) — then the fight begins on the battle theme.
-  function meetClarence() {
+  // a Pokémon-style "!" pops over your head + a two-note sting the instant the Gatekeeper notices you
+  function exclaimAlert() {
+    const sc = petScene; if (!sc) return;
+    const mark = sc.add.text(selfX, selfY - R - 12, '❗', { fontSize: '30px', fontStyle: 'bold' }).setOrigin(0.5, 1).setDepth(60000);
+    let pop = 0; const iv = window.setInterval(() => { pop++; mark.setScale(1 + Math.max(0, 0.4 - pop * 0.05)); if (pop > 8) window.clearInterval(iv); }, 30);
+    window.setTimeout(() => mark.destroy(), 950);
+    tone(880, 0.08, 'square', 0.14, 1180); window.setTimeout(() => tone(1320, 0.13, 'square', 0.12, 1620), 110);
+  }
+  // B5 GATEKEEPER: stepping into the chamber alerts Clarence ("!"), he strides over from the far wall,
+  // THEN bars the way with a few ominous lines (portrait above the box) → the fight, on the battle theme.
+  function summonClarence() {
     if (talkOpen || dialogOpen || isEncounterOpen() || encounterPending) return;
+    talkOpen = true; // freeze the player for the cutscene (no dialogue box shown yet)
+    keys.clear(); joyActive = false; vx = 0; vy = 0; prompt.style.display = 'none';
+    exclaimAlert();
+    if (clarenceSprite) clarenceAnim = { t: 0, fromX: clarenceSprite.x, toX: selfX + DUNGEON_TILE * 2.7, y: selfY }; // stride in, stop a few tiles off
+    else clarenceDialogue(); // no sprite (texture missing) → straight to the words
+  }
+  function clarenceDialogue() {
     const pages = [
       'Far enough.',
       'I know what waits past that door. You are not ready — none of you ever are.',
@@ -1804,7 +1830,7 @@ export function startWorld(net: WorldNet): void {
       window.clearInterval(timer); talkOpen = false; npcAdvance = null; npcClose = null;
       npcBox.style.display = 'none'; npcChoices.style.display = 'none'; npcPortrait.style.display = 'none';
       const clarence = DUNGEON_MOBS.find((m) => m.id === 'clarence'); // → the fight, on the battle theme
-      triggerEncounter({ mob: clarence, song: '/battle.mp3', winPotions: 5, onWin: () => { clarenceDefeated = true; } });
+      triggerEncounter({ mob: clarence, song: '/battle.mp3', winPotions: 5, onWin: () => { clarenceDefeated = true; clarenceSprite?.destroy(); clarenceSprite = null; } });
     }
     npcClose = closeTalk;
     showPage();
@@ -2492,7 +2518,7 @@ export function startWorld(net: WorldNet): void {
       if (currentFloor === 'B5' && !clarenceDefeated && !talkOpen && !dialogOpen && !isEncounterOpen() && !encounterPending) {
         const pcol = Math.floor((selfX - dInt.x) / DUNGEON_TILE);
         if (pcol < 24) clarenceArmed = true;
-        else if (clarenceArmed && pcol >= 27) { clarenceArmed = false; meetClarence(); }
+        else if (clarenceArmed && pcol >= 27) { clarenceArmed = false; summonClarence(); }
       }
       return;
     }
@@ -3693,6 +3719,7 @@ export function startWorld(net: WorldNet): void {
       // Dungeon (the Ruins): 0x72 stone-floor variants (f0–f6) + wall variants (w0–w3).
       for (let i = 0; i < 7; i++) this.load.image('d-f' + i, '/dungeon/f' + i + '.png');
       for (let i = 0; i < 4; i++) this.load.image('d-w' + i, '/dungeon/w' + i + '.png');
+      this.load.image('d-clarence', '/dungeon/mob_clarence.png'); // the B5 Gatekeeper's world sprite
     },
 
     create(this: Phaser.Scene) {
@@ -4024,6 +4051,15 @@ export function startWorld(net: WorldNet): void {
             const tw = 0.3 + 0.6 * Math.max(0, Math.sin(t * 2.1 + f.phase));
             f.glow.setPosition(f.x, f.y).setAlpha(0.5 * tw);
             f.core.setPosition(f.x, f.y).setAlpha(0.95 * tw);
+          }
+          // B5: the Gatekeeper striding in from the far wall → opens the dialogue once he arrives
+          if (clarenceAnim && clarenceSprite) {
+            clarenceAnim.t = Math.min(1, clarenceAnim.t + dt / 1.15);
+            const e = clarenceAnim.t < 0.5 ? 2 * clarenceAnim.t * clarenceAnim.t : 1 - Math.pow(-2 * clarenceAnim.t + 2, 2) / 2; // easeInOut
+            const bob = Math.abs(Math.sin(clarenceAnim.t * Math.PI * 5)) * 4; // a little walking bob
+            const x = clarenceAnim.fromX + (clarenceAnim.toX - clarenceAnim.fromX) * e;
+            clarenceSprite.setPosition(x, clarenceAnim.y - bob).setDepth(clarenceAnim.y + 1);
+            if (clarenceAnim.t >= 1) { clarenceAnim = null; clarenceDialogue(); }
           }
         } else {
           if (dungeonDarkRT) dungeonDarkRT.setVisible(false);
