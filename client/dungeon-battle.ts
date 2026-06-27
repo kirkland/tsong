@@ -7,7 +7,7 @@
 // win = fanfare + payout, lose = you took damage. Damage = points the mob scored × mob.power.
 
 import { Game } from '../server/game';
-import { COURT, PADDLE, ROAM, BLASTER } from '../shared/types';
+import { COURT, PADDLE, ROAM, BLASTER, DIAMOND } from '../shared/types';
 
 export interface MobDef {
   id: string; name: string; portrait: string; power: number; color: string;
@@ -25,6 +25,7 @@ export interface MobDef {
   fireRate?: number;                       // seconds between blaster shots
   dropChance?: number;                     // 0–1 chance a win drops a potion (default 0; Demon Fritz is high)
   rotate?: number;                         // permanent "rotate" power-up: the whole court is turned (1–3 quarter-turns; Clarence = 2 = 180°)
+  diamond?: boolean;                       // "diamond hands" mode: a drifting gem obstacle bounces around the court (Clarence)
 }
 
 // Roster, grouped two-per-tier. A floor introduces 2 NEW mobs (its tier) and carries the 2 from the
@@ -90,7 +91,7 @@ export const DUNGEON_MOBS: MobDef[] = [
   //     whole arena is turned 180° the entire fight (his permanent "rotate"). ---
   {
     id: 'clarence', name: 'Clarence, the Gatekeeper', portrait: '🌀', power: 10, color: '#7c5ec0', tier: 5, bob: 'float',
-    bot: { react: 0.19, error: 44, predict: false, idleCenter: true }, rotate: 3, lives: 5,
+    bot: { react: 0.19, error: 44, predict: false, idleCenter: true }, rotate: 3, lives: 5, diamond: true,
     gimmick: { name: 'Vertigo', desc: 'The entire arena is turned on its side.' },
     flavor: "you won't reach the boss.", tag: 'He guards the last door. Reality tilts wrong around him.',
   },
@@ -276,6 +277,7 @@ export function startEncounter(opts: EncounterOpts): void {
   if (mob.mirror) game.mirrorTimer.left = Infinity; // Possessed Noam: permanently invert the player's controls
   if (mob.blaster) game.blasterAmmo.right = Infinity; // Deranged Josiel: never runs out of freezing shots
   if (mob.rotate) game.rotated = mob.rotate;        // Clarence: the whole arena is turned (re-asserted each tick below)
+  if (mob.diamond) game.setDiamond(true);           // Clarence: a drifting diamond obstacle bounces around the court
   let fireTimer = (mob.fireRate ?? 1.6) * 1.4;      // delay the first blaster shot a touch
   const mobLives = mob.lives ?? 3; // points you must put past it to kill it
   const POTION_HEAL = 10; let healed = 0; // HP restored by potions drunk mid-battle
@@ -491,6 +493,17 @@ export function startEncounter(opts: EncounterOpts): void {
       gr.addColorStop(0, '#fff2c0'); gr.addColorStop(0.4, '#ff8a2a'); gr.addColorStop(1, 'rgba(255,60,20,0)');
       ctx.fillStyle = gr; ctx.beginPath(); ctx.arc(px, py, pr * 2.2, 0, 7); ctx.fill();
       ctx.fillStyle = '#fff7d8'; ctx.beginPath(); ctx.arc(px, py, pr * 0.7, 0, 7); ctx.fill();
+    }
+    // diamond-hands obstacle — a faceted cyan gem drifting around (deflects the ball)
+    if (game.diamondBlock) {
+      const d = game.diamondBlock, dr = (DIAMOND.r / COURT.w) * court.w;
+      ctx.save(); ctx.translate(cx(d.x), cy(d.y));
+      ctx.fillStyle = '#5fd0ff'; ctx.strokeStyle = '#eaffff'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(0, -dr); ctx.lineTo(dr * 0.78, 0); ctx.lineTo(0, dr); ctx.lineTo(-dr * 0.78, 0); ctx.closePath();
+      ctx.fill(); ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.beginPath();
+      ctx.moveTo(0, -dr); ctx.lineTo(0, dr); ctx.moveTo(-dr * 0.78, 0); ctx.lineTo(dr * 0.78, 0); ctx.stroke();
+      ctx.restore();
     }
     // ball(s)
     ctx.fillStyle = '#fff';
