@@ -345,6 +345,9 @@ const DUNGEON_THEME: Record<string, { wall: number; floor: number; surround: num
   B3: { wall: 0x866e7c, floor: 0x7c7690, surround: 0x05050c, props: true, gore: true }, // darker than B2, sickly + bloodied, still readable
   B4: { wall: 0x6a5660, floor: 0x645f74, surround: 0x040309, props: true, gore: true }, // the deep: coldest, darkest, most blood
 };
+// Fog-of-war darkness (the dim ambient OUTSIDE your light pool), ramped per descent: each floor is
+// genuinely darker than the last, but all lighter than the old flat 0.8 so nothing's a black void.
+const DUNGEON_DARK: Record<string, number> = { B1: 0.55, B2: 0.63, B3: 0.70, B4: 0.76 };
 const dungeonIsWall = (ch: string): boolean => ch === '#' || ch === 'T' || ch === 'o' || ch === ' ' || ch === 'W';
 // what blocks movement: walls + solid props (a chest you bump into) + a locked door ('L'). Switch-doors
 // ('X'/'Y') are handled per-state in dungeonBlocked (open/shut depends on the lever).
@@ -3916,7 +3919,7 @@ export function startWorld(net: WorldNet): void {
             // World-space layer: erase at room-local coords (worldPos − room origin), radii in world
             // units — holes track exactly, zero camera lag. Darker ambient so the light matters.
             const rt = dungeonDarkRT, brush = dungeonLightBrush;
-            rt.setVisible(true); rt.clear(); rt.fill(0x05070b, 0.8);
+            rt.setVisible(true); rt.clear(); rt.fill(0x05070b, DUNGEON_DARK[currentFloor] ?? 0.7);
             const stamp = (wx: number, wy: number, worldR: number) => {
               brush.setPosition(wx - dInt.x, wy - dInt.y).setDisplaySize(worldR * 2, worldR * 2);
               rt.erase(brush);
