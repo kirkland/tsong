@@ -464,7 +464,7 @@ export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potions?: 
   // B2 — a free wheel-spin chest, a potion, a coin chest, plus the SEALED locked-room prize (34,24).
   'B2:26,3': { spin: true },   // spins the wheel in-dungeon; reward → run loot, granted on escape
   'B2:4,13': { potions: 1 },
-  'B2:15,21': { coins: 120 },
+  'B2:15,21': { coins: 2500 },
   'B2:34,24': { cosmetic: 'car-monster', needsKey: true }, // the sealed vault: a MONSTER TRUCK (needs the B3 key)
   // B3 — bigger, darker, tier-3 mobs; meatier loot for the longer floor.
   'B3:28,3': { coins: 300 },
