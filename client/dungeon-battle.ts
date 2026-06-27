@@ -102,7 +102,7 @@ export const DUNGEON_MOBS: MobDef[] = [
   //     power-up (a wrong answer costs you HP + a screen of red). ---
   {
     id: 'rob', name: 'Rob', portrait: '🗺️', power: 8, color: '#23408a', tier: 5, bob: 'float',
-    bot: { react: 0.25, error: 70, predict: false, idleCenter: true }, lives: 12, boss: true, bossPowers: ['blaster', 'mirror'],
+    bot: { react: 0.25, error: 70, predict: false, idleCenter: true }, lives: 12, boss: true, bossPowers: ['mirror', 'paddle', 'quake'],
     fireRate: 1.7, gimmick: { name: 'Dead Reckoning', desc: 'Quizzes + escalates every 3 points.' },
     flavor: 'this is MY room.', tag: 'You interrupted his MapTap. He will make you regret it.',
   },
@@ -289,6 +289,7 @@ export function startEncounter(opts: EncounterOpts): void {
   if (mob.blaster) game.blasterAmmo.right = Infinity; // Deranged Josiel: never runs out of freezing shots
   if (mob.rotate) game.rotated = mob.rotate;        // Clarence: the whole arena is turned (re-asserted each tick below)
   if (mob.diamond) game.setDiamond(true);           // Clarence: a drifting diamond obstacle bounces around the court
+  if (mob.id === 'rob') robBlaster = true;          // Rob starts already armed with the blaster
   let fireTimer = (mob.fireRate ?? 1.6) * 1.4;      // delay the first blaster shot a touch
   const mobLives = mob.lives ?? 3; // points you must put past it to kill it
   const POTION_HEAL = 10; let healed = 0; // HP restored by potions drunk mid-battle
@@ -430,6 +431,8 @@ export function startEncounter(opts: EncounterOpts): void {
   function applyBossPower(pw?: string) {
     if (pw === 'blaster') { robBlaster = true; announce('⚡ Rob grabbed the BLASTER!'); }
     else if (pw === 'mirror') { robMirror = true; announce('🔄 Rob REVERSED your controls!'); }
+    else if (pw === 'paddle') { game.paddleScale.right = 1.4; announce("📏 Rob's paddle GREW!"); }
+    else if (pw === 'quake') { robQuake = true; game.earthquake = true; announce('🌋 EARTHQUAKE — the room SHAKES!'); }
     else if (pw === 'turbo') game.setTurbo(true);
     else if (pw === 'rotate') robRotate = 2;
   }
@@ -634,6 +637,7 @@ export function startEncounter(opts: EncounterOpts): void {
     const chips: [string, string][] = [];
     if (robBlaster) chips.push(['⚡ Blaster', '#ff8a2a']);
     if (robMirror) chips.push(['🔄 Reversed', '#9a6cff']);
+    if (game.paddleScale.right > 1) chips.push(['📏 Big Paddle', '#5ad1c0']);
     if (robQuake) chips.push(['🌋 Quake', '#d8a13a']);
     if (clutchRally) chips.push(['🎯 LOCKED IN', '#ff4a4a']);
     if (chips.length) {
@@ -789,8 +793,6 @@ export function startEncounter(opts: EncounterOpts): void {
       stepAI(dt);
       const beforeL = game.score.left, beforeR = game.score.right;
       game.tick(dt);
-      // his final stand: the last two points shake the whole room (earthquake) — no question, it just hits
-      if (mob.boss && !robQuake && game.score.left >= mobLives - 2) { robQuake = true; game.earthquake = true; announce('🌋 EARTHQUAKE — the room is SHAKING!'); }
       if (game.score.left > beforeL || game.score.right > beforeR) { // a rally just ended (someone scored)
         tone(game.score.left > beforeL ? 660 : 200, 0.08, 'square', 0.1, game.score.left > beforeL ? 880 : 120);
         if (mob.boss) {
