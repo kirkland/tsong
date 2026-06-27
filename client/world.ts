@@ -330,24 +330,50 @@ const DUNGEON_B4 = [
   '###############################################',
   '###############################################',
 ];
-const DUNGEON_FLOORS: Record<string, string[]> = { B1: DUNGEON_B1, B2: DUNGEON_B2, B3: DUNGEON_B3, B4: DUNGEON_B4 };
+// B5 — the BOSS floor. A long, thin, torch-lined approach hallway ('<' back to B4) that opens into a
+// grand pillared chamber where the boss waits. No loot, no wandering mobs, NO music — just dread.
+const DUNGEON_B5 = [
+  '#################################################',
+  '#################################################',
+  '##############################T###T###T###T###T##',
+  '###########################....................##',
+  '###########################....................##',
+  '##########################T....................##',
+  '###########################....................T#',
+  '###########################....o...o...o...o...##',
+  '###########################....................##',
+  '#####T###T###T###T###T###T#....................##',
+  '##<............................................T#',
+  '#####T###T###T###T###T###T#....................##',
+  '###########################....................##',
+  '###########################....o...o...o...o...##',
+  '###########################....................T#',
+  '##########################T....................##',
+  '###########################....................##',
+  '###########################....................##',
+  '##############################T###T###T###T###T##',
+  '#################################################',
+  '#################################################',
+];
+const DUNGEON_FLOORS: Record<string, string[]> = { B1: DUNGEON_B1, B2: DUNGEON_B2, B3: DUNGEON_B3, B4: DUNGEON_B4, B5: DUNGEON_B5 };
 const DUNGEON_TOTAL_CHESTS = Object.keys(DUNGEON_CHEST_CONTENTS).length; // for the x/y "chests found" counter
 // Locked 'L' doors → the chest they guard. A door stays open FOREVER once that chest is account-opened
 // (committed), exactly like the chest itself — no need to re-key it on later runs.
 const DUNGEON_LOCKED_DOORS: Record<string, string> = { 'B2:32,24': 'B2:34,24' };
-const DUNGEON_ORDER = ['B1', 'B2', 'B3', 'B4']; // descent order; '>' goes to the next, '<' to the previous
+const DUNGEON_ORDER = ['B1', 'B2', 'B3', 'B4', 'B5']; // descent order; '>' goes to the next, '<' to the previous
 // Each descent gets darker + colder in THEME (not lighting — the actual stone palette). `props`
 // turns on the deeper-floor ambient decals (bones, fungus, cobwebs, drips); `gore` adds blood + claw
 // marks on the bloodier floors.
-const DUNGEON_THEME: Record<string, { wall: number; floor: number; surround: number; props: boolean; gore?: boolean }> = {
+const DUNGEON_THEME: Record<string, { wall: number; floor: number; surround: number; props: boolean; gore?: boolean; silent?: boolean }> = {
   B1: { wall: 0xffd49a, floor: 0xffffff, surround: 0x070905, props: false }, // warm amber sandstone
   B2: { wall: 0xa07b86, floor: 0x9aa0b4, surround: 0x05060a, props: true },  // colder, blue-grey, dimmer
   B3: { wall: 0x866e7c, floor: 0x7c7690, surround: 0x05050c, props: true, gore: true }, // darker than B2, sickly + bloodied, still readable
   B4: { wall: 0x6a5660, floor: 0x645f74, surround: 0x040309, props: true, gore: true }, // the deep: coldest, darkest, most blood
+  B5: { wall: 0x564a68, floor: 0x423a56, surround: 0x010008, props: false, silent: true }, // the BOSS sanctum: grand regal stone, torch-lit, dead silent
 };
 // Fog-of-war darkness (the dim ambient OUTSIDE your light pool), ramped per descent: each floor is
 // genuinely darker than the last, but all lighter than the old flat 0.8 so nothing's a black void.
-const DUNGEON_DARK: Record<string, number> = { B1: 0.55, B2: 0.63, B3: 0.70, B4: 0.76 };
+const DUNGEON_DARK: Record<string, number> = { B1: 0.55, B2: 0.63, B3: 0.70, B4: 0.76, B5: 0.8 }; // the boss sanctum: darkest, lit only by its torches
 const dungeonIsWall = (ch: string): boolean => ch === '#' || ch === 'T' || ch === 'o' || ch === ' ' || ch === 'W';
 // what blocks movement: walls + solid props (a chest you bump into) + a locked door ('L'). Switch-doors
 // ('X'/'Y') are handled per-state in dungeonBlocked (open/shut depends on the lever).
@@ -1611,6 +1637,7 @@ export function startWorld(net: WorldNet): void {
     nearSwitch = null; nearSwitchDoor = null; switchOn = false; // each floor's switch puzzle resets to default
     newMobsSeen.clear(); recentMob = -1; recentMobRun = 0; // each floor re-forces its new mobs first
     stairSound(arriveChar === '<'); // arriving at an up-stair means we descended
+    setDungeonMusic(true); // re-evaluate per floor: silence on the boss sanctum, the loop everywhere else
     // NB: no dungeonSync here — that would reset the purse + provisional chests. The client already
     // holds every committed-open chest (from the entry sync) plus its own run-opens, so the rebuilt
     // floor renders chests correctly. The run (purse + provisional chests) rides between floors.
@@ -1850,6 +1877,7 @@ export function startWorld(net: WorldNet): void {
   // we track the DESIRED state and re-assert it once the play promise resolves.
   let dungeonMusicWanted = false;
   function setDungeonMusic(on: boolean) {
+    if (on && DUNGEON_THEME[currentFloor]?.silent) on = false; // the boss sanctum (B5) plays NO music — silence is the dread
     dungeonMusicWanted = on;
     if (!dungeonMusic) return;
     if (on) dungeonMusic.play().then(() => { if (!dungeonMusicWanted) dungeonMusic?.pause(); }).catch(() => { /* gesture */ });
@@ -2400,10 +2428,10 @@ export function startWorld(net: WorldNet): void {
       if (hit) bumpSound(false); else stepSound();
       // Cave-style encounters: every new tile you step onto bumps a rising danger meter and rolls.
       // Tall grass (~) ramps faster. The meter resets to 0 on a fight, so you get safe steps then
-      // the odds climb — never instant-spammy, never dead-quiet.
+      // the odds climb — never instant-spammy, never dead-quiet. The boss sanctum (B5) has none.
       const cc = Math.floor((selfX - dInt.x) / DUNGEON_TILE), cr = Math.floor((selfY - dInt.y) / DUNGEON_TILE);
       const cell = dungeonCell(cc, cr), key = cc + ',' + cr;
-      if (key !== lastGrassKey) {
+      if (currentFloor !== 'B5' && key !== lastGrassKey) {
         lastGrassKey = key;
         if (cell !== '@' && cell !== '>' && cell !== '<' && cell !== 'X' && cell !== 'Y') { // no ambush on entry/stairs/door tiles
           grassDanger += cell === '~' ? 2 : 1;
