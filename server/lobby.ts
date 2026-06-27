@@ -1064,7 +1064,7 @@ export class Lobby {
     }).catch((e) => console.error('dungeonSync load failed:', e));
     this.sendPurse(ws, pid);
   }
-  dungeonChest(ws: WebSocket, chest: string) {
+  dungeonChest(ws: WebSocket, chest: string, captured = false) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.pid) return;
     const contents = DUNGEON_CHEST_CONTENTS[chest];
@@ -1075,6 +1075,24 @@ export class Lobby {
     if (!run) { run = new Set(); this.dungeonRunChests.set(conn.pid, run); }
     if (run.has(chest)) return;                     // already opened THIS run → no double-pay
     run.add(chest);
+    // A "monster box": the client fought the mob and reports the outcome — a capture grants the pet
+    // (run-scoped, banked on escape), a kill pays the chest's coins. Same trust model as dungeonWin.
+    if (contents.monster) {
+      let prizeName: string | undefined, coins = 0;
+      if (captured && contents.pet) {
+        const def = COSMETICS.find((c) => c.id === contents.pet);
+        prizeName = def?.name ?? 'a pet';
+        const list = this.dungeonRunItems.get(conn.pid) ?? [];
+        list.push({ item: contents.pet, name: prizeName });
+        this.dungeonRunItems.set(conn.pid, list);
+      } else {
+        coins = contents.coins ?? 0;
+        if (coins > 0) this.dungeonPurse.set(conn.pid, (this.dungeonPurse.get(conn.pid) ?? 0) + coins);
+      }
+      this.tell(ws, { type: 'dungeonChestOpened', chest, coins, potions: 0, spin: false, prize: prizeName });
+      this.sendPurse(ws, conn.pid);
+      return;
+    }
     if (contents.spin) { this.dungeonSpinChest(ws, conn.pid, chest); return; } // roll the wheel in-dungeon
     const coins = contents.coins ?? 0, potions = contents.potions ?? 0;
     if (coins > 0) this.dungeonPurse.set(conn.pid, (this.dungeonPurse.get(conn.pid) ?? 0) + coins);

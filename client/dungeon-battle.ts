@@ -148,7 +148,8 @@ export interface EncounterOpts {
   itemChance: number;         // 0–1 chance a win also drops a potion (B1 = 0; deeper floors > 0)
   introImage?: HTMLImageElement | null; // a snapshot of the world, animated into the transition
   potions?: { count: () => number; consume: () => boolean }; // mid-battle potion use (P): heals +10 HP
-  onResult: (r: { result: 'win' | 'lose' | 'flee'; coins: number; item: string | null; hpLost: number }) => void;
+  capturable?: boolean;       // a "monster box" mob: at its last life, pause and offer a Poké Ball capture
+  onResult: (r: { result: 'win' | 'lose' | 'flee' | 'capture'; coins: number; item: string | null; hpLost: number }) => void;
 }
 
 let active = false;
@@ -345,18 +346,23 @@ export function startEncounter(opts: EncounterOpts): void {
     }
   }
 
-  // ── phases: transition → fight → result ──
-  type Phase = 'intro' | 'ready' | 'fight' | 'win' | 'lose';
+  // ── phases: transition → fight → result (+ the optional capture detour) ──
+  type Phase = 'intro' | 'ready' | 'fight' | 'win' | 'lose' | 'capturePrompt' | 'capturing' | 'captured';
   let phase: Phase = 'intro';
   let phaseT = 0;           // seconds in the current phase
   let bannerAlpha = 1;
   let last = performance.now();
   let raf = 0;
   let resultCoins = 0, resultItem: string | null = null;
+  // ── capture state (only used when opts.capturable) ──
+  let captureDeclined = false;       // said "no" → finish the fight normally
+  let captureScale = 1;              // the mob's draw-scale during capture (1 → 0 as it's sucked into the ball)
+  const captureMob = { x: 0, y: 0 }; // where the mob sat when the ball flew
+  let captureWobbleN = 0;            // wobble click-sounds already fired
 
   song.play().catch(() => { /* gesture already happened on the world key */ });
 
-  function endBattle(result: 'win' | 'lose' | 'flee') {
+  function endBattle(result: 'win' | 'lose' | 'flee' | 'capture') {
     if (!active) return;
     active = false;
     cancelAnimationFrame(raf);
@@ -367,10 +373,47 @@ export function startEncounter(opts: EncounterOpts): void {
     if (document.pointerLockElement === cv) document.exitPointerLock();
     song.pause(); fanfare.pause(); // audio + context are reused across battles, not torn down
     overlay.remove();
-    // net HP lost = starting HP minus where we ended up (potions healed some of it back)
-    opts.onResult({ result, coins: resultCoins, item: resultItem, hpLost: opts.hp - curHP() });
+    // net HP lost = starting HP minus where we ended up (potions healed some of it back). A capture
+    // costs no extra HP and pays no coins (you get the pet instead).
+    opts.onResult({ result, coins: result === 'capture' ? 0 : resultCoins, item: resultItem, hpLost: opts.hp - curHP() });
   }
   function flee() { if (phase === 'fight') { resultCoins = 0; endBattle('flee'); } }
+
+  // ── capture dialogue: a small Yes/No box shown when a capturable mob hits its last life ──
+  const captureBox = document.createElement('div');
+  captureBox.style.cssText =
+    'position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:4;display:none;pointer-events:auto;' +
+    'min-width:300px;background:#10131c;border:2px solid #3a508f;border-radius:14px;padding:18px 20px;text-align:center;' +
+    'box-shadow:0 12px 40px rgba(0,0,0,.6);';
+  overlay.appendChild(captureBox);
+  function showCaptureDialog() {
+    captureBox.replaceChildren();
+    const h = document.createElement('div');
+    h.innerHTML = `🟢 The <b>${mob.name}</b> is weak and cornered!`;
+    h.style.cssText = 'font-size:17px;color:#eaf0ff;margin-bottom:6px;';
+    const s = document.createElement('div');
+    s.textContent = 'Throw a Poké Ball and try to catch it?';
+    s.style.cssText = 'font-size:13px;color:#9fb3e6;margin-bottom:16px;';
+    captureBox.append(h, s);
+    const mk = (label: string, bg: string, on: () => void) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = label;
+      b.style.cssText = `display:inline-block;margin:0 6px;cursor:pointer;background:${bg};color:#fff;border:none;border-radius:10px;padding:11px 22px;font-size:15px;font-weight:700;`;
+      b.onclick = (e) => { e.stopPropagation(); on(); };
+      return b;
+    };
+    captureBox.append(
+      mk('✦ Throw Ball', '#c0392b', () => { hideCaptureDialog(); beginCapture(); }),
+      mk('✕ Keep Fighting', '#21305a', () => { hideCaptureDialog(); captureDeclined = true; phase = 'fight'; phaseT = 0; song.volume = 0.6; }),
+    );
+    captureBox.style.display = 'block';
+  }
+  function hideCaptureDialog() { captureBox.style.display = 'none'; }
+  function beginCapture() {
+    phase = 'capturing'; phaseT = 0; captureScale = 1; captureWobbleN = 0;
+    song.pause();
+    tone(140, 0.1, 'square', 0.16, 520); // the throw "whoosh→ping"
+  }
 
   // ── render helpers ──
   function layoutCourt() {
@@ -437,6 +480,8 @@ export function startEncounter(opts: EncounterOpts): void {
     if (mob.bob === 'flutter') { ox = Math.sin(t * 17) * 4; oy = Math.sin(t * 12 + 1) * 6; }
     else if (mob.bob === 'squish') { const s = Math.sin(t * 2.6); oy = (1 - Math.abs(s)) * 5; sy = 1 + s * 0.12; sx = 1 - s * 0.08; }
     else { oy = Math.sin(t * 1.6) * 7; }
+    captureMob.x = cxp; captureMob.y = baseY; // remembered so a Poké Ball knows where to fly
+    if (captureScale <= 0.02) return;          // sucked into the ball — don't draw the creature
     const img = mobImage(mob.id);
     if (img) { // generated art — fit to a tall target, constrained by the gutter width
       const iw = img instanceof HTMLCanvasElement ? img.width : img.naturalWidth;
@@ -445,7 +490,7 @@ export function startEncounter(opts: EncounterOpts): void {
       const scale = Math.min((court.h * 0.36) / ih, (gutter * 0.96) / iw);
       const dw = iw * scale, dh = ih * scale;
       baseY = Math.max(court.y + dh / 2, Math.min(court.y + court.h - dh / 2, baseY));
-      ctx.save(); ctx.translate(cxp + ox, baseY + oy); ctx.scale(sx, sy);
+      ctx.save(); ctx.translate(cxp + ox, baseY + oy); ctx.scale(sx * captureScale, sy * captureScale);
       ctx.drawImage(img, -dw / 2, -dh / 2, dw, dh); ctx.restore();
       return;
     }
@@ -550,14 +595,79 @@ export function startEncounter(opts: EncounterOpts): void {
   }
 
   // advance result on click / space
-  const advance = () => { if (phase === 'win' || phase === 'lose') endBattle(phase === 'win' ? 'win' : 'lose'); };
+  const isResult = () => phase === 'win' || phase === 'lose' || phase === 'captured';
+  const advance = () => { if (isResult()) endBattle(phase === 'win' ? 'win' : phase === 'captured' ? 'capture' : 'lose'); };
   const onOverlayClick = () => {
-    if (phase === 'win' || phase === 'lose') { advance(); return; }       // result screen → continue
+    if (isResult()) { advance(); return; }                                // result screen → continue
     if (phase === 'fight' && document.pointerLockElement !== cv) cv.requestPointerLock(); // capture the mouse
   };
   overlay.addEventListener('click', onOverlayClick);
-  const advKey = (e: KeyboardEvent) => { if ((e.key === ' ' || e.key === 'Enter') && (phase === 'win' || phase === 'lose')) { e.preventDefault(); advance(); } };
+  const advKey = (e: KeyboardEvent) => { if ((e.key === ' ' || e.key === 'Enter') && isResult()) { e.preventDefault(); advance(); } };
   window.addEventListener('keydown', advKey, true);
+
+  // ── Poké Ball capture animation (phase 'capturing'): ball flies in → mob sucks down → wobble → caught
+  function drawBall(x: number, y: number, r: number, rot: number, openF = 0) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+    ctx.lineWidth = Math.max(1.5, r * 0.12);
+    const split = openF * r * 0.9;
+    ctx.fillStyle = '#f3f3f5'; ctx.beginPath(); ctx.arc(0, split, r, 0, Math.PI); ctx.fill();        // white bottom
+    ctx.fillStyle = '#e23b2e'; ctx.beginPath(); ctx.arc(0, -split, r, Math.PI, Math.PI * 2); ctx.fill(); // red top
+    ctx.strokeStyle = '#15151a';
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();                                 // outline
+    if (openF < 0.5) { // closed: the band + button
+      ctx.fillStyle = '#15151a'; ctx.fillRect(-r, -r * 0.13, r * 2, r * 0.26);
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.3, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#f3f3f5'; ctx.beginPath(); ctx.arc(0, 0, r * 0.15, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
+  }
+  function drawCapture() {
+    const mx = captureMob.x, my = captureMob.y;
+    const restX = court.x + court.w * 0.5, restY = court.y + court.h * 0.74; // where the ball lands + wobbles
+    const r = Math.max(12, court.h * 0.05);
+    // 0.0–0.5 throw   0.5–0.95 suck-in   0.95–2.3 wobble   2.3+ caught
+    if (phaseT < 0.5) {
+      captureScale = 1;
+      const f = phaseT / 0.5;
+      const bx = court.x + court.w * 0.12 + (mx - (court.x + court.w * 0.12)) * f;
+      const by = (court.y + court.h + 40) + (my - (court.y + court.h + 40)) * f - Math.sin(f * Math.PI) * court.h * 0.4; // an arc
+      drawBall(bx, by, r, f * 12);
+    } else if (phaseT < 0.95) {
+      const f = (phaseT - 0.5) / 0.45;
+      captureScale = 1 - f;
+      // a red suck-in beam from the open ball to the dwindling mob
+      ctx.save(); ctx.globalAlpha = 0.55; ctx.strokeStyle = '#ff5a4a'; ctx.lineWidth = 6 * (1 - f);
+      ctx.beginPath(); ctx.moveTo(mx, my); ctx.lineTo(mx, my - r); ctx.stroke(); ctx.restore();
+      drawBall(mx, my, r, 0.8); // open at the mob
+    } else {
+      captureScale = 0;
+      const wob = phaseT - 0.95, settled = Math.min(1, wob / 0.4);
+      const bx = mx + (restX - mx) * settled, by = my + (restY - my) * settled; // drop to rest
+      const wobble = wob > 0.4 ? Math.sin((wob - 0.4) * 9) * Math.max(0, 1 - (wob - 0.4) / 1.0) * 0.5 : 0;
+      drawBall(bx, by, r, 0);
+      // a settle "click" on each wobble swing (3 of them), then "Gotcha!"
+      const swings = Math.floor((wob - 0.4) * 9 / Math.PI);
+      if (wob > 0.4 && swings > captureWobbleN && captureWobbleN < 3) { captureWobbleN = swings; tone(420, 0.05, 'square', 0.12, 300); }
+      ctx.save(); ctx.translate(bx, by); ctx.rotate(wobble); ctx.translate(-bx, -by); ctx.restore();
+      if (phaseT >= 2.3) { // caught!
+        phase = 'captured'; phaseT = 0; resultCoins = 0;
+        fanfare.currentTime = 0; fanfare.play().catch(() => {});
+        tone(660, 0.09, 'square', 0.12, 990); setTimeout(() => tone(990, 0.16, 'square', 0.12, 1320), 110);
+      }
+    }
+  }
+  function drawCaptureResult() { // "Gotcha!" panel, mirrors drawResult's layout
+    const W = cv.width, bw = Math.min(440, W * 0.8), bh = 132, bx = (W - bw) / 2, by = cv.height * 0.62;
+    ctx.fillStyle = 'rgba(8,12,20,.92)'; ctx.strokeStyle = '#4a7a3a'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 14); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = '#7ed957'; ctx.beginPath(); ctx.roundRect(bx + 16, by - 13, 130, 24, 8); ctx.fill();
+    ctx.fillStyle = '#0e1a08'; ctx.font = 'bold 13px ui-monospace'; ctx.fillText('GOTCHA!', bx + 26, by - 1);
+    ctx.fillStyle = '#eef2ff'; ctx.font = '18px ui-monospace'; ctx.textBaseline = 'top';
+    [`${mob.name} was caught!`, `It joins you as a pet — escape to keep it!`].forEach((s, i) => ctx.fillText(s, bx + 20, by + 18 + i * 26));
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#9fd1ff'; ctx.font = '15px ui-monospace'; ctx.textAlign = 'right';
+    ctx.fillText('▼ click / Space', bx + bw - 16, by + 80); ctx.textAlign = 'left';
+  }
 
   function frame() {
     const now = performance.now(), dt = Math.min(0.033, (now - last) / 1000); last = now;
@@ -579,7 +689,15 @@ export function startEncounter(opts: EncounterOpts): void {
       bannerAlpha = Math.max(0, 1 - Math.max(0, phaseT - 1.4) / 0.6);
       // mobLives points kills the mob (win). The mob never wins — it just chips your run HP each
       // point, and you fight on until that HP runs out (death). Potions (P) heal you mid-fight.
-      if (game.score.left >= mobLives) { phase = 'win'; phaseT = 0; resultCoins = opts.coins[0] + Math.floor(Math.random() * (opts.coins[1] - opts.coins[0] + 1)); resultItem = Math.random() < opts.itemChance ? '🧪 Potion' : null; fanfare.currentTime = 0; song.pause(); fanfare.play().catch(() => {}); }
+      // A capturable "monster box" mob, brought to its LAST life, pauses for the Poké Ball offer.
+      if (opts.capturable && !captureDeclined && game.score.left >= 1 && game.score.left === mobLives - 1) {
+        phase = 'capturePrompt'; phaseT = 0;
+        if (document.pointerLockElement === cv) document.exitPointerLock();
+        song.volume = 0.3;
+        tone(880, 0.1, 'square', 0.1, 1180); // a little "!" sting
+        showCaptureDialog();
+      }
+      else if (game.score.left >= mobLives) { phase = 'win'; phaseT = 0; resultCoins = opts.coins[0] + Math.floor(Math.random() * (opts.coins[1] - opts.coins[0] + 1)); resultItem = Math.random() < opts.itemChance ? '🧪 Potion' : null; fanfare.currentTime = 0; song.pause(); fanfare.play().catch(() => {}); }
       else if (curHP() <= 0) { phase = 'lose'; phaseT = 0; song.pause(); tone(160, 0.5, 'sawtooth', 0.18, 70); }
       // low-HP warning: a Pokémon-style beep every ~0.6s while you're in the red
       if (curHP() > 0 && curHP() / 100 <= 0.15 && now - lowBeepAt > 600) { lowBeepAt = now; tone(950, 0.09, 'square', 0.09, 950); }
@@ -594,6 +712,8 @@ export function startEncounter(opts: EncounterOpts): void {
       drawCourt(); drawHud();
       if (phase === 'ready' && phaseT >= 1.8) { phase = 'fight'; phaseT = 0; } // read the matchup, then serve
       if (phase === 'win' || phase === 'lose') drawResult();
+      if (phase === 'capturing') drawCapture();
+      if (phase === 'captured') drawCaptureResult();
     }
     // show the "click to capture" hint only while fighting un-captured
     const wantPrompt = phase === 'fight' && document.pointerLockElement !== cv ? 'block' : 'none';

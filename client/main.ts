@@ -2010,7 +2010,7 @@ worldBtn.addEventListener('click', async () => {
       },
       claimQuest: (quest) => net.send({ type: 'questClaim', quest }),
       dungeonSync: () => net.send({ type: 'dungeonSync' }),
-      dungeonChest: (chest) => net.send({ type: 'dungeonChest', chest }),
+      dungeonChest: (chest, captured) => net.send({ type: 'dungeonChest', chest, captured }),
       dungeonWin: (floor, tier) => net.send({ type: 'dungeonWin', floor, tier }),
       dungeonTakeKey: () => net.send({ type: 'dungeonTakeKey' }),
       dungeonExit: (escaped) => net.send({ type: 'dungeonExit', escaped }),

@@ -67,7 +67,7 @@ export interface WorldNet {
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
   dungeonSync(): void;             // entering the Ruins → ask which chests we've opened
-  dungeonChest(chest: string): void; // open a chest ('B1:col,row') → server pays coins from the House (once)
+  dungeonChest(chest: string, captured?: boolean): void; // open a chest ('B1:col,row') → server pays coins / grants prize (once). captured=true → a monster box caught (grant the pet)
   dungeonWin(floor: string, tier: number): void; // won an encounter → adds a TIER-ranged amount to the run purse
   dungeonTakeKey(): void; // took the key from the dying B3 adventurer (server marks the run-key)
   dungeonExit(escaped: boolean): void; // left the Ruins (escaped → server pays the run purse from the House)
@@ -1790,6 +1790,16 @@ export function startWorld(net: WorldNet): void {
   function openChest(c: number, r: number) {
     if (chestIsOpen(c, r)) return;
     const id = `${currentFloor}:${c},${r}`;
+    const contents = DUNGEON_CHEST_CONTENTS[id];
+    if (contents?.monster) { // a monster box! it lunges out into a fight instead of handing over loot
+      nearChestCell = null; updateNearBuilding();
+      chestSound();
+      showToast('📦😱 A monster jumped out of the box!');
+      const mob = DUNGEON_MOBS.find((m) => m.id === contents.monster) ?? DUNGEON_MOBS[0];
+      const win = contents.coins ?? 0;
+      triggerEncounter({ mob, capturable: !!contents.pet, chestId: id, chestC: c, chestR: r, coins: [win, win] });
+      return;
+    }
     openedChestsServer.add(id);                        // optimistic — the server confirms + pays/grants
     dungeonChestSprites[`${c},${r}`]?.setTexture('w-chest-open');
     chestSound();
@@ -1838,13 +1848,15 @@ export function startWorld(net: WorldNet): void {
     else dungeonMusic.pause();
   }
   let encounterPending = false; // a battle is being set up (snapshot in flight) — block re-triggering
-  // A tall-grass encounter: pause the dungeon theme and drop into a Pong duel vs a mob.
-  function triggerEncounter() {
+  // A tall-grass encounter: pause the dungeon theme and drop into a Pong duel vs a mob. `cfg` lets a
+  // "monster box" chest force a specific mob, mark it capturable, and route its reward through the chest.
+  type EncounterCfg = { mob?: (typeof DUNGEON_MOBS)[number]; capturable?: boolean; chestId?: string; chestC?: number; chestR?: number; coins?: [number, number] };
+  function triggerEncounter(cfg?: EncounterCfg) {
     if (isEncounterOpen() || encounterPending) return;
     encounterPending = true;
     keys.clear(); joyActive = false; vx = 0; vy = 0;
     setDungeonMusic(false);
-    const mob = DUNGEON_MOBS[pickFloorMob()]; // new mobs forced first, then full pool, shuffle-bagged
+    const mob = cfg?.mob ?? DUNGEON_MOBS[pickFloorMob()]; // new mobs forced first, then full pool, shuffle-bagged
     // Snapshot the live dungeon view FIRST (loop must still be running), then sleep + open the
     // battle — the snapshot is the world frame the Pokémon strip-transition animates apart.
     const begin = (snap: HTMLImageElement | null) => {
@@ -1852,8 +1864,9 @@ export function startWorld(net: WorldNet): void {
       if (game?.canvas) game.canvas.style.display = 'none'; // and stop the browser compositing it
       startEncounter({
         mob, hp: dungeonHP, introImage: snap,
-        coins: [...(DUNGEON_TIER_COINS[mob.tier] ?? DUNGEON_TIER_COINS[1])] as [number, number], // display only — server is authoritative
-        itemChance: mob.dropChance ?? 0, // most mobs drop only coins; some (Demon Fritz) drop a potion on a win
+        coins: cfg?.coins ?? [...(DUNGEON_TIER_COINS[mob.tier] ?? DUNGEON_TIER_COINS[1])] as [number, number], // display only — server is authoritative
+        itemChance: cfg?.chestId ? 0 : (mob.dropChance ?? 0), // most mobs drop only coins; some (Demon Fritz) drop a potion on a win
+        capturable: cfg?.capturable,
         potions: { // drink a potion mid-battle (P): consumes one of the run's potions for +10 HP
           count: () => potionCount,
           consume: () => { if (potionCount <= 0) return false; potionCount -= 1; updateDungeonHud(); updateDungeonControls(); return true; },
@@ -1863,8 +1876,21 @@ export function startWorld(net: WorldNet): void {
           if (game?.canvas) game.canvas.style.display = 'block';
           game?.loop.wake();
           dungeonHP = Math.max(0, dungeonHP - r.hpLost);
-          if (r.result === 'win') {
-            net.dungeonWin(currentFloor, mob.tier); // server credits the coins (by mob tier) from the House
+          const markBox = () => { // the monster box is consumed only once its fight resolves (flee/death → retryable)
+            if (cfg?.chestId == null) return;
+            openedChestsServer.add(cfg.chestId);
+            dungeonChestSprites[`${cfg.chestC},${cfg.chestR}`]?.setTexture('w-chest-open');
+          };
+          if (r.result === 'capture' && cfg?.chestId) {            // caught it → server grants the pet (run-scoped)
+            markBox(); net.dungeonChest(cfg.chestId, true);
+            showToast(`🎉 Gotcha! The ${mob.name} is yours — escape the Ruins to keep it!`);
+          } else if (r.result === 'win') {
+            if (cfg?.chestId) {                                    // killed the box-mob → server pays the chest's coins
+              markBox(); net.dungeonChest(cfg.chestId);
+              showToast(`📦 You smashed it! ${cfg.coins?.[0] ?? 0}🪙 — escape to keep!`);
+            } else {
+              net.dungeonWin(currentFloor, mob.tier);              // a normal mob win → coins by tier from the House
+            }
             if (r.item) potionCount += 1;
           }
           if (dungeonHP <= 0) { showToast('💀 You black out — your loot is lost in the dark…'); leaveDungeon(false); }
@@ -3245,6 +3271,14 @@ export function startWorld(net: WorldNet): void {
     px(6, 2, 3, 3, 0xffffff); px(7, 3, 1, 1, 0x111111);                             // right googly eye
     g.generateTexture('w-pet-rock', 12, 10);
 
+    // Crypt Slime: a green gelatinous blob with two dark eyes (12×10 texels) — the Ruins capture pet.
+    g.clear();
+    px(3, 2, 6, 1, 0x7ed06a); px(2, 3, 8, 2, 0x6fc25a);             // domed top
+    px(1, 5, 10, 3, 0x5fae54); px(1, 8, 10, 1, 0x4d9444);          // wide body + shaded base
+    px(3, 2, 2, 1, 0x9fe28a);                                       // highlight
+    px(3, 4, 1, 2, 0x16210f); px(7, 4, 1, 2, 0x16210f);            // two beady eyes
+    g.generateTexture('w-pet-slime', 12, 10);
+
     // Pikachu: yellow body, black-tipped ears, red cheeks (14×16 texels).
     {
       const PK = 0xf6d020, PK_D = 0xe0b800, BLK = 0x1a1a1a, RED = 0xe23b3b, BRN = 0x9c6b1f;
@@ -4110,7 +4144,7 @@ export function startWorld(net: WorldNet): void {
       if (!ps || ps.id !== petId) {
         // First sight of this owner's pet (or it changed) — (re)create the custom sprite.
         if (ps) ps.sprite.destroy();
-        const tex = pet.kind === 'rock' ? 'w-pet-rock' : pet.kind === 'pikachu' ? 'w-pet-pikachu' : 'w-pet-pacman-0';
+        const tex = pet.kind === 'rock' ? 'w-pet-rock' : pet.kind === 'pikachu' ? 'w-pet-pikachu' : pet.kind === 'slime' ? 'w-pet-slime' : 'w-pet-pacman-0';
         const sprite = sc.add.image(ox, oy, tex).setScale(TEXEL).setOrigin(0.5, 0.6);
         ps = { sprite, id: petId, kind: pet.kind, x: ox, y: oy, lastX: ox, lastY: oy, chomp: 0 };
         petSprites.set(a.id, ps);

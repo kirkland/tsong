@@ -293,7 +293,7 @@ wss.on('connection', (ws: WebSocket, req) => {
         lobby.dungeonSync(ws);
         break;
       case 'dungeonChest':
-        if (typeof msg.chest === 'string') lobby.dungeonChest(ws, msg.chest);
+        if (typeof msg.chest === 'string') lobby.dungeonChest(ws, msg.chest, msg.captured === true);
         break;
       case 'dungeonWin':
         if (typeof msg.floor === 'string' && typeof msg.tier === 'number') lobby.dungeonWin(ws, msg.floor, msg.tier);

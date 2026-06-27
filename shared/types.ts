@@ -273,6 +273,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'pet-rock', name: '🪨 Pet Rock', slot: 'pet', price: 50000 },
   { id: 'pet-pikachu', name: '⚡ Pikachu', slot: 'pet', price: 100000 },
   { id: 'pet-pacman', name: '🟡 Pac-Man', slot: 'pet', price: 150000 },
+  { id: 'pet-slime', name: '🟢 Crypt Slime', slot: 'pet', price: 0, locked: 'dungeon' }, // caught in the Ruins (B4 monster box)
   // New common loot-box refresh items
   { id: 'beret', name: 'Beret', slot: 'hat', price: 1000 },
   { id: 'catears', name: 'Cat Ears', slot: 'hat', price: 2000 }, // animated
@@ -403,11 +404,12 @@ export function carById(id: string | null | undefined): CarSpec | null {
 // follows you around (unlike a car, which replaces/IS the avatar while driving). A pet id
 // matches a COSMETICS entry with slot 'pet'. `kind` selects the custom drawn sprite in the
 // World renderer; `emoji` is just the small shop-tile preview glyph.
-export type PetKind = 'rock' | 'pikachu' | 'pacman';
+export type PetKind = 'rock' | 'pikachu' | 'pacman' | 'slime';
 export const PETS: readonly { id: string; emoji: string; kind: PetKind }[] = [
   { id: 'pet-rock', emoji: '🪨', kind: 'rock' },       // a googly-eyed rock
   { id: 'pet-pikachu', emoji: '⚡', kind: 'pikachu' },  // Pikachu
   { id: 'pet-pacman', emoji: '🟡', kind: 'pacman' },    // Pac-Man, chomping as it follows
+  { id: 'pet-slime', emoji: '🟢', kind: 'slime' },     // a Crypt Slime caught in the Ruins
 ];
 export function petById(id: string | null | undefined) {
   if (!id) return null;
@@ -459,7 +461,7 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
 // --- The Ruins dungeon economy: SERVER-AUTHORITATIVE so a tampered client can't mint coins. ---
 // Chests keyed by 'floor:col,row'. The server pays a chest's coins (from the House) the first time
 // a given player opens it, and tracks opened chests per account.
-export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potions?: number; spin?: boolean; cosmetic?: string; needsKey?: boolean }> = {
+export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potions?: number; spin?: boolean; cosmetic?: string; needsKey?: boolean; monster?: string; pet?: string }> = {
   'B1:18,2': { cosmetic: 'mushroom' }, // 🍄 Mushroom Cap hat — the first-floor cosmetic
   'B1:9,9': { potions: 1 },
   // B2 — a free wheel-spin chest, a potion, a coin chest, plus the SEALED locked-room prize (34,24).
@@ -479,7 +481,7 @@ export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potions?: 
   'B4:12,4': { cosmetic: 'trail-fart' }, // behind the switch-sealed 'X' door
   'B4:4,14': { potions: 2 },
   'B4:28,14': { spin: true },
-  'B4:4,27': { coins: 450 },
+  'B4:4,27': { monster: 'slime', coins: 450, pet: 'pet-slime' }, // a MONSTER BOX: fight the slime — kill it for 450🪙, or capture it as a pet
 };
 // Encounter-win payout keyed by the MOB'S TIER [min, max], not the floor. The server picks the amount
 // from the tier's range (it never trusts a client-sent number) after checking the tier is legal here.
@@ -864,7 +866,7 @@ export type ClientMsg =
   | { type: 'bail'; targetId: string } // pay 500🪙 to bail a jailed player out (targetId = their avatar id; may be your own)
   // --- The Ruins dungeon (server owns the coin awards + which chests you've opened) ---
   | { type: 'dungeonSync' } // entering the Ruins: ask which chests this player has already opened
-  | { type: 'dungeonChest'; chest: string } // open a chest (server pays its coins from the House, once only)
+  | { type: 'dungeonChest'; chest: string; captured?: boolean } // open a chest (server pays once). captured=true → a "monster box" mob was caught → grant its pet instead of coins
   | { type: 'dungeonWin'; floor: string; tier: number } // won an encounter (adds a TIER-ranged amount to the run purse)
   | { type: 'dungeonTakeKey' } // took the key from the dying B3 adventurer → server marks the run-key
   | { type: 'dungeonExit'; escaped: boolean } // left the Ruins: escaped=true pays the purse (from House); false forfeits
