@@ -25,21 +25,7 @@ def blob(cx, cy, rx, ry, fn):
             if d <= 1: fn(x, y, 1-math.sqrt(d))
 
 EYES = [(0.46*W, 0.305*H), (0.715*W, 0.305*H)]
-# 2) bloodshot wild eyes — brighten the whites (wide stare), red wash, a few veins, a tiny hot pupil glint
-for ex, ey in EYES:
-    blob(ex, ey, 16, 9, lambda x, y, f: px.__setitem__((x, y), (min(255, int(px[x, y][0]+85*f)), min(255, int(px[x, y][1]+55*f)), min(255, int(px[x, y][2]+45*f)))))  # bright wide sclera
-    blob(ex, ey, 15, 8, lambda x, y, f: px.__setitem__((x, y), (min(255, int(px[x, y][0]+55*f)), int(px[x, y][1]*(1-0.18*f)), int(px[x, y][2]*(1-0.22*f)))))  # reddened bloodshot wash
-    blob(ex, ey+11, 13, 7, lambda x, y, f: px.__setitem__((x, y), tuple(int(c*(1-0.4*f)) for c in px[x, y])))  # dark eyebag
-    px[int(ex), int(ey)] = (250, 235, 220)            # manic glint
-# a few red veins across each eye
-def vein(x, y, steps, ang, col):
-    for _ in range(steps):
-        if 0 <= int(x) < W and 0 <= int(y) < H:
-            o = px[int(x), int(y)]; px[int(x), int(y)] = (min(255, int(o[0]*0.5+col[0]*0.5)), int(o[1]*0.6), int(o[2]*0.6))
-        ang += random.uniform(-0.5, 0.5); x += math.cos(ang)*1.2; y += math.sin(ang)*1.2
-for ex, ey in EYES:
-    for _ in range(4):
-        vein(ex, ey, random.randint(5, 10), random.uniform(0, 6.28), (200, 20, 20))
+# 2) (eye effect removed for now — keep his real eyes; design to be revisited later)
 
 # 3) manic grin — deepen + darken the corners so the smile reads unhinged
 blob(0.5*W, 0.45*H, 0.30*W, 0.05*H, lambda x, y, f: px.__setitem__((x, y), tuple(int(c*(1-0.28*f)) for c in px[x, y])))

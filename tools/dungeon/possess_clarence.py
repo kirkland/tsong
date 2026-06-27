@@ -47,14 +47,7 @@ for y in range(H):
         gp[x, y] = (max(0, min(255, o[0]+n)), max(0, min(255, o[1]+n)), max(0, min(255, o[2]+n)))
 px = g.load()
 
-# 4) GLOWING EYES — laid down last so the grain can't muddy them. Snug to his eye, a tight violet
-#    halo blooming to a white-hot core, additively blended for real glow.
-def add_px(x, y, col, f):
-    o = px[x, y]; px[x, y] = tuple(min(255, int(o[i] + col[i]*f)) for i in range(3))
-for ex, ey in EYES:
-    blob(ex, ey, 18, 14, lambda x, y, f: add_px(x, y, (120, 50, 230), f**1.6))   # violet halo (soft, falls off)
-    blob(ex, ey, 9, 7,   lambda x, y, f: add_px(x, y, (180, 150, 255), f))        # inner violet bloom
-    blob(ex, ey, 4.5, 4, lambda x, y, f: px.__setitem__((x, y), (255, 250, 255)) if f > 0.25 else None)  # white-hot pupil
+# 4) (eye glow removed for now — keep his real eyes; design to be revisited later)
 
 # 5) keep the original silhouette alpha, drop stray specks (largest opaque blob only)
 out = Image.merge('RGBA', (*g.split(), alpha))

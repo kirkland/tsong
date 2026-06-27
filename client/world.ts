@@ -1589,11 +1589,10 @@ export function startWorld(net: WorldNet): void {
       dyingMan = { x: mx, y: my }; dyingManSprite = spr;
     }
     // B5: the Gatekeeper stands waiting at the far end of the grand chamber (until you've bested him).
-    if (currentFloor === 'B5' && !clarenceDefeated && sc.textures.exists('d-clarence')) {
+    if (currentFloor === 'B5' && !clarenceDefeated && sc.textures.exists('w-clarence')) {
       const cc = 43, cr = 10; // dead centre of the chamber's far wall, facing the entrance
       const cxw = ox + (cc + 0.5) * T, cyw = oy + (cr + 0.5) * T;
-      const spr = sc.add.image(cxw, cyw, 'd-clarence').setOrigin(0.5, 0.62).setDepth(cyw)
-        .setDisplaySize(T * 2.4 * (458 / 427), T * 2.4); // ~2.4 tiles tall, keep the portrait's aspect
+      const spr = sc.add.image(cxw, cyw, 'w-clarence').setOrigin(0.5, 0.92).setScale(sl * 1.5).setDepth(cyw); // a tall standing figure
       dungeonObjs.push(spr); clarenceSprite = spr; clarenceAnim = null;
     }
     // a few drifting fireflies (red / orange / purple) — twinkle over the darkness
@@ -3008,6 +3007,41 @@ export function startWorld(net: WorldNet): void {
       g.generateTexture('w-demon', 12, 16);
     }
 
+    // --- Clarence, the B5 Gatekeeper, as a proper standing NPC (16×24): swept dark hair, tan skin,
+    //     cold glowing-violet eyes, a tailored navy suit with white shirt + dark tie, slacks + shoes. ---
+    {
+      const HAIR = 0x17171f, SKN = 0xd6a172, SKN_D = 0xb07c52, SUIT = 0x232b48, SUIT_D = 0x151b32,
+        SUIT_L = 0x3a487c, SHIRT = 0xeaeef7, TIE = 0x111119, SHOE = 0x0c0c12, EYE = 0xc198ff, EYEC = 0xfff2ff;
+      g.clear();
+      // hair (rounded crown + side sweep)
+      px(5, 0, 6, 1, HAIR); px(4, 1, 8, 1, HAIR); px(4, 2, 8, 1, HAIR);
+      px(4, 3, 1, 2, HAIR); px(11, 3, 1, 2, HAIR);
+      // face
+      px(5, 3, 6, 5, SKN);
+      px(5, 3, 3, 1, HAIR); px(10, 3, 1, 1, HAIR);          // swept fringe + part
+      px(6, 4, 1, 1, HAIR); px(9, 4, 1, 1, HAIR);            // brows
+      px(4, 5, 1, 1, SKN); px(11, 5, 1, 1, SKN);             // ears
+      // glowing violet eyes (bright pixels read as a glow in the dark)
+      px(6, 5, 2, 1, EYE); px(9, 5, 2, 1, EYE); px(6, 5, 1, 1, EYEC); px(10, 5, 1, 1, EYEC);
+      px(7, 6, 1, 1, SKN_D);                                 // nose
+      px(6, 7, 4, 1, SKN_D);                                 // a flat, grim mouth
+      px(6, 8, 4, 1, SKN); px(7, 9, 2, 1, SKN_D);            // jaw + neck
+      // suit: shoulders, torso, sleeves, hands
+      px(3, 10, 10, 1, SUIT); px(3, 11, 10, 6, SUIT);
+      px(2, 10, 1, 1, SUIT); px(2, 11, 1, 6, SUIT_D); px(13, 10, 1, 1, SUIT); px(13, 11, 1, 6, SUIT_D);
+      px(2, 17, 1, 1, SKN); px(13, 17, 1, 1, SKN);
+      px(5, 11, 1, 4, SUIT_L); px(10, 11, 1, 4, SUIT_L);     // lapels
+      // white shirt + dark tie
+      px(6, 11, 4, 1, SHIRT); px(6, 12, 1, 3, SHIRT); px(9, 12, 1, 3, SHIRT);
+      px(7, 11, 2, 1, TIE); px(7, 12, 2, 1, TIE); px(7, 13, 2, 1, TIE); px(8, 14, 1, 2, TIE);
+      px(3, 16, 10, 1, SUIT_D);                              // jacket hem
+      // slacks + shoes
+      px(4, 17, 3, 5, SUIT_D); px(9, 17, 3, 5, SUIT_D);
+      px(5, 17, 1, 5, 0x202848); px(10, 17, 1, 5, 0x202848);
+      px(3, 22, 4, 2, SHOE); px(9, 22, 4, 2, SHOE);
+      g.generateTexture('w-clarence', 16, 24);
+    }
+
     // --- the tortured soul: a pale, hunched, gaunt wretch with sunken dark eye-sockets, reaching
     // arms and a tattered hem (12×16). Drawn near-white so the renderer can fade it to a ghost. ---
     {
@@ -3719,7 +3753,6 @@ export function startWorld(net: WorldNet): void {
       // Dungeon (the Ruins): 0x72 stone-floor variants (f0–f6) + wall variants (w0–w3).
       for (let i = 0; i < 7; i++) this.load.image('d-f' + i, '/dungeon/f' + i + '.png');
       for (let i = 0; i < 4; i++) this.load.image('d-w' + i, '/dungeon/w' + i + '.png');
-      this.load.image('d-clarence', '/dungeon/mob_clarence.png'); // the B5 Gatekeeper's world sprite
     },
 
     create(this: Phaser.Scene) {

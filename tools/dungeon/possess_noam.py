@@ -25,10 +25,7 @@ def blob(cx, cy, rx, ry, fn):
             if d <= 1: fn(x, y, 1-math.sqrt(d))
 
 EYES = [(0.275*W, 0.465*H), (0.555*W, 0.465*H)]
-# 2) black demon eyes — fill the whole socket black, faint dark bleed underneath
-for ex, ey in EYES:
-    blob(ex, ey, 22, 15, lambda x, y, f: px.__setitem__((x, y), (0, 0, 0) if f > 0.25 else tuple(int(c*(1-0.6*f)) for c in px[x, y])))
-    blob(ex, ey+16, 14, 12, lambda x, y, f: px.__setitem__((x, y), tuple(int(c*(1-0.45*f)) for c in px[x, y])))  # dark bleed
+# 2) (eye effect removed for now — keep his real eyes; design to be revisited later)
 
 # 3) veins crawling up from the eyes/temples — dark branching random walks
 def vein(x, y, steps, ang):

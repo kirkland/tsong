@@ -89,8 +89,8 @@ export const DUNGEON_MOBS: MobDef[] = [
   // --- B5 GATEKEEPER: a mini-boss that bars the way to the boss. Sharper than Noam, 5 lives, and the
   //     whole arena is turned 180° the entire fight (his permanent "rotate"). ---
   {
-    id: 'clarence', name: 'Clarence, the Gatekeeper', portrait: '🌀', power: 12, color: '#7c5ec0', tier: 5, bob: 'float',
-    bot: { react: 0.15, error: 28, predict: true, idleCenter: true }, rotate: 1, lives: 5,
+    id: 'clarence', name: 'Clarence, the Gatekeeper', portrait: '🌀', power: 10, color: '#7c5ec0', tier: 5, bob: 'float',
+    bot: { react: 0.19, error: 44, predict: false, idleCenter: true }, rotate: 3, lives: 5,
     gimmick: { name: 'Vertigo', desc: 'The entire arena is turned on its side.' },
     flavor: "you won't reach the boss.", tag: 'He guards the last door. Reality tilts wrong around him.',
   },
