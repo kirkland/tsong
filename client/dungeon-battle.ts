@@ -389,10 +389,10 @@ export function startEncounter(opts: EncounterOpts): void {
   function showCaptureDialog() {
     captureBox.replaceChildren();
     const h = document.createElement('div');
-    h.innerHTML = `🟢 The <b>${mob.name}</b> is weak and cornered!`;
+    h.innerHTML = `🟢 The <b>${mob.name}</b> has taken a liking to you…`;
     h.style.cssText = 'font-size:17px;color:#eaf0ff;margin-bottom:6px;';
     const s = document.createElement('div');
-    s.textContent = 'Throw a Poké Ball and try to catch it?';
+    s.textContent = "It doesn't want to fight anymore. It just wants to be your friend.";
     s.style.cssText = 'font-size:13px;color:#9fb3e6;margin-bottom:16px;';
     captureBox.append(h, s);
     const mk = (label: string, bg: string, on: () => void) => {
@@ -403,8 +403,8 @@ export function startEncounter(opts: EncounterOpts): void {
       return b;
     };
     captureBox.append(
-      mk('✦ Throw Ball', '#c0392b', () => { hideCaptureDialog(); beginCapture(); }),
-      mk('✕ Keep Fighting', '#21305a', () => { hideCaptureDialog(); captureDeclined = true; phase = 'fight'; phaseT = 0; song.volume = 0.6; }),
+      mk('💚 Capture him', '#2e8b57', () => { hideCaptureDialog(); beginCapture(); }),
+      mk('🗡️ Kill him anyways', '#7a2520', () => { hideCaptureDialog(); captureDeclined = true; phase = 'fight'; phaseT = 0; song.volume = 0.6; }),
     );
     captureBox.style.display = 'block';
   }
