@@ -343,7 +343,7 @@ const DUNGEON_B5 = [
   '###########################....o...o...o...o...##',
   '###########################....................##',
   '#####T###T###T###T###T###T#....................##',
-  '##<............................................T#',
+  '##<.........................................>..T#',
   '#####T###T###T###T###T###T#....................##',
   '###########################....................##',
   '###########################....o...o...o...o...##',
@@ -355,21 +355,40 @@ const DUNGEON_B5 = [
   '#################################################',
   '#################################################',
 ];
-const DUNGEON_FLOORS: Record<string, string[]> = { B1: DUNGEON_B1, B2: DUNGEON_B2, B3: DUNGEON_B3, B4: DUNGEON_B4, B5: DUNGEON_B5 };
+// B6 — THE FINAL ROOM: Rob's home office (the plot twist). Bright, mundane, one desk. 'o' tiles are
+// solid furniture (the desk+Rob mass, the bookshelf, the plant); '<' returns to B5. No mobs roam here —
+// Rob himself is the boss, fought only when you interrupt him at his PC.
+const DUNGEON_B6 = [
+  '##################',
+  '#.oo.........o...#',
+  '#......ooo.......#',
+  '#......ooo.......#',
+  '#......ooo.......#',
+  '#................#',
+  '#................#',
+  '#................#',
+  '#................#',
+  '#................#',
+  '#................#',
+  '#.......<........#',
+  '##################',
+];
+const DUNGEON_FLOORS: Record<string, string[]> = { B1: DUNGEON_B1, B2: DUNGEON_B2, B3: DUNGEON_B3, B4: DUNGEON_B4, B5: DUNGEON_B5, B6: DUNGEON_B6 };
 const DUNGEON_TOTAL_CHESTS = Object.keys(DUNGEON_CHEST_CONTENTS).length; // for the x/y "chests found" counter
 // Locked 'L' doors → the chest they guard. A door stays open FOREVER once that chest is account-opened
 // (committed), exactly like the chest itself — no need to re-key it on later runs.
 const DUNGEON_LOCKED_DOORS: Record<string, string> = { 'B2:32,24': 'B2:34,24' };
-const DUNGEON_ORDER = ['B1', 'B2', 'B3', 'B4', 'B5']; // descent order; '>' goes to the next, '<' to the previous
+const DUNGEON_ORDER = ['B1', 'B2', 'B3', 'B4', 'B5', 'B6']; // descent order; '>' goes to the next, '<' to the previous
 // Each descent gets darker + colder in THEME (not lighting — the actual stone palette). `props`
 // turns on the deeper-floor ambient decals (bones, fungus, cobwebs, drips); `gore` adds blood + claw
 // marks on the bloodier floors.
-const DUNGEON_THEME: Record<string, { wall: number; floor: number; surround: number; props: boolean; gore?: boolean; silent?: boolean }> = {
+const DUNGEON_THEME: Record<string, { wall: number; floor: number; surround: number; props: boolean; gore?: boolean; silent?: boolean; lit?: boolean; office?: boolean }> = {
   B1: { wall: 0xffd49a, floor: 0xffffff, surround: 0x070905, props: false }, // warm amber sandstone
   B2: { wall: 0xa07b86, floor: 0x9aa0b4, surround: 0x05060a, props: true },  // colder, blue-grey, dimmer
   B3: { wall: 0x866e7c, floor: 0x7c7690, surround: 0x05050c, props: true, gore: true }, // darker than B2, sickly + bloodied, still readable
   B4: { wall: 0x6a5660, floor: 0x645f74, surround: 0x040309, props: true, gore: true }, // the deep: coldest, darkest, most blood
   B5: { wall: 0x564a68, floor: 0x423a56, surround: 0x010008, props: false, silent: true }, // the BOSS sanctum: grand regal stone, torch-lit, dead silent
+  B6: { wall: 0xe6dcc6, floor: 0xffffff, surround: 0x2a2620, props: false, silent: true, lit: true, office: true }, // THE OFFICE: bright, warm, fully lit — the plot twist
 };
 // Fog-of-war darkness (the dim ambient OUTSIDE your light pool), ramped per descent: each floor is
 // genuinely darker than the last, but all lighter than the old flat 0.8 so nothing's a black void.
@@ -855,6 +874,9 @@ export function startWorld(net: WorldNet): void {
   let clarenceArmed = false;    // re-arms when you retreat into the hallway, so a flee doesn't instantly re-trigger
   let clarenceSprite: Phaser.GameObjects.Image | null = null; // his world sprite, standing at the chamber's far end
   let clarenceAnim: { t: number; fromX: number; toX: number; y: number } | null = null; // his approach slide → opens dialogue when done
+  let robBoss: { x: number; y: number; sprite: Phaser.GameObjects.Image } | null = null; // B6: Rob, seated at his PC
+  let nearRob = false;          // standing next to Rob (→ "Interrupt him" prompt)
+  let robDefeated = false;      // B6: beaten Rob this run? (run-scoped)
   let dungeonImp: { x: number; y: number } | null = null; // the friendly B2 imp's world position (talk for a potion)
   let nearDungeonImp = false; // the imp is within talk range
   let impGavePotion = false;  // he hands out one potion per run (no farming)
@@ -1517,7 +1539,7 @@ export function startWorld(net: WorldNet): void {
     dungeonObjs.length = 0;
     dungeonTorches.length = 0; dungeonFlies.length = 0; dungeonImp = null; nearDungeonImp = false;
     dyingMan = null; dyingManSprite = null; nearDyingMan = false;
-    clarenceSprite = null; clarenceAnim = null;
+    clarenceSprite = null; clarenceAnim = null; robBoss = null; nearRob = false;
     for (const k in dungeonChestSprites) delete dungeonChestSprites[k];
     for (const k in dungeonLockSprites) delete dungeonLockSprites[k];
     dungeonDarkRT?.destroy(); dungeonDarkRT = null;
@@ -1550,7 +1572,8 @@ export function startWorld(net: WorldNet): void {
         }
       } else {
         const fr = hash(c * 3, r);
-        const fkey = fr > 0.95 ? 'd-f5' : fr > 0.92 ? 'd-f6' : fr > 0.7 ? 'd-f' + (1 + Math.floor(fr * 40) % 4) : 'd-f0';
+        const fkey = theme.office ? 'w-wood' // the office gets warm wood planks instead of stone
+          : fr > 0.95 ? 'd-f5' : fr > 0.92 ? 'd-f6' : fr > 0.7 ? 'd-f' + (1 + Math.floor(fr * 40) % 4) : 'd-f0';
         keep(sc.add.image(wx, wy, fkey).setOrigin(0, 0).setScale(sl).setTint(theme.floor).setDepth(base));
         if ((ch === '>' || ch === '<') && sc.textures.exists('d-stairs')) { // a proper stone stairwell
           keep(sc.add.image(wx + T / 2, wy + T / 2, 'd-stairs').setScale(sl).setOrigin(0.5).setDepth(base + 2)
@@ -1594,6 +1617,29 @@ export function startWorld(net: WorldNet): void {
       const cxw = ox + (cc + 0.5) * T, cyw = oy + (cr + 0.5) * T;
       const spr = sc.add.image(cxw, cyw, 'w-clarence').setOrigin(0.5, 0.92).setScale(sl * 1.5).setDepth(cyw); // a tall standing figure
       dungeonObjs.push(spr); clarenceSprite = spr; clarenceAnim = null;
+    }
+    // B6: dress Rob's home office — desk + monitor, Rob seated at his PC (back to the door), a rug,
+    // bookshelf, plant, a sunny window and his own grandiose framed portrait on the wall.
+    if (currentFloor === 'B6') {
+      const at = (cc: number, cr: number) => ({ x: ox + (cc + 0.5) * T, y: oy + (cr + 0.5) * T });
+      const place = (key: string, cc: number, cr: number, scale: number, oy2 = 0.92, depthAdd = 0) => {
+        const p = at(cc, cr); const s = sc.add.image(p.x, p.y, key).setOrigin(0.5, oy2).setScale(sl * scale).setDepth(p.y + depthAdd);
+        dungeonObjs.push(s); return s;
+      };
+      // a rug under the workstation (low, flat on the floor)
+      const rug = at(8, 5); keep(sc.add.image(rug.x, rug.y, 'w-rug').setOrigin(0.5).setScale(sl * 1.7).setDepth(base + 0.5));
+      // wall décor on the top wall: a sunny window + Rob's framed presidential portrait
+      const win = at(3, 1); keep(sc.add.image(win.x, win.y - T * 0.2, 'w-window').setOrigin(0.5).setScale(sl * 1.1).setDepth(base + 1));
+      if (sc.textures.exists('w-rob-portrait')) {
+        const pf = at(12, 1);
+        keep(sc.add.rectangle(pf.x, pf.y - T * 0.2, T * 1.25, T * 1.5, 0xcaa14a).setDepth(base + 1)); // gilt frame
+        keep(sc.add.image(pf.x, pf.y - T * 0.2, 'w-rob-portrait').setDisplaySize(T * 1.05, T * 1.3).setDepth(base + 1.1));
+      }
+      place('w-bookshelf', 2, 1, 1.4, 0.95);            // bookshelf against the top-left wall
+      place('w-plant', 13, 1, 1.1, 0.95);               // a potted plant
+      place('w-deskpc', 8, 2.7, 1.5, 0.95);             // desk + monitor (its map screen glowing)
+      const rob = place('w-robpc', 8, 4, 1.45, 0.95, 1);// Rob, seated, back to the door
+      robBoss = { x: rob.x, y: rob.y, sprite: rob };
     }
     // a few drifting fireflies (red / orange / purple) — twinkle over the darkness
     if (sc.textures.exists('d-glow')) {
@@ -1674,7 +1720,7 @@ export function startWorld(net: WorldNet): void {
     dungeonHP = 100; lastGrassKey = ''; grassDanger = 0; potionCount = 0; // fresh run: no potions carried in
     newMobsSeen.clear(); recentMob = -1; recentMobRun = 0; impGavePotion = false;
     hasKey = false; keyTaken = false; unlockedDoors.clear(); switchOn = false; // fresh run: re-fetch the key, doors re-lock, lever resets
-    clarenceDefeated = false; clarenceArmed = false; // fresh run: the Gatekeeper bars the way again
+    clarenceDefeated = false; clarenceArmed = false; robDefeated = false; // fresh run: the Gatekeeper bars the way again, Rob's back at his PC
     lootItems.length = 0; lootOpen = false; lootPanel.style.display = 'none'; // fresh run loot
     openedChestsServer.clear();
     net.dungeonSync(); // ask the server which chests this account has already opened
@@ -1781,6 +1827,44 @@ export function startWorld(net: WorldNet): void {
     npcClose = closeTalk;
     showPage();
   }
+  // B6 FINAL BOSS: interrupt Rob at his PC. He's deep in a MapTap run and FURIOUS you barged in. A few
+  // annoyed (and geography-flavored) lines, his portrait above the box. (The duel itself is wired next.)
+  function robInterrupt() {
+    if (talkOpen || dialogOpen) return;
+    const pages = [
+      'Mmf— do you MIND? I was on a streak.',
+      'MapTap. Daily challenge. I had a four-thousand-mile guess riding on one coastline and you just—',
+      'Fine. FINE. Quick, then: capital of Australia. And no, it is not Sydney. Everyone says Sydney.',
+      "It's Canberra. It is ALWAYS Canberra.",
+      'This is my room. My ONE quiet room. The only place I get to just… play.',
+      "You want my attention? Fine. You have it now. All of it.",
+    ];
+    talkOpen = true; keys.clear(); joyActive = false; prompt.style.display = 'none';
+    npcName.textContent = 'Rob'; npcBox.style.display = 'block'; npcChoices.style.display = 'none';
+    if (!npcPortrait.src.endsWith('/dungeon/mob_rob.png')) npcPortrait.src = '/dungeon/mob_rob.png';
+    npcPortrait.style.display = 'block';
+    let pageI = 0, typing = false, timer = 0, full = '';
+    function showPage() {
+      const text = pages[pageI];
+      if (text === undefined) { closeTalk(); return; }
+      full = text; let shown = 0; typing = true; npcText.textContent = ''; npcHint.style.display = 'none';
+      timer = window.setInterval(() => {
+        shown++; npcText.textContent = full.slice(0, shown);
+        if (shown % 2 === 0) textBlip();
+        if (shown >= full.length) { window.clearInterval(timer); typing = false; npcHint.style.display = 'block'; }
+      }, 30);
+    }
+    npcAdvance = () => {
+      if (typing) { window.clearInterval(timer); typing = false; npcText.textContent = full; npcHint.style.display = 'block'; return; }
+      pageI++; if (pageI >= pages.length) closeTalk(); else showPage();
+    };
+    function closeTalk() {
+      window.clearInterval(timer); talkOpen = false; npcAdvance = null; npcClose = null;
+      npcBox.style.display = 'none'; npcChoices.style.display = 'none'; npcPortrait.style.display = 'none'; nearRob = false;
+    }
+    npcClose = closeTalk;
+    showPage();
+  }
   // a Pokémon-style "!" pops over your head + a two-note sting the instant the Gatekeeper notices you
   function exclaimAlert() {
     const sc = petScene; if (!sc) return;
@@ -1829,7 +1913,7 @@ export function startWorld(net: WorldNet): void {
       window.clearInterval(timer); talkOpen = false; npcAdvance = null; npcClose = null;
       npcBox.style.display = 'none'; npcChoices.style.display = 'none'; npcPortrait.style.display = 'none';
       const clarence = DUNGEON_MOBS.find((m) => m.id === 'clarence'); // → the fight, on the battle theme
-      triggerEncounter({ mob: clarence, song: '/battle.mp3', winPotions: 5, onWin: () => { clarenceDefeated = true; clarenceSprite?.destroy(); clarenceSprite = null; const sc = petScene; if (sc) buildFloor(sc); } }); // rebuild → the chamber's chests appear
+      triggerEncounter({ mob: clarence, song: '/battle.mp3', winPotions: 5, fleeWins: true, onWin: () => { clarenceDefeated = true; clarenceSprite?.destroy(); clarenceSprite = null; const sc = petScene; if (sc) buildFloor(sc); } }); // fleeWins is TEMP for testing; rebuild → the chamber's chests appear
     }
     npcClose = closeTalk;
     showPage();
@@ -1952,7 +2036,7 @@ export function startWorld(net: WorldNet): void {
   let encounterPending = false; // a battle is being set up (snapshot in flight) — block re-triggering
   // A tall-grass encounter: pause the dungeon theme and drop into a Pong duel vs a mob. `cfg` lets a
   // "monster box" chest force a specific mob, mark it capturable, and route its reward through the chest.
-  type EncounterCfg = { mob?: (typeof DUNGEON_MOBS)[number]; capturable?: boolean; chestId?: string; chestC?: number; chestR?: number; coins?: [number, number]; song?: string; winPotions?: number; onWin?: () => void };
+  type EncounterCfg = { mob?: (typeof DUNGEON_MOBS)[number]; capturable?: boolean; chestId?: string; chestC?: number; chestR?: number; coins?: [number, number]; song?: string; winPotions?: number; onWin?: () => void; fleeWins?: boolean };
   function triggerEncounter(cfg?: EncounterCfg) {
     if (isEncounterOpen() || encounterPending) return;
     encounterPending = true;
@@ -1987,7 +2071,7 @@ export function startWorld(net: WorldNet): void {
           if (r.result === 'capture' && cfg?.chestId) {            // caught it → server grants the pet (run-scoped)
             markBox(); net.dungeonChest(cfg.chestId, true);
             showToast(`🎉 Gotcha! The ${mob.name} is yours — escape the Ruins to keep it!`);
-          } else if (r.result === 'win') {
+          } else if (r.result === 'win' || (r.result === 'flee' && cfg?.fleeWins)) { // TEMP: flee counts as a win for the Clarence boss (testing)
             if (cfg?.chestId) {                                    // killed the box-mob → server pays the chest's coins
               markBox(); net.dungeonChest(cfg.chestId);
               showToast(`📦 You smashed it! ${cfg.coins?.[0] ?? 0}🪙 — escape to keep!`);
@@ -2254,6 +2338,7 @@ export function startWorld(net: WorldNet): void {
     if (nearSwitchDoor) { trySwitchDoor(); return; }
     if (nearDungeonImp) { impTalk(); return; }
     if (nearDyingMan) { dyingManTalk(); return; }
+    if (nearRob) { robInterrupt(); return; }
     if (nearJailed) { net.bail(nearJailed.id); return; } // post their bail
     const b = WORLD_BUILDINGS.find((x) => x.id === nearId);
     if (b) { enterBuilding(b.kind); return; }
@@ -2501,7 +2586,7 @@ export function startWorld(net: WorldNet): void {
       // the odds climb — never instant-spammy, never dead-quiet. The boss sanctum (B5) has none.
       const cc = Math.floor((selfX - dInt.x) / DUNGEON_TILE), cr = Math.floor((selfY - dInt.y) / DUNGEON_TILE);
       const cell = dungeonCell(cc, cr), key = cc + ',' + cr;
-      if (currentFloor !== 'B5' && key !== lastGrassKey) {
+      if (currentFloor !== 'B5' && currentFloor !== 'B6' && key !== lastGrassKey) {
         lastGrassKey = key;
         if (cell !== '@' && cell !== '>' && cell !== '<' && cell !== 'X' && cell !== 'Y') { // no ambush on entry/stairs/door tiles
           grassDanger += cell === '~' ? 2 : 1;
@@ -2628,7 +2713,8 @@ export function startWorld(net: WorldNet): void {
       const idx = DUNGEON_ORDER.indexOf(currentFloor);
       const down = cellWorldOf('>'), up = cellWorldOf('<');
       const onDown = down && Math.abs(selfX - down.x) < 40 && Math.abs(selfY - down.y) < 40;
-      if (onDown && idx < DUNGEON_ORDER.length - 1) nearStairs = { dir: 'down', to: DUNGEON_ORDER[idx + 1] };
+      const downSealed = currentFloor === 'B5' && !clarenceDefeated; // the office door opens only once the Gatekeeper falls
+      if (onDown && idx < DUNGEON_ORDER.length - 1 && !downSealed) nearStairs = { dir: 'down', to: DUNGEON_ORDER[idx + 1] };
       else if (onDown) nearBossStairs = true; // deepest floor: the '>' plunges to the (not-yet-built) boss level
       else if (up && Math.abs(selfX - up.x) < 40 && Math.abs(selfY - up.y) < 40 && idx > 0)
         nearStairs = { dir: 'up', to: DUNGEON_ORDER[idx - 1] };
@@ -2659,6 +2745,8 @@ export function startWorld(net: WorldNet): void {
       && Math.hypot(selfX - dungeonImp.x, selfY - dungeonImp.y) < DUNGEON_TILE * 1.4);
     nearDyingMan = !!(inDungeon && dyingMan && !keyTaken && !nearExit && !nearStairs && !nearChestCell && !nearDoorOrSwitch
       && Math.hypot(selfX - dyingMan.x, selfY - dyingMan.y) < DUNGEON_TILE * 1.4);
+    nearRob = !!(inDungeon && robBoss && !robDefeated && !nearExit && !nearStairs && !nearChestCell && !nearDoorOrSwitch
+      && Math.hypot(selfX - robBoss.x, selfY - robBoss.y) < DUNGEON_TILE * 1.7);
     // A jailed avatar within reach (and we're free) → offer to post their bail.
     nearJailed = null;
     if (!best && !nearNpc && !nearNetizen && !driving && !net.amJailed() && !inInterior && !inDungeon) {
@@ -2706,12 +2794,14 @@ export function startWorld(net: WorldNet): void {
       prompt.textContent = '💬 Talk to the Imp';
     } else if (nearDyingMan) {
       prompt.textContent = '🤢 Talk to the dying man (he reeks)';
+    } else if (nearRob) {
+      prompt.textContent = '💻 Interrupt him';
     } else if (nearJailed) {
       prompt.textContent = `🔓 Bail out ${nearJailed.name} (${BAIL_COST}🪙)`;
     } else if (nearParcel) {
       prompt.textContent = parcelPrompt(nearParcel);
     }
-    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDyingMan || nearJailed || nearParcel) && !dialogOpen && !talkOpen ? 'block' : 'none';
+    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDyingMan || nearRob || nearJailed || nearParcel) && !dialogOpen && !talkOpen ? 'block' : 'none';
   }
 
   function maybeSendMove(now: number) {
@@ -3040,6 +3130,83 @@ export function startWorld(net: WorldNet): void {
       px(5, 17, 1, 5, 0x202848); px(10, 17, 1, 5, 0x202848);
       px(3, 22, 4, 2, SHOE); px(9, 22, 4, 2, SHOE);
       g.generateTexture('w-clarence', 16, 24);
+    }
+
+    // === The final room: ROB'S HOME OFFICE. A mundane, brightly-lit one-man office — the plot twist
+    //     after all that dread. Rob sits at his PC playing MapTap (a geography game), back to the door. ===
+    // --- the desk + monitor (the screen shows a little world map, a red pin dropped on it) ---
+    {
+      const WOOD = 0x8a5a30, WOOD_L = 0xa97040, WOOD_D = 0x66401e, BEZEL = 0x16161c, SCRN = 0x2f6fc8,
+        LAND = 0x57a64a, LAND_L = 0x6cba5c, KEY = 0xcdd2da, MUG = 0xc23a2a;
+      g.clear();
+      // monitor
+      px(8, 1, 12, 9, BEZEL); px(9, 2, 10, 7, SCRN);                       // bezel + ocean screen
+      px(10, 3, 3, 2, LAND); px(14, 3, 2, 1, LAND_L); px(13, 5, 4, 2, LAND); px(10, 6, 2, 1, LAND_L); px(16, 5, 2, 1, LAND); // continents
+      px(15, 4, 1, 1, 0xff3030); px(15, 3, 1, 1, 0xffffff);                // a dropped red pin + glint
+      px(9, 8, 10, 1, 0x1a3a6a);                                          // the MapTap UI strip
+      px(13, 10, 2, 1, 0x24242c);                                         // monitor stand
+      // desk slab + legs
+      px(2, 11, 24, 4, WOOD); px(2, 11, 24, 1, WOOD_L); px(2, 14, 24, 1, WOOD_D);
+      px(3, 15, 2, 3, WOOD_D); px(23, 15, 2, 3, WOOD_D);
+      // keyboard + a coffee mug
+      px(9, 12, 10, 2, 0x2a2a30); px(10, 12, 8, 1, KEY);
+      px(22, 8, 3, 3, MUG); px(22, 8, 3, 1, 0xd85a4a);
+      g.generateTexture('w-deskpc', 28, 18);
+    }
+    // --- Rob, seated, seen from behind in his office chair (balding grey hair, navy suit back) ---
+    {
+      const CHAIR = 0x1c1c22, CHAIR_L = 0x2c2c34, SUIT = 0x222a46, SUIT_D = 0x1a2038,
+        SCALP = 0xcdb89a, HAIR = 0x9a9a98, COLLAR = 0xe8e8ee;
+      g.clear();
+      // chair back + arms + base
+      px(2, 3, 12, 12, CHAIR); px(3, 3, 10, 1, CHAIR_L); px(2, 4, 1, 9, 0x14141a); px(13, 4, 1, 9, 0x14141a);
+      px(7, 15, 2, 1, 0x2a2a30); px(5, 16, 6, 1, 0x18181c); px(4, 16, 1, 1, 0x101014); px(11, 16, 1, 1, 0x101014);
+      // navy suit back + shoulders
+      px(3, 6, 10, 2, SUIT); px(4, 6, 8, 8, SUIT); px(8, 7, 1, 6, SUIT_D);
+      // back of a balding head: bald scalp ringed by grey hair, white shirt collar at the neck
+      px(5, 1, 6, 4, SCALP); px(4, 3, 8, 2, HAIR); px(4, 2, 1, 2, HAIR); px(11, 2, 1, 2, HAIR); px(5, 4, 6, 1, 0x8a8a88);
+      px(6, 5, 4, 1, COLLAR);
+      g.generateTexture('w-robpc', 16, 18);
+    }
+    // --- a bookshelf packed with colourful spines (office ambiance) ---
+    {
+      g.clear();
+      px(1, 0, 14, 24, 0x6a4a2a); px(2, 1, 12, 22, 0x3a2614);               // frame + dark interior
+      const spine = [0xb83a3a, 0x3a7ab8, 0x4aa84a, 0xd8a83a, 0x8a4ab8, 0xc86a2a];
+      for (const sy of [1, 7, 13, 19]) { for (let x = 3; x <= 12; x++) px(x, sy, 1, 5, spine[(x + sy) % spine.length]); px(2, sy + 5, 12, 1, 0x6a4a2a); }
+      g.generateTexture('w-bookshelf', 16, 24);
+    }
+    // --- a leafy potted plant for the corner ---
+    {
+      g.clear();
+      px(3, 11, 6, 4, 0xb5662e); px(2, 10, 8, 1, 0xc97a3e);                 // terracotta pot
+      px(2, 3, 8, 7, 0x3a8a3a); px(3, 1, 6, 3, 0x4aa84a); px(1, 5, 2, 3, 0x357f35); px(9, 5, 2, 3, 0x357f35); px(5, 0, 2, 2, 0x5ab85a);
+      g.generateTexture('w-plant', 12, 16);
+    }
+    // --- a warm wood-plank floor tile for the office (replaces the stone underfoot) ---
+    {
+      g.clear();
+      px(0, 0, 16, 16, 0x9a6a3a);
+      for (let y = 0; y < 16; y += 4) { px(0, y, 16, 1, 0x855a30); for (let x = (y % 8 ? 0 : 8); x < 16; x += 8) px(x, y, 1, 4, 0x8d6034); } // planks + staggered seams
+      px(2, 1, 5, 1, 0xa5713e); px(9, 5, 4, 1, 0xa5713e); px(3, 9, 6, 1, 0xa5713e); px(10, 13, 4, 1, 0xa5713e); // faint grain highlights
+      g.generateTexture('w-wood', 16, 16);
+    }
+    // --- a plush patterned rug to sit under the desk ---
+    {
+      g.clear();
+      px(0, 0, 24, 16, 0x7a2030); px(1, 1, 22, 14, 0x9a2c3e);               // border + field
+      px(3, 3, 18, 10, 0x73505a); px(5, 5, 14, 6, 0x9a2c3e);               // inner panels
+      px(11, 6, 2, 4, 0xe0c060); px(8, 7, 8, 2, 0xe0c060);                 // a gold medallion
+      g.generateTexture('w-rug', 24, 16);
+    }
+    // --- a bright daytime window (the office looks out on a sunny sky) ---
+    {
+      g.clear();
+      px(0, 0, 20, 16, 0x7a5a36);                                          // wood frame
+      px(2, 2, 16, 12, 0xbfe6ff); px(2, 2, 16, 6, 0xd8f0ff);              // sky (lighter up top)
+      px(3, 10, 14, 4, 0x8fcf6a); px(3, 12, 14, 2, 0x79bd57);            // a sliver of green lawn
+      px(9, 2, 2, 12, 0x7a5a36); px(2, 7, 16, 2, 0x7a5a36);              // muntins (cross bars)
+      g.generateTexture('w-window', 20, 16);
     }
 
     // --- the tortured soul: a pale, hunched, gaunt wretch with sunken dark eye-sockets, reaching
@@ -3753,6 +3920,7 @@ export function startWorld(net: WorldNet): void {
       // Dungeon (the Ruins): 0x72 stone-floor variants (f0–f6) + wall variants (w0–w3).
       for (let i = 0; i < 7; i++) this.load.image('d-f' + i, '/dungeon/f' + i + '.png');
       for (let i = 0; i < 4; i++) this.load.image('d-w' + i, '/dungeon/w' + i + '.png');
+      this.load.image('w-rob-portrait', '/dungeon/mob_rob.png'); // Rob's grandiose framed portrait on his office wall
     },
 
     create(this: Phaser.Scene) {
@@ -4055,7 +4223,12 @@ export function startWorld(net: WorldNet): void {
         const t = now / 1000;
         const flick = (l: { phase: number; fire: number }) =>
           1 + l.fire * (Math.sin(t * 7.3 + l.phase) * 0.6 + Math.sin(t * 2.9 + l.phase * 1.7) * 0.4);
-        if (inDungeon) {
+        if (inDungeon && DUNGEON_THEME[currentFloor]?.lit) {
+          // A LIT floor (the office): no fog of war at all — it's just a bright, normal room.
+          if (nightOverlay) nightOverlay.setAlpha(0);
+          if (warmOverlay) warmOverlay.setAlpha(0);
+          if (dungeonDarkRT) dungeonDarkRT.setVisible(false);
+        } else if (inDungeon) {
           // The Ruins: a dim ambient dark with bright holes erased at the torches + the player, so
           // you see the real tiles normally inside the light and dimly (not black) outside it.
           if (nightOverlay) nightOverlay.setAlpha(0);
