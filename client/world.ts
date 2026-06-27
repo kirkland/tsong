@@ -1554,9 +1554,10 @@ export function startWorld(net: WorldNet): void {
       const ch = dungeonCell(c, r);
       if (ch === ' ') continue;
       const wx = ox + c * T, wy = oy + r * T;
-      if (dungeonIsWall(ch)) {
-        const key = 'd-w' + (Math.floor(hash(c, r * 7) * 4) % 4);
-        keep(sc.add.image(wx, wy, key).setOrigin(0, 0).setScale(sl).setTint(theme.wall).setDepth(base + 1));
+      // office 'o' tiles are solid FURNITURE, not wall — draw the wood floor under them (the sprite covers it)
+      if (dungeonIsWall(ch) && !(theme.office && ch === 'o')) {
+        const key = theme.office ? 'w-owall' : 'd-w' + (Math.floor(hash(c, r * 7) * 4) % 4);
+        keep(sc.add.image(wx, wy, key).setOrigin(0, 0).setScale(sl).setTint(theme.office ? 0xffffff : theme.wall).setDepth(base + 1));
         if (ch === 'T' && sc.textures.exists('d-glow')) { // a wall torch: small bright flame + a light source
           const lx = wx + T / 2, ly = wy + T / 2;
           keep(sc.add.image(lx, ly, 'd-glow').setTint(0xffcf6e).setBlendMode(Phaser.BlendModes.ADD).setDepth(50003).setAlpha(0.8).setDisplaySize(T * 0.7, T * 0.7)); // the small flame itself
@@ -1637,8 +1638,8 @@ export function startWorld(net: WorldNet): void {
       }
       place('w-bookshelf', 2, 1, 1.4, 0.95);            // bookshelf against the top-left wall
       place('w-plant', 13, 1, 1.1, 0.95);               // a potted plant
-      place('w-deskpc', 8, 2.7, 1.5, 0.95);             // desk + monitor (its map screen glowing)
-      const rob = place('w-robpc', 8, 4, 1.45, 0.95, 1);// Rob, seated, back to the door
+      place('w-deskpc', 8, 2.4, 1.5, 0.95);             // desk + monitor (its map screen glowing) up top
+      const rob = place('w-robpc', 8, 4.3, 1.15, 0.95, 1); // Rob, seated below it, back to the door
       robBoss = { x: rob.x, y: rob.y, sprite: rob };
     }
     // a few drifting fireflies (red / orange / purple) — twinkle over the darkness
@@ -1831,36 +1832,62 @@ export function startWorld(net: WorldNet): void {
   // annoyed (and geography-flavored) lines, his portrait above the box. (The duel itself is wired next.)
   function robInterrupt() {
     if (talkOpen || dialogOpen) return;
-    const pages = [
+    // pages: a string is a line; a {q,opts} is an interactive MapTap question (pick an answer, he reacts)
+    type RobPage = string | { q: string; opts: { t: string; ok?: boolean }[] };
+    const pages: RobPage[] = [
       'Mmf— do you MIND? I was on a streak.',
-      'MapTap. Daily challenge. I had a four-thousand-mile guess riding on one coastline and you just—',
-      'Fine. FINE. Quick, then: capital of Australia. And no, it is not Sydney. Everyone says Sydney.',
-      "It's Canberra. It is ALWAYS Canberra.",
-      'This is my room. My ONE quiet room. The only place I get to just… play.',
-      "You want my attention? Fine. You have it now. All of it.",
+      "This is my office. The one room in this whole place with a door that STAYS shut. That's the point of it.",
+      "Out there I have to be… presidential. Composed. In here it's just me and MapTap. It gives you a name — no borders, no labels, just the bare globe — and you tap exactly where it is. Reykjavík. Tap. Lake Baikal. Tap. It's the one thing that's mine.",
+      "And you kicked the door in mid-drop. I had a pin hovering right over Ulaanbaatar — pixel-perfect — and it's gone.",
+      "You think you could do what I do? A name, a blank planet, one tap. …Let's warm up. Surely you know THIS much:",
+      { q: 'Capital of Australia?', opts: [{ t: 'Sydney' }, { t: 'Canberra', ok: true }, { t: 'Melbourne' }] },
+      "…Hm. But a list gives you options. The globe doesn't. One name, one tap, and ten thousand miles of ocean if you're wrong.",
+      "You want to know if you've actually got the instinct? Sit down. We settle this MY way.",
     ];
     talkOpen = true; keys.clear(); joyActive = false; prompt.style.display = 'none';
     npcName.textContent = 'Rob'; npcBox.style.display = 'block'; npcChoices.style.display = 'none';
     if (!npcPortrait.src.endsWith('/dungeon/mob_rob.png')) npcPortrait.src = '/dungeon/mob_rob.png';
     npcPortrait.style.display = 'block';
-    let pageI = 0, typing = false, timer = 0, full = '';
-    function showPage() {
-      const text = pages[pageI];
-      if (text === undefined) { closeTalk(); return; }
-      full = text; let shown = 0; typing = true; npcText.textContent = ''; npcHint.style.display = 'none';
+    let pageI = 0, typing = false, timer = 0, full = '', awaitingAnswer = false, pendingDone: (() => void) | null = null;
+    function typeOut(text: string, done: () => void) {
+      full = text; let shown = 0; typing = true; pendingDone = done; npcText.textContent = ''; npcHint.style.display = 'none'; npcChoices.style.display = 'none';
       timer = window.setInterval(() => {
         shown++; npcText.textContent = full.slice(0, shown);
         if (shown % 2 === 0) textBlip();
-        if (shown >= full.length) { window.clearInterval(timer); typing = false; npcHint.style.display = 'block'; }
-      }, 30);
+        if (shown >= full.length) { window.clearInterval(timer); typing = false; pendingDone = null; done(); }
+      }, 28);
+    }
+    function showPage() {
+      const pg = pages[pageI];
+      if (pg === undefined) { closeTalk(); return; }
+      awaitingAnswer = false; npcChoices.replaceChildren();
+      if (typeof pg === 'string') { typeOut(pg, () => { npcHint.style.display = 'block'; }); return; }
+      typeOut(pg.q, () => { // a question → lay out the answer buttons
+        awaitingAnswer = true; npcChoices.style.display = 'flex'; npcChoices.style.flexWrap = 'wrap';
+        for (const o of pg.opts) {
+          const b = document.createElement('button');
+          b.type = 'button'; b.textContent = o.t;
+          b.style.cssText = 'cursor:pointer;background:#21305a;color:#e8eefc;border:1px solid #3a508f;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;';
+          b.onmouseenter = () => { b.style.background = '#2c4079'; }; b.onmouseleave = () => { b.style.background = '#21305a'; };
+          b.onclick = (e) => {
+            e.stopPropagation(); if (!awaitingAnswer) return; awaitingAnswer = false;
+            const right = pg.opts.find((x) => x.ok)!.t;
+            npcChoices.style.display = 'none';
+            tone(o.ok ? 880 : 160, 0.1, o.ok ? 'square' : 'sawtooth', 0.12, o.ok ? 1180 : 110);
+            typeOut(o.ok ? `${o.t}. …Correct. Lucky.` : `${o.t}? No. It's ${right}. Of course it's ${right}.`, () => { npcHint.style.display = 'block'; });
+          };
+          npcChoices.appendChild(b);
+        }
+      });
     }
     npcAdvance = () => {
-      if (typing) { window.clearInterval(timer); typing = false; npcText.textContent = full; npcHint.style.display = 'block'; return; }
+      if (typing) { window.clearInterval(timer); typing = false; npcText.textContent = full; const d = pendingDone; pendingDone = null; d?.(); return; } // finish typing → run its done (lay out options / show hint)
+      if (awaitingAnswer) return; // must pick an answer first
       pageI++; if (pageI >= pages.length) closeTalk(); else showPage();
     };
     function closeTalk() {
       window.clearInterval(timer); talkOpen = false; npcAdvance = null; npcClose = null;
-      npcBox.style.display = 'none'; npcChoices.style.display = 'none'; npcPortrait.style.display = 'none'; nearRob = false;
+      npcBox.style.display = 'none'; npcChoices.style.display = 'none'; npcChoices.replaceChildren(); npcPortrait.style.display = 'none'; nearRob = false;
     }
     npcClose = closeTalk;
     showPage();
@@ -3153,20 +3180,32 @@ export function startWorld(net: WorldNet): void {
       px(22, 8, 3, 3, MUG); px(22, 8, 3, 1, 0xd85a4a);
       g.generateTexture('w-deskpc', 28, 18);
     }
-    // --- Rob, seated, seen from behind in his office chair (balding grey hair, navy suit back) ---
+    // --- Rob, seated at his PC seen from behind: a tall ergonomic office chair (headrest, mesh back,
+    //     armrests, chrome 5-star base) with Rob's dark-haired head + navy suit shoulders rising above
+    //     it, one arm out to the desk. Detailed + shaded (20×26). ---
     {
-      const CHAIR = 0x1c1c22, CHAIR_L = 0x2c2c34, SUIT = 0x222a46, SUIT_D = 0x1a2038,
-        SCALP = 0xcdb89a, HAIR = 0x9a9a98, COLLAR = 0xe8e8ee;
+      const CH = 0x24242e, CH_D = 0x15151c, CH_L = 0x33333f, MESH = 0x2c2c3a, CHROME = 0x70747e, CHROME_D = 0x4a4e57,
+        HAIR = 0x241a10, HAIR_L = 0x3c2c19, SKIN = 0xc99a72, SKIN_D = 0xa87c56,
+        SUIT = 0x232b48, SUIT_L = 0x33406a, SUIT_D = 0x18203a, SHIRT = 0xe8e8ee, WHEEL = 0x101015;
       g.clear();
-      // chair back + arms + base
-      px(2, 3, 12, 12, CHAIR); px(3, 3, 10, 1, CHAIR_L); px(2, 4, 1, 9, 0x14141a); px(13, 4, 1, 9, 0x14141a);
-      px(7, 15, 2, 1, 0x2a2a30); px(5, 16, 6, 1, 0x18181c); px(4, 16, 1, 1, 0x101014); px(11, 16, 1, 1, 0x101014);
-      // navy suit back + shoulders
-      px(3, 6, 10, 2, SUIT); px(4, 6, 8, 8, SUIT); px(8, 7, 1, 6, SUIT_D);
-      // back of a balding head: bald scalp ringed by grey hair, white shirt collar at the neck
-      px(5, 1, 6, 4, SCALP); px(4, 3, 8, 2, HAIR); px(4, 2, 1, 2, HAIR); px(11, 2, 1, 2, HAIR); px(5, 4, 6, 1, 0x8a8a88);
-      px(6, 5, 4, 1, COLLAR);
-      g.generateTexture('w-robpc', 16, 18);
+      // chair: headrest, winged backrest with a mesh centre, armrests
+      px(6, 0, 8, 3, CH); px(7, 0, 6, 1, CH_L);                                  // headrest
+      px(3, 3, 14, 15, CH); px(3, 3, 2, 15, CH_D); px(15, 3, 2, 15, CH_D);       // backrest + side wings
+      px(6, 4, 8, 13, MESH); px(8, 4, 1, 13, CH_D); px(11, 4, 1, 13, CH_D);      // mesh panel + ribs
+      px(1, 11, 2, 5, CH_D); px(1, 11, 2, 1, CH_L); px(17, 11, 2, 5, CH_D); px(17, 11, 2, 1, CH_L); // armrests
+      // chair: gas cylinder + chrome 5-star base with castors
+      px(9, 18, 2, 3, CHROME); px(9, 18, 1, 3, CHROME_D);
+      px(4, 21, 12, 1, CHROME_D); px(3, 22, 3, 1, CHROME_D); px(9, 22, 2, 2, CHROME_D); px(14, 22, 3, 1, CHROME_D);
+      px(3, 23, 2, 1, WHEEL); px(15, 23, 2, 1, WHEEL); px(9, 24, 2, 1, WHEEL);
+      // Rob: navy suit shoulders/back (drawn in front of the chair), white collar, one arm to the desk
+      px(4, 9, 12, 8, SUIT); px(4, 9, 12, 1, SUIT_L); px(9, 10, 2, 7, SUIT_D);
+      px(7, 9, 6, 1, SHIRT);                                                     // shirt collar at the nape
+      px(3, 11, 2, 4, SUIT); px(15, 11, 3, 4, SUIT); px(17, 14, 2, 2, SKIN); px(17, 15, 2, 1, SKIN_D); // arms; right hand toward the keyboard
+      // Rob: dark-haired head (full head of hair, back view), neck
+      px(6, 2, 8, 6, HAIR); px(7, 2, 6, 1, HAIR_L); px(10, 3, 1, 4, HAIR_L);     // hair mass + a centre part
+      px(6, 3, 1, 4, HAIR); px(13, 3, 1, 4, HAIR);                               // sides
+      px(8, 8, 4, 1, SKIN_D);                                                    // nape of the neck
+      g.generateTexture('w-robpc', 20, 26);
     }
     // --- a bookshelf packed with colourful spines (office ambiance) ---
     {
@@ -3207,6 +3246,14 @@ export function startWorld(net: WorldNet): void {
       px(3, 10, 14, 4, 0x8fcf6a); px(3, 12, 14, 2, 0x79bd57);            // a sliver of green lawn
       px(9, 2, 2, 12, 0x7a5a36); px(2, 7, 16, 2, 0x7a5a36);              // muntins (cross bars)
       g.generateTexture('w-window', 20, 16);
+    }
+    // --- a light drywall wall tile for the office (warm beige, faint panel seams, a wood baseboard) ---
+    {
+      g.clear();
+      px(0, 0, 16, 16, 0xdfd3bb); px(0, 0, 16, 1, 0xebe0c9); px(0, 1, 16, 1, 0xd2c5a8); // wall + top shadow line
+      px(4, 0, 1, 13, 0xd6cab0); px(11, 0, 1, 13, 0xd6cab0);                              // faint vertical seams
+      px(0, 13, 16, 3, 0x8a5a30); px(0, 13, 16, 1, 0xa97040);                             // wood baseboard
+      g.generateTexture('w-owall', 16, 16);
     }
 
     // --- the tortured soul: a pale, hunched, gaunt wretch with sunken dark eye-sockets, reaching
