@@ -725,37 +725,40 @@ function fillHotdog(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: nu
 // Cosmetic registries — add new skins/hats here (id must match shared/types COSMETICS).
 // Each draws purely visual decoration on the paddle; none affect the ball's collision.
 type CosmeticDraw = (ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) => void;
-// A tailored suit: navy jacket, a crisp white shirt down the centre narrowing into a collar V, and a
-// deep-red tie tapering to its tip. The Gatekeeper's look, worn as a paddle. (Ruins B5 chest prize.)
-function fillSuit(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+// Prism: a cut-crystal paddle. A cold cyan→violet iridescent body, a faceted ridge running down the
+// spine (left facets catch light, right facets fall to shadow), a bright spine line, and a slow glint
+// band sweeping down it. Abstract + premium — reads clean at paddle scale. (Ruins B5 chest prize.)
+function fillPrism(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
   ctx.save();
   clipPaddle(ctx, cx, cy, h);
   const x = cx - PADDLE.w / 2, y = cy - h / 2, w = PADDLE.w;
-  // navy jacket, shaded toward the edges
-  const jacket = ctx.createLinearGradient(x, 0, x + w, 0);
-  jacket.addColorStop(0, '#10162a'); jacket.addColorStop(0.5, '#28315a'); jacket.addColorStop(1, '#10162a');
-  ctx.fillStyle = jacket; ctx.fillRect(x, y, w, h);
-  // white shirt down the centre
-  const sw = w * 0.46, sx = cx - sw / 2;
-  ctx.fillStyle = '#eef1f8'; ctx.fillRect(sx, y, sw, h);
-  // lapels: navy wedges closing the shirt into a collar V near the top
-  ctx.fillStyle = '#323d6a';
-  ctx.beginPath(); ctx.moveTo(sx, y); ctx.lineTo(cx, y + h * 0.17); ctx.lineTo(sx, y + h * 0.17); ctx.closePath(); ctx.fill();
-  ctx.beginPath(); ctx.moveTo(sx + sw, y); ctx.lineTo(cx, y + h * 0.17); ctx.lineTo(sx + sw, y + h * 0.17); ctx.closePath(); ctx.fill();
-  // tie: a tapering deep-red strip from the knot to its tip
-  const topW = sw * 0.66, botW = sw * 0.95;
-  ctx.fillStyle = '#8a1f2e';
-  ctx.beginPath();
-  ctx.moveTo(cx - topW / 2, y + h * 0.17); ctx.lineTo(cx + topW / 2, y + h * 0.17);
-  ctx.lineTo(cx + botW / 2, y + h - 5); ctx.lineTo(cx, y + h - 1); ctx.lineTo(cx - botW / 2, y + h - 5);
-  ctx.closePath(); ctx.fill();
-  ctx.fillStyle = '#6a1622'; ctx.fillRect(cx - topW / 2, y + h * 0.135, topW, h * 0.05); // the knot
+  // iridescent base — cyan at the top melting through blue/violet to magenta
+  const base = ctx.createLinearGradient(0, y, 0, y + h);
+  base.addColorStop(0, '#a6f2ff'); base.addColorStop(0.4, '#56b6f2'); base.addColorStop(0.7, '#7d6cf2'); base.addColorStop(1, '#b56cf0');
+  ctx.fillStyle = base; ctx.fillRect(x, y, w, h);
+  // faceted ridge: stacked chevrons — left half lit, right half shadowed → a cut-gem spine
+  const segs = 8, segH = h / segs;
+  for (let i = 0; i < segs; i++) {
+    const yy = y + i * segH, mid = yy + segH * 0.5;
+    ctx.fillStyle = `rgba(255,255,255,${0.10 + (i % 2) * 0.14})`;
+    ctx.beginPath(); ctx.moveTo(x, yy); ctx.lineTo(cx, mid); ctx.lineTo(x, yy + segH); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = `rgba(24,12,56,${0.14 + (i % 2) * 0.12})`;
+    ctx.beginPath(); ctx.moveTo(x + w, yy); ctx.lineTo(cx, mid); ctx.lineTo(x + w, yy + segH); ctx.closePath(); ctx.fill();
+  }
+  // the crystal spine
+  ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.moveTo(cx, y); ctx.lineTo(cx, y + h); ctx.stroke();
+  // a glint band sweeping slowly down the gem
+  const gy = y + ((performance.now() / 2600) % 1) * h;
+  const glint = ctx.createLinearGradient(0, gy - h * 0.12, 0, gy + h * 0.12);
+  glint.addColorStop(0, 'rgba(255,255,255,0)'); glint.addColorStop(0.5, 'rgba(255,255,255,.5)'); glint.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = glint; ctx.fillRect(x, gy - h * 0.12, w, h * 0.24);
   skinHighlight(ctx, cx, cy, h);
   ctx.restore();
 }
 const SKIN_RENDERERS: Record<string, CosmeticDraw> = {
   'skin-hotdog': fillHotdog,
-  'skin-suit': fillSuit,
+  'skin-prism': fillPrism,
   rainbow: fillRainbow,
   gold: fillGold,
   chrome: fillChrome,
