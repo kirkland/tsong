@@ -3228,7 +3228,7 @@ export function startWorld(net: WorldNet): void {
     {
       g.clear();
       px(1, 0, 14, 24, 0x6a4a2a); px(2, 1, 12, 22, 0x3a2614);               // frame + dark interior
-      const spine = [0xb83a3a, 0x3a7ab8, 0x4aa84a, 0xd8a83a, 0x8a4ab8, 0xc86a2a];
+      const spine = [0x6e3a30, 0x33455e, 0x3f5640, 0x7a6038, 0x4a3a4e, 0x5a4632]; // muted, bookish spines (no rainbow)
       for (const sy of [1, 7, 13, 19]) { for (let x = 3; x <= 12; x++) px(x, sy, 1, 5, spine[(x + sy) % spine.length]); px(2, sy + 5, 12, 1, 0x6a4a2a); }
       g.generateTexture('w-bookshelf', 16, 24);
     }

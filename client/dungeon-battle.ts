@@ -102,8 +102,8 @@ export const DUNGEON_MOBS: MobDef[] = [
   //     power-up (a wrong answer costs you HP + a screen of red). ---
   {
     id: 'rob', name: 'Rob', portrait: '🗺️', power: 8, color: '#23408a', tier: 5, bob: 'float',
-    bot: { react: 0.27, error: 76, predict: false, idleCenter: true }, lives: 12, boss: true, bossPowers: ['turbo', 'mirror'],
-    gimmick: { name: 'Dead Reckoning', desc: 'Powers up every 4 points.' },
+    bot: { react: 0.25, error: 70, predict: false, idleCenter: true }, lives: 12, boss: true, bossPowers: ['blaster', 'mirror'],
+    fireRate: 1.7, gimmick: { name: 'Dead Reckoning', desc: 'Powers up every 4 points.' },
     flavor: 'this is MY room.', tag: 'You interrupted his MapTap. He will make you regret it.',
   },
 ];
@@ -344,19 +344,21 @@ export function startEncounter(opts: EncounterOpts): void {
   function stepAI(dt: number) {
     aiTimer -= dt;
     const b = game.ball;
+    // a "clutch" rally makes Rob near-perfect (snappy reaction, predicts, almost no error)
+    const react = clutchRally ? 0.04 : mob.bot.react, error = clutchRally ? 4 : mob.bot.error, predict = clutchRally || mob.bot.predict;
     if (aiTimer <= 0) {
-      aiTimer = mob.bot.react;
+      aiTimer = react;
       const movingToward = b.vx > 0;
-      if (!movingToward && mob.bot.idleCenter) aiTarget = COURT.h / 2;
+      if (!movingToward && mob.bot.idleCenter && !clutchRally) aiTarget = COURT.h / 2;
       else {
         let y = b.y;
-        if (mob.bot.predict && b.vx > 0) {
+        if (predict && b.vx > 0) {
           const dist = (COURT.w - PADDLE.margin) - b.x;
           const t = b.vx !== 0 ? dist / b.vx : 0;
           y = b.y + b.vy * t;
           const span = COURT.h; y = Math.abs(((y % (2 * span)) + 2 * span) % (2 * span)); if (y > span) y = 2 * span - y;
         }
-        aiTarget = y + (Math.random() * 2 - 1) * mob.bot.error;
+        aiTarget = y + (Math.random() * 2 - 1) * error;
       }
     }
     // Roam (Demon Fritz): edge off the wall to pressure an incoming ball, but stay home enough that he
@@ -367,8 +369,8 @@ export function startEncounter(opts: EncounterOpts): void {
       inset = prog * ROAM.maxInset * 0.5; // modest forward pressure, not a reckless lunge
     }
     game.setTarget('right', mob.id, aiTarget, inset);
-    // Blaster (Deranged Josiel): periodically fire a freezing shot aimed at the player's paddle.
-    if (mob.blaster && game.disabledTimer.left <= 0) { // don't pile shots on while you're already frozen
+    // Blaster (Deranged Josiel / Rob once armed): periodically fire a freezing shot at the player's paddle.
+    if ((mob.blaster || robBlaster) && game.disabledTimer.left <= 0) { // don't pile shots on while you're already frozen
       fireTimer -= dt;
       if (fireTimer <= 0) {
         fireTimer = mob.fireRate ?? 1.6;
@@ -395,7 +397,11 @@ export function startEncounter(opts: EncounterOpts): void {
   let bossCheckpoints = 0;            // how many 4-point checkpoints already cleared
   let mapPenalty = 0;                 // HP docked by wrong MapTap answers
   let flashT = 0;                     // red damage-flash timer (seconds), decays each frame
-  let robRotate = 0, robMirror = false; // boss powers granted at checkpoints (turbo is applied directly)
+  let robRotate = 0, robMirror = false, robBlaster = false, robQuake = false; // boss powers, accrued through the fight
+  let powerAnnounce = '', powerAnnounceT = 0; // big centre banner when Rob gains a power
+  // "clutch": once every few rallies Rob locks in (near-perfect + a fast ball) and almost certainly
+  // takes the point — forcing you to spend potions — while staying beatable the rest of the time.
+  let clutchRally = false, ralliesLeft = 2 + Math.floor(Math.random() * 3);
   let captureDeclined = false;       // said "no" → finish the fight normally
   let captureScale = 1;              // the mob's draw-scale during capture (1 → 0 as it's sucked into the ball)
   const captureMob = { x: 0, y: 0 }; // where the mob sat when the ball flew
@@ -419,10 +425,12 @@ export function startEncounter(opts: EncounterOpts): void {
     opts.onResult({ result, coins: result === 'capture' ? 0 : resultCoins, item: resultItem, hpLost: opts.hp - curHP() });
   }
   function flee() { if (phase === 'fight') { resultCoins = 0; endBattle('flee'); } }
-  // grant the boss his next escalation power (placeholders for now — Rob: turbo → mirror)
+  // grant the boss his next escalation power + announce it (Rob: blaster → +reverse; earthquake last 2 pts)
+  function announce(s: string) { powerAnnounce = s; powerAnnounceT = 2.4; }
   function applyBossPower(pw?: string) {
-    if (pw === 'turbo') game.setTurbo(true);
-    else if (pw === 'mirror') robMirror = true;
+    if (pw === 'blaster') { robBlaster = true; announce('⚡ Rob grabbed the BLASTER!'); }
+    else if (pw === 'mirror') { robMirror = true; announce('🔄 Rob REVERSED your controls!'); }
+    else if (pw === 'turbo') game.setTurbo(true);
     else if (pw === 'rotate') robRotate = 2;
   }
 
@@ -489,6 +497,7 @@ export function startEncounter(opts: EncounterOpts): void {
     // centre. The creature in the gutter is drawn AFTER this (outside the transform) so it stays upright.
     const rot = game.rotated ? game.rotated * Math.PI / 2 : 0;
     ctx.save();
+    if (robQuake) ctx.translate((Math.random() - 0.5) * 9, (Math.random() - 0.5) * 9); // earthquake: jolt the court
     if (rot) { const ccx = court.x + court.w / 2, ccy = court.y + court.h / 2; ctx.translate(ccx, ccy); ctx.rotate(rot); ctx.translate(-ccx, -ccy); }
     // court frame + mid line
     ctx.strokeStyle = '#3a4a52'; ctx.lineWidth = 3;
@@ -621,6 +630,24 @@ export function startEncounter(opts: EncounterOpts): void {
     // flee hint
     ctx.fillStyle = '#6f6688'; ctx.font = '11px ui-monospace'; ctx.textAlign = 'right';
     ctx.fillText('F to flee', W - 18, cv.height - 16); ctx.textAlign = 'left';
+    // boss power-state chips (top-centre) so the player always knows what's active
+    const chips: [string, string][] = [];
+    if (robBlaster) chips.push(['⚡ Blaster', '#ff8a2a']);
+    if (robMirror) chips.push(['🔄 Reversed', '#9a6cff']);
+    if (robQuake) chips.push(['🌋 Quake', '#d8a13a']);
+    if (clutchRally) chips.push(['🎯 LOCKED IN', '#ff4a4a']);
+    if (chips.length) {
+      ctx.textBaseline = 'middle'; ctx.font = 'bold 12px ui-monospace';
+      const cw2 = 104, gap = 8, total = chips.length * cw2 + (chips.length - 1) * gap;
+      let x0 = (W - total) / 2;
+      for (const [label, col] of chips) {
+        ctx.fillStyle = '#0c0a12e0'; ctx.strokeStyle = col; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.roundRect(x0, 12, cw2, 22, 7); ctx.fill(); ctx.stroke();
+        ctx.fillStyle = col; ctx.textAlign = 'center'; ctx.fillText(label, x0 + cw2 / 2, 24);
+        x0 += cw2 + gap;
+      }
+      ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+    }
   }
 
   // Pokémon Gen-3 style transition: flash the captured world, then split it into horizontal strips
@@ -743,6 +770,7 @@ export function startEncounter(opts: EncounterOpts): void {
     const now = performance.now(), dt = Math.min(0.033, (now - last) / 1000); last = now;
     phaseT += dt;
     if (flashT > 0) flashT = Math.max(0, flashT - dt); // decay the DOOM damage flash
+    if (powerAnnounceT > 0) powerAnnounceT -= dt;       // decay the power-up banner
     layoutCourt();
 
     if (phase === 'fight') {
@@ -756,10 +784,23 @@ export function startEncounter(opts: EncounterOpts): void {
       if (mob.rotate) game.rotated = mob.rotate;
       if (robRotate) game.rotated = robRotate;            // boss powers granted mid-fight (re-asserted)
       if (robMirror) game.mirrorTimer.left = Infinity;
+      if (robBlaster) game.blasterAmmo.right = Infinity;
+      if (robQuake) game.earthquake = true;
       stepAI(dt);
       const beforeL = game.score.left, beforeR = game.score.right;
       game.tick(dt);
-      if (game.score.left > beforeL || game.score.right > beforeR) tone(game.score.left > beforeL ? 660 : 200, 0.08, 'square', 0.1, game.score.left > beforeL ? 880 : 120);
+      // his final stand: the last two points shake the whole room (earthquake) — no question, it just hits
+      if (mob.boss && !robQuake && game.score.left >= mobLives - 2) { robQuake = true; game.earthquake = true; announce('🌋 EARTHQUAKE — the room is SHAKING!'); }
+      if (game.score.left > beforeL || game.score.right > beforeR) { // a rally just ended (someone scored)
+        tone(game.score.left > beforeL ? 660 : 200, 0.08, 'square', 0.1, game.score.left > beforeL ? 880 : 120);
+        if (mob.boss) {
+          if (clutchRally) { clutchRally = false; game.setTurbo(false); } // the locked-in rally resolved → back to normal
+          if (--ralliesLeft <= 0 && game.score.left < mobLives - 1) {     // arm the next "clutch" rally (not on the final point)
+            clutchRally = true; game.setTurbo(true); ralliesLeft = 3 + Math.floor(Math.random() * 3);
+            announce('🎯 Rob locks in — survive this rally!');
+          }
+        }
+      }
       bannerAlpha = Math.max(0, 1 - Math.max(0, phaseT - 1.4) / 0.6);
       // mobLives points kills the mob (win). The mob never wins — it just chips your run HP each
       // point, and you fight on until that HP runs out (death). Potions (P) heal you mid-fight.
@@ -808,6 +849,14 @@ export function startEncounter(opts: EncounterOpts): void {
     }
     // DOOM-style damage flash: a red wash over the whole screen, fading out (from a wrong MapTap answer)
     if (flashT > 0) { ctx.fillStyle = `rgba(200,20,12,${Math.min(0.6, flashT * 0.8)})`; ctx.fillRect(0, 0, cv.width, cv.height); }
+    // a big centre banner when Rob gains a power / locks in
+    if (powerAnnounceT > 0 && phase !== 'intro') {
+      const a = Math.min(1, powerAnnounceT / 0.4);
+      ctx.save(); ctx.globalAlpha = a; ctx.textAlign = 'center';
+      ctx.font = 'bold 30px ui-monospace'; ctx.fillStyle = '#0c0a12'; ctx.fillText(powerAnnounce, cv.width / 2 + 2, cv.height * 0.3 + 2);
+      ctx.fillStyle = '#ffd24a'; ctx.fillText(powerAnnounce, cv.width / 2, cv.height * 0.3);
+      ctx.textAlign = 'left'; ctx.restore();
+    }
     // show the "click to capture" hint only while fighting un-captured
     const wantPrompt = phase === 'fight' && document.pointerLockElement !== cv ? 'block' : 'none';
     if (capturePrompt.style.display !== wantPrompt) capturePrompt.style.display = wantPrompt;
