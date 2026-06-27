@@ -951,9 +951,38 @@ const HAT_RENDERERS: Record<string, CosmeticDraw> = {
   'x-jackpot': drawJackpotCrown,
   beret: drawBeret,
   catears: drawCatEars,
+  mushroom: drawMushroom,
   'x-voidcrown': drawVoidCrown,
   'x-prismhalo': drawPrismHalo,
 };
+
+// Cosmetic "mushroom cap": a red toadstool dome with white spots + a little cream gill-lip, perched on
+// the paddle's top end. Visual only — the Ruins B1 chest prize.
+function drawMushroom(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  const capW = PADDLE.w + 14, capH = 13, baseY = top - 1; // flat underside just above the paddle
+  ctx.save();
+  // cream gills/stem hint tucked under the cap
+  ctx.fillStyle = '#f2e4c9';
+  ctx.fillRect(cx - capW * 0.26, baseY - 1, capW * 0.52, 3);
+  // the red dome (upper half-ellipse)
+  ctx.fillStyle = '#d63a36';
+  ctx.beginPath();
+  ctx.ellipse(cx, baseY, capW / 2, capH, 0, Math.PI, 2 * Math.PI);
+  ctx.closePath();
+  ctx.fill();
+  // a darker underside lip for a touch of depth
+  ctx.fillStyle = '#b02a28';
+  ctx.fillRect(cx - capW / 2, baseY - 2, capW, 2);
+  // white spots scattered over the dome
+  ctx.fillStyle = '#fff6e9';
+  for (const [sx, sy, r] of [[-0.22, 0.5, 2.6], [0.18, 0.62, 3.0], [0.02, 0.84, 2.1], [-0.34, 0.22, 1.7], [0.34, 0.24, 1.8]] as const) {
+    ctx.beginPath();
+    ctx.arc(cx + sx * capW, baseY - sy * capH, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
 
 // Cosmetic "top hat": a little hat perched at the top end of the paddle. Visual only.
 function drawTopHat(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {

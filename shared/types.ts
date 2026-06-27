@@ -200,6 +200,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'pirate', name: 'Pirate Hat', slot: 'hat', price: 1000 },
   { id: 'santa', name: 'Santa Hat', slot: 'hat', price: 1000 },
   { id: 'headphones', name: 'Headphones', slot: 'hat', price: 2000 }, // animated
+  { id: 'mushroom', name: '🍄 Mushroom Cap', slot: 'hat', price: 0, locked: 'dungeon' }, // a Ruins chest prize (B1)
   // Skins
   { id: 'rainbow', name: 'Rainbow', slot: 'skin', price: 1000 },
   { id: 'gold', name: 'Gold', slot: 'skin', price: 2000 }, // animated
@@ -458,7 +459,7 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
 // Chests keyed by 'floor:col,row'. The server pays a chest's coins (from the House) the first time
 // a given player opens it, and tracks opened chests per account.
 export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potions?: number; spin?: boolean; cosmetic?: string; needsKey?: boolean }> = {
-  'B1:18,2': { coins: 200 },
+  'B1:18,2': { cosmetic: 'mushroom' }, // 🍄 Mushroom Cap hat — the first-floor cosmetic
   'B1:9,9': { potions: 1 },
   // B2 — a free wheel-spin chest, a potion, a coin chest, plus the SEALED locked-room prize (34,24).
   'B2:26,3': { spin: true },   // spins the wheel in-dungeon; reward → run loot, granted on escape
