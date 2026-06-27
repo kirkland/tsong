@@ -5358,13 +5358,28 @@ export class Lobby {
     }
   }
 
-  /** Build and send the balance sheet for the player at `rank` on the current net-worth board:
-   *  liquid coins, every open stock position valued at the live price, and any debt to Davis.
+  /** Build and send the balance sheet for the player at `rank` on the current net-worth board,
+   *  or for the requesting player when `self` is true. Shows liquid coins, every open stock
+   *  position valued at the live price, and any debt to Davis.
    *  Public info (the board already shows net/coins/debt) — no pid ever leaves the server. */
-  async sendBalanceSheet(ws: WebSocket, rank: number) {
-    if (!Number.isInteger(rank) || rank < 0 || rank >= this.netWorthPids.length) return;
-    const pid = this.netWorthPids[rank];
-    const name = this.netWorth[rank]?.name ?? '???';
+  async sendBalanceSheet(ws: WebSocket, rank?: number, self?: boolean) {
+    let pid: string;
+    let name: string;
+    if (self) {
+      const conn = this.conns.get(ws);
+      if (!conn || !conn.pid) return;
+      pid = conn.pid;
+      name = conn.nickname || conn.pid;
+      // Resolve the player's actual rank for the response (may stay undefined if off-board)
+      for (let i = 0; i < this.netWorthPids.length; i++) {
+        if (this.netWorthPids[i] === pid) { rank = i; break; }
+      }
+      if (rank === undefined) rank = 0;
+    } else {
+      if (!Number.isInteger(rank) || rank! < 0 || rank! >= this.netWorthPids.length) return;
+      pid = this.netWorthPids[rank!];
+      name = this.netWorth[rank!]?.name ?? '???';
+    }
     const [wallet, holdings, loan] = await Promise.all([getWallet(pid), getHoldings(pid), getLoan(pid)]);
     const rows: BalanceSheetHolding[] = [];
     let stockValue = 0;
@@ -5379,7 +5394,7 @@ export class Lobby {
     const owed = loan?.owed ?? 0;
     const net = wallet.coins + stockValue - owed;
     this.tell(ws, {
-      type: 'balanceSheet', rank, name,
+      type: 'balanceSheet', rank: rank ?? 0, name,
       coins: wallet.coins, holdings: rows, stockValue, loan: owed, net,
     });
   }

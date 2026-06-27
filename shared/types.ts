@@ -793,7 +793,7 @@ export type ClientMsg =
   | { type: 'minesBet'; amount: number; mines: number } // start a Mines hand (1–24 mines on a 5×5 grid)
   | { type: 'minesReveal'; cell: number } // flip tile at index 0–24
   | { type: 'minesCashout' } // collect winnings on the current Mines hand
-  | { type: 'balanceSheetReq'; rank: number } // peek at a net-worth board player's balance sheet (by current rank)
+  | { type: 'balanceSheetReq'; rank?: number; self?: boolean } // peek at a net-worth board player's balance sheet (by rank, or self for the requesting player)
   | { type: 'lootBoxOpen' } // open a loot box: spend coins, roll a weighted prize (common cosmetic / House coins / capped-rare exclusive)
   | { type: 'marketList'; instanceId: number; ask: number } // list an owned exclusive instance on the marketplace for `ask` coins
   | { type: 'marketCancel'; listingId: number } // cancel one of your own listings
