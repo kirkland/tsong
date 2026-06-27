@@ -264,6 +264,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'song-battle', name: 'regular battle theme', slot: 'song', price: 15000, audio: '/battle.mp3' },
   { id: 'song-disco', name: 'disco', slot: 'song', price: 20000, audio: '/disco.mp3' },
   { id: 'song-davis', name: 'davis boss theme', slot: 'song', price: 30000, audio: '/davis-battle.mp3' },
+  { id: 'song-everlong', name: '🎸 Everlong (8-bit)', slot: 'song', price: 0, locked: 'dungeon', audio: '/everlong.mp3' }, // a Ruins chest prize (B4)
   // Cars — drive them around the World map (slot 'car'; physics/look live in CARS above).
   { id: 'car-coupe', name: '🚗 Coupe', slot: 'car', price: 8000 },
   { id: 'car-drifter', name: '🏎️ Drift King', slot: 'car', price: 20000 },
@@ -477,7 +478,7 @@ export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potions?: 
   // B4 — the deep floor: a 5-potion chest right at the entrance, richest coins, another wheel spin, and
   // the switch-locked room's prize: a 💨 Fart Cloud trail.
   'B4:6,3': { potions: 5 },
-  'B4:29,3': { coins: 500 },
+  'B4:29,3': { cosmetic: 'song-everlong' }, // 🎸 Everlong battle theme
   'B4:12,4': { cosmetic: 'trail-fart' }, // behind the switch-sealed 'X' door
   'B4:4,14': { potions: 2 },
   'B4:28,14': { spin: true },
