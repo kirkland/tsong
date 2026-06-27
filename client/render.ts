@@ -816,6 +816,7 @@ function drawTrail(ctx: CanvasRenderingContext2D, key: string, cx: number, cy: n
   if (id === 'trail-fart') {
     // A proper gas cloud: soft, lumpy puffs that swell + fade as they drift back off the paddle —
     // densest where it's freshly emitted, billowing bigger and thinner as it dissipates behind.
+    const sink = h * 0.46; // gas hangs/settles low — pool it toward the bottom of the paddle, not its centre
     for (let i = 0; i < n; i++) {
       const f = (i + 1) / n;                     // 0 = tail (old, dispersed) → 1 = head (fresh by the paddle)
       const age = 1 - f;
@@ -826,7 +827,7 @@ function drawTrail(ctx: CanvasRenderingContext2D, key: string, cx: number, cy: n
       for (let k = 0; k < 2; k++) {              // two jittered overlapping puffs → a billowy, uneven cloud
         const wob = Math.sin(t / 260 + i * 1.3 + k * 2.3);
         const ox = wob * base * 0.4 + (k - 0.5) * base * 0.5;
-        const oy = Math.cos(t / 300 + i + k * 1.9) * base * 0.35;
+        const oy = sink + age * base * 0.5 + Math.cos(t / 300 + i + k * 1.9) * base * 0.3; // sink low, older puffs drift a bit lower
         const pr = base * (0.6 + 0.3 * k);
         const gx = pts[i].x + ox, gy = pts[i].y + oy;
         const grad = ctx.createRadialGradient(gx, gy, 0, gx, gy, pr);
