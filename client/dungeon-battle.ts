@@ -289,7 +289,6 @@ export function startEncounter(opts: EncounterOpts): void {
   if (mob.blaster) game.blasterAmmo.right = Infinity; // Deranged Josiel: never runs out of freezing shots
   if (mob.rotate) game.rotated = mob.rotate;        // Clarence: the whole arena is turned (re-asserted each tick below)
   if (mob.diamond) game.setDiamond(true);           // Clarence: a drifting diamond obstacle bounces around the court
-  if (mob.id === 'rob') robBlaster = true;          // Rob starts already armed with the blaster
   let fireTimer = (mob.fireRate ?? 1.6) * 1.4;      // delay the first blaster shot a touch
   const mobLives = mob.lives ?? 3; // points you must put past it to kill it
   const POTION_HEAL = 10; let healed = 0; // HP restored by potions drunk mid-battle
@@ -398,7 +397,7 @@ export function startEncounter(opts: EncounterOpts): void {
   let bossCheckpoints = 0;            // how many 4-point checkpoints already cleared
   let mapPenalty = 0;                 // HP docked by wrong MapTap answers
   let flashT = 0;                     // red damage-flash timer (seconds), decays each frame
-  let robRotate = 0, robMirror = false, robBlaster = false, robQuake = false; // boss powers, accrued through the fight
+  let robRotate = 0, robMirror = false, robBlaster = mob.id === 'rob', robQuake = false; // boss powers (Rob opens with the blaster)
   let powerAnnounce = '', powerAnnounceT = 0; // big centre banner when Rob gains a power
   // "clutch": once every few rallies Rob locks in (near-perfect + a fast ball) and almost certainly
   // takes the point — forcing you to spend potions — while staying beatable the rest of the time.
