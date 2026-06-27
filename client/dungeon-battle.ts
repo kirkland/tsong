@@ -103,7 +103,7 @@ export const DUNGEON_MOBS: MobDef[] = [
   {
     id: 'rob', name: 'Rob', portrait: '🗺️', power: 8, color: '#23408a', tier: 5, bob: 'float',
     bot: { react: 0.25, error: 70, predict: false, idleCenter: true }, lives: 12, boss: true, bossPowers: ['blaster', 'mirror'],
-    fireRate: 1.7, gimmick: { name: 'Dead Reckoning', desc: 'Powers up every 4 points.' },
+    fireRate: 1.7, gimmick: { name: 'Dead Reckoning', desc: 'Quizzes + escalates every 3 points.' },
     flavor: 'this is MY room.', tag: 'You interrupted his MapTap. He will make you regret it.',
   },
 ];
@@ -806,8 +806,8 @@ export function startEncounter(opts: EncounterOpts): void {
       // point, and you fight on until that HP runs out (death). Potions (P) heal you mid-fight.
       // BOSS (Rob): every 4 points, pause for a MapTap question — a wrong answer docks HP + flashes the
       // screen red — then he gains his next power and the fight resumes.
-      if (mob.boss && game.score.left > 0 && game.score.left % 4 === 0 && game.score.left < mobLives && bossCheckpoints < game.score.left / 4) {
-        bossCheckpoints = game.score.left / 4;
+      if (mob.boss && game.score.left > 0 && game.score.left % 3 === 0 && game.score.left < mobLives && bossCheckpoints < game.score.left / 3) {
+        bossCheckpoints = game.score.left / 3;
         phase = 'maptap'; phaseT = 0;
         if (document.pointerLockElement === cv) document.exitPointerLock();
         song.pause();
