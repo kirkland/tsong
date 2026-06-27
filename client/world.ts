@@ -1797,10 +1797,15 @@ export function startWorld(net: WorldNet): void {
     if (contents?.monster) { // a monster box! it lunges out into a fight instead of handing over loot
       nearChestCell = null; updateNearBuilding();
       chestSound();
+      keys.clear(); joyActive = false; vx = 0; vy = 0; // freeze the player for the reveal
       showToast('📦😱 A monster jumped out of the box!');
       const mob = DUNGEON_MOBS.find((m) => m.id === contents.monster) ?? DUNGEON_MOBS[0];
       const win = contents.coins ?? 0;
-      triggerEncounter({ mob, capturable: !!contents.pet, chestId: id, chestC: c, chestR: r, coins: [win, win] });
+      encounterPending = true; // hold off any other encounter while the reveal line is on screen
+      window.setTimeout(() => { // let the toast breathe ~1.1s, THEN the battle overlay takes over
+        encounterPending = false;
+        triggerEncounter({ mob, capturable: !!contents.pet, chestId: id, chestC: c, chestR: r, coins: [win, win] });
+      }, 1100);
       return;
     }
     openedChestsServer.add(id);                        // optimistic — the server confirms + pays/grants
