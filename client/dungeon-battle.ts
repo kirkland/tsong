@@ -103,7 +103,7 @@ export const DUNGEON_MOBS: MobDef[] = [
   {
     id: 'rob', name: 'Rob', portrait: '🗺️', power: 8, color: '#23408a', tier: 5, bob: 'float',
     bot: { react: 0.27, error: 76, predict: false, idleCenter: true }, lives: 12, boss: true, bossPowers: ['turbo', 'mirror'],
-    gimmick: { name: 'Tantrum', desc: 'Powers up every 4 points.' },
+    gimmick: { name: 'Dead Reckoning', desc: 'Powers up every 4 points.' },
     flavor: 'this is MY room.', tag: 'You interrupted his MapTap. He will make you regret it.',
   },
 ];
