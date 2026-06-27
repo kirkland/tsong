@@ -102,8 +102,8 @@ export const DUNGEON_MOBS: MobDef[] = [
   //     power-up (a wrong answer costs you HP + a screen of red). ---
   {
     id: 'rob', name: 'Rob', portrait: '🗺️', power: 8, color: '#23408a', tier: 5, bob: 'float',
-    bot: { react: 0.17, error: 36, predict: true, idleCenter: true }, lives: 12, boss: true, bossPowers: ['turbo', 'mirror'],
-    gimmick: { name: 'Sore Loser', desc: 'He escalates every four points — and quizzes you between rounds.' },
+    bot: { react: 0.27, error: 76, predict: false, idleCenter: true }, lives: 12, boss: true, bossPowers: ['turbo', 'mirror'],
+    gimmick: { name: 'Tantrum', desc: 'Powers up every 4 points.' },
     flavor: 'this is MY room.', tag: 'You interrupted his MapTap. He will make you regret it.',
   },
 ];

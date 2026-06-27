@@ -1845,13 +1845,10 @@ export function startWorld(net: WorldNet): void {
     type RobPage = string | { q: string; opts: { t: string; ok?: boolean }[] };
     const pages: RobPage[] = [
       'Mmf— do you MIND? I was on a streak.',
-      "This is my office. The one room in this whole place with a door that STAYS shut. That's the point of it.",
-      "Out there I have to be… presidential. Composed. In here it's just me and MapTap. It gives you a name — no borders, no labels, just the bare globe — and you tap exactly where it is. Reykjavík. Tap. Lake Baikal. Tap. It's the one thing that's mine.",
-      "And you kicked the door in mid-drop. I had a pin hovering right over Ulaanbaatar — pixel-perfect — and it's gone.",
-      "You think you could do what I do? A name, a blank planet, one tap. …Let's warm up. Surely you know THIS much:",
+      "This is my office. The one door that stays SHUT. In here it's just me and MapTap — a name, a blank globe, one tap. It's the one thing that's mine.",
+      "And you barged in mid-drop. Fine. You think you could do what I do? Quick:",
       { q: 'Capital of Australia?', opts: [{ t: 'Sydney' }, { t: 'Canberra', ok: true }, { t: 'Melbourne' }] },
-      "…Hm. But a list gives you options. The globe doesn't. One name, one tap, and ten thousand miles of ocean if you're wrong.",
-      "You want to know if you've actually got the instinct? Sit down. We settle this MY way.",
+      "…A list gives you options. The globe doesn't. Sit down — we settle this MY way.",
     ];
     talkOpen = true; keys.clear(); joyActive = false; prompt.style.display = 'none';
     npcName.textContent = 'Rob'; npcBox.style.display = 'block'; npcChoices.style.display = 'none';
