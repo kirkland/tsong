@@ -171,7 +171,7 @@ export interface EncounterOpts {
   potions?: { count: () => number; consume: () => boolean }; // mid-battle potion use (P): heals +10 HP
   capturable?: boolean;       // a "monster box" mob: at its last life, pause and offer a Poké Ball capture
   song?: string;              // override the cycled battle theme with a specific track (Clarence → /battle.mp3)
-  onResult: (r: { result: 'win' | 'lose' | 'flee' | 'capture'; coins: number; item: string | null; hpLost: number }) => void;
+  onResult: (r: { result: 'win' | 'lose' | 'capture'; coins: number; item: string | null; hpLost: number }) => void;
 }
 
 let active = false;
@@ -301,7 +301,6 @@ export function startEncounter(opts: EncounterOpts): void {
   const onKey = (e: KeyboardEvent, down: boolean) => {
     const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     if (k === 'w' || k === 's' || k === 'arrowup' || k === 'arrowdown') { down ? keys.add(k) : keys.delete(k); e.preventDefault(); }
-    if (down && (k === 'f')) flee();
     if (down && k === 'p') drinkPotion();
   };
   // Drink a potion mid-battle: +10 HP, capped at 100. No-op if you have none or you're already full.
@@ -409,7 +408,7 @@ export function startEncounter(opts: EncounterOpts): void {
 
   song.play().catch(() => { /* gesture already happened on the world key */ });
 
-  function endBattle(result: 'win' | 'lose' | 'flee' | 'capture') {
+  function endBattle(result: 'win' | 'lose' | 'capture') {
     if (!active) return;
     active = false;
     cancelAnimationFrame(raf);
@@ -424,7 +423,6 @@ export function startEncounter(opts: EncounterOpts): void {
     // costs no extra HP and pays no coins (you get the pet instead).
     opts.onResult({ result, coins: result === 'capture' ? 0 : resultCoins, item: resultItem, hpLost: opts.hp - curHP() });
   }
-  function flee() { if (phase === 'fight') { resultCoins = 0; endBattle('flee'); } }
   // grant the boss his next escalation power + announce it (Rob: blaster → +reverse; earthquake last 2 pts)
   function announce(s: string) { powerAnnounce = s; powerAnnounceT = 2.4; }
   function applyBossPower(pw?: string) {
@@ -629,9 +627,6 @@ export function startEncounter(opts: EncounterOpts): void {
     const pc = opts.potions ? opts.potions.count() : 0;
     ctx.fillStyle = pc > 0 ? '#cdb98a' : '#5a5266'; ctx.font = 'bold 13px ui-monospace'; ctx.textBaseline = 'middle';
     ctx.fillText(`🧪 ×${pc}  (P)`, hx + hw + 14, hy + 7); ctx.textBaseline = 'alphabetic';
-    // flee hint
-    ctx.fillStyle = '#6f6688'; ctx.font = '11px ui-monospace'; ctx.textAlign = 'right';
-    ctx.fillText('F to flee', W - 18, cv.height - 16); ctx.textAlign = 'left';
     // boss power-state chips (top-centre) so the player always knows what's active
     const chips: [string, string][] = [];
     if (robBlaster) chips.push(['⚡ Blaster', '#ff8a2a']);

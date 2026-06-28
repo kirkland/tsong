@@ -2319,7 +2319,7 @@ export function startWorld(net: WorldNet): void {
       window.clearInterval(timer); talkOpen = false; npcAdvance = null; npcClose = null;
       npcBox.style.display = 'none'; npcChoices.style.display = 'none'; npcPortrait.style.display = 'none';
       const clarence = DUNGEON_MOBS.find((m) => m.id === 'clarence'); // → the fight, on the battle theme
-      triggerEncounter({ mob: clarence, song: '/battle.mp3', winPotions: 5, onWin: () => { clarenceDefeated = true; clarenceSprite?.destroy(); clarenceSprite = null; const sc = petScene; if (sc) buildFloor(sc); } }); // fleeWins is TEMP for testing; rebuild → the chamber's chests appear
+      triggerEncounter({ mob: clarence, song: '/battle.mp3', winPotions: 5, onWin: () => { clarenceDefeated = true; clarenceSprite?.destroy(); clarenceSprite = null; const sc = petScene; if (sc) buildFloor(sc); } }); // rebuild → the chamber's reward chests appear
     }
     npcClose = closeTalk;
     showPage();
@@ -2442,7 +2442,7 @@ export function startWorld(net: WorldNet): void {
   let encounterPending = false; // a battle is being set up (snapshot in flight) — block re-triggering
   // A tall-grass encounter: pause the dungeon theme and drop into a Pong duel vs a mob. `cfg` lets a
   // "monster box" chest force a specific mob, mark it capturable, and route its reward through the chest.
-  type EncounterCfg = { mob?: (typeof DUNGEON_MOBS)[number]; capturable?: boolean; chestId?: string; chestC?: number; chestR?: number; coins?: [number, number]; song?: string; winPotions?: number; onWin?: () => void; fleeWins?: boolean };
+  type EncounterCfg = { mob?: (typeof DUNGEON_MOBS)[number]; capturable?: boolean; chestId?: string; chestC?: number; chestR?: number; coins?: [number, number]; song?: string; winPotions?: number; onWin?: () => void };
   function triggerEncounter(cfg?: EncounterCfg) {
     if (isEncounterOpen() || encounterPending) return;
     encounterPending = true;
@@ -2477,7 +2477,7 @@ export function startWorld(net: WorldNet): void {
           if (r.result === 'capture' && cfg?.chestId) {            // caught it → server grants the pet (run-scoped)
             markBox(); net.dungeonChest(cfg.chestId, true);
             showToast(`🎉 Gotcha! The ${mob.name} is yours — escape the Ruins to keep it!`);
-          } else if (r.result === 'win' || (r.result === 'flee' && cfg?.fleeWins)) { // TEMP: flee counts as a win for the Clarence boss (testing)
+          } else if (r.result === 'win') {
             if (cfg?.chestId) {                                    // killed the box-mob → server pays the chest's coins
               markBox(); net.dungeonChest(cfg.chestId);
               showToast(`📦 You smashed it! ${cfg.coins?.[0] ?? 0}🪙 — escape to keep!`);
