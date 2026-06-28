@@ -370,8 +370,8 @@ export type BotLevel = (typeof BOT_LEVELS)[number];
 export const WORLD: { w: number; h: number; spawnX: number; spawnY: number } = {
   w: 4800, // widened east to make room for Robville, the suburban neighborhood (see WORLD_PARCELS)
   h: 2200,
-  spawnX: 1600,
-  spawnY: 1240,
+  spawnX: 1700, // just in front of the Arena (x1425–1775, y345–595), framing the Ruins (x1850+) to the right
+  spawnY: 700,
 };
 export const WORLD_AVATAR = {
   r: 16,        // avatar body radius, world units
