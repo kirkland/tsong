@@ -1660,6 +1660,7 @@ export class Lobby {
   /** Wander netizen avatars and fan everyone's positions out. Called every tick by broadcast();
    *  throttled to ~15 Hz. Also runs when no humans are in the world to keep netizens moving. */
   broadcastWorld() {
+    if (this.world.size === 0) return; // nobody's in the world → don't simulate netizens or send anything
     const now = Date.now();
     const dt = 1 / 60;
     const speed = 64;
@@ -1699,7 +1700,6 @@ export class Lobby {
         }
       }
     }
-    if (this.world.size === 0) return; // no humans to send to
     if (++this.worldBcTick % Lobby.WORLD_BROADCAST_EVERY !== 0) return;
     const data = JSON.stringify({ type: 'world', avatars: this.worldAvatars() });
     for (const ws of this.world.sockets()) {
