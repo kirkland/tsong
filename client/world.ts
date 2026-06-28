@@ -2242,14 +2242,14 @@ export function startWorld(net: WorldNet): void {
   // --- weekly objectives (top-left panel + reward toast) ---
   // `progress` (optional) returns "[done, total]" for objectives that count toward a goal (e.g.
   // winning 10 games) so the panel can show "(7/10)".
-  interface Objective { id: string; label: string; reward: number; done: boolean; progress?: () => [number, number] }
+  interface Objective { id: string; label: string; reward: number; done: boolean; progress?: () => [number, number]; hideProgress?: boolean }
   const PONG_WINS_KEY = 'tsong.world.pongWins'; // bumped by main.ts on each match win
   const pongWins = () => { try { return parseInt(localStorage.getItem(PONG_WINS_KEY) || '0', 10) || 0; } catch { return 0; } };
   const objectives: Objective[] = [
     { id: 'find-waldo', label: 'Find Waldo', reward: 400, done: false },
     { id: 'give-banana', label: 'Give Kevin a banana', reward: 400, done: false },
     { id: 'win-ten', label: 'Win 10 tsong games', reward: 1000, done: false, progress: () => [Math.min(pongWins(), 10), 10] },
-    { id: 'ruins-chests', label: 'Open every chest in the Ruins', reward: 50000, done: false, progress: () => [chestsFound(), DUNGEON_TOTAL_CHESTS] },
+    { id: 'ruins-chests', label: 'Open every chest in the Ruins', reward: 50000, done: false, progress: () => [chestsFound(), DUNGEON_TOTAL_CHESTS], hideProgress: true },
   ];
   const questKey = (id: string) => `tsong.world.quest.${id}`;
   for (const o of objectives) { try { o.done = localStorage.getItem(questKey(o.id)) === '1'; } catch { /* ignore */ } }
@@ -2263,7 +2263,7 @@ export function startWorld(net: WorldNet): void {
       box.textContent = o.done ? '☑' : '☐';
       box.style.cssText = `font-size:15px;color:${o.done ? '#6bd06b' : '#9fb0d8'};`;
       const lab = document.createElement('span');
-      const prog = !o.done && o.progress ? ` (${o.progress()[0]}/${o.progress()[1]})` : '';
+      const prog = !o.done && o.progress && !o.hideProgress ? ` (${o.progress()[0]}/${o.progress()[1]})` : '';
       lab.textContent = o.label + prog;
       if (o.done) lab.style.textDecoration = 'line-through';
       const rew = document.createElement('span');
@@ -4817,7 +4817,6 @@ export function startWorld(net: WorldNet): void {
       else if (coins) showToast(`📦 ${coins}🪙 added to your purse — escape to keep it!`);
       // spin chests (coins:0/potions:0) say nothing here — the wheel + its own toast handle it
       updateDungeonHud(); updateDungeonControls();
-      renderObjectives(); // live-update the "open every chest" progress count (completion still only on escape)
     },
     dungeonSpinLoot(reward) {
       if (reward.kind === 'item') { lootItems.push({ item: reward.item, name: reward.name }); }
