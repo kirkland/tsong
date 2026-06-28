@@ -737,7 +737,7 @@ const net = connect(
     } else if (msg.type === 'dungeonChests') {
       worldMod?.feedDungeonChests(msg.opened);
     } else if (msg.type === 'dungeonChestOpened') {
-      worldMod?.dungeonChestAccepted(msg.chest, msg.coins, msg.potions, msg.spin, msg.prize);
+      worldMod?.dungeonChestAccepted(msg.chest, msg.coins, msg.potions, msg.spin, msg.prize, msg.prizes);
     } else if (msg.type === 'dungeonSpin') {
       // a spin chest: play the wheel right here in the dungeon; the reward drops into the run loot
       worldMod?.dungeonSpinLoot(msg.reward); // record it for the loot panel (coins also flow via dungeonPurse)

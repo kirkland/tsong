@@ -995,7 +995,7 @@ export class Lobby {
 
   // World "weekly objective" rewards, in coins (NOT win-units — these are paid as-is, not ×COIN_SCALE).
   // Granted once per player per quest (tracked in-memory for the server's lifetime), paid from the House.
-  private static QUEST_REWARDS: Record<string, number> = { 'find-waldo': 400, 'give-banana': 400, 'win-ten': 1000 };
+  private static QUEST_REWARDS: Record<string, number> = { 'find-waldo': 400, 'give-banana': 400, 'win-ten': 1000, 'ruins-chests': 50000 };
   private claimedQuests = new Set<string>(); // `${pid}:${quest}`
   questClaim(ws: WebSocket, quest: string) {
     const conn = this.conns.get(ws);
@@ -1097,14 +1097,14 @@ export class Lobby {
     const coins = contents.coins ?? 0, potions = contents.potions ?? 0;
     if (coins > 0) this.dungeonPurse.set(conn.pid, (this.dungeonPurse.get(conn.pid) ?? 0) + coins);
     let prizeName: string | undefined;
-    if (contents.cosmetic) { // a cosmetic prize (truck, skin, …) → bank as a run-item, granted on escape
-      const def = COSMETICS.find((c) => c.id === contents.cosmetic);
-      prizeName = def?.name ?? 'a prize';
-      const list = this.dungeonRunItems.get(conn.pid) ?? [];
-      list.push({ item: contents.cosmetic, name: prizeName });
-      this.dungeonRunItems.set(conn.pid, list);
-    }
-    this.tell(ws, { type: 'dungeonChestOpened', chest, coins, potions, spin: false, prize: prizeName });
+    const grantCosmetic = (id: string) => { // bank a cosmetic as a run-item (granted on escape)
+      const def = COSMETICS.find((c) => c.id === id), name = def?.name ?? 'a prize';
+      const list = this.dungeonRunItems.get(conn.pid!) ?? []; list.push({ item: id, name });
+      this.dungeonRunItems.set(conn.pid!, list); return name;
+    };
+    if (contents.cosmetic) prizeName = grantCosmetic(contents.cosmetic); // a single cosmetic prize (truck, skin, …)
+    const prizes = contents.items?.map(grantCosmetic);                   // a multi-item haul (the boss reward)
+    this.tell(ws, { type: 'dungeonChestOpened', chest, coins, potions, spin: false, prize: prizeName, prizes });
     this.sendPurse(ws, conn.pid);
   }
   // A spin chest: roll the wheel server-side, drop the reward into the RUN loot (coins → purse,

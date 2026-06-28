@@ -229,6 +229,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   // is NOT buyable — it's unlocked only by clearing the campaign.
   { id: 'davisslayer', name: '🏆 Davis Slayer', slot: 'title', price: 0, locked: 'campaign' },
   { id: 'flawless', name: '💯 Flawless', slot: 'title', price: 0, locked: 'campaign' }, // perfect campaign run only
+  { id: 'title-pindropper', name: '📍 Pin Dropper', slot: 'title', price: 0, locked: 'dungeon' }, // beat Rob, the final boss
   { id: 'bigcatch', name: '🐟 Big Catch', slot: 'title', price: 0, locked: 'fishing_rare' }, // land a rare-or-better fish
   { id: 'angler', name: '🎣 Angler', slot: 'title', price: 0, locked: 'fishing' }, // land a legendary fish
   { id: 'clown', name: '🤡 Clown', slot: 'title', price: 1000 },
@@ -248,6 +249,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'aurora', name: 'Aurora', slot: 'skin', price: 10000 },
   { id: 'skin-hotdog', name: '🌭 Hot Dog', slot: 'skin', price: 0, locked: 'dungeon' }, // a Ruins chest prize
   { id: 'skin-prism', name: '💠 Prism', slot: 'skin', price: 0, locked: 'dungeon' }, // a Ruins chest prize (B5, post-Clarence)
+  { id: 'skin-globe', name: '🌍 Globe', slot: 'skin', price: 0, locked: 'dungeon' }, // the Rob boss prize
   // Trails
   { id: 'stardust', name: 'Stardust', slot: 'trail', price: 5000 },
   { id: 'inferno', name: 'Inferno', slot: 'trail', price: 8000 },
@@ -267,6 +269,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'song-davis', name: 'davis boss theme', slot: 'song', price: 30000, audio: '/davis-battle.mp3' },
   { id: 'song-everlong', name: '🎸 Everlong (8-bit)', slot: 'song', price: 0, locked: 'dungeon', audio: '/everlong.mp3' }, // a Ruins chest prize (B4)
   { id: 'song-encounter', name: '⚔️ Encounter Theme', slot: 'song', price: 0, locked: 'dungeon', audio: '/encounter.mp3' }, // a Ruins chest prize (B5)
+  { id: 'song-inthend', name: '🎧 In The End (8-bit)', slot: 'song', price: 0, locked: 'dungeon', audio: '/inthend.mp3' }, // Rob's anthem — a boss prize
   // Cars — drive them around the World map (slot 'car'; physics/look live in CARS above).
   { id: 'car-coupe', name: '🚗 Coupe', slot: 'car', price: 8000 },
   { id: 'car-drifter', name: '🏎️ Drift King', slot: 'car', price: 20000 },
@@ -277,6 +280,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'pet-pikachu', name: '⚡ Pikachu', slot: 'pet', price: 100000 },
   { id: 'pet-pacman', name: '🟡 Pac-Man', slot: 'pet', price: 150000 },
   { id: 'pet-slime', name: '🟢 Crypt Slime', slot: 'pet', price: 0, locked: 'dungeon' }, // caught in the Ruins (B4 monster box)
+  { id: 'pet-dragon', name: '🐉 Dragon', slot: 'pet', price: 0, locked: 'dungeon' }, // the Rob boss prize — flies around you
   // New common loot-box refresh items
   { id: 'beret', name: 'Beret', slot: 'hat', price: 1000 },
   { id: 'catears', name: 'Cat Ears', slot: 'hat', price: 2000 }, // animated
@@ -407,12 +411,13 @@ export function carById(id: string | null | undefined): CarSpec | null {
 // follows you around (unlike a car, which replaces/IS the avatar while driving). A pet id
 // matches a COSMETICS entry with slot 'pet'. `kind` selects the custom drawn sprite in the
 // World renderer; `emoji` is just the small shop-tile preview glyph.
-export type PetKind = 'rock' | 'pikachu' | 'pacman' | 'slime';
+export type PetKind = 'rock' | 'pikachu' | 'pacman' | 'slime' | 'dragon';
 export const PETS: readonly { id: string; emoji: string; kind: PetKind }[] = [
   { id: 'pet-rock', emoji: '🪨', kind: 'rock' },       // a googly-eyed rock
   { id: 'pet-pikachu', emoji: '⚡', kind: 'pikachu' },  // Pikachu
   { id: 'pet-pacman', emoji: '🟡', kind: 'pacman' },    // Pac-Man, chomping as it follows
   { id: 'pet-slime', emoji: '🟢', kind: 'slime' },     // a Crypt Slime caught in the Ruins
+  { id: 'pet-dragon', emoji: '🐉', kind: 'dragon' },   // a dragon that flies around you (Rob boss prize)
 ];
 export function petById(id: string | null | undefined) {
   if (!id) return null;
@@ -464,7 +469,7 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
 // --- The Ruins dungeon economy: SERVER-AUTHORITATIVE so a tampered client can't mint coins. ---
 // Chests keyed by 'floor:col,row'. The server pays a chest's coins (from the House) the first time
 // a given player opens it, and tracks opened chests per account.
-export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potions?: number; spin?: boolean; cosmetic?: string; needsKey?: boolean; monster?: string; pet?: string }> = {
+export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potions?: number; spin?: boolean; cosmetic?: string; needsKey?: boolean; monster?: string; pet?: string; items?: string[] }> = {
   'B1:18,2': { cosmetic: 'mushroom' }, // 🍄 Mushroom Cap hat — the first-floor cosmetic
   'B1:9,9': { potions: 1 },
   // B2 — a free wheel-spin chest, a potion, a coin chest, plus the SEALED locked-room prize (34,24).
@@ -489,6 +494,8 @@ export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potions?: 
   'B5:32,5': { cosmetic: 'song-encounter' }, // ⚔️ the Encounter battle theme (Clarence already drops potions)
   'B5:37,5': { coins: 5000 },                // the deepest coin haul in the Ruins
   'B5:42,5': { cosmetic: 'skin-prism' },     // 💠 Prism paddle skin
+  // B6 — the final boss reward (granted on beating Rob; once per account). Not a findable tile chest.
+  'B6:boss': { coins: 50000, items: ['song-inthend', 'title-pindropper', 'skin-globe', 'pet-dragon'] },
 };
 // Encounter-win payout keyed by the MOB'S TIER [min, max], not the floor. The server picks the amount
 // from the tier's range (it never trusts a client-sent number) after checking the tier is legal here.
@@ -1332,7 +1339,7 @@ export type ServerMsg =
   | LoanBookMsg
   | WorldMsg
   | { type: 'dungeonChests'; opened: string[] } // chests this player has opened (reply to dungeonSync)
-  | { type: 'dungeonChestOpened'; chest: string; coins: number; potions: number; spin?: boolean; prize?: string } // a chest open was accepted (prize = display name of a cosmetic reward)
+  | { type: 'dungeonChestOpened'; chest: string; coins: number; potions: number; spin?: boolean; prize?: string; prizes?: string[] } // a chest open was accepted (prize/prizes = display names of cosmetic rewards)
   | { type: 'dungeonSpin'; chest: string; segment: number; reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string } } // a spin chest: play the wheel, reward goes to run loot
   | { type: 'dungeonPurse'; coins: number } // current run-purse total (paid out only on a clean escape)
   | LandMsg

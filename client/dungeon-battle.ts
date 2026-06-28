@@ -810,7 +810,9 @@ export function startEncounter(opts: EncounterOpts): void {
         phase = 'maptap'; phaseT = 0;
         if (document.pointerLockElement === cv) document.exitPointerLock();
         song.pause();
-        const pl = randomPlace();
+        // Rob's three drops, in order of cruelty: Alabama → somewhere in Russia → Tonga (good luck)
+        const ROB_Q = [{ name: 'Alabama', lat: 32.8, lon: -86.8 }, { name: 'Novosibirsk, Russia', lat: 55.0, lon: 82.9 }, { name: 'Tonga', lat: -21.2, lon: -175.2 }];
+        const pl = ROB_Q[bossCheckpoints - 1] ?? randomPlace();
         askMapTap({
           prompt: pl.name, lat: pl.lat, lon: pl.lon, onDone: (correct) => {
             if (!correct) { mapPenalty += 10; flashT = 0.8; tone(150, 0.45, 'sawtooth', 0.2, 64); } // a wrong guess HURTS

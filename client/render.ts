@@ -756,9 +756,35 @@ function fillPrism(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: num
   skinHighlight(ctx, cx, cy, h);
   ctx.restore();
 }
+// Globe: a little rotating earth — deep-blue oceans with green landmasses scrolling by, faint latitude
+// lines, and a curved specular sheen. (The Rob boss prize.)
+function fillGlobe(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
+  const x = cx - PADDLE.w / 2, y = cy - h / 2, w = PADDLE.w, t = performance.now() / 1000;
+  const ocean = ctx.createLinearGradient(x, 0, x + w, 0);
+  ocean.addColorStop(0, '#0e2f5e'); ocean.addColorStop(0.45, '#1b6fc0'); ocean.addColorStop(1, '#0c2a55');
+  ctx.fillStyle = ocean; ctx.fillRect(x, y, w, h);
+  // green landmasses scrolling upward → the globe "spins"
+  ctx.fillStyle = '#3f9a4a';
+  const scroll = (t * 13) % h;
+  for (const [fx, fy, bw, bh] of [[0.32, 0.08, 6, 9], [0.68, 0.4, 5, 7], [0.42, 0.72, 7, 8], [0.6, 1.0, 5, 6], [0.28, 1.28, 6, 7]] as const) {
+    const by = y + (((fy * h - scroll) % h) + h) % h;
+    ctx.beginPath(); ctx.ellipse(x + fx * w, by, bw * w / 16, bh, 0, 0, 7); ctx.fill();
+  }
+  // faint latitude lines + a left-edge sheen for a spherical read
+  ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.lineWidth = 1;
+  for (let yy = y + 7; yy < y + h; yy += 11) { ctx.beginPath(); ctx.moveTo(x, yy); ctx.lineTo(x + w, yy); ctx.stroke(); }
+  const hl = ctx.createLinearGradient(x, 0, x + w, 0);
+  hl.addColorStop(0, 'rgba(255,255,255,.4)'); hl.addColorStop(0.35, 'rgba(255,255,255,0)');
+  ctx.fillStyle = hl; ctx.fillRect(x, y, w, h);
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
+}
 const SKIN_RENDERERS: Record<string, CosmeticDraw> = {
   'skin-hotdog': fillHotdog,
   'skin-prism': fillPrism,
+  'skin-globe': fillGlobe,
   rainbow: fillRainbow,
   gold: fillGold,
   chrome: fillChrome,

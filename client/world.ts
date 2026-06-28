@@ -49,6 +49,7 @@ import {
   STOCKS,
   DUNGEON_TIER_COINS,
   DUNGEON_CHEST_CONTENTS,
+  COSMETICS,
 } from '../shared/types';
 
 // What the world needs from the rest of the app. main.ts supplies these (see startWorld call).
@@ -92,7 +93,7 @@ interface Controller {
   feedLand(parcels: LandParcelView[], bankBought: number, bankCap: number): void; // Robville land book
   reenter(): void; // re-send worldEnter after a socket reconnect (server forgot us on drop)
   dungeonChests(opened: string[]): void;                          // server's list of chests we've opened
-  chestAccepted(chest: string, coins: number, potions: number, spin?: boolean, prize?: string): void; // server accepted a chest open (prize = cosmetic name)
+  chestAccepted(chest: string, coins: number, potions: number, spin?: boolean, prize?: string, prizes?: string[]): void; // server accepted a chest open (prize/prizes = cosmetic names)
   dungeonSpinLoot(reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string }): void; // a spin chest's reward → run loot
   dungeonPurse(coins: number): void;                              // current run-purse total from the server
 }
@@ -119,8 +120,8 @@ export function feedDungeonChests(opened: string[]): void {
 }
 
 /** The server accepted a chest open (added the coins to the run purse / granted the potion). */
-export function dungeonChestAccepted(chest: string, coins: number, potions: number, spin?: boolean, prize?: string): void {
-  controller?.chestAccepted(chest, coins, potions, spin, prize);
+export function dungeonChestAccepted(chest: string, coins: number, potions: number, spin?: boolean, prize?: string, prizes?: string[]): void {
+  controller?.chestAccepted(chest, coins, potions, spin, prize, prizes);
 }
 export function dungeonSpinLoot(reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string }): void {
   controller?.dungeonSpinLoot(reward);
@@ -374,7 +375,7 @@ const DUNGEON_B6 = [
   '##################',
 ];
 const DUNGEON_FLOORS: Record<string, string[]> = { B1: DUNGEON_B1, B2: DUNGEON_B2, B3: DUNGEON_B3, B4: DUNGEON_B4, B5: DUNGEON_B5, B6: DUNGEON_B6 };
-const DUNGEON_TOTAL_CHESTS = Object.keys(DUNGEON_CHEST_CONTENTS).length; // for the x/y "chests found" counter
+const DUNGEON_TOTAL_CHESTS = Object.keys(DUNGEON_CHEST_CONTENTS).filter((k) => !k.endsWith(':boss')).length; // for the x/y counter (the boss reward isn't a tile chest)
 // Locked 'L' doors → the chest they guard. A door stays open FOREVER once that chest is account-opened
 // (committed), exactly like the chest itself — no need to re-key it on later runs.
 const DUNGEON_LOCKED_DOORS: Record<string, string> = { 'B2:32,24': 'B2:34,24' };
@@ -1738,7 +1739,7 @@ export function startWorld(net: WorldNet): void {
     dungeonChestCounter.style.display = 'block';
     updateDungeonHud(); updateDungeonControls();
   }
-  const chestsFound = () => [...openedChestsServer].filter((id) => DUNGEON_CHEST_CONTENTS[id]).length;
+  const chestsFound = () => [...openedChestsServer].filter((id) => DUNGEON_CHEST_CONTENTS[id] && !id.endsWith(':boss')).length;
   function updateDungeonHud() {
     dungeonBanner.textContent = `🏚️ THE RUINS · ${currentFloor}   ·   ❤️ ${Math.round(dungeonHP)}   ·   🧪 ${potionCount}`
       + (dungeonPurseDisplay ? `   ·   💰 ${dungeonPurseDisplay}🪙 (escape to keep!)` : '');
@@ -1896,17 +1897,53 @@ export function startWorld(net: WorldNet): void {
       npcBox.style.display = 'none'; npcChoices.style.display = 'none'; npcChoices.replaceChildren(); npcPortrait.style.display = 'none'; nearRob = false;
       // the dialogue's over → the duel. Beating Rob conquers the Ruins (escape with everything).
       const rob = DUNGEON_MOBS.find((m) => m.id === 'rob');
-      triggerEncounter({
-        mob: rob, song: '/inthend.mp3',
-        onWin: () => {
-          robDefeated = true; robBoss?.sprite.destroy(); robBoss = null;
-          showToast('🏆 You beat Rob — the Ruins are conquered! Banking your haul…');
-          window.setTimeout(() => leaveDungeon(true), 1900);
-        },
-      });
+      triggerEncounter({ mob: rob, song: '/inthend.mp3', onWin: robVictory });
     }
     npcClose = closeTalk;
     showPage();
+  }
+  // Beat Rob → his defeated monologue, then a big "spoils" GUI, then the prizes are granted + you escape.
+  function robVictory() {
+    robDefeated = true; robBoss?.sprite.destroy(); robBoss = null;
+    const pages = [
+      '…Hah. Beaten. In my own office. By someone who kicked the door in mid-drop.',
+      'You want to know the worst part? It was never about the interruption. Out there, everyone wants something from me. In here it was just me, a blank globe, and a name to find. The one thing that was mine.',
+      'And you took even that. …Go on. Take whatever you came down here for. I have a daily to re-run anyway.',
+      "But for the record? It's still Canberra. It is ALWAYS Canberra.",
+    ];
+    talkOpen = true; keys.clear(); joyActive = false; prompt.style.display = 'none';
+    npcName.textContent = 'Rob'; npcBox.style.display = 'block'; npcChoices.style.display = 'none';
+    if (!npcPortrait.src.endsWith('/dungeon/mob_rob.png')) npcPortrait.src = '/dungeon/mob_rob.png';
+    npcPortrait.style.display = 'block';
+    let pageI = 0, typing = false, timer = 0, full = '';
+    function showPage() {
+      const text = pages[pageI];
+      if (text === undefined) { closeTalk(); return; }
+      full = text; let shown = 0; typing = true; npcText.textContent = ''; npcHint.style.display = 'none';
+      timer = window.setInterval(() => { shown++; npcText.textContent = full.slice(0, shown); if (shown % 2 === 0) textBlip(); if (shown >= full.length) { window.clearInterval(timer); typing = false; npcHint.style.display = 'block'; } }, 30);
+    }
+    npcAdvance = () => { if (typing) { window.clearInterval(timer); typing = false; npcText.textContent = full; npcHint.style.display = 'block'; return; } pageI++; if (pageI >= pages.length) closeTalk(); else showPage(); };
+    function closeTalk() { window.clearInterval(timer); talkOpen = false; npcAdvance = null; npcClose = null; npcBox.style.display = 'none'; npcPortrait.style.display = 'none'; showBossRewards(); }
+    npcClose = closeTalk; showPage();
+  }
+  // The big "THE RUINS — CONQUERED" spoils screen: victory fanfare + every reward listed, click to claim.
+  function showBossRewards() {
+    try { const f = new Audio('/victory.mp3'); f.volume = 0.85; f.play().catch(() => {}); } catch { /* ignore */ }
+    const reward = DUNGEON_CHEST_CONTENTS['B6:boss'];
+    const rows = [`💰 ${(reward?.coins ?? 0).toLocaleString()} coins`];
+    for (const id of reward?.items ?? []) rows.push(COSMETICS.find((c) => c.id === id)?.name ?? id);
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'position:fixed;inset:0;z-index:100003;background:radial-gradient(circle at 50% 35%,#1a1330ee,#05030cf2);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;font-family:ui-monospace,Menlo,monospace;';
+    const h = document.createElement('div'); h.textContent = '🏆 THE RUINS — CONQUERED'; h.style.cssText = 'font-size:30px;font-weight:900;color:#ffd24a;text-shadow:0 2px 10px #000;letter-spacing:1px;';
+    const sub = document.createElement('div'); sub.textContent = 'You beat Rob. Your spoils:'; sub.style.cssText = 'font-size:14px;color:#b9c4e6;margin-bottom:4px;';
+    const box = document.createElement('div'); box.style.cssText = 'background:#0e1224;border:2px solid #3a508f;border-radius:14px;padding:16px 26px;display:flex;flex-direction:column;gap:9px;min-width:280px;';
+    for (const r of rows) { const row = document.createElement('div'); row.textContent = '✦ ' + r; row.style.cssText = 'font-size:17px;color:#eef2ff;font-weight:600;'; box.appendChild(row); }
+    const btn = document.createElement('button'); btn.type = 'button'; btn.textContent = '▶ Claim & climb out';
+    btn.style.cssText = 'margin-top:10px;cursor:pointer;background:#c0392b;color:#fff;border:none;border-radius:10px;padding:13px 26px;font-size:16px;font-weight:800;';
+    btn.onmouseenter = () => { btn.style.background = '#d8472f'; }; btn.onmouseleave = () => { btn.style.background = '#c0392b'; };
+    btn.onclick = () => { wrap.remove(); net.dungeonChest('B6:boss'); window.setTimeout(() => leaveDungeon(true), 300); };
+    wrap.append(h, sub, box, btn);
+    overlay.appendChild(wrap);
   }
   // a Pokémon-style "!" pops over your head + a two-note sting the instant the Gatekeeper notices you
   function exclaimAlert() {
@@ -2205,6 +2242,7 @@ export function startWorld(net: WorldNet): void {
     { id: 'find-waldo', label: 'Find Waldo', reward: 400, done: false },
     { id: 'give-banana', label: 'Give Kevin a banana', reward: 400, done: false },
     { id: 'win-ten', label: 'Win 10 tsong games', reward: 1000, done: false, progress: () => [Math.min(pongWins(), 10), 10] },
+    { id: 'ruins-chests', label: 'Open every chest in the Ruins', reward: 50000, done: false, progress: () => [chestsFound(), DUNGEON_TOTAL_CHESTS] },
   ];
   const questKey = (id: string) => `tsong.world.quest.${id}`;
   for (const o of objectives) { try { o.done = localStorage.getItem(questKey(o.id)) === '1'; } catch { /* ignore */ } }
@@ -3658,6 +3696,20 @@ export function startWorld(net: WorldNet): void {
     px(3, 4, 1, 2, 0x16210f); px(7, 4, 1, 2, 0x16210f);            // two beady eyes
     g.generateTexture('w-pet-slime', 12, 10);
 
+    // Dragon: a little red wyvern with spread bat-wings, a gold belly + horn (16×12). Flies above you.
+    {
+      const DR = 0x9a2a2a, DR_D = 0x6e1717, DR_L = 0xc23a3a, WING = 0x7a1f1f, BELLY = 0xd8a050, HORN = 0xe8d8b0, EYE = 0xffe14d;
+      g.clear();
+      px(0, 2, 5, 1, WING); px(1, 1, 3, 1, WING); px(0, 3, 6, 2, WING);          // left wing
+      px(11, 2, 5, 1, WING); px(12, 1, 3, 1, WING); px(10, 3, 6, 2, WING);       // right wing
+      px(6, 4, 4, 5, DR); px(6, 4, 4, 1, DR_L); px(7, 7, 2, 2, BELLY);           // body + belly
+      px(4, 2, 3, 3, DR); px(4, 2, 3, 1, DR_L); px(3, 3, 1, 1, DR);              // head
+      px(5, 1, 1, 1, HORN); px(5, 3, 1, 1, EYE); px(2, 3, 1, 1, DR_D);           // horn, eye, snout
+      px(10, 6, 2, 1, DR); px(12, 7, 2, 1, DR_D); px(14, 6, 1, 1, DR_L);         // tail
+      px(6, 9, 1, 1, DR_D); px(9, 9, 1, 1, DR_D);                                // feet
+      g.generateTexture('w-pet-dragon', 16, 12);
+    }
+
     // Pikachu: yellow body, black-tipped ears, red cheeks (14×16 texels).
     {
       const PK = 0xf6d020, PK_D = 0xe0b800, BLK = 0x1a1a1a, RED = 0xe23b3b, BRN = 0x9c6b1f;
@@ -4547,7 +4599,7 @@ export function startWorld(net: WorldNet): void {
       if (!ps || ps.id !== petId) {
         // First sight of this owner's pet (or it changed) — (re)create the custom sprite.
         if (ps) ps.sprite.destroy();
-        const tex = pet.kind === 'rock' ? 'w-pet-rock' : pet.kind === 'pikachu' ? 'w-pet-pikachu' : pet.kind === 'slime' ? 'w-pet-slime' : 'w-pet-pacman-0';
+        const tex = pet.kind === 'rock' ? 'w-pet-rock' : pet.kind === 'pikachu' ? 'w-pet-pikachu' : pet.kind === 'slime' ? 'w-pet-slime' : pet.kind === 'dragon' ? 'w-pet-dragon' : 'w-pet-pacman-0';
         const sprite = sc.add.image(ox, oy, tex).setScale(TEXEL).setOrigin(0.5, 0.6);
         ps = { sprite, id: petId, kind: pet.kind, x: ox, y: oy, lastX: ox, lastY: oy, chomp: 0 };
         petSprites.set(a.id, ps);
@@ -4565,6 +4617,10 @@ export function startWorld(net: WorldNet): void {
       ps.x += pvx * Math.min(1, dt * 8); // lazy chase so the pet lags + swings behind
       ps.y += pvy * Math.min(1, dt * 8);
       ps.lastX = ox; ps.lastY = oy;
+      if (ps.kind === 'dragon') { // a dragon FLIES: it hovers above you, bobbing on its wingbeats
+        const fly = 26 + Math.sin(performance.now() / 180 + ps.x) * 5;
+        ps.sprite.setPosition(ps.x, ps.y - fly).setDepth(ps.y + 5000).setFlipX(pvx < -0.05); // always on top; face travel
+      } else
       ps.sprite.setPosition(ps.x, ps.y).setDepth(ps.y); // depth-sort with everything else by y
 
       if (ps.kind === 'pacman') {
@@ -4745,14 +4801,16 @@ export function startWorld(net: WorldNet): void {
       updateDungeonHud(); // refresh the "📦 X/Y chests opened" counter now the banked list arrived
       updateNearBuilding();
     },
-    chestAccepted(chest, coins, potions, _spin, prize) {
+    chestAccepted(chest, coins, potions, _spin, prize, prizes) {
       openedChestsServer.add(chest);
       if (chest.startsWith(currentFloor + ':')) dungeonChestSprites[chest.slice(currentFloor.length + 1)]?.setTexture('w-chest-open');
+      if (prizes) for (const p of prizes) lootItems.push({ item: 'cosmetic', name: p }); // a multi-item haul (boss reward) → loot panel
       if (prize) { lootItems.push({ item: 'cosmetic', name: prize }); showToast(`📦✨ You found ${prize} — escape to keep it!`); }
       else if (potions > 0) { potionCount += potions; showToast(potions > 1 ? `📦 Found ${potions} 🧪 Potions!` : '📦 Found a 🧪 Potion!'); }
       else if (coins) showToast(`📦 ${coins}🪙 added to your purse — escape to keep it!`);
       // spin chests (coins:0/potions:0) say nothing here — the wheel + its own toast handle it
       updateDungeonHud(); updateDungeonControls();
+      checkProgressObjectives(); // may complete "open every chest in the Ruins"
     },
     dungeonSpinLoot(reward) {
       if (reward.kind === 'item') { lootItems.push({ item: reward.item, name: reward.name }); }

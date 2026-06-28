@@ -94,7 +94,10 @@ export function askMapTap(opts: { prompt: string; lat: number; lon: number; onDo
     const g = unproj(gx, gy, W, H);
     const km = haversineKm(g.lat, g.lon, opts.lat, opts.lon);
     const correct = km <= CORRECT_KM;
-    const tp = proj(opts.lon, opts.lat, W, H);
+    // draw the true pin on whichever side of the antimeridian is nearest the guess (e.g. Tonga ≈ -175°
+    // appears beside New Zealand, not across the whole map). Scoring still uses the real longitude.
+    let dlon = opts.lon; if (dlon - g.lon > 180) dlon -= 360; else if (dlon - g.lon < -180) dlon += 360;
+    const tp = proj(dlon, opts.lat, W, H);
     // draw the line from guess → truth, both markers
     ctx.strokeStyle = correct ? '#7ed957' : '#ff5a4a'; ctx.lineWidth = 2; ctx.setLineDash([5, 5]);
     ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(tp.x, tp.y); ctx.stroke(); ctx.setLineDash([]);
