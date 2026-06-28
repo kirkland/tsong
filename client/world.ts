@@ -1774,9 +1774,9 @@ export function startWorld(net: WorldNet): void {
     if (!npcPortrait.src.endsWith('/dungeon/imp_portrait.png')) npcPortrait.src = '/dungeon/imp_portrait.png';
     npcPortrait.style.display = 'block'; // his portrait floats above the box
     let pageI = 0, typing = false, timer = 0, full = '';
-    const grantIfNeeded = () => { // he hands the potion over on his last line (once per run)
+    const grantIfNeeded = () => { // he hands the potions over on his last line (once per run)
       if (gave && pageI === pages.length - 1 && !impGavePotion) {
-        impGavePotion = true; potionCount += 1;
+        impGavePotion = true; potionCount += 3;
         tone(523, 0.08, 'square', 0.12, 784); window.setTimeout(() => tone(784, 0.13, 'square', 0.12, 1046), 80);
         updateDungeonHud(); updateDungeonControls();
       }
@@ -2198,6 +2198,7 @@ export function startWorld(net: WorldNet): void {
     const d = WORLD_BUILDINGS.find((b) => b.kind === 'dungeon');
     if (d) { selfX = d.x + d.w / 2; selfY = d.y + d.h + 44; } // step back out the doorway
     enterChime();
+    renderObjectives(); // refresh the count after committing/rolling back this run's opens
     if (escaped) checkProgressObjectives(); // only a clean escape banks chests → can complete "open every chest in the Ruins"
   }
   function openDialog(heading: string, sub: string, choices: { label: string; onPick: () => void }[]) {
@@ -4816,6 +4817,7 @@ export function startWorld(net: WorldNet): void {
       else if (coins) showToast(`📦 ${coins}🪙 added to your purse — escape to keep it!`);
       // spin chests (coins:0/potions:0) say nothing here — the wheel + its own toast handle it
       updateDungeonHud(); updateDungeonControls();
+      renderObjectives(); // live-update the "open every chest" progress count (completion still only on escape)
     },
     dungeonSpinLoot(reward) {
       if (reward.kind === 'item') { lootItems.push({ item: reward.item, name: reward.name }); }
