@@ -188,6 +188,9 @@ export class Game {
   // Power-ups. A target floats on the board; bouncing the ball over it grants its kind.
   target: { x: number; y: number; kind: PowerupKind } | null = null;
   growHits: Record<Side, number> = { left: 0, right: 0 };
+  // Permanent per-side paddle-size multiplier (NOT a power-up; survives clearPowerups). Defaults to 1
+  // so the live game is unaffected; the dungeon uses it for "big paddle" mobs like The Warden.
+  paddleScale: Record<Side, number> = { left: 1, right: 1 };
   shrinkHits: Record<Side, number> = { left: 0, right: 0 };
   smashHits: Record<Side, number> = { left: 0, right: 0 };
   curveHits: Record<Side, number> = { left: 0, right: 0 };
@@ -344,7 +347,7 @@ export class Game {
 
   /** Current paddle half-height for a side — grown/shrunk by active power-ups. */
   halfH(side: Side): number {
-    let h = PADDLE.h;
+    let h = PADDLE.h * this.paddleScale[side];
     if (this.growHits[side] > 0) h *= PADDLE_BOOST;
     if (this.shrinkHits[side] > 0) h *= PADDLE_SHRINK;
     return h / 2;

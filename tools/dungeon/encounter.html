@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TSONG Dungeon — Encounter Transition</title>
+<style>
+  :root { --ink:#e8e2f0; }
+  * { box-sizing:border-box; margin:0; }
+  html,body { height:100%; background:#000; color:var(--ink);
+              font:14px/1.4 ui-monospace,Menlo,Consolas,monospace; overflow:hidden; }
+  #stage { position:relative; width:100vw; height:100vh; }
+
+  /* ── the "walking in the dungeon" placeholder ── */
+  #world { position:absolute; inset:0; display:flex; flex-direction:column;
+           align-items:center; justify-content:center; gap:14px;
+           background:radial-gradient(circle at 50% 40%, #241d2e, #0d0b12 70%); }
+  #world h1 { color:#c9a227; letter-spacing:1px; font-size:16px; }
+  #world p { color:#9a90b0; }
+  .tile { width:46px; height:46px; border:1px solid #3a3450; background:#1b1726;
+          display:grid; place-items:center; font-size:22px; }
+  .hint { margin-top:18px; color:#6f6688; font-size:12px; }
+  kbd { background:#241d12; border:1px solid #342d45; border-radius:4px; padding:1px 6px; }
+
+  /* ── the battle scene revealed after the wipe ── */
+  #battle { position:absolute; inset:0; display:none;
+            background:linear-gradient(#15212a,#0a1016); }
+  /* court leaves HUD bands: top for the enemy box, bottom for your HP — never covered */
+  .court { position:absolute; top:92px; left:16px; right:16px; bottom:54px;
+           border:3px solid #2f4a5a; border-radius:6px;
+           background:repeating-linear-gradient(#0e1a22,#0e1a22 2px,#0c161d 2px,#0c161d 4px); }
+  .mid { position:absolute; left:50%; top:92px; bottom:54px; width:0;
+         border-left:3px dashed #2f4a5a; }
+  .paddle { position:absolute; width:12px; height:84px; border-radius:4px; }
+  .pL { left:7%; background:#5ad1c0; box-shadow:0 0 16px #5ad1c0aa; }
+  .pR { right:7%; background:#e0683e; box-shadow:0 0 16px #e0683eaa; }
+  .ball { position:absolute; width:16px; height:16px; border-radius:50%;
+          background:#fff; box-shadow:0 0 14px #fff; }
+
+  /* enemy box — lives in the TOP HUD band (above the court), so it never covers play */
+  .profile { position:absolute; top:12px; right:16px; height:68px; padding:8px 14px;
+             display:flex; align-items:center; gap:12px;
+             background:#0c0a12ee; border:2px solid #c9a227; border-radius:10px;
+             box-shadow:0 6px 30px #000a; }
+  .profile .port { font-size:34px; filter:drop-shadow(0 2px 6px #000); }
+  .profile .nm { font-size:16px; color:#fff; }
+  .profile .pips { display:flex; gap:5px; margin-top:5px; }
+  .pip { width:15px; height:15px; border-radius:50%; background:#d23a3a;
+         border:1px solid #00000060; }
+  .pip.gone { background:#3a2030; }
+  .gimmick { font-size:11px; color:#c9a227; max-width:150px; }
+  .gimmick b { color:#fff; }
+
+  /* your HP — bottom HUD band, Pokémon-style bottom-right */
+  .hp { position:absolute; right:16px; bottom:14px; width:240px; }
+  .hp .lab { font-size:11px; color:#9a90b0; margin-bottom:3px; }
+  .hp .bar { height:14px; background:#2a1620; border:2px solid #5a2530; border-radius:8px;
+             overflow:hidden; }
+  .hp .fill { height:100%; width:78%; background:linear-gradient(#46d06a,#2f8f4b); }
+
+  /* "A wild X appeared!" — top-left of the HUD band, fades after a beat */
+  .banner { position:absolute; left:16px; top:24px; font-size:18px; color:#fff;
+            text-shadow:0 2px 0 #000, 0 0 14px #c9a227; transition:opacity .6s; }
+
+  /* ── transition curtain: flashes + sliding bars ── */
+  #curtain { position:absolute; inset:0; pointer-events:none; display:none; z-index:10; }
+  #flash { position:absolute; inset:0; background:#fff; opacity:0; }
+  .bars { position:absolute; inset:0; }
+  .bar { position:absolute; left:0; width:100%; background:#000; transform:translateX(-101%); }
+
+  #replay { position:absolute; left:50%; bottom:24px; transform:translateX(-50%); z-index:20;
+            padding:8px 14px; background:#1d1828; color:#c9a227; border:1px solid #c9a227;
+            border-radius:8px; font:inherit; cursor:pointer; display:none; }
+
+  /* "win the battle" button shown in the mock court */
+  #winBtn { position:absolute; left:50%; bottom:64px; transform:translateX(-50%); z-index:8;
+            padding:10px 18px; background:#21305a; color:#e8eefc; border:2px solid #4a64a0;
+            border-radius:10px; font:inherit; font-weight:700; cursor:pointer; }
+
+  /* the World's exact npcBox dialogue (styling lifted from world.ts) */
+  #npcBox { position:absolute; left:50%; bottom:24px; transform:translateX(-50%);
+            width:min(92vw,720px); display:none; background:#0c1330ee; border:3px solid #e8eefc;
+            border-radius:14px; padding:18px 22px 20px; box-shadow:0 12px 40px #000a;
+            z-index:21; cursor:pointer; }
+  #npcName { position:absolute; top:-14px; left:18px; background:#e8b84b; color:#1a1408;
+             font-weight:800; font-size:14px; letter-spacing:.5px; padding:3px 12px;
+             border-radius:8px; box-shadow:0 3px 0 #00000033; }
+  #npcText { color:#eef2ff; font-size:18px; line-height:1.5; min-height:54px;
+             font-family:ui-monospace,monospace; }
+  #npcHint { position:absolute; right:16px; bottom:8px; color:#9fd1ff; font-size:15px;
+             animation:wBlink 1s steps(2) infinite; }
+  @keyframes wBlink { 0%,49%{opacity:.25} 50%,100%{opacity:1} }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div id="world">
+    <h1>TSONG DUNGEON — B2</h1>
+    <p>You step into the tall grass…</p>
+    <div class="tile">🚶</div>
+    <p class="hint">Press <kbd>Space</kbd> (or click) to step on an encounter tile</p>
+  </div>
+
+  <div id="battle">
+    <div class="court"></div>
+    <div class="mid"></div>
+    <div class="paddle pL" id="pL"></div>
+    <div class="paddle pR" id="pR"></div>
+    <div class="ball" id="ball"></div>
+    <div class="banner" id="banner"></div>
+    <div class="profile" id="profile"></div>
+    <div class="hp"><div class="lab">YOUR HP</div><div class="bar"><div class="fill"></div></div></div>
+    <button id="winBtn">🏓 Win the rally (to 3) ▶</button>
+  </div>
+
+  <!-- the World's npcBox, reused verbatim for the victory payout -->
+  <div id="npcBox"><div id="npcName">Victory!</div><div id="npcText"></div><div id="npcHint">▼</div></div>
+
+  <div id="curtain">
+    <div id="flash"></div>
+    <div class="bars" id="bars"></div>
+  </div>
+
+  <button id="replay">↻ encounter again</button>
+</div>
+
+<audio id="dungeon" src="../../client/public/dungeon.mp3" preload="auto" loop></audio>
+<audio id="song" src="../../client/public/encounter.mp3" preload="auto"></audio>
+<audio id="fanfare" src="../../client/public/victory.mp3" preload="auto"></audio>
+
+<script src="mobs.js"></script>
+<script>
+const $ = (s) => document.querySelector(s);
+const MOBS = (window.DUNGEON_MOBS || []).filter(m => !m.boss);
+const dungeon = $('#dungeon');
+const song = $('#song');
+const fanfare = $('#fanfare');
+let busy = false, exploring = false;
+dungeon.volume = 0.55;
+
+// ── World's exact audio synth (tone + textBlip), copied from world.ts so the
+//    text-box sounds are identical to the overworld. ──
+let actx = null;
+const ac = () => (actx ??= new (window.AudioContext || window.webkitAudioContext)());
+function tone(freq, dur, type, vol, slideTo) {
+  try {
+    const a = ac(), t = a.currentTime;
+    const o = a.createOscillator(), g = a.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t);
+    if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t + dur);
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
+    o.connect(g); g.connect(a.destination); o.start(t); o.stop(t + dur + 0.02);
+  } catch {}
+}
+const textBlip = () => tone(440, 0.04, 'square', 0.05, 720);   // world.ts textBlip
+const selectBlip = () => tone(660, 0.05, 'square', 0.12, 880); // world.ts selectBlip
+
+// Build the sliding bars once (alternating entry directions).
+const NBARS = 12, bars = $('#bars');
+for (let i = 0; i < NBARS; i++) {
+  const b = document.createElement('div');
+  b.className = 'bar';
+  b.style.top = (i * 100 / NBARS) + '%';
+  b.style.height = (100 / NBARS + 0.2) + '%';
+  b.dataset.dir = i % 2 ? '1' : '-1';
+  b.style.transform = `translateX(${(i % 2 ? 101 : -101)}%)`;
+  bars.appendChild(b);
+}
+const barEls = [...bars.children];
+const wait = (ms) => new Promise(r => setTimeout(r, ms));
+
+async function flash(times) {
+  const f = $('#flash');
+  for (let i = 0; i < times; i++) {
+    f.style.transition = 'none'; f.style.opacity = '1'; await wait(70);
+    f.style.transition = 'opacity 90ms'; f.style.opacity = '0'; await wait(90);
+  }
+}
+function setBars(covered) {
+  barEls.forEach(b => {
+    b.style.transition = 'transform 360ms cubic-bezier(.6,0,.4,1)';
+    b.style.transform = covered ? 'translateX(0)' : `translateX(${(+b.dataset.dir) * 101}%)`;
+  });
+}
+
+function buildProfile(mob) {
+  const g = mob.gimmick;
+  const banner = $('#banner');
+  banner.textContent = `A wild ${mob.name} appeared!`;
+  banner.style.opacity = '1';
+  setTimeout(() => { banner.style.opacity = '0'; }, 1800); // fade so it doesn't linger
+  $('#profile').innerHTML = `
+    <div class="port">${mob.portrait}</div>
+    <div><div class="nm">${mob.name}</div>
+      <div class="pips"><span class="pip"></span><span class="pip"></span><span class="pip"></span></div></div>
+    <div class="gimmick"><b>${g.name}</b> · <code>${g.powerup}</code></div>`;
+}
+
+// Ball/paddle idle animation so the mock court feels alive.
+let raf = null;
+function animateCourt() {
+  const stage = $('#stage'); const ball = $('#ball'); const pR = $('#pR'); const pL = $('#pL');
+  let t = 0;
+  (function loop() {
+    t += 0.016;
+    const W = stage.clientWidth, H = stage.clientHeight;
+    const L = 16, R = W - 16, T = 92, B = H - 54, cw = R - L, ch = B - T; // court rect
+    const bx = L + cw * (0.5 + 0.42 * Math.sin(t * 1.7));
+    const by = T + ch * (0.5 + 0.40 * Math.sin(t * 2.3));
+    ball.style.left = (bx - 8) + 'px'; ball.style.top = (by - 8) + 'px';
+    pR.style.top = (by - 42) + 'px';
+    pL.style.top = (T + ch * (0.5 + 0.34 * Math.sin(t * 2.3 - 0.6)) - 42) + 'px';
+    raf = requestAnimationFrame(loop);
+  })();
+}
+
+async function encounter() {
+  if (busy) return; busy = true;
+  $('#replay').style.display = 'none';
+  const mob = MOBS[Math.floor(Math.random() * MOBS.length)] || MOBS[0];
+
+  // 1) Battle music kicks in the instant the encounter fires; the dungeon theme PAUSES
+  //    in place (currentTime preserved) so it resumes from here after the fight.
+  dungeon.pause();
+  song.currentTime = 0; song.volume = 0.7; song.play().catch(() => {});
+
+  // 2) The transition: flashes → bars slam shut → swap scenes → bars reveal. (~2s)
+  $('#curtain').style.display = 'block';
+  await flash(4);                 // ~0.65s of strobing
+  setBars(true); await wait(420); // bars close to full black
+  buildProfile(mob);
+  $('#world').style.display = 'none';
+  $('#battle').style.display = 'block';
+  animateCourt();
+  await wait(180);
+  setBars(false); await wait(420); // bars slide away → battle revealed
+  $('#curtain').style.display = 'none';
+
+  $('#replay').style.display = 'block';
+  busy = false;
+}
+
+// ── Victory screen: fanfare + World npcBox payout, click-to-continue (Pokémon-style) ──
+let vAdvance = null;
+function victory() {
+  song.pause();
+  fanfare.currentTime = 0; fanfare.volume = 0.8; fanfare.play().catch(() => {});
+  $('#winBtn').style.display = 'none';
+
+  const coins = 150 + Math.floor(Math.random() * 151); // 150–300 per win
+  const gotItem = Math.random() < 0.35;
+  const pages = [`You won the battle!`, `Earned ${coins}🪙!`];
+  if (gotItem) pages.push(`Found a 🧪 Potion!`);
+
+  const box = $('#npcBox'), txt = $('#npcText'), hint = $('#npcHint');
+  box.style.display = 'block';
+  let pageI = 0, typing = false, timer = 0, full = '';
+
+  function showPage() {
+    full = pages[pageI]; let shown = 0; typing = true;
+    txt.textContent = ''; hint.style.display = 'none';
+    timer = setInterval(() => {
+      shown++; txt.textContent = full.slice(0, shown);
+      if (shown % 2 === 0) textBlip();
+      if (shown >= full.length) { clearInterval(timer); typing = false; hint.style.display = 'block'; }
+    }, 30);
+  }
+  vAdvance = () => {
+    if (typing) { clearInterval(timer); typing = false; txt.textContent = full; hint.style.display = 'block'; return; }
+    pageI++;
+    if (pageI >= pages.length) { box.style.display = 'none'; vAdvance = null; reset(); $('#replay').style.display = 'block'; }
+    else { selectBlip(); showPage(); }
+  };
+  showPage();
+}
+$('#npcBox').addEventListener('click', () => vAdvance?.());
+$('#winBtn').addEventListener('click', () => victory());
+
+function reset() {
+  cancelAnimationFrame(raf);
+  song.pause(); fanfare.pause();
+  // Resume the dungeon theme right where it paused (loops when it ends).
+  if (exploring) dungeon.play().catch(() => {});
+  $('#battle').style.display = 'none';
+  $('#world').style.display = 'flex';
+  $('#winBtn').style.display = 'block';
+  $('#replay').style.display = 'none';
+}
+
+// First interaction starts the dungeon theme (you're "exploring"); the next one trips an
+// encounter — so you can actually hear the music pause and resume across a battle.
+function worldAction() {
+  if (busy) return;
+  if (!exploring) {
+    exploring = true;
+    dungeon.currentTime = 0; dungeon.play().catch(() => {});
+    $('#world').querySelector('.hint').innerHTML =
+      '🎵 exploring… press <kbd>Space</kbd> again to hit an encounter';
+    $('#world').querySelector('p').textContent = 'The Mines of Narshe echo around you…';
+    return;
+  }
+  encounter();
+}
+
+addEventListener('keydown', (e) => {
+  if (e.code !== 'Space' && e.code !== 'Enter') return;
+  e.preventDefault();
+  if ($('#npcBox').style.display === 'block') { vAdvance?.(); return; }
+  if (busy) return;
+  if ($('#battle').style.display === 'block') victory();
+  else worldAction();
+});
+$('#world').addEventListener('click', worldAction);
+$('#replay').addEventListener('click', () => { reset(); encounter(); });
+</script>
+</body>
+</html>

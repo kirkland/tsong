@@ -13,6 +13,8 @@
     "start": "tsx server/index.ts",
     "typecheck": "tsc --noEmit",
     "conservation": "tsx scripts/conservation-check.ts",
+    "dungeon-check": "tsx scripts/dungeon-economy-check.ts",
+    "dungeon-bot": "node scripts/dungeon-bot.mjs",
     "listen": "tsx tools/listener/listen.ts",
     "mcp": "tsx tools/mcp/index.ts"
   },

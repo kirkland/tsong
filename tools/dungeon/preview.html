@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>TSONG Dungeon — Layout Previewer</title>
+<style>
+  :root { --bg:#0d0b12; --panel:#16131d; --ink:#e8e2f0; --muted:#9a90b0; --accent:#c9a227; }
+  * { box-sizing: border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink);
+              font:14px/1.45 ui-monospace,Menlo,Consolas,monospace; }
+  .wrap { display:flex; height:100%; }
+  .side { width:300px; flex:0 0 300px; background:var(--panel); padding:16px 18px;
+          overflow:auto; border-right:1px solid #2a2435; }
+  .main { flex:1; display:flex; flex-direction:column; align-items:center;
+          justify-content:center; gap:14px; padding:18px; overflow:auto; }
+  h1 { font-size:15px; margin:0 0 2px; letter-spacing:.5px; color:var(--accent); }
+  h2 { font-size:13px; margin:18px 0 6px; color:var(--muted); text-transform:uppercase;
+       letter-spacing:1px; font-weight:600; }
+  .sub { color:var(--muted); margin:0 0 10px; font-size:12px; }
+  canvas { image-rendering:pixelated; background:#000; border:1px solid #2a2435;
+           box-shadow:0 8px 40px #0008; }
+  .floors { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+  .fbtn { cursor:pointer; padding:6px 9px; border:1px solid #342d45; border-radius:6px;
+          background:#1d1828; color:var(--ink); font:inherit; }
+  .fbtn.active { border-color:var(--accent); color:var(--accent); background:#241d12; }
+  .meta { text-align:center; max-width:680px; }
+  .meta .name { font-size:18px; color:var(--accent); }
+  .meta .blurb { color:var(--muted); margin-top:4px; }
+  .legend { display:grid; grid-template-columns:auto 1fr; gap:4px 8px; align-items:center; }
+  .sw { width:18px; height:18px; border-radius:3px; border:1px solid #0006; display:inline-block; }
+  .warn { color:#e0683e; font-size:12px; margin-top:8px; }
+  .hint { color:var(--muted); font-size:11px; margin-top:14px; }
+  kbd { background:#241d12; border:1px solid #342d45; border-radius:4px; padding:0 5px; }
+  .stat { color:var(--muted); font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <aside class="side">
+    <h1>TSONG DUNGEON</h1>
+    <p class="sub">Layout previewer — planning phase</p>
+
+    <h2>Floors</h2>
+    <div class="floors" id="floors"></div>
+    <div class="stat" id="dims"></div>
+    <div class="warn" id="warn"></div>
+
+    <h2>Legend</h2>
+    <div class="legend" id="legend"></div>
+
+    <p class="hint">
+      <kbd>←</kbd><kbd>→</kbd> or <kbd>1</kbd>–<kbd>9</kbd> switch floors ·
+      hover a tile for its coords. Edit <code>floors.js</code> and refresh.
+    </p>
+  </aside>
+
+  <main class="main">
+    <div class="meta"><span class="name" id="fname"></span><div class="blurb" id="fblurb"></div></div>
+    <canvas id="cv"></canvas>
+    <div class="stat" id="hover">&nbsp;</div>
+  </main>
+</div>
+
+<script src="floors.js"></script>
+<script>
+// Tile vocabulary: glyph → {name, color, char}. char is the symbol painted on the tile.
+const TILES = {
+  '#': { name:'wall',                color:'#3b3450' },
+  '.': { name:'floor',              color:'#1b1726' },
+  ' ': { name:'bedrock / outside',  color:'#0a0810' },
+  '@': { name:'arrival point',      color:'#2f8f6b' },
+  '<': { name:'stairs up',          color:'#4a6fa5' },
+  '>': { name:'stairs down',        color:'#7a4aa5' },
+  'D': { name:'door',               color:'#8a6d3b' },
+  '+': { name:'locked door',        color:'#b5532e' },
+  'K': { name:'key',                color:'#d9c44a' },
+  '~': { name:'encounter tile',     color:'#2a4a4f' },
+  'c': { name:'chest (loot)',       color:'#c98a27' },
+  '$': { name:'exclusive collectible', color:'#d94aa0' },
+  'o': { name:'pillar',             color:'#4a4560' },
+  'T': { name:'torch',              color:'#e0863e' },
+  '^': { name:'spike trap',         color:'#9a3030' },
+  'B': { name:'boss',               color:'#d23a3a' },
+};
+const GLYPH = { '~':'≈', 'c':'▣', '$':'✦', 'o':'●', 'T':'†', '^':'▲', 'B':'☗',
+                'K':'⚷', '@':'◆', '<':'▲', '>':'▼', 'D':'▢', '+':'▥' };
+
+const FLOORS = window.DUNGEON_FLOORS || [];
+let cur = 0;
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const elFloors = document.getElementById('floors');
+
+// Pad ragged rows to a common width so sketches render even when counts drift.
+function normalize(rows) {
+  const w = Math.max(...rows.map(r => r.length));
+  const ragged = rows.some(r => r.length !== w);
+  return { grid: rows.map(r => r.padEnd(w, ' ')), w, h: rows.length, ragged };
+}
+
+function draw() {
+  const f = FLOORS[cur];
+  const { grid, w, h, ragged } = normalize(f.rows);
+  const cell = Math.max(14, Math.min(40, Math.floor(900 / w)));
+  cv.width = w * cell; cv.height = h * cell;
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = Math.floor(cell * 0.62) + 'px ui-monospace,monospace';
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const ch = grid[y][x];
+      const t = TILES[ch] || { name:'?', color:'#ff00ff' };
+      ctx.fillStyle = t.color;
+      ctx.fillRect(x*cell, y*cell, cell, cell);
+      // subtle floor grid so empty space reads as a grid
+      if (ch === '.' || ch === '~') {
+        ctx.strokeStyle = '#ffffff08'; ctx.strokeRect(x*cell+.5, y*cell+.5, cell-1, cell-1);
+      }
+      const g = GLYPH[ch];
+      if (g) { ctx.fillStyle = '#0c0a12cc'; ctx.fillText(g, x*cell+cell/2+1, y*cell+cell/2+1);
+               ctx.fillStyle = '#f4eefaee'; ctx.fillText(g, x*cell+cell/2, y*cell+cell/2); }
+    }
+  }
+  document.getElementById('fname').textContent = `${f.id} · ${f.name}`;
+  document.getElementById('fblurb').textContent = f.blurb || '';
+  document.getElementById('dims').textContent = `${w} × ${h} tiles · cell ${cell}px`;
+  document.getElementById('warn').textContent = ragged
+    ? '⚠ ragged rows padded to width — tidy them before shipping' : '';
+  cv._cell = cell; cv._grid = grid;
+}
+
+cv.addEventListener('mousemove', (e) => {
+  const r = cv.getBoundingClientRect(), cell = cv._cell;
+  const x = Math.floor((e.clientX - r.left) / cell), y = Math.floor((e.clientY - r.top) / cell);
+  const ch = cv._grid?.[y]?.[x];
+  document.getElementById('hover').textContent = ch !== undefined
+    ? `(${x}, ${y})  ‘${ch === ' ' ? '·' : ch}’  ${ (TILES[ch]||{name:'?'}).name }` : ' ';
+});
+cv.addEventListener('mouseleave', () => document.getElementById('hover').textContent = ' ');
+
+function buildFloorBtns() {
+  elFloors.innerHTML = '';
+  FLOORS.forEach((f, i) => {
+    const b = document.createElement('button');
+    b.className = 'fbtn' + (i === cur ? ' active' : '');
+    b.textContent = f.id;
+    b.onclick = () => { cur = i; refresh(); };
+    elFloors.appendChild(b);
+  });
+}
+function buildLegend() {
+  const el = document.getElementById('legend');
+  el.innerHTML = '';
+  for (const [ch, t] of Object.entries(TILES)) {
+    const sw = document.createElement('span'); sw.className = 'sw'; sw.style.background = t.color;
+    const lab = document.createElement('span');
+    lab.textContent = `${ch === ' ' ? '␠' : ch}  ${t.name}`;
+    el.appendChild(sw); el.appendChild(lab);
+  }
+}
+function refresh() { buildFloorBtns(); draw(); }
+
+addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowRight') { cur = (cur + 1) % FLOORS.length; refresh(); }
+  else if (e.key === 'ArrowLeft') { cur = (cur - 1 + FLOORS.length) % FLOORS.length; refresh(); }
+  else if (/^[1-9]$/.test(e.key) && +e.key <= FLOORS.length) { cur = +e.key - 1; refresh(); }
+});
+
+buildLegend();
+refresh();
+</script>
+</body>
+</html>

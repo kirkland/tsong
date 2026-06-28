@@ -233,6 +233,9 @@ export async function initDb(): Promise<void> {
   // Nomic (the Parliament sub-game) — ONE perpetual communal game persisted as a single JSON
   // snapshot row (rulebook, params, scores, log). Won seasons are sealed into nomic_hall.
   await pool.query(`CREATE TABLE IF NOT EXISTS nomic_state (id INTEGER PRIMARY KEY, data TEXT NOT NULL)`);
+  // Which Ruins chests each account has permanently opened (banked on a clean escape) — so the
+  // "once per account, no re-farm" guarantee survives a server restart.
+  await pool.query(`CREATE TABLE IF NOT EXISTS dungeon_opened (pid TEXT NOT NULL, chest TEXT NOT NULL, PRIMARY KEY (pid, chest))`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS nomic_hall (
       season    INTEGER PRIMARY KEY,
@@ -822,8 +825,28 @@ export async function claimSpin(pid: string, name: string, nowMs: number): Promi
 }
 
 /** Grant an item for free (daily-spin prize). No-op if already owned. Returns updated wallet. */
+/** All Ruins chests this account has permanently opened (banked on past escapes). */
+export async function getOpenedChests(pid: string): Promise<string[]> {
+  if (!pool || !pid) return [];
+  const { rows } = await pool.query<{ chest: string }>(`SELECT chest FROM dungeon_opened WHERE pid = $1`, [pid]);
+  return rows.map((r) => r.chest);
+}
+/** Permanently bank a set of opened chests for an account (called on a clean dungeon escape). */
+export async function addOpenedChests(pid: string, chests: string[]): Promise<void> {
+  if (!pool || !pid || chests.length === 0) return;
+  const values = chests.map((_, i) => `($1, $${i + 2})`).join(',');
+  await pool.query(`INSERT INTO dungeon_opened (pid, chest) VALUES ${values} ON CONFLICT DO NOTHING`, [pid, ...chests]);
+}
+
 export async function grantItem(pid: string, _name: string, item: string): Promise<Wallet | null> {
   if (!pool || !pid) return null;
+  // ensure the player row exists, so the grant can't silently no-op for a not-yet-persisted player.
+  // Keep the existing name if no (or empty) name is passed — granting an item must never rename a player.
+  await pool.query(
+    `INSERT INTO players (id, name) VALUES ($1, COALESCE(NULLIF($2, ''), $1))
+       ON CONFLICT (id) DO UPDATE SET name = COALESCE(NULLIF($2, ''), players.name)`,
+    [pid, _name],
+  );
   const cur = await getWallet(pid);
   if (cur.owned.includes(item)) return cur;
   const owned = [...cur.owned, item].join(',');
@@ -910,8 +933,8 @@ export async function spendCoins(pid: string, amount: number): Promise<Wallet | 
 export async function addCoins(pid: string, name: string, delta: number): Promise<Wallet | null> {
   if (!pool || !pid) return null;
   const { rows } = await pool.query(
-    `INSERT INTO players (id, name, coins) VALUES ($1, $2, GREATEST(0, $3))
-       ON CONFLICT (id) DO UPDATE SET coins = GREATEST(0, players.coins + $3), name = EXCLUDED.name
+    `INSERT INTO players (id, name, coins) VALUES ($1, COALESCE(NULLIF($2, ''), $1), GREATEST(0, $3))
+       ON CONFLICT (id) DO UPDATE SET coins = GREATEST(0, players.coins + $3), name = COALESCE(NULLIF($2, ''), players.name)
        RETURNING coins, owned, hat, skin, trail, title, song, car`,
     [pid, name, delta],
   );

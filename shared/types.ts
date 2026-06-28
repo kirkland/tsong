@@ -178,7 +178,7 @@ export interface CosmeticItem {
   name: string;
   slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'pet';
   price: number;
-  locked?: 'campaign' | 'fishing' | 'fishing_rare'; // not buyable — unlocked by in-game achievements
+  locked?: 'campaign' | 'fishing' | 'fishing_rare' | 'dungeon'; // not buyable — unlocked by in-game achievements
   audio?: string; // for 'song' items: path to the mp3 that plays during your matches
 }
 // Static cosmetics cost 1000 coins; animated ones cost 2000 (10×/20× the COIN_SCALE base).
@@ -200,6 +200,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'pirate', name: 'Pirate Hat', slot: 'hat', price: 1000 },
   { id: 'santa', name: 'Santa Hat', slot: 'hat', price: 1000 },
   { id: 'headphones', name: 'Headphones', slot: 'hat', price: 2000 }, // animated
+  { id: 'mushroom', name: '🍄 Mushroom Cap', slot: 'hat', price: 0, locked: 'dungeon' }, // a Ruins chest prize (B1)
   // Skins
   { id: 'rainbow', name: 'Rainbow', slot: 'skin', price: 1000 },
   { id: 'gold', name: 'Gold', slot: 'skin', price: 2000 }, // animated
@@ -228,6 +229,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   // is NOT buyable — it's unlocked only by clearing the campaign.
   { id: 'davisslayer', name: '🏆 Davis Slayer', slot: 'title', price: 0, locked: 'campaign' },
   { id: 'flawless', name: '💯 Flawless', slot: 'title', price: 0, locked: 'campaign' }, // perfect campaign run only
+  { id: 'title-pindropper', name: '📍 Pin Dropper', slot: 'title', price: 0, locked: 'dungeon' }, // beat Rob, the final boss
   { id: 'bigcatch', name: '🐟 Big Catch', slot: 'title', price: 0, locked: 'fishing_rare' }, // land a rare-or-better fish
   { id: 'angler', name: '🎣 Angler', slot: 'title', price: 0, locked: 'fishing' }, // land a legendary fish
   { id: 'clown', name: '🤡 Clown', slot: 'title', price: 1000 },
@@ -245,11 +247,16 @@ export const COSMETICS: readonly CosmeticItem[] = [
   // Skins (animated)
   { id: 'obsidian', name: 'Obsidian', slot: 'skin', price: 6000 },
   { id: 'aurora', name: 'Aurora', slot: 'skin', price: 10000 },
+  { id: 'skin-hotdog', name: '🌭 Hot Dog', slot: 'skin', price: 0, locked: 'dungeon' }, // a Ruins chest prize
+  { id: 'skin-prism', name: '💠 Prism', slot: 'skin', price: 0, locked: 'dungeon' }, // a Ruins chest prize (B5, post-Clarence)
+  { id: 'skin-globe', name: '🌍 Globe', slot: 'skin', price: 0, locked: 'dungeon' }, // the Rob boss prize
   // Trails
   { id: 'stardust', name: 'Stardust', slot: 'trail', price: 5000 },
   { id: 'inferno', name: 'Inferno', slot: 'trail', price: 8000 },
   { id: 'lightning', name: 'Lightning', slot: 'trail', price: 10000 },
   { id: 'phoenix', name: 'Phoenix', slot: 'trail', price: 15000 }, // animated
+  { id: 'trail-fart', name: '💨 Fart Cloud', slot: 'trail', price: 0, locked: 'dungeon' }, // a Ruins chest prize (B4 switch room)
+  { id: 'trail-blood', name: '🩸 Blood Trail', slot: 'trail', price: 0, locked: 'dungeon' }, // a Ruins chest prize (B3 gore floor)
   // Titles (flex tier)
   { id: 'whale', name: '💎 Whale', slot: 'title', price: 25000 },
   { id: 'marketmaker', name: '📈 Market Maker', slot: 'title', price: 40000 },
@@ -260,14 +267,20 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'song-battle', name: 'regular battle theme', slot: 'song', price: 15000, audio: '/battle.mp3' },
   { id: 'song-disco', name: 'disco', slot: 'song', price: 20000, audio: '/disco.mp3' },
   { id: 'song-davis', name: 'davis boss theme', slot: 'song', price: 30000, audio: '/davis-battle.mp3' },
+  { id: 'song-everlong', name: '🎸 Everlong (8-bit)', slot: 'song', price: 0, locked: 'dungeon', audio: '/everlong.mp3' }, // a Ruins chest prize (B4)
+  { id: 'song-encounter', name: '⚔️ Encounter Theme', slot: 'song', price: 0, locked: 'dungeon', audio: '/encounter.mp3' }, // a Ruins chest prize (B5)
+  { id: 'song-inthend', name: '🎧 In The End (8-bit)', slot: 'song', price: 0, locked: 'dungeon', audio: '/inthend.mp3' }, // Rob's anthem — a boss prize
   // Cars — drive them around the World map (slot 'car'; physics/look live in CARS above).
   { id: 'car-coupe', name: '🚗 Coupe', slot: 'car', price: 8000 },
   { id: 'car-drifter', name: '🏎️ Drift King', slot: 'car', price: 20000 },
   { id: 'car-muscle', name: '🚙 Muscle', slot: 'car', price: 35000 },
+  { id: 'car-monster', name: '🛻 Monster Truck', slot: 'car', price: 0, locked: 'dungeon' }, // the Ruins locked-room prize
   // Pets (slot 'pet') — follow you around the World map; look/animation keyed by PETS below.
   { id: 'pet-rock', name: '🪨 Pet Rock', slot: 'pet', price: 50000 },
   { id: 'pet-pikachu', name: '⚡ Pikachu', slot: 'pet', price: 100000 },
   { id: 'pet-pacman', name: '🟡 Pac-Man', slot: 'pet', price: 150000 },
+  { id: 'pet-slime', name: '🟢 Crypt Slime', slot: 'pet', price: 0, locked: 'dungeon' }, // caught in the Ruins (B4 monster box)
+  { id: 'pet-dragon', name: '🐉 Dragon', slot: 'pet', price: 0, locked: 'dungeon' }, // the Rob boss prize — flies around you
   // New common loot-box refresh items
   { id: 'beret', name: 'Beret', slot: 'hat', price: 1000 },
   { id: 'catears', name: 'Cat Ears', slot: 'hat', price: 2000 }, // animated
@@ -357,8 +370,8 @@ export type BotLevel = (typeof BOT_LEVELS)[number];
 export const WORLD: { w: number; h: number; spawnX: number; spawnY: number } = {
   w: 4800, // widened east to make room for Robville, the suburban neighborhood (see WORLD_PARCELS)
   h: 2200,
-  spawnX: 1600,
-  spawnY: 1240,
+  spawnX: 1700, // just in front of the Arena (x1425–1775, y345–595), framing the Ruins (x1850+) to the right
+  spawnY: 700,
 };
 export const WORLD_AVATAR = {
   r: 16,        // avatar body radius, world units
@@ -386,6 +399,8 @@ export const CARS: readonly CarSpec[] = [
   { id: 'car-drifter', name: 'Drift King', body: '#2bd4c4', accent: '#10302d', speed: 600, accel: 760, turn: 3.0, grip: 0.70 },
   // The muscle: fastest and heaviest, wide drifts once it breaks loose.
   { id: 'car-muscle',  name: 'Muscle',    body: '#8a5cf6', accent: '#1c1430', speed: 660, accel: 620, turn: 2.2, grip: 0.78 },
+  // The Monster Truck: the Ruins' locked-room prize. Heavy, planted, monstrous low-end grunt.
+  { id: 'car-monster', name: 'Monster Truck', body: '#cc2222', accent: '#1a1a1a', speed: 600, accel: 820, turn: 2.0, grip: 0.92 },
 ] as const;
 export function carById(id: string | null | undefined): CarSpec | null {
   if (!id) return null;
@@ -397,11 +412,13 @@ export function carById(id: string | null | undefined): CarSpec | null {
 // follows you around (unlike a car, which replaces/IS the avatar while driving). A pet id
 // matches a COSMETICS entry with slot 'pet'. `kind` selects the custom drawn sprite in the
 // World renderer; `emoji` is just the small shop-tile preview glyph.
-export type PetKind = 'rock' | 'pikachu' | 'pacman';
+export type PetKind = 'rock' | 'pikachu' | 'pacman' | 'slime' | 'dragon';
 export const PETS: readonly { id: string; emoji: string; kind: PetKind }[] = [
   { id: 'pet-rock', emoji: '🪨', kind: 'rock' },       // a googly-eyed rock
   { id: 'pet-pikachu', emoji: '⚡', kind: 'pikachu' },  // Pikachu
   { id: 'pet-pacman', emoji: '🟡', kind: 'pacman' },    // Pac-Man, chomping as it follows
+  { id: 'pet-slime', emoji: '🟢', kind: 'slime' },     // a Crypt Slime caught in the Ruins
+  { id: 'pet-dragon', emoji: '🐉', kind: 'dragon' },   // a dragon that flies around you (Rob boss prize)
 ];
 export function petById(id: string | null | undefined) {
   if (!id) return null;
@@ -410,7 +427,7 @@ export function petById(id: string | null | undefined) {
 
 // What entering a building does (the client maps each `kind` to an action). Add a kind here
 // and a handler on the client to introduce a new venue.
-export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament' | 'arcade';
+export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament' | 'arcade' | 'dungeon';
 // A venue's footprint on the map. The rectangle (top-left origin, world units) is solid —
 // avatars collide with it — and an apron just outside the door is the entry trigger zone.
 export interface WorldBuilding {
@@ -445,7 +462,59 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
   // The Arcade — a neon-lit hall between Parliament and the Arena, home to the solo/co-op minigames
   // (Campaign, Type or Die, Street Demons racing, Super Tsong Bros).
   { id: 'arcade', kind: 'arcade', name: 'ARCADE', emoji: '🎮', x: 900, y: 430, w: 280, h: 200, color: '#3a2a5a' },
+  // The Ruins — a crumbling overgrown stone doorway east of the Arena. Step in to descend into the
+  // dungeon: torch-lit floors, random Pong encounters, loot, and a boss at the bottom.
+  { id: 'dungeon', kind: 'dungeon', name: 'THE RUINS', emoji: '🏚️', x: 1850, y: 380, w: 200, h: 170, color: '#5d6a4c' },
 ] as const;
+
+// --- The Ruins dungeon economy: SERVER-AUTHORITATIVE so a tampered client can't mint coins. ---
+// Chests keyed by 'floor:col,row'. The server pays a chest's coins (from the House) the first time
+// a given player opens it, and tracks opened chests per account.
+export const DUNGEON_CHEST_CONTENTS: Record<string, { coins?: number; potions?: number; spin?: boolean; cosmetic?: string; needsKey?: boolean; monster?: string; pet?: string; items?: string[] }> = {
+  'B1:18,2': { cosmetic: 'mushroom' }, // 🍄 Mushroom Cap hat — the first-floor cosmetic
+  'B1:9,9': { potions: 1 },
+  // B2 — a free wheel-spin chest, a potion, a coin chest, plus the SEALED locked-room prize (34,24).
+  'B2:26,3': { spin: true },   // spins the wheel in-dungeon; reward → run loot, granted on escape
+  'B2:4,13': { potions: 1 },
+  'B2:15,21': { coins: 2500 },
+  'B2:34,24': { cosmetic: 'car-monster', needsKey: true }, // the sealed vault: a MONSTER TRUCK (needs the B3 key)
+  // B3 — bigger, darker, tier-3 mobs; meatier loot for the longer floor.
+  'B3:28,3': { cosmetic: 'trail-blood' }, // 🩸 Blood Trail — the gore-floor cosmetic
+  'B3:4,13': { potions: 4 },               // generous: 4 potions on a long floor
+  'B3:29,23': { cosmetic: 'skin-hotdog' }, // 🌭 Hot Dog paddle skin
+  'B3:38,24': { potions: 2 },
+  // B4 — the deep floor: a 5-potion chest right at the entrance, richest coins, another wheel spin, and
+  // the switch-locked room's prize: a 💨 Fart Cloud trail.
+  'B4:6,3': { potions: 5 },
+  'B4:29,3': { cosmetic: 'song-everlong' }, // 🎸 Everlong battle theme
+  'B4:12,4': { cosmetic: 'trail-fart' }, // behind the switch-sealed 'X' door
+  'B4:4,14': { potions: 2 },
+  'B4:28,14': { spin: true },
+  'B4:4,27': { monster: 'slime', coins: 450, pet: 'pet-slime' }, // a MONSTER BOX: fight the slime — kill it for 450🪙, or capture it as a pet
+  // B5 — the boss sanctum. These three only become lootable AFTER you beat Clarence the Gatekeeper.
+  'B5:32,5': { cosmetic: 'song-encounter' }, // ⚔️ the Encounter battle theme (Clarence already drops potions)
+  'B5:37,5': { coins: 5000 },                // the deepest coin haul in the Ruins
+  'B5:42,5': { cosmetic: 'skin-prism' },     // 💠 Prism paddle skin
+  // B6 — the final boss reward (granted on beating Rob; once per account). Not a findable tile chest.
+  'B6:boss': { coins: 50000, items: ['song-inthend', 'title-pindropper', 'skin-globe', 'pet-dragon'] },
+};
+// Encounter-win payout keyed by the MOB'S TIER [min, max], not the floor. The server picks the amount
+// from the tier's range (it never trusts a client-sent number) after checking the tier is legal here.
+export const DUNGEON_TIER_COINS: Record<number, readonly [number, number]> = {
+  1: [35, 75],    // Cave Bat, Crypt Slime
+  2: [70, 140],   // Cursed Jsav (4 lives), The Warden (big paddle)
+  3: [140, 260],  // Demon Fritz (roam), + B3's second mob
+  4: [260, 460],  // Bone Rattler, Grave Wisp
+  5: [460, 760],  // Stone Gargoyle, Cursed Wraith
+};
+// Which mob tiers may legitimately appear on each floor = the floor's own NEW tier + the one above it
+// (carried down). The server uses this to reject a tampered win that claims a tier you couldn't fight.
+export const DUNGEON_FLOOR_TIERS: Record<string, readonly number[]> = {
+  B1: [1],
+  B2: [1, 2],
+  B3: [2, 3], // tier-3 new mobs + tier-2 carried down
+  B4: [3, 4], // tier-4 new mobs + tier-3 carried down
+};
 
 // The town JAIL — a tiny barred cell just east of the Tavern. Try to drive after 2+ beers and the
 // drunk-tank claims you: your avatar is locked behind these bars (server-persisted, so you can't
@@ -821,6 +890,12 @@ export type ClientMsg =
   | { type: 'buyBeer' } // buy a beer at the Tavern (20🪙 → House); ups your drunk level (cut off at 6)
   | { type: 'jail' } // self-report: tried to drunk-drive (server verifies drunkLevel ≥ 2 and jails you)
   | { type: 'bail'; targetId: string } // pay 500🪙 to bail a jailed player out (targetId = their avatar id; may be your own)
+  // --- The Ruins dungeon (server owns the coin awards + which chests you've opened) ---
+  | { type: 'dungeonSync' } // entering the Ruins: ask which chests this player has already opened
+  | { type: 'dungeonChest'; chest: string; captured?: boolean } // open a chest (server pays once). captured=true → a "monster box" mob was caught → grant its pet instead of coins
+  | { type: 'dungeonWin'; floor: string; tier: number } // won an encounter (adds a TIER-ranged amount to the run purse)
+  | { type: 'dungeonTakeKey' } // took the key from the dying B3 adventurer → server marks the run-key
+  | { type: 'dungeonExit'; escaped: boolean } // left the Ruins: escaped=true pays the purse (from House); false forfeits
   // --- Nomic (the Parliament sub-game) ---
   | { type: 'nomEnter' } // enter the Parliament: seat as a legislator + subscribe to its state
   | { type: 'nomLeave' } // leave the Parliament (unseat + unsubscribe)
@@ -1276,6 +1351,10 @@ export type ServerMsg =
   | MarketMsg
   | LoanBookMsg
   | WorldMsg
+  | { type: 'dungeonChests'; opened: string[] } // chests this player has opened (reply to dungeonSync)
+  | { type: 'dungeonChestOpened'; chest: string; coins: number; potions: number; spin?: boolean; prize?: string; prizes?: string[] } // a chest open was accepted (prize/prizes = display names of cosmetic rewards)
+  | { type: 'dungeonSpin'; chest: string; segment: number; reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string } } // a spin chest: play the wheel, reward goes to run loot
+  | { type: 'dungeonPurse'; coins: number } // current run-purse total (paid out only on a clean escape)
   | LandMsg
   | WorldSayMsg
   | HouseMsg

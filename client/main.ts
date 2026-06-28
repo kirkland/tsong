@@ -737,6 +737,16 @@ const net = connect(
       showToast(text);
     } else if (msg.type === 'world') {
       worldMod?.feedWorld(msg.avatars);
+    } else if (msg.type === 'dungeonChests') {
+      worldMod?.feedDungeonChests(msg.opened);
+    } else if (msg.type === 'dungeonChestOpened') {
+      worldMod?.dungeonChestAccepted(msg.chest, msg.coins, msg.potions, msg.spin, msg.prize, msg.prizes);
+    } else if (msg.type === 'dungeonSpin') {
+      // a spin chest: play the wheel right here in the dungeon; the reward drops into the run loot
+      worldMod?.dungeonSpinLoot(msg.reward); // record it for the loot panel (coins also flow via dungeonPurse)
+      celebrateSpin(msg.reward, msg.segment, { heading: '🎁 RELIC WHEEL', note: 'Escape the Ruins to claim it!' });
+    } else if (msg.type === 'dungeonPurse') {
+      worldMod?.feedDungeonPurse(msg.coins);
     } else if (msg.type === 'prefs') {
       // Account-stored settings arriving on join: seed the local set (server wins over cookie) and apply.
       for (const [k, v] of Object.entries(msg.prefs)) { prefs[k] = v; setCookie('tsong_' + k, v); }
@@ -2028,6 +2038,11 @@ worldBtn.addEventListener('click', async () => {
         setTimeout(() => (document.getElementById(id) as HTMLButtonElement | null)?.click(), 0);
       },
       claimQuest: (quest) => net.send({ type: 'questClaim', quest }),
+      dungeonSync: () => net.send({ type: 'dungeonSync' }),
+      dungeonChest: (chest, captured) => net.send({ type: 'dungeonChest', chest, captured }),
+      dungeonWin: (floor, tier) => net.send({ type: 'dungeonWin', floor, tier }),
+      dungeonTakeKey: () => net.send({ type: 'dungeonTakeKey' }),
+      dungeonExit: (escaped) => net.send({ type: 'dungeonExit', escaped }),
       buyBeer: () => net.send({ type: 'buyBeer' }),
       drunkLevel: () => drunkLevel, // the world reads this live to wobble movement + the camera
       jail: () => net.send({ type: 'jail' }),                 // tried to drunk-drive → bust
@@ -2390,10 +2405,17 @@ function renderShop() {
     row.appendChild(name);
     const btn = document.createElement('button');
     if (!owned && item.locked) {
-      // Locked items (e.g. Davis Slayer) can't be bought — unlocked by an achievement.
-      btn.textContent = '🔒 Campaign';
+      // Locked items can't be bought — each is unlocked by a specific in-game achievement.
+      const LOCK_LABEL: Record<string, { tag: string; how: string }> = {
+        campaign: { tag: '🔒 Campaign', how: 'Clear the campaign to unlock' },
+        fishing: { tag: '🔒 Fishing', how: 'Land a legendary fish to unlock' },
+        fishing_rare: { tag: '🔒 Fishing', how: 'Land a rare-or-better fish to unlock' },
+        dungeon: { tag: '🔒 The Ruins', how: 'Loot the sealed vault in The Ruins to unlock' },
+      };
+      const lk = LOCK_LABEL[item.locked] ?? { tag: '🔒 Locked', how: 'Unlocked by an in-game achievement' };
+      btn.textContent = lk.tag;
       btn.disabled = true;
-      btn.title = 'Clear the campaign to unlock';
+      btn.title = lk.how;
     } else if (!owned) {
       btn.textContent = 'Buy';
       btn.disabled = wallet.coins < item.price;
@@ -2491,7 +2513,7 @@ setInterval(updateSpinButton, 1000);
 
 // The spinning reel: a horizontal strip of the wheel segments that scrolls and eases to a
 // stop with the won segment under the center pointer, then reveals the prize + plays "yay".
-function celebrateSpin(reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string }, segment: number) {
+function celebrateSpin(reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string }, segment: number, opts?: { heading?: string; note?: string }) {
   const CW = 104; // card width incl. gap
   const VIS = 5;  // visible cards
   const VW = CW * VIS;
@@ -2502,7 +2524,7 @@ function celebrateSpin(reward: { kind: 'coins'; amount: number } | { kind: 'item
     'position:fixed;inset:0;z-index:10000;display:flex;flex-direction:column;align-items:center;' +
     'justify-content:center;gap:18px;background:rgba(4,6,13,0.88);';
   const heading = document.createElement('div');
-  heading.textContent = '🎰 DAILY SPIN';
+  heading.textContent = opts?.heading ?? '🎰 DAILY SPIN';
   heading.style.cssText = 'font:900 30px ui-monospace,monospace;color:#ff5cc8;text-shadow:0 2px 0 #000;';
   const viewport = document.createElement('div');
   viewport.style.cssText =
@@ -2553,6 +2575,7 @@ function celebrateSpin(reward: { kind: 'coins'; amount: number } | { kind: 'item
     updateSpinButton();
     playYay();
     prize.textContent = reward.kind === 'coins' ? `You won ${reward.amount} 🪙!` : `You won a free ${reward.name}! 🎉`;
+    if (opts?.note) { const n = document.createElement('div'); n.textContent = opts.note; n.style.cssText = 'font:700 13px ui-monospace,monospace;color:#9fb4ff;'; back.insertBefore(n, prize.nextSibling); }
     // brief confetti-ish flash on the viewport
     viewport.style.boxShadow = '0 0 40px rgba(255,209,102,0.8)';
     const closeBtn = document.createElement('button');

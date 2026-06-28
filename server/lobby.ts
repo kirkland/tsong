@@ -112,6 +112,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
   recordFishCatch, getFishingLeaderboard, FishingScoreRow,
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS, getAssessableWealth, stampActivity, getJailed, setJailed,
+  getOpenedChests, addOpenedChests,
   getHoldings, investStock, closePosition, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
   setStockCrashAt, getMarketInstability, setMarketInstability,
   getLoan, takeLoan, repayLoan, collectDefaultedLoans, realignLoansToDeadline, getOpenLoans,
@@ -129,7 +130,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   getGameModes, saveGameModes,
   loadNomic, saveNomic, archiveNomicSeason } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
-import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR } from '../shared/types';
+import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR, DUNGEON_CHEST_CONTENTS, DUNGEON_TIER_COINS, DUNGEON_FLOOR_TIERS } from '../shared/types';
 import { WORLD_PARCELS, BANK_PARCEL_CAP, PARCEL_PRICE, LandParcelView, WORLD_SAY_MAX } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
@@ -1016,7 +1017,7 @@ export class Lobby {
 
   // World "weekly objective" rewards, in coins (NOT win-units — these are paid as-is, not ×COIN_SCALE).
   // Granted once per player per quest (tracked in-memory for the server's lifetime), paid from the House.
-  private static QUEST_REWARDS: Record<string, number> = { 'find-waldo': 400, 'give-banana': 400, 'win-ten': 1000 };
+  private static QUEST_REWARDS: Record<string, number> = { 'find-waldo': 400, 'give-banana': 400, 'win-ten': 1000, 'ruins-chests': 50000 };
   private claimedQuests = new Set<string>(); // `${pid}:${quest}`
   questClaim(ws: WebSocket, quest: string) {
     const conn = this.conns.get(ws);
@@ -1029,6 +1030,167 @@ export class Lobby {
     this.housePay(conn.pid, conn.nickname, reward) // already in coins — do NOT ×COIN_SCALE
       .then(() => this.sendWallet(ws))
       .catch((e) => { this.claimedQuests.delete(key); console.error('quest reward failed:', e); });
+  }
+
+  // --- The Ruins dungeon: the server owns all coin awards (paid from the House → conserved) and
+  // tracks which chests each account has opened (in-memory, like quests), so chests can't be
+  // re-farmed and a tampered client can't mint coins. ---
+  // Chests, like the purse, are PROVISIONAL during a run: opening one adds its coins to the purse and
+  // marks it open for the run, but it only becomes permanently-opened when you escape with the loot.
+  // Die / bail → the run's chests roll back (re-lootable) along with the forfeited purse. So you can
+  // never lose a chest's reward forever just because a mob got you on the way out.
+  private dungeonOpenedChests = new Set<string>(); // `${pid}:${chest}` — COMMITTED (banked on escape)
+  private dungeonRunChests = new Map<string, Set<string>>(); // pid → chests opened THIS run (provisional)
+  private dungeonPurse = new Map<string, number>(); // pid → run-purse coins (paid out only on a clean escape)
+  private dungeonRunItems = new Map<string, { item: string; name: string }[]>(); // pid → cosmetics won this run (granted on escape)
+  private dungeonRunKeys = new Set<string>(); // pids holding the B3 key this run (gates the locked vault chest)
+  // Took the key from the dying B3 adventurer → mark the run-key so the locked vault chest will open.
+  dungeonTakeKey(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (conn && conn.pid) this.dungeonRunKeys.add(conn.pid);
+  }
+  private sendPurse(ws: WebSocket, pid: string) {
+    this.tell(ws, { type: 'dungeonPurse', coins: this.dungeonPurse.get(pid) ?? 0 });
+  }
+  // Roll the daily-spin wheel (weighted; drops a cosmetic slot the player already completed). Returns
+  // the landed segment + the reward, WITHOUT granting anything — callers decide when to grant.
+  private rollSpin(owned: string[]): { segment: number; reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string } } {
+    const hasUnowned = (slot: 'hat' | 'skin') => COSMETICS.some((c) => c.slot === slot && !owned.includes(c.id));
+    const weights = [36, 24, 16, 11, 6, 2, 3, 2]; // index-aligned to SPIN_SEGMENTS
+    if (!hasUnowned('hat')) weights[6] = 0;
+    if (!hasUnowned('skin')) weights[7] = 0;
+    const total = weights.reduce((a, b) => a + b, 0);
+    let roll = Math.random() * total, seg = 0;
+    for (let i = 0; i < weights.length; i++) { roll -= weights[i]; if (roll < 0) { seg = i; break; } }
+    const def = SPIN_SEGMENTS[seg];
+    if (def.kind === 'coins') return { segment: seg, reward: { kind: 'coins', amount: def.value } };
+    const avail = COSMETICS.filter((c) => c.slot === def.kind && !owned.includes(c.id));
+    const item = avail[Math.floor(Math.random() * avail.length)];
+    return { segment: seg, reward: { kind: 'item', item: item.id, name: item.name } };
+  }
+  dungeonSync(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    const pid = conn.pid;
+    this.dungeonPurse.set(pid, 0);        // entering the Ruins starts a fresh, empty run purse
+    this.dungeonRunChests.delete(pid);    // …and a fresh provisional-chest slate
+    this.dungeonRunItems.delete(pid);     // …and no spin-won cosmetics yet
+    this.dungeonRunKeys.delete(pid);      // …and no key (re-fetch it from the dying man on B3)
+    // load this account's permanently-opened chests from the DB into the in-memory set (survives restarts)
+    getOpenedChests(pid).then((banked) => {
+      for (const chest of banked) this.dungeonOpenedChests.add(`${pid}:${chest}`);
+      const pfx = pid + ':';
+      const opened: string[] = [];
+      for (const k of this.dungeonOpenedChests) if (k.startsWith(pfx)) opened.push(k.slice(pfx.length));
+      this.tell(ws, { type: 'dungeonChests', opened });
+    }).catch((e) => console.error('dungeonSync load failed:', e));
+    this.sendPurse(ws, pid);
+  }
+  dungeonChest(ws: WebSocket, chest: string, captured = false) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    const contents = DUNGEON_CHEST_CONTENTS[chest];
+    if (!contents) return;                          // unknown chest → ignore
+    if (contents.needsKey && !this.dungeonRunKeys.has(conn.pid)) return; // the sealed vault won't open without the key
+    if (this.dungeonOpenedChests.has(`${conn.pid}:${chest}`)) return; // already banked → no re-farm
+    let run = this.dungeonRunChests.get(conn.pid);
+    if (!run) { run = new Set(); this.dungeonRunChests.set(conn.pid, run); }
+    if (run.has(chest)) return;                     // already opened THIS run → no double-pay
+    run.add(chest);
+    // A "monster box": the client fought the mob and reports the outcome — a capture grants the pet
+    // (run-scoped, banked on escape), a kill pays the chest's coins. Same trust model as dungeonWin.
+    if (contents.monster) {
+      let prizeName: string | undefined, coins = 0;
+      if (captured && contents.pet) {
+        const def = COSMETICS.find((c) => c.id === contents.pet);
+        prizeName = def?.name ?? 'a pet';
+        const list = this.dungeonRunItems.get(conn.pid) ?? [];
+        list.push({ item: contents.pet, name: prizeName });
+        this.dungeonRunItems.set(conn.pid, list);
+      } else {
+        coins = contents.coins ?? 0;
+        if (coins > 0) this.dungeonPurse.set(conn.pid, (this.dungeonPurse.get(conn.pid) ?? 0) + coins);
+      }
+      this.tell(ws, { type: 'dungeonChestOpened', chest, coins, potions: 0, spin: false, prize: prizeName });
+      this.sendPurse(ws, conn.pid);
+      return;
+    }
+    if (contents.spin) { this.dungeonSpinChest(ws, conn.pid, chest); return; } // roll the wheel in-dungeon
+    const coins = contents.coins ?? 0, potions = contents.potions ?? 0;
+    if (coins > 0) this.dungeonPurse.set(conn.pid, (this.dungeonPurse.get(conn.pid) ?? 0) + coins);
+    let prizeName: string | undefined;
+    const grantCosmetic = (id: string) => { // bank a cosmetic as a run-item (granted on escape)
+      const def = COSMETICS.find((c) => c.id === id), name = def?.name ?? 'a prize';
+      const list = this.dungeonRunItems.get(conn.pid!) ?? []; list.push({ item: id, name });
+      this.dungeonRunItems.set(conn.pid!, list); return name;
+    };
+    if (contents.cosmetic) prizeName = grantCosmetic(contents.cosmetic); // a single cosmetic prize (truck, skin, …)
+    const prizes = contents.items?.map(grantCosmetic);                   // a multi-item haul (the boss reward)
+    this.tell(ws, { type: 'dungeonChestOpened', chest, coins, potions, spin: false, prize: prizeName, prizes });
+    this.sendPurse(ws, conn.pid);
+  }
+  // A spin chest: roll the wheel server-side, drop the reward into the RUN loot (coins → purse,
+  // cosmetic → run-items), and tell the client to play the wheel landing on that segment. Like every
+  // chest it's provisional — the coins/item only bank when you escape (forfeited on death).
+  private async dungeonSpinChest(ws: WebSocket, pid: string, chest: string) {
+    try {
+      const owned = (await getWallet(pid)).owned;
+      const { segment, reward } = this.rollSpin(owned);
+      if (reward.kind === 'coins') {
+        this.dungeonPurse.set(pid, (this.dungeonPurse.get(pid) ?? 0) + reward.amount);
+      } else {
+        const list = this.dungeonRunItems.get(pid) ?? [];
+        list.push({ item: reward.item, name: reward.name });
+        this.dungeonRunItems.set(pid, list);
+      }
+      this.tell(ws, { type: 'dungeonChestOpened', chest, coins: 0, potions: 0, spin: false }); // swap the sprite (no toast)
+      this.tell(ws, { type: 'dungeonSpin', chest, segment, reward });                              // play the wheel
+      this.sendPurse(ws, pid);
+    } catch (e) { console.error('dungeon spin chest failed:', e); }
+  }
+  dungeonWin(ws: WebSocket, floor: string, tier: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    const allowed = DUNGEON_FLOOR_TIERS[floor];
+    if (!allowed || !allowed.includes(tier)) return;  // reject a tier you couldn't legally fight here
+    const range = DUNGEON_TIER_COINS[tier];
+    if (!range) return;
+    const coins = range[0] + Math.floor(Math.random() * (range[1] - range[0] + 1)); // server picks the amount
+    this.dungeonPurse.set(conn.pid, (this.dungeonPurse.get(conn.pid) ?? 0) + coins);
+    this.sendPurse(ws, conn.pid);
+  }
+  // Left the Ruins. escaped=true (walked out via B1 / beat the boss) → pay the purse from the House AND
+  // commit this run's chests as permanently-opened. escaped=false (died / bailed) → forfeit the purse
+  // and ROLL BACK the run's chests (they re-lock, so the loot isn't lost forever). Either way the run
+  // state is cleared.
+  dungeonExit(ws: WebSocket, escaped: boolean) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    const purse = this.dungeonPurse.get(conn.pid) ?? 0;
+    const run = this.dungeonRunChests.get(conn.pid);
+    const items = this.dungeonRunItems.get(conn.pid) ?? [];
+    this.dungeonPurse.delete(conn.pid);
+    this.dungeonRunChests.delete(conn.pid);
+    this.dungeonRunItems.delete(conn.pid);
+    this.dungeonRunKeys.delete(conn.pid);
+    this.tell(ws, { type: 'dungeonPurse', coins: 0 });
+    if (escaped) {
+      if (run) {
+        for (const chest of run) this.dungeonOpenedChests.add(`${conn.pid}:${chest}`); // bank the chests (memory)
+        addOpenedChests(conn.pid, [...run]).catch((e) => console.error('dungeon chest persist failed:', e)); // …and to the DB
+      }
+      // Pay the purse + grant every escaped-with cosmetic (spin prizes, the vault vehicle), THEN send
+      // the wallet ONCE — so the shop reflects newly-owned items (no refresh-before-grant race).
+      const nick = conn.nickname ?? '', pid = conn.pid; // grantItem/housePay don't need the name (and won't clobber it)
+      void (async () => {
+        // Grant SEQUENTIALLY: `owned` is a read-modify-write, so concurrent grants clobber each other
+        // (only the last write survives). Awaiting each one keeps every prize.
+        for (const it of items) { try { await grantItem(pid, nick, it.item); } catch (e) { console.error('dungeon item grant failed:', e); } }
+        if (purse > 0) { try { await this.housePay(pid, nick, purse); await this.refreshNetWorth().catch(() => {}); } catch (e) { console.error('dungeon exit payout failed:', e); } }
+        if (items.length || purse > 0) this.sendWallet(ws); // one wallet push once everything's landed
+      })();
+    }
+    // escaped=false: run chests/items are simply discarded above (never committed) → re-lootable next run.
   }
 
   /** Forward an opaque DOOM payload to the co-op partner. */

@@ -691,10 +691,100 @@ function fillRainbow(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: n
   ctx.restore();
 }
 
+// Cosmetic "hot dog" skin (the Ruins vault-floor prize): a bun-wrapped sausage running the length of
+// the paddle, with squiggles of ketchup + mustard down it.
+function fillHotdog(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
+  const x = cx - PADDLE.w / 2, y = cy - h / 2, w = PADDLE.w;
+  // bun (toasted, shaded toward the edges)
+  const bun = ctx.createLinearGradient(x, 0, x + w, 0);
+  bun.addColorStop(0, '#b07a36'); bun.addColorStop(0.5, '#ecc079'); bun.addColorStop(1, '#b07a36');
+  ctx.fillStyle = bun; ctx.fillRect(x, y, w, h);
+  // sausage down the middle
+  const sw = w * 0.6, sx = cx - sw / 2;
+  const saus = ctx.createLinearGradient(sx, 0, sx + sw, 0);
+  saus.addColorStop(0, '#7c271a'); saus.addColorStop(0.4, '#c2503a'); saus.addColorStop(1, '#7c271a');
+  ctx.fillStyle = saus; ctx.beginPath(); ctx.roundRect(sx, y + 2, sw, h - 4, sw / 2); ctx.fill();
+  // ketchup + mustard squiggles
+  const zig = (color: string, phase: number) => {
+    ctx.strokeStyle = color; ctx.lineWidth = Math.max(1.5, sw * 0.15); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.beginPath();
+    for (let yy = y + 5; yy <= y + h - 5; yy += 3) {
+      const xx = cx + Math.sin(yy * 0.45 + phase) * sw * 0.2;
+      if (yy === y + 5) ctx.moveTo(xx, yy); else ctx.lineTo(xx, yy);
+    }
+    ctx.stroke();
+  };
+  zig('#e8362a', 0);          // ketchup
+  zig('#f6c61b', Math.PI);    // mustard
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
+}
+
 // Cosmetic registries — add new skins/hats here (id must match shared/types COSMETICS).
 // Each draws purely visual decoration on the paddle; none affect the ball's collision.
 type CosmeticDraw = (ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) => void;
+// Prism: a cut-crystal paddle. A cold cyan→violet iridescent body, a faceted ridge running down the
+// spine (left facets catch light, right facets fall to shadow), a bright spine line, and a slow glint
+// band sweeping down it. Abstract + premium — reads clean at paddle scale. (Ruins B5 chest prize.)
+function fillPrism(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
+  const x = cx - PADDLE.w / 2, y = cy - h / 2, w = PADDLE.w;
+  // iridescent base — cyan at the top melting through blue/violet to magenta
+  const base = ctx.createLinearGradient(0, y, 0, y + h);
+  base.addColorStop(0, '#a6f2ff'); base.addColorStop(0.4, '#56b6f2'); base.addColorStop(0.7, '#7d6cf2'); base.addColorStop(1, '#b56cf0');
+  ctx.fillStyle = base; ctx.fillRect(x, y, w, h);
+  // faceted ridge: stacked chevrons — left half lit, right half shadowed → a cut-gem spine
+  const segs = 8, segH = h / segs;
+  for (let i = 0; i < segs; i++) {
+    const yy = y + i * segH, mid = yy + segH * 0.5;
+    ctx.fillStyle = `rgba(255,255,255,${0.10 + (i % 2) * 0.14})`;
+    ctx.beginPath(); ctx.moveTo(x, yy); ctx.lineTo(cx, mid); ctx.lineTo(x, yy + segH); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = `rgba(24,12,56,${0.14 + (i % 2) * 0.12})`;
+    ctx.beginPath(); ctx.moveTo(x + w, yy); ctx.lineTo(cx, mid); ctx.lineTo(x + w, yy + segH); ctx.closePath(); ctx.fill();
+  }
+  // the crystal spine
+  ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 1.2;
+  ctx.beginPath(); ctx.moveTo(cx, y); ctx.lineTo(cx, y + h); ctx.stroke();
+  // a glint band sweeping slowly down the gem
+  const gy = y + ((performance.now() / 2600) % 1) * h;
+  const glint = ctx.createLinearGradient(0, gy - h * 0.12, 0, gy + h * 0.12);
+  glint.addColorStop(0, 'rgba(255,255,255,0)'); glint.addColorStop(0.5, 'rgba(255,255,255,.5)'); glint.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = glint; ctx.fillRect(x, gy - h * 0.12, w, h * 0.24);
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
+}
+// Globe: a little rotating earth — deep-blue oceans with green landmasses scrolling by, faint latitude
+// lines, and a curved specular sheen. (The Rob boss prize.)
+function fillGlobe(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save();
+  clipPaddle(ctx, cx, cy, h);
+  const x = cx - PADDLE.w / 2, y = cy - h / 2, w = PADDLE.w, t = performance.now() / 1000;
+  const ocean = ctx.createLinearGradient(x, 0, x + w, 0);
+  ocean.addColorStop(0, '#0e2f5e'); ocean.addColorStop(0.45, '#1b6fc0'); ocean.addColorStop(1, '#0c2a55');
+  ctx.fillStyle = ocean; ctx.fillRect(x, y, w, h);
+  // green landmasses scrolling upward → the globe "spins"
+  ctx.fillStyle = '#3f9a4a';
+  const scroll = (t * 13) % h;
+  for (const [fx, fy, bw, bh] of [[0.32, 0.08, 6, 9], [0.68, 0.4, 5, 7], [0.42, 0.72, 7, 8], [0.6, 1.0, 5, 6], [0.28, 1.28, 6, 7]] as const) {
+    const by = y + (((fy * h - scroll) % h) + h) % h;
+    ctx.beginPath(); ctx.ellipse(x + fx * w, by, bw * w / 16, bh, 0, 0, 7); ctx.fill();
+  }
+  // faint latitude lines + a left-edge sheen for a spherical read
+  ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.lineWidth = 1;
+  for (let yy = y + 7; yy < y + h; yy += 11) { ctx.beginPath(); ctx.moveTo(x, yy); ctx.lineTo(x + w, yy); ctx.stroke(); }
+  const hl = ctx.createLinearGradient(x, 0, x + w, 0);
+  hl.addColorStop(0, 'rgba(255,255,255,.4)'); hl.addColorStop(0.35, 'rgba(255,255,255,0)');
+  ctx.fillStyle = hl; ctx.fillRect(x, y, w, h);
+  skinHighlight(ctx, cx, cy, h);
+  ctx.restore();
+}
 const SKIN_RENDERERS: Record<string, CosmeticDraw> = {
+  'skin-hotdog': fillHotdog,
+  'skin-prism': fillPrism,
+  'skin-globe': fillGlobe,
   rainbow: fillRainbow,
   gold: fillGold,
   chrome: fillChrome,
@@ -736,6 +826,15 @@ const TRAIL_TINTS: Record<string, TrailTint> = {
   inferno: (i, n) => `hsl(${20 + (i / n) * 35},100%,${50 + (i / n) * 12}%)`, // red tail → yellow head
   lightning: () => '#8ab4ff',
   phoenix: (i, _n, t) => `hsl(${(t / 14 + i * 18) % 60},100%,58%)`, // animated red↔gold fire
+  'trail-fart': (i, _n, t) => { // a sickly swamp-gas cloud — noxious yellow-green roiling into olive-brown (no glow → reads as opaque gas)
+    const hue = 66 + 18 * Math.sin(t / 480 + i * 0.6); // yellow-green ↔ olive
+    const light = 33 + 9 * Math.sin(t / 300 + i * 0.9);
+    return `hsl(${hue},52%,${light}%)`;
+  },
+  'trail-blood': (i, n) => { // wet crimson at the head → dark clotted maroon at the tail (no glow → reads as opaque blood)
+    const f = n > 1 ? i / (n - 1) : 1;
+    return `hsl(${352 - f * 6},88%,${17 + f * 27}%)`;
+  },
   // --- exclusive trails ---
   'x-eclipse': (i, n, t) => {
     const f = i / n;
@@ -776,6 +875,52 @@ function drawTrail(ctx: CanvasRenderingContext2D, key: string, cx: number, cy: n
   const glow = TRAIL_GLOW.has(id);
   ctx.save();
   if (glow) ctx.globalCompositeOperation = 'lighter';
+  if (id === 'trail-fart') {
+    // A proper gas cloud: soft, lumpy puffs that swell + fade as they drift back off the paddle —
+    // densest where it's freshly emitted, billowing bigger and thinner as it dissipates behind.
+    const sink = h * 0.46; // gas hangs/settles low — pool it toward the bottom of the paddle, not its centre
+    for (let i = 0; i < n; i++) {
+      const f = (i + 1) / n;                     // 0 = tail (old, dispersed) → 1 = head (fresh by the paddle)
+      const age = 1 - f;
+      const col = tint(i, n, t);
+      const clear = col.replace('hsl(', 'hsla(').replace(')', ',0)'); // same hue, fully transparent edge
+      const base = PADDLE.w * (0.6 + age * 1.7); // swells with age
+      const baseA = 0.06 + 0.18 * f;             // fresher = denser
+      for (let k = 0; k < 2; k++) {              // two jittered overlapping puffs → a billowy, uneven cloud
+        const wob = Math.sin(t / 260 + i * 1.3 + k * 2.3);
+        const ox = wob * base * 0.4 + (k - 0.5) * base * 0.5;
+        const oy = sink + age * base * 0.5 + Math.cos(t / 300 + i + k * 1.9) * base * 0.3; // sink low, older puffs drift a bit lower
+        const pr = base * (0.6 + 0.3 * k);
+        const gx = pts[i].x + ox, gy = pts[i].y + oy;
+        const grad = ctx.createRadialGradient(gx, gy, 0, gx, gy, pr);
+        grad.addColorStop(0, col); grad.addColorStop(0.55, col); grad.addColorStop(1, clear);
+        ctx.globalAlpha = baseA;
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(gx, gy, pr, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    ctx.restore();
+    return;
+  }
+  if (id === 'trail-blood') {
+    // Wet, opaque blood: rounded globs that sag downward (gravity) and stretch longer + lower as they
+    // age, bright crimson at the head smearing to dark clotted maroon behind.
+    const sag = h * 0.16;
+    for (let i = 0; i < n; i++) {
+      const f = (i + 1) / n, age = 1 - f;
+      const a = 0.45 * Math.pow(f, 1.1);
+      if (a < 0.02) continue;
+      const w = PADDLE.w * (0.4 + 0.55 * f);
+      const hh = h * (0.4 + 0.5 * f) + age * sag * 1.4; // older globs elongate as they drip
+      ctx.globalAlpha = a;
+      ctx.fillStyle = tint(i, n, t);
+      ctx.beginPath();
+      ctx.ellipse(pts[i].x, pts[i].y + age * sag, w / 2, hh / 2, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+    return;
+  }
   for (let i = 0; i < n; i++) {
     const f = (i + 1) / n;                 // 0 → tail, 1 → head
     const alpha = 0.3 * Math.pow(f, 1.5);  // translucent, fading toward the tail
@@ -810,7 +955,22 @@ export function drawCosmeticPreview(canvas: HTMLCanvasElement, id: string, slot:
     const n = 6;
     ctx.save();
     if (glow) ctx.globalCompositeOperation = 'lighter';
-    for (let i = 0; i < n; i++) {
+    if (id === 'trail-fart') { // billowing gas puffs rising off the paddle (matches the in-game cloud)
+      for (let i = 0; i < n; i++) {
+        const f = (i + 1) / n, age = 1 - f;
+        const col = tint ? tint(i, n, 0) : '#7a8a3a';
+        const clear = col.replace('hsl(', 'hsla(').replace(')', ',0)');
+        const r = PADDLE.w * (0.6 + age * 1.6), py = cy - h / 2 - (n - i) * 9;
+        for (let k = 0; k < 2; k++) {
+          const gx = cx + (k - 0.5) * r * 0.6;
+          const grad = ctx.createRadialGradient(gx, py, 0, gx, py, r);
+          grad.addColorStop(0, col); grad.addColorStop(0.55, col); grad.addColorStop(1, clear);
+          ctx.globalAlpha = 0.1 + 0.2 * f;
+          ctx.fillStyle = grad;
+          ctx.beginPath(); ctx.arc(gx, py, r, 0, Math.PI * 2); ctx.fill();
+        }
+      }
+    } else for (let i = 0; i < n; i++) {
       const f = (i + 1) / n;
       ctx.globalAlpha = 0.32 * Math.pow(f, 1.4);
       ctx.fillStyle = tint ? tint(i, n, 0) : '#888';
@@ -872,9 +1032,38 @@ const HAT_RENDERERS: Record<string, CosmeticDraw> = {
   'x-jackpot': drawJackpotCrown,
   beret: drawBeret,
   catears: drawCatEars,
+  mushroom: drawMushroom,
   'x-voidcrown': drawVoidCrown,
   'x-prismhalo': drawPrismHalo,
 };
+
+// Cosmetic "mushroom cap": a red toadstool dome with white spots + a little cream gill-lip, perched on
+// the paddle's top end. Visual only — the Ruins B1 chest prize.
+function drawMushroom(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2;
+  const capW = PADDLE.w + 14, capH = 13, baseY = top - 1; // flat underside just above the paddle
+  ctx.save();
+  // cream gills/stem hint tucked under the cap
+  ctx.fillStyle = '#f2e4c9';
+  ctx.fillRect(cx - capW * 0.26, baseY - 1, capW * 0.52, 3);
+  // the red dome (upper half-ellipse)
+  ctx.fillStyle = '#d63a36';
+  ctx.beginPath();
+  ctx.ellipse(cx, baseY, capW / 2, capH, 0, Math.PI, 2 * Math.PI);
+  ctx.closePath();
+  ctx.fill();
+  // a darker underside lip for a touch of depth
+  ctx.fillStyle = '#b02a28';
+  ctx.fillRect(cx - capW / 2, baseY - 2, capW, 2);
+  // white spots scattered over the dome
+  ctx.fillStyle = '#fff6e9';
+  for (const [sx, sy, r] of [[-0.22, 0.5, 2.6], [0.18, 0.62, 3.0], [0.02, 0.84, 2.1], [-0.34, 0.22, 1.7], [0.34, 0.24, 1.8]] as const) {
+    ctx.beginPath();
+    ctx.arc(cx + sx * capW, baseY - sy * capH, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
 
 // Cosmetic "top hat": a little hat perched at the top end of the paddle. Visual only.
 function drawTopHat(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
