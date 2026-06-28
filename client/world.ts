@@ -1118,7 +1118,7 @@ export function startWorld(net: WorldNet): void {
   const minimap = document.createElement('canvas');
   minimap.width = 200; minimap.height = Math.round(200 * WORLD.h / WORLD.w);
   minimap.style.cssText =
-    'position:absolute;top:10px;right:10px;width:200px;border:2px solid #2a3550;border-radius:8px;' +
+    'position:absolute;top:48px;right:10px;width:200px;border:2px solid #2a3550;border-radius:8px;' + // below the topbar so it never covers the drive / back-to-pong buttons
     'box-shadow:0 6px 20px #0008;background:#1a2a1c;cursor:pointer;z-index:3;';
   minimap.title = 'Open full map (M)';
   overlay.appendChild(minimap);
@@ -3740,13 +3740,15 @@ export function startWorld(net: WorldNet): void {
     px(6, 2, 3, 3, 0xffffff); px(7, 3, 1, 1, 0x111111);                             // right googly eye
     g.generateTexture('w-pet-rock', 12, 10);
 
-    // Crypt Slime: a green gelatinous blob with two dark eyes (12×10 texels) — the Ruins capture pet.
+    // Crypt Slime: a green gelatinous blob with two beady eyes + a little tongue lolling out (12×11).
     g.clear();
     px(3, 2, 6, 1, 0x7ed06a); px(2, 3, 8, 2, 0x6fc25a);             // domed top
     px(1, 5, 10, 3, 0x5fae54); px(1, 8, 10, 1, 0x4d9444);          // wide body + shaded base
     px(3, 2, 2, 1, 0x9fe28a);                                       // highlight
     px(3, 4, 1, 2, 0x16210f); px(7, 4, 1, 2, 0x16210f);            // two beady eyes
-    g.generateTexture('w-pet-slime', 12, 10);
+    px(4, 7, 4, 1, 0x2a3a1a);                                       // mouth line
+    px(5, 8, 2, 3, 0xe2566a); px(5, 8, 2, 1, 0xf07a8a);            // a red tongue sticking out the bottom
+    g.generateTexture('w-pet-slime', 12, 11);
 
     // Dragon: a little red wyvern with spread bat-wings, a gold belly + horn (16×12). Flies above you.
     {
@@ -4685,6 +4687,10 @@ export function startWorld(net: WorldNet): void {
       } else if (ps.kind === 'pikachu') {
         // Face the way it's walking (flip horizontally) so it doesn't moonwalk.
         if (Math.abs(pvx) > 0.5) ps.sprite.setFlipX(pvx < 0);
+      } else if (ps.kind === 'slime') {
+        // Breathe: a gentle squash-stretch pulse (wider as it flattens), like it's a living blob.
+        const b = Math.sin(performance.now() / 520) * 0.09;
+        ps.sprite.setScale(TEXEL * (1 + b), TEXEL * (1 - b));
       }
     }
     // Tear down pets whose owner left the world or unequipped.
