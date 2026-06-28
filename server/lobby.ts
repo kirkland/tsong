@@ -1159,11 +1159,14 @@ export class Lobby {
       }
       // Pay the purse + grant every escaped-with cosmetic (spin prizes, the vault vehicle), THEN send
       // the wallet ONCE — so the shop reflects newly-owned items (no refresh-before-grant race).
-      const grants: Promise<unknown>[] = [];
-      const nick = conn.nickname ?? ''; // grantItem/housePay don't need the name (and won't clobber it) — never gate on it
-      for (const it of items) grants.push(grantItem(conn.pid, nick, it.item).catch((e) => console.error('dungeon item grant failed:', e)));
-      if (purse > 0) grants.push(this.housePay(conn.pid, nick, purse).then(() => this.refreshNetWorth().catch(() => {})).catch((e) => console.error('dungeon exit payout failed:', e)));
-      if (grants.length) Promise.allSettled(grants).then(() => this.sendWallet(ws));
+      const nick = conn.nickname ?? '', pid = conn.pid; // grantItem/housePay don't need the name (and won't clobber it)
+      void (async () => {
+        // Grant SEQUENTIALLY: `owned` is a read-modify-write, so concurrent grants clobber each other
+        // (only the last write survives). Awaiting each one keeps every prize.
+        for (const it of items) { try { await grantItem(pid, nick, it.item); } catch (e) { console.error('dungeon item grant failed:', e); } }
+        if (purse > 0) { try { await this.housePay(pid, nick, purse); await this.refreshNetWorth().catch(() => {}); } catch (e) { console.error('dungeon exit payout failed:', e); } }
+        if (items.length || purse > 0) this.sendWallet(ws); // one wallet push once everything's landed
+      })();
     }
     // escaped=false: run chests/items are simply discarded above (never committed) → re-lootable next run.
   }
