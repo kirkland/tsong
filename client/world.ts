@@ -882,6 +882,9 @@ export function startWorld(net: WorldNet): void {
   let dungeonImp: { x: number; y: number } | null = null; // the friendly B2 imp's world position (talk for a potion)
   let nearDungeonImp = false; // the imp is within talk range
   let impGavePotion = false;  // he hands out one potion per run (no farming)
+  let dungeonImp2: { x: number; y: number } | null = null; // a 2nd imp in the B5 chamber (post-Clarence) — 3 potions
+  let nearDungeonImp2 = false;
+  let imp2Gave = false;       // the B5 imp hands over his 3 potions once per run
   let dyingMan: { x: number; y: number } | null = null; // the bleeding B3 NPC who gives the key
   let dyingManSprite: Phaser.GameObjects.Image | null = null;
   let nearDyingMan = false;
@@ -1532,6 +1535,7 @@ export function startWorld(net: WorldNet): void {
     }
     // NPCs are solid — you bump into them rather than walking through
     if (dungeonImp && Math.hypot(wx - dungeonImp.x, wy - dungeonImp.y) < rad + DUNGEON_TILE * 0.4) return true;
+    if (dungeonImp2 && Math.hypot(wx - dungeonImp2.x, wy - dungeonImp2.y) < rad + DUNGEON_TILE * 0.4) return true;
     if (dyingMan && Math.hypot(wx - dyingMan.x, wy - dyingMan.y) < rad + DUNGEON_TILE * 0.4) return true;
     return false;
   }
@@ -1540,7 +1544,7 @@ export function startWorld(net: WorldNet): void {
   function buildFloor(sc: Phaser.Scene) {
     for (const o of dungeonObjs) o.destroy();
     dungeonObjs.length = 0;
-    dungeonTorches.length = 0; dungeonFlies.length = 0; dungeonImp = null; nearDungeonImp = false;
+    dungeonTorches.length = 0; dungeonFlies.length = 0; dungeonImp = null; nearDungeonImp = false; dungeonImp2 = null; nearDungeonImp2 = false;
     dyingMan = null; dyingManSprite = null; nearDyingMan = false;
     clarenceSprite = null; clarenceAnim = null; robBoss = null; nearRob = false; b6Minions.length = 0;
     for (const k in dungeonChestSprites) delete dungeonChestSprites[k];
@@ -1621,6 +1625,13 @@ export function startWorld(net: WorldNet): void {
       const cxw = ox + (cc + 0.5) * T, cyw = oy + (cr + 0.5) * T;
       const spr = sc.add.image(cxw, cyw, 'w-clarence').setOrigin(0.5, 0.92).setScale(sl * 1.5).setDepth(cyw); // a tall standing figure
       dungeonObjs.push(spr); clarenceSprite = spr; clarenceAnim = null;
+    }
+    // B5: once Clarence is down, a friendly imp loiters by the chamber's reward chests (talk → 3 potions).
+    if (currentFloor === 'B5' && clarenceDefeated && sc.textures.exists('w-demon')) {
+      const ic = 30, ir = 9; // a clear floor tile near the chests/aisle
+      const ix = ox + (ic + 0.5) * T, iy = oy + (ir + 0.5) * T;
+      const spr = sc.add.image(ix, iy, 'w-demon').setScale(sl).setOrigin(0.5, 0.62).setDepth(base + 4);
+      dungeonObjs.push(spr); dungeonImp2 = { x: ix, y: iy };
     }
     // B6: dress Rob's home office — desk + monitor, Rob seated at his PC (back to the door), a rug,
     // bookshelf, plant, a sunny window and his own grandiose framed portrait on the wall.
@@ -1730,7 +1741,7 @@ export function startWorld(net: WorldNet): void {
     setDungeonMusic(true);
     minimap.style.display = 'none'; help.style.display = 'none'; // no overworld minimap / drive hint underground
     dungeonHP = 100; lastGrassKey = ''; grassDanger = 0; potionCount = 0; // fresh run: no potions carried in
-    newMobsSeen.clear(); recentMob = -1; recentMobRun = 0; impGavePotion = false;
+    newMobsSeen.clear(); recentMob = -1; recentMobRun = 0; impGavePotion = false; imp2Gave = false;
     hasKey = false; keyTaken = false; unlockedDoors.clear(); switchOn = false; // fresh run: re-fetch the key, doors re-lock, lever resets
     clarenceDefeated = false; clarenceArmed = false; robDefeated = false; // fresh run: the Gatekeeper bars the way again, Rob's back at his PC
     lootItems.length = 0; lootOpen = false; lootPanel.style.display = 'none'; // fresh run loot
@@ -1796,6 +1807,37 @@ export function startWorld(net: WorldNet): void {
       pageI++; if (pageI >= pages.length) closeTalk(); else showPage();
     };
     function closeTalk() { window.clearInterval(timer); talkOpen = false; npcAdvance = null; npcClose = null; npcBox.style.display = 'none'; npcChoices.style.display = 'none'; npcPortrait.style.display = 'none'; }
+    npcClose = closeTalk;
+    showPage();
+  }
+  // The B5 chamber imp (post-Clarence): reassures you he's NOT the boss, hands over 3 potions, and
+  // really hammers home that you should DRINK them mid-fight.
+  function b5ImpTalk() {
+    if (talkOpen || dialogOpen) return;
+    const gave = !imp2Gave;
+    const pages = gave
+      ? ['Whoa, whoa — relax. I\'m not the boss.', "You look rattled. Here — three potions. On the house.", 'Now LISTEN to me. Press P to drink one. MID-fight. Even when the room\'s spinning. +10 HP each.', "People die clutching a full stash like it's a souvenir. Don't be a hero — USE them."]
+      : ['Still hoarding those potions? Press P. Mid-fight. I mean it.'];
+    talkOpen = true; keys.clear(); joyActive = false; prompt.style.display = 'none';
+    npcName.textContent = 'Imp'; npcBox.style.display = 'block'; npcChoices.style.display = 'none';
+    if (!npcPortrait.src.endsWith('/dungeon/imp_portrait.png')) npcPortrait.src = '/dungeon/imp_portrait.png';
+    npcPortrait.style.display = 'block';
+    let pageI = 0, typing = false, timer = 0, full = '';
+    const grantIfNeeded = () => {
+      if (gave && pageI === pages.length - 1 && !imp2Gave) {
+        imp2Gave = true; potionCount += 3;
+        tone(523, 0.08, 'square', 0.12, 784); window.setTimeout(() => tone(784, 0.13, 'square', 0.12, 1046), 80);
+        updateDungeonHud(); updateDungeonControls();
+      }
+    };
+    function showPage() {
+      const text = pages[pageI];
+      if (text === undefined) { closeTalk(); return; }
+      full = text; let shown = 0; typing = true; npcText.textContent = ''; npcHint.style.display = 'none';
+      timer = window.setInterval(() => { shown++; npcText.textContent = full.slice(0, shown); if (shown % 2 === 0) textBlip(); if (shown >= full.length) { window.clearInterval(timer); typing = false; npcHint.style.display = 'block'; grantIfNeeded(); } }, 30);
+    }
+    npcAdvance = () => { if (typing) { window.clearInterval(timer); typing = false; npcText.textContent = full; npcHint.style.display = 'block'; grantIfNeeded(); return; } pageI++; if (pageI >= pages.length) closeTalk(); else showPage(); };
+    function closeTalk() { window.clearInterval(timer); talkOpen = false; npcAdvance = null; npcClose = null; npcBox.style.display = 'none'; npcChoices.style.display = 'none'; npcPortrait.style.display = 'none'; nearDungeonImp2 = false; }
     npcClose = closeTalk;
     showPage();
   }
@@ -2426,6 +2468,7 @@ export function startWorld(net: WorldNet): void {
     if (nearSwitch) { flipSwitch(); return; }
     if (nearSwitchDoor) { trySwitchDoor(); return; }
     if (nearDungeonImp) { impTalk(); return; }
+    if (nearDungeonImp2) { b5ImpTalk(); return; }
     if (nearDyingMan) { dyingManTalk(); return; }
     if (nearRob) { robInterrupt(); return; }
     if (nearJailed) { net.bail(nearJailed.id); return; } // post their bail
@@ -2832,6 +2875,8 @@ export function startWorld(net: WorldNet): void {
     const nearDoorOrSwitch = nearLockedDoor || nearSwitch || nearSwitchDoor;
     nearDungeonImp = !!(inDungeon && dungeonImp && !nearExit && !nearStairs && !nearChestCell && !nearDoorOrSwitch
       && Math.hypot(selfX - dungeonImp.x, selfY - dungeonImp.y) < DUNGEON_TILE * 1.4);
+    nearDungeonImp2 = !!(inDungeon && dungeonImp2 && !nearExit && !nearStairs && !nearChestCell && !nearDoorOrSwitch
+      && Math.hypot(selfX - dungeonImp2.x, selfY - dungeonImp2.y) < DUNGEON_TILE * 1.4);
     nearDyingMan = !!(inDungeon && dyingMan && !keyTaken && !nearExit && !nearStairs && !nearChestCell && !nearDoorOrSwitch
       && Math.hypot(selfX - dyingMan.x, selfY - dyingMan.y) < DUNGEON_TILE * 1.4);
     nearRob = !!(inDungeon && robBoss && !robDefeated && !nearExit && !nearStairs && !nearChestCell && !nearDoorOrSwitch
@@ -2879,7 +2924,7 @@ export function startWorld(net: WorldNet): void {
       prompt.textContent = '🔧 Throw the switch';
     } else if (nearSwitchDoor) {
       prompt.textContent = '🔒 Sealed door';
-    } else if (nearDungeonImp) {
+    } else if (nearDungeonImp || nearDungeonImp2) {
       prompt.textContent = '💬 Talk to the Imp';
     } else if (nearDyingMan) {
       prompt.textContent = '🤢 Talk to the dying man (he reeks)';
@@ -2890,7 +2935,7 @@ export function startWorld(net: WorldNet): void {
     } else if (nearParcel) {
       prompt.textContent = parcelPrompt(nearParcel);
     }
-    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDyingMan || nearRob || nearJailed || nearParcel) && !dialogOpen && !talkOpen ? 'block' : 'none';
+    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDungeonImp2 || nearDyingMan || nearRob || nearJailed || nearParcel) && !dialogOpen && !talkOpen ? 'block' : 'none';
   }
 
   function maybeSendMove(now: number) {
