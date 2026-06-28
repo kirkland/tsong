@@ -75,13 +75,13 @@ export const DUNGEON_MOBS: MobDef[] = [
   // --- B4 (tier 4): the deep. Possessed Noam flips your controls; Grave Wisp drifts the cold dark. ---
   {
     id: 'noam', name: 'Possessed Noam', portrait: '👁️', power: 11, color: '#5a6a5e', tier: 4, bob: 'float',
-    bot: { react: 0.23, error: 54, predict: false, idleCenter: true }, mirror: true,
+    bot: { react: 0.23, error: 54, predict: false, idleCenter: true }, mirror: true, dropChance: 0.5,
     gimmick: { name: 'Possession', desc: 'Black-eyed and grinning — it FLIPS your controls.' },
     flavor: 'you know me… look closer.', tag: "Your friend's face, smiling. The eyes are all wrong.",
   },
   {
     id: 'josiel', name: 'Deranged Josiel', portrait: '🔫', power: 11, color: '#7a8a5a', tier: 4, bob: 'float',
-    bot: { react: 0.24, error: 60, predict: false, idleCenter: true }, blaster: true, fireRate: 1.7,
+    bot: { react: 0.24, error: 60, predict: false, idleCenter: true }, blaster: true, fireRate: 1.7, dropChance: 0.5,
     gimmick: { name: 'Blaster', desc: 'Fires shots that FREEZE your paddle — dodge them.' },
     flavor: 'hold still. this\'ll only sting.', tag: 'Wide-eyed, bloodshot, and far too happy to see you.',
   },
