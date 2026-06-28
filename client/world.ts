@@ -1767,7 +1767,7 @@ export function startWorld(net: WorldNet): void {
     if (talkOpen || dialogOpen) return;
     const gave = !impGavePotion;
     const pages = gave
-      ? ['Easy — not here to fight.', 'Plenty came through. Few came back.', 'Here — a potion. Press P. +10 HP, even mid-fight.']
+      ? ['Easy — not here to fight.', 'Plenty came through. Few came back.', 'Here — 3 potions. Press P. +10 HP each, even mid-fight.']
       : ['Still alive? Good.', 'P to drink. Works mid-fight. +10 HP.'];
     talkOpen = true; keys.clear(); joyActive = false; prompt.style.display = 'none';
     npcName.textContent = 'Imp'; npcBox.style.display = 'block'; npcChoices.style.display = 'none';

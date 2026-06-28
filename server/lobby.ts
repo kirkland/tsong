@@ -1160,8 +1160,9 @@ export class Lobby {
       // Pay the purse + grant every escaped-with cosmetic (spin prizes, the vault vehicle), THEN send
       // the wallet ONCE — so the shop reflects newly-owned items (no refresh-before-grant race).
       const grants: Promise<unknown>[] = [];
-      if (conn.nickname) for (const it of items) grants.push(grantItem(conn.pid, conn.nickname, it.item).catch((e) => console.error('dungeon item grant failed:', e)));
-      if (purse > 0 && conn.nickname) grants.push(this.housePay(conn.pid, conn.nickname, purse).then(() => this.refreshNetWorth().catch(() => {})).catch((e) => console.error('dungeon exit payout failed:', e)));
+      const nick = conn.nickname ?? ''; // grantItem/housePay don't need the name (and won't clobber it) — never gate on it
+      for (const it of items) grants.push(grantItem(conn.pid, nick, it.item).catch((e) => console.error('dungeon item grant failed:', e)));
+      if (purse > 0) grants.push(this.housePay(conn.pid, nick, purse).then(() => this.refreshNetWorth().catch(() => {})).catch((e) => console.error('dungeon exit payout failed:', e)));
       if (grants.length) Promise.allSettled(grants).then(() => this.sendWallet(ws));
     }
     // escaped=false: run chests/items are simply discarded above (never committed) → re-lootable next run.

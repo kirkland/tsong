@@ -811,7 +811,7 @@ export function startEncounter(opts: EncounterOpts): void {
         if (document.pointerLockElement === cv) document.exitPointerLock();
         song.pause();
         // Rob's three drops, in order of cruelty: Alabama → somewhere in Russia → Tonga (good luck)
-        const ROB_Q = [{ name: 'Alabama', lat: 32.8, lon: -86.8 }, { name: 'Novosibirsk, Russia', lat: 55.0, lon: 82.9 }, { name: 'Tonga', lat: -21.2, lon: -175.2 }];
+        const ROB_Q = [{ name: 'Alabama', lat: 32.8, lon: -86.8 }, { name: 'Novosibirsk', lat: 55.0, lon: 82.9 }, { name: 'Tonga', lat: -21.2, lon: -175.2 }];
         const pl = ROB_Q[bossCheckpoints - 1] ?? randomPlace();
         askMapTap({
           prompt: pl.name, lat: pl.lat, lon: pl.lon, onDone: (correct) => {
