@@ -4713,7 +4713,7 @@ export function startWorld(net: WorldNet): void {
       ps.lastX = ox; ps.lastY = oy;
       if (ps.kind === 'dragon') { // a dragon FLIES: it hovers above you, bobbing gently on its wingbeats
         const fly = 24 + Math.sin(performance.now() / 280) * 4; // time-only phase → smooth bob (no per-pixel jitter)
-        if (pvx < -0.4) ps.sprite.setFlipX(true); else if (pvx > 0.4) ps.sprite.setFlipX(false); // flip only on real travel
+        if (ps.x < ox - 6) ps.sprite.setFlipX(true); else if (ps.x > ox + 6) ps.sprite.setFlipX(false); // always turn to face you (sprite faces left by default)
         ps.sprite.setPosition(ps.x, ps.y - fly).setDepth(ps.y + 5000); // always drawn on top
       } else
       ps.sprite.setPosition(ps.x, ps.y).setDepth(ps.y); // depth-sort with everything else by y
