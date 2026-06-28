@@ -49,13 +49,13 @@ export const DUNGEON_MOBS: MobDef[] = [
   // --- B2 (tier 2): the floor turns to horror. Cursed Jsav won't stay down; The Warden walls the goal. ---
   {
     id: 'jsav', name: 'Cursed Jsav', portrait: '🫠', power: 7, color: '#7a8a6a', tier: 2, bob: 'float',
-    bot: { react: 0.27, error: 78, predict: false, idleCenter: true }, lives: 4,
+    bot: { react: 0.27, error: 78, predict: false, idleCenter: true }, lives: 4, dropChance: 0.35,
     gimmick: { name: 'Four Lives', desc: "Won't stay down — takes FOUR to put away." },
     flavor: 'you remember me…?', tag: 'A face you knew, dredged up wrong from the dark.',
   },
   {
     id: 'warden', name: 'The Warden', portrait: '🫥', power: 8, color: '#2e3a36', tier: 2, bob: 'float',
-    bot: { react: 0.28, error: 82, predict: false, idleCenter: true }, paddleScale: 2.0,
+    bot: { react: 0.28, error: 82, predict: false, idleCenter: true }, paddleScale: 2.0, dropChance: 0.35,
     gimmick: { name: 'Looming', desc: 'Its bulk fills the goal — a paddle twice your size.' },
     flavor: '…', tag: 'A tall, patient thing that has waited here a very long time.',
   },
@@ -68,7 +68,7 @@ export const DUNGEON_MOBS: MobDef[] = [
   },
   {
     id: 'hound', name: 'The Flayed Hound', portrait: '🐺', power: 11, color: '#9a2b32', tier: 3, bob: 'float',
-    bot: { react: 0.20, error: 56, predict: false, idleCenter: false }, turbo: true,
+    bot: { react: 0.20, error: 56, predict: false, idleCenter: false }, turbo: true, dropChance: 0.35,
     gimmick: { name: 'Frenzy', desc: 'The ball serves fast and blurs faster with every hit.' },
     flavor: '*wet snarl*', tag: 'Skinned, starving, and far too quick. It has your scent.',
   },
