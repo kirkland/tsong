@@ -102,7 +102,7 @@ export const DUNGEON_MOBS: MobDef[] = [
   //     power-up (a wrong answer costs you HP + a screen of red). ---
   {
     id: 'rob', name: 'Rob', portrait: '🗺️', power: 8, color: '#23408a', tier: 5, bob: 'float',
-    bot: { react: 0.25, error: 70, predict: false, idleCenter: true }, lives: 12, boss: true, bossPowers: ['mirror', 'paddle', 'quake'],
+    bot: { react: 0.25, error: 70, predict: false, idleCenter: true }, lives: 12, boss: true, bossPowers: ['paddle', 'mirror', 'quake'],
     fireRate: 1.7, gimmick: { name: 'Dead Reckoning', desc: 'Quizzes + escalates every 3 points.' },
     flavor: 'this is MY room.', tag: 'You interrupted his MapTap. He will make you regret it.',
   },
