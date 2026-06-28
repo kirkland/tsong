@@ -889,6 +889,7 @@ export function startWorld(net: WorldNet): void {
   let keyTaken = false;       // already looted the dying man this run → he's a corpse now
   const unlockedDoors = new Set<string>(); // 'floor:c,r' of 'L' doors opened with the key this run
   const openedChestsServer = new Set<string>(); // 'floor:col,row' the server says this account has opened
+  const runOpens = new Set<string>();           // chests opened THIS run (provisional) — rolled back on death, banked on escape
   const chestIsOpen = (c: number, r: number) => openedChestsServer.has(`${currentFloor}:${c},${r}`);
   // a locked door is open if unlocked THIS run (with the key) OR its guarded chest is already banked
   const doorIsOpen = (c: number, r: number) => {
@@ -1733,7 +1734,7 @@ export function startWorld(net: WorldNet): void {
     hasKey = false; keyTaken = false; unlockedDoors.clear(); switchOn = false; // fresh run: re-fetch the key, doors re-lock, lever resets
     clarenceDefeated = false; clarenceArmed = false; robDefeated = false; // fresh run: the Gatekeeper bars the way again, Rob's back at his PC
     lootItems.length = 0; lootOpen = false; lootPanel.style.display = 'none'; // fresh run loot
-    openedChestsServer.clear();
+    openedChestsServer.clear(); runOpens.clear();
     net.dungeonSync(); // ask the server which chests this account has already opened
     dungeonBanner.style.display = 'block'; dungeonControls.style.display = 'block'; lootBtn.style.display = 'block';
     dungeonChestCounter.style.display = 'block';
@@ -2065,7 +2066,7 @@ export function startWorld(net: WorldNet): void {
       }, 1100);
       return;
     }
-    openedChestsServer.add(id);                        // optimistic — the server confirms + pays/grants
+    openedChestsServer.add(id); runOpens.add(id);      // optimistic (provisional this run) — the server confirms + pays/grants
     dungeonChestSprites[`${c},${r}`]?.setTexture('w-chest-open');
     chestSound();
     net.dungeonChest(id);                              // → server: pay the coins from the House / grant the potion
@@ -2145,7 +2146,7 @@ export function startWorld(net: WorldNet): void {
           dungeonHP = Math.max(0, dungeonHP - r.hpLost);
           const markBox = () => { // the monster box is consumed only once its fight resolves (flee/death → retryable)
             if (cfg?.chestId == null) return;
-            openedChestsServer.add(cfg.chestId);
+            openedChestsServer.add(cfg.chestId); runOpens.add(cfg.chestId);
             dungeonChestSprites[`${cfg.chestC},${cfg.chestR}`]?.setTexture('w-chest-open');
           };
           if (r.result === 'capture' && cfg?.chestId) {            // caught it → server grants the pet (run-scoped)
@@ -2179,6 +2180,10 @@ export function startWorld(net: WorldNet): void {
   }
   function leaveDungeon(escaped = true) {
     net.dungeonExit(escaped); // escaped (walked out via B1 / beat the boss) → server pays the purse; else forfeit
+    // Bank or roll back this run's chest opens client-side, mirroring the server: escape commits them,
+    // death forfeits them (so openedChestsServer always reflects what's actually banked to the account).
+    if (!escaped) for (const id of runOpens) openedChestsServer.delete(id);
+    runOpens.clear();
     inDungeon = false;
     nearExit = false;
     dungeonPurseDisplay = 0;
@@ -2193,6 +2198,7 @@ export function startWorld(net: WorldNet): void {
     const d = WORLD_BUILDINGS.find((b) => b.kind === 'dungeon');
     if (d) { selfX = d.x + d.w / 2; selfY = d.y + d.h + 44; } // step back out the doorway
     enterChime();
+    if (escaped) checkProgressObjectives(); // only a clean escape banks chests → can complete "open every chest in the Ruins"
   }
   function openDialog(heading: string, sub: string, choices: { label: string; onPick: () => void }[]) {
     dialogOpen = true;
@@ -4802,7 +4808,7 @@ export function startWorld(net: WorldNet): void {
       updateNearBuilding();
     },
     chestAccepted(chest, coins, potions, _spin, prize, prizes) {
-      openedChestsServer.add(chest);
+      openedChestsServer.add(chest); runOpens.add(chest);
       if (chest.startsWith(currentFloor + ':')) dungeonChestSprites[chest.slice(currentFloor.length + 1)]?.setTexture('w-chest-open');
       if (prizes) for (const p of prizes) lootItems.push({ item: 'cosmetic', name: p }); // a multi-item haul (boss reward) → loot panel
       if (prize) { lootItems.push({ item: 'cosmetic', name: prize }); showToast(`📦✨ You found ${prize} — escape to keep it!`); }
@@ -4810,7 +4816,6 @@ export function startWorld(net: WorldNet): void {
       else if (coins) showToast(`📦 ${coins}🪙 added to your purse — escape to keep it!`);
       // spin chests (coins:0/potions:0) say nothing here — the wheel + its own toast handle it
       updateDungeonHud(); updateDungeonControls();
-      checkProgressObjectives(); // may complete "open every chest in the Ruins"
     },
     dungeonSpinLoot(reward) {
       if (reward.kind === 'item') { lootItems.push({ item: reward.item, name: reward.name }); }
