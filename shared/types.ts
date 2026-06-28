@@ -318,6 +318,7 @@ export function isExclusive(id: string): boolean {
 
 export const CHAT_MAX_LEN = 200; // max characters per chat message
 export const CHAT_HISTORY = 50; // recent messages kept/sent to new joiners
+export const WORLD_SAY_MAX = 120; // max characters in a World speech bubble (press '/' to talk)
 export const TICK_MS = 1000 / 60;
 export const MAX_BOUNCE = Math.PI / 3; // steepest deflection off a paddle edge
 export const SERVE_DELAY = 0.7; // seconds the ball pauses at center before launching
@@ -762,6 +763,16 @@ export interface LandMsg {
   bankCap: number;    // BANK_PARCEL_CAP — so the client can show "2 of 2 used"
 }
 
+// A live in-world chat line, fanned out to everyone in the World (not replayed on join). The
+// client pops `text` as a speech bubble over the avatar with id `id` for a few seconds.
+export interface WorldSayMsg {
+  type: 'worldSay';
+  id: string;   // speaker's avatar/connection id (matches WorldAvatar.id / YouMsg.id)
+  name: string; // speaker's nickname (for an optional log/fallback)
+  text: string;
+  say?: boolean; // true → spoken via the "Say" popup (Y); renders the bubble in purple
+}
+
 // --- Client -> Server ---
 export type ClientMsg =
   // pid = stable per-browser identity; color = chosen paddle color
@@ -831,7 +842,7 @@ export type ClientMsg =
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
   | { type: 'dailySpin' } // claim the once-per-24h reward spin
   | { type: 'stockInvest'; coin: string; amount: number; side?: StockSide } // open a long or short position
-  | { type: 'stockCashOut'; coin: string; side?: StockSide } // close a long or short position
+  | { type: 'stockCashOut'; coin: string; side?: StockSide; fraction?: number } // close a long/short position — all of it, or a 0–1 fraction (partial cash-out)
   | { type: 'getLoan'; amount: number } // borrow `amount` coins from Davis (owe 1.5× back by the daily 5pm collection)
   | { type: 'repayLoan' } // pay Davis the full 1.5× owed and clear the loan
   | { type: 'roulette'; bets: RouletteBet[] } // stake coins on a single spin of the casino wheel
@@ -851,7 +862,7 @@ export type ClientMsg =
   | { type: 'minesBet'; amount: number; mines: number } // start a Mines hand (1–24 mines on a 5×5 grid)
   | { type: 'minesReveal'; cell: number } // flip tile at index 0–24
   | { type: 'minesCashout' } // collect winnings on the current Mines hand
-  | { type: 'balanceSheetReq'; rank: number } // peek at a net-worth board player's balance sheet (by current rank)
+  | { type: 'balanceSheetReq'; rank?: number; self?: boolean } // peek at a net-worth board player's balance sheet (by rank, or self for the requesting player)
   | { type: 'lootBoxOpen' } // open a loot box: spend coins, roll a weighted prize (common cosmetic / House coins / capped-rare exclusive)
   | { type: 'marketList'; instanceId: number; ask: number } // list an owned exclusive instance on the marketplace for `ask` coins
   | { type: 'marketCancel'; listingId: number } // cancel one of your own listings
@@ -861,6 +872,7 @@ export type ClientMsg =
   | { type: 'worldEnter' } // step into the free-roam world map (start sending/receiving avatar positions)
   | { type: 'worldLeave' } // leave the world map
   | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null; pet?: string | null } // client-authoritative avatar position (world units), heading + car when driving, pet trailing
+  | { type: 'worldChat'; text: string; say?: boolean } // say a line in the World — pops as a speech bubble over your avatar; say=true (the Y popup) renders it purple
   // --- Robville land (the suburban neighborhood) ---
   | { type: 'landReq' } // request the current Robville parcel ownership/market book
   | { type: 'landBuyBank'; id: string } // buy an empty lot from the bank for PARCEL_PRICE (subject to BANK_PARCEL_CAP)
@@ -1222,6 +1234,7 @@ export interface ChatLine {
   player: boolean; // true if the sender held a paddle when they sent it
   color: string; // hex color of the sender's name
   command?: boolean; // true if this line is a slash command someone ran (styled apart)
+  whisper?: boolean; // true if this is a private /whisper line (rendered all-purple)
   time: number; // epoch ms, set by the server
 }
 
@@ -1343,6 +1356,7 @@ export type ServerMsg =
   | { type: 'dungeonSpin'; chest: string; segment: number; reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string } } // a spin chest: play the wheel, reward goes to run loot
   | { type: 'dungeonPurse'; coins: number } // current run-purse total (paid out only on a clean escape)
   | LandMsg
+  | WorldSayMsg
   | HouseMsg
   | HouseStateMsg
   | NetizenInfoMsg

@@ -416,6 +416,9 @@ wss.on('connection', (ws: WebSocket, req) => {
           lobby.worldMove(ws, msg.x, msg.y, typeof msg.a === 'number' ? msg.a : undefined, typeof msg.car === 'string' ? msg.car : null, typeof msg.pet === 'string' ? msg.pet : null);
         }
         break;
+      case 'worldChat':
+        if (typeof msg.text === 'string') lobby.worldChat(ws, msg.text, msg.say === true);
+        break;
       case 'landReq':
         lobby.sendLand(ws);
         break;
@@ -440,7 +443,10 @@ wss.on('connection', (ws: WebSocket, req) => {
         }
         break;
       case 'stockCashOut':
-        if (typeof msg.coin === 'string') lobby.stockCashOut(ws, msg.coin, msg.side === 'short' ? 'short' : 'long');
+        if (typeof msg.coin === 'string') {
+          const frac = typeof msg.fraction === 'number' ? msg.fraction : 1;
+          lobby.stockCashOut(ws, msg.coin, msg.side === 'short' ? 'short' : 'long', frac);
+        }
         break;
       case 'getLoan':
         if (typeof msg.amount === 'number') lobby.getLoanFor(ws, msg.amount);
@@ -500,7 +506,7 @@ wss.on('connection', (ws: WebSocket, req) => {
         lobby.minesCashout(ws);
         break;
       case 'balanceSheetReq':
-        if (typeof msg.rank === 'number') lobby.sendBalanceSheet(ws, msg.rank);
+        lobby.sendBalanceSheet(ws, msg.rank, msg.self);
         break;
       case 'eloProfileReq':
         if (typeof msg.rank === 'number') lobby.sendEloProfile(ws, msg.rank, msg.self);

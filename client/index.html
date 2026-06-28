@@ -1889,6 +1889,51 @@
       .coin-amt::-webkit-outer-spin-button, .coin-amt::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
       .coin-cash { border-color: #1f5a3a !important; background: #0e2419 !important; color: #5fe0a0 !important; }
       .coin-cash:hover:not(:disabled) { background: #14361f !important; }
+      /* Floating wallet-change indicator: pops under the toolbar coin counter, drifts down + fades. */
+      .coin-delta {
+        position: fixed; transform: translateX(-50%); z-index: 100002; pointer-events: none;
+        font: 800 15px ui-monospace, monospace; text-shadow: 0 1px 3px #000c, 0 0 4px #000;
+        white-space: nowrap; animation: coinDelta 1.6s ease-out forwards;
+      }
+      .coin-delta.pos { color: #5fe0a0; }
+      .coin-delta.neg { color: #ff7a7a; }
+      /* Pop in, hold steady for ~1s, then fade out in place (no drift). */
+      @keyframes coinDelta {
+        0%   { opacity: 0; }
+        8%   { opacity: 1; }
+        65%  { opacity: 1; }
+        100% { opacity: 0; }
+      }
+      /* Sell modal — close a position fully or sell a custom slice. */
+      .sell-modal {
+        position: fixed; inset: 0; z-index: 100001; display: flex; align-items: center; justify-content: center;
+        background: #060a14cc; backdrop-filter: blur(2px);
+      }
+      .sell-box {
+        width: min(340px, 92vw); background: #121a2e; border: 1px solid #2a3550; border-radius: 12px;
+        padding: 18px; box-shadow: 0 18px 50px #000a; display: flex; flex-direction: column; gap: 12px;
+        font-size: 13px; color: #cdd8f5;
+      }
+      .sell-title { font-size: 16px; font-weight: 800; color: #e8eefc; letter-spacing: .3px; }
+      .sell-sum { font-size: 12px; color: #9fb0d8; }
+      .sell-sum .pl-up { color: #6ee7a8; } .sell-sum .pl-down { color: #ff7a7a; }
+      .sell-slider { width: 100%; accent-color: #5fe0a0; cursor: pointer; }
+      .sell-amt-row { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #9fb0d8; }
+      .sell-amt {
+        width: 96px; text-align: center; font-weight: 700; color: #ffd166; font-size: 13px;
+        background: #0b1120; border: 1px solid #2a3550; border-radius: 6px; padding: 5px 6px;
+        font-family: ui-monospace, monospace; -moz-appearance: textfield;
+      }
+      .sell-amt::-webkit-outer-spin-button, .sell-amt::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+      .sell-preview { font-size: 13px; color: #e8eefc; min-height: 18px; }
+      .sell-preview b { color: #ffd166; } .sell-note { color: #6a7596; font-size: 11px; font-weight: 400; }
+      .sell-btns { display: flex; gap: 6px; margin-top: 2px; }
+      .sell-btns button {
+        font: inherit; font-size: 12px; font-weight: 700; padding: 7px 10px; border-radius: 7px;
+        border: 1px solid #2a3550; background: #1a2035; color: #9fb0d8; cursor: pointer; flex: 1;
+      }
+      .sell-btns button:hover { background: #2d4070; color: #fff; }
+      .sell-btns .sell-cancel { flex: 0 0 auto; }
       /* Screen-effect power-up overlays (sit over the board in any view) */
       #screenFx {
         position: absolute; top: 0; left: 50%; transform: translateX(-50%);

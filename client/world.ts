@@ -34,6 +34,7 @@ import {
   ROBVILLE_BULBS,
   PARCEL_PRICE,
   BANK_PARCEL_CAP,
+  WORLD_SAY_MAX,
   type LandParcelView,
   JAIL,
   JAIL_WALL,
@@ -50,6 +51,7 @@ import {
   DUNGEON_TIER_COINS,
   DUNGEON_CHEST_CONTENTS,
   COSMETICS,
+  type ChatLine,
 } from '../shared/types';
 
 // What the world needs from the rest of the app. main.ts supplies these (see startWorld call).
@@ -85,12 +87,20 @@ export interface WorldNet {
   landList(id: string, ask: number): void;  // list your lot for sale at `ask` coins
   landUnlist(id: string): void;             // take your lot back off the market
   landBuy(id: string): void;                // buy a listed lot from its owner at the asking price
+  say(text: string, asSay?: boolean): void; // → speech bubble over your avatar (+ to others in-world); asSay=true → purple "Say" bubble
+  sendChat(text: string): void;             // → main game chat, so the line also shows in the side feed
+  chatHistory(): ChatLine[];                // recent chat backlog, seeded (hidden) so it's there on T
+  // Slash-command autocomplete, shared with the main chat (same COMMANDS list).
+  worldChatMenu(text: string): { label: string; hint: string; complete: string; enabled: boolean }[];
+  worldRunChatCommand(text: string): 'ran' | 'rejected' | 'passthrough';
 }
 
 // --- module-level controller so feedWorld()/isWorldOpen() can reach the live overlay ---
 interface Controller {
   feed(avatars: WorldAvatar[]): void;
   feedLand(parcels: LandParcelView[], bankBought: number, bankCap: number): void; // Robville land book
+  feedSay(id: string, name: string, text: string, say: boolean): void; // an in-world line → speech bubble (say=purple)
+  feedChat(line: ChatLine): void; // a new chat line (mirrors the main chat into the side feed)
   reenter(): void; // re-send worldEnter after a socket reconnect (server forgot us on drop)
   dungeonChests(opened: string[]): void;                          // server's list of chests we've opened
   chestAccepted(chest: string, coins: number, potions: number, spin?: boolean, prize?: string, prizes?: string[]): void; // server accepted a chest open (prize/prizes = cosmetic names)
@@ -135,6 +145,16 @@ export function feedDungeonPurse(coins: number): void {
 /** Push the latest Robville land book (from a `land` server message) into the live overlay. */
 export function feedLand(parcels: LandParcelView[], bankBought: number, bankCap: number): void {
   controller?.feedLand(parcels, bankBought, bankCap);
+}
+
+/** Pop a speech bubble over a world avatar (from a `worldSay` server message). */
+export function feedSay(id: string, name: string, text: string, say = false): void {
+  controller?.feedSay(id, name, text, say);
+}
+
+/** Mirror a chat line (from a `chat` server message) into the in-world side feed. No-op if closed. */
+export function feedWorldChat(line: ChatLine): void {
+  controller?.feedChat(line);
 }
 
 /** Re-assert our presence in the world after a reconnect (the server drops us on socket close). */
@@ -919,6 +939,12 @@ export function startWorld(net: WorldNet): void {
   // Per-lot Phaser objects (the tinted pad + its hovering sign), built once in create().
   const parcelGfx = new Map<string, { pad: Phaser.GameObjects.Rectangle; sign: Phaser.GameObjects.Text }>();
 
+  // --- in-world speech bubbles (lines said via the chat box pop briefly over the avatar) ---
+  const SAY_MS = 5000;                                 // how long a speech bubble lingers
+  const SAY_COLOR = '#c9a8ff';                         // purple, for lines spoken via the "Say" popup (Y)
+  const CHAT_COLOR = '#ffeb3b';                         // yellow, for lines sent through the chat (T)
+  const says = new Map<string, { text: string; until: number; purple: boolean }>(); // avatar id → its current bubble
+
   // --- NPC state ---
   const npcs: LiveNpc[] = [];          // populated in create()
   let nearNpc: LiveNpc | null = null;  // townsperson within talking range
@@ -1058,6 +1084,263 @@ export function startWorld(net: WorldNet): void {
     'background:#e8b84b;color:#1a1408;border:none;border-radius:10px;padding:11px 18px;font-size:15px;' +
     'font-weight:700;box-shadow:0 6px 20px #0008;z-index:2;';
   overlay.appendChild(prompt);
+
+  // --- in-world chat (middle-left, no background — just floating text). It's the SAME chat as the
+  // main game: lines stream in via feedChat() (mirrored from the server `chat` message). Press T to
+  // pop a minimal input; what you send goes to the main chat (so it lands here) AND pops a speech
+  // bubble over your avatar. Lines fade when you're idle; opening the input reveals the backlog. ---
+  const FADE_HOLD = 7000, FADE_OUT = 1200; // ms a line stays solid, then fades out
+  let chatActive = false;
+  const fades = new WeakMap<HTMLElement, Animation>();
+  const chatWrap = document.createElement('div');
+  chatWrap.style.cssText =
+    'position:absolute;left:16px;top:50%;transform:translateY(-50%);z-index:3;' +
+    'width:min(42vw,440px);display:flex;flex-direction:column;pointer-events:none;';
+  const chatLines = document.createElement('div');
+  chatLines.style.cssText =
+    'display:flex;flex-direction:column;gap:2px;max-height:26vh;overflow-y:auto;overflow-x:hidden;' +
+    'padding-left:6px;scrollbar-width:thin;scrollbar-color:#ffffff44 transparent;';
+  const chatInputRow = document.createElement('div');
+  chatInputRow.style.cssText = 'display:none;align-items:center;gap:7px;margin-top:8px;padding-left:6px;';
+  const chatPrompt = document.createElement('span');
+  chatPrompt.textContent = 'Say:';
+  chatPrompt.style.cssText =
+    'color:#ffe14d;font:800 14px system-ui,sans-serif;text-shadow:0 1px 3px #000,0 0 5px #000;';
+  const chatInput = document.createElement('input');
+  chatInput.maxLength = 200;
+  chatInput.autocomplete = 'off';
+  chatInput.placeholder = 'press Enter to send · Esc to cancel';
+  chatInput.style.cssText =
+    'flex:1;pointer-events:auto;background:#0c1330b0;border:none;border-bottom:2px solid #ffe14d;' +
+    'color:#fff;font:600 15px system-ui,sans-serif;padding:5px 8px;outline:none;border-radius:5px 5px 0 0;' +
+    'text-shadow:0 1px 2px #000;';
+  chatInputRow.append(chatPrompt, chatInput);
+  // Slash-command autocomplete popup (same COMMANDS as the main chat), shown just above the input.
+  const cmdMenu = document.createElement('div');
+  cmdMenu.style.cssText =
+    'display:none;flex-direction:column;gap:1px;margin-top:6px;pointer-events:auto;background:#0c1330f0;' +
+    'border:1px solid #3a4ea8;border-radius:8px;padding:4px;max-height:30vh;overflow-y:auto;' +
+    'box-shadow:0 6px 20px #0008;scrollbar-width:thin;scrollbar-color:#ffffff44 transparent;';
+  chatWrap.append(chatLines, cmdMenu, chatInputRow);
+  overlay.appendChild(chatWrap);
+
+  // --- slash-command menu state + behaviour ---
+  let cmdItems: { label: string; hint: string; complete: string; enabled: boolean }[] = [];
+  let cmdIndex = 0;
+  function renderCmdMenu() {
+    cmdMenu.replaceChildren();
+    cmdItems.forEach((it, i) => {
+      const row = document.createElement('div');
+      row.style.cssText =
+        'display:flex;gap:8px;align-items:baseline;padding:4px 7px;border-radius:5px;cursor:pointer;' +
+        (i === cmdIndex ? 'background:#2a3a6e;' : '') + (it.enabled ? '' : 'opacity:.5;');
+      const name = document.createElement('span');
+      name.textContent = it.label;
+      name.style.cssText = 'color:#cfe0ff;font:800 13px system-ui,sans-serif;white-space:nowrap;';
+      const hint = document.createElement('span');
+      hint.textContent = it.hint;
+      hint.style.cssText = 'color:#8aa0d8;font:600 12px system-ui,sans-serif;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      row.append(name, hint);
+      row.addEventListener('mousedown', (e) => { e.preventDefault(); cmdIndex = i; completeCmd(); });
+      cmdMenu.append(row);
+      if (i === cmdIndex) row.scrollIntoView({ block: 'nearest' });
+    });
+    cmdMenu.style.display = 'flex';
+  }
+  function refreshCmdMenu() {
+    cmdItems = chatActive ? net.worldChatMenu(chatInput.value) : [];
+    if (!cmdItems.length) { cmdMenu.style.display = 'none'; return; }
+    if (cmdIndex >= cmdItems.length) cmdIndex = 0;
+    renderCmdMenu();
+  }
+  function closeCmdMenu() { cmdItems = []; cmdMenu.style.display = 'none'; }
+  // Autocomplete the highlighted row into the input (Tab, or click), then re-suggest.
+  function completeCmd() {
+    const it = cmdItems[cmdIndex];
+    if (!it) return;
+    chatInput.value = it.complete;
+    chatInput.focus();
+    chatInput.setSelectionRange(it.complete.length, it.complete.length);
+    refreshCmdMenu();
+  }
+
+  function armFade(el: HTMLElement) {
+    const anim = el.animate(
+      [
+        { opacity: 1, offset: 0 },
+        { opacity: 1, offset: FADE_HOLD / (FADE_HOLD + FADE_OUT) },
+        { opacity: 0, offset: 1 },
+      ],
+      { duration: FADE_HOLD + FADE_OUT, easing: 'linear', fill: 'forwards' },
+    );
+    fades.set(el, anim);
+    anim.onfinish = () => { if (!chatActive) el.style.visibility = 'hidden'; };
+  }
+  function pushChatLine(line: ChatLine, seed = false) {
+    const row = document.createElement('div');
+    row.style.cssText =
+      'font:600 14px system-ui,sans-serif;line-height:1.35;word-break:break-word;' +
+      'text-shadow:0 1px 3px #000,0 0 5px #000,0 0 2px #000;';
+    const who = document.createElement('span');
+    who.textContent = line.player && !line.whisper ? `${line.from} (playing)` : line.from;
+    who.style.color = line.color || '#cdd8f5';
+    who.style.fontWeight = '800';
+    const body = document.createElement('span');
+    body.textContent = `: ${line.text}`;
+    body.style.color = line.whisper ? (line.color || '#c9a8ff') : (line.command ? '#ffd27d' : '#f3f6ff');
+    row.append(who, body);
+    chatLines.append(row);
+    while (chatLines.childElementCount > 60) chatLines.firstElementChild!.remove();
+    chatLines.scrollTop = chatLines.scrollHeight; // keep the newest line in view
+    // Seeded backlog: park it hidden so it's instantly there when you press T, but doesn't flash on
+    // entry. Live lines either show solid (if you're already typing) or fade after a beat.
+    if (seed) { row.style.visibility = 'hidden'; row.style.opacity = '0'; }
+    else if (chatActive) { row.style.opacity = '1'; }
+    else { armFade(row); }
+  }
+  // Seed the recent backlog (hidden). Pressing T reveals it; otherwise it stays out of the way.
+  for (const line of net.chatHistory()) pushChatLine(line, true);
+
+  function openChat(initial = '') {
+    if (chatActive || sayActive || talkOpen || dialogOpen) return;
+    chatActive = true;
+    keys.clear(); joyActive = false; // stop any walk-in-progress while typing
+    for (const el of Array.from(chatLines.children) as HTMLElement[]) {
+      fades.get(el)?.cancel();
+      el.style.visibility = 'visible';
+      el.style.opacity = '1';
+    }
+    chatLines.style.pointerEvents = 'auto'; // let the wheel/drag scroll the backlog while typing
+    chatLines.scrollTop = chatLines.scrollHeight;
+    chatInputRow.style.display = 'flex';
+    prompt.style.display = 'none';
+    chatBtn.style.display = 'none';
+    chatInput.value = initial; // '/' opens pre-filled with a slash so you can type a command
+    chatInput.focus();
+    chatInput.setSelectionRange(initial.length, initial.length);
+    refreshCmdMenu(); // show command suggestions immediately if we opened on '/'
+  }
+  function closeChat() {
+    if (!chatActive) return;
+    chatActive = false;
+    closeCmdMenu();
+    chatLines.style.pointerEvents = 'none'; // back to click-through so drag-to-walk works
+    chatInputRow.style.display = 'none';
+    chatBtn.style.display = 'flex';
+    chatInput.blur();
+    for (const el of Array.from(chatLines.children) as HTMLElement[]) {
+      if (el.style.visibility === 'hidden') continue; // already faded out — leave it gone
+      armFade(el);
+    }
+  }
+  // Send the current input: run it as a slash command, or post it as a chat line (+ speech bubble).
+  function submitChat() {
+    const text = chatInput.value.trim();
+    chatInput.value = '';
+    closeCmdMenu();
+    if (text) {
+      const res = net.worldRunChatCommand(text); // /ff, /tip, /whisper, /powerup, …
+      if (res === 'rejected') { chatInput.value = text; refreshCmdMenu(); return; } // incomplete — keep it
+      if (res === 'passthrough') {
+        net.sendChat(text);                    // → main game chat → shows in this side feed (+ main chat)
+        // Slash text that isn't a known command goes to chat but never pops a public speech bubble.
+        if (!text.startsWith('/')) {
+          const said = text.slice(0, WORLD_SAY_MAX);
+          net.say(said, false);                // → yellow speech bubble over your avatar (chat line)
+          // Optimistic local echo so your own bubble pops instantly (the server also echoes it back).
+          says.set(net.selfId(), { text: said, until: performance.now() + SAY_MS, purple: false });
+        }
+      } // 'ran' → the command already did its thing
+    }
+    closeChat();
+  }
+  chatInput.addEventListener('input', () => refreshCmdMenu());
+  chatInput.addEventListener('keydown', (e) => {
+    e.stopPropagation(); // keep the world's capture handler from acting on what we type
+    const menuOpen = cmdItems.length > 0;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      // With the menu open, Enter runs the highlighted command (completing it if it needs more).
+      if (menuOpen) {
+        const it = cmdItems[cmdIndex];
+        const res = net.worldRunChatCommand(it.complete.trimEnd());
+        if (res === 'ran') { chatInput.value = ''; closeCmdMenu(); closeChat(); }
+        else completeCmd(); // needs args (or disabled) — drop the completion in and keep suggesting
+        return;
+      }
+      submitChat();
+    } else if (e.key === 'Tab' && menuOpen) {
+      e.preventDefault();
+      completeCmd();
+    } else if (e.key === 'ArrowDown' && menuOpen) {
+      e.preventDefault(); cmdIndex = (cmdIndex + 1) % cmdItems.length; renderCmdMenu();
+    } else if (e.key === 'ArrowUp' && menuOpen) {
+      e.preventDefault(); cmdIndex = (cmdIndex - 1 + cmdItems.length) % cmdItems.length; renderCmdMenu();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      if (menuOpen) closeCmdMenu(); // first Esc closes the menu; next closes the chat
+      else { chatInput.value = ''; closeChat(); }
+    }
+  });
+  chatInput.addEventListener('blur', () => { if (chatActive) closeChat(); });
+
+  // --- "Say something" popup (press Y): the classic bottom-center box that ONLY pops a speech
+  // bubble over your avatar — it does NOT go into the chat feed. (T/'/' is the full chat.) ---
+  let sayActive = false;
+  const sayBox = document.createElement('input');
+  sayBox.type = 'text';
+  sayBox.maxLength = WORLD_SAY_MAX;
+  sayBox.placeholder = 'Say something…  (Enter to send · Esc to cancel)';
+  sayBox.style.cssText =
+    'position:absolute;left:50%;bottom:84px;transform:translateX(-50%);display:none;width:min(440px,82vw);' +
+    'background:#0c1330ee;color:#eef3ff;border:1px solid #3a4ea8;border-radius:10px;padding:11px 14px;' +
+    'font-size:15px;font-family:inherit;outline:none;box-shadow:0 6px 20px #0008;z-index:4;';
+  overlay.appendChild(sayBox);
+  function openSay() {
+    if (sayActive || chatActive || talkOpen || dialogOpen) return;
+    sayActive = true;
+    keys.clear(); joyActive = false; // stop walking while typing
+    sayBox.value = '';
+    sayBox.style.display = 'block';
+    prompt.style.display = 'none';
+    chatBtn.style.display = 'none';
+    sayBox.focus();
+  }
+  function closeSay() {
+    if (!sayActive) return;
+    sayActive = false;
+    sayBox.style.display = 'none';
+    chatBtn.style.display = 'flex';
+    sayBox.blur();
+  }
+  sayBox.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') {
+      const text = sayBox.value.trim();
+      if (text) {
+        const said = text.slice(0, WORLD_SAY_MAX);
+        net.say(said, true);                    // purple bubble only — not added to the chat feed
+        says.set(net.selfId(), { text: said, until: performance.now() + SAY_MS, purple: true }); // instant local echo
+      }
+      closeSay();
+    } else if (e.key === 'Escape') {
+      closeSay();
+    }
+  });
+  sayBox.addEventListener('blur', () => { if (sayActive) closeSay(); });
+
+  // Touch affordance: a little 💬 button (bottom-right) opens the chat for players without a
+  // keyboard. Hidden while the box is already open.
+  const chatBtn = document.createElement('button');
+  chatBtn.type = 'button';
+  chatBtn.textContent = '💬';
+  chatBtn.title = 'Say something (T)';
+  chatBtn.style.cssText =
+    'position:absolute;right:14px;bottom:14px;display:flex;align-items:center;justify-content:center;' +
+    'width:48px;height:48px;cursor:pointer;background:#243a6bcc;color:#cfe0ff;border:1px solid #3a558f;' +
+    'border-radius:50%;font-size:22px;box-shadow:0 6px 20px #0008;z-index:3;';
+  chatBtn.onclick = () => openChat();
+  overlay.appendChild(chatBtn);
 
   // Jail banner (top-center) — shown while you're locked up. You can't bail yourself; you have to
   // wait for another player to walk up to the bars and post your bail.
@@ -1286,8 +1569,8 @@ export function startWorld(net: WorldNet): void {
     const now = performance.now();
     if (helpFlash && now < helpFlashUntil) { help.innerHTML = `<span style="color:#ffd166">${helpFlash}</span>`; return; }
     help.innerHTML = driving
-      ? 'W/S or ↑/↓ throttle · A/D or ←/→ steer · drag to drive · <b>F</b> get out'
-      : 'WASD / arrows or drag to walk · <b>F</b> to drive · <b>Space</b> to talk / enter';
+      ? 'W/S or ↑/↓ throttle · A/D or ←/→ steer · drag to drive · <b>F</b> get out · <b>T</b> chat · <b>Y</b> say'
+      : 'WASD / arrows or drag to walk · <b>F</b> drive · <b>Space</b> enter · <b>T</b> chat · <b>Y</b> say';
   }
 
   // --- building entry ---
@@ -2611,6 +2894,9 @@ export function startWorld(net: WorldNet): void {
     if (isEncounterOpen()) return; // the battle overlay owns input while it's up
     unlockAudio();
     const k = e.key.toLowerCase();
+    // While a chat/say input is open it owns the keyboard — let every keystroke (incl. Esc/Enter,
+    // handled by the input itself) flow through untouched, and never treat them as movement.
+    if (chatActive || sayActive) return;
     if (inDungeon && k === 'p') { e.preventDefault(); usePotion(); return; } // drink a potion (+10 HP)
     if (inDungeon && k === 'l') { e.preventDefault(); toggleLoot(); return; } // 🎒 toggle the run-loot panel
     if (k === 'escape') {
@@ -2619,6 +2905,12 @@ export function startWorld(net: WorldNet): void {
       return;
     }
     if (k === 'm') { e.preventDefault(); e.stopPropagation(); toggleFullMap(); return; } // M → full map
+    // T opens the chat input; '/' opens it pre-filled with a slash (for chat commands). Both swallow
+    // the key so it isn't typed into the box twice.
+    if (k === 't' && !talkOpen && !dialogOpen) { e.preventDefault(); e.stopPropagation(); openChat(); return; }
+    if (k === '/' && !talkOpen && !dialogOpen) { e.preventDefault(); e.stopPropagation(); openChat('/'); return; }
+    // Y opens the classic "Say something" popup — a speech bubble over your head, NOT into the chat.
+    if (k === 'y' && !talkOpen && !dialogOpen) { e.preventDefault(); e.stopPropagation(); openSay(); return; }
     // While chatting, Enter / Space / E advances the dialogue; movement is frozen.
     if (talkOpen) {
       if (k === 'enter' || k === ' ' || k === 'e') { e.preventDefault(); e.stopPropagation(); npcAdvance?.(); }
@@ -2642,6 +2934,9 @@ export function startWorld(net: WorldNet): void {
   }
   function onPointerDown(e: PointerEvent) {
     unlockAudio();
+    // A tap anywhere but the open input dismisses it (and doesn't also start a walk).
+    if (chatActive) { if (!(e.target instanceof Node && chatWrap.contains(e.target))) closeChat(); return; }
+    if (sayActive) { if (e.target !== sayBox) closeSay(); return; }
     // Ignore drags that start on a chrome button or while a modal/dialogue is up.
     if (dialogOpen || talkOpen || (e.target instanceof Element && e.target.closest('button'))) return;
     // Tapped a netizen avatar? → fire the challenge hook instead of starting to walk.
@@ -3029,6 +3324,7 @@ export function startWorld(net: WorldNet): void {
     smokeT: number; sx: number; sy: number; // exhaust-smoke emit cooldown + last position (movement gate)
     label: Phaser.GameObjects.Text;
     bubble: Phaser.GameObjects.Text;  // netizen speech bubble (hidden for humans)
+    bubbleBg: Phaser.GameObjects.NineSlice; // rounded panel drawn behind the bubble text
     bubbleNextAt: number;             // when this bot picks its next line
     // smoothed render position for remote avatars (we lerp toward the broadcast)
     rx: number; ry: number; ra: number;
@@ -3096,6 +3392,11 @@ export function startWorld(net: WorldNet): void {
     fontFamily: 'system-ui, sans-serif', fontSize: '11px', color: '#ffffff',
     stroke: '#0b1020', strokeThickness: 4, resolution: 2,
   };
+  // Speech-bubble panel ('w-bubble' 9-slice): authored big (radius 16, corner region 24) then shrunk
+  // on the avatar so the on-screen radius is small (~16·0.3·ZOOM ≈ 10px, like the '/' chat popup) and
+  // the border stays a thin hairline (~3·0.3·ZOOM ≈ 1.8px).
+  const BUBBLE_CORNER = 24;
+  const BUBBLE_BG_SCALE = 0.3;
 
   function makeTextures(scene: Phaser.Scene) {
     const g = scene.make.graphics({ x: 0, y: 0 }, false);
@@ -3729,6 +4030,27 @@ export function startWorld(net: WorldNet): void {
       px(22, 10, 2, 4, 0xffffff);                              // windshield strip
       px(10, 7, 11, 1, 0xffffff); px(10, 16, 11, 1, 0xffffff); // roll bars
       g.generateTexture('w-monster-roof', 34, 24);
+    }
+    // --- speech-bubble panel: a rounded rect drawn on a 2D canvas (which anti-aliases properly,
+    // unlike Phaser's pixel-art Graphics) and used as a LINEAR-filtered 9-slice. That keeps the
+    // corners smooth at any bubble size and any camera zoom, instead of the chunky vector jaggies. ---
+    {
+      const S = 96, rad = 16, bw = 3; // authored big so the AA is dense; scaled down on the avatar
+      const cv = document.createElement('canvas');
+      cv.width = S; cv.height = S;
+      const ctx = cv.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = 'rgba(27,37,66,0.97)';  // #1b2542 panel (nearly opaque)
+        ctx.strokeStyle = 'rgba(11,16,32,0.9)'; // #0b1020 hairline border
+        ctx.lineWidth = bw;
+        const o = bw / 2;
+        ctx.beginPath();
+        ctx.roundRect(o, o, S - bw, S - bw, rad);
+        ctx.fill();
+        ctx.stroke();
+      }
+      scene.textures.addCanvas('w-bubble', cv);
+      scene.textures.get('w-bubble').setFilter(Phaser.Textures.FilterMode.LINEAR);
     }
 
     // --- Pets ---------------------------------------------------------------------------
@@ -4602,7 +4924,7 @@ export function startWorld(net: WorldNet): void {
       maybeSendMove(now);
 
       // place our avatar straight from authoritative state (zero latency)
-      if (self) placeAvatar(self, selfX, selfY, facing, driving, net.color(), net.name() || 'you');
+      if (self) { placeAvatar(self, selfX, selfY, facing, driving, net.color(), net.name() || 'you'); applySay(self, net.selfId(), now); }
 
       // reconcile + lerp remote avatars
       const seen = new Set<string>();
@@ -4623,7 +4945,7 @@ export function startWorld(net: WorldNet): void {
         const ta = a.a ?? av.ra;
         av.ra += angDelta(av.ra, ta) * Math.min(1, dt * 12);
         placeAvatar(av, av.rx, av.ry, av.ra, !!a.car, a.color, a.name);
-        // Netizens are silent until approached — no auto speech bubbles.
+        applySay(av, a.id, now); // pop their speech bubble if they've said something recently
       }
       // drop avatars that left
       for (const [id, av] of remote) if (!seen.has(id)) { av.c.destroy(); remote.delete(id); }
@@ -4753,13 +5075,45 @@ export function startWorld(net: WorldNet): void {
     const carRoof = sc.add.image(0, 0, 'w-car-roof').setScale(TEXEL);
     const car = sc.add.container(0, 0, [carWheels, carBody, carRoof]).setVisible(false);
     const label = sc.add.text(0, -R - 14, name, NAME_STYLE).setOrigin(0.5, 1);
+    // Rounded speech bubble: the smooth panel is the 'w-bubble' 9-slice (drawn behind the text);
+    // the text just carries the words. drawBubbleBg() re-fits the panel to the text on each change.
+    const bubbleBg = sc.add.nineslice(0, -R - 32, 'w-bubble', undefined, 48, 48, BUBBLE_CORNER, BUBBLE_CORNER, BUBBLE_CORNER, BUBBLE_CORNER)
+      .setOrigin(0.5, 0.5).setScale(BUBBLE_BG_SCALE).setVisible(false);
     const bubble = sc.add.text(0, -R - 32, '', {
       fontFamily: 'system-ui, sans-serif', fontSize: '11px', color: '#ffeb3b',
-      backgroundColor: '#1b2542e6', padding: { x: 6, y: 3 }, align: 'center',
+      padding: { x: 9, y: 5 }, align: 'center',
       stroke: '#0b1020', strokeThickness: 2, resolution: 2,
-    }).setOrigin(0.5, 1).setVisible(false);
-    const c = sc.add.container(selfX, selfY, [shadow, car, person, label, bubble]);
-    return { c, person, car, carBody, carRoof, carWheels, label, bubble, bubbleNextAt: 0, rx: selfX, ry: selfY, ra: 0, smokeT: 0, sx: selfX, sy: selfY };
+      wordWrap: { width: 180 },
+    }).setOrigin(0.5, 1).setVisible(false).setDepth(1);
+    const c = sc.add.container(selfX, selfY, [shadow, car, person, label, bubbleBg, bubble]);
+    return { c, person, car, carBody, carRoof, carWheels, label, bubble, bubbleBg, bubbleNextAt: 0, rx: selfX, ry: selfY, ra: 0, smokeT: 0, sx: selfX, sy: selfY };
+  }
+
+  // Re-fit the rounded panel to the bubble text (which already bakes in its padding). The 9-slice
+  // size is pre-scale, so we divide the desired local size by the panel's scale; corners stay crisp.
+  function drawBubbleBg(av: Av) {
+    const b = av.bubble;
+    const pad = 2; // local units of breathing room around the text
+    av.bubbleBg.setSize((b.width + pad * 2) / BUBBLE_BG_SCALE, (b.height + pad * 2) / BUBBLE_BG_SCALE);
+    av.bubbleBg.setPosition(b.x, b.y - b.height / 2); // center the panel on the text
+  }
+
+  // Show/hide an avatar's speech bubble from the live `says` book (expiring lines auto-clear).
+  function applySay(av: Av, id: string, now: number) {
+    const s = says.get(id);
+    if (s && s.until > now) {
+      const changed = av.bubble.text !== s.text;
+      if (changed) av.bubble.setText(s.text);
+      if (changed || !av.bubble.visible) {
+        av.bubble.setColor(s.purple ? SAY_COLOR : CHAT_COLOR); // purple for /Say (Y), yellow for chat (T)
+        av.bubble.setVisible(true);
+        drawBubbleBg(av);          // re-fit the pill whenever the text (and thus its size) changes
+        av.bubbleBg.setVisible(true);
+      }
+    } else {
+      if (s) says.delete(id);
+      if (av.bubble.visible) { av.bubble.setVisible(false); av.bubbleBg.setVisible(false); }
+    }
   }
 
   function placeAvatar(av: Av, x: number, y: number, a: number, drivingNow: boolean, color: string, name: string) {
@@ -4923,6 +5277,12 @@ export function startWorld(net: WorldNet): void {
       myBankCap = bankCap;
       refreshParcels();
     },
+    feedSay(id, _name, text, say) {
+      const now = performance.now();
+      for (const [k, v] of says) if (v.until <= now) says.delete(k); // drop stale lines (e.g. speakers who left)
+      says.set(id, { text, until: now + SAY_MS, purple: say });
+    },
+    feedChat(line) { pushChatLine(line); },
   };
   syncDriveBtn();
   net.enter();

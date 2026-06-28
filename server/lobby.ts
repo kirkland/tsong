@@ -131,7 +131,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   loadNomic, saveNomic, archiveNomicSeason } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR, DUNGEON_CHEST_CONTENTS, DUNGEON_TIER_COINS, DUNGEON_FLOOR_TIERS } from '../shared/types';
-import { WORLD_PARCELS, BANK_PARCEL_CAP, PARCEL_PRICE, LandParcelView } from '../shared/types';
+import { WORLD_PARCELS, BANK_PARCEL_CAP, PARCEL_PRICE, LandParcelView, WORLD_SAY_MAX } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
 // emoji code points (pictographs, components, ZWJ, variation selectors, flags).
@@ -658,6 +658,28 @@ export class Lobby {
     const clean = text.replace(/\s+/g, ' ').trim().slice(0, CHAT_MAX_LEN);
     if (!clean) return;
     conn.lastChatAt = now;
+
+    // --- /whisper <name> <message> (aliases /w, /dm): a private line only the sender + target see.
+    // Never broadcast or logged to history. Works from any chat box (main or the in-world feed). ---
+    const wm = clean.match(/^\/(?:whisper|w|dm)\s+(\S+)\s+(.+)$/i);
+    if (wm) {
+      const targetName = wm[1], body = wm[2].trim();
+      if (!body) return;
+      let targetWs: WebSocket | undefined;
+      let targetNick = '';
+      for (const [sock, c] of this.conns) {
+        if (c.nickname && c.nickname.toLowerCase() === targetName.toLowerCase()) { targetWs = sock; targetNick = c.nickname; break; }
+      }
+      if (!targetWs) {
+        this.tell(ws, { type: 'chat', lines: [{ from: '🔒 whisper', text: `No player named "${targetName}" is online.`, player: false, color: '#9a86c4', time: now, command: true }] });
+        return;
+      }
+      const WHISPER_COLOR = '#c9a8ff';
+      const isPlayer = conn.role !== 'observer';
+      this.tell(ws, { type: 'chat', lines: [{ from: `You whispered to ${targetNick}`, text: body, player: isPlayer, color: WHISPER_COLOR, whisper: true, time: now }] });
+      if (targetWs !== ws) this.tell(targetWs, { type: 'chat', lines: [{ from: `${conn.nickname} whispered`, text: body, player: isPlayer, color: WHISPER_COLOR, whisper: true, time: now }] });
+      return;
+    }
 
     const line: ChatLine = {
       from: conn.nickname,
@@ -1558,6 +1580,17 @@ export class Lobby {
       return;
     }
     this.world.move(ws, x, y, a, car, pet);
+  }
+
+  /** A player pressed '/' in the World and said a line — fan it out to everyone in the world as a
+   *  transient speech bubble over their avatar. Must be in the world + joined; sanitized + capped. */
+  worldChat(ws: WebSocket, text: string, say = false) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !this.world.has(ws)) return;
+    const clean = text.replace(/\s+/g, ' ').trim().slice(0, WORLD_SAY_MAX);
+    if (!clean) return;
+    const data = JSON.stringify({ type: 'worldSay', id: conn.id, name: conn.nickname, text: clean, say });
+    for (const sock of this.world.sockets()) if (sock.readyState === sock.OPEN) sock.send(data);
   }
 
   /** Snapshot every in-world avatar (human + netizen). */
@@ -4130,8 +4163,8 @@ export class Lobby {
    *  10% of the payout into the House. Conservation is exact: the escrow that left circulation at
    *  invest comes back as principal + House (loss) or principal + House gain (win). Returns the
    *  gross payout (for the pressure model) + the net credited to the player. */
-  private async settleCashOut(pid: string, name: string, coin: string, price: number, side: StockSide): Promise<{ gross: number; credited: number } | null> {
-    const pos = await closePosition(pid, coin, price, side);
+  private async settleCashOut(pid: string, name: string, coin: string, price: number, side: StockSide, fraction = 1): Promise<{ gross: number; credited: number } | null> {
+    const pos = await closePosition(pid, coin, price, side, fraction);
     if (!pos) return null;
     const { cost, payout, openedAt } = pos;
     let credited = 0;
@@ -4175,13 +4208,15 @@ export class Lobby {
 
   /** Close the whole long or short position in a crypto. Principal is returned in full; profit is
    *  House-throttled; a fast-sell is taxed (see settleCashOut). */
-  stockCashOut(ws: WebSocket, coin: string, side: StockSide) {
+  stockCashOut(ws: WebSocket, coin: string, side: StockSide, fraction = 1) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     if (!STOCKS.some((s) => s.id === coin)) return;
     const price = this.stockPrices.get(coin)?.price;
     if (!price || !(price > 0)) return;
-    this.settleCashOut(conn.pid, conn.nickname, coin, price, side)
+    const frac = Number.isFinite(fraction) ? Math.min(1, Math.max(0, fraction)) : 1;
+    if (frac <= 0) { this.sendStocks(ws); return; }
+    this.settleCashOut(conn.pid, conn.nickname, coin, price, side, frac)
       .then((res) => {
         if (!res) { this.sendStocks(ws); return; } // held nothing on that side
         // A close exerts sell (long) / cover (short) pressure on the price.
@@ -5485,13 +5520,28 @@ export class Lobby {
     }
   }
 
-  /** Build and send the balance sheet for the player at `rank` on the current net-worth board:
-   *  liquid coins, every open stock position valued at the live price, and any debt to Davis.
+  /** Build and send the balance sheet for the player at `rank` on the current net-worth board,
+   *  or for the requesting player when `self` is true. Shows liquid coins, every open stock
+   *  position valued at the live price, and any debt to Davis.
    *  Public info (the board already shows net/coins/debt) — no pid ever leaves the server. */
-  async sendBalanceSheet(ws: WebSocket, rank: number) {
-    if (!Number.isInteger(rank) || rank < 0 || rank >= this.netWorthPids.length) return;
-    const pid = this.netWorthPids[rank];
-    const name = this.netWorth[rank]?.name ?? '???';
+  async sendBalanceSheet(ws: WebSocket, rank?: number, self?: boolean) {
+    let pid: string;
+    let name: string;
+    if (self) {
+      const conn = this.conns.get(ws);
+      if (!conn || !conn.pid) return;
+      pid = conn.pid;
+      name = conn.nickname || conn.pid;
+      // Resolve the player's actual rank for the response (may stay undefined if off-board)
+      for (let i = 0; i < this.netWorthPids.length; i++) {
+        if (this.netWorthPids[i] === pid) { rank = i; break; }
+      }
+      if (rank === undefined) rank = 0;
+    } else {
+      if (!Number.isInteger(rank) || rank! < 0 || rank! >= this.netWorthPids.length) return;
+      pid = this.netWorthPids[rank!];
+      name = this.netWorth[rank!]?.name ?? '???';
+    }
     const [wallet, holdings, loan] = await Promise.all([getWallet(pid), getHoldings(pid), getLoan(pid)]);
     const rows: BalanceSheetHolding[] = [];
     let stockValue = 0;
@@ -5506,7 +5556,7 @@ export class Lobby {
     const owed = loan?.owed ?? 0;
     const net = wallet.coins + stockValue - owed;
     this.tell(ws, {
-      type: 'balanceSheet', rank, name,
+      type: 'balanceSheet', rank: rank ?? 0, name,
       coins: wallet.coins, holdings: rows, stockValue, loan: owed, net,
     });
   }
