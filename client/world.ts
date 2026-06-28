@@ -4669,9 +4669,10 @@ export function startWorld(net: WorldNet): void {
       ps.x += pvx * Math.min(1, dt * 8); // lazy chase so the pet lags + swings behind
       ps.y += pvy * Math.min(1, dt * 8);
       ps.lastX = ox; ps.lastY = oy;
-      if (ps.kind === 'dragon') { // a dragon FLIES: it hovers above you, bobbing on its wingbeats
-        const fly = 26 + Math.sin(performance.now() / 180 + ps.x) * 5;
-        ps.sprite.setPosition(ps.x, ps.y - fly).setDepth(ps.y + 5000).setFlipX(pvx < -0.05); // always on top; face travel
+      if (ps.kind === 'dragon') { // a dragon FLIES: it hovers above you, bobbing gently on its wingbeats
+        const fly = 24 + Math.sin(performance.now() / 280) * 4; // time-only phase → smooth bob (no per-pixel jitter)
+        if (pvx < -0.4) ps.sprite.setFlipX(true); else if (pvx > 0.4) ps.sprite.setFlipX(false); // flip only on real travel
+        ps.sprite.setPosition(ps.x, ps.y - fly).setDepth(ps.y + 5000); // always drawn on top
       } else
       ps.sprite.setPosition(ps.x, ps.y).setDepth(ps.y); // depth-sort with everything else by y
 
