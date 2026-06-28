@@ -3861,6 +3861,45 @@ export function startWorld(net: WorldNet): void {
       .setOrigin(0.5, 1).setDepth(b.y + b.h + 2);
   }
 
+  // The Ruins: not a house — a crumbling stone shell. Broken, gap-toothed walls over a black descent
+  // pit, a ragged archway entrance, scattered rubble, a toppled column, and creeping moss.
+  function buildRuins(sc: Phaser.Scene, b: WorldBuilding) {
+    const { x, y, w, h } = b, front = y + h;
+    const stone = 0x6f6a76, stoneD = 0x4a4652, stoneHi = 0x8d8896, dark = 0x0e0b14, moss = 0x4c7a3a;
+    const r = (i: number) => Math.abs((Math.sin(i * 12.9898) * 43758.5453) % 1); // deterministic pseudo-random 0..1
+    const rect = (rx: number, ry: number, rw: number, rh: number, c: number, d: number) =>
+      sc.add.rectangle(rx, ry, rw, rh, c).setOrigin(0, 0).setDepth(d);
+    // the descent: a sunken black pit inside the shell
+    rect(x, y, w, h, 0x241f2b, y - 3);
+    rect(x + 8, y + 12, w - 16, h - 20, dark, y - 2);
+    // back wall — segmented with broken crenellations + the odd collapsed gap + moss
+    for (let i = 0, sx = x; sx < x + w - 6; sx += 18, i++) {
+      if (r(i) < 0.22) continue;                              // a collapsed section (gap)
+      const ch = 18 + Math.floor(r(i + 9) * 22);
+      rect(sx, y - ch + 14, 18, ch, i % 2 ? stone : stoneD, y + 1);
+      rect(sx, y - ch + 14, 18, 4, stoneHi, y + 1.1);
+      if (r(i + 3) < 0.32) rect(sx + 3, y - ch + 17, 9, 4, moss, y + 1.2);
+    }
+    // left + right side walls running toward the viewer, broken in places
+    for (let i = 0, sy = y; sy < y + h - 4; sy += 18, i++) {
+      if (r(i + 40) > 0.18) rect(x - 4, sy, 16, 18, i % 2 ? stone : stoneD, sy);
+      if (r(i + 60) > 0.18) rect(x + w - 12, sy, 16, 18, i % 2 ? stone : stoneD, sy);
+    }
+    // front face: broken stubs flanking a dark archway entrance
+    const doorW = Math.min(76, w * 0.42), dx0 = x + (w - doorW) / 2;
+    rect(x - 4, front - 30, dx0 - x + 4, 30, stone, front); rect(x - 4, front - 30, dx0 - x + 4, 5, stoneHi, front + 0.1);
+    rect(dx0 + doorW, front - 30, x + w + 4 - (dx0 + doorW), 30, stone, front); rect(dx0 + doorW, front - 30, x + w + 4 - (dx0 + doorW), 5, stoneHi, front + 0.1);
+    rect(dx0, front - 46, doorW, 46, dark, front - 0.5);     // the dark mouth
+    rect(dx0 - 5, front - 50, doorW + 10, 9, stoneD, front + 0.2); rect(dx0 - 5, front - 50, doorW + 10, 3, stoneHi, front + 0.3); // broken lintel
+    // a toppled column at the front-left + moss on it
+    rect(x - 10, front - 58, 15, 58, stone, front + 1); rect(x - 10, front - 58, 15, 5, stoneHi, front + 1.1);
+    rect(x - 8, front - 60, 11, 7, moss, front + 1.2);
+    // rubble strewn around the base
+    for (let i = 0; i < 8; i++) { const rx = x + r(i + 100) * (w - 8), ry = front - 4 + r(i + 101) * 12, s = 6 + r(i + 102) * 9; rect(rx, ry, s, s * 0.7, i % 2 ? stoneD : stone, ry + 60); }
+    // the venue glyph above the mouth
+    sc.add.text(dx0 + doorW / 2, front - h * 0.5, b.emoji, { fontSize: '24px' }).setOrigin(0.5, 1).setDepth(front + 3);
+  }
+
   // The Casino and Arena need to read as what they ARE, not as generic houses — so they're custom
   // pixel facades (drawn at texel res, upscaled ×TEXEL) plus animated Phaser overlays on top.
   function px9(g: Phaser.GameObjects.Graphics, x: number, y: number, w: number, h: number, c: number, a = 1) {
@@ -4169,6 +4208,7 @@ export function startWorld(net: WorldNet): void {
         else if (b.kind === 'arena') buildArena(sc, b);
         else if (b.kind === 'doomportal') buildDoomPortal(sc, b);
         else if (b.kind === 'pond') buildPond(sc, b);
+        else if (b.kind === 'dungeon') buildRuins(sc, b);
         else buildBuilding(sc, b);
         const sign = sc.add.text(b.x + b.w / 2, b.y - 6, b.name, {
           fontFamily: 'system-ui, sans-serif', fontSize: '15px', fontStyle: 'bold',
