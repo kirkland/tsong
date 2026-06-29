@@ -1982,6 +1982,7 @@ worldBtn.addEventListener('click', async () => {
       color: () => myColor,
       selfId: () => myId,
       car: () => wallet.car, // the car you've equipped in the shop (null = on foot only)
+      boat: () => wallet.boat, // the boat you've equipped (null = none) — board it on water with B
       pet: () => wallet.pet, // the pet you've equipped in the shop — trails behind you (null = none)
       onExit: () => worldBtn.setAttribute('aria-pressed', 'false'),
       // Walk into the Arena → hop into the play queue (you'll be seated when a spot opens).

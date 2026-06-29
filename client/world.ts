@@ -63,6 +63,7 @@ export interface WorldNet {
   color(): string;               // our avatar color
   selfId(): string;              // our connection id (to skip our own avatar in the broadcast)
   car(): string | null;          // our equipped car id (null = none → can't drive)
+  boat(): string | null;         // our equipped boat id (null = none → can't board a boat)
   pet(): string | null;          // our equipped pet id (null = none → nothing trails us)
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
@@ -851,6 +852,19 @@ export function startWorld(net: WorldNet): void {
   let driving = false;
   let vx = 0, vy = 0; // car velocity, world units / s (drives the drift physics)
 
+  // --- boat / water state ---
+  // Water you can drive a boat on: each region is the ellipse of open water inside a pond building
+  // (matching how buildPond draws it). Boats are confined to these ellipses; on foot or in a car the
+  // pond rect stays solid, so you launch from the shore. Add water by adding pond buildings.
+  interface WaterRegion { rect: Rect; cx: number; cy: number; rx: number; ry: number }
+  const WATER: WaterRegion[] = (WORLD_BUILDINGS as readonly WorldBuilding[])
+    .filter((b) => b.kind === 'pond')
+    .map((b) => ({ rect: { x: b.x, y: b.y, w: b.w, h: b.h }, cx: b.x + b.w / 2, cy: b.y + b.h / 2, rx: b.w / 2 - 22, ry: b.h / 2 - 26 }));
+  const BOAT_BOARD_PAD = 44; // how close to a pond's shore you can be to launch your boat (world units)
+  let boating = false;
+  let boatWater: WaterRegion | null = null;          // the water we're currently boating on
+  let boatEntry: { x: number; y: number } | null = null; // safe shore spot we launched from
+
   // --- input state ---
   const keys = new Set<string>();
   let joyActive = false;
@@ -1123,6 +1137,15 @@ export function startWorld(net: WorldNet): void {
     'background:#e8b84b;color:#1a1408;border:none;border-radius:10px;padding:11px 18px;font-size:15px;' +
     'font-weight:700;box-shadow:0 6px 20px #0008;z-index:2;';
   overlay.appendChild(prompt);
+
+  // Boat prompt (just above the door prompt): board/dock affordance shown near water. Tap = B.
+  const boatPrompt = document.createElement('button');
+  boatPrompt.type = 'button';
+  boatPrompt.style.cssText =
+    'position:absolute;left:50%;bottom:92px;transform:translateX(-50%);display:none;cursor:pointer;' +
+    'background:#2f6fa8;color:#eaf4ff;border:none;border-radius:10px;padding:10px 16px;font-size:14px;' +
+    'font-weight:700;box-shadow:0 6px 20px #0008;z-index:2;';
+  overlay.appendChild(boatPrompt);
 
   // --- in-world chat (middle-left, no background — just floating text). It's the SAME chat as the
   // main game: lines stream in via feedChat() (mirrored from the server `chat` message). Press T to
@@ -1563,6 +1586,7 @@ export function startWorld(net: WorldNet): void {
     return carById(net.car());
   }
   function toggleDrive() {
+    if (boating) return; // dock the boat first (B) before hopping in a car
     if (inInterior || inDungeon || net.amJailed()) return; // no cars in the bar, the dungeon, or the slammer
     if (!driving) {
       // Drunk driving (2+ beers): a coin-flip says whether the cops catch you.
@@ -1590,6 +1614,62 @@ export function startWorld(net: WorldNet): void {
     }
     syncDriveBtn();
   }
+
+  // --- boating ---
+  function myBoat(): CarSpec | null {
+    return carById(net.boat());
+  }
+  // Pull a point inside a water ellipse (f<1 keeps it off the very edge). Returns hit=true if it had
+  // to be clamped — the shared shape with resolveCollisions so stepVehicle can use either.
+  function confineToWater(x: number, y: number, w: WaterRegion, f = 1): { x: number; y: number; hit: boolean } {
+    const dx = x - w.cx, dy = y - w.cy;
+    const d = Math.hypot(dx / w.rx, dy / w.ry);
+    if (d <= f) return { x, y, hit: false };
+    const s = f / d;
+    return { x: w.cx + dx * s, y: w.cy + dy * s, hit: true };
+  }
+  // The water you could launch a boat onto right now (near a pond's shore, on foot, boat owned).
+  function boardableWater(): WaterRegion | null {
+    if (boating || driving || !myBoat() || inInterior || inDungeon) return null;
+    for (const w of WATER) {
+      const nx = clamp(selfX, w.rect.x, w.rect.x + w.rect.w);
+      const ny = clamp(selfY, w.rect.y, w.rect.y + w.rect.h);
+      if (Math.hypot(selfX - nx, selfY - ny) <= BOAT_BOARD_PAD) return w;
+    }
+    return null;
+  }
+  // Step out of the boat onto the nearest dry shore (just outside the pond rect, on grass).
+  function disembarkPoint(x: number, y: number, r: Rect): { x: number; y: number } {
+    const pad = R + 6;
+    const left = x - r.x, right = r.x + r.w - x, top = y - r.y, bottom = r.y + r.h - y;
+    const m = Math.min(left, right, top, bottom);
+    if (m === left) return { x: r.x - pad, y };
+    if (m === right) return { x: r.x + r.w + pad, y };
+    if (m === top) return { x, y: r.y - pad };
+    return { x, y: r.y + r.h + pad };
+  }
+  function toggleBoat() {
+    if (inInterior || inDungeon || net.amJailed()) return;
+    if (!boating) {
+      if (!myBoat()) { flashHelp('You don\'t own a boat — fish one up! (Shop → Vehicles → Boats)'); return; }
+      const w = boardableWater();
+      if (!w) { flashHelp('🛥️ Get next to the water (the fishing pond) to launch your boat.'); return; }
+      boating = true; boatWater = w; driving = false; vx = vy = 0;
+      boatEntry = { x: selfX, y: selfY };           // remember the dock for a safe fallback
+      const p = confineToWater(selfX, selfY, w, 0.82); // slide the boat onto the open water
+      selfX = p.x; selfY = p.y;
+      tone(360, 0.18, 'sine', 0.05, 520);           // little launch blip
+    } else {
+      const w = boatWater;
+      boating = false; boatWater = null; vx = vy = 0;
+      const back = w ? disembarkPoint(selfX, selfY, w.rect) : (boatEntry ?? { x: selfX, y: selfY });
+      const safe = resolveCollisions(back.x, back.y, R); // never disembark into a wall
+      selfX = safe.x; selfY = safe.y;
+      boatEntry = null;
+      tone(300, 0.16, 'sine', 0.05, 220);
+    }
+    syncDriveBtn();
+  }
   function syncDriveBtn() {
     const car = myCar();
     if (driving) {
@@ -1607,9 +1687,14 @@ export function startWorld(net: WorldNet): void {
   function updateHelp() {
     const now = performance.now();
     if (helpFlash && now < helpFlashUntil) { help.innerHTML = `<span style="color:#ffd166">${helpFlash}</span>`; return; }
+    if (boating) {
+      help.innerHTML = 'W/S or ↑/↓ throttle · A/D or ←/→ steer · drag to sail · <b>B</b> dock · <b>T</b> chat · <b>Y</b> say';
+      return;
+    }
+    const boatHint = boardableWater() ? ' · <b>B</b> board boat' : '';
     help.innerHTML = driving
       ? 'W/S or ↑/↓ throttle · A/D or ←/→ steer · drag to drive · <b>F</b> get out · <b>T</b> chat · <b>Y</b> say'
-      : 'WASD / arrows or drag to walk · <b>F</b> drive · <b>Space</b> enter · <b>T</b> chat · <b>Y</b> say';
+      : `WASD / arrows or drag to walk · <b>F</b> drive${boatHint} · <b>Space</b> enter · <b>T</b> chat · <b>Y</b> say`;
   }
 
   // --- building entry ---
@@ -3065,6 +3150,7 @@ export function startWorld(net: WorldNet): void {
     showPage();
   }
   prompt.onclick = triggerNear;
+  boatPrompt.onclick = toggleBoat;
   driveBtn.onclick = toggleDrive;
 
   // --- input (capture phase so the main game's global shortcuts don't also fire) ---
@@ -3098,6 +3184,7 @@ export function startWorld(net: WorldNet): void {
     }
     if (dialogOpen) return;
     if (k === 'f') { e.preventDefault(); e.stopPropagation(); toggleDrive(); return; }
+    if (k === 'b') { e.preventDefault(); e.stopPropagation(); toggleBoat(); return; } // board/dock a boat on water
     if (k === 'enter' || k === 'e' || k === ' ') {
       // Always swallow Space so the page never scrolls; interact with whatever's in range
       // (building, NPC, netizen, exit, chest, or jail — triggerNear no-ops if nothing is).
@@ -3222,7 +3309,14 @@ export function startWorld(net: WorldNet): void {
   // Drive: arcade physics with drift. Throttle accelerates along the heading; steering rotates the
   // heading (more authority the faster you go); the velocity's sideways component is bled off by
   // the car's grip each frame — low grip = long slides (drift), high grip = it sticks.
+  // Cars confine against buildings; boats confine to their water ellipse. Same arcade physics.
   function stepCar(car: CarSpec, dt: number) {
+    stepVehicle(car, dt, (x, y) => resolveCollisions(x, y, CAR_WID * 0.5));
+  }
+  function stepBoat(boat: CarSpec, dt: number) {
+    stepVehicle(boat, dt, (x, y) => boatWater ? confineToWater(x, y, boatWater, 1) : resolveCollisions(x, y, CAR_WID * 0.5));
+  }
+  function stepVehicle(car: CarSpec, dt: number, confine: (x: number, y: number) => { x: number; y: number; hit: boolean }) {
     let throttle = 0, steer = 0;
     if (keys.has('w') || keys.has('arrowup')) throttle += 1;
     if (keys.has('s') || keys.has('arrowdown')) throttle -= 1;
@@ -3267,9 +3361,9 @@ export function startWorld(net: WorldNet): void {
     vx = hx * fwd - hy * lat;
     vy = hy * fwd + hx * lat;
 
-    const moved = resolveCollisions(selfX + vx * dt, selfY + vy * dt, CAR_WID * 0.5);
+    const moved = confine(selfX + vx * dt, selfY + vy * dt);
     if (moved.hit) {
-      if (Math.hypot(vx, vy) > 60) bumpSound(true); // crunch (skip silent scrapes when crawling)
+      if (Math.hypot(vx, vy) > 60) bumpSound(true); // crunch / shore bump (skip silent scrapes when crawling)
       vx *= 0.3; vy *= 0.3;                          // kill most momentum
     }
     selfX = moved.x; selfY = moved.y;
@@ -3280,7 +3374,7 @@ export function startWorld(net: WorldNet): void {
     // nearest building door — skipped inside the Tavern (town buildings are off-map from here)
     let best: string | null = null;
     let bestD = Infinity;
-    if (!inInterior && !inDungeon) {
+    if (!inInterior && !inDungeon && !boating) { // no door prompts while out on the water
       for (const b of WORLD_BUILDINGS) {
         const d = distToBuilding(b);
         const reach = (driving ? CAR_LEN * 0.5 : R) + TRIGGER_PAD;
@@ -3416,6 +3510,14 @@ export function startWorld(net: WorldNet): void {
       prompt.textContent = parcelPrompt(nearParcel);
     }
     prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearBook || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDungeonImp2 || nearDyingMan || nearRob || nearJailed || nearParcel) && !dialogOpen && !talkOpen ? 'block' : 'none';
+    // Boat affordance: dock while afloat, or board when standing by the water with a boat.
+    const boatable = boating || !!boardableWater();
+    if (boatable && !dialogOpen && !talkOpen) {
+      boatPrompt.textContent = boating ? '🚶 Dock the boat (B)' : '🛥️ Board the boat (B)';
+      boatPrompt.style.display = 'block';
+    } else {
+      boatPrompt.style.display = 'none';
+    }
   }
 
   function maybeSendMove(now: number) {
@@ -3423,7 +3525,8 @@ export function startWorld(net: WorldNet): void {
     if (now - lastSentAt < 66) return; // ~15 Hz cap
     if (Math.abs(selfX - lastSentX) < 0.5 && Math.abs(selfY - lastSentY) < 0.5) return;
     lastSentX = selfX; lastSentY = selfY; lastSentAt = now;
-    net.move(selfX, selfY, driving ? facing : undefined, driving ? net.car() : null, net.pet());
+    // Stream the boat id in the same field as the car id; others render it via carById (it's in CARS).
+    net.move(selfX, selfY, (driving || boating) ? facing : undefined, boating ? net.boat() : driving ? net.car() : null, net.pet());
   }
 
   // ============================================================================================
@@ -4365,6 +4468,32 @@ export function startWorld(net: WorldNet): void {
     px(8, 4, 11, 6, 0xffffff);   // cabin/roof patch (tinted with the accent color)
     px(20, 6, 4, 2, 0xffffff);   // a little nose stripe
     g.generateTexture('w-car-roof', 26, 14);
+
+    // --- Bill's Boat: a fully-painted pixel-art motor yacht, top-down, pointing +x (east), 44×20
+    //     texels. White hull with a navy waterline trim, teak aft deck, a white cabin with a glass
+    //     window band, and a sharp bow. Painted in full colour (rendered untinted, unlike the cars). ---
+    {
+      const HULL = 0xf4f7fa, TRIM = 0x21466f, DECK = 0xcaa46a, WOODL = 0xdcc093,
+            CABIN = 0xffffff, GLASS = 0x8fc0e6, RAIL = 0x2b3a4d;
+      g.clear();
+      // navy hull silhouette → leaves a thin trim once the white hull is inset by 1px
+      px(6, 4, 30, 12, TRIM); px(35, 6, 5, 8, TRIM); px(39, 8, 2, 4, TRIM);
+      // white hull
+      px(7, 5, 28, 10, HULL); px(35, 7, 4, 6, HULL); px(38, 9, 2, 2, HULL);
+      px(6, 6, 1, 8, TRIM); // flat transom at the stern (left)
+      // teak aft deck (open cockpit)
+      px(9, 7, 12, 6, DECK); px(9, 7, 12, 1, WOODL);
+      // superstructure / cabin amidships, with a raised flybridge
+      px(21, 5, 13, 10, CABIN); px(24, 4, 8, 2, CABIN);
+      // wraparound glass window band
+      px(22, 7, 11, 2, GLASS); px(25, 10, 7, 2, GLASS);
+      // gunwale rails + a little mast nub and a bow light
+      px(8, 5, 27, 1, RAIL, 0.55); px(8, 14, 27, 1, RAIL, 0.55);
+      px(30, 3, 1, 2, RAIL); px(36, 9, 2, 2, GLASS);
+      g.generateTexture('w-boat-body', 44, 20);
+      g.clear(); // the yacht is painted entirely in the body layer; keep the roof layer transparent
+      g.generateTexture('w-boat-roof', 2, 2);
+    }
 
     // --- MONSTER TRUCK (the Ruins vault prize) — top-down, pointing +x, 34×24 texels. Three layers:
     //     untinted knobby wheels, a tintable beefy body, a dark cab roof. ---
@@ -5335,8 +5464,11 @@ export function startWorld(net: WorldNet): void {
       }
 
       if (!dialogOpen && !talkOpen) {
-        const car = driving ? myCar() : null;
-        if (car) stepCar(car, dt);
+        const boat = boating ? myBoat() : null;
+        const car = !boating && driving ? myCar() : null;
+        if (boat) stepBoat(boat, dt);
+        else if (boating) { boating = false; boatWater = null; } // lost the boat — bail out of the mode
+        else if (car) stepCar(car, dt);
         else stepFoot(dt);
       }
 
@@ -5345,7 +5477,7 @@ export function startWorld(net: WorldNet): void {
       maybeSendMove(now);
 
       // place our avatar straight from authoritative state (zero latency)
-      if (self) { placeAvatar(self, selfX, selfY, facing, driving, net.color(), net.name() || 'you'); applySay(self, net.selfId(), now); }
+      if (self) { placeAvatar(self, selfX, selfY, facing, boating ? net.boat() : driving ? net.car() : null, net.color(), net.name() || 'you'); applySay(self, net.selfId(), now); }
 
       // The Blessing of the Ball: a pulsing golden halo behind you + a draining HUD badge, both fading
       // as the swiftness wears off.
@@ -5383,7 +5515,7 @@ export function startWorld(net: WorldNet): void {
         }
         const ta = a.a ?? av.ra;
         av.ra += angDelta(av.ra, ta) * Math.min(1, dt * 12);
-        placeAvatar(av, av.rx, av.ry, av.ra, !!a.car, a.color, a.name);
+        placeAvatar(av, av.rx, av.ry, av.ra, a.car ?? null, a.color, a.name);
         applySay(av, a.id, now); // pop their speech bubble if they've said something recently
       }
       // drop avatars that left
@@ -5555,21 +5687,25 @@ export function startWorld(net: WorldNet): void {
     }
   }
 
-  function placeAvatar(av: Av, x: number, y: number, a: number, drivingNow: boolean, color: string, name: string) {
+  // vehicleId: the car/boat id being driven, or null when on foot (then the person sprite shows).
+  function placeAvatar(av: Av, x: number, y: number, a: number, vehicleId: string | null, color: string, name: string) {
     av.c.setPosition(x, y).setDepth(y);
     if (av.label.text !== name) av.label.setText(name);
     const tint = hexToInt(color);
-    av.person.setVisible(!drivingNow).setTint(tint);
-    av.car.setVisible(drivingNow);
-    if (drivingNow) {
+    const inVehicle = !!vehicleId;
+    av.person.setVisible(!inVehicle).setTint(tint);
+    av.car.setVisible(inVehicle);
+    if (inVehicle) {
       av.car.setRotation(a);
-      const spec = carById((others.find((o) => o.name === name)?.car) ?? net.car());
+      const spec = carById(vehicleId);
       const monster = spec?.id === 'car-monster';
+      const boat = spec?.id === 'car-boat';
       av.carWheels.setVisible(monster);
-      av.carBody.setTexture(monster ? 'w-monster-body' : 'w-car-body');
-      av.carRoof.setTexture(monster ? 'w-monster-roof' : 'w-car-roof');
-      av.carBody.setTint(spec ? hexToInt(spec.body) : tint);
-      av.carRoof.setTint(spec ? hexToInt(spec.accent) : 0xffffff);
+      av.carBody.setTexture(monster ? 'w-monster-body' : boat ? 'w-boat-body' : 'w-car-body');
+      av.carRoof.setTexture(monster ? 'w-monster-roof' : boat ? 'w-boat-roof' : 'w-car-roof');
+      // The yacht is painted in full colour, so render it untinted; cars tint to their paint job.
+      av.carBody.setTint(boat ? 0xffffff : spec ? hexToInt(spec.body) : tint);
+      av.carRoof.setTint(boat ? 0xffffff : spec ? hexToInt(spec.accent) : 0xffffff);
     }
   }
 

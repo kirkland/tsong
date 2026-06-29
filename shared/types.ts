@@ -403,8 +403,8 @@ export const CARS: readonly CarSpec[] = [
   { id: 'car-muscle',  name: 'Muscle',    body: '#8a5cf6', accent: '#1c1430', speed: 660, accel: 620, turn: 2.2, grip: 0.78 },
   // The Monster Truck: the Ruins' locked-room prize. Heavy, planted, monstrous low-end grunt.
   { id: 'car-monster', name: 'Monster Truck', body: '#cc2222', accent: '#1a1a1a', speed: 600, accel: 820, turn: 2.0, grip: 0.92 },
-  // Bill's Boat: fished up from junk. Glides like it's on water — low grip, breezy and floaty.
-  { id: 'car-boat',    name: "Bill's Boat",  body: '#2f6fa8', accent: '#e8d8b0', speed: 560, accel: 600, turn: 2.5, grip: 0.55 },
+  // Bill's Boat: a little white-and-navy yacht fished up from junk. Glides on water — low grip.
+  { id: 'car-boat',    name: "Bill's Boat",  body: '#eef3f8', accent: '#2f6fa8', speed: 560, accel: 600, turn: 2.5, grip: 0.55 },
 ] as const;
 export function carById(id: string | null | undefined): CarSpec | null {
   if (!id) return null;
