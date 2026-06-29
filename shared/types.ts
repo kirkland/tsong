@@ -427,7 +427,7 @@ export function petById(id: string | null | undefined) {
 
 // What entering a building does (the client maps each `kind` to an action). Add a kind here
 // and a handler on the client to introduce a new venue.
-export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament' | 'arcade' | 'dungeon';
+export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament' | 'arcade' | 'dungeon' | 'temple';
 // A venue's footprint on the map. The rectangle (top-left origin, world units) is solid —
 // avatars collide with it — and an apron just outside the door is the entry trigger zone.
 export interface WorldBuilding {
@@ -465,6 +465,9 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
   // The Ruins — a crumbling overgrown stone doorway east of the Arena. Step in to descend into the
   // dungeon: torch-lit floors, random Pong encounters, loot, and a boss at the bottom.
   { id: 'dungeon', kind: 'dungeon', name: 'THE RUINS', emoji: '🏚️', x: 1850, y: 380, w: 200, h: 170, color: '#5d6a4c' },
+  // The Temple — a pale stone sanctuary south of the plaza, devoted to the Order of the Eternal Volley.
+  // Step inside to a hushed, candlelit nave; read the holy book at the lectern to receive a Blessing.
+  { id: 'temple', kind: 'temple', name: 'THE TEMPLE', emoji: '⛪', x: 1560, y: 1730, w: 340, h: 270, color: '#d8cda0' },
 ] as const;
 
 // --- The Ruins dungeon economy: SERVER-AUTHORITATIVE so a tampered client can't mint coins. ---

@@ -225,6 +225,11 @@ const JAIL_WALLS: Rect[] = [
 const TAVERN_INT = { x: 5400, y: 300, w: 880, h: 560 };
 const TAVERN_WALL = 28; // interior wall thickness (play area is inset by this)
 const TAVERN_ZOOM = 3;  // zoom in while inside so the small cozy room fills the viewport
+// The Temple's INTERIOR — a grand candlelit nave, off-map BELOW the Tavern block (which ends at y860)
+// so the two never overlap. Same camera/collision swap trick as the Tavern.
+const TEMPLE_INT = { x: 5400, y: 1120, w: 920, h: 700 };
+const TEMPLE_WALL = 34;  // thick stone walls (play area is inset by this)
+const TEMPLE_ZOOM = 2.4; // a touch wider than the Tavern — let the lofty nave breathe
 
 // --- The Ruins dungeon: off-map tile floors (same trick as the Tavern interior). Tile legend —
 // '#'/'T'/'o' = wall, '.' = floor, '~' = tall-grass encounter, 'c' chest, '>' stairs DOWN,
@@ -853,8 +858,12 @@ export function startWorld(net: WorldNet): void {
   let joyCX = 0, joyCY = 0; // joystick current (screen px)
   let dialogOpen = false;   // movement pauses while a building dialog is up
   let nearId: string | null = null; // building the avatar is currently at the door of
-  // --- Tavern interior state ---
-  let inInterior = false;   // true while inside the Tavern (camera + collision switch to TAVERN_INT)
+  // --- interior state (the Tavern AND the Temple share this walkable-room machinery) ---
+  let inInterior = false;   // true while inside a walkable room (camera + collision switch to curInt)
+  let inTemple = false;     // sub-flag: the current interior is the Temple (vs the Tavern)
+  // The ACTIVE interior's geometry — swapped on entry so the movement clamp / exit mat / zoom all
+  // read one rect instead of hard-coding the Tavern's. Defaults to the Tavern.
+  let curInt = TAVERN_INT, curWall = TAVERN_WALL, curZoom = TAVERN_ZOOM;
   let inDungeon = false;    // true while inside the Ruins dungeon (camera + tile collision → dInt)
   // --- current-floor geometry (swapped by setFloorGeom on entry/descent) ---
   let currentFloor = 'B1';
@@ -925,7 +934,23 @@ export function startWorld(net: WorldNet): void {
   let grassDanger = 0;      // ramps per grass tile crossed → rising encounter odds; resets on a fight
   let recentMob = -1, recentMobRun = 0; // shuffle-bag: never the same mob more than twice in a row
   const newMobsSeen = new Set<number>(); // this floor's NEW mobs already met (both required before carry mobs reappear)
-  let interiorBuilt = false;// the interior's Phaser props are lazily built on first entry
+  let interiorBuilt = false;// the Tavern interior's Phaser props are lazily built on first entry
+  let templeBuilt = false;  // the Temple interior's props are lazily built on first entry
+  let nearBook = false;     // standing at the holy book's lectern (Enter → read it)
+  let templeBookX = 0, templeBookY = 0; // world position of the lectern (set in buildTempleInterior)
+  // The Blessing of the Ball: reading the holy book grants a swiftness blessing that gradually wears
+  // off. We stamp a window [blessStart, blessEnd]; the speed bonus lerps from full back to none across it.
+  let blessStart = 0, blessEnd = 0;
+  const BLESS_MS = 90_000;  // a blessing lasts a minute and a half
+  const BLESS_MAX = 0.6;    // up to +60% on-foot speed at its peak, decaying to 0
+  // Fraction of the blessing remaining, 0..1 (1 = just received, 0 = worn off / none).
+  function blessFrac() {
+    if (blessEnd <= 0) return 0;
+    const now = Date.now();
+    if (now >= blessEnd) return 0;
+    return Math.max(0, Math.min(1, (blessEnd - now) / (blessEnd - blessStart)));
+  }
+  const blessMul = () => 1 + BLESS_MAX * blessFrac(); // on-foot speed multiplier
   let nearExit = false;     // standing on the interior's exit mat (Enter → leave)
   // --- jail state ---
   let nearJailed: { id: string; name: string } | null = null; // a jailed avatar in bail range (free players)
@@ -1023,6 +1048,20 @@ export function startWorld(net: WorldNet): void {
   help.style.cssText =
     'position:absolute;left:14px;bottom:12px;color:#cdd8f5;font-size:12px;pointer-events:none;line-height:1.5;z-index:2;text-shadow:0 1px 4px #000a;';
   overlay.appendChild(help);
+
+  // Blessing of the Ball badge (top-centre) — a gilded pill with a bar that drains as the blessing
+  // wears off. Hidden whenever no blessing is active. Updated each frame in update().
+  const blessBadge = document.createElement('div');
+  blessBadge.style.cssText =
+    'position:absolute;left:50%;top:44px;transform:translateX(-50%);display:none;pointer-events:none;z-index:4;' +
+    'background:#1a1330d8;border:1px solid #e8c34d;border-radius:10px;padding:6px 14px 8px;text-align:center;' +
+    'color:#ffe9a0;font-size:12px;font-weight:800;letter-spacing:.5px;text-shadow:0 1px 3px #000a;box-shadow:0 4px 16px #0008;';
+  blessBadge.innerHTML =
+    '✨ Blessing of the Ball ✨' +
+    '<div style="margin-top:5px;height:5px;width:160px;background:#3a2f12;border-radius:3px;overflow:hidden">' +
+    '<div class="wBlessBar" style="height:100%;width:100%;background:linear-gradient(90deg,#ffd24a,#fff3b0);border-radius:3px"></div></div>';
+  overlay.appendChild(blessBadge);
+  const blessBar = blessBadge.querySelector('.wBlessBar') as HTMLDivElement;
 
   // Small fixed banner naming the current dungeon floor (top-center). Hidden outside the Ruins.
   const dungeonBanner = document.createElement('div');
@@ -1586,6 +1625,7 @@ export function startWorld(net: WorldNet): void {
       case 'parliament': return '🏛️ Enter Parliament — play Nomic';
       case 'arcade': return '🎮 Enter the Arcade';
       case 'dungeon': return '🏚️ Enter the Ruins — descend the dungeon';
+      case 'temple': return '⛪ Enter the Temple';
     }
   }
   function enterBuilding(kind: WorldBuildingKind) {
@@ -1632,6 +1672,7 @@ export function startWorld(net: WorldNet): void {
       return;
     }
     if (kind === 'bar') { enterTavern(); return; }
+    if (kind === 'temple') { enterTemple(); return; }
     if (kind === 'dungeon') { enterDungeon(); return; }
     if (kind === 'parliament') {
       openDialog('🏛️ Parliament', 'The perpetual game of Nomic is in session. The only rule that cannot change is that the rules can.', [
@@ -1780,7 +1821,8 @@ export function startWorld(net: WorldNet): void {
     const sc = petScene; if (!sc) return;
     buildInterior(sc);
     enterChime();
-    inInterior = true;
+    inInterior = true; inTemple = false;
+    curInt = TAVERN_INT; curWall = TAVERN_WALL; curZoom = TAVERN_ZOOM;
     driving = false; vx = 0; vy = 0; // you're on foot inside
     keys.clear(); joyActive = false;
     selfX = TAVERN_INT.x + TAVERN_INT.w / 2;
@@ -1795,6 +1837,142 @@ export function startWorld(net: WorldNet): void {
     const bar = WORLD_BUILDINGS.find((b) => b.kind === 'bar');
     if (bar) { selfX = bar.x + bar.w / 2; selfY = bar.y + bar.h + 44; } // step back out the door
     enterChime();
+  }
+
+  // --- Temple interior: a hushed, candlelit nave off the map. The faith here is the Order of the
+  // Eternal Volley — they hold the Ball sacred and must never let it fall; the Paddle is their cross.
+  // Walk up the nave to the lectern and read the holy book for a Blessing. Same camera/collision swap
+  // as the Tavern (curInt/curWall/curZoom), plus a holy chant that loops while you're inside. ---
+  function buildTempleInterior(sc: Phaser.Scene) {
+    if (templeBuilt) return;
+    templeBuilt = true;
+    const T = TEMPLE_WALL, ix = TEMPLE_INT.x, iy = TEMPLE_INT.y, iw = TEMPLE_INT.w, ih = TEMPLE_INT.h;
+    const cx = ix + iw / 2;
+    const tile = (key: string, x: number, y: number, w: number, h: number, depth: number) =>
+      sc.add.tileSprite(x, y, w, h, key).setOrigin(0, 0).setTileScale(TEXEL, TEXEL).setDepth(depth);
+    const prop = (key: string, x: number, y: number, depth = y) =>
+      sc.add.image(x, y, key).setScale(TEXEL).setOrigin(0.5, 1).setDepth(depth);
+    const ADD = Phaser.BlendModes.ADD;
+
+    // dark surround so a big viewport never shows grass past the nave's edges
+    sc.add.rectangle(ix - 900, iy - 900, iw + 1800, ih + 1800, 0x0c0a14).setOrigin(0, 0).setDepth(iy - 1000);
+    tile('w-tmp-floor', ix, iy, iw, ih, iy - 900);                               // marble floor
+    tile('w-tmp-rug', cx - 70, iy + 96, 140, ih - 210, iy - 880);               // sacred runner up the nave
+    // walls (drawn; collision is the clamp to the inset play area)
+    tile('w-tmp-wall', ix, iy, iw, 90, iy - 800);                                // back wall band
+    tile('w-tmp-wall', ix, iy, T + 12, ih, iy - 800);                            // left wall
+    tile('w-tmp-wall', ix + iw - T - 12, iy, T + 12, ih, iy - 800);              // right wall
+    tile('w-tmp-wall', ix, iy + ih - T, iw, T, iy - 790);                        // bottom baseboard
+    // three tall stained-glass windows on the back wall — the Eternal Volley rendered in glass
+    for (const wx of [cx - 240, cx, cx + 240]) {
+      sc.add.circle(wx, iy + 60, 48, 0x9fb6ff, 0.10).setDepth(iy - 798);         // cool daylight bloom
+      sc.add.image(wx, iy + 6, 'w-tmp-window').setScale(TEXEL).setOrigin(0.5, 0).setDepth(iy - 795);
+    }
+    // the Cross of the Paddle hung above the altar
+    sc.add.image(cx, iy + 118, 'w-tmp-icon').setScale(TEXEL).setOrigin(0.5, 0.5).setDepth(iy - 700);
+    prop('w-tmp-altar', cx, iy + 206);                                           // the altar
+    // the holy Ball relic — a radiant orb hovering over the altar, slowly breathing
+    const relicGlow = sc.add.circle(cx, iy + 156, 30, 0xffe06a, 0.25).setBlendMode(ADD).setDepth(iy - 650);
+    const relic = sc.add.circle(cx, iy + 156, 11, 0xfff3b0).setDepth(iy - 640);
+    sc.add.circle(cx, iy + 156, 7, 0xffffff, 0.9).setDepth(iy - 639);
+    sc.tweens.add({ targets: relic, y: iy + 148, duration: 1900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    sc.tweens.add({ targets: relicGlow, alpha: 0.5, scale: 1.3, duration: 1500, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    // altar candles throwing warm flickering light
+    for (const dxc of [-150, -72, 72, 150]) {
+      sc.add.circle(cx + dxc, iy + 184, 22, 0xffd98a, 0.16).setBlendMode(ADD).setDepth(iy - 660);
+      const cd = prop('w-tmp-candle', cx + dxc, iy + 200, iy - 645);
+      sc.tweens.add({ targets: cd, scaleY: TEXEL * 1.1, duration: 200 + Math.abs(dxc % 9) * 14, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    }
+    // a colonnade down each side aisle
+    for (const cy0 of [iy + 250, iy + 386, iy + 522]) {
+      prop('w-tmp-column', ix + 118, cy0);
+      prop('w-tmp-column', ix + iw - 118, cy0);
+    }
+    // pews flanking the central runner
+    for (let r = 0; r < 4; r++) {
+      const py = iy + 336 + r * 82;
+      prop('w-tmp-pew', cx - 150, py);
+      prop('w-tmp-pew', cx + 150, py);
+    }
+    // the lectern bearing the holy book — walk up and press E to read it
+    templeBookX = cx; templeBookY = iy + 286;
+    sc.add.circle(templeBookX, templeBookY - 4, 17, 0xffe9a0, 0.14).setBlendMode(ADD).setDepth(iy - 600);
+    prop('w-tmp-book', templeBookX, templeBookY + 16);
+    // exit mat by the door (sits at the room's bottom-centre, where the generic exit detector looks)
+    tile('w-tmp-rug', cx - 80, iy + ih - T - 84, 160, 64, iy - 870);
+    sc.add.text(cx, iy + ih - T - 46, '🚪 EXIT', { fontFamily: 'system-ui, sans-serif', fontSize: '16px', fontStyle: 'bold', color: '#ffe2b0', stroke: '#1a0f08', strokeThickness: 4 })
+      .setOrigin(0.5).setDepth(iy - 200);
+  }
+  function enterTemple() {
+    const sc = petScene; if (!sc) return;
+    buildTempleInterior(sc);
+    enterChime();
+    inInterior = true; inTemple = true;
+    curInt = TEMPLE_INT; curWall = TEMPLE_WALL; curZoom = TEMPLE_ZOOM;
+    driving = false; vx = 0; vy = 0; // on foot inside
+    keys.clear(); joyActive = false;
+    selfX = TEMPLE_INT.x + TEMPLE_INT.w / 2;
+    selfY = TEMPLE_INT.y + TEMPLE_INT.h - 180; // by the door, facing up the nave
+    mainCam?.setBounds(TEMPLE_INT.x, TEMPLE_INT.y, TEMPLE_INT.w, TEMPLE_INT.h);
+    startChant();
+  }
+  function leaveTemple() {
+    inInterior = false; inTemple = false;
+    nearExit = false; nearBook = false;
+    keys.clear(); joyActive = false;
+    mainCam?.setBounds(0, 0, WORLD.w, WORLD.h);
+    const t = WORLD_BUILDINGS.find((b) => b.kind === 'temple');
+    if (t) { selfX = t.x + t.w / 2; selfY = t.y + t.h + 44; } // step back out the door
+    stopChant();
+    enterChime();
+  }
+
+  // Reading the holy book: a gothic scripture of the Eternal Volley, page by page. The last page
+  // bestows the Blessing of the Ball — a swiftness that gradually wears off (see bestowBlessing).
+  function readHolyBook() {
+    if (talkOpen || dialogOpen) return;
+    const pages = [
+      '☩ THE BOOK OF THE ETERNAL VOLLEY ☩',
+      'In the beginning was the Serve; and the Serve was with the Ball, and the Serve was the Ball.',
+      'Hear, O faithful, the first commandment and the last: the Ball must not fall.',
+      'Two Paddles stand as sentinels at the edges of the world, and between them the Ball passeth, to and fro, world without end.',
+      'Blessed are they who return what is sent unto them, for theirs shall be the unbroken rally.',
+      'Yea, though I walk through the valley of the missed shot, I shall fear no point against me; for the Paddle, it comforteth me.',
+      'Now go forth in swiftness, faithful one. The Ball goes with thee. ✝',
+    ];
+    talkOpen = true; keys.clear(); joyActive = false; prompt.style.display = 'none';
+    npcName.textContent = '📖 The Holy Book';
+    npcBox.style.display = 'block'; npcChoices.style.display = 'none'; npcPortrait.style.display = 'none';
+    let pageI = 0, typing = false, timer = 0, full = '';
+    const grantIfNeeded = () => { if (pageI === pages.length - 1) bestowBlessing(); }; // blessing on the final verse
+    function showPage() {
+      const text = pages[pageI];
+      if (text === undefined) { closeTalk(); return; }
+      full = text; let shown = 0; typing = true; npcText.textContent = ''; npcHint.style.display = 'none';
+      timer = window.setInterval(() => {
+        shown++; npcText.textContent = full.slice(0, shown);
+        if (shown % 2 === 0) chantBlip();
+        if (shown >= full.length) { window.clearInterval(timer); typing = false; npcHint.style.display = 'block'; grantIfNeeded(); }
+      }, 34);
+    }
+    npcAdvance = () => {
+      if (typing) { window.clearInterval(timer); typing = false; npcText.textContent = full; npcHint.style.display = 'block'; grantIfNeeded(); return; }
+      pageI++; if (pageI >= pages.length) closeTalk(); else showPage();
+    };
+    function closeTalk() { window.clearInterval(timer); talkOpen = false; npcAdvance = null; npcClose = null; npcBox.style.display = 'none'; }
+    npcClose = closeTalk;
+    showPage();
+  }
+  // The Blessing of the Ball — swiftness that decays over BLESS_MS. Re-reading refreshes it.
+  function bestowBlessing() {
+    const wasGone = blessFrac() <= 0;
+    blessStart = Date.now(); blessEnd = blessStart + BLESS_MS;
+    if (wasGone) {
+      tone(392, 0.5, 'sine', 0.12, 523);
+      window.setTimeout(() => tone(523, 0.5, 'sine', 0.12, 659), 170);
+      window.setTimeout(() => tone(659, 0.8, 'sine', 0.14, 784), 340);
+      showToast('✨ <b>Blessing of the Ball</b> ✨<br>You feel light on your feet. <i>Go in swiftness.</i>');
+    }
   }
 
   // --- The Ruins dungeon interior: an off-map tile room rendered from DUNGEON_B1. Same camera/
@@ -2739,7 +2917,8 @@ export function startWorld(net: WorldNet): void {
     // The bartender takes your order (the beer dialog) instead of plain chatter.
     if (nearNpc && nearNpc.def.id === 'bartender') { orderBeer(); return; }
     if (nearNpc) { startTalk(nearNpc); return; }
-    if (nearExit) { if (inDungeon) leaveDungeon(); else leaveTavern(); return; }
+    if (nearExit) { if (inDungeon) leaveDungeon(); else if (inTemple) leaveTemple(); else leaveTavern(); return; }
+    if (nearBook) { readHolyBook(); return; }
     if (nearStairs) { changeFloor(nearStairs.to, nearStairs.dir === 'down' ? '<' : '>'); return; }
     if (nearBossStairs) { // the deepest stairwell — boss floor not carved yet, so it just breathes at you
       tone(48, 0.7, 'sawtooth', 0.12, 32); window.setTimeout(() => tone(40, 0.9, 'sine', 0.10, 28), 200);
@@ -2993,17 +3172,18 @@ export function startWorld(net: WorldNet): void {
       dx = ndx; dy = ndy;
     }
     facing = Math.atan2(dy, dx);
+    const SP = SPEED * blessMul(); // the Blessing of the Ball quickens your step (decays to 1×)
     if (inInterior) {
-      // inside the Tavern: no town collision, just clamp to the inset play area
-      selfX = clamp(selfX + dx * SPEED * dt, TAVERN_INT.x + TAVERN_WALL + R, TAVERN_INT.x + TAVERN_INT.w - TAVERN_WALL - R);
-      selfY = clamp(selfY + dy * SPEED * dt, TAVERN_INT.y + TAVERN_WALL + R, TAVERN_INT.y + TAVERN_INT.h - TAVERN_WALL - R);
+      // inside a room (Tavern/Temple): no town collision, just clamp to the inset play area
+      selfX = clamp(selfX + dx * SP * dt, curInt.x + curWall + R, curInt.x + curInt.w - curWall - R);
+      selfY = clamp(selfY + dy * SP * dt, curInt.y + curWall + R, curInt.y + curInt.h - curWall - R);
       stepSound();
       return;
     }
     if (inDungeon) {
       // inside the Ruins: collide per-tile against the walls/chests (slide along each axis), and
       // play the overworld's synthesized "boop" when you bump something solid.
-      const nx = selfX + dx * SPEED * dt, ny = selfY + dy * SPEED * dt;
+      const nx = selfX + dx * SP * dt, ny = selfY + dy * SP * dt;
       let hit = false;
       if (!dungeonBlocked(nx, selfY)) selfX = nx; else hit = true;
       if (!dungeonBlocked(selfX, ny)) selfY = ny; else hit = true;
@@ -3033,7 +3213,7 @@ export function startWorld(net: WorldNet): void {
       }
       return;
     }
-    const moved = resolveCollisions(selfX + dx * SPEED * dt, selfY + dy * SPEED * dt, R);
+    const moved = resolveCollisions(selfX + dx * SP * dt, selfY + dy * SP * dt, R);
     selfX = moved.x; selfY = moved.y;
     if (moved.hit) bumpSound(false);
     else stepSound();
@@ -3124,12 +3304,15 @@ export function startWorld(net: WorldNet): void {
         if (d < bD) { bD = d; nearNetizen = a.id; nearNpc = null; }
       }
     }
-    // Inside the Tavern: standing on the exit mat (and not chatting up someone) → leave prompt.
+    // Inside a room: standing on the exit mat (bottom-centre, and not chatting up someone) → leave prompt.
     nearExit = false;
     if (inInterior && !nearNpc) {
-      const mx = TAVERN_INT.x + TAVERN_INT.w / 2, my = TAVERN_INT.y + TAVERN_INT.h - TAVERN_WALL - 50;
+      const mx = curInt.x + curInt.w / 2, my = curInt.y + curInt.h - curWall - 50;
       if (Math.abs(selfX - mx) < 110 && Math.abs(selfY - my) < 80) nearExit = true;
     }
+    // Inside the Temple: standing at the lectern → read-the-book prompt (loses to the exit mat).
+    nearBook = false;
+    if (inTemple && !nearNpc && !nearExit && Math.hypot(selfX - templeBookX, selfY - templeBookY) < R + 44) nearBook = true;
     if (inDungeon && cellWorldOf('@')) { // the '@' arrival cell (B1 only) doubles as the way out
       const e = dungeonEntry();
       if (Math.abs(selfX - e.x) < 44 && Math.abs(selfY - e.y) < 44) nearExit = true;
@@ -3206,7 +3389,9 @@ export function startWorld(net: WorldNet): void {
     } else if (nearNpc) {
       prompt.textContent = nearNpc.def.id === 'bartender' ? '🍺 Order from the Barkeep' : `💬 Talk to ${nearNpc.def.name}`;
     } else if (nearExit) {
-      prompt.textContent = inDungeon ? '🚪 Leave the Ruins' : '🚪 Leave the Tavern';
+      prompt.textContent = inDungeon ? '🚪 Leave the Ruins' : inTemple ? '🚪 Leave the Temple' : '🚪 Leave the Tavern';
+    } else if (nearBook) {
+      prompt.textContent = '📖 Read the holy book';
     } else if (nearStairs) {
       prompt.textContent = nearStairs.dir === 'down' ? `⬇️ Descend to ${nearStairs.to}` : `⬆️ Climb up to ${nearStairs.to}`;
     } else if (nearBossStairs) {
@@ -3230,7 +3415,7 @@ export function startWorld(net: WorldNet): void {
     } else if (nearParcel) {
       prompt.textContent = parcelPrompt(nearParcel);
     }
-    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDungeonImp2 || nearDyingMan || nearRob || nearJailed || nearParcel) && !dialogOpen && !talkOpen ? 'block' : 'none';
+    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearBook || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDungeonImp2 || nearDyingMan || nearRob || nearJailed || nearParcel) && !dialogOpen && !talkOpen ? 'block' : 'none';
   }
 
   function maybeSendMove(now: number) {
@@ -3306,6 +3491,51 @@ export function startWorld(net: WorldNet): void {
   function selectBlip() { tone(660, 0.05, 'square', 0.12, 880); }
   // The dialogue typewriter blip — lifted straight from campaign.ts's text chatter (square 440→720).
   function textBlip() { tone(440, 0.04, 'square', 0.05, 720); }
+  // A hushed, low blip for the scripture typewriter — reverent rather than chirpy.
+  function chantBlip() { tone(196, 0.05, 'sine', 0.04, 262); }
+
+  // --- Holy chant: a slow choral drone that loops while you're in the Temple. Each "breath" swells a
+  // root+fifth+octave chord (two detuned voices each → a shimmering choir) then fades; a small modal
+  // cycle of roots gives it that solemn Gregorian wander. All synthesized — no audio assets. ---
+  let chantTimer = 0;
+  const chantNodes: { o: OscillatorNode; g: GainNode }[] = [];
+  function chantChord(root: number) {
+    try {
+      const a = ac(); const t = a.currentTime; const dur = 4.6;
+      if (chantNodes.length > 24) chantNodes.splice(0, chantNodes.length - 24); // drop spent voices
+      const freqs = [root, root * 1.5, root * 2]; // root, perfect fifth, octave
+      for (let i = 0; i < freqs.length; i++) {
+        for (const det of [-1.6, 1.6]) {           // two slightly detuned voices → choral beating
+          const o = a.createOscillator(); const g = a.createGain();
+          o.type = i === 0 ? 'sine' : 'triangle';
+          o.frequency.value = freqs[i] + det;
+          g.gain.setValueAtTime(0.0001, t);
+          g.gain.exponentialRampToValueAtTime(0.05 / (i + 1), t + 1.3); // slow swell
+          g.gain.exponentialRampToValueAtTime(0.0001, t + dur);          // and fade
+          o.connect(g); g.connect(a.destination); o.start(t); o.stop(t + dur + 0.1);
+          chantNodes.push({ o, g });
+        }
+      }
+    } catch { /* ignore */ }
+  }
+  function startChant() {
+    if (chantTimer) return;
+    unlockAudio();
+    const roots = [110, 146.83, 130.81, 164.81, 110, 98]; // A2 · D3 · C3 · E3 · A2 · G2
+    let i = 0;
+    chantChord(roots[0]);
+    chantTimer = window.setInterval(() => { i = (i + 1) % roots.length; chantChord(roots[i]); }, 4200);
+  }
+  function stopChant() {
+    if (chantTimer) { window.clearInterval(chantTimer); chantTimer = 0; }
+    const a = actx;
+    for (const n of chantNodes) {
+      try {
+        if (a) { n.g.gain.cancelScheduledValues(a.currentTime); n.g.gain.exponentialRampToValueAtTime(0.0001, a.currentTime + 0.6); n.o.stop(a.currentTime + 0.7); }
+      } catch { /* already stopped */ }
+    }
+    chantNodes.length = 0;
+  }
 
   // ============================================================================================
   // PHASER SCENE — texture generation + rendering. All draw state lives in `scene`-scoped vars
@@ -3331,6 +3561,7 @@ export function startWorld(net: WorldNet): void {
   }
   const remote = new Map<string, Av>();
   let self: Av | null = null;
+  let selfAura: Phaser.GameObjects.Arc | null = null; // golden Blessing halo behind the self avatar
 
   // Trailing pets: one little emoji sprite per avatar that has a pet equipped. The sprite chases a
   // point ~36 world units BEHIND its owner each frame, so it reads as a companion padding along.
@@ -3866,6 +4097,119 @@ export function startWorld(net: WorldNet): void {
       g.generateTexture('w-tav-window', 24, 20);
     }
 
+    // ============================================================================================
+    // TEMPLE INTERIOR PROPS — pale marble & candlelit stone, with the iconography of the Order of the
+    // Eternal Volley: the holy Ball, the sacred Paddle (their cross). Baked once; assembled in
+    // buildTempleInterior().
+    // ============================================================================================
+    {
+      // marble floor tile (16×16): a pale checker with faint grey veining
+      const M1 = 0xe8e3d4, M2 = 0xd5cfbe, VEIN = 0xc2bba6, SEAM = 0xb4ad98;
+      g.clear();
+      px(0, 0, 8, 8, M1); px(8, 8, 8, 8, M1); px(8, 0, 8, 8, M2); px(0, 8, 8, 8, M2);
+      px(0, 7, 16, 1, SEAM); px(7, 0, 1, 16, SEAM);                       // grout seams
+      px(2, 3, 4, 1, VEIN); px(10, 11, 3, 1, VEIN); px(12, 2, 1, 3, VEIN); // veins
+      g.generateTexture('w-tmp-floor', 16, 16);
+    }
+    {
+      // dressed-stone wall tile (16×16): light ashlar blocks with mortar courses
+      const S1 = 0xcac3ae, S2 = 0xbcb59f, MORT = 0x9a937e, HI = 0xdcd6c4;
+      g.clear();
+      px(0, 0, 16, 16, S1); px(0, 0, 16, 1, HI);
+      px(0, 7, 16, 1, MORT); px(0, 15, 16, 1, MORT);                      // courses
+      px(7, 0, 1, 8, MORT); px(11, 8, 1, 8, MORT);                        // staggered joints
+      px(2, 2, 3, 1, S2); px(10, 10, 3, 1, S2);                           // faint block shading
+      g.generateTexture('w-tmp-wall', 16, 16);
+    }
+    {
+      // sacred runner tile (16×16): royal purple with gold borders + a gold sun-diamond
+      const P = 0x4a2d7a, P_D = 0x351f5a, GOLD = 0xe8c34d, GOLD_D = 0xb8923a;
+      g.clear();
+      px(0, 0, 16, 16, P);
+      px(0, 0, 16, 2, GOLD); px(0, 14, 16, 2, GOLD); px(0, 0, 2, 16, GOLD_D); px(14, 0, 2, 16, GOLD_D);
+      px(3, 3, 10, 10, P_D);
+      px(7, 4, 2, 8, GOLD); px(4, 7, 8, 2, GOLD); px(6, 6, 4, 4, GOLD_D); px(7, 7, 2, 2, GOLD);
+      g.generateTexture('w-tmp-rug', 16, 16);
+    }
+    {
+      // stained-glass window (24×40): a deep-blue arched light — the holy Ball arcing over the green
+      // Paddle, the Eternal Volley rendered in glass, with rose panes in the crown.
+      const FRM = 0x7a715f, GL = 0x21478f, GL_D = 0x162a5e, LEAD = 0x0d1632;
+      const BALL = 0xffe06a, GLOW = 0xfff6c0, PAD = 0x46c06a, PAD_HI = 0x8ce0a4, PAD_D = 0x2f8f4c, RED = 0xc23b4a;
+      g.clear();
+      px(2, 6, 20, 34, FRM); px(5, 2, 14, 6, FRM); px(8, 0, 8, 3, FRM);  // arched stone frame
+      px(4, 8, 16, 30, GL_D); px(5, 9, 14, 28, GL); px(7, 4, 10, 5, GL); // blue glass field
+      px(11, 4, 2, 34, LEAD); px(4, 22, 16, 2, LEAD);                    // lead came (cross)
+      px(9, 30, 6, 6, PAD); px(9, 30, 6, 1, PAD_HI); px(9, 35, 6, 1, PAD_D); // green Paddle at the base
+      px(10, 13, 4, 4, GLOW); px(11, 14, 2, 2, BALL);                    // golden Ball
+      px(9, 12, 6, 1, GLOW); px(9, 17, 6, 1, GLOW); px(8, 13, 1, 3, GLOW); px(15, 13, 1, 3, GLOW); // its radiance
+      px(7, 5, 3, 2, RED); px(14, 5, 3, 2, RED);                         // rose panes in the crown
+      g.generateTexture('w-tmp-window', 24, 40);
+    }
+    {
+      // fluted classical column (16×64): capital, ribbed shaft, base
+      const COL = 0xd9d3c1, COL_SH = 0xb9b29c, COL_HI = 0xeee9da, CAP = 0xcabf9f;
+      g.clear();
+      px(0, 0, 16, 5, CAP); px(1, 1, 14, 1, COL_HI); px(2, 5, 12, 2, COL_SH); // capital
+      px(3, 7, 10, 52, COL);                                                  // shaft
+      px(3, 7, 1, 52, COL_HI); px(5, 7, 1, 52, COL_SH); px(8, 7, 1, 52, COL_SH); px(11, 7, 1, 52, COL_SH); // flutes
+      px(1, 59, 14, 5, CAP); px(0, 62, 16, 2, COL_SH);                        // base
+      g.generateTexture('w-tmp-column', 16, 64);
+    }
+    {
+      // the altar (44×30): pale stone block draped with a purple gold-hemmed cloth, on a base step
+      const ST = 0xcfc8b3, ST_HI = 0xe6ded0, ST_D = 0xa9a28c, CLOTH = 0x4a2d7a, CLOTH_HI = 0x5e3a96, CLOTH_D = 0x351f5a, GOLD = 0xe8c34d;
+      g.clear();
+      px(2, 8, 40, 20, ST); px(2, 8, 40, 2, ST_HI); px(2, 26, 40, 2, ST_D);   // block
+      px(0, 26, 44, 4, ST_D);                                                  // base step
+      px(6, 0, 32, 9, CLOTH); px(6, 0, 32, 2, CLOTH_HI); px(6, 7, 32, 2, CLOTH_D); // draped cloth
+      px(6, 9, 32, 1, GOLD);                                                   // gold hem
+      for (const fx of [9, 16, 23, 30, 37]) px(fx, 10, 1, 2, GOLD);            // gold fringe
+      g.generateTexture('w-tmp-altar', 44, 30);
+    }
+    {
+      // tall altar candle (8×20): holder, wax, flame
+      const WAX = 0xeee3c4, WAX_D = 0xcfc09a, STK = 0x9a7b3a, FL = 0xffcf5a, FL_HI = 0xfff0c0;
+      g.clear();
+      px(2, 18, 4, 2, STK);                                                    // holder
+      px(3, 6, 2, 12, WAX); px(4, 6, 1, 12, WAX_D);                            // candle
+      px(3, 3, 2, 3, FL); px(3, 2, 2, 1, FL_HI); px(3, 4, 2, 1, FL_HI);        // flame
+      g.generateTexture('w-tmp-candle', 8, 20);
+    }
+    {
+      // a worshipper's pew (48×18): a forward-facing wooden bench
+      const W = 0x6e4a28, W_HI = 0x8a5e34, W_D = 0x4f3318;
+      g.clear();
+      px(2, 0, 44, 5, W); px(2, 0, 44, 2, W_HI);                              // backrest
+      px(2, 5, 2, 6, W_D); px(42, 5, 2, 6, W_D);                              // back posts
+      px(0, 10, 48, 5, W); px(0, 10, 48, 1, W_HI); px(0, 14, 48, 1, W_D);     // seat
+      px(3, 15, 3, 3, W_D); px(42, 15, 3, 3, W_D);                            // legs
+      g.generateTexture('w-tmp-pew', 48, 18);
+    }
+    {
+      // the Cross of the Paddle (28×28): the sacred Paddle as an upright cross, the Ball at its heart
+      const PAD = 0xb9823f, PAD_HI = 0xd8a05c, PAD_D = 0x8a5f2c, HANDLE = 0x6e4a28, HANDLE_HI = 0x8a5e34;
+      const BALL = 0xffe06a, GLOW = 0xfff6c0, RAY = 0xffe082;
+      g.clear();
+      px(13, 0, 2, 28, RAY, 0.5); px(0, 13, 28, 2, RAY, 0.5);                 // faint radiant cross-glow
+      px(10, 2, 8, 12, PAD); px(10, 2, 8, 2, PAD_HI); px(10, 12, 8, 2, PAD_D); // blade (up)
+      px(4, 8, 20, 5, PAD); px(4, 8, 20, 1, PAD_HI); px(4, 12, 20, 1, PAD_D);  // crossbar (arms)
+      px(12, 14, 4, 12, HANDLE); px(12, 14, 2, 12, HANDLE_HI);                 // handle (down)
+      px(11, 8, 6, 6, GLOW); px(12, 9, 4, 4, BALL); px(13, 10, 1, 1, 0xffffff); // the Ball at the heart
+      g.generateTexture('w-tmp-icon', 28, 28);
+    }
+    {
+      // the holy book on its lectern (24×28): a slanted stand bearing an open, gilded scripture
+      const WD = 0x6e4a28, WD_HI = 0x8a5e34, WD_D = 0x4f3318, PG = 0xf2ead2, PG_SH = 0xd8cfb2, INK = 0x2a2118, GOLD = 0xe8c34d;
+      g.clear();
+      px(10, 16, 4, 10, WD); px(11, 16, 1, 10, WD_HI); px(7, 25, 10, 3, WD_D); // post + foot
+      px(4, 12, 16, 5, WD); px(4, 12, 16, 1, WD_HI);                           // slanted lectern top
+      px(3, 6, 18, 8, PG); px(3, 6, 18, 1, PG_SH); px(11, 5, 2, 9, WD_D);      // open book + spine
+      px(5, 8, 5, 1, INK); px(5, 10, 5, 1, INK); px(14, 8, 5, 1, INK); px(14, 10, 5, 1, INK); // text lines
+      px(3, 6, 1, 8, GOLD); px(20, 6, 1, 8, GOLD);                            // gilded page edges
+      g.generateTexture('w-tmp-book', 24, 28);
+    }
+
     // --- soft round shadow (12×6 texels) ---
     g.clear();
     px(2, 1, 8, 4, 0x000000, 0.28); px(1, 2, 10, 2, 0x000000, 0.28);
@@ -4309,6 +4653,63 @@ export function startWorld(net: WorldNet): void {
     }
   }
 
+  // The Temple: a pale stone sanctuary of the Order of the Eternal Volley — a stepped base, a portico
+  // of columns over a dark recessed doorway, a triangular pediment, and a rose window in the tympanum
+  // showing the holy Ball arcing over the green Paddle. A golden finial Ball crowns the apex.
+  function buildTemple(sc: Phaser.Scene, b: WorldBuilding) {
+    const W = Math.round(b.w / TEXEL), H = Math.round(b.h / TEXEL);
+    const depth = b.y + b.h;
+    const g = sc.make.graphics({ x: 0, y: 0 }, false);
+    const P = (x: number, y: number, w: number, h: number, c: number, a = 1) => px9(g, x, y, w, h, c, a);
+    const STONE = 0xe4dcc4, STONE_HI = 0xf3ecd9, STONE_D = 0xc3baa0, STEP = 0xcfc7ad, STEP_D = 0xb0a88e;
+    const ROOF = 0x6e5a8a, DOOR = 0x241d30, GOLD = 0xe8c34d, GLASS_D = 0x2a4a86, BALL = 0xffe06a, GLOW = 0xfff3b0, GREEN = 0x46c06a;
+    const pedH = Math.round(H * 0.30);                 // pediment (triangle) height
+    const colTop = pedH;                                // columns begin under the pediment
+    const baseY = H - Math.round(H * 0.12);             // top of the stepped base
+    // stepped base (stylobate)
+    const stepH = Math.ceil((H - baseY) / 3) + 1;
+    for (let s = 0; s < 3; s++) P(s * 3, baseY + s * Math.round((H - baseY) / 3), W - s * 6, stepH, s % 2 ? STEP_D : STEP);
+    // dark cella glimpsed behind the colonnade
+    const margin = Math.round(W * 0.06), span = W - margin * 2, colY = colTop + 6, colH = baseY - colY;
+    P(margin, colY, span, colH, 0x2c2740);
+    // entablature the columns hold up
+    P(2, colTop, W - 4, 6, STONE); P(2, colTop, W - 4, 2, STONE_HI); P(2, colTop + 5, W - 4, 1, STONE_D);
+    // the colonnade
+    const nCols = 6, gap = span / nCols, colW = Math.max(4, Math.round(gap * 0.42));
+    for (let i = 0; i < nCols; i++) {
+      const cxp = Math.round(margin + gap * (i + 0.5) - colW / 2);
+      P(cxp, colY, colW, colH, STONE);
+      P(cxp, colY, 1, colH, STONE_HI); P(cxp + colW - 1, colY, 1, colH, STONE_D);
+      P(cxp - 1, colY, colW + 2, 2, STONE_HI); P(cxp - 1, baseY - 2, colW + 2, 2, STONE_D); // capital + base
+    }
+    // recessed doorway between the central columns, gilded
+    const dw = Math.round(W * 0.15), dx = Math.round((W - dw) / 2), dh = Math.round(colH * 0.78);
+    P(dx, baseY - dh, dw, dh, DOOR);
+    P(dx, baseY - dh, dw, 2, GOLD); P(Math.round(W / 2 - 1), baseY - dh + 3, 2, dh - 3, GOLD, 0.45);
+    // the pediment (triangle) with a cornice along its base
+    for (let y = 0; y < pedH; y++) { const halfw = Math.round((W / 2 - 2) * (y / pedH)); P(W / 2 - halfw, y, halfw * 2, 1, y / pedH > 0.82 ? STONE_D : STONE); }
+    P(0, pedH - 2, W, 2, ROOF);
+    // the rose window in the tympanum — the holy Ball over the green Paddle, ringed in gold
+    const rcx = Math.round(W / 2), rcy = Math.round(pedH * 0.62), rr = Math.max(5, Math.round(pedH * 0.26));
+    for (let yy = -rr - 1; yy <= rr + 1; yy++) for (let xx = -rr - 1; xx <= rr + 1; xx++) {
+      const d = Math.hypot(xx, yy);
+      if (d <= rr + 1 && d > rr - 1.5) P(rcx + xx, rcy + yy, 1, 1, GOLD);       // gilded rim
+      else if (d <= rr - 1.5) P(rcx + xx, rcy + yy, 1, 1, GLASS_D);            // blue glass
+    }
+    P(rcx - 2, rcy - 2, 4, 4, GLOW); P(rcx - 1, rcy - 1, 2, 2, BALL);          // the Ball
+    P(rcx - 3, rcy + rr - 3, 6, 2, GREEN);                                     // the Paddle below it
+    g.generateTexture('w-temple', W, H);
+    g.destroy();
+    sc.add.image(b.x, b.y, 'w-temple').setOrigin(0, 0).setScale(TEXEL).setDepth(depth);
+    // a golden finial Ball crowning the apex, haloed in a slow pulse
+    const apexX = b.x + b.w / 2, apexY = b.y - 4;
+    const halo = sc.add.circle(apexX, apexY, 12, 0xffe06a, 0.3).setBlendMode(Phaser.BlendModes.ADD).setDepth(depth + 2);
+    sc.add.circle(apexX, apexY, 5, 0xfff3b0).setDepth(depth + 3);
+    sc.tweens.add({ targets: halo, alpha: 0.6, scale: 1.4, duration: 1400, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    // the venue glyph above the door
+    sc.add.text(b.x + b.w / 2, b.y + b.h - TILE * 1.5, b.emoji, { fontSize: '22px' }).setOrigin(0.5, 1).setDepth(b.y + b.h + 2);
+  }
+
   // The hellgate: a dark red-black stone archway with a glowing portal mouth, then live flames
   // layered over/around it (pushed into `flames`, danced each frame in update()). Mirrors the
   // buildCasino/buildArena idiom — bake the static facade as a texture, add animated sprites on top.
@@ -4531,6 +4932,7 @@ export function startWorld(net: WorldNet): void {
         else if (b.kind === 'doomportal') buildDoomPortal(sc, b);
         else if (b.kind === 'pond') buildPond(sc, b);
         else if (b.kind === 'dungeon') buildRuins(sc, b);
+        else if (b.kind === 'temple') buildTemple(sc, b);
         else buildBuilding(sc, b);
         const sign = sc.add.text(b.x + b.w / 2, b.y - 6, b.name, {
           fontFamily: 'system-ui, sans-serif', fontSize: '15px', fontStyle: 'bold',
@@ -4611,6 +5013,8 @@ export function startWorld(net: WorldNet): void {
       // --- our own avatar ---
       petScene = sc; // remember the scene so pet sprites can be spawned on demand in update()
       self = makeAvatar(sc, net.name() || 'you', net.color());
+      // a golden halo that haloes you while the Blessing of the Ball is upon you (alpha set per-frame)
+      selfAura = sc.add.circle(selfX, selfY, R + 12, 0xffe06a, 0).setBlendMode(Phaser.BlendModes.ADD);
       sc.cameras.main.startFollow(self.c, true, 0.18, 0.18);
       sc.cameras.main.roundPixels = true;
 
@@ -4858,7 +5262,7 @@ export function startWorld(net: WorldNet): void {
         if (drunkOverlay) drunkOverlay.setAlpha(drunk > 0 ? Math.min(0.5, drunk * 0.06) : 0);
         if (mainCam) {
           const w = time / 1000;
-          const baseZoom = inInterior ? TAVERN_ZOOM : inDungeon ? DUNGEON_ZOOM : ZOOM; // cozy in the Tavern, close-in in the dungeon
+          const baseZoom = inInterior ? curZoom : inDungeon ? DUNGEON_ZOOM : ZOOM; // cozy in the Tavern/Temple, close-in in the dungeon
           mainCam.setRotation(drunk > 0 ? Math.sin(w * 1.1) * 0.012 * drunk : 0);            // tilt sway (~4° at lvl 6)
           mainCam.setZoom(drunk > 0 ? baseZoom * (1 + Math.sin(w * 0.8) * 0.02 * drunk) : baseZoom); // breathing zoom
         }
@@ -4925,6 +5329,24 @@ export function startWorld(net: WorldNet): void {
 
       // place our avatar straight from authoritative state (zero latency)
       if (self) { placeAvatar(self, selfX, selfY, facing, driving, net.color(), net.name() || 'you'); applySay(self, net.selfId(), now); }
+
+      // The Blessing of the Ball: a pulsing golden halo behind you + a draining HUD badge, both fading
+      // as the swiftness wears off.
+      {
+        const bf = blessFrac();
+        if (selfAura) {
+          if (bf > 0) {
+            const pulse = 0.5 + 0.5 * Math.sin(now / 220);
+            selfAura.setPosition(selfX, selfY).setDepth(selfY - 1)
+              .setRadius((R + 10 + pulse * 4))
+              .setFillStyle(0xffe06a, (0.12 + 0.16 * pulse) * Math.min(1, bf + 0.25));
+          } else if (selfAura.fillAlpha !== 0) {
+            selfAura.setFillStyle(0xffe06a, 0);
+          }
+        }
+        if (bf > 0) { blessBadge.style.display = 'block'; if (blessBar) blessBar.style.width = (bf * 100).toFixed(1) + '%'; }
+        else if (blessBadge.style.display !== 'none') blessBadge.style.display = 'none';
+      }
 
       // reconcile + lerp remote avatars
       const seen = new Set<string>();
@@ -5230,6 +5652,7 @@ export function startWorld(net: WorldNet): void {
     game = null;
     if (inDungeon) net.dungeonExit(false); // bailed out of the World mid-dungeon → forfeit the run purse
     setDungeonMusic(false); dungeonMusic = null; inDungeon = false;
+    stopChant(); inInterior = false; inTemple = false;
     try { void actx?.close(); } catch { /* ignore */ }
     actx = null;
     overlay.remove();
