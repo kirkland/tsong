@@ -360,21 +360,26 @@ export function startFishing(net: FishingNet): void {
 
   function drawReveal() {
     if (!reveal) return;
+    // Boat keys override: when a junk haul coughs up the keys, the catch IS the keys —
+    // show "🔑 Old Boat Keys" instead of the soda can / boot / tire we actually reeled in.
+    const isKeys = reveal.item?.id === 'car-boat';
     const info = TIER_INFO[reveal.species.tier];
     const pop = 1 + revealPop * 0.4;
     ctx.save();
     ctx.translate(W / 2, H * 0.4);
     ctx.scale(pop, pop);
     ctx.textAlign = 'center';
-    ctx.fillStyle = info.color;
+    ctx.fillStyle = isKeys ? '#ffd23f' : info.color;
     ctx.font = '900 22px ui-monospace,monospace';
-    ctx.fillText(info.label, 0, -70);
+    ctx.fillText(isKeys ? 'BOAT KEYS' : info.label, 0, -70);
     ctx.font = '700 26px ui-monospace,monospace';
     ctx.fillStyle = '#fff';
-    ctx.fillText(reveal.species.name, 0, -30);
-    ctx.font = '700 20px ui-monospace,monospace';
-    ctx.fillStyle = '#cfe0ff';
-    ctx.fillText(`${reveal.sizeLb.toLocaleString()} lb`, 0, 4);
+    ctx.fillText(isKeys ? '🔑 Old Boat Keys' : reveal.species.name, 0, -30);
+    if (!isKeys) {
+      ctx.font = '700 20px ui-monospace,monospace';
+      ctx.fillStyle = '#cfe0ff';
+      ctx.fillText(`${reveal.sizeLb.toLocaleString()} lb`, 0, 4);
+    }
     ctx.font = '700 22px ui-monospace,monospace';
     ctx.fillStyle = '#ffd166';
     const coinText = reveal.coins === null ? '…' : `🪙 +${reveal.coins.toLocaleString()}`;
