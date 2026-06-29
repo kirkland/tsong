@@ -3494,37 +3494,54 @@ export function startWorld(net: WorldNet): void {
   // A hushed, low blip for the scripture typewriter — reverent rather than chirpy.
   function chantBlip() { tone(196, 0.05, 'sine', 0.04, 262); }
 
-  // --- Holy chant: a slow choral drone that loops while you're in the Temple. Each "breath" swells a
-  // root+fifth+octave chord (two detuned voices each → a shimmering choir) then fades; a small modal
-  // cycle of roots gives it that solemn Gregorian wander. All synthesized — no audio assets. ---
+  // --- Holy music: a full pipe-organ hymn that fills the Temple while you're inside. Each phrase lays
+  // a fat organ pad (root + fifth + octaves, sine & sawtooth ranks) under a clear hymn melody up top,
+  // so it reads as real music, not a faint background drone. All synthesized — no audio assets. ---
   let chantTimer = 0;
   const chantNodes: { o: OscillatorNode; g: GainNode }[] = [];
-  function chantChord(root: number) {
+  // One sustained organ voice: swell in, hold, then release. Pushed to chantNodes so stopChant() can
+  // cut everything cleanly when you leave.
+  function holyVoice(freq: number, t: number, dur: number, peak: number, type: OscillatorType, attack: number) {
+    const a = ac();
+    const o = a.createOscillator(); const g = a.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(peak, t + attack);                 // swell
+    g.gain.setValueAtTime(peak, t + Math.max(attack + 0.05, dur - 0.7));   // hold
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);                  // release
+    o.connect(g); g.connect(a.destination); o.start(t); o.stop(t + dur + 0.05);
+    if (chantNodes.length > 40) chantNodes.splice(0, chantNodes.length - 40); // drop spent voices
+    chantNodes.push({ o, g });
+  }
+  function chantChord(root: number, mel: readonly number[]) {
     try {
-      const a = ac(); const t = a.currentTime; const dur = 4.6;
-      if (chantNodes.length > 24) chantNodes.splice(0, chantNodes.length - 24); // drop spent voices
-      const freqs = [root, root * 1.5, root * 2]; // root, perfect fifth, octave
-      for (let i = 0; i < freqs.length; i++) {
-        for (const det of [-1.6, 1.6]) {           // two slightly detuned voices → choral beating
-          const o = a.createOscillator(); const g = a.createGain();
-          o.type = i === 0 ? 'sine' : 'triangle';
-          o.frequency.value = freqs[i] + det;
-          g.gain.setValueAtTime(0.0001, t);
-          g.gain.exponentialRampToValueAtTime(0.05 / (i + 1), t + 1.3); // slow swell
-          g.gain.exponentialRampToValueAtTime(0.0001, t + dur);          // and fade
-          o.connect(g); g.connect(a.destination); o.start(t); o.stop(t + dur + 0.1);
-          chantNodes.push({ o, g });
-        }
-      }
+      const a = ac(); const t = a.currentTime; const dur = 4.4;
+      // a fat pipe-organ pad — multiple ranks for a full, present sound
+      holyVoice(root, t, dur, 0.16, 'sine', 0.5);          // sub
+      holyVoice(root * 2, t, dur, 0.12, 'sawtooth', 0.6);  // principal rank (reedy)
+      holyVoice(root * 1.5, t, dur, 0.09, 'sine', 0.7);    // fifth
+      holyVoice(root * 3, t, dur, 0.05, 'sawtooth', 0.9);  // bright upper rank
+      holyVoice(root * 2 + 1.5, t, dur, 0.05, 'triangle', 0.8); // detuned shimmer
+      // a clear hymn melody sung over the top — foreground, not subtle
+      const step = (dur - 0.6) / Math.max(1, mel.length);
+      for (let k = 0; k < mel.length; k++) holyVoice(mel[k], t + k * step, step + 0.3, 0.14, 'sine', 0.05);
     } catch { /* ignore */ }
   }
   function startChant() {
     if (chantTimer) return;
     unlockAudio();
-    const roots = [110, 146.83, 130.81, 164.81, 110, 98]; // A2 · D3 · C3 · E3 · A2 · G2
+    // a solemn hymn: each phrase pairs a bass root with a melody line over it
+    const phrases: { root: number; mel: number[] }[] = [
+      { root: 110.00, mel: [440.00, 523.25, 493.88] }, // A
+      { root: 146.83, mel: [587.33, 523.25, 440.00] }, // D
+      { root: 130.81, mel: [523.25, 659.25, 587.33] }, // C
+      { root: 164.81, mel: [659.25, 587.33, 493.88] }, // E
+      { root: 110.00, mel: [493.88, 440.00, 523.25] }, // A
+      { root:  98.00, mel: [392.00, 440.00, 493.88] }, // G
+    ];
     let i = 0;
-    chantChord(roots[0]);
-    chantTimer = window.setInterval(() => { i = (i + 1) % roots.length; chantChord(roots[i]); }, 4200);
+    chantChord(phrases[0].root, phrases[0].mel);
+    chantTimer = window.setInterval(() => { i = (i + 1) % phrases.length; chantChord(phrases[i].root, phrases[i].mel); }, 4000);
   }
   function stopChant() {
     if (chantTimer) { window.clearInterval(chantTimer); chantTimer = 0; }
