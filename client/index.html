@@ -1026,6 +1026,11 @@
       }
       .shop-tab.active { background: #2d4070; border-color: #3a6df0; color: #fff; }
       #shopItems { max-height: 46vh; overflow-y: auto; }
+      .shop-subhead {
+        font-size: 11px; font-weight: 800; letter-spacing: .6px; text-transform: uppercase;
+        color: #8aa0d8; margin: 8px 0 2px; padding-bottom: 3px; border-bottom: 1px solid #2a3550;
+      }
+      .shop-subhead:first-child { margin-top: 0; }
       .shop-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
       .shop-preview { flex-shrink: 0; border-radius: 4px; background: #060912; }
       /* ▶ audition button for theme songs (stands in for the paddle preview canvas). */
@@ -3710,7 +3715,7 @@
             <button id="tabTrails" class="shop-tab" type="button">Trails</button>
             <button id="tabTitles" class="shop-tab" type="button">Titles</button>
             <button id="tabSongs" class="shop-tab" type="button">🎵 Songs</button>
-            <button id="tabCars" class="shop-tab" type="button">🚗 Cars</button>
+            <button id="tabVehicles" class="shop-tab" type="button">🚗 Vehicles</button>
             <button id="tabPets" class="shop-tab" type="button">🐾 Pets</button>
           </div>
           <div id="shopItems"></div>

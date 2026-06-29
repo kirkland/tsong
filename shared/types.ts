@@ -176,9 +176,9 @@ export const COIN_SCALE = 100;
 export interface CosmeticItem {
   id: string;
   name: string;
-  slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'pet';
+  slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'boat' | 'pet';
   price: number;
-  locked?: 'campaign' | 'fishing' | 'fishing_rare' | 'dungeon'; // not buyable — unlocked by in-game achievements
+  locked?: 'campaign' | 'fishing' | 'fishing_rare' | 'fishing_junk' | 'dungeon'; // not buyable — unlocked by in-game achievements
   audio?: string; // for 'song' items: path to the mp3 that plays during your matches
 }
 // Static cosmetics cost 1000 coins; animated ones cost 2000 (10×/20× the COIN_SCALE base).
@@ -275,6 +275,8 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'car-drifter', name: '🏎️ Drift King', slot: 'car', price: 20000 },
   { id: 'car-muscle', name: '🚙 Muscle', slot: 'car', price: 35000 },
   { id: 'car-monster', name: '🛻 Monster Truck', slot: 'car', price: 0, locked: 'dungeon' }, // the Ruins locked-room prize
+  // Boats (slot 'boat') — equipped alongside a car; usable on water. Look/physics live in CARS.
+  { id: 'car-boat', name: "🛥️ Bill's Boat", slot: 'boat', price: 0, locked: 'fishing_junk' }, // fish up boat keys from junk to unlock (it's a yacht)
   // Pets (slot 'pet') — follow you around the World map; look/animation keyed by PETS below.
   { id: 'pet-rock', name: '🪨 Pet Rock', slot: 'pet', price: 50000 },
   { id: 'pet-pikachu', name: '⚡ Pikachu', slot: 'pet', price: 100000 },
@@ -401,6 +403,8 @@ export const CARS: readonly CarSpec[] = [
   { id: 'car-muscle',  name: 'Muscle',    body: '#8a5cf6', accent: '#1c1430', speed: 660, accel: 620, turn: 2.2, grip: 0.78 },
   // The Monster Truck: the Ruins' locked-room prize. Heavy, planted, monstrous low-end grunt.
   { id: 'car-monster', name: 'Monster Truck', body: '#cc2222', accent: '#1a1a1a', speed: 600, accel: 820, turn: 2.0, grip: 0.92 },
+  // Bill's Boat: fished up from junk. Glides like it's on water — low grip, breezy and floaty.
+  { id: 'car-boat',    name: "Bill's Boat",  body: '#2f6fa8', accent: '#e8d8b0', speed: 560, accel: 600, turn: 2.5, grip: 0.55 },
 ] as const;
 export function carById(id: string | null | undefined): CarSpec | null {
   if (!id) return null;
@@ -841,7 +845,7 @@ export type ClientMsg =
   | { type: 'campaignScore'; score: number; stage: number; won: boolean } // record a campaign run (arcade score, furthest stage, whether Davis fell)
   | { type: 'fishCatch'; tier: string; sizeLb: number } // landed a fish — server picks the House-funded coin reward by tier (client never sends coins)
   | { type: 'shopBuy'; item: string } // buy a cosmetic from the shop
-  | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'pet'; item: string | null } // equip (item) or unequip (null) a cosmetic
+  | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'boat' | 'pet'; item: string | null } // equip (item) or unequip (null) a cosmetic
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
   | { type: 'dailySpin' } // claim the once-per-24h reward spin
   | { type: 'stockInvest'; coin: string; amount: number; side?: StockSide } // open a long or short position
@@ -1587,6 +1591,7 @@ export interface WalletMsg {
   title: string | null; // equipped name title (flair shown by your name)
   song: string | null; // equipped theme song (plays during your matches)
   car: string | null; // equipped car (driven in the World map)
+  boat: string | null; // equipped boat (used on water; equipped alongside a car)
   pet: string | null; // equipped pet (trails behind you in the World map)
   // Owned scarce exclusives (loot-box mints / marketplace buys): item id + mint serial +
   // instance id (the marketplace lists a specific instance). Kept OUT of the `owned` CSV —

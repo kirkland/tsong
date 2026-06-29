@@ -382,7 +382,7 @@ export function startFishing(net: FishingNet): void {
     if (reveal.item) {
       ctx.font = '700 16px ui-monospace,monospace';
       ctx.fillStyle = '#ffd23f';
-      ctx.fillText(`Unlocked: ${reveal.item.name} title!`, 0, 78);
+      ctx.fillText(`Unlocked: ${reveal.item.name}!`, 0, 78);
     }
     ctx.restore();
   }

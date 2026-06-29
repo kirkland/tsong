@@ -1830,6 +1830,21 @@ export class Lobby {
           finish(cos && w ? { id: cos.id, name: cos.name } : undefined);
         })
         .catch((e) => { console.error('bigcatch title award failed:', e); finish(); });
+    } else if (tier === 'junk' && Math.random() < 0.05) {
+      // 5% of junk hauls cough up a set of BOAT KEYS → one-time unlock of Bill's Boat. (If they
+      // already own it, it's just an ordinary junk haul — they still pocket the coins.)
+      getWallet(pid)
+        .then((w) => {
+          if (w.owned.includes('car-boat')) { finish(); return; }
+          grantItem(pid, nick, 'car-boat')
+            .then(() => {
+              const cos = COSMETICS.find((c) => c.id === 'car-boat');
+              finish(cos ? { id: cos.id, name: cos.name } : undefined);
+              this.announce(`🔑 ${nick} fished up a set of BOAT KEYS and unlocked Bill's Boat! 🛥️`);
+            })
+            .catch((e) => { console.error('boat keys grant failed:', e); finish(); });
+        })
+        .catch((e) => { console.error('boat keys ownership check failed:', e); finish(); });
     } else {
       finish();
     }
@@ -2395,7 +2410,7 @@ export class Lobby {
         c.trail = w.trail;
         c.title = w.title;
         c.song = w.song;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, pet: w.pet, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, boat: w.boat, pet: w.pet, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet load failed:', e));
   }
@@ -2409,7 +2424,7 @@ export class Lobby {
         const c = this.conns.get(ws);
         if (!c) return;
         c.hat = w.hat; c.skin = w.skin; c.trail = w.trail; c.title = w.title; c.song = w.song;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, pet: w.pet, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, boat: w.boat, pet: w.pet, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet send failed:', e));
   }
@@ -2638,7 +2653,7 @@ export class Lobby {
   }
 
   /** Equip (item) or unequip (null) a cosmetic in its slot. */
-  shopEquip(ws: WebSocket, slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'pet', item: string | null) {
+  shopEquip(ws: WebSocket, slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'boat' | 'pet', item: string | null) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     if (item !== null) {
