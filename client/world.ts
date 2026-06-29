@@ -857,9 +857,11 @@ export function startWorld(net: WorldNet): void {
   // (matching how buildPond draws it). Boats are confined to these ellipses; on foot or in a car the
   // pond rect stays solid, so you launch from the shore. Add water by adding pond buildings.
   interface WaterRegion { rect: Rect; cx: number; cy: number; rx: number; ry: number }
+  // rx/ry are the *navigable* ellipse — inset well inside the visible water so the long boat hull
+  // stays on the water instead of overhanging onto the sandy shore at the edges.
   const WATER: WaterRegion[] = (WORLD_BUILDINGS as readonly WorldBuilding[])
     .filter((b) => b.kind === 'pond')
-    .map((b) => ({ rect: { x: b.x, y: b.y, w: b.w, h: b.h }, cx: b.x + b.w / 2, cy: b.y + b.h / 2, rx: b.w / 2 - 22, ry: b.h / 2 - 26 }));
+    .map((b) => ({ rect: { x: b.x, y: b.y, w: b.w, h: b.h }, cx: b.x + b.w / 2, cy: b.y + b.h / 2, rx: b.w / 2 - 50, ry: b.h / 2 - 52 }));
   const BOAT_BOARD_PAD = 44; // how close to a pond's shore you can be to launch your boat (world units)
   let boating = false;
   let boatWater: WaterRegion | null = null;          // the water we're currently boating on
@@ -4469,29 +4471,31 @@ export function startWorld(net: WorldNet): void {
     px(20, 6, 4, 2, 0xffffff);   // a little nose stripe
     g.generateTexture('w-car-roof', 26, 14);
 
-    // --- Bill's Boat: a fully-painted pixel-art motor yacht, top-down, pointing +x (east), 44×20
-    //     texels. White hull with a navy waterline trim, teak aft deck, a white cabin with a glass
-    //     window band, and a sharp bow. Painted in full colour (rendered untinted, unlike the cars). ---
+    // --- Bill's Boat: a fully-painted pixel-art runabout/speedboat, top-down, pointing +x (east),
+    //     36×18 texels. A white hull with a V bow, an open blue cockpit (helm seats + aft bench +
+    //     console), a windshield, and an outboard motor on the transom. Painted in full colour and
+    //     rendered untinted (unlike the tinted cars). ---
     {
-      const HULL = 0xf4f7fa, TRIM = 0x21466f, DECK = 0xcaa46a, WOODL = 0xdcc093,
-            CABIN = 0xffffff, GLASS = 0x8fc0e6, RAIL = 0x2b3a4d;
+      const HULL = 0xf2efe6, DECK = 0x3d6e8c, DECK_D = 0x2e5670, GLASS = 0xbfdcec,
+            SEAT = 0xe4e9ed, CONSOLE = 0x2c3e50, MOTOR = 0x232a33, TRIM = 0xffffff;
       g.clear();
-      // navy hull silhouette → leaves a thin trim once the white hull is inset by 1px
-      px(6, 4, 30, 12, TRIM); px(35, 6, 5, 8, TRIM); px(39, 8, 2, 4, TRIM);
-      // white hull
-      px(7, 5, 28, 10, HULL); px(35, 7, 4, 6, HULL); px(38, 9, 2, 2, HULL);
-      px(6, 6, 1, 8, TRIM); // flat transom at the stern (left)
-      // teak aft deck (open cockpit)
-      px(9, 7, 12, 6, DECK); px(9, 7, 12, 1, WOODL);
-      // superstructure / cabin amidships, with a raised flybridge
-      px(21, 5, 13, 10, CABIN); px(24, 4, 8, 2, CABIN);
-      // wraparound glass window band
-      px(22, 7, 11, 2, GLASS); px(25, 10, 7, 2, GLASS);
-      // gunwale rails + a little mast nub and a bow light
-      px(8, 5, 27, 1, RAIL, 0.55); px(8, 14, 27, 1, RAIL, 0.55);
-      px(30, 3, 1, 2, RAIL); px(36, 9, 2, 2, GLASS);
-      g.generateTexture('w-boat-body', 44, 20);
-      g.clear(); // the yacht is painted entirely in the body layer; keep the roof layer transparent
+      // white hull with a pointed V bow at the right (+x)
+      px(4, 4, 24, 10, HULL); px(28, 5, 4, 8, HULL); px(31, 6, 3, 6, HULL); px(33, 8, 2, 2, HULL);
+      px(3, 6, 1, 6, HULL);                              // transom (stern, left)
+      // open blue cockpit interior
+      px(7, 6, 18, 6, DECK); px(7, 6, 18, 1, DECK_D); px(7, 11, 18, 1, DECK_D); // floor + gunwale shadow
+      // windshield band just aft of the white foredeck
+      px(23, 5, 2, 8, GLASS);
+      // seating: a full-beam aft bench + two helm seats, with a dark console by the windshield
+      px(9, 6, 3, 6, SEAT);
+      px(15, 6, 3, 2, SEAT); px(15, 10, 3, 2, SEAT);
+      px(20, 7, 2, 4, CONSOLE);
+      // outboard motor poking off the transom
+      px(0, 7, 3, 4, MOTOR); px(3, 8, 1, 2, MOTOR);
+      // bright white gunwale rails down both sides
+      px(5, 4, 23, 1, TRIM); px(5, 13, 23, 1, TRIM);
+      g.generateTexture('w-boat-body', 36, 18);
+      g.clear(); // the boat is painted entirely in the body layer; keep the roof layer transparent
       g.generateTexture('w-boat-roof', 2, 2);
     }
 
