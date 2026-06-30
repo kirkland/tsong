@@ -668,7 +668,11 @@ const net = connect(
       prevProjCount = projCount;
       // Detect paddle hit and score events for sound.
       if (msg.status === 'playing' && !msg.paused) {
-        if (msg.hitSeq !== prevHitSeq) playHitSound();
+        if (msg.hitSeq !== prevHitSeq) {
+          playHitSound();
+          // First paddle hit = new point is live — cut the replay immediately.
+          if (replayFrames) { replayFrames = null; replayIdx = 0; }
+        }
         if (msg.score.left > prevScore.left || msg.score.right > prevScore.right) {
           playScoreSound();
           // Trigger slow-mo goal replay using buffered frames (only when mode is on).
