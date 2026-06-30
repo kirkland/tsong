@@ -34,6 +34,8 @@ import {
   ROBVILLE_BULBS,
   PARCEL_PRICE,
   BANK_PARCEL_CAP,
+  HOUSE_KINDS,
+  HOUSE_BY_ID,
   WORLD_SAY_MAX,
   type LandParcelView,
   JAIL,
@@ -88,6 +90,8 @@ export interface WorldNet {
   landList(id: string, ask: number): void;  // list your lot for sale at `ask` coins
   landUnlist(id: string): void;             // take your lot back off the market
   landBuy(id: string): void;                // buy a listed lot from its owner at the asking price
+  houseBuild(id: string, house: string): void; // build a HOUSE_KINDS house on a lot you own
+  houseDemolish(id: string): void;          // tear the house down on a lot you own (free)
   say(text: string, asSay?: boolean): void; // → speech bubble over your avatar (+ to others in-world); asSay=true → purple "Say" bubble
   sendChat(text: string): void;             // → main game chat, so the line also shows in the side feed
   chatHistory(): ChatLine[];                // recent chat backlog, seeded (hidden) so it's there on T
@@ -978,8 +982,9 @@ export function startWorld(net: WorldNet): void {
   let myBankBought = 0;                            // lots I've bought from the bank so far
   let myBankCap = BANK_PARCEL_CAP;                 // the per-player bank cap (server-authoritative)
   let nearParcel: string | null = null;            // lot the avatar is currently standing on
-  // Per-lot Phaser objects (the tinted pad + its hovering sign), built once in create().
-  const parcelGfx = new Map<string, { pad: Phaser.GameObjects.Rectangle; sign: Phaser.GameObjects.Text }>();
+  // Per-lot Phaser objects (the tinted pad, its hovering sign, and the big house emoji that sits on
+  // the pad once one's built), built once in create().
+  const parcelGfx = new Map<string, { pad: Phaser.GameObjects.Rectangle; sign: Phaser.GameObjects.Text; house: Phaser.GameObjects.Text }>();
 
   // --- in-world speech bubbles (lines said via the chat box pop briefly over the avatar) ---
   const SAY_MS = 5000;                                 // how long a speech bubble lingers
@@ -1793,22 +1798,27 @@ export function startWorld(net: WorldNet): void {
       const g = parcelGfx.get(p.id);
       if (!g) continue;
       const st = land.get(p.id);
+      // A built house lends its emoji to the sign's icon (else the default 🏠 / 🪧).
+      const built = st && st.house ? HOUSE_BY_ID.get(st.house) : undefined;
+      const homeIcon = built ? built.emoji : '🏠';
       let fill = 0x6fbf73, fa = 0.16, stroke = 0xeaf7ea, label = `🪧 ${PARCEL_PRICE.toLocaleString()}🪙`;
       if (st && st.ownerName) {
         if (st.mine) {
           fill = 0xe8c84b; fa = 0.22; stroke = 0xfff3c4;
-          label = st.ask != null ? `🏠 Yours · ${st.ask.toLocaleString()}🪙` : '🏠 Your lot';
+          label = st.ask != null ? `${homeIcon} Yours · ${st.ask.toLocaleString()}🪙` : `${homeIcon} Your lot`;
         } else if (st.ask != null) {
           fill = 0xe09a3a; fa = 0.20; stroke = 0xffe0b0;
           label = `🪧 ${st.ask.toLocaleString()}🪙\n${st.ownerName}`;
         } else {
           fill = 0x5a78c8; fa = 0.16; stroke = 0xcdd8f5;
-          label = `🏠 ${st.ownerName}`;
+          label = `${homeIcon} ${st.ownerName}`;
         }
       }
       g.pad.setFillStyle(fill, fa);
       g.pad.setStrokeStyle(3, stroke, 0.9);
       g.sign.setText(label);
+      if (built) { g.house.setText(built.emoji).setVisible(true); }
+      else { g.house.setVisible(false); }
     }
   }
 
@@ -1816,9 +1826,10 @@ export function startWorld(net: WorldNet): void {
   function parcelPrompt(id: string): string {
     const st = land.get(id);
     if (!st || !st.ownerName) return `🏡 Buy this lot — ${PARCEL_PRICE.toLocaleString()}🪙`;
-    if (st.mine) return st.ask != null ? '🏠 Your lot — manage listing' : '🏠 Your lot — sell?';
+    const built = st.house ? HOUSE_BY_ID.get(st.house) : undefined;
+    if (st.mine) return built ? `${built.emoji} Your ${built.name} — manage` : '🏗️ Your lot — build a house';
     if (st.ask != null) return `🏡 Buy ${st.ownerName}'s lot — ${st.ask.toLocaleString()}🪙`;
-    return `🏠 ${st.ownerName}'s lot`;
+    return built ? `${built.emoji} ${st.ownerName}'s ${built.name}` : `🏠 ${st.ownerName}'s lot`;
   }
 
   // Walk onto a lot + press E → this dialog. Branches on who owns it (bank / you / a neighbor).
@@ -1838,30 +1849,58 @@ export function startWorld(net: WorldNet): void {
       ]);
       return;
     }
-    // Your own lot → manage the listing.
+    // Your own lot → build/manage a house, and manage the listing.
     if (st.mine) {
+      const built = st.house ? HOUSE_BY_ID.get(st.house) : undefined;
       const choices: { label: string; onPick: () => void }[] = [
-        { label: st.ask != null ? '🏷️ Change asking price…' : '🏷️ List for sale…', onPick: () => {
-          const raw = window.prompt('Set an asking price for your Robville lot (in coins):', st.ask != null ? String(st.ask) : '2000');
-          const ask = Math.floor(Number(raw));
-          if (raw != null && Number.isFinite(ask) && ask > 0) net.landList(id, ask);
-          closeDialog();
-        } },
+        { label: built ? '🏗️ Rebuild as something else…' : '🏗️ Build a house…', onPick: () => { closeDialog(); openBuildMenu(id); } },
       ];
+      if (built) choices.push({ label: '🧨 Demolish house', onPick: () => { closeDialog(); net.houseDemolish(id); } });
+      choices.push({ label: st.ask != null ? '🏷️ Change asking price…' : '🏷️ List for sale…', onPick: () => {
+        const raw = window.prompt('Set an asking price for your Robville lot (in coins):', st.ask != null ? String(st.ask) : '2000');
+        const ask = Math.floor(Number(raw));
+        if (raw != null && Number.isFinite(ask) && ask > 0) net.landList(id, ask);
+        closeDialog();
+      } });
       if (st.ask != null) choices.push({ label: '🚫 Take off the market', onPick: () => { closeDialog(); net.landUnlist(id); } });
-      openDialog('🏠 Your Robville Lot',
-        st.ask != null ? `Listed for sale at ${st.ask.toLocaleString()}🪙.` : "A fine plot. Build a house here soon™ — for now you can put it on the market.", choices);
+      const sub = built
+        ? (st.ask != null
+            ? `Your ${built.name} ${built.emoji}, listed for ${st.ask.toLocaleString()}🪙 (the house goes with it).`
+            : `Your ${built.name} ${built.emoji}. Rebuild, demolish, or put it on the market.`)
+        : (st.ask != null
+            ? `An empty plot, listed for ${st.ask.toLocaleString()}🪙. Build a house to make it (and the sale) shine.`
+            : 'A fine empty plot. Build a house here, or put it on the market.');
+      openDialog('🏠 Your Robville Lot', sub, choices);
       return;
     }
     // A neighbor's lot — buyable only if they've listed it (no bank cap on private sales).
+    const nb = st.house ? HOUSE_BY_ID.get(st.house) : undefined;
+    const what = nb ? `${nb.name} ${nb.emoji}` : 'lot';
     if (st.ask != null) {
-      openDialog(`🏡 ${st.ownerName}'s Lot`,
-        `${st.ownerName} is asking ${st.ask.toLocaleString()}🪙. No bank limit when you buy from a neighbor.`, [
+      openDialog(`🏡 ${st.ownerName}'s ${nb ? nb.name : 'Lot'}`,
+        `${st.ownerName} is asking ${st.ask.toLocaleString()}🪙 for this ${what}${nb ? ' (house included)' : ''}. No bank limit when you buy from a neighbor.`, [
         { label: `🤝 Buy for ${st.ask.toLocaleString()}🪙`, onPick: () => { closeDialog(); net.landBuy(id); } },
       ]);
     } else {
-      openDialog(`🏠 ${st.ownerName}'s Lot`, `This lot belongs to ${st.ownerName}, and it isn't for sale right now.`, []);
+      openDialog(`🏠 ${st.ownerName}'s ${nb ? nb.name : 'Lot'}`, `This ${what} belongs to ${st.ownerName}, and it isn't for sale right now.`, []);
     }
+  }
+
+  // The "build a house" submenu: every house, cheapest → fanciest, with its price. The chosen
+  // house's cost is charged on the server (flowing into the House) and the lot updates for everyone.
+  function openBuildMenu(id: string) {
+    const st = land.get(id);
+    if (!st || !st.mine) return;
+    const built = st.house ? HOUSE_BY_ID.get(st.house) : undefined;
+    const choices = HOUSE_KINDS
+      .filter((h) => !built || h.id !== built.id)
+      .map((h) => ({
+        label: `${h.emoji} ${h.name} — ${h.cost.toLocaleString()}🪙`,
+        onPick: () => { closeDialog(); net.houseBuild(id, h.id); },
+      }));
+    openDialog('🏗️ Build a House',
+      'Pick your dream home — the bill goes to the local builders. A house stays with the lot if you ever sell, so building is an upgrade you can cash out.',
+      choices);
   }
 
   // --- Tavern interior: a walkable room off the map. Entering swaps the camera bounds + collision
@@ -5139,7 +5178,13 @@ export function startWorld(net: WorldNet): void {
             color: '#ffffff', stroke: '#13240f', strokeThickness: 4, align: 'center', resolution: 2,
           });
           sign.setOrigin(0.5, 1).setDepth(100000);
-          parcelGfx.set(p.id, { pad, sign });
+          // The house emoji sits on the pad, anchored at its base so the avatar can pass behind it.
+          // Depth tracks its foot (p.cy + a touch) so it sorts among avatars/props by y like everything else.
+          const house = sc.add.text(p.cx, p.cy + p.h / 2 - 8, '', {
+            fontFamily: 'system-ui, sans-serif', fontSize: '52px', resolution: 2,
+          });
+          house.setOrigin(0.5, 1).setDepth(p.cy + p.h / 2 - 8).setVisible(false);
+          parcelGfx.set(p.id, { pad, sign, house });
         }
         refreshParcels();
         // Neighborhood entrance sign where the avenue meets the residential spine.

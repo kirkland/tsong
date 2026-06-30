@@ -122,6 +122,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   mintExclusive, getExclusiveSupply, getExclusiveLastSale,
   listExclusive, cancelListing, getMarketListings, buyLowestAsk,
   getLandParcels, getBankParcels, buyParcelFromBank, listParcel, unlistParcel, buyParcelFromOwner,
+  buildHouse, demolishHouse,
   getNetizens, seedNetizen,
   addBounty, getBountyOn, clearBounty, getBounties,
   challengedToday, recordChallenge,
@@ -132,7 +133,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   loadNomic, saveNomic, archiveNomicSeason } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR, DUNGEON_CHEST_CONTENTS, DUNGEON_TIER_COINS, DUNGEON_FLOOR_TIERS } from '../shared/types';
-import { WORLD_PARCELS, BANK_PARCEL_CAP, PARCEL_PRICE, LandParcelView, WORLD_SAY_MAX } from '../shared/types';
+import { WORLD_PARCELS, BANK_PARCEL_CAP, PARCEL_PRICE, LandParcelView, WORLD_SAY_MAX, HOUSE_BY_ID } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
 // emoji code points (pictographs, components, ZWJ, variation selectors, flags).
@@ -4590,6 +4591,7 @@ export class Lobby {
         ownerName: owned ? (r!.ownerName ?? '???') : null,
         mine: owned && r!.ownerPid === forPid,
         ask: owned ? (r!.ask ?? null) : null,
+        house: owned ? (r!.house ?? null) : null,
       };
     });
     return { parcels, bankBought };
@@ -4686,6 +4688,43 @@ export class Lobby {
         this.broadcastLand();
       })
       .catch((e) => console.error('land buy (owner) failed:', e));
+  }
+
+  /** Build a house on a lot you own. The build cost flows into the House (the builders). */
+  houseBuild(ws: WebSocket, id: string, house: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    if (typeof id !== 'string' || !WORLD_PARCELS.some((p) => p.id === id)) return;
+    const kind = HOUSE_BY_ID.get(house);
+    if (!kind) return;
+    buildHouse(conn.pid, id, kind.id, kind.cost)
+      .then((res) => {
+        if (!res.ok) {
+          const msg = res.reason === 'notyours' ? "You can only build on a lot you own."
+            : res.reason === 'afford' ? `You can't afford to build a ${kind.name} — it costs ${kind.cost.toLocaleString()}🪙.`
+            : '';
+          if (msg) this.notify(ws, msg);
+          this.sendLand(ws);
+          return;
+        }
+        // The build cost flowed into the House treasury (handled in the txn) — mirror it here.
+        this.houseBalance += kind.cost;
+        this.broadcastHouse();
+        this.notify(ws, `${kind.emoji} Built a ${kind.name} for ${kind.cost.toLocaleString()}🪙! Home sweet home.`);
+        this.sendWallet(ws);
+        this.broadcastLand();
+      })
+      .catch((e) => console.error('house build failed:', e));
+  }
+
+  /** Tear down the house on a lot you own (free; back to an empty lot). */
+  houseDemolish(ws: WebSocket, id: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    if (typeof id !== 'string') return;
+    demolishHouse(conn.pid, id)
+      .then((ok) => { if (ok) { this.notify(ws, '🧨 Demolished! The lot is empty again.'); this.broadcastLand(); } })
+      .catch((e) => console.error('house demolish failed:', e));
   }
 
   // --- Loan book (public, clickable from the stability bar) ---

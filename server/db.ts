@@ -476,9 +476,12 @@ export async function initDb(): Promise<void> {
       owner_pid  TEXT,
       owner_name TEXT,
       ask        INTEGER,
+      house      TEXT,
       updated_at BIGINT NOT NULL DEFAULT 0
     )
   `);
+  // `house` (a HOUSE_KINDS id, or NULL for an empty lot) was added after the table first shipped.
+  await pool.query(`ALTER TABLE land_parcels ADD COLUMN IF NOT EXISTS house TEXT`);
   // Seed a row for every lot so the buy txn can lock it FOR UPDATE. ON CONFLICT DO NOTHING keeps
   // existing ownership; lots added to the layout later start bank-owned.
   for (const p of WORLD_PARCELS) {
@@ -1448,17 +1451,18 @@ export async function buyLowestAsk(item: string, buyerPid: string, _buyerName: s
 }
 
 // --- Robville land registry -----------------------------------------------------------------
-export interface LandRow { id: string; ownerPid: string | null; ownerName: string | null; ask: number | null; }
+export interface LandRow { id: string; ownerPid: string | null; ownerName: string | null; ask: number | null; house: string | null; }
 
 /** Every lot's current ownership/market state (only rows that exist; lots are seeded on boot). */
 export async function getLandParcels(): Promise<LandRow[]> {
   if (!pool) return [];
-  const { rows } = await pool.query(`SELECT id, owner_pid, owner_name, ask FROM land_parcels`);
+  const { rows } = await pool.query(`SELECT id, owner_pid, owner_name, ask, house FROM land_parcels`);
   return rows.map((r) => ({
     id: r.id as string,
     ownerPid: (r.owner_pid as string | null) ?? null,
     ownerName: (r.owner_name as string | null) ?? null,
     ask: r.ask === null || r.ask === undefined ? null : Number(r.ask),
+    house: (r.house as string | null) ?? null,
   }));
 }
 
@@ -1586,6 +1590,52 @@ export async function buyParcelFromOwner(
   } finally {
     client.release();
   }
+}
+
+/** Build a house on a lot you own. Atomic: locks the lot, checks you still own it, debits the
+ *  build cost (into the House — the construction industry), and stamps the house onto the lot.
+ *  Building replaces whatever stood there. `house` is a HOUSE_KINDS id (validated by the caller). */
+export async function buildHouse(
+  pid: string, id: string, house: string, cost: number, nowMs: number = Date.now(),
+): Promise<{ ok: true } | { ok: false; reason: 'nodb' | 'notyours' | 'afford' }> {
+  if (!pool || !pid) return { ok: false, reason: 'nodb' };
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const lot = await client.query(`SELECT owner_pid FROM land_parcels WHERE id = $1 FOR UPDATE`, [id]);
+    if (!lot.rowCount || lot.rows[0].owner_pid !== pid) { await client.query('ROLLBACK'); return { ok: false, reason: 'notyours' }; }
+    const pay = await client.query(
+      `UPDATE players SET coins = coins - $2 WHERE id = $1 AND coins >= $2`,
+      [pid, cost],
+    );
+    if (!pay.rowCount) { await client.query('ROLLBACK'); return { ok: false, reason: 'afford' }; }
+    await client.query(
+      `UPDATE land_parcels SET house = $2, updated_at = $3 WHERE id = $1`,
+      [id, house, nowMs],
+    );
+    // The build cost flows into the House treasury (the local builders are the House).
+    await client.query(
+      `UPDATE doom_meta SET v = (GREATEST(0, v::numeric + $1))::text WHERE k = 'house_balance'`,
+      [cost],
+    );
+    await client.query('COMMIT');
+    return { ok: true };
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/** Tear down the house on a lot you own (free; the lot goes back to empty). */
+export async function demolishHouse(pid: string, id: string, nowMs: number = Date.now()): Promise<boolean> {
+  if (!pool || !pid) return false;
+  const res = await pool.query(
+    `UPDATE land_parcels SET house = NULL, updated_at = $3 WHERE id = $1 AND owner_pid = $2 AND house IS NOT NULL`,
+    [id, pid, nowMs],
+  );
+  return (res.rowCount ?? 0) > 0;
 }
 
 /** Load the persisted global price board (empty if never saved / no DB). */

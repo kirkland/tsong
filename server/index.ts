@@ -457,6 +457,12 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'landBuy':
         if (typeof msg.id === 'string') lobby.landBuy(ws, msg.id);
         break;
+      case 'houseBuild':
+        if (typeof msg.id === 'string' && typeof msg.house === 'string') lobby.houseBuild(ws, msg.id, msg.house);
+        break;
+      case 'houseDemolish':
+        if (typeof msg.id === 'string') lobby.houseDemolish(ws, msg.id);
+        break;
       case 'dailySpin':
         lobby.dailySpin(ws);
         break;

@@ -543,8 +543,9 @@ export const JAIL_CELL = {
 // street. A residential spine threads four cul-de-sac bulbs, each ringed by buyable lots. Buy an
 // empty lot from the BANK for PARCEL_PRICE (coins → the House). Anti-monopoly rule: nobody may
 // buy more than BANK_PARCEL_CAP lots (1/10 of all lots) FROM THE BANK — but you can buy any number
-// from other players on the open market, where owners set their own asking price. (Building and
-// furnishing houses on your lots: coming soon.)
+// from other players on the open market, where owners set their own asking price. Once you own a
+// lot you can build a house on it (see HOUSE_KINDS) — and a built house travels with the lot when
+// you sell it, so a furnished plot is worth more on the open market.
 export const PARCEL_PRICE = 1000; // coins to buy an empty lot from the bank
 
 // A cul-de-sac bulb: a paved circle at the dead end of a residential stem road. `stem` is the
@@ -584,6 +585,25 @@ export const WORLD_PARCELS: readonly LandParcel[] = (() => {
 // Anti-monopoly cap: the most lots one player may EVER buy from the bank (1/10 of all lots, ≥1).
 // Player-to-player purchases don't count toward it and are unlimited.
 export const BANK_PARCEL_CAP = Math.max(1, Math.floor(WORLD_PARCELS.length / 10));
+
+// The houses you can build on a lot you own. Cost (coins → the House, i.e. the local construction
+// industry) scales with fanciness, from a humble straw hut to a full castle. Building one replaces
+// whatever stood there before; demolishing is free. The house is part of the lot — it stays put
+// when the lot changes hands. `emoji` is how it's drawn on the pad. Ordered cheapest → fanciest.
+export interface HouseKind { id: string; name: string; emoji: string; cost: number; blurb: string; }
+export const HOUSE_KINDS: readonly HouseKind[] = [
+  { id: 'hut',      name: 'Straw Hut',      emoji: '🛖', cost: 500,    blurb: 'Four walls and a dream. Mostly walls.' },
+  { id: 'cape',     name: 'Modest Cape',    emoji: '🏠', cost: 2_500,  blurb: 'A respectable little starter home.' },
+  { id: 'cottage',  name: 'Cozy Cottage',   emoji: '🏡', cost: 6_000,  blurb: 'White picket fence, garden out back.' },
+  { id: 'mushroom', name: 'Mushroom House', emoji: '🍄', cost: 12_000, blurb: 'Whimsical, fungal, surprisingly roomy.' },
+  { id: 'bigtop',   name: 'The Big Top',    emoji: '🎪', cost: 16_000, blurb: 'Why live in a house when you can live in a circus?' },
+  { id: 'pagoda',   name: 'Jade Pagoda',    emoji: '🏯', cost: 24_000, blurb: 'Tiered, serene, and very fancy.' },
+  { id: 'mansion',  name: 'Marble Mansion', emoji: '🏛️', cost: 32_000, blurb: 'Columns. So many columns.' },
+  { id: 'wizard',   name: 'Wizard Tower',   emoji: '🧙', cost: 45_000, blurb: 'Comes with a hat. Probably haunted.' },
+  { id: 'castle',   name: 'Castle',         emoji: '🏰', cost: 75_000, blurb: 'A moat is extra. The flex is included.' },
+  { id: 'ufo',      name: 'UFO Landing Pad', emoji: '🛸', cost: 120_000, blurb: 'Out of this world. The neighbors have questions.' },
+];
+export const HOUSE_BY_ID: ReadonlyMap<string, HouseKind> = new Map(HOUSE_KINDS.map((h) => [h.id, h]));
 
 // --- Nomic (the Parliament sub-game) ---------------------------------------------------
 // A standalone, self-amending RULES game in its own World building (🏛️ PARLIAMENT). NOT connected
@@ -765,6 +785,7 @@ export interface LandParcelView {
   ownerName: string | null; // null = bank-owned (buyable for PARCEL_PRICE); else the owner's nickname
   mine: boolean;            // true if YOU own this lot
   ask: number | null;       // asking price if the owner has it listed for sale, else null
+  house: string | null;     // a HOUSE_KINDS id if a house is built here, else null (empty lot)
 }
 export interface LandMsg {
   type: 'land';
@@ -889,6 +910,8 @@ export type ClientMsg =
   | { type: 'landList'; id: string; ask: number } // list your lot for sale at `ask` coins
   | { type: 'landUnlist'; id: string } // take your lot back off the market
   | { type: 'landBuy'; id: string } // buy a listed lot from its owner at the asking price (no cap)
+  | { type: 'houseBuild'; id: string; house: string } // build a HOUSE_KINDS house on a lot you own (coins → House)
+  | { type: 'houseDemolish'; id: string } // tear the house down on a lot you own (free; back to empty lot)
   | { type: 'migrate'; oldPid: string } // one-time: merge a UUID guest account into the signed-in Google account
   | { type: 'netizenInfoReq'; netizenId: string }
   | { type: 'netizenChallenge'; netizenId: string; wager: number }
