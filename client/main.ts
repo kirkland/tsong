@@ -214,9 +214,20 @@ muteBtn.addEventListener('click', () => {
   prefSet('muted', muted ? '1' : '0');
   applyMute();
 });
+// True while the user is typing into a text field (an <input>, a <textarea> like the
+// Parliament propose form, or any contenteditable). Global game key handlers must bail on
+// these or they'd swallow the keystrokes — e.g. typing "w" into the Nomic rule box would
+// be eaten by the paddle-movement handler and never appear.
+function isTyping(e: KeyboardEvent): boolean {
+  const t = e.target;
+  return t instanceof HTMLInputElement
+    || t instanceof HTMLTextAreaElement
+    || (t instanceof HTMLElement && t.isContentEditable);
+}
+
 // M key toggles mute from anywhere (except when typing in an input)
 window.addEventListener('keydown', (e) => {
-  if (e.target instanceof HTMLInputElement) return;
+  if (isTyping(e)) return;
   if (e.key.toLowerCase() === 'm') {
     muted = !muted;
     prefSet('muted', muted ? '1' : '0');
@@ -1380,7 +1391,7 @@ chatInput.addEventListener('keydown', (e) => {
 });
 // Press T (while not playing / not pointer-locked) to focus the chat input.
 window.addEventListener('keydown', (e) => {
-  if (e.target instanceof HTMLInputElement) return;
+  if (isTyping(e)) return;
   if (overlay.style.display !== 'none') return;
   if (e.key.toLowerCase() === 't' && !pointerLocked && joined) {
     e.preventDefault();
@@ -4180,7 +4191,7 @@ document.addEventListener('pointerlockchange', () => {
 // horizontally, so those become the natural movement keys (see the loop below).
 const MOVE_KEYS = new Set(['arrowup', 'arrowdown', 'w', 's', 'arrowleft', 'arrowright', 'a', 'd']);
 window.addEventListener('keydown', (e) => {
-  if (e.target instanceof HTMLInputElement) return;
+  if (isTyping(e)) return;
   if (overlay.style.display !== 'none') return;
   const k = e.key.toLowerCase();
   if (MOVE_KEYS.has(k)) {
@@ -4189,7 +4200,7 @@ window.addEventListener('keydown', (e) => {
   }
 });
 window.addEventListener('keyup', (e) => {
-  if (e.target instanceof HTMLInputElement) return;
+  if (isTyping(e)) return;
   keys.delete(e.key.toLowerCase());
 });
 
@@ -4211,7 +4222,7 @@ function canFinish(): boolean {
 }
 
 window.addEventListener('keydown', (e) => {
-  if (e.target instanceof HTMLInputElement) return;
+  if (isTyping(e)) return;
   if (!canFinish()) return;
   const k = e.key.toLowerCase();
   if (!COMBO_KEYS.has(k)) return;
