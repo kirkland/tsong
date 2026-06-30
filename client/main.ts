@@ -339,6 +339,55 @@ let myId = ''; // per-connection id from the server; identifies our own paddle i
 let myName = '';
 let myColor = '#e8eefc';
 let state: StateMsg | null = null;
+// Snapshot interpolation: keep two consecutive server states so the render loop can
+// lerp between them, absorbing network jitter at the cost of ~one server tick of lag.
+let snapA: StateMsg | null = null;
+let snapATime = 0; // performance.now() when snapA arrived
+let snapBTime = 0; // performance.now() when state (snapB) arrived
+
+function lerpPaddlePlayers(
+  a: StateMsg['paddles']['left']['players'],
+  b: StateMsg['paddles']['left']['players'],
+  alpha: number,
+): StateMsg['paddles']['left']['players'] {
+  return b.map((pb, i) => {
+    const pa = a[i];
+    if (!pa) return pb;
+    return { ...pb, x: pa.x + (pb.x - pa.x) * alpha, y: pa.y + (pb.y - pa.y) * alpha };
+  });
+}
+
+function interpState(a: StateMsg, b: StateMsg, alpha: number): StateMsg {
+  const L = (ax: number, bx: number) => ax + (bx - ax) * alpha;
+  return {
+    ...b,
+    ball: { ...b.ball, x: L(a.ball.x, b.ball.x), y: L(a.ball.y, b.ball.y) },
+    extraBalls: b.extraBalls.map((bb, i) => {
+      const ab = a.extraBalls[i];
+      return ab ? { ...bb, x: L(ab.x, bb.x), y: L(ab.y, bb.y) } : bb;
+    }),
+    paddles: {
+      left: {
+        ...b.paddles.left,
+        y: L(a.paddles.left.y, b.paddles.left.y),
+        players: lerpPaddlePlayers(a.paddles.left.players, b.paddles.left.players, alpha),
+      },
+      right: {
+        ...b.paddles.right,
+        y: L(a.paddles.right.y, b.paddles.right.y),
+        players: lerpPaddlePlayers(a.paddles.right.players, b.paddles.right.players, alpha),
+      },
+    },
+    poly: b.poly ? {
+      ...b.poly,
+      players: b.poly.players.map((pb, i) => {
+        const pa = a.poly?.players[i];
+        return pa ? { ...pb, cx: L(pa.cx, pb.cx), cy: L(pa.cy, pb.cy) } : pb;
+      }),
+    } : null,
+  };
+}
+
 let ballColor = '#e8eefc'; // live pong-ball color, mirrored onto the ball reaction
 let joined = false; // true once the player has entered a nickname (gates reactions)
 let drunkLevel = 0; // 0 = sober … 6 = cut off (from the Tavern); wobbles the paddle + blurs the canvas
@@ -668,6 +717,9 @@ const net = connect(
         if (prevTarget.kind === 'coins') playChaChing(); // coin grab
       }
       prevTarget = msg.target ?? null;
+      snapA = state;
+      snapATime = snapBTime;
+      snapBTime = performance.now();
       state = msg;
       syncMyPaddleFromServer();
       syncViewMode(msg.viewMode ?? 'normal');
@@ -4981,13 +5033,19 @@ function loop(t: number) {
     }
     applyCanvasRotation(state.rotated);
     applyScreenFx(state);
-    if (state.viewMode !== 'normal' && renderer3d && !state.fatality) {
-      const side = state.viewMode === 'firstperson'
+    // Interpolate between the previous and current server snapshots to smooth out
+    // network jitter. alpha tracks how far we've progressed into the current interval.
+    const interval = snapBTime - snapATime;
+    const renderState = (snapA && interval > 0)
+      ? interpState(snapA, state, Math.min(1, (t - snapBTime) / interval))
+      : state;
+    if (renderState.viewMode !== 'normal' && renderer3d && !renderState.fatality) {
+      const side = renderState.viewMode === 'firstperson'
         ? (myRole !== 'observer' ? (myRole as 'left' | 'right') : fpSide)
         : null;
-      renderer3d.render(state, side, aim);
+      renderer3d.render(renderState, side, aim);
     } else {
-      draw(ctx, state, myRole);
+      draw(ctx, renderState, myRole);
     }
   }
   requestAnimationFrame(loop);
