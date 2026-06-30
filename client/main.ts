@@ -5037,7 +5037,7 @@ function loop(t: number) {
     // network jitter. alpha tracks how far we've progressed into the current interval.
     const interval = snapBTime - snapATime;
     const renderState = (snapA && interval > 0)
-      ? interpState(snapA, state, Math.min(1, (t - snapBTime) / interval))
+      ? interpState(snapA, state, Math.min(1, Math.max(0, (t - snapBTime) / interval)))
       : state;
     if (renderState.viewMode !== 'normal' && renderer3d && !renderState.fatality) {
       const side = renderState.viewMode === 'firstperson'
