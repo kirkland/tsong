@@ -366,11 +366,11 @@ export interface LobbySnapshot {
 
 // --- Season Pass ------------------------------------------------------------------
 const SEASON_CHALLENGES = [
-  { id: 'wins',     label: 'Win 3 matches',          emoji: '🏆', goal: 3,  reward: 300 },
-  { id: 'goals',    label: 'Score 10 goals',          emoji: '⚽', goal: 10, reward: 200 },
-  { id: 'streak',   label: 'Win 2 matches in a row',  emoji: '🔥', goal: 2,  reward: 250 },
-  { id: 'spectate', label: 'Watch 3 complete matches', emoji: '👀', goal: 3,  reward: 150 },
-  { id: 'chat',     label: 'Send 10 chat messages',   emoji: '💬', goal: 10, reward: 100 },
+  { id: 'wins',     label: 'Win 3 matches',          emoji: '🏆', goal: 3,  reward: 3000 },
+  { id: 'goals',    label: 'Score 10 goals',          emoji: '⚽', goal: 10, reward: 2000 },
+  { id: 'streak',   label: 'Win 2 matches in a row',  emoji: '🔥', goal: 2,  reward: 2500 },
+  { id: 'spectate', label: 'Watch 3 complete matches', emoji: '👀', goal: 3,  reward: 1500 },
+  { id: 'chat',     label: 'Send 10 chat messages',   emoji: '💬', goal: 10, reward: 1000 },
 ] as const;
 type SeasonChallengeId = (typeof SEASON_CHALLENGES)[number]['id'];
 
