@@ -339,54 +339,10 @@ let myId = ''; // per-connection id from the server; identifies our own paddle i
 let myName = '';
 let myColor = '#e8eefc';
 let state: StateMsg | null = null;
-// Snapshot interpolation: keep two consecutive server states so the render loop can
-// lerp between them, absorbing network jitter at the cost of ~one server tick of lag.
-let snapA: StateMsg | null = null;
-let snapATime = 0; // performance.now() when snapA arrived
-let snapBTime = 0; // performance.now() when state (snapB) arrived
-
-function lerpPaddlePlayers(
-  a: StateMsg['paddles']['left']['players'],
-  b: StateMsg['paddles']['left']['players'],
-  alpha: number,
-): StateMsg['paddles']['left']['players'] {
-  return b.map((pb, i) => {
-    const pa = a[i];
-    if (!pa) return pb;
-    return { ...pb, x: pa.x + (pb.x - pa.x) * alpha, y: pa.y + (pb.y - pa.y) * alpha };
-  });
-}
-
-function interpState(a: StateMsg, b: StateMsg, alpha: number): StateMsg {
-  const L = (ax: number, bx: number) => ax + (bx - ax) * alpha;
-  return {
-    ...b,
-    ball: { ...b.ball, x: L(a.ball.x, b.ball.x), y: L(a.ball.y, b.ball.y) },
-    extraBalls: b.extraBalls.map((bb, i) => {
-      const ab = a.extraBalls[i];
-      return ab ? { ...bb, x: L(ab.x, bb.x), y: L(ab.y, bb.y) } : bb;
-    }),
-    paddles: {
-      left: {
-        ...b.paddles.left,
-        y: L(a.paddles.left.y, b.paddles.left.y),
-        players: lerpPaddlePlayers(a.paddles.left.players, b.paddles.left.players, alpha),
-      },
-      right: {
-        ...b.paddles.right,
-        y: L(a.paddles.right.y, b.paddles.right.y),
-        players: lerpPaddlePlayers(a.paddles.right.players, b.paddles.right.players, alpha),
-      },
-    },
-    poly: b.poly ? {
-      ...b.poly,
-      players: b.poly.players.map((pb, i) => {
-        const pa = a.poly?.players[i];
-        return pa ? { ...pb, cx: L(pa.cx, pb.cx), cy: L(pa.cy, pb.cy) } : pb;
-      }),
-    } : null,
-  };
-}
+// Smoothed display positions for paddles — EMA-blended toward the server value each frame.
+// Ball renders directly from the latest server state (no added lag).
+let leftDisplayY = COURT.h / 2;
+let rightDisplayY = COURT.h / 2;
 
 let ballColor = '#e8eefc'; // live pong-ball color, mirrored onto the ball reaction
 let joined = false; // true once the player has entered a nickname (gates reactions)
@@ -717,9 +673,11 @@ const net = connect(
         if (prevTarget.kind === 'coins') playChaChing(); // coin grab
       }
       prevTarget = msg.target ?? null;
-      snapA = state;
-      snapATime = snapBTime;
-      snapBTime = performance.now();
+      if (!state) {
+        // First state: snap display values immediately to avoid an initial lerp from center.
+        leftDisplayY = msg.paddles.left.y;
+        rightDisplayY = msg.paddles.right.y;
+      }
       state = msg;
       syncMyPaddleFromServer();
       syncViewMode(msg.viewMode ?? 'normal');
@@ -4957,7 +4915,7 @@ function loop(t: number) {
         arenaTarget = Math.max(-max, Math.min(max, arenaTarget + along * step));
       }
     }
-    if (Math.abs(arenaTarget - lastSent) > 0.5 && t - lastSendAt > 33) {
+    if (Math.abs(arenaTarget - lastSent) > 0.5 && t - lastSendAt > 16) {
       net.send({ type: 'paddle', y: arenaTarget });
       lastSent = arenaTarget;
       lastSendAt = t;
@@ -5008,7 +4966,7 @@ function loop(t: number) {
     // While drunk the sway is always moving, so keep streaming so the wobble actually reaches the server.
     const roaming = myRoamHits() > 0;
     const changed = Math.abs(target - lastSent) > 0.5 || (roaming && Math.abs(targetX - lastSentX) > 0.5) || drunkLevel > 0;
-    if (changed && t - lastSendAt > 33) {
+    if (changed && t - lastSendAt > 16) {
       net.send(roaming ? { type: 'paddle', y: sendY, x: targetX } : { type: 'paddle', y: sendY });
       lastSent = target;
       lastSentX = targetX;
@@ -5033,12 +4991,18 @@ function loop(t: number) {
     }
     applyCanvasRotation(state.rotated);
     applyScreenFx(state);
-    // Interpolate between the previous and current server snapshots to smooth out
-    // network jitter. alpha tracks how far we've progressed into the current interval.
-    const interval = snapBTime - snapATime;
-    let renderState = (snapA && interval > 0)
-      ? interpState(snapA, state, Math.min(1, Math.max(0, (t - snapBTime) / interval)))
-      : state;
+    // Smooth paddle display positions toward server values each frame (absorbs jitter
+    // without adding fixed lag to the ball or local paddle).
+    const PADDLE_SMOOTH = 0.4;
+    leftDisplayY += (state.paddles.left.y - leftDisplayY) * PADDLE_SMOOTH;
+    rightDisplayY += (state.paddles.right.y - rightDisplayY) * PADDLE_SMOOTH;
+    let renderState: StateMsg = {
+      ...state,
+      paddles: {
+        left: { ...state.paddles.left, y: leftDisplayY },
+        right: { ...state.paddles.right, y: rightDisplayY },
+      },
+    };
     // Client-side prediction: override the local player's own paddle with the local
     // target so it feels instant rather than lagging by RTT + server echo.
     if (isPlayer() && (myRole === 'left' || myRole === 'right')) {
