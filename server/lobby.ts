@@ -6,6 +6,7 @@ import { Game } from './game';
 import { PolyGame } from './polygame';
 import { TypeGame } from './typegame';
 import { NomicGame } from './nomic';
+import { BowlingManager } from './bowling';
 import { World } from './world';
 import { Tournament, Participant } from './tournament';
 import {
@@ -553,7 +554,20 @@ export class Lobby {
   private nomGame!: NomicGame;
   private nomSockets = new Map<string, WebSocket>(); // member pid → socket of players in the Parliament
 
+  // --- Bolwoing Alley (PvP turn-based bowling) ---
+  private bowlingManager: BowlingManager;
+
   constructor(private game: Game) {
+    this.bowlingManager = new BowlingManager({
+      award: (ws, pid, coins) => {
+        const conn = this.conns.get(ws);
+        if (!conn) return;
+        this.housePay(pid, conn.nickname, coins * COIN_SCALE)
+          .then(() => this.sendWallet(ws))
+          .catch((e) => console.error('bowling prize failed:', e));
+      },
+      announce: (_roomId, text) => this.announce(text),
+    });
     this.typeGame = new TypeGame({
       // A coin-monster kill pays the player who landed it.
       award: (id, coins) => {
@@ -1914,6 +1928,32 @@ export class Lobby {
     const conn = this.conns.get(ws);
     if (!conn || !this.tdSockets.has(conn.id)) return;
     this.typeGame.claimKill(conn.id, id);
+  }
+
+  // --- Bolwoing Alley ---
+
+  bowlJoin(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    this.bowlingManager.join(ws, conn.id, conn.pid, conn.nickname, conn.color);
+  }
+
+  bowlReady(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn) return;
+    this.bowlingManager.ready(conn.id);
+  }
+
+  bowlThrow(ws: WebSocket, offset: number, power: number) {
+    const conn = this.conns.get(ws);
+    if (!conn) return;
+    this.bowlingManager.throw(conn.id, offset, power);
+  }
+
+  bowlLeave(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn) return;
+    this.bowlingManager.leave(conn.id);
   }
 
   // --- Nomic (the Parliament) ---
@@ -5214,6 +5254,7 @@ export class Lobby {
     this.srLeave(ws);   // drop any Street Demons grid slot (ends the race if the host left)
     this.sbLeave(ws);   // drop any Super Tsong Bros slot (ends the match if the host left)
     this.tdLeave(ws);   // drop out of the Type or Die arena
+    this.bowlLeave(ws); // drop out of any bowling room
     this.nomLeave(ws);  // drop out of the Parliament (Nomic) rotation
     this.world.leave(ws); // drop their avatar from the free-roam world map
     const leavingPid = this.conns.get(ws)?.pid ?? '';
