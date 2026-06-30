@@ -296,6 +296,7 @@ const replayBuf: StateMsg[] = [];
 let replayFrames: StateMsg[] | null = null;
 let replayIdx = 0;
 let replayNextAt = 0;
+let replayEnabled = false;  // off by default; toggled in MODES → Personal
 
 function selectSwatch(color: string) {
   for (const btn of colorPicker.querySelectorAll<HTMLButtonElement>('.swatch')) {
@@ -685,8 +686,8 @@ const net = connect(
         if (msg.hitSeq !== prevHitSeq) playHitSound();
         if (msg.score.left > prevScore.left || msg.score.right > prevScore.right) {
           playScoreSound();
-          // Trigger slow-mo goal replay using buffered frames
-          if (replayBuf.length >= 5) {
+          // Trigger slow-mo goal replay using buffered frames (only when mode is on).
+          if (replayEnabled && replayBuf.length >= 5) {
             replayFrames = [...replayBuf, msg];
             replayIdx = 0;
             replayNextAt = performance.now();
@@ -711,8 +712,9 @@ const net = connect(
       replayBuf.push(state);
       if (replayBuf.length > REPLAY_FRAMES) replayBuf.shift();
       syncMyPaddleFromServer();
-      syncViewMode(msg.viewMode ?? 'normal');
-      updateUI();
+      // While replay is playing, hold the UI frozen so live score/status don't bleed through.
+      if (!replayFrames) syncViewMode(msg.viewMode ?? 'normal');
+      if (!replayFrames) updateUI();
     } else if (msg.type === 'leaderboard') {
       renderLeaderboard(msg.rows, msg.selfElo, msg.selfRank);
     } else if (msg.type === 'netWorth') {
@@ -3748,6 +3750,15 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !powerupInfoPanel.hidden) closePowerupInfo();
 });
 
+// --- Goal replay toggle (Personal section of MODES panel) ---
+const replayToggle = document.getElementById('replayToggle') as HTMLInputElement | null;
+if (replayToggle) {
+  replayToggle.addEventListener('change', () => {
+    replayEnabled = replayToggle.checked;
+    if (!replayEnabled) { replayFrames = null; replayIdx = 0; } // cancel any active replay
+  });
+}
+
 // --- Season Pass ---
 const seasonBtn = document.getElementById('seasonBtn') as HTMLButtonElement | null;
 const seasonPanel = document.getElementById('seasonPanel') as HTMLDivElement | null;
@@ -5082,8 +5093,6 @@ function loop(t: number) {
       document.body.classList.toggle('fatality-2d', showFatality2d);
       if (!showFatality2d && state.viewMode !== 'normal') renderer3d?.resize();
     }
-    applyCanvasRotation(state.rotated);
-    applyScreenFx(state);
     // Smooth paddle display positions toward server values each frame (absorbs jitter
     // without adding fixed lag to the ball or local paddle).
     const PADDLE_SMOOTH = 0.4;
@@ -5129,6 +5138,9 @@ function loop(t: number) {
         replayIdx = 0;
       }
     }
+    // Apply canvas effects against the fully-resolved renderState (replay frame or live).
+    applyCanvasRotation(renderState.rotated);
+    applyScreenFx(renderState);
     if (renderState.viewMode !== 'normal' && renderer3d && !renderState.fatality && !replayActive) {
       const side = renderState.viewMode === 'firstperson'
         ? (myRole !== 'observer' ? (myRole as 'left' | 'right') : fpSide)
