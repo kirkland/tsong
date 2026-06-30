@@ -344,7 +344,8 @@ function injectStyles() {
   .nom-empty,.nom-wait{opacity:.6;font-size:13px;font-style:italic}
   .nom-form{display:flex;flex-direction:column;gap:8px}
   .nom-form label{display:flex;flex-direction:column;gap:3px;font-size:12px;font-weight:600;color:#6b5a36}
-  .nom-form select,.nom-form input,.nom-form textarea{font:inherit;padding:5px 7px;border:1px solid #b9a673;border-radius:5px;background:#fffdf5}
+  .nom-form select,.nom-form input,.nom-form textarea{font:inherit;padding:5px 7px;border:1px solid #b9a673;border-radius:5px;background:#fffdf5;color:#2a241a;color-scheme:light}
+  .nom-form option{background:#fffdf5;color:#2a241a}
   .nf-val-wrap{margin-top:5px}
   .nf-err{color:#a23b2b;font-size:12px;min-height:14px}
   `;
