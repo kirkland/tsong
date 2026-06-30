@@ -829,8 +829,25 @@
         0%, 100% { box-shadow: 0 0 4px rgba(180,100,255,0.25); }
         50%       { box-shadow: 0 0 13px rgba(180,100,255,0.6); }
       }
+      @keyframes viewGlow {
+        0%, 100% { box-shadow: 0 0 4px rgba(60,200,220,0.25); }
+        50%       { box-shadow: 0 0 13px rgba(60,200,220,0.6); }
+      }
+      @keyframes modesGlow {
+        0%, 100% { box-shadow: 0 0 4px rgba(255,140,60,0.25); }
+        50%       { box-shadow: 0 0 13px rgba(255,140,60,0.6); }
+      }
+      @keyframes tourneyGlow {
+        0%, 100% { box-shadow: 0 0 4px rgba(255,90,150,0.25); }
+        50%       { box-shadow: 0 0 13px rgba(255,90,150,0.6); }
+      }
+      @keyframes powerupGlow {
+        0%, 100% { box-shadow: 0 0 4px rgba(140,220,50,0.25); }
+        50%       { box-shadow: 0 0 13px rgba(140,220,50,0.6); }
+      }
       @media (prefers-reduced-motion: reduce) {
-        #arcadeBtn, #casinoBtn, #economyBtn, #workMenuBtn { animation: none; }
+        #arcadeBtn, #casinoBtn, #economyBtn, #workMenuBtn,
+        #viewModeBtn, #gameModesBtn, #tourneyBtn, #powerupInfoBtn { animation: none; }
       }
       #arcadeBtn .caret, #casinoBtn .caret, #economyBtn .caret, #workMenuBtn .caret { font-size: 10px; transition: transform 0.15s; }
       #arcadeBtn[aria-expanded='true'] .caret, #casinoBtn[aria-expanded='true'] .caret, #economyBtn[aria-expanded='true'] .caret, #workMenuBtn[aria-expanded='true'] .caret { transform: rotate(180deg); }
@@ -1981,10 +1998,11 @@
         letter-spacing: 1px;
         padding: 7px 12px;
         border-radius: 6px;
-        border: 1px solid #2a3550;
-        background: #0e1424;
-        color: #7da2ff;
+        border: 1px solid #1e5a6e;
+        background: #0a1a20;
+        color: #60d8e8;
         cursor: pointer;
+        animation: viewGlow 3.2s ease-in-out infinite;
       }
       #viewModeBtn:hover:not(:disabled) { background: #18203a; }
       #viewModeBtn:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -2078,10 +2096,11 @@
         letter-spacing: 1px;
         padding: 7px 12px;
         border-radius: 6px;
-        border: 1px solid #2a3550;
-        background: #0e1424;
-        color: #7da2ff;
+        border: 1px solid #6e2a4a;
+        background: #1c0e16;
+        color: #ff6ba8;
         cursor: pointer;
+        animation: tourneyGlow 3.2s ease-in-out infinite;
       }
       #tourneyBtn:hover { background: #18203a; }
       #tourneyBtn .caret { font-size: 14px; transition: transform 0.15s; transform: translateY(-0.15em); }
@@ -2197,10 +2216,11 @@
         letter-spacing: 1px;
         padding: 7px 12px;
         border-radius: 6px;
-        border: 1px solid #2a3550;
-        background: #0e1424;
-        color: #7da2ff;
+        border: 1px solid #6e3a10;
+        background: #1c1008;
+        color: #ff9a55;
         cursor: pointer;
+        animation: modesGlow 3.2s ease-in-out infinite;
       }
       #gameModesBtn:hover {
         background: #18203a;
@@ -3115,10 +3135,11 @@
         letter-spacing: 1px;
         padding: 7px 12px;
         border-radius: 6px;
-        border: 1px solid #2a3550;
-        background: #0e1424;
-        color: #7da2ff;
+        border: 1px solid #3a6e10;
+        background: #121c08;
+        color: #9de850;
         cursor: pointer;
+        animation: powerupGlow 3.2s ease-in-out infinite;
       }
       #powerupInfoBtn:hover {
         background: #18203a;
