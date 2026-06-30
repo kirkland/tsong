@@ -94,6 +94,7 @@ export interface WorldNet {
   houseDemolish(id: string): void;          // tear the house down on a lot you own (free)
   say(text: string, asSay?: boolean): void; // → speech bubble over your avatar (+ to others in-world); asSay=true → purple "Say" bubble
   boom(x: number, y: number, r?: number): void; // explosion here → fireball broadcast to everyone else; r>0 = a damaging rocket blast
+  rocket(x: number, y: number, a: number): void; // we launched a rocket → broadcast it so others watch it fly
   sendChat(text: string): void;             // → main game chat, so the line also shows in the side feed
   chatHistory(): ChatLine[];                // recent chat backlog, seeded (hidden) so it's there on T
   // Slash-command autocomplete, shared with the main chat (same COMMANDS list).
@@ -107,6 +108,7 @@ interface Controller {
   feedLand(parcels: LandParcelView[], bankBought: number, bankCap: number): void; // Robville land book
   feedSay(id: string, name: string, text: string, say: boolean): void; // an in-world line → speech bubble (say=purple)
   feedBoom(x: number, y: number, r?: number): void; // someone else's explosion → render the fireball (+ blast effects if r>0)
+  feedRocket(x: number, y: number, a: number): void; // someone else launched a rocket → render it flying
   feedChat(line: ChatLine): void; // a new chat line (mirrors the main chat into the side feed)
   reenter(): void; // re-send worldEnter after a socket reconnect (server forgot us on drop)
   dungeonChests(opened: string[]): void;                          // server's list of chests we've opened
@@ -162,6 +164,11 @@ export function feedSay(id: string, name: string, text: string, say = false): vo
 /** Render an explosion at a world point (from a `worldBoom` server message). No-op if closed. */
 export function feedBoom(x: number, y: number, r?: number): void {
   controller?.feedBoom(x, y, r);
+}
+
+/** Render another player's rocket streaking across the world (from a `worldRocket` message). */
+export function feedRocket(x: number, y: number, a: number): void {
+  controller?.feedRocket(x, y, a);
 }
 
 /** Mirror a chat line (from a `chat` server message) into the in-world side feed. No-op if closed. */
@@ -870,6 +877,8 @@ export function startWorld(net: WorldNet): void {
   let lastSkidMarkAt = 0; // throttle for laying rubber on the ground while drifting
   let stunnedUntil = 0;   // ms; knocked off your feet by a rocket blast — can't move until then
   let lastRocketAt = 0;   // rocket-launcher fire cooldown
+  let userZoom = 1;       // overworld zoom multiplier (±/wheel/pinch); applied on top of the base ZOOM
+  function adjustZoom(factor: number) { userZoom = clamp(userZoom * factor, 0.6, 1.9); }
 
   // --- boat / water state ---
   // Water you can drive a boat on: each region is the ellipse of open water inside a pond building
@@ -3281,6 +3290,8 @@ export function startWorld(net: WorldNet): void {
     if (k === 'f') { e.preventDefault(); e.stopPropagation(); toggleDrive(); return; }
     if (k === 'b') { e.preventDefault(); e.stopPropagation(); toggleBoat(); return; } // board/dock a boat on water
     if (k === 'r') { e.preventDefault(); e.stopPropagation(); fireRocket(); return; } // 🚀 fire the rocket launcher
+    if (k === '=' || k === '+') { e.preventDefault(); e.stopPropagation(); adjustZoom(1.12); return; }  // zoom in
+    if (k === '-' || k === '_') { e.preventDefault(); e.stopPropagation(); adjustZoom(1 / 1.12); return; } // zoom out
     if (k === 'enter' || k === 'e' || k === ' ') {
       // Always swallow Space so the page never scrolls; interact with whatever's in range
       // (building, NPC, netizen, exit, chest, or jail — triggerNear no-ops if nothing is).
@@ -3296,6 +3307,9 @@ export function startWorld(net: WorldNet): void {
     if (k === 'shift') { handbrake = false; e.stopPropagation(); return; }
     if (MOVE_KEYS.has(k)) { keys.delete(k); e.stopPropagation(); }
   }
+  // Active touch/mouse pointers on the world — one drives the walk joystick; two pinch-to-zoom.
+  const pointers = new Map<number, { x: number; y: number }>();
+  let pinchDist = 0;
   function onPointerDown(e: PointerEvent) {
     unlockAudio();
     // A tap anywhere but the open input dismisses it (and doesn't also start a walk).
@@ -3303,6 +3317,13 @@ export function startWorld(net: WorldNet): void {
     if (sayActive) { if (e.target !== sayBox) closeSay(); return; }
     // Ignore drags that start on a chrome button or while a modal/dialogue is up.
     if (dialogOpen || talkOpen || (e.target instanceof Element && e.target.closest('button'))) return;
+    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size >= 2) { // a second finger → pinch-to-zoom, not a walk
+      joyActive = false;
+      const p = [...pointers.values()];
+      pinchDist = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+      return;
+    }
     // Tapped a netizen avatar? → fire the challenge hook instead of starting to walk.
     if (mainCam && net.onNetizenClick) {
       const wp = mainCam.getWorldPoint(e.clientX, e.clientY);
@@ -3316,10 +3337,28 @@ export function startWorld(net: WorldNet): void {
     joyOY = joyCY = e.clientY;
   }
   function onPointerMove(e: PointerEvent) {
+    if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pointers.size >= 2) { // pinch: zoom by the change in finger spread
+      const p = [...pointers.values()];
+      const d = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
+      if (pinchDist > 0 && d > 0) adjustZoom(d / pinchDist);
+      pinchDist = d;
+      return;
+    }
     if (!joyActive) return;
     joyCX = e.clientX; joyCY = e.clientY;
   }
-  function onPointerUp() { joyActive = false; }
+  function onPointerUp(e?: PointerEvent) {
+    if (e) pointers.delete(e.pointerId);
+    if (pointers.size < 2) pinchDist = 0;
+    if (pointers.size === 0) joyActive = false;
+  }
+  // Mouse wheel / trackpad scroll zooms the overworld (but let the chat backlog scroll normally).
+  function onWheel(e: WheelEvent) {
+    if (e.target instanceof Node && chatWrap.contains(e.target)) return;
+    e.preventDefault();
+    adjustZoom(e.deltaY < 0 ? 1.1 : 1 / 1.1);
+  }
 
   window.addEventListener('keydown', onKeyDown, true);
   window.addEventListener('keyup', onKeyUp, true);
@@ -3327,6 +3366,7 @@ export function startWorld(net: WorldNet): void {
   window.addEventListener('pointermove', onPointerMove);
   window.addEventListener('pointerup', onPointerUp);
   window.addEventListener('pointercancel', onPointerUp);
+  overlay.addEventListener('wheel', onWheel, { passive: false });
   backBtn.onclick = exit;
 
   // --- movement physics (identical to the canvas version; Phaser just renders the result) ---
@@ -5606,7 +5646,7 @@ export function startWorld(net: WorldNet): void {
         if (drunkOverlay) drunkOverlay.setAlpha(drunk > 0 ? Math.min(0.5, drunk * 0.06) : 0);
         if (mainCam) {
           const w = time / 1000;
-          const baseZoom = inInterior ? curZoom : inDungeon ? DUNGEON_ZOOM : ZOOM; // cozy in the Tavern/Temple, close-in in the dungeon
+          const baseZoom = inInterior ? curZoom : inDungeon ? DUNGEON_ZOOM : ZOOM * userZoom; // cozy in the Tavern/Temple, close-in in the dungeon; player zoom out in the open world
           mainCam.setRotation(drunk > 0 ? Math.sin(w * 1.1) * 0.012 * drunk : 0);            // tilt sway (~4° at lvl 6)
           mainCam.setZoom(drunk > 0 ? baseZoom * (1 + Math.sin(w * 0.8) * 0.02 * drunk) : baseZoom); // breathing zoom
         }
@@ -5848,9 +5888,18 @@ export function startWorld(net: WorldNet): void {
   // or when it runs out of fuel. The blast squishes nearby townsfolk, blows up cars, and knocks
   // people off their feet — and is broadcast so EVERYONE sees the fireball and takes the hit.
   // ============================================================================================
-  interface Rocket { spr: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number; t: number; }
+  // `ghost` rockets are other players' missiles, mirrored from a `worldRocket` broadcast — purely
+  // cosmetic (they fly + trail smoke but never detonate or deal a blast; the firer owns that and
+  // sends the authoritative `worldBoom`).
+  interface Rocket { spr: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number; t: number; ghost: boolean; }
   const rockets: Rocket[] = [];
   const ROCKET_SPEED = 640, ROCKET_LIFE = 1.7, BLAST_R = 96;
+
+  function spawnRocketSprite(x: number, y: number, a: number, ghost: boolean) {
+    const sc = petScene; if (!sc) return;
+    const spr = sc.add.image(x, y, 'w-rocket').setScale(TEXEL * 1.2).setRotation(a).setDepth(y + 8);
+    rockets.push({ spr, x, y, vx: Math.cos(a) * ROCKET_SPEED, vy: Math.sin(a) * ROCKET_SPEED, t: 0, ghost });
+  }
 
   function fireRocket() {
     const sc = petScene; if (!sc) return;
@@ -5862,9 +5911,15 @@ export function startWorld(net: WorldNet): void {
     const hx = Math.cos(facing), hy = Math.sin(facing);
     const muzzle = (driving ? CAR_LEN * 0.55 : R) + 12;                    // spawn ahead so you don't eat your own blast
     const x = selfX + hx * muzzle, y = selfY + hy * muzzle;
-    const spr = sc.add.image(x, y, 'w-rocket').setScale(TEXEL * 1.2).setRotation(facing).setDepth(y + 8);
-    rockets.push({ spr, x, y, vx: hx * ROCKET_SPEED, vy: hy * ROCKET_SPEED, t: 0 });
+    spawnRocketSprite(x, y, facing, false);
+    net.rocket(x, y, facing);                                              // let everyone else watch it fly
     rocketLaunchSound();
+  }
+  // A remote player's rocket (from a `worldRocket` broadcast) — render it streaking across our screen.
+  function feedRocket(x: number, y: number, a: number) {
+    if (inInterior || inDungeon) return; // not visible from inside a room/the Ruins
+    spawnRocketSprite(x, y, a, true);
+    if (Math.hypot(x - selfX, y - selfY) < 850) rocketLaunchSound(); // only nearby launches are audible
   }
 
   function detonateRocket(x: number, y: number) {
@@ -5914,12 +5969,23 @@ export function startWorld(net: WorldNet): void {
       let hit = rk.t >= ROCKET_LIFE;                                       // fuel ran out
       if (!hit && resolveCollisions(rk.x, rk.y, 4).hit) hit = true;        // slammed a building/wall
       if (!hit && (rk.x < 8 || rk.y < 8 || rk.x > WORLD.w - 8 || rk.y > WORLD.h - 8)) hit = true; // off the map edge
+      // Ghost (remote) rockets never detonate or deal a blast — they just fly until they hit a
+      // wall/edge/fuel-out, then vanish (the firer's own worldBoom drives the actual explosion).
+      if (rk.ghost) { if (hit) { rk.spr.destroy(); rockets.splice(i, 1); } continue; }
       if (!hit) for (const n of npcs) { if (now >= n.squishedUntil && Math.hypot(n.x - rk.x, n.y - rk.y) < R + 4) { hit = true; break; } }
       if (!hit) for (const a of others) {                                  // a car or a person downrange
         if (a.id === selfId) continue;
         if (Math.hypot(a.x - rk.x, a.y - rk.y) < (a.car ? CAR_LEN * 0.5 : R * 1.3)) { hit = true; break; }
       }
       if (hit) { rk.spr.destroy(); rockets.splice(i, 1); detonateRocket(rk.x, rk.y); }
+    }
+  }
+  // Clean up any ghost rocket near a blast we just received, so a mirrored missile doesn't keep
+  // flying past the point where its owner actually detonated it (on an NPC/player we don't share).
+  function clearGhostRocketsNear(x: number, y: number, r: number) {
+    for (let i = rockets.length - 1; i >= 0; i--) {
+      const rk = rockets[i];
+      if (rk.ghost && Math.hypot(rk.x - x, rk.y - y) <= r + 40) { rk.spr.destroy(); rockets.splice(i, 1); }
     }
   }
 
@@ -6279,7 +6345,8 @@ export function startWorld(net: WorldNet): void {
       for (const [k, v] of says) if (v.until <= now) says.delete(k); // drop stale lines (e.g. speakers who left)
       says.set(id, { text, until: now + SAY_MS, purple: say });
     },
-    feedBoom(x, y, r) { spawnExplosion(x, y); if (r && r > 0) applyBlast(x, y, r); },
+    feedBoom(x, y, r) { spawnExplosion(x, y); if (r && r > 0) { clearGhostRocketsNear(x, y, r); applyBlast(x, y, r); } },
+    feedRocket(x, y, a) { feedRocket(x, y, a); },
     feedChat(line) { pushChatLine(line); },
   };
   syncDriveBtn();

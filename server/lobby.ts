@@ -1647,6 +1647,16 @@ export class Lobby {
     for (const sock of this.world.sockets()) if (sock !== ws && sock.readyState === sock.OPEN) sock.send(data);
   }
 
+  /** A player launched a rocket — fan it out to everyone ELSE so they watch the missile fly. */
+  worldRocket(ws: WebSocket, x: number, y: number, a: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !this.world.has(ws)) return;
+    const bx = Math.max(0, Math.min(WORLD.w, x));
+    const by = Math.max(0, Math.min(WORLD.h, y));
+    const data = JSON.stringify({ type: 'worldRocket', x: bx, y: by, a });
+    for (const sock of this.world.sockets()) if (sock !== ws && sock.readyState === sock.OPEN) sock.send(data);
+  }
+
   /** Snapshot every in-world avatar (human + netizen). */
   private worldAvatars(): WorldAvatar[] {
     const out: WorldAvatar[] = [];

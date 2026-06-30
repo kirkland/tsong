@@ -813,6 +813,15 @@ export interface WorldBoomMsg {
   r?: number; // blast radius (rocket strikes); when >0 receivers also take blast effects, not just the visual
 }
 
+// A player launched a rocket from (x,y) heading at angle a — fanned out so everyone watches the
+// missile fly. Detonation is authoritative on the firer and arrives separately as a WorldBoomMsg.
+export interface WorldRocketMsg {
+  type: 'worldRocket';
+  x: number;
+  y: number;
+  a: number;
+}
+
 // --- Client -> Server ---
 export type ClientMsg =
   // pid = stable per-browser identity; color = chosen paddle color
@@ -914,6 +923,7 @@ export type ClientMsg =
   | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null; pet?: string | null } // client-authoritative avatar position (world units), heading + car when driving, pet trailing
   | { type: 'worldChat'; text: string; say?: boolean } // say a line in the World — pops as a speech bubble over your avatar; say=true (the Y popup) renders it purple
   | { type: 'worldBoom'; x: number; y: number; r?: number } // an explosion here (car crash or rocket strike) — broadcast the fireball; r>0 = a damaging blast
+  | { type: 'worldRocket'; x: number; y: number; a: number } // we launched a rocket here, heading a → broadcast so others see it fly
   // --- Robville land (the suburban neighborhood) ---
   | { type: 'landReq' } // request the current Robville parcel ownership/market book
   | { type: 'landBuyBank'; id: string } // buy an empty lot from the bank for PARCEL_PRICE (subject to BANK_PARCEL_CAP)
@@ -1409,6 +1419,7 @@ export type ServerMsg =
   | LandMsg
   | WorldSayMsg
   | WorldBoomMsg
+  | WorldRocketMsg
   | HouseMsg
   | HouseStateMsg
   | NetizenInfoMsg
