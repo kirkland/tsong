@@ -209,7 +209,7 @@ function applyState(m: any) {
     } else if (isMyTurn && ballInFrame === 1) {
       setPhase('beer');
     } else {
-      phase = isMyTurn ? 'aiming' : 'scored';
+      setPhase(isMyTurn ? 'aiming' : 'scored');
     }
   } else { setPhase('lobby'); }
   if (m.ranked) { ranked = m.ranked; setPhase('over'); }
@@ -289,7 +289,7 @@ function applyNext(m: any) {
   if (isMyTurn && ballInFrame === 1) {
     setPhase('beer');
   } else {
-    phase = isMyTurn ? 'aiming' : 'scored';
+    setPhase(isMyTurn ? 'aiming' : 'scored');
   }
 }
 function applyOver(m: any) {
@@ -382,8 +382,12 @@ function loop(ts: number) {
   if (!bowlingOpen) return;
   const dt = Math.min((ts - lastTs) / 1000, 0.1);
   lastTs = ts;
-  update(dt);
-  render();
+  try {
+    update(dt);
+    render();
+  } catch (err) {
+    console.error('[bowling] render error:', err);
+  }
   rafId = requestAnimationFrame(loop);
 }
 function drunkWobble(): number {
@@ -526,6 +530,10 @@ function drawScene() {
   }
 
   // --- Floor: scan-line perspective casting ---
+  // Fill the horizon gap (scanlines beyond LANE_LEN are skipped, leaving black)
+  // with the far-end floor colors so there's no black band near the vanishing point.
+  ctx.fillStyle = '#120a1e';
+  ctx.fillRect(0, VP_Y, W, 20);
   // For each screen row y below horizon:
   //   floor depth = CAM_H * FOCAL / (y - VP_Y)
   //   lane edges at that depth = ±LANE_HW * FOCAL / depth
@@ -1265,34 +1273,54 @@ function drawBeerPrompt() {
 
 // ─── Lobby / waiting / over screens ──────────────────────────────────────────
 function drawLobby() {
-  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  // Warm dark overlay (lighter than before so the lane is visible)
+  ctx.fillStyle = 'rgba(10,5,20,0.78)';
   ctx.fillRect(0, 0, W, H);
+
+  // Panel card
+  const pw = 460, ph = roomPlayers.length > 0 ? 80 + roomPlayers.length * 44 + 40 : 200;
+  const px = (W - pw) / 2, py = H / 2 - ph / 2 - 30;
+  const grd = ctx.createLinearGradient(px, py, px, py + ph);
+  grd.addColorStop(0, 'rgba(30,15,5,0.96)');
+  grd.addColorStop(1, 'rgba(20,8,0,0.96)');
+  ctx.fillStyle = grd;
+  roundRect(ctx, px, py, pw, ph, 16); ctx.fill();
+  ctx.strokeStyle = '#8b5e2a'; ctx.lineWidth = 2; ctx.stroke();
+
   ctx.save();
-  ctx.font = 'bold 38px system-ui'; ctx.textAlign = 'center';
+  ctx.font = 'bold 34px system-ui'; ctx.textAlign = 'center';
   ctx.fillStyle = '#ffee44'; ctx.shadowColor = '#ff8800'; ctx.shadowBlur = 22;
-  ctx.fillText('🎳 BOLWOING ALLEY', W / 2, H / 2 - 100);
+  ctx.fillText('🎳 BOLWOING ALLEY', W / 2, py + 44);
   ctx.restore();
 
-  ctx.font = '16px system-ui'; ctx.textAlign = 'center'; ctx.fillStyle = '#bbb';
-  ctx.fillText('Waiting for players… (2–4)', W / 2, H / 2 - 55);
+  ctx.font = '15px system-ui'; ctx.textAlign = 'center'; ctx.fillStyle = '#bb9966';
+  ctx.fillText('Waiting for players… (2–4)', W / 2, py + 72);
 
   for (let i = 0; i < roomPlayers.length; i++) {
     const p = roomPlayers[i];
-    const py = H / 2 - 20 + i * 38;
+    const ry = py + 100 + i * 44;
     ctx.fillStyle = p.color || '#888';
-    ctx.fillRect(W / 2 - 120, py, 10, 26);
-    ctx.font = '15px system-ui'; ctx.textAlign = 'left';
+    ctx.fillRect(W / 2 - 130, ry - 4, 10, 28);
+    ctx.font = '16px system-ui'; ctx.textAlign = 'left';
     ctx.fillStyle = p.ready ? '#66ff88' : '#ddd';
-    ctx.fillText(`${p.name}   ${p.ready ? '✅ Ready' : '⌛ Not ready'}`, W / 2 - 104, py + 17);
+    ctx.fillText(`${p.name}`, W / 2 - 112, ry + 16);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = p.ready ? '#44ff88' : '#aa7744';
+    ctx.fillText(p.ready ? '✅ Ready' : '⌛ Waiting', W / 2 + 130, ry + 16);
   }
-  ctx.font = '13px system-ui'; ctx.textAlign = 'center'; ctx.fillStyle = '#556';
-  ctx.fillText('10 frames · 1st place wins 750🪙', W / 2, H - 28);
+
+  ctx.font = '12px system-ui'; ctx.textAlign = 'center'; ctx.fillStyle = '#665544';
+  ctx.fillText('10 frames · standard scoring · 1st place wins 750🪙', W / 2, py + ph - 12);
 }
 
 function drawWaiting() {
-  ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(0, 0, W, H);
-  ctx.font = '20px system-ui'; ctx.textAlign = 'center'; ctx.fillStyle = '#aaa';
-  ctx.fillText('Connecting to Bolwoing Alley…', W / 2, H / 2);
+  ctx.fillStyle = 'rgba(10,5,20,0.85)'; ctx.fillRect(0, 0, W, H);
+  // Panel
+  ctx.fillStyle = 'rgba(20,10,5,0.96)';
+  roundRect(ctx, W/2 - 200, H/2 - 50, 400, 100, 14); ctx.fill();
+  ctx.strokeStyle = '#8b5e2a'; ctx.lineWidth = 2; ctx.stroke();
+  ctx.font = '20px system-ui'; ctx.textAlign = 'center'; ctx.fillStyle = '#bb9966';
+  ctx.fillText('Connecting to Bolwoing Alley…', W / 2, H / 2 + 7);
 }
 
 function drawGameOver() {
