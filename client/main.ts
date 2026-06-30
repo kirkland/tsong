@@ -803,6 +803,9 @@ const net = connect(
       superBrosMod?.feedSbRelay(msg.data);
     } else if (msg.type === 'doomLeaderboard') {
       doomScores = { solo: msg.solo, coop: msg.coop };
+    } else if (msg.type === 'bowlState' || msg.type === 'bowlStart' || msg.type === 'bowlThrowResult' ||
+               msg.type === 'bowlNextBall' || msg.type === 'bowlNextTurn' || msg.type === 'bowlGameOver') {
+      bowlingMod?.onBowlMsg(msg);
     } else if (msg.type === 'nomState') {
       nomicMod?.feedNomState(msg);
     } else if (msg.type === 'tdState') {
@@ -2068,6 +2071,25 @@ async function openFishing(): Promise<void> {
 const fishingBtn = document.getElementById('fishingBtn') as HTMLButtonElement;
 fishingBtn.addEventListener('click', () => { void openFishing(); });
 
+// --- Bolwoing Alley: PvP bowling minigame, entered from the world building ---
+let bowlingMod: typeof import('./bowling') | null = null;
+async function openBowling(): Promise<void> {
+  try {
+    bowlingMod = await import('./bowling');
+    if (bowlingMod.isBowlingOpen()) return;
+    bowlingMod.openBowling({
+      bowlJoin:  () => net.send({ type: 'bowlJoin' }),
+      bowlReady: () => net.send({ type: 'bowlReady' }),
+      bowlThrow: (offset, power) => net.send({ type: 'bowlThrow', offset, power }),
+      bowlLeave: () => net.send({ type: 'bowlLeave' }),
+      name:   () => myName,
+      selfId: () => myId,
+    });
+  } catch (e) {
+    console.error('Bowling failed to load:', e);
+  }
+}
+
 // --- Beta "World": a free-roam 2D overworld you walk around as a named avatar, seeing everyone
 // else who's currently in the world. It's the future main UI; for now its buildings deep-link
 // into existing features — the Arena (tsong itself, via the play queue), the Casino (roulette)
@@ -2120,6 +2142,11 @@ worldBtn.addEventListener('click', async () => {
         // deferred a tick so the world's teardown click finishes first.
         if (feature === 'fishing') {
           setTimeout(() => { void openFishing(); }, 0);
+          return;
+        }
+        // Bolwoing Alley opens the bowling overlay (lazy-loaded).
+        if (feature === 'bowling') {
+          setTimeout(() => { void openBowling(); }, 0);
           return;
         }
         // Arcade cabinets launch the solo/co-op minigames via their toolbar buttons.

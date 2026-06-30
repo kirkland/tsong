@@ -414,6 +414,20 @@ wss.on('connection', (ws: WebSocket, req) => {
           lobby.fishCatch(ws, msg.tier, msg.sizeLb);
         }
         break;
+      case 'bowlJoin':
+        lobby.bowlJoin(ws);
+        break;
+      case 'bowlReady':
+        lobby.bowlReady(ws);
+        break;
+      case 'bowlThrow':
+        if (typeof msg.offset === 'number' && typeof msg.power === 'number') {
+          lobby.bowlThrow(ws, msg.offset, msg.power);
+        }
+        break;
+      case 'bowlLeave':
+        lobby.bowlLeave(ws);
+        break;
       case 'worldEnter':
         lobby.worldEnter(ws);
         break;

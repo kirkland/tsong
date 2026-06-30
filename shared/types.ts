@@ -431,7 +431,7 @@ export function petById(id: string | null | undefined) {
 
 // What entering a building does (the client maps each `kind` to an action). Add a kind here
 // and a handler on the client to introduce a new venue.
-export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament' | 'arcade' | 'dungeon' | 'temple';
+export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament' | 'arcade' | 'dungeon' | 'temple' | 'bowling';
 // A venue's footprint on the map. The rectangle (top-left origin, world units) is solid —
 // avatars collide with it — and an apron just outside the door is the entry trigger zone.
 export interface WorldBuilding {
@@ -472,6 +472,9 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
   // The Temple — a pale stone sanctuary south of the plaza, devoted to the Order of the Eternal Volley.
   // Step inside to a hushed, candlelit nave; read the holy book at the lectern to receive a Blessing.
   { id: 'temple', kind: 'temple', name: 'THE TEMPLE', emoji: '⛪', x: 1560, y: 1730, w: 340, h: 270, color: '#d8cda0' },
+  // Bolwoing Alley — east of the Robville connector, accessible via a short spur road.
+  // Hosts 2–4 player turn-based bowling with server-side pin physics and strike celebrations.
+  { id: 'bowling', kind: 'bowling', name: 'BOLWOING ALLEY', emoji: '🎳', x: 2890, y: 1390, w: 310, h: 220, color: '#1a1050' },
 ] as const;
 
 // --- The Ruins dungeon economy: SERVER-AUTHORITATIVE so a tampered client can't mint coins. ---
@@ -912,7 +915,12 @@ export type ClientMsg =
   | { type: 'eloProfileReq'; rank: number; self?: true }
   | { type: 'seasonPassReq' }                // request a fresh season pass state
   | { type: 'seasonClaim'; id: string }      // claim a completed weekly challenge reward
-  | { type: 'replayWatching'; watching: boolean }; // hold/release serve countdown during goal replay
+  | { type: 'replayWatching'; watching: boolean } // hold/release serve countdown during goal replay
+  // --- Bolwoing Alley ---
+  | { type: 'bowlJoin' }                          // enter/create a bowling room
+  | { type: 'bowlReady' }                         // mark self as ready to start
+  | { type: 'bowlThrow'; offset: number; power: number } // make a throw (offset −1..1, power 0..1)
+  | { type: 'bowlLeave' };                        // leave the bowling room
 
 // --- Server -> Client ---
 
@@ -1376,7 +1384,14 @@ export type ServerMsg =
   | JailMsg
   | NomStateMsg
   | EloProfileMsg
-  | SeasonPassMsg;
+  | SeasonPassMsg
+  // --- Bolwoing Alley server→client messages ---
+  | { type: 'bowlState'; roomId: string; phase: string; players: any[]; currentPlayerId: string | null; pinState: boolean[]; scores: any; frames: any }
+  | { type: 'bowlStart'; roomId: string; phase: string; players: any[]; currentPlayerId: string | null; pinState: boolean[]; scores: any; frames: any }
+  | { type: 'bowlThrowResult'; roomId: string; playerId: string; pinState: boolean[]; pinsDown: number[]; scores: any; frames: any }
+  | { type: 'bowlNextBall'; roomId: string; playerId: string; ball: number; pinState: boolean[]; scores: any; frames: any }
+  | { type: 'bowlNextTurn'; roomId: string; playerId: string; frameIdx: number; pinState: boolean[]; scores: any; frames: any }
+  | { type: 'bowlGameOver'; roomId: string; ranked: any[]; scores: any; frames: any };
 
 // Your current drunkenness level (0 = sober … 6 = cut off). Sent only to the affected client.
 // The client applies escalating visual + control-wobble effects; the server owns the 3-min-per-level

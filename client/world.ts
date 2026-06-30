@@ -67,7 +67,7 @@ export interface WorldNet {
   pet(): string | null;          // our equipped pet id (null = none → nothing trails us)
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'stocks' | 'loans' | 'petshop' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros'): void; // open a Casino/Bank/Pet-Shop/DOOM/Fishing/Arcade feature
+  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'stocks' | 'loans' | 'petshop' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'bowling'): void; // open a Casino/Bank/Pet-Shop/DOOM/Fishing/Arcade/Bowling feature
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
   dungeonSync(): void;             // entering the Ruins → ask which chests we've opened
@@ -208,6 +208,7 @@ const ROADS: Rect[] = [
   { x: 3910, y: 720,  w: 390,  h: 80 },   // stem → Birch Circle (east, upper)
   { x: 3500, y: 1600, w: 300,  h: 80 },   // stem → Willow Court (west, lower)
   { x: 3910, y: 1600, w: 390,  h: 80 },   // stem → Cedar Circle (east, lower)
+  { x: 2945, y: 1290, w: 110, h: 130 },  // spur south to the Bolwoing Alley
 ];
 const PLAZA = { x: 1600, y: 1100, r: 240 }; // paved circle + fountain at town center
 // The Tavern's INTERIOR lives off the main map. When you step inside, the camera bounds switch to
@@ -1713,6 +1714,7 @@ export function startWorld(net: WorldNet): void {
       case 'arcade': return '🎮 Enter the Arcade';
       case 'dungeon': return '🏚️ Enter the Ruins — descend the dungeon';
       case 'temple': return '⛪ Enter the Temple';
+      case 'bowling': return '🎳 Enter Bolwoing Alley';
     }
   }
   function enterBuilding(kind: WorldBuildingKind) {
@@ -1764,6 +1766,12 @@ export function startWorld(net: WorldNet): void {
     if (kind === 'parliament') {
       openDialog('🏛️ Parliament', 'The perpetual game of Nomic is in session. The only rule that cannot change is that the rules can.', [
         { label: '🏛️ Take your seat', onPick: () => { exit(); net.openParliament(); } },
+      ]);
+      return;
+    }
+    if (kind === 'bowling') {
+      openDialog('🎳 Bolwoing Alley', 'The sound of pins crashing echoes down the lane.', [
+        { label: '🎳 Bowl (2–4 players)', onPick: () => { exit(); net.openFeature('bowling'); } },
       ]);
       return;
     }
