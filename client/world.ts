@@ -3384,7 +3384,9 @@ export function startWorld(net: WorldNet): void {
     const sp = Math.hypot(vx, vy);
     // Steering needs speed to bite; near-stationary you can barely turn.
     const authority = Math.min(1, sp / 120);
-    facing += steer * car.turn * authority * dt;
+    // Reverse-steer: when actually travelling backwards, the wheel swaps (like a real car).
+    const rev = (vx * Math.cos(facing) + vy * Math.sin(facing)) < 0 ? -1 : 1;
+    facing += steer * rev * car.turn * authority * dt;
     // Drunk driving (you got away with the stop, but you're hammered): a violent, ever-worsening
     // weave layered on top, so keeping it on the road is brutal. Scales hard with the booze.
     const drunk = net.drunkLevel();
