@@ -833,6 +833,9 @@ interface LiveNpc {
   lineIdx: number;          // which flavour line to say next
   c: Phaser.GameObjects.Container;
   bob: Phaser.GameObjects.Container; // body sprites (bobbed/flipped); shadow+label sit outside it
+  label: Phaser.GameObjects.Text;    // floating name — swapped for dizzy stars while squished
+  squishedUntil: number;    // ms timestamp; flattened on the ground (run over by a car) until then
+  getUpUntil: number;       // ms timestamp; brief squash-stretch "popping back up" pose until then
 }
 
 // --- small helpers ---
@@ -3418,6 +3421,29 @@ export function startWorld(net: WorldNet): void {
       vx *= 0.3; vy *= 0.3;                          // kill most momentum
     }
     selfX = moved.x; selfY = moved.y;
+    runOverNpcs(Math.hypot(vx, vy));
+  }
+
+  // VEHICULAR SLAPSTICK: while driving with any real momentum, flatten any townsperson the car
+  // rolls over. They squelch, get launched a touch in your direction of travel, and lie there as a
+  // pancake — then dust themselves off and pop back upright a few seconds later, no worse for wear.
+  function runOverNpcs(speed: number) {
+    if (speed < 55) return;                 // a gentle crawl just nudges; you have to actually run them over
+    const now = performance.now();
+    const reach = CAR_LEN * 0.42 + R * 0.7; // the car's footprint vs. a standing person
+    const hx = Math.cos(facing), hy = Math.sin(facing);
+    for (const n of npcs) {
+      if (now < n.squishedUntil) continue;  // already a pancake — don't re-squish
+      if (Math.hypot(n.x - selfX, n.y - selfY) > reach) continue;
+      n.squishedUntil = now + 2600 + Math.random() * 1400; // down for a few seconds
+      n.getUpUntil = 0;
+      n.walking = false;
+      // launch them a bit further along the car's heading, but never into a wall.
+      const shove = resolveCollisions(n.x + hx * 22, n.y + hy * 22, R * 0.7);
+      n.x = shove.x; n.y = shove.y;
+      n.label.setText('💫');                 // seeing stars
+      squishSound();
+    }
   }
 
   function updateNearBuilding() {
@@ -3638,6 +3664,19 @@ export function startWorld(net: WorldNet): void {
     window.setTimeout(() => tone(659, 0.09, 'square', 0.16), 85);
     window.setTimeout(() => tone(784, 0.15, 'square', 0.16), 170);
   }
+  // The run-over SPLAT: a wet, comedic squish — a low descending squelch under a filtered-noise
+  // splat, topped with a silly high cartoon squeak. Throttled so a slow grind doesn't machine-gun.
+  let lastSquishAt = 0;
+  function squishSound() {
+    const now = performance.now();
+    if (now - lastSquishAt < 120) return;
+    lastSquishAt = now;
+    tone(200, 0.18, 'sawtooth', 0.22, 38);   // squelchy downward squish
+    noise(0.2, 0.24, 360);                    // wet splat
+    window.setTimeout(() => tone(950, 0.05, 'square', 0.08, 1500), 55); // cartoon squeak
+  }
+  // The dust-yourself-off "pop" as a flattened townsperson springs back upright.
+  function getUpSound() { tone(280, 0.13, 'square', 0.1, 660); }
   function revSound(starting: boolean) {
     if (starting) tone(80, 0.26, 'sawtooth', 0.18, 230);
     else tone(210, 0.22, 'sawtooth', 0.15, 80);
@@ -5807,11 +5846,40 @@ export function startWorld(net: WorldNet): void {
     const bob = sc.add.container(0, 0, parts);
     const label = sc.add.text(0, -R - 26, def.name, NAME_STYLE).setOrigin(0.5, 1);
     const c = sc.add.container(def.x, def.y, [shadow, bob, label]);
-    return { def, x: def.x, y: def.y, tx: def.x, ty: def.y, pauseUntil: 0, faceLeft: false, walking: false, lineIdx: 0, c, bob };
+    return { def, x: def.x, y: def.y, tx: def.x, ty: def.y, pauseUntil: 0, faceLeft: false, walking: false, lineIdx: 0, c, bob, label, squishedUntil: 0, getUpUntil: 0 };
   }
 
   function updateNpcs(now: number, dt: number) {
     for (const n of npcs) {
+      // --- run-over slapstick: flattened, then a springy "get back up" pop ---
+      if (now < n.squishedUntil) {
+        n.walking = false;
+        n.c.setPosition(n.x, n.y).setDepth(n.y);
+        n.bob.scaleX = (n.faceLeft ? -1 : 1) * 1.65; // splayed wide…
+        n.bob.scaleY = 0.16;                          // …and squashed flat to the ground
+        n.bob.y = 0;
+        continue;
+      }
+      if (n.squishedUntil !== 0) {
+        // just got up: kick off the spring-back pose, shake off the stars, wander somewhere new
+        n.squishedUntil = 0;
+        n.getUpUntil = now + 380;
+        n.label.setText(n.def.name);
+        n.pauseUntil = now + 300;
+        n.tx = n.def.x; n.ty = n.def.y;
+        getUpSound();
+      }
+      if (now < n.getUpUntil) {
+        // ease from squashed → a slight overshoot stretch → normal, for a bouncy recovery
+        const p = 1 - (n.getUpUntil - now) / 380;     // 0→1
+        const stretch = Math.sin(p * Math.PI);        // 0→1→0 bump
+        n.c.setPosition(n.x, n.y).setDepth(n.y);
+        n.bob.scaleX = (n.faceLeft ? -1 : 1) * (1 + 0.3 * (1 - p) - 0.12 * stretch);
+        n.bob.scaleY = 0.2 + 0.8 * p + 0.18 * stretch;
+        n.bob.y = -2 * stretch;                       // a little hop as they spring up
+        continue;
+      }
+      n.bob.scaleY = 1; // ensure the pancake pose is fully cleared once recovered
       const talking = talkOpen && nearNpc === n;
       if (!talking && now >= n.pauseUntil) {
         const dx = n.tx - n.x, dy = n.ty - n.y;
