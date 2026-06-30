@@ -5036,9 +5036,27 @@ function loop(t: number) {
     // Interpolate between the previous and current server snapshots to smooth out
     // network jitter. alpha tracks how far we've progressed into the current interval.
     const interval = snapBTime - snapATime;
-    const renderState = (snapA && interval > 0)
+    let renderState = (snapA && interval > 0)
       ? interpState(snapA, state, Math.min(1, Math.max(0, (t - snapBTime) / interval)))
       : state;
+    // Client-side prediction: override the local player's own paddle with the local
+    // target so it feels instant rather than lagging by RTT + server echo.
+    if (isPlayer() && (myRole === 'left' || myRole === 'right')) {
+      const side = myRole as 'left' | 'right';
+      renderState = {
+        ...renderState,
+        paddles: {
+          ...renderState.paddles,
+          [side]: {
+            ...renderState.paddles[side],
+            y: target,
+            players: renderState.paddles[side].players.map((p) =>
+              p.id === myId ? { ...p, y: target } : p,
+            ),
+          },
+        },
+      };
+    }
     if (renderState.viewMode !== 'normal' && renderer3d && !renderState.fatality) {
       const side = renderState.viewMode === 'firstperson'
         ? (myRole !== 'observer' ? (myRole as 'left' | 'right') : fpSide)
