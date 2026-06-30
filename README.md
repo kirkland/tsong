@@ -94,7 +94,7 @@ Want to hack on tsong? Welcome! 🏓
 
 Built by:
 
-- [Robert Kaufman](https://github.com/robkaufmanls) (@robkaufmanls)
+- [Robert Kaufman](https://github.com/kirkland) (@kirkland)
 - [Noam Molloy](https://github.com/noammolloy) (@noammolloy)
 - [Jay Srinivasan](https://github.com/jayyy-s) (@jayyy-s)
 - [Matt Beauvais](https://github.com/mattb102) (@mattb102)
