@@ -3336,6 +3336,12 @@
         white-space: nowrap;
         line-height: 1.6;
       }
+      /* Personal section header inside the modes panel. */
+      .modes-section-head {
+        font-size: 9px; letter-spacing: 1px; text-transform: uppercase;
+        color: #6b7796; padding: 4px 10px 0; margin: 0;
+      }
+      .mode-section-divider { height: 1px; background: #1c2640; margin: 6px 10px 2px; }
       /* Win score selector in the modes panel. */
       .win-score-row {
         display: flex;
@@ -4245,8 +4251,17 @@
               <button class="ws-btn" data-score="7" type="button" title="First to 7 wins">7</button>
             </div>
           </div>
-        </div>
-          </div>
+          <div class="mode-section-divider"></div>
+          <h4 class="modes-section-head">Personal</h4>
+          <label class="mode-option" title="After each goal, replay the last ~1.5 seconds in slow motion.">
+            <span class="mode-icon">⏪</span>
+            <span class="mode-text">
+              <span class="mode-name">Goal replay</span>
+              <span class="mode-desc">Slow-mo replay when a point is scored</span>
+            </span>
+            <input type="checkbox" id="replayToggle" />
+            <span class="mode-switch" aria-hidden="true"></span>
+          </label>
         </div>
       </div>
       <div id="tourney">
