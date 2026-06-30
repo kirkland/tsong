@@ -93,6 +93,7 @@ export interface WorldNet {
   houseBuild(id: string, house: string): void; // build a HOUSE_KINDS house on a lot you own
   houseDemolish(id: string): void;          // tear the house down on a lot you own (free)
   say(text: string, asSay?: boolean): void; // → speech bubble over your avatar (+ to others in-world); asSay=true → purple "Say" bubble
+  boom(x: number, y: number): void;         // tell the server our car exploded here → fireball broadcast to everyone else
   sendChat(text: string): void;             // → main game chat, so the line also shows in the side feed
   chatHistory(): ChatLine[];                // recent chat backlog, seeded (hidden) so it's there on T
   // Slash-command autocomplete, shared with the main chat (same COMMANDS list).
@@ -105,6 +106,7 @@ interface Controller {
   feed(avatars: WorldAvatar[]): void;
   feedLand(parcels: LandParcelView[], bankBought: number, bankCap: number): void; // Robville land book
   feedSay(id: string, name: string, text: string, say: boolean): void; // an in-world line → speech bubble (say=purple)
+  feedBoom(x: number, y: number): void; // someone else's car exploded → render the fireball here
   feedChat(line: ChatLine): void; // a new chat line (mirrors the main chat into the side feed)
   reenter(): void; // re-send worldEnter after a socket reconnect (server forgot us on drop)
   dungeonChests(opened: string[]): void;                          // server's list of chests we've opened
@@ -155,6 +157,11 @@ export function feedLand(parcels: LandParcelView[], bankBought: number, bankCap:
 /** Pop a speech bubble over a world avatar (from a `worldSay` server message). */
 export function feedSay(id: string, name: string, text: string, say = false): void {
   controller?.feedSay(id, name, text, say);
+}
+
+/** Render a car-crash fireball at a world point (from a `worldBoom` server message). No-op if closed. */
+export function feedBoom(x: number, y: number): void {
+  controller?.feedBoom(x, y);
 }
 
 /** Mirror a chat line (from a `chat` server message) into the in-world side feed. No-op if closed. */
@@ -3417,7 +3424,15 @@ export function startWorld(net: WorldNet): void {
 
     const moved = confine(selfX + vx * dt, selfY + vy * dt);
     if (moved.hit) {
-      if (Math.hypot(vx, vy) > 60) bumpSound(true); // crunch / shore bump (skip silent scrapes when crawling)
+      const impact = Math.hypot(vx, vy);
+      // Slam a CAR into a building hard enough and it goes up in a fireball (boats just bump the
+      // shore). A gentle nudge still only gives the crunch.
+      if (driving && !boating && impact > 200) {
+        selfX = moved.x; selfY = moved.y;
+        blowUpMyCar('💥 KABOOM! You wrapped your car around a building — summon a fresh one anytime.');
+        return;
+      }
+      if (impact > 60) bumpSound(true); // crunch / shore bump (skip silent scrapes when crawling)
       vx *= 0.3; vy *= 0.3;                          // kill most momentum
     }
     selfX = moved.x; selfY = moved.y;
@@ -5719,6 +5734,22 @@ export function startWorld(net: WorldNet): void {
   // independently on each client (the condition is symmetric: I'm driving + you're in a car + we
   // overlap), so both sides blow up and dismount in lockstep. Hop back in any time — your car's fine.
   let lastCarCrashAt = 0;
+  // Blow up the car YOU'RE driving, right where you are: a fireball on your own screen, the same
+  // fireball broadcast to everyone else, and you're tipped back out onto your feet. Your car is
+  // unharmed — press drive to summon it again. Used by both crash paths below.
+  function blowUpMyCar(reason: string) {
+    const now = performance.now();
+    if (!driving || now - lastCarCrashAt < 1200) return; // already on foot / just blew up — don't double-pop
+    lastCarCrashAt = now;
+    spawnExplosion(selfX, selfY);     // instant local fireball (others get it via the broadcast below)
+    net.boom(selfX, selfY);           // → server fans this fireball out to everyone else in the world
+    driving = false; vx = 0; vy = 0;
+    keys.clear();
+    syncDriveBtn();
+    flashHelp(reason);
+  }
+  // Two cars touching → BOTH explode. Detection is symmetric, so each client blows up its OWN car
+  // (one fireball per car, every one of them broadcast) — net result: two fireballs, seen by all.
   function checkCarCrash(now: number) {
     if (!driving || boating) return;
     if (now - lastCarCrashAt < 1200) return;      // don't re-detonate the same pile-up every frame
@@ -5727,12 +5758,7 @@ export function startWorld(net: WorldNet): void {
     for (const a of others) {
       if (a.id === selfId || !a.car || a.car === 'car-boat') continue; // foot/boat avatars don't crash
       if (Math.hypot(a.x - selfX, a.y - selfY) > reach) continue;
-      lastCarCrashAt = now;
-      spawnExplosion((selfX + a.x) / 2, (selfY + a.y) / 2);
-      driving = false; vx = 0; vy = 0;            // ejected onto your feet (your car is unharmed — re-summon any time)
-      keys.clear();
-      syncDriveBtn();
-      flashHelp('💥 KABOOM! Your cars collided — hop back in whenever you like.');
+      blowUpMyCar('💥 KABOOM! Your cars collided — hop back in whenever you like.');
       break;
     }
   }
@@ -6060,6 +6086,7 @@ export function startWorld(net: WorldNet): void {
       for (const [k, v] of says) if (v.until <= now) says.delete(k); // drop stale lines (e.g. speakers who left)
       says.set(id, { text, until: now + SAY_MS, purple: say });
     },
+    feedBoom(x, y) { spawnExplosion(x, y); },
     feedChat(line) { pushChatLine(line); },
   };
   syncDriveBtn();

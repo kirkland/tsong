@@ -1635,6 +1635,17 @@ export class Lobby {
     for (const sock of this.world.sockets()) if (sock.readyState === sock.OPEN) sock.send(data);
   }
 
+  /** A player's car just exploded at (x,y) — fan the fireball out to everyone ELSE in the world (the
+   *  crasher already drew their own locally). Must be in the world; coords are clamped to the map. */
+  worldBoom(ws: WebSocket, x: number, y: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !this.world.has(ws)) return;
+    const bx = Math.max(0, Math.min(WORLD.w, x));
+    const by = Math.max(0, Math.min(WORLD.h, y));
+    const data = JSON.stringify({ type: 'worldBoom', x: bx, y: by });
+    for (const sock of this.world.sockets()) if (sock !== ws && sock.readyState === sock.OPEN) sock.send(data);
+  }
+
   /** Snapshot every in-world avatar (human + netizen). */
   private worldAvatars(): WorldAvatar[] {
     const out: WorldAvatar[] = [];

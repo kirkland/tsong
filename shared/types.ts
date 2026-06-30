@@ -804,6 +804,14 @@ export interface WorldSayMsg {
   say?: boolean; // true → spoken via the "Say" popup (Y); renders the bubble in purple
 }
 
+// A car blew up (car-vs-car collision or a high-speed building crash) at this world point. Fanned
+// out to everyone else in the world so the fireball is visible to all, not just the crasher.
+export interface WorldBoomMsg {
+  type: 'worldBoom';
+  x: number;
+  y: number;
+}
+
 // --- Client -> Server ---
 export type ClientMsg =
   // pid = stable per-browser identity; color = chosen paddle color
@@ -904,6 +912,7 @@ export type ClientMsg =
   | { type: 'worldLeave' } // leave the world map
   | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null; pet?: string | null } // client-authoritative avatar position (world units), heading + car when driving, pet trailing
   | { type: 'worldChat'; text: string; say?: boolean } // say a line in the World — pops as a speech bubble over your avatar; say=true (the Y popup) renders it purple
+  | { type: 'worldBoom'; x: number; y: number } // a car of ours just exploded here — broadcast the fireball to everyone else in the world
   // --- Robville land (the suburban neighborhood) ---
   | { type: 'landReq' } // request the current Robville parcel ownership/market book
   | { type: 'landBuyBank'; id: string } // buy an empty lot from the bank for PARCEL_PRICE (subject to BANK_PARCEL_CAP)
@@ -1398,6 +1407,7 @@ export type ServerMsg =
   | { type: 'dungeonPurse'; coins: number } // current run-purse total (paid out only on a clean escape)
   | LandMsg
   | WorldSayMsg
+  | WorldBoomMsg
   | HouseMsg
   | HouseStateMsg
   | NetizenInfoMsg
