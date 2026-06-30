@@ -909,7 +909,9 @@ export type ClientMsg =
   | { type: 'nomPropose'; kind: NomProposalKind; text: string; target?: number; effect?: NomEffect | null; ruleClass?: 'immutable' | 'mutable' } // (your turn) put a rule change on the floor
   | { type: 'nomVote'; vote: NomVote } // cast your vote on the proposal currently on the floor
   | { type: 'nomResolve' } // (the Speaker / proposer) call the vote and resolve the floor early
-  | { type: 'eloProfileReq'; rank: number; self?: true };
+  | { type: 'eloProfileReq'; rank: number; self?: true }
+  | { type: 'seasonPassReq' }                // request a fresh season pass state
+  | { type: 'seasonClaim'; id: string };     // claim a completed weekly challenge reward
 
 // --- Server -> Client ---
 
@@ -1372,7 +1374,8 @@ export type ServerMsg =
   | DrunkMsg
   | JailMsg
   | NomStateMsg
-  | EloProfileMsg;
+  | EloProfileMsg
+  | SeasonPassMsg;
 
 // Your current drunkenness level (0 = sober … 6 = cut off). Sent only to the affected client.
 // The client applies escalating visual + control-wobble effects; the server owns the 3-min-per-level
@@ -2384,3 +2387,21 @@ export const STAGES: Stage[] = [
 export const SB_STOCKS = 3;          // lives per fighter
 export const SB_MAX_PLAYERS = 4;     // lobby cap
 export const SB_MIN_PLAYERS = 2;     // min to start
+
+
+// Season Pass: weekly challenges with coin rewards.
+export interface SeasonChallenge {
+  id: string;
+  label: string;
+  emoji: string;
+  goal: number;
+  progress: number;
+  reward: number;
+  claimed: boolean;
+}
+
+export interface SeasonPassMsg {
+  type: 'seasonPass';
+  weekId: string;  // e.g. '2026-W26'
+  challenges: SeasonChallenge[];
+}

@@ -4451,6 +4451,29 @@ function toRgb(h: string): [number, number, number] {
   return [parseInt(v.slice(0, 2), 16), parseInt(v.slice(2, 4), 16), parseInt(v.slice(4, 6), 16)];
 }
 
+/** Goal replay overlay: dims the court and shows a "REPLAY" badge + progress bar. */
+export function drawReplayOverlay(ctx: CanvasRenderingContext2D, frameIdx: number, totalFrames: number) {
+  ctx.save();
+  // Subtle vignette so the replay stands out
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
+  ctx.fillRect(0, 0, COURT.w, COURT.h);
+  // Badge
+  ctx.font = 'bold 26px ui-monospace, monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillStyle = 'rgba(255, 70, 70, 0.95)';
+  ctx.fillText('⏪ REPLAY', COURT.w / 2, 56);
+  // Progress bar
+  const barW = 150;
+  const barX = (COURT.w - barW) / 2;
+  const barY = 90;
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
+  ctx.fillRect(barX, barY, barW, 3);
+  ctx.fillStyle = 'rgba(255, 70, 70, 0.8)';
+  ctx.fillRect(barX, barY, barW * Math.min(1, frameIdx / totalFrames), 3);
+  ctx.restore();
+}
+
 // Startup guard: warn about any exclusive cosmetic missing its client renderer entry.
 (() => {
   const registries: Record<string, Record<string, unknown>> = {

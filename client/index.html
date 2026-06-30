@@ -847,7 +847,7 @@
       }
       @media (prefers-reduced-motion: reduce) {
         #arcadeBtn, #casinoBtn, #economyBtn, #workMenuBtn,
-        #viewModeBtn, #gameModesBtn, #tourneyBtn, #powerupInfoBtn { animation: none; }
+        #viewModeBtn, #gameModesBtn, #tourneyBtn, #powerupInfoBtn, #seasonBtn { animation: none; }
       }
       #arcadeBtn .caret, #casinoBtn .caret, #economyBtn .caret, #workMenuBtn .caret { font-size: 10px; transition: transform 0.15s; }
       #arcadeBtn[aria-expanded='true'] .caret, #casinoBtn[aria-expanded='true'] .caret, #economyBtn[aria-expanded='true'] .caret, #workMenuBtn[aria-expanded='true'] .caret { transform: rotate(180deg); }
@@ -3232,6 +3232,92 @@
         font-size: 12px;
       }
 
+      /* Season Pass button + panel */
+      @keyframes seasonGlow {
+        0%, 100% { box-shadow: 0 0 0px rgba(52, 211, 153, 0); }
+        50%       { box-shadow: 0 0 13px rgba(52, 211, 153, 0.55); }
+      }
+      #seasonBtn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font: inherit;
+        font-size: 12px;
+        letter-spacing: 1px;
+        padding: 7px 12px;
+        border-radius: 6px;
+        border: 1px solid #0d5c3b;
+        background: #061a10;
+        color: #34d399;
+        cursor: pointer;
+        animation: seasonGlow 3.2s ease-in-out infinite;
+      }
+      #seasonBtn:hover { background: #0a2418; }
+      #seasonBtn .caret { font-size: 14px; transition: transform 0.15s; transform: translateY(-0.15em); }
+      #seasonBtn[aria-expanded='true'] .caret { transform: translateY(-0.15em) rotate(180deg); }
+      #seasonPanel {
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 0;
+        width: min(86vw, 280px);
+        background: #0a1220;
+        border: 1px solid #1a3a28;
+        border-radius: 8px;
+        box-shadow: 0 10px 28px rgba(0,0,0,0.6);
+        padding: 10px 12px 12px;
+      }
+      #seasonPanel[hidden] { display: none; }
+      .season-week {
+        font-size: 10px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        color: #34d399;
+        display: block;
+        margin-bottom: 10px;
+      }
+      .season-challenge {
+        background: #0e1c2a;
+        border: 1px solid #1e3040;
+        border-radius: 6px;
+        padding: 8px 10px;
+        margin-bottom: 7px;
+      }
+      .season-challenge.season-claimable { border-color: #34d399; background: #0a2018; }
+      .season-challenge.season-claimed { opacity: 0.5; }
+      .season-ch-top {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-bottom: 5px;
+      }
+      .season-ch-emoji { font-size: 16px; flex-shrink: 0; }
+      .season-ch-label { font-size: 12px; color: #c8d4f0; flex: 1; }
+      .season-ch-reward { font-size: 11px; color: #ffd166; white-space: nowrap; }
+      .season-ch-bar-wrap {
+        height: 4px;
+        background: rgba(255,255,255,0.08);
+        border-radius: 2px;
+        overflow: hidden;
+        margin-bottom: 4px;
+      }
+      .season-ch-bar { height: 100%; background: #34d399; border-radius: 2px; transition: width 0.3s; }
+      .season-ch-foot { display: flex; justify-content: space-between; align-items: center; }
+      .season-ch-progress { font-size: 10px; color: #6b8a9e; }
+      .season-claim-btn {
+        font: inherit;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        color: #34d399;
+        background: rgba(52,211,153,0.12);
+        border: 1px solid #34d399;
+        border-radius: 4px;
+        padding: 2px 7px;
+        cursor: pointer;
+      }
+      .season-claim-btn:hover { background: rgba(52,211,153,0.22); }
+      .season-ch-done { font-size: 10px; color: #34d399; }
+
       /* Active power-up HUD: a row of small colored chips showing live timers/counts. */
       #puHud {
         min-height: 20px;
@@ -3526,7 +3612,7 @@
           gap: 4px;
           flex-wrap: wrap;
         }
-        #viewModeBtn, #muteBtn, #worldBtn, #workMenuBtn, #gameModesBtn, #powerupInfoBtn, #tourneyBtn, #shopBtn, #arcadeBtn, #casinoBtn, #economyBtn {
+        #viewModeBtn, #muteBtn, #worldBtn, #workMenuBtn, #gameModesBtn, #powerupInfoBtn, #tourneyBtn, #shopBtn, #arcadeBtn, #casinoBtn, #economyBtn, #seasonBtn {
           font-size: 10px;
           padding: 4px 8px;
         }
@@ -4395,6 +4481,15 @@
               </div>
             </div>
           </div>
+        </div>
+      </div>
+      <div id="season">
+        <button id="seasonBtn" type="button" aria-expanded="false">
+          🏅 SEASON <span class="caret">▾</span>
+        </button>
+        <div id="seasonPanel" hidden>
+          <span class="season-week"></span>
+          <div class="season-challenges"></div>
         </div>
       </div>
       <!-- Spectators only, during a live duel: drop a solid obstacle block on the court. -->

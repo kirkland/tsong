@@ -286,6 +286,12 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'questClaim':
         if (typeof msg.quest === 'string') lobby.questClaim(ws, msg.quest);
         break;
+      case 'seasonClaim':
+        if (typeof msg.id === 'string') lobby.seasonClaim(ws, msg.id);
+        break;
+      case 'seasonPassReq':
+        lobby.sendSeasonPass(ws);
+        break;
       case 'buyBeer':
         lobby.buyBeer(ws);
         break;

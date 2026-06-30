@@ -364,6 +364,24 @@ export interface LobbySnapshot {
   chatLog: ChatLine[];
 }
 
+// --- Season Pass ------------------------------------------------------------------
+const SEASON_CHALLENGES = [
+  { id: 'wins',     label: 'Win 3 matches',          emoji: '🏆', goal: 3,  reward: 300 },
+  { id: 'goals',    label: 'Score 10 goals',          emoji: '⚽', goal: 10, reward: 200 },
+  { id: 'streak',   label: 'Win 2 matches in a row',  emoji: '🔥', goal: 2,  reward: 250 },
+  { id: 'spectate', label: 'Watch 3 complete matches', emoji: '👀', goal: 3,  reward: 150 },
+  { id: 'chat',     label: 'Send 10 chat messages',   emoji: '💬', goal: 10, reward: 100 },
+] as const;
+type SeasonChallengeId = (typeof SEASON_CHALLENGES)[number]['id'];
+
+function getSeasonWeekId(): string {
+  const d = new Date();
+  const startOfYear = new Date(d.getFullYear(), 0, 1);
+  const week = Math.ceil(((d.getTime() - startOfYear.getTime()) / 86_400_000 + startOfYear.getDay() + 1) / 7);
+  return `${d.getFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+// ----------------------------------------------------------------------------------
+
 export class Lobby {
   private conns = new Map<WebSocket, Conn>();
   // Players seated on each side, in join order. Each has their own paddle in the Game.
@@ -504,6 +522,11 @@ export class Lobby {
   private stockHistTick = 0; // re-roll counter, to decide which series to sample each tick
   private liveMatchId: number | null = null; // bracket match currently on the court
   private tourneyInterMs = 0; // ms left on the "next match" interstitial between games
+  // Season pass: weekly challenge progress (resets each week).
+  private seasonWeekId = getSeasonWeekId();
+  private seasonProgress = new Map<string, Map<SeasonChallengeId, number>>(); // pid → id → count
+  private seasonClaimed = new Map<string, Set<string>>(); // pid → Set of 'weekId:challengeId'
+  private lastGameScore = { left: 0, right: 0 }; // for per-goal season tracking
 
   // --- Crash casino game ---
   private crashPhase: 'betting' | 'live' | 'ended' = 'betting';
@@ -648,6 +671,7 @@ export class Lobby {
     this.tell(ws, { type: 'fishLeaderboard', rows: this.fishBoard });
     if (this.chatLog.length) this.tell(ws, { type: 'chat', lines: this.chatLog });
     this.tell(ws, this.buildCrashState(ws));
+    this.sendSeasonPass(ws);
   }
 
   chat(ws: WebSocket, text: string) {
@@ -695,6 +719,7 @@ export class Lobby {
     for (const sock of this.conns.keys()) {
       if (sock.readyState === sock.OPEN) sock.send(data);
     }
+    if (conn.pid) this.trackSeasonProgress(conn.pid, 'chat');
   }
 
   reaction(ws: WebSocket, emoji: string) {
@@ -5222,6 +5247,17 @@ export class Lobby {
   /** Called every tick after the active sim ticks. Routes to the live mode's bookkeeping. */
   sync() {
     this.expireResume();
+    // Per-goal season pass tracking (duel only, while a match is live).
+    if (this.mode === 'duel' && this.game.status === 'playing') {
+      const s = this.game.score;
+      if (s.left > this.lastGameScore.left) {
+        for (const c of this.connsOn('left')) if (c.pid) this.trackSeasonProgress(c.pid, 'goals');
+      }
+      if (s.right > this.lastGameScore.right) {
+        for (const c of this.connsOn('right')) if (c.pid) this.trackSeasonProgress(c.pid, 'goals');
+      }
+    }
+    if (this.mode === 'duel') this.lastGameScore = { ...this.game.score };
     this.tickStocks(); // re-roll crypto prices when the 5-minute window elapses
     // "coins" power-up: pay the collecting side 100 coins (1 × COIN_SCALE), once.
     if (this.game.coinGrant) {
@@ -5402,6 +5438,19 @@ export class Lobby {
         }
         this.settleBets(winnerSide); // pay out spectator wagers on this match
         this.settleBounty(winners, losers); // pay any bounty on the loser to the winner
+        // Season pass: track wins + streak for winners, spectate for observers.
+        this.checkSeasonWeekReset();
+        for (const c of winners) {
+          if (!c.pid) continue;
+          this.trackSeasonProgress(c.pid, 'wins');
+          if (this.kingStreak >= 2) this.trackSeasonProgress(c.pid, 'streak');
+        }
+        const participantPids = new Set([...winners, ...losers].map((c) => c.pid).filter(Boolean));
+        for (const c of this.conns.values()) {
+          if (c.pid && !participantPids.has(c.pid)) this.trackSeasonProgress(c.pid, 'spectate');
+        }
+        // Stock market event: winner's coin pumps, loser's coin softens.
+        if (winners.length && losers.length) this.fireMatchMarketEvent(winners, losers);
       } else if (this.activeFatality && Date.now() - this.fatalityAt > FATALITY_DISPLAY_MS) {
         // Once the finishing move has played out, return to the lobby so the frozen
         // FATALITY screen clears and a fresh match can be started.
@@ -5616,6 +5665,92 @@ export class Lobby {
     }
     this.broadcastTypeDie();
     this.broadcastWorld();
+  }
+
+  // --- Season Pass ---
+
+  private checkSeasonWeekReset() {
+    const wid = getSeasonWeekId();
+    if (wid !== this.seasonWeekId) {
+      this.seasonWeekId = wid;
+      this.seasonProgress.clear();
+      this.seasonClaimed.clear();
+    }
+  }
+
+  private trackSeasonProgress(pid: string, id: SeasonChallengeId) {
+    this.checkSeasonWeekReset();
+    let pidMap = this.seasonProgress.get(pid);
+    if (!pidMap) { pidMap = new Map(); this.seasonProgress.set(pid, pidMap); }
+    const ch = SEASON_CHALLENGES.find((c) => c.id === id)!;
+    const prev = pidMap.get(id) ?? 0;
+    if (prev >= ch.goal) return; // already maxed — no need to track further
+    pidMap.set(id, prev + 1);
+    if (prev + 1 >= ch.goal) {
+      // Just completed — ping the player
+      for (const [ws, c] of this.conns) {
+        if (c.pid === pid) {
+          this.notify(ws, `${ch.emoji} Season challenge complete: ${ch.label}! Claim your reward in SEASON.`);
+          this.sendSeasonPass(ws);
+          break;
+        }
+      }
+    }
+  }
+
+  sendSeasonPass(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn) return;
+    this.checkSeasonWeekReset();
+    const pid = conn.pid ?? '';
+    const pidMap = this.seasonProgress.get(pid) ?? new Map<SeasonChallengeId, number>();
+    const claimedSet = this.seasonClaimed.get(pid) ?? new Set<string>();
+    const challenges = SEASON_CHALLENGES.map((ch) => ({
+      id: ch.id,
+      label: ch.label,
+      emoji: ch.emoji,
+      goal: ch.goal,
+      progress: Math.min(pidMap.get(ch.id) ?? 0, ch.goal),
+      reward: ch.reward,
+      claimed: claimedSet.has(`${this.seasonWeekId}:${ch.id}`),
+    }));
+    this.tell(ws, { type: 'seasonPass', weekId: this.seasonWeekId, challenges });
+  }
+
+  seasonClaim(ws: WebSocket, challengeId: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    this.checkSeasonWeekReset();
+    const ch = SEASON_CHALLENGES.find((c) => c.id === challengeId);
+    if (!ch) return;
+    let claimedSet = this.seasonClaimed.get(conn.pid);
+    if (!claimedSet) { claimedSet = new Set(); this.seasonClaimed.set(conn.pid, claimedSet); }
+    const claimKey = `${this.seasonWeekId}:${challengeId}`;
+    if (claimedSet.has(claimKey)) return;
+    const progress = this.seasonProgress.get(conn.pid)?.get(ch.id as SeasonChallengeId) ?? 0;
+    if (progress < ch.goal) return;
+    claimedSet.add(claimKey);
+    this.housePay(conn.pid, conn.nickname, ch.reward)
+      .then(() => { this.sendWallet(ws); this.sendSeasonPass(ws); })
+      .catch((e) => { claimedSet!.delete(claimKey); console.error('season claim failed:', e); });
+  }
+
+  /** On match end, nudge the winner's coin up and the loser's coin down, then broadcast. */
+  private fireMatchMarketEvent(winners: Conn[], losers: Conn[]) {
+    const w = winners[0];
+    const l = losers[0];
+    const hash = (s: string) => s.split('').reduce((a, c) => ((a * 31 + c.charCodeAt(0)) >>> 0), 0);
+    const ids = STOCKS.map((s) => s.id);
+    const winIdx = hash(w.pid || w.nickname) % ids.length;
+    const loseIdxRaw = hash(l.pid || l.nickname) % ids.length;
+    const loseIdx = loseIdxRaw === winIdx ? (loseIdxRaw + 1) % ids.length : loseIdxRaw;
+    const winCoin = ids[winIdx];
+    const loseCoin = ids[loseIdx];
+    this.pressure.set(winCoin, Math.min(1, (this.pressure.get(winCoin) ?? 0) + 0.45));
+    this.pressure.set(loseCoin, Math.max(-1, (this.pressure.get(loseCoin) ?? 0) - 0.3));
+    const winTicker = STOCKS.find((s) => s.id === winCoin)!.ticker;
+    const loseTicker = STOCKS.find((s) => s.id === loseCoin)!.ticker;
+    this.announce(`📈 $${winTicker} surges after ${w.nickname}'s win! $${loseTicker} softens on the news.`, true);
   }
 
   // --- internals ---

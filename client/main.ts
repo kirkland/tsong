@@ -13,7 +13,7 @@ import { initHilo } from './hilo';
 import { initMines } from './mines';
 import { initAds, revealAds } from './ads';
 import { initFlyover, startFlyovers, flySummoned } from './flyover';
-import { draw, drawLegendIcon, setBlasterAim, drawCosmeticPreview } from './render';
+import { draw, drawLegendIcon, setBlasterAim, drawCosmeticPreview, drawReplayOverlay } from './render';
 import {
   COURT,
   PADDLE,
@@ -56,6 +56,7 @@ import {
   HouseStateMsg,
   LOOT_TABLE,
   minBet,
+  SeasonChallenge,
 } from '../shared/types';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -287,6 +288,14 @@ function playScoreSound() {
 
 // Track previous state for detecting events client-side
 let prevScore = { left: 0, right: 0 };
+
+// Goal replay: circular buffer of recent frames, then slow-motion playback on score.
+const REPLAY_FRAMES = 45;   // ~1.5 seconds of gameplay to capture
+const REPLAY_SPEED = 0.45;  // playback speed fraction (< 1 = slow-mo)
+const replayBuf: StateMsg[] = [];
+let replayFrames: StateMsg[] | null = null;
+let replayIdx = 0;
+let replayNextAt = 0;
 
 function selectSwatch(color: string) {
   for (const btn of colorPicker.querySelectorAll<HTMLButtonElement>('.swatch')) {
@@ -674,7 +683,15 @@ const net = connect(
       // Detect paddle hit and score events for sound.
       if (msg.status === 'playing' && !msg.paused) {
         if (msg.hitSeq !== prevHitSeq) playHitSound();
-        if (msg.score.left > prevScore.left || msg.score.right > prevScore.right) playScoreSound();
+        if (msg.score.left > prevScore.left || msg.score.right > prevScore.right) {
+          playScoreSound();
+          // Trigger slow-mo goal replay using buffered frames
+          if (replayBuf.length >= 5) {
+            replayFrames = [...replayBuf, msg];
+            replayIdx = 0;
+            replayNextAt = performance.now();
+          }
+        }
       }
       prevHitSeq = msg.hitSeq;
       prevScore = { ...msg.score };
@@ -690,6 +707,9 @@ const net = connect(
         rightDisplayY = msg.paddles.right.y;
       }
       state = msg;
+      // Push to replay circular buffer
+      replayBuf.push(state);
+      if (replayBuf.length > REPLAY_FRAMES) replayBuf.shift();
       syncMyPaddleFromServer();
       syncViewMode(msg.viewMode ?? 'normal');
       updateUI();
@@ -877,6 +897,8 @@ const net = connect(
         if (document.pointerLockElement) document.exitPointerLock();
         void import('./world').then((m) => { if (!m.isWorldOpen()) worldBtn.click(); });
       }
+    } else if (msg.type === 'seasonPass') {
+      renderSeasonPass(msg.weekId, msg.challenges);
     }
   },
   () => {
@@ -3726,6 +3748,66 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !powerupInfoPanel.hidden) closePowerupInfo();
 });
 
+// --- Season Pass ---
+const seasonBtn = document.getElementById('seasonBtn') as HTMLButtonElement | null;
+const seasonPanel = document.getElementById('seasonPanel') as HTMLDivElement | null;
+
+function openSeasonPass() {
+  if (!seasonPanel || !seasonBtn) return;
+  seasonPanel.hidden = false;
+  seasonBtn.setAttribute('aria-expanded', 'true');
+  net.send({ type: 'seasonPassReq' }); // refresh data
+}
+function closeSeasonPass() {
+  if (!seasonPanel || !seasonBtn) return;
+  seasonPanel.hidden = true;
+  seasonBtn.setAttribute('aria-expanded', 'false');
+}
+if (seasonBtn) {
+  seasonBtn.addEventListener('click', () => seasonPanel?.hidden ? openSeasonPass() : closeSeasonPass());
+  document.addEventListener('click', (e) => {
+    if (!seasonPanel || seasonPanel.hidden) return;
+    const t = e.target as Node;
+    if (!seasonPanel.contains(t) && !seasonBtn.contains(t)) closeSeasonPass();
+  });
+}
+
+function renderSeasonPass(weekId: string, challenges: SeasonChallenge[]) {
+  if (!seasonPanel) return;
+  const body = seasonPanel.querySelector('.season-challenges');
+  if (!body) return;
+  // Week label: 'W26' → 'Week 26'
+  const weekLabel = weekId.replace(/^(\d{4})-W(\d+)$/, (_, y, w) => `Week ${parseInt(w)} · ${y}`);
+  const weekEl = seasonPanel.querySelector('.season-week');
+  if (weekEl) weekEl.textContent = weekLabel;
+  body.innerHTML = '';
+  for (const ch of challenges) {
+    const pct = Math.min(1, ch.progress / ch.goal) * 100;
+    const done = ch.progress >= ch.goal;
+    const div = document.createElement('div');
+    div.className = 'season-challenge' + (done && !ch.claimed ? ' season-claimable' : '') + (ch.claimed ? ' season-claimed' : '');
+    div.innerHTML = `
+      <div class="season-ch-top">
+        <span class="season-ch-emoji">${ch.emoji}</span>
+        <span class="season-ch-label">${ch.label}</span>
+        <span class="season-ch-reward">+${ch.reward.toLocaleString()}🪙</span>
+      </div>
+      <div class="season-ch-bar-wrap">
+        <div class="season-ch-bar" style="width:${pct.toFixed(1)}%"></div>
+      </div>
+      <div class="season-ch-foot">
+        <span class="season-ch-progress">${Math.min(ch.progress, ch.goal)} / ${ch.goal}</span>
+        ${done && !ch.claimed ? `<button class="season-claim-btn" data-id="${ch.id}">CLAIM</button>` : ''}
+        ${ch.claimed ? '<span class="season-ch-done">✓ Claimed</span>' : ''}
+      </div>
+    `;
+    body.appendChild(div);
+  }
+  for (const btn of body.querySelectorAll<HTMLButtonElement>('.season-claim-btn')) {
+    btn.addEventListener('click', () => net.send({ type: 'seasonClaim', id: btn.dataset.id! }));
+  }
+}
+
 // "Add block": spectators-only drop of a solid obstacle on the live duel court. Shown only
 // when you could actually use it (same rule as spawning a power-up, duel mode only).
 const blockControl = document.getElementById('blockControl') as HTMLDivElement;
@@ -5032,13 +5114,29 @@ function loop(t: number) {
         },
       };
     }
-    if (renderState.viewMode !== 'normal' && renderer3d && !renderState.fatality) {
+    // Goal replay: substitute a captured frame and advance at slow-mo speed.
+    let replayActive = false;
+    if (replayFrames) {
+      if (t >= replayNextAt && replayIdx < replayFrames.length) {
+        replayNextAt = t + 33 / REPLAY_SPEED;
+        replayIdx++;
+      }
+      if (replayIdx < replayFrames.length) {
+        renderState = replayFrames[replayIdx];
+        replayActive = true;
+      } else {
+        replayFrames = null;
+        replayIdx = 0;
+      }
+    }
+    if (renderState.viewMode !== 'normal' && renderer3d && !renderState.fatality && !replayActive) {
       const side = renderState.viewMode === 'firstperson'
         ? (myRole !== 'observer' ? (myRole as 'left' | 'right') : fpSide)
         : null;
       renderer3d.render(renderState, side, aim);
     } else {
       draw(ctx, renderState, myRole);
+      if (replayActive && replayFrames) drawReplayOverlay(ctx, replayIdx, replayFrames.length);
     }
   }
   requestAnimationFrame(loop);
