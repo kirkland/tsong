@@ -40,11 +40,11 @@ function proj(wx: number, wy: number, wz: number): [number, number, number] | nu
 }
 
 // ─── State machine ────────────────────────────────────────────────────────────
-type Phase = 'waiting' | 'lobby' | 'aiming' | 'charging' | 'rolling' | 'pinfalling' | 'scored' | 'over';
+type Phase = 'waiting' | 'lobby' | 'beer' | 'aiming' | 'charging' | 'rolling' | 'pinfalling' | 'scored' | 'over';
 interface RemotePlayer { id: string; name: string; color: string; ready: boolean; }
 interface FallingPin { idx: number; wx: number; wz: number; vy: number; rz: number; rSpeed: number; alpha: number; t: number; }
 interface Particle { x: number; y: number; vx: number; vy: number; c: string; life: number; sz: number; }
-interface Cel { kind: 'strike' | 'spare' | 'gutter' | 'turkey' | 'perfect'; t: number; dur: number; }
+interface Cel { kind: 'strike' | 'spare' | 'gutter' | 'turkey' | 'perfect' | 'strikality'; t: number; dur: number; }
 
 let bowlingOpen = false, rafId = 0;
 let net: BowlingNet, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, overlay: HTMLDivElement;
@@ -60,6 +60,14 @@ let isMyTurn = false;
 let ballInFrame = 1;   // 1 or 2 — shown prominently in HUD
 let pinsStandingBefore = 10; // count before this ball, for "X pins remaining" display
 
+// Drunk level: 0 = sober, increases each beer (max 6).
+// Affects aim wobble, canvas sway, and throw offset sent to server.
+let drunkLevel = 0;
+const DRUNK_MAX = 6;
+
+// Pending throw result (cached until the roll animation completes)
+let pendingResult: any = null;
+
 // Aim: −1 (left gutter) to +1 (right gutter), 0 = center
 let aimX = 0;  // follows mouse X in real-time
 
@@ -69,9 +77,9 @@ let chargeT = 0;           // seconds held
 const CHARGE_FULL = 1.2;   // seconds for max power
 let lockedAim = 0, lockedPower = 0;
 
-// Ball roll animation
+// Ball roll animation (shown for ALL players' throws, not just own)
 let rollT = 0;
-const ROLL_DUR = 0.75;     // seconds for ball to reach pins
+const ROLL_DUR = 0.9;      // seconds for ball to reach pins
 let rollBallX = VP_X, rollBallY = H - 40, rollBallR = 52;
 
 // Falling pin list
@@ -139,9 +147,9 @@ function bs(bg: string) {
 }
 function resetLocal() {
   pinState = new Array(10).fill(true);
-  fallingPins = []; particles = []; cel = null;
+  fallingPins = []; particles = []; cel = null; pendingResult = null;
   rollT = 0; charging = false; chargeT = 0; aimX = 0; shakeT = 0;
-  isMyTurn = false; ballInFrame = 1; pinsStandingBefore = 10;
+  isMyTurn = false; ballInFrame = 1; pinsStandingBefore = 10; drunkLevel = 0;
 }
 
 export function closeBowling() {
@@ -182,12 +190,37 @@ function applyState(m: any) {
     const lastFrBalls = (curFr[curFr.length - 1] ?? []).length;
     ballInFrame = lastFrBalls >= 1 ? 2 : 1;
     pinsStandingBefore = pinState.filter(Boolean).length;
-    phase = m.phase === 'over' ? 'over' : isMyTurn ? 'aiming' : 'scored';
+    if (m.phase === 'over') {
+      phase = 'over';
+    } else if (isMyTurn && ballInFrame === 1) {
+      phase = 'beer';
+    } else {
+      phase = isMyTurn ? 'aiming' : 'scored';
+    }
   } else { phase = 'lobby'; }
   if (m.ranked) { ranked = m.ranked; phase = 'over'; }
   syncReadyBtn();
 }
 function applyResult(m: any) {
+  // Cache the result; we'll apply pin-fall once the roll animation reaches the pins.
+  pendingResult = m;
+
+  // Start ball rolling animation for everyone (own throw or watching another player).
+  const throwOffset = typeof m.offset === 'number' ? m.offset : 0;
+  lockedAim = throwOffset;
+  rollBallX = VP_X + throwOffset * W * 0.22;
+  rollBallY = H - 40;
+  rollBallR = 52;
+  rollT = 0;
+  phase = 'rolling';
+  playRollSfx();
+}
+
+function applyPendingResult() {
+  const m = pendingResult;
+  pendingResult = null;
+  if (!m) return;
+
   pinState = m.pinState ?? pinState;
   scores = m.scores ?? scores; frames = m.frames ?? frames;
   const down: number[] = m.pinsDown ?? [];
@@ -210,7 +243,13 @@ function applyResult(m: any) {
   if (b1 === 10 && lf.length === 1) {
     let cs = 1;
     for (let fi = pf.length - 2; fi >= 0; fi--) { if (pf[fi][0] === 10) cs++; else break; }
-    trigCel(cs >= 3 ? 'turkey' : 'strike', cs >= 3 ? 3.5 : 2.8);
+    if (cs >= 3) {
+      trigCel('turkey', 3.5);
+    } else {
+      // 50% chance of STRIKALITY for any strike if it's our turn (or solo)
+      const doStrikality = m.playerId === selfId && Math.random() < 0.5;
+      trigCel(doStrikality ? 'strikality' : 'strike', doStrikality ? 4.5 : 2.8);
+    }
   } else if (lf.length === 2 && b1 + b2 === 10) {
     trigCel('spare', 2.0);
   } else if (down.length === 0) {
@@ -225,11 +264,16 @@ function applyNext(m: any) {
   scores = m.scores ?? scores; frames = m.frames ?? frames;
   currentPlayerId = m.playerId ?? m.currentPlayerId;
   isMyTurn = currentPlayerId === selfId;
-  fallingPins = []; charging = false; chargeT = 0;
+  fallingPins = []; charging = false; chargeT = 0; pendingResult = null;
   // bowlNextBall = still same player, 2nd ball; bowlNextTurn = new player's first ball
   ballInFrame = m.type === 'bowlNextBall' ? 2 : 1;
   pinsStandingBefore = pinState.filter(Boolean).length;
-  phase = isMyTurn ? 'aiming' : 'scored';
+  // On new turns (ball 1), offer a beer before aiming. Ball 2 goes straight to aiming.
+  if (isMyTurn && ballInFrame === 1) {
+    phase = 'beer';
+  } else {
+    phase = isMyTurn ? 'aiming' : 'scored';
+  }
 }
 function applyOver(m: any) {
   ranked = m.ranked ?? []; scores = m.scores ?? scores; frames = m.frames ?? frames;
@@ -240,6 +284,7 @@ function applyOver(m: any) {
 
 function trigCel(kind: Cel['kind'], dur: number) {
   cel = { kind, t: 0, dur };
+  if (kind === 'strikality') { playStrikeSfx(); return; } // no fireworks — visual is the effect
   if (kind !== 'gutter') spawnFW(kind === 'perfect' ? 250 : kind === 'turkey' ? 160 : kind === 'spare' ? 50 : 90);
   if (kind === 'strike' || kind === 'turkey' || kind === 'perfect') playStrikeSfx();
 }
@@ -305,11 +350,13 @@ function onKey(e: KeyboardEvent) {
 }
 function fireThrow() {
   if (!isMyTurn || phase === 'rolling') return;
-  lockedAim = aimX;
+  // Drunk players' aim drifts — add a scaled random offset
+  const drunkDrift = drunkLevel > 0 ? (Math.random() - 0.5) * drunkLevel * 0.35 : 0;
+  lockedAim = Math.max(-1, Math.min(1, aimX + drunkDrift));
   lockedPower = Math.min(1, chargeT / CHARGE_FULL);
   charging = false; chargeT = 0;
   phase = 'rolling'; rollT = 0;
-  rollBallX = VP_X + aimX * W * 0.22;
+  rollBallX = VP_X + lockedAim * W * 0.22;
   rollBallY = H - 40; rollBallR = 52;
   playRollSfx();
   net.bowlThrow(lockedAim, lockedPower);
@@ -324,12 +371,21 @@ function loop(ts: number) {
   render();
   rafId = requestAnimationFrame(loop);
 }
+function drunkWobble(): number {
+  if (drunkLevel === 0) return 0;
+  const w = lastTs / 1000;
+  return (Math.sin(w * 3.1) * 0.08 + Math.sin(w * 1.3 + 1) * 0.04) * drunkLevel;
+}
+
 function update(dt: number) {
   if (phase === 'charging') chargeT = Math.min(chargeT + dt, CHARGE_FULL + 0.1);
   if (phase === 'rolling') {
     rollT += dt / ROLL_DUR;
-    if (rollT >= 1) rollT = 1;
-    // Ball flies from foreground (rollBallY ≈ H-40, r=52) to VP (r≈4, y≈VP_Y)
+    if (rollT >= 1) {
+      rollT = 1;
+      if (pendingResult) applyPendingResult();
+    }
+    // Ball flies from foreground to VP
     const ease = 1 - Math.pow(1 - Math.min(rollT, 1), 2);
     rollBallX = lerp(VP_X + lockedAim * W * 0.22, VP_X + lockedAim * 3, ease);
     rollBallY = lerp(H - 40, VP_Y + 12, ease);
@@ -360,6 +416,15 @@ function render() {
     const s = shakeT * shakePow;
     ctx.translate((Math.random() - 0.5) * s, (Math.random() - 0.5) * s);
   }
+  // Drunk camera sway (like world.ts: sine-sum wobble scaled by drunk level)
+  if (drunkLevel > 0) {
+    const wob = drunkWobble();
+    const ca = Math.cos(wob), sa = Math.sin(wob);
+    ctx.transform(ca, sa, -sa, ca, W / 2 * (1 - ca) + H / 2 * sa, W / 2 * (-sa) + H / 2 * (1 - ca));
+    // Amber booze haze overlay
+    ctx.fillStyle = `rgba(180,100,0,${Math.min(0.38, drunkLevel * 0.055)})`;
+    ctx.fillRect(-W, -H, W * 3, H * 3);
+  }
   drawScene();
   ctx.restore();
   drawParticles();
@@ -368,6 +433,7 @@ function render() {
   if (phase === 'lobby')   drawLobby();
   if (phase === 'waiting') drawWaiting();
   if (phase === 'over')    drawGameOver();
+  if (phase === 'beer')    drawBeerPrompt();
 }
 
 // ─── Scene: FPS-style perspective lane ───────────────────────────────────────
@@ -725,8 +791,9 @@ function drawRollBall() {
 
 function drawForeground() {
   const power = phase === 'charging' ? Math.min(chargeT / CHARGE_FULL, 1) : 0;
-  // Aim wobble during charging
-  const wobble = phase === 'charging' ? Math.sin(chargeT * 22) * (1 - power) * 3 : 0;
+  // Aim wobble during charging + drunk sway
+  const drunkSway = drunkLevel > 0 ? drunkWobble() * W * 0.18 : 0;
+  const wobble = (phase === 'charging' ? Math.sin(chargeT * 22) * (1 - power) * 3 : 0) + drunkSway;
   const bx = VP_X + aimX * W * 0.22 + wobble;
   const by = H - 40 + (phase === 'charging' ? -power * 15 : 0);
   const r  = 52;
@@ -834,7 +901,7 @@ function drawParticles() {
 
 // ─── HUD ─────────────────────────────────────────────────────────────────────
 function drawHUD() {
-  if (phase === 'waiting' || phase === 'lobby') return;
+  if (phase === 'waiting' || phase === 'lobby' || phase === 'beer') return;
 
   // Turn indicator
   const cp = roomPlayers.find((p) => p.id === currentPlayerId);
@@ -1029,12 +1096,143 @@ function drawCelebration(c: Cel) {
     ctx.fillText('/ SPARE! /', W / 2, H / 2);
     ctx.restore();
 
+  } else if (c.kind === 'strikality') {
+    // JSAV-style: background creeps to black, pin #5 (head pin) stretches into
+    // a giant bowling-pin face that fills the screen.
+    const MORPH = 0.35;
+    const g = Math.max(0, c.t - MORPH);
+
+    ctx.fillStyle = `rgba(2,3,10,${Math.min(0.92, 0.22 + g * 0.55)})`;
+    ctx.fillRect(0, 0, W, H);
+
+    // Growing stretched pin in the center
+    const BASE_W = 90, BASE_H = 70;
+    const vGrow = 1 + g * 5 + g * g * 3;
+    const wGrow = 1 + g * 1.2 + g * g * 2;
+    const jiggle = 1 + Math.sin(c.t * 22) * 0.045 * Math.min(1, g * 2);
+    const pw2 = Math.min(BASE_W * wGrow * jiggle, W * 2.2);
+    const ph2 = Math.min(BASE_H * vGrow * jiggle, H * 2.4);
+    const pcx = W / 2 + Math.sin(c.t * 47) * Math.min(10, g * 5);
+    const pcy = H / 2 + Math.cos(c.t * 39) * Math.min(10, g * 5);
+
+    // Draw an enormous pin silhouette
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, c.t / MORPH);
+    const BL2 = pw2 * 0.5, NK2 = pw2 * 0.18, HD2 = pw2 * 0.33;
+    const path2 = new Path2D();
+    path2.moveTo(pcx - BL2 * 0.85, pcy + ph2 * 0.5);
+    path2.quadraticCurveTo(pcx - NK2 * 0.5, pcy + ph2 * 0.1, pcx - NK2, pcy - ph2 * 0.18);
+    path2.arc(pcx, pcy - ph2 * 0.35, HD2, Math.PI, 0, false);
+    path2.quadraticCurveTo(pcx + NK2 * 0.5, pcy + ph2 * 0.1, pcx + BL2 * 0.85, pcy + ph2 * 0.5);
+    path2.closePath();
+
+    const pg2 = ctx.createLinearGradient(pcx - BL2, 0, pcx + BL2, 0);
+    pg2.addColorStop(0, '#b0aa98'); pg2.addColorStop(0.4, '#ffffff'); pg2.addColorStop(1, '#a09888');
+    ctx.fillStyle = pg2; ctx.fill(path2);
+
+    // Red stripe
+    ctx.save(); ctx.clip(path2);
+    ctx.fillStyle = '#cc1a1a';
+    ctx.fillRect(pcx - BL2, pcy + ph2 * 0.02, BL2 * 2, ph2 * 0.1);
+    ctx.restore();
+
+    ctx.restore();
+
+    // "STRIKALITY" banner
+    if (c.t > MORPH) {
+      const a2 = Math.min(1, (c.t - MORPH) * 3.5);
+      const pulse2 = 1 + Math.sin(c.t * 9) * 0.025;
+      ctx.save();
+      ctx.globalAlpha = a2;
+      ctx.translate(W / 2, H / 2 + 30);
+      ctx.scale(pulse2, pulse2);
+      ctx.font = 'bold 68px ui-monospace, system-ui';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 6; ctx.strokeText('STRIKALITY', 0, 0);
+      ctx.fillStyle = '#ff2b2b';
+      ctx.shadowColor = '#ff2b2b'; ctx.shadowBlur = 30;
+      ctx.fillText('STRIKALITY', 0, 0);
+      ctx.restore();
+    }
+
   } else if (c.kind === 'gutter') {
     ctx.save(); ctx.globalAlpha = vis;
     ctx.font = 'bold 48px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillStyle = '#ff5533'; ctx.shadowColor = '#ff2200'; ctx.shadowBlur = 20;
     ctx.fillText('😬  GUTTER BALL', W / 2, H / 2 + 40);
     ctx.restore();
+  }
+}
+
+// ─── Beer prompt ─────────────────────────────────────────────────────────────
+// Shown before each of MY turns (ball 1 only). Click YES → drunk++, then aim.
+function drawBeerPrompt() {
+  ctx.fillStyle = 'rgba(0,0,0,0.72)';
+  ctx.fillRect(0, 0, W, H);
+
+  // Panel
+  const pw = 420, ph = 210, px = (W - pw) / 2, py = (H - ph) / 2 - 20;
+  ctx.fillStyle = '#1a0e08';
+  roundRect(ctx, px, py, pw, ph, 14);
+  ctx.fill();
+  ctx.strokeStyle = '#8b5e2a'; ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Beer emoji + question
+  ctx.font = 'bold 38px system-ui'; ctx.textAlign = 'center';
+  ctx.fillStyle = '#f5c842';
+  ctx.fillText('🍺', W / 2, py + 48);
+
+  ctx.font = 'bold 18px system-ui'; ctx.fillStyle = '#f0e0b0';
+  const q = drunkLevel === 0 ? 'Want a beer before you bowl?' : drunkLevel < 3 ? `Another one? (${drunkLevel}/6 beers deep)` : drunkLevel < 5 ? `Dude… you're at ${drunkLevel}/6. One more?` : `BRO. YOU ARE WASTED (${drunkLevel}/6). REALLY?`;
+  ctx.fillText(q, W / 2, py + 90);
+
+  // Drunk indicator
+  if (drunkLevel > 0) {
+    for (let i = 0; i < DRUNK_MAX; i++) {
+      ctx.fillStyle = i < drunkLevel ? '#f5c842' : 'rgba(255,255,255,0.15)';
+      ctx.beginPath(); ctx.arc(W / 2 - DRUNK_MAX * 14 + i * 28 + 14, py + 115, 8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Buttons
+  const btnY = py + ph - 52;
+  // YES button
+  ctx.fillStyle = '#3a1a05';
+  roundRect(ctx, W / 2 - 175, btnY, 155, 40, 8); ctx.fill();
+  ctx.strokeStyle = '#f5c842'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.font = 'bold 15px system-ui'; ctx.fillStyle = '#f5c842';
+  ctx.fillText(drunkLevel >= DRUNK_MAX ? '🤢 You\'re maxed out' : '🍺 Yes, gimme a beer', W / 2 - 97, btnY + 25);
+
+  // NO button
+  ctx.fillStyle = '#0e1a0e';
+  roundRect(ctx, W / 2 + 20, btnY, 155, 40, 8); ctx.fill();
+  ctx.strokeStyle = '#44ff88'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.fillStyle = '#44ff88';
+  ctx.fillText('🎳 Nah, let\'s bowl', W / 2 + 97, btnY + 25);
+
+  // Install click handler once (cleared when phase changes)
+  if (!(canvas as any)._beerHandler) {
+    const handler = (e: MouseEvent) => {
+      if (phase !== 'beer') { canvas.removeEventListener('click', handler); (canvas as any)._beerHandler = null; return; }
+      const r = canvas.getBoundingClientRect();
+      const mx = (e.clientX - r.left) / r.width * W;
+      const my = (e.clientY - r.top) / r.height * H;
+      const yesBtn = mx >= W / 2 - 175 && mx <= W / 2 - 20 && my >= btnY && my <= btnY + 40;
+      const noBtn  = mx >= W / 2 + 20  && mx <= W / 2 + 175 && my >= btnY && my <= btnY + 40;
+      if (yesBtn && drunkLevel < DRUNK_MAX) {
+        drunkLevel++;
+        playBeerSfx();
+      }
+      if (yesBtn || noBtn) {
+        canvas.removeEventListener('click', handler);
+        (canvas as any)._beerHandler = null;
+        phase = 'aiming';
+      }
+    };
+    (canvas as any)._beerHandler = handler;
+    canvas.addEventListener('click', handler);
   }
 }
 
@@ -1130,6 +1328,31 @@ function playPinCrash(count: number) {
     const src = ac.createBufferSource(); src.buffer = buf;
     const g = ac.createGain(); g.gain.value = 0.15 + count * 0.04;
     src.connect(g); g.connect(ac.destination); src.start();
+  } catch {}
+}
+function playBeerSfx() {
+  const ac = getAC(); if (!ac) return;
+  try {
+    // Satisfying "glug" — a pitched thump + quick reverb decay
+    const notes = [220, 196, 165];
+    notes.forEach((freq, i) => {
+      const osc = ac.createOscillator();
+      const g = ac.createGain();
+      osc.frequency.value = freq;
+      osc.type = 'sine';
+      const st = ac.currentTime + i * 0.08;
+      g.gain.setValueAtTime(0.22, st);
+      g.gain.exponentialRampToValueAtTime(0.001, st + 0.22);
+      osc.connect(g); g.connect(ac.destination);
+      osc.start(st); osc.stop(st + 0.25);
+    });
+    // Fizz noise
+    const buf = ac.createBuffer(1, ac.sampleRate * 0.5, ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.max(0, 0.06 - (i / ac.sampleRate) * 0.12);
+    const src = ac.createBufferSource(); src.buffer = buf;
+    const gf = ac.createGain(); gf.gain.value = 0.5;
+    src.connect(gf); gf.connect(ac.destination); src.start(ac.currentTime + 0.05);
   } catch {}
 }
 function playStrikeSfx() {
