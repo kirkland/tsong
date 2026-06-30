@@ -1,11 +1,7 @@
-// "Bolwoing Alley" — a PvP bowling minigame (2–4 players), self-contained
-// canvas overlay. Like fishing.ts / doom.ts it owns its rAF loop and tears
-// everything down on exit. Walk into the Bolwoing Alley building in the world
-// to start.
-//
-// Controls: AIM phase → drag slider left/right to pick your line.
-//           POWER phase → the power bar oscillates; click to lock in power.
-//           Ball rolls, pins crash, strikes get a flashy alley-screen animation.
+// "Bolwoing Alley" — first-person PvP bowling for 2–4 players.
+// Raycaster-style lane perspective (like doom.ts): scan-line floor casting,
+// perspective-projected 3D pins, foreground arm+ball. Hold click to charge
+// power, release to throw. Pure canvas overlay, self-contained rAF loop.
 
 export interface BowlingNet {
   bowlJoin(): void;
@@ -16,101 +12,82 @@ export interface BowlingNet {
   selfId(): string;
 }
 
-// PIN LAYOUT (0-indexed internally, 0 = headpin)
-//   Row 4 (back):  7  8  9  10  (indices 6,7,8,9)
-//   Row 3:         4  5  6       (3,4,5)
-//   Row 2:         2  3          (1,2)
-//   Row 1 (front): 1             (0)
-const PIN_XY: [number, number][] = [
+// ─── Perspective constants ────────────────────────────────────────────────────
+const W = 900, H = 560;
+const VP_X = W / 2;           // vanishing point X (lane center)
+const VP_Y = 215;             // horizon line Y
+const FOCAL = 320;            // perspective focal length
+const CAM_H = 0.72;           // camera height above floor (world units)
+const LANE_HW = 0.62;         // lane half-width (world units)
+const PIN_Z0 = 10.0;          // head-pin Z distance (world units)
+const PIN_VR = 0.28;          // visual pin radius (exaggerated for visibility)
+const PIN_VH = 0.65;          // visual pin height
+const LANE_LEN = 14.0;        // visible lane depth
+
+// 10 pin world positions (x = left/right, z = offset from head pin away from camera)
+const PIN_WXZ: [number, number][] = [
   [0, 0],
-  [-0.5, 1], [0.5, 1],
-  [-1, 2], [0, 2], [1, 2],
-  [-1.5, 3], [-0.5, 3], [0.5, 3], [1.5, 3],
+  [-0.30, 0.26], [0.30, 0.26],
+  [-0.60, 0.52], [0, 0.52], [0.60, 0.52],
+  [-0.90, 0.78], [-0.30, 0.78], [0.30, 0.78], [0.90, 0.78],
 ];
-// Pin numbers (1-based) for display
-const PIN_NUM = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+
+// Project a world point (wx, wy, wz) to screen. Returns null if behind camera.
+function proj(wx: number, wy: number, wz: number): [number, number, number] | null {
+  if (wz <= 0.01) return null;
+  const s = FOCAL / wz;
+  return [VP_X + wx * s, VP_Y + (CAM_H - wy) * s, s];
+}
 
 // ─── State machine ────────────────────────────────────────────────────────────
-type Phase = 'waiting' | 'lobby' | 'aiming' | 'powering' | 'rolling' | 'pinfalling' | 'scored' | 'over';
-
+type Phase = 'waiting' | 'lobby' | 'aiming' | 'charging' | 'rolling' | 'pinfalling' | 'scored' | 'over';
 interface RemotePlayer { id: string; name: string; color: string; ready: boolean; }
+interface FallingPin { idx: number; wx: number; wz: number; vy: number; rz: number; rSpeed: number; alpha: number; t: number; }
+interface Particle { x: number; y: number; vx: number; vy: number; c: string; life: number; sz: number; }
+interface Cel { kind: 'strike' | 'spare' | 'gutter' | 'turkey' | 'perfect'; t: number; dur: number; }
 
-let bowlingOpen = false;
-let rafId = 0;
-let net: BowlingNet;
-let canvas: HTMLCanvasElement;
-let ctx: CanvasRenderingContext2D;
-let overlay: HTMLDivElement;
-
-// Game state (populated by server messages)
+let bowlingOpen = false, rafId = 0;
+let net: BowlingNet, canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D, overlay: HTMLDivElement;
 let phase: Phase = 'waiting';
-let selfId = '';
-let selfName = '';
+let selfId = '', selfName = '';
 let roomPlayers: RemotePlayer[] = [];
 let currentPlayerId = '';
-let pinState: boolean[] = new Array(10).fill(true);     // true = standing
-let localPins: boolean[] = new Array(10).fill(true);    // for animation
+let pinState: boolean[] = new Array(10).fill(true);
 let scores: Record<string, number[]> = {};
 let frames: Record<string, number[][]> = {};
 let ranked: { id: string; name: string; color: string; score: number }[] = [];
 let isMyTurn = false;
+let ballInFrame = 1;   // 1 or 2 — shown prominently in HUD
+let pinsStandingBefore = 10; // count before this ball, for "X pins remaining" display
 
-// Aim / power state
-let aimOffset = 0;          // -1..1, dragged by mouse/touch
-let powerLevel = 0;         // 0..1, oscillating
-let powerDir = 1;
-let powerLocked = false;
-let lockedPower = 0;
-let isDraggingAim = false;
-let aimDragStartX = 0;
-let aimDragStartOffset = 0;
+// Aim: −1 (left gutter) to +1 (right gutter), 0 = center
+let aimX = 0;  // follows mouse X in real-time
 
-// Ball animation
-let ballX = 0, ballY = 0;
-let ballAnim = 0;           // 0..1 through roll animation
-const ROLL_DURATION = 0.9;  // seconds
+// Power charge
+let charging = false;
+let chargeT = 0;           // seconds held
+const CHARGE_FULL = 1.2;   // seconds for max power
+let lockedAim = 0, lockedPower = 0;
 
-// Pin fall animation
-interface FallingPin { idx: number; x: number; y: number; vx: number; vy: number; rot: number; rotV: number; alpha: number; }
+// Ball roll animation
+let rollT = 0;
+const ROLL_DUR = 0.75;     // seconds for ball to reach pins
+let rollBallX = VP_X, rollBallY = H - 40, rollBallR = 52;
+
+// Falling pin list
 let fallingPins: FallingPin[] = [];
-
-// Strike / spare celebration
-interface StrikeAnim {
-  kind: 'strike' | 'spare' | 'gutter' | 'turkey' | 'perfect';
-  t: number;     // elapsed seconds
-  duration: number;
-}
-let celebration: StrikeAnim | null = null;
-
-// Firework particles for strike animation
-interface Particle { x: number; y: number; vx: number; vy: number; color: string; life: number; size: number; }
+// Particles
 let particles: Particle[] = [];
-
-// Timing
+// Celebration
+let cel: Cel | null = null;
+// Screen shake
+let shakeT = 0, shakePow = 0;
+// Rumble sound
+let audioCtx: AudioContext | null = null;
+// Time
 let lastTs = 0;
 
-// ─── Canvas metrics ───────────────────────────────────────────────────────────
-const CW = 900, CH = 600;      // logical canvas size
-const LANE_X = CW / 2;         // center of the lane
-const LANE_W = 200;            // lane width in canvas px
-const LANE_TOP = 80;           // top of lane (pin deck)
-const LANE_BOT = CH - 80;      // bottom of lane (approach)
-const LANE_H = LANE_BOT - LANE_TOP;
-
-// Convert pin-coord (0-based, headpin at y=0 = near player) to canvas coords.
-// Pin rows run 0..3 top to bottom on the canvas (back row = top, head = lower).
-const PIN_SCALE = 36;          // pixels per pin unit
-function pinToCanvas(px: number, py: number): [number, number] {
-  // py=0 = headpin (near player = lower on screen), py=3 = back row (upper)
-  const cy = LANE_TOP + 50 + (3 - py) * PIN_SCALE;
-  const cx = LANE_X + px * PIN_SCALE;
-  return [cx, cy];
-}
-
-// Score card area
-const CARD_X = 20, CARD_W = CW - 40;
-
-// ─── Entry point ─────────────────────────────────────────────────────────────
+// ─── Entry / exit ─────────────────────────────────────────────────────────────
 export function openBowling(netAdapter: BowlingNet) {
   if (bowlingOpen) return;
   bowlingOpen = true;
@@ -118,73 +95,53 @@ export function openBowling(netAdapter: BowlingNet) {
   selfId = net.selfId();
   selfName = net.name();
 
-  // Build overlay
   overlay = document.createElement('div');
   overlay.id = 'bowlOverlay';
-  overlay.style.cssText = [
-    'position:fixed;inset:0;z-index:900;background:#060a1a;',
-    'display:flex;flex-direction:column;align-items:center;justify-content:center;',
-  ].join('');
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:900;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;';
 
   canvas = document.createElement('canvas');
-  canvas.width = CW;
-  canvas.height = CH;
-  canvas.style.cssText = 'width:min(100vw,900px);height:auto;cursor:crosshair;touch-action:none;';
+  canvas.width = W; canvas.height = H;
+  canvas.style.cssText = 'width:min(100vw,900px);height:auto;cursor:none;touch-action:none;';
   ctx = canvas.getContext('2d')!;
 
-  // Controls bar below canvas
-  const controls = document.createElement('div');
-  controls.style.cssText = 'display:flex;gap:12px;margin-top:10px;align-items:center;';
+  const bar = document.createElement('div');
+  bar.style.cssText = 'display:flex;gap:10px;margin-top:8px;';
   const readyBtn = document.createElement('button');
   readyBtn.id = 'bowlReadyBtn';
-  readyBtn.textContent = '✅ Ready Up';
-  readyBtn.style.cssText = btnStyle('#2a6e2a');
+  readyBtn.textContent = '✅ Ready';
+  readyBtn.style.cssText = bs('#1c5c1c');
   readyBtn.onclick = () => { net.bowlReady(); readyBtn.disabled = true; };
   const leaveBtn = document.createElement('button');
   leaveBtn.textContent = '🚪 Leave';
-  leaveBtn.style.cssText = btnStyle('#6e2a2a');
+  leaveBtn.style.cssText = bs('#5c1c1c');
   leaveBtn.onclick = () => closeBowling();
-  controls.append(readyBtn, leaveBtn);
-
-  overlay.append(canvas, controls);
+  bar.append(readyBtn, leaveBtn);
+  overlay.append(canvas, bar);
   document.body.appendChild(overlay);
 
-  // Input handlers
-  canvas.addEventListener('mousedown',  onPointerDown);
-  canvas.addEventListener('mousemove',  onPointerMove);
-  canvas.addEventListener('mouseup',    onPointerUp);
-  canvas.addEventListener('touchstart', onTouchStart, { passive: false });
-  canvas.addEventListener('touchmove',  onTouchMove,  { passive: false });
-  canvas.addEventListener('touchend',   onTouchEnd,   { passive: false });
+  canvas.addEventListener('mousemove',  onMove);
+  canvas.addEventListener('mousedown',  onDown);
+  canvas.addEventListener('mouseup',    onUp);
+  canvas.addEventListener('touchstart', onTS, { passive: false });
+  canvas.addEventListener('touchmove',  onTM, { passive: false });
+  canvas.addEventListener('touchend',   onTE, { passive: false });
   document.addEventListener('keydown', onKey);
 
-  // Join the room
-  resetLocalState();
+  resetLocal();
   phase = 'waiting';
   net.bowlJoin();
-
   lastTs = performance.now();
   rafId = requestAnimationFrame(loop);
 }
 
-function btnStyle(bg: string): string {
-  return `background:${bg};color:#fff;border:none;padding:8px 18px;border-radius:6px;` +
-         `font-size:14px;cursor:pointer;font-family:system-ui,sans-serif;`;
+function bs(bg: string) {
+  return `background:${bg};color:#fff;border:none;padding:8px 20px;border-radius:6px;font:14px system-ui;cursor:pointer;`;
 }
-
-function resetLocalState() {
+function resetLocal() {
   pinState = new Array(10).fill(true);
-  localPins = new Array(10).fill(true);
-  fallingPins = [];
-  celebration = null;
-  particles = [];
-  ballAnim = 0;
-  aimOffset = 0;
-  powerLevel = 0;
-  powerDir = 1;
-  powerLocked = false;
-  lockedPower = 0;
-  isMyTurn = false;
+  fallingPins = []; particles = []; cel = null;
+  rollT = 0; charging = false; chargeT = 0; aimX = 0; shakeT = 0;
+  isMyTurn = false; ballInFrame = 1; pinsStandingBefore = 10;
 }
 
 export function closeBowling() {
@@ -192,241 +149,173 @@ export function closeBowling() {
   bowlingOpen = false;
   net.bowlLeave();
   cancelAnimationFrame(rafId);
-  canvas.removeEventListener('mousedown',  onPointerDown);
-  canvas.removeEventListener('mousemove',  onPointerMove);
-  canvas.removeEventListener('mouseup',    onPointerUp);
-  canvas.removeEventListener('touchstart', onTouchStart);
-  canvas.removeEventListener('touchmove',  onTouchMove);
-  canvas.removeEventListener('touchend',   onTouchEnd);
+  canvas.removeEventListener('mousemove', onMove);
+  canvas.removeEventListener('mousedown', onDown);
+  canvas.removeEventListener('mouseup',   onUp);
+  canvas.removeEventListener('touchstart', onTS);
+  canvas.removeEventListener('touchmove',  onTM);
+  canvas.removeEventListener('touchend',   onTE);
   document.removeEventListener('keydown', onKey);
   overlay?.remove();
 }
+export function isBowlingOpen() { return bowlingOpen; }
 
-export function isBowlingOpen(): boolean { return bowlingOpen; }
-
-// ─── Server message handler ───────────────────────────────────────────────────
+// ─── Server messages ──────────────────────────────────────────────────────────
 export function onBowlMsg(msg: any) {
   if (!bowlingOpen) return;
   switch (msg.type) {
-    case 'bowlState': applyState(msg); break;
-    case 'bowlStart': applyState(msg); break;
-    case 'bowlThrowResult': applyThrowResult(msg); break;
-    case 'bowlNextBall':   applyNextBall(msg); break;
-    case 'bowlNextTurn':   applyNextTurn(msg); break;
-    case 'bowlGameOver':   applyGameOver(msg); break;
+    case 'bowlState': case 'bowlStart': applyState(msg); break;
+    case 'bowlThrowResult': applyResult(msg); break;
+    case 'bowlNextBall': case 'bowlNextTurn': applyNext(msg); break;
+    case 'bowlGameOver': applyOver(msg); break;
   }
 }
-
-function applyState(msg: any) {
-  roomPlayers = msg.players ?? [];
-  if (msg.phase === 'playing' || msg.phase === 'over') {
-    scores = msg.scores ?? {};
-    frames = msg.frames ?? {};
-    currentPlayerId = msg.currentPlayerId ?? '';
-    pinState = msg.pinState ?? new Array(10).fill(true);
-    localPins = [...pinState];
+function applyState(m: any) {
+  roomPlayers = m.players ?? [];
+  scores = m.scores ?? {}; frames = m.frames ?? {};
+  if (m.phase === 'playing' || m.phase === 'over') {
+    currentPlayerId = m.currentPlayerId ?? '';
+    pinState = m.pinState ?? new Array(10).fill(true);
     isMyTurn = currentPlayerId === selfId;
-    phase = msg.phase === 'over' ? 'over' : (isMyTurn ? 'aiming' : 'rolling');
-  } else {
-    phase = 'lobby';
-  }
-  if (msg.ranked) { ranked = msg.ranked; phase = 'over'; }
-  updateReadyBtn();
+    // Determine ball in frame from frame data
+    const curFr = (frames[currentPlayerId] ?? []);
+    const lastFrBalls = (curFr[curFr.length - 1] ?? []).length;
+    ballInFrame = lastFrBalls >= 1 ? 2 : 1;
+    pinsStandingBefore = pinState.filter(Boolean).length;
+    phase = m.phase === 'over' ? 'over' : isMyTurn ? 'aiming' : 'scored';
+  } else { phase = 'lobby'; }
+  if (m.ranked) { ranked = m.ranked; phase = 'over'; }
+  syncReadyBtn();
 }
+function applyResult(m: any) {
+  pinState = m.pinState ?? pinState;
+  scores = m.scores ?? scores; frames = m.frames ?? frames;
+  const down: number[] = m.pinsDown ?? [];
 
-function applyThrowResult(msg: any) {
-  pinState = msg.pinState ?? pinState;
-  scores = msg.scores ?? scores;
-  frames = msg.frames ?? frames;
-  const pinsDown: number[] = msg.pinsDown ?? [];
-
-  // Start pin fall animation
-  for (const i of pinsDown) {
-    const [cx, cy] = pinToCanvas(...PIN_XY[i]);
-    fallingPins.push({
-      idx: i, x: cx, y: cy,
-      vx: (Math.random() - 0.5) * 5,
-      vy: -(2 + Math.random() * 3),
-      rot: 0, rotV: (Math.random() - 0.5) * 0.4,
-      alpha: 1,
-    });
+  // Spawn falling pins
+  for (const i of down) {
+    const [wx, wz] = PIN_WXZ[i];
+    fallingPins.push({ idx: i, wx, wz: PIN_Z0 + wz, vy: 1.5 + Math.random(), rz: 0, rSpeed: (Math.random() - 0.5) * 5, alpha: 1, t: 0 });
   }
 
-  // Check for strike / spare / gutter in this turn's frame
-  const myFrames = frames[msg.playerId] ?? [];
-  const lastFrame = myFrames[myFrames.length - 1] ?? [];
-  const ball1 = lastFrame[0] ?? 0;
-  const ball2 = lastFrame[1] ?? 0;
+  // Screen shake proportional to pins knocked
+  shakeT = 0.35 + down.length * 0.04;
+  shakePow = Math.min(down.length * 2 + 3, 18);
+  if (down.length > 0) playPinCrash(down.length);
 
-  if (ball1 === 10 && lastFrame.length === 1) {
-    // Check turkey (3 in a row)
-    let consecutiveStrikes = 1;
-    for (let fi = myFrames.length - 2; fi >= 0; fi--) {
-      if (myFrames[fi][0] === 10) consecutiveStrikes++;
-      else break;
-    }
-    if (consecutiveStrikes >= 3) {
-      triggerCelebration('turkey', 3.5);
-    } else {
-      triggerCelebration('strike', 2.8);
-    }
-  } else if (lastFrame.length === 2 && ball1 + ball2 === 10) {
-    triggerCelebration('spare', 2.0);
-  } else if (pinsDown.length === 0) {
-    triggerCelebration('gutter', 1.5);
+  // Celebration
+  const pf = frames[m.playerId] ?? [];
+  const lf = pf[pf.length - 1] ?? [];
+  const b1 = lf[0] ?? 0, b2 = lf[1] ?? 0;
+  if (b1 === 10 && lf.length === 1) {
+    let cs = 1;
+    for (let fi = pf.length - 2; fi >= 0; fi--) { if (pf[fi][0] === 10) cs++; else break; }
+    trigCel(cs >= 3 ? 'turkey' : 'strike', cs >= 3 ? 3.5 : 2.8);
+  } else if (lf.length === 2 && b1 + b2 === 10) {
+    trigCel('spare', 2.0);
+  } else if (down.length === 0) {
+    trigCel('gutter', 1.4);
   }
-
+  pinsStandingBefore = pinState.filter(Boolean).length;
   phase = 'pinfalling';
-  setTimeout(() => { phase = 'scored'; }, 1000);
+  setTimeout(() => { if (bowlingOpen) phase = 'scored'; }, 1200);
 }
-
-function applyNextBall(msg: any) {
-  pinState = msg.pinState ?? pinState;
-  localPins = [...pinState];
-  scores = msg.scores ?? scores;
-  frames = msg.frames ?? frames;
-  currentPlayerId = msg.playerId;
+function applyNext(m: any) {
+  pinState = m.pinState ?? new Array(10).fill(true);
+  scores = m.scores ?? scores; frames = m.frames ?? frames;
+  currentPlayerId = m.playerId ?? m.currentPlayerId;
   isMyTurn = currentPlayerId === selfId;
-  fallingPins = [];
-  celebration = null;
-  phase = isMyTurn ? 'aiming' : 'rolling';
-  aimOffset = 0;
-  powerLocked = false;
+  fallingPins = []; charging = false; chargeT = 0;
+  // bowlNextBall = still same player, 2nd ball; bowlNextTurn = new player's first ball
+  ballInFrame = m.type === 'bowlNextBall' ? 2 : 1;
+  pinsStandingBefore = pinState.filter(Boolean).length;
+  phase = isMyTurn ? 'aiming' : 'scored';
 }
-
-function applyNextTurn(msg: any) {
-  pinState = msg.pinState ?? new Array(10).fill(true);
-  localPins = [...pinState];
-  scores = msg.scores ?? scores;
-  frames = msg.frames ?? frames;
-  currentPlayerId = msg.playerId;
-  isMyTurn = currentPlayerId === selfId;
-  fallingPins = [];
-  celebration = null;
-  phase = isMyTurn ? 'aiming' : 'rolling';
-  aimOffset = 0;
-  powerLocked = false;
-}
-
-function applyGameOver(msg: any) {
-  ranked = msg.ranked ?? [];
-  scores = msg.scores ?? scores;
-  frames = msg.frames ?? frames;
+function applyOver(m: any) {
+  ranked = m.ranked ?? []; scores = m.scores ?? scores; frames = m.frames ?? frames;
   phase = 'over';
-  // Perfect game?
-  const winner = ranked[0];
-  if (winner && (scores[winner.id]?.pop() ?? 0) >= 300) {
-    triggerCelebration('perfect', 6);
-  }
+  const w = ranked[0];
+  if (w && (scores[w.id]?.pop() ?? 0) >= 300) trigCel('perfect', 7);
 }
 
-function triggerCelebration(kind: StrikeAnim['kind'], duration: number) {
-  celebration = { kind, t: 0, duration };
-  particles = [];
-  if (kind === 'strike' || kind === 'turkey' || kind === 'perfect') {
-    spawnFireworks(kind === 'perfect' ? 200 : kind === 'turkey' ? 130 : 80);
-  }
+function trigCel(kind: Cel['kind'], dur: number) {
+  cel = { kind, t: 0, dur };
+  if (kind !== 'gutter') spawnFW(kind === 'perfect' ? 250 : kind === 'turkey' ? 160 : kind === 'spare' ? 50 : 90);
+  if (kind === 'strike' || kind === 'turkey' || kind === 'perfect') playStrikeSfx();
 }
-
-function spawnFireworks(count: number) {
-  const COLORS = ['#ff2244','#ffcc00','#44ff88','#44aaff','#ff44ff','#ffffff','#ff6600'];
-  for (let i = 0; i < count; i++) {
-    const cx = LANE_X + (Math.random() - 0.5) * 400;
-    const cy = LANE_TOP + Math.random() * (LANE_BOT - LANE_TOP) * 0.6;
-    for (let j = 0; j < 8; j++) {
-      const angle = (j / 8) * Math.PI * 2 + Math.random() * 0.5;
-      const speed = 1.5 + Math.random() * 3;
-      particles.push({
-        x: cx, y: cy,
-        vx: Math.cos(angle) * speed,
-        vy: Math.sin(angle) * speed - 2,
-        color: COLORS[Math.floor(Math.random() * COLORS.length)],
-        life: 0.6 + Math.random() * 0.8,
-        size: 2 + Math.random() * 3,
-      });
+function spawnFW(n: number) {
+  const COLS = ['#ff2244','#ffcc00','#44ff88','#44ccff','#ff44ff','#fff','#ff8800'];
+  for (let i = 0; i < n; i++) {
+    const cx = W * 0.2 + Math.random() * W * 0.6;
+    const cy = 30 + Math.random() * (VP_Y + 60);
+    for (let j = 0; j < 9; j++) {
+      const a = (j / 9) * Math.PI * 2 + Math.random() * 0.4;
+      const sp = 1.5 + Math.random() * 3;
+      particles.push({ x: cx, y: cy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 1.5,
+        c: COLS[Math.floor(Math.random() * COLS.length)], life: 0.7 + Math.random() * 0.9, sz: 2.5 + Math.random() * 3 });
     }
   }
 }
-
-function updateReadyBtn() {
-  const btn = document.getElementById('bowlReadyBtn') as HTMLButtonElement | null;
-  if (!btn) return;
-  btn.hidden = phase !== 'lobby';
+function syncReadyBtn() {
+  const b = document.getElementById('bowlReadyBtn') as HTMLButtonElement | null;
+  if (!b) return;
+  b.hidden = phase !== 'lobby';
   const me = roomPlayers.find((p) => p.id === selfId);
-  btn.disabled = !!me?.ready;
-  btn.textContent = me?.ready ? '✅ Waiting…' : '✅ Ready Up';
+  b.disabled = !!me?.ready;
+  b.textContent = me?.ready ? '⏳ Waiting…' : '✅ Ready';
 }
 
 // ─── Input ────────────────────────────────────────────────────────────────────
-function canvasX(e: { clientX: number }): number {
-  const rect = canvas.getBoundingClientRect();
-  return (e.clientX - rect.left) / rect.width * CW;
+function cx(e: { clientX: number }) {
+  const r = canvas.getBoundingClientRect();
+  return (e.clientX - r.left) / r.width * W;
 }
-
-function onPointerDown(e: MouseEvent) {
-  if (phase === 'aiming' && isMyTurn) {
-    isDraggingAim = true;
-    aimDragStartX = canvasX(e);
-    aimDragStartOffset = aimOffset;
-    return;
-  }
-  if (phase === 'powering' && isMyTurn && !powerLocked) {
-    lockPower();
-    return;
-  }
+function setAimFromX(screenX: number) {
+  // map screen X → aim offset −1..1
+  // Lane edges at approach: VP_X ± LANE_HW * FOCAL / 0.3 (at z=0.3)
+  // Use screen center ± half-width for intuitive feel
+  aimX = Math.max(-1, Math.min(1, (screenX - W / 2) / (W * 0.28)));
 }
-function onPointerMove(e: MouseEvent) {
-  if (isDraggingAim && phase === 'aiming') {
-    const dx = canvasX(e) - aimDragStartX;
-    aimOffset = Math.max(-1, Math.min(1, aimDragStartOffset + dx / (LANE_W * 0.42)));
-  }
+function onMove(e: MouseEvent) { setAimFromX(cx(e)); }
+function onDown(e: MouseEvent) {
+  if (!isMyTurn) return;
+  if (phase === 'aiming') { charging = true; chargeT = 0; phase = 'charging'; }
+  else if (phase === 'charging') { fireThrow(); }
 }
-function onPointerUp(e: MouseEvent) {
-  if (isDraggingAim && phase === 'aiming') {
-    isDraggingAim = false;
-    // Tap without drag → confirm aim
-    if (Math.abs(canvasX(e) - aimDragStartX) < 6) {
-      phase = 'powering';
-      powerLevel = 0; powerDir = 1;
-    }
-  }
+function onUp(_e: MouseEvent) {
+  if (charging && (phase === 'charging' || phase === 'aiming')) fireThrow();
 }
-
-function onTouchStart(e: TouchEvent) {
+function onTS(e: TouchEvent) { e.preventDefault(); const t = e.touches[0]; if (t) { setAimFromX(cx({ clientX: t.clientX })); } }
+function onTM(e: TouchEvent) { e.preventDefault(); const t = e.touches[0]; if (t) setAimFromX(cx({ clientX: t.clientX })); }
+function onTE(e: TouchEvent) {
   e.preventDefault();
-  const t = e.touches[0]; if (!t) return;
-  onPointerDown({ clientX: t.clientX } as MouseEvent);
+  if (!isMyTurn) return;
+  if (phase === 'aiming' || phase === 'charging') {
+    if (!charging) { charging = true; chargeT = 0; phase = 'charging'; }
+    else fireThrow();
+  }
 }
-function onTouchMove(e: TouchEvent) {
-  e.preventDefault();
-  const t = e.touches[0]; if (!t) return;
-  onPointerMove({ clientX: t.clientX } as MouseEvent);
-}
-function onTouchEnd(e: TouchEvent) {
-  e.preventDefault();
-  const t = e.changedTouches[0]; if (!t) return;
-  onPointerUp({ clientX: t.clientX } as MouseEvent);
-}
-
 function onKey(e: KeyboardEvent) {
   if (e.key === 'Escape') { closeBowling(); return; }
   if (e.key === ' ' || e.key === 'Enter') {
-    if (phase === 'aiming' && isMyTurn) { phase = 'powering'; powerLevel = 0; powerDir = 1; }
-    else if (phase === 'powering' && isMyTurn && !powerLocked) lockPower();
+    if (!isMyTurn) return;
+    if (phase === 'aiming') { charging = true; chargeT = 0; phase = 'charging'; }
+    else if (phase === 'charging') fireThrow();
   }
 }
-
-function lockPower() {
-  powerLocked = true;
-  lockedPower = powerLevel;
-  phase = 'rolling';
-  ballAnim = 0;
-  ballX = LANE_X + aimOffset * LANE_W * 0.42;
-  ballY = LANE_BOT - 20;
-  net.bowlThrow(aimOffset, lockedPower);
+function fireThrow() {
+  if (!isMyTurn || phase === 'rolling') return;
+  lockedAim = aimX;
+  lockedPower = Math.min(1, chargeT / CHARGE_FULL);
+  charging = false; chargeT = 0;
+  phase = 'rolling'; rollT = 0;
+  rollBallX = VP_X + aimX * W * 0.22;
+  rollBallY = H - 40; rollBallR = 52;
+  playRollSfx();
+  net.bowlThrow(lockedAim, lockedPower);
 }
 
-// ─── Main loop ────────────────────────────────────────────────────────────────
+// ─── Game loop ────────────────────────────────────────────────────────────────
 function loop(ts: number) {
   if (!bowlingOpen) return;
   const dt = Math.min((ts - lastTs) / 1000, 0.1);
@@ -435,750 +324,840 @@ function loop(ts: number) {
   render();
   rafId = requestAnimationFrame(loop);
 }
-
 function update(dt: number) {
-  // Power bar oscillation
-  if (phase === 'powering' && !powerLocked) {
-    powerLevel += powerDir * dt * 1.4;
-    if (powerLevel >= 1) { powerLevel = 1; powerDir = -1; }
-    if (powerLevel <= 0) { powerLevel = 0; powerDir = 1; }
-  }
-
-  // Ball roll animation
+  if (phase === 'charging') chargeT = Math.min(chargeT + dt, CHARGE_FULL + 0.1);
   if (phase === 'rolling') {
-    ballAnim = Math.min(1, ballAnim + dt / ROLL_DURATION);
-    const [tx, ty] = [LANE_X + aimOffset * LANE_W * 0.05, LANE_TOP + 60];
-    ballX = LANE_X + aimOffset * LANE_W * 0.42 + (tx - (LANE_X + aimOffset * LANE_W * 0.42)) * ballAnim;
-    ballY = (LANE_BOT - 20) + (ty - (LANE_BOT - 20)) * ballAnim;
+    rollT += dt / ROLL_DUR;
+    if (rollT >= 1) rollT = 1;
+    // Ball flies from foreground (rollBallY ≈ H-40, r=52) to VP (r≈4, y≈VP_Y)
+    const ease = 1 - Math.pow(1 - Math.min(rollT, 1), 2);
+    rollBallX = lerp(VP_X + lockedAim * W * 0.22, VP_X + lockedAim * 3, ease);
+    rollBallY = lerp(H - 40, VP_Y + 12, ease);
+    rollBallR  = lerp(52, 4, ease);
   }
-
-  // Falling pin physics
   for (const fp of fallingPins) {
-    fp.x  += fp.vx * dt * 60;
-    fp.y  += fp.vy * dt * 60;
-    fp.vy += 0.18 * dt * 60; // gravity
-    fp.rot += fp.rotV * dt * 60;
-    fp.alpha -= dt * 0.9;
+    fp.t += dt;
+    fp.wz += fp.vy * dt * 0.5;
+    fp.vy += 3 * dt;
+    fp.rz += fp.rSpeed * dt;
+    fp.alpha = Math.max(0, 1 - fp.t * 1.1);
   }
   fallingPins = fallingPins.filter((fp) => fp.alpha > 0);
-
-  // Celebration timer
-  if (celebration) {
-    celebration.t += dt;
-    if (celebration.t >= celebration.duration) celebration = null;
-  }
-
-  // Particles
   for (const p of particles) {
-    p.x += p.vx * dt * 60;
-    p.y += p.vy * dt * 60;
-    p.vy += 0.06 * dt * 60;
-    p.life -= dt;
+    p.x += p.vx * dt * 55; p.y += p.vy * dt * 55;
+    p.vy += 0.06 * dt * 55; p.life -= dt;
   }
   particles = particles.filter((p) => p.life > 0);
+  if (cel) { cel.t += dt; if (cel.t >= cel.dur) cel = null; }
+  if (shakeT > 0) shakeT = Math.max(0, shakeT - dt);
 }
 
 // ─── Rendering ───────────────────────────────────────────────────────────────
 function render() {
-  ctx.clearRect(0, 0, CW, CH);
-
-  drawBackground();
-  drawLane();
-  drawPins();
-  if (phase === 'rolling' || phase === 'pinfalling') drawBall();
-  if (phase === 'aiming' && isMyTurn) drawAimGuide();
-  if (phase === 'powering' && isMyTurn) drawPowerBar();
-  drawFallingPins();
-  drawParticles();
-  drawScoreCard();
-  drawCelebration();
-  if (phase === 'lobby') drawLobby();
-  if (phase === 'over')  drawGameOver();
-  if (phase === 'waiting') drawWaiting();
-  if (!isMyTurn && phase !== 'lobby' && phase !== 'over' && phase !== 'waiting') drawWatchHUD();
-}
-
-// --- Background: dark alley aesthetic ---
-function drawBackground() {
-  // Dark carpet floor
-  ctx.fillStyle = '#0a0814';
-  ctx.fillRect(0, 0, CW, CH);
-
-  // Side alley panels (wood paneling look)
-  for (let side = 0; side < 2; side++) {
-    const lx = side === 0 ? 0 : LANE_X + LANE_W / 2 + 10;
-    const lw = side === 0 ? LANE_X - LANE_W / 2 - 10 : CW - (LANE_X + LANE_W / 2 + 10);
-    ctx.fillStyle = '#1a1030';
-    ctx.fillRect(lx, 0, lw, CH);
-    // Neon strip at lane edge
-    ctx.fillStyle = side === 0 ? 'rgba(120,60,220,0.15)' : 'rgba(220,100,30,0.15)';
-    ctx.fillRect(side === 0 ? lx + lw - 4 : lx, 0, 4, CH);
-  }
-
-  // Ceiling lights above lane
-  for (let i = 0; i < 6; i++) {
-    const lx = LANE_X;
-    const ly = 30 + i * (CH / 5.5);
-    const grd = ctx.createRadialGradient(lx, ly, 2, lx, ly, 60);
-    grd.addColorStop(0, 'rgba(255,240,200,0.22)');
-    grd.addColorStop(1, 'rgba(255,240,200,0)');
-    ctx.fillStyle = grd;
-    ctx.fillRect(lx - 60, ly - 60, 120, 120);
-  }
-
-  // "BOLWOING ALLEY" neon sign at top
   ctx.save();
-  ctx.font = 'bold 26px system-ui';
-  ctx.textAlign = 'center';
-  const grdText = ctx.createLinearGradient(CW / 2 - 200, 0, CW / 2 + 200, 0);
-  grdText.addColorStop(0, '#ff44cc');
-  grdText.addColorStop(0.5, '#ffee44');
-  grdText.addColorStop(1, '#44ddff');
-  ctx.fillStyle = grdText;
-  ctx.shadowColor = '#ff44cc';
-  ctx.shadowBlur = 18;
-  ctx.fillText('🎳 BOLWOING ALLEY 🎳', CW / 2, 26);
+  // Screen shake
+  if (shakeT > 0) {
+    const s = shakeT * shakePow;
+    ctx.translate((Math.random() - 0.5) * s, (Math.random() - 0.5) * s);
+  }
+  drawScene();
   ctx.restore();
+  drawParticles();
+  drawHUD();
+  if (cel) drawCelebration(cel);
+  if (phase === 'lobby')   drawLobby();
+  if (phase === 'waiting') drawWaiting();
+  if (phase === 'over')    drawGameOver();
 }
 
-// --- Lane: polished hardwood ---
-function drawLane() {
-  // Gutter gutters
-  const gg = 20;
-  ctx.fillStyle = '#3a2800';
-  ctx.fillRect(LANE_X - LANE_W / 2 - gg, LANE_TOP - 10, gg, LANE_H + 20);
-  ctx.fillRect(LANE_X + LANE_W / 2,      LANE_TOP - 10, gg, LANE_H + 20);
+// ─── Scene: FPS-style perspective lane ───────────────────────────────────────
+function drawScene() {
+  // --- Ceiling ---
+  ctx.fillStyle = '#0b0812';
+  ctx.fillRect(0, 0, W, VP_Y);
 
-  // Lane surface — vertical wood planks
-  for (let plank = 0; plank < 6; plank++) {
-    const px = LANE_X - LANE_W / 2 + plank * (LANE_W / 6);
-    const shade = 0x5a + plank * 0x06;
-    const col = `rgb(${shade + 40},${shade + 20},${Math.floor(shade * 0.4)})`;
-    ctx.fillStyle = col;
-    ctx.fillRect(px, LANE_TOP - 10, LANE_W / 6, LANE_H + 20);
-  }
-  // Grain lines
-  ctx.strokeStyle = 'rgba(0,0,0,0.18)';
-  ctx.lineWidth = 0.8;
-  for (let g = 0; g < 7; g++) {
-    const gx = LANE_X - LANE_W / 2 + g * (LANE_W / 6);
-    ctx.beginPath(); ctx.moveTo(gx, LANE_TOP - 10); ctx.lineTo(gx, LANE_BOT + 10); ctx.stroke();
+  // Overhead lights: rows of glowing circles converging
+  for (let dz = 1.5; dz < LANE_LEN; dz += 2.5) {
+    const p = proj(0, CAM_H + 2.4, dz);
+    if (!p) continue;
+    const [lx, ly, sc] = p;
+    const lr = Math.max(3, 24 * (sc / FOCAL));
+    const grd = ctx.createRadialGradient(lx, ly, 0, lx, ly, lr * 3);
+    grd.addColorStop(0, 'rgba(255,240,180,0.5)');
+    grd.addColorStop(0.3, 'rgba(255,230,120,0.15)');
+    grd.addColorStop(1, 'rgba(255,200,80,0)');
+    ctx.beginPath(); ctx.arc(lx, ly, lr * 3, 0, Math.PI * 2);
+    ctx.fillStyle = grd; ctx.fill();
+    ctx.beginPath(); ctx.arc(lx, ly, lr, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(255,245,200,0.85)'; ctx.fill();
   }
 
-  // Shiny reflection strip down the middle
-  const refl = ctx.createLinearGradient(LANE_X - 10, 0, LANE_X + 10, 0);
-  refl.addColorStop(0, 'rgba(255,255,220,0)');
-  refl.addColorStop(0.5, 'rgba(255,255,220,0.18)');
-  refl.addColorStop(1, 'rgba(255,255,220,0)');
-  ctx.fillStyle = refl;
-  ctx.fillRect(LANE_X - 10, LANE_TOP - 10, 20, LANE_H + 20);
+  // Neon "BOLWOING ALLEY" sign near ceiling
+  ctx.save();
+  ctx.font = 'bold 22px system-ui';
+  ctx.textAlign = 'center';
+  const grdN = ctx.createLinearGradient(W/2 - 180, 0, W/2 + 180, 0);
+  grdN.addColorStop(0, '#ff44dd'); grdN.addColorStop(0.5, '#ffee44'); grdN.addColorStop(1, '#44ddff');
+  ctx.fillStyle = grdN;
+  ctx.shadowColor = '#ff44dd'; ctx.shadowBlur = 20;
+  ctx.fillText('🎳  B O L W O I N G   A L L E Y  🎳', W / 2, 32);
+  ctx.restore();
 
-  // Foul line
-  ctx.fillStyle = '#cc2222';
-  ctx.fillRect(LANE_X - LANE_W / 2, LANE_BOT - 34, LANE_W, 3);
-
-  // Approach dots (7 dots evenly spaced)
-  for (let d = 0; d < 7; d++) {
-    const dx = LANE_X - LANE_W / 2 + 20 + d * ((LANE_W - 40) / 6);
+  // --- Side walls (alley boundary outside the lane) ---
+  // Left wall
+  const lTopP = proj(-LANE_HW, CAM_H + 2.4, LANE_LEN * 0.98);
+  const lBotP = proj(-LANE_HW, 0, LANE_LEN * 0.98);
+  const lBotNear = proj(-LANE_HW, 0, 0.5);
+  const lTopNear = proj(-LANE_HW, CAM_H + 2.4, 0.5);
+  if (lTopP && lBotP && lTopNear && lBotNear) {
     ctx.beginPath();
-    ctx.arc(dx, LANE_BOT - 24, 3, 0, Math.PI * 2);
-    ctx.fillStyle = '#cc2222';
-    ctx.fill();
-  }
-
-  // Arrow targeting markers (5 arrows toward center)
-  const arrowY = LANE_TOP + 120;
-  const arrowPositions = [-LANE_W * 0.38, -LANE_W * 0.19, 0, LANE_W * 0.19, LANE_W * 0.38];
-  for (const ax of arrowPositions) {
-    const x = LANE_X + ax;
-    ctx.beginPath();
-    ctx.moveTo(x, arrowY - 10);
-    ctx.lineTo(x - 6, arrowY);
-    ctx.lineTo(x + 6, arrowY);
+    ctx.moveTo(lTopNear[0], lTopNear[1]);
+    ctx.lineTo(lTopP[0], lTopP[1]);
+    ctx.lineTo(lBotP[0], lBotP[1]);
+    ctx.lineTo(lBotNear[0], lBotNear[1]);
     ctx.closePath();
-    ctx.fillStyle = 'rgba(220,180,80,0.7)';
-    ctx.fill();
+    const wg = ctx.createLinearGradient(lTopP[0], 0, lTopNear[0], 0);
+    wg.addColorStop(0, '#1a0e28'); wg.addColorStop(1, '#2a1840');
+    ctx.fillStyle = wg; ctx.fill();
+    // Neon strip along wall
+    ctx.strokeStyle = 'rgba(150,30,200,0.6)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(lTopNear[0], VP_Y + 20); ctx.lineTo(lTopP[0], VP_Y + 2); ctx.stroke();
+  }
+  // Right wall (mirror)
+  const rTopP = proj(LANE_HW, CAM_H + 2.4, LANE_LEN * 0.98);
+  const rBotP = proj(LANE_HW, 0, LANE_LEN * 0.98);
+  const rBotNear = proj(LANE_HW, 0, 0.5);
+  const rTopNear = proj(LANE_HW, CAM_H + 2.4, 0.5);
+  if (rTopP && rBotP && rTopNear && rBotNear) {
+    ctx.beginPath();
+    ctx.moveTo(rTopNear[0], rTopNear[1]);
+    ctx.lineTo(rTopP[0], rTopP[1]);
+    ctx.lineTo(rBotP[0], rBotP[1]);
+    ctx.lineTo(rBotNear[0], rBotNear[1]);
+    ctx.closePath();
+    const wg = ctx.createLinearGradient(rTopP[0], 0, rTopNear[0], 0);
+    wg.addColorStop(0, '#1a0e28'); wg.addColorStop(1, '#2a1840');
+    ctx.fillStyle = wg; ctx.fill();
+    ctx.strokeStyle = 'rgba(200,80,30,0.6)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(rTopNear[0], VP_Y + 20); ctx.lineTo(rTopP[0], VP_Y + 2); ctx.stroke();
   }
 
-  // Pin deck (lighter section at top)
-  ctx.fillStyle = 'rgba(255,255,200,0.06)';
-  ctx.fillRect(LANE_X - LANE_W / 2, LANE_TOP - 10, LANE_W, 80);
+  // --- Floor: scan-line perspective casting ---
+  // For each screen row y below horizon:
+  //   floor depth = CAM_H * FOCAL / (y - VP_Y)
+  //   lane edges at that depth = ±LANE_HW * FOCAL / depth
+  ctx.save();
+  for (let y = VP_Y + 1; y < H; y++) {
+    const depth = CAM_H * FOCAL / (y - VP_Y);
+    if (depth > LANE_LEN + 2) continue;
+
+    const lw = LANE_HW * FOCAL / depth;
+    const gw = lw * 0.10; // gutter width on screen
+
+    // Closeness factor (0=far, 1=near camera)
+    const close = 1 - Math.min(depth / LANE_LEN, 1);
+    // Wood plank stripes (horizontal bands in depth)
+    const plankPhase = (depth % 1.4) / 1.4;
+    const plankLine = plankPhase < 0.07 ? 0.55 : 1;
+    const woodR = Math.floor((40 + close * 70) * plankLine + 25);
+    const woodG = Math.floor((20 + close * 45) * plankLine + 10);
+    const woodB = Math.floor((2  + close * 8)  * plankLine);
+    // Left boundary
+    const lLane = VP_X - lw;
+    const rLane = VP_X + lw;
+
+    // Outside alley (dark carpet)
+    ctx.fillStyle = '#120a1e';
+    ctx.fillRect(0, y, Math.max(0, lLane - gw), 1);
+    ctx.fillRect(rLane + gw, y, W - (rLane + gw), 1);
+
+    // Gutter (dark notch beside lane)
+    ctx.fillStyle = '#0a0606';
+    ctx.fillRect(lLane - gw, y, gw, 1);
+    ctx.fillRect(rLane,      y, gw, 1);
+
+    // Lane surface
+    ctx.fillStyle = `rgb(${woodR},${woodG},${woodB})`;
+    ctx.fillRect(lLane, y, lw * 2, 1);
+
+    // Center reflection shimmer
+    const shimmer = Math.max(0, 1 - Math.abs(close - 0.5) * 3) * 18;
+    if (shimmer > 0) {
+      ctx.fillStyle = `rgba(255,240,180,${shimmer / 255})`;
+      ctx.fillRect(VP_X - 6, y, 12, 1);
+    }
+  }
+
+  // Foul line (bright red stripe near camera)
+  const flDepth = 0.35;
+  const flY = VP_Y + CAM_H * FOCAL / flDepth;
+  if (flY < H) {
+    const flW = LANE_HW * FOCAL / flDepth;
+    ctx.fillStyle = '#cc2222';
+    ctx.fillRect(VP_X - flW, flY - 1, flW * 2, 3);
+  }
+
+  // Arrow targets (5 chevron markers converging)
+  for (let ai = -2; ai <= 2; ai++) {
+    const arZ = LANE_LEN * 0.28;
+    const arX = ai * LANE_HW * 0.38;
+    const pa  = proj(arX, 0.01, arZ);
+    if (!pa) continue;
+    const [ax, ay, sc] = pa;
+    const as = Math.max(4, 10 * sc / (FOCAL / (PIN_Z0 * 0.35)));
+    ctx.beginPath();
+    ctx.moveTo(ax, ay - as); ctx.lineTo(ax - as * 0.5, ay); ctx.lineTo(ax + as * 0.5, ay);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(210,160,50,0.7)';
+    ctx.fill();
+  }
+  ctx.restore();
+
+  // --- Pin deck back wall ---
+  const bwZ = PIN_Z0 + 1.2;
+  const bwL = proj(-LANE_HW, 0, bwZ);
+  const bwR = proj( LANE_HW, 0, bwZ);
+  const bwLT= proj(-LANE_HW, CAM_H + 1.5, bwZ);
+  const bwRT= proj( LANE_HW, CAM_H + 1.5, bwZ);
+  if (bwL && bwR && bwLT && bwRT) {
+    ctx.beginPath();
+    ctx.moveTo(bwLT[0], bwLT[1]); ctx.lineTo(bwRT[0], bwRT[1]);
+    ctx.lineTo(bwR[0],  bwR[1]);  ctx.lineTo(bwL[0],  bwL[1]);
+    ctx.closePath();
+    ctx.fillStyle = '#221838'; ctx.fill();
+    ctx.strokeStyle = '#3a2060'; ctx.lineWidth = 1.5; ctx.stroke();
+  }
+
+  // --- Pins ---
+  drawPins();
+
+  // --- Ball in play ---
+  if (phase === 'rolling') drawRollBall();
+
+  // --- Foreground arm + ball (when aiming/charging) ---
+  if (phase === 'aiming' || phase === 'charging') drawForeground();
 }
 
-// --- Pins ---
+// ─── Pin rendering ────────────────────────────────────────────────────────────
 function drawPins() {
-  for (let i = 0; i < 10; i++) {
-    if (!localPins[i] && phase !== 'aiming' && phase !== 'powering' && phase !== 'rolling') {
-      // Show knocked pins as shadows
-      const [cx, cy] = pinToCanvas(...PIN_XY[i]);
-      ctx.save();
-      ctx.globalAlpha = 0.2;
-      ctx.beginPath();
-      ctx.arc(cx, cy, 10, 0, Math.PI * 2);
-      ctx.fillStyle = '#888';
-      ctx.fill();
-      ctx.restore();
+  // Sort back-to-front so closer pins draw on top
+  const order = [6,7,8,9, 3,4,5, 1,2, 0];
+  for (const i of order) {
+    const [wx, wz0] = PIN_WXZ[i];
+    const wz = PIN_Z0 + wz0;
+
+    // Check falling pin override
+    const fp = fallingPins.find((f) => f.idx === i);
+    if (fp) {
+      drawFallingPin(fp);
       continue;
     }
-    // Standing pins
-    const [cx, cy] = pinToCanvas(...PIN_XY[i]);
-    const isStanding = localPins[i];
-
-    // Pin shadow
-    ctx.save();
-    ctx.globalAlpha = 0.4;
-    ctx.beginPath();
-    ctx.ellipse(cx + 2, cy + 8, 8, 4, 0, 0, Math.PI * 2);
-    ctx.fillStyle = '#000';
-    ctx.fill();
-    ctx.restore();
-
-    if (!isStanding) continue;
-
-    // Pin body (white cylinder silhouette)
-    const pinGrd = ctx.createRadialGradient(cx - 3, cy - 4, 1, cx, cy, 12);
-    pinGrd.addColorStop(0, '#ffffff');
-    pinGrd.addColorStop(0.4, '#e8e8e0');
-    pinGrd.addColorStop(1, '#c0b8a0');
-    ctx.beginPath();
-    ctx.arc(cx, cy, 11, 0, Math.PI * 2);
-    ctx.fillStyle = pinGrd;
-    ctx.fill();
-
-    // Red stripe (classic bowling pin)
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(cx, cy, 11, 0, Math.PI * 2);
-    ctx.clip();
-    ctx.fillStyle = '#cc2222';
-    ctx.fillRect(cx - 12, cy - 4, 24, 4);
-    ctx.restore();
-
-    // Highlight
-    ctx.beginPath();
-    ctx.arc(cx - 3, cy - 4, 4, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.fill();
-
-    // Pin number (small)
-    ctx.font = 'bold 7px system-ui';
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#333';
-    ctx.fillText(String(PIN_NUM[i]), cx, cy + 3);
+    if (!pinState[i]) continue;
+    drawStandingPin(wx, 0, wz, 1.0);
   }
 }
 
-// --- Ball ---
-function drawBall() {
-  const bx = ballX, by = ballY;
-  const ballR = 16;
+function drawStandingPin(wx: number, wy: number, wz: number, alpha: number) {
+  const pBottom = proj(wx, wy,          wz);
+  const pTop    = proj(wx, wy + PIN_VH, wz);
+  if (!pBottom || !pTop) return;
+  const [bx, by] = pBottom;
+  const [, ty]   = pTop;
+  const h = by - ty;   // total screen height of pin
 
-  // Shadow
-  ctx.save();
-  ctx.globalAlpha = 0.4;
-  ctx.beginPath();
-  ctx.ellipse(bx + 2, by + 6, ballR, ballR * 0.4, 0, 0, Math.PI * 2);
-  ctx.fillStyle = '#000';
-  ctx.fill();
-  ctx.restore();
+  // Real bowling-pin proportions (all fractions of h):
+  //   base         0..0.08   wide flat ring
+  //   chime        0.08..0.18  narrows
+  //   belly        0.18..0.42  bulges out (widest)
+  //   upper chime  0.42..0.68  narrows to neck
+  //   neck         0.68..0.73  narrowest
+  //   head         0.73..1.0   ball on top
+  const B  = h * 0.22;  // base half-width
+  const CH = h * 0.12;  // chime half-width
+  const BL = h * 0.26;  // belly half-width (widest)
+  const NK = h * 0.09;  // neck half-width
+  const HD = h * 0.17;  // head half-width
 
-  // Ball body
-  const ballGrd = ctx.createRadialGradient(bx - 4, by - 6, 2, bx, by, ballR);
-  ballGrd.addColorStop(0, '#6688ff');
-  ballGrd.addColorStop(0.5, '#3344cc');
-  ballGrd.addColorStop(1, '#111233');
-  ctx.beginPath();
-  ctx.arc(bx, by, ballR, 0, Math.PI * 2);
-  ctx.fillStyle = ballGrd;
-  ctx.fill();
+  // Y positions (from by downward = up in screen coords)
+  const y0  = by;                 // base bottom
+  const y1  = by - h * 0.08;     // base top / chime bottom
+  const y2  = by - h * 0.18;     // chime top / belly start
+  const y3  = by - h * 0.42;     // belly widest
+  const y4  = by - h * 0.66;     // neck
+  const y5  = by - h * 0.73;     // neck top / head base
+  const headCy = by - h * 0.87;  // head circle center
+  const headR  = h * 0.15;       // head circle radius
 
-  // Finger holes (2 visible)
-  ctx.beginPath();
-  ctx.arc(bx - 4, by - 2, 3, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  ctx.fill();
-  ctx.beginPath();
-  ctx.arc(bx + 4, by - 4, 2.5, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(0,0,0,0.55)';
-  ctx.fill();
-
-  // Shine
-  ctx.beginPath();
-  ctx.arc(bx - 5, by - 7, 5, 0, Math.PI * 2);
-  ctx.fillStyle = 'rgba(200,220,255,0.45)';
-  ctx.fill();
-}
-
-// --- Aim guide ---
-function drawAimGuide() {
-  const startX = LANE_X + aimOffset * LANE_W * 0.42;
-  const endX   = LANE_X + aimOffset * LANE_W * 0.05;
-
-  // Aim line
-  ctx.save();
-  ctx.setLineDash([6, 5]);
-  ctx.strokeStyle = 'rgba(100,200,255,0.7)';
-  ctx.lineWidth = 2;
-  ctx.shadowColor = '#44aaff';
-  ctx.shadowBlur = 8;
-  ctx.beginPath();
-  ctx.moveTo(startX, LANE_BOT - 20);
-  ctx.lineTo(endX, LANE_TOP + 60);
-  ctx.stroke();
-  ctx.restore();
-
-  // Ball preview at approach
-  drawBallAt(startX, LANE_BOT - 20, 14, 0.6);
-
-  // Aim indicator slider
-  drawAimSlider(aimOffset);
-
-  // Instruction
-  ctx.font = '14px system-ui';
-  ctx.textAlign = 'center';
-  ctx.fillStyle = 'rgba(160,220,255,0.9)';
-  ctx.fillText('← Drag to aim · Click/Space to lock →', CW / 2, CH - 10);
-}
-
-function drawBallAt(x: number, y: number, r: number, alpha: number) {
   ctx.save();
   ctx.globalAlpha = alpha;
-  const g = ctx.createRadialGradient(x - 2, y - 3, 1, x, y, r);
-  g.addColorStop(0, '#88aaff');
-  g.addColorStop(1, '#2233aa');
+
+  // Drop shadow on lane
   ctx.beginPath();
-  ctx.arc(x, y, r, 0, Math.PI * 2);
-  ctx.fillStyle = g;
+  ctx.ellipse(bx, by + h * 0.03, BL * 0.85, h * 0.04, 0, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
   ctx.fill();
+
+  // Build pin outline path (left side up, arc over head, right side down)
+  const path = new Path2D();
+  path.moveTo(bx - B, y0);
+  // base ring sides
+  path.lineTo(bx - B, y1);
+  // chime narrows
+  path.quadraticCurveTo(bx - CH * 1.1, y1 + (y2 - y1) * 0.6, bx - CH, y2);
+  // belly flare
+  path.quadraticCurveTo(bx - BL * 1.08, y2 + (y3 - y2) * 0.5, bx - BL, y3);
+  // upper chime narrows to neck
+  path.quadraticCurveTo(bx - BL * 0.9, y3 + (y4 - y3) * 0.4, bx - NK * 1.1, y4);
+  path.quadraticCurveTo(bx - NK * 1.0, y4 + (y5 - y4) * 0.5, bx - NK, y5);
+  // head shoulder
+  path.quadraticCurveTo(bx - NK * 0.5, y5 + (headCy - y5) * 0.3, bx - HD, headCy);
+  // head arc
+  path.arc(bx, headCy, headR, Math.PI, 0, false);
+  // head shoulder right
+  path.quadraticCurveTo(bx + NK * 0.5, y5 + (headCy - y5) * 0.3, bx + NK, y5);
+  // neck to belly right
+  path.quadraticCurveTo(bx + NK * 1.0, y4 + (y5 - y4) * 0.5, bx + NK * 1.1, y4);
+  path.quadraticCurveTo(bx + BL * 0.9, y3 + (y4 - y3) * 0.4, bx + BL, y3);
+  // belly to chime right
+  path.quadraticCurveTo(bx + BL * 1.08, y2 + (y3 - y2) * 0.5, bx + CH, y2);
+  path.quadraticCurveTo(bx + CH * 1.1, y1 + (y2 - y1) * 0.6, bx + B, y1);
+  path.lineTo(bx + B, y0);
+  path.closePath();
+
+  // White body with subtle ivory gradient (3D shading)
+  const pg = ctx.createLinearGradient(bx - BL, 0, bx + BL, 0);
+  pg.addColorStop(0,    '#c8c4bc');
+  pg.addColorStop(0.18, '#f5f2ee');
+  pg.addColorStop(0.42, '#ffffff');
+  pg.addColorStop(0.68, '#eeeae4');
+  pg.addColorStop(1,    '#b0aba0');
+  ctx.fillStyle = pg;
+  ctx.fill(path);
+
+  // Red stripes — clipped to pin body
+  ctx.save();
+  ctx.clip(path);
+
+  // Lower red stripe: just above the chime, wrapping around belly
+  ctx.fillStyle = '#c8151a';
+  const rS1top = by - h * 0.27, rS1bot = by - h * 0.19;
+  ctx.fillRect(bx - BL * 1.1, rS1top, BL * 2.2, rS1bot - rS1top);
+
+  // Upper red stripe: at/below neck
+  const rS2top = by - h * 0.61, rS2bot = by - h * 0.55;
+  ctx.fillRect(bx - BL * 0.5, rS2top, BL * 1.0, rS2bot - rS2top);
+
+  ctx.restore();  // end stripe clip
+
+  // Soft edge outline
+  ctx.strokeStyle = '#9a9488'; ctx.lineWidth = 0.7;
+  ctx.stroke(path);
+
+  // Specular highlight on head (upper-left glint)
+  const hlR = headR * 0.38;
+  const hlg = ctx.createRadialGradient(bx - headR * 0.3, headCy - headR * 0.35, 0, bx - headR * 0.2, headCy - headR * 0.2, hlR * 2);
+  hlg.addColorStop(0, 'rgba(255,255,255,0.75)');
+  hlg.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.beginPath(); ctx.arc(bx - headR * 0.28, headCy - headR * 0.32, hlR, 0, Math.PI * 2);
+  ctx.fillStyle = hlg; ctx.fill();
+
+  // Belly glint
+  const blg = ctx.createRadialGradient(bx - BL * 0.2, y3 - h * 0.06, 0, bx - BL * 0.1, y3 - h * 0.04, BL * 0.5);
+  blg.addColorStop(0, 'rgba(255,255,255,0.35)');
+  blg.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.beginPath(); ctx.arc(bx - BL * 0.18, y3 - h * 0.05, BL * 0.42, 0, Math.PI * 2);
+  ctx.fillStyle = blg; ctx.fill();
+
   ctx.restore();
 }
 
-function drawAimSlider(offset: number) {
-  const sliderY = LANE_BOT + 20;
-  const sliderL = LANE_X - LANE_W / 2;
-  const sliderREnd = LANE_X + LANE_W / 2;
+function drawFallingPin(fp: FallingPin) {
+  const p = proj(fp.wx, 0, fp.wz);
+  if (!p) return;
+  const [bx, by, sc] = p;
+  const pinH = PIN_VH * sc;
 
-  // Track
-  ctx.fillStyle = 'rgba(100,100,140,0.5)';
-  ctx.fillRect(sliderL, sliderY - 4, sliderREnd - sliderL, 8);
-  // Fill
-  const fillX = LANE_X + offset * LANE_W / 2;
-  ctx.fillStyle = '#44aaff';
-  ctx.fillRect(Math.min(LANE_X, fillX), sliderY - 3, Math.abs(fillX - LANE_X), 6);
-  // Thumb
-  ctx.beginPath();
-  ctx.arc(fillX, sliderY, 11, 0, Math.PI * 2);
-  ctx.fillStyle = '#aaddff';
-  ctx.fill();
-  ctx.strokeStyle = '#fff';
-  ctx.lineWidth = 2;
-  ctx.stroke();
+  ctx.save();
+  ctx.globalAlpha = fp.alpha;
+  ctx.translate(bx, by);
+  // Tumble: rotate around base
+  ctx.rotate(fp.rz + Math.PI * 0.15 * fp.t * 6);
+
+  // Simplified but recognizable pin silhouette (scaled to pinH)
+  const BL = pinH * 0.26, NK = pinH * 0.09, HD = pinH * 0.16;
+  const path = new Path2D();
+  path.moveTo(-pinH * 0.22, 0);
+  path.quadraticCurveTo(-BL, -pinH * 0.38, -BL, -pinH * 0.42);
+  path.quadraticCurveTo(-NK, -pinH * 0.66, -NK, -pinH * 0.73);
+  path.arc(0, -pinH * 0.87, HD, Math.PI, 0, false);
+  path.quadraticCurveTo(NK, -pinH * 0.66, BL, -pinH * 0.42);
+  path.quadraticCurveTo(BL, -pinH * 0.38, pinH * 0.22, 0);
+  path.closePath();
+
+  const pg = ctx.createLinearGradient(-BL, 0, BL, 0);
+  pg.addColorStop(0, '#c0bdb5'); pg.addColorStop(0.45, '#ffffff'); pg.addColorStop(1, '#aaa8a0');
+  ctx.fillStyle = pg; ctx.fill(path);
+
+  ctx.save(); ctx.clip(path);
+  ctx.fillStyle = '#c8151a';
+  ctx.fillRect(-BL * 1.1, -pinH * 0.27, BL * 2.2, pinH * 0.08);
+  ctx.fillRect(-BL * 0.5, -pinH * 0.61, BL * 1.0, pinH * 0.07);
+  ctx.restore();
+
+  ctx.restore();
 }
 
-// --- Power bar ---
-function drawPowerBar() {
-  const barX = LANE_X - LANE_W / 2 - 60;
-  const barW = 24;
-  const barH = LANE_H - 60;
-  const barY = LANE_TOP + 30;
+// ─── Ball rendering ──────────────────────────────────────────────────────────
+function drawRollBall() {
+  const r = rollBallR;
+  const bx = rollBallX, by = rollBallY;
+  // Ball shadow (on floor)
+  const sp = proj(lockedAim * LANE_HW * (1 - rollT * 0.9), 0, lerp(0.5, PIN_Z0, rollT * rollT));
+  if (sp) {
+    ctx.save(); ctx.globalAlpha = 0.3 * (1 - rollT * 0.8);
+    ctx.beginPath(); ctx.ellipse(sp[0], sp[1], r * 0.5, r * 0.15, 0, 0, Math.PI * 2);
+    ctx.fillStyle = '#000'; ctx.fill(); ctx.restore();
+  }
+  // Spin phase
+  const spin = rollT * 12;
+  drawBallSphere(bx, by, r, spin);
+}
 
-  // Label
-  ctx.font = 'bold 11px system-ui';
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#ddd';
-  ctx.fillText('POWER', barX + barW / 2, barY - 8);
+function drawForeground() {
+  const power = phase === 'charging' ? Math.min(chargeT / CHARGE_FULL, 1) : 0;
+  // Aim wobble during charging
+  const wobble = phase === 'charging' ? Math.sin(chargeT * 22) * (1 - power) * 3 : 0;
+  const bx = VP_X + aimX * W * 0.22 + wobble;
+  const by = H - 40 + (phase === 'charging' ? -power * 15 : 0);
+  const r  = 52;
 
-  // Background
-  ctx.fillStyle = '#1a1a3a';
-  ctx.fillRect(barX, barY, barW, barH);
+  // Forearm (dark rounded shape below ball)
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(bx - r * 0.6, by + 20);
+  ctx.quadraticCurveTo(bx - r * 0.4, by + r * 0.8, bx - r * 0.25, by + r * 0.3);
+  ctx.lineTo(bx + r * 0.25, by + r * 0.3);
+  ctx.quadraticCurveTo(bx + r * 0.4, by + r * 0.8, bx + r * 0.6, by + 20);
+  ctx.lineTo(bx + 90, H + 60);
+  ctx.lineTo(bx - 90, H + 60);
+  ctx.closePath();
+  ctx.fillStyle = '#3d2210';
+  ctx.fill();
+  ctx.restore();
 
-  // Power fill with gradient
-  const fillH = barH * powerLevel;
-  const g = ctx.createLinearGradient(0, barY + barH - fillH, 0, barY + barH);
-  g.addColorStop(0, powerLevel > 0.8 ? '#ff2222' : powerLevel > 0.5 ? '#ffaa00' : '#22cc44');
-  g.addColorStop(1, powerLevel > 0.8 ? '#ff6666' : powerLevel > 0.5 ? '#ffdd44' : '#66ffaa');
-  ctx.fillStyle = g;
-  ctx.fillRect(barX, barY + barH - fillH, barW, fillH);
+  // Power ring around ball
+  if (phase === 'charging' && power > 0) {
+    const ringR = r + 8;
+    ctx.beginPath();
+    ctx.arc(bx, by, ringR, -Math.PI / 2, -Math.PI / 2 + power * Math.PI * 2);
+    const ringCol = power < 0.5 ? '#44ff88' : power < 0.8 ? '#ffee44' : '#ff2244';
+    ctx.strokeStyle = ringCol; ctx.lineWidth = 5;
+    ctx.shadowColor = ringCol; ctx.shadowBlur = 12;
+    ctx.stroke(); ctx.shadowBlur = 0;
+  }
 
-  // Notches
-  for (let n = 0; n <= 10; n++) {
-    const ny = barY + barH - (n / 10) * barH;
-    ctx.fillStyle = 'rgba(0,0,0,0.5)';
-    ctx.fillRect(barX, ny - 0.5, barW, 1);
-    if (n % 5 === 0) {
-      ctx.font = '9px system-ui';
-      ctx.textAlign = 'right';
-      ctx.fillStyle = '#888';
-      ctx.fillText(String(n * 10) + '%', barX - 3, ny + 3);
+  // Ball
+  drawBallSphere(bx, by, r, 0);
+
+  // Aim line on floor
+  if (phase === 'aiming' || phase === 'charging') {
+    ctx.save(); ctx.setLineDash([5, 7]);
+    ctx.strokeStyle = phase === 'charging'
+      ? `rgba(${Math.floor(255 * power)},${Math.floor(255 * (1-power*0.5))},50,0.7)`
+      : 'rgba(100,200,255,0.6)';
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = 8;
+    // Line from ball bottom to pin deck
+    const pinP = proj(aimX * LANE_HW * 0.9, 0, PIN_Z0);
+    if (pinP) {
+      ctx.beginPath(); ctx.moveTo(bx, by + r - 8); ctx.lineTo(pinP[0], pinP[1]); ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Controls hint
+  if (phase === 'aiming') {
+    ctx.font = '14px system-ui'; ctx.textAlign = 'center';
+    ctx.fillStyle = 'rgba(180,220,255,0.85)';
+    const hint = ballInFrame === 2
+      ? `Ball 2 of 2 — ${pinsStandingBefore} pins left  ·  Move mouse · Click & hold · Release`
+      : 'Ball 1 of 2  ·  Move mouse to aim · Click & hold to charge · Release to throw';
+    ctx.fillText(hint, W / 2, H - 8);
+  } else if (phase === 'charging') {
+    const p = Math.round(Math.min(chargeT / CHARGE_FULL, 1) * 100);
+    ctx.font = 'bold 16px system-ui'; ctx.textAlign = 'center';
+    const col = p < 50 ? '#44ff88' : p < 80 ? '#ffee44' : '#ff4444';
+    ctx.fillStyle = col;
+    ctx.shadowColor = col; ctx.shadowBlur = 10;
+    ctx.fillText(`POWER: ${p}%  —  Release to throw!`, W / 2, H - 8);
+    ctx.shadowBlur = 0;
+  }
+}
+
+function drawBallSphere(bx: number, by: number, r: number, spin: number) {
+  // Ball body with radial gradient
+  const g = ctx.createRadialGradient(bx - r * 0.28, by - r * 0.3, r * 0.05, bx, by, r);
+  g.addColorStop(0, '#8899ff');
+  g.addColorStop(0.4, '#4455cc');
+  g.addColorStop(0.75, '#222288');
+  g.addColorStop(1, '#0a0822');
+  ctx.beginPath(); ctx.arc(bx, by, r, 0, Math.PI * 2);
+  ctx.fillStyle = g; ctx.fill();
+
+  // Finger holes (animated spin)
+  const holePositions = [[0.2, -0.12], [-0.1, -0.3], [0.05, 0.22]] as const;
+  for (const [hx, hy] of holePositions) {
+    const a = spin;
+    const rx2 = hx * Math.cos(a) - hy * Math.sin(a);
+    const ry2 = hx * Math.sin(a) + hy * Math.cos(a);
+    if (ry2 > -0.5 && ry2 < 0.5) { // only draw holes on "front" half
+      const hr = Math.max(1, r * 0.09);
+      ctx.beginPath(); ctx.arc(bx + rx2 * r, by + ry2 * r, hr, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(0,0,0,0.65)'; ctx.fill();
     }
   }
-
-  // Border
-  ctx.strokeStyle = '#4444aa';
-  ctx.lineWidth = 1.5;
-  ctx.strokeRect(barX, barY, barW, barH);
-
-  // "Sweet spot" glow at 80–90%
-  if (powerLevel > 0.75 && powerLevel < 0.95) {
-    ctx.save();
-    ctx.shadowColor = '#ffee44';
-    ctx.shadowBlur = 16;
-    ctx.strokeStyle = '#ffee44';
-    ctx.strokeRect(barX, barY, barW, barH);
-    ctx.restore();
-  }
-
-  // Instruction
-  ctx.font = '14px system-ui';
-  ctx.textAlign = 'center';
-  ctx.fillStyle = 'rgba(255,220,100,0.9)';
-  ctx.fillText('Click / Space to throw!', CW / 2, CH - 10);
-
-  // Also draw ball at approach
-  drawBallAt(LANE_X + aimOffset * LANE_W * 0.42, LANE_BOT - 20, 15, 1);
+  // Specular highlight
+  ctx.beginPath(); ctx.arc(bx - r * 0.28, by - r * 0.3, r * 0.22, 0, Math.PI * 2);
+  ctx.fillStyle = 'rgba(200,220,255,0.4)'; ctx.fill();
 }
 
-// --- Falling pins animation ---
-function drawFallingPins() {
-  for (const fp of fallingPins) {
-    ctx.save();
-    ctx.globalAlpha = Math.max(0, fp.alpha);
-    ctx.translate(fp.x, fp.y);
-    ctx.rotate(fp.rot);
-    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 11);
-    g.addColorStop(0, '#ffffff');
-    g.addColorStop(1, '#c0b8a0');
-    ctx.beginPath();
-    ctx.arc(0, 0, 11, 0, Math.PI * 2);
-    ctx.fillStyle = g;
-    ctx.fill();
-    ctx.fillStyle = '#cc2222';
-    ctx.fillRect(-12, -4, 24, 4);
-    ctx.restore();
-  }
-}
-
-// --- Particles ---
+// ─── Particles ───────────────────────────────────────────────────────────────
 function drawParticles() {
   for (const p of particles) {
     ctx.save();
-    ctx.globalAlpha = Math.max(0, p.life * 1.2);
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-    ctx.fillStyle = p.color;
-    ctx.shadowColor = p.color;
-    ctx.shadowBlur = 6;
-    ctx.fill();
-    ctx.restore();
+    ctx.globalAlpha = Math.max(0, Math.min(1, p.life * 1.1));
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.sz, 0, Math.PI * 2);
+    ctx.fillStyle = p.c; ctx.shadowColor = p.c; ctx.shadowBlur = 8;
+    ctx.fill(); ctx.restore();
   }
 }
 
-// --- Score card ---
-function drawScoreCard() {
+// ─── HUD ─────────────────────────────────────────────────────────────────────
+function drawHUD() {
   if (phase === 'waiting' || phase === 'lobby') return;
-  const players = roomPlayers.length > 0 ? roomPlayers : [{ id: selfId, name: selfName, color: '#6688ff', ready: true }];
-  const rowH = 42;
-  const totalH = players.length * rowH + 4;
-  const cardY = 4;
 
-  ctx.fillStyle = 'rgba(0,0,0,0.75)';
-  roundRect(ctx, CARD_X, cardY, CARD_W, totalH, 6);
-  ctx.fill();
-
-  const frameW = (CARD_W - 120) / 11; // 10 frames + 1 total column
-
-  // Header frames
-  ctx.font = '9px system-ui';
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#aaa';
-  for (let f = 0; f < 10; f++) {
-    ctx.fillText(String(f + 1), CARD_X + 110 + (f + 0.5) * frameW, cardY + 14);
+  // Turn indicator
+  const cp = roomPlayers.find((p) => p.id === currentPlayerId);
+  if (cp) {
+    const label = cp.id === selfId ? '🎳 YOUR TURN' : `⏳ ${cp.name}'s turn`;
+    const col = cp.id === selfId ? '#ffee44' : '#aabbdd';
+    ctx.font = `bold 15px system-ui`;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = col;
+    ctx.shadowColor = col; ctx.shadowBlur = 10;
+    ctx.fillText(label, 12, 20);
+    ctx.shadowBlur = 0;
   }
-  ctx.fillText('TOT', CARD_X + 110 + 10.5 * frameW, cardY + 14);
+
+  // Ball-in-frame pill (bottom center, visible when playing)
+  if (phase === 'aiming' || phase === 'charging' || phase === 'rolling' || phase === 'scored' || phase === 'pinfalling') {
+    const myFr = frames[currentPlayerId] ?? [];
+    const curFrBalls = (myFr[myFr.length - 1] ?? []).length;
+    const displayBall = curFrBalls === 0 ? ballInFrame : curFrBalls + (phase === 'aiming' || phase === 'charging' || phase === 'rolling' ? 1 : 0);
+    const frameNum = myFr.length || 1;
+    const pinsLeft = pinState.filter(Boolean).length;
+    const isSecond = ballInFrame === 2 || curFrBalls >= 1;
+
+    // Pill background
+    const pillW = 200, pillH = 28, pillX = W / 2 - pillW / 2, pillY = H - 70;
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    roundRect(ctx, pillX, pillY, pillW, pillH, 14);
+    ctx.fill();
+
+    // Ball dots
+    const dot1col = '#fff', dot2col = isSecond ? '#fff' : 'rgba(255,255,255,0.25)';
+    ctx.beginPath(); ctx.arc(pillX + 22, pillY + 14, 6, 0, Math.PI * 2);
+    ctx.fillStyle = dot1col; ctx.fill();
+    ctx.beginPath(); ctx.arc(pillX + 38, pillY + 14, 6, 0, Math.PI * 2);
+    ctx.fillStyle = dot2col; ctx.fill();
+
+    ctx.font = 'bold 12px system-ui'; ctx.textAlign = 'left';
+    const ballText = isSecond
+      ? `Frame ${frameNum}  ·  Ball 2  ·  ${pinsLeft} pin${pinsLeft !== 1 ? 's' : ''} left`
+      : `Frame ${frameNum}  ·  Ball 1  ·  ${pinsStandingBefore} pins`;
+    ctx.fillStyle = '#ddeeff';
+    ctx.fillText(ballText, pillX + 52, pillY + 18);
+    void displayBall; // used implicitly via ballInFrame tracking
+  }
+
+  // Score strips (right side, compact)
+  const players = roomPlayers.length > 0 ? roomPlayers : [{ id: selfId, name: selfName, color: '#6688ff', ready: true }];
+  const rowH = 52 / Math.max(players.length, 1);
+  const cardW = 270;
+  const cardX = W - cardW - 8;
+  const cardY = 6;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  roundRect(ctx, cardX - 4, cardY, cardW + 8, players.length * rowH + 8, 6);
+  ctx.fill();
 
   for (let pi = 0; pi < players.length; pi++) {
     const p = players[pi];
-    const rowY = cardY + pi * rowH + 18;
-    const myFrames = frames[p.id] ?? [];
-    const myScores = scores[p.id] ?? [];
+    const ry = cardY + 4 + pi * rowH;
+    const myFr = frames[p.id] ?? [];
+    const mySc = scores[p.id] ?? [];
+    const curTotal = mySc[mySc.length - 1] ?? 0;
+    const fr = myFr.length;
+    const ball = (myFr[myFr.length - 1] ?? []).length;
     const isActive = p.id === currentPlayerId;
 
-    // Active player highlight
-    if (isActive && phase !== 'over') {
-      ctx.fillStyle = 'rgba(100,180,255,0.12)';
-      ctx.fillRect(CARD_X + 2, rowY - 2, CARD_W - 4, rowH - 2);
+    if (isActive) {
+      ctx.fillStyle = 'rgba(120,180,255,0.12)';
+      ctx.fillRect(cardX - 4, ry - 2, cardW + 8, rowH);
     }
-
-    // Color swatch
+    // Color dot
     ctx.fillStyle = p.color || '#6688ff';
-    ctx.fillRect(CARD_X + 6, rowY + 2, 12, rowH - 10);
-
+    ctx.fillRect(cardX, ry + 3, 6, rowH - 8);
     // Name
-    ctx.font = `bold 12px system-ui`;
+    ctx.font = `bold 11px system-ui`;
     ctx.textAlign = 'left';
-    ctx.fillStyle = isActive ? '#88ddff' : '#ddd';
-    ctx.fillText(p.name.slice(0, 10), CARD_X + 24, rowY + 16);
-
-    // Frame cells
-    for (let f = 0; f < 10; f++) {
-      const fx = CARD_X + 110 + f * frameW;
-      const fr = myFrames[f] ?? [];
-      const cumScore = myScores[f];
-      const isCurrentFrame = f === myFrames.length - 1 && phase !== 'over';
-
-      // Cell background
-      ctx.fillStyle = isCurrentFrame ? 'rgba(80,140,220,0.15)' : 'rgba(255,255,255,0.04)';
-      ctx.strokeStyle = 'rgba(255,255,255,0.1)';
-      ctx.lineWidth = 0.5;
-      ctx.fillRect(fx + 1, rowY - 1, frameW - 2, rowH - 4);
-      ctx.strokeRect(fx + 1, rowY - 1, frameW - 2, rowH - 4);
-
-      // Ball marks (top row of each frame cell)
-      ctx.font = '10px system-ui';
-      ctx.textAlign = 'center';
-      const bh = rowH * 0.4;
-      for (let b = 0; b < Math.min(fr.length, f < 9 ? 2 : 3); b++) {
-        const bx = fx + (b + 0.5) * (frameW / (f < 9 ? 2 : 3));
-        const by2 = rowY + 2;
-        const val = fr[b];
-        let mark = String(val);
-        if (val === 10 && b === 0) mark = '✕';
-        else if (val === 0) mark = '-';
-        else if (b === 1 && (fr[0] + val === 10)) mark = '/';
-        const isStrike = mark === '✕';
-        const isSpare = mark === '/';
-        ctx.fillStyle = isStrike ? '#ffee44' : isSpare ? '#44ff88' : '#ddd';
-        if (isStrike || isSpare) {
-          ctx.save();
-          ctx.shadowColor = isStrike ? '#ffcc00' : '#22ff66';
-          ctx.shadowBlur = 6;
-        }
-        ctx.fillText(mark, bx, by2 + bh * 0.6);
-        if (isStrike || isSpare) ctx.restore();
-      }
-
-      // Cumulative score
-      if (cumScore !== undefined) {
-        ctx.font = 'bold 11px system-ui';
-        ctx.textAlign = 'center';
-        ctx.fillStyle = '#fff';
-        ctx.fillText(String(cumScore), fx + frameW / 2, rowY + rowH - 8);
-      }
-    }
-
-    // Total column
-    const tx = CARD_X + 110 + 10 * frameW;
-    ctx.font = 'bold 13px system-ui';
-    ctx.textAlign = 'center';
+    ctx.fillStyle = isActive ? '#88ddff' : '#ccc';
+    ctx.fillText(p.name.slice(0, 9), cardX + 12, ry + rowH * 0.45);
+    // Frame/score
+    ctx.font = '10px system-ui';
+    ctx.fillStyle = '#aaa';
+    ctx.fillText(`F${fr} B${ball}`, cardX + 12, ry + rowH * 0.82);
+    // Total
+    ctx.font = 'bold 14px system-ui';
+    ctx.textAlign = 'right';
     ctx.fillStyle = '#ffdd88';
-    ctx.fillText(String(myScores[myScores.length - 1] ?? 0), tx + frameW / 2, rowY + 18);
+    ctx.fillText(String(curTotal), cardX + cardW - 2, ry + rowH * 0.65);
+  }
+
+  // Frame score mini-sheet (bottom left) for self only
+  drawMiniScorecard();
+}
+
+function drawMiniScorecard() {
+  const myFr = frames[selfId] ?? [];
+  const mySc = scores[selfId] ?? [];
+  if (myFr.length === 0) return;
+  const cx2 = 8, cy2 = H - 70;
+  const fw = 28, fh = 36;
+  const totalW = 10 * fw + 6;
+
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  roundRect(ctx, cx2, cy2, totalW, fh + 4, 4);
+  ctx.fill();
+
+  for (let f = 0; f < 10; f++) {
+    const fx = cx2 + 3 + f * fw;
+    const fr2 = myFr[f] ?? [];
+    const sc = mySc[f];
+    const isCur = f === myFr.length - 1 && phase !== 'over';
+
+    ctx.fillStyle = isCur ? 'rgba(80,140,220,0.2)' : 'rgba(255,255,255,0.04)';
+    ctx.fillRect(fx, cy2 + 2, fw - 2, fh);
+
+    ctx.font = '8px system-ui'; ctx.textAlign = 'center';
+    // Ball marks
+    for (let b = 0; b < Math.min(fr2.length, f < 9 ? 2 : 3); b++) {
+      const bx2 = fx + (b + 0.5) * (fw / (f < 9 ? 2 : 3)) - 1;
+      const v = fr2[b];
+      let mark = String(v);
+      if (v === 10 && b === 0) mark = 'X';
+      else if (v === 0) mark = '-';
+      else if (b === 1 && (fr2[0] + v === 10)) mark = '/';
+      const isX = mark === 'X', isS = mark === '/';
+      ctx.fillStyle = isX ? '#ffee44' : isS ? '#44ff88' : '#ddd';
+      if (isX) { ctx.shadowColor = '#ffcc00'; ctx.shadowBlur = 6; }
+      ctx.fillText(mark, bx2, cy2 + 13);
+      ctx.shadowBlur = 0;
+    }
+    // Cumulative score
+    if (sc !== undefined) {
+      ctx.font = 'bold 9px system-ui'; ctx.fillStyle = '#fff';
+      ctx.fillText(String(sc), fx + fw / 2 - 1, cy2 + fh - 2);
+    }
+    // Frame number
+    ctx.font = '6px system-ui'; ctx.fillStyle = '#555';
+    ctx.fillText(String(f + 1), fx + fw / 2 - 1, cy2 + 3);
   }
 }
 
-// --- Celebration overlay ---
-function drawCelebration() {
-  if (!celebration) return;
-  const t = celebration.t;
-  const dur = celebration.duration;
-  const progress = t / dur;
+// ─── Celebration ─────────────────────────────────────────────────────────────
+function drawCelebration(c: Cel) {
+  const prog = c.t / c.dur;
+  if (prog > 0.9) return;
 
-  // Flash timing: visible in first half, fade out in second half
-  if (progress > 0.85) return;
-  const alpha = progress < 0.1 ? progress / 0.1 : progress > 0.7 ? 1 - (progress - 0.7) / 0.15 : 1;
+  const vis = prog < 0.1 ? prog / 0.1 : prog > 0.75 ? 1 - (prog - 0.75) / 0.15 : 1;
 
-  ctx.save();
-  ctx.globalAlpha = alpha;
+  if (c.kind === 'strike' || c.kind === 'turkey' || c.kind === 'perfect') {
+    // Alley screen flash
+    const flash = Math.max(0, 0.3 - prog * 0.35);
+    ctx.fillStyle = `rgba(255,200,0,${flash})`;
+    ctx.fillRect(0, 0, W, H);
 
-  if (celebration.kind === 'strike' || celebration.kind === 'turkey' || celebration.kind === 'perfect') {
-    // Full alley-screen flash effect
-    const flashAlpha = Math.max(0, 0.25 - progress * 0.3);
-    ctx.fillStyle = `rgba(255,220,0,${flashAlpha})`;
-    ctx.fillRect(0, 0, CW, CH);
-
-    // Big text cycling colors
-    const colors = ['#ff2244', '#ffee00', '#44ff88', '#44aaff', '#ff44ff'];
-    const col = colors[Math.floor(t * 8) % colors.length];
-
-    const label = celebration.kind === 'perfect' ? '🎳 PERFECT GAME! 🎳'
-                : celebration.kind === 'turkey'  ? '🦃 TURKEY!! 🦃'
-                : '⚡ STRIKE! ⚡';
+    const label = c.kind === 'perfect' ? '🎳 PERFECT GAME! 🎳' : c.kind === 'turkey' ? '🦃 TURKEY!! 🦃' : '⚡ STRIKE! ⚡';
+    const cols = ['#ff2244','#ffee00','#44ff88','#44aaff','#ff44ff'];
+    const col = cols[Math.floor(c.t * 8) % cols.length];
+    const pulse = 1 + Math.sin(c.t * 14) * 0.06;
 
     ctx.save();
-    const scale = 1 + Math.sin(t * 12) * 0.05;
-    ctx.translate(CW / 2, CH / 2);
-    ctx.scale(scale, scale);
-    ctx.font = 'bold 72px system-ui';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.shadowColor = col;
-    ctx.shadowBlur = 30;
+    ctx.translate(W / 2, H / 2);
+    ctx.scale(pulse, pulse);
+    ctx.font = `bold ${c.kind === 'perfect' ? 62 : 72}px system-ui`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 5; ctx.strokeText(label, 0, 0);
     ctx.fillStyle = col;
+    ctx.shadowColor = col; ctx.shadowBlur = 35; ctx.globalAlpha = vis;
     ctx.fillText(label, 0, 0);
-    // Outline
-    ctx.strokeStyle = '#000';
-    ctx.lineWidth = 4;
-    ctx.strokeText(label, 0, 0);
     ctx.restore();
 
-    // Disco spin ring (bowling pin silhouettes orbiting)
-    if (celebration.kind !== 'perfect') {
-      for (let i = 0; i < 8; i++) {
-        const angle = (i / 8) * Math.PI * 2 + t * 3;
-        const rx = CW / 2 + Math.cos(angle) * 160;
-        const ry = CH / 2 + Math.sin(angle) * 90;
-        ctx.beginPath();
-        ctx.arc(rx, ry, 12, 0, Math.PI * 2);
-        ctx.fillStyle = colors[i % colors.length];
-        ctx.shadowColor = colors[i % colors.length];
-        ctx.shadowBlur = 12;
-        ctx.fill();
-        ctx.fillStyle = '#cc0000';
-        ctx.fillRect(rx - 12, ry - 3, 24, 4);
+    // Spinning pin ring
+    if (c.kind !== 'perfect') {
+      for (let i = 0; i < 10; i++) {
+        const a = (i / 10) * Math.PI * 2 + c.t * 2.5;
+        const rx2 = W / 2 + Math.cos(a) * 180;
+        const ry2 = H / 2 + Math.sin(a) * 90;
+        ctx.save(); ctx.globalAlpha = vis * 0.85;
+        ctx.beginPath(); ctx.arc(rx2, ry2, 10, 0, Math.PI * 2);
+        ctx.fillStyle = '#eee'; ctx.fill();
+        ctx.fillStyle = '#cc1a1a';
+        ctx.fillRect(rx2 - 10, ry2 - 2.5, 20, 4);
+        ctx.restore();
       }
     }
 
-  } else if (celebration.kind === 'spare') {
-    // Green flash
-    ctx.fillStyle = `rgba(0,200,80,${Math.max(0, 0.15 - progress * 0.2)})`;
-    ctx.fillRect(0, 0, CW, CH);
+  } else if (c.kind === 'spare') {
+    ctx.fillStyle = `rgba(0,180,70,${Math.max(0, 0.15 - prog * 0.2)})`;
+    ctx.fillRect(0, 0, W, H);
+    ctx.save(); ctx.globalAlpha = vis;
+    ctx.font = 'bold 64px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#44ff88'; ctx.shadowColor = '#00cc44'; ctx.shadowBlur = 28;
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 4; ctx.strokeText('/ SPARE! /', W/2, H/2);
+    ctx.fillText('/ SPARE! /', W / 2, H / 2);
+    ctx.restore();
 
-    ctx.font = 'bold 60px system-ui';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#44ff88';
-    ctx.shadowColor = '#00cc44';
-    ctx.shadowBlur = 24;
-    ctx.fillText('/ SPARE! /', CW / 2, CH / 2);
-    ctx.strokeStyle = '#003322';
-    ctx.lineWidth = 3;
-    ctx.strokeText('/ SPARE! /', CW / 2, CH / 2);
-
-  } else if (celebration.kind === 'gutter') {
-    ctx.font = 'bold 44px system-ui';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = 'rgba(200,100,80,0.9)';
-    ctx.fillText('😬 GUTTER BALL', CW / 2, CH / 2);
+  } else if (c.kind === 'gutter') {
+    ctx.save(); ctx.globalAlpha = vis;
+    ctx.font = 'bold 48px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ff5533'; ctx.shadowColor = '#ff2200'; ctx.shadowBlur = 20;
+    ctx.fillText('😬  GUTTER BALL', W / 2, H / 2 + 40);
+    ctx.restore();
   }
-
-  ctx.restore();
 }
 
-// --- Lobby screen ---
+// ─── Lobby / waiting / over screens ──────────────────────────────────────────
 function drawLobby() {
+  ctx.fillStyle = 'rgba(0,0,0,0.55)';
+  ctx.fillRect(0, 0, W, H);
   ctx.save();
-  ctx.fillStyle = 'rgba(0,0,0,0.6)';
-  ctx.fillRect(0, 0, CW, CH);
-
-  ctx.font = 'bold 34px system-ui';
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#ffee44';
-  ctx.shadowColor = '#ff8800';
-  ctx.shadowBlur = 18;
-  ctx.fillText('🎳 BOLWOING ALLEY', CW / 2, CH / 2 - 100);
+  ctx.font = 'bold 38px system-ui'; ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffee44'; ctx.shadowColor = '#ff8800'; ctx.shadowBlur = 22;
+  ctx.fillText('🎳 BOLWOING ALLEY', W / 2, H / 2 - 100);
   ctx.restore();
 
-  ctx.font = '16px system-ui';
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#bbb';
-  ctx.fillText('Waiting for players…', CW / 2, CH / 2 - 55);
+  ctx.font = '16px system-ui'; ctx.textAlign = 'center'; ctx.fillStyle = '#bbb';
+  ctx.fillText('Waiting for players… (2–4)', W / 2, H / 2 - 55);
 
-  // Player list
   for (let i = 0; i < roomPlayers.length; i++) {
     const p = roomPlayers[i];
-    const py = CH / 2 - 20 + i * 36;
-    ctx.fillStyle = p.color || '#aaa';
-    ctx.fillRect(CW / 2 - 120, py, 12, 24);
-    ctx.font = '15px system-ui';
-    ctx.textAlign = 'left';
+    const py = H / 2 - 20 + i * 38;
+    ctx.fillStyle = p.color || '#888';
+    ctx.fillRect(W / 2 - 120, py, 10, 26);
+    ctx.font = '15px system-ui'; ctx.textAlign = 'left';
     ctx.fillStyle = p.ready ? '#66ff88' : '#ddd';
-    ctx.fillText(`${p.name}  ${p.ready ? '✅ Ready' : '⌛ Not ready'}`, CW / 2 - 100, py + 17);
+    ctx.fillText(`${p.name}   ${p.ready ? '✅ Ready' : '⌛ Not ready'}`, W / 2 - 104, py + 17);
   }
-
-  ctx.font = '13px system-ui';
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#778';
-  ctx.fillText('2–4 players · 10 frames · Strike wins 750🪙', CW / 2, CH - 30);
+  ctx.font = '13px system-ui'; ctx.textAlign = 'center'; ctx.fillStyle = '#556';
+  ctx.fillText('10 frames · 1st place wins 750🪙', W / 2, H - 28);
 }
 
-// --- Waiting screen ---
 function drawWaiting() {
-  ctx.save();
-  ctx.fillStyle = 'rgba(0,0,0,0.7)';
-  ctx.fillRect(0, 0, CW, CH);
-  ctx.font = '18px system-ui';
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#aaa';
-  ctx.fillText('Connecting to Bolwoing Alley…', CW / 2, CH / 2);
-  ctx.restore();
+  ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(0, 0, W, H);
+  ctx.font = '20px system-ui'; ctx.textAlign = 'center'; ctx.fillStyle = '#aaa';
+  ctx.fillText('Connecting to Bolwoing Alley…', W / 2, H / 2);
 }
 
-// --- Watch HUD (when it's not our turn) ---
-function drawWatchHUD() {
-  const watching = roomPlayers.find((p) => p.id === currentPlayerId);
-  if (!watching) return;
-  ctx.font = '15px system-ui';
-  ctx.textAlign = 'center';
-  ctx.fillStyle = 'rgba(160,200,255,0.85)';
-  ctx.fillText(`🎳 ${watching.name}'s turn…`, CW / 2, CH - 10);
-}
-
-// --- Game over ---
 function drawGameOver() {
-  ctx.save();
-  ctx.fillStyle = 'rgba(0,0,0,0.75)';
-  ctx.fillRect(0, 0, CW, CH);
+  ctx.fillStyle = 'rgba(0,0,0,0.8)'; ctx.fillRect(0, 0, W, H);
+  ctx.save(); ctx.font = 'bold 44px system-ui'; ctx.textAlign = 'center';
+  ctx.fillStyle = '#ffee44'; ctx.shadowColor = '#ff8800'; ctx.shadowBlur = 28;
+  ctx.fillText('🏆 GAME OVER', W / 2, H / 2 - 120); ctx.restore();
 
-  ctx.font = 'bold 40px system-ui';
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#ffee44';
-  ctx.shadowColor = '#ff8800';
-  ctx.shadowBlur = 24;
-  ctx.fillText('🏆 GAME OVER', CW / 2, CH / 2 - 120);
-  ctx.restore();
-
+  const medals = ['🥇','🥈','🥉','4️⃣'];
+  const prizes = [750, 300, 150, 0];
   for (let i = 0; i < ranked.length; i++) {
     const r = ranked[i];
-    const ry = CH / 2 - 60 + i * 56;
-    const medals = ['🥇', '🥈', '🥉', '4️⃣'];
+    const ry = H / 2 - 55 + i * 54;
     const isMe = r.id === selfId;
-
-    ctx.font = isMe ? 'bold 20px system-ui' : '18px system-ui';
+    ctx.font = isMe ? 'bold 22px system-ui' : '19px system-ui';
     ctx.textAlign = 'center';
-    ctx.fillStyle = isMe ? '#ffdd44' : '#ddd';
-    ctx.fillText(`${medals[i]} ${r.name}  —  ${r.score} pts`, CW / 2, ry);
-
-    if (i === 0 && COIN_PRIZES[0]) {
-      ctx.font = '14px system-ui';
-      ctx.fillStyle = '#88ffaa';
-      ctx.fillText(`+${COIN_PRIZES[0].toLocaleString()}🪙`, CW / 2, ry + 22);
-    } else if (i === 1 && COIN_PRIZES[1]) {
-      ctx.font = '13px system-ui';
-      ctx.fillStyle = '#aaddff';
-      ctx.fillText(`+${COIN_PRIZES[1].toLocaleString()}🪙`, CW / 2, ry + 20);
+    ctx.fillStyle = isMe ? '#ffee44' : '#ddd';
+    ctx.fillText(`${medals[i]} ${r.name}  —  ${r.score} pts`, W / 2, ry);
+    if (prizes[i]) {
+      ctx.font = '13px system-ui'; ctx.fillStyle = i === 0 ? '#88ffaa' : '#aaddff';
+      ctx.fillText(`+${prizes[i].toLocaleString()}🪙`, W / 2, ry + 20);
     }
   }
-
-  ctx.font = '14px system-ui';
-  ctx.textAlign = 'center';
-  ctx.fillStyle = '#778';
-  ctx.fillText('Press ESC to leave', CW / 2, CH - 20);
+  ctx.font = '14px system-ui'; ctx.fillStyle = '#556'; ctx.fillText('ESC to leave', W / 2, H - 18);
 }
 
-// ─── Utility ─────────────────────────────────────────────────────────────────
+// ─── Sound (Web Audio synth) ─────────────────────────────────────────────────
+function getAC(): AudioContext | null {
+  if (!audioCtx) {
+    try { audioCtx = new AudioContext(); } catch { return null; }
+  }
+  return audioCtx;
+}
+function playRollSfx() {
+  const ac = getAC(); if (!ac) return;
+  try {
+    const buf = ac.createBuffer(1, ac.sampleRate * 0.8, ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      const t2 = i / ac.sampleRate;
+      const env = Math.max(0, 0.3 - t2 * 0.38);
+      d[i] = (Math.random() * 2 - 1) * env * (0.6 + 0.4 * Math.sin(t2 * 180));
+    }
+    const src = ac.createBufferSource(); src.buffer = buf;
+    const g = ac.createGain(); g.gain.value = 0.3;
+    src.connect(g); g.connect(ac.destination); src.start();
+  } catch {}
+}
+function playPinCrash(count: number) {
+  const ac = getAC(); if (!ac) return;
+  try {
+    const dur = 0.4;
+    const buf = ac.createBuffer(1, ac.sampleRate * dur, ac.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) {
+      const t2 = i / ac.sampleRate;
+      const env = Math.pow(Math.max(0, 1 - t2 / dur), 1.5);
+      d[i] = (Math.random() * 2 - 1) * env * 0.9;
+    }
+    const src = ac.createBufferSource(); src.buffer = buf;
+    const g = ac.createGain(); g.gain.value = 0.15 + count * 0.04;
+    src.connect(g); g.connect(ac.destination); src.start();
+  } catch {}
+}
+function playStrikeSfx() {
+  const ac = getAC(); if (!ac) return;
+  try {
+    const notes = [523, 659, 784, 1047]; // C5 E5 G5 C6 fanfare
+    notes.forEach((freq, i) => {
+      const osc = ac.createOscillator();
+      const g = ac.createGain();
+      osc.frequency.value = freq;
+      osc.type = 'sine';
+      const st = ac.currentTime + i * 0.12;
+      g.gain.setValueAtTime(0, st);
+      g.gain.linearRampToValueAtTime(0.18, st + 0.02);
+      g.gain.linearRampToValueAtTime(0, st + 0.3);
+      osc.connect(g); g.connect(ac.destination);
+      osc.start(st); osc.stop(st + 0.32);
+    });
+  } catch {}
+}
+
+// ─── Utilities ────────────────────────────────────────────────────────────────
+function lerp(a: number, b: number, t: number) { return a + (b - a) * t; }
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.lineTo(x + w - r, y);
-  ctx.arcTo(x + w, y, x + w, y + r, r);
-  ctx.lineTo(x + w, y + h - r);
-  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
-  ctx.lineTo(x + r, y + h);
-  ctx.arcTo(x, y + h, x, y + h - r, r);
-  ctx.lineTo(x, y + r);
-  ctx.arcTo(x, y, x + r, y, r);
-  ctx.closePath();
+  ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r); ctx.lineTo(x + w, y + h - r);
+  ctx.arcTo(x + w, y + h, x + w - r, y + h, r); ctx.lineTo(x + r, y + h);
+  ctx.arcTo(x, y + h, x, y + h - r, r); ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r); ctx.closePath();
 }
-
-// Coin prizes exposed for display
-const COIN_PRIZES = [750, 300, 150, 0];
