@@ -236,21 +236,6 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
-// --- mouse sensitivity ---
-let mouseSens = parseFloat(prefGet('mouseSens', '1'));
-const mouseSensSlider = document.getElementById('mouseSensSlider') as HTMLInputElement;
-const mouseSensLabel = document.getElementById('mouseSensLabel') as HTMLSpanElement;
-function applyMouseSens() {
-  mouseSens = parseFloat(mouseSensSlider.value);
-  mouseSensLabel.textContent = mouseSens.toFixed(2) + '×';
-}
-mouseSensSlider.value = prefGet('mouseSens', '1');
-applyMouseSens();
-mouseSensSlider.addEventListener('input', () => {
-  prefSet('mouseSens', mouseSensSlider.value);
-  applyMouseSens();
-});
-
 // --- synthesized sound effects ---
 function playHitSound() {
   if (muted) return;
@@ -4204,8 +4189,8 @@ function onBoardMouseMove(e: MouseEvent) {
   if (inArena() && state?.poly) {
     const me = myPolyPlayer(state);
     if (!me) return;
-    const dx = e.movementX * (COURT.w / r.width) * mouseSens;
-    const dy = e.movementY * (COURT.h / r.height) * mouseSens;
+    const dx = e.movementX * (COURT.w / r.width);
+    const dy = e.movementY * (COURT.h / r.height);
     const along = dx * Math.cos(me.angle) + dy * Math.sin(me.angle);
     const max = arenaMaxPos(state, me.len);
     arenaTarget = Math.max(-max, Math.min(max, arenaTarget + along));
@@ -4225,22 +4210,22 @@ function onBoardMouseMove(e: MouseEvent) {
   // to an edge in a single frame and making it appear frozen.
   // Rotated court: paddle slides horizontally too, same movementX logic.
   if (state?.rotated === 1) {
-    target = clampPaddle(target - e.movementX * (COURT.h / r.width) * mouseSens);
+    target = clampPaddle(target - e.movementX * (COURT.h / r.width));
   } else if (state?.rotated === 2) {
-    target = clampPaddle(target - e.movementY * (COURT.h / r.height) * mouseSens);
+    target = clampPaddle(target - e.movementY * (COURT.h / r.height));
   } else if (state?.rotated === 3) {
-    target = clampPaddle(target + e.movementX * (COURT.h / r.width) * mouseSens);
+    target = clampPaddle(target + e.movementX * (COURT.h / r.width));
   } else if (state?.viewMode === 'firstperson') {
     const sign = myRole === 'right' ? -1 : 1;
     const dx = Math.max(-40, Math.min(40, e.movementX));
-    target = clampPaddle(target + sign * dx * (COURT.h / r.width) * 1.5 * mouseSens);
+    target = clampPaddle(target + sign * dx * (COURT.h / r.width) * 1.5);
   } else {
-    target = clampPaddle(target + e.movementY * (COURT.h / r.height) * mouseSens);
+    target = clampPaddle(target + e.movementY * (COURT.h / r.height));
     // Roam power-up: the otherwise-unused horizontal axis pushes the paddle into the
     // court. Moving toward center (right for left side, left for right side) extends it.
     if (myRoamHits() > 0 && myAmmo() <= 0) {
       const sign = myRole === 'right' ? -1 : 1;
-      targetX = clampRoam(targetX + sign * e.movementX * (COURT.w / r.width) * mouseSens);
+      targetX = clampRoam(targetX + sign * e.movementX * (COURT.w / r.width));
     }
   }
 }

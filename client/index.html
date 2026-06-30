@@ -3336,17 +3336,7 @@
         white-space: nowrap;
         line-height: 1.6;
       }
-      /* Personal section header inside the modes panel. */
-      .modes-section-head {
-        font-size: 9px; letter-spacing: 1px; text-transform: uppercase;
-        color: #6b7796; padding: 4px 10px 0; margin: 0;
-      }
-      /* Sensitivity slider controls row */
-      .mode-sens-controls { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-      #mouseSensSlider { width: 80px; height: 6px; accent-color: #7da2ff; cursor: pointer; }
-      #mouseSensLabel { font-size: 11px; color: #8b98b8; min-width: 36px; text-align: right; }
       /* Win score selector in the modes panel. */
-      .mode-section-divider { height: 1px; background: #1c2640; margin: 6px 10px 2px; }
       .win-score-row {
         display: flex;
         align-items: center;
@@ -4255,27 +4245,7 @@
               <button class="ws-btn" data-score="7" type="button" title="First to 7 wins">7</button>
             </div>
           </div>
-          <div class="mode-section-divider"></div>
-          <h4 class="modes-section-head">Personal</h4>
-          <label class="mode-option" title="After each goal, replay the last ~1.5 seconds in slow motion.">
-            <span class="mode-icon">⏪</span>
-            <span class="mode-text">
-              <span class="mode-name">Goal replay</span>
-              <span class="mode-desc">Slow-mo replay when a point is scored</span>
-            </span>
-            <input type="checkbox" id="replayToggle" />
-            <span class="mode-switch" aria-hidden="true"></span>
-          </label>
-          <div class="mode-option" style="padding-bottom:0">
-            <span class="mode-icon">🐭</span>
-            <span class="mode-text">
-              <span class="mode-name">Mouse sensitivity</span>
-              <span class="mode-desc">Multiplier for mouse movement</span>
-            </span>
-            <div class="mode-sens-controls">
-              <input type="range" id="mouseSensSlider" min="0.25" max="3.0" step="0.05" value="1.0" />
-              <span id="mouseSensLabel">1.00×</span>
-            </div>
+        </div>
           </div>
         </div>
       </div>
