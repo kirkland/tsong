@@ -522,6 +522,8 @@ export class Lobby {
   private stockHistTick = 0; // re-roll counter, to decide which series to sample each tick
   private liveMatchId: number | null = null; // bracket match currently on the court
   private tourneyInterMs = 0; // ms left on the "next match" interstitial between games
+  // Replay watching: seated players currently mid-replay hold the serve countdown.
+  private replayWatchers = new Set<WebSocket>();
   // Season pass: weekly challenge progress (resets each week).
   private seasonWeekId = getSeasonWeekId();
   private seasonProgress = new Map<string, Map<SeasonChallengeId, number>>(); // pid → id → count
@@ -5205,6 +5207,8 @@ export class Lobby {
   }
 
   remove(ws: WebSocket) {
+    this.replayWatchers.delete(ws);
+    this.game.serveHeld = this.replayWatchers.size > 0;
     this.doomLeave(ws); // drop any co-op DOOM slot (and notify the partner)
     this.ntLeave(ws);   // drop any Nuketown slot (ends the match if the host left)
     this.srLeave(ws);   // drop any Street Demons grid slot (ends the race if the host left)
@@ -5667,6 +5671,20 @@ export class Lobby {
     this.broadcastWorld();
   }
 
+  // --- Goal replay serve hold ---
+
+  /** A seated player started or ended a goal replay; hold or release the serve countdown. */
+  replayWatching(ws: WebSocket, watching: boolean) {
+    if (watching) {
+      // Only seated duel players can hold the serve.
+      if (!this.sideOf(ws) || this.mode !== 'duel') return;
+      this.replayWatchers.add(ws);
+    } else {
+      this.replayWatchers.delete(ws);
+    }
+    this.game.serveHeld = this.replayWatchers.size > 0;
+  }
+
   // --- Season Pass ---
 
   private checkSeasonWeekReset() {
@@ -5844,6 +5862,8 @@ export class Lobby {
   private unseat(ws: WebSocket) {
     const side = this.sideOf(ws);
     if (!side) return;
+    this.replayWatchers.delete(ws);
+    this.game.serveHeld = this.replayWatchers.size > 0;
     this.teams[side] = this.teams[side].filter((s) => s !== ws);
     const conn = this.conns.get(ws);
     if (conn) {

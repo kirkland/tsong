@@ -670,8 +670,12 @@ const net = connect(
       if (msg.status === 'playing' && !msg.paused) {
         if (msg.hitSeq !== prevHitSeq) {
           playHitSound();
-          // First paddle hit = new point is live — cut the replay immediately.
-          if (replayFrames) { replayFrames = null; replayIdx = 0; }
+          // First paddle hit = serve has landed, new point is live — release serve hold and cut replay.
+          if (replayFrames) {
+            replayFrames = null;
+            replayIdx = 0;
+            net.send({ type: 'replayWatching', watching: false });
+          }
         }
         if (msg.score.left > prevScore.left || msg.score.right > prevScore.right) {
           playScoreSound();
@@ -680,6 +684,7 @@ const net = connect(
             replayFrames = [...replayBuf, msg];
             replayIdx = 0;
             replayNextAt = performance.now();
+            net.send({ type: 'replayWatching', watching: true });
           }
         }
       }
@@ -5125,6 +5130,7 @@ function loop(t: number) {
       } else {
         replayFrames = null;
         replayIdx = 0;
+        net.send({ type: 'replayWatching', watching: false });
       }
     }
     // Apply canvas effects against the fully-resolved renderState (replay frame or live).

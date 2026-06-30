@@ -911,7 +911,8 @@ export type ClientMsg =
   | { type: 'nomResolve' } // (the Speaker / proposer) call the vote and resolve the floor early
   | { type: 'eloProfileReq'; rank: number; self?: true }
   | { type: 'seasonPassReq' }                // request a fresh season pass state
-  | { type: 'seasonClaim'; id: string };     // claim a completed weekly challenge reward
+  | { type: 'seasonClaim'; id: string }      // claim a completed weekly challenge reward
+  | { type: 'replayWatching'; watching: boolean }; // hold/release serve countdown during goal replay
 
 // --- Server -> Client ---
 

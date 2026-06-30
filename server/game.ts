@@ -227,6 +227,7 @@ export class Game {
 
   private serveTimer = 0;
   private serveDir = 1; // +1 = launch toward right, -1 = toward left
+  serveHeld = false; // when true, freeze the serve countdown (e.g. a client is watching goal replay)
   private targetTimer = 0; // counts down to spawn (no target) or to despawn (target up)
 
   /** Capture the full simulation state for persistence across a restart. */
@@ -830,7 +831,7 @@ export class Game {
     this.movePinata(dt, this.slowTimer > 0 ? SLOW_SCALE : 1);
 
     if (this.serveTimer > 0) {
-      this.serveTimer -= dt;
+      if (!this.serveHeld) this.serveTimer -= dt;
       if (this.serveTimer <= 0) this.launch();
       return;
     }

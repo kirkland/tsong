@@ -292,6 +292,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'seasonPassReq':
         lobby.sendSeasonPass(ws);
         break;
+      case 'replayWatching':
+        lobby.replayWatching(ws, msg.watching === true);
+        break;
       case 'buyBeer':
         lobby.buyBeer(ws);
         break;
