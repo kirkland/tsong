@@ -136,7 +136,7 @@ export function openBowling(netAdapter: BowlingNet) {
   document.addEventListener('keydown', onKey);
 
   resetLocal();
-  phase = 'waiting';
+  setPhase('waiting');
   net.bowlJoin();
   lastTs = performance.now();
   rafId = requestAnimationFrame(loop);
@@ -144,6 +144,10 @@ export function openBowling(netAdapter: BowlingNet) {
 
 function bs(bg: string) {
   return `background:${bg};color:#fff;border:none;padding:8px 20px;border-radius:6px;font:14px system-ui;cursor:pointer;`;
+}
+function setPhase(p: Phase) {
+  phase = p;
+  if (canvas) canvas.style.cursor = (p === 'beer' || p === 'lobby' || p === 'over' || p === 'waiting') ? 'default' : 'none';
 }
 function resetLocal() {
   pinState = new Array(10).fill(true);
@@ -191,14 +195,14 @@ function applyState(m: any) {
     ballInFrame = lastFrBalls >= 1 ? 2 : 1;
     pinsStandingBefore = pinState.filter(Boolean).length;
     if (m.phase === 'over') {
-      phase = 'over';
+      setPhase('over');
     } else if (isMyTurn && ballInFrame === 1) {
-      phase = 'beer';
+      setPhase('beer');
     } else {
       phase = isMyTurn ? 'aiming' : 'scored';
     }
-  } else { phase = 'lobby'; }
-  if (m.ranked) { ranked = m.ranked; phase = 'over'; }
+  } else { setPhase('lobby'); }
+  if (m.ranked) { ranked = m.ranked; setPhase('over'); }
   syncReadyBtn();
 }
 function applyResult(m: any) {
@@ -212,7 +216,7 @@ function applyResult(m: any) {
   rollBallY = H - 40;
   rollBallR = 52;
   rollT = 0;
-  phase = 'rolling';
+  setPhase('rolling');
   playRollSfx();
 }
 
@@ -256,8 +260,8 @@ function applyPendingResult() {
     trigCel('gutter', 1.4);
   }
   pinsStandingBefore = pinState.filter(Boolean).length;
-  phase = 'pinfalling';
-  setTimeout(() => { if (bowlingOpen) phase = 'scored'; }, 1200);
+  setPhase('pinfalling');
+  setTimeout(() => { if (bowlingOpen) setPhase('scored'); }, 1200);
 }
 function applyNext(m: any) {
   pinState = m.pinState ?? new Array(10).fill(true);
@@ -270,14 +274,14 @@ function applyNext(m: any) {
   pinsStandingBefore = pinState.filter(Boolean).length;
   // On new turns (ball 1), offer a beer before aiming. Ball 2 goes straight to aiming.
   if (isMyTurn && ballInFrame === 1) {
-    phase = 'beer';
+    setPhase('beer');
   } else {
     phase = isMyTurn ? 'aiming' : 'scored';
   }
 }
 function applyOver(m: any) {
   ranked = m.ranked ?? []; scores = m.scores ?? scores; frames = m.frames ?? frames;
-  phase = 'over';
+  setPhase('over');
   const w = ranked[0];
   if (w && (scores[w.id]?.pop() ?? 0) >= 300) trigCel('perfect', 7);
 }
@@ -324,7 +328,7 @@ function setAimFromX(screenX: number) {
 function onMove(e: MouseEvent) { setAimFromX(cx(e)); }
 function onDown(e: MouseEvent) {
   if (!isMyTurn) return;
-  if (phase === 'aiming') { charging = true; chargeT = 0; phase = 'charging'; }
+  if (phase === 'aiming') { charging = true; chargeT = 0; setPhase('charging'); }
   else if (phase === 'charging') { fireThrow(); }
 }
 function onUp(_e: MouseEvent) {
@@ -336,7 +340,7 @@ function onTE(e: TouchEvent) {
   e.preventDefault();
   if (!isMyTurn) return;
   if (phase === 'aiming' || phase === 'charging') {
-    if (!charging) { charging = true; chargeT = 0; phase = 'charging'; }
+    if (!charging) { charging = true; chargeT = 0; setPhase('charging'); }
     else fireThrow();
   }
 }
@@ -344,7 +348,7 @@ function onKey(e: KeyboardEvent) {
   if (e.key === 'Escape') { closeBowling(); return; }
   if (e.key === ' ' || e.key === 'Enter') {
     if (!isMyTurn) return;
-    if (phase === 'aiming') { charging = true; chargeT = 0; phase = 'charging'; }
+    if (phase === 'aiming') { charging = true; chargeT = 0; setPhase('charging'); }
     else if (phase === 'charging') fireThrow();
   }
 }
@@ -355,7 +359,7 @@ function fireThrow() {
   lockedAim = Math.max(-1, Math.min(1, aimX + drunkDrift));
   lockedPower = Math.min(1, chargeT / CHARGE_FULL);
   charging = false; chargeT = 0;
-  phase = 'rolling'; rollT = 0;
+  setPhase('rolling'); rollT = 0;
   rollBallX = VP_X + lockedAim * W * 0.22;
   rollBallY = H - 40; rollBallR = 52;
   playRollSfx();
@@ -1228,7 +1232,7 @@ function drawBeerPrompt() {
       if (yesBtn || noBtn) {
         canvas.removeEventListener('click', handler);
         (canvas as any)._beerHandler = null;
-        phase = 'aiming';
+        setPhase('aiming');
       }
     };
     (canvas as any)._beerHandler = handler;
