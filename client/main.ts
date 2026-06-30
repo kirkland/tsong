@@ -1133,6 +1133,22 @@ const COMMANDS: ChatCommand[] = [
     },
   },
   {
+    name: 'bounty',
+    hint: 'Put coins on a player\'s head — /bounty <name> <amount>. Whoever beats them next claims the pot.',
+    enabled: () => joined,
+    disabledHint: 'join the game first',
+    argOptions: () => knownPlayerNames(),
+    argHint: (arg) => `Bounty ${arg} — then add an amount (e.g. /bounty ${arg} 100)`,
+    run: (arg) => {
+      const tokens = (arg ?? '').trim().split(/\s+/).filter(Boolean);
+      if (tokens.length < 2) return false; // need a name AND an amount — keep the text visible
+      const amount = Number(tokens.pop());
+      const to = tokens.join(' ');
+      if (!to || !Number.isFinite(amount) || amount <= 0 || !Number.isInteger(amount)) return false;
+      net.send({ type: 'placeBounty', to, amount });
+    },
+  },
+  {
     name: 'whisper',
     hint: 'Private message — /whisper <name> <message>. Only they see it.',
     enabled: () => joined,
