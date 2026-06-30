@@ -176,10 +176,10 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
   ctx.fillText(String(s.score.left), COURT.w / 2 - 70, 18);
   ctx.fillText(String(s.score.right), COURT.w / 2 + 70, 18);
 
-  // Current ball speed
+  // Current ball speed — drawn below the score pair so it doesn't overlap the 44px digits
   ctx.fillStyle = '#6b7796';
   ctx.font = '13px ui-monospace, monospace';
-  ctx.fillText(`${Math.round(s.ballSpeed)}`, COURT.w / 2, 22);
+  ctx.fillText(`${Math.round(s.ballSpeed)}`, COURT.w / 2, 68);
 
   // Player names along the bottom, with the lead player's equipped title as flair.
   const leftId = s.paddles.left.players[0]?.title;

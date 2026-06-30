@@ -1137,7 +1137,7 @@
       }
       #marketGraphTf button.active { background: #2d4070; border-color: #3a6df0; color: #fff; }
       .coin-graph { display: block; width: 100%; height: 26px; margin-top: 4px; }
-      #marketNote { font-size: 10px; color: #5a647e; margin-top: 8px; line-height: 1.4; }
+      #marketNote { font-size: 11px; color: #5a647e; margin-top: 8px; line-height: 1.5; display: flex; flex-direction: column; gap: 5px; }
       #marketList { max-height: 56vh; overflow-y: auto; }
       /* Economy Overhaul: House readout + order-flow tint */
       .house-readout { font-size: 11px; color: #c9b46a; margin-bottom: 8px; }
@@ -1706,6 +1706,7 @@
       .mines-result { font: 800 13px ui-monospace, monospace; min-height: 18px; text-align: center; margin: 6px 0; }
       .mines-win  { color: #6ee7a8; }
       .mines-lose { color: #f87171; }
+      .mines-note { font-size: 10px; color: #5a647e; line-height: 1.4; margin-top: 8px; }
 
       /* --- Horse Racing panel --- */
       #horseBtn {
@@ -2079,7 +2080,7 @@
         border-radius: 6px;
         border: 1px solid #2a3550;
         background: #0e1424;
-        color: #ffd166;
+        color: #7da2ff;
         cursor: pointer;
       }
       #tourneyBtn:hover { background: #18203a; }
@@ -3228,6 +3229,15 @@
         white-space: nowrap;
         line-height: 1.6;
       }
+      /* Personal section header inside the modes panel. */
+      .modes-section-head {
+        font-size: 9px; letter-spacing: 1px; text-transform: uppercase;
+        color: #6b7796; padding: 4px 10px 0; margin: 0;
+      }
+      /* Sensitivity slider controls row */
+      .mode-sens-controls { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+      #mouseSensSlider { width: 80px; height: 6px; accent-color: #7da2ff; cursor: pointer; }
+      #mouseSensLabel { font-size: 11px; color: #8b98b8; min-width: 36px; text-align: right; }
       /* Win score selector in the modes panel. */
       .mode-section-divider { height: 1px; background: #1c2640; margin: 6px 10px 2px; }
       .win-score-row {
@@ -3495,7 +3505,7 @@
           gap: 4px;
           flex-wrap: wrap;
         }
-        #viewModeBtn, #muteBtn, #workMenuBtn, #gameModesBtn, #powerupInfoBtn, #loanBtn, #rouletteBtn, #arcadeBtn, #casinoBtn, #economyBtn {
+        #viewModeBtn, #muteBtn, #worldBtn, #workMenuBtn, #gameModesBtn, #powerupInfoBtn, #tourneyBtn, #shopBtn, #arcadeBtn, #casinoBtn, #economyBtn {
           font-size: 10px;
           padding: 4px 8px;
         }
@@ -3759,7 +3769,10 @@
           <button type="button" data-tf="1d">1d</button>
         </div>
         <div id="marketList"></div>
-        <div id="marketNote"><b>Buy</b> to bet a coin rises; <b>Short</b> to bet it falls. A short profits as the price drops (toward +100% near zero), but if the price climbs past your entry it goes <b>negative</b> — covering then <b>costs</b> you coins, so a short gone wrong can drain far more than you staked. Prices update every 30s and drift up over the day. ⚠️ Unpaid loans build market instability; at 100% a <b>CRASH</b> tanks a random handful of coins by random amounts — while one random coin <b>spikes up</b> (you never know which, or how hard), so blanket-shorting is never safe.</div>
+        <div id="marketNote">
+          <span><b>Buy</b> to bet a coin rises; <b>Short</b> to bet it falls. A short gone wrong can drain far more than you staked — covering costs coins if the price climbs past your entry. Prices update every 30s and drift up over the day.</span>
+          <span>⚠️ Unpaid loans build market instability. At 100% a <b>CRASH</b> tanks a random handful of coins while one random coin <b>spikes up</b> — blanket-shorting is never safe.</span>
+        </div>
       </div>
       <div id="newsPanel" hidden>
         <h3>📰 Market News</h3>
@@ -3962,7 +3975,7 @@
         </div>
         <div class="mines-grid" id="minesGrid"></div>
         <div id="minesResult" class="mines-result"></div>
-        <div class="plinko-note">Flip tiles to find gems — avoid mines. Cash out any time after your first safe reveal. More mines = higher multipliers. Max bet 50,000 🪙.</div>
+        <div class="mines-note">Flip tiles to find gems — avoid mines. Cash out any time after your first safe reveal. More mines = higher multipliers. Max bet 50,000 🪙.</div>
       </div>
       <div id="lootPanel" hidden>
         <h3>🎁 Loot Box</h3>
@@ -4136,16 +4149,16 @@
             </div>
           </div>
           <div class="mode-section-divider"></div>
-          <h4 style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#6b7796;padding:4px 6px 0">Personal</h4>
+          <h4 class="modes-section-head">Personal</h4>
           <div class="mode-option" style="padding-bottom:0">
             <span class="mode-icon">🐭</span>
             <span class="mode-text">
               <span class="mode-name">Mouse sensitivity</span>
               <span class="mode-desc">Multiplier for mouse movement</span>
             </span>
-            <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-              <input type="range" id="mouseSensSlider" min="0.25" max="3.0" step="0.05" value="1.0" style="width:80px;height:6px;accent-color:#7da2ff;cursor:pointer" />
-              <span id="mouseSensLabel" style="font-size:11px;color:#8b98b8;min-width:36px;text-align:right">1.00×</span>
+            <div class="mode-sens-controls">
+              <input type="range" id="mouseSensSlider" min="0.25" max="3.0" step="0.05" value="1.0" />
+              <span id="mouseSensLabel">1.00×</span>
             </div>
           </div>
         </div>
