@@ -79,6 +79,7 @@ let dragging = false;
 let dragOriginX = 0, dragOriginY = 0;
 let dragCurX = 0, dragCurY = 0;
 // charging = true while dragging (kept for phase compatibility)
+let aimX = 0;     // current aim line X (−1..1), updated by mouse/drag
 let charging = false;
 let chargeT = 0;  // unused with drag controls but kept to avoid breakage
 const CHARGE_FULL = 1.2;
