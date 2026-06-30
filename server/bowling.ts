@@ -40,9 +40,11 @@ export function simulateThrow(standing: boolean[], offset: number, power: number
   let bx = laneX + wobble;
   let by = -1.2; // start before the head pin
 
-  // Ball travels mostly "into the lane" with slight curvature toward center
-  const dx = -bx * 0.08; // gentle pull toward center (bowling lane hook)
-  const dy = 0.06;       // step size per iteration
+  // Ball travels mostly "into the lane" with a very slight hook toward center.
+  // Keep the multiplier tiny — large values cause the ball to wildly overshoot
+  // the opposite side of the lane by the time it reaches the pin deck.
+  const dx = -bx * 0.002; // gentle hook (not overcorrection)
+  const dy = 0.06;         // step size per iteration
 
   const result = [...standing];
 
@@ -264,11 +266,13 @@ export class BowlingManager {
     // Record this ball in the player's frame
     this.recordBall(room, current, pinsDown.length);
 
-    // Tell everyone the result
+    // Tell everyone the result (include offset so clients can animate the roll)
     this.broadcast(room, {
       type: 'bowlThrowResult',
       roomId: room.id,
       playerId: connId,
+      offset: off,
+      power: pow,
       pinState: room.pinState,
       pinsDown,
       scores: this.allScores(room),
@@ -334,8 +338,11 @@ export class BowlingManager {
     room.phase = 'playing';
     room.currentPlayerIdx = 0;
     room.pinState = new Array(10).fill(true);
-    // Init frames
-    for (const p of room.players) { p.frames = [[]]; } // frame 0, no rolls yet
+    // Only give the first player their opening frame. Everyone else gets one
+    // pushed in advance() the moment the turn rotates to them, so no player
+    // ever starts with a ghost empty frame at index 0.
+    for (const p of room.players) { p.frames = []; }
+    room.players[0].frames = [[]];
     this.broadcast(room, { type: 'bowlStart', roomId: room.id, ...this.stateMsg(room) });
     this.startRollTimer(room);
   }
