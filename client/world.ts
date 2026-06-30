@@ -866,6 +866,8 @@ export function startWorld(net: WorldNet): void {
   // --- car state ---
   let driving = false;
   let vx = 0, vy = 0; // car velocity, world units / s (drives the drift physics)
+  let handbrake = false; // hold Shift (or the on-screen DRIFT button) → break the rear loose and slide
+  let lastSkidMarkAt = 0; // throttle for laying rubber on the ground while drifting
 
   // --- boat / water state ---
   // Water you can drive a boat on: each region is the ellipse of open water inside a pond building
@@ -1080,6 +1082,22 @@ export function startWorld(net: WorldNet): void {
   help.style.cssText =
     'position:absolute;left:14px;bottom:12px;color:#cdd8f5;font-size:12px;pointer-events:none;line-height:1.5;z-index:2;text-shadow:0 1px 4px #000a;';
   overlay.appendChild(help);
+
+  // Hold-to-DRIFT button (bottom-right) for touch — keyboard players use Shift. Shown only while
+  // driving; press-and-hold engages the handbrake, exactly like holding Shift.
+  const driftBtn = document.createElement('button');
+  driftBtn.type = 'button';
+  driftBtn.textContent = '🌀 DRIFT';
+  driftBtn.style.cssText =
+    'position:absolute;right:20px;bottom:84px;display:none;pointer-events:auto;cursor:pointer;z-index:5;' +
+    'width:86px;height:86px;border-radius:50%;background:#4a2a6b;color:#f0d6ff;border:2px solid #8f55a0;' +
+    'font-size:14px;font-weight:800;letter-spacing:.5px;touch-action:none;user-select:none;box-shadow:0 4px 14px #0008;';
+  overlay.appendChild(driftBtn);
+  driftBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); handbrake = true; driftBtn.style.background = '#7a3a9b'; });
+  const releaseDrift = (e?: Event) => { e?.preventDefault(); handbrake = false; driftBtn.style.background = '#4a2a6b'; };
+  driftBtn.addEventListener('pointerup', releaseDrift);
+  driftBtn.addEventListener('pointercancel', releaseDrift);
+  driftBtn.addEventListener('pointerleave', releaseDrift);
 
   // Blessing of the Ball badge (top-centre) — a gilded pill with a bar that drains as the blessing
   // wears off. Hidden whenever no blessing is active. Updated each frame in update().
@@ -1628,6 +1646,7 @@ export function startWorld(net: WorldNet): void {
     } else {
       driving = false;
       vx = vy = 0;
+      handbrake = false;
       revSound(false);
     }
     syncDriveBtn();
@@ -1696,6 +1715,8 @@ export function startWorld(net: WorldNet): void {
       driveBtn.textContent = car ? `🚗 Drive ${car.name}` : '🚗 Drive';
     }
     driveBtn.style.opacity = car || driving ? '1' : '0.6';
+    driftBtn.style.display = driving ? 'block' : 'none'; // hold-to-drift only makes sense behind the wheel
+    if (!driving) { handbrake = false; driftBtn.style.background = '#4a2a6b'; }
     updateHelp();
   }
 
@@ -1711,7 +1732,7 @@ export function startWorld(net: WorldNet): void {
     }
     const boatHint = boardableWater() ? ' · <b>B</b> board boat' : '';
     help.innerHTML = driving
-      ? 'W/S or ↑/↓ throttle · A/D or ←/→ steer · drag to drive · <b>F</b> get out · <b>T</b> chat · <b>Y</b> say'
+      ? 'W/S or ↑/↓ throttle · A/D or ←/→ steer · <b>Shift</b> drift · drag to drive · <b>F</b> get out · <b>T</b> chat'
       : `WASD / arrows or drag to walk · <b>F</b> drive${boatHint} · <b>Space</b> enter · <b>T</b> chat · <b>Y</b> say`;
   }
 
@@ -3251,10 +3272,12 @@ export function startWorld(net: WorldNet): void {
       triggerNear(); // no-ops if nothing's in range; also covers dungeon chests/stairs/exit + parcels
       return;
     }
+    if (k === 'shift') { handbrake = true; e.preventDefault(); e.stopPropagation(); return; } // handbrake → drift
     if (MOVE_KEYS.has(k)) { keys.add(k); e.preventDefault(); e.stopPropagation(); }
   }
   function onKeyUp(e: KeyboardEvent) {
     const k = e.key.toLowerCase();
+    if (k === 'shift') { handbrake = false; e.stopPropagation(); return; }
     if (MOVE_KEYS.has(k)) { keys.delete(k); e.stopPropagation(); }
   }
   function onPointerDown(e: PointerEvent) {
@@ -3392,11 +3415,15 @@ export function startWorld(net: WorldNet): void {
     steer = clamp(steer, -1, 1);
 
     const sp = Math.hypot(vx, vy);
-    // Steering needs speed to bite; near-stationary you can barely turn.
+    // Handbrake drift: hold Shift (or the DRIFT button) in a moving car to break the rear loose. The
+    // tail steps out, the wheel bites harder so you can swing the nose, and you keep sliding along
+    // your old line instead of where you point — proper arcade powerslides. Boats don't drift.
+    const drifting = driving && !boating && handbrake && sp > 40;
+    // Steering needs speed to bite; near-stationary you can barely turn. Drifting sharpens it.
     const authority = Math.min(1, sp / 120);
     // Reverse-steer: when actually travelling backwards, the wheel swaps (like a real car).
     const rev = (vx * Math.cos(facing) + vy * Math.sin(facing)) < 0 ? -1 : 1;
-    facing += steer * rev * car.turn * authority * dt;
+    facing += steer * rev * car.turn * authority * (drifting ? 1.8 : 1) * dt;
     // Drunk driving (you got away with the stop, but you're hammered): a violent, ever-worsening
     // weave layered on top, so keeping it on the road is brutal. Scales hard with the booze.
     const drunk = net.drunkLevel();
@@ -3415,9 +3442,12 @@ export function startWorld(net: WorldNet): void {
     // off by grip — this is what makes the car drift instead of moving like an air-hockey puck.
     let fwd = vx * hx + vy * hy;
     let lat = -vx * hy + vy * hx;
-    const k = Math.pow(car.grip, dt * 60); // grip applied per ~frame, dt-correct
+    // Higher effective grip RETAINS lateral velocity (the car keeps sliding sideways) — so the
+    // handbrake pushes grip toward 1 to make the rear let go, while normal driving uses the car's spec.
+    const gripVal = drifting ? Math.min(0.99, car.grip + 0.22) : car.grip;
+    const k = Math.pow(gripVal, dt * 60); // grip applied per ~frame, dt-correct
     lat *= k;
-    fwd *= Math.pow(0.99, dt * 60);        // mild rolling drag
+    fwd *= Math.pow(drifting ? 0.97 : 0.99, dt * 60); // a drift scrubs off a little extra speed
     fwd = clamp(fwd, -car.speed * 0.5, car.speed);
     vx = hx * fwd - hy * lat;
     vy = hy * fwd + hx * lat;
@@ -3436,6 +3466,7 @@ export function startWorld(net: WorldNet): void {
       vx *= 0.3; vy *= 0.3;                          // kill most momentum
     }
     selfX = moved.x; selfY = moved.y;
+    if (drifting && Math.abs(lat) > 42) emitSkid(); // sliding hard enough → screech, smoke, rubber
     runOverNpcs(Math.hypot(vx, vy));
   }
 
@@ -3692,6 +3723,14 @@ export function startWorld(net: WorldNet): void {
   }
   // The dust-yourself-off "pop" as a flattened townsperson springs back upright.
   function getUpSound() { tone(280, 0.13, 'square', 0.1, 660); }
+  // Tyre screech while drifting — a thin high noise burst, throttled so it reads as a continuous skid.
+  let lastSkidAt = 0;
+  function skidSound() {
+    const now = performance.now();
+    if (now - lastSkidAt < 105) return;
+    lastSkidAt = now;
+    noise(0.16, 0.05, 1150);
+  }
   // KABOOM: two cars meet. A deep detonation (sub-bass thump + descending saw) under a long, fat
   // noise rumble, with a second debris-rumble tail — the whole "huge fireball" in one shot.
   function boomSound() {
@@ -5586,7 +5625,7 @@ export function startWorld(net: WorldNet): void {
       const jailedNow = net.amJailed();
       if (jailedNow !== wasJailed) {
         wasJailed = jailedNow;
-        driving = false; vx = vy = 0; keys.clear(); joyActive = false;
+        driving = false; vx = vy = 0; handbrake = false; keys.clear(); joyActive = false;
         if (jailedNow) { selfX = JAIL.x + JAIL.w / 2; selfY = JAIL.y + JAIL.h / 2; }
         else { selfX = JAIL.x + JAIL.w / 2; selfY = JAIL.y + JAIL.h + R + 18; } // released out front
         jailBanner.style.display = jailedNow ? 'flex' : 'none';
@@ -5653,6 +5692,7 @@ export function startWorld(net: WorldNet): void {
 
       updatePets(dt);
       updateSmoke(dt);
+      updateSkids(dt);
       updateBoom(dt);
 
       // redraw the minimap ~8×/s (and the full map while it's open)
@@ -5693,6 +5733,43 @@ export function startWorld(net: WorldNet): void {
       if (k >= 1) { p.spr.destroy(); smokePuffs.splice(i, 1); continue; }
       p.spr.x += p.vx * dt; p.spr.y += p.vy * dt; p.vx *= 0.94; p.vy *= 0.95;
       p.spr.setScale(0.7 + k * 1.6).setAlpha(0.55 * (1 - k)).setDepth(p.spr.y - 3);
+    }
+  }
+
+  // --- DRIFT RUBBER: dark streaks burned into the tarmac at the rear wheels while you slide, plus a
+  // tyre-smoke puff and a screech. The marks linger on the ground, then slowly fade. ---
+  const skidMarks: { spr: Phaser.GameObjects.Image; t: number; max: number }[] = [];
+  function layRubber(x: number, y: number, ang: number) {
+    const sc = petScene; if (!sc || skidMarks.length > 240) return;
+    const spr = sc.add.image(x, y, 'w-shadow').setScale(TEXEL * 0.95, TEXEL * 0.5).setRotation(ang)
+      .setTint(0x0b0b0d).setAlpha(0.5).setDepth(2); // depth 2 → on the ground, under every avatar
+    skidMarks.push({ spr, t: 0, max: 4.5 + Math.random() });
+  }
+  function emitSkid() {
+    skidSound();
+    const now = performance.now();
+    if (now - lastSkidMarkAt > 26) {
+      lastSkidMarkAt = now;
+      const bx = selfX - Math.cos(facing) * CAR_LEN * 0.32, by = selfY - Math.sin(facing) * CAR_LEN * 0.32;
+      const ox = -Math.sin(facing) * CAR_WID * 0.34, oy = Math.cos(facing) * CAR_WID * 0.34;
+      layRubber(bx + ox, by + oy, facing);
+      layRubber(bx - ox, by - oy, facing);
+    }
+    const sc = petScene;
+    if (sc && smokePuffs.length < 80) {
+      const bx = selfX - Math.cos(facing) * CAR_LEN * 0.4, by = selfY - Math.sin(facing) * CAR_LEN * 0.4;
+      smokePuffs.push({
+        spr: sc.add.image(bx, by, 'w-smoke').setScale(0.6).setTint(0xc8c8c8).setAlpha(0.5).setDepth(by - 2),
+        t: 0, max: 0.45 + Math.random() * 0.3,
+        vx: -Math.cos(facing) * 18 + (Math.random() - 0.5) * 34, vy: -Math.sin(facing) * 18 + (Math.random() - 0.5) * 34,
+      });
+    }
+  }
+  function updateSkids(dt: number) {
+    for (let i = skidMarks.length - 1; i >= 0; i--) {
+      const m = skidMarks[i]; m.t += dt; const k = m.t / m.max;
+      if (k >= 1) { m.spr.destroy(); skidMarks.splice(i, 1); continue; }
+      if (k > 0.6) m.spr.setAlpha(0.5 * (1 - (k - 0.6) / 0.4)); // hold, then fade over the last 40%
     }
   }
 
@@ -5743,7 +5820,7 @@ export function startWorld(net: WorldNet): void {
     lastCarCrashAt = now;
     spawnExplosion(selfX, selfY);     // instant local fireball (others get it via the broadcast below)
     net.boom(selfX, selfY);           // → server fans this fireball out to everyone else in the world
-    driving = false; vx = 0; vy = 0;
+    driving = false; vx = 0; vy = 0; handbrake = false;
     keys.clear();
     syncDriveBtn();
     flashHelp(reason);
