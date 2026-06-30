@@ -4451,26 +4451,119 @@ function toRgb(h: string): [number, number, number] {
   return [parseInt(v.slice(0, 2), 16), parseInt(v.slice(2, 4), 16), parseInt(v.slice(4, 6), 16)];
 }
 
-/** Goal replay overlay: dims the court and shows a "REPLAY" badge + progress bar. */
-export function drawReplayOverlay(ctx: CanvasRenderingContext2D, frameIdx: number, totalFrames: number) {
+const REPLAY_CAPTIONS = [
+  ['WHAT A SHOT!! 🎯',       '#fbbf24'],
+  ['SKILL ISSUE 💀',         '#f87171'],
+  ['CLIP IT 📹',             '#fb923c'],
+  ['UNBELIEVABLE 😱',        '#a78bfa'],
+  ["HE'S COOKED 🔥",        '#f97316'],
+  ['RATIO 📉',               '#f43f5e'],
+  ['GOAT BEHAVIOR 🐐',       '#4ade80'],
+  ['TOP 10 ANIME MOMENTS',   '#e879f9'],
+  ['ACTUALLY INSANE',        '#38bdf8'],
+  ['MALDING 😤',             '#fbbf24'],
+  ['NOT REAL 💔',            '#fb7185'],
+  ["LET'S GOOOOO 🔥",       '#4ade80'],
+  ['BLATANT DISRESPECT 💢',  '#f87171'],
+  ['GG NO RE 🫡',            '#6ee7b7'],
+  ['CHAT IS COOKED 😭',      '#fb923c'],
+  ['RENT FREE 🏠',           '#a78bfa'],
+];
+
+const REPLAY_EMOJI = ['😭','🔥','💀','😱','🤣','👀','🎯','🫡','💔','🏆','⚡','🎉','🧠','😤','🫠','💅'];
+
+/** Goal replay overlay: cinematic letterbox, broadcast badge, meme caption, floating reactions. */
+export function drawReplayOverlay(
+  ctx: CanvasRenderingContext2D,
+  frameIdx: number,
+  totalFrames: number,
+  replayCount: number,
+  scoringLeft: boolean,
+) {
+  const { w, h } = COURT;
+  const prog = Math.min(1, frameIdx / totalFrames);
+
   ctx.save();
-  // Subtle vignette so the replay stands out
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.22)';
-  ctx.fillRect(0, 0, COURT.w, COURT.h);
-  // Badge
-  ctx.font = 'bold 26px ui-monospace, monospace';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'top';
-  ctx.fillStyle = 'rgba(255, 70, 70, 0.95)';
-  ctx.fillText('⏪ REPLAY', COURT.w / 2, 56);
-  // Progress bar
-  const barW = 150;
-  const barX = (COURT.w - barW) / 2;
-  const barY = 90;
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
-  ctx.fillRect(barX, barY, barW, 3);
-  ctx.fillStyle = 'rgba(255, 70, 70, 0.8)';
-  ctx.fillRect(barX, barY, barW * Math.min(1, frameIdx / totalFrames), 3);
+
+  // Vignette
+  const vg = ctx.createRadialGradient(w / 2, h / 2, h * 0.15, w / 2, h / 2, h * 0.75);
+  vg.addColorStop(0, 'rgba(0,0,0,0)');
+  vg.addColorStop(1, 'rgba(0,0,0,0.5)');
+  ctx.fillStyle = vg;
+  ctx.fillRect(0, 0, w, h);
+
+  // Cinematic letterbox bars
+  const barH = 52;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, w, barH);
+  ctx.fillRect(0, h - barH, w, barH);
+
+  // ── TOP BAR: broadcast badge ──────────────────────────────────────────
+  // Red "live dot"
+  ctx.beginPath();
+  ctx.arc(18, 26, 5, 0, Math.PI * 2);
+  ctx.fillStyle = '#ef4444';
+  ctx.fill();
+  // Pulsing ring
+  const pulse = 0.55 + 0.45 * Math.sin(Date.now() / 220);
+  ctx.beginPath();
+  ctx.arc(18, 26, 5 + 4 * pulse, 0, Math.PI * 2);
+  ctx.strokeStyle = `rgba(239,68,68,${0.6 * (1 - pulse)})`;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  // "INSTANT REPLAY" text
+  ctx.font = 'bold 14px ui-sans-serif, system-ui, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#fff';
+  ctx.fillText('INSTANT REPLAY', 30, 26);
+  // "TSONG TV" bug in top-right
+  ctx.font = '10px ui-sans-serif, system-ui, sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  ctx.fillText('TSONG TV', w - 10, 26);
+
+  // ── FLOATING EMOJI REACTIONS ───────────────────────────────────────────
+  // Seeded per-replay so they're stable across frames
+  for (let i = 0; i < 9; i++) {
+    const seed = (replayCount * 31 + i * 7) & 0xffff;
+    const ex = 28 + ((seed * 1664525 + 1013904223) & 0xffff) % (w - 56);
+    const baseY = barH + 20 + ((seed * 22695477 + 1) & 0xffff) % (h - barH * 2 - 40);
+    const ey = baseY - prog * (60 + i * 12);
+    const opacity = Math.max(0, 1 - prog * 1.6 + i * 0.04);
+    if (opacity <= 0) continue;
+    ctx.globalAlpha = opacity;
+    ctx.font = `${14 + (seed % 10)}px serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(REPLAY_EMOJI[seed % REPLAY_EMOJI.length], ex, ey);
+  }
+  ctx.globalAlpha = 1;
+
+  // ── BOTTOM BAR: meme caption ──────────────────────────────────────────
+  const [caption, captionColor] = REPLAY_CAPTIONS[replayCount % REPLAY_CAPTIONS.length];
+  // Slide in from the scoring side within the first 30% of replay
+  const slideIn = Math.min(1, prog / 0.3);
+  const slideFrom = scoringLeft ? -w : w;
+  const captionX = slideFrom * (1 - slideIn) + (scoringLeft ? 18 : w - 18);
+
+  ctx.font = 'bold 17px ui-sans-serif, system-ui, sans-serif';
+  ctx.textAlign = scoringLeft ? 'left' : 'right';
+  ctx.textBaseline = 'middle';
+  // Shadow for readability
+  ctx.shadowColor = 'rgba(0,0,0,0.8)';
+  ctx.shadowBlur = 8;
+  ctx.fillStyle = captionColor;
+  ctx.fillText(caption, captionX, h - barH / 2);
+  ctx.shadowBlur = 0;
+
+  // ── PROGRESS BAR inside bottom bar ───────────────────────────────────
+  const pbY = h - 3;
+  ctx.fillStyle = 'rgba(255,255,255,0.1)';
+  ctx.fillRect(0, pbY, w, 3);
+  ctx.fillStyle = captionColor;
+  ctx.fillRect(0, pbY, w * prog, 3);
+
   ctx.restore();
 }
 

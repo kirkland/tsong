@@ -282,6 +282,39 @@ let replayFrames: StateMsg[] | null = null;
 let replayIdx = 0;
 let replayNextAt = 0;
 let replayEnabled = false;  // off by default; toggled in MODES → Personal
+let replayCount = 0;        // increments each replay, drives caption rotation
+let replayScoringLeft = false; // which side scored (for caption + zoom direction)
+
+function playReplayWhoosh() {
+  if (muted) return;
+  try {
+    const ac = new AudioContext();
+    // Descending sweep — the "time slowing down" whoosh
+    const osc = ac.createOscillator();
+    const gain = ac.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(700, ac.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(55, ac.currentTime + 0.65);
+    gain.gain.setValueAtTime(0.16, ac.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.7);
+    osc.connect(gain);
+    gain.connect(ac.destination);
+    osc.start();
+    osc.stop(ac.currentTime + 0.7);
+    // Second harmonic layer for body
+    const osc2 = ac.createOscillator();
+    const gain2 = ac.createGain();
+    osc2.type = 'triangle';
+    osc2.frequency.setValueAtTime(1100, ac.currentTime);
+    osc2.frequency.exponentialRampToValueAtTime(80, ac.currentTime + 0.55);
+    gain2.gain.setValueAtTime(0.07, ac.currentTime);
+    gain2.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.6);
+    osc2.connect(gain2);
+    gain2.connect(ac.destination);
+    osc2.start();
+    osc2.stop(ac.currentTime + 0.6);
+  } catch {}
+}
 
 function selectSwatch(color: string) {
   for (const btn of colorPicker.querySelectorAll<HTMLButtonElement>('.swatch')) {
@@ -681,9 +714,12 @@ const net = connect(
           playScoreSound();
           // Trigger slow-mo goal replay using buffered frames (only when mode is on).
           if (replayEnabled && replayBuf.length >= 5) {
+            replayScoringLeft = msg.score.left > prevScore.left;
             replayFrames = [...replayBuf, msg];
             replayIdx = 0;
             replayNextAt = performance.now();
+            replayCount++;
+            playReplayWhoosh();
             net.send({ type: 'replayWatching', watching: true });
           }
         }
@@ -5141,9 +5177,21 @@ function loop(t: number) {
         ? (myRole !== 'observer' ? (myRole as 'left' | 'right') : fpSide)
         : null;
       renderer3d.render(renderState, side, aim);
+    } else if (replayActive && replayFrames) {
+      // Slow cinematic zoom toward the scoring wall during replay
+      const zoomProg = replayIdx / replayFrames.length;
+      const zoom = 1 + 0.22 * zoomProg;
+      const pivotX = replayScoringLeft ? COURT.w * 0.82 : COURT.w * 0.18;
+      const pivotY = COURT.h / 2;
+      ctx.save();
+      ctx.translate(pivotX, pivotY);
+      ctx.scale(zoom, zoom);
+      ctx.translate(-pivotX, -pivotY);
+      draw(ctx, renderState, myRole);
+      ctx.restore();
+      drawReplayOverlay(ctx, replayIdx, replayFrames.length, replayCount, replayScoringLeft);
     } else {
       draw(ctx, renderState, myRole);
-      if (replayActive && replayFrames) drawReplayOverlay(ctx, replayIdx, replayFrames.length);
     }
   }
   requestAnimationFrame(loop);
