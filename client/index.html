@@ -3229,6 +3229,7 @@
         line-height: 1.6;
       }
       /* Win score selector in the modes panel. */
+      .mode-section-divider { height: 1px; background: #1c2640; margin: 6px 10px 2px; }
       .win-score-row {
         display: flex;
         align-items: center;
@@ -3680,16 +3681,6 @@
     </div>
     <div id="topLeft">
       <button id="muteBtn" type="button" aria-pressed="false" title="Toggle sound on/off (M)">🔊</button>
-      <div id="settingsMenu">
-        <button id="settingsBtn" type="button" aria-expanded="false" title="Settings">⚙️ <span class="caret">▾</span></button>
-        <div id="settingsPanel" class="nav-menu" hidden>
-          <div class="wm-setting">
-            <span class="wm-setting-label">🐭 Mouse sensitivity</span>
-            <input type="range" id="mouseSensSlider" min="0.25" max="3.0" step="0.05" value="1.0" />
-            <span id="mouseSensLabel" style="font-size:10px;color:#8b98b8;text-align:center">1.00×</span>
-          </div>
-        </div>
-      </div>
       <button id="worldBtn" type="button" aria-pressed="false" title="Walk around the TSONG world (beta) — a free-roam map with everyone on it">🌍 World</button>
       <div id="workMenu">
         <button id="workMenuBtn" type="button" aria-expanded="false" title="Boss-key disguises">📊 Work <span class="caret">▾</span></button>
@@ -4142,6 +4133,19 @@
               <button class="ws-btn active" data-score="3" type="button" title="First to 3 wins">3</button>
               <button class="ws-btn" data-score="5" type="button" title="First to 5 wins">5</button>
               <button class="ws-btn" data-score="7" type="button" title="First to 7 wins">7</button>
+            </div>
+          </div>
+          <div class="mode-section-divider"></div>
+          <h4 style="font-size:9px;letter-spacing:1px;text-transform:uppercase;color:#6b7796;padding:4px 6px 0">Personal</h4>
+          <div class="mode-option" style="padding-bottom:0">
+            <span class="mode-icon">🐭</span>
+            <span class="mode-text">
+              <span class="mode-name">Mouse sensitivity</span>
+              <span class="mode-desc">Multiplier for mouse movement</span>
+            </span>
+            <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+              <input type="range" id="mouseSensSlider" min="0.25" max="3.0" step="0.05" value="1.0" style="width:80px;height:4px;accent-color:#7da2ff;cursor:pointer" />
+              <span id="mouseSensLabel" style="font-size:11px;color:#8b98b8;min-width:36px;text-align:right">1.00×</span>
             </div>
           </div>
         </div>
