@@ -3677,6 +3677,14 @@ export function startWorld(net: WorldNet): void {
   }
   // The dust-yourself-off "pop" as a flattened townsperson springs back upright.
   function getUpSound() { tone(280, 0.13, 'square', 0.1, 660); }
+  // KABOOM: two cars meet. A deep detonation (sub-bass thump + descending saw) under a long, fat
+  // noise rumble, with a second debris-rumble tail — the whole "huge fireball" in one shot.
+  function boomSound() {
+    tone(90, 0.55, 'sawtooth', 0.3, 28);
+    tone(58, 0.6, 'sine', 0.32, 26);
+    noise(0.5, 0.34, 220);
+    window.setTimeout(() => noise(0.45, 0.2, 140), 90);
+  }
   function revSound(starting: boolean) {
     if (starting) tone(80, 0.26, 'sawtooth', 0.18, 230);
     else tone(210, 0.22, 'sawtooth', 0.15, 80);
@@ -4431,6 +4439,14 @@ export function startWorld(net: WorldNet): void {
     g.fillStyle(0xffffff, 0.35); g.fillCircle(10, 10, 6.5);
     g.fillStyle(0xffffff, 0.55); g.fillCircle(10, 10, 3.5);
     g.generateTexture('w-smoke', 20, 20);
+
+    // --- fireball blob: a hot white core fading to a soft edge. Drawn white so an ADD blend + per-
+    // particle tint paints the yellow→orange→red of a crash explosion. ---
+    g.clear();
+    g.fillStyle(0xffffff, 0.30); g.fillCircle(12, 12, 12);
+    g.fillStyle(0xffffff, 0.55); g.fillCircle(12, 12, 8);
+    g.fillStyle(0xffffff, 0.95); g.fillCircle(12, 12, 4.5);
+    g.generateTexture('w-fireball', 24, 24);
 
     // --- avatar: the tsong ball with eyes (tintable white body) (10×10 texels) ---
     g.clear();
@@ -5570,6 +5586,7 @@ export function startWorld(net: WorldNet): void {
         else stepFoot(dt);
       }
 
+      checkCarCrash(now);
       updateNpcs(now, dt);
       updateNearBuilding();
       maybeSendMove(now);
@@ -5621,6 +5638,7 @@ export function startWorld(net: WorldNet): void {
 
       updatePets(dt);
       updateSmoke(dt);
+      updateBoom(dt);
 
       // redraw the minimap ~8×/s (and the full map while it's open)
       if (now - lastMapDraw > 120) {
@@ -5662,6 +5680,63 @@ export function startWorld(net: WorldNet): void {
       p.spr.setScale(0.7 + k * 1.6).setAlpha(0.55 * (1 - k)).setDepth(p.spr.y - 3);
     }
   }
+
+  // --- CAR CRASH FIREBALL: a one-shot burst of additive fire particles, a bright central flash, and
+  // a rising cloud of black smoke. Pure synthesized sprites (w-fireball + w-smoke), animated here. ---
+  const boomParts: { spr: Phaser.GameObjects.Image; t: number; max: number; vx: number; vy: number; kind: 'fire' | 'flash' | 'smoke'; r0: number; r1: number }[] = [];
+  const FIRE_TINTS = [0xffffff, 0xffe066, 0xffae34, 0xff5722];
+  function spawnExplosion(x: number, y: number) {
+    const sc = petScene; if (!sc) return;
+    boomSound();
+    // central white flash — short, bright, ADD-blended
+    boomParts.push({ spr: sc.add.image(x, y, 'w-fireball').setDepth(y + 400).setBlendMode(Phaser.BlendModes.ADD).setScale(2), t: 0, max: 0.16, vx: 0, vy: 0, kind: 'flash', r0: 2.2, r1: 6 });
+    // a fat ball of fire flung outward
+    for (let i = 0; i < 22; i++) {
+      const a = Math.random() * Math.PI * 2, sp = 50 + Math.random() * 190;
+      const spr = sc.add.image(x, y, 'w-fireball').setDepth(y + 300).setBlendMode(Phaser.BlendModes.ADD).setTint(FIRE_TINTS[i % FIRE_TINTS.length]);
+      boomParts.push({ spr, t: 0, max: 0.4 + Math.random() * 0.45, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 40, kind: 'fire', r0: 1.3 + Math.random() * 1.4, r1: 0.15 });
+    }
+    // billowing black smoke that lingers and rises
+    for (let i = 0; i < 12; i++) {
+      const a = Math.random() * Math.PI * 2, sp = 18 + Math.random() * 75;
+      const spr = sc.add.image(x, y, 'w-smoke').setDepth(y + 60).setTint(0x2a2a2a).setAlpha(0);
+      boomParts.push({ spr, t: 0, max: 0.9 + Math.random() * 0.9, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 55, kind: 'smoke', r0: 0.5, r1: 2.8 });
+    }
+  }
+  function updateBoom(dt: number) {
+    for (let i = boomParts.length - 1; i >= 0; i--) {
+      const p = boomParts[i]; p.t += dt; const k = p.t / p.max;
+      if (k >= 1) { p.spr.destroy(); boomParts.splice(i, 1); continue; }
+      p.spr.x += p.vx * dt; p.spr.y += p.vy * dt; p.vx *= 0.9; p.vy *= 0.9;
+      const r = p.r0 + (p.r1 - p.r0) * k;
+      if (p.kind === 'flash') p.spr.setScale(r).setAlpha(1 - k);
+      else if (p.kind === 'fire') p.spr.setScale(Math.max(0.05, r)).setAlpha(1 - k * k);
+      else p.spr.setScale(r).setAlpha(0.55 * Math.sin(Math.min(1, k * 1.5) * Math.PI)).setDepth(p.spr.y + 60);
+    }
+  }
+
+  // Two cars colliding → a huge fireball, and BOTH drivers bail out onto their feet. This is detected
+  // independently on each client (the condition is symmetric: I'm driving + you're in a car + we
+  // overlap), so both sides blow up and dismount in lockstep. Hop back in any time — your car's fine.
+  let lastCarCrashAt = 0;
+  function checkCarCrash(now: number) {
+    if (!driving || boating) return;
+    if (now - lastCarCrashAt < 1200) return;      // don't re-detonate the same pile-up every frame
+    const selfId = net.selfId();
+    const reach = CAR_LEN * 0.8;                  // two car bodies pressed together
+    for (const a of others) {
+      if (a.id === selfId || !a.car || a.car === 'car-boat') continue; // foot/boat avatars don't crash
+      if (Math.hypot(a.x - selfX, a.y - selfY) > reach) continue;
+      lastCarCrashAt = now;
+      spawnExplosion((selfX + a.x) / 2, (selfY + a.y) / 2);
+      driving = false; vx = 0; vy = 0;            // ejected onto your feet (your car is unharmed — re-summon any time)
+      keys.clear();
+      syncDriveBtn();
+      flashHelp('💥 KABOOM! Your cars collided — hop back in whenever you like.');
+      break;
+    }
+  }
+
   // in a sensible spot. Each pet lerps toward its target so it lags and swings like a real tagalong.
   function updatePets(dt: number) {
     const sc = petScene;
