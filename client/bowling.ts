@@ -69,6 +69,8 @@ const DRUNK_MAX = 6;
 let pendingResult: any = null;
 // Pending bowlNextBall/bowlNextTurn (cached until the pin-fall animation completes)
 let pendingNext: any = null;
+// Timer ID for the pin-fall → next-turn transition (so we can cancel stale timers)
+let pinFallTimer = 0;
 
 // Drag-to-throw controls (slingshot / inverse):
 //   • mousedown / touchstart — anchor the drag origin
@@ -86,6 +88,8 @@ let charging = false;
 let chargeT = 0;  // unused with drag controls but kept to avoid breakage
 const CHARGE_FULL = 1.2;
 let lockedAim = 0, lockedPower = 0;
+// Aim wobble — accumulates while pulling for power; release timing matters
+let aimWobbleT = 0;
 
 // Ball roll animation (shown for ALL players' throws, not just own)
 let rollT = 0;
@@ -162,7 +166,8 @@ function setPhase(p: Phase) {
 function resetLocal() {
   pinState = new Array(10).fill(true);
   fallingPins = []; particles = []; cel = null; pendingResult = null; pendingNext = null;
-  rollT = 0; charging = false; chargeT = 0; aimX = 0; shakeT = 0;
+  if (pinFallTimer) { clearTimeout(pinFallTimer); pinFallTimer = 0; }
+  rollT = 0; charging = false; chargeT = 0; aimX = 0; aimWobbleT = 0; shakeT = 0;
   dragging = false; dragOriginX = 0; dragOriginY = 0; dragCurX = 0; dragCurY = 0;
   isMyTurn = false; ballInFrame = 1; pinsStandingBefore = 10;
   // drunkLevel intentionally NOT reset here — beer accumulates all game.
@@ -277,11 +282,13 @@ function applyPendingResult() {
   }
   pinsStandingBefore = pinState.filter(Boolean).length;
   setPhase('pinfalling');
-  setTimeout(() => {
+  if (pinFallTimer) clearTimeout(pinFallTimer);
+  pinFallTimer = window.setTimeout(() => {
+    pinFallTimer = 0;
     if (!bowlingOpen) return;
     if (pendingNext) {
-      _applyNext(pendingNext);
-      pendingNext = null;
+      const m = pendingNext; pendingNext = null;
+      _applyNext(m);
     } else {
       setPhase('scored');
     }
@@ -358,7 +365,7 @@ function canvasXY(clientX: number, clientY: number): [number, number] {
 }
 function startDrag(sx: number, sy: number) {
   if (!isMyTurn || (phase !== 'aiming' && phase !== 'charging')) return;
-  dragging = true; charging = true;
+  dragging = true; charging = true; aimWobbleT = 0;
   dragOriginX = sx; dragOriginY = sy;
   dragCurX = sx; dragCurY = sy;
   setPhase('charging');
@@ -386,10 +393,12 @@ function onTE(e: TouchEvent) { e.preventDefault(); endDrag(); }
 function onKey(e: KeyboardEvent) { if (e.key === 'Escape') closeBowling(); }
 function fireThrow() {
   if (!isMyTurn || phase === 'rolling') return;
-  const dx = dragCurX - dragOriginX;
-  const dy = dragCurY - dragOriginY;           // positive = dragged down toward player
-  const rawAim = dx / DRAG_AIM_SCALE;
-  const rawPow = Math.max(0, dy) / DRAG_POW_SCALE; // only downward pull builds power
+  // Base aim = where pointer is (absolute). Wobble captured at release moment adds
+  // a skill layer: steady low-power = accurate, full-power yeet = gamble.
+  const BALL_REST_Y = H - 130;
+  const wobble = getAimWobble();
+  const rawAim = (dragCurX - W / 2) / (W * 0.32) + wobble; // absolute + timing wobble
+  const rawPow = Math.max(0, dragCurY - BALL_REST_Y) / DRAG_POW_SCALE;
   const drunkDrift = drunkLevel > 0 ? (Math.random() - 0.5) * drunkLevel * 0.35 : 0;
   lockedAim   = Math.max(-1, Math.min(1, rawAim + drunkDrift));
   lockedPower = Math.min(1, rawPow);
@@ -422,8 +431,23 @@ function drunkWobble(): number {
   return (Math.sin(w * 3.1) * 0.10 + Math.sin(w * 1.3 + 1) * 0.05) * drunkLevel;
 }
 
+function getAimWobble(): number {
+  if (!dragging || phase !== 'charging') return 0;
+  const BALL_REST_Y = H - 130;
+  const power = Math.min(1, Math.max(0, dragCurY - BALL_REST_Y) / DRAG_POW_SCALE);
+  // Low power = tiny wobble (±0.04), full power = substantial (±0.22)
+  const amp = 0.04 + power * 0.18;
+  return Math.sin(aimWobbleT * Math.PI * 2) * amp;
+}
+
 function update(dt: number) {
   if (phase === 'charging') chargeT = Math.min(chargeT + dt, CHARGE_FULL + 0.1);
+  // Aim pendulum: wobbles while charging — release timing matters
+  if (phase === 'charging' && dragging) {
+    const BALL_REST_Y = H - 130;
+    const power = Math.min(1, Math.max(0, dragCurY - BALL_REST_Y) / DRAG_POW_SCALE);
+    aimWobbleT += dt * (1.0 + power * 0.8); // faster at high power = harder to time
+  }
   if (phase === 'rolling') {
     rollT += dt / ROLL_DUR;
     if (rollT >= 1) {
@@ -839,27 +863,27 @@ function drawRollBall() {
 }
 
 function drawForeground() {
-  // Compute aim and power from current drag state
+  const BALL_REST_Y = H - 130;
   const isDragging = phase === 'charging' && dragging;
-  const dragDX = isDragging ? dragCurX - dragOriginX : 0;
-  const dragDY = isDragging ? Math.max(0, dragCurY - dragOriginY) : 0; // only downward
-  const dragPow = Math.min(1, dragDY / DRAG_POW_SCALE);
-  const dragAim = Math.max(-1, Math.min(1, (isDragging ? dragCurX - dragOriginX : 0) / DRAG_AIM_SCALE));
 
-  // Ball rest position — high enough to have room for the slingshot pull
+  // Ball rest position — center-X with drunk sway, fixed Y with room to drag down
   const drunkSway = drunkLevel > 0 ? drunkWobble() * W * 0.12 : 0;
   const ballRestX = VP_X + drunkSway;
-  const ballRestY = H - 130; // moved up so dragging down stays on screen
+  const ballRestY = BALL_REST_Y;
   const r = 52;
 
-  // Ball position: drag shifts it (clamped to stay on canvas)
-  const rawBX = isDragging ? ballRestX + (dragCurX - dragOriginX) * 0.4 : ballRestX;
-  const rawBY = isDragging ? ballRestY + dragDY * 0.5 : ballRestY;
-  const bx = Math.max(r + 10, Math.min(W - r - 10, rawBX));
-  const by = Math.max(r + 10, Math.min(H - r - 10, rawBY));
+  // Arrow aim = absolute pointer position + live wobble (exactly what fireThrow captures)
+  const curPtrX = isDragging ? dragCurX : ballRestX;
+  const aimForArrow = Math.max(-1, Math.min(1, (curPtrX - W / 2) / (W * 0.32) + getAimWobble()));
 
-  // Aim direction for the arrow (from drag or mouse position)
-  const aimForArrow = isDragging ? dragAim : aimX;
+  // Power: how far below the rest line the pointer has been pulled
+  const dragDY = isDragging ? Math.max(0, dragCurY - BALL_REST_Y) : 0;
+  const dragPow = Math.min(1, dragDY / DRAG_POW_SCALE);
+
+  // Ball visual follows pointer X (for aim feedback), drops down when pulling power
+  const rawBY = isDragging ? ballRestY + dragDY * 0.5 : ballRestY;
+  const bx = Math.max(r + 10, Math.min(W - r - 10, isDragging ? dragCurX : ballRestX));
+  const by = Math.max(r + 10, Math.min(H - r - 10, rawBY));
 
   // Arrow from ball toward the pin deck
   const pinP = proj(aimForArrow * LANE_HW * 0.9, 0, PIN_Z0);
@@ -911,7 +935,8 @@ function drawForeground() {
     ctx.save();
     ctx.strokeStyle = powCol; ctx.lineWidth = 3;
     ctx.shadowColor = powCol; ctx.shadowBlur = 10; ctx.globalAlpha = 0.7;
-    ctx.beginPath(); ctx.moveTo(ballRestX, ballRestY); ctx.lineTo(bx, by); ctx.stroke();
+    // Rubber-band: from the fixed anchor (center-bottom) to current ball position
+    ctx.beginPath(); ctx.moveTo(VP_X + drunkSway, BALL_REST_Y); ctx.lineTo(bx, by); ctx.stroke();
     ctx.restore();
     // Power arc ring
     if (dragPow > 0) {
