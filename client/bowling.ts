@@ -68,13 +68,20 @@ const DRUNK_MAX = 6;
 // Pending throw result (cached until the roll animation completes)
 let pendingResult: any = null;
 
-// Aim: −1 (left gutter) to +1 (right gutter), 0 = center
-let aimX = 0;  // follows mouse X in real-time
-
-// Power charge
+// Drag-to-throw controls (slingshot / inverse):
+//   • mousedown / touchstart — anchor the drag origin
+//   • drag left/right        — aim  (−1 = left gutter, +1 = right)
+//   • drag DOWN (toward you) — power (pulling back like a slingshot)
+//   • release                — fire
+const DRAG_AIM_SCALE  = 220;   // px of horizontal drag → ±1 aim
+const DRAG_POW_SCALE  = 180;   // px of downward drag  → power 0–1
+let dragging = false;
+let dragOriginX = 0, dragOriginY = 0;
+let dragCurX = 0, dragCurY = 0;
+// charging = true while dragging (kept for phase compatibility)
 let charging = false;
-let chargeT = 0;           // seconds held
-const CHARGE_FULL = 1.2;   // seconds for max power
+let chargeT = 0;  // unused with drag controls but kept to avoid breakage
+const CHARGE_FULL = 1.2;
 let lockedAim = 0, lockedPower = 0;
 
 // Ball roll animation (shown for ALL players' throws, not just own)
@@ -153,12 +160,15 @@ function resetLocal() {
   pinState = new Array(10).fill(true);
   fallingPins = []; particles = []; cel = null; pendingResult = null;
   rollT = 0; charging = false; chargeT = 0; aimX = 0; shakeT = 0;
-  isMyTurn = false; ballInFrame = 1; pinsStandingBefore = 10; drunkLevel = 0;
+  dragging = false; dragOriginX = 0; dragOriginY = 0; dragCurX = 0; dragCurY = 0;
+  isMyTurn = false; ballInFrame = 1; pinsStandingBefore = 10;
+  // drunkLevel intentionally NOT reset here — beer accumulates all game.
 }
 
 export function closeBowling() {
   if (!bowlingOpen) return;
   bowlingOpen = false;
+  drunkLevel = 0;  // sober up when you leave the alley
   net.bowlLeave();
   cancelAnimationFrame(rafId);
   canvas.removeEventListener('mousemove', onMove);
@@ -206,18 +216,21 @@ function applyState(m: any) {
   syncReadyBtn();
 }
 function applyResult(m: any) {
-  // Cache the result; we'll apply pin-fall once the roll animation reaches the pins.
+  // Cache the result; apply pin-fall once the roll animation reaches the pins.
   pendingResult = m;
 
-  // Start ball rolling animation for everyone (own throw or watching another player).
-  const throwOffset = typeof m.offset === 'number' ? m.offset : 0;
-  lockedAim = throwOffset;
-  rollBallX = VP_X + throwOffset * W * 0.22;
-  rollBallY = H - 40;
-  rollBallR = 52;
-  rollT = 0;
-  setPhase('rolling');
-  playRollSfx();
+  if (phase !== 'rolling') {
+    // Opponent's throw (or reconnect) — start a fresh roll animation.
+    const throwOffset = typeof m.offset === 'number' ? m.offset : 0;
+    lockedAim = throwOffset;
+    rollBallX = VP_X + throwOffset * W * 0.22;
+    rollBallY = H - 40;
+    rollBallR = 52;
+    rollT = 0;
+    setPhase('rolling');
+    playRollSfx();
+  }
+  // Own throw: fireThrow() already started the animation — just let it run.
 }
 
 function applyPendingResult() {
@@ -315,50 +328,48 @@ function syncReadyBtn() {
 }
 
 // ─── Input ────────────────────────────────────────────────────────────────────
-function cx(e: { clientX: number }) {
+// Slingshot / drag-to-throw controls:
+//   • press & drag LEFT/RIGHT  → aim (horizontal delta / DRAG_AIM_SCALE)
+//   • drag DOWN (toward you)   → power (like pulling back a slingshot)
+//   • release                  → throw
+function canvasXY(clientX: number, clientY: number): [number, number] {
   const r = canvas.getBoundingClientRect();
-  return (e.clientX - r.left) / r.width * W;
+  return [(clientX - r.left) / r.width * W, (clientY - r.top) / r.height * H];
 }
-function setAimFromX(screenX: number) {
-  // map screen X → aim offset −1..1
-  // Lane edges at approach: VP_X ± LANE_HW * FOCAL / 0.3 (at z=0.3)
-  // Use screen center ± half-width for intuitive feel
-  aimX = Math.max(-1, Math.min(1, (screenX - W / 2) / (W * 0.28)));
+function startDrag(sx: number, sy: number) {
+  if (!isMyTurn || (phase !== 'aiming' && phase !== 'charging')) return;
+  dragging = true; charging = true;
+  dragOriginX = sx; dragOriginY = sy;
+  dragCurX = sx; dragCurY = sy;
+  setPhase('charging');
 }
-function onMove(e: MouseEvent) { setAimFromX(cx(e)); }
-function onDown(e: MouseEvent) {
-  if (!isMyTurn) return;
-  if (phase === 'aiming') { charging = true; chargeT = 0; setPhase('charging'); }
-  else if (phase === 'charging') { fireThrow(); }
+function moveDrag(sx: number, sy: number) {
+  if (dragging) { dragCurX = sx; dragCurY = sy; }
+  // Also track for aim line even before dragging
+  aimX = Math.max(-1, Math.min(1, (sx - W / 2) / (W * 0.28)));
 }
-function onUp(_e: MouseEvent) {
-  if (charging && (phase === 'charging' || phase === 'aiming')) fireThrow();
+function endDrag() {
+  if (!dragging) return;
+  dragging = false;
+  if (isMyTurn && (phase === 'charging' || phase === 'aiming')) fireThrow();
 }
-function onTS(e: TouchEvent) { e.preventDefault(); const t = e.touches[0]; if (t) { setAimFromX(cx({ clientX: t.clientX })); } }
-function onTM(e: TouchEvent) { e.preventDefault(); const t = e.touches[0]; if (t) setAimFromX(cx({ clientX: t.clientX })); }
-function onTE(e: TouchEvent) {
-  e.preventDefault();
-  if (!isMyTurn) return;
-  if (phase === 'aiming' || phase === 'charging') {
-    if (!charging) { charging = true; chargeT = 0; setPhase('charging'); }
-    else fireThrow();
-  }
-}
-function onKey(e: KeyboardEvent) {
-  if (e.key === 'Escape') { closeBowling(); return; }
-  if (e.key === ' ' || e.key === 'Enter') {
-    if (!isMyTurn) return;
-    if (phase === 'aiming') { charging = true; chargeT = 0; setPhase('charging'); }
-    else if (phase === 'charging') fireThrow();
-  }
-}
+function onMove(e: MouseEvent) { const [sx, sy] = canvasXY(e.clientX, e.clientY); moveDrag(sx, sy); }
+function onDown(e: MouseEvent) { const [sx, sy] = canvasXY(e.clientX, e.clientY); startDrag(sx, sy); }
+function onUp(_e: MouseEvent) { endDrag(); }
+function onTS(e: TouchEvent) { e.preventDefault(); const t = e.touches[0]; if (t) { const [sx,sy]=canvasXY(t.clientX,t.clientY); startDrag(sx,sy); } }
+function onTM(e: TouchEvent) { e.preventDefault(); const t = e.touches[0]; if (t) { const [sx,sy]=canvasXY(t.clientX,t.clientY); moveDrag(sx,sy); } }
+function onTE(e: TouchEvent) { e.preventDefault(); endDrag(); }
+function onKey(e: KeyboardEvent) { if (e.key === 'Escape') closeBowling(); }
 function fireThrow() {
   if (!isMyTurn || phase === 'rolling') return;
-  // Drunk players' aim drifts — add a scaled random offset
+  const dx = dragCurX - dragOriginX;
+  const dy = dragCurY - dragOriginY;           // positive = dragged down toward player
+  const rawAim = dx / DRAG_AIM_SCALE;
+  const rawPow = Math.max(0, dy) / DRAG_POW_SCALE; // only downward pull builds power
   const drunkDrift = drunkLevel > 0 ? (Math.random() - 0.5) * drunkLevel * 0.35 : 0;
-  lockedAim = Math.max(-1, Math.min(1, aimX + drunkDrift));
-  lockedPower = Math.min(1, chargeT / CHARGE_FULL);
-  charging = false; chargeT = 0;
+  lockedAim   = Math.max(-1, Math.min(1, rawAim + drunkDrift));
+  lockedPower = Math.min(1, rawPow);
+  charging = false; chargeT = 0; dragging = false;
   setPhase('rolling'); rollT = 0;
   rollBallX = VP_X + lockedAim * W * 0.22;
   rollBallY = H - 40; rollBallR = 52;
@@ -378,7 +389,9 @@ function loop(ts: number) {
 function drunkWobble(): number {
   if (drunkLevel === 0) return 0;
   const w = lastTs / 1000;
-  return (Math.sin(w * 3.1) * 0.08 + Math.sin(w * 1.3 + 1) * 0.04) * drunkLevel;
+  // Two-sine wobble identical to the overworld tavern, but with stronger scaling
+  // so level 6 is genuinely disorienting (≈±0.6 rad tilt vs ±0.54 in overworld).
+  return (Math.sin(w * 3.1) * 0.10 + Math.sin(w * 1.3 + 1) * 0.05) * drunkLevel;
 }
 
 function update(dt: number) {
@@ -794,15 +807,24 @@ function drawRollBall() {
 }
 
 function drawForeground() {
-  const power = phase === 'charging' ? Math.min(chargeT / CHARGE_FULL, 1) : 0;
-  // Aim wobble during charging + drunk sway
-  const drunkSway = drunkLevel > 0 ? drunkWobble() * W * 0.18 : 0;
-  const wobble = (phase === 'charging' ? Math.sin(chargeT * 22) * (1 - power) * 3 : 0) + drunkSway;
-  const bx = VP_X + aimX * W * 0.22 + wobble;
-  const by = H - 40 + (phase === 'charging' ? -power * 15 : 0);
-  const r  = 52;
+  // Compute aim and power from current drag state
+  const isDragging = phase === 'charging' && dragging;
+  const dragDX = isDragging ? dragCurX - dragOriginX : 0;
+  const dragDY = isDragging ? dragCurY - dragOriginY : 0;
+  const dragPow = Math.max(0, Math.min(1, dragDY / DRAG_POW_SCALE));
+  const dragAim = Math.max(-1, Math.min(1, dragDX / DRAG_AIM_SCALE));
 
-  // Forearm (dark rounded shape below ball)
+  // Ball rests at origin (center-bottom) in aiming phase, follows drag in charging
+  const drunkSway = drunkLevel > 0 ? drunkWobble() * W * 0.12 : 0;
+  const ballRestX = VP_X + drunkSway;
+  const ballRestY = H - 55;
+  const r = 52;
+
+  // In charging: ball lifts slightly (pulled back), offset by drunk sway
+  const bx = isDragging ? ballRestX + dragDX * 0.5 : ballRestX;
+  const by = isDragging ? ballRestY + Math.max(0, dragDY) * 0.4 : ballRestY;
+
+  // Forearm
   ctx.save();
   ctx.beginPath();
   ctx.moveTo(bx - r * 0.6, by + 20);
@@ -812,56 +834,57 @@ function drawForeground() {
   ctx.lineTo(bx + 90, H + 60);
   ctx.lineTo(bx - 90, H + 60);
   ctx.closePath();
-  ctx.fillStyle = '#3d2210';
-  ctx.fill();
+  ctx.fillStyle = '#3d2210'; ctx.fill();
   ctx.restore();
 
-  // Power ring around ball
-  if (phase === 'charging' && power > 0) {
-    const ringR = r + 8;
+  // Rubber-band line from origin to current drag (shows the slingshot pull)
+  if (isDragging) {
+    ctx.save();
+    ctx.setLineDash([]);
+    const powCol = dragPow < 0.4 ? '#44ff88' : dragPow < 0.75 ? '#ffee44' : '#ff2244';
+    ctx.strokeStyle = powCol; ctx.lineWidth = 3;
+    ctx.shadowColor = powCol; ctx.shadowBlur = 10;
+    ctx.globalAlpha = 0.75;
+    ctx.beginPath(); ctx.moveTo(ballRestX, ballRestY); ctx.lineTo(bx, by); ctx.stroke();
+    ctx.restore();
+    // Power label
+    ctx.font = 'bold 15px system-ui'; ctx.textAlign = 'center';
+    ctx.fillStyle = powCol; ctx.shadowColor = powCol; ctx.shadowBlur = 8;
+    ctx.fillText(`POWER ${Math.round(dragPow * 100)}%`, W / 2, H - 8);
+    ctx.shadowBlur = 0;
+  }
+
+  // Power arc ring
+  if (isDragging && dragPow > 0) {
+    const powCol = dragPow < 0.4 ? '#44ff88' : dragPow < 0.75 ? '#ffee44' : '#ff2244';
     ctx.beginPath();
-    ctx.arc(bx, by, ringR, -Math.PI / 2, -Math.PI / 2 + power * Math.PI * 2);
-    const ringCol = power < 0.5 ? '#44ff88' : power < 0.8 ? '#ffee44' : '#ff2244';
-    ctx.strokeStyle = ringCol; ctx.lineWidth = 5;
-    ctx.shadowColor = ringCol; ctx.shadowBlur = 12;
+    ctx.arc(bx, by, r + 8, -Math.PI / 2, -Math.PI / 2 + dragPow * Math.PI * 2);
+    ctx.strokeStyle = powCol; ctx.lineWidth = 5;
+    ctx.shadowColor = powCol; ctx.shadowBlur = 14;
     ctx.stroke(); ctx.shadowBlur = 0;
   }
 
   // Ball
   drawBallSphere(bx, by, r, 0);
 
-  // Aim line on floor
-  if (phase === 'aiming' || phase === 'charging') {
-    ctx.save(); ctx.setLineDash([5, 7]);
-    ctx.strokeStyle = phase === 'charging'
-      ? `rgba(${Math.floor(255 * power)},${Math.floor(255 * (1-power*0.5))},50,0.7)`
-      : 'rgba(100,200,255,0.6)';
-    ctx.lineWidth = 2.5;
-    ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = 8;
-    // Line from ball bottom to pin deck
-    const pinP = proj(aimX * LANE_HW * 0.9, 0, PIN_Z0);
-    if (pinP) {
-      ctx.beginPath(); ctx.moveTo(bx, by + r - 8); ctx.lineTo(pinP[0], pinP[1]); ctx.stroke();
-    }
-    ctx.restore();
-  }
+  // Aim line on lane toward pins (follows drag aim or mouse position)
+  const aimForLine = isDragging ? dragAim : aimX;
+  ctx.save(); ctx.setLineDash([5, 7]);
+  ctx.strokeStyle = isDragging
+    ? `rgba(255,${Math.floor(220 * (1 - dragPow))},50,0.75)`
+    : 'rgba(100,200,255,0.5)';
+  ctx.lineWidth = 2.5; ctx.shadowColor = ctx.strokeStyle; ctx.shadowBlur = 7;
+  const pinP = proj(aimForLine * LANE_HW * 0.9, 0, PIN_Z0);
+  if (pinP) { ctx.beginPath(); ctx.moveTo(bx, by + r - 8); ctx.lineTo(pinP[0], pinP[1]); ctx.stroke(); }
+  ctx.restore();
 
-  // Controls hint
+  // Hint text (aiming phase only — charging shows power label above)
   if (phase === 'aiming') {
-    ctx.font = '14px system-ui'; ctx.textAlign = 'center';
-    ctx.fillStyle = 'rgba(180,220,255,0.85)';
+    ctx.font = '13px system-ui'; ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(180,220,255,0.8)';
     const hint = ballInFrame === 2
-      ? `Ball 2 of 2 — ${pinsStandingBefore} pins left  ·  Move mouse · Click & hold · Release`
-      : 'Ball 1 of 2  ·  Move mouse to aim · Click & hold to charge · Release to throw';
+      ? `Ball 2 — ${pinsStandingBefore} pin${pinsStandingBefore !== 1 ? 's' : ''} left  ·  Click & drag down to throw`
+      : 'Click & drag down to throw  ·  left/right to aim  ·  more drag = more power';
     ctx.fillText(hint, W / 2, H - 8);
-  } else if (phase === 'charging') {
-    const p = Math.round(Math.min(chargeT / CHARGE_FULL, 1) * 100);
-    ctx.font = 'bold 16px system-ui'; ctx.textAlign = 'center';
-    const col = p < 50 ? '#44ff88' : p < 80 ? '#ffee44' : '#ff4444';
-    ctx.fillStyle = col;
-    ctx.shadowColor = col; ctx.shadowBlur = 10;
-    ctx.fillText(`POWER: ${p}%  —  Release to throw!`, W / 2, H - 8);
-    ctx.shadowBlur = 0;
   }
 }
 
