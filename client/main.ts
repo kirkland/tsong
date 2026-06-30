@@ -847,7 +847,7 @@ const net = connect(
     } else if (msg.type === 'worldSay') {
       worldMod?.feedSay(msg.id, msg.name, msg.text, msg.say === true);
     } else if (msg.type === 'worldBoom') {
-      worldMod?.feedBoom(msg.x, msg.y);
+      worldMod?.feedBoom(msg.x, msg.y, msg.r);
     } else if (msg.type === 'wallet') {
       wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, car: msg.car, boat: msg.boat, pet: msg.pet, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
       rouletteHandle.setCoins(msg.coins);
@@ -2195,7 +2195,7 @@ worldBtn.addEventListener('click', async () => {
       houseBuild: (id, house) => net.send({ type: 'houseBuild', id, house }),
       houseDemolish: (id) => net.send({ type: 'houseDemolish', id }),
       say: (text, asSay) => net.send({ type: 'worldChat', text, say: asSay }),
-      boom: (x, y) => net.send({ type: 'worldBoom', x, y }),
+      boom: (x, y, r) => net.send({ type: 'worldBoom', x, y, r }),
       sendChat: (text) => net.send({ type: 'chat', text }), // → main game chat (shows in the side feed)
       chatHistory: () => recentChat,
       // Slash-command autocomplete, shared with the main chat so the in-world chat gets the same

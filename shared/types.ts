@@ -810,6 +810,7 @@ export interface WorldBoomMsg {
   type: 'worldBoom';
   x: number;
   y: number;
+  r?: number; // blast radius (rocket strikes); when >0 receivers also take blast effects, not just the visual
 }
 
 // --- Client -> Server ---
@@ -912,7 +913,7 @@ export type ClientMsg =
   | { type: 'worldLeave' } // leave the world map
   | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null; pet?: string | null } // client-authoritative avatar position (world units), heading + car when driving, pet trailing
   | { type: 'worldChat'; text: string; say?: boolean } // say a line in the World — pops as a speech bubble over your avatar; say=true (the Y popup) renders it purple
-  | { type: 'worldBoom'; x: number; y: number } // a car of ours just exploded here — broadcast the fireball to everyone else in the world
+  | { type: 'worldBoom'; x: number; y: number; r?: number } // an explosion here (car crash or rocket strike) — broadcast the fireball; r>0 = a damaging blast
   // --- Robville land (the suburban neighborhood) ---
   | { type: 'landReq' } // request the current Robville parcel ownership/market book
   | { type: 'landBuyBank'; id: string } // buy an empty lot from the bank for PARCEL_PRICE (subject to BANK_PARCEL_CAP)

@@ -443,7 +443,7 @@ wss.on('connection', (ws: WebSocket, req) => {
         if (typeof msg.text === 'string') lobby.worldChat(ws, msg.text, msg.say === true);
         break;
       case 'worldBoom':
-        if (typeof msg.x === 'number' && typeof msg.y === 'number') lobby.worldBoom(ws, msg.x, msg.y);
+        if (typeof msg.x === 'number' && typeof msg.y === 'number') lobby.worldBoom(ws, msg.x, msg.y, typeof msg.r === 'number' ? msg.r : undefined);
         break;
       case 'landReq':
         lobby.sendLand(ws);

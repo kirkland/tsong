@@ -93,7 +93,7 @@ export interface WorldNet {
   houseBuild(id: string, house: string): void; // build a HOUSE_KINDS house on a lot you own
   houseDemolish(id: string): void;          // tear the house down on a lot you own (free)
   say(text: string, asSay?: boolean): void; // → speech bubble over your avatar (+ to others in-world); asSay=true → purple "Say" bubble
-  boom(x: number, y: number): void;         // tell the server our car exploded here → fireball broadcast to everyone else
+  boom(x: number, y: number, r?: number): void; // explosion here → fireball broadcast to everyone else; r>0 = a damaging rocket blast
   sendChat(text: string): void;             // → main game chat, so the line also shows in the side feed
   chatHistory(): ChatLine[];                // recent chat backlog, seeded (hidden) so it's there on T
   // Slash-command autocomplete, shared with the main chat (same COMMANDS list).
@@ -106,7 +106,7 @@ interface Controller {
   feed(avatars: WorldAvatar[]): void;
   feedLand(parcels: LandParcelView[], bankBought: number, bankCap: number): void; // Robville land book
   feedSay(id: string, name: string, text: string, say: boolean): void; // an in-world line → speech bubble (say=purple)
-  feedBoom(x: number, y: number): void; // someone else's car exploded → render the fireball here
+  feedBoom(x: number, y: number, r?: number): void; // someone else's explosion → render the fireball (+ blast effects if r>0)
   feedChat(line: ChatLine): void; // a new chat line (mirrors the main chat into the side feed)
   reenter(): void; // re-send worldEnter after a socket reconnect (server forgot us on drop)
   dungeonChests(opened: string[]): void;                          // server's list of chests we've opened
@@ -159,9 +159,9 @@ export function feedSay(id: string, name: string, text: string, say = false): vo
   controller?.feedSay(id, name, text, say);
 }
 
-/** Render a car-crash fireball at a world point (from a `worldBoom` server message). No-op if closed. */
-export function feedBoom(x: number, y: number): void {
-  controller?.feedBoom(x, y);
+/** Render an explosion at a world point (from a `worldBoom` server message). No-op if closed. */
+export function feedBoom(x: number, y: number, r?: number): void {
+  controller?.feedBoom(x, y, r);
 }
 
 /** Mirror a chat line (from a `chat` server message) into the in-world side feed. No-op if closed. */
@@ -868,6 +868,8 @@ export function startWorld(net: WorldNet): void {
   let vx = 0, vy = 0; // car velocity, world units / s (drives the drift physics)
   let handbrake = false; // hold Shift (or the on-screen DRIFT button) → break the rear loose and slide
   let lastSkidMarkAt = 0; // throttle for laying rubber on the ground while drifting
+  let stunnedUntil = 0;   // ms; knocked off your feet by a rocket blast — can't move until then
+  let lastRocketAt = 0;   // rocket-launcher fire cooldown
 
   // --- boat / water state ---
   // Water you can drive a boat on: each region is the ellipse of open water inside a pond building
@@ -1098,6 +1100,19 @@ export function startWorld(net: WorldNet): void {
   driftBtn.addEventListener('pointerup', releaseDrift);
   driftBtn.addEventListener('pointercancel', releaseDrift);
   driftBtn.addEventListener('pointerleave', releaseDrift);
+
+  // Fire-rocket button (bottom-right, above the drift button) for touch — keyboard players press R.
+  // Shown whenever you're out in the open world (hidden indoors, in the Ruins, in jail, or boating).
+  const fireBtn = document.createElement('button');
+  fireBtn.type = 'button';
+  fireBtn.textContent = '🚀';
+  fireBtn.style.cssText =
+    'position:absolute;right:20px;bottom:182px;display:none;pointer-events:auto;cursor:pointer;z-index:5;' +
+    'width:72px;height:72px;border-radius:50%;background:#6b2a2a;color:#fff;border:2px solid #b85555;' +
+    'font-size:30px;line-height:1;touch-action:none;user-select:none;box-shadow:0 4px 14px #0008;';
+  overlay.appendChild(fireBtn);
+  fireBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); unlockAudio(); fireRocket(); });
+  let fireBtnShown = false;
 
   // Blessing of the Ball badge (top-centre) — a gilded pill with a bar that drains as the blessing
   // wears off. Hidden whenever no blessing is active. Updated each frame in update().
@@ -1732,8 +1747,8 @@ export function startWorld(net: WorldNet): void {
     }
     const boatHint = boardableWater() ? ' · <b>B</b> board boat' : '';
     help.innerHTML = driving
-      ? 'W/S or ↑/↓ throttle · A/D or ←/→ steer · <b>Shift</b> drift · drag to drive · <b>F</b> get out · <b>T</b> chat'
-      : `WASD / arrows or drag to walk · <b>F</b> drive${boatHint} · <b>Space</b> enter · <b>T</b> chat · <b>Y</b> say`;
+      ? 'W/S or ↑/↓ throttle · A/D or ←/→ steer · <b>Shift</b> drift · <b>R</b> 🚀 · <b>F</b> get out · <b>T</b> chat'
+      : `WASD / arrows or drag to walk · <b>F</b> drive${boatHint} · <b>R</b> 🚀 · <b>Space</b> enter · <b>T</b> chat`;
   }
 
   // --- building entry ---
@@ -3265,6 +3280,7 @@ export function startWorld(net: WorldNet): void {
     if (dialogOpen) return;
     if (k === 'f') { e.preventDefault(); e.stopPropagation(); toggleDrive(); return; }
     if (k === 'b') { e.preventDefault(); e.stopPropagation(); toggleBoat(); return; } // board/dock a boat on water
+    if (k === 'r') { e.preventDefault(); e.stopPropagation(); fireRocket(); return; } // 🚀 fire the rocket launcher
     if (k === 'enter' || k === 'e' || k === ' ') {
       // Always swallow Space so the page never scrolls; interact with whatever's in range
       // (building, NPC, netizen, exit, chest, or jail — triggerNear no-ops if nothing is).
@@ -3738,6 +3754,11 @@ export function startWorld(net: WorldNet): void {
     tone(58, 0.6, 'sine', 0.32, 26);
     noise(0.5, 0.34, 220);
     window.setTimeout(() => noise(0.45, 0.2, 140), 90);
+  }
+  // Rocket launch: a sharp whoosh — a rising noise hiss plus a quick pitch-up tone (the ignition).
+  function rocketLaunchSound() {
+    noise(0.3, 0.16, 900);
+    tone(180, 0.22, 'sawtooth', 0.16, 520);
   }
   function revSound(starting: boolean) {
     if (starting) tone(80, 0.26, 'sawtooth', 0.18, 230);
@@ -4501,6 +4522,15 @@ export function startWorld(net: WorldNet): void {
     g.fillStyle(0xffffff, 0.55); g.fillCircle(12, 12, 8);
     g.fillStyle(0xffffff, 0.95); g.fillCircle(12, 12, 4.5);
     g.generateTexture('w-fireball', 24, 24);
+
+    // --- rocket: a little missile pointing +x (so rotation = travel heading). Red body, dark nose,
+    // swept fins, and a hot flame tail. ---
+    g.clear();
+    px(0, 3, 3, 2, 0xffd24a); px(0, 4, 2, 1, 0xff7a1a);     // flame tail
+    px(2, 1, 2, 6, 0x9a2a2a);                                // rear fins
+    px(3, 2, 9, 4, 0xd23b3b); px(3, 2, 9, 1, 0xef6a6a);      // body + top highlight
+    px(11, 3, 3, 2, 0x7a1414); px(13, 4, 1, 1, 0x7a1414);    // dark nose cone
+    g.generateTexture('w-rocket', 16, 8);
 
     // --- avatar: the tsong ball with eyes (tintable white body) (10×10 texels) ---
     g.clear();
@@ -5631,7 +5661,7 @@ export function startWorld(net: WorldNet): void {
         jailBanner.style.display = jailedNow ? 'flex' : 'none';
       }
 
-      if (!dialogOpen && !talkOpen) {
+      if (!dialogOpen && !talkOpen && now >= stunnedUntil) {
         const boat = boating ? myBoat() : null;
         const car = !boating && driving ? myCar() : null;
         if (boat) stepBoat(boat, dt);
@@ -5644,6 +5674,10 @@ export function startWorld(net: WorldNet): void {
       updateNpcs(now, dt);
       updateNearBuilding();
       maybeSendMove(now);
+
+      // show the touch fire button only out in the open world
+      const canRocket = !inInterior && !inDungeon && !boating && !net.amJailed();
+      if (fireBtnShown !== canRocket) { fireBtnShown = canRocket; fireBtn.style.display = canRocket ? 'block' : 'none'; }
 
       // place our avatar straight from authoritative state (zero latency)
       if (self) { placeAvatar(self, selfX, selfY, facing, boating ? net.boat() : driving ? net.car() : null, net.color(), net.name() || 'you'); applySay(self, net.selfId(), now); }
@@ -5693,6 +5727,7 @@ export function startWorld(net: WorldNet): void {
       updatePets(dt);
       updateSmoke(dt);
       updateSkids(dt);
+      updateRockets(dt);
       updateBoom(dt);
 
       // redraw the minimap ~8×/s (and the full map while it's open)
@@ -5804,6 +5839,87 @@ export function startWorld(net: WorldNet): void {
       if (p.kind === 'flash') p.spr.setScale(r).setAlpha(1 - k);
       else if (p.kind === 'fire') p.spr.setScale(Math.max(0.05, r)).setAlpha(1 - k * k);
       else p.spr.setScale(r).setAlpha(0.55 * Math.sin(Math.min(1, k * 1.5) * Math.PI)).setDepth(p.spr.y + 60);
+    }
+  }
+
+  // ============================================================================================
+  // ROCKET LAUNCHER 🚀 — fire with R (or the on-screen button); a missile streaks out along your
+  // heading and detonates on the first thing it hits (building, townsperson, car, or another player)
+  // or when it runs out of fuel. The blast squishes nearby townsfolk, blows up cars, and knocks
+  // people off their feet — and is broadcast so EVERYONE sees the fireball and takes the hit.
+  // ============================================================================================
+  interface Rocket { spr: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number; t: number; }
+  const rockets: Rocket[] = [];
+  const ROCKET_SPEED = 640, ROCKET_LIFE = 1.7, BLAST_R = 96;
+
+  function fireRocket() {
+    const sc = petScene; if (!sc) return;
+    const now = performance.now();
+    if (now - lastRocketAt < 850) return;                                  // cooldown
+    if (inInterior || inDungeon || boating || net.amJailed() || talkOpen || dialogOpen || chatActive || sayActive) return;
+    if (now < stunnedUntil) return;                                        // can't fire while flattened
+    lastRocketAt = now;
+    const hx = Math.cos(facing), hy = Math.sin(facing);
+    const muzzle = (driving ? CAR_LEN * 0.55 : R) + 12;                    // spawn ahead so you don't eat your own blast
+    const x = selfX + hx * muzzle, y = selfY + hy * muzzle;
+    const spr = sc.add.image(x, y, 'w-rocket').setScale(TEXEL * 1.2).setRotation(facing).setDepth(y + 8);
+    rockets.push({ spr, x, y, vx: hx * ROCKET_SPEED, vy: hy * ROCKET_SPEED, t: 0 });
+    rocketLaunchSound();
+  }
+
+  function detonateRocket(x: number, y: number) {
+    spawnExplosion(x, y);              // local fireball + boom (spawnExplosion plays the boom sound)
+    net.boom(x, y, BLAST_R);          // fan a DAMAGING blast out to everyone else
+    applyBlast(x, y, BLAST_R);        // and apply it to our own world (NPCs, our car/self)
+  }
+
+  // Resolve a blast at (x,y): flatten townsfolk in range; if WE are caught, our car blows up (driving)
+  // or we get knocked off our feet (on foot). Runs on the firer locally AND on every receiver.
+  function applyBlast(x: number, y: number, r: number) {
+    const now = performance.now();
+    for (const n of npcs) {
+      if (now < n.squishedUntil) continue;
+      if (Math.hypot(n.x - x, n.y - y) > r) continue;
+      n.squishedUntil = now + 2600 + Math.random() * 1400;
+      n.getUpUntil = 0; n.walking = false; n.label.setText('💫');
+      squishSound();
+    }
+    if (Math.hypot(selfX - x, selfY - y) <= r) {
+      if (driving) blowUpMyCar('💥 Your car took a direct hit — summon a fresh one anytime.');
+      else if (now >= stunnedUntil && !inInterior && !inDungeon) {
+        stunnedUntil = now + 2300; keys.clear();
+        flashHelp('💥 Blown off your feet!');
+      }
+    }
+    if (mainCam) {
+      const d = Math.hypot(x - selfX, y - selfY);
+      if (d < 420) mainCam.shake(280, 0.013 * Math.max(0.25, 1 - d / 420)); // closer blast → harder shake
+    }
+  }
+
+  function updateRockets(dt: number) {
+    const sc = petScene; if (!sc) return;
+    const now = performance.now();
+    const selfId = net.selfId();
+    for (let i = rockets.length - 1; i >= 0; i--) {
+      const rk = rockets[i];
+      rk.t += dt;
+      rk.x += rk.vx * dt; rk.y += rk.vy * dt;
+      rk.spr.setPosition(rk.x, rk.y).setDepth(rk.y + 8);
+      // a thin smoke trail (reuses the smoke-puff pool/updater)
+      if (smokePuffs.length < 90) {
+        smokePuffs.push({ spr: sc.add.image(rk.x, rk.y, 'w-smoke').setScale(0.35).setTint(0xdadada).setAlpha(0.45).setDepth(rk.y - 2),
+          t: 0, max: 0.4, vx: (Math.random() - 0.5) * 24, vy: (Math.random() - 0.5) * 24 });
+      }
+      let hit = rk.t >= ROCKET_LIFE;                                       // fuel ran out
+      if (!hit && resolveCollisions(rk.x, rk.y, 4).hit) hit = true;        // slammed a building/wall
+      if (!hit && (rk.x < 8 || rk.y < 8 || rk.x > WORLD.w - 8 || rk.y > WORLD.h - 8)) hit = true; // off the map edge
+      if (!hit) for (const n of npcs) { if (now >= n.squishedUntil && Math.hypot(n.x - rk.x, n.y - rk.y) < R + 4) { hit = true; break; } }
+      if (!hit) for (const a of others) {                                  // a car or a person downrange
+        if (a.id === selfId) continue;
+        if (Math.hypot(a.x - rk.x, a.y - rk.y) < (a.car ? CAR_LEN * 0.5 : R * 1.3)) { hit = true; break; }
+      }
+      if (hit) { rk.spr.destroy(); rockets.splice(i, 1); detonateRocket(rk.x, rk.y); }
     }
   }
 
@@ -6163,7 +6279,7 @@ export function startWorld(net: WorldNet): void {
       for (const [k, v] of says) if (v.until <= now) says.delete(k); // drop stale lines (e.g. speakers who left)
       says.set(id, { text, until: now + SAY_MS, purple: say });
     },
-    feedBoom(x, y) { spawnExplosion(x, y); },
+    feedBoom(x, y, r) { spawnExplosion(x, y); if (r && r > 0) applyBlast(x, y, r); },
     feedChat(line) { pushChatLine(line); },
   };
   syncDriveBtn();
