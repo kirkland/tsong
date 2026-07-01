@@ -563,7 +563,7 @@ interface NpcDef {
   body?: 'pants' | 'dress'; // silhouette, default 'pants'
   hat?: 'cap' | 'sun';  // optional headwear
   hatColor?: number;    // cap tint (sun hat is fixed straw)
-  kind?: 'minion' | 'kenny' | 'demon' | 'soul' | 'angler' | 'protester' | 'fed'; // special one-off sprite; default is the little-person
+  kind?: 'minion' | 'kenny' | 'demon' | 'soul' | 'angler' | 'protester' | 'fed' | 'dorito'; // special one-off sprite; default is the little-person
   glasses?: boolean;    // overlay specs
   stripes?: boolean;    // red/white striped shirt instead of a flat tinted one (Waldo!)
   x: number; y: number; // home anchor (NPC roams around this)
@@ -793,6 +793,27 @@ const NPCS: NpcDef[] = [
       choices: [
         { label: '🍌 Banana!', reply: 'BANANAAAAAA! *happy minion noises*', claim: 'give-banana' },
         { label: 'No thanks', reply: '...Poopaye. (he looks devastated)' },
+      ],
+    },
+  },
+  {
+    // Danny DeVito, but he's a Dorito. Loiters near the Tavern being magnificent garbage.
+    id: 'doritas', name: 'Doritas DeVito', shirt: 0xe8912c, hair: 0x2a1d10, kind: 'dorito',
+    x: 1300, y: 1780, roam: 100,
+    lines: [
+      "I'm a chip off the old block. The block was also a chip. It's chips all the way down.",
+      "Crunchy on the outside. Crunchier on the inside. No soft parts. That's DeVito.",
+      "I found a nickel in the fountain. Finders keepers. That's the law now. I made it law.",
+      "They call me Cool Ranch behind my back. To my face it's 'sir.'",
+      "I stuffed a ham with rum and floated it down the pond. It's an investment. Don't touch my rum ham.",
+      "I once ate a whole bag of myself. Long story. Weird night. Regrets? A few. Would I again? Instantly.",
+      "You want the last of me? Tough. I'm a limited-edition flavor, sweetheart.",
+    ],
+    ask: {
+      q: 'Nacho Cheese or Cool Ranch — pick a side, and choose wisely.',
+      choices: [
+        { label: 'Nacho Cheese', reply: 'The classic. The KING. ...Alright. We can be friends.' },
+        { label: 'Cool Ranch', reply: "Get outta here. ...Fine. But we're not friends. We're acquaintances." },
       ],
     },
   },
@@ -4333,6 +4354,42 @@ export function startWorld(net: WorldNet): void {
       g.generateTexture('w-fed', 16, 16);
     }
 
+    // --- Doritas DeVito: Danny DeVito reimagined as a nacho-cheese tortilla chip. A stout triangle
+    //     of a man — bald pate, wild dark side-hair, monstrous eyebrows, an enormous raspy grin, dusted
+    //     in cheese powder. Stubby arms and little legs. Baked (not tinted). 16×16, feet at the base. ---
+    {
+      const NACHO = 0xe8912c, NACHO_D = 0xb56a18, NACHO_L = 0xf4b85a, CRUMB = 0x8a4f11;
+      const CHEESE = 0xf6d24a, HAIR = 0x2a1d10, BROW = 0x1f1509, TOOTH = 0xf8f0d8, MOUTH = 0x4a2408;
+      const SKN = 0xe7b98c, EYEW = 0xffffff, PUP = 0x1a1208, SHOE = 0x171717;
+      g.clear();
+      // the chip — a triangle that widens toward the base (per-row spans)
+      px(8, 1, 1, 1, NACHO); px(7, 2, 3, 2, NACHO); px(6, 4, 5, 2, NACHO);
+      px(5, 6, 7, 1, NACHO); px(4, 7, 9, 2, NACHO); px(3, 9, 11, 2, NACHO);
+      px(2, 11, 13, 2, NACHO); px(1, 13, 15, 1, NACHO);
+      // toasted edges + a highlight down the upper-left facet
+      px(1, 13, 15, 1, CRUMB); px(1, 12, 1, 1, NACHO_D); px(14, 12, 1, 1, NACHO_D);
+      px(2, 12, 12, 1, NACHO_D); px(6, 4, 1, 2, NACHO_L); px(7, 2, 1, 2, NACHO_L);
+      // cheese-dust freckles scattered across the chip
+      px(4, 6, 1, 1, CHEESE, 0.9); px(11, 8, 1, 1, CHEESE, 0.9); px(3, 10, 1, 1, CHEESE, 0.9);
+      px(13, 11, 1, 1, CHEESE, 0.9); px(9, 5, 1, 1, CHEESE, 0.85); px(6, 12, 1, 1, CHEESE, 0.85);
+      // the face: a bald crown up top (shiny skin showing through), wild dark hair down the sides
+      px(6, 5, 5, 1, SKN); px(7, 4, 3, 1, SKN);                              // gleaming bald pate
+      px(3, 9, 1, 3, HAIR); px(13, 9, 1, 3, HAIR); px(2, 11, 1, 2, HAIR); px(14, 11, 1, 2, HAIR); // side hair
+      // monstrous eyebrows
+      px(5, 6, 3, 1, BROW); px(9, 6, 3, 1, BROW);
+      // eyes with pupils
+      px(5, 7, 2, 1, EYEW); px(9, 7, 2, 1, EYEW); px(6, 7, 1, 1, PUP); px(9, 7, 1, 1, PUP);
+      // a little nose nub
+      px(8, 8, 1, 1, NACHO_D);
+      // the enormous raspy grin — wide dark mouth with a row of teeth
+      px(5, 10, 7, 1, MOUTH); px(5, 10, 7, 1, TOOTH); px(5, 11, 7, 1, MOUTH); px(6, 11, 5, 1, TOOTH);
+      // stubby arms poking out the sides
+      px(0, 9, 2, 1, NACHO); px(0, 9, 1, 1, SKN); px(14, 9, 2, 1, NACHO); px(15, 9, 1, 1, SKN);
+      // two little legs + shoes below the base
+      px(5, 14, 2, 2, HAIR); px(9, 14, 2, 2, HAIR); px(4, 15, 3, 1, SHOE); px(9, 15, 3, 1, SHOE);
+      g.generateTexture('w-dorito', 16, 16);
+    }
+
     // --- shelter critters: little dogs & cats milling around the pet shack (14×10, face +x) ---
     {
       const DOG = 0x9a6b3f, DOG_D = 0x744d28, EAR = 0x5e3d20, NOSE = 0x2a1c12;
@@ -6420,6 +6477,8 @@ export function startWorld(net: WorldNet): void {
       parts = [sc.add.image(0, 0, 'w-protester').setScale(TEXEL * 1.2).setOrigin(0.5, 0.95)];
     } else if (def.kind === 'fed') {
       parts = [sc.add.image(0, 0, 'w-fed').setScale(TEXEL * 1.2).setOrigin(0.5, 0.95)];
+    } else if (def.kind === 'dorito') {
+      parts = [sc.add.image(0, 0, 'w-dorito').setScale(TEXEL * 1.25).setOrigin(0.5, 0.95)];
     } else {
       const layer = (key: string, tint?: number) => {
         const im = sc.add.image(0, 0, key).setScale(TEXEL).setOrigin(0.5, 0.95);
