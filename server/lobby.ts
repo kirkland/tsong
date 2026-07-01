@@ -1705,7 +1705,8 @@ export class Lobby {
     this.rrActive = true;
     this.rrEndsAt = now + 3 * 60 * 1000;
     this.rrKills.clear();
-    this.announce('💥🚗 ROAD RAGE! 3 minutes of rocket-car PvP — kills earn 25 coins. Get in a car and start blasting!');
+    this.tell(ws, { type: 'announce', text: '💥 Road Rage started! Get in a car and start blasting!', toast: true });
+    this.announce('💥🚗 ROAD RAGE! 3 minutes of rocket-car PvP — kills earn 25 coins. Get in a car and start blasting!', true);
     this.broadcastRoadRage();
     setTimeout(() => this.endRoadRage(), 3 * 60 * 1000);
   }
