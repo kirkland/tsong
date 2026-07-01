@@ -120,6 +120,15 @@ export const PINATA = {
   stickMax: 4, // balls held before the next contact (the 5th) bursts it
   maxBalls: 10, // safety cap on live balls — don't spawn replacements beyond this
 } as const;
+
+// "Bomb Party" mode: the live ball is a lit bomb with a burning fuse. The fuse starts on
+// each serve and counts down in real time; whichever side of the net the ball is on when
+// it hits zero is "holding" the bomb — it detonates and the point goes to their opponent.
+// A hot-potato twist that punishes stalling and rewards forcing a fast return.
+export const BOMBPARTY = {
+  fuse: 7,      // seconds the fuse burns before the bomb goes off
+  panic: 3,     // seconds-remaining below which the bomb starts frantically flashing red
+} as const;
 export const TARGET = {
   r: 24, // target radius, court units
   minDelay: 6, // min seconds before a target (re)appears
@@ -835,7 +844,7 @@ export type ClientMsg =
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
   | { type: 'summonPlane' } // secret: summon the banner-plane for the whole room to see
-  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean; bumpers?: boolean } // toggle game modes
+  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean; bumpers?: boolean; bombparty?: boolean } // toggle game modes
   | { type: 'fatality'; move: string } // winner-only, validated server-side
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
   | { type: 'forfeit' } // "/ff": leave your paddle spot mid-game (and get shamed)
@@ -1085,6 +1094,14 @@ export interface StateMsg {
   // surface (absolute court positions), and a one-frame `burst` pulse the moment it pops.
   // null when the mode is off or no match is running.
   pinataPos: { x: number; y: number; spin: number; stuck: { x: number; y: number }[]; burst: boolean } | null;
+  bombparty: boolean; // whether "bomb party" mode is armed (the live ball is a lit bomb)
+  // Live bomb fuse when bomb-party mode is running: seconds left and the full fuse length,
+  // so the client can render a burning fuse that reddens/flashes faster as time runs out.
+  // null when the mode is off or no match is running.
+  bomb: { fuse: number; max: number } | null;
+  // Set for the single frame the bomb detonates, at the blast's court position, so every
+  // client can flash a fireball there. null the rest of the time.
+  bombBoom: { x: number; y: number } | null;
   breakout: boolean; // whether "breakout" mode is armed
   // Which bricks are still alive (true = alive). Length = BREAKOUT.cols × BREAKOUT.rows.
   // null when breakout mode is off.

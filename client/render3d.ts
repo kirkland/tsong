@@ -493,6 +493,16 @@ export function createRenderer(container: HTMLElement): Renderer3D {
   pinata.castShadow = true;
   pinata.visible = false;
   world.add(pinata);
+
+  // Bomb Party: a glowing fireball sphere that flashes at the blast site for ~0.6s.
+  const bombBoom = new THREE.Mesh(
+    new THREE.SphereGeometry(1, 20, 16),
+    new THREE.MeshBasicMaterial({ color: '#ffb040', transparent: true, opacity: 0 }),
+  );
+  bombBoom.visible = false;
+  world.add(bombBoom);
+  let bombBoomAt = -1e9;
+  const bombBoomPos = { x: 0, y: 0 };
   const stuckGeo = new THREE.SphereGeometry(BALL.r, 16, 12);
   const stuckPool: THREE.Mesh<THREE.SphereGeometry, THREE.MeshStandardMaterial>[] = [];
   function getStuck(i: number) {
@@ -720,10 +730,38 @@ export function createRenderer(container: HTMLElement): Renderer3D {
       m.visible = true;
       m.scale.setScalar(ballR);
       m.position.set(wx(b.x), Math.max(ballR, BALL_Y), wz(b.y));
-      m.material.color.set(b.color);
-      m.material.emissive.set(tmpColor.set(b.color).multiplyScalar(0.4));
+      // Bomb Party: the primary ball is a dark bomb pulsing an ever-more-urgent red glow.
+      if (s.bomb && i === 0) {
+        const frac = s.bomb.max > 0 ? Math.max(0, Math.min(1, s.bomb.fuse / s.bomb.max)) : 0;
+        const rate = 2 + (1 - frac) * 16;
+        const blink = 0.5 + 0.5 * Math.sin((Date.now() / 1000) * rate * Math.PI * 2);
+        m.material.color.set('#1a1216');
+        m.material.emissive.set('#ff2a10');
+        m.material.emissiveIntensity = 0.25 + (1 - frac) * blink * 1.6;
+      } else {
+        m.material.color.set(b.color);
+        m.material.emissive.set(tmpColor.set(b.color).multiplyScalar(0.4));
+        m.material.emissiveIntensity = 1;
+      }
     });
     for (let i = balls.length; i < ballPool.length; i++) ballPool[i].visible = false;
+
+    // Bomb Party detonation: latch the blast, then flash an expanding fireball for ~0.6s.
+    if (s.bombBoom) { bombBoomAt = performance.now(); bombBoomPos.x = s.bombBoom.x; bombBoomPos.y = s.bombBoom.y; }
+    {
+      const bt = (performance.now() - bombBoomAt) / 600;
+      if (bt >= 0 && bt < 1) {
+        bombBoom.visible = true;
+        const R = 20 + bt * 140;
+        bombBoom.scale.setScalar(R);
+        bombBoom.position.set(wx(bombBoomPos.x), Math.max(R, BALL_Y), wz(bombBoomPos.y));
+        const mat = bombBoom.material as THREE.MeshBasicMaterial;
+        mat.opacity = (1 - bt) * 0.85;
+        mat.color.setRGB(1, 0.5 + 0.4 * (1 - bt), 0.15 * (1 - bt));
+      } else {
+        bombBoom.visible = false;
+      }
+    }
 
     // Blaster projectiles — bright green laser bolts oriented along their travel direction.
     s.projectiles.forEach((pr, i) => {

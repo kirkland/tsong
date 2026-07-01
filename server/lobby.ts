@@ -132,7 +132,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   getGameModes, saveGameModes,
   loadNomic, saveNomic, archiveNomicSeason } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
-import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR, DUNGEON_CHEST_CONTENTS, DUNGEON_TIER_COINS, DUNGEON_FLOOR_TIERS } from '../shared/types';
+import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, BOMBPARTY, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR, DUNGEON_CHEST_CONTENTS, DUNGEON_TIER_COINS, DUNGEON_FLOOR_TIERS } from '../shared/types';
 import { WORLD_PARCELS, BANK_PARCEL_CAP, PARCEL_PRICE, LandParcelView, WORLD_SAY_MAX, HOUSE_BY_ID } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
@@ -5134,7 +5134,7 @@ export class Lobby {
   }
 
   // Any joined client may toggle game modes.
-  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean; bumpers?: boolean }) {
+  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean; bumpers?: boolean; bombparty?: boolean }) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return;
     if (opts.closing !== undefined) this.game.setClosing(opts.closing);
@@ -5143,6 +5143,7 @@ export class Lobby {
     if (opts.streamer !== undefined) this.streamerMode = opts.streamer;
     if (opts.diamond !== undefined) this.game.setDiamond(opts.diamond);
     if (opts.pinata !== undefined) this.game.setPinata(opts.pinata);
+    if (opts.bombparty !== undefined) this.game.setBombParty(opts.bombparty);
     if (opts.layered !== undefined) this.game.setLayered(opts.layered);
     if (opts.arena !== undefined) this.setArena(opts.arena);
     if (opts.breakout !== undefined) this.game.setBreakout(opts.breakout);
@@ -5167,6 +5168,7 @@ export class Lobby {
       streamer: this.streamerMode,
       diamond: this.game.diamond,
       pinata: this.game.pinata,
+      bombparty: this.game.bombparty,
       layered: this.game.layered,
       arena: this.arena,
       breakout: this.game.breakout,
@@ -5193,6 +5195,7 @@ export class Lobby {
     if (typeof m.streamer === 'boolean') this.streamerMode = m.streamer;
     if (typeof m.diamond === 'boolean') this.game.setDiamond(m.diamond);
     if (typeof m.pinata === 'boolean') this.game.setPinata(m.pinata);
+    if (typeof m.bombparty === 'boolean') this.game.setBombParty(m.bombparty);
     if (typeof m.layered === 'boolean') this.game.setLayered(m.layered);
     if (typeof m.arena === 'boolean') this.setArena(m.arena);
     if (typeof m.breakout === 'boolean') this.game.setBreakout(m.breakout);
@@ -6138,6 +6141,11 @@ export class Lobby {
       viewMode: this.viewMode,
       pinata: this.game.pinata,
       pinataPos: poly ? null : this.pinataView(),
+      bombparty: this.game.bombparty,
+      bomb: !poly && this.game.bombparty
+        ? { fuse: Math.max(0, this.game.bombFuse), max: BOMBPARTY.fuse }
+        : null,
+      bombBoom: poly ? null : this.game.bombBoom,
       winner: status === 'over' ? (poly ? this.polyWinnerName() : this.winnerName) : null,
       fatalitiesEnabled: this.fatalitiesEnabled,
       fatality: !poly && this.game.status === 'over' ? this.activeFatality : null,
