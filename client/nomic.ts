@@ -128,11 +128,13 @@ function renderParams(s: NomStateMsg) {
 function renderScores(s: NomStateMsg) {
   const host = overlay!.querySelector('.nom-scores') as HTMLElement;
   const rows = s.scores.map((sc) => {
-    const seated = s.members.includes(sc.id);
+    const inRotation = s.members.includes(sc.id);
+    const isOnline = s.online.includes(sc.id);
     const speaker = s.turn === sc.id;
-    return `<li class="${seated ? 'nom-seated' : 'nom-absent'}">
+    const statusDot = !inRotation ? '' : isOnline ? ' 🟢' : ' 🔴';
+    return `<li class="${inRotation ? (isOnline ? 'nom-seated' : 'nom-away') : 'nom-absent'}">
       <span class="nom-dot" style="background:${esc(sc.color)}"></span>
-      <span class="nom-pname">${speaker ? '🪑 ' : ''}${esc(sc.name)}${sc.id === s.you ? ' <em>(you)</em>' : ''}</span>
+      <span class="nom-pname">${speaker ? '🪑 ' : ''}${esc(sc.name)}${sc.id === s.you ? ' <em>(you)</em>' : ''}${statusDot}</span>
       <span class="nom-pts">${sc.points}</span></li>`;
   }).join('');
   host.innerHTML = `<h3>Legislators</h3><ol class="nom-scorelist">${rows || '<li class="nom-empty">Nobody seated.</li>'}</ol>`;
@@ -336,6 +338,7 @@ function injectStyles() {
   .nom-scorelist{list-style:none;margin:0;padding:0}
   .nom-scorelist li{display:flex;align-items:center;gap:7px;padding:3px 0;font-size:13px}
   .nom-absent{opacity:.45}
+  .nom-away{opacity:.7}
   .nom-dot{width:10px;height:10px;border-radius:50%;display:inline-block;flex:0 0 auto}
   .nom-pname{flex:1}.nom-pname em{opacity:.7;font-style:normal;font-size:11px}
   .nom-pts{font-weight:700;font-variant-numeric:tabular-nums}
