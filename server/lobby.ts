@@ -1735,7 +1735,8 @@ export class Lobby {
   private broadcastRoadRage() {
     const standings = [...this.rrKills.values()].sort((a, b) => b.kills - a.kills).slice(0, 8);
     const msg = JSON.stringify({ type: 'worldRoadRage', active: this.rrActive, endsAt: this.rrEndsAt, standings });
-    for (const sock of this.world.sockets()) if (sock.readyState === sock.OPEN) sock.send(msg);
+    // Send to ALL connected clients, not just world sockets — everyone sees the HUD.
+    for (const sock of this.conns.keys()) if (sock.readyState === sock.OPEN) sock.send(msg);
   }
 
   /** Snapshot every in-world avatar (human + netizen). */
