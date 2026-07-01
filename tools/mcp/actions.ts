@@ -133,17 +133,17 @@ export function registerActionTools(server: McpServer, ctx: McpContext) {
 
   server.tool(
     'sell',
-    'Close a position (long cash-out or short cover). Returns payout, coins delta, fast-sell tax info.',
-    { coin: coinEnum, side: z.enum(['long', 'short']).optional().default('long') },
-    async ({ coin, side }) => {
+    'Close a position (long cash-out or short cover). Returns payout, coins delta, fast-sell tax info. Use fraction (0–1] to partially close — e.g. 0.5 sells half. Omit or pass 1 to close the full position.',
+    { coin: coinEnum, side: z.enum(['long', 'short']).optional().default('long'), fraction: z.number().gt(0).lte(1).optional().default(1) },
+    async ({ coin, side, fraction }) => {
       const g = guarded(ctx);
       if (g) return { content: [{ type: 'text', text: JSON.stringify({ ok: false, reason: g }) }], isError: true };
-      const dr = await dryRunGuard(ctx, 'sell', { coin, side });
+      const dr = await dryRunGuard(ctx, 'sell', { coin, side, fraction });
       if (dr) return dr;
 
       const before = ctx.conn.getState().wallet?.coins ?? null;
       const beforeHolding = ctx.conn.getState().stocks?.holdings.find((h) => h.id === coin && h.side === side);
-      ctx.conn.send({ type: 'stockCashOut', coin, side });
+      ctx.conn.send({ type: 'stockCashOut', coin, side, fraction });
       let wallet;
       try {
         const results = await Promise.allSettled([
@@ -162,7 +162,7 @@ export function registerActionTools(server: McpServer, ctx: McpContext) {
 
       writeAudit(ctx.cfg.auditLog, {
         ts: Date.now(), identity: { name: ctx.identity.name }, autonomy: ctx.autonomy,
-        tool: 'sell', params: { coin, side },
+        tool: 'sell', params: { coin, side, fraction },
         coinsBefore: before, coinsAfter: after, delta,
         result: delta !== null && delta > 0 ? 'ok' : 'rejected',
         note: announce?.text,
