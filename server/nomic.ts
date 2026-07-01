@@ -47,8 +47,9 @@ export class NomicGame {
   private nextProposalId = 1;
   private nextLogId = 1;
 
-  // Ephemeral (not persisted): who's currently in the room, whose turn it is, what's on the floor.
-  private members: string[] = [];              // seated legislator ids, in turn order
+  // Ephemeral (not persisted): the legislator roster, who's online, whose turn, what's on the floor.
+  private members: string[] = [];              // all legislators in turn order (stays when they go offline)
+  private activeMembers = new Set<string>();   // subset currently connected — quorum for auto-resolve
   private turnId: string | null = null;        // the Speaker (current turn-holder)
   private floor: NomProposal | null = null;    // the proposal on the floor
   private winnerName: string | null = null;    // set briefly after a season win, cleared on next propose
@@ -99,27 +100,26 @@ export class NomicGame {
 
   // --- membership -----------------------------------------------------------------------------
 
-  /** A player walks into the Parliament: seat them and subscribe. Brand-new players start at 0 pts. */
+  /** A player walks into the Parliament: seat them and mark online. Brand-new players start at 0 pts. */
   enter(id: string, name: string, color: string) {
     const existing = this.scores.get(id);
     if (existing) { existing.name = name; existing.color = color; }
     else this.scores.set(id, { id, name, color, points: 0 });
     if (!this.members.includes(id)) this.members.push(id);
-    if (this.turnId === null) this.turnId = id; // first legislator in takes the floor
+    this.activeMembers.add(id);
+    if (this.turnId === null) this.turnId = id;
     this.changed();
+    // Re-check auto-resolve: a returning player may have been the missing vote.
+    this.maybeAutoResolve();
   }
 
-  /** A player leaves / disconnects. Their score persists; they drop from the rotation. */
+  /** A player closes the Parliament or disconnects. They stay in the rotation (async play) —
+   *  only their online status changes. Score, turn position, and any votes they've cast persist. */
   leave(id: string) {
-    const i = this.members.indexOf(id);
-    if (i < 0) return;
-    // If it's their turn (or their proposal on the floor), pass the gavel before removing them.
-    const wasTheirTurn = this.turnId === id;
-    if (this.floor && this.floor.proposer === id) this.floor = null; // drop their un-resolved floor proposal
-    this.members.splice(i, 1);
-    if (this.members.length === 0) { this.turnId = null; this.floor = null; }
-    else if (wasTheirTurn) this.turnId = this.members[i % this.members.length];
+    if (!this.activeMembers.delete(id)) return;
     this.changed();
+    // Re-check auto-resolve: their departure may complete the online quorum.
+    this.maybeAutoResolve();
   }
 
   private advanceTurn() {
@@ -182,17 +182,22 @@ export class NomicGame {
     return null;
   }
 
-  /** Once every seated legislator has voted, resolve automatically. */
+  /** Auto-resolve once every currently-online legislator has voted.
+   *  Offline members are excluded from the quorum — they can't block async play. */
   private maybeAutoResolve() {
-    if (!this.floor) return;
+    if (!this.floor || this.floor.status !== 'open') return;
     const voted = new Set(this.floor.votes.map((v) => v.id));
-    if (this.members.every((m) => voted.has(m))) this.resolveFloor();
+    const onlineAndSeated = this.members.filter((m) => this.activeMembers.has(m));
+    if (onlineAndSeated.length > 0 && onlineAndSeated.every((m) => voted.has(m))) this.resolveFloor();
   }
 
-  /** The Speaker / proposer calls the vote and resolves the floor early. */
+  /** The Speaker (or any member if the Speaker is offline) calls the vote and resolves early. */
   resolve(id: string): string | null {
     if (!this.floor) return 'Nothing is on the floor.';
-    if (id !== this.floor.proposer && id !== this.turnId) return 'Only the Speaker may call the vote.';
+    const speakerOnline = this.turnId && this.activeMembers.has(this.turnId);
+    if (id !== this.floor.proposer && id !== this.turnId && speakerOnline) {
+      return 'Only the Speaker may call the vote.';
+    }
     this.resolveFloor();
     return null;
   }
@@ -324,6 +329,7 @@ export class NomicGame {
       rules: this.rules.map((r) => ({ ...r })),
       scores: [...this.scores.values()].map((s) => ({ ...s })).sort((a, b) => b.points - a.points),
       members: [...this.members],
+      online: [...this.activeMembers],
       turn: this.turnId,
       proposal: this.floor ? { ...this.floor, votes: this.floor.votes.map((v) => ({ ...v })) } : null,
       log: this.log.slice(-LOG_KEEP),

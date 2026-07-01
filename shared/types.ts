@@ -716,7 +716,8 @@ export interface NomStateMsg {
   params: NomParams;
   rules: NomRule[];             // the live rulebook, ascending by number
   scores: NomScore[];           // every legislator who has ever played this season, by points desc
-  members: string[];            // seated legislator ids, in turn order
+  members: string[];            // all legislators in turn order (includes offline)
+  online: string[];             // subset of members currently connected to the Parliament
   turn: string | null;          // member id whose turn it is (the Speaker), null if nobody seated
   proposal: NomProposal | null; // what's on the floor, or null between turns
   log: NomLogEntry[];           // recent history, oldest → newest
