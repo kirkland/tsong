@@ -916,7 +916,7 @@ export function startWorld(net: WorldNet): void {
     if (!rrHud) {
       rrHud = document.createElement('div');
       rrHud.id = 'rrHud';
-      rrHud.style.cssText = 'position:fixed;top:12px;right:12px;z-index:800;background:rgba(20,0,0,0.82);border:2px solid #ff3333;border-radius:8px;padding:8px 12px;color:#fff;font:13px/1.5 system-ui;min-width:160px;pointer-events:none;';
+      rrHud.style.cssText = 'position:fixed;top:12px;right:12px;z-index:9999;background:rgba(20,0,0,0.82);border:2px solid #ff3333;border-radius:8px;padding:8px 12px;color:#fff;font:13px/1.5 system-ui;min-width:160px;pointer-events:none;';
       document.body.appendChild(rrHud);
     }
     const secsLeft = Math.max(0, Math.ceil((rrEndsAt - Date.now()) / 1000));
