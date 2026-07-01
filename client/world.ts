@@ -234,6 +234,7 @@ const ROADS: Rect[] = [
   { x: 3500, y: 1600, w: 300,  h: 80 },   // stem → Willow Court (west, lower)
   { x: 3910, y: 1600, w: 390,  h: 80 },   // stem → Cedar Circle (east, lower)
   { x: 2945, y: 1290, w: 110, h: 130 },  // spur south to the Bolwoing Alley
+  { x: 2115, y: 1295, w: 110, h: 595 },  // spur south to McDonald's
 ];
 const PLAZA = { x: 1600, y: 1100, r: 240 }; // paved circle + fountain at town center
 // The Tavern's INTERIOR lives off the main map. When you step inside, the camera bounds switch to
@@ -257,6 +258,10 @@ const TAVERN_ZOOM = 3;  // zoom in while inside so the small cozy room fills the
 const TEMPLE_INT = { x: 5400, y: 1120, w: 920, h: 700 };
 const TEMPLE_WALL = 34;  // thick stone walls (play area is inset by this)
 const TEMPLE_ZOOM = 2.4; // a touch wider than the Tavern — let the lofty nave breathe
+// McDonald's INTERIOR — off-map below the Temple block (which ends at y≈1820)
+const MC_INT = { x: 5400, y: 2100, w: 780, h: 500 };
+const MC_WALL = 26;
+const MC_ZOOM = 3;
 
 // --- The Ruins dungeon: off-map tile floors (same trick as the Tavern interior). Tile legend —
 // '#'/'T'/'o' = wall, '.' = floor, '~' = tall-grass encounter, 'c' chest, '>' stairs DOWN,
@@ -847,6 +852,43 @@ const NPCS: NpcDef[] = [
       'One more and I\'m emailing my broker something I\'ll regret.',
     ],
   },
+  // --- McDonald's INTERIOR cast (stationary, off-map at MC_INT; only reachable once you're inside) ---
+  {
+    id: 'mc-cashier', name: 'Mac', shirt: 0xcc0000, hair: 0x1a1a1a, skin: SKINS[2],
+    hairStyle: 'short' as const, x: MC_INT.x + MC_INT.w / 2, y: MC_INT.y + 95, roam: 0,
+    lines: [
+      'Welcome to McDonald\'s! Can I take your order?',
+      'Would you like to try our McFlurry today?',
+      'That\'ll be $5.39. Will that be all?',
+      'Our fries are hot and fresh right now!',
+      'Have a great day! 😊',
+    ],
+  },
+  {
+    id: 'mc-grimace', name: 'Grimace', shirt: 0x7a2a9a, hair: 0x4a1a6a, skin: 0x9a44cc,
+    x: MC_INT.x + Math.round(MC_INT.w * 0.22), y: MC_INT.y + MC_INT.h - 130, roam: 0,
+    lines: [
+      'Mmmmm... McFlurry... my one true love.',
+      'I have been eating here every day since 1971.',
+      'The purple shake... it calls to me.',
+      'Have you tried the 20-piece nuggets? Asking for a friend.',
+      '*is entirely made of purple*',
+      'Ronald keeps giving me free stuff. I think he feels bad about the whole thing.',
+    ],
+  },
+  {
+    id: 'mc-ronald', name: 'Ronald', shirt: 0xff2200, hair: 0xff6600, skin: SKINS[0],
+    hairStyle: 'spiky' as const,
+    x: MC_INT.x + Math.round(MC_INT.w * 0.76), y: MC_INT.y + MC_INT.h - 110, roam: 20,
+    lines: [
+      'Ba da ba ba baaa~ I\'m lovin\' it! 🎵',
+      'Did you hear about the tsong tournament? I\'m DEFINITELY entering.',
+      'Every Happy Meal comes with a toy. Or a regret. It\'s 50/50.',
+      'I\'ve been a clown here for 40 years. The benefits are incredible.',
+      'The fry oil... it flows through me now.',
+      'Fun fact: the M stands for Magic. Always has.',
+    ],
+  },
   {
     // The Fed Chair, stationed outside Parliament (x:470,y:420,w:340,h:240). Speaks in careful riddles.
     id: 'fed', name: 'The Fed', shirt: 0x222a36, hair: 0xb9bdc6, skin: SKINS[1], kind: 'fed',
@@ -956,6 +998,7 @@ export function startWorld(net: WorldNet): void {
   // --- interior state (the Tavern AND the Temple share this walkable-room machinery) ---
   let inInterior = false;   // true while inside a walkable room (camera + collision switch to curInt)
   let inTemple = false;     // sub-flag: the current interior is the Temple (vs the Tavern)
+  let inMcdonald = false;   // sub-flag: the current interior is McDonald's
   // The ACTIVE interior's geometry — swapped on entry so the movement clamp / exit mat / zoom all
   // read one rect instead of hard-coding the Tavern's. Defaults to the Tavern.
   let curInt = TAVERN_INT, curWall = TAVERN_WALL, curZoom = TAVERN_ZOOM;
@@ -1031,6 +1074,7 @@ export function startWorld(net: WorldNet): void {
   const newMobsSeen = new Set<number>(); // this floor's NEW mobs already met (both required before carry mobs reappear)
   let interiorBuilt = false;// the Tavern interior's Phaser props are lazily built on first entry
   let templeBuilt = false;  // the Temple interior's props are lazily built on first entry
+  let mcBuilt = false;      // the McDonald's interior props are lazily built on first entry
   let nearBook = false;     // standing at the holy book's lectern (Enter → read it)
   let templeBookX = 0, templeBookY = 0; // world position of the lectern (set in buildTempleInterior)
   // The Blessing of the Ball: reading the holy book grants a swiftness blessing that gradually wears
@@ -1826,6 +1870,7 @@ export function startWorld(net: WorldNet): void {
       case 'dungeon': return '🏚️ Enter the Ruins — descend the dungeon';
       case 'temple': return '⛪ Enter the Temple';
       case 'bowling': return '🎳 Enter Bolwoing Alley';
+      case 'mcdonald': return "🍔 Enter McDonald's";
     }
   }
   function enterBuilding(kind: WorldBuildingKind) {
@@ -1872,6 +1917,7 @@ export function startWorld(net: WorldNet): void {
       return;
     }
     if (kind === 'bar') { enterTavern(); return; }
+    if (kind === 'mcdonald') { enterMcdonald(); return; }
     if (kind === 'temple') { enterTemple(); return; }
     if (kind === 'dungeon') { enterDungeon(); return; }
     if (kind === 'parliament') {
@@ -3157,7 +3203,7 @@ export function startWorld(net: WorldNet): void {
     // The bartender takes your order (the beer dialog) instead of plain chatter.
     if (nearNpc && nearNpc.def.id === 'bartender') { orderBeer(); return; }
     if (nearNpc) { startTalk(nearNpc); return; }
-    if (nearExit) { if (inDungeon) leaveDungeon(); else if (inTemple) leaveTemple(); else leaveTavern(); return; }
+    if (nearExit) { if (inDungeon) leaveDungeon(); else if (inTemple) leaveTemple(); else if (inMcdonald) leaveMcdonald(); else leaveTavern(); return; }
     if (nearBook) { readHolyBook(); return; }
     if (nearStairs) { changeFloor(nearStairs.to, nearStairs.dir === 'down' ? '<' : '>'); return; }
     if (nearBossStairs) { // the deepest stairwell — boss floor not carved yet, so it just breathes at you
@@ -3713,7 +3759,7 @@ export function startWorld(net: WorldNet): void {
     } else if (nearNpc) {
       prompt.textContent = nearNpc.def.id === 'bartender' ? '🍺 Order from the Barkeep' : `💬 Talk to ${nearNpc.def.name}`;
     } else if (nearExit) {
-      prompt.textContent = inDungeon ? '🚪 Leave the Ruins' : inTemple ? '🚪 Leave the Temple' : '🚪 Leave the Tavern';
+      prompt.textContent = inDungeon ? '🚪 Leave the Ruins' : inTemple ? '🚪 Leave the Temple' : inMcdonald ? "🍔 Leave McDonald's" : '🚪 Leave the Tavern';
     } else if (nearBook) {
       prompt.textContent = '📖 Read the holy book';
     } else if (nearStairs) {
@@ -5118,6 +5164,244 @@ export function startWorld(net: WorldNet): void {
     }
   }
 
+  // McDonald's: red facade, giant golden M arches, drive-thru window, warm-lit interior visible
+  // through windows. Animated "open" glow on the arches + a pulsing McCafé sign above the door.
+  function buildMcDonald(sc: Phaser.Scene, b: WorldBuilding) {
+    const W = Math.round(b.w / TEXEL), H = Math.round(b.h / TEXEL);
+    const depth = b.y + b.h;
+    const g = sc.make.graphics({ x: 0, y: 0 }, false);
+    const P = (x: number, y: number, w: number, h: number, c: number, a = 1) => px9(g, x, y, w, h, c, a);
+
+    const RED = 0xcc0000, DRED = 0xaa0000, BRID = 0xff2222;
+    const GOLD = 0xffc107, DGOLD = 0xe6a800, LGOLD = 0xffd740;
+    const CREAM = 0xfff5cc, DARK = 0x1a0800;
+
+    // Dark ground shadow for the sign strip
+    P(0, 0, W, H, DRED);
+    P(2, 2, W - 4, H - 4, RED);
+    // Bright highlight on top edge
+    P(2, 2, W - 4, 2, BRID);
+
+    // --- Yellow signage band (top 24% of facade) ---
+    const bandH = Math.round(H * 0.24);
+    P(0, 0, W, bandH, GOLD);
+    P(0, 0, W, 3, LGOLD);
+    P(0, bandH - 2, W, 2, DGOLD);
+    // Decorative red stripe near top of sign band
+    P(4, 4, W - 8, 3, RED);
+
+    // --- The iconic golden arches (the M) ---
+    // Positioned in the center of the facade below the sign band
+    const archTop = bandH + 3;
+    const archH = Math.round(H * 0.38);
+    const archBot = archTop + archH;
+    const padX = Math.round(W * 0.16);
+    const archW = W - padX * 2;
+
+    // Fill the full arch zone solid gold
+    P(padX, archTop, archW, archH, GOLD);
+    // Shade the sides slightly
+    P(padX, archTop, 2, archH, DGOLD);
+    P(padX + archW - 2, archTop, 2, archH, DGOLD);
+
+    // V-notch from the top center — makes two separate arch humps (the classic M)
+    const notchTopW = 2;
+    const notchBotW = Math.round(archW * 0.30);
+    const notchH = Math.round(archH * 0.56);
+    const cx = padX + Math.round(archW / 2);
+    for (let dy = 0; dy <= notchH; dy++) {
+      const t = dy / notchH;
+      const nw = Math.max(notchTopW, Math.round(notchTopW + (notchBotW - notchTopW) * t));
+      P(cx - Math.round(nw / 2), archTop + dy, nw, 1, DRED);
+    }
+    // Round the very tips of each arch
+    P(padX, archTop, 3, 1, DRED); P(padX + archW - 3, archTop, 3, 1, DRED);
+    P(padX, archTop, 1, 3, DRED); P(padX + archW - 1, archTop, 1, 3, DRED);
+    // Highlight the arch tops with bright gold
+    const leftArchMid = padX + Math.round(archW * 0.25);
+    const rightArchMid = padX + Math.round(archW * 0.75);
+    P(leftArchMid - 4, archTop, 8, 2, LGOLD);
+    P(rightArchMid - 4, archTop, 8, 2, LGOLD);
+
+    // --- Windows (warm yellow glow showing people inside) ---
+    const winY = archBot + 4;
+    const winH = Math.round(H * 0.12);
+    const winW = Math.round(W * 0.11);
+    for (let wx = Math.round(W * 0.05); wx + winW < W - 4; wx += Math.round(W * 0.18)) {
+      P(wx, winY, winW, winH, DARK);
+      P(wx + 1, winY + 1, winW - 2, winH - 2, 0xffe09a); // warm interior glow
+      P(wx + 2, winY + 2, winW - 4, Math.round(winH / 3), 0xfff0c0); // highlight
+    }
+
+    // --- Door (center bottom, gold frame) ---
+    const dw = Math.round(W * 0.18), dx = Math.round((W - dw) / 2);
+    const dh = Math.round(H * 0.22);
+    P(dx - 2, H - dh - 3, dw + 4, dh + 1, GOLD); // gold frame
+    P(dx, H - dh - 1, dw, dh, DARK);               // dark door interior
+    P(dx + 1, H - dh - 1, Math.round(dw / 2) - 1, dh, 0x2a1000); // door panels
+    // Red canopy over door
+    P(dx - 6, H - dh - 9, dw + 12, 6, RED);
+    P(dx - 7, H - dh - 11, dw + 14, 3, BRID);
+    // Canopy fringe (alternating yellow/red teeth)
+    for (let fx = dx - 5; fx < dx + dw + 6; fx += 5) P(fx, H - dh - 4, 3, 4, GOLD);
+
+    // --- Drive-thru window on the right side (implied by a smaller window + arrow sign) ---
+    const dtx = W - Math.round(W * 0.11);
+    const dty = Math.round(H * 0.55);
+    P(dtx, dty, Math.round(W * 0.09), Math.round(H * 0.14), DARK);
+    P(dtx + 1, dty + 1, Math.round(W * 0.09) - 2, Math.round(H * 0.14) - 2, 0xffe09a);
+
+    // Outer border
+    P(0, 0, 2, H, DARK); P(W - 2, 0, 2, H, DARK);
+    P(0, H - 2, W, 2, DARK);
+
+    g.generateTexture('w-mcdonald', W, H);
+    g.destroy();
+    sc.add.image(b.x, b.y, 'w-mcdonald').setOrigin(0, 0).setScale(TEXEL).setDepth(depth);
+
+    // Animated golden arch glow (gentle pulse to attract customers)
+    const glowX = b.x + (padX + archW / 2) * TEXEL;
+    const glowY = b.y + (archTop + archH * 0.42) * TEXEL;
+    const glow = sc.add.circle(glowX, glowY, archW * TEXEL * 0.38, GOLD, 0.11).setDepth(depth + 1);
+    sc.tweens.add({ targets: glow, alpha: 0.04, duration: 2100, yoyo: true, repeat: -1 });
+
+    // Neon "OPEN" sign on the drive-thru side
+    const openSign = sc.add.text(b.x + b.w - 26, b.y + Math.round(H * 0.35) * TEXEL, 'OPEN', {
+      fontFamily: 'system-ui, sans-serif', fontSize: '10px', fontStyle: 'bold',
+      color: '#ffee00', stroke: '#aa0000', strokeThickness: 3, resolution: 2,
+    }).setOrigin(0.5).setDepth(depth + 2);
+    sc.tweens.add({ targets: openSign, alpha: 0.4, duration: 700, yoyo: true, repeat: -1 });
+  }
+
+  // McDonald's interior: a bright fast-food dining room. Red walls, checkered floor, counter at back,
+  // menu board above it, tables with chairs, and a McCafé corner. Cashier Mac, Grimace, and Ronald
+  // are on duty. Exit via the door mat at the bottom center.
+  function buildMcdonaldInterior(sc: Phaser.Scene) {
+    if (mcBuilt) return;
+    mcBuilt = true;
+    const T = MC_WALL, ix = MC_INT.x, iy = MC_INT.y, iw = MC_INT.w, ih = MC_INT.h;
+    const cx = ix + iw / 2;
+
+    const tile = (key: string, x: number, y: number, w: number, h: number, depth: number) =>
+      sc.add.tileSprite(x, y, w, h, key).setOrigin(0, 0).setTileScale(TEXEL, TEXEL).setDepth(depth);
+
+    // Dark surround so a big viewport doesn't show grass
+    sc.add.rectangle(ix - 900, iy - 900, iw + 1800, ih + 1800, 0x2a0000).setOrigin(0, 0).setDepth(iy - 1000);
+
+    // Floor: a bright cream/beige (fast food floor)
+    sc.add.rectangle(ix, iy, iw, ih, 0xf5e6c0).setOrigin(0, 0).setDepth(iy - 900);
+    // Checkered pattern overlay (red/cream tiles)
+    const tileS = 40;
+    for (let ty2 = 0; ty2 < ih; ty2 += tileS) {
+      for (let tx2 = 0; tx2 < iw; tx2 += tileS) {
+        const isRed = ((Math.floor(tx2 / tileS) + Math.floor(ty2 / tileS)) % 2 === 0);
+        if (isRed) sc.add.rectangle(ix + tx2, iy + ty2, tileS, tileS, 0xdd1111, 0.08).setOrigin(0, 0).setDepth(iy - 899);
+      }
+    }
+
+    // Walls: red on top/sides, yellow baseboard at bottom
+    sc.add.rectangle(ix, iy, iw, T + 10, 0xcc0000).setOrigin(0, 0).setDepth(iy - 800); // back wall
+    sc.add.rectangle(ix, iy, T, ih, 0xcc0000).setOrigin(0, 0).setDepth(iy - 800);       // left
+    sc.add.rectangle(ix + iw - T, iy, T, ih, 0xcc0000).setOrigin(0, 0).setDepth(iy - 800); // right
+    sc.add.rectangle(ix, iy + ih - T, iw, T, 0xcc0000).setOrigin(0, 0).setDepth(iy - 790); // front
+    // Yellow baseboard stripe
+    sc.add.rectangle(ix, iy + ih - T - 8, iw, 8, 0xffc107).setOrigin(0, 0).setDepth(iy - 789);
+    // Yellow top stripe on back wall
+    sc.add.rectangle(ix, iy + T + 8, iw, 6, 0xffc107).setOrigin(0, 0).setDepth(iy - 799);
+
+    // Counter: a long service counter across the back
+    const counterY = iy + T + 16;
+    const counterH = 50;
+    const counterL = ix + T + 10;
+    const counterR = ix + iw - T - 10;
+    sc.add.rectangle(counterL, counterY, counterR - counterL, counterH, 0xdddddd).setOrigin(0, 0).setDepth(counterY + counterH);
+    sc.add.rectangle(counterL, counterY, counterR - counterL, 6, 0xeeeeee).setOrigin(0, 0).setDepth(counterY + counterH + 1); // top highlight
+    sc.add.rectangle(counterL, counterY + counterH - 6, counterR - counterL, 6, 0xbbbbbb).setOrigin(0, 0).setDepth(counterY + counterH + 1); // shadow
+    // Red trim on counter front
+    sc.add.rectangle(counterL, counterY + 6, counterR - counterL, 4, 0xcc0000).setOrigin(0, 0).setDepth(counterY + counterH + 2);
+    sc.add.rectangle(counterL, counterY + 14, counterR - counterL, 4, 0xffc107).setOrigin(0, 0).setDepth(counterY + counterH + 2);
+
+    // Menu board above counter (large dark panel with yellow text)
+    const mbY = iy + 4;
+    const mbH = T + 10;
+    sc.add.rectangle(counterL, mbY, counterR - counterL, mbH, 0x1a0000).setOrigin(0, 0).setDepth(mbY + mbH + 1);
+    sc.add.rectangle(counterL + 2, mbY + 2, counterR - counterL - 4, mbH - 4, 0x0d0000).setOrigin(0, 0).setDepth(mbY + mbH + 2);
+    sc.add.text(cx, mbY + Math.round(mbH * 0.38), '🍔 Big Mac  🍟 Fries  🥤 McFlurry', {
+      fontFamily: 'system-ui, sans-serif', fontSize: '10px', fontStyle: 'bold',
+      color: '#ffcc00', resolution: 2,
+    }).setOrigin(0.5, 0.5).setDepth(mbY + mbH + 3);
+
+    // A cash register on the counter
+    const regX = cx - 30;
+    sc.add.rectangle(regX, counterY + 4, 40, 24, 0x333333).setOrigin(0, 0).setDepth(counterY + counterH + 3);
+    sc.add.rectangle(regX + 4, counterY + 6, 32, 14, 0x111111).setOrigin(0, 0).setDepth(counterY + counterH + 4);
+
+    // Dining area: three tables with chairs
+    const tbl = (tx: number, ty: number) => {
+      sc.add.rectangle(tx - 30, ty - 12, 60, 32, 0xff2222).setOrigin(0, 0).setDepth(ty + 8);       // table
+      sc.add.rectangle(tx - 28, ty - 10, 56, 28, 0xff4444).setOrigin(0, 0).setDepth(ty + 9);       // table surface
+      sc.add.rectangle(tx - 28, ty - 10, 56, 6, 0xff6666).setOrigin(0, 0).setDepth(ty + 10);       // highlight
+      // chairs top & bottom
+      sc.add.rectangle(tx - 20, ty - 28, 18, 14, 0xffc107).setOrigin(0, 0).setDepth(ty - 20);
+      sc.add.rectangle(tx + 2, ty - 28, 18, 14, 0xffc107).setOrigin(0, 0).setDepth(ty - 20);
+      sc.add.rectangle(tx - 20, ty + 22, 18, 14, 0xffc107).setOrigin(0, 0).setDepth(ty + 32);
+      sc.add.rectangle(tx + 2, ty + 22, 18, 14, 0xffc107).setOrigin(0, 0).setDepth(ty + 32);
+    };
+    tbl(ix + Math.round(iw * 0.25), iy + Math.round(ih * 0.65));
+    tbl(cx, iy + Math.round(ih * 0.70));
+    tbl(ix + Math.round(iw * 0.75), iy + Math.round(ih * 0.65));
+
+    // McCafé corner (upper left) — a small coffee machine
+    const mcafX = ix + T + 14, mcafY = counterY + counterH + 8;
+    sc.add.rectangle(mcafX, mcafY, 36, 28, 0x222222).setOrigin(0, 0).setDepth(mcafY + 28);
+    sc.add.rectangle(mcafX + 4, mcafY + 4, 28, 16, 0x444444).setOrigin(0, 0).setDepth(mcafY + 29);
+    sc.add.circle(mcafX + 18, mcafY + 22, 5, 0x8B4513).setDepth(mcafY + 30); // coffee spout
+    sc.add.text(mcafX + 18, mcafY - 6, '☕ McCafé', {
+      fontFamily: 'system-ui, sans-serif', fontSize: '9px', fontStyle: 'bold',
+      color: '#ffd700', stroke: '#220000', strokeThickness: 3, resolution: 2,
+    }).setOrigin(0.5, 1).setDepth(mcafY + 31);
+
+    // Trash can (near the door)
+    const trashX = ix + iw - T - 30, trashY = iy + ih - T - 50;
+    sc.add.rectangle(trashX, trashY, 22, 28, 0x555555).setOrigin(0, 0).setDepth(trashY + 28);
+    sc.add.rectangle(trashX + 2, trashY + 2, 18, 24, 0x333333).setOrigin(0, 0).setDepth(trashY + 29);
+
+    // A happy meal box on one of the tables (easter egg)
+    sc.add.text(cx + 4, iy + Math.round(ih * 0.70) - 8, '🍟', {
+      fontFamily: 'system-ui, sans-serif', fontSize: '13px',
+    }).setOrigin(0.5).setDepth(iy + Math.round(ih * 0.70));
+
+    // Exit mat by the door (bottom center)
+    sc.add.rectangle(cx - 50, iy + ih - T - 50, 100, 36, 0xffc107, 0.6).setOrigin(0, 0).setDepth(iy - 870);
+    sc.add.text(cx, iy + ih - T - 32, '🚪 EXIT', {
+      fontFamily: 'system-ui, sans-serif', fontSize: '16px', fontStyle: 'bold',
+      color: '#cc0000', stroke: '#1a0000', strokeThickness: 4,
+    }).setOrigin(0.5).setDepth(iy - 200);
+  }
+
+  function enterMcdonald() {
+    const sc = petScene; if (!sc) return;
+    buildMcdonaldInterior(sc);
+    enterChime();
+    inInterior = true; inMcdonald = true;
+    curInt = MC_INT; curWall = MC_WALL; curZoom = MC_ZOOM;
+    driving = false; vx = 0; vy = 0;
+    keys.clear(); joyActive = false;
+    selfX = MC_INT.x + MC_INT.w / 2;
+    selfY = MC_INT.y + MC_INT.h - 180;
+    mainCam?.setBounds(MC_INT.x, MC_INT.y, MC_INT.w, MC_INT.h);
+  }
+
+  function leaveMcdonald() {
+    inInterior = false; inMcdonald = false;
+    nearExit = false;
+    keys.clear(); joyActive = false;
+    mainCam?.setBounds(0, 0, WORLD.w, WORLD.h);
+    const mc = WORLD_BUILDINGS.find((b) => b.kind === 'mcdonald');
+    if (mc) { selfX = mc.x + mc.w / 2; selfY = mc.y + mc.h + 44; }
+    enterChime();
+  }
+
   // The Temple: a pale stone sanctuary of the Order of the Eternal Volley — a stepped base, a portico
   // of columns over a dark recessed doorway, a triangular pediment, and a rose window in the tympanum
   // showing the holy Ball arcing over the green Paddle. A golden finial Ball crowns the apex.
@@ -5599,6 +5883,7 @@ export function startWorld(net: WorldNet): void {
         else if (b.kind === 'dungeon') buildRuins(sc, b);
         else if (b.kind === 'temple') buildTemple(sc, b);
         else if (b.kind === 'parliament') buildParliament(sc, b);
+        else if (b.kind === 'mcdonald') buildMcDonald(sc, b);
         else buildBuilding(sc, b);
         const sign = sc.add.text(b.x + b.w / 2, b.y - 6, b.name, {
           fontFamily: 'system-ui, sans-serif', fontSize: '15px', fontStyle: 'bold',
@@ -6586,7 +6871,7 @@ export function startWorld(net: WorldNet): void {
     game = null;
     if (inDungeon) net.dungeonExit(false); // bailed out of the World mid-dungeon → forfeit the run purse
     setDungeonMusic(false); dungeonMusic = null; inDungeon = false;
-    stopChant(); inInterior = false; inTemple = false;
+    stopChant(); inInterior = false; inTemple = false; inMcdonald = false;
     try { void actx?.close(); } catch { /* ignore */ }
     actx = null;
     overlay.remove();

@@ -431,7 +431,7 @@ export function petById(id: string | null | undefined) {
 
 // What entering a building does (the client maps each `kind` to an action). Add a kind here
 // and a handler on the client to introduce a new venue.
-export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament' | 'arcade' | 'dungeon' | 'temple' | 'bowling';
+export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament' | 'arcade' | 'dungeon' | 'temple' | 'bowling' | 'mcdonald';
 // A venue's footprint on the map. The rectangle (top-left origin, world units) is solid —
 // avatars collide with it — and an apron just outside the door is the entry trigger zone.
 export interface WorldBuilding {
@@ -475,6 +475,9 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
   // Bolwoing Alley — east of the Robville connector, accessible via a short spur road.
   // Hosts 2–4 player turn-based bowling with server-side pin physics and strike celebrations.
   { id: 'bowling', kind: 'bowling', name: 'BOLWOING ALLEY', emoji: '🎳', x: 2890, y: 1390, w: 310, h: 220, color: '#1a1050' },
+  // McDonald's — south of the pond, east of the Temple. Red facade, golden arches, enterable interior.
+  // Cashier Mac, Grimace, and Ronald hold court inside. The fries are hot and fresh.
+  { id: 'mcdonald', kind: 'mcdonald', name: "McDONALD'S", emoji: '🍔', x: 2050, y: 1870, w: 260, h: 200, color: '#cc0000' },
 ] as const;
 
 // --- The Ruins dungeon economy: SERVER-AUTHORITATIVE so a tampered client can't mint coins. ---
