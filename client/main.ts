@@ -806,6 +806,10 @@ const net = connect(
     } else if (msg.type === 'bowlState' || msg.type === 'bowlStart' || msg.type === 'bowlThrowResult' ||
                msg.type === 'bowlNextBall' || msg.type === 'bowlNextTurn' || msg.type === 'bowlGameOver') {
       bowlingMod?.onBowlMsg(msg);
+    } else if (msg.type === 'crState') {
+      crMod?.onState(msg.game);
+    } else if (msg.type === 'crEvent') {
+      crMod?.onEvent(msg.text, msg.kind);
     } else if (msg.type === 'nomState') {
       nomicMod?.feedNomState(msg);
     } else if (msg.type === 'tdState') {
@@ -2104,6 +2108,22 @@ async function openBowling(): Promise<void> {
     console.error('Bowling failed to load:', e);
   }
 }
+
+// --- City Tycoon: 2–8 player Monopoly-style board game, entered from the arcade cabinet ---
+let crMod: typeof import('./cityrise') | null = null;
+document.getElementById('crBtn')?.addEventListener('click', async () => {
+  try {
+    crMod = await import('./cityrise');
+    if (crMod.isCityTycoonOpen()) return;
+    crMod.startCityTycoon({
+      send: (msg) => net.send(msg),
+      myPid: () => myPid,
+      myName: () => myName,
+    });
+  } catch (e) {
+    console.error('City Tycoon failed to load:', e);
+  }
+});
 
 // --- Beta "World": a free-roam 2D overworld you walk around as a named avatar, seeing everyone
 // else who's currently in the world. It's the future main UI; for now its buildings deep-link

@@ -979,7 +979,17 @@ export type ClientMsg =
   | { type: 'bowlJoin' }                          // enter/create a bowling room
   | { type: 'bowlReady' }                         // mark self as ready to start
   | { type: 'bowlThrow'; offset: number; power: number } // make a throw (offset −1..1, power 0..1)
-  | { type: 'bowlLeave' };                        // leave the bowling room
+  | { type: 'bowlLeave' }                         // leave the bowling room
+  // --- City Tycoon (Monopoly-style board game) ---
+  | { type: 'crJoin' }                            // enter/create a City Tycoon room
+  | { type: 'crLeave' }                           // leave the room
+  | { type: 'crReady' }                           // mark self ready to start
+  | { type: 'crRoll' }                            // roll the dice on your turn
+  | { type: 'crBuy' }                             // buy the property you landed on
+  | { type: 'crPass' }                            // decline → send it to auction
+  | { type: 'crAuctionBid'; amount: number }      // bid in the current auction
+  | { type: 'crBuild'; position: number }         // build a house/hotel on a lot you own
+  | { type: 'crEndTurn' };                        // end your turn
 
 // --- Server -> Client ---
 
@@ -1454,7 +1464,10 @@ export type ServerMsg =
   | { type: 'bowlNextBall'; roomId: string; playerId: string; ball: number; pinState: boolean[]; scores: any; frames: any }
   | { type: 'bowlNextTurn'; roomId: string; playerId: string; frameIdx: number; pinState: boolean[]; scores: any; frames: any }
   | { type: 'bowlGameOver'; roomId: string; ranked: any[]; scores: any; frames: any }
-  | { type: 'mcFoodResult'; item: string; granted: boolean; bonus?: number };
+  | { type: 'mcFoodResult'; item: string; granted: boolean; bonus?: number }
+  // --- City Tycoon ---
+  | { type: 'crState'; game: any }                                        // full authoritative game snapshot
+  | { type: 'crEvent'; text: string; kind: 'info' | 'warn' | 'success' | 'error' }; // toast/log line
 
 // Your current drunkenness level (0 = sober … 6 = cut off). Sent only to the affected client.
 // The client applies escalating visual + control-wobble effects; the server owns the 3-min-per-level

@@ -431,6 +431,33 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'bowlLeave':
         lobby.bowlLeave(ws);
         break;
+      case 'crJoin':
+        lobby.crJoin(ws);
+        break;
+      case 'crLeave':
+        lobby.crLeave(ws);
+        break;
+      case 'crReady':
+        lobby.crReady(ws);
+        break;
+      case 'crRoll':
+        lobby.crRoll(ws);
+        break;
+      case 'crBuy':
+        lobby.crBuy(ws);
+        break;
+      case 'crPass':
+        lobby.crPass(ws);
+        break;
+      case 'crAuctionBid':
+        if (typeof msg.amount === 'number') lobby.crAuctionBid(ws, msg.amount);
+        break;
+      case 'crBuild':
+        if (typeof msg.position === 'number') lobby.crBuild(ws, msg.position);
+        break;
+      case 'crEndTurn':
+        lobby.crEndTurn(ws);
+        break;
       case 'worldEnter':
         lobby.worldEnter(ws);
         break;

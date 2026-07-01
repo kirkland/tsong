@@ -7,6 +7,7 @@ import { PolyGame } from './polygame';
 import { TypeGame } from './typegame';
 import { NomicGame } from './nomic';
 import { BowlingManager } from './bowling';
+import { CityRiseManager } from './cityrise';
 import { World } from './world';
 import { Tournament, Participant } from './tournament';
 import {
@@ -565,7 +566,25 @@ export class Lobby {
   // --- Bolwoing Alley (PvP turn-based bowling) ---
   private bowlingManager: BowlingManager;
 
+  // --- City Tycoon (Monopoly-style board game) ---
+  private cityRise: CityRiseManager;
+
   constructor(private game: Game) {
+    this.cityRise = new CityRiseManager({
+      award: (pid, name, coins) => {
+        this.housePay(pid, name, coins * COIN_SCALE)
+          .then(() => { const ws = this.wsOfPid(pid); if (ws) this.sendWallet(ws); })
+          .catch((e) => console.error('cityrise prize failed:', e));
+      },
+      broadcast: (pids, msg) => {
+        const data = JSON.stringify(msg);
+        for (const pid of pids) {
+          const ws = this.wsOfPid(pid);
+          if (ws && ws.readyState === ws.OPEN) ws.send(data);
+        }
+      },
+      notify: (pid, text) => { const ws = this.wsOfPid(pid); if (ws) this.notify(ws, text); },
+    });
     this.bowlingManager = new BowlingManager({
       award: (ws, pid, coins) => {
         const conn = this.conns.get(ws);
@@ -640,6 +659,7 @@ export class Lobby {
       this.game.tick(dt);
     }
     this.typeGame.tick(dt); // the typing minigame runs in parallel, independent of the pong sim
+    this.cityRise.tick(Date.now()); // drive City Tycoon phase timers (auto-roll, auction close, …)
     this.tickDrunk();       // sober players down one level per 3-min timer
   }
 
@@ -2059,6 +2079,54 @@ export class Lobby {
     const conn = this.conns.get(ws);
     if (!conn) return;
     this.bowlingManager.leave(conn.id);
+  }
+
+  // --- City Tycoon ---
+
+  crJoin(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    this.cityRise.join(conn.pid, conn.nickname, conn.color);
+  }
+  crLeave(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    this.cityRise.leave(conn.pid);
+  }
+  crReady(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    this.cityRise.ready(conn.pid);
+  }
+  crRoll(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    this.cityRise.roll(conn.pid);
+  }
+  crBuy(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    this.cityRise.buy(conn.pid);
+  }
+  crPass(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    this.cityRise.pass(conn.pid);
+  }
+  crAuctionBid(ws: WebSocket, amount: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    this.cityRise.auctionBid(conn.pid, amount);
+  }
+  crBuild(ws: WebSocket, position: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    this.cityRise.build(conn.pid, position);
+  }
+  crEndTurn(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    this.cityRise.endTurn(conn.pid);
   }
 
   // --- Nomic (the Parliament) ---
@@ -5445,6 +5513,7 @@ export class Lobby {
     this.sbLeave(ws);   // drop any Super Tsong Bros slot (ends the match if the host left)
     this.tdLeave(ws);   // drop out of the Type or Die arena
     this.bowlLeave(ws); // drop out of any bowling room
+    this.crLeave(ws);   // drop out of any City Tycoon game (holdings return to the bank)
     this.nomLeave(ws);  // drop out of the Parliament (Nomic) rotation
     this.world.leave(ws); // drop their avatar from the free-roam world map
     const leavingPid = this.conns.get(ws)?.pid ?? '';
