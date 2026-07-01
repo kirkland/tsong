@@ -619,9 +619,7 @@ export class Lobby {
         archiveNomicSeason(season, winner, rules).catch((e) => console.error('nomic archive failed:', e));
       },
     });
-    loadNomic()
-      .then((snap) => { if (snap) this.nomGame.restore(snap); })
-      .catch((e) => console.error('nomic load failed:', e));
+    // Nomic DB load is deferred to loadNomicState(), called after initDb() in index.ts.
     // Kick off the perpetual Crash casino game.
     this.crashPhaseStart = Date.now();
     setInterval(() => this.crashTick(), CRASH_TICK_MS);
@@ -5205,6 +5203,14 @@ export class Lobby {
       this.viewMode = m.viewMode;
       this.syncPowerupPool();
     }
+  }
+
+  /** Load the persisted Nomic rulebook from the DB. Call once after initDb() completes.
+   *  The constructor leaves the game at seed rules so this must run before any player
+   *  enters the Parliament, or the season's custom laws will be lost. */
+  async loadNomicState() {
+    const snap = await loadNomic().catch((e) => { console.error('nomic load failed:', e); return null; });
+    if (snap) this.nomGame.restore(snap);
   }
 
   /** Sync which powerups are eligible based on the current view mode.
