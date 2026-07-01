@@ -5089,6 +5089,160 @@ export function startWorld(net: WorldNet): void {
     sc.add.text(b.x + b.w / 2, b.y + b.h - TILE * 1.5, b.emoji, { fontSize: '22px' }).setOrigin(0.5, 1).setDepth(b.y + b.h + 2);
   }
 
+  // Parliament: a stately domed capitol in pale marble — a grand central rotunda dome on a columned
+  // drum, crowned by a lantern cupola with a gold finial and a slowly waving flag; a projecting
+  // portico of fluted columns under a triangular pediment (gilt seal in the tympanum) over a wide
+  // flight of steps; flanking wings of tall arched windows. Baked as a facade texture in the
+  // buildCasino/buildTemple idiom, with the finial + flag added as live sprites above the roofline.
+  function buildParliament(sc: Phaser.Scene, b: WorldBuilding) {
+    const W = Math.round(b.w / TEXEL), H = Math.round(b.h / TEXEL);
+    const depth = b.y + b.h;
+    const g = sc.make.graphics({ x: 0, y: 0 }, false);
+    const P = (x: number, y: number, w: number, h: number, c: number, a = 1) => px9(g, x, y, w, h, c, a);
+    const MARBLE = 0xece6d4, HI = 0xf7f2e4, MD = 0xd2caae, DD = 0xb6ac8d;
+    const STEP = 0xdcd4bc, STEP_D = 0xc0b799, SHADOW = 0x2b2a3a;
+    const DOME = 0xe7e1cc, DOME_HI = 0xf4efdc, DOME_D = 0xcfc6aa;
+    const GOLD = 0xd9b64a, GOLD_HI = 0xf0d478, DOOR = 0x241f30, GLASS = 0x35597f, GLASS_HI = 0x7aa6cf;
+
+    const cx = Math.round(W / 2);
+    const mainTop = Math.round(H * 0.40);              // top of the marble block
+    const baseY = H - Math.round(H * 0.11);            // top of the stepped base
+    const entH = Math.max(4, Math.round((baseY - mainTop) * 0.14));
+    const colTop = mainTop + entH;
+    const colH = baseY - colTop;
+
+    // --- the dome (drawn first so the pediment/roof read in front of it) ---
+    const domeR = Math.round(W * 0.12);
+    const drumH = Math.round(domeR * 0.55);
+    const drumW = Math.round(domeR * 1.9);
+    const drumTop = mainTop - drumH - 1;
+    // colonnaded drum under the dome
+    P(cx - Math.round(drumW / 2), drumTop, drumW, drumH + 2, MARBLE);
+    P(cx - Math.round(drumW / 2), drumTop, drumW, 1, HI);
+    P(cx - Math.round(drumW / 2), drumTop + drumH, drumW, 2, DD);
+    for (let i = 0; i < 6; i++) {                      // slim drum pilasters / dark window slits
+      const dx = cx - Math.round(drumW / 2) + 2 + Math.round(i * (drumW - 4) / 5);
+      P(dx, drumTop + 2, 1, drumH - 3, GLASS);
+    }
+    // the cupola half-dome
+    for (let yy = 0; yy <= domeR; yy++) {
+      const halfw = Math.round(Math.sqrt(Math.max(0, domeR * domeR - yy * yy)));
+      P(cx - halfw, drumTop - yy, halfw * 2, 1, DOME);
+    }
+    for (let yy = 0; yy <= domeR; yy++) {              // right-side shading
+      const halfw = Math.round(Math.sqrt(Math.max(0, domeR * domeR - yy * yy)));
+      const s = Math.round(halfw * 0.4);
+      if (halfw - s > 0) P(cx + s, drumTop - yy, halfw - s, 1, DOME_D, 0.45);
+    }
+    P(cx - Math.round(domeR * 0.55), drumTop - Math.round(domeR * 0.55), 2, Math.round(domeR * 0.6), DOME_HI, 0.5); // sheen
+    P(cx - domeR, drumTop - 1, domeR * 2, 2, GOLD);    // gilt ring at the dome base
+    // the lantern (cupola) on top of the dome
+    const cupW = Math.max(5, Math.round(domeR * 0.5)), cupH = Math.round(domeR * 0.42);
+    const cupX = cx - Math.round(cupW / 2), cupY = drumTop - domeR - cupH;
+    P(cupX, cupY, cupW, cupH, MARBLE); P(cupX, cupY, cupW, 1, HI); P(cupX, cupY + cupH - 1, cupW, 1, DD);
+    for (let yy = 0; yy <= Math.round(cupW / 2); yy++) {   // its little cap
+      const halfw = Math.round(Math.sqrt(Math.max(0, (cupW / 2) * (cupW / 2) - yy * yy)));
+      P(cx - halfw, cupY - yy, halfw * 2, 1, GOLD);
+    }
+
+    // --- marble block, entablature, portico recess ---
+    P(0, mainTop, W, baseY - mainTop, MARBLE);
+    P(0, mainTop, W, 1, HI);
+    P(0, mainTop, W, entH, MARBLE);                    // entablature band
+    P(0, mainTop, W, 1, HI); P(0, mainTop + entH - 1, W, 1, DD);
+    P(0, mainTop + Math.round(entH * 0.5), W, 1, MD);  // architrave line
+    P(0, mainTop + 1, W, 1, GOLD, 0.5);                // gilt cornice fillet
+
+    const portX0 = Math.round(W * 0.27), portX1 = Math.round(W * 0.73), portW = portX1 - portX0;
+    P(portX0, colTop, portW, colH, SHADOW);            // shadowed portico interior
+
+    // tall arched windows in the flanking wings
+    const winW = Math.max(3, Math.round(W * 0.038)), winTop = colTop + Math.round(colH * 0.16), winH = Math.round(colH * 0.5);
+    const wingWindows = (x0: number, x1: number) => {
+      const n = 3, seg = (x1 - x0) / n;
+      for (let i = 0; i < n; i++) {
+        const wx = Math.round(x0 + seg * (i + 0.5) - winW / 2);
+        P(wx - 1, winTop - 1, winW + 2, winH + 2, DD);
+        P(wx, winTop, winW, winH, GLASS);
+        for (let yy = 0; yy <= Math.round(winW / 2); yy++) { // arched top
+          const hw = Math.round(Math.sqrt(Math.max(0, (winW / 2) * (winW / 2) - yy * yy)));
+          P(wx + Math.round(winW / 2) - hw, winTop - 1 - yy, hw * 2, 1, DD);
+          P(wx + Math.round(winW / 2) - hw + 1, winTop - yy, Math.max(0, hw * 2 - 2), 1, GLASS);
+        }
+        P(wx, winTop, 1, winH, GLASS_HI, 0.7);          // reflection
+        P(wx + Math.floor(winW / 2), winTop, 1, winH, DD); // mullion
+      }
+    };
+    wingWindows(Math.round(W * 0.05), portX0 - 3);
+    wingWindows(portX1 + 3, W - Math.round(W * 0.05));
+
+    // --- the colonnade across the portico ---
+    const nCols = 6, gap = portW / nCols, colW = Math.max(3, Math.round(gap * 0.5));
+    for (let i = 0; i < nCols; i++) {
+      const cxp = Math.round(portX0 + gap * (i + 0.5) - colW / 2);
+      P(cxp, colTop, colW, colH, MARBLE);
+      P(cxp, colTop, 1, colH, HI); P(cxp + colW - 1, colTop, 1, colH, DD);
+      if (colW >= 4) P(cxp + Math.round(colW * 0.45), colTop + 2, 1, colH - 4, MD, 0.6); // flute
+      P(cxp - 1, colTop, colW + 2, 2, HI);              // capital
+      P(cxp - 1, baseY - 2, colW + 2, 2, DD);           // base
+    }
+
+    // --- the gilded central doorway ---
+    const dw = Math.round(W * 0.085), dx = cx - Math.round(dw / 2), dh = Math.round(colH * 0.62);
+    P(dx - 1, baseY - dh - 1, dw + 2, dh + 1, GOLD);
+    P(dx, baseY - dh, dw, dh, DOOR);
+    P(cx - 1, baseY - dh + 2, 1, dh - 2, GOLD, 0.4);    // seam between the double doors
+
+    // --- the pediment (triangle) over the portico, with a gilt seal in the tympanum ---
+    const pedHalf = Math.round(portW / 2) + 3, pedH = Math.round(H * 0.15), pedBaseY = mainTop + 1, pedApexY = pedBaseY - pedH;
+    for (let y = 0; y <= pedH; y++) {
+      const halfw = Math.round(pedHalf * (y / pedH));
+      P(cx - halfw, pedApexY + y, halfw * 2, 1, MARBLE);
+    }
+    P(cx - pedHalf, pedApexY, 1, 1, HI);                // apex highlight
+    for (let y = 0; y <= pedH; y++) { const halfw = Math.round(pedHalf * (y / pedH)); P(cx - halfw, pedApexY + y, 1, 1, HI); } // left rake sheen
+    P(cx - pedHalf - 2, pedBaseY, pedHalf * 2 + 4, 2, DD);      // cornice
+    P(cx - pedHalf - 2, pedBaseY - 1, pedHalf * 2 + 4, 1, HI);
+    P(cx - pedHalf - 2, pedBaseY, pedHalf * 2 + 4, 1, GOLD, 0.5);
+    const emR = Math.max(3, Math.round(pedH * 0.30)), emY = pedApexY + Math.round(pedH * 0.62);
+    for (let yy = -emR - 1; yy <= emR + 1; yy++) for (let xx = -emR - 1; xx <= emR + 1; xx++) {
+      const d = Math.hypot(xx, yy);
+      if (d <= emR + 1 && d > emR - 1) P(cx + xx, emY + yy, 1, 1, GOLD);        // gilt ring
+      else if (d <= emR - 1) P(cx + xx, emY + yy, 1, 1, SHADOW);                // dark field
+    }
+    P(cx - 1, emY - emR + 1, 2, emR * 2 - 2, GOLD_HI, 0.9);                     // emblem: a gilt cross/star
+    P(cx - emR + 1, emY - 1, emR * 2 - 2, 2, GOLD_HI, 0.9);
+
+    // --- grand stepped base (widening toward the ground) ---
+    const nSteps = 3, stepBand = Math.max(2, Math.round((H - baseY) / nSteps) + 1);
+    for (let s = 0; s < nSteps; s++) {
+      const inset = (nSteps - 1 - s) * 3;
+      const sy = baseY + s * Math.round((H - baseY) / nSteps);
+      P(inset, sy, W - inset * 2, stepBand, s % 2 ? STEP_D : STEP);
+      P(inset, sy, W - inset * 2, 1, HI);
+    }
+
+    g.generateTexture('w-parliament', W, H);
+    g.destroy();
+    sc.add.image(b.x, b.y, 'w-parliament').setOrigin(0, 0).setScale(TEXEL).setDepth(depth);
+
+    // Live crown: a gold finial ball on a pole above the lantern, flying a flag that gently waves.
+    const poleX = b.x + cx * TEXEL;
+    const poleTopY = b.y + (cupY - Math.round(cupW / 2)) * TEXEL - 4; // just above the lantern cap
+    const finialY = poleTopY - 18;
+    sc.add.rectangle(poleX, poleTopY, 2, poleTopY - finialY, 0xb9932f).setOrigin(0.5, 1).setDepth(depth + 2);
+    const halo = sc.add.circle(poleX, finialY, 8, 0xffe9a6, 0.28).setBlendMode(Phaser.BlendModes.ADD).setDepth(depth + 2);
+    sc.add.circle(poleX, finialY, 3, 0xfff0c0).setDepth(depth + 3);
+    sc.tweens.add({ targets: halo, alpha: 0.55, scale: 1.4, duration: 1600, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    const flag = sc.add.rectangle(poleX + 1, finialY + 3, 18, 11, 0xc0392b).setOrigin(0, 0).setDepth(depth + 3);
+    flag.setStrokeStyle(1, 0x8f2a20);
+    sc.tweens.add({ targets: flag, scaleX: 0.82, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+
+    // the venue glyph above the door
+    sc.add.text(b.x + b.w / 2, b.y + b.h - TILE * 1.4, b.emoji, { fontSize: '22px' })
+      .setOrigin(0.5, 1).setDepth(b.y + b.h + 2);
+  }
+
   // The hellgate: a dark red-black stone archway with a glowing portal mouth, then live flames
   // layered over/around it (pushed into `flames`, danced each frame in update()). Mirrors the
   // buildCasino/buildArena idiom — bake the static facade as a texture, add animated sprites on top.
@@ -5312,6 +5466,7 @@ export function startWorld(net: WorldNet): void {
         else if (b.kind === 'pond') buildPond(sc, b);
         else if (b.kind === 'dungeon') buildRuins(sc, b);
         else if (b.kind === 'temple') buildTemple(sc, b);
+        else if (b.kind === 'parliament') buildParliament(sc, b);
         else buildBuilding(sc, b);
         const sign = sc.add.text(b.x + b.w / 2, b.y - 6, b.name, {
           fontFamily: 'system-ui, sans-serif', fontSize: '15px', fontStyle: 'bold',
