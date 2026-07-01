@@ -95,7 +95,7 @@ export interface WorldNet {
   say(text: string, asSay?: boolean): void; // → speech bubble over your avatar (+ to others in-world); asSay=true → purple "Say" bubble
   boom(x: number, y: number, r?: number): void; // explosion here → fireball broadcast to everyone else; r>0 = a damaging rocket blast
   rocket(x: number, y: number, a: number): void; // we launched a rocket → broadcast it so others watch it fly
-  blownUp(car: boolean, self: boolean): void; // a rocket blast got us → server posts a chat line (car=our car exploded; self=our own rocket)
+  blownUp(car: boolean, self: boolean, killedBy?: string): void; // a rocket blast got us (killedBy = shooter's pid for Road Rage)
   sendChat(text: string): void;             // → main game chat, so the line also shows in the side feed
   chatHistory(): ChatLine[];                // recent chat backlog, seeded (hidden) so it's there on T
   // Slash-command autocomplete, shared with the main chat (same COMMANDS list).
@@ -108,9 +108,10 @@ interface Controller {
   feed(avatars: WorldAvatar[]): void;
   feedLand(parcels: LandParcelView[], bankBought: number, bankCap: number): void; // Robville land book
   feedSay(id: string, name: string, text: string, say: boolean): void; // an in-world line → speech bubble (say=purple)
-  feedBoom(x: number, y: number, r?: number): void; // someone else's explosion → render the fireball (+ blast effects if r>0)
+  feedBoom(x: number, y: number, r?: number, shooterPid?: string): void; // someone else's explosion → fireball + blast effects; shooterPid for kill credit
   feedRocket(x: number, y: number, a: number): void; // someone else launched a rocket → render it flying
   feedChat(line: ChatLine): void; // a new chat line (mirrors the main chat into the side feed)
+  feedRoadRage(active: boolean, endsAt: number, standings: { name: string; kills: number }[]): void;
   reenter(): void; // re-send worldEnter after a socket reconnect (server forgot us on drop)
   dungeonChests(opened: string[]): void;                          // server's list of chests we've opened
   chestAccepted(chest: string, coins: number, potions: number, spin?: boolean, prize?: string, prizes?: string[]): void; // server accepted a chest open (prize/prizes = cosmetic names)
@@ -163,8 +164,8 @@ export function feedSay(id: string, name: string, text: string, say = false): vo
 }
 
 /** Render an explosion at a world point (from a `worldBoom` server message). No-op if closed. */
-export function feedBoom(x: number, y: number, r?: number): void {
-  controller?.feedBoom(x, y, r);
+export function feedBoom(x: number, y: number, r?: number, shooterPid?: string): void {
+  controller?.feedBoom(x, y, r, shooterPid);
 }
 
 /** Render another player's rocket streaking across the world (from a `worldRocket` message). */
@@ -180,6 +181,11 @@ export function feedWorldChat(line: ChatLine): void {
 /** Re-assert our presence in the world after a reconnect (the server drops us on socket close). */
 export function reenterWorld(): void {
   controller?.reenter();
+}
+
+/** Handle a Road Rage event broadcast. */
+export function feedRoadRage(active: boolean, endsAt: number, standings: { name: string; kills: number }[]): void {
+  controller?.feedRoadRage(active, endsAt, standings);
 }
 
 const SPEED = WORLD_AVATAR.speed; // on-foot walk speed
@@ -878,6 +884,29 @@ export function startWorld(net: WorldNet): void {
   let lastSkidMarkAt = 0; // throttle for laying rubber on the ground while drifting
   let stunnedUntil = 0;   // ms; knocked off your feet by a rocket blast — can't move until then
   let lastRocketAt = 0;   // rocket-launcher fire cooldown
+
+  // --- Road Rage PvP event ---
+  let rrActive = false, rrEndsAt = 0;
+  let rrStandings: { name: string; kills: number }[] = [];
+  let rrHud: HTMLDivElement | null = null;
+
+  function updateRoadRageHud() {
+    if (!rrActive) { rrHud?.remove(); rrHud = null; return; }
+    if (!rrHud) {
+      rrHud = document.createElement('div');
+      rrHud.id = 'rrHud';
+      rrHud.style.cssText = 'position:fixed;top:12px;right:12px;z-index:800;background:rgba(20,0,0,0.82);border:2px solid #ff3333;border-radius:8px;padding:8px 12px;color:#fff;font:13px/1.5 system-ui;min-width:160px;pointer-events:none;';
+      document.body.appendChild(rrHud);
+    }
+    const secsLeft = Math.max(0, Math.ceil((rrEndsAt - Date.now()) / 1000));
+    const m = String(Math.floor(secsLeft / 60)).padStart(2, '0');
+    const s = String(secsLeft % 60).padStart(2, '0');
+    const rows = rrStandings.slice(0, 5).map((e, i) =>
+      `<div style="display:flex;justify-content:space-between;gap:12px"><span>${i === 0 ? '🏆' : `${i + 1}.`} ${e.name}</span><span style="color:#ff8a4a;font-weight:700">${e.kills}💀</span></div>`
+    ).join('') || '<div style="opacity:.6;font-size:11px">No kills yet</div>';
+    rrHud.innerHTML = `<div style="color:#ff3333;font-weight:700;letter-spacing:1px;margin-bottom:4px">💥 ROAD RAGE ${m}:${s}</div>${rows}`;
+  }
+  setInterval(updateRoadRageHud, 1000); // keep the countdown ticking
   let userZoom = 1;       // overworld zoom multiplier (±/wheel/pinch); applied on top of the base ZOOM
   function adjustZoom(factor: number) { userZoom = clamp(userZoom * factor, 0.6, 1.9); }
 
@@ -6132,8 +6161,8 @@ export function startWorld(net: WorldNet): void {
 
   // Resolve a blast at (x,y): flatten townsfolk in range; if WE are caught, our car blows up (driving)
   // or we get knocked off our feet (on foot). Runs on the firer locally AND on every receiver.
-  // mine=true → the rocket was ours (a self-own if it catches us); false → someone else's missile.
-  function applyBlast(x: number, y: number, r: number, mine: boolean) {
+  // mine=true → the rocket was ours; shooterPid → for Road Rage kill attribution.
+  function applyBlast(x: number, y: number, r: number, mine: boolean, shooterPid?: string) {
     const now = performance.now();
     for (const n of npcs) {
       if (now < n.squishedUntil) continue;
@@ -6144,11 +6173,11 @@ export function startWorld(net: WorldNet): void {
     }
     if (Math.hypot(selfX - x, selfY - y) <= r) {
       if (driving) {
-        if (blowUpMyCar('💥 Your car took a direct hit — summon a fresh one anytime.')) net.blownUp(true, mine);
+        if (blowUpMyCar('💥 Your car took a direct hit — summon a fresh one anytime.')) net.blownUp(true, mine, mine ? undefined : shooterPid);
       } else if (now >= stunnedUntil && !inInterior && !inDungeon) {
         stunnedUntil = now + 2300; keys.clear();
         flashHelp('💥 Blown off your feet!');
-        net.blownUp(false, mine);
+        net.blownUp(false, mine, mine ? undefined : shooterPid);
       }
     }
     if (mainCam) {
@@ -6502,6 +6531,7 @@ export function startWorld(net: WorldNet): void {
     try { void actx?.close(); } catch { /* ignore */ }
     actx = null;
     overlay.remove();
+    rrHud?.remove(); rrHud = null;
     controller = null;
     _exitWorld = null;
     net.leave();
@@ -6551,9 +6581,14 @@ export function startWorld(net: WorldNet): void {
       for (const [k, v] of says) if (v.until <= now) says.delete(k); // drop stale lines (e.g. speakers who left)
       says.set(id, { text, until: now + SAY_MS, purple: say });
     },
-    feedBoom(x, y, r) { spawnExplosion(x, y); if (r && r > 0) { clearGhostRocketsNear(x, y, r); applyBlast(x, y, r, false); } },
+    feedBoom(x, y, r, shooterPid) { spawnExplosion(x, y); if (r && r > 0) { clearGhostRocketsNear(x, y, r); applyBlast(x, y, r, false, shooterPid); } },
     feedRocket(x, y, a) { feedRocket(x, y, a); },
     feedChat(line) { pushChatLine(line); },
+    feedRoadRage(active: boolean, endsAt: number, standings: { name: string; kills: number }[]) {
+      rrActive = active; rrEndsAt = endsAt; rrStandings = standings;
+      updateRoadRageHud();
+      if (!active) { rrHud?.remove(); rrHud = null; }
+    },
   };
   syncDriveBtn();
   net.enter();

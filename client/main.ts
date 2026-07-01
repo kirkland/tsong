@@ -847,9 +847,11 @@ const net = connect(
     } else if (msg.type === 'worldSay') {
       worldMod?.feedSay(msg.id, msg.name, msg.text, msg.say === true);
     } else if (msg.type === 'worldBoom') {
-      worldMod?.feedBoom(msg.x, msg.y, msg.r);
+      worldMod?.feedBoom(msg.x, msg.y, msg.r, msg.pid);
     } else if (msg.type === 'worldRocket') {
       worldMod?.feedRocket(msg.x, msg.y, msg.a);
+    } else if (msg.type === 'worldRoadRage') {
+      worldMod?.feedRoadRage(msg.active, msg.endsAt, msg.standings ?? []);
     } else if (msg.type === 'wallet') {
       wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, car: msg.car, boat: msg.boat, pet: msg.pet, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
       rouletteHandle.setCoins(msg.coins);
@@ -1228,6 +1230,13 @@ const COMMANDS: ChatCommand[] = [
       if (!to || !Number.isFinite(amount) || amount <= 0 || !Number.isInteger(amount)) return false;
       net.send({ type: 'tip', to, amount });
     },
+  },
+  {
+    name: 'roadrage',
+    hint: 'Start a 3-minute rocket-car PvP deathmatch in the overworld. Kills earn 25 coins. 5-min cooldown.',
+    enabled: () => joined,
+    disabledHint: 'join the game first',
+    run: () => net.send({ type: 'worldRoadRage' }),
   },
   {
     name: 'bounty',
@@ -2199,7 +2208,7 @@ worldBtn.addEventListener('click', async () => {
       say: (text, asSay) => net.send({ type: 'worldChat', text, say: asSay }),
       boom: (x, y, r) => net.send({ type: 'worldBoom', x, y, r }),
       rocket: (x, y, a) => net.send({ type: 'worldRocket', x, y, a }),
-      blownUp: (car, self) => net.send({ type: 'worldBlownUp', car, self }),
+      blownUp: (car, self, killedBy) => net.send({ type: 'worldBlownUp', car, self, killedBy }),
       sendChat: (text) => net.send({ type: 'chat', text }), // → main game chat (shows in the side feed)
       chatHistory: () => recentChat,
       // Slash-command autocomplete, shared with the main chat so the in-world chat gets the same
