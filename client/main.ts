@@ -923,6 +923,8 @@ const net = connect(
     } else if (msg.type === 'news') {
       newsFeed = msg.items;
       if (!newsPanel.hidden) renderNews();
+    } else if (msg.type === 'mcFoodResult') {
+      worldMod?.feedMcFood(msg.item, msg.granted, msg.bonus);
     } else if (msg.type === 'drunk') {
       drunkLevel = msg.level;
       // escalating booze haze on the pong canvas: blur + woozy hue/saturation that grows per level
@@ -2191,6 +2193,7 @@ worldBtn.addEventListener('click', async () => {
       dungeonTakeKey: () => net.send({ type: 'dungeonTakeKey' }),
       dungeonExit: (escaped) => net.send({ type: 'dungeonExit', escaped }),
       buyBeer: () => net.send({ type: 'buyBeer' }),
+      buyMcFood: (item: string) => net.send({ type: 'buyMcFood', item: item as 'fries' | 'bigmac' | 'mcflurry' | 'happymeal' }),
       drunkLevel: () => drunkLevel, // the world reads this live to wobble movement + the camera
       jail: () => net.send({ type: 'jail' }),                 // tried to drunk-drive → bust
       bail: (targetId) => net.send({ type: 'bail', targetId }), // post 500🪙 bail for a jailed avatar

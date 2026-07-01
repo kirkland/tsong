@@ -2744,6 +2744,44 @@ export class Lobby {
   /** Buy a cosmetic from the shop, spending coins. Cosmetics are visual-only. */
   /** Buy a beer at the Tavern: 20🪙 into the House (a sink), one level drunker, 3-min timer reset.
    *  The bartender cuts you off at 6. */
+  buyMcFood(ws: WebSocket, item: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    const PRICES: Record<string, number> = { fries: 50, bigmac: 100, mcflurry: 75, happymeal: 150 };
+    const price = PRICES[item];
+    if (price === undefined) return;
+    spendCoins(conn.pid, price)
+      .then(async (w) => {
+        if (!w) { this.notify(ws, `💸 Not enough coins for that. (need ${price}🪙)`); this.sendWallet(ws); return; }
+        await this.houseCredit(price);
+        this.sendWallet(ws);
+        // Big Mac gives a coin bonus (net cost is still 100, but you "win back" 60)
+        if (item === 'bigmac') {
+          const bonus = 60;
+          await addCoins(conn.pid!, conn.nickname || 'Player', bonus);
+          this.sendWallet(ws);
+          this.tell(ws, { type: 'mcFoodResult', item, granted: true, bonus });
+          this.notify(ws, '🍔 Big Mac! Legendary. You feel powerful, albeit a bit bloated. (+60🪙 found in the bag)');
+        } else if (item === 'happymeal') {
+          // Mystery prize roll
+          const roll = Math.random();
+          let bonus = 0;
+          let line = '';
+          if (roll < 0.08) { bonus = 500; line = '🎉 JACKPOT HAPPY MEAL!! The toy was a solid gold nugget! (+500🪙)'; }
+          else if (roll < 0.25) { bonus = 200; line = '🤡 Wow, the toy was actually worth something! (+200🪙)'; }
+          else if (roll < 0.50) { bonus = 75; line = '🎠 Cute toy! And 75 coins fell out of the box. (+75🪙)'; }
+          else if (roll < 0.75) { line = '🤡 The toy is a tiny Ronald. He stares at you. You feel watched.'; }
+          else { line = '🎪 Happy Meal! The toy is a mystery. (no coins, but the memory is priceless)'; }
+          if (bonus > 0) { await addCoins(conn.pid!, conn.nickname || 'Player', bonus); this.sendWallet(ws); }
+          this.tell(ws, { type: 'mcFoodResult', item, granted: true, bonus: bonus || undefined });
+          this.notify(ws, line);
+        } else {
+          this.tell(ws, { type: 'mcFoodResult', item, granted: true });
+        }
+      })
+      .catch((e) => console.error('buyMcFood failed:', e));
+  }
+
   buyBeer(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
