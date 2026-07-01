@@ -61,7 +61,7 @@ const BOOST_SPD = 88;    // top speed while boosting
 const ACCEL = 46;        // thrust along the heading, units / s²
 const TURN = 2.9;        // steering rate, rad/s at full authority
 const AUTH_SPD = 14;     // speed at which steering reaches full authority (no pivoting in place)
-const GRIP = 0.93;       // lateral velocity RETAINED per frame — high = long slides (drift always on)
+const GRIP = 0.91;       // lateral velocity RETAINED per frame — high = long slides (drift always on)
 const FWD_DRAG = 0.992;  // mild forward rolling drag per frame
 const REV_FRAC = 0.45;   // reverse top speed as a fraction of MAX_SPD
 const BOOST_ACCEL = 70;  // extra thrust while the afterburner is lit
@@ -684,8 +684,13 @@ export function startStreetDemons(net: StreetDemonsNet): void {
     let diff = want - c.angle;
     while (diff > Math.PI) diff -= 2 * Math.PI;
     while (diff < -Math.PI) diff += 2 * Math.PI;
-    const steer = Math.max(-1, Math.min(1, diff * 1.8));
-    const throttle = Math.abs(diff) > 0.5 + c.skill * 0.2 ? 0 : 1; // clumsier demons brake earlier
+    // clumsier demons (lower skill) wander off-line, lift the throttle sooner, and occasionally
+    // botch a corner entirely — so a human who nails the racing line can pull away.
+    const sloppy = 1 - c.skill;
+    let steer = diff * 1.7 + (Math.random() - 0.5) * sloppy * 0.5;
+    steer = Math.max(-1, Math.min(1, steer));
+    let throttle = Math.abs(diff) > 0.3 + c.skill * 0.16 ? 0 : 1;
+    if (throttle > 0 && Math.random() < sloppy * 0.05) throttle = 0; // missed apex / early lift
     return { throttle, steer, held: true };
   }
 
@@ -702,7 +707,7 @@ export function startStreetDemons(net: StreetDemonsNet): void {
     // thrust along the heading (reverse at 60% power)
     if (c.boosting > 0) { c.vx += hx * BOOST_ACCEL * dt; c.vy += hy * BOOST_ACCEL * dt; c.boosting -= dt; }
     if (inp.throttle !== 0) {
-      const power = inp.throttle > 0 ? ACCEL : ACCEL * 0.6;
+      const power = (inp.throttle > 0 ? ACCEL : ACCEL * 0.6) * (c.bot ? 0.9 : 1); // bots pull weaker
       c.vx += hx * power * inp.throttle * dt;
       c.vy += hy * power * inp.throttle * dt;
     }
@@ -712,8 +717,10 @@ export function startStreetDemons(net: StreetDemonsNet): void {
     let lat = -c.vx * hy + c.vy * hx;
     lat *= Math.pow(GRIP, dt * 60);
     fwd *= Math.pow(FWD_DRAG, dt * 60);
-    const botCap = c.bot ? MAX_SPD * (0.9 + c.skill * 0.06) : MAX_SPD; // bots slightly slower flat-out
-    const cap = c.boosting > 0 ? BOOST_SPD : botCap;
+    // bots are clearly slower than the player EVERYWHERE — including on the boost straights, where
+    // a flat-out-only cap used to leave them level with a boosting human.
+    const spdFrac = c.bot ? 0.78 + c.skill * 0.06 : 1;
+    const cap = (c.boosting > 0 ? BOOST_SPD : MAX_SPD) * spdFrac;
     fwd = Math.max(-MAX_SPD * REV_FRAC, Math.min(cap, fwd));
     c.vx = hx * fwd - hy * lat;
     c.vy = hy * fwd + hx * lat;
@@ -868,7 +875,7 @@ export function startStreetDemons(net: StreetDemonsNet): void {
       // lights drop and you launch off the line. Hold it the whole countdown and you just roll off.
       for (const c of cars) {
         const held = c.slot === selfSlot ? readLocalInput().held
-          : c.bot ? (countdown < 0.15 + (1 - c.skill) * 0.4)
+          : c.bot ? (countdown < 0.9 - c.skill * 0.55) // clumsy bots start too early and bog; only sharp ones land the launch window
             : (guestInputs.get(c.slot)?.held ?? false);
         c.revHold = held ? (c.revHold ?? 0) + dt : 0;
       }
