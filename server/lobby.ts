@@ -2086,7 +2086,11 @@ export class Lobby {
   crJoin(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
-    this.cityRise.join(conn.pid, conn.nickname, conn.color);
+    try {
+      this.cityRise.join(conn.pid, conn.nickname, conn.color);
+    } catch (e) {
+      console.error('crJoin failed:', e);
+    }
   }
   crLeave(ws: WebSocket) {
     const conn = this.conns.get(ws);

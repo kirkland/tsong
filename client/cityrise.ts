@@ -53,6 +53,7 @@ let sidePanel: HTMLDivElement;
 let actionBar: HTMLDivElement;
 let toastLayer: HTMLDivElement;
 let rafId = 0;
+let joinRetryTimer: ReturnType<typeof setInterval> | null = null;
 
 let game: CrGame | null = null;
 let selfPid = '';
@@ -137,6 +138,10 @@ export function startCityTycoon(adapter: CityRiseNet): void {
 
   layout();
   net.send({ type: 'crJoin' });
+  joinRetryTimer = setInterval(() => {
+    if (!open || game) { clearInterval(joinRetryTimer!); joinRetryTimer = null; return; }
+    net.send({ type: 'crJoin' }); // retry if no state received yet (reconnect, dropped packet)
+  }, 3000);
   lastTs = performance.now();
   rafId = requestAnimationFrame(loop);
 }
@@ -144,6 +149,7 @@ export function startCityTycoon(adapter: CityRiseNet): void {
 export function closeCityTycoon(): void {
   if (!open) return;
   open = false;
+  if (joinRetryTimer) { clearInterval(joinRetryTimer); joinRetryTimer = null; }
   net.send({ type: 'crLeave' });
   cancelAnimationFrame(rafId);
   window.removeEventListener('resize', layout);
@@ -166,6 +172,7 @@ function onKey(e: KeyboardEvent) {
 
 export function onState(g: CrGame): void {
   if (!open) return;
+  if (joinRetryTimer) { clearInterval(joinRetryTimer); joinRetryTimer = null; }
   const prev = game;
   game = g;
   // Floating +/- coin text over a player's token when their cash changes.

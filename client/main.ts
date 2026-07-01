@@ -957,6 +957,8 @@ const net = connect(
     if (myName) net.send({ type: 'join', nickname: myName, pid: myPid, color: myColor });
     // Re-assert capture state after a (re)connect so the server's view stays in sync.
     if (pointerLocked) net.send({ type: 'capture', on: true });
+    // Re-join City Tycoon on reconnect — the server drops the player on disconnect.
+    if (crMod?.isCityTycoonOpen()) net.send({ type: 'crJoin' });
     // If we're walking the world map, re-announce our presence (the server drops us on socket
     // close, so a reconnect would otherwise make our avatar invisible to everyone else).
     worldMod?.reenterWorld();
