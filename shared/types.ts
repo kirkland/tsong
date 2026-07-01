@@ -956,6 +956,7 @@ export type ClientMsg =
   | { type: 'bondWithdraw'; id: string } // redeem a bond early (forfeit interest + 5% penalty)
   | { type: 'auctionBid'; amount: number } // bid on the current Fed exclusive auction
   | { type: 'buyBeer' } // buy a beer at the Tavern (20🪙 → House); ups your drunk level (cut off at 6)
+  | { type: 'buyMcFood'; item: 'fries' | 'bigmac' | 'mcflurry' | 'happymeal' } // buy food at McDonald's; server charges coins + sends mcFoodResult
   | { type: 'jail' } // self-report: tried to drunk-drive (server verifies drunkLevel ≥ 2 and jails you)
   | { type: 'bail'; targetId: string } // pay 500🪙 to bail a jailed player out (targetId = their avatar id; may be your own)
   // --- The Ruins dungeon (server owns the coin awards + which chests you've opened) ---
@@ -1452,7 +1453,8 @@ export type ServerMsg =
   | { type: 'bowlThrowResult'; roomId: string; playerId: string; pinState: boolean[]; pinsDown: number[]; scores: any; frames: any }
   | { type: 'bowlNextBall'; roomId: string; playerId: string; ball: number; pinState: boolean[]; scores: any; frames: any }
   | { type: 'bowlNextTurn'; roomId: string; playerId: string; frameIdx: number; pinState: boolean[]; scores: any; frames: any }
-  | { type: 'bowlGameOver'; roomId: string; ranked: any[]; scores: any; frames: any };
+  | { type: 'bowlGameOver'; roomId: string; ranked: any[]; scores: any; frames: any }
+  | { type: 'mcFoodResult'; item: string; granted: boolean; bonus?: number };
 
 // Your current drunkenness level (0 = sober … 6 = cut off). Sent only to the affected client.
 // The client applies escalating visual + control-wobble effects; the server owns the 3-min-per-level

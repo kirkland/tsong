@@ -298,6 +298,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'buyBeer':
         lobby.buyBeer(ws);
         break;
+      case 'buyMcFood':
+        if (typeof msg.item === 'string') lobby.buyMcFood(ws, msg.item);
+        break;
       case 'dungeonSync':
         lobby.dungeonSync(ws);
         break;

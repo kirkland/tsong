@@ -79,6 +79,7 @@ export interface WorldNet {
   dungeonExit(escaped: boolean): void; // left the Ruins (escaped → server pays the run purse from the House)
   onNetizenClick?(netizenId: string): void; // user tapped a netizen avatar in the world (→ challenge)
   buyBeer(): void;               // buy a beer at the Tavern (server charges 20🪙 + ups drunk level)
+  buyMcFood(item: string): void; // buy food at McDonald's (server charges coins + sends mcFoodResult)
   drunkLevel(): number;          // current drunkenness 0–6 (drives movement wobble + camera sway)
   jail(): void;                  // self-report a drunk-drive attempt (server jails you if 2+ beers in)
   bail(targetId: string): void;  // pay 500🪙 to bail a jailed avatar out (id; may be your own)
@@ -112,6 +113,7 @@ interface Controller {
   feedRocket(x: number, y: number, a: number): void; // someone else launched a rocket → render it flying
   feedChat(line: ChatLine): void; // a new chat line (mirrors the main chat into the side feed)
   feedRoadRage(active: boolean, endsAt: number, standings: { name: string; kills: number }[]): void;
+  feedMcFood(item: string, granted: boolean, bonus?: number): void;
   reenter(): void; // re-send worldEnter after a socket reconnect (server forgot us on drop)
   dungeonChests(opened: string[]): void;                          // server's list of chests we've opened
   chestAccepted(chest: string, coins: number, potions: number, spin?: boolean, prize?: string, prizes?: string[]): void; // server accepted a chest open (prize/prizes = cosmetic names)
@@ -186,6 +188,11 @@ export function reenterWorld(): void {
 /** Handle a Road Rage event broadcast. */
 export function feedRoadRage(active: boolean, endsAt: number, standings: { name: string; kills: number }[]): void {
   controller?.feedRoadRage(active, endsAt, standings);
+}
+
+/** Handle a McDonald's food result from the server. */
+export function feedMcFood(item: string, granted: boolean, bonus?: number): void {
+  controller?.feedMcFood(item, granted, bonus);
 }
 
 const SPEED = WORLD_AVATAR.speed; // on-foot walk speed
@@ -1082,6 +1089,9 @@ export function startWorld(net: WorldNet): void {
   let blessStart = 0, blessEnd = 0;
   const BLESS_MS = 90_000;  // a blessing lasts a minute and a half
   const BLESS_MAX = 0.6;    // up to +60% on-foot speed at its peak, decaying to 0
+
+  // McFlurry brain-freeze: brief visual effect (screen flash + camera wobble). Purely client-side.
+  let mcFreezeUntil = 0;
   // Fraction of the blessing remaining, 0..1 (1 = just received, 0 = worn off / none).
   function blessFrac() {
     if (blessEnd <= 0) return 0;
@@ -3202,6 +3212,8 @@ export function startWorld(net: WorldNet): void {
     }
     // The bartender takes your order (the beer dialog) instead of plain chatter.
     if (nearNpc && nearNpc.def.id === 'bartender') { orderBeer(); return; }
+    // Mac the cashier takes your order too.
+    if (nearNpc && nearNpc.def.id === 'mc-cashier') { orderMcFood(); return; }
     if (nearNpc) { startTalk(nearNpc); return; }
     if (nearExit) { if (inDungeon) leaveDungeon(); else if (inTemple) leaveTemple(); else if (inMcdonald) leaveMcdonald(); else leaveTavern(); return; }
     if (nearBook) { readHolyBook(); return; }
@@ -3240,6 +3252,23 @@ export function startWorld(net: WorldNet): void {
     ];
     openDialog('🍺 Barkeep', quips[Math.floor(Math.random() * quips.length)], [
       { label: '🍺 Buy a beer (20🪙)', onPick: () => { closeDialog(); net.buyBeer(); showToast('🍺 *glug glug glug*'); } },
+    ]);
+  }
+
+  function orderMcFood() {
+    if (dialogOpen || talkOpen) return;
+    const quips = [
+      '"Welcome to McDonald\'s! Can I take your order?"',
+      '"Our fries are hot! Like, genuinely hot. Please be careful."',
+      '"If I see you order the McFlurry I will respect you forever."',
+      '"The Happy Meal toy is a mystery. A beautiful mystery."',
+      '"One second, I need to ask Ronald about the sauce."',
+    ];
+    openDialog('🍔 Mac — Cashier', quips[Math.floor(Math.random() * quips.length)], [
+      { label: '🍟 Fries (50🪙)   — speed boost 30s', onPick: () => { closeDialog(); net.buyMcFood('fries'); } },
+      { label: '🍔 Big Mac (100🪙) — coin in the bag', onPick: () => { closeDialog(); net.buyMcFood('bigmac'); } },
+      { label: '🥤 McFlurry (75🪙) — brain freeze!!', onPick: () => { closeDialog(); net.buyMcFood('mcflurry'); } },
+      { label: '🎠 Happy Meal (150🪙) — mystery prize', onPick: () => { closeDialog(); net.buyMcFood('happymeal'); } },
     ]);
   }
 
@@ -3757,7 +3786,7 @@ export function startWorld(net: WorldNet): void {
       const a = others.find((o) => o.id === nearNetizen);
       prompt.textContent = `💬 Talk to ${a?.name ?? 'Netizen'}`;
     } else if (nearNpc) {
-      prompt.textContent = nearNpc.def.id === 'bartender' ? '🍺 Order from the Barkeep' : `💬 Talk to ${nearNpc.def.name}`;
+      prompt.textContent = nearNpc.def.id === 'bartender' ? '🍺 Order from the Barkeep' : nearNpc.def.id === 'mc-cashier' ? '🍔 Order from Mac' : `💬 Talk to ${nearNpc.def.name}`;
     } else if (nearExit) {
       prompt.textContent = inDungeon ? '🚪 Leave the Ruins' : inTemple ? '🚪 Leave the Temple' : inMcdonald ? "🍔 Leave McDonald's" : '🚪 Leave the Tavern';
     } else if (nearBook) {
@@ -5164,113 +5193,118 @@ export function startWorld(net: WorldNet): void {
     }
   }
 
-  // McDonald's: red facade, giant golden M arches, drive-thru window, warm-lit interior visible
-  // through windows. Animated "open" glow on the arches + a pulsing McCafé sign above the door.
+  // McDonald's: red facade with a YELLOW arch-sign panel containing a bold RED M (maximum contrast).
+  // Drive-thru window on the right, warm-lit dining windows, red canopy over the door,
+  // animated pulsing arch glow + flashing OPEN sign.
   function buildMcDonald(sc: Phaser.Scene, b: WorldBuilding) {
     const W = Math.round(b.w / TEXEL), H = Math.round(b.h / TEXEL);
     const depth = b.y + b.h;
     const g = sc.make.graphics({ x: 0, y: 0 }, false);
     const P = (x: number, y: number, w: number, h: number, c: number, a = 1) => px9(g, x, y, w, h, c, a);
 
-    const RED = 0xcc0000, DRED = 0xaa0000, BRID = 0xff2222;
-    const GOLD = 0xffc107, DGOLD = 0xe6a800, LGOLD = 0xffd740;
-    const CREAM = 0xfff5cc, DARK = 0x1a0800;
+    const RED = 0xcc0000, DRED = 0x990000, BRID = 0xff4444, MRED = 0xbb0000;
+    const GOLD = 0xffc107, DGOLD = 0xe69500, LGOLD = 0xffe066;
+    const DARK = 0x1a0000;
 
-    // Dark ground shadow for the sign strip
+    // Main red facade
     P(0, 0, W, H, DRED);
-    P(2, 2, W - 4, H - 4, RED);
-    // Bright highlight on top edge
-    P(2, 2, W - 4, 2, BRID);
+    P(1, 1, W - 2, H - 2, RED);
+    P(1, 1, W - 2, 2, BRID); // top highlight
 
-    // --- Yellow signage band (top 24% of facade) ---
-    const bandH = Math.round(H * 0.24);
-    P(0, 0, W, bandH, GOLD);
-    P(0, 0, W, 3, LGOLD);
-    P(0, bandH - 2, W, 2, DGOLD);
-    // Decorative red stripe near top of sign band
-    P(4, 4, W - 8, 3, RED);
+    // --- Wide YELLOW arch-sign panel (covers upper ~45% of facade) ---
+    // This is the main visual anchor — the iconic yellow background the M lives on.
+    const signPad = 6;
+    const signTop = 5, signH = Math.round(H * 0.45);
+    P(signPad, signTop, W - signPad * 2, signH, GOLD);
+    P(signPad, signTop, W - signPad * 2, 2, LGOLD);                  // top glint
+    P(signPad, signTop + signH - 2, W - signPad * 2, 2, DGOLD);      // bottom shadow
+    P(signPad, signTop, 2, signH, DGOLD);                              // left side
+    P(W - signPad - 2, signTop, 2, signH, DGOLD);                     // right side
 
-    // --- The iconic golden arches (the M) ---
-    // Positioned in the center of the facade below the sign band
-    const archTop = bandH + 3;
-    const archH = Math.round(H * 0.38);
-    const archBot = archTop + archH;
-    const padX = Math.round(W * 0.16);
-    const archW = W - padX * 2;
+    // --- Bold RED M silhouette on the yellow panel (high contrast, unmissable) ---
+    // The M is drawn as five rectangular blocks: two tall outer pillars, two shorter inner
+    // legs, and a base connecting them — creating the classic two-arch silhouette.
+    const mPad = Math.round((W - signPad * 2) * 0.08) + signPad;
+    const mW = W - mPad * 2;                      // total M width
+    const mTop = signTop + Math.round(signH * 0.1);
+    const mBot = signTop + signH - Math.round(signH * 0.1);
+    const mH = mBot - mTop;
+    const pilW = Math.round(mW * 0.18);           // outer pillar width
+    const legW = Math.round(mW * 0.12);           // inner leg width
+    const baseH = Math.round(mH * 0.26);          // base height
+    const legStart = mTop + Math.round(mH * 0.38); // inner legs start below the arch tops
 
-    // Fill the full arch zone solid gold
-    P(padX, archTop, archW, archH, GOLD);
-    // Shade the sides slightly
-    P(padX, archTop, 2, archH, DGOLD);
-    P(padX + archW - 2, archTop, 2, archH, DGOLD);
+    // Left outer pillar
+    P(mPad, mTop, pilW, mH, MRED);
+    P(mPad, mTop, pilW, 2, BRID); // top glint
+    // Right outer pillar
+    P(mPad + mW - pilW, mTop, pilW, mH, MRED);
+    P(mPad + mW - pilW, mTop, pilW, 2, BRID);
+    // Left inner leg
+    P(mPad + pilW, legStart, legW, mBot - legStart, MRED);
+    // Right inner leg
+    P(mPad + mW - pilW - legW, legStart, legW, mBot - legStart, MRED);
+    // Base connector (spans the full M width at the bottom)
+    P(mPad, mBot - baseH, mW, baseH, MRED);
+    // Slight bevel on the base top
+    P(mPad, mBot - baseH, mW, 1, BRID);
 
-    // V-notch from the top center — makes two separate arch humps (the classic M)
-    const notchTopW = 2;
-    const notchBotW = Math.round(archW * 0.30);
-    const notchH = Math.round(archH * 0.56);
-    const cx = padX + Math.round(archW / 2);
-    for (let dy = 0; dy <= notchH; dy++) {
-      const t = dy / notchH;
-      const nw = Math.max(notchTopW, Math.round(notchTopW + (notchBotW - notchTopW) * t));
-      P(cx - Math.round(nw / 2), archTop + dy, nw, 1, DRED);
-    }
-    // Round the very tips of each arch
-    P(padX, archTop, 3, 1, DRED); P(padX + archW - 3, archTop, 3, 1, DRED);
-    P(padX, archTop, 1, 3, DRED); P(padX + archW - 1, archTop, 1, 3, DRED);
-    // Highlight the arch tops with bright gold
-    const leftArchMid = padX + Math.round(archW * 0.25);
-    const rightArchMid = padX + Math.round(archW * 0.75);
-    P(leftArchMid - 4, archTop, 8, 2, LGOLD);
-    P(rightArchMid - 4, archTop, 8, 2, LGOLD);
-
-    // --- Windows (warm yellow glow showing people inside) ---
-    const winY = archBot + 4;
-    const winH = Math.round(H * 0.12);
-    const winW = Math.round(W * 0.11);
-    for (let wx = Math.round(W * 0.05); wx + winW < W - 4; wx += Math.round(W * 0.18)) {
-      P(wx, winY, winW, winH, DARK);
-      P(wx + 1, winY + 1, winW - 2, winH - 2, 0xffe09a); // warm interior glow
-      P(wx + 2, winY + 2, winW - 4, Math.round(winH / 3), 0xfff0c0); // highlight
+    // --- Warm-lit dining windows (lower section) ---
+    const winTop = signTop + signH + 4;
+    const winH = Math.round((H - winTop - 14) * 0.55);
+    const winW = Math.round(W * 0.10);
+    let wx = 6;
+    while (wx + winW < W - 6) {
+      P(wx, winTop, winW, winH, DARK);
+      P(wx + 1, winTop + 1, winW - 2, winH - 2, 0xffe09a); // warm glow
+      P(wx + 1, winTop + 1, winW - 2, Math.round(winH * 0.35), 0xfff2c8); // top glint
+      wx += Math.round(W * 0.18);
     }
 
-    // --- Door (center bottom, gold frame) ---
-    const dw = Math.round(W * 0.18), dx = Math.round((W - dw) / 2);
-    const dh = Math.round(H * 0.22);
-    P(dx - 2, H - dh - 3, dw + 4, dh + 1, GOLD); // gold frame
-    P(dx, H - dh - 1, dw, dh, DARK);               // dark door interior
-    P(dx + 1, H - dh - 1, Math.round(dw / 2) - 1, dh, 0x2a1000); // door panels
-    // Red canopy over door
-    P(dx - 6, H - dh - 9, dw + 12, 6, RED);
-    P(dx - 7, H - dh - 11, dw + 14, 3, BRID);
-    // Canopy fringe (alternating yellow/red teeth)
-    for (let fx = dx - 5; fx < dx + dw + 6; fx += 5) P(fx, H - dh - 4, 3, 4, GOLD);
+    // --- Drive-thru window (right side, smaller) ---
+    const dtW = Math.round(W * 0.09), dtH = Math.round(H * 0.13);
+    const dtX = W - dtW - 5, dtY = winTop + winH + 6;
+    P(dtX, dtY, dtW, dtH, DARK); P(dtX + 1, dtY + 1, dtW - 2, dtH - 2, 0xffe09a);
 
-    // --- Drive-thru window on the right side (implied by a smaller window + arrow sign) ---
-    const dtx = W - Math.round(W * 0.11);
-    const dty = Math.round(H * 0.55);
-    P(dtx, dty, Math.round(W * 0.09), Math.round(H * 0.14), DARK);
-    P(dtx + 1, dty + 1, Math.round(W * 0.09) - 2, Math.round(H * 0.14) - 2, 0xffe09a);
+    // --- Door (center bottom) ---
+    const dw = Math.round(W * 0.20), dh = Math.round(H * 0.20);
+    const doorX = Math.round((W - dw) / 2);
+    P(doorX - 2, H - dh - 3, dw + 4, dh, GOLD);     // gold frame
+    P(doorX, H - dh - 1, dw, dh, DARK);               // opening
+    P(doorX + 1, H - dh - 1, Math.round(dw / 2) - 1, dh, 0x200800); // door panel
+    // Canopy (red with yellow fringe teeth)
+    P(doorX - 8, H - dh - 12, dw + 16, 8, RED);
+    P(doorX - 9, H - dh - 14, dw + 18, 3, BRID); // canopy highlight
+    for (let fx = doorX - 7; fx < doorX + dw + 8; fx += 6) P(fx, H - dh - 5, 4, 5, GOLD); // fringe
 
     // Outer border
-    P(0, 0, 2, H, DARK); P(W - 2, 0, 2, H, DARK);
-    P(0, H - 2, W, 2, DARK);
+    P(0, 0, 2, H, DARK); P(W - 2, 0, 2, H, DARK); P(0, H - 2, W, 2, DARK);
 
     g.generateTexture('w-mcdonald', W, H);
     g.destroy();
     sc.add.image(b.x, b.y, 'w-mcdonald').setOrigin(0, 0).setScale(TEXEL).setDepth(depth);
 
-    // Animated golden arch glow (gentle pulse to attract customers)
-    const glowX = b.x + (padX + archW / 2) * TEXEL;
-    const glowY = b.y + (archTop + archH * 0.42) * TEXEL;
-    const glow = sc.add.circle(glowX, glowY, archW * TEXEL * 0.38, GOLD, 0.11).setDepth(depth + 1);
-    sc.tweens.add({ targets: glow, alpha: 0.04, duration: 2100, yoyo: true, repeat: -1 });
+    // Pulsing warm glow behind the yellow sign panel
+    const archGlowX = b.x + W / 2 * TEXEL;
+    const archGlowY = b.y + (signTop + signH / 2) * TEXEL;
+    const glow = sc.add.ellipse(archGlowX, archGlowY, (W - signPad * 2) * TEXEL * 1.1, signH * TEXEL, GOLD, 0.14).setDepth(depth - 1);
+    sc.tweens.add({ targets: glow, alpha: 0.05, duration: 1800, yoyo: true, repeat: -1 });
 
-    // Neon "OPEN" sign on the drive-thru side
-    const openSign = sc.add.text(b.x + b.w - 26, b.y + Math.round(H * 0.35) * TEXEL, 'OPEN', {
-      fontFamily: 'system-ui, sans-serif', fontSize: '10px', fontStyle: 'bold',
-      color: '#ffee00', stroke: '#aa0000', strokeThickness: 3, resolution: 2,
-    }).setOrigin(0.5).setDepth(depth + 2);
-    sc.tweens.add({ targets: openSign, alpha: 0.4, duration: 700, yoyo: true, repeat: -1 });
+    // Blinking red OPEN sign in the drive-thru alcove
+    const openSign = sc.add.text(b.x + (dtX + dtW / 2) * TEXEL, b.y + (dtY - 4) * TEXEL, '▶ OPEN', {
+      fontFamily: 'system-ui, sans-serif', fontSize: '9px', fontStyle: 'bold',
+      color: '#ff2200', stroke: '#1a0000', strokeThickness: 2, resolution: 2,
+    }).setOrigin(0.5, 1).setDepth(depth + 2);
+    sc.tweens.add({ targets: openSign, alpha: 0.2, duration: 600, yoyo: true, repeat: -1 });
+
+    // "Ba da ba ba baaa" sparkle lights along the bottom of the sign panel
+    const n = Math.max(5, Math.round((W - signPad * 2) / 16));
+    for (let i = 0; i < n; i++) {
+      const bx = b.x + (signPad + 4 + i * ((W - signPad * 2 - 8) / (n - 1))) * TEXEL;
+      const by = b.y + (signTop + signH - 2) * TEXEL;
+      const bulb = sc.add.circle(bx, by, 3, LGOLD).setDepth(depth + 1);
+      sc.tweens.add({ targets: bulb, alpha: 0.15, duration: 450, yoyo: true, repeat: -1, delay: i * 110 });
+    }
   }
 
   // McDonald's interior: a bright fast-food dining room. Red walls, checkered floor, counter at back,
@@ -5400,6 +5434,131 @@ export function startWorld(net: WorldNet): void {
     const mc = WORLD_BUILDINGS.find((b) => b.kind === 'mcdonald');
     if (mc) { selfX = mc.x + mc.w / 2; selfY = mc.y + mc.h + 44; }
     enterChime();
+  }
+
+  // McDonald's confetti burst for jackpot Happy Meal wins.
+  function spawnMcConfetti() {
+    const colors = ['#ffc107', '#cc0000', '#ffffff', '#ff6600', '#ffff00'];
+    for (let i = 0; i < 40; i++) {
+      const div = document.createElement('div');
+      const color = colors[i % colors.length];
+      div.style.cssText = `position:fixed;pointer-events:none;z-index:99995;width:8px;height:8px;background:${color};border-radius:2px;` +
+        `left:${30 + Math.random() * 40}%;top:${10 + Math.random() * 30}%;` +
+        `transform:rotate(${Math.random() * 360}deg);` +
+        `transition:transform ${1.2 + Math.random() * 1.2}s ease,top ${1.5 + Math.random() * 1}s ease,opacity 2s ease`;
+      document.body.appendChild(div);
+      requestAnimationFrame(() => {
+        div.style.top = `${60 + Math.random() * 40}%`;
+        div.style.transform = `rotate(${Math.random() * 720}deg)`;
+        div.style.opacity = '0';
+      });
+      window.setTimeout(() => div.remove(), 3000);
+    }
+  }
+
+  // --- T-Rex: a large prehistoric predator that prowls the overworld. Purely client-side —
+  // each session gets their own Rex. She wanders slowly, accelerates when you get close,
+  // and if she catches you she chomps you (screen shake + coins fall out). She announces
+  // her presence with a guttural roar every few minutes. ---
+  let rex: { x: number; y: number; vx: number; vy: number; img: Phaser.GameObjects.Text; nametag: Phaser.GameObjects.Text; nextTurn: number; chasing: boolean; chompCooldown: number; lastRoar: number } | null = null;
+
+  function spawnRex(sc: Phaser.Scene) {
+    const corners = [
+      { x: 300, y: 300 }, { x: WORLD.w - 300, y: 300 },
+      { x: 300, y: WORLD.h - 300 }, { x: WORLD.w - 300, y: WORLD.h - 300 },
+    ];
+    const pos = corners[Math.floor(Math.random() * corners.length)];
+    const img = sc.add.text(pos.x, pos.y, '🦖', {
+      fontFamily: 'system-ui, sans-serif', fontSize: '56px',
+    }).setOrigin(0.5, 0.85).setDepth(99995);
+    const nametag = sc.add.text(pos.x, pos.y - 44, 'T-REX', {
+      fontFamily: 'system-ui, sans-serif', fontSize: '13px', fontStyle: 'bold',
+      color: '#ff4444', stroke: '#000', strokeThickness: 3, resolution: 2,
+    }).setOrigin(0.5, 1).setDepth(99996);
+    rex = {
+      x: pos.x, y: pos.y, vx: 0, vy: 0,
+      img, nametag,
+      nextTurn: performance.now() + 1500 + Math.random() * 2000,
+      chasing: false, chompCooldown: 0, lastRoar: performance.now() + 60_000,
+    };
+  }
+
+  function updateRex(now: number, dt: number) {
+    if (!rex || inInterior || inDungeon) {
+      if (rex) { rex.img.setVisible(false); rex.nametag.setVisible(false); }
+      return;
+    }
+    rex.img.setVisible(true); rex.nametag.setVisible(true);
+
+    const dx = selfX - rex.x, dy = selfY - rex.y;
+    const distToPlayer = Math.hypot(dx, dy);
+    const chaseRange = 450;
+    const chompRange = 68;
+
+    // Roar when close (once every 3 minutes, throttled)
+    if (distToPlayer < chaseRange && now - rex.lastRoar > 180_000) {
+      rex.lastRoar = now;
+      showToast('🦖 <b>RRROOAAAR!</b> <i>The ground shakes. Something huge approaches.</i>');
+      tone(55, 0.8, 'sawtooth', 0.18, 28);
+    }
+
+    // Chase mode: charge at player when within range
+    rex.chasing = distToPlayer < chaseRange && now > rex.chompCooldown;
+
+    if (rex.chasing) {
+      // Accelerate toward player
+      const speed = 140 + (chaseRange - distToPlayer) * 0.18; // faster the closer it gets
+      rex.vx += (dx / distToPlayer) * speed * dt * 3;
+      rex.vy += (dy / distToPlayer) * speed * dt * 3;
+      rex.img.setFlipX(dx < 0);
+    } else {
+      // Wander: drift toward a random target that changes periodically
+      if (now >= rex.nextTurn) {
+        rex.nextTurn = now + 2000 + Math.random() * 4000;
+        const a = Math.random() * Math.PI * 2;
+        const r = 200 + Math.random() * 400;
+        rex.vx = Math.cos(a) * (55 + Math.random() * 40);
+        rex.vy = Math.sin(a) * (55 + Math.random() * 40);
+        rex.img.setFlipX(rex.vx < 0);
+      }
+    }
+
+    // Clamp speed
+    const spd = Math.hypot(rex.vx, rex.vy);
+    const maxSpd = rex.chasing ? 240 : 90;
+    if (spd > maxSpd) { rex.vx = (rex.vx / spd) * maxSpd; rex.vy = (rex.vy / spd) * maxSpd; }
+
+    // Apply drag
+    const drag = rex.chasing ? 0.94 : 0.88;
+    rex.vx *= Math.pow(drag, dt * 60); rex.vy *= Math.pow(drag, dt * 60);
+
+    // Move + clamp to world bounds
+    rex.x = Math.max(100, Math.min(WORLD.w - 100, rex.x + rex.vx * dt));
+    rex.y = Math.max(100, Math.min(WORLD.h - 100, rex.y + rex.vy * dt));
+
+    // Chomp!
+    if (rex.chasing && distToPlayer < chompRange && now > rex.chompCooldown) {
+      rex.chompCooldown = now + 8000; // 8-second cooldown before it can eat you again
+      rex.chasing = false;
+      rex.vx = -rex.vx * 0.4; rex.vy = -rex.vy * 0.4; // bounce off
+      tone(110, 0.5, 'sawtooth', 0.14, 55); window.setTimeout(() => tone(55, 0.6, 'sawtooth', 0.16, 28), 200);
+      showToast('🦖 <b>OM NOM NOM.</b> The T-Rex ate you. You escape, dignity: zero. Coins: also fewer.');
+      // Lose a small number of coins (visual shake, actual loss is a taste — not server-authoritative)
+      const shakeEl = document.createElement('div');
+      shakeEl.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:99990;';
+      shakeEl.animate([
+        { transform: 'translate(0,0)' }, { transform: 'translate(-8px,4px)' }, { transform: 'translate(10px,-6px)' },
+        { transform: 'translate(-6px,8px)' }, { transform: 'translate(4px,-4px)' }, { transform: 'translate(0,0)' },
+      ], { duration: 380, easing: 'ease-out' });
+      document.body.appendChild(shakeEl);
+      window.setTimeout(() => shakeEl.remove(), 400);
+      // Push the player away from Rex
+      selfX += (dx / Math.max(1, distToPlayer)) * (-80);
+      selfY += (dy / Math.max(1, distToPlayer)) * (-80);
+    }
+
+    rex.img.setPosition(rex.x, rex.y).setDepth(rex.y + 28);
+    rex.nametag.setPosition(rex.x, rex.y - 36).setDepth(rex.y + 30);
   }
 
   // The Temple: a pale stone sanctuary of the Order of the Eternal Volley — a stepped base, a portico
@@ -5967,6 +6126,9 @@ export function startWorld(net: WorldNet): void {
       // --- townsfolk ---
       for (const def of NPCS) npcs.push(makeNpc(sc, def));
 
+      // --- T-Rex: spawns after 45 seconds so players settle in before it shows up ---
+      window.setTimeout(() => { if (petScene) spawnRex(petScene); }, 45_000);
+
       // --- our own avatar ---
       petScene = sc; // remember the scene so pet sprites can be spawned on demand in update()
       self = makeAvatar(sc, net.name() || 'you', net.color());
@@ -6220,8 +6382,9 @@ export function startWorld(net: WorldNet): void {
         if (mainCam) {
           const w = time / 1000;
           const baseZoom = inInterior ? curZoom : inDungeon ? DUNGEON_ZOOM : ZOOM * userZoom; // cozy in the Tavern/Temple, close-in in the dungeon; player zoom out in the open world
-          mainCam.setRotation(drunk > 0 ? Math.sin(w * 1.1) * 0.012 * drunk : 0);            // tilt sway (~4° at lvl 6)
-          mainCam.setZoom(drunk > 0 ? baseZoom * (1 + Math.sin(w * 0.8) * 0.02 * drunk) : baseZoom); // breathing zoom
+          const freeze = mcFreezeUntil > now ? (mcFreezeUntil - now) / 2800 : 0; // 0→1 McFlurry brain-freeze
+          mainCam.setRotation(drunk > 0 ? Math.sin(w * 1.1) * 0.012 * drunk : freeze > 0 ? Math.sin(w * 4.5) * 0.018 * freeze : 0);
+          mainCam.setZoom(drunk > 0 ? baseZoom * (1 + Math.sin(w * 0.8) * 0.02 * drunk) : freeze > 0 ? baseZoom * (1 + Math.sin(w * 3.2) * 0.015 * freeze) : baseZoom);
         }
       }
 
@@ -6285,6 +6448,7 @@ export function startWorld(net: WorldNet): void {
 
       checkCarCrash(now);
       updateNpcs(now, dt);
+      updateRex(now, dt);
       updateNearBuilding();
       maybeSendMove(now);
 
@@ -6872,6 +7036,7 @@ export function startWorld(net: WorldNet): void {
     if (inDungeon) net.dungeonExit(false); // bailed out of the World mid-dungeon → forfeit the run purse
     setDungeonMusic(false); dungeonMusic = null; inDungeon = false;
     stopChant(); inInterior = false; inTemple = false; inMcdonald = false;
+    rex?.img.destroy(); rex?.nametag.destroy(); rex = null;
     try { void actx?.close(); } catch { /* ignore */ }
     actx = null;
     overlay.remove();
@@ -6932,6 +7097,32 @@ export function startWorld(net: WorldNet): void {
       rrActive = active; rrEndsAt = endsAt; rrStandings = standings;
       updateRoadRageHud();
       if (!active) { rrHud?.remove(); rrHud = null; }
+    },
+    feedMcFood(item: string, granted: boolean, _bonus?: number) {
+      if (!granted) return;
+      if (item === 'fries') {
+        // 30-second speed boost using the blessing window (shorter than the Temple blessing)
+        blessStart = Date.now(); blessEnd = blessStart + 30_000;
+        tone(659, 0.15, 'sine', 0.10, 587); window.setTimeout(() => tone(880, 0.2, 'sine', 0.12, 1047), 150);
+        showToast('🍟 <b>Hot fries!</b> Legs feel like rockets. <i>+speed 30s</i>');
+      } else if (item === 'mcflurry') {
+        // Brain freeze: short screen flash white-blue + camera wobble
+        mcFreezeUntil = Date.now() + 2800;
+        tone(220, 0.3, 'sawtooth', 0.06, 110);
+        showToast('🥤 <b>BRAIN FREEZE.</b> Everything is cold and beautiful and wrong.');
+        const flashEl = document.createElement('div');
+        flashEl.style.cssText = 'position:fixed;inset:0;background:rgba(200,230,255,0.72);z-index:99990;pointer-events:none;transition:opacity 2.5s ease';
+        document.body.appendChild(flashEl);
+        requestAnimationFrame(() => { flashEl.style.opacity = '0'; });
+        window.setTimeout(() => flashEl.remove(), 3000);
+      } else if (item === 'bigmac') {
+        tone(523, 0.2, 'sine', 0.10, 392); window.setTimeout(() => tone(659, 0.3, 'sine', 0.12, 784), 200);
+        showToast('🍔 <b>Big Mac.</b> Two all-beef patties. Power courses through you. (+60🪙 in the bag)');
+      } else if (item === 'happymeal') {
+        tone(784, 0.15, 'sine', 0.10, 1047); window.setTimeout(() => tone(1047, 0.25, 'sine', 0.12, 1047), 170);
+        // Effect varies by bonus amount
+        if (_bonus && _bonus >= 200) spawnMcConfetti();
+      }
     },
   };
   syncDriveBtn();
