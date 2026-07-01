@@ -924,6 +924,7 @@ export type ClientMsg =
   | { type: 'worldChat'; text: string; say?: boolean } // say a line in the World — pops as a speech bubble over your avatar; say=true (the Y popup) renders it purple
   | { type: 'worldBoom'; x: number; y: number; r?: number } // an explosion here (car crash or rocket strike) — broadcast the fireball; r>0 = a damaging blast
   | { type: 'worldRocket'; x: number; y: number; a: number } // we launched a rocket here, heading a → broadcast so others see it fly
+  | { type: 'worldBlownUp'; car: boolean; self: boolean } // a rocket blast got us (car=our car exploded; else on foot). self=our own rocket → server posts a chat line so everyone knows
   // --- Robville land (the suburban neighborhood) ---
   | { type: 'landReq' } // request the current Robville parcel ownership/market book
   | { type: 'landBuyBank'; id: string } // buy an empty lot from the bank for PARCEL_PRICE (subject to BANK_PARCEL_CAP)

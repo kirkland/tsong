@@ -95,6 +95,7 @@ export interface WorldNet {
   say(text: string, asSay?: boolean): void; // → speech bubble over your avatar (+ to others in-world); asSay=true → purple "Say" bubble
   boom(x: number, y: number, r?: number): void; // explosion here → fireball broadcast to everyone else; r>0 = a damaging rocket blast
   rocket(x: number, y: number, a: number): void; // we launched a rocket → broadcast it so others watch it fly
+  blownUp(car: boolean, self: boolean): void; // a rocket blast got us → server posts a chat line (car=our car exploded; self=our own rocket)
   sendChat(text: string): void;             // → main game chat, so the line also shows in the side feed
   chatHistory(): ChatLine[];                // recent chat backlog, seeded (hidden) so it's there on T
   // Slash-command autocomplete, shared with the main chat (same COMMANDS list).
@@ -5925,12 +5926,13 @@ export function startWorld(net: WorldNet): void {
   function detonateRocket(x: number, y: number) {
     spawnExplosion(x, y);              // local fireball + boom (spawnExplosion plays the boom sound)
     net.boom(x, y, BLAST_R);          // fan a DAMAGING blast out to everyone else
-    applyBlast(x, y, BLAST_R);        // and apply it to our own world (NPCs, our car/self)
+    applyBlast(x, y, BLAST_R, true);  // and apply it to our own world (NPCs, our car/self) — our own rocket
   }
 
   // Resolve a blast at (x,y): flatten townsfolk in range; if WE are caught, our car blows up (driving)
   // or we get knocked off our feet (on foot). Runs on the firer locally AND on every receiver.
-  function applyBlast(x: number, y: number, r: number) {
+  // mine=true → the rocket was ours (a self-own if it catches us); false → someone else's missile.
+  function applyBlast(x: number, y: number, r: number, mine: boolean) {
     const now = performance.now();
     for (const n of npcs) {
       if (now < n.squishedUntil) continue;
@@ -5940,10 +5942,12 @@ export function startWorld(net: WorldNet): void {
       squishSound();
     }
     if (Math.hypot(selfX - x, selfY - y) <= r) {
-      if (driving) blowUpMyCar('💥 Your car took a direct hit — summon a fresh one anytime.');
-      else if (now >= stunnedUntil && !inInterior && !inDungeon) {
+      if (driving) {
+        if (blowUpMyCar('💥 Your car took a direct hit — summon a fresh one anytime.')) net.blownUp(true, mine);
+      } else if (now >= stunnedUntil && !inInterior && !inDungeon) {
         stunnedUntil = now + 2300; keys.clear();
         flashHelp('💥 Blown off your feet!');
+        net.blownUp(false, mine);
       }
     }
     if (mainCam) {
@@ -5996,9 +6000,9 @@ export function startWorld(net: WorldNet): void {
   // Blow up the car YOU'RE driving, right where you are: a fireball on your own screen, the same
   // fireball broadcast to everyone else, and you're tipped back out onto your feet. Your car is
   // unharmed — press drive to summon it again. Used by both crash paths below.
-  function blowUpMyCar(reason: string) {
+  function blowUpMyCar(reason: string): boolean {
     const now = performance.now();
-    if (!driving || now - lastCarCrashAt < 1200) return; // already on foot / just blew up — don't double-pop
+    if (!driving || now - lastCarCrashAt < 1200) return false; // already on foot / just blew up — don't double-pop
     lastCarCrashAt = now;
     spawnExplosion(selfX, selfY);     // instant local fireball (others get it via the broadcast below)
     net.boom(selfX, selfY);           // → server fans this fireball out to everyone else in the world
@@ -6006,6 +6010,7 @@ export function startWorld(net: WorldNet): void {
     keys.clear();
     syncDriveBtn();
     flashHelp(reason);
+    return true;
   }
   // Two cars touching → BOTH explode. Detection is symmetric, so each client blows up its OWN car
   // (one fireball per car, every one of them broadcast) — net result: two fireballs, seen by all.
@@ -6345,7 +6350,7 @@ export function startWorld(net: WorldNet): void {
       for (const [k, v] of says) if (v.until <= now) says.delete(k); // drop stale lines (e.g. speakers who left)
       says.set(id, { text, until: now + SAY_MS, purple: say });
     },
-    feedBoom(x, y, r) { spawnExplosion(x, y); if (r && r > 0) { clearGhostRocketsNear(x, y, r); applyBlast(x, y, r); } },
+    feedBoom(x, y, r) { spawnExplosion(x, y); if (r && r > 0) { clearGhostRocketsNear(x, y, r); applyBlast(x, y, r, false); } },
     feedRocket(x, y, a) { feedRocket(x, y, a); },
     feedChat(line) { pushChatLine(line); },
   };

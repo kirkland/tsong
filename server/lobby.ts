@@ -161,6 +161,7 @@ interface Conn {
   captured: boolean; // mouse captured to the board (pointer lock); gates play start
   captureDeadline: number; // seconds left to capture before being benched (0 = not counting)
   lastChatAt: number; // ms timestamp of last chat message (light rate limiting)
+  lastBlownUpAt: number; // ms timestamp of last rocket-kill chat line (dedupe overlapping blasts)
   // Cached wallet/cosmetics (loaded from the DB on join). Purely cosmetic — never affects play.
   hat: string | null;
   skin: string | null;
@@ -666,6 +667,7 @@ export class Lobby {
       captured: false,
       captureDeadline: 0,
       lastChatAt: 0,
+      lastBlownUpAt: 0,
       hat: null,
       skin: null,
       trail: null,
@@ -1657,6 +1659,23 @@ export class Lobby {
     for (const sock of this.world.sockets()) if (sock !== ws && sock.readyState === sock.OPEN) sock.send(data);
   }
 
+  /** A rocket blast just got a player (their car, or them on foot). The victim reports it; we post a
+   *  chat line so everyone knows. self=true → they set off their own rocket (a proud self-own). */
+  worldBlownUp(ws: WebSocket, car: boolean, self: boolean) {
+    const conn = this.conns.get(ws);
+    if (!conn || !this.world.has(ws)) return;
+    const now = Date.now();
+    if (now - conn.lastBlownUpAt < 1500) return; // dedupe overlapping blasts in the same instant
+    conn.lastBlownUpAt = now;
+    const nick = conn.nickname || 'Someone';
+    const text = self
+      ? (car ? `💥🚀 ${nick} blew up their own car with a rocket! 🤦`
+             : `💥🚀 ${nick} blew themselves up with their own rocket! 🤦`)
+      : (car ? `💥🚀 ${nick}'s car got blown up by a rocket!`
+             : `💥🚀 ${nick} got blown up by a rocket!`);
+    this.botChat('🚀 KABOOM', text, '#ff8a4a');
+  }
+
   /** Snapshot every in-world avatar (human + netizen). */
   private worldAvatars(): WorldAvatar[] {
     const out: WorldAvatar[] = [];
@@ -2323,6 +2342,7 @@ export class Lobby {
       captured: true, // the bot is always "ready"; only the human must capture their mouse
       captureDeadline: 0,
       lastChatAt: 0,
+      lastBlownUpAt: 0,
       hat: null,
       skin: null,
       trail: null,

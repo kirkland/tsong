@@ -2199,6 +2199,7 @@ worldBtn.addEventListener('click', async () => {
       say: (text, asSay) => net.send({ type: 'worldChat', text, say: asSay }),
       boom: (x, y, r) => net.send({ type: 'worldBoom', x, y, r }),
       rocket: (x, y, a) => net.send({ type: 'worldRocket', x, y, a }),
+      blownUp: (car, self) => net.send({ type: 'worldBlownUp', car, self }),
       sendChat: (text) => net.send({ type: 'chat', text }), // → main game chat (shows in the side feed)
       chatHistory: () => recentChat,
       // Slash-command autocomplete, shared with the main chat so the in-world chat gets the same
