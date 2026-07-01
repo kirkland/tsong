@@ -5171,18 +5171,22 @@ function loop(t: number) {
       },
     };
     // Client-side prediction: override the local player's own paddle with the local
-    // target so it feels instant rather than lagging by RTT + server echo.
+    // target so it feels instant rather than lagging by RTT + server echo. While the
+    // mirror power-up is on us the server flips the target (COURT.h - y), so predict the
+    // flipped position too — otherwise the paddle tracks the mouse normally on our screen
+    // and the reversal is invisible (you'd just mysteriously miss the ball).
     if (isPlayer() && (myRole === 'left' || myRole === 'right')) {
       const side = myRole as 'left' | 'right';
+      const predY = state.paddles[side].mirrored ? COURT.h - target : target;
       renderState = {
         ...renderState,
         paddles: {
           ...renderState.paddles,
           [side]: {
             ...renderState.paddles[side],
-            y: target,
+            y: predY,
             players: renderState.paddles[side].players.map((p) =>
-              p.id === myId ? { ...p, y: target } : p,
+              p.id === myId ? { ...p, y: predY } : p,
             ),
           },
         },
