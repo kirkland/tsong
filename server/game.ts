@@ -33,7 +33,6 @@ import {
   LAYERED,
   DIAMOND,
   PINATA,
-  BOMBPARTY,
   BLOCK,
   POWERUPS,
   TARGET,
@@ -102,8 +101,6 @@ export interface GameSnapshot {
   diamondBlock: { x: number; y: number; vx: number; vy: number } | null;
   pinata: boolean;
   pinataObj: PinataObj | null;
-  bombparty?: boolean;
-  bombFuse?: number;
   blocks?: { x: number; y: number; w: number; h: number; angle?: number }[];
   rotated: number;
   fritz?: boolean;
@@ -169,9 +166,6 @@ export class Game {
   diamondBlock: { x: number; y: number; vx: number; vy: number } | null = null;
   pinata = false; // "piñata" mode armed; spawns a drifting ball-collector
   pinataObj: PinataObj | null = null; // the live piñata during a match (else null)
-  bombparty = false; // "bomb party" mode armed; the live ball becomes a lit, ticking bomb
-  bombFuse = 0; // seconds left on the current point's fuse (>0 only while the bomb is lit)
-  bombBoom: { x: number; y: number } | null = null; // set for the single tick the bomb detonates
   // Spectator-dropped obstacles. Like breakout bricks: the ball caroms off them and the
   // block shatters on contact. Center + size, court units. They accumulate as spectators
   // drop them (capped), get knocked out by rallies, and clear at the next match start.
@@ -252,8 +246,6 @@ export class Game {
       pinataObj: this.pinataObj
         ? { ...this.pinataObj, stuck: this.pinataObj.stuck.map((s) => ({ ...s })) }
         : null,
-      bombparty: this.bombparty,
-      bombFuse: this.bombFuse,
       blocks: this.blocks.map((bl) => ({ ...bl })),
       rotated: this.rotated,
       fritz: this.fritz,
@@ -311,8 +303,6 @@ export class Game {
     this.pinataObj = s.pinataObj
       ? { ...s.pinataObj, stuck: (s.pinataObj.stuck ?? []).map((x) => ({ ...x })) }
       : null;
-    this.bombparty = s.bombparty ?? false;
-    this.bombFuse = s.bombFuse ?? 0;
     this.blocks = s.blocks ? s.blocks.map((bl) => ({ ...bl, angle: bl.angle ?? 0 })) : [];
     this.rotated = typeof s.rotated === 'number' ? s.rotated : (s.rotated ? 1 : 0);
     this.fritz = s.fritz ?? false;
@@ -461,19 +451,6 @@ export class Game {
       if (this.status === 'playing' && !this.pinataObj) this.spawnPinata();
     } else {
       this.pinataObj = null;
-    }
-  }
-
-  /** Arm / disarm bomb-party mode. Arming mid-rally lights the fuse on the ball in flight;
-   *  otherwise the fuse is (re)lit on the next serve. Disarming snuffs it out immediately. */
-  setBombParty(on: boolean) {
-    this.bombparty = on;
-    // Light it now if a ball is already live (past the serve countdown); serve() (re)lights
-    // it each point. When the fuse is 0 during the serve pause, launch happens via tick.
-    if (on) {
-      if (this.status === 'playing' && this.bombFuse <= 0) this.bombFuse = BOMBPARTY.fuse;
-    } else {
-      this.bombFuse = 0;
     }
   }
 
@@ -813,9 +790,6 @@ export class Game {
     if (this.pinataObj) this.pinataObj.stuck = [];
     this.pinataPendingSpawns = 0;
     this.pinataBurstPending = false;
-    // Bomb Party: (re)light the fuse for the new point. It holds full through the serve
-    // pause and only starts burning once the ball launches (see tick()).
-    this.bombFuse = this.bombparty ? BOMBPARTY.fuse : 0;
     // Breakout: reset the brick grid for each new point.
     if (this.breakout) this.brickAlive = this.freshBricks();
   }
@@ -829,7 +803,6 @@ export class Game {
 
   tick(dt: number) {
     this.pinataBurstFlash = false; // a burst this tick (if any) sets it back to true
-    this.bombBoom = null;          // a detonation this tick (if any) sets it back below
     this.bumperFlash.fill(false);  // any bumper hits this tick set their slot to true
     // Paddles ease toward their target each tick; frozen paddles don't move.
     const maxStep = PADDLE.speed * dt;
@@ -861,26 +834,6 @@ export class Game {
       if (!this.serveHeld) this.serveTimer -= dt;
       if (this.serveTimer <= 0) this.launch();
       return;
-    }
-
-    // Bomb Party: the live ball is a lit bomb. The fuse burns in real time (never slowed);
-    // when it runs out, whichever half of the court the ball is on is "holding" it — the
-    // bomb detonates and the point is awarded to their opponent.
-    if (this.bombparty && this.bombFuse > 0) {
-      this.bombFuse -= dt;
-      if (this.bombFuse <= 0) {
-        this.bombFuse = 0;
-        const holder: Side = this.ball.x < COURT.w / 2 ? 'left' : 'right';
-        const scorer = other(holder);
-        this.bombBoom = { x: this.ball.x, y: this.ball.y };
-        if (this.scorePoint(scorer)) {
-          this.extraBalls = []; // match over on the blast
-          return;
-        }
-        if (this.closing) this.paddleX = { ...HOME_X };
-        this.serve(scorer === 'left' ? 1 : -1); // loser (the holder) receives the next serve
-        return;
-      }
     }
 
     if (this.slowTimer > 0) this.slowTimer -= dt;

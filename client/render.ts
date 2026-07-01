@@ -1,6 +1,6 @@
 // Pure drawing: takes the latest server state and paints one frame. No game logic.
 
-import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, BOMBPARTY, TARGET, BREAKOUT, BUMPER, BUMPER_POSITIONS, COSMETICS, EXCLUSIVES, PowerupKind, StateMsg, PolyState, Role, Side } from '../shared/types';
+import { COURT, PADDLE, BALL, BIG_BALL_R, BLASTER, DIAMOND, PINATA, TARGET, BREAKOUT, BUMPER, BUMPER_POSITIONS, COSMETICS, EXCLUSIVES, PowerupKind, StateMsg, PolyState, Role, Side } from '../shared/types';
 
 // The display flair for an equipped title id (e.g. 'davisslayer' → '🏆 Davis Slayer'), or ''.
 // Also searches EXCLUSIVES for exclusive titles (e.g. 'x-founder' → '🪙 Founder').
@@ -140,8 +140,7 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
 
   // Ball(s) — colored by whichever paddle last hit them. Extra balls = multi power-up.
   const ballR = s.tinyBall ? 3 : s.bigBall ? BIG_BALL_R : BALL.r;
-  const allBalls = [s.ball, ...s.extraBalls];
-  allBalls.forEach((b, i) => {
+  for (const b of [s.ball, ...s.extraBalls]) {
     // Fog of war: hide the ball in mid-court (>120px from either paddle face).
     let alpha = s.ghostBall ? 0.12 : 1;
     if (s.fog && !s.ghostBall) {
@@ -152,21 +151,12 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
       else if (nearest > 120) alpha = 1 - (nearest - 120) / 120;
     }
     ctx.globalAlpha = alpha;
-    // Bomb Party: the primary ball is a lit bomb with a burning fuse.
-    if (s.bomb && i === 0) {
-      drawBomb(ctx, b.x, b.y, ballR, s.bomb);
-    } else {
-      ctx.fillStyle = b.color;
-      ctx.beginPath();
-      ctx.arc(b.x, b.y, ballR, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  });
+    ctx.fillStyle = b.color;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, ballR, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.globalAlpha = 1;
-
-  // Bomb Party detonation: a big fireball where the bomb went off (latched for ~0.6s).
-  if (s.bombBoom) { bombBoomAt = performance.now(); bombBoomPos = { x: s.bombBoom.x, y: s.bombBoom.y }; }
-  drawBombBoom(ctx);
 
   // Blind overlay — drawn over the opponent's half so the blinded player can't
   // read the ball trajectory until it crosses into their side.
@@ -658,102 +648,6 @@ function drawPinata(
     ctx.lineWidth = 1;
     ctx.stroke();
   }
-}
-
-// Bomb Party: draw the live ball as a black cartoon bomb with a burning, sparking fuse.
-// It reddens and pulses faster as the fuse runs down, and once inside the "panic" window
-// it flashes urgently. `bomb.fuse` is seconds left; `bomb.max` the full fuse length.
-function drawBomb(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  r: number,
-  bomb: NonNullable<StateMsg['bomb']>,
-) {
-  const now = performance.now();
-  const frac = bomb.max > 0 ? Math.max(0, Math.min(1, bomb.fuse / bomb.max)) : 0;
-  const panic = bomb.fuse <= BOMBPARTY.panic;
-  // Flash rate accelerates as the fuse burns down (slow throb → frantic blink).
-  const rate = 2 + (1 - frac) * 16;
-  const blink = 0.5 + 0.5 * Math.sin((now / 1000) * rate * Math.PI * 2);
-  const R = r * 1.35; // the bomb reads a touch bigger than a plain ball
-
-  // Danger ring: expands and reddens as time runs out; frantic in the panic window.
-  const ringAlpha = (panic ? 0.55 : 0.3) * blink;
-  ctx.save();
-  ctx.globalAlpha *= ringAlpha;
-  ctx.strokeStyle = panic ? '#ff2a2a' : '#ff9b2a';
-  ctx.lineWidth = panic ? 5 : 3;
-  ctx.beginPath();
-  ctx.arc(x, y, R + 6 + blink * 6, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.restore();
-
-  // Bomb body — a dark sphere with a highlight; tints toward red as the fuse burns.
-  const bodyR = 0.35 + (1 - frac) * 0.4; // 0 = near-black, 1 = angry red-black
-  ctx.save();
-  ctx.fillStyle = `rgb(${Math.round(20 + bodyR * 120)}, 18, 22)`;
-  ctx.beginPath();
-  ctx.arc(x, y, R, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-  ctx.beginPath();
-  ctx.arc(x - R * 0.35, y - R * 0.35, R * 0.28, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-
-  // Fuse — a short cap stub with a flickering, jittering spark at its tip.
-  const capX = x + R * 0.5, capY = y - R * 0.7;
-  const tipX = capX + R * 0.55, tipY = capY - R * 0.75;
-  ctx.save();
-  ctx.strokeStyle = '#c9a06a';
-  ctx.lineWidth = 3;
-  ctx.beginPath();
-  ctx.moveTo(x + R * 0.2, y - R * 0.95);
-  ctx.lineTo(capX, capY);
-  ctx.lineTo(tipX, tipY);
-  ctx.stroke();
-  // Spark: a jittering star of orange/yellow that flares brighter in the panic window.
-  const jit = () => (Math.random() * 2 - 1) * (panic ? 3 : 2);
-  const sparkR = (panic ? 6 : 4) + blink * 3;
-  const grd = ctx.createRadialGradient(tipX, tipY, 0, tipX, tipY, sparkR * 2);
-  grd.addColorStop(0, '#fff6c8');
-  grd.addColorStop(0.4, '#ffd23f');
-  grd.addColorStop(1, 'rgba(255, 90, 20, 0)');
-  ctx.fillStyle = grd;
-  ctx.beginPath();
-  ctx.arc(tipX + jit(), tipY + jit(), sparkR * 2, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
-}
-
-// Latched detonation flash — position + timestamp of the last bomb blast (see drawState).
-let bombBoomAt = -1e9;
-let bombBoomPos = { x: 0, y: 0 };
-function drawBombBoom(ctx: CanvasRenderingContext2D) {
-  const t = (performance.now() - bombBoomAt) / 600; // 0→1 over 0.6s
-  if (t < 0 || t >= 1) return;
-  const { x, y } = bombBoomPos;
-  ctx.save();
-  // Expanding fireball: bright core → orange → smoke, fading as it grows.
-  const R = 24 + t * 150;
-  const grd = ctx.createRadialGradient(x, y, 0, x, y, R);
-  grd.addColorStop(0, `rgba(255, 250, 200, ${(1 - t) * 0.95})`);
-  grd.addColorStop(0.35, `rgba(255, 160, 40, ${(1 - t) * 0.85})`);
-  grd.addColorStop(0.75, `rgba(200, 50, 20, ${(1 - t) * 0.5})`);
-  grd.addColorStop(1, 'rgba(60, 20, 10, 0)');
-  ctx.fillStyle = grd;
-  ctx.beginPath();
-  ctx.arc(x, y, R, 0, Math.PI * 2);
-  ctx.fill();
-  // A crisp shockwave ring racing ahead of the fireball.
-  ctx.globalAlpha = (1 - t) * 0.8;
-  ctx.strokeStyle = '#fff2c0';
-  ctx.lineWidth = 4 * (1 - t);
-  ctx.beginPath();
-  ctx.arc(x, y, R * 1.15, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.restore();
 }
 
 function drawPaddle(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {

@@ -94,7 +94,6 @@ const turboModeEl = document.getElementById('turboMode') as HTMLInputElement;
 const streamerModeEl = document.getElementById('streamerMode') as HTMLInputElement;
 const diamondModeEl = document.getElementById('diamondMode') as HTMLInputElement;
 const pinataModeEl = document.getElementById('pinataMode') as HTMLInputElement;
-const bombpartyModeEl = document.getElementById('bombpartyMode') as HTMLInputElement;
 const layeredModeEl = document.getElementById('layeredMode') as HTMLInputElement;
 const arenaModeEl = document.getElementById('arenaMode') as HTMLInputElement;
 const breakoutModeEl = document.getElementById('breakoutMode') as HTMLInputElement;
@@ -1151,9 +1150,6 @@ diamondModeEl.addEventListener('change', () =>
 pinataModeEl.addEventListener('change', () =>
   net.send({ type: 'mode', pinata: pinataModeEl.checked }),
 );
-bombpartyModeEl.addEventListener('change', () =>
-  net.send({ type: 'mode', bombparty: bombpartyModeEl.checked }),
-);
 layeredModeEl.addEventListener('change', () =>
   net.send({ type: 'mode', layered: layeredModeEl.checked }),
 );
@@ -1486,7 +1482,6 @@ function enableChat() {
   streamerModeEl.disabled = false;
   diamondModeEl.disabled = false;
   pinataModeEl.disabled = false;
-  bombpartyModeEl.disabled = false;
   layeredModeEl.disabled = false;
   arenaModeEl.disabled = false;
   breakoutModeEl.disabled = false;
@@ -5290,9 +5285,6 @@ function updateUI() {
   }
   if (document.activeElement !== pinataModeEl && pinataModeEl.checked !== state.pinata) {
     pinataModeEl.checked = state.pinata;
-  }
-  if (document.activeElement !== bombpartyModeEl && bombpartyModeEl.checked !== state.bombparty) {
-    bombpartyModeEl.checked = state.bombparty;
   }
   if (document.activeElement !== layeredModeEl && layeredModeEl.checked !== state.layered) {
     layeredModeEl.checked = state.layered;
