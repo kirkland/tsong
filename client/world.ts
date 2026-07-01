@@ -5051,6 +5051,26 @@ export function startWorld(net: WorldNet): void {
     // dark cella glimpsed behind the colonnade
     const margin = Math.round(W * 0.06), span = W - margin * 2, colY = colTop + 6, colH = baseY - colY;
     P(margin, colY, span, colH, 0x2c2740);
+    // Stained-glass lancet windows in the bays flanking the doorway — a leaded mosaic of jewel tones
+    // under a gilt pointed arch, glimpsed between the columns. Drawn now so the colonnade overlays them.
+    const GLASS = [0xc0392b, 0x2a6fb0, 0x2f8f43, 0xe0a92b, 0x7a3b8f]; // ruby / sapphire / emerald / amber / violet
+    const LEAD = 0x141018;
+    const lancet = (lcx: number, topY: number, lw: number, lh: number) => {
+      const half = Math.round(lw / 2);
+      for (let yy = 0; yy <= half; yy++) {             // pointed arch cap
+        const hw = half - yy;
+        P(lcx - hw - 1, topY - yy, (hw + 1) * 2, 1, GOLD);
+        if (hw > 0) P(lcx - hw + 1, topY - yy, hw * 2 - 2, 1, GLASS[yy % GLASS.length]);
+      }
+      P(lcx - half - 1, topY, lw + 2, lh + 1, GOLD);   // gilt frame
+      for (let ry = 0; ry < lh; ry++) for (let rx = 0; rx < lw; rx++) {
+        const lead = rx % 3 === 0 || ry % 5 === 0;     // leaded cames between panes
+        P(lcx - half + rx, topY + ry, 1, 1, lead ? LEAD : GLASS[(Math.floor(rx / 3) + Math.floor(ry / 5) * 2) % GLASS.length]);
+      }
+      P(lcx - half + 1, topY + 1, 1, Math.round(lh * 0.5), 0xffffff, 0.22); // a faint glint
+    };
+    const winW = Math.max(5, Math.round(W * 0.055)), winH = Math.round(colH * 0.6), winTop = colY + Math.round(colH * 0.16);
+    for (const f of [0.19, 0.34, 0.66, 0.81]) lancet(Math.round(W * f), winTop, winW, winH);
     // entablature the columns hold up
     P(2, colTop, W - 4, 6, STONE); P(2, colTop, W - 4, 2, STONE_HI); P(2, colTop + 5, W - 4, 1, STONE_D);
     // the colonnade
@@ -5077,6 +5097,26 @@ export function startWorld(net: WorldNet): void {
     }
     P(rcx - 2, rcy - 2, 4, 4, GLOW); P(rcx - 1, rcy - 1, 2, 2, BALL);          // the Ball
     P(rcx - 3, rcy + rr - 3, 6, 2, GREEN);                                     // the Paddle below it
+    // Gargoyles hunched on the entablature corners — horned stone beasts jutting outward as
+    // waterspouts, wings raised, gripping the cornice. Their eyes get a faint red glow (added live).
+    const gargoyleEyes: { ex: number; ey: number }[] = [];
+    const gargoyle = (gx: number, gy: number, dir: number) => {
+      const GS = 0x8f8672, GSD = 0x726a58, GSH = 0xa89e84;
+      P(gx - 4, gy - 7, 8, 8, GS); P(gx - 4, gy - 7, 8, 1, GSH); P(gx - 4, gy, 8, 1, GSD); // hunched body
+      P(gx - 2, gy - 13, 7, 7, GSD); P(gx - 2, gy - 13, 7, 1, GS);                         // raised wing
+      P(gx + 1, gy - 12, 1, 6, GS); P(gx + 3, gy - 11, 1, 5, GS);                          // wing ribs
+      const hx = dir > 0 ? gx + 2 : gx - 8;                                                // head juts outward
+      P(hx, gy - 9, 6, 5, GS); P(hx, gy - 9, 6, 1, GSH);
+      const snout = dir > 0 ? hx + 6 : hx - 2;
+      P(snout, gy - 7, 2, 3, GS); P(dir > 0 ? snout + 1 : snout, gy - 6, 1, 1, LEAD);      // jaw + open mouth
+      P(dir > 0 ? hx : hx + 5, gy - 11, 1, 2, GSD);                                        // horn
+      P(gx - 4, gy, 2, 2, GSD); P(gx + 2, gy, 2, 2, GSD);                                  // clawed feet
+      const eyx = dir > 0 ? hx + 3 : hx + 1, eyy = gy - 8;
+      P(eyx, eyy, 1, 1, LEAD);                                                             // eye socket
+      gargoyleEyes.push({ ex: eyx, ey: eyy });
+    };
+    gargoyle(13, colTop + 5, -1);
+    gargoyle(W - 13, colTop + 5, 1);
     g.generateTexture('w-temple', W, H);
     g.destroy();
     sc.add.image(b.x, b.y, 'w-temple').setOrigin(0, 0).setScale(TEXEL).setDepth(depth);
@@ -5085,6 +5125,12 @@ export function startWorld(net: WorldNet): void {
     const halo = sc.add.circle(apexX, apexY, 12, 0xffe06a, 0.3).setBlendMode(Phaser.BlendModes.ADD).setDepth(depth + 2);
     sc.add.circle(apexX, apexY, 5, 0xfff3b0).setDepth(depth + 3);
     sc.tweens.add({ targets: halo, alpha: 0.6, scale: 1.4, duration: 1400, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    // the gargoyles' eyes smoulder a faint red, breathing slowly out of sync
+    gargoyleEyes.forEach((e, i) => {
+      const eye = sc.add.circle(b.x + (e.ex + 0.5) * TEXEL, b.y + (e.ey + 0.5) * TEXEL, 2.2, 0xff3b1a)
+        .setBlendMode(Phaser.BlendModes.ADD).setDepth(depth + 3);
+      sc.tweens.add({ targets: eye, alpha: 0.25, duration: 1700 + i * 300, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    });
     // the venue glyph above the door
     sc.add.text(b.x + b.w / 2, b.y + b.h - TILE * 1.5, b.emoji, { fontSize: '22px' }).setOrigin(0.5, 1).setDepth(b.y + b.h + 2);
   }
