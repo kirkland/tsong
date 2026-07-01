@@ -811,7 +811,16 @@ export interface WorldBoomMsg {
   type: 'worldBoom';
   x: number;
   y: number;
-  r?: number; // blast radius (rocket strikes); when >0 receivers also take blast effects, not just the visual
+  r?: number;      // blast radius (rocket strikes); when >0 receivers also take blast effects, not just the visual
+  pid?: string;    // shooter's pid — set by server for kill attribution during Road Rage
+}
+
+// Road Rage event — broadcast when the mode starts, ends, or standings change.
+export interface WorldRoadRageMsg {
+  type: 'worldRoadRage';
+  active: boolean;
+  endsAt: number;  // ms epoch timestamp; 0 when active=false
+  standings: { name: string; kills: number }[];
 }
 
 // A player launched a rocket from (x,y) heading at angle a — fanned out so everyone watches the
@@ -1422,6 +1431,7 @@ export type ServerMsg =
   | WorldSayMsg
   | WorldBoomMsg
   | WorldRocketMsg
+  | WorldRoadRageMsg
   | HouseMsg
   | HouseStateMsg
   | NetizenInfoMsg

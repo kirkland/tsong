@@ -556,6 +556,12 @@ export class Lobby {
   private nomGame!: NomicGame;
   private nomSockets = new Map<string, WebSocket>(); // member pid → socket of players in the Parliament
 
+  // --- Road Rage — timed overworld rocket-car PvP deathmatch ---
+  private rrActive = false;
+  private rrEndsAt = 0;
+  private rrKills = new Map<string, { name: string; kills: number }>(); // pid → stats
+  private rrCooldownUntil = 0; // prevent back-to-back events
+
   // --- Bolwoing Alley (PvP turn-based bowling) ---
   private bowlingManager: BowlingManager;
 
@@ -1642,8 +1648,9 @@ export class Lobby {
     if (!conn || !this.world.has(ws)) return;
     const bx = Math.max(0, Math.min(WORLD.w, x));
     const by = Math.max(0, Math.min(WORLD.h, y));
-    const br = typeof r === 'number' ? Math.max(0, Math.min(300, r)) : undefined; // cap the blast radius
-    const data = JSON.stringify({ type: 'worldBoom', x: bx, y: by, r: br });
+    const br = typeof r === 'number' ? Math.max(0, Math.min(300, r)) : undefined;
+    // Include shooter's pid so recipients can attribute kills during Road Rage.
+    const data = JSON.stringify({ type: 'worldBoom', x: bx, y: by, r: br, pid: conn.pid });
     for (const sock of this.world.sockets()) if (sock !== ws && sock.readyState === sock.OPEN) sock.send(data);
   }
 
@@ -1657,21 +1664,77 @@ export class Lobby {
     for (const sock of this.world.sockets()) if (sock !== ws && sock.readyState === sock.OPEN) sock.send(data);
   }
 
-  /** A rocket blast just got a player (their car, or them on foot). The victim reports it; we post a
-   *  chat line so everyone knows. self=true → they set off their own rocket (a proud self-own). */
-  worldBlownUp(ws: WebSocket, car: boolean, self: boolean) {
+  /** A rocket blast just got a player. self=true → own rocket. killedBy = shooter's pid (set during Road Rage). */
+  worldBlownUp(ws: WebSocket, car: boolean, self: boolean, killedBy?: string) {
     const conn = this.conns.get(ws);
     if (!conn || !this.world.has(ws)) return;
     const now = Date.now();
-    if (now - conn.lastBlownUpAt < 1500) return; // dedupe overlapping blasts in the same instant
+    if (now - conn.lastBlownUpAt < 1500) return;
     conn.lastBlownUpAt = now;
     const nick = conn.nickname || 'Someone';
+
+    // Road Rage kill attribution — credit the shooter, deduct a coin penalty from the victim.
+    if (this.rrActive && !self && killedBy && killedBy !== conn.pid) {
+      const killerConn = [...this.conns.entries()].find(([, c]) => c.pid === killedBy)?.[1];
+      const killerName = killerConn?.nickname || 'Someone';
+      const entry = this.rrKills.get(killedBy) ?? { name: killerName, kills: 0 };
+      entry.kills++;
+      this.rrKills.set(killedBy, entry);
+      const killerWs = [...this.conns.entries()].find(([, c]) => c.pid === killedBy)?.[0];
+      if (killerWs) this.housePay(killedBy, killerName, 25).then(() => this.sendWallet(killerWs)).catch(() => {});
+      this.botChat('💥 ROAD RAGE', `${killerName} 💥 ${nick} (+25 coins, ${entry.kills} kill${entry.kills === 1 ? '' : 's'})`, '#ff4444');
+      this.broadcastRoadRage();
+      return; // skip the normal blow-up chat line
+    }
+
     const text = self
-      ? (car ? `💥🚀 ${nick} blew up their own car with a rocket! 🤦`
-             : `💥🚀 ${nick} blew themselves up with their own rocket! 🤦`)
-      : (car ? `💥🚀 ${nick}'s car got blown up by a rocket!`
-             : `💥🚀 ${nick} got blown up by a rocket!`);
+      ? (car ? `💥🚀 ${nick} blew up their own car! 🤦` : `💥🚀 ${nick} blew themselves up! 🤦`)
+      : (car ? `💥🚀 ${nick}'s car got blown up!` : `💥🚀 ${nick} got blown up!`);
     this.botChat('🚀 KABOOM', text, '#ff8a4a');
+  }
+
+  /** Start a 3-minute Road Rage event. Any player can trigger it; 5-minute cooldown between events. */
+  startRoadRage(ws: WebSocket) {
+    const now = Date.now();
+    if (this.rrActive) { this.tell(ws, { type: 'announce', text: '💥 Road Rage is already in progress!', toast: true }); return; }
+    if (now < this.rrCooldownUntil) {
+      const secs = Math.ceil((this.rrCooldownUntil - now) / 1000);
+      this.tell(ws, { type: 'announce', text: `💥 Road Rage on cooldown — ${secs}s remaining.`, toast: true });
+      return;
+    }
+    this.rrActive = true;
+    this.rrEndsAt = now + 3 * 60 * 1000;
+    this.rrKills.clear();
+    this.announce('💥🚗 ROAD RAGE! 3 minutes of rocket-car PvP — kills earn 25 coins. Get in a car and start blasting!');
+    this.broadcastRoadRage();
+    setTimeout(() => this.endRoadRage(), 3 * 60 * 1000);
+  }
+
+  private endRoadRage() {
+    if (!this.rrActive) return;
+    this.rrActive = false;
+    this.rrCooldownUntil = Date.now() + 5 * 60 * 1000;
+    const sorted = [...this.rrKills.values()].sort((a, b) => b.kills - a.kills);
+    if (sorted.length === 0) {
+      this.announce('💥 Road Rage ended. Nobody got a single kill. Embarrassing.');
+    } else {
+      const winner = sorted[0];
+      this.announce(`💥 Road Rage over! 🏆 ${winner.name} wins with ${winner.kills} kill${winner.kills === 1 ? '' : 's'}!`);
+      // Bonus coins to the top killer
+      const winnerEntry = [...this.conns.entries()].find(([, c]) => c.pid && this.rrKills.get(c.pid)?.name === winner.name);
+      if (winnerEntry) {
+        const [winnerWs, winnerConn] = winnerEntry;
+        this.housePay(winnerConn.pid!, winnerConn.nickname || '', 100)
+          .then(() => this.sendWallet(winnerWs)).catch(() => {});
+      }
+    }
+    this.broadcastRoadRage();
+  }
+
+  private broadcastRoadRage() {
+    const standings = [...this.rrKills.values()].sort((a, b) => b.kills - a.kills).slice(0, 8);
+    const msg = JSON.stringify({ type: 'worldRoadRage', active: this.rrActive, endsAt: this.rrEndsAt, standings });
+    for (const sock of this.world.sockets()) if (sock.readyState === sock.OPEN) sock.send(msg);
   }
 
   /** Snapshot every in-world avatar (human + netizen). */
