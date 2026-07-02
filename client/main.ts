@@ -1090,7 +1090,6 @@ joinForm.addEventListener('submit', (e) => {
   enableChat();
   revealAds(); // the fake banner ad only appears once you're in (never over the join screen)
   startFlyovers();
-  setTimeout(() => { if (!worldMod?.isWorldOpen()) worldBtn.click(); }, 0);
 });
 
 // --- ping: notify everyone you want players ---
@@ -4198,7 +4197,6 @@ if (remembered) {
   enableChat();
   revealAds(); // returning players skip the join form — still show the banner ad
   startFlyovers();
-  setTimeout(() => { if (!worldMod?.isWorldOpen()) worldBtn.click(); }, 0);
 } else {
   nick.focus();
 }
