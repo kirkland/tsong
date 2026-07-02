@@ -270,6 +270,11 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'song-everlong', name: '🎸 Everlong (8-bit)', slot: 'song', price: 0, locked: 'dungeon', audio: '/everlong.mp3' }, // a Ruins chest prize (B4)
   { id: 'song-encounter', name: '⚔️ Encounter Theme', slot: 'song', price: 0, locked: 'dungeon', audio: '/encounter.mp3' }, // a Ruins chest prize (B5)
   { id: 'song-inthend', name: '🎧 In The End (8-bit)', slot: 'song', price: 0, locked: 'dungeon', audio: '/inthend.mp3' }, // Rob's anthem — a boss prize
+  // 8-bit cover tsongs — all purchasable. Livin' on a Prayer also loops in the Tavern (enterTavern).
+  { id: 'song-prayer', name: "🎸 Livin' on a Prayer (8-bit)", slot: 'song', price: 25000, audio: '/livin-on-a-prayer-8bit.mp3' },
+  { id: 'song-gangsta', name: "🎤 Gangsta's Paradise (8-bit)", slot: 'song', price: 18000, audio: '/gangstas-paradise-8bit.mp3' },
+  { id: 'song-heart', name: '🖤 Heart-Shaped Box (8-bit)', slot: 'song', price: 20000, audio: '/heart-shaped-box-8bit.mp3' },
+  { id: 'song-android', name: '🤖 Paranoid Android (8-bit)', slot: 'song', price: 22000, audio: '/paranoid-android-8bit.mp3' },
   // Cars — drive them around the World map (slot 'car'; physics/look live in CARS above).
   { id: 'car-coupe', name: '🚗 Coupe', slot: 'car', price: 8000 },
   { id: 'car-drifter', name: '🏎️ Drift King', slot: 'car', price: 20000 },
