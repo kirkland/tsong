@@ -69,7 +69,7 @@ export interface WorldNet {
   pet(): string | null;          // our equipped pet id (null = none → nothing trails us)
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'stocks' | 'loans' | 'petshop' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'bowling'): void; // open a Casino/Bank/Pet-Shop/DOOM/Fishing/Arcade/Bowling feature
+  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'stocks' | 'loans' | 'petshop' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'bowling' | 'nuketown' | 'citytycoon' | 'lootbox' | 'blackmarket' | 'news' | 'house'): void; // open a Casino/Bank/Pet-Shop/DOOM/Fishing/Arcade/Bowling feature
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
   dungeonSync(): void;             // entering the Ruins → ask which chests we've opened
@@ -1888,22 +1888,26 @@ export function startWorld(net: WorldNet): void {
     if (kind === 'arena') { exit(); net.enterArena(); return; }
     if (kind === 'casino') {
       openDialog('🎰 Casino', 'What are you feeling lucky for?', [
-        { label: '🎡 Roulette',   onPick: () => { exit(); net.openFeature('roulette');  } },
-        { label: '🃏 Blackjack',  onPick: () => { exit(); net.openFeature('blackjack'); } },
-        { label: '🎲 Craps',      onPick: () => { exit(); net.openFeature('craps');     } },
-        { label: '🚀 Crash',      onPick: () => { exit(); net.openFeature('crash');     } },
-        { label: '🎰 Slots',      onPick: () => { exit(); net.openFeature('slots');     } },
-        { label: '🎯 Plinko',     onPick: () => { exit(); net.openFeature('plinko');    } },
-        { label: '🏇 Horse Racing', onPick: () => { exit(); net.openFeature('horse');   } },
-        { label: '🃏 Hi-Lo',      onPick: () => { exit(); net.openFeature('hilo');      } },
-        { label: '💣 Mines',      onPick: () => { exit(); net.openFeature('mines');     } },
+        { label: '🎡 Roulette',   onPick: () => { exit(); net.openFeature('roulette');    } },
+        { label: '🃏 Blackjack',  onPick: () => { exit(); net.openFeature('blackjack');   } },
+        { label: '🎲 Craps',      onPick: () => { exit(); net.openFeature('craps');       } },
+        { label: '🚀 Crash',      onPick: () => { exit(); net.openFeature('crash');       } },
+        { label: '🎰 Slots',      onPick: () => { exit(); net.openFeature('slots');       } },
+        { label: '🎯 Plinko',     onPick: () => { exit(); net.openFeature('plinko');      } },
+        { label: '🏇 Horse Racing', onPick: () => { exit(); net.openFeature('horse');     } },
+        { label: '🃏 Hi-Lo',      onPick: () => { exit(); net.openFeature('hilo');        } },
+        { label: '💣 Mines',      onPick: () => { exit(); net.openFeature('mines');       } },
+        { label: '🎁 Loot Box',   onPick: () => { exit(); net.openFeature('lootbox');     } },
+        { label: '🛒 Black Market', onPick: () => { exit(); net.openFeature('blackmarket'); } },
       ]);
       return;
     }
     if (kind === 'bank') {
       openDialog('🏦 Bank', 'How can we help you today?', [
         { label: '📈 Crypto Market', onPick: () => { exit(); net.openFeature('stocks'); } },
-        { label: '💸 Get a Loan', onPick: () => { exit(); net.openFeature('loans'); } },
+        { label: '💸 Get a Loan',    onPick: () => { exit(); net.openFeature('loans');  } },
+        { label: '📰 Market News',   onPick: () => { exit(); net.openFeature('news');   } },
+        { label: '🏛️ The Fed',       onPick: () => { exit(); net.openFeature('house');  } },
       ]);
       return;
     }
@@ -1948,6 +1952,8 @@ export function startWorld(net: WorldNet): void {
         { label: '⌨️ Type or Die', onPick: () => { exit(); net.openFeature('typedie'); } },
         { label: '🏎️ Street Demons (Racing)', onPick: () => { exit(); net.openFeature('racing'); } },
         { label: '🥊 Super Tsong Bros', onPick: () => { exit(); net.openFeature('superbros'); } },
+        { label: '💣 Nuketown', onPick: () => { exit(); net.openFeature('nuketown'); } },
+        { label: '🏙️ City Tycoon', onPick: () => { exit(); net.openFeature('citytycoon'); } },
       ]);
       return;
     }

@@ -1090,6 +1090,7 @@ joinForm.addEventListener('submit', (e) => {
   enableChat();
   revealAds(); // the fake banner ad only appears once you're in (never over the join screen)
   startFlyovers();
+  setTimeout(() => { if (!worldMod?.isWorldOpen()) worldBtn.click(); }, 0);
 });
 
 // --- ping: notify everyone you want players ---
@@ -2187,24 +2188,30 @@ worldBtn.addEventListener('click', async () => {
           return;
         }
         // Arcade cabinets launch the solo/co-op minigames via their toolbar buttons.
-        if (feature === 'campaign' || feature === 'typedie' || feature === 'racing' || feature === 'superbros') {
+        if (feature === 'campaign' || feature === 'typedie' || feature === 'racing' || feature === 'superbros' || feature === 'nuketown' || feature === 'citytycoon') {
           const btn = feature === 'campaign' ? campaignBtn
                     : feature === 'typedie' ? typeDieBtn
                     : feature === 'racing' ? streetDemonsBtn
+                    : feature === 'nuketown' ? nuketownBtn
+                    : feature === 'citytycoon' ? (document.getElementById('crBtn') as HTMLButtonElement)
                     : sbBtn;
-          setTimeout(() => btn.click(), 0);
+          setTimeout(() => btn?.click(), 0);
           return;
         }
-        const id = feature === 'roulette'  ? 'rouletteBtn'
-                 : feature === 'blackjack' ? 'bjBtn'
-                 : feature === 'craps'     ? 'crapsBtn'
-                 : feature === 'crash'     ? 'crashBtn'
-                 : feature === 'slots'     ? 'slotsBtn'
-                 : feature === 'plinko'    ? 'plinkoBtn'
-                 : feature === 'horse'     ? 'horseBtn'
-                 : feature === 'hilo'      ? 'hiloBtn'
-                 : feature === 'mines'     ? 'minesBtn'
-                 : feature === 'stocks'    ? 'marketBtn'
+        const id = feature === 'roulette'    ? 'rouletteBtn'
+                 : feature === 'blackjack'  ? 'bjBtn'
+                 : feature === 'craps'      ? 'crapsBtn'
+                 : feature === 'crash'      ? 'crashBtn'
+                 : feature === 'slots'      ? 'slotsBtn'
+                 : feature === 'plinko'     ? 'plinkoBtn'
+                 : feature === 'horse'      ? 'horseBtn'
+                 : feature === 'hilo'       ? 'hiloBtn'
+                 : feature === 'mines'      ? 'minesBtn'
+                 : feature === 'stocks'     ? 'marketBtn'
+                 : feature === 'lootbox'    ? 'lootBtn'
+                 : feature === 'blackmarket' ? 'marketplaceBtn'
+                 : feature === 'news'       ? 'newsBtn'
+                 : feature === 'house'      ? 'houseBtn'
                  : 'loanBtn';
         setTimeout(() => (document.getElementById(id) as HTMLButtonElement | null)?.click(), 0);
       },
@@ -4191,6 +4198,7 @@ if (remembered) {
   enableChat();
   revealAds(); // returning players skip the join form — still show the banner ad
   startFlyovers();
+  setTimeout(() => { if (!worldMod?.isWorldOpen()) worldBtn.click(); }, 0);
 } else {
   nick.focus();
 }
