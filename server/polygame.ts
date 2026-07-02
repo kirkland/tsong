@@ -10,10 +10,13 @@
 import {
   BALL,
   ARENA,
-  POLY_PADDLE_LEN,
+  ARENA_BALL,
+  ARENA_SERVE_DELAY,
+  POLY_PADDLE_FRACTION,
+  POLY_PADDLE_MIN,
+  POLY_PADDLE_MAX,
   PADDLE,
   MAX_BOUNCE,
-  SERVE_DELAY,
   PADDLE_BOOST,
   SMASH_BONUS,
   SLOW_SCALE,
@@ -167,8 +170,15 @@ export class PolyGame {
     return Math.max(0, half - this.paddleLen(ent) / 2);
   }
 
+  /** Base paddle length at this player count: a fraction of the current edge length,
+   *  clamped so it can't get silly-long (triangle) or vanishingly small (octagon). */
+  private basePaddleLen(): number {
+    const edgeLen = 2 * ARENA.radius * Math.sin(Math.PI / this.n);
+    return clamp(edgeLen * POLY_PADDLE_FRACTION, POLY_PADDLE_MIN, POLY_PADDLE_MAX);
+  }
+
   private paddleLen(ent: PolyEnt): number {
-    return POLY_PADDLE_LEN * (ent.growHits > 0 ? PADDLE_BOOST : 1);
+    return this.basePaddleLen() * (ent.growHits > 0 ? PADDLE_BOOST : 1);
   }
 
   ballR(): number {
@@ -249,7 +259,7 @@ export class PolyGame {
   }
 
   private serve() {
-    this.serveTimer = SERVE_DELAY;
+    this.serveTimer = ARENA_SERVE_DELAY;
     this.ball = { x: ARENA.cx, y: ARENA.cy, vx: 0, vy: 0, spin: 0 };
     this.extraBalls = [];
     this.lastHitId = null;
@@ -263,8 +273,8 @@ export class PolyGame {
 
   private launch() {
     const angle = Math.random() * Math.PI * 2; // any direction — it's a free-for-all
-    this.ball.vx = Math.cos(angle) * BALL.speed;
-    this.ball.vy = Math.sin(angle) * BALL.speed;
+    this.ball.vx = Math.cos(angle) * ARENA_BALL.speed;
+    this.ball.vy = Math.sin(angle) * ARENA_BALL.speed;
   }
 
   // --- simulation ---
@@ -374,8 +384,9 @@ export class PolyGame {
         this.lastHitId = ent.id;
         this.hitSeq++;
         const rel = clamp((s - ent.pos) / half, -1, 1);
-        let speed = Math.hypot(b.vx, b.vy) * BALL.speedup;
+        let speed = Math.hypot(b.vx, b.vy) * ARENA_BALL.speedup;
         if (ent.smashHits > 0) speed *= SMASH_BONUS;
+        speed = Math.min(speed, ARENA_BALL.maxSpeed);
         const outAngle = Math.atan2(hitE.ny, hitE.nx) + rel * MAX_BOUNCE;
         b.vx = Math.cos(outAngle) * speed;
         b.vy = Math.sin(outAngle) * speed;
@@ -510,7 +521,7 @@ export class PolyGame {
     if (this.extraBalls.length >= MULTI_MAX) return;
     const src = this.ball;
     const current = Math.hypot(src.vx, src.vy);
-    const speed = BALL.speed + Math.random() * Math.max(0, current - BALL.speed);
+    const speed = ARENA_BALL.speed + Math.random() * Math.max(0, current - ARENA_BALL.speed);
     const angle = Math.random() * Math.PI * 2;
     this.extraBalls.push({
       x: src.x,

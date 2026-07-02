@@ -35,7 +35,25 @@ export const ARENA = {
   cy: COURT.h / 2,
   radius: 260, // circumradius of the polygon, court units (near-fills the 500-tall court)
 } as const;
-export const POLY_PADDLE_LEN = 64; // arena paddle length along its edge, court units
+// Arena paddle length is a fraction of the *current* edge length rather than a flat
+// number: a triangle's edges are far longer than an octagon's, so a fixed-length paddle
+// covered way less of a triangle edge and made 3–4 player games end in seconds. Scaling
+// with the edge (clamped so it can't get silly-long or disappear) keeps coverage — and
+// game length — comparable across every player count, while leaving the 8-player octagon
+// (whose edges are shortest) at essentially the old 64.
+export const POLY_PADDLE_FRACTION = 0.32; // share of the edge a paddle covers at rest
+export const POLY_PADDLE_MIN = 56; // court units
+export const POLY_PADDLE_MAX = 130; // court units
+// Arena's free-for-all rallies bounce between many paddles before anyone misses, so the
+// per-hit speedup compounds far more times per point than in a 1v1 duel. A slower serve,
+// gentler speedup, and hard cap keep long rallies from spiraling into an unreturnable
+// blur — the "ball's too quick" complaint.
+export const ARENA_BALL = {
+  speed: 340, // serve speed, court units/second (vs. BALL.speed = 480 for the duel)
+  speedup: 1.025, // multiplier applied on each paddle hit
+  maxSpeed: 760, // hard cap regardless of how long the rally runs
+} as const;
+export const ARENA_SERVE_DELAY = 1.1; // seconds the arena ball pauses at center before launching (vs. SERVE_DELAY = 0.7)
 // Power-ups that make sense in a free-for-all (per-player or global only — nothing that
 // targets a single "opponent", which is ambiguous with more than two players).
 export const POLY_POWERUPS = [
