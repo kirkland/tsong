@@ -3658,20 +3658,15 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !gameModesPanel.hidden) closeGameModes();
 });
 
-// --- Tournament dropdown (top-left): create a bracket ---
+// --- Tournament dropdown (top-left): create or join a bracket ---
 const tourneyBtn = document.getElementById('tourneyBtn') as HTMLButtonElement;
 const tourneyPanel = document.getElementById('tourneyPanel') as HTMLDivElement;
-const tournamentPanel = document.getElementById('tournamentPanel') as HTMLDivElement;
-const tournamentTitle = document.getElementById('tournamentTitle') as HTMLSpanElement;
-const tournamentBody = document.getElementById('tournamentBody') as HTMLDivElement;
-const tournamentJoinBtn = document.getElementById('tournamentJoinBtn') as HTMLButtonElement;
-const tournamentCancelBtn = document.getElementById('tournamentCancelBtn') as HTMLButtonElement;
-const tournamentCollapseBtn = document.getElementById('tournamentCollapseBtn') as HTMLButtonElement;
-// Bracket fold state: auto-collapses out of the way once a match is actually being played,
-// so it stops covering the board; the user can toggle it to peek at any time.
-let bracketCollapsed = false;
-let lastTourneyPhase = '';
-
+const tourneyCreate = document.getElementById('tourneyCreate') as HTMLDivElement;
+const tourneyActive = document.getElementById('tourneyActive') as HTMLDivElement;
+const tourneyActiveTitle = document.getElementById('tourneyActiveTitle') as HTMLSpanElement;
+const tourneyActiveBody = document.getElementById('tourneyActiveBody') as HTMLDivElement;
+const tourneyActiveJoin = document.getElementById('tourneyActiveJoin') as HTMLButtonElement;
+const tourneyActiveCancel = document.getElementById('tourneyActiveCancel') as HTMLButtonElement;
 function closeTourney() {
   tourneyPanel.hidden = true;
   tourneyBtn.setAttribute('aria-expanded', 'false');
@@ -3692,13 +3687,9 @@ for (const btn of tourneyPanel.querySelectorAll<HTMLButtonElement>('.tourney-siz
     closeTourney();
   });
 }
-tournamentJoinBtn.addEventListener('click', () => net.send({ type: 'tournamentJoin' }));
-tournamentCancelBtn.addEventListener('click', () => {
+tourneyActiveJoin.addEventListener('click', () => { net.send({ type: 'tournamentJoin' }); closeTourney(); });
+tourneyActiveCancel.addEventListener('click', () => {
   if (confirm('Cancel the current tournament?')) net.send({ type: 'tournamentCancel' });
-});
-tournamentCollapseBtn.addEventListener('click', () => {
-  bracketCollapsed = !bracketCollapsed;
-  if (state) renderTournament(state.tournament);
 });
 
 // Public bet board under the court: who bet how much on each side.
@@ -3727,33 +3718,27 @@ function renderBetBoard(s: StateMsg) {
 function renderTournament(t: StateMsg['tournament']) {
   document.body.classList.toggle('tournament-on', !!t);
   if (!t) {
-    tournamentPanel.hidden = true;
-    lastTourneyPhase = '';
+    tourneyCreate.hidden = false;
+    tourneyActive.hidden = true;
+    tourneyBtn.classList.remove('joinable');
+    tourneyBtn.firstChild!.textContent = '🏆 TOURNEY ';
     return;
   }
-  tournamentPanel.hidden = false;
 
-  // Auto-fold the bracket once a match is actually being played so it stops covering the
-  // board; auto-unfold during signup, between matches, and on the champion screen. A manual
-  // toggle sticks until the phase changes again.
-  const live = t.status === 'active' && state?.status === 'playing';
-  const phase = `${t.status}:${live ? 'live' : 'idle'}`;
-  if (phase !== lastTourneyPhase) {
-    lastTourneyPhase = phase;
-    bracketCollapsed = live;
-  }
-  tournamentCollapseBtn.hidden = t.status === 'signup'; // nothing to fold during signup
-  tournamentCollapseBtn.textContent = bracketCollapsed ? '▸' : '▾';
-  tournamentBody.hidden = bracketCollapsed && t.status !== 'signup';
-  // Only the creator sees the cancel (✕) button — keeps a random spectator from nuking it.
-  tournamentCancelBtn.hidden = t.creator !== myName;
+  tourneyCreate.hidden = true;
+  tourneyActive.hidden = false;
+  tourneyActiveCancel.hidden = t.creator !== myName;
 
   if (t.status === 'signup') {
     const filled = t.slots.filter(Boolean).length;
-    tournamentTitle.textContent = `⚽ World Cup — ${filled}/${t.size} joined`;
     const alreadyIn = t.slots.some((s) => s === myName);
-    tournamentJoinBtn.hidden = !(myRole === 'observer' && !alreadyIn && filled < t.size && joined);
-    tournamentBody.innerHTML =
+    const canJoin = joined && !alreadyIn && filled < t.size;
+    tourneyActiveTitle.textContent = `⚽ World Cup — ${filled}/${t.size} joined`;
+    tourneyActiveJoin.hidden = !canJoin;
+    // Pulse the button green so spectators notice there's a slot waiting.
+    tourneyBtn.classList.toggle('joinable', canJoin);
+    tourneyBtn.firstChild!.textContent = canJoin ? '🏆 JOIN NOW ' : '🏆 TOURNEY ';
+    tourneyActiveBody.innerHTML =
       `<div class="t-slots">` +
       t.slots
         .map((s, i) => {
@@ -3768,18 +3753,21 @@ function renderTournament(t: StateMsg['tournament']) {
     return;
   }
 
-  // active / done → render the bracket by round.
-  tournamentJoinBtn.hidden = true;
+  // active / done
+  tourneyActiveJoin.hidden = true;
+  tourneyBtn.classList.remove('joinable');
   const liveMatch = t.matches.find((m) => m.live);
   const flagOf = (name: string | null) => name && t.countries[name] ? t.countries[name].flag + ' ' : '';
-  tournamentTitle.textContent =
+  tourneyActiveTitle.textContent =
     t.status === 'done'
       ? `⚽🏆 ${flagOf(t.champion)}${t.champion ?? '—'}`
       : liveMatch && liveMatch.p1 && liveMatch.p2
         ? `⚽ ${flagOf(liveMatch.p1)}${liveMatch.p1} vs ${flagOf(liveMatch.p2)}${liveMatch.p2}`
         : '⚽ World Cup';
+  tourneyBtn.firstChild!.textContent =
+    t.status === 'done' ? '🏆 DONE ' : '🏆 LIVE ';
   const roundName = (r: number) => {
-    const fromEnd = t.rounds - 1 - r; // 0 = final
+    const fromEnd = t.rounds - 1 - r;
     if (fromEnd === 0) return 'Final';
     if (fromEnd === 1) return 'Semifinals';
     if (fromEnd === 2) return 'Quarterfinals';
@@ -3808,7 +3796,7 @@ function renderTournament(t: StateMsg['tournament']) {
     const champC = t.countries[t.champion];
     html += `<div class="t-champion">⚽🏆 ${champC ? champC.flag + ' ' : ''}${escapeHtml(t.champion)} wins the World Cup!</div>`;
   }
-  tournamentBody.innerHTML = html;
+  tourneyActiveBody.innerHTML = html;
 }
 
 // --- Power-ups dropdown (top-left, next to MODES): legend of all power-ups ---

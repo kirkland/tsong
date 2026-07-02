@@ -2123,7 +2123,9 @@
         position: absolute;
         top: calc(100% + 6px);
         left: 0;
-        width: 240px;
+        width: 260px;
+        max-height: 80vh;
+        overflow-y: auto;
         background: #0e1424;
         border: 1px solid #2a3550;
         border-radius: 8px;
@@ -2143,48 +2145,35 @@
         border-radius: 6px; border: 1px solid #2a3550; background: #1a2035; color: #ffd166; cursor: pointer;
       }
       .tourney-size:hover { background: #2d4070; border-color: #3a6df0; }
-      /* Live bracket / signup panel — pinned to the top edge so it stays clear of the board.
-         While a match is live it collapses to just the slim header bar. */
-      #tournamentPanel {
-        position: fixed;
-        top: 6px;
-        left: 50%;
-        transform: translateX(-50%);
-        max-width: 92vw;
-        max-height: 80vh;
-        overflow: auto;
-        background: rgba(8,18,8,0.97);
-        border: 1px solid #1e4020;
-        border-radius: 10px;
-        box-shadow: 0 12px 36px rgba(0,0,0,0.6), 0 0 0 1px rgba(80,180,80,0.15);
-        padding: 8px 12px;
-        z-index: 60;
-        color: #c8e8c8;
+      /* When there's an open tournament to join, the TOURNEY button pulses green. */
+      #tourneyBtn.joinable {
+        border-color: #2a6e3a; background: #0a1c10; color: #6ee7a8;
+        animation: joinableGlow 1.2s ease-in-out infinite;
       }
-      #tournamentPanel[hidden] { display: none; }
-      #tournamentHead {
-        display: flex; align-items: center; gap: 10px;
+      @keyframes joinableGlow {
+        0%, 100% { box-shadow: 0 0 5px rgba(60,220,100,0.4); }
+        50%       { box-shadow: 0 0 16px rgba(60,220,100,0.85); }
       }
-      #tournamentBody { margin-top: 10px; }
-      #tournamentBody[hidden] { display: none; }
-      #tournamentTitle { font-size: 13px; font-weight: 700; letter-spacing: 0.5px; color: #7de87d; flex: 1; white-space: nowrap; }
-      #tournamentCollapseBtn {
-        font: inherit; font-size: 12px; padding: 4px 9px; border-radius: 6px;
-        border: 1px solid #1e4020; background: #0e1c0e; color: #6a9b6a; cursor: pointer;
+      /* Active-tournament section inside #tourneyPanel */
+      #tourneyActive[hidden] { display: none; }
+      .tourney-active-head {
+        display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
       }
-      #tournamentCollapseBtn:hover { background: #142014; color: #c8e8c8; }
-      #tournamentCollapseBtn[hidden] { display: none; }
-      #tournamentJoinBtn {
+      #tourneyActiveTitle {
+        font-size: 13px; font-weight: 700; color: #7de87d; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      }
+      #tourneyActiveJoin {
         font: inherit; font-size: 12px; font-weight: 700; padding: 5px 12px; border-radius: 6px;
-        border: 1px solid #3a8f3a; background: #1e4a1e; color: #c8f0c8; cursor: pointer;
+        border: 1px solid #3a8f3a; background: #1e4a1e; color: #c8f0c8; cursor: pointer; white-space: nowrap;
       }
-      #tournamentJoinBtn[hidden] { display: none; }
-      #tournamentCancelBtn {
+      #tourneyActiveJoin[hidden] { display: none; }
+      #tourneyActiveCancel {
         font: inherit; font-size: 12px; padding: 4px 9px; border-radius: 6px;
         border: 1px solid #1e4020; background: #0e1c0e; color: #6a9b6a; cursor: pointer;
       }
-      #tournamentCancelBtn:hover { background: #3a1a25; border-color: #a33; color: #fbb; }
-      #tournamentCancelBtn[hidden] { display: none; }
+      #tourneyActiveCancel:hover { background: #3a1a25; border-color: #a33; color: #fbb; }
+      #tourneyActiveCancel[hidden] { display: none; }
+      #tourneyActiveBody { color: #c8e8c8; max-height: 60vh; overflow-y: auto; }
       /* signup slot list — World Cup flag cards */
       .t-slots { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
       .t-slot {
@@ -4284,11 +4273,23 @@
           🏆 TOURNEY <span class="caret">▾</span>
         </button>
         <div id="tourneyPanel" hidden>
-          <h3>Tournament</h3>
-          <p class="tourney-blurb">Single-elimination bracket. Players take a slot; the bracket starts automatically once every slot is filled.</p>
-          <div class="tourney-sizes">
-            <button class="tourney-size" data-size="4" type="button">4 players</button>
-            <button class="tourney-size" data-size="8" type="button">8 players</button>
+          <!-- shown when no tournament is active -->
+          <div id="tourneyCreate">
+            <h3>Start a Tournament</h3>
+            <p class="tourney-blurb">Single-elimination bracket. Players take a slot; the bracket starts automatically once every slot is filled.</p>
+            <div class="tourney-sizes">
+              <button class="tourney-size" data-size="4" type="button">4 players</button>
+              <button class="tourney-size" data-size="8" type="button">8 players</button>
+            </div>
+          </div>
+          <!-- shown when a tournament is active -->
+          <div id="tourneyActive" hidden>
+            <div class="tourney-active-head">
+              <span id="tourneyActiveTitle">⚽ World Cup</span>
+              <button id="tourneyActiveJoin" type="button" hidden>Join</button>
+              <button id="tourneyActiveCancel" type="button" hidden title="Cancel the tournament">✕</button>
+            </div>
+            <div id="tourneyActiveBody"></div>
           </div>
         </div>
       </div>
@@ -4509,15 +4510,6 @@
       </div>
     </div>
     <!-- Live tournament bracket / signup, shown whenever a tournament is running. -->
-    <div id="tournamentPanel" hidden>
-      <div id="tournamentHead">
-        <span id="tournamentTitle">Tournament</span>
-        <button id="tournamentJoinBtn" type="button" hidden>Join</button>
-        <button id="tournamentCollapseBtn" type="button" title="Show/hide the bracket">▾</button>
-        <button id="tournamentCancelBtn" type="button" title="Cancel the tournament">✕</button>
-      </div>
-      <div id="tournamentBody"></div>
-    </div>
     <!-- Fatality combos reference, opened from the modes panel (only while fatalities are on). -->
     <div id="combosModal" hidden>
       <div id="combosCard" role="dialog" aria-modal="true" aria-label="Fatality combos">
