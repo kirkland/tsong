@@ -13,7 +13,7 @@ import { initHilo } from './hilo';
 import { initMines } from './mines';
 import { initAds, revealAds } from './ads';
 import { initFlyover, startFlyovers, flySummoned } from './flyover';
-import { draw, drawLegendIcon, setBlasterAim, drawCosmeticPreview, drawReplayOverlay } from './render';
+import { draw, drawLegendIcon, setBlasterAim, drawCosmeticPreview, drawReplayOverlay, triggerGoalCelebration } from './render';
 import {
   COURT,
   PADDLE,
@@ -57,6 +57,7 @@ import {
   LOOT_TABLE,
   minBet,
   SeasonChallenge,
+  MatchStatsMsg,
 } from '../shared/types';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -72,6 +73,7 @@ const queueBtn = document.getElementById('queueBtn') as HTMLButtonElement;
 const queueArea = document.getElementById('queueArea') as HTMLDivElement;
 const readyBtn = document.getElementById('readyBtn') as HTMLButtonElement;
 const rematchBtn = document.getElementById('rematchBtn') as HTMLButtonElement;
+const statsCardEl = document.getElementById('statsCard') as HTMLDivElement;
 const quitBtn = document.getElementById('quitBtn') as HTMLButtonElement;
 const pingBtn = document.getElementById('pingBtn') as HTMLButtonElement;
 const renameBtn = document.getElementById('rename') as HTMLButtonElement;
@@ -496,6 +498,7 @@ function previewSong(src: string) {
 }
 // Apply persisted mute state immediately (before applyMute() runs at definition time).
 applyMute();
+let matchStats: MatchStatsMsg | null = null;
 let prevStatus: StateMsg['status'] | null = null; // last seen status, to fire on the rising edge into 'over'
 let prevFatality = false; // whether a fatality was playing last frame, to fire music on the rising edge
 let prevDisco = false; // rising-edge detection for disco sound
@@ -712,6 +715,10 @@ const net = connect(
         }
         if (msg.score.left > prevScore.left || msg.score.right > prevScore.right) {
           playScoreSound();
+          // Fire a goal celebration for the scorer's equipped celebration cosmetic.
+          const scorerSide: Side = msg.score.left > prevScore.left ? 'left' : 'right';
+          const scorerPlayer0 = msg.paddles[scorerSide].players[0];
+          if (scorerPlayer0?.goalcelebr) triggerGoalCelebration(scorerPlayer0.goalcelebr, scorerSide);
           // Trigger slow-mo goal replay using buffered frames (only when mode is on).
           if (replayEnabled && replayBuf.length >= 5) {
             replayScoringLeft = msg.score.left > prevScore.left;
@@ -857,7 +864,7 @@ const net = connect(
     } else if (msg.type === 'worldRoadRage') {
       worldMod?.feedRoadRage(msg.active, msg.endsAt, msg.standings ?? []);
     } else if (msg.type === 'wallet') {
-      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, car: msg.car, boat: msg.boat, pet: msg.pet, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
+      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, car: msg.car, boat: msg.boat, pet: msg.pet, balltrail: msg.balltrail ?? null, goalcelebr: msg.goalcelebr ?? null, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
       rouletteHandle.setCoins(msg.coins);
       bjHandle.setCoins(msg.coins);
       crapsHandle.setCoins(msg.coins);
@@ -873,6 +880,9 @@ const net = connect(
       // pre-result value until the wheel lands — otherwise the settled balance reveals the outcome
       // before the animation finishes. The roulette `onSettled` callback runs refreshWallet then.
       if (!rouletteHandle.isSpinning()) refreshWallet();
+    } else if (msg.type === 'matchStats') {
+      matchStats = msg;
+      updateUI();
     } else if (msg.type === 'stocks') {
       market = { prices: msg.prices, holdings: msg.holdings, history: msg.history, nextUpdateAt: msg.nextUpdateAt };
       if (!marketPanel.hidden) renderMarket();
@@ -2452,11 +2462,11 @@ document.addEventListener('keydown', (e) => {
 });
 
 // --- Coins, cosmetics shop & betting ---
-let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; song: string | null; car: string | null; boat: string | null; pet: string | null; exclusives: { id: string; serial: number; instanceId: number }[]; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
-  { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, car: null, boat: null, pet: null, exclusives: [], bets: [], nextSpinAt: 0, bonusSpins: 0 };
+let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; song: string | null; car: string | null; boat: string | null; pet: string | null; balltrail: string | null; goalcelebr: string | null; exclusives: { id: string; serial: number; instanceId: number }[]; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
+  { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, car: null, boat: null, pet: null, balltrail: null, goalcelebr: null, exclusives: [], bets: [], nextSpinAt: 0, bonusSpins: 0 };
 let betAmount = 100; // default wager (economy is scaled ×100); min is still 1
 // 'vehicle' is a combined tab that renders Cars + Boats subsections; the rest map 1:1 to a slot.
-let shopTab: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'vehicle' | 'pet' = 'hat';
+let shopTab: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'vehicle' | 'pet' | 'balltrail' | 'goalcelebr' = 'hat';
 const shopBtn = document.getElementById('shopBtn') as HTMLButtonElement;
 const shopPanel = document.getElementById('shopPanel') as HTMLDivElement;
 const coinCount = document.getElementById('coinCount') as HTMLSpanElement;
@@ -2469,8 +2479,10 @@ const tabTitles = document.getElementById('tabTitles') as HTMLButtonElement;
 const tabSongs = document.getElementById('tabSongs') as HTMLButtonElement;
 const tabVehicles = document.getElementById('tabVehicles') as HTMLButtonElement;
 const tabPets = document.getElementById('tabPets') as HTMLButtonElement;
-const shopTabs = [tabHats, tabSkins, tabTrails, tabTitles, tabSongs, tabVehicles, tabPets];
-function selectShopTab(tab: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'vehicle' | 'pet', el: HTMLButtonElement) {
+const tabBallTrails = document.getElementById('tabBallTrails') as HTMLButtonElement;
+const tabGoalCelebr = document.getElementById('tabGoalCelebr') as HTMLButtonElement;
+const shopTabs = [tabHats, tabSkins, tabTrails, tabTitles, tabSongs, tabVehicles, tabPets, tabBallTrails, tabGoalCelebr];
+function selectShopTab(tab: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'vehicle' | 'pet' | 'balltrail' | 'goalcelebr', el: HTMLButtonElement) {
   shopTab = tab;
   for (const t of shopTabs) t.classList.toggle('active', t === el);
   renderShop();
@@ -2482,6 +2494,8 @@ tabTitles.addEventListener('click', () => selectShopTab('title', tabTitles));
 tabSongs.addEventListener('click', () => selectShopTab('song', tabSongs));
 tabVehicles.addEventListener('click', () => selectShopTab('vehicle', tabVehicles));
 tabPets.addEventListener('click', () => selectShopTab('pet', tabPets));
+tabBallTrails.addEventListener('click', () => selectShopTab('balltrail', tabBallTrails));
+tabGoalCelebr.addEventListener('click', () => selectShopTab('goalcelebr', tabGoalCelebr));
 const spinBtn = document.getElementById('spinBtn') as HTMLButtonElement;
 let spinning = false; // a spin animation is currently playing
 spinBtn.addEventListener('click', () => {
@@ -2513,7 +2527,7 @@ document.addEventListener('click', (e) => {
 
 // Build the shop rows (buy / equip / unequip) + the betting section from the current wallet.
 // Keep track of preview canvases so the animation loop can repaint them.
-const shopPreviewCanvases: { canvas: HTMLCanvasElement; id: string; slot: 'hat' | 'skin' | 'trail' }[] = [];
+const shopPreviewCanvases: { canvas: HTMLCanvasElement; id: string; slot: 'hat' | 'skin' | 'trail' | 'balltrail' }[] = [];
 
 // Floating "+N" (green) / "−N" (red) that pops under the toolbar coin counter whenever your liquid
 // balance changes. shownCoins tracks the last *displayed* total, so the flash only fires on a real
@@ -2548,7 +2562,7 @@ function renderShop() {
   };
   const appendRow = (item: (typeof COSMETICS)[number]) => {
     const owned = wallet.owned.includes(item.id);
-    const equipped = (item.slot === 'hat' ? wallet.hat : item.slot === 'skin' ? wallet.skin : item.slot === 'trail' ? wallet.trail : item.slot === 'song' ? wallet.song : item.slot === 'car' ? wallet.car : item.slot === 'boat' ? wallet.boat : item.slot === 'pet' ? wallet.pet : wallet.title) === item.id;
+    const equipped = (item.slot === 'hat' ? wallet.hat : item.slot === 'skin' ? wallet.skin : item.slot === 'trail' ? wallet.trail : item.slot === 'song' ? wallet.song : item.slot === 'car' ? wallet.car : item.slot === 'boat' ? wallet.boat : item.slot === 'pet' ? wallet.pet : item.slot === 'balltrail' ? wallet.balltrail : item.slot === 'goalcelebr' ? wallet.goalcelebr : wallet.title) === item.id;
     const row = document.createElement('div');
     row.className = 'shop-row';
     // Titles are text flair and songs are audio — neither has a paddle preview. Songs get a ▶
@@ -2574,12 +2588,19 @@ function renderShop() {
       sw.style.cssText = 'display:inline-block;width:28px;text-align:center;font-size:20px;line-height:1;';
       sw.textContent = petById(item.id)?.emoji ?? '🐾';
       row.appendChild(sw);
+    } else if (item.slot === 'goalcelebr') {
+      // Goal celebrations show an emoji preview — a full-screen animation doesn't fit in 28×52.
+      const emoji = item.id.includes('confetti') ? '🎊' : item.id.includes('explosion') ? '💥' : item.id.includes('fireworks') ? '🎆' : '✨';
+      const sw = document.createElement('span');
+      sw.style.cssText = 'display:inline-block;width:28px;text-align:center;font-size:20px;line-height:52px;';
+      sw.textContent = emoji;
+      row.appendChild(sw);
     } else if (item.slot !== 'title') {
       const preview = document.createElement('canvas') as HTMLCanvasElement;
       preview.width = 28; preview.height = 52;
       preview.className = 'shop-preview';
-      drawCosmeticPreview(preview, item.id, item.slot);
-      shopPreviewCanvases.push({ canvas: preview, id: item.id, slot: item.slot as 'hat' | 'skin' | 'trail' });
+      drawCosmeticPreview(preview, item.id, item.slot as 'hat' | 'skin' | 'trail' | 'balltrail');
+      shopPreviewCanvases.push({ canvas: preview, id: item.id, slot: item.slot as 'hat' | 'skin' | 'trail' | 'balltrail' });
       row.appendChild(preview);
     }
     const name = document.createElement('span');
@@ -5441,6 +5462,26 @@ function updateUI() {
     readyBtn.style.display = 'none';
     rematchBtn.style.display = 'none';
     rematchBtn.disabled = false;
+  }
+
+  // Stats card — shown when the match is over and we have stats from the server.
+  if (state.status === 'over' && matchStats && !state.poly) {
+    statsCardEl.style.display = 'block';
+    const s = matchStats;
+    const left = s.leftName ?? 'Left';
+    const right = s.rightName ?? 'Right';
+    statsCardEl.innerHTML = `
+      <div style="margin-top:10px;padding:10px 14px;background:rgba(20,28,56,0.85);border:1px solid #2a3a6a;border-radius:8px;font-size:12px;color:#c8d8ff;line-height:1.7;">
+        <div style="font-weight:bold;margin-bottom:4px;color:#7da2ff;">📊 Match Stats</div>
+        <div>🏓 Longest rally: <b>${s.longestRally}</b> hits</div>
+        <div>⚡ Top ball speed: <b>${s.maxBallSpeed}</b> px/s</div>
+        ${s.powerupsLeft + s.powerupsRight > 0
+          ? `<div>✨ Power-ups — ${left}: <b>${s.powerupsLeft}</b> · ${right}: <b>${s.powerupsRight}</b></div>`
+          : ''}
+      </div>`;
+  } else if (state.status !== 'over') {
+    statsCardEl.style.display = 'none';
+    if (prevStatus === 'over') matchStats = null;
   }
 
   // Side-pick buttons belong to layered-teams mode (each shows its head count and

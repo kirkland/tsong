@@ -182,6 +182,10 @@ export class Game {
   winnerSide: Side | null = null;
   lastHit: Side | null = null; // side whose paddle last touched any ball (null until first hit)
   hitSeq = 0; // incremented on every paddle bounce so clients can detect same-side repeat hits
+  rallyHits = 0;    // paddle hits in the current rally (resets on serve)
+  longestRally = 0; // match-wide peak of rallyHits before each reset
+  maxBallSpeed = 0; // match-wide peak ball speed, court units/second
+  powerupsCollected: Record<Side, number> = { left: 0, right: 0 };
   paused = false; // set by the lobby: freeze play until both players capture their mouse
   winScore = WIN_SCORE; // first-to-N; configurable per-room (default: shared constant)
 
@@ -374,6 +378,7 @@ export class Game {
   start() {
     this.score = { left: 0, right: 0 };
     this.winnerSide = null;
+    this.rallyHits = 0; this.longestRally = 0; this.maxBallSpeed = 0; this.powerupsCollected = { left: 0, right: 0 };
     // Spread each team's paddles evenly down the court so they don't start stacked.
     for (const side of ['left', 'right'] as Side[]) {
       const team = this.players[side];
@@ -766,6 +771,7 @@ export class Game {
     this.ball = { x: COURT.w / 2, y: COURT.h / 2, vx: 0, vy: 0, spin: 0 };
     this.extraBalls = [];
     this.lastHit = null;
+    this.rallyHits = 0;
     // Clear all per-point effects so they don't bleed into the next rally.
     this.slowTimer = 0;
     this.freezeTimer = { left: 0, right: 0 };
@@ -1087,6 +1093,7 @@ export class Game {
   }
 
   private grant(kind: PowerupKind, side: Side) {
+    this.powerupsCollected[side] = (this.powerupsCollected[side] ?? 0) + 1;
     switch (kind) {
       case 'grow':
         this.growHits[side] = POWERUP_HITS;
@@ -1275,10 +1282,13 @@ export class Game {
   private bounce(side: Side, b: Ball, ent: PaddleEnt, idx: number) {
     this.lastHit = side;
     this.hitSeq++;
+    this.rallyHits++;
+    this.longestRally = Math.max(this.longestRally, this.rallyHits);
     const rel = clamp((b.y - ent.y) / this.halfH(side), -1, 1);
     const speedup = this.turbo ? TURBO_SPEEDUP : BALL.speedup;
     let speed = Math.hypot(b.vx, b.vy) * speedup;
     if (this.smashHits[side] > 0) speed *= SMASH_BONUS;
+    this.maxBallSpeed = Math.max(this.maxBallSpeed, speed);
     const angle = rel * MAX_BOUNCE;
     const dir = side === 'left' ? 1 : -1;
     b.vx = dir * speed * Math.cos(angle);

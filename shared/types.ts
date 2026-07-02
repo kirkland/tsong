@@ -194,7 +194,7 @@ export const COIN_SCALE = 100;
 export interface CosmeticItem {
   id: string;
   name: string;
-  slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'boat' | 'pet';
+  slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' | 'title' | 'song' | 'car' | 'boat' | 'pet';
   price: number;
   locked?: 'campaign' | 'fishing' | 'fishing_rare' | 'fishing_junk' | 'dungeon'; // not buyable — unlocked by in-game achievements
   audio?: string; // for 'song' items: path to the mp3 that plays during your matches
@@ -311,6 +311,16 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'catears', name: 'Cat Ears', slot: 'hat', price: 2000 }, // animated
   { id: 'carbon', name: 'Carbon Fiber', slot: 'skin', price: 2000 }, // animated
   { id: 'mermaid', name: 'Mermaid', slot: 'skin', price: 2000 }, // animated
+  // Ball trails — a fading comet tail behind the ball as it zips across the court
+  { id: 'balltrail-comet',   name: 'Ball Comet',    slot: 'balltrail', price: 2000 },
+  { id: 'balltrail-rainbow', name: 'Rainbow Streak', slot: 'balltrail', price: 3000 },
+  { id: 'balltrail-fire',    name: 'Ball Inferno',   slot: 'balltrail', price: 5000 },
+  { id: 'balltrail-ghost',   name: 'Ghost Trail',    slot: 'balltrail', price: 3500 },
+  // Goal celebrations — Rocket League-style screen explosion when you score
+  { id: 'goalcelebr-confetti',  name: '🎊 Confetti',      slot: 'goalcelebr', price: 2000 },
+  { id: 'goalcelebr-explosion', name: '💥 Rocket Blast',  slot: 'goalcelebr', price: 5000 },
+  { id: 'goalcelebr-fireworks', name: '🎆 Fireworks',     slot: 'goalcelebr', price: 3500 },
+  { id: 'goalcelebr-glitter',   name: '✨ Glitter Storm', slot: 'goalcelebr', price: 2500 },
 ] as const;
 // --- Economy Overhaul: scarce "exclusive" cosmetics ---
 // Loot-box-only cosmetics with a HARD global mint cap (see exclusive_supply in the DB). They are
@@ -923,7 +933,7 @@ export type ClientMsg =
   | { type: 'campaignScore'; score: number; stage: number; won: boolean } // record a campaign run (arcade score, furthest stage, whether Davis fell)
   | { type: 'fishCatch'; tier: string; sizeLb: number } // landed a fish — server picks the House-funded coin reward by tier (client never sends coins)
   | { type: 'shopBuy'; item: string } // buy a cosmetic from the shop
-  | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'boat' | 'pet'; item: string | null } // equip (item) or unequip (null) a cosmetic
+  | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' | 'title' | 'song' | 'car' | 'boat' | 'pet'; item: string | null } // equip (item) or unequip (null) a cosmetic
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
   | { type: 'dailySpin' } // claim the once-per-24h reward spin
   | { type: 'stockInvest'; coin: string; amount: number; side?: StockSide } // open a long or short position
@@ -1028,6 +1038,8 @@ export interface TeamPlayer {
   hat?: string | null; // equipped cosmetic hat (purely visual — no collision)
   skin?: string | null; // equipped cosmetic skin (purely visual — no collision)
   trail?: string | null; // equipped paddle trail (purely visual — no collision)
+  balltrail?: string | null; // equipped ball trail cosmetic
+  goalcelebr?: string | null; // equipped goal celebration cosmetic
   title?: string | null; // equipped name title (flair shown by the name)
 }
 
@@ -1091,6 +1103,7 @@ export interface StateMsg {
   // Extra balls in play during a "multi" power-up; empty the rest of the time.
   extraBalls: { x: number; y: number; color: string }[];
   ballSpeed: number; // current ball speed, court units / second
+  ballTrail: string | null; // active ball trail cosmetic id (from the player who last hit)
   paddles: { left: PaddleState; right: PaddleState };
   // Active power-up target, or null when none is on the board. `kind` picks its icon/effect.
   target: { x: number; y: number; kind: PowerupKind } | null;
@@ -1480,6 +1493,7 @@ export type ServerMsg =
   | NomStateMsg
   | EloProfileMsg
   | SeasonPassMsg
+  | MatchStatsMsg
   // --- Bolwoing Alley server→client messages ---
   | { type: 'bowlState'; roomId: string; phase: string; players: any[]; currentPlayerId: string | null; pinState: boolean[]; scores: any; frames: any }
   | { type: 'bowlStart'; roomId: string; phase: string; players: any[]; currentPlayerId: string | null; pinState: boolean[]; scores: any; frames: any }
@@ -1711,6 +1725,8 @@ export interface WalletMsg {
   car: string | null; // equipped car (driven in the World map)
   boat: string | null; // equipped boat (used on water; equipped alongside a car)
   pet: string | null; // equipped pet (trails behind you in the World map)
+  balltrail: string | null; // equipped ball trail cosmetic
+  goalcelebr: string | null; // equipped goal celebration cosmetic
   // Owned scarce exclusives (loot-box mints / marketplace buys): item id + mint serial +
   // instance id (the marketplace lists a specific instance). Kept OUT of the `owned` CSV —
   // exclusives are tracked per-instance in their own table.
@@ -2519,4 +2535,15 @@ export interface SeasonPassMsg {
   type: 'seasonPass';
   weekId: string;  // e.g. '2026-W26'
   challenges: SeasonChallenge[];
+}
+
+export interface MatchStatsMsg {
+  type: 'matchStats';
+  longestRally: number;    // peak paddle-hit count in a single rally
+  maxBallSpeed: number;    // peak ball speed this match, court units / second (rounded)
+  powerupsLeft: number;    // total power-ups collected by the left side
+  powerupsRight: number;   // total power-ups collected by the right side
+  leftName: string | null;
+  rightName: string | null;
+  winnerSide: Side | null;
 }

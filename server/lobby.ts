@@ -169,6 +169,8 @@ interface Conn {
   trail: string | null;
   title: string | null;
   song: string | null; // equipped theme song id (plays during this player's matches)
+  balltrail: string | null;
+  goalcelebr: string | null;
   // Casino games
   bjHand?: BjHand;             // active blackjack hand (undefined = not playing)
   crapsPoint: number | null;   // current craps point (null = come-out phase)
@@ -697,6 +699,8 @@ export class Lobby {
       trail: null,
       title: null,
       song: null,
+      balltrail: null,
+      goalcelebr: null,
       crapsPoint: null,
       drunkLevel: 0,
       drunkUntil: 0,
@@ -2483,6 +2487,8 @@ export class Lobby {
       trail: null,
       title: null,
       song: null,
+      balltrail: null,
+      goalcelebr: null,
       crapsPoint: null,
       drunkLevel: 0,
       drunkUntil: 0,
@@ -2655,7 +2661,9 @@ export class Lobby {
         c.trail = w.trail;
         c.title = w.title;
         c.song = w.song;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, boat: w.boat, pet: w.pet, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        c.balltrail = w.balltrail;
+        c.goalcelebr = w.goalcelebr;
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, boat: w.boat, pet: w.pet, balltrail: w.balltrail, goalcelebr: w.goalcelebr, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet load failed:', e));
   }
@@ -2668,10 +2676,28 @@ export class Lobby {
       .then((w) => {
         const c = this.conns.get(ws);
         if (!c) return;
-        c.hat = w.hat; c.skin = w.skin; c.trail = w.trail; c.title = w.title; c.song = w.song;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, boat: w.boat, pet: w.pet, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        c.hat = w.hat; c.skin = w.skin; c.trail = w.trail; c.title = w.title; c.song = w.song; c.balltrail = w.balltrail; c.goalcelebr = w.goalcelebr;
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, boat: w.boat, pet: w.pet, balltrail: w.balltrail, goalcelebr: w.goalcelebr, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet send failed:', e));
+  }
+
+  /** Broadcast end-of-match stats to everyone in the room. */
+  private broadcastMatchStats() {
+    const winnerSide = this.game.winnerSide;
+    const leftName = this.teams.left.length ? (this.conns.get(this.teams.left[0])?.nickname ?? null) : null;
+    const rightName = this.teams.right.length ? (this.conns.get(this.teams.right[0])?.nickname ?? null) : null;
+    const msg = {
+      type: 'matchStats' as const,
+      longestRally: this.game.longestRally,
+      maxBallSpeed: Math.round(this.game.maxBallSpeed),
+      powerupsLeft: this.game.powerupsCollected.left,
+      powerupsRight: this.game.powerupsCollected.right,
+      leftName,
+      rightName,
+      winnerSide,
+    };
+    for (const ws of this.conns.keys()) this.tell(ws, msg);
   }
 
   /** Re-send wallets to a set of connections (e.g. winners who just earned a coin). */
@@ -2936,7 +2962,7 @@ export class Lobby {
   }
 
   /** Equip (item) or unequip (null) a cosmetic in its slot. */
-  shopEquip(ws: WebSocket, slot: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'car' | 'boat' | 'pet', item: string | null) {
+  shopEquip(ws: WebSocket, slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' | 'title' | 'song' | 'car' | 'boat' | 'pet', item: string | null) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     if (item !== null) {
@@ -2950,7 +2976,7 @@ export class Lobby {
       .then((w) => {
         if (!w) return;
         const c = this.conns.get(ws);
-        if (c) { c.hat = w.hat; c.skin = w.skin; c.trail = w.trail; c.title = w.title; c.song = w.song; }
+        if (c) { c.hat = w.hat; c.skin = w.skin; c.trail = w.trail; c.title = w.title; c.song = w.song; c.balltrail = w.balltrail; c.goalcelebr = w.goalcelebr; }
         this.sendWallet(ws);
         if (slot === 'title') this.refreshLeaderboard(); // title shows on the board
       })
@@ -5689,6 +5715,7 @@ export class Lobby {
           this.fatalityAt = Date.now();
         }
         this.overHandled = true;
+        this.broadcastMatchStats();
         // Give a human winner a window to land their finisher; otherwise the bot just leaves
         // (or lingers through its own finisher, handled below).
         this.botOverTimer = this.fatalityWinnerSide ? BOT_FINISH_SECS : BOT_OVER_SECS;
@@ -5734,6 +5761,7 @@ export class Lobby {
           this.streakPid = winner.pid;
         }
         this.overHandled = true;
+        this.broadcastMatchStats();
 
         // Every seated player's record counts: each winner gets a win, each loser a loss.
         const winRefs = winners.filter((c) => c.pid).map((c) => ({ pid: c.pid, name: c.nickname }));
@@ -6224,6 +6252,12 @@ export class Lobby {
     const tinyBall = (poly ? this.poly.tinyTimer : this.game.tinyTimer) > 0;
     const bigBall = (poly ? this.poly.bigBallTimer : this.game.bigBallTimer) > 0;
     const lastHit = this.game.lastHit;
+    const ballTrail = (() => {
+      if (poly || !lastHit) return null;
+      const ws0 = this.teams[lastHit][0];
+      if (!ws0) return null;
+      return this.conns.get(ws0)?.balltrail ?? null;
+    })();
     const ballColor = poly
       ? this.poly.lastHitId
         ? this.colorOfId(this.poly.lastHitId)
@@ -6244,6 +6278,8 @@ export class Lobby {
           skin: c.skin,
           trail: c.trail,
           title: c.title,
+          balltrail: c.balltrail,
+          goalcelebr: c.goalcelebr,
         };
       });
       return {
@@ -6282,6 +6318,7 @@ export class Lobby {
       hitSeq: poly ? this.poly.hitSeq : this.game.hitSeq,
       extraBalls: extraSrc.map((b) => ({ x: b.x, y: b.y, color: ballColor })),
       ballSpeed: Math.hypot(ballSrc.vx, ballSrc.vy),
+      ballTrail,
       paddles: { left: sideState('left'), right: sideState('right') },
       target: targetSrc
         ? { x: targetSrc.x, y: targetSrc.y, kind: targetSrc.kind }

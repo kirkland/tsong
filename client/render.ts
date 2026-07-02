@@ -28,6 +28,162 @@ export function setBlasterAim(aim: { side: Side; angle: number } | null) {
   blasterAim = aim;
 }
 
+// Ball trail — a fading comet tail behind the ball. History is kept module-level so it
+// accumulates across frames and auto-fades as the ball moves.
+const BALL_TRAIL_LEN = 22;
+const ballTrailHistory: { x: number; y: number }[] = [];
+type BallTrailTint = (i: number, n: number, t: number) => string;
+const BALL_TRAIL_TINTS: Record<string, BallTrailTint> = {
+  'balltrail-comet':   (i, n) => `hsl(35,100%,${40 + (i / n) * 28}%)`,
+  'balltrail-rainbow': (i, _n, t) => `hsl(${(t / 10 + i * 18) % 360},88%,60%)`,
+  'balltrail-fire':    (i, n, t) => `hsl(${18 + (i / n) * 22 + Math.sin(t / 300 + i) * 4},100%,${42 + (i / n) * 22}%)`,
+  'balltrail-ghost':   (i, n) => `hsla(195,75%,72%,${0.15 + (i / n) * 0.55})`,
+};
+const BALL_TRAIL_GLOW = new Set(['balltrail-comet', 'balltrail-rainbow', 'balltrail-fire']);
+
+function drawBallTrail(ctx: CanvasRenderingContext2D, bx: number, by: number, r: number, id: string) {
+  const tint = BALL_TRAIL_TINTS[id];
+  if (!tint) return;
+  ballTrailHistory.push({ x: bx, y: by });
+  if (ballTrailHistory.length > BALL_TRAIL_LEN) ballTrailHistory.shift();
+  const hist = ballTrailHistory;
+  if (hist.length < 3) return;
+  const n = hist.length;
+  const t = performance.now();
+  ctx.save();
+  if (BALL_TRAIL_GLOW.has(id)) ctx.globalCompositeOperation = 'lighter';
+  for (let i = 0; i < n - 1; i++) {
+    const f = (i + 1) / n;
+    ctx.globalAlpha = 0.38 * Math.pow(f, 1.4);
+    ctx.fillStyle = tint(i, n, t);
+    ctx.beginPath();
+    ctx.arc(hist[i].x, hist[i].y, r * (0.25 + 0.75 * f), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+// Goal celebrations — Rocket-League-style screen effects when a player scores.
+const CELEBRATION_MS = 2500;
+let celebrationState: { id: string; side: Side; startTime: number } | null = null;
+export function triggerGoalCelebration(id: string, side: Side) {
+  celebrationState = { id, side, startTime: performance.now() };
+}
+
+function drawGoalCelebration(ctx: CanvasRenderingContext2D, id: string, side: Side, progress: number) {
+  const alpha = progress < 0.7 ? 1 : 1 - (progress - 0.7) / 0.3;
+  ctx.save();
+
+  if (id === 'goalcelebr-explosion') {
+    // Concentric expanding rings from the scoring goal wall, then a full-court flash
+    const wallX = side === 'left' ? COURT.w : 0; // left scored → ball went past right wall
+    const n = 5;
+    for (let i = 0; i < n; i++) {
+      const p = Math.max(0, progress - i * 0.08);
+      if (p <= 0) continue;
+      const rr = p * 420;
+      const a = alpha * (1 - p) * 0.7;
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = i % 2 ? '#ff9900' : '#ffffff';
+      ctx.lineWidth = 8 - i * 1.2;
+      ctx.beginPath();
+      ctx.arc(wallX, COURT.h / 2, rr, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // Central flash burst
+    const flashA = Math.max(0, 0.5 - progress * 2) * alpha;
+    if (flashA > 0) {
+      ctx.globalAlpha = flashA * 0.4;
+      ctx.fillStyle = '#fff0a0';
+      ctx.fillRect(0, 0, COURT.w, COURT.h);
+    }
+  } else if (id === 'goalcelebr-confetti') {
+    // 60 confetti pieces raining down from the top
+    const COLORS = ['#ff4444','#ffbb00','#44cc44','#4488ff','#cc44cc','#ff8844','#ffffff'];
+    for (let i = 0; i < 60; i++) {
+      const seed = i * 6.37;
+      const col = COLORS[i % COLORS.length];
+      const x = (((seed * 0.618) % 1) * COURT.w);
+      const fallY = (progress * 1.3 + ((seed * 0.234) % 0.3)) * COURT.h;
+      const y = (fallY % COURT.h);
+      if (y < 0) continue;
+      const sz = 6 + ((seed * 0.5) % 8);
+      const rot = progress * ((i % 2 ? 1 : -1) * 8 + seed * 0.2);
+      const a = alpha * (y > COURT.h * 0.85 ? 1 - (y - COURT.h * 0.85) / (COURT.h * 0.15) : 1);
+      if (a <= 0) continue;
+      ctx.globalAlpha = a;
+      ctx.fillStyle = col;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rot);
+      ctx.fillRect(-sz / 2, -sz / 4, sz, sz / 2);
+      ctx.restore();
+    }
+  } else if (id === 'goalcelebr-fireworks') {
+    // 4 firework bursts at different positions/timings
+    const BURSTS = [
+      { x: COURT.w * 0.25, y: COURT.h * 0.3, delay: 0,    color: '#ff6644' },
+      { x: COURT.w * 0.75, y: COURT.h * 0.25, delay: 0.12, color: '#44aaff' },
+      { x: COURT.w * 0.5,  y: COURT.h * 0.2,  delay: 0.22, color: '#ffee44' },
+      { x: COURT.w * 0.35, y: COURT.h * 0.35, delay: 0.3,  color: '#cc44ff' },
+    ];
+    for (const b of BURSTS) {
+      const p = Math.max(0, (progress - b.delay) / (1 - b.delay));
+      if (p <= 0) continue;
+      const burstAlpha = alpha * (p < 0.3 ? p / 0.3 : 1 - (p - 0.3) / 0.7);
+      if (burstAlpha <= 0) continue;
+      const rays = 18;
+      const maxR = 80 + p * 60;
+      for (let i = 0; i < rays; i++) {
+        const ang = (i / rays) * Math.PI * 2;
+        const rr = maxR * p;
+        ctx.globalAlpha = burstAlpha * (0.5 + 0.5 * Math.sin(p * Math.PI));
+        ctx.strokeStyle = b.color;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(b.x, b.y);
+        ctx.lineTo(b.x + Math.cos(ang) * rr, b.y + Math.sin(ang) * rr);
+        ctx.stroke();
+      }
+      // Burst center flash
+      ctx.globalAlpha = burstAlpha * 0.6;
+      ctx.fillStyle = b.color;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, 12 * (1 - p * 0.6), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (id === 'goalcelebr-glitter') {
+    // 80 sparkle stars scattered across the screen
+    for (let i = 0; i < 80; i++) {
+      const seed = i * 7.13;
+      const x = ((seed * 0.311) % 1) * COURT.w;
+      const y = ((seed * 0.557) % 1) * COURT.h;
+      const phase = ((seed * 0.181) % 1);
+      const twinkle = 0.4 + 0.6 * Math.abs(Math.sin((progress - phase) * Math.PI * 6));
+      const a = alpha * twinkle * Math.min(1, progress * 4) * Math.max(0, 1 - (progress - 0.6) * 2.5);
+      if (a <= 0) continue;
+      const sz = 3 + ((seed * 0.4) % 5);
+      ctx.globalAlpha = a;
+      ctx.fillStyle = `hsl(${(seed * 47 + progress * 200) % 360},90%,80%)`;
+      // 4-pointed star
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(progress * 3 + seed);
+      ctx.beginPath();
+      for (let k = 0; k < 4; k++) {
+        const ang = (k / 4) * Math.PI * 2;
+        const ang2 = ang + Math.PI / 4;
+        k === 0 ? ctx.moveTo(Math.cos(ang) * sz, Math.sin(ang) * sz) : ctx.lineTo(Math.cos(ang) * sz, Math.sin(ang) * sz);
+        ctx.lineTo(Math.cos(ang2) * sz * 0.35, Math.sin(ang2) * sz * 0.35);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+  ctx.restore();
+}
+
 export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 'observer') {
   // Arena (free-for-all polygon) mode renders its own court entirely; bail out early.
   if (s.poly) {
@@ -140,6 +296,8 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
 
   // Ball(s) — colored by whichever paddle last hit them. Extra balls = multi power-up.
   const ballR = s.tinyBall ? 3 : s.bigBall ? BIG_BALL_R : BALL.r;
+  // Ball trail — drawn under the ball so the glow doesn't obscure it.
+  if (s.ballTrail) drawBallTrail(ctx, s.ball.x, s.ball.y, ballR, s.ballTrail);
   for (const b of [s.ball, ...s.extraBalls]) {
     // Fog of war: hide the ball in mid-court (>120px from either paddle face).
     let alpha = s.ghostBall ? 0.12 : 1;
@@ -220,6 +378,17 @@ export function draw(ctx: CanvasRenderingContext2D, s: StateMsg, myRole: Role = 
   } else {
     fxStart = 0;
     fxKey = '';
+  }
+
+  // Goal celebration overlay.
+  if (celebrationState) {
+    const elapsed = performance.now() - celebrationState.startTime;
+    if (elapsed < CELEBRATION_MS) {
+      const progress = elapsed / CELEBRATION_MS;
+      drawGoalCelebration(ctx, celebrationState.id, celebrationState.side, progress);
+    } else {
+      celebrationState = null;
+    }
   }
 }
 
@@ -936,7 +1105,7 @@ function drawTrail(ctx: CanvasRenderingContext2D, key: string, cx: number, cy: n
   ctx.restore();
 }
 
-export function drawCosmeticPreview(canvas: HTMLCanvasElement, id: string, slot: 'hat' | 'skin' | 'trail') {
+export function drawCosmeticPreview(canvas: HTMLCanvasElement, id: string, slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr') {
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
   const W = canvas.width, H = canvas.height;
@@ -995,6 +1164,42 @@ export function drawCosmeticPreview(canvas: HTMLCanvasElement, id: string, slot:
       ctx.fillRect(cx - PADDLE.w / 2, cy - h / 2, PADDLE.w, h);
       ctx.restore();
     }
+  } else if (slot === 'balltrail') {
+    // Draw a small ball with a fading arc of comet-trail circles behind/above it.
+    const tint = BALL_TRAIL_TINTS[id];
+    const ballR = 5;
+    const bx = 0, by = 4;
+    if (tint) {
+      const n = 8;
+      const t = performance.now();
+      ctx.save();
+      if (BALL_TRAIL_GLOW.has(id)) ctx.globalCompositeOperation = 'lighter';
+      for (let i = 0; i < n; i++) {
+        const f = (i + 1) / n;
+        ctx.globalAlpha = 0.42 * Math.pow(f, 1.4);
+        ctx.fillStyle = tint(i, n, t);
+        const px = bx - (n - i) * 3.5;
+        const py = by + Math.sin(((n - i) / n) * Math.PI) * 5;
+        ctx.beginPath();
+        ctx.arc(px, py, ballR * (0.25 + 0.75 * f), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#e8eefc';
+    ctx.beginPath();
+    ctx.arc(bx, by, ballR, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (slot === 'goalcelebr') {
+    // Emoji-only preview — just render the emoji from the item name.
+    const emoji = id.includes('confetti') ? '🎊' : id.includes('explosion') ? '💥' : id.includes('fireworks') ? '🎆' : '✨';
+    ctx.restore(); // undo the scale/translate set up above
+    ctx.font = `${Math.round(H * 0.55)}px serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(emoji, W / 2, H / 2);
+    return; // skip the outer ctx.restore() which was already called
   } else {
     // Draw a plain blue paddle then the hat on top
     ctx.fillStyle = '#3a6df0';
