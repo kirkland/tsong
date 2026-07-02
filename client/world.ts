@@ -2124,6 +2124,7 @@ export function startWorld(net: WorldNet): void {
     selfX = TAVERN_INT.x + TAVERN_INT.w / 2;
     selfY = TAVERN_INT.y + TAVERN_INT.h - 180; // by the door, clear of the exit mat
     mainCam?.setBounds(TAVERN_INT.x, TAVERN_INT.y, TAVERN_INT.w, TAVERN_INT.h);
+    setTavernMusic(true); // the jukebox kicks on: Bon Jovi
   }
   function leaveTavern() {
     inInterior = false;
@@ -2132,6 +2133,7 @@ export function startWorld(net: WorldNet): void {
     mainCam?.setBounds(0, 0, WORLD.w, WORLD.h);
     const bar = WORLD_BUILDINGS.find((b) => b.kind === 'bar');
     if (bar) { selfX = bar.x + bar.w / 2; selfY = bar.y + bar.h + 44; } // step back out the door
+    setTavernMusic(false);
     enterChime();
   }
 
@@ -4069,6 +4071,17 @@ export function startWorld(net: WorldNet): void {
   // Looping FFVI "Mines of Narshe" dungeon theme — starts on entry, pauses on exit (encounter
   // music will pause/resume this later). Created lazily so it never autoplays before a gesture.
   let dungeonMusic: HTMLAudioElement | null = null;
+  // Looping Tavern jukebox — Bon Jovi "Livin' on a Prayer" (8-bit). Starts on entering the bar,
+  // pauses on leaving. Same lazy-create + race-safe wanted pattern as the dungeon theme.
+  let tavernMusic: HTMLAudioElement | null = null;
+  let tavernMusicWanted = false;
+  function setTavernMusic(on: boolean) {
+    tavernMusicWanted = on;
+    if (on && !tavernMusic) { tavernMusic = new Audio('/livin-on-a-prayer-8bit.mp3'); tavernMusic.loop = true; tavernMusic.volume = 0.4; }
+    if (!tavernMusic) return;
+    if (on) { tavernMusic.currentTime = 0; tavernMusic.play().then(() => { if (!tavernMusicWanted) tavernMusic?.pause(); }).catch(() => { /* needs a gesture; entering the bar is one */ }); }
+    else tavernMusic.pause();
+  }
   // DOOM-portal flame sprites: little orange/yellow tongues layered over the archway. Each carries
   // its own phase/anchor so update() can jitter alpha/scale/offset and make them dance ("on fire").
   interface Flame { img: Phaser.GameObjects.Image; bx: number; by: number; phase: number; amp: number; base: number }
@@ -7035,6 +7048,7 @@ export function startWorld(net: WorldNet): void {
     game = null;
     if (inDungeon) net.dungeonExit(false); // bailed out of the World mid-dungeon → forfeit the run purse
     setDungeonMusic(false); dungeonMusic = null; inDungeon = false;
+    setTavernMusic(false); tavernMusic = null;
     stopChant(); inInterior = false; inTemple = false; inMcdonald = false;
     rex?.img.destroy(); rex?.nametag.destroy(); rex = null;
     try { void actx?.close(); } catch { /* ignore */ }
