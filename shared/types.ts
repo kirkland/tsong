@@ -312,15 +312,22 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'carbon', name: 'Carbon Fiber', slot: 'skin', price: 2000 }, // animated
   { id: 'mermaid', name: 'Mermaid', slot: 'skin', price: 2000 }, // animated
   // Ball trails — a fading comet tail behind the ball as it zips across the court
-  { id: 'balltrail-comet',   name: 'Ball Comet',    slot: 'balltrail', price: 2000 },
-  { id: 'balltrail-rainbow', name: 'Rainbow Streak', slot: 'balltrail', price: 3000 },
-  { id: 'balltrail-fire',    name: 'Ball Inferno',   slot: 'balltrail', price: 5000 },
-  { id: 'balltrail-ghost',   name: 'Ghost Trail',    slot: 'balltrail', price: 3500 },
+  { id: 'balltrail-comet',     name: 'Ball Comet',      slot: 'balltrail', price: 2000 },
+  { id: 'balltrail-rainbow',   name: 'Rainbow Streak',  slot: 'balltrail', price: 3000 },
+  { id: 'balltrail-fire',      name: 'Ball Inferno',    slot: 'balltrail', price: 5000 },
+  { id: 'balltrail-ghost',     name: 'Ghost Trail',     slot: 'balltrail', price: 3500 },
+  { id: 'balltrail-lightning', name: '⚡ Lightning',    slot: 'balltrail', price: 7000 },
+  { id: 'balltrail-plasma',    name: '🔵 Plasma',       slot: 'balltrail', price: 8000 },
+  { id: 'balltrail-galaxy',    name: '🌌 Galaxy',       slot: 'balltrail', price: 9000 },
+  { id: 'balltrail-void',      name: '🕳️ Void',         slot: 'balltrail', price: 12000 },
   // Goal celebrations — Rocket League-style screen explosion when you score
-  { id: 'goalcelebr-confetti',  name: '🎊 Confetti',      slot: 'goalcelebr', price: 2000 },
-  { id: 'goalcelebr-explosion', name: '💥 Rocket Blast',  slot: 'goalcelebr', price: 5000 },
-  { id: 'goalcelebr-fireworks', name: '🎆 Fireworks',     slot: 'goalcelebr', price: 3500 },
-  { id: 'goalcelebr-glitter',   name: '✨ Glitter Storm', slot: 'goalcelebr', price: 2500 },
+  { id: 'goalcelebr-confetti',    name: '🎊 Confetti',      slot: 'goalcelebr', price: 2000 },
+  { id: 'goalcelebr-explosion',   name: '💥 Rocket Blast',  slot: 'goalcelebr', price: 5000 },
+  { id: 'goalcelebr-fireworks',   name: '🎆 Fireworks',     slot: 'goalcelebr', price: 3500 },
+  { id: 'goalcelebr-glitter',     name: '✨ Glitter Storm', slot: 'goalcelebr', price: 2500 },
+  { id: 'goalcelebr-matrix',      name: '👾 Matrix',        slot: 'goalcelebr', price: 7500 },
+  { id: 'goalcelebr-hyperspace',  name: '🚀 Hyperspace',    slot: 'goalcelebr', price: 10000 },
+  { id: 'goalcelebr-supernova',   name: '💫 Supernova',     slot: 'goalcelebr', price: 15000 },
 ] as const;
 // --- Economy Overhaul: scarce "exclusive" cosmetics ---
 // Loot-box-only cosmetics with a HARD global mint cap (see exclusive_supply in the DB). They are

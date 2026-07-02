@@ -41,21 +41,149 @@ const BALL_TRAIL_TINTS: Record<string, BallTrailTint> = {
 };
 const BALL_TRAIL_GLOW = new Set(['balltrail-comet', 'balltrail-rainbow', 'balltrail-fire']);
 
+type BallTrailCustom = (ctx: CanvasRenderingContext2D, hist: { x: number; y: number }[], r: number, t: number) => void;
+const BALL_TRAIL_CUSTOM: Record<string, BallTrailCustom> = {
+  'balltrail-lightning': (ctx, hist, r, t) => {
+    const n = hist.length;
+    ctx.globalCompositeOperation = 'lighter';
+    // Zigzag bolt — perpendicular jitter between each history point
+    for (let i = 1; i < n; i++) {
+      const f = i / n;
+      const dx = hist[i].x - hist[i - 1].x, dy = hist[i].y - hist[i - 1].y;
+      const len = Math.hypot(dx, dy) || 1;
+      const jitter = Math.sin(t / 80 + i * 4.7) * (1 - f) * r * 2.5;
+      const px = (-dy / len) * jitter, py = (dx / len) * jitter;
+      ctx.globalAlpha = 0.75 * f;
+      ctx.strokeStyle = f > 0.75 ? '#ffffff' : f > 0.45 ? '#aaffff' : '#4499ff';
+      ctx.lineWidth = 1.5 + f * 1.5;
+      ctx.beginPath();
+      ctx.moveTo(hist[i - 1].x + px, hist[i - 1].y + py);
+      ctx.lineTo(hist[i].x + px, hist[i].y + py);
+      ctx.stroke();
+    }
+    // Outer arc glow
+    for (let i = 0; i < n; i++) {
+      const f = (i + 1) / n;
+      ctx.globalAlpha = 0.18 * f;
+      ctx.fillStyle = '#66ccff';
+      ctx.beginPath();
+      ctx.arc(hist[i].x, hist[i].y, r * 1.4 * f, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  },
+  'balltrail-plasma': (ctx, hist, r, t) => {
+    const n = hist.length;
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < n; i++) {
+      const f = (i + 1) / n;
+      const pulse = 0.82 + 0.18 * Math.sin(t / 110 + i * 0.9);
+      const hue = (t / 4 + i * 28) % 360;
+      ctx.globalAlpha = 0.42 * f * pulse;
+      ctx.fillStyle = `hsl(${hue},100%,65%)`;
+      ctx.beginPath();
+      ctx.arc(hist[i].x, hist[i].y, r * (0.45 + f * 0.9) * pulse, 0, Math.PI * 2);
+      ctx.fill();
+      // Thin ring overlay for depth
+      ctx.globalAlpha = 0.15 * f;
+      ctx.strokeStyle = `hsl(${(hue + 180) % 360},100%,80%)`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(hist[i].x, hist[i].y, r * (0.5 + f) * pulse, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  },
+  'balltrail-galaxy': (ctx, hist, r, t) => {
+    const n = hist.length;
+    // Nebula cloud behind each point
+    for (let i = 0; i < n; i++) {
+      const f = (i + 1) / n;
+      const pulse = 0.7 + 0.3 * Math.sin(t / 500 + i * 0.85);
+      ctx.globalAlpha = 0.1 * f * pulse;
+      ctx.fillStyle = `hsl(${255 + i * 4},100%,55%)`;
+      ctx.beginPath();
+      ctx.arc(hist[i].x, hist[i].y, r * 3.5 * f, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Stars orbiting each trail point
+    for (let i = 0; i < n; i++) {
+      const f = i / n;
+      for (let k = 0; k < 3; k++) {
+        const ang = t / 700 + i * 2.1 + k * 2.094;
+        const orbit = r * (1.2 + f * 2);
+        ctx.globalAlpha = f * 0.85;
+        ctx.fillStyle = k === 0 ? '#ffffff' : k === 1 ? '#aaaaff' : '#ffaaff';
+        ctx.beginPath();
+        ctx.arc(hist[i].x + Math.cos(ang) * orbit, hist[i].y + Math.sin(ang) * orbit, 0.8 + f * 1.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    // Core glow
+    for (let i = 0; i < n; i++) {
+      const f = (i + 1) / n;
+      ctx.globalAlpha = 0.22 * f;
+      ctx.fillStyle = '#cc88ff';
+      ctx.beginPath();
+      ctx.arc(hist[i].x, hist[i].y, r * 0.6 * f, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  },
+  'balltrail-void': (ctx, hist, r, t) => {
+    const n = hist.length;
+    // Event horizon — glowing purple ring with dark core
+    for (let i = 0; i < n; i++) {
+      const f = (i + 1) / n;
+      ctx.globalAlpha = 0.5 * f;
+      ctx.strokeStyle = `hsl(270,100%,${42 + f * 28}%)`;
+      ctx.lineWidth = r * 0.55;
+      ctx.beginPath();
+      ctx.arc(hist[i].x, hist[i].y, r * (0.55 + f * 0.7), 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    // Void core — near-black fill eating the glow
+    for (let i = 0; i < n; i++) {
+      const f = (i + 1) / n;
+      ctx.globalAlpha = 0.9 * f;
+      ctx.fillStyle = '#030010';
+      ctx.beginPath();
+      ctx.arc(hist[i].x, hist[i].y, r * 0.42 * f, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Debris spiraling counter-clockwise into the void
+    for (let i = 0; i < n; i++) {
+      const f = i / n;
+      const ang = -t / 240 + i * 2.4;
+      const orbit = r * f * 2.2;
+      ctx.globalAlpha = f * 0.65;
+      ctx.fillStyle = `hsl(278,80%,${28 + f * 32}%)`;
+      ctx.beginPath();
+      ctx.arc(hist[i].x + Math.cos(ang) * orbit, hist[i].y + Math.sin(ang) * orbit, 1.5 * f, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  },
+};
+
 function drawBallTrail(ctx: CanvasRenderingContext2D, bx: number, by: number, r: number, id: string) {
   const tint = BALL_TRAIL_TINTS[id];
-  if (!tint) return;
+  const custom = BALL_TRAIL_CUSTOM[id];
+  if (!tint && !custom) return;
   ballTrailHistory.push({ x: bx, y: by });
   if (ballTrailHistory.length > BALL_TRAIL_LEN) ballTrailHistory.shift();
   const hist = ballTrailHistory;
   if (hist.length < 3) return;
-  const n = hist.length;
   const t = performance.now();
+  if (custom) {
+    ctx.save();
+    custom(ctx, hist, r, t);
+    ctx.restore();
+    return;
+  }
+  const n = hist.length;
   ctx.save();
   if (BALL_TRAIL_GLOW.has(id)) ctx.globalCompositeOperation = 'lighter';
   for (let i = 0; i < n - 1; i++) {
     const f = (i + 1) / n;
     ctx.globalAlpha = 0.38 * Math.pow(f, 1.4);
-    ctx.fillStyle = tint(i, n, t);
+    ctx.fillStyle = tint!(i, n, t);
     ctx.beginPath();
     ctx.arc(hist[i].x, hist[i].y, r * (0.25 + 0.75 * f), 0, Math.PI * 2);
     ctx.fill();
@@ -165,7 +293,6 @@ function drawGoalCelebration(ctx: CanvasRenderingContext2D, id: string, side: Si
       const sz = 3 + ((seed * 0.4) % 5);
       ctx.globalAlpha = a;
       ctx.fillStyle = `hsl(${(seed * 47 + progress * 200) % 360},90%,80%)`;
-      // 4-pointed star
       ctx.save();
       ctx.translate(x, y);
       ctx.rotate(progress * 3 + seed);
@@ -179,6 +306,135 @@ function drawGoalCelebration(ctx: CanvasRenderingContext2D, id: string, side: Si
       ctx.closePath();
       ctx.fill();
       ctx.restore();
+    }
+  } else if (id === 'goalcelebr-matrix') {
+    // Green code rain — columns of falling characters (Matrix-style)
+    const COLS = 22;
+    const colW = COURT.w / COLS;
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const CHARS = '01アイウエオカキクケコサシスセソタチ';
+    for (let c = 0; c < COLS; c++) {
+      const seed = c * 7.31;
+      const speed = 0.55 + (seed * 0.31) % 0.6;
+      const offset = (seed * 0.19) % 1;
+      const col = (progress * speed * 2.2 + offset) % 1.6;
+      const x = c * colW + colW / 2;
+      const len = 6 + Math.floor((seed * 3.7) % 8);
+      for (let row = 0; row < len; row++) {
+        const y = (col - row / len) * (COURT.h + 80) - 40;
+        if (y < -15 || y > COURT.h + 15) continue;
+        const isHead = row === 0;
+        const a = alpha * Math.max(0, 1 - row / len) * (isHead ? 1 : 0.75);
+        if (a <= 0) continue;
+        ctx.globalAlpha = a;
+        ctx.fillStyle = isHead ? '#dfffdf' : `hsl(120,100%,${Math.max(28, 52 - row * 5)}%)`;
+        const ch = CHARS[Math.floor((seed * 11 + row * 7 + progress * 60) % CHARS.length)];
+        ctx.fillText(ch, x, y);
+      }
+    }
+  } else if (id === 'goalcelebr-hyperspace') {
+    // Star-warp — streaks accelerate outward from the center like jumping to lightspeed
+    const cx = COURT.w / 2, cy = COURT.h / 2;
+    const ease = Math.pow(progress, 1.8);
+    for (let i = 0; i < 90; i++) {
+      const seed = i * 5.17;
+      const ang = (seed * 0.618033) * Math.PI * 2;
+      const baseR = 4 + (seed * 0.28) % 18;
+      const reach = 350 + (seed * 0.41) % 200;
+      const tailLen = ease * 55 * (0.5 + (seed * 0.22) % 0.8);
+      const tip = baseR + ease * reach * (0.6 + (seed * 0.17) % 0.6);
+      const tail = Math.max(baseR, tip - tailLen);
+      const a = alpha * Math.min(1, progress * 2.5) * Math.max(0, 1 - (progress - 0.65) / 0.35);
+      if (a <= 0) continue;
+      const bright = 65 + (seed * 22) % 30;
+      ctx.globalAlpha = a;
+      ctx.strokeStyle = `hsl(${200 + (seed * 32) % 70},85%,${bright}%)`;
+      ctx.lineWidth = 0.8 + ease * 2.2;
+      ctx.beginPath();
+      ctx.moveTo(cx + Math.cos(ang) * tail, cy + Math.sin(ang) * tail);
+      ctx.lineTo(cx + Math.cos(ang) * tip,  cy + Math.sin(ang) * tip);
+      ctx.stroke();
+    }
+    // Central blinding flash at warp initiation
+    const flashA = alpha * Math.max(0, 0.45 - progress * 1.5);
+    if (flashA > 0) {
+      ctx.globalAlpha = flashA;
+      ctx.fillStyle = '#e8f4ff';
+      ctx.fillRect(0, 0, COURT.w, COURT.h);
+    }
+  } else if (id === 'goalcelebr-supernova') {
+    // Massive expanding shockwave + debris cascade + secondary pops
+    const cx = COURT.w / 2, cy = COURT.h / 2;
+    const shockR = progress * 520;
+    const shockColor = progress < 0.18 ? '#ffffff' : progress < 0.38 ? '#ffee55' : progress < 0.58 ? '#ff8800' : '#ff3300';
+    // Primary shockwave ring
+    ctx.globalAlpha = alpha * Math.max(0, 1 - progress * 0.85);
+    ctx.strokeStyle = shockColor;
+    ctx.lineWidth = Math.max(1, 14 * (1 - progress * 0.72));
+    ctx.beginPath();
+    ctx.arc(cx, cy, shockR, 0, Math.PI * 2);
+    ctx.stroke();
+    // Inner radial glow — fades out in first half
+    if (progress < 0.55) {
+      const glowFade = 1 - progress / 0.55;
+      ctx.globalAlpha = alpha * glowFade * 0.55;
+      const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, 180 * progress + 10);
+      grad.addColorStop(0, '#ffffff');
+      grad.addColorStop(0.25, '#ffee44');
+      grad.addColorStop(1, 'rgba(255,100,0,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(cx, cy, 180 * progress + 10, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Debris fragments — fly outward at varying speeds
+    for (let i = 0; i < 48; i++) {
+      const seed = i * 6.17;
+      const ang = (seed * 0.618033) * Math.PI * 2;
+      const spd = 0.45 + (seed * 0.43) % 0.9;
+      const dist = progress * spd * 320;
+      const x = cx + Math.cos(ang) * dist;
+      const y = cy + Math.sin(ang) * dist;
+      const sz = (2.5 + (seed * 0.32) % 5) * Math.max(0.2, 1 - progress * 0.8);
+      const a = alpha * Math.max(0, 1 - progress * 1.6) * 0.9;
+      if (a <= 0 || sz <= 0) continue;
+      ctx.globalAlpha = a;
+      ctx.fillStyle = progress < 0.3 ? '#ffff88' : '#ff6600';
+      ctx.beginPath();
+      ctx.arc(x, y, sz, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // Secondary mini pops scattered around the perimeter
+    const POP_TIMES = [0.25, 0.38, 0.45, 0.52, 0.6];
+    for (let j = 0; j < POP_TIMES.length; j++) {
+      const pStart = POP_TIMES[j];
+      if (progress < pStart) continue;
+      const pp = Math.min(1, (progress - pStart) / 0.18);
+      const seed2 = j * 9.41;
+      const px = cx + Math.cos(seed2 * 2) * (180 + (seed2 * 11) % 120);
+      const py = cy + Math.sin(seed2 * 2) * (80 + (seed2 * 7) % 100);
+      const popA = alpha * (pp < 0.3 ? pp / 0.3 : 1 - (pp - 0.3) / 0.7);
+      if (popA <= 0) continue;
+      for (let k = 0; k < 12; k++) {
+        const ang = (k / 12) * Math.PI * 2;
+        const rr = pp * (30 + j * 8);
+        ctx.globalAlpha = popA * 0.7;
+        ctx.strokeStyle = j % 2 ? '#ffcc44' : '#ff7744';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.lineTo(px + Math.cos(ang) * rr, py + Math.sin(ang) * rr);
+        ctx.stroke();
+      }
+    }
+    // Initial white flash
+    const flashA = alpha * Math.max(0, 0.5 - progress * 3.2);
+    if (flashA > 0) {
+      ctx.globalAlpha = flashA * 0.55;
+      ctx.fillStyle = '#fff8f0';
+      ctx.fillRect(0, 0, COURT.w, COURT.h);
     }
   }
   ctx.restore();
@@ -1165,23 +1421,30 @@ export function drawCosmeticPreview(canvas: HTMLCanvasElement, id: string, slot:
       ctx.restore();
     }
   } else if (slot === 'balltrail') {
-    // Draw a small ball with a fading arc of comet-trail circles behind/above it.
+    // Draw a small ball with a fading arc behind it (tint-based or custom).
     const tint = BALL_TRAIL_TINTS[id];
+    const custom = BALL_TRAIL_CUSTOM[id];
     const ballR = 5;
     const bx = 0, by = 4;
-    if (tint) {
-      const n = 8;
-      const t = performance.now();
+    const n = 9;
+    const fakeHist = Array.from({ length: n }, (_, i) => ({
+      x: bx - (n - i) * 3.2,
+      y: by + Math.sin(((n - i) / n) * Math.PI) * 5,
+    }));
+    const t = performance.now();
+    if (custom) {
+      ctx.save();
+      custom(ctx, fakeHist, ballR, t);
+      ctx.restore();
+    } else if (tint) {
       ctx.save();
       if (BALL_TRAIL_GLOW.has(id)) ctx.globalCompositeOperation = 'lighter';
       for (let i = 0; i < n; i++) {
         const f = (i + 1) / n;
         ctx.globalAlpha = 0.42 * Math.pow(f, 1.4);
         ctx.fillStyle = tint(i, n, t);
-        const px = bx - (n - i) * 3.5;
-        const py = by + Math.sin(((n - i) / n) * Math.PI) * 5;
         ctx.beginPath();
-        ctx.arc(px, py, ballR * (0.25 + 0.75 * f), 0, Math.PI * 2);
+        ctx.arc(fakeHist[i].x, fakeHist[i].y, ballR * (0.25 + 0.75 * f), 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.restore();

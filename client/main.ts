@@ -2590,7 +2590,7 @@ function renderShop() {
       row.appendChild(sw);
     } else if (item.slot === 'goalcelebr') {
       // Goal celebrations show an emoji preview — a full-screen animation doesn't fit in 28×52.
-      const emoji = item.id.includes('confetti') ? '🎊' : item.id.includes('explosion') ? '💥' : item.id.includes('fireworks') ? '🎆' : '✨';
+      const emoji = item.id.includes('confetti') ? '🎊' : item.id.includes('explosion') ? '💥' : item.id.includes('fireworks') ? '🎆' : item.id.includes('matrix') ? '👾' : item.id.includes('hyperspace') ? '🚀' : item.id.includes('supernova') ? '💫' : '✨';
       const sw = document.createElement('span');
       sw.style.cssText = 'display:inline-block;width:28px;text-align:center;font-size:20px;line-height:52px;';
       sw.textContent = emoji;
