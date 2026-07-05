@@ -887,7 +887,7 @@ export type ClientMsg =
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
   | { type: 'summonPlane' } // secret: summon the banner-plane for the whole room to see
-  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean; bumpers?: boolean } // toggle game modes
+  | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean; bumpers?: boolean; typeRacer?: boolean } // toggle game modes
   | { type: 'fatality'; move: string } // winner-only, validated server-side
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
   | { type: 'forfeit' } // "/ff": leave your paddle spot mid-game (and get shamed)
@@ -1164,6 +1164,10 @@ export interface StateMsg {
   bumpers: boolean; // "bumpers" mode: five static pinball pegs in the center
   // One-frame flash per bumper (index matches BUMPER_POSITIONS). True the tick the ball hit it.
   bumperFlash: boolean[];
+  // "Type racer" mode: mouse/arrow paddle control is off — players type sentences and each
+  // correct character steps their paddle toward where the ball will land. Movement itself
+  // stays client-driven (the usual 'paddle' message); the server only carries the toggle.
+  typeRacer: boolean;
   winner: string | null; // nickname of the winner when status === 'over'
   // Shared, room-wide toggle: when true, the match winner can perform a finishing move.
   // It's one setting for everyone (not per-user), so it rides along in the state.

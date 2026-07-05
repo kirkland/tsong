@@ -5335,7 +5335,7 @@ export class Lobby {
   }
 
   // Any joined client may toggle game modes.
-  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean; bumpers?: boolean }) {
+  setMode(ws: WebSocket, opts: { closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean; bumpers?: boolean; typeRacer?: boolean }) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname) return;
     if (opts.closing !== undefined) this.game.setClosing(opts.closing);
@@ -5350,6 +5350,7 @@ export class Lobby {
     if (opts.fog !== undefined) this.game.setFog(opts.fog);
     if (opts.portal !== undefined) this.game.setPortal(opts.portal);
     if (opts.bumpers !== undefined) this.game.setBumpers(opts.bumpers);
+    if (opts.typeRacer !== undefined) this.game.setTypeRacer(opts.typeRacer);
     // View mode is locked while a match is in progress to avoid disrupting players.
     if ((opts.viewMode === 'normal' || opts.viewMode === '3d' || opts.viewMode === 'firstperson') && this.game.status !== 'playing') {
       this.viewMode = opts.viewMode;
@@ -5374,6 +5375,7 @@ export class Lobby {
       fog: this.game.fog,
       portal: this.game.portal,
       bumpers: this.game.bumpers,
+      typeRacer: this.game.typeRacer,
       viewMode: this.viewMode,
     };
   }
@@ -5400,6 +5402,7 @@ export class Lobby {
     if (typeof m.fog === 'boolean') this.game.setFog(m.fog);
     if (typeof m.portal === 'boolean') this.game.setPortal(m.portal);
     if (typeof m.bumpers === 'boolean') this.game.setBumpers(m.bumpers);
+    if (typeof m.typeRacer === 'boolean') this.game.setTypeRacer(m.typeRacer);
     if ((m.viewMode === 'normal' || m.viewMode === '3d' || m.viewMode === 'firstperson') && this.game.status !== 'playing') {
       this.viewMode = m.viewMode;
       this.syncPowerupPool();
@@ -6379,6 +6382,7 @@ export class Lobby {
       portal: this.game.portal,
       bumpers: this.game.bumpers,
       bumperFlash: [...this.game.bumperFlash],
+      typeRacer: this.game.typeRacer,
     };
   }
 

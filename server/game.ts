@@ -114,6 +114,7 @@ export interface GameSnapshot {
   portal?: boolean;
   bumpers?: boolean;
   bumperFlash?: boolean[];
+  typeRacer?: boolean;
   winnerSide: Side | null;
   lastHit: Side | null;
   target: { x: number; y: number; kind: PowerupKind } | null;
@@ -175,6 +176,7 @@ export class Game {
   fog = false;    // "fog of war": server passes flag; visibility computed client-side
   portal = false; // "portal walls": top/bottom walls teleport instead of bounce
   bumpers = false; // "bumpers" mode: five static pinball pegs in the center
+  typeRacer = false; // "type racer": typing drives the paddles; server only carries the flag
   bumperFlash: boolean[] = BUMPER_POSITIONS.map(() => false); // one-frame hit signal per peg
   pinataBurstFlash = false; // set for the single tick a burst happens (drives a client pulse)
   private pinataPendingSpawns = 0; // replacement balls owed this tick (one per ball stuck)
@@ -287,6 +289,7 @@ export class Game {
       fog: this.fog,
       portal: this.portal,
       bumpers: this.bumpers,
+      typeRacer: this.typeRacer,
     };
   }
 
@@ -320,6 +323,7 @@ export class Game {
     this.fog = s.fog ?? false;
     this.portal = s.portal ?? false;
     this.bumpers = s.bumpers ?? false;
+    this.typeRacer = s.typeRacer ?? false;
     this.winnerSide = s.winnerSide;
     this.lastHit = s.lastHit;
     this.target = s.target ? { ...s.target } : null;
@@ -489,6 +493,7 @@ export class Game {
   setFog(on: boolean)     { this.fog = on; }
   setPortal(on: boolean)  { this.portal = on; }
   setBumpers(on: boolean) { this.bumpers = on; }
+  setTypeRacer(on: boolean) { this.typeRacer = on; }
 
   // Drift the piñata, spin it, and bounce it off the four walls (radius PINATA.r).
   private movePinata(dt: number, scale: number) {

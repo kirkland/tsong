@@ -102,6 +102,8 @@ const breakoutModeEl = document.getElementById('breakoutMode') as HTMLInputEleme
 const fogModeEl = document.getElementById('fogMode') as HTMLInputElement;
 const portalModeEl = document.getElementById('portalMode') as HTMLInputElement;
 const bumpersModeEl = document.getElementById('bumpersMode') as HTMLInputElement;
+const typeRacerModeEl = document.getElementById('typeRacerMode') as HTMLInputElement;
+const typeBarEl = document.getElementById('typeBar') as HTMLDivElement;
 const reactionsEl = document.getElementById('reactions') as HTMLDivElement;
 const recentReactionsEl = document.getElementById('recentReactions') as HTMLDivElement;
 const ballReactionEl = document.getElementById('ballReaction') as HTMLDivElement;
@@ -749,6 +751,9 @@ const net = connect(
       replayBuf.push(state);
       if (replayBuf.length > REPLAY_FRAMES) replayBuf.shift();
       syncMyPaddleFromServer();
+      // Type Racer: keep the ball-velocity estimate fresh and the sentence bar in sync.
+      trTrackBall(msg);
+      trRenderBar();
       // While replay is playing, hold the UI frozen so live score/status don't bleed through.
       if (!replayFrames) syncViewMode(msg.viewMode ?? 'normal');
       if (!replayFrames) updateUI();
@@ -1188,6 +1193,9 @@ portalModeEl.addEventListener('change', () =>
 bumpersModeEl.addEventListener('change', () =>
   net.send({ type: 'mode', bumpers: bumpersModeEl.checked }),
 );
+typeRacerModeEl.addEventListener('change', () =>
+  net.send({ type: 'mode', typeRacer: typeRacerModeEl.checked }),
+);
 
 // --- win score selector ---
 for (const btn of winScoreOpts.querySelectorAll<HTMLButtonElement>('.ws-btn')) {
@@ -1515,6 +1523,7 @@ function enableChat() {
   fogModeEl.disabled = false;
   portalModeEl.disabled = false;
   bumpersModeEl.disabled = false;
+  typeRacerModeEl.disabled = false;
   for (const btn of reactionsEl.querySelectorAll<HTMLButtonElement>('.reaction-btn')) {
     btn.disabled = false;
   }
@@ -4334,6 +4343,8 @@ function onBoardMouseMove(e: MouseEvent) {
     const d = paddleUsesX ? e.movementY : e.movementX;
     aimAngle = Math.max(-BLASTER.maxAngle, Math.min(BLASTER.maxAngle, aimAngle + d * 0.004));
   }
+  // Type Racer: the mouse may still aim the blaster (above) but never drives the paddle.
+  if (state?.typeRacer && myDuelSide()) return;
   // Convert screen-pixel movement to court units. In first-person the paddle appears
   // left/right on screen so movementX drives it (direction flips for the right side).
   // Cap movementX per event to avoid a mouse-acceleration spike clamping the paddle
@@ -4410,6 +4421,156 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => {
   if (isTyping(e)) return;
   keys.delete(e.key.toLowerCase());
+});
+
+// --- Type Racer mode: typing IS the paddle ---
+// Mouse and arrow keys are cut off for seated duel players; instead a sentence is shown
+// under the board and every correctly typed character nudges the paddle toward where the
+// ball is going to land (predicted from consecutive state frames — the wire carries no
+// velocity). Finishing a sentence snaps the paddle the rest of the way and deals a new one.
+const TR_SENTENCES = [
+  'the ball does not care about your feelings',
+  'a good serve is worth a thousand words per minute',
+  'never trust a paddle that types faster than you',
+  'the quick brown fox jumps over the lazy paddle',
+  'somewhere davis is watching this rally and judging',
+  'home row is where the heart is',
+  'in tsong nobody can hear you backspace',
+  'the walls are closing in and so are my typos',
+  'a wild power up appeared and i missed it typing this',
+  'my kingdom for a shorter sentence',
+  'keep your eyes on the ball and your fingers on the keys',
+  'the pinata regrets nothing and neither do i',
+  'stop reading this and hit the ball',
+  'legend says the octagon is just a stop sign with dreams',
+  'coins buy hats but typing buys glory',
+  'the bumpers giveth and the bumpers taketh away',
+  'this rally is sponsored by absolutely nobody',
+  'every missed keystroke is a tiny funeral',
+  'gravity mode is just the ball having a bad day',
+  'i came for the pong and stayed for the paperwork',
+  'the fish in the pond are cheering for you',
+  'breakout bricks fear the sound of typing',
+  'may your fingers be swift and your wifi be stable',
+  'the tavern will hear about this rally tonight',
+  'do not look at the keyboard the ball is watching',
+] as const;
+const TR_STEP = 32; // court units the paddle moves per correct character
+let trSentence = '';
+let trPos = 0;
+let trTypo = false; // a typo happened somewhere in the current sentence
+let trFlawless = 0; // consecutive typo-free sentences (a quiet flex fires at 3)
+let trBarKey = ''; // last-rendered sentence:pos, so the bar only re-renders on change
+// Ball velocity estimated from consecutive state frames (StateMsg.ball has no vx/vy).
+let trBallPrev: { x: number; y: number; t: number } | null = null;
+const trBallVel = { vx: 0, vy: 0 };
+
+/** Feed each incoming state frame so the intercept prediction has a velocity to work with. */
+function trTrackBall(s: StateMsg) {
+  const t = performance.now();
+  if (trBallPrev) {
+    const dt = (t - trBallPrev.t) / 1000;
+    if (dt > 0.001 && dt < 0.25) {
+      const vx = (s.ball.x - trBallPrev.x) / dt;
+      const vy = (s.ball.y - trBallPrev.y) / dt;
+      // An impossible speed means the ball teleported (serve reset / warp) — keep the old estimate.
+      if (Math.hypot(vx, vy) < 4000) {
+        trBallVel.vx = vx;
+        trBallVel.vy = vy;
+      }
+    }
+  }
+  trBallPrev = { x: s.ball.x, y: s.ball.y, t };
+}
+
+/** Where the paddle will need to be: the ball's wall-folded Y at my paddle face when it's
+ *  approaching, mid-court when it's leaving (ready for the return). */
+function trGoalY(): number {
+  const side = myDuelSide();
+  if (!state || !side) return COURT.h / 2;
+  const b = state.ball;
+  const { vx, vy } = trBallVel;
+  const toward = side === 'left' ? vx < -1 : vx > 1;
+  if (!toward) return COURT.h / 2;
+  const t = (state.paddles[side].x - b.x) / vx;
+  if (t <= 0 || t > 30) return COURT.h / 2;
+  // Fold the straight-line Y into [0, COURT.h] via a triangle wave (top/bottom bounces).
+  const span = 2 * COURT.h;
+  let y = b.y + vy * t;
+  y = ((y % span) + span) % span;
+  if (y > COURT.h) y = span - y;
+  return clampPaddle(y);
+}
+
+function trNewSentence() {
+  let next = trSentence;
+  while (next === trSentence) next = TR_SENTENCES[Math.floor(Math.random() * TR_SENTENCES.length)];
+  trSentence = next;
+  trPos = 0;
+  trTypo = false;
+}
+
+/** Rebuild the sentence bar (done / current / remaining spans). Cheap, but skipped when
+ *  nothing changed since it runs on every state frame as well as every keystroke. */
+function trRenderBar() {
+  const show = !!state && state.typeRacer && !state.poly && !!myDuelSide() && state.status === 'playing';
+  const key = show ? `${trSentence}:${trPos}` : 'off';
+  if (key === trBarKey) return;
+  trBarKey = key;
+  typeBarEl.hidden = !show;
+  if (!show) return;
+  if (!trSentence) {
+    trNewSentence();
+    trBarKey = `${trSentence}:${trPos}`;
+  }
+  const done = document.createElement('span');
+  done.className = 'tr-done';
+  done.textContent = trSentence.slice(0, trPos);
+  const cur = document.createElement('span');
+  cur.className = 'tr-cur';
+  cur.textContent = trSentence[trPos] ?? '';
+  const todo = document.createElement('span');
+  todo.textContent = trSentence.slice(trPos + 1);
+  typeBarEl.replaceChildren(done, cur, todo);
+}
+
+function trFinishSentence() {
+  // Sentence rush: finishing a line snaps the paddle the rest of the way home.
+  target = trGoalY();
+  typeBarEl.classList.add('tr-rush');
+  setTimeout(() => typeBarEl.classList.remove('tr-rush'), 400);
+  if (!trTypo) {
+    trFlawless++;
+    if (trSentence.includes('quick brown fox')) net.send({ type: 'reaction', emoji: '🦊' });
+    else if (trFlawless % 3 === 0) net.send({ type: 'reaction', emoji: '⌨️' });
+  } else {
+    trFlawless = 0;
+  }
+  trNewSentence();
+}
+
+window.addEventListener('keydown', (e) => {
+  if (!state?.typeRacer || state.poly || !myDuelSide() || state.status !== 'playing') return;
+  if (isTyping(e)) return;
+  if (overlay.style.display !== 'none') return;
+  if (!canControl()) return; // same capture gate as mouse control — click the board first
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key.length !== 1) return;
+  e.preventDefault(); // space would otherwise scroll the page
+  if (!trSentence) trNewSentence();
+  if (e.key.toLowerCase() === trSentence[trPos].toLowerCase()) {
+    trPos++;
+    // Step toward where the ball will land — never past it.
+    const goal = trGoalY();
+    target = clampPaddle(target + Math.sign(goal - target) * Math.min(TR_STEP, Math.abs(goal - target)));
+    if (trPos >= trSentence.length) trFinishSentence();
+  } else {
+    trTypo = true;
+    typeBarEl.classList.remove('tr-shake');
+    void typeBarEl.offsetWidth; // restart the shake animation
+    typeBarEl.classList.add('tr-shake');
+  }
+  trRenderBar();
 });
 
 // --- fatality input ---
@@ -4675,6 +4836,7 @@ function onTouchMove(e: TouchEvent) {
     arenaTarget = Math.max(-max, Math.min(max, along));
     return;
   }
+  if (state?.typeRacer) return; // Type Racer: touch-dragging is cut off like the mouse
   const relY = (touch.clientY - r.top) / r.height;
   target = clampPaddle(relY * COURT.h);
 }
@@ -5142,7 +5304,9 @@ function loop(t: number) {
   } else if (isPlayer() && canControl()) {
     // Paddle input (mouse and keyboard) only applies while the mouse is captured.
     const step = PADDLE.speed / 60;
-    if (state?.rotated === 1) {
+    if (state?.typeRacer && myDuelSide()) {
+      // Type Racer: arrows/WASD are dead — `target` is driven only by the typing handler.
+    } else if (state?.rotated === 1) {
       // 90° CW: paddle horizontal; right on screen = decreasing court-Y.
       if (keys.has('arrowright') || keys.has('d')) target -= step;
       if (keys.has('arrowleft') || keys.has('a')) target += step;
@@ -5352,6 +5516,9 @@ function updateUI() {
   }
   if (document.activeElement !== bumpersModeEl && bumpersModeEl.checked !== state.bumpers) {
     bumpersModeEl.checked = state.bumpers;
+  }
+  if (document.activeElement !== typeRacerModeEl && typeRacerModeEl.checked !== state.typeRacer) {
+    typeRacerModeEl.checked = state.typeRacer;
   }
 
   // Add/kick-bot button: show the right control for the current match state.

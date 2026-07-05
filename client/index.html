@@ -3322,6 +3322,36 @@
       .season-ch-done { font-size: 10px; color: #34d399; }
 
       /* Active power-up HUD: a row of small colored chips showing live timers/counts. */
+      /* Type Racer sentence bar — the typing prompt under the board. */
+      #typeBar {
+        max-width: 760px;
+        margin: 2px auto 0;
+        padding: 6px 14px;
+        border: 1px solid #1c2640;
+        border-radius: 8px;
+        background: #0d1424;
+        font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+        font-size: 15px;
+        letter-spacing: 0.5px;
+        line-height: 1.5;
+        text-align: center;
+        color: #45507a; /* untyped remainder */
+        user-select: none;
+        white-space: pre-wrap; /* the highlighted current char may be a space */
+      }
+      #typeBar .tr-done { color: #58d68b; }
+      #typeBar .tr-cur {
+        color: #eaf0ff;
+        background: #2a3a68;
+        border-radius: 3px;
+        box-shadow: 0 2px 0 #58a6ff;
+      }
+      #typeBar.tr-shake { animation: trShake 0.15s linear; }
+      #typeBar.tr-rush { box-shadow: 0 0 14px rgba(88, 214, 139, 0.5); transition: box-shadow 0.1s; }
+      @keyframes trShake {
+        25% { transform: translateX(-4px); }
+        75% { transform: translateX(4px); }
+      }
       #puHud {
         min-height: 20px;
         display: flex;
@@ -4225,6 +4255,15 @@
               <input type="checkbox" id="bumpersMode" disabled />
               <span class="mode-switch" aria-hidden="true"></span>
             </label>
+            <label class="mode-option" title="Mouse and arrow keys are cut off — type the sentence shown under the board and every correct character nudges your paddle toward where the ball is heading. Finish a sentence for a fresh one (and a little burst of speed).">
+              <span class="mode-icon">⌨️</span>
+              <span class="mode-text">
+                <span class="mode-name">Type Racer</span>
+                <span class="mode-desc">Typing moves your paddle — no mouse, no arrows</span>
+              </span>
+              <input type="checkbox" id="typeRacerMode" disabled />
+              <span class="mode-switch" aria-hidden="true"></span>
+            </label>
             <label class="mode-option" title="Floods the chat with fake viewer bots to distract the players. 📺">
               <span class="mode-icon">📺</span>
               <span class="mode-text">
@@ -4675,6 +4714,9 @@
         </div>
         <div id="betBoard" hidden></div>
         <div id="status"></div>
+        <!-- Type Racer sentence bar: the current sentence with per-character progress. Only
+             visible to seated duel players while the Type Racer mode is on. -->
+        <div id="typeBar" hidden></div>
         <div id="mobileControls">
           <button id="mobUp" class="mob-paddle-btn" type="button" aria-label="Move paddle up">▲</button>
           <button id="mobDown" class="mob-paddle-btn" type="button" aria-label="Move paddle down">▼</button>
