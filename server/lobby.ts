@@ -162,6 +162,7 @@ interface Conn {
   captured: boolean; // mouse captured to the board (pointer lock); gates play start
   captureDeadline: number; // seconds left to capture before being benched (0 = not counting)
   lastChatAt: number; // ms timestamp of last chat message (light rate limiting)
+  lastShoveAt?: number; // ms timestamp of last Type Racer shove (caps sabotage to typing speed)
   lastBlownUpAt: number; // ms timestamp of last rocket-kill chat line (dedupe overlapping blasts)
   // Cached wallet/cosmetics (loaded from the DB on join). Purely cosmetic — never affects play.
   hat: string | null;
@@ -780,6 +781,26 @@ export class Lobby {
     const data = JSON.stringify({ type: 'reaction', emoji });
     for (const sock of this.conns.keys()) {
       if (sock.readyState === sock.OPEN) sock.send(data);
+    }
+  }
+
+  // Type Racer sabotage: a seated duel player typed a correct character while the ball is
+  // heading away from them. Relay it to everyone seated on the OTHER side — their clients
+  // knock their own paddle target a quarter-step off course. The server doesn't verify the
+  // ball direction (movement is client-driven in this mode anyway); it just checks the mode
+  // is armed, the sender is seated, and the typing rate is humanly possible.
+  typeShove(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return;
+    if (!this.game.typeRacer || this.game.status !== 'playing') return;
+    if (conn.role !== 'left' && conn.role !== 'right') return; // duel seats only (arena is untouched)
+    const now = Date.now();
+    if (now - (conn.lastShoveAt ?? 0) < 40) return; // ~25/s cap — above any real typing speed
+    conn.lastShoveAt = now;
+    const other: Side = conn.role === 'left' ? 'right' : 'left';
+    const data = JSON.stringify({ type: 'typeShove' });
+    for (const [sock, c] of this.conns) {
+      if (c.role === other && sock.readyState === sock.OPEN) sock.send(data);
     }
   }
 

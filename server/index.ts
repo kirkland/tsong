@@ -170,6 +170,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'summonPlane':
         lobby.summonPlane(ws);
         break;
+      case 'typeShove':
+        lobby.typeShove(ws);
+        break;
       case 'mode':
         lobby.setMode(ws, {
           closing: typeof msg.closing === 'boolean' ? msg.closing : undefined,

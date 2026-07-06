@@ -3348,6 +3348,10 @@
       }
       #typeBar.tr-shake { animation: trShake 0.15s linear; }
       #typeBar.tr-rush { box-shadow: 0 0 14px rgba(88, 214, 139, 0.5); transition: box-shadow 0.1s; }
+      #typeBar.tr-shoved { animation: trShoved 0.3s ease-out; }
+      @keyframes trShoved {
+        from { box-shadow: 0 0 12px rgba(226, 59, 59, 0.7); border-color: #e23b3b; }
+      }
       @keyframes trShake {
         25% { transform: translateX(-4px); }
         75% { transform: translateX(4px); }
@@ -4255,7 +4259,7 @@
               <input type="checkbox" id="bumpersMode" disabled />
               <span class="mode-switch" aria-hidden="true"></span>
             </label>
-            <label class="mode-option" title="Mouse and arrow keys are cut off — type the sentence shown under the board and every correct character nudges your paddle toward where the ball is heading. Finish a sentence for a fresh one (and a little burst of speed).">
+            <label class="mode-option" title="Mouse and arrow keys are cut off — type the sentence shown under the board and every correct character nudges your paddle toward where the ball is heading. When the ball is heading AWAY from you, your keystrokes instead knock your opponent's paddle off course (at quarter strength). Finish a sentence for a fresh one (and a little burst of speed).">
               <span class="mode-icon">⌨️</span>
               <span class="mode-text">
                 <span class="mode-name">Type Racer</span>

@@ -772,6 +772,8 @@ const net = connect(
       if (msg.lines.length === 1 && document.hidden && msg.lines[0].from !== myName) {
         notifyChatTitle(msg.lines[0].from);
       }
+    } else if (msg.type === 'typeShove') {
+      trApplyShove();
     } else if (msg.type === 'reaction') {
       spawnReaction(msg.emoji);
     } else if (msg.type === 'tip') {
@@ -4456,6 +4458,7 @@ const TR_SENTENCES = [
   'do not look at the keyboard the ball is watching',
 ] as const;
 const TR_STEP = 32; // court units the paddle moves per correct character
+const TR_SHOVE = TR_STEP / 4; // units an opponent's keystroke knocks YOUR paddle off course
 let trSentence = '';
 let trPos = 0;
 let trTypo = false; // a typo happened somewhere in the current sentence
@@ -4500,6 +4503,27 @@ function trGoalY(): number {
   y = ((y % span) + span) % span;
   if (y > COURT.h) y = span - y;
   return clampPaddle(y);
+}
+
+/** Is the ball heading away from my side (toward the opponent)? */
+function trBallAway(): boolean {
+  const side = myDuelSide();
+  if (!side) return false;
+  return side === 'left' ? trBallVel.vx > 1 : trBallVel.vx < -1;
+}
+
+/** The opponent typed a correct character while the ball is coming at us: knock our own
+ *  paddle target a quarter-step AWAY from where it needs to be. Our own full-size steps
+ *  out-pull the sabotage at equal typing speed — but a slow typist gets dragged off course. */
+function trApplyShove() {
+  if (!state?.typeRacer || state.poly || !myDuelSide() || state.status !== 'playing') return;
+  const goal = trGoalY();
+  const dir = Math.sign(target - goal) || (Math.random() < 0.5 ? -1 : 1);
+  target = clampPaddle(target + dir * TR_SHOVE);
+  // Red flick on the sentence bar so the victim can tell they're being typed at.
+  typeBarEl.classList.remove('tr-shoved');
+  void typeBarEl.offsetWidth;
+  typeBarEl.classList.add('tr-shoved');
 }
 
 function trNewSentence() {
@@ -4563,6 +4587,8 @@ window.addEventListener('keydown', (e) => {
     // Step toward where the ball will land — never past it.
     const goal = trGoalY();
     target = clampPaddle(target + Math.sign(goal - target) * Math.min(TR_STEP, Math.abs(goal - target)));
+    // Ball heading away? Typing still pays: each keystroke knocks the OPPONENT off course.
+    if (trBallAway()) net.send({ type: 'typeShove' });
     if (trPos >= trSentence.length) trFinishSentence();
   } else {
     trTypo = true;

@@ -887,6 +887,9 @@ export type ClientMsg =
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
   | { type: 'summonPlane' } // secret: summon the banner-plane for the whole room to see
+  // Type Racer: a correct keystroke typed while the ball is heading AWAY — relayed to the
+  // other side, whose paddles get knocked a quarter-step off course (see TypeShoveMsg).
+  | { type: 'typeShove' }
   | { type: 'mode'; closing?: boolean; gravity?: boolean; turbo?: boolean; streamer?: boolean; diamond?: boolean; pinata?: boolean; layered?: boolean; arena?: boolean; viewMode?: string; breakout?: boolean; fog?: boolean; portal?: boolean; bumpers?: boolean; typeRacer?: boolean } // toggle game modes
   | { type: 'fatality'; move: string } // winner-only, validated server-side
   | { type: 'setFatalities'; enabled: boolean } // flips the shared fatalities setting
@@ -1384,6 +1387,13 @@ export interface ReactionMsg {
   emoji: string;
 }
 
+// Type Racer sabotage: the opponent typed a correct character while the ball is heading
+// toward YOU. Your client nudges its own paddle target a quarter-step off course (away
+// from the predicted intercept) — so at equal typing speed the defender still wins.
+export interface TypeShoveMsg {
+  type: 'typeShove';
+}
+
 // A one-off transient notice. By default a big center-screen banner (e.g. a forfeit);
 // `toast: true` renders a small unobtrusive corner toast instead (e.g. betting activity).
 export interface AnnounceMsg {
@@ -1441,6 +1451,7 @@ export type ServerMsg =
   | BalanceSheetMsg
   | ChatMsg
   | ReactionMsg
+  | TypeShoveMsg
   | AnnounceMsg
   | PingMsg
   | FlyoverMsg
