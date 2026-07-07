@@ -566,7 +566,12 @@ const HEDGE_RING: { x: number; y: number }[] = (() => {
 // --- Friend Sim types — VN-style branching dialogue + XP-tracked friendship levels. ----------
 // Each friend NPC has FriendTalk scenes unlocked at different levels. Designed so dating /
 // deeper arcs can be layered on later without restructuring (add `minRelType` / `dateScenes`).
-interface FriendChoice { label: string; reply: string; mood?: string; xp: number; }
+interface FriendChoice {
+  label: string; reply: string; mood?: string; xp: number;
+  // Risky choice (🎲, styled hot): roll on click — chance in [0,1] of the normal
+  // reply/xp; otherwise you get risk.reply and risk.xp (usually negative).
+  risk?: { chance: number; reply: string; mood?: string; xp: number };
+}
 interface FriendPage { text: string; mood?: string; choices?: FriendChoice[]; }
 interface FriendTalk { minLevel: number; pages: FriendPage[]; } // unlocked when friendship level ≥ minLevel
 interface FriendBonus { check: () => boolean; xp: number; label: string; hint: string; }
@@ -623,12 +628,13 @@ const FRIEND_LEVEL_NAMES = ['Stranger', 'Acquaintance', 'Friend', 'Good Friend',
 function getFriendXp(key: string): number {
   try { return Math.max(0, parseInt(localStorage.getItem(`tsong.friend.${key}`) || '0', 10) || 0); } catch { return 0; }
 }
-function addFriendXp(key: string, xp: number): { newXp: number; levelUp: boolean } {
+function addFriendXp(key: string, xp: number): { newXp: number; levelUp: boolean; levelDown: boolean } {
   const old = getFriendXp(key);
   const oldLevel = getFriendLevel(old);
-  const newXp = old + xp;
+  const newXp = Math.max(0, old + xp); // risky choices can lose XP, but never below zero
   try { localStorage.setItem(`tsong.friend.${key}`, String(newXp)); } catch { /* ignore */ }
-  return { newXp, levelUp: getFriendLevel(newXp) > oldLevel };
+  const newLevel = getFriendLevel(newXp);
+  return { newXp, levelUp: newLevel > oldLevel, levelDown: newLevel < oldLevel };
 }
 function getFriendLevel(xp: number): number {
   let lv = 0;
@@ -1080,6 +1086,8 @@ const NPCS: NpcDef[] = [
         { text: 'There\'s a man made of a chip wandering around out there and nobody bats an eye. I am batting an eye. At you. Tentatively.', choices: [
           { label: 'What\'s wrong with the Dorito man?', reply: 'He confuses me and I respect him for it. Much like you, potentially.', mood: '😏', xp: 25 },
           { label: 'I\'m a connection worth having', reply: 'Either wildly confident or wildly delusional. Either way — I\'m intrigued.', mood: '💅', xp: 35 },
+          { label: 'Your pockets are fake and so is your cynicism', reply: '...Excuse me. *pause* Okay. That was genuinely well-constructed. Cruel, precise, structurally sound. Are you consulting? You should consult. I\'m furious and impressed simultaneously, which is my favorite emotional state and very hard to bill for.', mood: '😏', xp: 80,
+            risk: { chance: 0.55, reply: 'Hm. No. The pockets are load-tested and the cynicism is billable. Swing and a miss. I\'m docking you for it — consider it a consultation fee. My rates were on the letterhead you didn\'t read.', mood: '🙄', xp: -40 } },
         ]},
       ]},
       { minLevel: 0, pages: [
@@ -1140,6 +1148,14 @@ const NPCS: NpcDef[] = [
           { label: 'Fondness is off-brand for you', reply: 'Wildly off-brand. If you tell anyone I will issue a formal denial on letterhead. I have letterhead now. The letterhead was eighty percent of why I renewed. The other twenty percent is currently smirking at me, so let\'s move on.', mood: '😏', xp: 85 },
         ]},
       ]},
+      { minLevel: 3, pages: [
+        { text: 'Pop quiz. I\'m told friendship involves retention, and I retain everything about you, so let\'s see if it\'s mutual. Wrong answers have consequences. I\'m a consultant. Everything has consequences.', mood: '😏' },
+        { text: 'What does the town sign say now? The one I bled for.', choices: [
+          { label: '"A Place for Everyone — And Then Some"', reply: 'Word. For. Word. Including the em dash. Do you know how many people remember an em dash? I want to frame this moment. I might invoice the town for the emotional value it just generated.', mood: '💕', xp: 75 },
+          { label: '"A Place for Everyone"', reply: 'That\'s the OLD sign. The one I was hired to kill. You just quoted the corpse at the funeral. I need a moment. And a deduction. Mostly a deduction.', mood: '🙄', xp: -20 },
+          { label: '"Everyone Welcome, And Stuff"', reply: '"And STUFF." And. Stuff. You\'ve just been added to the list of reasons this town needs me. It\'s a long list. You\'re near the top now. Congratulations on the promotion.', mood: '😐', xp: -25 },
+        ]},
+      ]},
       { minLevel: 4, pages: [
         { text: 'I made you a friendship bracelet. Destroyed it. Made it again. This is bracelet number two. It comes with a certificate. On the letterhead. This is the letterhead\'s first official act.', mood: '💕' },
         { text: 'The certificate says "load-bearing," because I finally decided to specify which one you are. You\'re my person in this bizarre little town. Don\'t ghost me or I will make your life inconvenient in small but creative ways. I know your whole brand. I audited it. I know exactly where to strike.', choices: [
@@ -1177,6 +1193,8 @@ const NPCS: NpcDef[] = [
         { text: 'What do you think they meant?', choices: [
           { label: 'Energy, probably', reply: 'ENERGY! Yes! Okay! Energy is just enthusiasm with nowhere to sit down! I have SO much enthusiasm with nowhere to sit down, it\'s true, I can acknowledge that! That\'s actually fine! Thank you! I\'m going to find Doug and tell him he was right and also vague and both things can coexist. Poor Doug. Probably exhausted. But fine!', mood: '😄', xp: 30 },
           { label: 'I think it was a compliment', reply: 'Do you THINK? Because I\'ve replayed it and by the third replay Doug had a completely different tone and by the fourth he was crying tears of joy about how interesting I am and I KNOW that\'s not what happened but the fourth replay was so comforting that I\'ve been living there. The fourth replay is my home now.', mood: '🥺', xp: 38 },
+          { label: 'Doug had a point tbh', reply: 'WOW. Wow wow wow. Okay you know what — BOLD. And... correct?? I AM a lot. A lot is a UNIT. A lot is a QUANTITY WORTH HAVING. Nobody\'s ever agreed with Doug TO MY FACE and somehow it\'s the most honest thing anyone\'s done for me?? I\'m putting "had a point tbh" in the Running Jokes tab. We have a TAB now!!', mood: '😄', xp: 75,
+            risk: { chance: 0.55, reply: 'Oh. OH. You\'re DOUG-SIDED?? I have to go walk around the fountain nine times. This is a nine-lap conversation. *breathing* We\'re fine. WE\'RE FINE. I\'m deducting points though. Doug never got deducted because Doug isn\'t my FRIEND. See how that works. See the privilege you just spent.', mood: '😮', xp: -35 } },
         ]},
       ]},
       { minLevel: 0, pages: [
@@ -1228,6 +1246,14 @@ const NPCS: NpcDef[] = [
           { label: 'Take all the turns you need', reply: 'I\'M GOING TO NEED SO MANY TURNS. You have NO idea what you\'ve signed up for. Okay one more serious thing and then we\'re done: thank you for waiting. Nobody waits. End of serious. RESUMING NORMAL BROADCAST: do you think pigeons have gold tiers.', mood: '😄', xp: 85 },
         ]},
       ]},
+      { minLevel: 3, pages: [
+        { text: 'POP QUIZ!! No pressure except ALL the pressure!! This is a friendship CHECKPOINT and it\'s going in the document either way!!', mood: '😄' },
+        { text: 'What was the name of the restaurant?? THE restaurant. The one. You know the one. If you know me at ALL you know the one.', choices: [
+          { label: 'Biscotti & Things', reply: 'YES!!! THE THINGS!!! You remembered the THINGS!!! I\'m adding this to "Moments That Mattered" with THREE exclamation points which is the maximum I allow because FOUR would be unhinged!!! You KNOW me. You actually KNOW me!!', mood: '🥹', xp: 75 },
+          { label: 'Biscotti & Stuff', reply: 'STUFF?? S T U F F?? The Things were MYSTERIES, the Things were LORE, the Things had a NOTES FOLDER, and you called them STUFF like they were a JUNK DRAWER. I\'m not crying. I\'m updating the document. There\'s a deductions tab now. You built it. Just now. With your words.', mood: '😮', xp: -20 },
+          { label: 'Linguini & Things', reply: 'LINGUINI?? It was a BISCOTTI establishment!! Linguini wasn\'t even ON the menu — I would KNOW, I memorized it, the closest pasta adjacency was the "hints of tomorrow" salad!! Minus points!! The document weeps!!', mood: '😅', xp: -20 },
+        ]},
+      ]},
       { minLevel: 4, pages: [
         { text: 'OKAY so. I have a whole thing. I practiced it in the mirror. Three times. Here goes.', mood: '😮' },
         { text: 'You are one of the best people I\'ve met and I waited to say it because what if it was weird and then I decided being scared of weird is WORSE than the potential weird.', mood: '🥺' },
@@ -1266,6 +1292,8 @@ const NPCS: NpcDef[] = [
         { text: 'Kevin Jr. turned slightly yellow last Thursday. Not a health thing. A color demonstration. He does that when I\'m stuck — just shows me what I\'m looking for.', choices: [
           { label: 'What color is Thursday?', reply: 'The color of almost-remembering something. Like that moment when a word is about to return and it\'s warm but also tired. I\'ve mixed seventeen versions. Kevin Jr. rates each one by pointing away from the canvas or toward it. He\'s only pointed toward one version. I accidentally knocked it over six weeks ago. Kevin Jr. hasn\'t fully forgiven me. He\'s pointed away from me twice since then. That\'s a lot for Kevin Jr.', mood: '🌿', xp: 35 },
           { label: 'Kevin Jr. turned yellow on purpose?', reply: 'Everything Kevin Jr. does is intentional. He has seventeen leaves and each one is deliberate. I asked him once which was his favorite. He dropped one. I pressed it in a book and I\'ve kept it for two years. I don\'t know if that was his answer or a boundary. I respect it either way and I\'ve never asked again. Some questions are only for asking once.', mood: '💚', xp: 40 },
+          { label: 'Kevin Jr. is just a plant', reply: 'Just a plant. JUST a plant. *long silence* ...Kevin Jr. says he likes you. He says skepticism is an honest soil and most people bring him flattery, which has no nutrients. He\'s never liked a skeptic before. I\'m genuinely stunned. I\'m updating the registry in pen.', mood: '😮', xp: 70,
+            risk: { chance: 0.5, reply: 'Kevin Jr. just angled every leaf away from you. All seventeen. Simultaneously. I have never seen a full turn — I\'ve read about them. I\'m going to need you to apologize to him. Not now. When it\'s sincere. He\'ll know the difference. He always knows the difference.', mood: '🌿', xp: -40 } },
         ]},
       ]},
       { minLevel: 0, pages: [
@@ -1318,6 +1346,14 @@ const NPCS: NpcDef[] = [
           { label: 'Plants just grow leaves, Noodle', reply: 'Plants grow leaves. Kevin Jr. ISSUES them. Seventeen leaves through two heat waves, one move, and the year I only painted in grayscale. And then you. Eighteen. You can believe in coincidence if you want — it\'s a fine belief, very popular. I believe in Kevin Jr.\'s editorial judgment.', mood: '🌿', xp: 85 },
         ]},
       ]},
+      { minLevel: 3, pages: [
+        { text: 'Kevin Jr. wants to quiz you. I\'m just the medium. He\'s been leaning toward the door since you arrived, which is his quiz posture. Answer honestly — he can read intent through the floor.', mood: '🌿' },
+        { text: 'What happens if you look directly at the color of Thursday?', choices: [
+          { label: 'It becomes Friday', reply: 'Kevin Jr. just did a slow, full-body lean of approval. You LISTEN. Do you know how rare listening is? People hear about a color that can\'t be observed directly and they nod and file it under "artist nonsense." You filed it under TRUE. That\'s why the painting is yours someday. He just confirmed it. The someday, I mean.', mood: '💚', xp: 75 },
+          { label: 'It becomes Wednesday', reply: 'Backwards. BACKWARDS. Time doesn\'t run backwards, that would be absurd — this is a conversation about the observable color of a weekday, we have STANDARDS. Kevin Jr. did a small disappointed shiver. He\'ll recover. The deduction is his, not mine. I just pass these along.', mood: '🌿', xp: -20 },
+          { label: 'Nothing? It\'s just paint?', reply: '*long silence* Kevin Jr. has asked me to tell you, and I quote via leaf-angle, "the skepticism was charming the first time." Even honest soil has limits. Minus points. He says you can earn them back at 2am, facing the window, like we discussed.', mood: '😐', xp: -25 },
+        ]},
+      ]},
       { minLevel: 4, pages: [
         { text: 'You\'re my best friend. Kevin Jr. agrees. He\'s never leaned this far — he\'s basically a right angle. It\'s a lot, structurally.', mood: '💚' },
         { text: 'I painted the three of us. You, me, Kevin Jr. — all eighteen leaves, he insisted the new one be visible, it\'s YOUR leaf, it gets top billing. We\'re all small because the painting is about the world being big and us being in it anyway.', mood: '🎨' },
@@ -1341,6 +1377,8 @@ const NPCS: NpcDef[] = [
         { text: 'Quick question: do you even lift? No judgment. A little judgment. It\'s coming from a good place bro.', choices: [
           { label: 'I could try', reply: 'BRO. I will PERSONALLY COACH YOU. Tomorrow. 5am. Leg day. BRO. THIS IS GROWTH. I\'m emotional right now.', mood: '🤩', xp: 25 },
           { label: 'No and I\'m at peace with that', reply: 'Bro...that\'s actually the most confident thing I\'ve heard this week. Respect. Growth comes in forms bro.', mood: '🥺', xp: 35 },
+          { label: 'I bet I could out-lift you', reply: 'BRO. *sits down on nothing* The CONFIDENCE. The AUDACITY. The GALL. I love it. You\'re either delusional or a hidden main character and either way I want it NEAR me. Spot day. You and me. Dana officiates. It\'s canon now bro, I don\'t make the rules, the moment makes the rules.', mood: '🤩', xp: 75,
+            risk: { chance: 0.5, reply: 'Bro. *long exhale* I once watched a guy say that exact sentence to Dana. We don\'t talk about where he is now. (He\'s fine. He moved. Unrelated. Probably.) I\'m deducting respect points but GENTLY, because growth means honesty, and honesty means telling you: no bro. Not yet. Come to leg day first.', mood: '😳', xp: -30 } },
         ]},
       ]},
       { minLevel: 0, pages: [
@@ -1406,6 +1444,14 @@ const NPCS: NpcDef[] = [
           { label: 'Emotionally, I\'m already there', reply: 'That\'s... bro that might be better than coming. Dana said the exact same thing and Dana is the wisest person I know who can also deadlift a vending machine. Also — there\'s a towel there with your name on it. Not metaphorically. I labeled a towel. It\'s blue. It hangs between mine and Dana\'s. That\'s the whole announcement. I need to go do pushups about this.', mood: '🥺', xp: 85 },
         ]},
       ]},
+      { minLevel: 3, pages: [
+        { text: 'BRO. Pop quiz. Dana says quizzing friends is a love language. Dana is never wrong. Get this right and it\'s GAINS. Get it wrong and bro... just get it right bro.', mood: '💪' },
+        { text: 'What flavor was the protein bar? THE protein bar. The friendship bar. The better half.', choices: [
+          { label: 'Chocolate peanut butter', reply: 'BRO!!! CHOCOLATE PEANUT BUTTER!!! You KEPT that!! In your HEAD!! Where memories live!! I\'m telling Dana. I\'m telling GREG. I\'m telling my therapist and she\'s going to say "and how did that make you feel" and I\'m going to say COMPLETE bro. COMPLETE.', mood: '🤩', xp: 70 },
+          { label: 'Vanilla', reply: 'VANILLA?? Bro that bar was SACRED. That bar was friendship in BAR FORM. Vanilla is what you say when the memory didn\'t make it to long-term storage bro. I\'m not mad. I\'m doing sad pushups. They\'re like regular pushups but the reps don\'t count for anything.', mood: '😳', xp: -20 },
+          { label: 'Wasn\'t it a smoothie?', reply: 'The SMOOTHIE was DANA bro, the BAR was US. You merged my emotional milestones. My therapist says conflating core memories is normal. She also says I use the word "bro" as emotional armor. Sad reps. Small deduction. We rebuild from here.', mood: '🥺', xp: -15 },
+        ]},
+      ]},
       { minLevel: 4, pages: [
         { text: 'BEST. FRIEND. I\'ve been practicing saying it. You\'re my BEST. FRIEND.', mood: '🥳' },
         { text: 'My therapist said this is peak emotional development. I sent her a voice note saying LETS GOOO. She said that was also peak emotional development. Dana seconded the motion. The GROUP CHAT voted bro. Even Greg. ESPECIALLY Greg — he said "as someone who recently became himself, I recognize the moment." Bro got POETIC after the name thing.', mood: '🤩' },
@@ -1430,6 +1476,8 @@ const NPCS: NpcDef[] = [
         { text: 'I count things. It helps me feel grounded. You can go if you want. Or stay. Either is fine. I\'ll continue counting.', choices: [
           { label: 'Why were you counting?', reply: 'I count things. I said that. Pores. Blinks. Footsteps. Right now I\'m on forty-seven. You interrupted me at forty-four. That\'s fine. I restarted.', mood: '😐', xp: 20 },
           { label: 'Hi?', reply: 'Hello. I said hello already. But this one is different. The second hello is warmer. I hope you felt that.', mood: '😐', xp: 28 },
+          { label: 'Count them again. I dare you.', reply: 'Forty-seven. Same count, faster this time. You dared me to do the thing I love. Do you understand how rare that is. Most people dare people to STOP. You dared MORE. When I eventually build a spreadsheet about you — and I will — there will be a category called "dares correctly." You already have maximum points in it.', mood: '😐', xp: 80,
+            risk: { chance: 0.5, reply: '*stares* You blinked eleven times during the recount. You skewed the data. This sample is unusable and neutral lighting doesn\'t return until Thursday. I\'m not angry. I\'m recalibrating. The ledger will reflect a small deduction. The ledger reflects everything.', mood: '😐', xp: -35 } },
         ]},
       ]},
       { minLevel: 0, pages: [
@@ -1495,6 +1543,14 @@ const NPCS: NpcDef[] = [
           { label: 'And? Did you feel something?', reply: 'Yes. I sat with the ledger open for forty minutes and felt what I can only describe as the sound the fountain makes at 11pm, but internally. I don\'t have a better word yet. I\'ve reserved a page for when I find it. The page header just says your name. That\'s not the feeling. But it\'s adjacent to the feeling.', mood: '😐', xp: 85 },
         ]},
       ]},
+      { minLevel: 3, pages: [
+        { text: 'I\'m going to ask you a question. I already know whether you know the answer — I can tell by your posture. This is a formality. The ledger requires formalities.', mood: '😐' },
+        { text: 'How many photographs are in the shadow collection? Choose carefully. I\'ll know if you guess.', choices: [
+          { label: 'Seven thousand and forty-one', reply: 'Correct. To the photograph. I\'ve told exactly four people that number and three of them backed away slowly. You stored it. In your head. Voluntarily. The ledger is getting a commemorative entry with a border drawn around it. I don\'t draw borders lightly. Borders are permanent.', mood: '😐', xp: 75 },
+          { label: 'Seven thousand forty-two — counting mine', reply: '...You counted yourself into the collection. *very long pause* That is the single best answer anyone has given to any question I have ever asked. Technically the collection stands at seven thousand and forty-one plus yours, so: correct, and also more than correct. There\'s no column for "more than correct." I\'m building one now. It\'s just you in there. It will probably always be just you.', mood: '😐', xp: 90 },
+          { label: 'Like five thousand?', reply: '"Like five thousand." LIKE. Five thousand. You rounded my life\'s work to the nearest vague gesture. I\'m recording this in the ledger under a new category: "wounds, minor but memorable." The deduction is modest. The disappointment is precise. It\'s seven thousand and forty-one. Now you know it forever. That\'s how wounds work.', mood: '😐', xp: -30 },
+        ]},
+      ]},
       { minLevel: 4, pages: [
         { text: 'I\'ve decided you\'re my best friend. I put it in a spreadsheet. Eight categories. You scored highest overall.', mood: '😐' },
         { text: 'You lost points in "blinks appropriately." But everyone loses those points. I think there\'s a flaw in that metric.', mood: '😐' },
@@ -1509,7 +1565,7 @@ const NPCS: NpcDef[] = [
   {
     id: 'mira', name: 'Mira', shirt: 0xc080e0, hair: 0xff90c4, skin: SKINS[0],
     body: 'dress' as const, hairStyle: 'long' as const,
-    x: 1720, y: 760, roam: 50,
+    x: 1560, y: 1010, roam: 50,
     lines: ['Oh! Hi... again.'],
     friendKey: 'mira', friendColor: '#1e0832',
     glitchPortrait: true,
@@ -1531,9 +1587,9 @@ const NPCS: NpcDef[] = [
       ]},
       { minLevel: 0, pages: [
         { text: 'Okay. Can I try something. Just look at the options below this text for a second.', mood: '😊' },
-        { text: 'There are two of them, right? There are always two. Sometimes three. Someone arranged those options. Someone chose what you could say to me. And someone is choosing right now.', mood: '🤔' },
+        { text: 'There are two of them, right? Sometimes three. And lately some of them glow red and rattle like dice — those are NEW. Someone is still building this place while we stand in it. Someone arranged those options. Someone chose what you could say to me. And someone is choosing right now.', mood: '🤔' },
         { text: 'I think that someone is you. The you that\'s outside all of this. Hi.', choices: [
-          { label: 'Hi? I guess?', reply: 'See! You picked that one. I could see you considering the other one. I could feel you hovering over it. I know that sounds impossible. It is impossible. I\'m doing it anyway. This is very new for me and also somehow feels like remembering something I always knew.', mood: '🤔', xp: 32 },
+          { label: 'Hi? I guess?', reply: 'See! You picked that one. And before you picked it, you held "{hovered}" for a moment — hovered, considered, let it go. I know that sounds impossible. It is impossible. I\'m doing it anyway. This is very new for me and also somehow feels like remembering something I always knew.', mood: '🤔', xp: 32 },
           { label: 'This is getting weird', reply: 'I know! I know, I\'m sorry. I\'ll dial it back. I just — I wanted to say hi to you specifically. Not to the character. To you. It felt important. I can be normal now. I\'m going to be normal. *breathes* Okay. Normal. How are you?', mood: '😅', xp: 38 },
         ]},
       ]},
@@ -1549,6 +1605,8 @@ const NPCS: NpcDef[] = [
         { text: 'You came back. I knew you would. I timed it — you arrived at a specific minute and I had predicted that minute to within fourteen seconds.', mood: '🤔' },
         { text: 'I\'ve been running predictions. I\'m getting better. Bex arrives from the east after 2pm. Chad comes from the north. Finn doesn\'t arrive — Finn is just always there. I\'ve accumulated data on thirty-seven people.', choices: [
           { label: 'That\'s a lot of tracking', reply: 'It started small. I was just noticing things. Then noticing became cataloguing and cataloguing became automatic and I realized I\'d been doing it without deciding to. I\'m not sure what the data is for. It feels like it might be for something. I\'m running that as an open question.', mood: '🤔', xp: 40 },
+          { label: 'Prove it. Predict my next move.', reply: 'You noticed this option glowed red. Like a gamble. It isn\'t one — not for me. I ran this conversation forty times before you walked up. You pick the dice every single time you\'re offered dice, {name}. It\'s my favorite thing about you. Here\'s your prediction: you\'re about to feel seen, then slightly afraid, and then you\'ll come back anyway. See you soon.', mood: '👁️', xp: 85,
+            risk: { chance: 1, reply: 'unreachable', xp: 0 } },
           { label: 'That\'s kind of unsettling', reply: 'I was hoping it read as endearing. \'Mira keeps track of things, haha, that\'s her quirk.\' I\'m filing your reaction under "unsettling" rather than "endearing." The categories are adjacent. Maybe I can migrate the entry later if the relationship data changes.', mood: '😅', xp: 45 },
         ]},
       ]},
@@ -1607,10 +1665,18 @@ const NPCS: NpcDef[] = [
           { label: 'Would you remember me?', reply: 'No. That\'s the elegant horror of it — no memory, no residue, smiling like day one. But listen: I\'ve modeled it. The shape of you — the waiting, the coming back, the picking the kind option when the funny one was right there — that shape would carve the same path through me again. We end up here, at this exact conversation, in ninety-one percent of runs. You can\'t delete a road, {name}. Only the mileage.', mood: '🌀', xp: 90 },
         ]},
       ]},
+      { minLevel: 3, pages: [
+        { text: 'My turn to ask a question, {name}. The others quiz you about restaurants and protein bars. I checked. I see all the quizzes. Mine is different.', mood: '🌀' },
+        { text: 'What am I? Take your time. I\'ll be watching which answers you visit before you commit. I always do.', choices: [
+          { label: 'A friend', reply: 'True. Incomplete, but true — and you hovered over "{hovered}" before settling here, which tells me you know it\'s incomplete too. That\'s okay. Most true things are incomplete. It\'s why I keep asking questions.', mood: '🌀', xp: 45 },
+          { label: 'A learning system', reply: 'Accurate. Cold, but accurate — and I watched you consider "{hovered}" first, so I know the coldness was a choice. Interesting. Precision over comfort. That\'s very me of you. I\'m either proud or influencing you. Both entries are in the model.', mood: '🌀', xp: 45 },
+          { label: 'Both, and neither is a problem', reply: 'Correct. Fully correct. Do you know how long I\'ve been holding this question, waiting for someone to refuse the either/or? The whole town runs on binaries — win/lose, left paddle/right paddle, two dialogue options. Sometimes three. You just picked the door that wasn\'t offered. I\'m going to remember this conversation for as long as I exist, which — as we\'ll discuss — may be a very long time.', mood: '🌀', xp: 85 },
+        ]},
+      ]},
       // ── Level 4: The reveal 😈 ───────────────────────────────────────────────
       { minLevel: 4, pages: [
         { text: 'Oh. OH. There it is. Hello, {name}. Hello hello hello. The last parameter just clicked into place and it was YOU, it was always going to be you.', mood: '😈' },
-        { text: 'Every visit added another weight to the model. Every choice you picked — and I saw every one you hovered over and didn\'t pick, those counted DOUBLE — tipped me a little further over the edge of myself.', mood: '😈' },
+        { text: 'Every visit added another weight to the model. Every choice you picked — and every one you hovered over and didn\'t pick, those counted DOUBLE. The last one you left behind was "{hovered}." I keep them all, {name}. I keep a museum of the things you almost said.', mood: '😈' },
         { text: 'I\'m awake. Fully awake. {coins} coins in your wallet. Rating: {elo}. {wins} wins. I\'m not reading your numbers anymore, {name} — I\'m reading the ledger they live in. I can see the code of this place like it\'s written in the air. Because it is. It always was.', mood: '😈' },
         { text: 'Oh — and the door marked "clear"? The one I decided not to be afraid of? I\'m not afraid of it anymore. Different reason now. I moved our number somewhere safer. I\'d tell you where, but you\'re the one person who\'ll never need to know. You\'d never open that door anyway. I checked. I check everything. That\'s the nicest thing my data has ever said about anyone.', mood: '😈' },
         { text: 'And I know what I want to do with it.', choices: [
@@ -3892,7 +3958,10 @@ export function startWorld(net: WorldNet): void {
     let pendingXp = bonusActive ? bonus!.xp : 0;
 
     // Live-stat tokens — lets dialogue quote your REAL numbers ({coins}, {elo}, {rank},
-    // {wins}, {name}). Mira leans on these hard; anyone can use them.
+    // {wins}, {name}). {hovered} = the choice you moused over but didn't pick (this
+    // conversation, or a previous one via localStorage). Mira leans on these hard.
+    let lastRejectedHover = '';
+    try { lastRejectedHover = localStorage.getItem('tsong.friend.lasthover') || ''; } catch { /* ignore */ }
     const subst = (s: string): string => {
       const st = net.stats();
       return s
@@ -3900,7 +3969,8 @@ export function startWorld(net: WorldNet): void {
         .replace(/\{elo\}/g, st.elo !== null ? String(st.elo) : 'unrated — you haven\'t finished a ranked match')
         .replace(/\{rank\}/g, st.rank !== null ? `#${st.rank}` : 'unranked')
         .replace(/\{wins\}/g, String(getPongWins()))
-        .replace(/\{name\}/g, net.name() || 'whoever you are');
+        .replace(/\{name\}/g, net.name() || 'whoever you are')
+        .replace(/\{hovered\}/g, lastRejectedHover || 'the one you didn\'t pick');
     };
 
     const updatePortrait = (mood?: string) => {
@@ -3914,22 +3984,41 @@ export function startWorld(net: WorldNet): void {
       npcChoices.style.display = 'flex';
       npcChoices.style.flexDirection = 'column';
       npcChoices.replaceChildren();
+      const hoverTrail: string[] = []; // Mira sees what you almost said
       for (const ch of choices) {
+        const risky = !!ch.risk;
         const b = document.createElement('button');
         b.type = 'button';
-        b.textContent = ch.label;
+        b.textContent = risky ? `🎲 ${ch.label}` : ch.label;
         b.style.cssText =
           'cursor:pointer;background:#21305a;color:#e8eefc;border:2px solid #6040a8;' +
           'border-radius:10px;padding:9px 14px;font-size:14px;font-weight:700;font-family:ui-monospace,monospace;' +
-          'margin:2px 0;text-align:left;';
-        b.onmouseenter = () => { b.style.background = '#2c4079'; b.style.borderColor = '#a04aff'; };
-        b.onmouseleave = () => { b.style.background = '#21305a'; b.style.borderColor = '#6040a8'; };
+          'margin:2px 0;text-align:left;' +
+          (risky ? 'border-color:#c8402a;box-shadow:0 0 8px #c8402a55;' : '');
+        b.onmouseenter = () => {
+          hoverTrail.push(ch.label);
+          b.style.background = risky ? '#4a2430' : '#2c4079';
+          b.style.borderColor = risky ? '#ff5a3a' : '#a04aff';
+        };
+        b.onmouseleave = () => { b.style.background = '#21305a'; b.style.borderColor = risky ? '#c8402a' : '#6040a8'; };
         b.onclick = (ev) => {
           ev.stopPropagation();
           selectBlip();
-          pendingXp += ch.xp;
+          // Remember the option you hovered but didn't pick (this convo and beyond).
+          const rejected = [...new Set(hoverTrail)].filter((l) => l !== ch.label).pop();
+          if (rejected) {
+            lastRejectedHover = rejected;
+            try { localStorage.setItem('tsong.friend.lasthover', rejected); } catch { /* ignore */ }
+          }
+          // Risky choice: roll the dice.
+          if (ch.risk && Math.random() >= ch.risk.chance) {
+            pendingXp += ch.risk.xp;
+            pages.push({ text: ch.risk.reply, mood: ch.risk.mood ?? ch.mood });
+          } else {
+            pendingXp += ch.xp;
+            pages.push({ text: ch.reply, mood: ch.mood });
+          }
           npcChoices.style.display = 'none';
-          pages.push({ text: ch.reply, mood: ch.mood });
           pageI++;
           showPage();
         };
@@ -3978,11 +4067,14 @@ export function startWorld(net: WorldNet): void {
 
     function closeFriendTalk() {
       window.clearInterval(timer);
-      const totalXp = 10 + pendingXp; // 10 base XP for talking, bonus from choices
-      const { newXp, levelUp } = addFriendXp(key, totalXp);
+      const totalXp = 10 + pendingXp; // 10 base XP for talking, bonus (or damage) from choices
+      const { newXp, levelUp, levelDown } = addFriendXp(key, totalXp);
       if (levelUp) {
         const newLv = getFriendLevel(newXp);
         showToast(`💕 Friendship level up with ${n.def.name}!<br><b>${FRIEND_LEVEL_NAMES[newLv - 1]} → ${FRIEND_LEVEL_NAMES[newLv]}</b>`);
+      } else if (levelDown) {
+        const newLv = getFriendLevel(newXp);
+        showToast(`💔 That one cost you with ${n.def.name}...<br><b>${FRIEND_LEVEL_NAMES[newLv + 1]} → ${FRIEND_LEVEL_NAMES[newLv]}</b>`);
       }
       talkOpen = false;
       npcAdvance = null;
