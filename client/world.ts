@@ -1251,7 +1251,7 @@ const NPCS: NpcDef[] = [
     friendBonus: { check: () => { const h = new Date().getHours(); return h >= 22 || h < 6; }, xp: 25, label: "Kevin Jr. is vibrating. The hour is correct.", hint: "Visit between 10pm and 6am" },
   },
   {
-    id: 'chad-friend', name: 'Chad', shirt: 0x1a6ae8, hair: 0x2a1800, skin: SKINS[2],
+    id: 'chad-friend', name: 'Chad', shirt: 0x1a6ae8, hair: 0x2a1800, skin: SKINS[4],
     hairStyle: 'short' as const,
     x: 1650, y: 500, roam: 90,
     lines: ['BRO.'],
@@ -1318,7 +1318,7 @@ const NPCS: NpcDef[] = [
     friendBonus: { check: () => getPongWins() >= 10, xp: 40, label: "BRO. TEN WINS?? That's ELITE GAINS. That's ELITE.", hint: "Win 10+ tsong matches" },
   },
   {
-    id: 'finn', name: 'Finn', shirt: 0x282030, hair: 0x141018, skin: SKINS[4],
+    id: 'finn', name: 'Finn', shirt: 0x282030, hair: 0xc4a060, skin: SKINS[0],
     hairStyle: 'short' as const,
     x: 2250, y: 710, roam: 40,
     lines: ['...'],
