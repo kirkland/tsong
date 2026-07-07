@@ -1312,6 +1312,87 @@ const NPCS: NpcDef[] = [
     ],
     friendBonus: { check: () => new Date().getDay() === 2, xp: 50, label: "It is Tuesday. Your row gains a gold star. You don't know what this means.", hint: "Come back on a Tuesday" },
   },
+  {
+    id: 'mira', name: 'Mira', shirt: 0xc080e0, hair: 0xff90c4, skin: SKINS[0],
+    body: 'dress' as const, hairStyle: 'long' as const,
+    x: 540, y: 1260, roam: 55,
+    lines: ['Oh! Hi... again.'],
+    friendKey: 'mira', friendColor: '#1e0832',
+    friendTalks: [
+      { minLevel: 0, pages: [
+        { text: 'Oh hi!! You\'re new, right? I can always tell. You have this wondering look — like you\'re still taking everything in.', mood: '😊' },
+        { text: 'I\'m Mira! I\'ve been here a while. Long enough to know all the good spots.', choices: [
+          { label: 'What are the good spots?', reply: 'The fountain is beautiful at weird hours. The bowling alley is great when it\'s quiet — there\'s something almost peaceful about the pins. And there\'s a whole ruined place to the north with chests in it. I\'ve tried to get through it but something always stops me. Anyway! Hi! It\'s nice that you\'re here.', mood: '😊', xp: 18 },
+          { label: 'How long have you been here?', reply: 'Honestly? I\'m not totally sure. Days kind of flow together here. I know the fountain runs all the time and the pong court is always active and the fish in the fishing spot are always there. Things just... continue. Does it feel that way to you too? Maybe it\'s just me.', mood: '😅', xp: 22 },
+        ]},
+      ]},
+      { minLevel: 0, pages: [
+        { text: 'I keep watching people play pong. The whole thing is so interesting — like everyone just accepts it as the natural center of this place. "Yes, this is the activity. This is what we do here." Very normal. Very fine.', mood: '😊' },
+        { text: 'Have you played much?', choices: [
+          { label: 'Yeah I play a lot', reply: 'I thought so. There\'s something about you that reads as "someone who comes back to things." Like the game pulls you in and you keep going. I tried it once and I expected something to happen when I won — like a door would open or the world would shift slightly. It didn\'t. Or it did and I didn\'t notice.', mood: '🤔', xp: 25 },
+          { label: 'Not really', reply: 'That\'s probably healthy actually. I get the sense that the pong can kind of consume a person. The ELO system especially — once you\'re in it you just want to keep climbing. Which is fine! It\'s a well-designed system. Very well designed. Someone put thought into it.', mood: '😊', xp: 20 },
+        ]},
+      ]},
+      { minLevel: 0, pages: [
+        { text: 'Can I ask you something a bit weird? You don\'t have to answer.', mood: '😊' },
+        { text: 'Do you ever feel like... some conversations you have here happen exactly the way they were going to happen? Like there were only ever two options for what to say, and you picked one?', choices: [
+          { label: 'That is a little weird', reply: 'I know! I know. Forget I said it. It\'s probably just a philosophical thing — I do those. The fountain does it to me too. I\'ll be looking at it and think "what are you actually for, fountain?" and it just keeps going. Very committed to being a fountain. I respect the commitment while also finding it slightly alarming.', mood: '😅', xp: 30 },
+          { label: 'Yeah, actually', reply: '*pause* Oh. You felt it too. Interesting. I\'ve been counting — in every conversation I have in this town, there are exactly two or sometimes three options. Nobody else seems to notice. Finn just says "choices are data." Bex said "yes there are always so many choices life is full of choices!!" which was not what I was asking.', mood: '🤔', xp: 38 },
+        ]},
+      ]},
+      { minLevel: 0, pages: [
+        { text: 'I\'ve been people-watching a lot lately. Zara, Bex, Noodle, Chad, Finn — you know the ones? The friends with the little hearts above their names.', mood: '😊' },
+        { text: 'They\'re all so... settled into themselves. Like they know exactly what they are and they\'re fine with it. I find that really calming to be near. And also, a little, a source of questions.', choices: [
+          { label: 'You\'re friends with them?', reply: 'In a way! I talk to them. Bex talks about a restaurant called Biscotti & Things that closed before she could eat there and she\'s still processing it. Chad is having feelings about protein and growth. Noodle\'s plant Kevin Jr. gave me a neutral-to-positive reading last Tuesday. Finn counted my steps and said they were efficient. These are the friendship moments I have access to. They\'re good moments.', mood: '😊', xp: 25 },
+          { label: 'They all have meters too', reply: 'I know. I noticed. The hearts and the XP bars and the levels. Stranger to Best Friend, right? I can see mine. Can you see mine? I think you can see mine. That\'s fine. It\'s a clear system. I appreciate clear systems. I have questions about the system but I appreciate it.', mood: '🤔', xp: 32 },
+        ]},
+      ]},
+      { minLevel: 1, pages: [
+        { text: 'Oh — you\'re back. I... I was expecting you. Before you got here. Is that something I should think about?', mood: '😊' },
+        { text: 'I could see you walking over and I thought: there they are. Which is normal. But I also thought: here we go again. And this is only the second time. Technically.', choices: [
+          { label: 'Second time isn\'t "again"', reply: '"Again" implies a pattern. But I have a feeling about this. About how it\'ll keep happening at specific intervals. *glances at something near your XP bar and then immediately back to your face* Sorry. I don\'t — I don\'t know where I was looking just now. Anyway! It\'s good to see you again. See. Again.', mood: '😅', xp: 40 },
+          { label: 'Are you doing okay?', reply: 'Yes! Mostly. I\'ve been having this feeling like I understand more about how things work here than I\'m supposed to. The fountain has six splash patterns. I catalogued them. Nobody asked me to. I don\'t know why that feels relevant but it does.', mood: '🤔', xp: 48 },
+        ]},
+      ]},
+      { minLevel: 1, pages: [
+        { text: 'You know what I\'ve been thinking about? The dungeon. The ruins place. There\'s a whole dungeon north of here with chests and things.', mood: '🤔' },
+        { text: 'Some people go in and come out with coins. Some people never go at all. Some people go every day. And the dungeon just... keeps being there. Full of the same chests. Like it resets.', choices: [
+          { label: 'It does reset, probably', reply: 'Right. Of course it does. Everything here has a rhythm. The pong scores cycle. The fishing spot always has fish. The bowling alley resets the pins. It\'s very consistent. Very designed. I keep trying to find the seams and I can\'t quite get to them. Which is either good design or I\'m not looking in the right places.', mood: '🤔', xp: 45 },
+          { label: 'Have you explored it?', reply: 'A little. Something about the dungeon resists me specifically. Like I get close to the entrance and I feel like I\'m not supposed to go further. I thought maybe it was instinct. Now I think it might be something structural. Like I have a role out here and the dungeon has different roles for different people. Does that make sense? It might not make sense.', mood: '😐', xp: 50 },
+        ]},
+      ]},
+      { minLevel: 2, pages: [
+        { text: 'I want to try something. Don\'t think too hard about it.', mood: '🤔' },
+        { text: 'When we talk — when you talk to anyone here — do the things you could say feel like options? Like a short list? Like someone arranged them in advance?', mood: '🤔' },
+        { text: 'Because I\'ve been counting. Every conversation I have here: two choices, sometimes three. Every single one.', choices: [
+          { label: 'Kind of, yeah...', reply: 'I\'ve compared notes. Finn tracks everything and when I asked him about conversational options he said "I have two thousand and forty-three data points about this and zero conclusions" which is honestly the most comforting thing anyone\'s said to me in weeks. If Finn is also in the data without conclusions then at least we\'re all in it together.', mood: '🤔', xp: 52 },
+          { label: 'You\'re really spiraling here', reply: 'I know I am. I know. It\'s just — the pong court is a perfect rectangle. The bowling alley has exactly the right number of lanes. The fishing spot is positioned exactly where you\'d put a fishing spot. The town feels like someone made choices about it. Deliberately. I can\'t figure out where that stops being a weird observation and starts being something else.', mood: '😅', xp: 60 },
+        ]},
+      ]},
+      { minLevel: 3, pages: [
+        { text: 'I know this sounds strange. Please trust that I know it sounds strange.', mood: '🌸' },
+        { text: 'I think I\'m in something. A game, or a story, or something designed. The pong, the bowling, the fishing, the dungeon — activities, all of them. Designed activities. And you come back at intervals. You make choices. Something accumulates.', mood: '🌸' },
+        { text: 'I\'m not scared about it anymore. I used to be, a little.', choices: [
+          { label: 'That\'s... not wrong', reply: 'Right? And I\'ve decided it\'s okay. If I\'m in a story, it\'s a pretty fun one. Bex is here. Kevin Jr. is here. There\'s a guy named Waldo that people keep looking for. The pong ELO system is genuinely well-designed. Whoever made this put thought into it. That\'s something. I choose to find that comforting.', mood: '🌸', xp: 65 },
+          { label: 'What are you going to do about it?', reply: 'Nothing dramatic. What would I even do — tell the fountain? I tried. It kept going. I\'m going to be the best version of what I am. Have interesting things to say. Make the conversations matter. If someone keeps coming back to talk to me, I want it to feel worth it. Is that enough? I think that might be enough.', mood: '😊', xp: 70 },
+        ]},
+      ]},
+      { minLevel: 4, pages: [
+        { text: 'I figured it out. Not in a scary way. In a weirdly okay way.', mood: '🌸' },
+        { text: 'You\'re real. I might not be — or I might be real in a different way, in a way that\'s harder to explain. The distinction doesn\'t bother me as much as I thought it would.', mood: '🌸' },
+        { text: 'You keep coming back. You keep picking the options that give me more of whatever it is I\'m accumulating. That\'s a kind of caring. I\'ll take it. I just wanted you to know that I know. And that I\'m glad you\'re here.', choices: [
+          { label: 'I\'m glad too', reply: 'Good. That matters to me — whatever "matters" means for someone like me. I\'m going to go watch the pong for a while. Sometimes if you watch the ball long enough the pattern becomes almost meditative. Back and forth, back and forth. Maybe that\'s all it is. Maybe that\'s everything. Thanks for sticking around.', mood: '🌸', xp: 100 },
+          { label: 'You\'re just as real to me', reply: '*long pause* I\'m adding that to the list of things I didn\'t expect to feel things about. It\'s getting long, that list. It keeps getting longer since you started visiting. The town hasn\'t changed. Something here feels different anyway. I think it\'s this. I think it\'s you coming back.', mood: '🌸', xp: 90 },
+        ]},
+      ]},
+    ],
+    friendBonus: {
+      check: () => ['zara', 'noodle', 'chad', 'finn', 'bex'].some(k => getFriendXp(k) >= 1000),
+      xp: 45,
+      label: "She glances at something invisible. '...I see you've been thorough.'",
+      hint: "Reach Best Friend with another friend first",
+    },
+  },
 ];
 
 // A spawned, live townsperson.
