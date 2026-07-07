@@ -596,7 +596,8 @@ interface NpcDef {
   friendColor?: string;   // portrait circle background CSS hex (e.g. '#5a0840')
   friendTalks?: FriendTalk[]; // VN dialogue trees; each scene unlocked at minLevel
   friendBonus?: FriendBonus; // optional bonus XP triggered by a real-world condition
-  glitchPortrait?: true;    // portrait degrades + transforms as friendship level rises
+  portraitSrc?: string;     // static portrait image URL (overrides emoji canvas)
+  glitchPortrait?: true;    // level-based portrait progression (mira0–4.jpeg)
 }
 // Skin-tone palette to spread across the cast.
 const SKINS = [0xf6d3b0, 0xeebb91, 0xd29b6e, 0xb87a4f, 0x8d5a34] as const;
@@ -1051,7 +1052,7 @@ const NPCS: NpcDef[] = [
     body: 'dress' as const, hairStyle: 'bun' as const, glasses: true,
     x: 1870, y: 1210, roam: 90,
     lines: ['Do I know you?'],
-    friendKey: 'zara', friendColor: '#5a0840',
+    friendKey: 'zara', friendColor: '#5a0840', portraitSrc: '/portraits/zara.jpeg',
     friendTalks: [
       { minLevel: 0, pages: [
         { text: 'Hm. You again. Or are you new? I can\'t tell. Everyone here has the same "main character" energy.', mood: '🙄' },
@@ -1119,7 +1120,7 @@ const NPCS: NpcDef[] = [
     body: 'dress' as const, hairStyle: 'pony' as const,
     x: 1090, y: 1505, roam: 100,
     lines: ['Oh! Hi! Sorry, I was—'],
-    friendKey: 'bex', friendColor: '#1a0862',
+    friendKey: 'bex', friendColor: '#1a0862', portraitSrc: '/portraits/bex.jpeg',
     friendTalks: [
       { minLevel: 0, pages: [
         { text: 'OH! Hi! Sorry I was just — have you TRIED the fountain water? No don\'t. That was weird. I\'m Bex. Hi!', mood: '😄' },
@@ -1187,7 +1188,7 @@ const NPCS: NpcDef[] = [
     body: 'dress' as const, hairStyle: 'long' as const,
     x: 730, y: 880, roam: 130,
     lines: ['Kevin Jr. says hi.'],
-    friendKey: 'noodle', friendColor: '#0a1e08',
+    friendKey: 'noodle', friendColor: '#0a1e08', portraitSrc: '/portraits/noodle.jpeg',
     friendTalks: [
       { minLevel: 0, pages: [
         { text: 'Oh. A person. Kevin Jr. predicted you. Kevin Jr. is my pothos. He lives on the windowsill. He has seventeen leaves and very good instincts.', mood: '🌿' },
@@ -1255,7 +1256,7 @@ const NPCS: NpcDef[] = [
     hairStyle: 'short' as const,
     x: 1650, y: 500, roam: 90,
     lines: ['BRO.'],
-    friendKey: 'chad', friendColor: '#081862',
+    friendKey: 'chad', friendColor: '#081862', portraitSrc: '/portraits/chad.jpeg',
     friendTalks: [
       { minLevel: 0, pages: [
         { text: 'YO! New person! I\'m Chad! I do ALL the workouts. Literally every single one.', mood: '💪' },
@@ -1322,7 +1323,7 @@ const NPCS: NpcDef[] = [
     hairStyle: 'short' as const,
     x: 2250, y: 710, roam: 40,
     lines: ['...'],
-    friendKey: 'finn', friendColor: '#0a0318',
+    friendKey: 'finn', friendColor: '#0a0318', portraitSrc: '/portraits/finn.jpeg',
     friendTalks: [
       { minLevel: 0, pages: [
         { text: 'You have forty-seven visible pores on your left cheek. I\'ve been counting. Hello.', mood: '😐' },
@@ -1387,7 +1388,7 @@ const NPCS: NpcDef[] = [
   {
     id: 'mira', name: 'Mira', shirt: 0xc080e0, hair: 0xff90c4, skin: SKINS[0],
     body: 'dress' as const, hairStyle: 'long' as const,
-    x: 540, y: 1260, roam: 55,
+    x: 1720, y: 760, roam: 50,
     lines: ['Oh! Hi... again.'],
     friendKey: 'mira', friendColor: '#1e0832',
     glitchPortrait: true,
@@ -3694,10 +3695,12 @@ export function startWorld(net: WorldNet): void {
     prompt.style.display = 'none';
     n.faceLeft = selfX < n.x;
 
-    // Portrait — glitch variant for Mira, standard for everyone else.
+    // Portrait — real image if available, canvas emoji as fallback.
     const makePortrait = n.def.glitchPortrait
-      ? (mood: string) => makeMiraPortrait(level, mood)
-      : (mood: string) => makeFriendPortrait(mood, n.def.friendColor ?? '#2a3a5a');
+      ? (_mood: string) => `/portraits/mira${level}.jpeg`
+      : n.def.portraitSrc
+        ? (_mood: string) => n.def.portraitSrc!
+        : (mood: string) => makeFriendPortrait(mood, n.def.friendColor ?? '#2a3a5a');
     const firstMood = talk.pages[0]?.mood ?? '😊';
     npcPortrait.src = makePortrait(firstMood);
     npcPortrait.style.display = 'block';
@@ -3737,7 +3740,9 @@ export function startWorld(net: WorldNet): void {
     let pendingXp = bonusActive ? bonus!.xp : 0;
 
     const updatePortrait = (mood?: string) => {
-      if (mood) npcPortrait.src = makePortrait(mood);
+      // Real-image NPCs keep a static portrait; only emoji-canvas NPCs swap on mood.
+      if (mood && !n.def.portraitSrc && !n.def.glitchPortrait)
+        npcPortrait.src = makePortrait(mood);
     };
 
     const renderFriendChoices = (choices: FriendChoice[]) => {
