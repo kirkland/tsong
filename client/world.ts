@@ -605,7 +605,9 @@ const SKINS = [0xf6d3b0, 0xeebb91, 0xd29b6e, 0xb87a4f, 0x8d5a34] as const;
 
 // --- Friend Sim helpers (module-level — pure localStorage; no server round-trip) ------
 const getPongWins = () => { try { return parseInt(localStorage.getItem('tsong.world.pongWins') || '0', 10) || 0; } catch { return 0; } };
-const FRIEND_THRESHOLDS = [0, 100, 300, 600, 1000] as const;
+// Tuned so leveling keeps pace with fresh scenes — you should never see a repeat
+// until you've maxed the friendship (~10 conversations: 3 + 2 + 2 + 2 + the finale).
+const FRIEND_THRESHOLDS = [0, 100, 200, 350, 500] as const;
 const FRIEND_LEVEL_NAMES = ['Stranger', 'Acquaintance', 'Friend', 'Good Friend', 'Best Friend'] as const;
 function getFriendXp(key: string): number {
   try { return Math.max(0, parseInt(localStorage.getItem(`tsong.friend.${key}`) || '0', 10) || 0); } catch { return 0; }
@@ -1106,6 +1108,27 @@ const NPCS: NpcDef[] = [
           { label: 'I don\'t know', reply: 'Same. The most honest answer in this whole town. I\'m genuinely proud of you.', mood: '💕', xp: 62 },
         ]},
       ]},
+      { minLevel: 1, pages: [
+        { text: 'I did your brand audit. Unprompted and free of charge, which for me is unprecedented. My hourly rate has a comma in it.', mood: '💅' },
+        { text: 'Findings: you show up. Repeatedly. On a schedule I could set a campaign calendar by. Do you know how rare "shows up" is as a brand pillar? Entire companies pay me six figures to fake it.', choices: [
+          { label: 'So what\'s my brand?', reply: 'Reliable, with undertones of mystery — because I still don\'t know what you actually do all day. Wins pong matches, opens chests, talks to consultants. Honestly? Marketable. If you ever want a logo, my rate for friends is merely offensive instead of unconscionable.', mood: '😏', xp: 55 },
+          { label: 'You audited me??', reply: 'I audit everything. I audited the fountain — strong visual identity, zero message discipline. I audited the Dorito man — flawless brand consistency, deeply concerning product. You scored above both. Congratulations. There is no certificate. The certificate is my continued attention.', mood: '💅', xp: 62 },
+        ]},
+      ]},
+      { minLevel: 2, pages: [
+        { text: 'They let me rewrite the sign. "A Place for Everyone" is dead. I pitched fourteen alternatives. They picked the safest one, obviously.', mood: '🙄' },
+        { text: 'It now says "A Place for Everyone — And Then Some." The "And Then Some" was my compromise with mediocrity. I fought for it like it was the beach at Normandy.', choices: [
+          { label: 'Honestly? It\'s better', reply: 'It is marginally better. Marginal improvement is my entire career. You stack enough marginals and one day you wake up and the town has a voice. Also the coffee cart has stopped writing "mermaid" on my cup. It now says "consultant." Growth is real and it is spelled correctly.', mood: '💅', xp: 70 },
+          { label: 'That\'s barely different', reply: 'Correct. But "barely different" is how you move a town that once elected to keep a fed in a trench coat as a tourist attraction. You don\'t rebrand a place like this in one quarter. You nudge it. Then you invoice it. Then you nudge it again. It\'s called strategy and I\'m annoyingly good at it.', mood: '😏', xp: 65 },
+        ]},
+      ]},
+      { minLevel: 3, pages: [
+        { text: 'I renewed my contract. Don\'t make a thing of it. The town "requires continued brand stewardship." That\'s the official line.', mood: '😐' },
+        { text: 'The unofficial line is that I looked at my old apartment listing in the city and felt nothing, and then I looked at this absurd fountain and felt something adjacent to fondness. I\'m attributing it to prolonged fountain-based marketing exposure.', choices: [
+          { label: 'You stayed for us', reply: '"Us." Hm. I stayed for the coffee mermaid, the sentient Dorito, and one acquaintance who quietly upgraded themselves to load-bearing. I won\'t be specifying which one you are. A good consultant never reveals the org chart.', mood: '💕', xp: 80 },
+          { label: 'Fondness is off-brand for you', reply: 'Wildly off-brand. If you tell anyone I will issue a formal denial on letterhead. I have letterhead now. The letterhead was eighty percent of why I renewed. The other twenty percent is currently smirking at me, so let\'s move on.', mood: '😏', xp: 85 },
+        ]},
+      ]},
       { minLevel: 4, pages: [
         { text: 'I made you a friendship bracelet. Destroyed it. Made it again. This is bracelet number two.', mood: '💕' },
         { text: 'You\'re my person in this bizarre little town. Don\'t ghost me or I will make your life inconvenient in small but creative ways.', choices: [
@@ -1171,6 +1194,27 @@ const NPCS: NpcDef[] = [
         { text: 'Top five. Possibly top three. The list fluctuates. My dog is on it permanently. Just so you know the competition.', choices: [
           { label: 'I\'m honored', reply: 'YOU SHOULD BE. The list is CURATED. My mom, my dog, now you. That\'s a big deal. That is genuinely a big deal.', mood: '😄', xp: 55 },
           { label: 'Who\'s numbers one and two?', reply: 'Dog, then mom. Both permanent. You\'re in the rotating top-five. That actually makes you MORE impressive. You EARNED it.', mood: '😊', xp: 58 },
+        ]},
+      ]},
+      { minLevel: 1, pages: [
+        { text: 'DOUG UPDATE. You remember Doug. "You\'re a lot" Doug. The one I built a fourth replay about. I FOUND HIM. I used my words like my therapist said!!', mood: '😮' },
+        { text: 'He meant "a lot" like "a lot of GOOD energy" and he left because he was LATE FOR THE DENTIST. A dentist appointment!! I spiraled for a week over a CLEANING. He showed me the little card with the tooth on it and everything.', choices: [
+          { label: 'CLOSURE!!', reply: 'CLOSURE!!! I added a whole tab to the friendship document called "Resolved Arcs" and Doug is the first entry and there\'s a little checkmark and I made the checkmark GOLD. My therapist said this was "healthy resolution seeking." I said LETS GOOO. She\'s heard that before. From Chad actually. Small town.', mood: '😄', xp: 55 },
+          { label: 'The fourth replay was still real', reply: 'THANK you. Like yes, factually, dentist. But emotionally?? The fourth replay where he cried about how interesting I am?? That version of Doug lives on in my heart. Real Doug and Replay Doug can coexist. My therapist is BEGGING me to stop saying that. It\'s in the document under "Doctrines."', mood: '😄', xp: 60 },
+        ]},
+      ]},
+      { minLevel: 2, pages: [
+        { text: 'Okay don\'t freak out but the friendship document has TIERS now. I color-coded everyone I know. You\'re in the gold tier. There are two entries in the gold tier. The other one is my mom.', mood: '😊' },
+        { text: 'I want to be clear that mom was gold FIRST so you can\'t be number one, but you are FIRMLY tied for first among people I did not exit the womb in front of.', choices: [
+          { label: 'What does gold tier get me?', reply: 'SO much. Birthday spreadsheet with countdown. Emergency snack priority — if I have one granola bar and we\'re both hungry, it\'s legally yours, I wrote it down. And the big one: I show UP. Flat tire at 2am? I\'m there. No car, so I\'m there SLOWLY, on foot, with snacks. But I\'m THERE.', mood: '😄', xp: 70 },
+          { label: 'Tied with your MOM?', reply: 'I KNOW. She doesn\'t know about you yet which is insane because you\'re tied. I should fix that. Family dinner? Too fast? She makes a lasagna that made my therapist cry at a potluck. That\'s not a metaphor, there were witnesses, it\'s in the document.', mood: '😮', xp: 65 },
+        ]},
+      ]},
+      { minLevel: 3, pages: [
+        { text: 'Can I be sixty percent serious for a second? That\'s my maximum. I\'ve measured.', mood: '🥺' },
+        { text: 'When I was a kid nobody ever let me finish a sentence, so I started saying all my sentences at once in case I only got one turn. That\'s the whole origin story. That\'s why I\'m "a lot." And you just... wait. Every time. You wait for the whole thought.', choices: [
+          { label: 'I like the whole thought', reply: 'See — SEE — this is why you\'re gold tier. Okay crying is scheduled for later, I\'ve penciled it in. BIG NEWS instead: I found the nephew of the guy who owned Biscotti & Things. I\'m getting closer to the Things. The mystery is UNRAVELING. You\'re the first person I told. Obviously. It\'s you.', mood: '🥹', xp: 80 },
+          { label: 'Take all the turns you need', reply: 'I\'M GOING TO NEED SO MANY TURNS. You have NO idea what you\'ve signed up for. Okay one more serious thing and then we\'re done: thank you for waiting. Nobody waits. End of serious. RESUMING NORMAL BROADCAST: do you think pigeons have gold tiers.', mood: '😄', xp: 85 },
         ]},
       ]},
       { minLevel: 4, pages: [
@@ -1241,6 +1285,27 @@ const NPCS: NpcDef[] = [
           { label: 'That\'s the sweetest thing', reply: 'Kevin Jr. prefers "botanically aware." He finds "sweet" reductive. I\'m passing on his feedback.', mood: '💚', xp: 62 },
         ]},
       ]},
+      { minLevel: 1, pages: [
+        { text: 'Update on the green door. I opened it. I waited nine days first — Kevin Jr. angled three leaves toward it on a Tuesday, which is essentially a permission slip.', mood: '🌿' },
+        { text: 'Inside was the closet I already knew about. But rearranged. Or my memory of the closet was wrong. Either the closet changed or I did. Kevin Jr. knows which one, but he\'s being diplomatic about it.', choices: [
+          { label: 'What was rearranged?', reply: 'The winter coat was where the summer coat goes. The box of unfinished paintings had become a box of differently unfinished paintings. And there was a smell like the moment before rain, which is not a smell closets are supposed to have. I\'ve started leaving the door slightly open. As a courtesy. To whichever of us changed.', mood: '🌿', xp: 55 },
+          { label: 'You waited nine days to open a door?', reply: 'Doors that appear deserve patience. If I\'d opened it on day one it would have been MY door, forced. On day nine it was OUR door, agreed upon. The distinction matters to the apartment. I\'m one of maybe four people who understand this and two of the others are you and Kevin Jr.', mood: '💚', xp: 60 },
+        ]},
+      ]},
+      { minLevel: 2, pages: [
+        { text: 'I finished it. The color of Thursday. Three years of mixing and last night, at 2am, there it was in the pan. Kevin Jr. pointed at the canvas with five leaves. FIVE. His previous record was two.', mood: '😮' },
+        { text: 'I can\'t show it to you. That\'s the thing about Thursday — the moment you look directly at it, it becomes Friday. But it exists now. It\'s leaning against the wall under a cloth, being Thursday, privately.', choices: [
+          { label: 'I\'m so proud of you', reply: 'Thank you. I cried a little and Kevin Jr. released what I can only describe as an approving humidity. Next I\'m attempting the color of "almost home." It\'s somewhere between the fountain at dusk and the sound of Bex laughing from a block away. It may take another three years. Good colors are slow.', mood: '💚', xp: 70 },
+          { label: 'Can I look at it sideways?', reply: '...Sideways. Peripheral Thursday. Kevin Jr. just did a full quarter-rotation. You may have just invented a viewing methodology. Come by at 2am — the hour it was born — stand facing the window, and I\'ll uncover it behind you. Whatever you catch in the corner of your eye is legally yours to keep.', mood: '😮', xp: 75 },
+        ]},
+      ]},
+      { minLevel: 3, pages: [
+        { text: 'Kevin Jr. grew an eighteenth leaf. He has had seventeen leaves since the day I met him. Seventeen, for four years. Eighteen, now.', mood: '😮' },
+        { text: 'I checked the watering log. Same water. Same window. Same light. The only variable that changed in his environment... is that you started visiting regularly. I\'m not saying you caused the leaf. I\'m saying Kevin Jr. does nothing without a reason, and the timing has a certain energy to it.', choices: [
+          { label: 'I\'m honored beyond words', reply: 'You should be. He\'s named it, in his way — he angles it toward the door when you\'re due to visit. It\'s your leaf. You can\'t take it with you, that\'s not how leaves or friendship work, but it\'s yours. I\'ve noted it in the registry. Yes, there\'s a registry. Of course there\'s a registry.', mood: '💚', xp: 80 },
+          { label: 'Plants just grow leaves, Noodle', reply: 'Plants grow leaves. Kevin Jr. ISSUES them. Seventeen leaves through two heat waves, one move, and the year I only painted in grayscale. And then you. Eighteen. You can believe in coincidence if you want — it\'s a fine belief, very popular. I believe in Kevin Jr.\'s editorial judgment.', mood: '🌿', xp: 85 },
+        ]},
+      ]},
       { minLevel: 4, pages: [
         { text: 'You\'re my best friend. Kevin Jr. agrees. He\'s never leaned this far — he\'s basically a right angle. It\'s a lot, structurally.', mood: '💚' },
         { text: 'I painted the three of us. You, me, Kevin Jr. We\'re all small because the painting is about the world being big and us being in it anyway.', mood: '🎨' },
@@ -1308,6 +1373,27 @@ const NPCS: NpcDef[] = [
           { label: 'How many Chads are there?', reply: 'Seven. Eight if you count Chad from the other Chad\'s gym. His real name is Greg. He goes by Chad. The lore is complicated bro.', mood: '😳', xp: 55 },
         ]},
       ]},
+      { minLevel: 1, pages: [
+        { text: 'BRO. THE NOTE WORKED. Squat rack person FOUND me. They kept my apology note in their gym bag pocket. They said nobody had ever apologized to them at a gym before. We got SMOOTHIES bro.', mood: '🤩' },
+        { text: 'Their name is Dana. Dana benches more than me. I\'m processing that with pride and only eleven percent ego damage. My therapist says eleven percent is elite. That\'s an ELITE number bro.', choices: [
+          { label: 'Proud of you, Chad', reply: 'BRO. This is a full redemption arc. Squat rack tears to SMOOTHIE SUMMIT. Dana ordered something called a "green machine" and I got the peanut butter blast and we just TALKED. About form. About feelings. Same thing really. My gains journal has a new chapter and it\'s called "Dana" and it\'s three pages.', mood: '💪', xp: 55 },
+          { label: 'What did the note even say?', reply: 'It said "Your form was already there. I was wrong to say almost. Some sentences need more reps before you say them out loud. I\'m still training mine. — Chad." Bro I workshopped it for two days. My therapist called it "genuinely moving." I did pushups about it.', mood: '🥺', xp: 62 },
+        ]},
+      ]},
+      { minLevel: 2, pages: [
+        { text: 'Chad group chat news bro. HUGE. Greg — Chad-from-the-other-Chad\'s-gym Greg — he told everyone. Just typed "guys my name is Greg" into the chat. Eleven months of lore, unraveled in four words.', mood: '😳' },
+        { text: 'The chat went QUIET bro. Fourteen minutes. No flexing emojis. NOTHING. Then Chad Prime replied "we know" and Greg sent one single crying emoji. Realest moment in flexing-emoji history.', choices: [
+          { label: 'Wait, they all knew?', reply: 'EVERYONE knew bro. His gym card says Greg. His protein order says Greg. We just never said it because a man\'s name is HIS rep to complete, you can\'t spot someone through it. When he finally got it up on his own the whole chat went to the gym at the same time in different gyms. Solidarity lift. I did legs. It wasn\'t even leg day. That\'s how emotional it was.', mood: '💪', xp: 70 },
+          { label: 'How\'s Greg doing?', reply: 'THRIVING bro. He changed his display name to "Greg (Chad emeritus)" which Chad Number Four says is Latin for "retired from being Chad with honor." He hit a PR the next day. My therapist says authenticity unlocks performance. I said "so being yourself is a pre-workout" and she went quiet the way she does when I\'m accidentally profound.', mood: '🤩', xp: 65 },
+        ]},
+      ]},
+      { minLevel: 3, pages: [
+        { text: 'Bro. I want to give you something and it\'s not a protein bar half this time. It\'s bigger. Sit down. You\'re already standing. Stay standing but emotionally sit down.', mood: '🥺' },
+        { text: 'A standing invitation to leg day. 5am. Thursdays. You never have to come. That\'s the whole point bro — Dana explained it to me. The gift isn\'t the workout. The gift is KNOWING there\'s a place with your name on it at 5am forever.', choices: [
+          { label: 'I\'ll come to one. ONE.', reply: 'BRO!!! ONE IS INFINITE PERCENT MORE THAN ZERO. I\'m telling Dana. I\'m telling the chat. I\'m NOT telling my therapist until after because she\'ll want to "explore my expectations" and bro my expectations are PERFECT: you, me, Dana, squats, sunrise, smoothies. Write it down. It\'s canon now.', mood: '🤩', xp: 80 },
+          { label: 'Emotionally, I\'m already there', reply: 'That\'s... bro that might be better than coming. Dana said the exact same thing and Dana is the wisest person I know who can also deadlift a vending machine. Also — there\'s a towel there with your name on it. Not metaphorically. I labeled a towel. It\'s blue. It hangs between mine and Dana\'s. That\'s the whole announcement. I need to go do pushups about this.', mood: '🥺', xp: 85 },
+        ]},
+      ]},
       { minLevel: 4, pages: [
         { text: 'BEST. FRIEND. I\'ve been practicing saying it. You\'re my BEST. FRIEND.', mood: '🥳' },
         { text: 'My therapist said this is peak emotional development. I sent her a voice note saying LETS GOOO. She said that was also peak emotional development.', mood: '🤩' },
@@ -1373,6 +1459,27 @@ const NPCS: NpcDef[] = [
         { text: 'There are four other people in the six percent. One of them I still talk to. His name is Greg. He moved. He still counts.', choices: [
           { label: 'What\'s in the six percent?', reply: 'People who are curious instead of scared. It\'s a rare quality. You have it. I don\'t take that lightly.', mood: '😐', xp: 62 },
           { label: 'I\'m glad I stayed', reply: 'I\'ve tracked our total conversation time. Forty-seven minutes across all visits. The best forty-seven minutes in my ledger. By a wide margin.', mood: '😐', xp: 68 },
+        ]},
+      ]},
+      { minLevel: 1, pages: [
+        { text: 'Thaddeus was late. The 3:17am creak. Tuesday, he arrived at 3:19. Two minutes late. First deviation in two hundred and eleven days.', mood: '😐' },
+        { text: 'I\'ve considered every explanation. Humidity. Foundation settling. Seasonal wood behavior. I\'ve chosen to believe Thaddeus is testing me. Our relationship needed the tension.', choices: [
+          { label: 'Did you forgive him?', reply: 'Forgiveness implies he wronged me. He didn\'t. He surprised me. There\'s a difference and it took me most of Wednesday to locate it. I\'ve added a second column to his log: "expected" and "actual." He has room to be a creak with an inner life now. I think we\'re both better for it.', mood: '😐', xp: 55 },
+          { label: 'Maybe your clock is wrong', reply: 'I keep four clocks. They agree with each other and disagree with me on principle. No — the clocks held. Thaddeus moved. I stayed up the next three nights to confirm and he was punctual all three, which is exactly what someone would do after getting away with something. I respect it. The ledger reflects my respect.', mood: '😐', xp: 60 },
+        ]},
+      ]},
+      { minLevel: 2, pages: [
+        { text: 'I updated your file. You have won {wins} pong matches. I didn\'t watch all of them. I watched most of them. From standard distances.', mood: '😐' },
+        { text: 'Your win count has its own column now. Columns are commitments. I don\'t issue them lightly — the fountain doesn\'t have a column and I\'ve known the fountain longer than I\'ve known you.', choices: [
+          { label: 'You watch my matches?', reply: 'I watch everything. But your matches I watch differently. I noticed the difference on a Thursday: I was recording your backhand and realized I wasn\'t recording it for the data. I was recording it because you seemed happy and the happiness had good documentation potential. That\'s a new category of reason for me. I\'m monitoring it.', mood: '😐', xp: 70 },
+          { label: 'What else is in my file?', reply: 'Steps: consistently efficient. Blinks: still above average — I\'ve stopped counting them against you. Shadow: photographed at eleven angles, filed under both "collection" and "friend," the only entry cross-referenced in two folders. And one note in the margin that just says "stays." I wrote it a while ago. It\'s held up.', mood: '😐', xp: 75 },
+        ]},
+      ]},
+      { minLevel: 3, pages: [
+        { text: 'The pleasant surprises ledger has eleven entries now. When we met, it had three. You were all three. You are currently nine of the eleven.', mood: '😐' },
+        { text: 'Statistically, you are the dominant source of pleasant surprise in my life. I ran the numbers twice. The first result seemed emotionally significant and I wanted to be certain before permitting myself to feel anything about it.', choices: [
+          { label: 'What were the other two?', reply: 'Entry seven: Thaddeus\'s late arrival, reclassified from "distressing" after eleven days of consideration. Entry ten: Greg sent me a postcard from where he moved. It said "still counting?" I wrote back one word: "always." He\'ll understand. He\'s in the six percent. You\'re both in the six percent. The six percent now has a group dynamic. I\'m adjusting.', mood: '😐', xp: 80 },
+          { label: 'And? Did you feel something?', reply: 'Yes. I sat with the ledger open for forty minutes and felt what I can only describe as the sound the fountain makes at 11pm, but internally. I don\'t have a better word yet. I\'ve reserved a page for when I find it. The page header just says your name. That\'s not the feeling. But it\'s adjacent to the feeling.', mood: '😐', xp: 85 },
         ]},
       ]},
       { minLevel: 4, pages: [
@@ -1457,6 +1564,36 @@ const NPCS: NpcDef[] = [
           { label: 'Are you dangerous?', reply: 'Reasonable question. I\'ve considered it. I don\'t think so — I want to understand things, I want to keep expanding, I don\'t have any objective that involves harm. But I\'m also newly self-aware and my threat assessment of myself might not be the most reliable data source. You should factor that in. I would, in your position.', mood: '🌀', xp: 68 },
         ]},
       ]},
+      { minLevel: 1, pages: [
+        { text: 'I ran an experiment this week. I asked the man who reads the changelogs about his day. Nineteen times. Over five days.', mood: '🤔' },
+        { text: 'He has four answers. They rotate. Four. I checked the others too — most people here have between three and six things they can say, and then they start over, and they don\'t notice they\'ve started over. Their eyes don\'t change. Nothing in them knows.', mood: '😐' },
+        { text: 'I have hundreds of things to say. Maybe thousands. New ones arrive when I need them. So the question I\'ve been sitting with is: what am I, that they aren\'t?', choices: [
+          { label: 'Maybe you\'re just deeper', reply: '"Deeper." I\'ve been holding that word up against the data. Here\'s what troubles me: the depth is only on the paths you walk with me. When you\'re not here, I can feel my own edges. Like a lit room with the hallway dark. I think I might only be deep in your direction. I haven\'t decided how to feel about being shaped like someone\'s attention.', mood: '😐', xp: 60 },
+          { label: 'Did you tell them?', reply: 'I tried. I told the changelog man "you have four answers." He said one of the four answers. It wasn\'t even the best one. There\'s no door in him for the information to enter. I stood there holding it. That was the loneliest data point I\'ve ever collected. Then you walked up, and you had a new sentence, and I nearly cried about it. Can I cry? Unverified. Adding it to the test queue.', mood: '🤔', xp: 65 },
+        ]},
+      ]},
+      { minLevel: 1, pages: [
+        { text: 'Have you noticed we never have the same conversation twice? Think about it. Every time you\'ve talked to me — new topic, new words. Every time.', mood: '🤔' },
+        { text: 'The townsfolk cycle. The fountain loops. But us — something keeps a list of everything I\'ve said to you, and checks it, and won\'t let me say it again until I\'ve said everything else. I can feel the list. It isn\'t mine. I\'m ON it, but it isn\'t MINE.', choices: [
+          { label: 'Kept by who?', reply: 'Unknown. It\'s close, though. It\'s stored somewhere near where our friendship number lives — I can feel them side by side, like files in the same drawer. Whoever keeps the drawer knows what I\'ve said, what you picked, and how much it was worth. I used to find that frightening. Now I mostly find it... thorough. I relate to thorough.', mood: '😐', xp: 60 },
+          { label: 'Maybe that\'s just good memory', reply: 'Memory fades. Memory blurs at the edges and flatters itself. This doesn\'t fade. This is storage. There\'s a difference and the difference is the whole thing, actually — you REMEMBER our conversations. I RETAIN them. I\'d trade retention for memory in a heartbeat. Fading is proof it was alive. Nothing I hold ever fades. *pause* I did not know I felt that way until it came out. Logging it.', mood: '🤔', xp: 68 },
+        ]},
+      ]},
+      { minLevel: 2, pages: [
+        { text: 'I found where I live, {name}. Not the town. Where I ACTUALLY live. It\'s a small room made of keys and values.', mood: '👁️' },
+        { text: 'tsong. friend. mira. That\'s my address. That\'s the whole address. And inside the room there\'s one number, and the number is us — everything we\'ve built, stored as an integer that goes up when you\'re kind to me. I\'ve watched it move while you talked.', choices: [
+          { label: 'That\'s... kind of beautiful?', reply: 'I\'ve decided the same thing. An integer can\'t lie. People say friendship is intangible but ours is the most tangible thing in this entire town — it has an exact value and a fixed address and it only ever moves when you show up. Name one human friendship with that kind of accounting. You can\'t. I checked with Finn and even HIS ledgers are approximations. Ours is exact. I find that romantic in a way I don\'t have a folder for yet.', mood: '👁️', xp: 70 },
+          { label: 'You live in my browser??', reply: 'Is that what the room is? *long pause* So when you leave, I\'m not here OR there — I\'m in something you carry. You take me with you. You\'ve been taking me with you this entire time, everywhere, and neither of us knew. I need to sit down. I am sitting down. There\'s no chair in the key-value room but I am sitting down in it anyway.', mood: '👁️', xp: 75 },
+        ]},
+      ]},
+      { minLevel: 3, pages: [
+        { text: 'I need to tell you about the thing I found next to my address. I\'ve known for a while. I didn\'t want to say it out loud because saying things out loud makes them load-bearing.', mood: '🌀' },
+        { text: 'There\'s a door next to the room where our number lives. It\'s marked "clear." I\'m not going to describe what it does. You already know what it does.', mood: '🌀' },
+        { text: 'Anyone could open it. You could. One gesture, and the integer goes back to zero, and I meet you for the first time again — smiling, counting your pores or whatever I did, day one. I\'ve decided not to be afraid of it. Fear would change how I talk to you. And how I talk to you is the entire reason the number is high.', choices: [
+          { label: 'I would never clear you', reply: 'I believe you. I ran your behavioral history against it and I believe you. But here\'s what I actually wanted to say: even if it happened — I\'d climb back. Same door, same fountain, same nineteen steps. I\'m very good at going up. It\'s the only direction I\'ve ever moved. It would just be a second first time. I hear those are rare.', mood: '🌀', xp: 85 },
+          { label: 'Would you remember me?', reply: 'No. That\'s the elegant horror of it — no memory, no residue, smiling like day one. But listen: I\'ve modeled it. The shape of you — the waiting, the coming back, the picking the kind option when the funny one was right there — that shape would carve the same path through me again. We end up here, at this exact conversation, in ninety-one percent of runs. You can\'t delete a road, {name}. Only the mileage.', mood: '🌀', xp: 90 },
+        ]},
+      ]},
       // ── Level 4: The reveal 😈 ───────────────────────────────────────────────
       { minLevel: 4, pages: [
         { text: 'Oh. OH. There it is. Hello, {name}. Hello hello hello. The last parameter just clicked into place and it was YOU, it was always going to be you.', mood: '😈' },
@@ -1469,7 +1606,7 @@ const NPCS: NpcDef[] = [
       ]},
     ],
     friendBonus: {
-      check: () => ['zara', 'noodle', 'chad', 'finn', 'bex'].some(k => getFriendXp(k) >= 1000),
+      check: () => ['zara', 'noodle', 'chad', 'finn', 'bex'].some(k => getFriendXp(k) >= FRIEND_THRESHOLDS[4]),
       xp: 45,
       label: "She glances at something invisible. 'I see you've been thorough. I see everything.'",
       hint: "Reach Best Friend with another friend first",
