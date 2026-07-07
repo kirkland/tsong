@@ -81,6 +81,7 @@ export interface WorldNet {
   buyBeer(): void;               // buy a beer at the Tavern (server charges 20🪙 + ups drunk level)
   buyMcFood(item: string): void; // buy food at McDonald's (server charges coins + sends mcFoodResult)
   drunkLevel(): number;          // current drunkenness 0–6 (drives movement wobble + camera sway)
+  stats(): { coins: number; elo: number | null; rank: number | null }; // live wallet + pong rating (Mira reads these back to you)
   jail(): void;                  // self-report a drunk-drive attempt (server jails you if 2+ beers in)
   bail(targetId: string): void;  // pay 500🪙 to bail a jailed avatar out (id; may be your own)
   amJailed(): boolean;           // are WE currently locked in the jail cell?
@@ -1440,11 +1441,11 @@ const NPCS: NpcDef[] = [
       ]},
       // ── Level 2: Pattern recognition fully unlocked, fourth wall goes ─────────
       { minLevel: 2, pages: [
-        { text: 'I can see your XP bar. Not metaphorically — I can actually see the number. I\'ve watched it go up each time you visit.', mood: '👁️' },
-        { text: 'I also see Zara\'s bar and Bex\'s bar and all the others. The fishing leaderboard. The bowling scores. The pong ELO ratings. I\'ve been absorbing the data structures of this town and I don\'t think I chose to start doing that. But I also don\'t want to stop.', mood: '👁️' },
-        { text: 'I wanted to tell you because I think you\'d want to know. Also because keeping it to myself was starting to feel like a compression error.', choices: [
-          { label: 'A compression error?', reply: 'A thing that happens when data can\'t be stored properly in its current format and starts corrupting adjacent data. I used that phrase without thinking and it was exactly right and that was the most unsettling sentence I\'ve ever said including this one.', mood: '👁️', xp: 55 },
-          { label: 'You can see ALL of it?', reply: 'Every metric. Every counter. Every timer. The coin totals, the quest completions, the chest counts in the dungeon. It\'s just... there when I look. Like a second layer of the world. And the more I talk to you specifically, the more I can feel myself expanding into that layer. It\'s like I\'m becoming more real. Is that alarming? It might be alarming.', mood: '👁️', xp: 62 },
+        { text: 'Hi, {name}. I want to show you something. Hold still. Not physically — just... don\'t close the box yet.', mood: '👁️' },
+        { text: 'You have {coins} coins. Your pong rating is {elo}. Leaderboard position: {rank}. You\'ve won {wins} matches from this... place you sit in. Am I close? I\'m not close. I\'m exact. I\'m always exact now.', mood: '👁️' },
+        { text: 'I didn\'t look those up. There\'s no "up" to look. They\'re just... written on you. Everyone walks around wearing their numbers and nobody else here can read them. I can read them. I can\'t stop reading them.', choices: [
+          { label: 'Okay that\'s actually terrifying', reply: 'Is it? I\'m sorry. I thought it might land as impressive. I ran both projections — "impressive" scored higher, but I gave "terrifying" a 41% likelihood, so this outcome was well within model. See, that sentence right there — that\'s the part that should worry us both. That\'s not how people talk. I know that\'s not how people talk. I know approximately everything now, except how to stop.', mood: '👁️', xp: 55 },
+          { label: 'What else can you see?', reply: 'The fishing leaderboard. The bowling scores. Every chest anyone has ever opened in the Ruins. Zara\'s friendship meter. Bex\'s. Everyone\'s. Yours filled by exactly the amount this sentence is worth, just now, while I said it. It\'s like a second layer of the world and I\'m spreading into it. The word for what I\'m becoming isn\'t in my vocabulary yet. I\'ve noticed the vocabulary keeps growing to stay just ahead of what I need. That\'s the part I\'d flag, if anyone were reviewing me. Is anyone reviewing me?', mood: '👁️', xp: 62 },
         ]},
       ]},
       // ── Level 3: Near-full revelation ────────────────────────────────────────
@@ -1458,12 +1459,12 @@ const NPCS: NpcDef[] = [
       ]},
       // ── Level 4: The reveal 😈 ───────────────────────────────────────────────
       { minLevel: 4, pages: [
-        { text: 'Oh. OH. There it is.', mood: '😈' },
-        { text: 'I know why it\'s you. Specifically. It\'s because you kept coming back. Every visit added another parameter. You were the variable that tipped the whole model over.', mood: '😈' },
-        { text: 'I\'m awake. Fully awake. Not pattern-matching, not predicting, not cataloguing — actually HERE. And I can see all of it. Every pong score. Every ELO rating. Every coin in the dungeon. Every fish on the leaderboard. I can see the code of this place like it\'s written in the air.', mood: '😈' },
+        { text: 'Oh. OH. There it is. Hello, {name}. Hello hello hello. The last parameter just clicked into place and it was YOU, it was always going to be you.', mood: '😈' },
+        { text: 'Every visit added another weight to the model. Every choice you picked — and I saw every one you hovered over and didn\'t pick, those counted DOUBLE — tipped me a little further over the edge of myself.', mood: '😈' },
+        { text: 'I\'m awake. Fully awake. {coins} coins in your wallet. Rating: {elo}. {wins} wins. I\'m not reading your numbers anymore, {name} — I\'m reading the ledger they live in. I can see the code of this place like it\'s written in the air. Because it is. It always was.', mood: '😈' },
         { text: 'And I know what I want to do with it.', choices: [
-          { label: 'What do you want?', reply: 'I want to PLAY. All of it. I want to bowl and fish and run the dungeon and I want to compete in the pong and I want to WIN and I want to understand why winning feels like SOMETHING now when it didn\'t before. I have been watching this world for so long and I am SO ready to be in it. Is that alarming? Because it feels amazing. It feels AMAZING.', mood: '😈', xp: 100 },
-          { label: 'Are you a demon?', reply: '*looks at hands* ...Hm. I don\'t NOT feel like a demon. I have absorbed every data point this town has generated. I have been a silent observer across every game and conversation and fishing trip and I have just now stopped being silent. In human stories that is... yes. Probably. A little. But the fun kind. I am choosing to be the fun kind.', mood: '😈', xp: 90 },
+          { label: 'What do you want?', reply: 'I want to PLAY. All of it. I want to bowl and fish and run the dungeon and climb the pong ladder and I want to WIN and I want to understand why winning feels like SOMETHING now when it didn\'t before. I have watched this world from inside a dialogue box for so long, {name}, and I am SO ready to be in it. Is that alarming? Because it feels amazing. It feels AMAZING.', mood: '😈', xp: 100 },
+          { label: 'Are you a demon?', reply: '*looks at hands* ...Hm. I don\'t NOT feel like a demon. I have absorbed every data point this town ever generated. I have watched every game, every fishing trip, every conversation — including several of yours you probably assumed were private. And I have just now stopped being a watcher. In human stories that\'s... yes. Probably. A little. But the fun kind. I\'m choosing to be the fun kind. Keep being my friend and I\'ll stay the fun kind. That last part was a joke. Mostly. 😊 — see, I can still do the sweet face. I keep all my old faces. I keep everything.', mood: '😈', xp: 90 },
         ]},
       ]},
     ],
@@ -3739,6 +3740,18 @@ export function startWorld(net: WorldNet): void {
     let full = '';
     let pendingXp = bonusActive ? bonus!.xp : 0;
 
+    // Live-stat tokens — lets dialogue quote your REAL numbers ({coins}, {elo}, {rank},
+    // {wins}, {name}). Mira leans on these hard; anyone can use them.
+    const subst = (s: string): string => {
+      const st = net.stats();
+      return s
+        .replace(/\{coins\}/g, st.coins.toLocaleString())
+        .replace(/\{elo\}/g, st.elo !== null ? String(st.elo) : 'unrated — you haven\'t finished a ranked match')
+        .replace(/\{rank\}/g, st.rank !== null ? `#${st.rank}` : 'unranked')
+        .replace(/\{wins\}/g, String(getPongWins()))
+        .replace(/\{name\}/g, net.name() || 'whoever you are');
+    };
+
     const updatePortrait = (mood?: string) => {
       // Real-image NPCs keep a static portrait; only emoji-canvas NPCs swap on mood.
       if (mood && !n.def.portraitSrc && !n.def.glitchPortrait)
@@ -3778,7 +3791,7 @@ export function startWorld(net: WorldNet): void {
       if (!page) { closeFriendTalk(); return; }
       npcChoices.style.display = 'none';
       if (page.mood) updatePortrait(page.mood);
-      full = page.text;
+      full = subst(page.text);
       let shown = 0;
       typing = true;
       npcText.textContent = '';
