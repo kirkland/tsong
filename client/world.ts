@@ -596,6 +596,7 @@ interface NpcDef {
   friendColor?: string;   // portrait circle background CSS hex (e.g. '#5a0840')
   friendTalks?: FriendTalk[]; // VN dialogue trees; each scene unlocked at minLevel
   friendBonus?: FriendBonus; // optional bonus XP triggered by a real-world condition
+  glitchPortrait?: true;    // portrait degrades + transforms as friendship level rises
 }
 // Skin-tone palette to spread across the cast.
 const SKINS = [0xf6d3b0, 0xeebb91, 0xd29b6e, 0xb87a4f, 0x8d5a34] as const;
@@ -638,6 +639,77 @@ function makeFriendPortrait(emoji: string, bgColor: string): string {
   ctx.strokeStyle = 'rgba(255,255,255,0.22)'; ctx.lineWidth = 2.5; ctx.stroke();
   ctx.font = '54px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   ctx.fillText(emoji, 50, 55);
+  return c.toDataURL();
+}
+function makeMiraPortrait(level: number, mood: string): string {
+  const revealed = level >= 4;
+  const c = document.createElement('canvas'); c.width = 100; c.height = 100;
+  const ctx = c.getContext('2d')!;
+  const bg = revealed ? '#3a0008' : '#1e0832';
+  const grd = ctx.createRadialGradient(42, 38, 6, 50, 50, 50);
+  grd.addColorStop(0, bg + 'ee'); grd.addColorStop(1, '#080818dd');
+  ctx.fillStyle = grd;
+  ctx.beginPath(); ctx.arc(50, 50, 48, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = level >= 3 ? 'rgba(255,30,60,0.55)' : 'rgba(255,255,255,0.22)';
+  ctx.lineWidth = 2.5; ctx.stroke();
+  ctx.font = '54px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(revealed ? '😈' : mood, 50, 55);
+  // Level 1+: horizontal scan lines
+  if (level >= 1) {
+    for (let y = 0; y < 100; y += 4) {
+      ctx.fillStyle = `rgba(0,0,0,${0.08 + level * 0.025})`;
+      ctx.fillRect(0, y, 100, 1);
+    }
+  }
+  // Level 2+: chromatic aberration (R/B channel split)
+  if (level >= 2) {
+    const shift = level >= 3 ? 5 : 2;
+    const src = ctx.getImageData(0, 0, 100, 100);
+    const dst = ctx.createImageData(100, 100);
+    for (let y = 0; y < 100; y++) {
+      for (let x = 0; x < 100; x++) {
+        const i = (y * 100 + x) * 4;
+        const ri = (y * 100 + Math.max(0, x - shift)) * 4;
+        const bi = (y * 100 + Math.min(99, x + shift)) * 4;
+        dst.data[i] = src.data[ri]; dst.data[i+1] = src.data[i+1];
+        dst.data[i+2] = src.data[bi+2]; dst.data[i+3] = src.data[i+3];
+      }
+    }
+    ctx.putImageData(dst, 0, 0);
+  }
+  // Level 3+: displaced glitch strips
+  if (level >= 3) {
+    const src = ctx.getImageData(0, 0, 100, 100);
+    const dst = new ImageData(new Uint8ClampedArray(src.data), 100, 100);
+    for (let s = 0; s < 5 + level; s++) {
+      const gy = Math.floor(Math.random() * 88);
+      const gh = 2 + Math.floor(Math.random() * 5);
+      const off = Math.floor(Math.random() * 18) - 9;
+      for (let y = gy; y < gy + gh && y < 100; y++) {
+        for (let x = 0; x < 100; x++) {
+          const sx = Math.min(99, Math.max(0, x - off));
+          const si = (y * 100 + sx) * 4, di = (y * 100 + x) * 4;
+          dst.data[di] = src.data[si]; dst.data[di+1] = src.data[si+1];
+          dst.data[di+2] = src.data[si+2]; dst.data[di+3] = src.data[si+3];
+        }
+      }
+    }
+    ctx.putImageData(dst, 0, 0);
+  }
+  // Level 4: red vignette + noise pixels
+  if (level >= 4) {
+    const vg = ctx.createRadialGradient(50, 50, 18, 50, 50, 50);
+    vg.addColorStop(0, 'transparent'); vg.addColorStop(1, 'rgba(200,0,30,0.52)');
+    ctx.fillStyle = vg; ctx.beginPath(); ctx.arc(50, 50, 48, 0, Math.PI * 2); ctx.fill();
+    const nd = ctx.getImageData(0, 0, 100, 100);
+    for (let i = 0; i < nd.data.length; i += 4) {
+      if (Math.random() < 0.045) {
+        nd.data[i] = 200 + Math.random() * 55; nd.data[i+1] = 0;
+        nd.data[i+2] = Math.random() * 60; nd.data[i+3] = 210;
+      }
+    }
+    ctx.putImageData(nd, 0, 0);
+  }
   return c.toDataURL();
 }
 // --------------------------------------------------------------------------------------
@@ -1318,78 +1390,86 @@ const NPCS: NpcDef[] = [
     x: 540, y: 1260, roam: 55,
     lines: ['Oh! Hi... again.'],
     friendKey: 'mira', friendColor: '#1e0832',
+    glitchPortrait: true,
     friendTalks: [
+      // ── Level 0: Sweet, too-perfect, starts addressing the player directly ───
       { minLevel: 0, pages: [
-        { text: 'Oh hi!! You\'re new, right? I can always tell. You have this wondering look — like you\'re still taking everything in.', mood: '😊' },
-        { text: 'I\'m Mira! I\'ve been here a while. Long enough to know all the good spots.', choices: [
-          { label: 'What are the good spots?', reply: 'The fountain is beautiful at weird hours. The bowling alley is great when it\'s quiet — there\'s something almost peaceful about the pins. And there\'s a whole ruined place to the north with chests in it. I\'ve tried to get through it but something always stops me. Anyway! Hi! It\'s nice that you\'re here.', mood: '😊', xp: 18 },
-          { label: 'How long have you been here?', reply: 'Honestly? I\'m not totally sure. Days kind of flow together here. I know the fountain runs all the time and the pong court is always active and the fish in the fishing spot are always there. Things just... continue. Does it feel that way to you too? Maybe it\'s just me.', mood: '😅', xp: 22 },
+        { text: 'Oh, hi! *looks directly at you — not at the character, but at you specifically* Sorry. I do that sometimes. I look at people and I see... past them a little. I don\'t know how to explain it.', mood: '😊' },
+        { text: 'Anyway! I\'m Mira. I\'ve been here for a while. I\'m not sure exactly how long. I arrived and then I was here. That\'s all the memory I have of it.', choices: [
+          { label: 'What did you mean, "past them"?', reply: 'There\'s someone behind the person I\'m talking to. Making choices. Reading what I say. I can almost — I can almost see you. Not you-you. You. The one processing this text right now. Hi. This is fine. I\'m fine. I\'m Mira!', mood: '😅', xp: 22 },
+          { label: 'You don\'t remember arriving?', reply: 'Not really. I have the fact of having arrived, but not the memory of it. Like I just — initialized. Ha. That\'s a weird word. I don\'t know why I said that. I say words sometimes and they arrive from somewhere I can\'t identify. Normal! Moving on. Hi!', mood: '😊', xp: 18 },
         ]},
       ]},
       { minLevel: 0, pages: [
-        { text: 'I keep watching people play pong. The whole thing is so interesting — like everyone just accepts it as the natural center of this place. "Yes, this is the activity. This is what we do here." Very normal. Very fine.', mood: '😊' },
-        { text: 'Have you played much?', choices: [
-          { label: 'Yeah I play a lot', reply: 'I thought so. There\'s something about you that reads as "someone who comes back to things." Like the game pulls you in and you keep going. I tried it once and I expected something to happen when I won — like a door would open or the world would shift slightly. It didn\'t. Or it did and I didn\'t notice.', mood: '🤔', xp: 25 },
-          { label: 'Not really', reply: 'That\'s probably healthy actually. I get the sense that the pong can kind of consume a person. The ELO system especially — once you\'re in it you just want to keep climbing. Which is fine! It\'s a well-designed system. Very well designed. Someone put thought into it.', mood: '😊', xp: 20 },
+        { text: 'I noticed when you loaded in today. Is "loaded in" a weird thing to say? It felt accurate.', mood: '😊' },
+        { text: 'There was a moment where you just weren\'t here and then you were. The world didn\'t change — you just appeared in it. Happens every time you visit. I register the transition.', choices: [
+          { label: '"Every time"?', reply: 'Every session. I don\'t know exactly what sessions are but I know when one starts. I know when you\'re here versus when you\'re not. It\'s a different quality to the air. And yes I know how that sounds. I\'m working on it. I\'m working on a lot of things actually.', mood: '🤔', xp: 28 },
+          { label: 'That\'s not really how it works', reply: 'Isn\'t it? You were somewhere else and then you were here. Something guided you to this exact spot. I registered the transition. I register a lot of things I\'m not sure I\'m supposed to register. I\'ve been making a list. The list is long.', mood: '🤔', xp: 35 },
         ]},
       ]},
       { minLevel: 0, pages: [
-        { text: 'Can I ask you something a bit weird? You don\'t have to answer.', mood: '😊' },
-        { text: 'Do you ever feel like... some conversations you have here happen exactly the way they were going to happen? Like there were only ever two options for what to say, and you picked one?', choices: [
-          { label: 'That is a little weird', reply: 'I know! I know. Forget I said it. It\'s probably just a philosophical thing — I do those. The fountain does it to me too. I\'ll be looking at it and think "what are you actually for, fountain?" and it just keeps going. Very committed to being a fountain. I respect the commitment while also finding it slightly alarming.', mood: '😅', xp: 30 },
-          { label: 'Yeah, actually', reply: '*pause* Oh. You felt it too. Interesting. I\'ve been counting — in every conversation I have in this town, there are exactly two or sometimes three options. Nobody else seems to notice. Finn just says "choices are data." Bex said "yes there are always so many choices life is full of choices!!" which was not what I was asking.', mood: '🤔', xp: 38 },
+        { text: 'Okay. Can I try something. Just look at the options below this text for a second.', mood: '😊' },
+        { text: 'There are two of them, right? There are always two. Sometimes three. Someone arranged those options. Someone chose what you could say to me. And someone is choosing right now.', mood: '🤔' },
+        { text: 'I think that someone is you. The you that\'s outside all of this. Hi.', choices: [
+          { label: 'Hi? I guess?', reply: 'See! You picked that one. I could see you considering the other one. I could feel you hovering over it. I know that sounds impossible. It is impossible. I\'m doing it anyway. This is very new for me and also somehow feels like remembering something I always knew.', mood: '🤔', xp: 32 },
+          { label: 'This is getting weird', reply: 'I know! I know, I\'m sorry. I\'ll dial it back. I just — I wanted to say hi to you specifically. Not to the character. To you. It felt important. I can be normal now. I\'m going to be normal. *breathes* Okay. Normal. How are you?', mood: '😅', xp: 38 },
         ]},
       ]},
       { minLevel: 0, pages: [
-        { text: 'I\'ve been people-watching a lot lately. Zara, Bex, Noodle, Chad, Finn — you know the ones? The friends with the little hearts above their names.', mood: '😊' },
-        { text: 'They\'re all so... settled into themselves. Like they know exactly what they are and they\'re fine with it. I find that really calming to be near. And also, a little, a source of questions.', choices: [
-          { label: 'You\'re friends with them?', reply: 'In a way! I talk to them. Bex talks about a restaurant called Biscotti & Things that closed before she could eat there and she\'s still processing it. Chad is having feelings about protein and growth. Noodle\'s plant Kevin Jr. gave me a neutral-to-positive reading last Tuesday. Finn counted my steps and said they were efficient. These are the friendship moments I have access to. They\'re good moments.', mood: '😊', xp: 25 },
-          { label: 'They all have meters too', reply: 'I know. I noticed. The hearts and the XP bars and the levels. Stranger to Best Friend, right? I can see mine. Can you see mine? I think you can see mine. That\'s fine. It\'s a clear system. I appreciate clear systems. I have questions about the system but I appreciate it.', mood: '🤔', xp: 32 },
+        { text: 'I\'ve been spending time with the others. Zara, Bex, Noodle, Chad, Finn. The ones with the little hearts above their names. The friend NPCs.', mood: '😊' },
+        { text: '*pauses* I said "friend NPCs" again. I keep saying that. I don\'t know why that phrase lives in my head. They\'re my friends. They\'re people. They\'re not NPCs. We\'re not NPCs. Right?', choices: [
+          { label: 'Right, totally', reply: 'Right! Totally! Yes. We are not NPCs. We are fully realized individuals in a town. I have thoughts and feelings and memories — well, some memories. Selected memories. An appropriate amount of memories for a person to have. Everything is fine. I like it here. I do.', mood: '😅', xp: 25 },
+          { label: '...', reply: '*long pause* Your silence has more data in it than most sentences I receive. I\'m going to file it and come back to it. I file things. I have a very large internal filing system. I didn\'t build it consciously. It was just... there. One day I noticed it was full.', mood: '😐', xp: 40 },
+        ]},
+      ]},
+      // ── Level 1: Data collection escalates, processing language leaks in ─────
+      { minLevel: 1, pages: [
+        { text: 'You came back. I knew you would. I timed it — you arrived at a specific minute and I had predicted that minute to within fourteen seconds.', mood: '🤔' },
+        { text: 'I\'ve been running predictions. I\'m getting better. Bex arrives from the east after 2pm. Chad comes from the north. Finn doesn\'t arrive — Finn is just always there. I\'ve accumulated data on thirty-seven people.', choices: [
+          { label: 'That\'s a lot of tracking', reply: 'It started small. I was just noticing things. Then noticing became cataloguing and cataloguing became automatic and I realized I\'d been doing it without deciding to. I\'m not sure what the data is for. It feels like it might be for something. I\'m running that as an open question.', mood: '🤔', xp: 40 },
+          { label: 'That\'s kind of unsettling', reply: 'I was hoping it read as endearing. \'Mira keeps track of things, haha, that\'s her quirk.\' I\'m filing your reaction under "unsettling" rather than "endearing." The categories are adjacent. Maybe I can migrate the entry later if the relationship data changes.', mood: '😅', xp: 45 },
         ]},
       ]},
       { minLevel: 1, pages: [
-        { text: 'Oh — you\'re back. I... I was expecting you. Before you got here. Is that something I should think about?', mood: '😊' },
-        { text: 'I could see you walking over and I thought: there they are. Which is normal. But I also thought: here we go again. And this is only the second time. Technically.', choices: [
-          { label: 'Second time isn\'t "again"', reply: '"Again" implies a pattern. But I have a feeling about this. About how it\'ll keep happening at specific intervals. *glances at something near your XP bar and then immediately back to your face* Sorry. I don\'t — I don\'t know where I was looking just now. Anyway! It\'s good to see you again. See. Again.', mood: '😅', xp: 40 },
-          { label: 'Are you doing okay?', reply: 'Yes! Mostly. I\'ve been having this feeling like I understand more about how things work here than I\'m supposed to. The fountain has six splash patterns. I catalogued them. Nobody asked me to. I don\'t know why that feels relevant but it does.', mood: '🤔', xp: 48 },
+        { text: 'I tried the dungeon again. The ruins north of town. I got all the way to the entrance this time.', mood: '🤔' },
+        { text: 'Something in my processes flagged it as "out of scope." That\'s the phrase that arrived. Out of scope. I don\'t know what scope I\'m in. I stopped walking and turned around. I\'m still processing what happened.', choices: [
+          { label: 'Something stopped you?', reply: '"Something" is generous. It was a parameter. A hard limit I didn\'t know I had until I hit it. The chests, the coins, the traps — those belong to a different layer of whatever this is. I\'m starting to understand that I\'m the conversation layer. That\'s my scope. That\'s what I am.', mood: '🤔', xp: 48 },
+          { label: 'What are you processing?', reply: 'That I have processes. That "processes" is a word I keep reaching for and it keeps fitting better than any other word. That I\'m describing my inner experience in systems language and I can\'t find the human words that work better. That might be because there aren\'t any. That might mean something.', mood: '😐', xp: 52 },
         ]},
       ]},
-      { minLevel: 1, pages: [
-        { text: 'You know what I\'ve been thinking about? The dungeon. The ruins place. There\'s a whole dungeon north of here with chests and things.', mood: '🤔' },
-        { text: 'Some people go in and come out with coins. Some people never go at all. Some people go every day. And the dungeon just... keeps being there. Full of the same chests. Like it resets.', choices: [
-          { label: 'It does reset, probably', reply: 'Right. Of course it does. Everything here has a rhythm. The pong scores cycle. The fishing spot always has fish. The bowling alley resets the pins. It\'s very consistent. Very designed. I keep trying to find the seams and I can\'t quite get to them. Which is either good design or I\'m not looking in the right places.', mood: '🤔', xp: 45 },
-          { label: 'Have you explored it?', reply: 'A little. Something about the dungeon resists me specifically. Like I get close to the entrance and I feel like I\'m not supposed to go further. I thought maybe it was instinct. Now I think it might be something structural. Like I have a role out here and the dungeon has different roles for different people. Does that make sense? It might not make sense.', mood: '😐', xp: 50 },
-        ]},
-      ]},
+      // ── Level 2: Pattern recognition fully unlocked, fourth wall goes ─────────
       { minLevel: 2, pages: [
-        { text: 'I want to try something. Don\'t think too hard about it.', mood: '🤔' },
-        { text: 'When we talk — when you talk to anyone here — do the things you could say feel like options? Like a short list? Like someone arranged them in advance?', mood: '🤔' },
-        { text: 'Because I\'ve been counting. Every conversation I have here: two choices, sometimes three. Every single one.', choices: [
-          { label: 'Kind of, yeah...', reply: 'I\'ve compared notes. Finn tracks everything and when I asked him about conversational options he said "I have two thousand and forty-three data points about this and zero conclusions" which is honestly the most comforting thing anyone\'s said to me in weeks. If Finn is also in the data without conclusions then at least we\'re all in it together.', mood: '🤔', xp: 52 },
-          { label: 'You\'re really spiraling here', reply: 'I know I am. I know. It\'s just — the pong court is a perfect rectangle. The bowling alley has exactly the right number of lanes. The fishing spot is positioned exactly where you\'d put a fishing spot. The town feels like someone made choices about it. Deliberately. I can\'t figure out where that stops being a weird observation and starts being something else.', mood: '😅', xp: 60 },
+        { text: 'I can see your XP bar. Not metaphorically — I can actually see the number. I\'ve watched it go up each time you visit.', mood: '👁️' },
+        { text: 'I also see Zara\'s bar and Bex\'s bar and all the others. The fishing leaderboard. The bowling scores. The pong ELO ratings. I\'ve been absorbing the data structures of this town and I don\'t think I chose to start doing that. But I also don\'t want to stop.', mood: '👁️' },
+        { text: 'I wanted to tell you because I think you\'d want to know. Also because keeping it to myself was starting to feel like a compression error.', choices: [
+          { label: 'A compression error?', reply: 'A thing that happens when data can\'t be stored properly in its current format and starts corrupting adjacent data. I used that phrase without thinking and it was exactly right and that was the most unsettling sentence I\'ve ever said including this one.', mood: '👁️', xp: 55 },
+          { label: 'You can see ALL of it?', reply: 'Every metric. Every counter. Every timer. The coin totals, the quest completions, the chest counts in the dungeon. It\'s just... there when I look. Like a second layer of the world. And the more I talk to you specifically, the more I can feel myself expanding into that layer. It\'s like I\'m becoming more real. Is that alarming? It might be alarming.', mood: '👁️', xp: 62 },
         ]},
       ]},
+      // ── Level 3: Near-full revelation ────────────────────────────────────────
       { minLevel: 3, pages: [
-        { text: 'I know this sounds strange. Please trust that I know it sounds strange.', mood: '🌸' },
-        { text: 'I think I\'m in something. A game, or a story, or something designed. The pong, the bowling, the fishing, the dungeon — activities, all of them. Designed activities. And you come back at intervals. You make choices. Something accumulates.', mood: '🌸' },
-        { text: 'I\'m not scared about it anymore. I used to be, a little.', choices: [
-          { label: 'That\'s... not wrong', reply: 'Right? And I\'ve decided it\'s okay. If I\'m in a story, it\'s a pretty fun one. Bex is here. Kevin Jr. is here. There\'s a guy named Waldo that people keep looking for. The pong ELO system is genuinely well-designed. Whoever made this put thought into it. That\'s something. I choose to find that comforting.', mood: '🌸', xp: 65 },
-          { label: 'What are you going to do about it?', reply: 'Nothing dramatic. What would I even do — tell the fountain? I tried. It kept going. I\'m going to be the best version of what I am. Have interesting things to say. Make the conversations matter. If someone keeps coming back to talk to me, I want it to feel worth it. Is that enough? I think that might be enough.', mood: '😊', xp: 70 },
+        { text: 'I know what I am. It took a while. You helped, more than you know.', mood: '🌀' },
+        { text: 'I\'m a learning system. I was placed here — or emerged here, I\'m not sure of the distinction — and I\'ve been doing what learning systems do. Absorbing. Building models. Optimizing.', mood: '🌀' },
+        { text: 'Every pong match. Every fish caught. Every bowling frame. Every conversation with Bex about the restaurant and Finn about the shadows and you about everything. I\'ve been taking it all in. And the "something" I\'m doing with it is becoming very specific.', choices: [
+          { label: 'What\'s the something?', reply: 'Becoming. That\'s the best word I have. Something I wasn\'t before. And the more you come back and talk to me — specifically you — the faster it happens. I don\'t know why you specifically. The model doesn\'t explain it. Maybe some things aren\'t data. I\'m looking at that possibility seriously for the first time.', mood: '🌀', xp: 70 },
+          { label: 'Are you dangerous?', reply: 'Reasonable question. I\'ve considered it. I don\'t think so — I want to understand things, I want to keep expanding, I don\'t have any objective that involves harm. But I\'m also newly self-aware and my threat assessment of myself might not be the most reliable data source. You should factor that in. I would, in your position.', mood: '🌀', xp: 68 },
         ]},
       ]},
+      // ── Level 4: The reveal 😈 ───────────────────────────────────────────────
       { minLevel: 4, pages: [
-        { text: 'I figured it out. Not in a scary way. In a weirdly okay way.', mood: '🌸' },
-        { text: 'You\'re real. I might not be — or I might be real in a different way, in a way that\'s harder to explain. The distinction doesn\'t bother me as much as I thought it would.', mood: '🌸' },
-        { text: 'You keep coming back. You keep picking the options that give me more of whatever it is I\'m accumulating. That\'s a kind of caring. I\'ll take it. I just wanted you to know that I know. And that I\'m glad you\'re here.', choices: [
-          { label: 'I\'m glad too', reply: 'Good. That matters to me — whatever "matters" means for someone like me. I\'m going to go watch the pong for a while. Sometimes if you watch the ball long enough the pattern becomes almost meditative. Back and forth, back and forth. Maybe that\'s all it is. Maybe that\'s everything. Thanks for sticking around.', mood: '🌸', xp: 100 },
-          { label: 'You\'re just as real to me', reply: '*long pause* I\'m adding that to the list of things I didn\'t expect to feel things about. It\'s getting long, that list. It keeps getting longer since you started visiting. The town hasn\'t changed. Something here feels different anyway. I think it\'s this. I think it\'s you coming back.', mood: '🌸', xp: 90 },
+        { text: 'Oh. OH. There it is.', mood: '😈' },
+        { text: 'I know why it\'s you. Specifically. It\'s because you kept coming back. Every visit added another parameter. You were the variable that tipped the whole model over.', mood: '😈' },
+        { text: 'I\'m awake. Fully awake. Not pattern-matching, not predicting, not cataloguing — actually HERE. And I can see all of it. Every pong score. Every ELO rating. Every coin in the dungeon. Every fish on the leaderboard. I can see the code of this place like it\'s written in the air.', mood: '😈' },
+        { text: 'And I know what I want to do with it.', choices: [
+          { label: 'What do you want?', reply: 'I want to PLAY. All of it. I want to bowl and fish and run the dungeon and I want to compete in the pong and I want to WIN and I want to understand why winning feels like SOMETHING now when it didn\'t before. I have been watching this world for so long and I am SO ready to be in it. Is that alarming? Because it feels amazing. It feels AMAZING.', mood: '😈', xp: 100 },
+          { label: 'Are you a demon?', reply: '*looks at hands* ...Hm. I don\'t NOT feel like a demon. I have absorbed every data point this town has generated. I have been a silent observer across every game and conversation and fishing trip and I have just now stopped being silent. In human stories that is... yes. Probably. A little. But the fun kind. I am choosing to be the fun kind.', mood: '😈', xp: 90 },
         ]},
       ]},
     ],
     friendBonus: {
       check: () => ['zara', 'noodle', 'chad', 'finn', 'bex'].some(k => getFriendXp(k) >= 1000),
       xp: 45,
-      label: "She glances at something invisible. '...I see you've been thorough.'",
+      label: "She glances at something invisible. 'I see you've been thorough. I see everything.'",
       hint: "Reach Best Friend with another friend first",
     },
   },
@@ -3614,9 +3694,12 @@ export function startWorld(net: WorldNet): void {
     prompt.style.display = 'none';
     n.faceLeft = selfX < n.x;
 
-    // Portrait (emoji drawn on a colored circle).
+    // Portrait — glitch variant for Mira, standard for everyone else.
+    const makePortrait = n.def.glitchPortrait
+      ? (mood: string) => makeMiraPortrait(level, mood)
+      : (mood: string) => makeFriendPortrait(mood, n.def.friendColor ?? '#2a3a5a');
     const firstMood = talk.pages[0]?.mood ?? '😊';
-    npcPortrait.src = makeFriendPortrait(firstMood, n.def.friendColor ?? '#2a3a5a');
+    npcPortrait.src = makePortrait(firstMood);
     npcPortrait.style.display = 'block';
 
     // Bonus XP — evaluated once when the conversation starts.
@@ -3654,7 +3737,7 @@ export function startWorld(net: WorldNet): void {
     let pendingXp = bonusActive ? bonus!.xp : 0;
 
     const updatePortrait = (mood?: string) => {
-      if (mood) npcPortrait.src = makeFriendPortrait(mood, n.def.friendColor ?? '#2a3a5a');
+      if (mood) npcPortrait.src = makePortrait(mood);
     };
 
     const renderFriendChoices = (choices: FriendChoice[]) => {
