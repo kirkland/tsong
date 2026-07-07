@@ -2244,7 +2244,10 @@ worldBtn.addEventListener('click', async () => {
       buyBeer: () => net.send({ type: 'buyBeer' }),
       buyMcFood: (item: string) => net.send({ type: 'buyMcFood', item: item as 'fries' | 'bigmac' | 'mcflurry' | 'happymeal' }),
       drunkLevel: () => drunkLevel, // the world reads this live to wobble movement + the camera
-      stats: () => ({ coins: wallet.coins, elo: lastLbSelfElo ?? null, rank: lastLbSelfRank ?? null }), // Mira reads these back to you
+      stats: () => ({
+        coins: wallet.coins, elo: lastLbSelfElo ?? null, rank: lastLbSelfRank ?? null,
+        fishLb: fishScores.find((r) => r.name === myName)?.lb ?? 0, // best charted catch (0 if unranked)
+      }), // Mira reads these back to you
 
       jail: () => net.send({ type: 'jail' }),                 // tried to drunk-drive → bust
       bail: (targetId) => net.send({ type: 'bail', targetId }), // post 500🪙 bail for a jailed avatar
