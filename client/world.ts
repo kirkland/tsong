@@ -1237,6 +1237,7 @@ interface LiveNpc {
   c: Phaser.GameObjects.Container;
   bob: Phaser.GameObjects.Container; // body sprites (bobbed/flipped); shadow+label sit outside it
   label: Phaser.GameObjects.Text;    // floating name — swapped for dizzy stars while squished
+  heart?: Phaser.GameObjects.Text;   // friend-sim NPCs: pulsing heart above nameplate
   squishedUntil: number;    // ms timestamp; flattened on the ground (run over by a car) until then
   getUpUntil: number;       // ms timestamp; brief squash-stretch "popping back up" pose until then
 }
@@ -7420,9 +7421,18 @@ export function startWorld(net: WorldNet): void {
       if (def.glasses) parts.push(layer('w-npc-glasses'));
     }
     const bob = sc.add.container(0, 0, parts);
-    const label = sc.add.text(0, -R - 26, def.name, NAME_STYLE).setOrigin(0.5, 1);
-    const c = sc.add.container(def.x, def.y, [shadow, bob, label]);
-    return { def, x: def.x, y: def.y, tx: def.x, ty: def.y, pauseUntil: 0, faceLeft: false, walking: false, lineIdx: 0, c, bob, label, squishedUntil: 0, getUpUntil: 0 };
+    const isFriend = !!def.friendKey;
+    const label = sc.add.text(0, -R - 26, def.name,
+      isFriend ? { ...NAME_STYLE, color: '#ffb8d8' } : NAME_STYLE,
+    ).setOrigin(0.5, 1);
+    const heart = isFriend
+      ? sc.add.text(0, -R - 46, '💕', {
+          fontFamily: 'system-ui, sans-serif', fontSize: '13px',
+          stroke: '#0b1020', strokeThickness: 3, resolution: 2,
+        }).setOrigin(0.5, 1)
+      : undefined;
+    const c = sc.add.container(def.x, def.y, heart ? [shadow, bob, label, heart] : [shadow, bob, label]);
+    return { def, x: def.x, y: def.y, tx: def.x, ty: def.y, pauseUntil: 0, faceLeft: false, walking: false, lineIdx: 0, c, bob, label, heart, squishedUntil: 0, getUpUntil: 0 };
   }
 
   function updateNpcs(now: number, dt: number) {
@@ -7479,6 +7489,10 @@ export function startWorld(net: WorldNet): void {
       n.c.setPosition(n.x, n.y).setDepth(n.y);
       n.bob.scaleX = n.faceLeft ? -1 : 1;
       n.bob.y = n.walking ? Math.sin(now / 110) * 1.4 - 1 : 0; // little walk bob
+      if (n.heart) {
+        n.heart.y = -R - 46 + Math.sin(now / 650) * 3.5;
+        n.heart.setAlpha(0.7 + 0.3 * Math.sin(now / 650));
+      }
     }
   }
 
