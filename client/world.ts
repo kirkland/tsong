@@ -81,7 +81,7 @@ export interface WorldNet {
   buyBeer(): void;               // buy a beer at the Tavern (server charges 20🪙 + ups drunk level)
   buyMcFood(item: string): void; // buy food at McDonald's (server charges coins + sends mcFoodResult)
   drunkLevel(): number;          // current drunkenness 0–6 (drives movement wobble + camera sway)
-  stats(): { coins: number; elo: number | null; rank: number | null }; // live wallet + pong rating (Mira reads these back to you)
+  stats(): { coins: number; elo: number | null; rank: number | null; fishLb: number }; // live wallet + pong rating + best catch (Mira reads these back to you)
   jail(): void;                  // self-report a drunk-drive attempt (server jails you if 2+ beers in)
   bail(targetId: string): void;  // pay 500🪙 to bail a jailed avatar out (id; may be your own)
   amJailed(): boolean;           // are WE currently locked in the jail cell?
@@ -573,7 +573,7 @@ interface FriendChoice {
   risk?: { chance: number; reply: string; mood?: string; xp: number };
   // Persona-style stat gate: shown 🔒-greyed until the requirement is met.
   // night = 10pm–6am local; the rest compare a live stat against min.
-  req?: { stat: 'elo' | 'coins' | 'wins' | 'night'; min?: number; lockText: string };
+  req?: { stat: 'elo' | 'coins' | 'wins' | 'night' | 'fish'; min?: number; lockText: string };
 }
 interface FriendPage { text: string; mood?: string; choices?: FriendChoice[]; }
 interface FriendTalk { minLevel: number; pages: FriendPage[]; } // unlocked when friendship level ≥ minLevel
@@ -1135,7 +1135,7 @@ const NPCS: NpcDef[] = [
         { text: 'Findings: you show up. Repeatedly. On a schedule I could set a campaign calendar by. Do you know how rare "shows up" is as a brand pillar? Entire companies pay me six figures to fake it.', choices: [
           { label: 'So what\'s my brand?', reply: 'Reliable, with undertones of mystery — because I still don\'t know what you actually do all day. Wins pong matches, opens chests, talks to consultants. Honestly? Marketable. If you ever want a logo, my rate for friends is merely offensive instead of unconscionable.', mood: '😏', xp: 55 },
           { label: 'You audited me??', reply: 'I audit everything. I audited the fountain — strong visual identity, zero message discipline. I audited the Dorito man — flawless brand consistency, deeply concerning product. You scored above both. Congratulations. There is no certificate. The certificate is my continued attention.', mood: '💅', xp: 62 },
-          { label: 'Let\'s talk leaderboard strategy', req: { stat: 'elo', min: 600, lockText: 'reach 600 ELO' }, reply: 'Six hundred plus. I checked before you walked up — I check everyone, but I checked you twice. Do you know how rare a defensible number is in this town? Everyone\'s brand is vibes. Yours is RATED. Sit down. I have thoughts about your matchup positioning and for once in my career I\'m giving them away free.', mood: '😏', xp: 70 },
+          { label: 'Let\'s talk leaderboard strategy', req: { stat: 'elo', min: 820, lockText: 'reach 820 ELO' }, reply: 'Eight-twenty. EIGHT-TWENTY. I checked before you walked up — I check everyone, but yours I\'ve been watching climb for weeks like a stock I was too proud to buy in early. That\'s not a rating anymore, that\'s a REPUTATION. Sit down. I have thoughts about your matchup positioning, your title sponsorship potential, and your inevitable rivalry arc, and for the first time in my career the consultation is free.', mood: '😏', xp: 80 },
         ]},
       ]},
       { minLevel: 2, pages: [
@@ -1242,7 +1242,7 @@ const NPCS: NpcDef[] = [
         { text: 'I want to be clear that mom was gold FIRST so you can\'t be number one, but you are FIRMLY tied for first among people I did not exit the womb in front of.', choices: [
           { label: 'What does gold tier get me?', reply: 'SO much. Birthday spreadsheet with countdown. Emergency snack priority — if I have one granola bar and we\'re both hungry, it\'s legally yours, I wrote it down. And the big one: I show UP. Flat tire at 2am? I\'m there. No car, so I\'m there SLOWLY, on foot, with snacks. But I\'m THERE.', mood: '😄', xp: 70 },
           { label: 'Tied with your MOM?', reply: 'I KNOW. She doesn\'t know about you yet which is insane because you\'re tied. I should fix that. Family dinner? Too fast? She makes a lasagna that made my therapist cry at a potluck. That\'s not a metaphor, there were witnesses, it\'s in the document.', mood: '😮', xp: 65 },
-          { label: 'I\'ll bankroll the Biscotti investigation', req: { stat: 'coins', min: 25000, lockText: '25,000+ coins' }, reply: 'You— what?? NO. No no no I can\'t take your coins, this is a PASSION project, it runs on obsession and a notes folder!! ...But the fact that you OFFERED. You looked at my restaurant mystery and said "this deserves FUNDING." I\'m crying in the document. There\'s a tab for that now too. You\'re the only entry. Investor Of My Heart, zero coins accepted.', mood: '🥹', xp: 75 },
+          { label: 'I\'ll bankroll the Biscotti investigation', req: { stat: 'coins', min: 1000000, lockText: '1,000,000 coins' }, reply: 'You— WHAT?? You have a MILLION COINS?? And your first instinct was the BISCOTTI FUND?? No. NO. I can\'t take a millionaire\'s coins, this is a PASSION project, it runs on obsession and a notes folder!! ...But you stood there, rich as a casino, and looked at my restaurant mystery and said "this deserves FUNDING." I\'m crying in the document. New tab. You\'re the only entry. INVESTOR OF MY HEART, ZERO COINS ACCEPTED, NET WORTH: EVERYTHING.', mood: '🥹', xp: 85 },
         ]},
       ]},
       { minLevel: 3, pages: [
@@ -1435,7 +1435,7 @@ const NPCS: NpcDef[] = [
         { text: 'Their name is Dana. Dana benches more than me. I\'m processing that with pride and only eleven percent ego damage. My therapist says eleven percent is elite. That\'s an ELITE number bro.', choices: [
           { label: 'Proud of you, Chad', reply: 'BRO. This is a full redemption arc. Squat rack tears to SMOOTHIE SUMMIT. Dana ordered something called a "green machine" and I got the peanut butter blast and we just TALKED. About form. About feelings. Same thing really. My gains journal has a new chapter and it\'s called "Dana" and it\'s three pages.', mood: '💪', xp: 55 },
           { label: 'What did the note even say?', reply: 'It said "Your form was already there. I was wrong to say almost. Some sentences need more reps before you say them out loud. I\'m still training mine. — Chad." Bro I workshopped it for two days. My therapist called it "genuinely moving." I did pushups about it.', mood: '🥺', xp: 62 },
-          { label: 'Check the scoreboard, Chad', req: { stat: 'wins', min: 10, lockText: '10+ tsong wins' }, reply: 'BRO I ALREADY DID. {wins} wins. DOUBLE DIGITS. Do you know what Dana calls double digits? "The end of the beginning." That\'s a DANA QUOTE and I just used it on YOU because you EARNED it. Dana wants to meet you now. This is huge bro. Dana doesn\'t meet people. Dana ASSESSES them from across the gym and you PASSED.', mood: '🤩', xp: 70 },
+          { label: 'Ask me about the one that didn\'t get away', req: { stat: 'fish', min: 100, lockText: 'land a 100+ lb catch' }, reply: 'BRO. THE HUNDRED POUNDER. I heard about it at the SMOOTHIE PLACE. Dana heard about it at the GYM. A fish. Over a HUNDRED POUNDS. Out of that little pond. Bro that\'s not fishing, that\'s a BOSS FIGHT. Do you know what I bench? More than that fish. Do you know what I\'ve PULLED OUT OF WATER? NOTHING. ZERO POUNDS. You\'re an ATHLETE bro. Cross-training LEGEND. I\'m adding "fish respect" to the gains journal as a whole new muscle group.', mood: '🤩', xp: 80 },
         ]},
       ]},
       { minLevel: 2, pages: [
@@ -1535,7 +1535,7 @@ const NPCS: NpcDef[] = [
         { text: 'I\'ve considered every explanation. Humidity. Foundation settling. Seasonal wood behavior. I\'ve chosen to believe Thaddeus is testing me. Our relationship needed the tension.', choices: [
           { label: 'Did you forgive him?', reply: 'Forgiveness implies he wronged me. He didn\'t. He surprised me. There\'s a difference and it took me most of Wednesday to locate it. I\'ve added a second column to his log: "expected" and "actual." He has room to be a creak with an inner life now. I think we\'re both better for it.', mood: '😐', xp: 55 },
           { label: 'Maybe your clock is wrong', reply: 'I keep four clocks. They agree with each other and disagree with me on principle. No — the clocks held. Thaddeus moved. I stayed up the next three nights to confirm and he was punctual all three, which is exactly what someone would do after getting away with something. I respect it. The ledger reflects my respect.', mood: '😐', xp: 60 },
-          { label: 'Audit my match history instead', req: { stat: 'wins', min: 25, lockText: '25+ tsong wins' }, reply: 'Twenty-five wins or more. I know. I\'ve been logging them since win one. What I haven\'t had is PERMISSION, which changes the quality of the data entirely. Observed numbers are surveillance. Offered numbers are friendship. You just converted my entire archive from the first category to the second, retroactively. This is the best administrative moment of my year. Possibly of the ledger\'s whole life.', mood: '😐', xp: 70 },
+          { label: 'Audit my match history instead', req: { stat: 'wins', min: 100, lockText: '100+ tsong wins' }, reply: 'One hundred wins. Triple digits. I\'ve logged every one since win one — I watched the hundredth happen and had to sit down on my counting bench. What I never had was PERMISSION, which changes the quality of the data entirely. Observed numbers are surveillance. Offered numbers are friendship. You just converted a hundred entries from the first category to the second, retroactively, in one sentence. The ledger needs a moment. I need a moment. We\'re both having a moment. This is the best administrative day of our lives.', mood: '😐', xp: 80 },
         ]},
       ]},
       { minLevel: 2, pages: [
@@ -3996,6 +3996,7 @@ export function startWorld(net: WorldNet): void {
       if (r.stat === 'wins') return getPongWins() >= (r.min ?? 0);
       const st = net.stats();
       if (r.stat === 'elo') return (st.elo ?? 0) >= (r.min ?? 0);
+      if (r.stat === 'fish') return st.fishLb >= (r.min ?? 0);
       return st.coins >= (r.min ?? 0);
     };
 
