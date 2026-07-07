@@ -1375,7 +1375,7 @@ const NPCS: NpcDef[] = [
   {
     id: 'chad-friend', name: 'Chad', shirt: 0x1a6ae8, hair: 0x2a1800, skin: SKINS[4],
     hairStyle: 'short' as const,
-    x: 1650, y: 500, roam: 90,
+    x: 2040, y: 990, roam: 90,
     lines: ['BRO.'],
     friendKey: 'chad', friendColor: '#081862', portraitSrc: '/portraits/chad.jpeg',
     friendTalks: [
@@ -4005,12 +4005,25 @@ export function startWorld(net: WorldNet): void {
       const f = document.createElement('div');
       f.textContent = text;
       f.style.cssText =
-        `position:absolute;right:22px;bottom:64px;color:${color};font-weight:800;font-size:17px;` +
-        'font-family:ui-monospace,monospace;pointer-events:none;text-shadow:0 2px 8px #000c;' +
-        'transition:transform .9s ease-out,opacity .9s ease-out;z-index:5;';
+        `position:absolute;right:24px;bottom:70px;color:${color};font-weight:800;font-size:24px;` +
+        'font-family:ui-monospace,monospace;pointer-events:none;text-shadow:0 2px 10px #000e;' +
+        'transition:transform 1.4s ease-out,opacity 1.4s ease-out;z-index:5;';
       npcBox.appendChild(f);
-      requestAnimationFrame(() => { f.style.transform = 'translateY(-30px)'; f.style.opacity = '0'; });
-      window.setTimeout(() => f.remove(), 950);
+      requestAnimationFrame(() => { f.style.transform = 'translateY(-44px)'; f.style.opacity = '0'; });
+      window.setTimeout(() => f.remove(), 1450);
+    };
+
+    // Running score for this conversation, pinned under the friendship meter —
+    // ticks on every pick so you always know how the chat is going. ♪ per perfect read.
+    const tally = document.createElement('div');
+    tally.style.cssText = 'font-size:11.5px;margin-top:5px;font-family:ui-monospace,monospace;color:#9fb4e8;';
+    npcFriendBar.appendChild(tally);
+    const updateTally = () => {
+      const total = 10 + pendingXp;
+      tally.innerHTML =
+        `This chat: <b style="color:${total >= 10 ? '#7fe089' : total >= 0 ? '#e8c84b' : '#ff6a5a'}">` +
+        `${total >= 0 ? '+' : ''}${total} XP</b>` +
+        (perfectPicks ? ` <span style="color:#ffd060">${'♪'.repeat(perfectPicks)}</span>` : '');
     };
 
     const renderFriendChoices = (choices: FriendChoice[]) => {
@@ -4072,6 +4085,7 @@ export function startWorld(net: WorldNet): void {
             else if (ch.xp < 0) floatXp(`💔 ${ch.xp}`, '#ff6a5a');
             else floatXp(`+${ch.xp}`, '#9fb4e8');
           }
+          updateTally();
           npcChoices.style.display = 'none';
           pageI++;
           showPage();
@@ -4145,6 +4159,7 @@ export function startWorld(net: WorldNet): void {
     }
     npcClose = closeFriendTalk;
 
+    updateTally();
     showPage();
   }
 
