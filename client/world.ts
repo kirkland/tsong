@@ -562,6 +562,14 @@ const HEDGE_RING: { x: number; y: number }[] = (() => {
 
 // --- townsfolk: client-side NPCs that wander near a home spot and have a few lines. A couple of
 // them ask a question you can actually answer (two reply choices, each with its own comeback).
+// --- Friend Sim types — VN-style branching dialogue + XP-tracked friendship levels. ----------
+// Each friend NPC has FriendTalk scenes unlocked at different levels. Designed so dating /
+// deeper arcs can be layered on later without restructuring (add `minRelType` / `dateScenes`).
+interface FriendChoice { label: string; reply: string; mood?: string; xp: number; }
+interface FriendPage { text: string; mood?: string; choices?: FriendChoice[]; }
+interface FriendTalk { minLevel: number; pages: FriendPage[]; } // unlocked when friendship level ≥ minLevel
+// -----------------------------------------------------------------------------------------
+
 // Purely local flavour — never networked, so they cost the server nothing. ---
 interface NpcChoice { label: string; reply: string; claim?: string } // claim → completes an objective
 type HairStyle = 'short' | 'long' | 'bun' | 'spiky' | 'pony' | 'bald';
@@ -582,9 +590,46 @@ interface NpcDef {
   roam: number;         // wander radius, world units
   lines: string[];      // flavour one-liners, cycled each chat
   ask?: { q: string; choices: [NpcChoice, NpcChoice] }; // optional: a question you can answer
+  // Friend-sim (optional — only on dedicated friend NPCs):
+  friendKey?: string;     // localStorage key suffix; presence = friend-sim NPC
+  friendColor?: string;   // portrait circle background CSS hex (e.g. '#5a0840')
+  friendTalks?: FriendTalk[]; // VN dialogue trees; each scene unlocked at minLevel
 }
 // Skin-tone palette to spread across the cast.
 const SKINS = [0xf6d3b0, 0xeebb91, 0xd29b6e, 0xb87a4f, 0x8d5a34] as const;
+
+// --- Friend Sim helpers (module-level — pure localStorage; no server round-trip) ------
+const FRIEND_THRESHOLDS = [0, 100, 300, 600, 1000] as const;
+const FRIEND_LEVEL_NAMES = ['Stranger', 'Acquaintance', 'Friend', 'Good Friend', 'Best Friend'] as const;
+function getFriendXp(key: string): number {
+  try { return Math.max(0, parseInt(localStorage.getItem(`tsong.friend.${key}`) || '0', 10) || 0); } catch { return 0; }
+}
+function addFriendXp(key: string, xp: number): { newXp: number; levelUp: boolean } {
+  const old = getFriendXp(key);
+  const oldLevel = getFriendLevel(old);
+  const newXp = old + xp;
+  try { localStorage.setItem(`tsong.friend.${key}`, String(newXp)); } catch { /* ignore */ }
+  return { newXp, levelUp: getFriendLevel(newXp) > oldLevel };
+}
+function getFriendLevel(xp: number): number {
+  let lv = 0;
+  for (let i = 1; i < FRIEND_THRESHOLDS.length; i++) { if (xp >= FRIEND_THRESHOLDS[i]) lv = i; }
+  return lv;
+}
+function makeFriendPortrait(emoji: string, bgColor: string): string {
+  const c = document.createElement('canvas'); c.width = 100; c.height = 100;
+  const ctx = c.getContext('2d')!;
+  const grd = ctx.createRadialGradient(42, 38, 6, 50, 50, 50);
+  grd.addColorStop(0, bgColor + 'ee'); grd.addColorStop(1, '#080818dd');
+  ctx.fillStyle = grd;
+  ctx.beginPath(); ctx.arc(50, 50, 48, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = 'rgba(255,255,255,0.22)'; ctx.lineWidth = 2.5; ctx.stroke();
+  ctx.font = '54px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(emoji, 50, 55);
+  return c.toDataURL();
+}
+// --------------------------------------------------------------------------------------
+
 const NPCS: NpcDef[] = [
   {
     id: 'pip', name: 'Pip', shirt: 0xe05a6d, hair: 0x4a2f1a, skin: SKINS[0], hairStyle: 'spiky',
@@ -909,6 +954,273 @@ const NPCS: NpcDef[] = [
       'Broker fees fund the House. The House funds everyone. Circulate.',
       'Price stability is a marathon, not a pump.',
       'I cannot confirm or deny the existence of a stimulus check.',
+    ],
+  },
+  // ====================== FRIEND SIM NPCs ==============================================
+  // 3 female + 2 male. Each has a `friendKey` + `friendTalks` VN dialogue tree.
+  // XP persisted per-browser in localStorage (key: tsong.friend.<friendKey>).
+  // Architecture: extend by adding scenes at higher minLevel, or a `dateScenes` array
+  // once a dating/romance arc is ready to layer on.
+  // ======================================================================================
+  {
+    id: 'zara', name: 'Zara', shirt: 0xd060c0, hair: 0x1a1030, skin: SKINS[1],
+    body: 'dress' as const, hairStyle: 'bun' as const, glasses: true,
+    x: 1870, y: 1210, roam: 90,
+    lines: ['Do I know you?'],
+    friendKey: 'zara', friendColor: '#5a0840',
+    friendTalks: [
+      { minLevel: 0, pages: [
+        { text: 'Hm. You again. Or are you new? I can\'t tell. Everyone here has the same "main character" energy.', mood: '🙄' },
+        { text: 'So. What brings you to my general vicinity?', choices: [
+          { label: 'Just passing through', reply: 'And yet you stopped. Interesting choice.', mood: '😏', xp: 20 },
+          { label: 'I wanted to meet you', reply: 'Bold. I\'ll allow it. Try not to make it weird. I\'m Zara.', mood: '💅', xp: 30 },
+        ]},
+      ]},
+      { minLevel: 0, pages: [
+        { text: 'My life coach told me to be open to connections. She has not seen this town.', mood: '😤' },
+        { text: 'There\'s a man made of a chip wandering around out there and nobody bats an eye. I am batting an eye. At you. Tentatively.', choices: [
+          { label: 'What\'s wrong with the Dorito man?', reply: 'He confuses me and I respect him for it. Much like you, potentially.', mood: '😏', xp: 25 },
+          { label: 'I\'m a connection worth having', reply: 'Either wildly confident or wildly delusional. Either way — I\'m intrigued.', mood: '💅', xp: 35 },
+        ]},
+      ]},
+      { minLevel: 1, pages: [
+        { text: 'Oh it\'s you. My "acquaintance." I looked it up. "A person one knows slightly." We are absolutely nailing it.', mood: '😏' },
+        { text: 'How\'s your... whatever it is you do?', choices: [
+          { label: 'Pretty good actually', reply: 'Good. I\'ve decided I want you to thrive. A thriving acquaintance makes me look like a good judge of character.', mood: '💅', xp: 35 },
+          { label: 'Could be better', reply: 'Noted. I\'ll try being marginally more supportive next time. I\'m practicing.', mood: '🙄', xp: 42 },
+        ]},
+      ]},
+      { minLevel: 2, pages: [
+        { text: 'Confession: I\'ve started looking forward to our chats. Don\'t tell anyone. I have an image.', mood: '😏' },
+        { text: 'I may have mentioned you positively to someone once. I immediately regretted the vulnerability. And then I didn\'t.', choices: [
+          { label: 'Your secret\'s safe with me', reply: 'Good. Also I defended your honor in a minor disagreement. Unsolicited. Surprising to me too.', mood: '💅', xp: 50 },
+          { label: 'Awww, Zara', reply: 'Do NOT "awww" me. I have business cards. One of them says "Executive of Feelings Suppression."', mood: '😤', xp: 40 },
+        ]},
+      ]},
+      { minLevel: 3, pages: [
+        { text: 'Theory: everyone in this town is waiting for something. What are YOU waiting for?', mood: '🤔' },
+        { text: 'And please, not "nothing." I am making an actual effort here.', choices: [
+          { label: 'A good pong match', reply: 'Honest. Classic. I\'m waiting for someone to admit the Dorito man is sentient. We\'re both in niche categories.', mood: '😏', xp: 45 },
+          { label: 'For things to make sense', reply: 'That\'s never happening. But the aspiration? Chef\'s kiss. Keep that energy.', mood: '💕', xp: 55 },
+          { label: 'I don\'t know', reply: 'Same. The most honest answer in this whole town. I\'m genuinely proud of you.', mood: '💕', xp: 62 },
+        ]},
+      ]},
+      { minLevel: 4, pages: [
+        { text: 'I made you a friendship bracelet. Destroyed it. Made it again. This is bracelet number two.', mood: '💕' },
+        { text: 'You\'re my person in this bizarre little town. Don\'t ghost me or I will make your life inconvenient in small but creative ways.', choices: [
+          { label: 'I would never', reply: 'Good. The bracelet is string. The sentiment is not. That\'s the whole thing.', mood: '💕', xp: 100 },
+          { label: 'This is the most touching thing you\'ve said', reply: 'I know. I\'ve been building to it. Don\'t make it weird. Actually — make it a little weird. But not too weird.', mood: '🥹', xp: 90 },
+        ]},
+      ]},
+    ],
+  },
+  {
+    id: 'bex', name: 'Bex', shirt: 0xff7730, hair: 0xe83a10, skin: SKINS[0],
+    body: 'dress' as const, hairStyle: 'pony' as const,
+    x: 1090, y: 1505, roam: 100,
+    lines: ['Oh! Hi! Sorry, I was—'],
+    friendKey: 'bex', friendColor: '#1a0862',
+    friendTalks: [
+      { minLevel: 0, pages: [
+        { text: 'OH! Hi! Sorry I was just — have you TRIED the fountain water? No don\'t. That was weird. I\'m Bex. Hi!', mood: '😄' },
+        { text: 'What\'s your deal? What are you INTO? Tell me everything. Actually top three things. GO.', choices: [
+          { label: 'Pong, mostly', reply: 'PONG. Okay okay. I respect the commitment. I tried pong once. I knocked the ball off the table. It was a video game. I don\'t understand me.', mood: '😅', xp: 25 },
+          { label: 'Just exploring', reply: 'SAME. I\'ve been "exploring" for three weeks. At some point this is just living here. Nobody tells you when that happens.', mood: '😄', xp: 30 },
+        ]},
+      ]},
+      { minLevel: 0, pages: [
+        { text: 'I JUST saw a pigeon trip over its own feet. Do they KNOW they have feet? This is bothering me.', mood: '😮' },
+        { text: 'Like we don\'t trip over our own hands. WHY. The pigeon is fine by the way. He walked it off.', choices: [
+          { label: 'Pigeons definitely know', reply: 'OKAY so WHY do they trip?? It\'s not like we trip over our hands. Unless. Can you trip over your own hands? I might test this.', mood: '🤔', xp: 25 },
+          { label: 'They probably don\'t', reply: 'That\'s WORSE. That means they\'re walking on mystery sticks they can\'t explain. Pigeons are going through it.', mood: '😮', xp: 32 },
+        ]},
+      ]},
+      { minLevel: 1, pages: [
+        { text: 'You\'re back!! I thought about something I said last time for literally three days. Was I weird? I\'m asking instead of spiraling. Growth!', mood: '😅' },
+        { text: 'My therapist says asking directly is healthier than catastrophizing. So. Was I weird.', choices: [
+          { label: 'Not weird at all', reply: 'OKAY GOOD. I made a pros and cons list of our last conversation. Pros won by eight points. Huge win.', mood: '😄', xp: 35 },
+          { label: 'A little, yeah', reply: 'Okay! Okay. I can work with that. You have a kind face when you\'re being honest. Has anyone told you that?', mood: '🥺', xp: 45 },
+        ]},
+      ]},
+      { minLevel: 2, pages: [
+        { text: 'Okay confession: I\'ve been low-key hoping to run into you. Not in a weird way. In a — I made you a playlist.', mood: '😊' },
+        { text: 'In my head. I didn\'t write it down but I know what\'s on it. It has one song that means something I can\'t explain yet.', choices: [
+          { label: 'I want to hear it', reply: 'Okay so: three songs that are happy in a complicated way. One embarrassing one you get immediately. And the 2am one. That\'s the playlist.', mood: '😄', xp: 50 },
+          { label: 'Tell me when it\'s ready', reply: 'You just GET it. It\'s a vibe thing. You\'ll know when it\'s time. I\'m building to it. This is very meaningful to me.', mood: '🥺', xp: 48 },
+        ]},
+      ]},
+      { minLevel: 3, pages: [
+        { text: 'I\'ve been thinking — and this is a Big Statement but I\'m a Brave Person now — I think you might be one of my favorite people.', mood: '🥺' },
+        { text: 'Top five. Possibly top three. The list fluctuates. My dog is on it permanently. Just so you know the competition.', choices: [
+          { label: 'I\'m honored', reply: 'YOU SHOULD BE. The list is CURATED. My mom, my dog, now you. That\'s a big deal. That is genuinely a big deal.', mood: '😄', xp: 55 },
+          { label: 'Who\'s numbers one and two?', reply: 'Dog, then mom. Both permanent. You\'re in the rotating top-five. That actually makes you MORE impressive. You EARNED it.', mood: '😊', xp: 58 },
+        ]},
+      ]},
+      { minLevel: 4, pages: [
+        { text: 'OKAY so. I have a whole thing. I practiced it in the mirror. Three times. Here goes.', mood: '😮' },
+        { text: 'You are one of the best people I\'ve met and I waited to say it because what if it was weird and then I decided being scared of weird is WORSE than the potential weird.', mood: '🥺' },
+        { text: 'Best Friend Status. Official. I made a document. I might laminate it.', choices: [
+          { label: 'I\'d love to see the document', reply: 'IT\'S SO GOOD. There\'s a "Moments That Mattered" section and a "Running Jokes" tab and a "Things I Want To Tell You" list that is already 47 items long. I have a problem.', mood: '😄', xp: 100 },
+          { label: 'You\'re my best friend too', reply: 'I\'M GOING TO CRY. Don\'t look at me. Look at me. Is this okay? This is the best day. Don\'t tell the other days I said that.', mood: '🥹', xp: 90 },
+        ]},
+      ]},
+    ],
+  },
+  {
+    id: 'noodle', name: 'Noodle', shirt: 0x7c5ab0, hair: 0x2e4a2e, skin: SKINS[0],
+    body: 'dress' as const, hairStyle: 'long' as const,
+    x: 730, y: 880, roam: 130,
+    lines: ['Kevin Jr. says hi.'],
+    friendKey: 'noodle', friendColor: '#0a1e08',
+    friendTalks: [
+      { minLevel: 0, pages: [
+        { text: 'Oh. A person. Kevin Jr. predicted you. Kevin Jr. is my pothos. He lives on the windowsill. He has seventeen leaves and very good instincts.', mood: '🌿' },
+        { text: 'He drooped east this morning. You came from the east. That\'s not a coincidence.', choices: [
+          { label: 'Who exactly is Kevin Jr.?', reply: 'A pothos. Three years old. He lost one leaf in an incident I don\'t discuss. He\'s thriving. We don\'t talk about the incident.', mood: '🌿', xp: 20 },
+          { label: 'Is he reliable?', reply: 'Extremely. He predicted my last haircut. He couldn\'t stop it but he knew it was coming. He drooped south that time.', mood: '🎨', xp: 30 },
+        ]},
+      ]},
+      { minLevel: 0, pages: [
+        { text: 'I\'ve been making art about this town. So far: fifty-three paintings of the fountain. The fountain keeps evolving as a subject.', mood: '🎨' },
+        { text: 'I haven\'t said a single one of the fifty-three things I have to say about it yet. The work continues.', choices: [
+          { label: 'Can I see them?', reply: 'Not yet. Art is never ready — it\'s just less wrong over time. I\'ll show you when they\'re less wrong.', mood: '🎨', xp: 25 },
+          { label: 'Fifty-three is a lot', reply: 'There are at least a hundred things to say about the fountain. Fifty-three is just the warm-up.', mood: '🌿', xp: 22 },
+        ]},
+      ]},
+      { minLevel: 1, pages: [
+        { text: 'You\'re back. Kevin Jr. did an anticipatory lean toward the door this morning. He knew you\'d return.', mood: '🌿' },
+        { text: 'I\'ve been thinking: do pong balls have feelings? They get hit constantly. Is that their whole experience? Just... impact?', choices: [
+          { label: 'That\'s genuinely dark', reply: 'Right? I made a four-panel comic about it. Panel four is just the ball saying "again." Very emotional Tuesday.', mood: '🎨', xp: 35 },
+          { label: 'Maybe they love the impact', reply: '!!! Positive impact!! I hadn\'t considered this. Noodle journal entry incoming. This changes the comic completely.', mood: '😮', xp: 48 },
+          { label: 'They\'re objects', reply: 'And? Objects have existence. You don\'t know their inner life. No one does. That\'s the beauty.', mood: '🌿', xp: 26 },
+        ]},
+      ]},
+      { minLevel: 2, pages: [
+        { text: 'I made something for you. It\'s a drawing. Of you walking around town. Kevin Jr. is in the corner, very small. You have to find him.', mood: '🎨' },
+        { text: 'This is the most emotionally vulnerable I\'ve been since I named the plant. Kevin Jr. didn\'t warn me it would feel like this.', choices: [
+          { label: 'I love it', reply: 'Good. Kevin Jr. knew you would. We believed in you before this confirmed it.', mood: '💚', xp: 52 },
+          { label: 'Where is Kevin Jr. in it?', reply: 'Lower left. By the bench. He\'s just a vibe. A small green vibe. You\'ll recognize him when you see him.', mood: '🌿', xp: 55 },
+        ]},
+      ]},
+      { minLevel: 3, pages: [
+        { text: 'I told Kevin Jr. you\'re a real friend. He did his biggest lean yet. I was genuinely worried he\'d topple.', mood: '💚' },
+        { text: 'He stabilized. But the lean was real. The lean always means something.', choices: [
+          { label: 'Tell Kevin Jr. I said hi', reply: 'I did. He absorbed it through his roots. He\'s processing. These things take a few hours for him. He\'ll get there.', mood: '🌿', xp: 55 },
+          { label: 'That\'s the sweetest thing', reply: 'Kevin Jr. prefers "botanically aware." He finds "sweet" reductive. I\'m passing on his feedback.', mood: '💚', xp: 62 },
+        ]},
+      ]},
+      { minLevel: 4, pages: [
+        { text: 'You\'re my best friend. Kevin Jr. agrees. He\'s never leaned this far — he\'s basically a right angle. It\'s a lot, structurally.', mood: '💚' },
+        { text: 'I painted the three of us. You, me, Kevin Jr. We\'re all small because the painting is about the world being big and us being in it anyway.', mood: '🎨' },
+        { text: 'You\'re the first person who stayed. Most people get nervous around Kevin Jr. Or me. Mostly Kevin Jr. He\'s a lot, energetically.', choices: [
+          { label: 'I\'m not going anywhere', reply: 'Kevin Jr. heard that. His vibe is spinning. He can\'t physically spin but energetically — full rotation. It\'s beautiful.', mood: '💚', xp: 100 },
+          { label: 'Kevin Jr. is genuinely great', reply: 'He IS. We\'re all great. This is the peak of my horticultural friendship arc. I need to document this. I\'ll get the paints.', mood: '🎨', xp: 90 },
+        ]},
+      ]},
+    ],
+  },
+  {
+    id: 'chad-friend', name: 'Chad', shirt: 0x1a6ae8, hair: 0x2a1800, skin: SKINS[2],
+    hairStyle: 'short' as const,
+    x: 1650, y: 500, roam: 90,
+    lines: ['BRO.'],
+    friendKey: 'chad', friendColor: '#081862',
+    friendTalks: [
+      { minLevel: 0, pages: [
+        { text: 'YO! New person! I\'m Chad! I do ALL the workouts. Literally every single one.', mood: '💪' },
+        { text: 'Quick question: do you even lift? No judgment. A little judgment. It\'s coming from a good place bro.', choices: [
+          { label: 'I could try', reply: 'BRO. I will PERSONALLY COACH YOU. Tomorrow. 5am. Leg day. BRO. THIS IS GROWTH. I\'m emotional right now.', mood: '🤩', xp: 25 },
+          { label: 'No and I\'m at peace with that', reply: 'Bro...that\'s actually the most confident thing I\'ve heard this week. Respect. Growth comes in forms bro.', mood: '🥺', xp: 35 },
+        ]},
+      ]},
+      { minLevel: 0, pages: [
+        { text: 'Bro. My protein shaker fell in the fountain. The water changed color for a second. Then it was fine. I think.', mood: '😳' },
+        { text: 'Should I tell someone? I\'m telling YOU. That\'s growth bro. Sharing feelings is growth.', choices: [
+          { label: 'You should probably tell someone official', reply: 'Bro that\'s so responsible. You\'re like a responsible version of me but without the protein. We balance each other.', mood: '🤩', xp: 22 },
+          { label: 'Was it chocolate flavor?', reply: 'BRO. How did you KNOW. Are you psychic?? Do you LIFT?? The two things are connected bro I know it.', mood: '😳', xp: 38 },
+        ]},
+      ]},
+      { minLevel: 1, pages: [
+        { text: 'BRO. I\'ve been thinking about what you said last time. Life-changing. Changed my whole life bro.', mood: '🤔' },
+        { text: 'I journaled about it. Front AND back. I don\'t remember what you said exactly but the energy was correct.', choices: [
+          { label: 'Something profound probably', reply: 'YES. Exactly that. I sent my therapist a voice note at 2am. She said please use the app. But she heard it bro.', mood: '💪', xp: 40 },
+          { label: 'I don\'t remember either', reply: 'Bro. BRO. Same. But you feel a good conversation even after it\'s gone. That\'s the thing bro. That\'s IT.', mood: '🥺', xp: 50 },
+        ]},
+      ]},
+      { minLevel: 2, pages: [
+        { text: 'I got you something.', mood: '😊' },
+        { text: 'It\'s a protein bar. Well — the second half of one. I ate the first half. It was a good half. You\'re getting the better half bro.', choices: [
+          { label: 'Thank you Chad', reply: 'BRO. That half of a protein bar is friendship in bar form. Chocolate peanut butter. We\'re not taking this lightly.', mood: '🤩', xp: 50 },
+          { label: 'I\'m not really a protein bar person', reply: 'Noted. Adding "learn friend\'s snack preferences" to my gains journal. I\'m growing as a friend bro.', mood: '🥺', xp: 42 },
+        ]},
+      ]},
+      { minLevel: 3, pages: [
+        { text: 'Real talk bro. I think you might be my best friend.', mood: '🥺' },
+        { text: 'I have gym friends but they\'re all also named Chad. The group chat is just flexing emojis. Nobody talks. It\'s lonely bro.', choices: [
+          { label: 'You\'re my best friend too', reply: 'BRO. I need a MOMENT. This is my Super Bowl. My protein peak. I\'m doing 100 pushups in your honor right now.', mood: '🤩', xp: 65 },
+          { label: 'How many Chads are there?', reply: 'Seven. Eight if you count Chad from the other Chad\'s gym. His real name is Greg. He goes by Chad. The lore is complicated bro.', mood: '😳', xp: 55 },
+        ]},
+      ]},
+      { minLevel: 4, pages: [
+        { text: 'BEST. FRIEND. I\'ve been practicing saying it. You\'re my BEST. FRIEND.', mood: '🥳' },
+        { text: 'My therapist said this is peak emotional development. I sent her a voice note saying LETS GOOO. She said that was also peak emotional development.', mood: '🤩' },
+        { text: 'I will never skip leg day for you. That is the highest compliment I know how to give. Please receive it as such.', choices: [
+          { label: 'That means the world', reply: 'I\'m doing 200 pushups right now. Don\'t watch. But know they\'re for you. Every single one is for you bro.', mood: '💪', xp: 100 },
+          { label: 'Is leg day a bigger deal than I am?', reply: 'Bro. No. But it\'s CLOSE. You\'re like... leg day adjacent. Which is VERY good. Leg day adjacent people are the backbone of society.', mood: '😅', xp: 80 },
+        ]},
+      ]},
+    ],
+  },
+  {
+    id: 'finn', name: 'Finn', shirt: 0x282030, hair: 0x141018, skin: SKINS[4],
+    hairStyle: 'short' as const,
+    x: 2250, y: 710, roam: 40,
+    lines: ['...'],
+    friendKey: 'finn', friendColor: '#0a0318',
+    friendTalks: [
+      { minLevel: 0, pages: [
+        { text: 'You have forty-seven visible pores on your left cheek. I\'ve been counting. Hello.', mood: '😐' },
+        { text: 'I count things. It helps me feel grounded. You can go if you want. Or stay. Either is fine. I\'ll continue counting.', choices: [
+          { label: 'Why were you counting?', reply: 'I count things. I said that. Pores. Blinks. Footsteps. Right now I\'m on forty-seven. You interrupted me at forty-four. That\'s fine. I restarted.', mood: '😐', xp: 20 },
+          { label: 'Hi?', reply: 'Hello. I said hello already. But this one is different. The second hello is warmer. I hope you felt that.', mood: '😐', xp: 28 },
+        ]},
+      ]},
+      { minLevel: 0, pages: [
+        { text: 'I collect shadows. Not metaphorically. I photograph shadows. I have seven thousand and forty-one photos. Yours would be seven thousand and forty-two.', mood: '😐' },
+        { text: 'Would you like to be number seven thousand and forty-two?', choices: [
+          { label: 'Sure, go ahead', reply: 'Thank you. *takes photo* It\'s a good one. You have a long shadow. Long shadows indicate character. I made that up but I believe it.', mood: '😐', xp: 35 },
+          { label: 'Can I see the collection?', reply: 'No. They\'re private. They\'re mine. But thank you for asking. Most people don\'t ask. They just back away slowly.', mood: '😐', xp: 25 },
+        ]},
+      ]},
+      { minLevel: 1, pages: [
+        { text: 'You came back. I wasn\'t sure you would. I told my shadow you\'d return. It disagreed. I win.', mood: '😐' },
+        { text: 'I\'m ahead by four hundred and twelve predictions now. The shadow is getting better though. Its recent form is impressive.', choices: [
+          { label: 'You compete with your shadow?', reply: 'Casually. It\'s a good exercise in humility. The shadow is flat. It sees things from below. Different perspective. Literally.', mood: '😐', xp: 40 },
+          { label: 'Glad I came back', reply: 'I noted that. I have a ledger. Your return is logged under "pleasant surprises." The ledger has three entries total. You\'re all three. Different days.', mood: '😐', xp: 48 },
+        ]},
+      ]},
+      { minLevel: 2, pages: [
+        { text: 'I made you a list. It\'s facts about you I\'ve observed. Number three is that you blink more than average. Number seven is that you always look left before right.', mood: '😐' },
+        { text: 'These are not criticisms. They are observations. I make them about people I find interesting. You are interesting.', choices: [
+          { label: 'How long have you been watching?', reply: 'Since we met. That\'s normal. That\'s called paying attention. Most people don\'t pay enough attention. I pay all of the attention.', mood: '😐', xp: 52 },
+          { label: 'That\'s very Finn of you', reply: 'Thank you. That\'s the first time my name has been used as an adjective. I need to think about what that means. Give me a moment. ...Okay. I\'m honored.', mood: '😐', xp: 60 },
+        ]},
+      ]},
+      { minLevel: 3, pages: [
+        { text: 'I have a confession. When I first saw you I thought: this person will leave quickly. I have a ninety-four percent accuracy rate on that. You are in the six percent.', mood: '😐' },
+        { text: 'There are four other people in the six percent. One of them I still talk to. His name is Greg. He moved. He still counts.', choices: [
+          { label: 'What\'s in the six percent?', reply: 'People who are curious instead of scared. It\'s a rare quality. You have it. I don\'t take that lightly.', mood: '😐', xp: 62 },
+          { label: 'I\'m glad I stayed', reply: 'I\'ve tracked our total conversation time. Forty-seven minutes across all visits. The best forty-seven minutes in my ledger. By a wide margin.', mood: '😐', xp: 68 },
+        ]},
+      ]},
+      { minLevel: 4, pages: [
+        { text: 'I\'ve decided you\'re my best friend. I put it in a spreadsheet. Eight categories. You scored highest overall.', mood: '😐' },
+        { text: 'You lost points in "blinks appropriately." But everyone loses those points. I think there\'s a flaw in that metric.', mood: '😐' },
+        { text: 'I\'ve also decided to tell you that your shadow at 4:17pm is now tied with the fountain\'s as my favorite. I wanted you to know that. It felt important.', choices: [
+          { label: 'I\'m touched, Finn', reply: 'I know. I could tell. I have a category for that too. "Receives information with grace." You scored a ten. Maximum points. I\'ve never given maximum points before.', mood: '😐', xp: 100 },
+          { label: 'Tell me about the spreadsheet', reply: 'Category 1: "Does Not Flee Immediately." You have never fled. Perfect score. Category 2: "Asks Follow-Up Questions." High score. You\'re exceptional data, honestly.', mood: '😐', xp: 90 },
+        ]},
+      ]},
     ],
   },
 ];
@@ -1615,7 +1927,9 @@ export function startWorld(net: WorldNet): void {
   npcPortrait.style.cssText =
     'position:absolute;left:50%;bottom:calc(100% - 12px);transform:translateX(-50%);height:200px;display:none;' +
     'image-rendering:pixelated;filter:drop-shadow(0 6px 12px #000b);pointer-events:none;';
-  npcBox.append(npcName, npcText, npcChoices, npcHint, npcPortrait);
+  const npcFriendBar = document.createElement('div');
+  npcFriendBar.style.cssText = 'display:none;margin:4px 0 10px;';
+  npcBox.append(npcName, npcFriendBar, npcText, npcChoices, npcHint, npcPortrait);
   overlay.appendChild(npcBox);
   if (!document.getElementById('wKeyframes')) {
     const st = document.createElement('style');
@@ -3107,8 +3421,148 @@ export function startWorld(net: WorldNet): void {
   renderObjectives();
   checkProgressObjectives(); // claim "win 10 games" if you finished it before coming back to town
 
+  // --- Friend Sim VN dialogue ----------------------------------------------------------------
+  function startFriendTalk(n: LiveNpc) {
+    if (talkOpen || dialogOpen) return;
+    if (!n.def.friendKey || !n.def.friendTalks) return;
+    const key = n.def.friendKey;
+    const xp = getFriendXp(key);
+    const level = getFriendLevel(xp);
+
+    // Pick a random unlocked scene.
+    const available = n.def.friendTalks.filter((t) => t.minLevel <= level);
+    if (!available.length) return;
+    const talk = available[Math.floor(Math.random() * available.length)];
+
+    talkOpen = true;
+    keys.clear(); joyActive = false;
+    prompt.style.display = 'none';
+    n.faceLeft = selfX < n.x;
+
+    // Portrait (emoji drawn on a colored circle).
+    const firstMood = talk.pages[0]?.mood ?? '😊';
+    npcPortrait.src = makeFriendPortrait(firstMood, n.def.friendColor ?? '#2a3a5a');
+    npcPortrait.style.display = 'block';
+
+    // Friendship meter bar.
+    const levelName = FRIEND_LEVEL_NAMES[level];
+    const prevThresh = FRIEND_THRESHOLDS[level];
+    const nextThresh = level < 4 ? FRIEND_THRESHOLDS[level + 1] : FRIEND_THRESHOLDS[4];
+    const pct = level < 4 ? Math.round(100 * (xp - prevThresh) / (nextThresh - prevThresh)) : 100;
+    const hearts = ['💙', '💙💙', '💚', '💛', '❤️'][level];
+    npcFriendBar.style.display = 'block';
+    npcFriendBar.innerHTML =
+      `<div style="font-size:11px;color:#d4b8ff;margin-bottom:3px;font-family:ui-monospace,monospace;">` +
+      `${hearts} ${levelName}${level < 4 ? ` <span style="opacity:.55">(${xp}/${nextThresh} XP)</span>` : ' <span style="color:#ffb3d4">✨ MAX</span>'}</div>` +
+      `<div style="height:5px;background:#1e2a48;border-radius:3px;overflow:hidden;">` +
+      `<div style="width:${pct}%;height:100%;background:linear-gradient(90deg,#a04aff,#ff6ab0);border-radius:3px;transition:width .5s;"></div></div>`;
+
+    npcName.textContent = n.def.name;
+    npcBox.style.display = 'block';
+
+    const pages: FriendPage[] = [...talk.pages];
+    let pageI = 0;
+    let typing = false;
+    let timer = 0;
+    let full = '';
+    let pendingXp = 0;
+
+    const updatePortrait = (mood?: string) => {
+      if (mood) npcPortrait.src = makeFriendPortrait(mood, n.def.friendColor ?? '#2a3a5a');
+    };
+
+    const renderFriendChoices = (choices: FriendChoice[]) => {
+      npcHint.style.display = 'none';
+      npcChoices.style.display = 'flex';
+      npcChoices.style.flexDirection = 'column';
+      npcChoices.replaceChildren();
+      for (const ch of choices) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = ch.label;
+        b.style.cssText =
+          'cursor:pointer;background:#21305a;color:#e8eefc;border:2px solid #6040a8;' +
+          'border-radius:10px;padding:9px 14px;font-size:14px;font-weight:700;font-family:ui-monospace,monospace;' +
+          'margin:2px 0;text-align:left;';
+        b.onmouseenter = () => { b.style.background = '#2c4079'; b.style.borderColor = '#a04aff'; };
+        b.onmouseleave = () => { b.style.background = '#21305a'; b.style.borderColor = '#6040a8'; };
+        b.onclick = (ev) => {
+          ev.stopPropagation();
+          selectBlip();
+          pendingXp += ch.xp;
+          npcChoices.style.display = 'none';
+          pages.push({ text: ch.reply, mood: ch.mood });
+          pageI++;
+          showPage();
+        };
+        npcChoices.appendChild(b);
+      }
+    };
+
+    function showPage() {
+      const page = pages[pageI];
+      if (!page) { closeFriendTalk(); return; }
+      npcChoices.style.display = 'none';
+      if (page.mood) updatePortrait(page.mood);
+      full = page.text;
+      let shown = 0;
+      typing = true;
+      npcText.textContent = '';
+      npcHint.style.display = 'none';
+      timer = window.setInterval(() => {
+        shown++;
+        npcText.textContent = full.slice(0, shown);
+        if (shown % 2 === 0) textBlip();
+        if (shown >= full.length) {
+          window.clearInterval(timer);
+          typing = false;
+          if (page.choices?.length) renderFriendChoices(page.choices);
+          else npcHint.style.display = 'block';
+        }
+      }, 26);
+    }
+
+    npcAdvance = () => {
+      if (typing) {
+        window.clearInterval(timer);
+        typing = false;
+        npcText.textContent = full;
+        const page = pages[pageI];
+        if (page?.choices?.length) renderFriendChoices(page.choices);
+        else npcHint.style.display = 'block';
+        return;
+      }
+      if (pages[pageI]?.choices?.length) return;
+      pageI++;
+      if (pageI >= pages.length) closeFriendTalk();
+      else showPage();
+    };
+
+    function closeFriendTalk() {
+      window.clearInterval(timer);
+      const totalXp = 10 + pendingXp; // 10 base XP for talking, bonus from choices
+      const { newXp, levelUp } = addFriendXp(key, totalXp);
+      if (levelUp) {
+        const newLv = getFriendLevel(newXp);
+        showToast(`💕 Friendship level up with ${n.def.name}!<br><b>${FRIEND_LEVEL_NAMES[newLv - 1]} → ${FRIEND_LEVEL_NAMES[newLv]}</b>`);
+      }
+      talkOpen = false;
+      npcAdvance = null;
+      npcClose = null;
+      npcBox.style.display = 'none';
+      npcPortrait.style.display = 'none';
+      npcFriendBar.style.display = 'none';
+      npcChoices.style.display = 'none';
+      npcChoices.style.flexDirection = '';
+    }
+    npcClose = closeFriendTalk;
+
+    showPage();
+  }
+
   // --- NPC dialogue (Pokémon-style bottom box: typewriter line(s), then optional reply choices) ---
   function startTalk(n: LiveNpc) {
+    if (n.def.friendKey) { startFriendTalk(n); return; } // redirect to VN friend flow
     if (talkOpen || dialogOpen) return;
     talkOpen = true;
     keys.clear(); joyActive = false;
@@ -3794,7 +4248,7 @@ export function startWorld(net: WorldNet): void {
       const a = others.find((o) => o.id === nearNetizen);
       prompt.textContent = `💬 Talk to ${a?.name ?? 'Netizen'}`;
     } else if (nearNpc) {
-      prompt.textContent = nearNpc.def.id === 'bartender' ? '🍺 Order from the Barkeep' : nearNpc.def.id === 'mc-cashier' ? '🍔 Order from Mac' : `💬 Talk to ${nearNpc.def.name}`;
+      prompt.textContent = nearNpc.def.id === 'bartender' ? '🍺 Order from the Barkeep' : nearNpc.def.id === 'mc-cashier' ? '🍔 Order from Mac' : nearNpc.def.friendKey ? `💕 Chat with ${nearNpc.def.name}` : `💬 Talk to ${nearNpc.def.name}`;
     } else if (nearExit) {
       prompt.textContent = inDungeon ? '🚪 Leave the Ruins' : inTemple ? '🚪 Leave the Temple' : inMcdonald ? "🍔 Leave McDonald's" : '🚪 Leave the Tavern';
     } else if (nearBook) {
