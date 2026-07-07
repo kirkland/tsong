@@ -470,6 +470,29 @@ export async function initDb(): Promise<void> {
     }
     await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('delete_matt_v1', now()::text)`);
   }
+  // One-time (per request): wipe "the equalizer"'s debts and slap a 1,000,000-coin bounty on his
+  // head. Matched on the normalized exact name. Runs once, but re-runs each boot until the account
+  // actually exists — the flag is set only on success, so it survives a deploy before he's signed up.
+  const equalizer = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'equalizer_bounty_v1'`);
+  if (equalizer.rowCount === 0) {
+    const marks = await pool.query<{ id: string; name: string }>(
+      `SELECT id, name FROM players WHERE LOWER(TRIM(name)) = 'the equalizer'`,
+    );
+    if (marks.rowCount) {
+      for (const m of marks.rows) {
+        await pool.query(`DELETE FROM loans WHERE pid = $1`, [m.id]);              // wipe his loans/debts
+        await pool.query(
+          `INSERT INTO bounties (target_pid, target_name, pot) VALUES ($1, $2, 1000000)
+             ON CONFLICT (target_pid) DO UPDATE SET pot = 1000000, target_name = EXCLUDED.target_name`,
+          [m.id, m.name],
+        );
+        console.log(`the equalizer (${m.id}): loans wiped, 1,000,000 bounty placed`);
+      }
+      await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('equalizer_bounty_v1', now()::text)`);
+    } else {
+      console.warn(`equalizer bounty skipped — no player named 'the equalizer' yet; will retry next boot`);
+    }
+  }
   // Robville land registry: one row per lot (the fixed WORLD_PARCELS set). owner_pid NULL = the
   // lot is bank-owned (buyable); `ask` is the owner's asking price when listed for sale, else NULL.
   await pool.query(`
