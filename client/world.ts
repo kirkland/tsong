@@ -608,6 +608,17 @@ const getPongWins = () => { try { return parseInt(localStorage.getItem('tsong.wo
 // Tuned so leveling keeps pace with fresh scenes — you should never see a repeat
 // until you've maxed the friendship (~10 conversations: 3 + 2 + 2 + 2 + the finale).
 const FRIEND_THRESHOLDS = [0, 100, 200, 350, 500] as const;
+// One-time reset: the dialogue trees + XP curve were rewritten, so stale progress
+// (earned against the old scenes/thresholds) is wiped. Bump to wipe again.
+const FRIEND_DATA_VERSION = '2';
+try {
+  if (localStorage.getItem('tsong.friend.v') !== FRIEND_DATA_VERSION) {
+    for (const k of Object.keys(localStorage)) {
+      if (k.startsWith('tsong.friend.')) localStorage.removeItem(k);
+    }
+    localStorage.setItem('tsong.friend.v', FRIEND_DATA_VERSION);
+  }
+} catch { /* private browsing etc. — friend progress just won't persist */ }
 const FRIEND_LEVEL_NAMES = ['Stranger', 'Acquaintance', 'Friend', 'Good Friend', 'Best Friend'] as const;
 function getFriendXp(key: string): number {
   try { return Math.max(0, parseInt(localStorage.getItem(`tsong.friend.${key}`) || '0', 10) || 0); } catch { return 0; }
