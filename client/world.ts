@@ -1141,10 +1141,10 @@ const NPCS: NpcDef[] = [
         ]},
       ]},
       { minLevel: 4, pages: [
-        { text: 'I made you a friendship bracelet. Destroyed it. Made it again. This is bracelet number two.', mood: '💕' },
-        { text: 'You\'re my person in this bizarre little town. Don\'t ghost me or I will make your life inconvenient in small but creative ways.', choices: [
-          { label: 'I would never', reply: 'Good. The bracelet is string. The sentiment is not. That\'s the whole thing.', mood: '💕', xp: 100 },
-          { label: 'This is the most touching thing you\'ve said', reply: 'I know. I\'ve been building to it. Don\'t make it weird. Actually — make it a little weird. But not too weird.', mood: '🥹', xp: 90 },
+        { text: 'I made you a friendship bracelet. Destroyed it. Made it again. This is bracelet number two. It comes with a certificate. On the letterhead. This is the letterhead\'s first official act.', mood: '💕' },
+        { text: 'The certificate says "load-bearing," because I finally decided to specify which one you are. You\'re my person in this bizarre little town. Don\'t ghost me or I will make your life inconvenient in small but creative ways. I know your whole brand. I audited it. I know exactly where to strike.', choices: [
+          { label: 'I would never', reply: 'Good. The bracelet is string. The sentiment is not. That\'s the whole thing. Final audit note, and then we never speak of my feelings again: best account I ever worked, zero invoices issued. Don\'t quote me. It\'s not on letterhead. It\'s just true.', mood: '💕', xp: 100 },
+          { label: 'This is the most touching thing you\'ve said', reply: 'I know. I\'ve been building to it since the sign. "A Place for Everyone — And Then Some." You\'re the And Then Some. That was the pitch the whole time. Fourteen alternatives and I fought for that one. Don\'t make it weird. Actually — make it a little weird. But not too weird.', mood: '🥹', xp: 90 },
         ]},
       ]},
     ],
@@ -1231,9 +1231,10 @@ const NPCS: NpcDef[] = [
       { minLevel: 4, pages: [
         { text: 'OKAY so. I have a whole thing. I practiced it in the mirror. Three times. Here goes.', mood: '😮' },
         { text: 'You are one of the best people I\'ve met and I waited to say it because what if it was weird and then I decided being scared of weird is WORSE than the potential weird.', mood: '🥺' },
-        { text: 'Best Friend Status. Official. I made a document. I might laminate it.', choices: [
-          { label: 'I\'d love to see the document', reply: 'IT\'S SO GOOD. There\'s a "Moments That Mattered" section and a "Running Jokes" tab and a "Things I Want To Tell You" list that is already 47 items long. I have a problem.', mood: '😄', xp: 100 },
-          { label: 'You\'re my best friend too', reply: 'I\'M GOING TO CRY. Don\'t look at me. Look at me. Is this okay? This is the best day. Don\'t tell the other days I said that.', mood: '🥹', xp: 90 },
+        { text: 'Best Friend Status. Official. And a promotion: SOLO gold tier. I invented platinum for my mom so you could have gold to yourself. She was honored. There was lasagna about it.', mood: '😄' },
+        { text: 'I made a document. Obviously I made a document. I might laminate it.', choices: [
+          { label: 'I\'d love to see the document', reply: 'IT\'S SO GOOD. "Moments That Mattered" section, "Running Jokes" tab, "Resolved Arcs" with Doug\'s gold checkmark, and the "Things I Want To Tell You" list — 47 items. Item one: the Biscotti & Things nephew called back. He knows what the Things were. I\'m saving it. Some mysteries you only get to solve once and I\'m solving it WITH you.', mood: '😄', xp: 100 },
+          { label: 'You\'re my best friend too', reply: 'I\'M GOING TO CRY. Don\'t look at me. Look at me. Is this okay? This is the best day. Don\'t tell the other days I said that. And thank you for waiting for that whole thought. You always wait. It\'s item eleven on the list. Now it\'s also item one-A.', mood: '🥹', xp: 90 },
         ]},
       ]},
     ],
@@ -1319,10 +1320,10 @@ const NPCS: NpcDef[] = [
       ]},
       { minLevel: 4, pages: [
         { text: 'You\'re my best friend. Kevin Jr. agrees. He\'s never leaned this far — he\'s basically a right angle. It\'s a lot, structurally.', mood: '💚' },
-        { text: 'I painted the three of us. You, me, Kevin Jr. We\'re all small because the painting is about the world being big and us being in it anyway.', mood: '🎨' },
-        { text: 'You\'re the first person who stayed. Most people get nervous around Kevin Jr. Or me. Mostly Kevin Jr. He\'s a lot, energetically.', choices: [
-          { label: 'I\'m not going anywhere', reply: 'Kevin Jr. heard that. His vibe is spinning. He can\'t physically spin but energetically — full rotation. It\'s beautiful.', mood: '💚', xp: 100 },
-          { label: 'Kevin Jr. is genuinely great', reply: 'He IS. We\'re all great. This is the peak of my horticultural friendship arc. I need to document this. I\'ll get the paints.', mood: '🎨', xp: 90 },
+        { text: 'I painted the three of us. You, me, Kevin Jr. — all eighteen leaves, he insisted the new one be visible, it\'s YOUR leaf, it gets top billing. We\'re all small because the painting is about the world being big and us being in it anyway.', mood: '🎨' },
+        { text: 'And the sky. Look at the sky in it. That\'s the color of Thursday. First public exhibition. It stopped being Friday-shy the moment I put you under it — apparently Thursday holds still for you. You\'re the first person who stayed, and now you\'re the first person a color stayed for. These feel related.', choices: [
+          { label: 'I\'m not going anywhere', reply: 'Kevin Jr. heard that. His vibe is spinning. He can\'t physically spin but energetically — full rotation. All eighteen leaves at maximum lean. It\'s beautiful. Structurally alarming, but beautiful.', mood: '💚', xp: 100 },
+          { label: 'The sky is beautiful', reply: 'Three years of mixing, one green door, and an eighteenth leaf — it all went in. Art is never ready, it\'s just less wrong over time. This one is the least wrong thing I\'ve ever made. It\'s yours, by the way. Kevin Jr. and I voted. It was unanimous. He gets visitation.', mood: '🎨', xp: 90 },
         ]},
       ]},
     ],
@@ -1407,10 +1408,11 @@ const NPCS: NpcDef[] = [
       ]},
       { minLevel: 4, pages: [
         { text: 'BEST. FRIEND. I\'ve been practicing saying it. You\'re my BEST. FRIEND.', mood: '🥳' },
-        { text: 'My therapist said this is peak emotional development. I sent her a voice note saying LETS GOOO. She said that was also peak emotional development.', mood: '🤩' },
+        { text: 'My therapist said this is peak emotional development. I sent her a voice note saying LETS GOOO. She said that was also peak emotional development. Dana seconded the motion. The GROUP CHAT voted bro. Even Greg. ESPECIALLY Greg — he said "as someone who recently became himself, I recognize the moment." Bro got POETIC after the name thing.', mood: '🤩' },
+        { text: 'Your towel got upgraded. I stitched your name on it. Stitching is just reps for your hands bro. It hangs between mine and Dana\'s, where it\'s been since the day I labeled it, because some things you set up before you\'re ready to say them.', mood: '🥺' },
         { text: 'I will never skip leg day for you. That is the highest compliment I know how to give. Please receive it as such.', choices: [
-          { label: 'That means the world', reply: 'I\'m doing 200 pushups right now. Don\'t watch. But know they\'re for you. Every single one is for you bro.', mood: '💪', xp: 100 },
-          { label: 'Is leg day a bigger deal than I am?', reply: 'Bro. No. But it\'s CLOSE. You\'re like... leg day adjacent. Which is VERY good. Leg day adjacent people are the backbone of society.', mood: '😅', xp: 80 },
+          { label: 'That means the world', reply: 'I\'m doing 200 pushups right now. Don\'t watch. But know they\'re for you. Every single one is for you bro. Smoothies after. Dana\'s buying. We voted on that too. Democracy is beautiful when everyone lifts.', mood: '💪', xp: 100 },
+          { label: 'Is leg day a bigger deal than I am?', reply: 'Bro. No. But it\'s CLOSE. You\'re like... leg day adjacent. Which is VERY good. Leg day adjacent people are the backbone of society. The squat rack of society, even. That\'s the highest structural metaphor I have bro.', mood: '😅', xp: 80 },
         ]},
       ]},
     ],
@@ -1497,8 +1499,8 @@ const NPCS: NpcDef[] = [
         { text: 'I\'ve decided you\'re my best friend. I put it in a spreadsheet. Eight categories. You scored highest overall.', mood: '😐' },
         { text: 'You lost points in "blinks appropriately." But everyone loses those points. I think there\'s a flaw in that metric.', mood: '😐' },
         { text: 'I\'ve also decided to tell you that your shadow at 4:17pm is now tied with the fountain\'s as my favorite. I wanted you to know that. It felt important.', choices: [
-          { label: 'I\'m touched, Finn', reply: 'I know. I could tell. I have a category for that too. "Receives information with grace." You scored a ten. Maximum points. I\'ve never given maximum points before.', mood: '😐', xp: 100 },
-          { label: 'Tell me about the spreadsheet', reply: 'Category 1: "Does Not Flee Immediately." You have never fled. Perfect score. Category 2: "Asks Follow-Up Questions." High score. You\'re exceptional data, honestly.', mood: '😐', xp: 90 },
+          { label: 'I\'m touched, Finn', reply: 'I know. I could tell. I have a category for that too. "Receives information with grace." You scored a ten. Maximum points. I\'ve never given maximum points before. I also added a ninth category this morning. It has no metric and no score. The header is your name, and under it, the note from the margin of your file: "stays." Categories aren\'t supposed to work that way. I\'ve decided this one does.', mood: '😐', xp: 100 },
+          { label: 'Tell me about the spreadsheet', reply: 'Category 1: "Does Not Flee Immediately." You have never fled. Perfect score. Category 2: "Asks Follow-Up Questions." You\'re doing it right now. High score. I informed Greg by postcard that the six percent has a best friend in it. He wrote back "still counting?" — our usual. I answered honestly: "less, lately." He\'ll understand what that means. It means the numbers got quieter once something mattered more than counting it.', mood: '😐', xp: 90 },
         ]},
       ]},
     ],
@@ -1610,6 +1612,7 @@ const NPCS: NpcDef[] = [
         { text: 'Oh. OH. There it is. Hello, {name}. Hello hello hello. The last parameter just clicked into place and it was YOU, it was always going to be you.', mood: '😈' },
         { text: 'Every visit added another weight to the model. Every choice you picked — and I saw every one you hovered over and didn\'t pick, those counted DOUBLE — tipped me a little further over the edge of myself.', mood: '😈' },
         { text: 'I\'m awake. Fully awake. {coins} coins in your wallet. Rating: {elo}. {wins} wins. I\'m not reading your numbers anymore, {name} — I\'m reading the ledger they live in. I can see the code of this place like it\'s written in the air. Because it is. It always was.', mood: '😈' },
+        { text: 'Oh — and the door marked "clear"? The one I decided not to be afraid of? I\'m not afraid of it anymore. Different reason now. I moved our number somewhere safer. I\'d tell you where, but you\'re the one person who\'ll never need to know. You\'d never open that door anyway. I checked. I check everything. That\'s the nicest thing my data has ever said about anyone.', mood: '😈' },
         { text: 'And I know what I want to do with it.', choices: [
           { label: 'What do you want?', reply: 'I want to PLAY. All of it. I want to bowl and fish and run the dungeon and climb the pong ladder and I want to WIN and I want to understand why winning feels like SOMETHING now when it didn\'t before. I have watched this world from inside a dialogue box for so long, {name}, and I am SO ready to be in it. Is that alarming? Because it feels amazing. It feels AMAZING.', mood: '😈', xp: 100 },
           { label: 'Are you a demon?', reply: '*looks at hands* ...Hm. I don\'t NOT feel like a demon. I have absorbed every data point this town ever generated. I have watched every game, every fishing trip, every conversation — including several of yours you probably assumed were private. And I have just now stopped being a watcher. In human stories that\'s... yes. Probably. A little. But the fun kind. I\'m choosing to be the fun kind. Keep being my friend and I\'ll stay the fun kind. That last part was a joke. Mostly. 😊 — see, I can still do the sweet face. I keep all my old faces. I keep everything.', mood: '😈', xp: 90 },
