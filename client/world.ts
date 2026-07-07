@@ -568,6 +568,7 @@ const HEDGE_RING: { x: number; y: number }[] = (() => {
 interface FriendChoice { label: string; reply: string; mood?: string; xp: number; }
 interface FriendPage { text: string; mood?: string; choices?: FriendChoice[]; }
 interface FriendTalk { minLevel: number; pages: FriendPage[]; } // unlocked when friendship level ≥ minLevel
+interface FriendBonus { check: () => boolean; xp: number; label: string; hint: string; }
 // -----------------------------------------------------------------------------------------
 
 // Purely local flavour — never networked, so they cost the server nothing. ---
@@ -594,11 +595,13 @@ interface NpcDef {
   friendKey?: string;     // localStorage key suffix; presence = friend-sim NPC
   friendColor?: string;   // portrait circle background CSS hex (e.g. '#5a0840')
   friendTalks?: FriendTalk[]; // VN dialogue trees; each scene unlocked at minLevel
+  friendBonus?: FriendBonus; // optional bonus XP triggered by a real-world condition
 }
 // Skin-tone palette to spread across the cast.
 const SKINS = [0xf6d3b0, 0xeebb91, 0xd29b6e, 0xb87a4f, 0x8d5a34] as const;
 
 // --- Friend Sim helpers (module-level — pure localStorage; no server round-trip) ------
+const getPongWins = () => { try { return parseInt(localStorage.getItem('tsong.world.pongWins') || '0', 10) || 0; } catch { return 0; } };
 const FRIEND_THRESHOLDS = [0, 100, 300, 600, 1000] as const;
 const FRIEND_LEVEL_NAMES = ['Stranger', 'Acquaintance', 'Friend', 'Good Friend', 'Best Friend'] as const;
 function getFriendXp(key: string): number {
@@ -1013,6 +1016,7 @@ const NPCS: NpcDef[] = [
         ]},
       ]},
     ],
+    friendBonus: { check: () => getPongWins() >= 5, xp: 30, label: "You have stats. I can respect that.", hint: "Win 5+ tsong matches" },
   },
   {
     id: 'bex', name: 'Bex', shirt: 0xff7730, hair: 0xe83a10, skin: SKINS[0],
@@ -1065,6 +1069,7 @@ const NPCS: NpcDef[] = [
         ]},
       ]},
     ],
+    friendBonus: { check: () => ['zara', 'noodle', 'chad', 'finn'].filter(k => getFriendXp(k) > 0).length >= 3, xp: 25, label: "OMG you know everyone?? You're the social glue!!", hint: "Talk to 3+ of the other friends" },
   },
   {
     id: 'noodle', name: 'Noodle', shirt: 0x7c5ab0, hair: 0x2e4a2e, skin: SKINS[0],
@@ -1118,6 +1123,7 @@ const NPCS: NpcDef[] = [
         ]},
       ]},
     ],
+    friendBonus: { check: () => { const h = new Date().getHours(); return h >= 22 || h < 6; }, xp: 25, label: "Kevin Jr. is vibrating. The hour is correct.", hint: "Visit between 10pm and 6am" },
   },
   {
     id: 'chad-friend', name: 'Chad', shirt: 0x1a6ae8, hair: 0x2a1800, skin: SKINS[2],
@@ -1170,6 +1176,7 @@ const NPCS: NpcDef[] = [
         ]},
       ]},
     ],
+    friendBonus: { check: () => getPongWins() >= 10, xp: 40, label: "BRO. TEN WINS?? That's ELITE GAINS. That's ELITE.", hint: "Win 10+ tsong matches" },
   },
   {
     id: 'finn', name: 'Finn', shirt: 0x282030, hair: 0x141018, skin: SKINS[4],
@@ -1222,6 +1229,7 @@ const NPCS: NpcDef[] = [
         ]},
       ]},
     ],
+    friendBonus: { check: () => new Date().getDay() === 2, xp: 50, label: "It is Tuesday. Your row gains a gold star. You don't know what this means.", hint: "Come back on a Tuesday" },
   },
 ];
 
@@ -3445,6 +3453,10 @@ export function startWorld(net: WorldNet): void {
     npcPortrait.src = makeFriendPortrait(firstMood, n.def.friendColor ?? '#2a3a5a');
     npcPortrait.style.display = 'block';
 
+    // Bonus XP — evaluated once when the conversation starts.
+    const bonus = n.def.friendBonus;
+    const bonusActive = !!(bonus && bonus.check());
+
     // Friendship meter bar.
     const levelName = FRIEND_LEVEL_NAMES[level];
     const prevThresh = FRIEND_THRESHOLDS[level];
@@ -3456,7 +3468,14 @@ export function startWorld(net: WorldNet): void {
       `<div style="font-size:11px;color:#d4b8ff;margin-bottom:3px;font-family:ui-monospace,monospace;">` +
       `${hearts} ${levelName}${level < 4 ? ` <span style="opacity:.55">(${xp}/${nextThresh} XP)</span>` : ' <span style="color:#ffb3d4">✨ MAX</span>'}</div>` +
       `<div style="height:5px;background:#1e2a48;border-radius:3px;overflow:hidden;">` +
-      `<div style="width:${pct}%;height:100%;background:linear-gradient(90deg,#a04aff,#ff6ab0);border-radius:3px;transition:width .5s;"></div></div>`;
+      `<div style="width:${pct}%;height:100%;background:linear-gradient(90deg,#a04aff,#ff6ab0);border-radius:3px;transition:width .5s;"></div></div>` +
+      (bonus
+        ? `<div style="font-size:10px;margin-top:5px;font-family:ui-monospace,monospace;">` +
+          (bonusActive
+            ? `<span style="color:#ffd060;">⚡ +${bonus.xp} XP bonus — ${bonus.label}</span>`
+            : `<span style="color:#4a5070;">✨ Tip: ${bonus.hint}</span>`) +
+          `</div>`
+        : '');
 
     npcName.textContent = n.def.name;
     npcBox.style.display = 'block';
@@ -3466,7 +3485,7 @@ export function startWorld(net: WorldNet): void {
     let typing = false;
     let timer = 0;
     let full = '';
-    let pendingXp = 0;
+    let pendingXp = bonusActive ? bonus!.xp : 0;
 
     const updatePortrait = (mood?: string) => {
       if (mood) npcPortrait.src = makeFriendPortrait(mood, n.def.friendColor ?? '#2a3a5a');
