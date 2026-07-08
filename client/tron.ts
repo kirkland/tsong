@@ -102,12 +102,59 @@ export function startTron(net: TronNet): void {
   overlay.style.cssText =
     'position:fixed;inset:0;z-index:9999;background:#020208;display:flex;align-items:center;' +
     'justify-content:center;flex-direction:column;font-family:ui-monospace,monospace;';
+  // canvas wrapped so the CRT scanline layer can sit exactly on top of it
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:relative;height:min(90vh,56.25vw);aspect-ratio:16/9;';
   const canvas = document.createElement('canvas');
   canvas.width = TRN_COLS * CELL; canvas.height = TRN_ROWS * CELL;
   canvas.style.cssText =
-    'height:min(90vh,56.25vw);aspect-ratio:16/9;background:#000;border:2px solid #0af3;box-shadow:0 0 40px #0af2;';
+    'width:100%;height:100%;background:#000;border:2px solid #0af3;border-radius:6px;' +
+    'box-shadow:0 0 60px #00e5ff22, inset 0 0 120px #000c;';
   const ctx = canvas.getContext('2d')!;
-  overlay.appendChild(canvas);
+  const scan = document.createElement('div');
+  scan.style.cssText =
+    'position:absolute;inset:0;pointer-events:none;border-radius:6px;' +
+    'background:repeating-linear-gradient(transparent 0 2px, #0003 2px 3px);' +
+    'box-shadow:inset 0 0 80px #000a;';
+  wrap.append(canvas, scan);
+  overlay.appendChild(wrap);
+
+  // cached vignette layer (drawn once, composited every frame)
+  const vig = document.createElement('canvas');
+  vig.width = canvas.width; vig.height = canvas.height;
+  {
+    const vctx = vig.getContext('2d')!;
+    const g = vctx.createRadialGradient(vig.width / 2, vig.height / 2, vig.height * 0.35, vig.width / 2, vig.height / 2, vig.height * 0.95);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, 'rgba(0,10,20,0.55)');
+    vctx.fillStyle = g;
+    vctx.fillRect(0, 0, vig.width, vig.height);
+  }
+
+  // neon title glow for the menu (scoped keyframes)
+  const styleEl = document.createElement('style');
+  styleEl.textContent =
+    '@keyframes trnGlow { 0%,100% { text-shadow: 0 0 24px #00e5ff88, 0 0 60px #00e5ff33; }' +
+    ' 50% { text-shadow: 0 0 40px #00e5ffcc, 0 0 90px #00e5ff55; } }';
+  overlay.appendChild(styleEl);
+
+  // --- derez particles (death explosions) ---
+  interface Spark { x: number; y: number; vx: number; vy: number; life: number; max: number; color: string; }
+  let sparks: Spark[] = [];
+  const spawnDerez = (r: Rider) => {
+    const cx = r.x * CELL + CELL / 2, cy = r.y * CELL + CELL / 2;
+    for (let i = 0; i < 42; i++) {
+      const a = Math.random() * Math.PI * 2, sp = 60 + Math.random() * 260;
+      sparks.push({
+        x: cx, y: cy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
+        life: 0, max: 0.5 + Math.random() * 0.6, color: r.color,
+      });
+    }
+  };
+  const updateSparks = (dt: number) => {
+    for (const s of sparks) { s.life += dt; s.x += s.vx * dt; s.y += s.vy * dt; s.vx *= 0.96; s.vy *= 0.96; }
+    sparks = sparks.filter((s) => s.life < s.max);
+  };
 
   // menu / lobby layer sits on top of the canvas
   const ui = document.createElement('div');
@@ -168,8 +215,8 @@ export function startTron(net: TronNet): void {
     if (mode === 'menu') {
       const title = document.createElement('div');
       title.innerHTML =
-        '<div style="font-size:64px;font-weight:900;letter-spacing:18px;color:#00e5ff;text-shadow:0 0 30px #00e5ff88">TRON</div>' +
-        '<div style="font-size:13px;opacity:.7;margin-top:6px">1–4 riders · light cycles · last one riding wins · first to 3 rounds</div>';
+        '<div style="font-size:64px;font-weight:900;letter-spacing:18px;color:#00e5ff;animation:trnGlow 2.6s ease-in-out infinite">TRON</div>' +
+        '<div style="font-size:13px;opacity:.7;margin-top:6px;letter-spacing:3px">1–4 RIDERS · LIGHT CYCLES · LAST ONE RIDING WINS · FIRST TO 3</div>';
       ui.appendChild(title);
       ui.appendChild(btn('Join Grid', '#00e5ff', () => net.join()));
       ui.appendChild(btn('Exit', '#8aa', close));
@@ -307,7 +354,7 @@ export function startTron(net: TronNet): void {
       if (!dead) for (let j = 0; j < riders.length; j++) { // same-cell head-on: both explode
         if (j !== i && heads[j] && heads[j]![0] === nx && heads[j]![1] === ny) dead = true;
       }
-      if (dead) { r.alive = false; heads[i] = null; continue; }
+      if (dead) { r.alive = false; heads[i] = null; spawnDerez(r); continue; }
     }
     for (let i = 0; i < riders.length; i++) {
       const r = riders[i]; const h = heads[i];
@@ -375,6 +422,7 @@ export function startTron(net: TronNet): void {
         r.alive = h[3] === 1;
         if (r.alive || wasAlive) { r.x = h[0]; r.y = h[1]; }
         if (r.alive) grid[idx(r.x, r.y)] = i + 1;
+        else if (wasAlive) spawnDerez(r); // derez burst where the wall got them
       });
     } else if (d.t === 're') {
       roundOver = true;
@@ -417,71 +465,149 @@ export function startTron(net: TronNet): void {
   // --- rendering ---
   function render() {
     const W = canvas.width, H = canvas.height;
-    ctx.fillStyle = '#020208';
+    const now = performance.now();
+    // deep-space backdrop with a slow breathing floor gradient
+    const bg = ctx.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, '#01040a');
+    bg.addColorStop(1, '#03101c');
+    ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
-    // faint grid lines — the Grid™
-    ctx.strokeStyle = '#0a2a38';
+    // the Grid™ — minor lines breathe, major lines every 32 cells run brighter
+    const pulse = 0.5 + 0.25 * Math.sin(now / 1400);
     ctx.lineWidth = 1;
+    ctx.strokeStyle = `rgba(14, 62, 84, ${pulse * 0.7})`;
     ctx.beginPath();
-    for (let x = 0; x <= TRN_COLS; x += 8) { ctx.moveTo(x * CELL, 0); ctx.lineTo(x * CELL, H); }
-    for (let y = 0; y <= TRN_ROWS; y += 8) { ctx.moveTo(0, y * CELL); ctx.lineTo(W, y * CELL); }
+    for (let x = 8; x < TRN_COLS; x += 8) { ctx.moveTo(x * CELL, 0); ctx.lineTo(x * CELL, H); }
+    for (let y = 8; y < TRN_ROWS; y += 8) { ctx.moveTo(0, y * CELL); ctx.lineTo(W, y * CELL); }
     ctx.stroke();
-    // trails
-    for (let y = 0; y < TRN_ROWS; y++) {
-      for (let x = 0; x < TRN_COLS; x++) {
-        const v = grid[idx(x, y)];
-        if (!v) continue;
-        ctx.fillStyle = COLORS[v - 1];
-        ctx.globalAlpha = 0.55;
-        ctx.fillRect(x * CELL, y * CELL, CELL, CELL);
-        ctx.globalAlpha = 1;
-        ctx.fillRect(x * CELL + 2, y * CELL + 2, CELL - 4, CELL - 4);
+    ctx.strokeStyle = `rgba(0, 190, 255, ${pulse * 0.28})`;
+    ctx.beginPath();
+    for (let x = 32; x < TRN_COLS; x += 32) { ctx.moveTo(x * CELL, 0); ctx.lineTo(x * CELL, H); }
+    for (let y = 32; y < TRN_ROWS; y += 32) { ctx.moveTo(0, y * CELL); ctx.lineTo(W, y * CELL); }
+    ctx.stroke();
+
+    // trails — one glow pass + one crisp pass PER COLOR (batched paths keep shadowBlur cheap)
+    const byColor: number[][] = [[], [], [], []];
+    for (let i = 0; i < grid.length; i++) { const v = grid[i]; if (v) byColor[v - 1].push(i); }
+    for (let c = 0; c < riders.length; c++) {
+      const cells = byColor[c];
+      if (!cells.length) continue;
+      ctx.beginPath();
+      for (const ci of cells) {
+        const x = (ci % TRN_COLS) * CELL, y = ((ci / TRN_COLS) | 0) * CELL;
+        ctx.rect(x + 1, y + 1, CELL - 2, CELL - 2);
       }
+      ctx.shadowColor = COLORS[c]; ctx.shadowBlur = 10;
+      ctx.fillStyle = COLORS[c]; ctx.globalAlpha = 0.85;
+      ctx.fill();
+      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+      // hot core line down the middle of the beam
+      ctx.beginPath();
+      for (const ci of cells) {
+        const x = (ci % TRN_COLS) * CELL, y = ((ci / TRN_COLS) | 0) * CELL;
+        ctx.rect(x + 3, y + 3, CELL - 6, CELL - 6);
+      }
+      ctx.fillStyle = '#fff'; ctx.globalAlpha = 0.35;
+      ctx.fill();
+      ctx.globalAlpha = 1;
     }
-    // heads (bright core + glow)
+
+    // heads — elongated cycle body along the travel direction, white-hot core, big glow
     for (const r of riders) {
       if (!r.alive) continue;
-      ctx.shadowColor = r.color; ctx.shadowBlur = 18;
+      const cx = r.x * CELL + CELL / 2, cy = r.y * CELL + CELL / 2;
+      const horiz = r.dir === 1 || r.dir === 3;
+      const len = CELL * 2.1, thick = CELL * 1.05;
+      ctx.shadowColor = r.color; ctx.shadowBlur = 26;
+      ctx.fillStyle = r.color;
+      ctx.fillRect(cx - (horiz ? len : thick) / 2, cy - (horiz ? thick : len) / 2, horiz ? len : thick, horiz ? thick : len);
+      ctx.shadowBlur = 12;
       ctx.fillStyle = '#fff';
-      ctx.fillRect(r.x * CELL - 1, r.y * CELL - 1, CELL + 2, CELL + 2);
+      const cl = len * 0.55, ct = thick * 0.5;
+      ctx.fillRect(cx - (horiz ? cl : ct) / 2, cy - (horiz ? ct : cl) / 2, horiz ? cl : ct, horiz ? ct : cl);
       ctx.shadowBlur = 0;
     }
-    // HUD: names + win pips
-    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-    ctx.font = '700 16px ui-monospace, monospace';
-    riders.forEach((r, i) => {
-      const x = 16 + i * 180;
-      ctx.fillStyle = r.alive || roundOver ? r.color : '#555';
-      ctx.fillText(`${r.name}${r.bot ? '·bot' : ''}`, x, 10);
-      for (let w = 0; w < TRN_ROUNDS_TO_WIN; w++) {
-        ctx.fillStyle = w < r.wins ? r.color : '#223';
-        ctx.fillRect(x + w * 14, 32, 10, 6);
+
+    // derez sparks
+    for (const s of sparks) {
+      const t = 1 - s.life / s.max;
+      ctx.globalAlpha = t;
+      ctx.fillStyle = Math.random() < 0.25 ? '#fff' : s.color;
+      const sz = 2 + t * 3;
+      ctx.fillRect(s.x - sz / 2, s.y - sz / 2, sz, sz);
+    }
+    ctx.globalAlpha = 1;
+
+    // vignette on top of the playfield, under the HUD
+    ctx.drawImage(vig, 0, 0);
+
+    // HUD — name plates with dim backing, glowing win pips, round marker up top
+    if (riders.length) {
+      ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      ctx.font = '700 15px ui-monospace, monospace';
+      riders.forEach((r, i) => {
+        const x = 16 + i * 190;
+        ctx.fillStyle = '#00000088';
+        ctx.fillRect(x - 8, 6, 172, 40);
+        ctx.fillStyle = r.alive || roundOver ? r.color : '#444a55';
+        ctx.fillText(`${r.name}${r.bot ? ' ·bot' : ''}`, x, 11);
+        for (let w = 0; w < TRN_ROUNDS_TO_WIN; w++) {
+          if (w < r.wins) { ctx.shadowColor = r.color; ctx.shadowBlur = 8; ctx.fillStyle = r.color; }
+          else { ctx.shadowBlur = 0; ctx.fillStyle = '#1a2230'; }
+          ctx.fillRect(x + w * 16, 33, 12, 6);
+        }
+        ctx.shadowBlur = 0;
+      });
+      if (mode === 'play') {
+        ctx.textAlign = 'center';
+        ctx.font = '700 13px ui-monospace, monospace';
+        ctx.fillStyle = '#4a7a92';
+        ctx.fillText(`— ROUND ${round} · FIRST TO ${TRN_ROUNDS_TO_WIN} —`, W / 2, 14);
       }
-    });
-    // center banner / countdown
-    const now = performance.now();
-    if (mode === 'play' && now < roundStartAt + COUNTDOWN_MS) {
-      const left = roundStartAt + COUNTDOWN_MS - now;
-      const n = Math.ceil(left / (COUNTDOWN_MS / 3));
+    }
+
+    // center countdown — numbers slam in (scale + fade), then GO! flashes
+    if (mode === 'play' && now < roundStartAt + COUNTDOWN_MS + 400) {
+      const elapsed = now - roundStartAt;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.font = '900 120px ui-monospace, monospace';
-      ctx.fillStyle = '#00e5ff';
-      ctx.shadowColor = '#00e5ff'; ctx.shadowBlur = 30;
-      ctx.fillText(String(n), W / 2, H / 2);
-      ctx.shadowBlur = 0;
+      if (elapsed < COUNTDOWN_MS) {
+        const seg = COUNTDOWN_MS / 3;
+        const n = 3 - Math.floor(elapsed / seg);
+        const frac = (elapsed % seg) / seg;           // 0 → 1 within this digit
+        const scale = 1.6 - frac * 0.6;               // slams from big to resting size
+        ctx.font = `900 ${Math.round(110 * scale)}px ui-monospace, monospace`;
+        ctx.globalAlpha = 1 - frac * 0.35;
+        ctx.fillStyle = '#00e5ff';
+        ctx.shadowColor = '#00e5ff'; ctx.shadowBlur = 40;
+        ctx.fillText(String(n), W / 2, H / 2);
+      } else {
+        const frac = (elapsed - COUNTDOWN_MS) / 400;
+        ctx.font = '900 130px ui-monospace, monospace';
+        ctx.globalAlpha = 1 - frac;
+        ctx.fillStyle = '#89ff2a';
+        ctx.shadowColor = '#89ff2a'; ctx.shadowBlur = 50;
+        ctx.fillText('GO!', W / 2, H / 2);
+      }
+      ctx.shadowBlur = 0; ctx.globalAlpha = 1;
     } else if (banner && now < bannerUntil) {
+      const col = matchWinner >= 0 ? COLORS[matchWinner] : '#bfe9ff';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.font = '900 44px ui-monospace, monospace';
-      ctx.fillStyle = matchWinner >= 0 ? COLORS[matchWinner] : '#bfe9ff';
-      ctx.shadowColor = matchWinner >= 0 ? COLORS[matchWinner] : '#00e5ff'; ctx.shadowBlur = 24;
+      ctx.font = '900 46px ui-monospace, monospace';
+      // chromatic double-print behind the main fill
+      ctx.globalAlpha = 0.5;
+      ctx.fillStyle = '#ff3df0'; ctx.fillText(banner, W / 2 - 3, H / 2);
+      ctx.fillStyle = '#00e5ff'; ctx.fillText(banner, W / 2 + 3, H / 2);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = col;
+      ctx.shadowColor = col; ctx.shadowBlur = 30;
       ctx.fillText(banner, W / 2, H / 2);
       ctx.shadowBlur = 0;
     }
     if (mode === 'play') {
       ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
       ctx.font = '12px ui-monospace, monospace';
-      ctx.fillStyle = '#4a6a7a';
-      ctx.fillText('arrows / WASD to steer · ESC to exit · first to 3 rounds', W / 2, H - 8);
+      ctx.fillStyle = '#3d5a6a';
+      ctx.fillText('ARROWS / WASD TO STEER · ESC TO EXIT', W / 2, H - 8);
     }
   }
 
@@ -494,6 +620,7 @@ export function startTron(net: TronNet): void {
       acc += dt;
       while (acc >= tickMs) { acc -= tickMs; hostTick(); if (roundOver) { acc = 0; break; } }
     }
+    updateSparks(dt / 1000);
     render();
     raf = requestAnimationFrame(loop);
   }
