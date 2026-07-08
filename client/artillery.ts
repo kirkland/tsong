@@ -46,6 +46,9 @@ const MAPS: WaMap[] = [
   { name: 'THE RUINS', desc: 'stepped stone + ancient pillars', grass: '#5a7a5a', dirtTop: '#4a4a55', dirtDeep: '#1a1a22' },
   { name: 'FOUNTAIN VALLEY', desc: 'one deep basin, no cover in the middle', grass: '#4a8a5a', dirtTop: '#2a3a24', dirtDeep: '#0e1408' },
   { name: 'THE ARENA', desc: 'two mesas, one fatal chasm', grass: '#7a6a3a', dirtTop: '#4a3520', dirtDeep: '#1c1208' },
+  { name: 'SKY ISLANDS', desc: 'no mainland — girders or death', grass: '#4aaa6a', dirtTop: '#3a4a5c', dirtDeep: '#141c26', },
+  { name: 'THE CAVERNS', desc: 'a hollowed-out underworld', grass: '#6a5a8a', dirtTop: '#3a2e4c', dirtDeep: '#120c1c' },
+  { name: 'ROBVILLE', desc: 'towers, floors, and bad intentions', grass: '#5a6a72', dirtTop: '#3c4248', dirtDeep: '#16181c' },
 ];
 const GRAV = 640;            // px/s² for projectiles and fighters
 const WALK_SPEED = 95;       // px/s
@@ -88,6 +91,22 @@ function mulberry32(seed: number) {
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
+}
+
+// seeded 2D value noise (two octaves, bilinear) — drives the cavern map
+function makeNoise2(rnd: () => number) {
+  const N = 64;
+  const grid = Array.from({ length: N * N }, () => rnd());
+  const at = (gx: number, gy: number) => grid[((gy % N + N) % N) * N + ((gx % N + N) % N)];
+  const level = (x: number, y: number, scale: number) => {
+    const fx = x / scale, fy = y / scale;
+    const x0 = Math.floor(fx), y0 = Math.floor(fy);
+    const tx = fx - x0, ty = fy - y0;
+    const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty);
+    const a = at(x0, y0), b = at(x0 + 1, y0), c = at(x0, y0 + 1), d = at(x0 + 1, y0 + 1);
+    return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+  };
+  return (x: number, y: number) => level(x, y, 150) * 0.65 + level(x, y, 55) * 0.35;
 }
 
 let waOpen = false;
@@ -212,6 +231,7 @@ export function startArtillery(net: ArtilleryNet): void {
     const freqs = [0.0021 + rnd() * 0.001, 0.0058 + rnd() * 0.002, 0.013 + rnd() * 0.004];
     const amps = [170 + rnd() * 90, 70 + rnd() * 40, 22 + rnd() * 14];
     const base = WA_H * (0.58 + rnd() * 0.08);
+    const noise2 = makeNoise2(rnd);
     const hmap = new Float64Array(WA_W);
     for (let x = 0; x < WA_W; x++) {
       let h = base
@@ -236,10 +256,64 @@ export function startArtillery(net: ArtilleryNet): void {
       hmap[x] = h;
     }
     solid = new Uint8Array(WA_W * WA_H);
-    for (let x = 0; x < WA_W; x++) {
-      const top = Math.max(60, Math.min(WA_H + 120, hmap[x]));
-      for (let y = Math.min(WA_H - 1, top) | 0; y < WA_H; y++) {
-        if (top < WA_H) solid[y * WA_W + x] = 1;
+    if (map === 4) {
+      // SKY ISLANDS: nothing but floating rock over open water
+      const nI = 6 + Math.floor(rnd() * 3);
+      for (let isl = 0; isl < nI; isl++) {
+        const ix = 130 + (WA_W - 260) * (isl + 0.5) / nI + (rnd() - 0.5) * 130;
+        const iy = WA_H * 0.3 + rnd() * WA_H * 0.42;
+        const rx = 95 + rnd() * 95, ry = 30 + rnd() * 30;
+        for (let y = Math.max(0, iy - ry) | 0; y < Math.min(WA_H, iy + ry * 1.8); y++) {
+          for (let x = Math.max(0, ix - rx) | 0; x < Math.min(WA_W, ix + rx); x++) {
+            const ddx = (x - ix) / rx;
+            const ddy = y < iy ? (y - iy) / ry : (y - iy) / (ry * 1.8); // teardrop bottoms
+            if (ddx * ddx + ddy * ddy <= 1) solid[y * WA_W + x] = 1;
+          }
+        }
+      }
+    } else if (map === 5) {
+      // THE CAVERNS: a mostly-solid underworld hollowed out by noise
+      const ceiling = WA_H * 0.22;
+      for (let y = ceiling | 0; y < WA_H; y++) {
+        for (let x = 0; x < WA_W; x++) {
+          const n = noise2(x, y);
+          const depthBias = (y - ceiling) / (WA_H - ceiling) * 0.13; // more open near the top
+          if (n + depthBias > 0.46) solid[y * WA_W + x] = 1;
+        }
+      }
+      // guarantee a floor band so the whole map can't drain into the water
+      for (let y = WA_H - 90; y < WA_H; y++) for (let x = 0; x < WA_W; x++) solid[y * WA_W + x] = 1;
+    } else if (map === 6) {
+      // ROBVILLE: flat ground + hollow towers with floors, windows and rooftop access
+      const ground = WA_H * 0.78;
+      for (let x = 0; x < WA_W; x++) for (let y = ground | 0; y < WA_H; y++) solid[y * WA_W + x] = 1;
+      const nT = 4 + Math.floor(rnd() * 3);
+      for (let t = 0; t < nT; t++) {
+        const tw = 130 + Math.floor(rnd() * 90);
+        const tx0 = Math.floor(60 + (WA_W - 120 - tw) * (t + 0.5) / nT + (rnd() - 0.5) * 60);
+        const th = 280 + Math.floor(rnd() * 300);
+        const top = ground - th;
+        // shell
+        for (let x = tx0; x < tx0 + tw; x++) for (let y = top | 0; y < ground; y++) solid[y * WA_W + x] = 1;
+        // hollow rooms per floor (leave 12px walls and 12px slabs)
+        for (let fy = top + 14; fy < ground - 24; fy += 88) {
+          for (let y = fy | 0; y < Math.min(ground - 12, fy + 74); y++) {
+            for (let x = tx0 + 12; x < tx0 + tw - 12; x++) solid[y * WA_W + x] = 0;
+          }
+          // a window/door gap on a random side of this floor
+          const left = rnd() < 0.5;
+          const gy0 = (fy + 18) | 0;
+          for (let y = gy0; y < gy0 + 42 && y < ground - 12; y++) {
+            for (let k = 0; k < 12; k++) solid[y * WA_W + (left ? tx0 + k : tx0 + tw - 1 - k)] = 0;
+          }
+        }
+      }
+    } else {
+      for (let x = 0; x < WA_W; x++) {
+        const top = Math.max(60, Math.min(WA_H + 120, hmap[x]));
+        for (let y = Math.min(WA_H - 1, top) | 0; y < WA_H; y++) {
+          if (top < WA_H) solid[y * WA_W + x] = 1;
+        }
       }
     }
     // THE RUINS: ancient pillars to snipe from (and blow up)
@@ -255,8 +329,8 @@ export function startArtillery(net: ArtilleryNet): void {
         }
       }
     }
-    // caves — hollow chambers to hide (or cower) in; every map but the chasm arena
-    if (map !== 3) {
+    // caves — hollow chambers to hide (or cower) in (heightmap maps only)
+    if (map <= 2) {
       const nC = 2 + Math.floor(rnd() * 3);
       for (let c = 0; c < nC; c++) {
         const cavX = 140 + rnd() * (WA_W - 280);
@@ -306,6 +380,62 @@ export function startArtillery(net: ArtilleryNet): void {
         tc.fillRect(x, runTop, 1, y - runTop);
         tc.fillStyle = theme.grass;
         tc.fillRect(x, runTop, 1, Math.min(6, y - runTop));
+      }
+    }
+    // texture pass — source-atop paints ONLY where terrain exists, so craters stay clean:
+    tc.save();
+    tc.globalCompositeOperation = 'source-atop';
+    // sediment strata
+    for (let y = 0; y < WA_H; y += 22 + Math.floor(rnd() * 18)) {
+      tc.fillStyle = `rgba(0,0,0,${0.06 + rnd() * 0.08})`;
+      tc.fillRect(0, y, WA_W, 3 + Math.floor(rnd() * 5));
+    }
+    // mineral speckle
+    for (let i = 0; i < 2600; i++) {
+      const sx = rnd() * WA_W, sy = rnd() * WA_H;
+      tc.fillStyle = rnd() < 0.5 ? '#ffffff10' : '#00000018';
+      tc.fillRect(sx, sy, 1 + rnd() * 2.4, 1 + rnd() * 2.4);
+    }
+    // top-light: terrain reads brighter near the sky
+    const light = tc.createLinearGradient(0, 0, 0, WA_H);
+    light.addColorStop(0, 'rgba(255,244,214,0.10)');
+    light.addColorStop(0.45, 'rgba(255,244,214,0)');
+    tc.fillStyle = light;
+    tc.fillRect(0, 0, WA_W, WA_H);
+    tc.restore();
+    // vegetation & set dressing, painted onto the terrain canvas so blasts remove it too
+    const surface = (x: number) => { for (let y = 0; y < WA_H; y++) if (solid[y * WA_W + x]) return y; return -1; };
+    for (let x = 40; x < WA_W - 40; x += 16 + Math.floor(rnd() * 40)) {
+      const top = surface(x);
+      if (top < 60 || top > WA_H - 120) continue;
+      const roll = rnd();
+      if (map === 6) {
+        if (roll < 0.18) { // rooftop antenna
+          tc.strokeStyle = '#8a949e'; tc.lineWidth = 2;
+          tc.beginPath(); tc.moveTo(x, top); tc.lineTo(x, top - 26); tc.stroke();
+          tc.fillStyle = '#ff5a5a'; tc.fillRect(x - 2, top - 30, 4, 4);
+        }
+      } else if (map === 5) {
+        if (roll < 0.2) { // cave mushrooms
+          tc.fillStyle = '#c8b8ff';
+          tc.fillRect(x - 1, top - 8, 2, 8);
+          tc.beginPath(); tc.arc(x, top - 9, 5, Math.PI, 0); tc.fill();
+        }
+      } else if (roll < 0.16) { // trees
+        const th2 = 26 + rnd() * 26;
+        tc.fillStyle = '#4a3220';
+        tc.fillRect(x - 2, top - th2, 4, th2);
+        tc.fillStyle = theme.grass;
+        tc.beginPath();
+        tc.arc(x, top - th2, 13 + rnd() * 9, 0, Math.PI * 2);
+        tc.arc(x - 9, top - th2 + 8, 9, 0, Math.PI * 2);
+        tc.arc(x + 9, top - th2 + 8, 9, 0, Math.PI * 2);
+        tc.fill();
+      } else if (roll < 0.22) { // boulders
+        tc.fillStyle = '#6a6a72';
+        tc.beginPath(); tc.ellipse(x, top - 4, 7 + rnd() * 6, 5 + rnd() * 4, 0, 0, Math.PI * 2); tc.fill();
+        tc.fillStyle = '#ffffff22';
+        tc.fillRect(x - 3, top - 8, 4, 2);
       }
     }
     return hmap;
