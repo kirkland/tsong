@@ -926,7 +926,7 @@ function stepBot(s: Sim, dt: number) {
     if (b.dead) continue;
     const bx = b.st === 0 ? b.tx : b.x, by = b.st === 0 ? b.ty : b.y;
     const d = Math.hypot(me.x - bx, me.y - by);
-    const dr = BOOM_R + TILE * 1.1;
+    const dr = BOOM_R + TILE * 0.45; // cuts it close on purpose — it eats a blast now and then
     if (d < dr) { danger = true; fleeX += ((me.x - bx) / (d || 1)) * (dr - d); fleeY += ((me.y - by) / (d || 1)) * (dr - d); }
   }
   if (danger) {
@@ -974,27 +974,36 @@ function stepBot(s: Sim, dt: number) {
   }
   if (s.t < brain.overrideUntil) { me.mvx = brain.omx; me.mvy = brain.omy; }
   else { me.mvx = brain.mx; me.mvy = brain.my; }
+  // stubby robot legs: a touch slower than a human, so you can actually run it down
+  me.mvx *= 0.8;
+  me.mvy *= 0.8;
 
-  // 4) lob a bomb (with a lead and a wobble — it's a bot, not a sniper)
+  // 4) lob a bomb (lazily, with barely any lead and a big wobble — it's a friendly bot)
   const distToYou = Math.hypot(you.x - me.x, you.y - me.y);
   if (s.t >= brain.nextBomb && s.t >= me.cdUntil && distToYou < 8 * TILE) {
-    me.aimX = you.x + you.mvx * P_SPEED * 0.35 + (Math.random() - 0.5) * TILE * 1.6;
-    me.aimY = you.y + you.mvy * P_SPEED * 0.35 + (Math.random() - 0.5) * TILE * 1.6;
+    me.aimX = you.x + you.mvx * P_SPEED * 0.15 + (Math.random() - 0.5) * TILE * 2.6;
+    me.aimY = you.y + you.mvy * P_SPEED * 0.15 + (Math.random() - 0.5) * TILE * 2.6;
     hostThrowBomb(s, 1);
-    brain.nextBomb = s.t + 1.7 + Math.random() * 1.6;
+    brain.nextBomb = s.t + 2.4 + Math.random() * 2.2;
   }
 
-  // 5) the showpiece: parry incoming bombs with wood
+  // 5) the showpiece: parry incoming bombs with wood — but only about half the time.
+  // A failed roll starts the cooldown too, so it commits to fumbling that bomb instead
+  // of re-rolling every frame until it succeeds.
   if (me.carry > 0 && s.t >= brain.parryCd) {
     for (const b of s.bombs) {
       if (b.dead || b.owner === 1) continue;
       const threat =
         (b.st === 0 && b.p > 0.25 && Math.hypot(b.tx - me.x, b.ty - me.y) < 3 * TILE) ||
         (b.st === 1 && Math.hypot(b.x - me.x, b.y - me.y) < 3.2 * TILE);
-      if (threat && Math.random() < 0.85) {
-        me.aimX = b.x; me.aimY = b.y;
-        hostThrowBlock(s, 1);
-        brain.parryCd = s.t + 0.9;
+      if (threat) {
+        if (Math.random() < 0.55) {
+          me.aimX = b.x; me.aimY = b.y;
+          hostThrowBlock(s, 1);
+          brain.parryCd = s.t + 1.6;
+        } else {
+          brain.parryCd = s.t + 1.2; // butterfingers
+        }
         break;
       }
     }
