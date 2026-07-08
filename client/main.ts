@@ -817,6 +817,10 @@ const net = connect(
       superBrosMod?.feedSbLobby(msg);
     } else if (msg.type === 'sbRelay') {
       superBrosMod?.feedSbRelay(msg.data);
+    } else if (msg.type === 'trnLobby') {
+      tronMod?.feedTrnLobby(msg);
+    } else if (msg.type === 'trnRelay') {
+      tronMod?.feedTrnRelay(msg.data);
     } else if (msg.type === 'tntLobby') {
       tntMod?.feedTntLobby(msg);
     } else if (msg.type === 'tntRelay') {
@@ -2031,6 +2035,26 @@ sbBtn.addEventListener('click', async () => {
   }
 });
 
+// --- Tron (lazy-loaded, self-contained): 1–4 player light cycles over the same dumb relay
+// shape as Super Tsong Bros (trn* messages). Slot 0 simulates everything, bots included.
+const trnBtn = document.getElementById('trnBtn') as HTMLButtonElement;
+let tronMod: typeof import('./tron') | null = null;
+trnBtn.addEventListener('click', async () => {
+  try {
+    tronMod = await import('./tron');
+    tronMod.startTron({
+      join: () => net.send({ type: 'trnJoin' }),
+      leave: () => net.send({ type: 'trnLeave' }),
+      start: () => net.send({ type: 'trnStart' }),
+      end: (winner) => net.send({ type: 'trnEnd', winner }),
+      relay: (data) => net.send({ type: 'trnRelay', data }),
+      name: () => myName,
+    });
+  } catch (e) {
+    console.error('Tron failed to load:', e);
+  }
+});
+
 // --- TNT Explosion Rally, a 1v1 bomb-parry maze duel designed by a 6-year-old (lazy-loaded,
 // self-contained). Host-authoritative over the same dumb relay shape as Super Tsong Bros:
 // the server is only a 2-slot lobby + fan-out (tnt* messages, routed above). Slot 0 simulates
@@ -2227,6 +2251,7 @@ const WORLD_DELEGATE_CHECK: Record<string, () => boolean> = {
   typedie: overlayPresentCheck('typeDieOverlay'),
   racing: overlayPresentCheck('streetDemonsOverlay'),
   superbros: overlayPresentCheck('superbrosOverlay'),
+  tron: overlayPresentCheck('tronOverlay'),
   nuketown: overlayPresentCheck('nuketownOverlay'),
   citytycoon: overlayPresentCheck('crOverlay'),
   bowling: overlayPresentCheck('bowlOverlay'),
@@ -2321,13 +2346,14 @@ worldBtn.addEventListener('click', async () => {
           return;
         }
         // Arcade cabinets launch the solo/co-op minigames via their toolbar buttons.
-        if (feature === 'campaign' || feature === 'typedie' || feature === 'racing' || feature === 'superbros' || feature === 'nuketown' || feature === 'citytycoon' || feature === 'tnt') {
+        if (feature === 'campaign' || feature === 'typedie' || feature === 'racing' || feature === 'superbros' || feature === 'nuketown' || feature === 'citytycoon' || feature === 'tnt' || feature === 'tron') {
           const btn = feature === 'campaign' ? campaignBtn
                     : feature === 'typedie' ? typeDieBtn
                     : feature === 'racing' ? streetDemonsBtn
                     : feature === 'nuketown' ? nuketownBtn
                     : feature === 'citytycoon' ? (document.getElementById('crBtn') as HTMLButtonElement)
                     : feature === 'tnt' ? tntBtn
+                    : feature === 'tron' ? trnBtn
                     : sbBtn;
           setTimeout(() => btn?.click(), 0);
           return;
