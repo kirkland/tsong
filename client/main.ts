@@ -2280,8 +2280,12 @@ worldBtn.addEventListener('click', async () => {
       toggleMute: () => { muted = !muted; prefSet('muted', muted ? '1' : '0'); applyMute(); },
       leaderboard: () => lastLbRows,
       netWorth: () => lastNwRows,
-      eloProfileReq: (rank) => net.send({ type: 'eloProfileReq', rank }),
-      balanceSheetReq: (rank) => net.send({ type: 'balanceSheetReq', rank }),
+      selfLbRow: () => (lastLbSelfElo !== undefined && lastLbSelfRank !== undefined)
+        ? { rank: lastLbSelfRank, elo: lastLbSelfElo } : null,
+      selfNwRow: () => (lastNwSelfRow !== undefined && lastNwSelfRank !== undefined)
+        ? { rank: lastNwSelfRank, net: lastNwSelfRow.net, loan: lastNwSelfRow.loan } : null,
+      eloProfileReq: (rank, self) => net.send({ type: 'eloProfileReq', rank: rank ?? 0, self: self ? true : undefined }),
+      balanceSheetReq: (rank, self) => net.send({ type: 'balanceSheetReq', rank, self }),
 
       jail: () => net.send({ type: 'jail' }),                 // tried to drunk-drive → bust
       bail: (targetId) => net.send({ type: 'bail', targetId }), // post 500🪙 bail for a jailed avatar

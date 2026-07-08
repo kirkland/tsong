@@ -53,6 +53,7 @@ import {
   DUNGEON_TIER_COINS,
   DUNGEON_CHEST_CONTENTS,
   COSMETICS,
+  EXCLUSIVES,
   type ChatLine,
 } from '../shared/types';
 
@@ -73,10 +74,14 @@ export interface WorldNet {
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   muted(): boolean;              // is game sound currently muted?
   toggleMute(): void;            // flip the mute toggle (same pref/state as the toolbar's 🔊 button)
-  leaderboard(): { name: string; wins: number; losses: number; elo: number }[]; // live pong standings (pre-ranked)
-  netWorth(): { name: string; net: number; coins: number; loan: number }[];     // live net-worth board (pre-ranked)
-  eloProfileReq(rank: number): void;    // drill into a leaderboard row (index into leaderboard()) → opens the real Elo profile modal
-  balanceSheetReq(rank: number): void;  // drill into a net-worth row (index into netWorth()) → opens the real balance-sheet modal
+  leaderboard(): { name: string; wins: number; losses: number; elo: number; title?: string | null }[]; // live pong standings (pre-ranked)
+  netWorth(): { name: string; net: number; coins: number; loan: number; title?: string | null }[];     // live net-worth board (pre-ranked)
+  // Our own rank + stat when we're NOT already in the visible top-N above (mirrors the toolbar
+  // boards' pinned self-row) — null once we're already shown in leaderboard()/netWorth().
+  selfLbRow(): { rank: number; elo: number } | null;
+  selfNwRow(): { rank: number; net: number; loan: number } | null;
+  eloProfileReq(rank?: number, self?: boolean): void;    // drill into a leaderboard row (index into leaderboard(), or self) → opens the real Elo profile modal
+  balanceSheetReq(rank?: number, self?: boolean): void;  // drill into a net-worth row (index into netWorth(), or self) → opens the real balance-sheet modal
   claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
   dungeonSync(): void;             // entering the Ruins → ask which chests we've opened
   dungeonChest(chest: string, captured?: boolean): void; // open a chest ('B1:col,row') → server pays coins / grants prize (once). captured=true → a monster box caught (grant the pet)
@@ -2790,13 +2795,26 @@ export function startWorld(net: WorldNet): void {
     }
   }
 
-  // Hall of Fame — a read-only trophy-case dialog showing the live pong leaderboard and
-  // net-worth board, so both stay checkable without ever leaving the World.
   // Hall of Fame — a read-only trophy-case dialog styled after the real Leaderboard/Net Worth
-  // boards (rank chip, name, right-aligned stat, self-row highlight, crown + debt on Net Worth).
-  // Rows are clickable, same as the real boards: clicking one exits World and fires the same
-  // balanceSheetReq/eloProfileReq the toolbar boards send, so the real drill-down modal opens
-  // with real server data — no separate profile UI to maintain inside World.
+  // boards (rank chip, name, title flair, right-aligned stat, self-row highlight, crown + debt
+  // on Net Worth). Rows are clickable, same as the real boards: clicking one exits World and
+  // fires the same balanceSheetReq/eloProfileReq the toolbar boards send, so the real drill-down
+  // modal opens with real server data — no separate profile UI to maintain inside World. A pinned
+  // self-row (like the toolbar boards') appears below each list when we're not already in it.
+  function titleFlairTag(titleId: string | null | undefined): HTMLSpanElement | null {
+    if (!titleId) return null;
+    const t = COSMETICS.find((c) => c.id === titleId) ?? EXCLUSIVES.find((e) => e.id === titleId);
+    if (!t) return null;
+    const tag = document.createElement('span');
+    tag.textContent = t.name;
+    tag.style.cssText = titleId === 'opstask'
+      ? 'margin-left:6px;font-size:10px;font-weight:700;white-space:nowrap;' +
+        'background:linear-gradient(90deg,#ff3b30,#ff9500,#ffd60a,#34c759,#0a84ff,#bf5af2,#ff3b30);' +
+        'background-size:200% auto;-webkit-background-clip:text;background-clip:text;color:transparent;' +
+        'animation:lbrainbow 2s linear infinite;'
+      : 'margin-left:6px;font-size:10px;color:#ffd166;opacity:0.95;white-space:nowrap;';
+    return tag;
+  }
   function enterHallOfFame() {
     if (dialogOpen || talkOpen) return;
     dialogOpen = true;
@@ -2812,6 +2830,10 @@ export function startWorld(net: WorldNet): void {
     const rowStyle = (bg: string, dashed: boolean) =>
       'display:flex;align-items:baseline;gap:8px;padding:5px 8px;border-radius:6px;cursor:pointer;text-align:left;' +
       `background:${bg};` + (dashed ? 'border-top:1px dashed #3a4a6a;' : '');
+    const hoverable = (row: HTMLDivElement, bg: string) => {
+      row.onmouseenter = () => { row.style.background = '#233158'; };
+      row.onmouseleave = () => { row.style.background = bg; };
+    };
 
     // heading, empty-state text, and a list container for one board section
     const buildSection = (title: string, color: string): HTMLDivElement => {
@@ -2842,8 +2864,7 @@ export function startWorld(net: WorldNet): void {
       const bg = self ? '#0a1020' : i % 2 ? '#18203a' : 'transparent';
       const row = document.createElement('div');
       row.style.cssText = rowStyle(bg, self);
-      row.onmouseenter = () => { row.style.background = '#233158'; };
-      row.onmouseleave = () => { row.style.background = bg; };
+      hoverable(row, bg);
       const rank = document.createElement('span');
       rank.textContent = `${i + 1}`;
       rank.style.cssText = 'color:#6b7796;width:18px;flex-shrink:0;font-size:13px;';
@@ -2853,10 +2874,32 @@ export function startWorld(net: WorldNet): void {
       const val = document.createElement('span');
       val.textContent = `${r.wins}-${r.losses} · ${Math.round(r.elo)}`;
       val.style.cssText = `font-size:12px;color:${self ? '#ffd23f' : '#7da2ff'};font-variant-numeric:tabular-nums;flex-shrink:0;`;
-      row.append(rank, name, val);
+      const tag = titleFlairTag(r.title);
+      row.append(rank, name, ...(tag ? [tag] : []), val);
       row.onclick = () => { selectBlip(); exit(); net.eloProfileReq(i); };
       lbList.appendChild(row);
     });
+    // Pinned self-row (rank + Elo only, matching the toolbar board) when we're outside the top 8.
+    if (!lb.some((r) => r.name === myName)) {
+      const self = net.selfLbRow();
+      if (self) {
+        const row = document.createElement('div');
+        row.style.cssText = rowStyle('#0a1020', true);
+        hoverable(row, '#0a1020');
+        const rank = document.createElement('span');
+        rank.textContent = `#${self.rank}`;
+        rank.style.cssText = 'color:#7a8aaa;width:28px;flex-shrink:0;font-size:13px;';
+        const name = document.createElement('span');
+        name.textContent = myName;
+        name.style.cssText = 'flex:1;font-size:13px;color:#b8c8e8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+        const val = document.createElement('span');
+        val.textContent = `${Math.round(self.elo)}`;
+        val.style.cssText = 'font-size:12px;color:#ffd23f;font-variant-numeric:tabular-nums;flex-shrink:0;';
+        row.append(rank, name, val);
+        row.onclick = () => { selectBlip(); exit(); net.eloProfileReq(0, true); };
+        lbList.appendChild(row);
+      }
+    }
 
     // 🪙 Net Worth
     const nwList = buildSection('🪙 Net Worth', '#ffd23f');
@@ -2868,8 +2911,7 @@ export function startWorld(net: WorldNet): void {
       const bg = self ? '#0a1020' : i % 2 ? '#18203a' : 'transparent';
       const row = document.createElement('div');
       row.style.cssText = rowStyle(bg, self);
-      row.onmouseenter = () => { row.style.background = '#233158'; };
-      row.onmouseleave = () => { row.style.background = bg; };
+      hoverable(row, bg);
       const rank = document.createElement('span');
       rank.textContent = `${i + 1}`;
       rank.style.cssText = 'color:#6b7796;width:18px;flex-shrink:0;font-size:13px;';
@@ -2879,7 +2921,8 @@ export function startWorld(net: WorldNet): void {
       const val = document.createElement('span');
       val.textContent = `${Math.round(r.net).toLocaleString()}🪙`;
       val.style.cssText = `font-size:12px;color:${broke ? '#f87171' : '#ffd23f'};font-variant-numeric:tabular-nums;flex-shrink:0;`;
-      row.append(rank, name, val);
+      const tag = titleFlairTag(r.title);
+      row.append(rank, name, ...(tag ? [tag] : []), val);
       if (r.loan > 0) {
         const debt = document.createElement('span');
         debt.textContent = `🔻${Math.round(r.loan).toLocaleString()}`;
@@ -2889,6 +2932,34 @@ export function startWorld(net: WorldNet): void {
       row.onclick = () => { selectBlip(); exit(); net.balanceSheetReq(i); };
       nwList.appendChild(row);
     });
+    // Pinned self-row when we're outside the top 8 (matches the toolbar board — no title/crown).
+    if (!nw.some((r) => r.name === myName)) {
+      const self = net.selfNwRow();
+      if (self) {
+        const broke = self.net < 0;
+        const row = document.createElement('div');
+        row.style.cssText = rowStyle('#0a1020', true);
+        hoverable(row, '#0a1020');
+        const rank = document.createElement('span');
+        rank.textContent = `#${self.rank}`;
+        rank.style.cssText = 'color:#7a8aaa;width:28px;flex-shrink:0;font-size:13px;';
+        const name = document.createElement('span');
+        name.textContent = myName;
+        name.style.cssText = 'flex:1;font-size:13px;color:#b8c8e8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+        const val = document.createElement('span');
+        val.textContent = `${Math.round(self.net).toLocaleString()}🪙`;
+        val.style.cssText = `font-size:12px;color:${broke ? '#f87171' : '#ffd23f'};font-variant-numeric:tabular-nums;flex-shrink:0;`;
+        row.append(rank, name, val);
+        if (self.loan > 0) {
+          const debt = document.createElement('span');
+          debt.textContent = `🔻${Math.round(self.loan).toLocaleString()}`;
+          debt.style.cssText = 'font-size:10px;color:#f87171;opacity:0.85;flex-shrink:0;';
+          row.appendChild(debt);
+        }
+        row.onclick = () => { selectBlip(); exit(); net.balanceSheetReq(undefined, true); };
+        nwList.appendChild(row);
+      }
+    }
 
     const close = document.createElement('button');
     close.type = 'button';
