@@ -12,6 +12,12 @@
 
 import { GH_CHARTS, type GhChart } from './gh-charts';
 
+export interface GhNet {
+  submit(song: string, diff: string, score: number): void; // report a finished run to the server
+  leaderboard(): { song: string; diff: string; name: string; score: number }[]; // live public board
+  name(): string;
+}
+
 const LANE_KEYS = ['a', 'w', 's', 'd'] as const;         // lane 0..3, left→right
 const LANE_COLORS = ['#00e5ff', '#ff9a00', '#ff3df0', '#89ff2a'] as const;
 const APPROACH_MS = 1500;   // note travel time from horizon to receptor
@@ -22,7 +28,7 @@ type Diff = 'easy' | 'normal' | 'hard';
 
 let ghOpen = false;
 
-export function startGuitarHero(): void {
+export function startGuitarHero(net: GhNet): void {
   if (ghOpen) return;
   ghOpen = true;
 
@@ -96,7 +102,9 @@ export function startGuitarHero(): void {
     return b;
   };
 
+  let boardTimer = 0; // refreshes the results leaderboard while the server broadcast lands
   function renderUi() {
+    window.clearInterval(boardTimer);
     ui.replaceChildren();
     ui.style.display = mode === 'play' ? 'none' : 'flex';
     if (mode === 'select') {
@@ -130,10 +138,12 @@ export function startGuitarHero(): void {
         row.onmouseenter = () => { row.style.borderColor = '#a04aff'; row.style.background = '#160a28'; };
         row.onmouseleave = () => { row.style.borderColor = '#3a2260'; row.style.background = '#0d0618'; };
         const mins = Math.floor(c.durationMs / 60000), secs = Math.round((c.durationMs % 60000) / 1000);
+        const world = net.leaderboard().filter((r) => r.song === c.file && r.diff === diff)[0];
         row.innerHTML =
           `<span style="font-size:16px;font-weight:800">${c.title}</span>` +
-          `<span style="font-size:11.5px;opacity:.65">${Math.round(c.bpm)} BPM · ${mins}:${String(secs).padStart(2, '0')} · ${n} notes` +
-          `${best ? ` · <span style="color:#ffd060">best ${best.toLocaleString()}</span>` : ''}</span>`;
+          `<span style="font-size:11.5px;opacity:.65;text-align:right">${Math.round(c.bpm)} BPM · ${mins}:${String(secs).padStart(2, '0')} · ${n} notes` +
+          `${best ? ` · <span style="color:#ffd060">best ${best.toLocaleString()}</span>` : ''}` +
+          `${world ? `<br>🌐 <span style="color:#c890ff">${world.name}</span> holds it — <span style="color:#ffd060">${world.score.toLocaleString()}</span>` : ''}</span>`;
         row.onclick = () => startSong(c);
         list.appendChild(row);
       }
@@ -161,6 +171,26 @@ export function startGuitarHero(): void {
         `<span style="color:#ffd060">PERFECT ${perfects}</span> · <span style="color:#00e5ff">GOOD ${goods}</span> · ` +
         `<span style="color:#ff5a5a">MISS ${misses}</span> · MAX COMBO ${maxCombo} · ${(acc * 100).toFixed(1)}%</div>`;
       ui.appendChild(panel);
+      // public top-5 for this song × difficulty (refreshes as the server broadcast lands)
+      const board = document.createElement('div');
+      board.style.cssText =
+        'min-width:380px;background:#0d0618cc;border:1px solid #3a2260;border-radius:10px;' +
+        'padding:10px 16px;font-size:13px;line-height:1.9;text-align:left;';
+      const renderBoard = () => {
+        const rows = net.leaderboard().filter((r) => r.song === chart!.file && r.diff === diff);
+        board.innerHTML =
+          '<div style="font-size:11px;letter-spacing:3px;color:#8a7aa8;margin-bottom:2px">🌐 WORLD TOP 5</div>' +
+          (rows.length
+            ? rows.map((r, i) => {
+                const me = r.name === net.name();
+                return `<div style="display:flex;justify-content:space-between;gap:18px;${me ? 'color:#ffd060;font-weight:800' : ''}">` +
+                  `<span>#${i + 1} ${r.name}${me ? ' ◄ you' : ''}</span><span>${r.score.toLocaleString()}</span></div>`;
+              }).join('')
+            : '<div style="opacity:.6">no scores yet — yours is incoming...</div>');
+      };
+      renderBoard();
+      boardTimer = window.setInterval(renderBoard, 800);
+      ui.appendChild(board);
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;gap:12px;';
       row.appendChild(btn('Retry', '#7fe089', () => startSong(chart!)));
@@ -192,6 +222,7 @@ export function startGuitarHero(): void {
 
   function endSong() {
     audio?.pause();
+    if (chart && score > 0) net.submit(chart.file, diff, score); // public leaderboard entry
     mode = 'results';
     renderUi();
   }
@@ -492,6 +523,7 @@ export function startGuitarHero(): void {
     if (!ghOpen) return;
     ghOpen = false;
     cancelAnimationFrame(raf);
+    window.clearInterval(boardTimer);
     window.removeEventListener('keydown', onKeyDown, true);
     window.removeEventListener('keyup', onKeyUp, true);
     audio?.pause();

@@ -956,6 +956,7 @@ export type ClientMsg =
   | { type: 'trnStart' } // (host only) start the match (solo start = you vs bots, no payout)
   | { type: 'trnEnd'; winner: number } // (host only) report winning slot (-1 = a bot won); server pays only multi-human matches
   | { type: 'trnRelay'; data: unknown } // forward an opaque Tron payload to all other riders
+  | { type: 'ghScore'; song: string; diff: string; score: number } // Tsong Hero run finished — record the best
   | { type: 'tntJoin' } // take a slot in the TNT Explosion Rally lobby (1v1 bomb-parry maze duel)
   | { type: 'tntLeave' } // leave the TNT Explosion Rally lobby / match
   | { type: 'tntStart' } // (host only) start the match (solo start = practice vs the TNT Bot, no payout)
@@ -1503,6 +1504,7 @@ export type ServerMsg =
   | SbRelayMsg
   | TrnLobbyMsg
   | TrnRelayMsg
+  | GhLeaderboardMsg
   | TntLobbyMsg
   | TntRelayMsg
   | DoomLeaderboardMsg
@@ -2254,6 +2256,11 @@ export interface TrnRelayMsg {
   type: 'trnRelay';
   data: unknown;
 }
+// Tsong Hero public leaderboard: the top 5 scores for every song × difficulty.
+export interface GhLeaderboardMsg {
+  type: 'ghLeaderboard';
+  rows: { song: string; diff: string; name: string; score: number }[];
+}
 // TNT Explosion Rally lobby (exactly 2 slots, 1v1 bomb-parry maze duel — concept by a
 // six-year-old game director). `slot` is which slot this client holds (0 = host/authority).
 // On 'playing', slot 0 simulates the whole match client-side and streams snapshots over the
@@ -2622,6 +2629,14 @@ export const TRN_ROWS = 180;         // arena grid height in cells
 export const TRN_MAX_PLAYERS = 4;    // lobby cap (humans; bots fill the rest)
 export const TRN_MIN_PLAYERS = 1;    // solo start allowed (vs bots, no payout)
 export const TRN_ROUNDS_TO_WIN = 3;  // first to this many round wins takes the match
+
+// --- Tsong Hero (rhythm game) — server-side validation whitelists ---
+export const GH_SONG_FILES = [
+  'everlong.mp3', 'inthend.mp3', 'paranoid-android-8bit.mp3',
+  'gangstas-paradise-8bit.mp3', 'heart-shaped-box-8bit.mp3', 'livin-on-a-prayer-8bit.mp3',
+] as const;
+export const GH_DIFFS = ['easy', 'normal', 'hard'] as const;
+export const GH_MAX_SCORE = 1_000_000; // sanity ceiling (a full-combo hard chart tops out ~700k)
 
 
 // Season Pass: weekly challenges with coin rewards.

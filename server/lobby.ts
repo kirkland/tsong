@@ -113,6 +113,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
   recordFishCatch, getFishingLeaderboard, FishingScoreRow,
+  recordGhScore, getGhLeaderboard, GhScoreRow,
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS, getAssessableWealth, stampActivity, getJailed, setJailed,
   getOpenedChests, addOpenedChests,
   getHoldings, investStock, closePosition, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
@@ -717,6 +718,7 @@ export class Lobby {
     this.tell(ws, { type: 'tdLeaderboard', rows: this.tdBoard });
     this.tell(ws, { type: 'campaignLeaderboard', rows: this.campaignBoard });
     this.tell(ws, { type: 'fishLeaderboard', rows: this.fishBoard });
+    this.tell(ws, { type: 'ghLeaderboard', rows: this.ghBoard });
     if (this.chatLog.length) this.tell(ws, { type: 'chat', lines: this.chatLog });
     this.tell(ws, this.buildCrashState(ws));
     this.sendSeasonPass(ws);
@@ -2142,6 +2144,35 @@ export class Lobby {
   }
 
   // --- Fishing minigame ---
+
+  // --- Tsong Hero (rhythm game) leaderboard ---
+  private ghBoard: GhScoreRow[] = [];
+  private static readonly GH_SONGS = new Set<string>([
+    'everlong.mp3', 'inthend.mp3', 'paranoid-android-8bit.mp3',
+    'gangstas-paradise-8bit.mp3', 'heart-shaped-box-8bit.mp3', 'livin-on-a-prayer-8bit.mp3',
+  ]);
+  private static readonly GH_MAX_SCORE = 1_000_000;
+
+  /** Reload the Tsong Hero top-5-per-song×difficulty board and push it to everyone. */
+  async refreshGhLeaderboard() {
+    this.ghBoard = await getGhLeaderboard();
+    const msg = JSON.stringify({ type: 'ghLeaderboard', rows: this.ghBoard });
+    for (const sock of this.conns.keys()) {
+      if (sock.readyState === sock.OPEN) sock.send(msg);
+    }
+  }
+
+  /** A finished Tsong Hero run: validate the song/difficulty/score, record the personal best. */
+  ghScore(ws: WebSocket, song: string, diff: string, score: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    if (!Lobby.GH_SONGS.has(song)) return;
+    if (diff !== 'easy' && diff !== 'normal' && diff !== 'hard') return;
+    if (!Number.isInteger(score) || score <= 0 || score > Lobby.GH_MAX_SCORE) return;
+    recordGhScore(conn.pid, conn.nickname, song, diff, score)
+      .then(() => this.refreshGhLeaderboard())
+      .catch((e) => console.error('gh score save failed:', e));
+  }
 
   /** Reload the biggest-catch leaderboard from the DB and push it to everyone. */
   async refreshFishLeaderboard() {

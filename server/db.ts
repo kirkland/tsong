@@ -233,6 +233,17 @@ export async function initDb(): Promise<void> {
       best_lb DOUBLE PRECISION NOT NULL DEFAULT 0
     )
   `);
+  // Tsong Hero rhythm game — best score per player per song per difficulty.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS gh_scores (
+      pid   TEXT NOT NULL,
+      song  TEXT NOT NULL,
+      diff  TEXT NOT NULL,
+      name  TEXT NOT NULL,
+      score INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (pid, song, diff)
+    )
+  `);
   // Nomic (the Parliament sub-game) — ONE perpetual communal game persisted as a single JSON
   // snapshot row (rulebook, params, scores, log). Won seasons are sealed into nomic_hall.
   await pool.query(`CREATE TABLE IF NOT EXISTS nomic_state (id INTEGER PRIMARY KEY, data TEXT NOT NULL)`);
@@ -553,6 +564,31 @@ export async function recordFishCatch(pid: string, name: string, lb: number): Pr
        SET best_lb = GREATEST(fishing_scores.best_lb, EXCLUDED.best_lb), name = EXCLUDED.name`,
     [pid, name, lb],
   );
+}
+
+export interface GhScoreRow { song: string; diff: string; name: string; score: number; }
+
+// Record a Tsong Hero run: keep only each player's best score per song per difficulty.
+export async function recordGhScore(pid: string, name: string, song: string, diff: string, score: number): Promise<void> {
+  if (!pool || !pid || !Number.isInteger(score) || score <= 0) return;
+  await pool.query(
+    `INSERT INTO gh_scores (pid, song, diff, name, score) VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (pid, song, diff) DO UPDATE
+       SET score = GREATEST(gh_scores.score, EXCLUDED.score), name = EXCLUDED.name`,
+    [pid, song, diff, name, score],
+  );
+}
+
+// Top 5 per song per difficulty across all players.
+export async function getGhLeaderboard(): Promise<GhScoreRow[]> {
+  if (!pool) return [];
+  const { rows } = await pool.query(
+    `SELECT song, diff, name, score FROM (
+       SELECT *, ROW_NUMBER() OVER (PARTITION BY song, diff ORDER BY score DESC, name ASC) AS rn
+       FROM gh_scores
+     ) t WHERE rn <= 5 ORDER BY song, diff, score DESC`,
+  );
+  return rows.map((r) => ({ song: r.song, diff: r.diff, name: r.name, score: Number(r.score) }));
 }
 
 // Biggest catches across all anglers (top N by best landed weight).
