@@ -951,6 +951,11 @@ export type ClientMsg =
   | { type: 'sbStart' } // (host only) start the Super Tsong Bros match (needs ≥2 players, all locked)
   | { type: 'sbEnd'; winner: number } // (host only) report the winning slot so the server pays the winner
   | { type: 'sbRelay'; data: unknown } // forward an opaque Super Tsong Bros payload to all other participants
+  | { type: 'trnJoin' } // take a slot in the Tron light-cycle lobby (1–4 players; bots fill empty seats)
+  | { type: 'trnLeave' } // leave the Tron lobby / match
+  | { type: 'trnStart' } // (host only) start the match (solo start = you vs bots, no payout)
+  | { type: 'trnEnd'; winner: number } // (host only) report winning slot (-1 = a bot won); server pays only multi-human matches
+  | { type: 'trnRelay'; data: unknown } // forward an opaque Tron payload to all other riders
   | { type: 'tntJoin' } // take a slot in the TNT Explosion Rally lobby (1v1 bomb-parry maze duel)
   | { type: 'tntLeave' } // leave the TNT Explosion Rally lobby / match
   | { type: 'tntStart' } // (host only) start the match (solo start = practice vs the TNT Bot, no payout)
@@ -1496,6 +1501,8 @@ export type ServerMsg =
   | SrRelayMsg
   | SbLobbyMsg
   | SbRelayMsg
+  | TrnLobbyMsg
+  | TrnRelayMsg
   | TntLobbyMsg
   | TntRelayMsg
   | DoomLeaderboardMsg
@@ -2230,6 +2237,23 @@ export interface SbRelayMsg {
   type: 'sbRelay';
   data: unknown;
 }
+// Tron light-cycle lobby (1–4 players; the host fills empty seats with bots at start). `slot`
+// is which slot this client holds (0 = host/authority). On 'playing', slot 0 simulates the
+// whole match client-side (bots included) and streams snapshots over the trn relay; guests
+// send direction inputs. On 'ended' everyone bails to the menu (the host left).
+export interface TrnLobbyMsg {
+  type: 'trnLobby';
+  status: 'waiting' | 'playing' | 'ended';
+  slot: number; // this client's slot (0 = host)
+  hostSlot: number; // which slot is the authority (0)
+  players: { name: string; slot: number }[]; // humans in the lobby (bots are host-side only)
+}
+// An opaque payload broadcast from one Tron participant to all others (host state snapshot /
+// guest direction input). Clients pick out the messages they care about.
+export interface TrnRelayMsg {
+  type: 'trnRelay';
+  data: unknown;
+}
 // TNT Explosion Rally lobby (exactly 2 slots, 1v1 bomb-parry maze duel — concept by a
 // six-year-old game director). `slot` is which slot this client holds (0 = host/authority).
 // On 'playing', slot 0 simulates the whole match client-side and streams snapshots over the
@@ -2591,6 +2615,13 @@ export const STAGES: Stage[] = [
 export const SB_STOCKS = 3;          // lives per fighter
 export const SB_MAX_PLAYERS = 4;     // lobby cap
 export const SB_MIN_PLAYERS = 2;     // min to start
+
+// --- Tron (light cycles) ---
+export const TRN_COLS = 128;         // arena grid width in cells
+export const TRN_ROWS = 72;          // arena grid height in cells
+export const TRN_MAX_PLAYERS = 4;    // lobby cap (humans; bots fill the rest)
+export const TRN_MIN_PLAYERS = 1;    // solo start allowed (vs bots, no payout)
+export const TRN_ROUNDS_TO_WIN = 3;  // first to this many round wins takes the match
 
 
 // Season Pass: weekly challenges with coin rewards.

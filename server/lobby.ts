@@ -1634,6 +1634,97 @@ export class Lobby {
     });
   }
 
+  // --- Tron (light cycles, 1–4 players; bots fill empty seats) ---
+  // Same host-authoritative relay shape as Super Tsong Bros. The server only runs the lobby,
+  // tracks 'waiting'|'playing', fans relay payloads to the other riders, and pays the
+  // House-funded reward to the reported winner. A solo host may start vs bots; payouts
+  // require ≥2 humans present at start, a host-only report, a live match, and a minimum length.
+  private trnSlots: WebSocket[] = [];
+  private trnStatus: 'waiting' | 'playing' = 'waiting';
+  private trnStartedAt = 0;
+  private trnHumansAtStart = 0; // human count when the match went live (payout gate)
+  private static readonly TRN_CAP = 4;
+  private static readonly TRN_WIN_REWARD = 750; // coins the winner earns per multi-human match
+  private static readonly TRN_MIN_MATCH_MS = 20_000; // matches shorter than this don't pay (anti-farm)
+
+  /** Take a slot in the Tron lobby (max 4). */
+  trnJoin(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return;
+    if (this.trnSlots.includes(ws) || this.trnSlots.length >= Lobby.TRN_CAP) return;
+    if (this.trnStatus === 'playing') return; // can't hop into a running match
+    this.trnSlots.push(ws);
+    this.broadcastTrnLobby();
+  }
+
+  /** Leave the lobby/match. If the HOST (slot 0) left, end the match for everyone. */
+  trnLeave(ws: WebSocket) {
+    const i = this.trnSlots.indexOf(ws);
+    if (i === -1) return;
+    const wasHost = i === 0;
+    this.trnSlots.splice(i, 1);
+    if (wasHost) {
+      // The authority is gone — no one can simulate the match. Tear it down for everyone left.
+      for (const other of this.trnSlots) {
+        this.tell(other, { type: 'trnLobby', status: 'ended', slot: 0, hostSlot: 0, players: [] });
+      }
+      this.trnSlots = [];
+      this.trnStatus = 'waiting';
+      return;
+    }
+    if (this.trnSlots.length <= 1) this.trnStatus = 'waiting';
+    this.broadcastTrnLobby();
+  }
+
+  /** (Host only) start the match. Solo start is allowed — the host fills seats with bots. */
+  trnStart(ws: WebSocket) {
+    if (this.trnSlots[0] !== ws) return; // only the host (slot 0) may start
+    if (this.trnSlots.length < 1) return;
+    this.trnStatus = 'playing';
+    this.trnStartedAt = Date.now();
+    this.trnHumansAtStart = this.trnSlots.length;
+    this.broadcastTrnLobby();
+  }
+
+  /** (Host only) settle a finished match. Pays only multi-human matches won by a human. */
+  trnEnd(ws: WebSocket, winnerSlot: number) {
+    if (this.trnSlots[0] !== ws) return;      // only the authoritative host reports
+    if (this.trnStatus !== 'playing') return; // already settled / never started — ignore
+    this.trnStatus = 'waiting';               // settle once; any further trnEnd is a no-op
+    const winSock = this.trnSlots[winnerSlot];
+    if (winnerSlot < 0 || !winSock) { this.broadcastTrnLobby(); return; } // bot won / invalid → no payout
+    if (this.trnHumansAtStart < 2) { this.broadcastTrnLobby(); return; }  // solo-vs-bots is for fun, not farming
+    if (Date.now() - this.trnStartedAt < Lobby.TRN_MIN_MATCH_MS) { this.broadcastTrnLobby(); return; }
+    const conn = this.conns.get(winSock);
+    if (conn && conn.pid) {
+      this.housePay(conn.pid, conn.nickname, Lobby.TRN_WIN_REWARD)
+        .then((paid) => {
+          this.sendWallet(winSock); this.refreshNetWorth().catch(() => {});
+          if (paid > 0) this.notify(winSock, `🏍️ You won Tron — +${paid.toLocaleString()} coins!`);
+        })
+        .catch((e) => console.error('tron reward failed:', e));
+    }
+    this.broadcastTrnLobby();
+  }
+
+  /** Forward an opaque Tron payload to every OTHER participant (dumb fan-out). */
+  trnRelay(ws: WebSocket, data: unknown) {
+    if (!this.trnSlots.includes(ws)) return;
+    for (const other of this.trnSlots) {
+      if (other !== ws) this.tell(other, { type: 'trnRelay', data });
+    }
+  }
+
+  private broadcastTrnLobby() {
+    const players = this.trnSlots.map((sock, slot) => ({
+      name: this.conns.get(sock)?.nickname ?? `P${slot}`,
+      slot,
+    }));
+    this.trnSlots.forEach((sock, slot) => {
+      this.tell(sock, { type: 'trnLobby', status: this.trnStatus, slot, hostSlot: 0, players });
+    });
+  }
+
   // --- TNT Explosion Rally (1v1 bomb-parry maze duel) ---
   // Same host-authoritative relay shape as Super Tsong Bros, capped at 2 players. The server
   // only runs the lobby, tracks 'waiting'|'playing', fans relay payloads to the other player,
@@ -5716,6 +5807,7 @@ export class Lobby {
     this.ntLeave(ws);   // drop any Nuketown slot (ends the match if the host left)
     this.srLeave(ws);   // drop any Street Demons grid slot (ends the race if the host left)
     this.sbLeave(ws);   // drop any Super Tsong Bros slot (ends the match if the host left)
+    this.trnLeave(ws);  // drop any Tron slot (ends the match if the host left)
     this.tntLeave(ws);  // drop any TNT Explosion Rally slot (ends the duel if the host left)
     this.tdLeave(ws);   // drop out of the Type or Die arena
     this.bowlLeave(ws); // drop out of any bowling room
