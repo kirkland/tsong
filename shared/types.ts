@@ -957,6 +957,11 @@ export type ClientMsg =
   | { type: 'trnEnd'; winner: number } // (host only) report winning slot (-1 = a bot won); server pays only multi-human matches
   | { type: 'trnRelay'; data: unknown } // forward an opaque Tron payload to all other riders
   | { type: 'ghScore'; song: string; diff: string; score: number } // Tsong Hero run finished — record the best
+  | { type: 'waJoin' } // take a slot in the Tsong Artillery lobby (1–4 players; bots fill empty seats)
+  | { type: 'waLeave' } // leave the Artillery lobby / match
+  | { type: 'waStart' } // (host only) start the match (solo start = you vs bots, no payout)
+  | { type: 'waEnd'; winner: number } // (host only) report winning slot (-1 = a bot won); server pays only multi-human matches
+  | { type: 'waRelay'; data: unknown } // forward an opaque Artillery payload to all other players
   | { type: 'tntJoin' } // take a slot in the TNT Explosion Rally lobby (1v1 bomb-parry maze duel)
   | { type: 'tntLeave' } // leave the TNT Explosion Rally lobby / match
   | { type: 'tntStart' } // (host only) start the match (solo start = practice vs the TNT Bot, no payout)
@@ -1504,6 +1509,8 @@ export type ServerMsg =
   | SbRelayMsg
   | TrnLobbyMsg
   | TrnRelayMsg
+  | WaLobbyMsg
+  | WaRelayMsg
   | GhLeaderboardMsg
   | TntLobbyMsg
   | TntRelayMsg
@@ -2256,6 +2263,20 @@ export interface TrnRelayMsg {
   type: 'trnRelay';
   data: unknown;
 }
+// Tsong Artillery lobby (1–4 players; the host fills empty seats with bots at start). Same
+// host-authoritative relay shape as Tron: the server only runs the lobby + fan-out. Turn-based,
+// so the shot messages replay deterministically on every client.
+export interface WaLobbyMsg {
+  type: 'waLobby';
+  status: 'waiting' | 'playing' | 'ended';
+  slot: number; // this client's slot (0 = host)
+  hostSlot: number;
+  players: { name: string; slot: number }[];
+}
+export interface WaRelayMsg {
+  type: 'waRelay';
+  data: unknown;
+}
 // Tsong Hero public leaderboard: the top 5 scores for every song × difficulty.
 export interface GhLeaderboardMsg {
   type: 'ghLeaderboard';
@@ -2629,6 +2650,13 @@ export const TRN_ROWS = 180;         // arena grid height in cells
 export const TRN_MAX_PLAYERS = 4;    // lobby cap (humans; bots fill the rest)
 export const TRN_MIN_PLAYERS = 1;    // solo start allowed (vs bots, no payout)
 export const TRN_ROUNDS_TO_WIN = 3;  // first to this many round wins takes the match
+
+// --- Tsong Artillery (Worms-like) ---
+export const WA_W = 1920;            // battlefield width (px, also the terrain bitmap width)
+export const WA_H = 1080;            // battlefield height
+export const WA_MAX_PLAYERS = 4;
+export const WA_TURN_MS = 30_000;    // shot clock per turn
+export const WA_HP = 150;            // hit points per fighter
 
 // --- Tsong Hero (rhythm game) — server-side validation whitelists ---
 export const GH_SONG_FILES = [
