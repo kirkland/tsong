@@ -146,7 +146,8 @@ export function startArtillery(net: ArtilleryNet): void {
   let hasFired = false;                              // acting player already shot this turn
   let retreatUntil = 0;                              // ...but may still RUN until this timestamp
   let turnRetreatUntil = 0;                          // host: when the current shooter's retreat window closes
-  let advanceScheduled = false;                      // host: guard against double turn-advances
+  let turnShotTaken = false;                         // set on EVERY client when the acting player's shot arrives
+  let advanceTimer = 0;                              // host: the one pending turn-advance timeout
   let turnCount = 0;                                 // total turns elapsed (drives sudden death — deterministic)
   let waterY = WATER_BASE;                           // current waterline
   let wind = 0;                                      // -1..1, bazooka drift
@@ -625,6 +626,7 @@ export function startArtillery(net: ArtilleryNet): void {
 
   function resolveShot(pi: number, w: number, sx: number, sy: number, ang: number, pow: number, tx?: number, ty?: number) {
     resolving = true;
+    if (pi === turnPi) turnShotTaken = true; // the acting player has used their shot (host's clock must stop)
     sfxFire();
     const wp = WEAPONS[w];
     const shooter = fighters[pi];
@@ -765,12 +767,11 @@ export function startArtillery(net: ArtilleryNet): void {
     }
   }
 
-  /** Host-only: schedule the next turn exactly once per turn. */
+  /** Host-only: schedule the next turn exactly once; hostNextTurn clears anything stale. */
   function scheduleAdvance(delayMs: number) {
-    if (!isHost || advanceScheduled) return;
-    advanceScheduled = true;
-    window.setTimeout(() => {
-      advanceScheduled = false;
+    if (!isHost || advanceTimer) return;
+    advanceTimer = window.setTimeout(() => {
+      advanceTimer = 0;
       if (waOpen && mode === 'play' && matchWinner === -2) hostNextTurn();
     }, delayMs);
   }
@@ -819,6 +820,8 @@ export function startArtillery(net: ArtilleryNet): void {
   }
 
   function hostNextTurn() {
+    // absorb any still-pending advance from the previous turn — one advance per turn, ever
+    if (advanceTimer) { window.clearTimeout(advanceTimer); advanceTimer = 0; }
     const alive = fighters.filter((f) => f.alive);
     const aliveTeams = new Set(alive.map((f) => teamOf(fighters.indexOf(f))));
     const over = teamMode ? aliveTeams.size <= 1 : alive.length <= 1;
@@ -870,6 +873,7 @@ export function startArtillery(net: ArtilleryNet): void {
     hasFired = false;
     retreatUntil = 0;
     turnRetreatUntil = 0;
+    turnShotTaken = false;
     if (ev) {
       if (ev.k === 'meteor') {
         banner = '☄️ METEOR SHOWER';
@@ -1290,8 +1294,9 @@ export function startArtillery(net: ArtilleryNet): void {
       }
       aimAngle = Math.atan2(mouseY - (me.y - 12), mouseX - me.x);
     }
-    // host duty: the shot clock
-    if (isHost && matchWinner === -2 && !resolving && !hasFired && turnPi >= 0 && now > turnEndsAt) {
+    // host duty: the shot clock (turnShotTaken is set for guests' shots too — the local
+    // hasFired flag only knows about OUR shots, which is exactly the bug that skipped turns)
+    if (isHost && matchWinner === -2 && !resolving && !eventResolving && !turnShotTaken && turnPi >= 0 && now > turnEndsAt) {
       hostNextTurn(); // clock expired — next soldier up
     }
     // sparks
