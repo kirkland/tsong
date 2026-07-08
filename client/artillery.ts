@@ -12,13 +12,13 @@
 //
 // Controls: A/D walk · mouse aims · hold SPACE to charge, release to fire · 1-4 weapons.
 
-import { WA_W, WA_H, WA_TURN_MS, WA_HP, WA_MAX_PLAYERS } from '../shared/types';
+import { WA_W, WA_H, WA_TURN_MS, WA_HP } from '../shared/types';
 
 export interface ArtilleryNet {
   join(): void;
   leave(): void;
   start(): void;
-  end(winner: number): void; // (host only) winning LOBBY slot (-1 = a bot won → no payout)
+  end(winner: number, winner2?: number): void; // (host only) winning lobby slot(s); -1 = nobody paid
   relay(data: unknown): void;
   name(): string;
 }
@@ -36,8 +36,10 @@ export function feedWaRelay(d: unknown) { handlers?.relay(d); }
 
 // --- constants ---
 const COLORS = ['#00e5ff', '#ff9a00', '#ff3df0', '#89ff2a'] as const;
-// The town's most recognizable figures enlist.
-const BOT_NAMES = ['THE DORITO MAN', 'WALDO', 'THE MINION'] as const;
+// 2v2 teams interleave by slot (0&2 vs 1&3) so turn order naturally alternates sides.
+const TEAM_NAMES = ['🌊 TEAM TIDE', '🔥 TEAM FLAME'] as const;
+const TEAM_BADGE = ['🌊', '🔥'] as const;
+const teamOf = (idx: number) => idx % 2;
 
 // --- battlefield maps (host picks; the generator theme + profile per map) ---
 interface WaMap { name: string; desc: string; grass: string; dirtTop: string; dirtDeep: string; }
@@ -54,6 +56,7 @@ const GRAV = 640;            // px/s² for projectiles and fighters
 const WALK_SPEED = 95;       // px/s
 const STEP_UP = 17;          // max ledge a fighter can walk up
 const JUMP_VY = -350;        // W to jump (clears ~95px — craters are no longer prisons)
+const RETREAT_MS = 5000;     // scramble window after firing before your turn ends
 const FALL_SAFE = 220;       // free-fall px before damage starts
 const WATER_BASE = WA_H - 26;   // starting waterline (rises in sudden death)
 const SUDDEN_DEATH_ROUNDS = 9;  // full rounds EACH before the water starts climbing
@@ -124,12 +127,12 @@ export function startArtillery(net: ArtilleryNet): void {
   let selfSlot = 0;
   let isHost = false;
   let lobbyState: WaLobby | null = null;
-  let botCount = 1;
+  let teamMode = false; // host toggles 2v2 (requires exactly 4 humans)
   let mapChoice = 0; // host's battlefield pick (index into MAPS)
 
   // --- battlefield state (identical on every client) ---
   interface Fighter {
-    name: string; color: string; bot: boolean; lobbySlot: number;
+    name: string; color: string; lobbySlot: number;
     x: number; y: number; vy: number; face: number; // face: 1 right, -1 left
     hp: number; alive: boolean; ammo: number[];     // per-weapon ammo (-1 = infinite)
     fallFrom: number;                                // y where the current fall began
@@ -140,6 +143,10 @@ export function startArtillery(net: ArtilleryNet): void {
   let turnPi = -1;                                   // whose turn (fighter index)
   let gravScale = 1;                                 // wildcard low-gravity turns scale projectile arcs
   let eventResolving = false;                        // wildcard flights in the air (don't advance the turn)
+  let hasFired = false;                              // acting player already shot this turn
+  let retreatUntil = 0;                              // ...but may still RUN until this timestamp
+  let turnRetreatUntil = 0;                          // host: when the current shooter's retreat window closes
+  let advanceScheduled = false;                      // host: guard against double turn-advances
   let turnCount = 0;                                 // total turns elapsed (drives sudden death — deterministic)
   let waterY = WATER_BASE;                           // current waterline
   let wind = 0;                                      // -1..1, bazooka drift
@@ -151,7 +158,6 @@ export function startArtillery(net: ArtilleryNet): void {
   let weapon = 0;
   let aimAngle = -Math.PI / 4;                       // set from the mouse each frame
   let endReported = false;
-  let botThinkAt = 0;                                // host: when the current bot fires
 
   interface Spark { x: number; y: number; vx: number; vy: number; life: number; max: number; color: string; }
   let sparks: Spark[] = [];
@@ -166,9 +172,6 @@ export function startArtillery(net: ArtilleryNet): void {
     selfHit: ['Friendly fire! With yourself!', 'Bold strategy.', 'The enemy within.', 'The tutorial did not cover this.'],
     drown: ['Gone swimming. Permanently.', 'The water always wins.', 'Blub blub.', 'The fountain claims another.', 'Should have equipped the boat.'],
     miss: ['The dirt felt that one.', 'Warning shot. Probably.', 'The wind sends its regards.', 'Terraforming, technically.', 'The Ruins gained a new pothole.'],
-    dorito: ['The Dorito man returns to the great bag.', 'Crunch. Then silence.', 'He was sentient. We all knew it.'],
-    waldo: ['Waldo has finally been found.', 'You found Waldo. Violently.', 'The stripes could not save him.'],
-    minion: ['The minion laughs no more.', 'A banana lies unattended.', 'Gru will hear about this.'],
     lore: [
       'The Dorito man watches from beyond the hills. He approves.',
       'Somewhere out there, Waldo is watching this war. Unfound.',
@@ -546,9 +549,6 @@ export function startArtillery(net: ArtilleryNet): void {
     f.alive = false;
     if (drowned) { sfxSplash(); say(pick(QUIPS.drown)); }
     else graves.push({ x: f.x, y: f.y });
-    if (f.name === 'THE DORITO MAN') say(pick(QUIPS.dorito));
-    else if (f.name === 'WALDO') say(pick(QUIPS.waldo));
-    else if (f.name === 'THE MINION') say(pick(QUIPS.minion));
     floaties.push({ x: f.x, y: f.y - 40, text: drowned ? '🌊' : '💀', color: '#fff', life: 0 });
   }
 
@@ -758,29 +758,35 @@ export function startArtillery(net: ArtilleryNet): void {
       return;
     }
     if (isHost) {
-      // safety-net sync + advance the turn
+      // safety-net sync, then advance once the shooter's retreat window closes
       net.relay({ t: 'sync', hp: fighters.map((f) => f.hp), px: fighters.map((f) => Math.round(f.x)), py: fighters.map((f) => Math.round(f.y)), alive: fighters.map((f) => f.alive ? 1 : 0) });
-      window.setTimeout(() => { if (waOpen && mode === 'play') hostNextTurn(); }, 1600);
+      const wait = Math.max(1600, turnRetreatUntil - performance.now() + 500);
+      scheduleAdvance(wait);
     }
+  }
+
+  /** Host-only: schedule the next turn exactly once per turn. */
+  function scheduleAdvance(delayMs: number) {
+    if (!isHost || advanceScheduled) return;
+    advanceScheduled = true;
+    window.setTimeout(() => {
+      advanceScheduled = false;
+      if (waOpen && mode === 'play' && matchWinner === -2) hostNextTurn();
+    }, delayMs);
   }
 
   // --- host: turn management + bots ---
   function hostStartMatch() {
     const humans = lobbyState?.players ?? [];
     const seed = (Math.random() * 0xffffffff) >>> 0;
+    if (humans.length !== 4) teamMode = false; // 2v2 strictly needs four
     fighters = humans.map((p) => ({
-      name: p.name, color: COLORS[p.slot], bot: false, lobbySlot: p.slot,
+      name: p.name, color: COLORS[p.slot], lobbySlot: p.slot,
       x: 0, y: 0, vy: 0, face: 1, hp: WA_HP, alive: true, ammo: WEAPONS.map((w) => w.ammo), fallFrom: 0,
     }));
-    for (let i = 0; i < botCount && fighters.length < WA_MAX_PLAYERS; i++) {
-      fighters.push({
-        name: BOT_NAMES[i], color: COLORS[fighters.length], bot: true, lobbySlot: -1,
-        x: 0, y: 0, vy: 0, face: 1, hp: WA_HP, alive: true, ammo: WEAPONS.map((w) => w.ammo), fallFrom: 0,
-      });
-    }
     genTerrain(seed, mapChoice);
     placeFighters();
-    net.relay({ t: 'init', seed, map: mapChoice, fighters: fighters.map((f) => ({ name: f.name, bot: f.bot, lobbySlot: f.lobbySlot })) });
+    net.relay({ t: 'init', seed, map: mapChoice, teams: teamMode, fighters: fighters.map((f) => ({ name: f.name, lobbySlot: f.lobbySlot })) });
     mode = 'play';
     endReported = false;
     matchWinner = -2;
@@ -814,15 +820,27 @@ export function startArtillery(net: ArtilleryNet): void {
 
   function hostNextTurn() {
     const alive = fighters.filter((f) => f.alive);
-    if (alive.length <= 1) {
-      const winIdx = alive.length === 1 ? fighters.indexOf(alive[0]) : -1;
+    const aliveTeams = new Set(alive.map((f) => teamOf(fighters.indexOf(f))));
+    const over = teamMode ? aliveTeams.size <= 1 : alive.length <= 1;
+    if (over) {
+      const winIdx = alive.length >= 1 ? fighters.indexOf(alive[0]) : -1;
       matchWinner = winIdx;
-      banner = winIdx >= 0 ? `${fighters[winIdx].name} WINS THE WAR` : 'MUTUAL DESTRUCTION';
+      banner = winIdx < 0 ? 'MUTUAL DESTRUCTION'
+        : teamMode ? `${TEAM_NAMES[teamOf(winIdx)]} WINS THE WAR`
+        : `${fighters[winIdx].name} WINS THE WAR`;
       bannerUntil = performance.now() + 5200;
       sfxBoom(1.3);
       say(winIdx >= 0 ? 'The Tavern erupts. Drinks are on the House. (They are not.)' : 'Nobody won. The craters won.');
-      net.relay({ t: 'end', winner: winIdx });
-      if (!endReported) { endReported = true; net.end(winIdx >= 0 ? fighters[winIdx].lobbySlot : -1); }
+      net.relay({ t: 'end', winner: winIdx, teams: teamMode });
+      if (!endReported) {
+        endReported = true;
+        if (teamMode && winIdx >= 0) {
+          const mates = fighters.map((f, i) => ({ f, i })).filter(({ i }) => teamOf(i) === teamOf(winIdx));
+          net.end(mates[0]?.f.lobbySlot ?? -1, mates[1]?.f.lobbySlot);
+        } else {
+          net.end(winIdx >= 0 ? fighters[winIdx].lobbySlot : -1);
+        }
+      }
       window.setTimeout(() => { if (waOpen) backToLobby(); }, 4800);
       return;
     }
@@ -845,11 +863,13 @@ export function startArtillery(net: ArtilleryNet): void {
     }
     net.relay({ t: 'turn', pi: turnPi, wind, crate, ev });
     applyTurnLocal(crate, ev);
-    if (fighters[turnPi].bot) botThinkAt = performance.now() + 1500 + Math.random() * 900;
   }
 
   function applyTurnLocal(crate?: { x: number; kind: CrateKind } | null, ev?: any) {
     gravScale = 1;
+    hasFired = false;
+    retreatUntil = 0;
+    turnRetreatUntil = 0;
     if (ev) {
       if (ev.k === 'meteor') {
         banner = '☄️ METEOR SHOWER';
@@ -910,44 +930,6 @@ export function startArtillery(net: ArtilleryNet): void {
     }
     // ambient lore from the announcer's booth
     if (Math.random() < 0.28 && performance.now() > quipUntil) say(pick(QUIPS.lore));
-  }
-
-  // Bot brain: trajectory search — simulate bazooka arcs across angle × power, pick the
-  // combo landing closest to the target (plus difficulty noise), then fire the real thing.
-  function botFire() {
-    const me = fighters[turnPi];
-    const targets = fighters.filter((f) => f.alive && f !== me);
-    if (!targets.length) return;
-    const target = targets.reduce((a, b) => Math.hypot(a.x - me.x, a.y - me.y) < Math.hypot(b.x - me.x, b.y - me.y) ? a : b);
-    let best = { ang: -Math.PI / 4, pow: 0.6, err: 1e9 };
-    for (let deg = 15; deg <= 165; deg += 4) {
-      for (let pow = 0.25; pow <= 1.001; pow += 0.09) {
-        const ang = -deg * Math.PI / 180; // aim upward arcs
-        const speed = 380 + pow * 720;
-        let x = me.x, y = me.y - 12, vx = Math.cos(ang) * speed, vy = Math.sin(ang) * speed;
-        // mirror horizontally toward the target side
-        if (Math.sign(Math.cos(ang)) !== Math.sign(target.x - me.x)) vx = -vx;
-        let err = 1e9;
-        for (let s = 0; s < 6 * 120; s++) {
-          vx += wind * 52 * SUBDT;
-          vy += GRAV * SUBDT;
-          x += vx * SUBDT; y += vy * SUBDT;
-          if (x < 0 || x > WA_W || y > WA_H) break;
-          if (isSolid(x, y)) { err = Math.hypot(x - target.x, y - target.y); break; }
-        }
-        if (err < best.err) best = { ang: Math.atan2(Math.sin(ang), Math.sign(target.x - me.x) * Math.abs(Math.cos(ang))), pow, err };
-      }
-    }
-    // aim error keeps bots beatable (30-80px depending on which bot)
-    const noise = (30 + fighters.indexOf(me) * 18) * (Math.random() - 0.5) / 200;
-    if (Math.random() < 0.4) {
-      say(me.name === 'THE DORITO MAN' ? 'The Dorito man crunches menacingly.'
-        : me.name === 'WALDO' ? 'Waldo: "Years of hiding. For this moment."'
-        : 'The minion giggles. That\'s a bad sign.');
-    }
-    const shot = { t: 'shot', pi: turnPi, w: 0, x: Math.round(me.x), y: Math.round(me.y), ang: best.ang + noise, pow: best.pow };
-    net.relay(shot);
-    resolveShot(turnPi, 0, me.x, me.y, shot.ang, shot.pow);
   }
 
   // --- cosmetic helpers ---
@@ -1040,31 +1022,25 @@ export function startArtillery(net: ArtilleryNet): void {
       ui.appendChild(btn('Exit', '#8aa', close));
     } else if (mode === 'lobby') {
       const humans = lobbyState?.players ?? [];
-      const maxBots = Math.max(0, WA_MAX_PLAYERS - humans.length);
-      if (botCount > maxBots) botCount = maxBots;
-      const minBots = humans.length >= 2 ? 0 : 1;
-      if (botCount < minBots) botCount = minBots;
+      if (humans.length !== 4) teamMode = false;
       const roster = document.createElement('div');
       roster.style.cssText = 'font-size:15px;line-height:2;min-width:340px;';
       roster.innerHTML =
         '<div style="font-size:22px;font-weight:900;letter-spacing:6px;color:#ffb847;margin-bottom:8px">THE TRENCHES</div>' +
-        humans.map((p) =>
-          `<div style="color:${COLORS[p.slot]}">🪖 ${p.name}${p.slot === 0 ? ' <span style="opacity:.6">(host)</span>' : ''}${p.slot === selfSlot ? ' <span style="opacity:.6">(you)</span>' : ''}</div>`,
+        humans.map((p, i) =>
+          `<div style="color:${COLORS[p.slot]}">${teamMode ? TEAM_BADGE[teamOf(i)] + ' ' : ''}🪖 ${p.name}${p.slot === 0 ? ' <span style="opacity:.6">(host)</span>' : ''}${p.slot === selfSlot ? ' <span style="opacity:.6">(you)</span>' : ''}</div>`,
         ).join('') +
-        Array.from({ length: isHost ? botCount : 0 }, (_, i) =>
-          `<div style="color:${COLORS[humans.length + i]};opacity:.75">🤖 ${BOT_NAMES[i]} <span style="opacity:.6">(bot)</span></div>`,
-        ).join('');
+        (humans.length < 2 ? '<div style="opacity:.5;font-size:12px">waiting for at least one more human — no bots in these trenches</div>' : '');
       ui.appendChild(roster);
       if (isHost) {
-        const botRow = document.createElement('div');
-        botRow.style.cssText = 'display:flex;gap:12px;align-items:center;font-size:15px;';
-        const minus = btn('−', '#ff9a00', () => { botCount = Math.max(minBots, botCount - 1); renderUi(); });
-        const plus = btn('+', '#ff9a00', () => { botCount = Math.min(maxBots, botCount + 1); renderUi(); });
-        for (const b of [minus, plus]) { b.style.padding = '4px 14px'; b.style.fontSize = '18px'; }
-        const label = document.createElement('span');
-        label.textContent = `Bots: ${botCount}`;
-        botRow.append(minus, label, plus);
-        ui.appendChild(botRow);
+        const modeRow = document.createElement('div');
+        modeRow.style.cssText = 'display:flex;gap:10px;align-items:center;';
+        const ffaBtn = btn('FREE FOR ALL', !teamMode ? '#ffb847' : '#556', () => { teamMode = false; renderUi(); });
+        const teamBtn = btn('2 v 2', teamMode ? '#ffb847' : '#556', () => { if (humans.length === 4) { teamMode = true; renderUi(); } });
+        for (const b of [ffaBtn, teamBtn]) { b.style.fontSize = '13px'; b.style.padding = '8px 18px'; }
+        if (humans.length !== 4) { teamBtn.style.opacity = '0.35'; teamBtn.title = 'needs exactly 4 players'; }
+        modeRow.append(ffaBtn, teamBtn);
+        ui.appendChild(modeRow);
         // battlefield picker
         const mapRow = document.createElement('div');
         mapRow.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;justify-content:center;max-width:640px;';
@@ -1080,7 +1056,7 @@ export function startArtillery(net: ArtilleryNet): void {
         mapDesc.style.cssText = 'font-size:11.5px;opacity:.6;margin-top:-6px;';
         mapDesc.textContent = MAPS[mapChoice].desc;
         ui.appendChild(mapDesc);
-        const canStart = humans.length + botCount >= 2;
+        const canStart = humans.length >= 2 && (!teamMode || humans.length === 4);
         const start = btn('Open Fire', '#89ff2a', () => { if (canStart) net.start(); });
         if (!canStart) { start.style.opacity = '0.4'; start.style.cursor = 'default'; }
         ui.appendChild(start);
@@ -1096,7 +1072,8 @@ export function startArtillery(net: ArtilleryNet): void {
         'border-radius:10px;padding:12px 18px;';
       legend.innerHTML =
         '<div style="font-size:11px;letter-spacing:3px;color:#a08a5a;margin-bottom:4px">FIELD MANUAL</div>' +
-        'A / D — walk · W — JUMP (craters are not prisons) · MOUSE — aim · HOLD SPACE — charge, release to FIRE<br>' +
+        'A / D — walk · W — JUMP · MOUSE — aim · HOLD SPACE — charge, release to FIRE<br>' +
+        'After firing you get 5s to RETREAT — run from your own dynamite, dive behind cover<br>' +
         '1 🚀 Bazooka (rides the wind) · 2 💣 Grenade (bounces, 3s fuse)<br>' +
         '3 🔫 Shotgun (point blank) · 4 🧨 Dynamite (drop &amp; RUN — ×2)<br>' +
         '5 🛩️ Airstrike (three from above, ×1) · 6 🏓 Pong Ball (bounces, hunts, ×1)<br>' +
@@ -1118,8 +1095,9 @@ export function startArtillery(net: ArtilleryNet): void {
   function guestApply(d: any) {
     if (!d || typeof d !== 'object') return;
     if (d.t === 'init') {
+      teamMode = !!d.teams;
       fighters = (d.fighters as any[]).map((f: any, i: number) => ({
-        name: String(f.name), color: COLORS[i], bot: !!f.bot, lobbySlot: f.lobbySlot ?? -1,
+        name: String(f.name), color: COLORS[i], lobbySlot: f.lobbySlot ?? -1,
         x: 0, y: 0, vy: 0, face: 1, hp: WA_HP, alive: true, ammo: WEAPONS.map((w) => w.ammo), fallFrom: 0,
       }));
       turnCount = 0;
@@ -1146,16 +1124,16 @@ export function startArtillery(net: ArtilleryNet): void {
         }
       }
     } else if (d.t === 'shot') {
-      if (d.pi !== myIdx()) resolveShot(d.pi, d.w, d.x, d.y, d.ang, d.pow, d.tx, d.ty);
-      if (isHost && fighters[d.pi] && !fighters[d.pi].bot) { /* host re-simulates guests' shots via the same path */ }
+      if (d.pi !== myIdx()) {
+        if (isHost && fighters[d.pi]) turnRetreatUntil = performance.now() + RETREAT_MS;
+        resolveShot(d.pi, d.w, d.x, d.y, d.ang, d.pow, d.tx, d.ty);
+      }
     } else if (d.t === 'crate') {
       if (d.pi !== myIdx()) applyCrate(d.pi, d.i);
     } else if (d.t === 'drown') {
       const f = fighters[d.pi];
       if (f && f.alive) killFighter(f, true);
-      if (isHost && d.pi === turnPi) {
-        window.setTimeout(() => { if (waOpen && mode === 'play' && !resolving) hostNextTurn(); }, 1200);
-      }
+      if (isHost && d.pi === turnPi) scheduleAdvance(1200);
     } else if (d.t === 'sync') {
       (d.hp as number[]).forEach((hp, i) => {
         const f = fighters[i];
@@ -1165,7 +1143,9 @@ export function startArtillery(net: ArtilleryNet): void {
       });
     } else if (d.t === 'end') {
       matchWinner = d.winner;
-      banner = d.winner >= 0 ? `${fighters[d.winner]?.name ?? '?'} WINS THE WAR` : 'MUTUAL DESTRUCTION';
+      banner = d.winner < 0 ? 'MUTUAL DESTRUCTION'
+        : d.teams ? `${TEAM_NAMES[teamOf(d.winner)]} WINS THE WAR`
+        : `${fighters[d.winner]?.name ?? '?'} WINS THE WAR`;
       bannerUntil = performance.now() + 5200;
       sfxBoom(1.3);
       say(d.winner >= 0 ? 'The Tavern erupts. Drinks are on the House. (They are not.)' : 'Nobody won. The craters won.');
@@ -1175,7 +1155,10 @@ export function startArtillery(net: ArtilleryNet): void {
 
   // --- input ---
   const myIdx = () => fighters.findIndex((f) => f.lobbySlot === selfSlot);
-  const myTurn = () => mode === 'play' && !resolving && turnPi >= 0 && turnPi === myIdx() && fighters[turnPi]?.alive && matchWinner === -2;
+  const myTurn = () => mode === 'play' && !resolving && !hasFired && turnPi >= 0 && turnPi === myIdx() && fighters[turnPi]?.alive && matchWinner === -2;
+  // after firing you can't shoot again, but you CAN scramble until the retreat window closes
+  const canMove = () => mode === 'play' && !eventResolving && turnPi >= 0 && turnPi === myIdx() && fighters[turnPi]?.alive && matchWinner === -2
+    && (!hasFired || performance.now() < retreatUntil);
   const keys = new Set<string>();
   let mouseX = WA_W / 2, mouseY = 0;
   let lastPosSend = 0;
@@ -1186,6 +1169,10 @@ export function startArtillery(net: ArtilleryNet): void {
     if (WEAPONS[weapon].ammo >= 0 && me.ammo[weapon] <= 0) { charge = -1; return; }
     const shot = { t: 'shot', pi: myIdx(), w: weapon, x: Math.round(me.x), y: Math.round(me.y), ang: aimAngle, pow: Math.min(1, charge), tx: Math.round(mouseX), ty: Math.round(mouseY) };
     charge = -1;
+    hasFired = true;
+    retreatUntil = performance.now() + RETREAT_MS;
+    turnRetreatUntil = retreatUntil;
+    if (weapon === 3) say('Run. RUN.');
     net.relay(shot);
     resolveShot(shot.pi, shot.w, me.x, me.y, shot.ang, shot.pow, shot.tx, shot.ty);
   }
@@ -1222,8 +1209,8 @@ export function startArtillery(net: ArtilleryNet): void {
       charge += dt / 1.6;
       if (charge >= 1) { charge = 1; fire(); } // max charge auto-fires, Worms-style
     }
-    // movement (acting player only, real-time within the turn): walk, JUMP, fall
-    if (myTurn()) {
+    // movement (acting player only, real-time within the turn — including the post-shot retreat)
+    if (canMove()) {
       const me = fighters[myIdx()];
       const ax = (keys.has('a') ? -1 : 0) + (keys.has('d') ? 1 : 0);
       const onGround = isSolid(me.x, me.y + 1);
@@ -1270,7 +1257,7 @@ export function startArtillery(net: ArtilleryNet): void {
         if (me.y >= waterY) {
           killFighter(me, true);
           net.relay({ t: 'drown', pi: myIdx() });
-          if (isHost) window.setTimeout(() => { if (waOpen && mode === 'play' && !resolving) hostNextTurn(); }, 1200);
+          scheduleAdvance(1200);
           return;
         }
         if (landed) {
@@ -1283,7 +1270,7 @@ export function startArtillery(net: ArtilleryNet): void {
             if (me.hp <= 0) {
               killFighter(me, false);
               net.relay({ t: 'pos', pi: myIdx(), x: Math.round(me.x), y: Math.round(me.y), face: me.face, hp: me.hp });
-              if (isHost) window.setTimeout(() => { if (waOpen && mode === 'play' && !resolving) hostNextTurn(); }, 1200);
+              scheduleAdvance(1200);
               return;
             }
           }
@@ -1303,10 +1290,9 @@ export function startArtillery(net: ArtilleryNet): void {
       }
       aimAngle = Math.atan2(mouseY - (me.y - 12), mouseX - me.x);
     }
-    // host duties: bot turns + shot clock
-    if (isHost && matchWinner === -2 && !resolving && turnPi >= 0) {
-      if (fighters[turnPi].bot && now >= botThinkAt) { botThinkAt = Infinity; botFire(); }
-      else if (!fighters[turnPi].bot && now > turnEndsAt) { hostNextTurn(); } // shot clock expired
+    // host duty: the shot clock
+    if (isHost && matchWinner === -2 && !resolving && !hasFired && turnPi >= 0 && now > turnEndsAt) {
+      hostNextTurn(); // clock expired — next soldier up
     }
     // sparks
     for (const s of sparks) { s.life += dt; s.x += s.vx * dt; s.y += s.vy * dt; s.vy += 700 * dt; }
@@ -1488,7 +1474,7 @@ export function startArtillery(net: ArtilleryNet): void {
       ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
       ctx.font = '700 13px ui-monospace, monospace';
       ctx.fillStyle = f.color;
-      ctx.fillText(f.name, f.x, fy - 34);
+      ctx.fillText(`${teamMode ? TEAM_BADGE[teamOf(i)] + ' ' : ''}${f.name}`, f.x, fy - 34);
       ctx.fillStyle = '#0008';
       ctx.fillRect(f.x - 20, fy - 32, 40, 5);
       ctx.fillStyle = f.hp > 50 ? '#7fe089' : f.hp > 25 ? '#ffd060' : '#ff5a5a';
@@ -1723,6 +1709,16 @@ export function startArtillery(net: ArtilleryNet): void {
         ctx.fillText(label, wx + 9, 18);
         wx += tw + 8;
       }
+    }
+    // RETREAT countdown for the shooter who's scrambling
+    if (hasFired && now < retreatUntil && turnPi === myIdx() && fighters[turnPi]?.alive && matchWinner === -2) {
+      const left = (retreatUntil - now) / 1000;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      ctx.font = '900 30px ui-monospace, monospace';
+      ctx.fillStyle = left < 1.5 ? '#ff5a3a' : '#ffd060';
+      ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 16;
+      ctx.fillText(`RETREAT! ${left.toFixed(1)}`, WA_W / 2, 70);
+      ctx.shadowBlur = 0;
     }
     // battlefield commentary
     if (quip && now < quipUntil) {

@@ -418,7 +418,7 @@ wss.on('connection', (ws: WebSocket, req) => {
         lobby.waStart(ws);
         break;
       case 'waEnd':
-        if (typeof msg.winner === 'number') lobby.waEnd(ws, msg.winner);
+        if (typeof msg.winner === 'number') lobby.waEnd(ws, msg.winner, typeof msg.winner2 === 'number' ? msg.winner2 : undefined);
         break;
       case 'waRelay':
         if (msg.data !== undefined) lobby.waRelay(ws, msg.data);

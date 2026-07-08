@@ -960,7 +960,7 @@ export type ClientMsg =
   | { type: 'waJoin' } // take a slot in the Tsong Artillery lobby (1–4 players; bots fill empty seats)
   | { type: 'waLeave' } // leave the Artillery lobby / match
   | { type: 'waStart' } // (host only) start the match (solo start = you vs bots, no payout)
-  | { type: 'waEnd'; winner: number } // (host only) report winning slot (-1 = a bot won); server pays only multi-human matches
+  | { type: 'waEnd'; winner: number; winner2?: number } // (host only) winning slot(s) — two for 2v2 team wins (-1 = nobody paid)
   | { type: 'waRelay'; data: unknown } // forward an opaque Artillery payload to all other players
   | { type: 'tntJoin' } // take a slot in the TNT Explosion Rally lobby (1v1 bomb-parry maze duel)
   | { type: 'tntLeave' } // leave the TNT Explosion Rally lobby / match
