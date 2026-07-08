@@ -59,7 +59,7 @@ interface Weapon {
   name: string; icon: string; wind: boolean; bounce: boolean; fuseMs: number;
   radius: number; dmg: number; hitscan: boolean; ammo: number;
   rest?: number;                    // bounce restitution (default 0.45)
-  special?: 'air' | 'pong';         // airstrike (3 bomblets from the sky) / proximity pong ball
+  special?: 'air' | 'pong' | 'girder' | 'dirt' | 'bowl'; // non-standard behaviors
 }
 const WEAPONS: Weapon[] = [
   { name: 'BAZOOKA', icon: '🚀', wind: true, bounce: false, fuseMs: 0, radius: 62, dmg: 48, hitscan: false, ammo: -1 },
@@ -68,7 +68,16 @@ const WEAPONS: Weapon[] = [
   { name: 'DYNAMITE', icon: '🧨', wind: false, bounce: false, fuseMs: 3500, radius: 85, dmg: 75, hitscan: false, ammo: 2 },
   { name: 'AIRSTRIKE', icon: '🛩️', wind: false, bounce: false, fuseMs: 0, radius: 42, dmg: 32, hitscan: false, ammo: 1, special: 'air' },
   { name: 'PONG BALL', icon: '🏓', wind: false, bounce: true, fuseMs: 5000, radius: 72, dmg: 62, hitscan: false, ammo: 1, rest: 0.72, special: 'pong' },
+  { name: 'GIRDER', icon: '🧱', wind: false, bounce: false, fuseMs: 0, radius: 0, dmg: 0, hitscan: false, ammo: 1, special: 'girder' },   // BUILD: place a steel beam at the mouse
+  { name: 'DIRT BALL', icon: '🪣', wind: false, bounce: false, fuseMs: 0, radius: 52, dmg: 0, hitscan: false, ammo: 1, special: 'dirt' }, // BUILD: lob a mound of fresh terrain
+  { name: 'BOWLING BALL', icon: '🎳', wind: false, bounce: false, fuseMs: 0, radius: 70, dmg: 55, hitscan: false, ammo: 0, special: 'bowl' }, // crate-only: the 7-10 split
 ];
+const GIRDER_RANGE = 340;  // how far from your soldier a beam can be placed
+// supply crate contents → weapon index (or hp)
+const CRATE_KINDS = ['hp', 'dyna', 'air', 'pong', 'girder', 'dirt', 'bowl'] as const;
+type CrateKind = typeof CRATE_KINDS[number];
+const CRATE_WEAPON: Record<Exclude<CrateKind, 'hp'>, number> = { dyna: 3, air: 4, pong: 5, girder: 6, dirt: 7, bowl: 8 };
+const CRATE_ICON: Record<CrateKind, string> = { hp: '❤️', dyna: '🧨', air: '🛩️', pong: '🏓', girder: '🧱', dirt: '🪣', bowl: '🎳' };
 
 // deterministic PRNG for terrain generation (both sides run it with the host's seed)
 function mulberry32(seed: number) {
@@ -246,6 +255,38 @@ export function startArtillery(net: ArtilleryNet): void {
         }
       }
     }
+    // caves — hollow chambers to hide (or cower) in; every map but the chasm arena
+    if (map !== 3) {
+      const nC = 2 + Math.floor(rnd() * 3);
+      for (let c = 0; c < nC; c++) {
+        const cavX = 140 + rnd() * (WA_W - 280);
+        const groundY = Math.max(60, Math.min(WA_H - 60, hmap[cavX | 0]));
+        const cavY = Math.min(WA_H - 110, groundY + 90 + rnd() * Math.max(30, WA_H - groundY - 260));
+        const rx = 70 + rnd() * 90, ry = 30 + rnd() * 40;
+        for (let y = Math.max(0, cavY - ry) | 0; y < Math.min(WA_H, cavY + ry); y++) {
+          for (let x = Math.max(0, cavX - rx) | 0; x < Math.min(WA_W, cavX + rx); x++) {
+            const ddx = (x - cavX) / rx, ddy = (y - cavY) / ry;
+            if (ddx * ddx + ddy * ddy <= 1) solid[y * WA_W + x] = 0;
+          }
+        }
+      }
+    }
+    // floating islands — high ground for the bold (girder up, or get blown off)
+    if (map === 0 || map === 2) {
+      const nI = 1 + Math.floor(rnd() * 2);
+      for (let isl = 0; isl < nI; isl++) {
+        const ix = 200 + rnd() * (WA_W - 400);
+        const groundY = Math.max(60, Math.min(WA_H - 60, hmap[ix | 0]));
+        const iy = Math.max(130, groundY - 230 - rnd() * 150);
+        const rx = 90 + rnd() * 70, ry = 22 + rnd() * 14;
+        for (let y = Math.max(0, iy - ry) | 0; y < Math.min(WA_H, iy + ry); y++) {
+          for (let x = Math.max(0, ix - rx) | 0; x < Math.min(WA_W, ix + rx); x++) {
+            const ddx = (x - ix) / rx, ddy = (y - iy) / ry;
+            if (ddx * ddx + ddy * ddy <= 1) solid[y * WA_W + x] = 1;
+          }
+        }
+      }
+    }
     // pre-render the dirt from the FINAL solid bitmap (pillars included)
     terrain = document.createElement('canvas');
     terrain.width = WA_W; terrain.height = WA_H;
@@ -301,6 +342,63 @@ export function startArtillery(net: ArtilleryNet): void {
       tc.arc(cx, cy, r - 2, 0, Math.PI * 2);
       tc.stroke();
       tc.restore();
+    }
+  }
+
+  // BUILD: pour fresh terrain (dirt ball). Fighters caught inside pop up on top of the mound.
+  function addTerrain(cx: number, cy: number, r: number) {
+    const x0 = Math.max(0, cx - r | 0), x1 = Math.min(WA_W - 1, cx + r | 0);
+    const y0 = Math.max(0, cy - r | 0), y1 = Math.min(WA_H - 1, cy + r | 0);
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const dx = x - cx, dy = y - cy;
+        if (dx * dx + dy * dy <= r * r) solid[y * WA_W + x] = 1;
+      }
+    }
+    if (terrain) {
+      const tc = terrain.getContext('2d')!;
+      tc.fillStyle = '#3d2a14';
+      tc.beginPath();
+      tc.arc(cx, cy, r, 0, Math.PI * 2);
+      tc.fill();
+      tc.fillStyle = '#3f7a3a';
+      tc.beginPath();
+      tc.arc(cx, cy, r, Math.PI, Math.PI * 2); // grassy crown
+      tc.arc(cx, cy, r - 5, Math.PI * 2, Math.PI, true);
+      tc.fill();
+    }
+    for (const f of fighters) { // buried? surface politely
+      if (!f.alive) continue;
+      let guard = 0;
+      while (isSolid(f.x, f.y - 2) && guard++ < 400) f.y--;
+      f.fallFrom = f.y;
+    }
+    boomDust(cx, cy, r);
+  }
+
+  // BUILD: place a steel girder beam (solid, paintable, blows up like anything else)
+  function addGirder(cx: number, cy: number) {
+    const w = 120, h = 14;
+    const x0 = Math.max(0, cx - w / 2 | 0), x1 = Math.min(WA_W - 1, cx + w / 2 | 0);
+    const y0 = Math.max(0, cy - h / 2 | 0), y1 = Math.min(WA_H - 1, cy + h / 2 | 0);
+    for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) solid[y * WA_W + x] = 1;
+    if (terrain) {
+      const tc = terrain.getContext('2d')!;
+      const g = tc.createLinearGradient(0, y0, 0, y1);
+      g.addColorStop(0, '#9aa4b2');
+      g.addColorStop(0.5, '#6a7482');
+      g.addColorStop(1, '#3a4250');
+      tc.fillStyle = g;
+      tc.fillRect(x0, y0, x1 - x0, y1 - y0);
+      tc.fillStyle = '#2a3240';
+      for (let x = x0 + 8; x < x1 - 4; x += 16) tc.fillRect(x, cy - 2 | 0, 4, 4); // rivets
+    }
+  }
+
+  function boomDust(x: number, y: number, r: number) {
+    for (let i = 0; i < Math.round(r * 0.6); i++) {
+      const a = Math.random() * Math.PI * 2, sp = 60 + Math.random() * 180;
+      sparks.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 90, life: 0, max: 0.5 + Math.random() * 0.4, color: ['#7a5a34', '#5a4224', '#8a7a5a'][i % 3] });
     }
   }
 
@@ -362,6 +460,24 @@ export function startArtillery(net: ArtilleryNet): void {
         if (f.hp <= 0) killFighter(f, false);
       }
     }
+    // crates caught in the blast cook off (one mini blast each, no further chaining)
+    const cooked = crates.filter((c) => Math.hypot(c.x - cx, c.y - cy) < w.radius * 1.2);
+    crates = crates.filter((c) => !cooked.includes(c));
+    for (const c of cooked) {
+      carve(c.x, c.y, 26);
+      boom(c.x, c.y, 26);
+      for (const f of fighters) {
+        if (!f.alive) continue;
+        const d2 = Math.hypot(f.x - c.x, (f.y - 9) - c.y);
+        if (d2 < 48) {
+          const dmg2 = Math.round(20 * (1 - d2 / 48));
+          f.hp = Math.max(0, f.hp - dmg2);
+          if (dmg2 > 0) floaties.push({ x: f.x, y: f.y - 34, text: `-${dmg2}`, color: '#ffd060', life: 0 });
+          if (f.hp <= 0) killFighter(f, false);
+        }
+      }
+      say('The supply crate has been... redistributed.');
+    }
     for (const f of fighters) if (f.alive) settleFighter(f);
     // cosmetic
     boom(cx, cy, w.radius);
@@ -371,7 +487,7 @@ export function startArtillery(net: ArtilleryNet): void {
     else if (!anyHit) say(pick(QUIPS.miss));
   }
 
-  function resolveShot(pi: number, w: number, sx: number, sy: number, ang: number, pow: number, tx?: number) {
+  function resolveShot(pi: number, w: number, sx: number, sy: number, ang: number, pow: number, tx?: number, ty?: number) {
     resolving = true;
     sfxFire();
     const wp = WEAPONS[w];
@@ -389,6 +505,17 @@ export function startArtillery(net: ArtilleryNet): void {
         if (victim) break;
       }
       explode(hx, hy, wp);
+      finishShot();
+      return;
+    }
+    if (wp.special === 'girder') {
+      // clamp the requested spot to build range from the soldier
+      let gx = (tx ?? sx), gy = (ty ?? sy - 80);
+      const gdx = gx - sx, gdy = gy - (sy - 10);
+      const gdist = Math.hypot(gdx, gdy);
+      if (gdist > GIRDER_RANGE) { gx = sx + gdx / gdist * GIRDER_RANGE; gy = (sy - 10) + gdy / gdist * GIRDER_RANGE; }
+      addGirder(Math.max(30, Math.min(WA_W - 30, gx)), Math.max(30, Math.min(WA_H - 30, gy)));
+      say('Infrastructure. In THIS economy?');
       finishShot();
       return;
     }
@@ -446,6 +573,8 @@ export function startArtillery(net: ArtilleryNet): void {
             const rest = fl.wp.rest ?? 0.45;
             if (Math.abs(fl.vy) > Math.abs(fl.vx)) fl.vy = -fl.vy * rest; else fl.vx = -fl.vx * rest;
             fl.vx *= fl.wp.special === 'pong' ? 0.94 : 0.75;
+          } else if (fl.wp.special === 'dirt') {
+            fl.done = true; addTerrain(fl.x, fl.y, fl.wp.radius); say('Fresh real estate. The bank is interested.'); break;
           } else {
             fl.done = true; explode(fl.x, fl.y, fl.wp); break;
           }
@@ -454,7 +583,10 @@ export function startArtillery(net: ArtilleryNet): void {
         const victim = fighters.find((f) => f.alive && f !== fighters[turnPi] && Math.abs(f.x - fl.x) < prox && Math.abs(f.y - 9 - fl.y) < prox);
         if (victim && (fl.wp.special === 'pong' || (!fl.wp.bounce && fl.wp.fuseMs === 0))) {
           // the pong ball smells fear — it detonates on contact with any enemy
-          fl.done = true; explode(fl.x, fl.y, fl.wp); break;
+          fl.done = true;
+          if (fl.wp.special === 'dirt') { addTerrain(fl.x, fl.y, fl.wp.radius); say('Buried alive. Rude, honestly.'); }
+          else explode(fl.x, fl.y, fl.wp);
+          break;
         }
       }
       if (!fl.done) { fl.trail.push([fl.x, fl.y]); if (fl.trail.length > 40) fl.trail.shift(); }
@@ -496,6 +628,7 @@ export function startArtillery(net: ArtilleryNet): void {
     turnCount = 0;
     waterY = WATER_BASE;
     graves = [];
+    crates = [];
     renderUi();
     banner = `⚔️ ${MAPS[mapChoice].name}`;
     bannerUntil = performance.now() + 2200;
@@ -537,12 +670,22 @@ export function startArtillery(net: ArtilleryNet): void {
     do { turnPi = (turnPi + 1) % fighters.length; } while (!fighters[turnPi].alive);
     wind = Math.round((Math.random() * 2 - 1) * 100) / 100;
     turnEndsAt = performance.now() + WA_TURN_MS;
-    net.relay({ t: 'turn', pi: turnPi, wind });
-    applyTurnLocal();
+    const crate = crates.length < 3 && Math.random() < 0.45
+      ? { x: 80 + Math.floor(Math.random() * (WA_W - 160)), kind: CRATE_KINDS[Math.floor(Math.random() * CRATE_KINDS.length)] }
+      : null;
+    net.relay({ t: 'turn', pi: turnPi, wind, crate });
+    applyTurnLocal(crate);
     if (fighters[turnPi].bot) botThinkAt = performance.now() + 1500 + Math.random() * 900;
   }
 
-  function applyTurnLocal() {
+  function applyTurnLocal(crate?: { x: number; kind: CrateKind } | null) {
+    if (crate) {
+      const cy = surfaceY(crate.x) - 10;
+      if (cy < waterY - 20) {
+        crates.push({ x: crate.x, y: cy, kind: crate.kind, born: performance.now() });
+        say('Supply drop inbound. No questions about the logistics.');
+      }
+    }
     turnEndsAt = performance.now() + WA_TURN_MS;
     charge = -1;
     weapon = 0;
@@ -603,6 +746,26 @@ export function startArtillery(net: ArtilleryNet): void {
   }
 
   // --- cosmetic helpers ---
+  // supply crates: spawned by the host at turn start, collected by walking over them
+  interface Crate { x: number; y: number; kind: CrateKind; born: number; }
+  let crates: Crate[] = [];
+  function applyCrate(pi: number, i: number) {
+    const c = crates[i];
+    const f = fighters[pi];
+    if (!c || !f) return;
+    crates.splice(i, 1);
+    if (c.kind === 'hp') {
+      f.hp = Math.min(WA_HP, f.hp + 30);
+      floaties.push({ x: f.x, y: f.y - 34, text: '+30', color: '#7fe089', life: 0 });
+      say(`${f.name} found a med-kit. The war continues anyway.`);
+    } else {
+      const wi = CRATE_WEAPON[c.kind];
+      f.ammo[wi]++;
+      floaties.push({ x: f.x, y: f.y - 34, text: `+1 ${WEAPONS[wi].icon}`, color: '#ffd060', life: 0 });
+      say(c.kind === 'bowl' ? `${f.name} visited the bowling alley. Everyone should worry.` : `${f.name} unboxed a ${WEAPONS[wi].name}.`);
+    }
+  }
+
   interface Flash { x: number; y: number; r: number; life: number; }
   let flashes: Flash[] = [];
   function boom(x: number, y: number, r: number) {
@@ -732,6 +895,8 @@ export function startArtillery(net: ArtilleryNet): void {
         '1 🚀 Bazooka (rides the wind) · 2 💣 Grenade (bounces, 3s fuse)<br>' +
         '3 🔫 Shotgun (point blank) · 4 🧨 Dynamite (drop &amp; RUN — ×2)<br>' +
         '5 🛩️ Airstrike (three from above, ×1) · 6 🏓 Pong Ball (bounces, hunts, ×1)<br>' +
+        '7 🧱 Girder (BUILD a steel beam at the mouse, ×1) · 8 🪣 Dirt Ball (BUILD a mound, bury someone, ×1)<br>' +
+        '9 🎳 Bowling Ball (crate-only — find one) · 📦 supply crates drop between turns: walk over to grab<br>' +
         'Fall damage is real. The water is fatal. The wind is not your friend.';
       ui.appendChild(legend);
       ui.appendChild(btn('Desert', '#8aa', () => { net.leave(); mode = 'menu'; renderUi(); }));
@@ -755,6 +920,7 @@ export function startArtillery(net: ArtilleryNet): void {
       turnCount = 0;
       waterY = WATER_BASE;
       graves = [];
+      crates = [];
       genTerrain(d.seed >>> 0, d.map | 0);
       placeFighters();
       matchWinner = -2;
@@ -764,13 +930,15 @@ export function startArtillery(net: ArtilleryNet): void {
     } else if (d.t === 'turn') {
       turnPi = d.pi;
       wind = d.wind;
-      applyTurnLocal();
+      applyTurnLocal(d.crate);
     } else if (d.t === 'pos') {
       const f = fighters[d.pi];
       if (f && d.pi !== myIdx()) { f.x = d.x; f.y = d.y; f.face = d.face; f.fallFrom = f.y; }
     } else if (d.t === 'shot') {
-      if (d.pi !== myIdx()) resolveShot(d.pi, d.w, d.x, d.y, d.ang, d.pow, d.tx);
+      if (d.pi !== myIdx()) resolveShot(d.pi, d.w, d.x, d.y, d.ang, d.pow, d.tx, d.ty);
       if (isHost && fighters[d.pi] && !fighters[d.pi].bot) { /* host re-simulates guests' shots via the same path */ }
+    } else if (d.t === 'crate') {
+      if (d.pi !== myIdx()) applyCrate(d.pi, d.i);
     } else if (d.t === 'drown') {
       const f = fighters[d.pi];
       if (f && f.alive) killFighter(f, true);
@@ -805,10 +973,10 @@ export function startArtillery(net: ArtilleryNet): void {
     if (!myTurn() || charge < 0) return;
     const me = fighters[myIdx()];
     if (WEAPONS[weapon].ammo >= 0 && me.ammo[weapon] <= 0) { charge = -1; return; }
-    const shot = { t: 'shot', pi: myIdx(), w: weapon, x: Math.round(me.x), y: Math.round(me.y), ang: aimAngle, pow: Math.min(1, charge), tx: Math.round(mouseX) };
+    const shot = { t: 'shot', pi: myIdx(), w: weapon, x: Math.round(me.x), y: Math.round(me.y), ang: aimAngle, pow: Math.min(1, charge), tx: Math.round(mouseX), ty: Math.round(mouseY) };
     charge = -1;
     net.relay(shot);
-    resolveShot(shot.pi, shot.w, me.x, me.y, shot.ang, shot.pow, shot.tx);
+    resolveShot(shot.pi, shot.w, me.x, me.y, shot.ang, shot.pow, shot.tx, shot.ty);
   }
 
   function onKeyDown(e: KeyboardEvent) {
@@ -817,7 +985,7 @@ export function startArtillery(net: ArtilleryNet): void {
     const k = e.key.toLowerCase();
     if (['a', 'd', ' '].includes(k)) { e.preventDefault(); e.stopPropagation(); }
     if (k === ' ' && myTurn() && charge < 0 && !e.repeat) charge = 0;
-    if (['1', '2', '3', '4', '5', '6'].includes(k) && myTurn()) weapon = Number(k) - 1;
+    if (['1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(k) && myTurn()) weapon = Number(k) - 1;
     keys.add(k);
   }
   function onKeyUp(e: KeyboardEvent) {
@@ -868,6 +1036,9 @@ export function startArtillery(net: ArtilleryNet): void {
               return;
             }
             me.fallFrom = me.y;
+            // supply crate pickup — walk into it
+            const ci = crates.findIndex((c) => Math.abs(c.x - me.x) < 18 && Math.abs(c.y - me.y) < 30);
+            if (ci >= 0) { net.relay({ t: 'crate', pi: myIdx(), i: ci }); applyCrate(myIdx(), ci); }
           }
         }
         if (now - lastPosSend > 80) {
@@ -954,6 +1125,30 @@ export function startArtillery(net: ArtilleryNet): void {
     ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
     for (const g of graves) ctx.fillText('🪦', g.x, Math.min(g.y, waterY) + 2);
 
+    // supply crates — parachute in, then sit there looking valuable
+    for (const c of crates) {
+      const age = now - c.born;
+      const drop = Math.min(1, age / 1300);
+      const cy = c.y - (1 - drop) * 170;
+      if (drop < 1) {
+        ctx.strokeStyle = '#e8e0d8';
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.arc(c.x, cy - 26, 16, Math.PI * 1.05, Math.PI * 1.95);
+        ctx.moveTo(c.x - 14, cy - 18); ctx.lineTo(c.x - 6, cy - 6);
+        ctx.moveTo(c.x + 14, cy - 18); ctx.lineTo(c.x + 6, cy - 6);
+        ctx.stroke();
+      } else {
+        ctx.shadowColor = '#ffd060'; ctx.shadowBlur = 10 + 6 * Math.sin(now / 300);
+      }
+      ctx.font = '22px serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+      ctx.fillText('📦', c.x, cy + 2);
+      ctx.shadowBlur = 0;
+      ctx.font = '12px serif';
+      ctx.fillText(CRATE_ICON[c.kind], c.x + 11, cy - 12);
+    }
+
     // fighters
     for (let i = 0; i < fighters.length; i++) {
       const f = fighters[i];
@@ -1035,7 +1230,23 @@ export function startArtillery(net: ArtilleryNet): void {
     if (myTurn()) {
       const me = fighters[myIdx()];
       const wp = WEAPONS[weapon];
-      if (wp.special === 'air') {
+      if (wp.special === 'girder') {
+        // beam ghost at the (range-clamped) mouse
+        let gx = mouseX, gy = mouseY;
+        const gdx = gx - me.x, gdy = gy - (me.y - 10);
+        const gdist = Math.hypot(gdx, gdy);
+        if (gdist > GIRDER_RANGE) { gx = me.x + gdx / gdist * GIRDER_RANGE; gy = (me.y - 10) + gdy / gdist * GIRDER_RANGE; }
+        ctx.globalAlpha = 0.55;
+        ctx.fillStyle = '#9aa4b2';
+        ctx.fillRect(gx - 60, gy - 7, 120, 14);
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = '#ffffff33';
+        ctx.setLineDash([4, 8]);
+        ctx.beginPath();
+        ctx.arc(me.x, me.y - 10, GIRDER_RANGE, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      } else if (wp.special === 'air') {
         // target designator: dashed drop line at the mouse
         ctx.strokeStyle = '#ff5a3a99';
         ctx.setLineDash([10, 10]);
@@ -1048,7 +1259,7 @@ export function startArtillery(net: ArtilleryNet): void {
         ctx.font = '26px serif';
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText('🛩️', mouseX, 40 + Math.sin(now / 300) * 6);
-      } else if (!wp.hitscan && weapon !== 3) {
+      } else if (!wp.hitscan && weapon !== 3) { // girder handled above; TS narrows it out here
         // trajectory preview — brighter with charge, tinted red near max
         const pow = charge >= 0 ? charge : 0.55;
         const speed = 380 + pow * 720;
