@@ -69,8 +69,12 @@ export interface WorldNet {
   pet(): string | null;          // our equipped pet id (null = none → nothing trails us)
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'stocks' | 'loans' | 'petshop' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'bowling' | 'nuketown' | 'citytycoon' | 'lootbox' | 'blackmarket' | 'news' | 'house'): void; // open a Casino/Bank/Pet-Shop/DOOM/Fishing/Arcade/Bowling feature
+  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'stocks' | 'loans' | 'petshop' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' | 'lootbox' | 'blackmarket' | 'news' | 'house' | 'shop'): void; // open a Casino/Bank/Pet-Shop/DOOM/Fishing/Arcade/Bowling/Shop feature
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
+  muted(): boolean;              // is game sound currently muted?
+  toggleMute(): void;            // flip the mute toggle (same pref/state as the toolbar's 🔊 button)
+  leaderboard(): { name: string; wins: number; losses: number; elo: number }[]; // live pong standings (pre-ranked)
+  netWorth(): { name: string; net: number; coins: number; loan: number }[];     // live net-worth board (pre-ranked)
   claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
   dungeonSync(): void;             // entering the Ruins → ask which chests we've opened
   dungeonChest(chest: string, captured?: boolean): void; // open a chest ('B1:col,row') → server pays coins / grants prize (once). captured=true → a monster box caught (grant the pet)
@@ -243,6 +247,8 @@ const ROADS: Rect[] = [
   { x: 3910, y: 1600, w: 390,  h: 80 },   // stem → Cedar Circle (east, lower)
   { x: 2945, y: 1290, w: 110, h: 130 },  // spur south to the Bolwoing Alley
   { x: 2115, y: 1295, w: 110, h: 595 },  // spur south to McDonald's
+  { x: 605, y: 1490, w: 110, h: 330 },   // spur further south, Casino → the General Store
+  { x: 2595, y: 900, w: 110, h: 80 },    // spur east off the Pet-shack road → Hall of Fame
 ];
 const PLAZA = { x: 1600, y: 1100, r: 240 }; // paved circle + fountain at town center
 // The Tavern's INTERIOR lives off the main map. When you step inside, the camera bounds switch to
@@ -1949,6 +1955,14 @@ export function startWorld(net: WorldNet): void {
   title.style.cssText = 'color:#e8eefc;font-size:18px;letter-spacing:.5px;text-shadow:0 2px 6px #000a;';
   const count = document.createElement('div');
   count.style.cssText = 'color:#8aa0d8;font-size:13px;margin-left:auto;pointer-events:none;text-shadow:0 1px 4px #000a;';
+  const muteBtn = document.createElement('button');
+  muteBtn.type = 'button';
+  muteBtn.style.cssText =
+    'pointer-events:auto;cursor:pointer;background:#1b2542;color:#cdd8f5;border:1px solid #2c3a63;' +
+    'border-radius:8px;padding:7px 10px;font-size:15px;line-height:1;';
+  function syncMuteBtn() { muteBtn.textContent = net.muted() ? '🔇' : '🔊'; }
+  syncMuteBtn();
+  muteBtn.addEventListener('click', () => { net.toggleMute(); syncMuteBtn(); });
   const driveBtn = document.createElement('button');
   driveBtn.type = 'button';
   driveBtn.style.cssText =
@@ -1960,7 +1974,7 @@ export function startWorld(net: WorldNet): void {
   backBtn.style.cssText =
     'pointer-events:auto;cursor:pointer;background:#1b2542;color:#cdd8f5;' +
     'border:1px solid #2c3a63;border-radius:8px;padding:7px 12px;font-size:13px;';
-  topbar.append(title, count, driveBtn, backBtn);
+  topbar.append(title, count, muteBtn, driveBtn, backBtn);
   overlay.appendChild(topbar);
 
   // Weekly objectives panel (top-left, under the title).
@@ -2378,7 +2392,7 @@ export function startWorld(net: WorldNet): void {
     'position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:#0008;z-index:3;';
   const dialogBox = document.createElement('div');
   dialogBox.style.cssText =
-    'min-width:260px;max-width:90vw;background:#141c33;border:1px solid #2c3a63;border-radius:14px;' +
+    'min-width:260px;max-width:90vw;max-height:82vh;overflow-y:auto;background:#141c33;border:1px solid #2c3a63;border-radius:14px;' +
     'padding:22px;box-shadow:0 16px 50px #000a;text-align:center;';
   dialog.appendChild(dialogBox);
   overlay.appendChild(dialog);
@@ -2674,6 +2688,8 @@ export function startWorld(net: WorldNet): void {
       case 'temple': return '⛪ Enter the Temple';
       case 'bowling': return '🎳 Enter Bolwoing Alley';
       case 'mcdonald': return "🍔 Enter McDonald's";
+      case 'shop': return '🛍️ Enter the General Store';
+      case 'hall': return '🏆 Enter the Hall of Fame';
     }
   }
   function enterBuilding(kind: WorldBuildingKind) {
@@ -2727,6 +2743,13 @@ export function startWorld(net: WorldNet): void {
     if (kind === 'mcdonald') { enterMcdonald(); return; }
     if (kind === 'temple') { enterTemple(); return; }
     if (kind === 'dungeon') { enterDungeon(); return; }
+    if (kind === 'shop') {
+      openDialog('🛍️ General Store', 'Shelves of paddle skins, titles, and theme songs — plus the day\'s free spin.', [
+        { label: '🛍️ Browse the Shop', onPick: () => { exit(); net.openFeature('shop'); } },
+      ]);
+      return;
+    }
+    if (kind === 'hall') { enterHallOfFame(); return; }
     if (kind === 'parliament') {
       openDialog('🏛️ Parliament', 'The perpetual game of Nomic is in session. The only rule that cannot change is that the rules can.', [
         { label: '🏛️ Take your seat', onPick: () => { exit(); net.openParliament(); } },
@@ -2746,10 +2769,28 @@ export function startWorld(net: WorldNet): void {
         { label: '🏎️ Street Demons (Racing)', onPick: () => { exit(); net.openFeature('racing'); } },
         { label: '🥊 Super Tsong Bros', onPick: () => { exit(); net.openFeature('superbros'); } },
         { label: '💣 Nuketown', onPick: () => { exit(); net.openFeature('nuketown'); } },
+        { label: '🧨 TNT Explosion Rally', onPick: () => { exit(); net.openFeature('tnt'); } },
         { label: '🏙️ City Tycoon', onPick: () => { exit(); net.openFeature('citytycoon'); } },
       ]);
       return;
     }
+  }
+
+  // Hall of Fame — a read-only trophy-case dialog showing the live pong leaderboard and
+  // net-worth board, so both stay checkable without ever leaving the World.
+  function enterHallOfFame() {
+    const lb = net.leaderboard().slice(0, 6);
+    const nw = net.netWorth().slice(0, 6);
+    const fmt = (n: number) => Math.round(n).toLocaleString();
+    const lines: string[] = [];
+    lines.push('🏓 PONG LEADERBOARD');
+    if (lb.length) lb.forEach((r, i) => lines.push(`${i + 1}. ${r.name} — ${r.wins}-${r.losses}, ${Math.round(r.elo)} ELO`));
+    else lines.push('(no ranked matches yet)');
+    lines.push('');
+    lines.push('🪙 NET WORTH');
+    if (nw.length) nw.forEach((r, i) => lines.push(`${i + 1}. ${r.name} — ${fmt(r.net)}🪙${r.loan > 0 ? ` (owes ${fmt(r.loan)})` : ''}`));
+    else lines.push('(nobody\'s banked a coin yet)');
+    openDialog('🏆 Hall of Fame', lines.join('\n'), []);
   }
 
   // --- Robville lots: each lot's tint + hovering sign reflect its ownership/market state. ---
@@ -3810,7 +3851,7 @@ export function startWorld(net: WorldNet): void {
     h.style.cssText = 'font-size:22px;color:#e8eefc;margin-bottom:6px;';
     const s = document.createElement('div');
     s.textContent = sub;
-    s.style.cssText = 'font-size:13px;color:#8aa0d8;margin-bottom:18px;';
+    s.style.cssText = 'font-size:13px;color:#8aa0d8;margin-bottom:18px;white-space:pre-line;text-align:left;';
     dialogBox.append(h, s);
     for (const c of choices) {
       const b = document.createElement('button');

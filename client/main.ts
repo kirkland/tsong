@@ -2234,12 +2234,13 @@ worldBtn.addEventListener('click', async () => {
           return;
         }
         // Arcade cabinets launch the solo/co-op minigames via their toolbar buttons.
-        if (feature === 'campaign' || feature === 'typedie' || feature === 'racing' || feature === 'superbros' || feature === 'nuketown' || feature === 'citytycoon') {
+        if (feature === 'campaign' || feature === 'typedie' || feature === 'racing' || feature === 'superbros' || feature === 'nuketown' || feature === 'citytycoon' || feature === 'tnt') {
           const btn = feature === 'campaign' ? campaignBtn
                     : feature === 'typedie' ? typeDieBtn
                     : feature === 'racing' ? streetDemonsBtn
                     : feature === 'nuketown' ? nuketownBtn
                     : feature === 'citytycoon' ? (document.getElementById('crBtn') as HTMLButtonElement)
+                    : feature === 'tnt' ? tntBtn
                     : sbBtn;
           setTimeout(() => btn?.click(), 0);
           return;
@@ -2258,6 +2259,7 @@ worldBtn.addEventListener('click', async () => {
                  : feature === 'blackmarket' ? 'marketplaceBtn'
                  : feature === 'news'       ? 'newsBtn'
                  : feature === 'house'      ? 'houseBtn'
+                 : feature === 'shop'       ? 'shopBtn'
                  : 'loanBtn';
         setTimeout(() => (document.getElementById(id) as HTMLButtonElement | null)?.click(), 0);
       },
@@ -2274,6 +2276,10 @@ worldBtn.addEventListener('click', async () => {
         coins: wallet.coins, elo: lastLbSelfElo ?? null, rank: lastLbSelfRank ?? null,
         fishLb: fishScores.find((r) => r.name === myName)?.lb ?? 0, // best charted catch (0 if unranked)
       }), // Mira reads these back to you
+      muted: () => muted,
+      toggleMute: () => { muted = !muted; prefSet('muted', muted ? '1' : '0'); applyMute(); },
+      leaderboard: () => lastLbRows,
+      netWorth: () => lastNwRows,
 
       jail: () => net.send({ type: 'jail' }),                 // tried to drunk-drive → bust
       bail: (targetId) => net.send({ type: 'bail', targetId }), // post 500🪙 bail for a jailed avatar

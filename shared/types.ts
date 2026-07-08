@@ -471,7 +471,7 @@ export function petById(id: string | null | undefined) {
 
 // What entering a building does (the client maps each `kind` to an action). Add a kind here
 // and a handler on the client to introduce a new venue.
-export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament' | 'arcade' | 'dungeon' | 'temple' | 'bowling' | 'mcdonald';
+export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament' | 'arcade' | 'dungeon' | 'temple' | 'bowling' | 'mcdonald' | 'shop' | 'hall';
 // A venue's footprint on the map. The rectangle (top-left origin, world units) is solid —
 // avatars collide with it — and an apron just outside the door is the entry trigger zone.
 export interface WorldBuilding {
@@ -518,6 +518,12 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
   // McDonald's — south of the pond, east of the Temple. Red facade, golden arches, enterable interior.
   // Cashier Mac, Grimace, and Ronald hold court inside. The fries are hot and fresh.
   { id: 'mcdonald', kind: 'mcdonald', name: "McDONALD'S", emoji: '🍔', x: 2050, y: 1870, w: 260, h: 200, color: '#cc0000' },
+  // The General Store — south of the Casino, on its own short spur. Sells the same cosmetics/
+  // vehicles/Daily Spin as the toolbar Shop; this is just a walk-in door into that same panel.
+  { id: 'shop', kind: 'shop', name: 'GENERAL STORE', emoji: '🛍️', x: 480, y: 1820, w: 280, h: 200, color: '#c98a2e' },
+  // Hall of Fame — a trophy hall NE of the plaza, between the pond and Bolwoing Alley. Displays
+  // the live pong leaderboard and net-worth standings without needing to leave the World.
+  { id: 'hall', kind: 'hall', name: 'HALL OF FAME', emoji: '🏆', x: 2700, y: 850, w: 280, h: 210, color: '#c9a227' },
 ] as const;
 
 // --- The Ruins dungeon economy: SERVER-AUTHORITATIVE so a tampered client can't mint coins. ---
