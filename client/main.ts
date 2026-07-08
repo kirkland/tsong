@@ -2262,9 +2262,12 @@ function watchWorldDelegate(feature: string) {
 
 const worldBtn = document.getElementById('worldBtn') as HTMLButtonElement;
 let worldMod: typeof import('./world') | null = null;
+// World is the landing page now, not an optional extra — kick off its chunk immediately instead
+// of waiting for the first click, so it's likely already cached by the time auto-join fires it.
+const worldModPromise: Promise<typeof import('./world')> = import('./world');
 worldBtn.addEventListener('click', async () => {
   try {
-    worldMod = await import('./world');
+    worldMod = await worldModPromise;
     if (worldMod.isWorldOpen()) return; // already walking around
     worldBtn.setAttribute('aria-pressed', 'true');
     worldMod.startWorld({

@@ -6966,15 +6966,20 @@ export function startWorld(net: WorldNet): void {
       const col = i % cols, row = Math.floor(i / cols);
       const x = ix + marginX + col * stepX, y = iy + marginY + row * stepY;
       casinoStations.push({ feature: g.feature, label: g.label, x, y });
-      sc.add.ellipse(x, y + 6, 90, 30, g.color, 0.22).setDepth(y - 4);          // glow puddle
+      const glow = sc.add.ellipse(x, y + 6, 90, 30, g.color, 0.22).setDepth(y - 4); // glow puddle
       sc.add.rectangle(x - 46, y - 78, 92, 90, g.color).setOrigin(0, 0).setDepth(y)
         .setStrokeStyle(2, 0xffffff, 0.35);                                    // cabinet body
       sc.add.rectangle(x - 46, y - 78, 92, 10, 0xffffff, 0.18).setOrigin(0, 0).setDepth(y + 1); // top sheen
-      sc.add.text(x, y - 46, g.emoji, { fontSize: '34px' }).setOrigin(0.5).setDepth(y + 2);
+      const icon = sc.add.text(x, y - 46, g.emoji, { fontSize: '34px' }).setOrigin(0.5).setDepth(y + 2);
       sc.add.text(x, y + 2, g.label, {
         fontFamily: 'system-ui, sans-serif', fontSize: '11px', fontStyle: 'bold',
         color: '#ffffff', stroke: '#000000', strokeThickness: 3, resolution: 2,
       }).setOrigin(0.5, 0).setDepth(y + 3);
+      // Idle animation so the row of cabinets reads as "live" rather than a wall of signs —
+      // each one's phase is offset by its index so the floor doesn't pulse in lockstep.
+      const phase = i * 220;
+      sc.tweens.add({ targets: glow, alpha: 0.34, scaleX: 1.12, scaleY: 1.12, duration: 1500, delay: phase, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      sc.tweens.add({ targets: icon, y: y - 51, duration: 1100, delay: phase, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
     });
 
     // exit mat by the door (bottom-center, where the generic exit detector looks)
