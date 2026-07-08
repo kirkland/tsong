@@ -211,7 +211,15 @@ export interface CrPlayer {
   mortgaged: Set<number>;      // positions with no rent (raised cash)
   goRounds: number;            // times passed Payday (easter-egg counter)
   online: boolean;
+  bot: boolean;                 // AI-controlled seat — never touches the coin economy
+  botNextActAt: number;         // ms timestamp the bot's next decision fires (0 = not scheduled)
 }
+
+// A bot never wins real coins — the win payout is skipped entirely for a bot winner.
+const BOT_NAMES = [
+  '🤖 Baron Byte', '🤖 Mogul McRobot', '🤖 Rex Realtor', '🤖 Tilly Tycoon',
+  '🤖 Duke Deedbot', '🤖 Cash Register', '🤖 Sir Sellsalot', '🤖 Landlordotron',
+];
 
 interface CrAuction {
   position: number;
@@ -247,6 +255,7 @@ export class CityRiseManager {
   private rooms = new Map<string, CrRoom>();
   private playerRoom = new Map<string, string>(); // pid → room id
   private nextId = 1;
+  private botSeq = 0;
 
   constructor(private hooks: CityRiseHooks) {}
 
@@ -264,6 +273,7 @@ export class CityRiseManager {
       pid, name, color: color2,
       money: START_MONEY, position: 0, auditTurns: 0, bankrupt: false, ready: false,
       owned: [], buildings: {}, mortgaged: new Set(), goRounds: 0, online: true,
+      bot: false, botNextActAt: 0,
     };
     room.players.push(player);
     this.playerRoom.set(pid, room.id);
@@ -278,7 +288,7 @@ export class CityRiseManager {
 
     if (room.phase === 'waiting') {
       room.players = room.players.filter((p) => p.pid !== pid);
-      if (room.players.length === 0) { this.rooms.delete(room.id); return; }
+      if (room.players.length === 0 || room.players.every((p) => p.bot)) { this.teardownRoom(room); return; }
       this.pushState(room);
       return;
     }
@@ -292,10 +302,18 @@ export class CityRiseManager {
     } else if (p) {
       p.online = false;
     }
-    if (this.rooms.has(room.id) && room.phase !== 'gameover') {
+    if (!this.rooms.has(room.id)) return;
+    // No point bots playing on alone once every human has bailed.
+    if (room.players.every((x) => x.bot || !this.playerRoom.has(x.pid))) { this.teardownRoom(room); return; }
+    if (room.phase !== 'gameover') {
       if (wasTheirTurn) this.nextTurn(room);
       else this.pushState(room);
     }
+  }
+
+  private teardownRoom(room: CrRoom): void {
+    for (const p of room.players) this.playerRoom.delete(p.pid);
+    this.rooms.delete(room.id);
   }
 
   ready(pid: string): void {
@@ -305,6 +323,12 @@ export class CityRiseManager {
     if (!p) return;
     p.ready = true;
     this.emit(room, `${p.name} is ready. 🏙️`, 'info');
+    this.maybeStart(room);
+  }
+
+  /** Start the game if everyone's ready, or arm the start-grace timer once someone is. Shared
+   *  by a human readying up and a bot (which readies the instant it's seated). */
+  private maybeStart(room: CrRoom): void {
     const readyCount = room.players.filter((x) => x.ready).length;
     if (room.players.length >= 2 && room.players.every((x) => x.ready)) {
       this.startGame(room);
@@ -314,6 +338,41 @@ export class CityRiseManager {
       room.startGraceAt = Date.now() + T_START_GRACE;
     }
     this.pushState(room);
+  }
+
+  /** "Add bot": seat an AI tycoon in an open slot. Waiting room only, ready immediately —
+   *  the human(s) just need to ready up themselves to kick things off. */
+  addBot(pid: string): void {
+    const room = this.roomOf(pid);
+    if (!room || room.phase !== 'waiting') return;
+    if (room.players.length >= MAX_PLAYERS) return;
+    const idx = room.players.length;
+    const botPid = `bot-${room.id}-${++this.botSeq}`;
+    let color = TOKEN_COLORS[idx % TOKEN_COLORS.length];
+    if (room.players.some((p) => p.color.toLowerCase() === color.toLowerCase())) {
+      color = TOKEN_COLORS[(idx + 1) % TOKEN_COLORS.length];
+    }
+    const takenNames = new Set(room.players.map((p) => p.name));
+    const name = BOT_NAMES.find((n) => !takenNames.has(n)) ?? BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)];
+    const bot: CrPlayer = {
+      pid: botPid, name, color,
+      money: START_MONEY, position: 0, auditTurns: 0, bankrupt: false, ready: true,
+      owned: [], buildings: {}, mortgaged: new Set(), goRounds: 0, online: true,
+      bot: true, botNextActAt: 0,
+    };
+    room.players.push(bot);
+    this.playerRoom.set(botPid, room.id);
+    this.emit(room, `${name} joined the city.`, 'info');
+    this.maybeStart(room);
+  }
+
+  /** "Remove bot": kick a bot out of the room (any joined player may do this, any time). */
+  removeBot(pid: string, botPid: string): void {
+    const room = this.roomOf(pid);
+    if (!room) return;
+    const bot = room.players.find((x) => x.pid === botPid);
+    if (!bot || !bot.bot) return;
+    this.leave(botPid);
   }
 
   // --- actions ---
@@ -733,7 +792,10 @@ export class CityRiseManager {
     if (winner) {
       const prize = 400 + room.players.length * 50;
       this.emit(room, `👑 ${winner.name} is the last tycoon standing and wins ${prize} 🪙!`, 'success');
-      try { void this.hooks.award(winner.pid, winner.name, prize); } catch (e) { console.error('cityrise award failed:', e); }
+      // Bots never touch the real coin economy — a bot winner gets bragging rights only.
+      if (!winner.bot) {
+        try { void this.hooks.award(winner.pid, winner.name, prize); } catch (e) { console.error('cityrise award failed:', e); }
+      }
     } else {
       this.emit(room, 'The city went bust. No winner!', 'warn');
     }
@@ -847,7 +909,66 @@ export class CityRiseManager {
       if (room.deadline > 0 && now >= room.deadline) {
         this.autoResolve(room);
       }
+      this.stepBots(room, now);
     }
+  }
+
+  // --- bots ---
+
+  /** Drive every bot seated in this room: each gets a short "thinking" pause before acting,
+   *  so a room full of bots doesn't resolve a whole game in a single tick. */
+  private stepBots(room: CrRoom, now: number): void {
+    if (room.phase === 'gameover') return;
+    for (const bot of room.players) {
+      if (!bot.bot || bot.bankrupt) continue;
+      const act = this.botDecision(room, bot);
+      if (!act) { bot.botNextActAt = 0; continue; }
+      if (bot.botNextActAt === 0) { bot.botNextActAt = now + 500 + Math.random() * 900; continue; }
+      if (now < bot.botNextActAt) continue;
+      bot.botNextActAt = 0;
+      act();
+    }
+  }
+
+  /** What a bot should do right now, or null if it has nothing pending this tick. */
+  private botDecision(room: CrRoom, bot: CrPlayer): (() => void) | null {
+    const turnPid = room.players[room.turnIdx]?.pid;
+    if (room.phase === 'rolling' && turnPid === bot.pid) {
+      return () => this.roll(bot.pid);
+    }
+    if (room.phase === 'buying' && turnPid === bot.pid && room.pendingBuy != null) {
+      const price = BOARD[room.pendingBuy].price ?? 0;
+      // Buys eagerly while flush; gets stingy once cash runs low.
+      return () => { if (bot.money - price >= 100) this.buy(bot.pid); else this.pass(bot.pid); };
+    }
+    if (room.phase === 'building' && turnPid === bot.pid) {
+      return () => this.botBuild(bot);
+    }
+    if (room.phase === 'auction' && room.auction && room.auction.highPid !== bot.pid) {
+      const a = room.auction;
+      const price = BOARD[a.position].price ?? 0;
+      const maxBid = Math.floor(price * 1.1); // won't chase a lot past 110% of sticker
+      const nextBid = a.highBid + Math.max(10, Math.round(price * 0.08));
+      if (nextBid > maxBid || nextBid > bot.money - 50) return null; // priced out — sit this one out
+      return () => this.auctionBid(bot.pid, nextBid);
+    }
+    return null;
+  }
+
+  /** Builds one house/hotel on the cheapest eligible monopoly (keeping a cash buffer), or
+   *  ends the turn once there's nothing left worth building. */
+  private botBuild(bot: CrPlayer): void {
+    for (const group of Object.keys(GROUPS)) {
+      if (!this.hasMonopoly(bot, group)) continue;
+      const positions = GROUPS[group];
+      const groupMin = Math.min(...positions.map((q) => bot.buildings[q] ?? 0));
+      if (groupMin >= 5) continue;
+      const pos = positions.find((q) => (bot.buildings[q] ?? 0) === groupMin && !bot.mortgaged.has(q));
+      if (pos == null) continue;
+      const cost = BOARD[pos].houseCost ?? 0;
+      if (bot.money - cost >= 200) { this.build(bot.pid, pos); return; }
+    }
+    this.endTurn(bot.pid);
   }
 
   private autoResolve(room: CrRoom): void {
@@ -922,7 +1043,7 @@ export class CityRiseManager {
       players: room.players.map((p) => ({
         pid: p.pid, name: p.name, color: p.color, money: p.money, position: p.position,
         auditTurns: p.auditTurns, bankrupt: p.bankrupt, ready: p.ready, online: p.online,
-        owned: p.owned, buildings: p.buildings, mortgaged: [...p.mortgaged],
+        owned: p.owned, buildings: p.buildings, mortgaged: [...p.mortgaged], bot: p.bot,
       })),
     };
   }

@@ -2157,6 +2157,16 @@ export class Lobby {
     if (!conn || !conn.pid) return;
     this.cityRise.endTurn(conn.pid);
   }
+  crAddBot(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    this.cityRise.addBot(conn.pid);
+  }
+  crRemoveBot(ws: WebSocket, botPid: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    this.cityRise.removeBot(conn.pid, botPid);
+  }
 
   // --- Nomic (the Parliament) ---
 

@@ -25,7 +25,7 @@ interface Space {
 interface CrPlayerView {
   pid: string; name: string; color: string; money: number; position: number;
   auditTurns: number; bankrupt: boolean; ready: boolean; online: boolean;
-  owned: number[]; buildings: Record<number, number>; mortgaged: number[];
+  owned: number[]; buildings: Record<number, number>; mortgaged: number[]; bot: boolean;
 }
 interface CrGame {
   id: string;
@@ -649,6 +649,14 @@ function renderPanel(): void {
       `<span style="flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.pid === selfPid ? '⭐ ' : ''}${escapeHtml(p.name)}${p.bankrupt ? ' 💀' : ''}${p.auditTurns > 0 ? ' 🔒' : ''}</span>` +
       `<span style="font-weight:700;color:#8bff9a">$${p.money}</span>` +
       `<span style="color:#9aa0c8" title="properties / monopolies">🏢${props}${sets ? ' 👑' + sets : ''}</span>`;
+    if (p.bot) {
+      const kick = document.createElement('button');
+      kick.textContent = '✕';
+      kick.title = 'Remove bot';
+      kick.style.cssText = 'flex:0 0 auto;width:22px;height:22px;border-radius:6px;border:1px solid #5c1c1c;background:#3a1414;color:#ff9a9a;cursor:pointer;font-size:12px;line-height:1;';
+      kick.onclick = () => net.send({ type: 'crRemoveBot', pid: p.pid });
+      row.appendChild(kick);
+    }
     list.appendChild(row);
   }
 
@@ -668,6 +676,7 @@ function renderActions(): void {
   if (g.phase === 'waiting') {
     if (me && !me.ready) actionBar.appendChild(btn('✅ Ready Up', '#1c7c2e', () => net.send({ type: 'crReady' })));
     else actionBar.appendChild(hint('Waiting for players to ready up… (2–8 players)'));
+    if (g.players.length < 8) actionBar.appendChild(btn('🤖 Add Bot', '#2a2a5a', () => net.send({ type: 'crAddBot' })));
     actionBar.appendChild(btn('🚪 Leave', '#5c1c1c', () => closeCityTycoon()));
     return;
   }

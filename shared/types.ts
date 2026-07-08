@@ -1032,7 +1032,9 @@ export type ClientMsg =
   | { type: 'crPass' }                            // decline → send it to auction
   | { type: 'crAuctionBid'; amount: number }      // bid in the current auction
   | { type: 'crBuild'; position: number }         // build a house/hotel on a lot you own
-  | { type: 'crEndTurn' };                        // end your turn
+  | { type: 'crEndTurn' }                         // end your turn
+  | { type: 'crAddBot' }                          // drop an AI tycoon into an open seat (waiting room only)
+  | { type: 'crRemoveBot'; pid: string };         // kick a bot from the room
 
 // --- Server -> Client ---
 

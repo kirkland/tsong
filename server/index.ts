@@ -462,6 +462,12 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'crEndTurn':
         lobby.crEndTurn(ws);
         break;
+      case 'crAddBot':
+        lobby.crAddBot(ws);
+        break;
+      case 'crRemoveBot':
+        if (typeof msg.pid === 'string') lobby.crRemoveBot(ws, msg.pid);
+        break;
       case 'worldEnter':
         lobby.worldEnter(ws);
         break;
