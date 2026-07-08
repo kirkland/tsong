@@ -508,6 +508,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'crCancelTrade':
         if (typeof msg.tradeId === 'number') lobby.crCancelTrade(ws, msg.tradeId);
         break;
+      case 'crChat':
+        if (typeof msg.text === 'string') lobby.crChat(ws, msg.text);
+        break;
       case 'worldEnter':
         lobby.worldEnter(ws);
         break;

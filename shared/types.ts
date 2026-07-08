@@ -1047,7 +1047,8 @@ export type ClientMsg =
       wantProps: number[]; wantCash: number; wantJailFree: number;
     } }                                            // propose a property/cash/jail-free trade to another player
   | { type: 'crRespondTrade'; tradeId: number; accept: boolean } // accept/reject a trade offered to you
-  | { type: 'crCancelTrade'; tradeId: number };   // withdraw a trade you proposed
+  | { type: 'crCancelTrade'; tradeId: number }    // withdraw a trade you proposed
+  | { type: 'crChat'; text: string };             // send a chat line to your City Tycoon room
 
 // --- Server -> Client ---
 

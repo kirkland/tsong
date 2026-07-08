@@ -52,6 +52,7 @@ interface CrGame {
   bankHouses: number;
   bankHotels: number;
   trades: CrTradeView[];
+  chat: { pid: string; name: string; color: string; text: string }[];
 }
 
 let open = false;
@@ -78,7 +79,7 @@ let lastDiceKey = '';
 let buildMode = false;
 let confetti: { x: number; y: number; vx: number; vy: number; c: string; life: number }[] = [];
 let lastTs = 0;
-let tradeModal: HTMLDivElement | null = null;
+let activeModal: HTMLDivElement | null = null;
 
 // --- geometry cache ---
 interface Cell { x: number; y: number; w: number; h: number; side: 'bottom' | 'right' | 'top' | 'left' | 'corner'; pos: number; }
@@ -125,6 +126,8 @@ export function startCityTycoon(adapter: CityRiseNet): void {
   title.style.cssText = 'font-size:20px;letter-spacing:.5px;background:linear-gradient(90deg,#8b7bff,#4dd0e1);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;';
   sidePanel.appendChild(title);
 
+  sidePanel.appendChild(btn('crMyProps', '#2a2a5a', () => openPropertiesModal(), '🏢 My Properties'));
+
   const bankLine = document.createElement('div');
   bankLine.id = 'crBank';
   bankLine.style.cssText = 'font-size:11px;color:#9aa0c8;';
@@ -139,6 +142,37 @@ export function startCityTycoon(adapter: CityRiseNet): void {
   tradesBox.id = 'crTrades';
   tradesBox.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
   sidePanel.appendChild(tradesBox);
+
+  const chatBox = document.createElement('div');
+  chatBox.style.cssText = 'display:flex;flex-direction:column;gap:4px;';
+  const chatTitle = document.createElement('div');
+  chatTitle.textContent = '💬 Chat';
+  chatTitle.style.cssText = 'font-size:11px;font-weight:600;color:#9aa0c8;';
+  chatBox.appendChild(chatTitle);
+  const chatList = document.createElement('div');
+  chatList.id = 'crChatList';
+  chatList.style.cssText = 'max-height:110px;overflow-y:auto;background:#0a0a14;border:1px solid #23233c;border-radius:8px;padding:6px 8px;font-size:12px;line-height:1.5;color:#dfe3f2;display:flex;flex-direction:column;gap:2px;';
+  chatBox.appendChild(chatList);
+  const chatRow = document.createElement('div');
+  chatRow.style.cssText = 'display:flex;gap:6px;';
+  const chatInput = document.createElement('input');
+  chatInput.id = 'crChatInput';
+  chatInput.type = 'text';
+  chatInput.maxLength = 200;
+  chatInput.placeholder = 'Say something…';
+  chatInput.style.cssText = 'flex:1 1 auto;min-width:0;padding:7px 9px;border-radius:8px;border:1px solid #33335a;background:#0a0a16;color:#fff;font-size:12px;';
+  const sendChat = () => {
+    const text = chatInput.value.trim();
+    if (!text) return;
+    net.send({ type: 'crChat', text });
+    chatInput.value = '';
+  };
+  // Stop keystrokes from bubbling to the document-level handler (Escape/R shortcuts) while typing.
+  chatInput.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Enter') sendChat(); });
+  chatRow.appendChild(chatInput);
+  chatRow.appendChild(btn('crChatSend', '#2a2a5a', sendChat, '➤'));
+  chatBox.appendChild(chatRow);
+  sidePanel.appendChild(chatBox);
 
   const logBox = document.createElement('div');
   logBox.id = 'crLog';
@@ -177,7 +211,7 @@ export function closeCityTycoon(): void {
   canvas.removeEventListener('click', onCanvasClick);
   document.removeEventListener('keydown', onKey);
   overlay?.remove();
-  tradeModal?.remove(); tradeModal = null;
+  activeModal?.remove(); activeModal = null;
   game = null; tokens.clear(); floats = []; confetti = []; buildMode = false;
 }
 
@@ -185,7 +219,7 @@ export function isCityTycoonOpen(): boolean { return open; }
 
 function onKey(e: KeyboardEvent) {
   if (!open) return;
-  if (e.key === 'Escape') { if (tradeModal) { closeTradeModal(); return; } closeCityTycoon(); return; }
+  if (e.key === 'Escape') { if (activeModal) { closeModal(); return; } closeCityTycoon(); return; }
   // Easter egg: press "R" to reroll the dice cosmetically for a little jiggle of hope.
   if (e.key === 'r' && game && game.phase === 'rolling' && game.turnPid === selfPid) { net.send({ type: 'crRoll' }); }
 }
@@ -690,6 +724,12 @@ function renderPanel(): void {
 
   renderTrades();
 
+  const chatList = document.getElementById('crChatList')!;
+  chatList.innerHTML = g.chat.length
+    ? g.chat.map((c) => `<div><span style="color:${c.color};font-weight:600">${escapeHtml(c.name)}:</span> ${escapeHtml(c.text)}</div>`).join('')
+    : '<div style="color:#555;">No messages yet — say hi!</div>';
+  chatList.scrollTop = chatList.scrollHeight;
+
   const logBox = document.getElementById('crLog')!;
   logBox.innerHTML = g.log.map((l) => `<div>${escapeHtml(l)}</div>`).join('');
   logBox.scrollTop = logBox.scrollHeight;
@@ -809,7 +849,53 @@ function appendTradeAndLeave(g: CrGame): void {
   actionBar.appendChild(btn('🚪 Leave', '#5c1c1c', () => closeCityTycoon()));
 }
 
-function closeTradeModal(): void { tradeModal?.remove(); tradeModal = null; }
+function closeModal(): void { activeModal?.remove(); activeModal = null; }
+
+function openPropertiesModal(): void {
+  if (!game) return;
+  closeModal();
+  const g = game;
+  const me = g.players.find((p) => p.pid === selfPid);
+  if (!me) return;
+
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;z-index:960;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;';
+  const card = document.createElement('div');
+  card.style.cssText = 'background:#14142c;border:1px solid #33335a;border-radius:12px;padding:18px;width:380px;max-width:92vw;max-height:86vh;overflow-y:auto;display:flex;flex-direction:column;gap:4px;color:#e8eefc;font-size:13px;';
+
+  const title = document.createElement('div');
+  title.style.cssText = 'font-size:16px;font-weight:700;margin-bottom:8px;';
+  title.textContent = `🏢 My Properties (${me.owned.length})`;
+  card.appendChild(title);
+
+  if (me.owned.length === 0) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'color:#666;padding:8px 0;';
+    empty.textContent = "You don't own any properties yet.";
+    card.appendChild(empty);
+  } else {
+    for (const pos of [...me.owned].sort((a, b) => a - b)) {
+      const sp = g.board[pos];
+      const level = me.buildings[pos] ?? 0;
+      const built = level === 5 ? '🏨' : level > 0 ? '🏠'.repeat(level) : '';
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid #23233c;';
+      row.innerHTML =
+        `<span style="width:12px;height:12px;border-radius:3px;background:${sp.color ?? '#666'};flex:0 0 auto;"></span>` +
+        `<span style="flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(sp.name)}${me.mortgaged.includes(pos) ? ' <span style="color:#ff9a9a;font-size:11px;">(mortgaged)</span>' : ''}</span>` +
+        `<span style="color:#9aa0c8;flex:0 0 auto;">${built}</span>` +
+        `<span style="color:#8bff9a;flex:0 0 auto;">$${sp.price ?? 0}</span>`;
+      card.appendChild(row);
+    }
+  }
+
+  card.appendChild(btn('close', '#5c1c1c', () => closeModal(), 'Close'));
+
+  modal.appendChild(card);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+  document.body.appendChild(modal);
+  activeModal = modal;
+}
 
 function buildTradeColumnHtml(label: string, p: CrPlayerView): string {
   const g = game!;
@@ -829,7 +915,7 @@ function buildTradeColumnHtml(label: string, p: CrPlayerView): string {
 
 function openTradeModal(): void {
   if (!game) return;
-  closeTradeModal();
+  closeModal();
   const g = game;
   const me = g.players.find((p) => p.pid === selfPid);
   const others = g.players.filter((p) => p.pid !== selfPid && !p.bankrupt);
@@ -874,15 +960,15 @@ function openTradeModal(): void {
     const offerJailFree = Number((giveCol.querySelector('.cr-jail') as HTMLInputElement | null)?.value || 0);
     const wantJailFree = Number((getCol.querySelector('.cr-jail') as HTMLInputElement | null)?.value || 0);
     net.send({ type: 'crProposeTrade', toPid: target.pid, offer: { offerProps, offerCash, offerJailFree, wantProps, wantCash, wantJailFree } });
-    closeTradeModal();
+    closeModal();
   }, 'Send Offer'));
-  btnRow.appendChild(btn('cancel', '#5c1c1c', () => closeTradeModal(), 'Cancel'));
+  btnRow.appendChild(btn('cancel', '#5c1c1c', () => closeModal(), 'Cancel'));
   card.appendChild(btnRow);
 
   modal.appendChild(card);
-  modal.addEventListener('click', (e) => { if (e.target === modal) closeTradeModal(); });
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
   document.body.appendChild(modal);
-  tradeModal = modal;
+  activeModal = modal;
 }
 
 function btn(id: string, bg: string, on: () => void, label?: string): HTMLButtonElement {

@@ -11,6 +11,8 @@
 // authoritative state snapshots plus little event toasts. Nothing here knows about sockets —
 // the Lobby wires that up through the hooks below.
 
+import { CHAT_MAX_LEN } from '../shared/types';
+
 // --- Hooks the Lobby provides (sockets, coin payouts, toasts) ---
 export interface CityRiseHooks {
   /** Pay the winner tsong coins (already in game-coin units, not ×COIN_SCALE). */
@@ -222,6 +224,7 @@ export interface CrPlayer {
   bot: boolean;                 // AI-controlled seat — never touches the coin economy
   botNextActAt: number;         // ms timestamp the bot's next decision fires (0 = not scheduled)
   jailFreeCards: number;        // held "Get Out of the Drunk Tank Free" cards
+  lastChatAt: number;           // ms timestamp of their last chat message (anti-spam throttle)
 }
 
 // A bot never wins real coins — the win payout is skipped entirely for a bot winner.
@@ -280,6 +283,7 @@ interface CrRoom {
   bankHotels: number;
   trades: CrTrade[];
   nextTradeId: number;
+  chat: { pid: string; name: string; color: string; text: string }[];
 }
 
 export class CityRiseManager {
@@ -304,7 +308,7 @@ export class CityRiseManager {
       pid, name, color: color2,
       money: START_MONEY, position: 0, auditTurns: 0, bankrupt: false, ready: false,
       owned: [], buildings: {}, mortgaged: new Set(), goRounds: 0, online: true,
-      bot: false, botNextActAt: 0, jailFreeCards: 0,
+      bot: false, botNextActAt: 0, jailFreeCards: 0, lastChatAt: 0,
     };
     room.players.push(player);
     this.playerRoom.set(pid, room.id);
@@ -389,7 +393,7 @@ export class CityRiseManager {
       pid: botPid, name, color,
       money: START_MONEY, position: 0, auditTurns: 0, bankrupt: false, ready: true,
       owned: [], buildings: {}, mortgaged: new Set(), goRounds: 0, online: true,
-      bot: true, botNextActAt: 0, jailFreeCards: 0,
+      bot: true, botNextActAt: 0, jailFreeCards: 0, lastChatAt: 0,
     };
     room.players.push(bot);
     this.playerRoom.set(botPid, room.id);
@@ -673,6 +677,25 @@ export class CityRiseManager {
 
   private removePlayerTrades(room: CrRoom, pid: string): void {
     room.trades = room.trades.filter((t) => t.fromPid !== pid && t.toPid !== pid);
+  }
+
+  // --- chat ---
+
+  /** In-room chat, separate from the auto-generated event log so table talk doesn't get
+   *  buried under "X bought Y" spam. Works in any phase, including the waiting room. */
+  chat(pid: string, text: string): void {
+    const room = this.roomOf(pid);
+    if (!room) return;
+    const p = room.players.find((x) => x.pid === pid);
+    if (!p) return;
+    const now = Date.now();
+    if (now - p.lastChatAt < 400) return; // light anti-spam throttle
+    const clean = text.replace(/\s+/g, ' ').trim().slice(0, CHAT_MAX_LEN);
+    if (!clean) return;
+    p.lastChatAt = now;
+    room.chat.push({ pid: p.pid, name: p.name, color: p.color, text: clean });
+    if (room.chat.length > 50) room.chat.shift();
+    this.pushState(room);
   }
 
   // --- movement + landing resolution ---
@@ -1210,7 +1233,7 @@ export class CityRiseManager {
       rolledThisTurn: false, pendingBuy: null, auction: null, lastCard: null,
       bulletin: BULLETIN.map((_, i) => i), dispatch: DISPATCH.map((_, i) => i),
       bIdx: 0, dIdx: 0, log: [], winnerPid: null, deadline: 0, startGraceAt: 0,
-      jackpot: 0, bankHouses: HOUSE_SUPPLY, bankHotels: HOTEL_SUPPLY, trades: [], nextTradeId: 1,
+      jackpot: 0, bankHouses: HOUSE_SUPPLY, bankHotels: HOTEL_SUPPLY, trades: [], nextTradeId: 1, chat: [],
     };
     this.rooms.set(id, room);
     return room;
@@ -1253,6 +1276,7 @@ export class CityRiseManager {
         offerProps: t.offerProps, offerCash: t.offerCash, offerJailFree: t.offerJailFree,
         wantProps: t.wantProps, wantCash: t.wantCash, wantJailFree: t.wantJailFree,
       })),
+      chat: room.chat.slice(-30),
       players: room.players.map((p) => ({
         pid: p.pid, name: p.name, color: p.color, money: p.money, position: p.position,
         auditTurns: p.auditTurns, bankrupt: p.bankrupt, ready: p.ready, online: p.online,

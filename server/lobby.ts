@@ -2290,6 +2290,11 @@ export class Lobby {
     if (!conn || !conn.pid) return;
     this.cityRise.cancelTrade(conn.pid, tradeId);
   }
+  crChat(ws: WebSocket, text: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    this.cityRise.chat(conn.pid, text);
+  }
 
   // --- Nomic (the Parliament) ---
 
