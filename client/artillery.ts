@@ -1380,28 +1380,42 @@ export function startArtillery(net: ArtilleryNet): void {
     ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
     for (const g of graves) ctx.fillText('🪦', g.x, Math.min(g.y, waterY) + 2);
 
-    // supply crates — parachute in, then sit there looking valuable
+    // supply crates — parachute in under a light beacon, contents on the label
     for (const c of crates) {
       const age = now - c.born;
       const drop = Math.min(1, age / 1300);
       const cy = c.y - (1 - drop) * 170;
-      if (drop < 1) {
+      const beaconCol = c.kind === 'hp' ? '255, 106, 138' : '255, 208, 96';
+      if (drop >= 1) {
+        // pulsing beacon column so crates read across the whole battlefield
+        const pulse = 0.5 + 0.5 * Math.sin(now / 320);
+        const bg = ctx.createLinearGradient(0, cy - 210, 0, cy);
+        bg.addColorStop(0, `rgba(${beaconCol}, 0)`);
+        bg.addColorStop(1, `rgba(${beaconCol}, ${0.16 + pulse * 0.12})`);
+        ctx.fillStyle = bg;
+        ctx.fillRect(c.x - 13, cy - 210, 26, 210);
+        // bouncing pointer
+        ctx.font = '17px ui-monospace, monospace';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+        ctx.fillStyle = `rgba(${beaconCol}, 0.95)`;
+        ctx.fillText('▼', c.x, cy - 58 + Math.sin(now / 260) * 5);
+        ctx.shadowColor = `rgb(${beaconCol})`; ctx.shadowBlur = 14 + 8 * pulse;
+      } else {
         ctx.strokeStyle = '#e8e0d8';
         ctx.lineWidth = 1.6;
         ctx.beginPath();
-        ctx.arc(c.x, cy - 26, 16, Math.PI * 1.05, Math.PI * 1.95);
-        ctx.moveTo(c.x - 14, cy - 18); ctx.lineTo(c.x - 6, cy - 6);
-        ctx.moveTo(c.x + 14, cy - 18); ctx.lineTo(c.x + 6, cy - 6);
+        ctx.arc(c.x, cy - 30, 18, Math.PI * 1.05, Math.PI * 1.95);
+        ctx.moveTo(c.x - 16, cy - 21); ctx.lineTo(c.x - 7, cy - 6);
+        ctx.moveTo(c.x + 16, cy - 21); ctx.lineTo(c.x + 7, cy - 6);
         ctx.stroke();
-      } else {
-        ctx.shadowColor = '#ffd060'; ctx.shadowBlur = 10 + 6 * Math.sin(now / 300);
       }
-      ctx.font = '22px serif';
+      ctx.font = '30px serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
-      ctx.fillText('📦', c.x, cy + 2);
+      ctx.fillText('📦', c.x, cy + 3);
       ctx.shadowBlur = 0;
-      ctx.font = '12px serif';
-      ctx.fillText(CRATE_ICON[c.kind], c.x + 11, cy - 12);
+      // the contents, printed right on the box — no mystery, pure greed
+      ctx.font = '17px serif';
+      ctx.fillText(CRATE_ICON[c.kind], c.x, cy - 26 + Math.sin(now / 260) * 3);
     }
 
     // fighters
