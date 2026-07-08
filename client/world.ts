@@ -276,6 +276,28 @@ const TEMPLE_ZOOM = 2.4; // a touch wider than the Tavern — let the lofty nave
 const MC_INT = { x: 5400, y: 2100, w: 780, h: 500 };
 const MC_WALL = 26;
 const MC_ZOOM = 3;
+// The Casino's INTERIOR — a neon gaming floor off-map below McDonald's (which ends at y≈2600).
+// Bigger than the other rooms (it hosts a whole row of machines), so the zoom stays wider than
+// the cozy Tavern/Temple/McDonald's rooms to keep several cabinets on screen at once.
+const CASINO_INT = { x: 5400, y: 2700, w: 1400, h: 820 };
+const CASINO_WALL = 30;
+const CASINO_ZOOM = 1.7;
+// Every casino game gets its own walk-up cabinet on the gaming floor. `feature` is the same key
+// net.openFeature() already understands (these games already work via the exterior building's
+// dialog list) — walking up to a cabinet and playing just skips that list and goes straight in.
+const CASINO_GAMES: readonly { feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'lootbox' | 'blackmarket'; emoji: string; label: string; color: number }[] = [
+  { feature: 'slots', emoji: '🎰', label: 'Slots', color: 0xe8b84b },
+  { feature: 'roulette', emoji: '🎡', label: 'Roulette', color: 0xa8323a },
+  { feature: 'blackjack', emoji: '🃏', label: 'Blackjack', color: 0x1f6b46 },
+  { feature: 'craps', emoji: '🎲', label: 'Craps', color: 0x1f6b46 },
+  { feature: 'crash', emoji: '🚀', label: 'Crash', color: 0x3a4ea8 },
+  { feature: 'plinko', emoji: '🎯', label: 'Plinko', color: 0x7a4fa8 },
+  { feature: 'horse', emoji: '🏇', label: 'Horse Racing', color: 0x5a3d2a },
+  { feature: 'hilo', emoji: '🔺', label: 'Hi-Lo', color: 0x1f6b46 },
+  { feature: 'mines', emoji: '💣', label: 'Mines', color: 0x3a2a2a },
+  { feature: 'lootbox', emoji: '🎁', label: 'Loot Box', color: 0xff3ea5 },
+  { feature: 'blackmarket', emoji: '🛒', label: 'Black Market', color: 0x555a66 },
+] as const;
 
 // --- The Ruins dungeon: off-map tile floors (same trick as the Tavern interior). Tile legend —
 // '#'/'T'/'o' = wall, '.' = floor, '~' = tall-grass encounter, 'c' chest, '>' stairs DOWN,
@@ -1803,6 +1825,7 @@ export function startWorld(net: WorldNet): void {
   let inInterior = false;   // true while inside a walkable room (camera + collision switch to curInt)
   let inTemple = false;     // sub-flag: the current interior is the Temple (vs the Tavern)
   let inMcdonald = false;   // sub-flag: the current interior is McDonald's
+  let inCasino = false;     // sub-flag: the current interior is the Casino gaming floor
   // The ACTIVE interior's geometry — swapped on entry so the movement clamp / exit mat / zoom all
   // read one rect instead of hard-coding the Tavern's. Defaults to the Tavern.
   let curInt = TAVERN_INT, curWall = TAVERN_WALL, curZoom = TAVERN_ZOOM;
@@ -1879,8 +1902,12 @@ export function startWorld(net: WorldNet): void {
   let interiorBuilt = false;// the Tavern interior's Phaser props are lazily built on first entry
   let templeBuilt = false;  // the Temple interior's props are lazily built on first entry
   let mcBuilt = false;      // the McDonald's interior props are lazily built on first entry
+  let casinoBuilt = false;  // the Casino gaming floor's props are lazily built on first entry
   let nearBook = false;     // standing at the holy book's lectern (Enter → read it)
   let templeBookX = 0, templeBookY = 0; // world position of the lectern (set in buildTempleInterior)
+  // Live world positions of each cabinet on the Casino floor (set in buildCasinoInterior).
+  let casinoStations: { feature: typeof CASINO_GAMES[number]['feature']; label: string; x: number; y: number }[] = [];
+  let nearCasinoGame: typeof casinoStations[number] | null = null; // standing at a cabinet (Enter → play)
   // The Blessing of the Ball: reading the holy book grants a swiftness blessing that gradually wears
   // off. We stamp a window [blessStart, blessEnd]; the speed bonus lerps from full back to none across it.
   let blessStart = 0, blessEnd = 0;
@@ -2695,22 +2722,7 @@ export function startWorld(net: WorldNet): void {
   function enterBuilding(kind: WorldBuildingKind) {
     enterChime();
     if (kind === 'arena') { exit(); net.enterArena(); return; }
-    if (kind === 'casino') {
-      openDialog('🎰 Casino', 'What are you feeling lucky for?', [
-        { label: '🎡 Roulette',   onPick: () => { exit(); net.openFeature('roulette');    } },
-        { label: '🃏 Blackjack',  onPick: () => { exit(); net.openFeature('blackjack');   } },
-        { label: '🎲 Craps',      onPick: () => { exit(); net.openFeature('craps');       } },
-        { label: '🚀 Crash',      onPick: () => { exit(); net.openFeature('crash');       } },
-        { label: '🎰 Slots',      onPick: () => { exit(); net.openFeature('slots');       } },
-        { label: '🎯 Plinko',     onPick: () => { exit(); net.openFeature('plinko');      } },
-        { label: '🏇 Horse Racing', onPick: () => { exit(); net.openFeature('horse');     } },
-        { label: '🃏 Hi-Lo',      onPick: () => { exit(); net.openFeature('hilo');        } },
-        { label: '💣 Mines',      onPick: () => { exit(); net.openFeature('mines');       } },
-        { label: '🎁 Loot Box',   onPick: () => { exit(); net.openFeature('lootbox');     } },
-        { label: '🛒 Black Market', onPick: () => { exit(); net.openFeature('blackmarket'); } },
-      ]);
-      return;
-    }
+    if (kind === 'casino') { enterCasino(); return; }
     if (kind === 'bank') {
       openDialog('🏦 Bank', 'How can we help you today?', [
         { label: '📈 Crypto Market', onPick: () => { exit(); net.openFeature('stocks'); } },
@@ -4321,8 +4333,9 @@ export function startWorld(net: WorldNet): void {
     // Mac the cashier takes your order too.
     if (nearNpc && nearNpc.def.id === 'mc-cashier') { orderMcFood(); return; }
     if (nearNpc) { startTalk(nearNpc); return; }
-    if (nearExit) { if (inDungeon) leaveDungeon(); else if (inTemple) leaveTemple(); else if (inMcdonald) leaveMcdonald(); else leaveTavern(); return; }
+    if (nearExit) { if (inDungeon) leaveDungeon(); else if (inTemple) leaveTemple(); else if (inMcdonald) leaveMcdonald(); else if (inCasino) leaveCasino(); else leaveTavern(); return; }
     if (nearBook) { readHolyBook(); return; }
+    if (nearCasinoGame) { playCasinoGame(nearCasinoGame); return; }
     if (nearStairs) { changeFloor(nearStairs.to, nearStairs.dir === 'down' ? '<' : '>'); return; }
     if (nearBossStairs) { // the deepest stairwell — boss floor not carved yet, so it just breathes at you
       tone(48, 0.7, 'sawtooth', 0.12, 32); window.setTimeout(() => tone(40, 0.9, 'sine', 0.10, 28), 200);
@@ -4818,6 +4831,15 @@ export function startWorld(net: WorldNet): void {
     // Inside the Temple: standing at the lectern → read-the-book prompt (loses to the exit mat).
     nearBook = false;
     if (inTemple && !nearNpc && !nearExit && Math.hypot(selfX - templeBookX, selfY - templeBookY) < R + 44) nearBook = true;
+    // Inside the Casino: standing at a cabinet → play prompt (loses to the exit mat).
+    nearCasinoGame = null;
+    if (inCasino && !nearExit) {
+      let bd = 70;
+      for (const st of casinoStations) {
+        const d = Math.hypot(selfX - st.x, selfY - st.y);
+        if (d < bd) { bd = d; nearCasinoGame = st; }
+      }
+    }
     if (inDungeon && cellWorldOf('@')) { // the '@' arrival cell (B1 only) doubles as the way out
       const e = dungeonEntry();
       if (Math.abs(selfX - e.x) < 44 && Math.abs(selfY - e.y) < 44) nearExit = true;
@@ -4894,9 +4916,11 @@ export function startWorld(net: WorldNet): void {
     } else if (nearNpc) {
       prompt.textContent = nearNpc.def.id === 'bartender' ? '🍺 Order from the Barkeep' : nearNpc.def.id === 'mc-cashier' ? '🍔 Order from Mac' : nearNpc.def.friendKey ? `💕 Chat with ${nearNpc.def.name}` : `💬 Talk to ${nearNpc.def.name}`;
     } else if (nearExit) {
-      prompt.textContent = inDungeon ? '🚪 Leave the Ruins' : inTemple ? '🚪 Leave the Temple' : inMcdonald ? "🍔 Leave McDonald's" : '🚪 Leave the Tavern';
+      prompt.textContent = inDungeon ? '🚪 Leave the Ruins' : inTemple ? '🚪 Leave the Temple' : inMcdonald ? "🍔 Leave McDonald's" : inCasino ? '🎰 Leave the Casino' : '🚪 Leave the Tavern';
     } else if (nearBook) {
       prompt.textContent = '📖 Read the holy book';
+    } else if (nearCasinoGame) {
+      prompt.textContent = `🎰 Play ${nearCasinoGame.label}`;
     } else if (nearStairs) {
       prompt.textContent = nearStairs.dir === 'down' ? `⬇️ Descend to ${nearStairs.to}` : `⬆️ Climb up to ${nearStairs.to}`;
     } else if (nearBossStairs) {
@@ -4920,7 +4944,7 @@ export function startWorld(net: WorldNet): void {
     } else if (nearParcel) {
       prompt.textContent = parcelPrompt(nearParcel);
     }
-    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearBook || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDungeonImp2 || nearDyingMan || nearRob || nearJailed || nearParcel) && !dialogOpen && !talkOpen ? 'block' : 'none';
+    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearBook || nearCasinoGame || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDungeonImp2 || nearDyingMan || nearRob || nearJailed || nearParcel) && !dialogOpen && !talkOpen ? 'block' : 'none';
     // Boat affordance: dock while afloat, or board when standing by the water with a boat.
     const boatable = boating || !!boardableWater();
     if (boatable && !dialogOpen && !talkOpen) {
@@ -6553,6 +6577,93 @@ export function startWorld(net: WorldNet): void {
     enterChime();
   }
 
+  // --- Casino interior: a walk-in gaming floor, one cabinet per game (CASINO_GAMES). Same
+  // camera/collision-swap trick as the Tavern/Temple/McDonald's; walking up to a cabinet and
+  // playing sends you straight into that game's real panel via net.openFeature, same as before. ---
+  function buildCasinoInterior(sc: Phaser.Scene) {
+    if (casinoBuilt) return;
+    casinoBuilt = true;
+    const T = CASINO_WALL, ix = CASINO_INT.x, iy = CASINO_INT.y, iw = CASINO_INT.w, ih = CASINO_INT.h;
+    const cx = ix + iw / 2;
+
+    // dark surround so a big viewport never shows grass past the room's edges
+    sc.add.rectangle(ix - 900, iy - 900, iw + 1800, ih + 1800, 0x0a0410).setOrigin(0, 0).setDepth(iy - 1000);
+    // floor: deep maroon casino carpet with a faint gold diamond pattern
+    sc.add.rectangle(ix, iy, iw, ih, 0x2a0c1a).setOrigin(0, 0).setDepth(iy - 900);
+    const tileS = 46;
+    for (let ty2 = 0; ty2 < ih; ty2 += tileS) {
+      for (let tx2 = 0; tx2 < iw; tx2 += tileS) {
+        if (((Math.floor(tx2 / tileS) + Math.floor(ty2 / tileS)) % 2) === 0) {
+          sc.add.rectangle(ix + tx2, iy + ty2, tileS, tileS, 0xe8b84b, 0.05).setOrigin(0, 0).setDepth(iy - 899);
+        }
+      }
+    }
+    // walls: dark purple with a magenta neon top stripe + gold baseboard (echoes the exterior facade)
+    sc.add.rectangle(ix, iy, iw, T + 10, 0x271447).setOrigin(0, 0).setDepth(iy - 800);
+    sc.add.rectangle(ix, iy, T, ih, 0x271447).setOrigin(0, 0).setDepth(iy - 800);
+    sc.add.rectangle(ix + iw - T, iy, T, ih, 0x271447).setOrigin(0, 0).setDepth(iy - 800);
+    sc.add.rectangle(ix, iy + ih - T, iw, T, 0x1a0e30).setOrigin(0, 0).setDepth(iy - 790);
+    sc.add.rectangle(ix, iy + T + 6, iw, 3, 0xff3ea5).setOrigin(0, 0).setDepth(iy - 799);
+    sc.add.rectangle(ix, iy + ih - T - 6, iw, 3, 0xe8b84b).setOrigin(0, 0).setDepth(iy - 789);
+    sc.add.text(cx, iy + T * 0.6, '🎰 THE CASINO FLOOR 🎰', {
+      fontFamily: 'system-ui, sans-serif', fontSize: '20px', fontStyle: 'bold',
+      color: '#ffd23f', stroke: '#1a0a14', strokeThickness: 5, resolution: 2,
+    }).setOrigin(0.5, 0.5).setDepth(iy - 700);
+
+    // one cabinet per game, laid out in a 4-column grid across the floor
+    casinoStations = [];
+    const cols = 4, marginX = 190, marginY = 260, stepX = (iw - marginX * 2) / (cols - 1), stepY = 200;
+    CASINO_GAMES.forEach((g, i) => {
+      const col = i % cols, row = Math.floor(i / cols);
+      const x = ix + marginX + col * stepX, y = iy + marginY + row * stepY;
+      casinoStations.push({ feature: g.feature, label: g.label, x, y });
+      sc.add.ellipse(x, y + 6, 90, 30, g.color, 0.22).setDepth(y - 4);          // glow puddle
+      sc.add.rectangle(x - 46, y - 78, 92, 90, g.color).setOrigin(0, 0).setDepth(y)
+        .setStrokeStyle(2, 0xffffff, 0.35);                                    // cabinet body
+      sc.add.rectangle(x - 46, y - 78, 92, 10, 0xffffff, 0.18).setOrigin(0, 0).setDepth(y + 1); // top sheen
+      sc.add.text(x, y - 46, g.emoji, { fontSize: '34px' }).setOrigin(0.5).setDepth(y + 2);
+      sc.add.text(x, y + 2, g.label, {
+        fontFamily: 'system-ui, sans-serif', fontSize: '11px', fontStyle: 'bold',
+        color: '#ffffff', stroke: '#000000', strokeThickness: 3, resolution: 2,
+      }).setOrigin(0.5, 0).setDepth(y + 3);
+    });
+
+    // exit mat by the door (bottom-center, where the generic exit detector looks)
+    sc.add.rectangle(cx - 70, iy + ih - T - 70, 140, 60, 0xe8b84b, 0.35).setOrigin(0, 0).setDepth(iy - 870);
+    sc.add.text(cx, iy + ih - T - 38, '🚪 EXIT', { fontFamily: 'system-ui, sans-serif', fontSize: '16px', fontStyle: 'bold', color: '#ffe2b0', stroke: '#1a0f08', strokeThickness: 4 })
+      .setOrigin(0.5).setDepth(iy - 200);
+  }
+  function enterCasino() {
+    const sc = petScene; if (!sc) return;
+    buildCasinoInterior(sc);
+    enterChime();
+    inInterior = true; inCasino = true;
+    curInt = CASINO_INT; curWall = CASINO_WALL; curZoom = CASINO_ZOOM;
+    driving = false; vx = 0; vy = 0; // on foot inside
+    keys.clear(); joyActive = false;
+    selfX = CASINO_INT.x + CASINO_INT.w / 2;
+    selfY = CASINO_INT.y + CASINO_INT.h - 180; // by the door
+    mainCam?.setBounds(CASINO_INT.x, CASINO_INT.y, CASINO_INT.w, CASINO_INT.h);
+  }
+  function leaveCasino() {
+    inInterior = false; inCasino = false;
+    nearExit = false; nearCasinoGame = null;
+    keys.clear(); joyActive = false;
+    mainCam?.setBounds(0, 0, WORLD.w, WORLD.h);
+    const c = WORLD_BUILDINGS.find((b) => b.kind === 'casino');
+    if (c) { selfX = c.x + c.w / 2; selfY = c.y + c.h + 44; } // step back out the door
+    enterChime();
+  }
+  // Walking up to a cabinet and confirming sends you straight into that game's real panel —
+  // same net.openFeature() plumbing the old flat dialog list used, just reached by walking now.
+  function playCasinoGame(g: NonNullable<typeof nearCasinoGame>) {
+    if (dialogOpen || talkOpen) return;
+    const emoji = CASINO_GAMES.find((c) => c.feature === g.feature)?.emoji ?? '🎰';
+    openDialog(`${emoji} ${g.label}`, `Step up and play ${g.label}.`, [
+      { label: `▶️ Play ${g.label}`, onPick: () => { exit(); net.openFeature(g.feature); } },
+    ]);
+  }
+
   // McDonald's confetti burst for jackpot Happy Meal wins.
   function spawnMcConfetti() {
     const colors = ['#ffc107', '#cc0000', '#ffffff', '#ff6600', '#ffff00'];
@@ -8166,7 +8277,7 @@ export function startWorld(net: WorldNet): void {
     if (inDungeon) net.dungeonExit(false); // bailed out of the World mid-dungeon → forfeit the run purse
     setDungeonMusic(false); dungeonMusic = null; inDungeon = false;
     setTavernMusic(false); tavernMusic = null;
-    stopChant(); inInterior = false; inTemple = false; inMcdonald = false;
+    stopChant(); inInterior = false; inTemple = false; inMcdonald = false; inCasino = false;
     rex?.img.destroy(); rex?.nametag.destroy(); rex = null;
     try { void actx?.close(); } catch { /* ignore */ }
     actx = null;
