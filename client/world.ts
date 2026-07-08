@@ -72,7 +72,7 @@ export interface WorldNet {
   pet(): string | null;          // our equipped pet id (null = none → nothing trails us)
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'stocks' | 'loans' | 'petshop' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' |'lootbox' | 'blackmarket' | 'news' | 'house' | 'shop' | 'tourney' | 'season' | 'powerups' | 'changelog'): void; // open a Casino/Bank/Pet-Shop/DOOM/Fishing/Arcade/Bowling/Shop/Notice-Board feature
+  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'stocks' | 'loans' | 'petshop' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' |'lootbox' | 'blackmarket' | 'news' | 'house' | 'shop' | 'tourney' | 'season' | 'powerups' | 'changelog'): void; // open a Casino/Bank/Pet-Shop/DOOM/Fishing/Arcade/Bowling/Shop/Notice-Board feature
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   openRename(): void;            // World's own 👤 button → reopen the nickname/color picker
   muted(): boolean;              // is game sound currently muted?
@@ -2839,6 +2839,7 @@ export function startWorld(net: WorldNet): void {
         { label: '🧨 TNT Explosion Rally', onPick: () => { pause(); net.openFeature('tnt'); } },
         { label: '🏍️ Tron', onPick: () => { pause(); net.openFeature('tron'); } },
         { label: '🎸 Tsong Hero', onPick: () => { pause(); net.openFeature('guitarhero'); } },
+        { label: '🪖 Worms: Tsong Edition', onPick: () => { pause(); net.openFeature('artillery'); } },
         { label: '🏙️ City Tycoon', onPick: () => { pause(); net.openFeature('citytycoon'); } },
       ]);
       return;

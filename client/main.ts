@@ -823,6 +823,10 @@ const net = connect(
       tronMod?.feedTrnRelay(msg.data);
     } else if (msg.type === 'ghLeaderboard') {
       ghScores = msg.rows;
+    } else if (msg.type === 'waLobby') {
+      artilleryMod?.feedWaLobby(msg);
+    } else if (msg.type === 'waRelay') {
+      artilleryMod?.feedWaRelay(msg.data);
     } else if (msg.type === 'tntLobby') {
       tntMod?.feedTntLobby(msg);
     } else if (msg.type === 'tntRelay') {
@@ -2057,6 +2061,27 @@ trnBtn.addEventListener('click', async () => {
   }
 });
 
+// --- Tsong Artillery (lazy-loaded, self-contained): Worms-style turn-based battles over the
+// same dumb relay shape as Tron (wa* messages). Turn-based → shot messages replay
+// deterministically on every client; the host runs turn order and the bots.
+const waBtn = document.getElementById('waBtn') as HTMLButtonElement;
+let artilleryMod: typeof import('./artillery') | null = null;
+waBtn.addEventListener('click', async () => {
+  try {
+    artilleryMod = await import('./artillery');
+    artilleryMod.startArtillery({
+      join: () => net.send({ type: 'waJoin' }),
+      leave: () => net.send({ type: 'waLeave' }),
+      start: () => net.send({ type: 'waStart' }),
+      end: (winner) => net.send({ type: 'waEnd', winner }),
+      relay: (data) => net.send({ type: 'waRelay', data }),
+      name: () => myName,
+    });
+  } catch (e) {
+    console.error('Tsong Artillery failed to load:', e);
+  }
+});
+
 // --- Tsong Hero (lazy-loaded, self-contained): solo rhythm game over the 8-bit song covers.
 // Charts were extracted offline from the actual mp3 waveforms; the server only keeps the
 // public per-song leaderboard (ghScore up, ghLeaderboard down).
@@ -2274,6 +2299,7 @@ const WORLD_DELEGATE_CHECK: Record<string, () => boolean> = {
   superbros: overlayPresentCheck('superbrosOverlay'),
   tron: overlayPresentCheck('tronOverlay'),
   guitarhero: overlayPresentCheck('ghOverlay'),
+  artillery: overlayPresentCheck('waOverlay'),
   nuketown: overlayPresentCheck('nuketownOverlay'),
   citytycoon: overlayPresentCheck('crOverlay'),
   bowling: overlayPresentCheck('bowlOverlay'),
@@ -2368,7 +2394,7 @@ worldBtn.addEventListener('click', async () => {
           return;
         }
         // Arcade cabinets launch the solo/co-op minigames via their toolbar buttons.
-        if (feature === 'campaign' || feature === 'typedie' || feature === 'racing' || feature === 'superbros' || feature === 'nuketown' || feature === 'citytycoon' || feature === 'tnt' || feature === 'tron' || feature === 'guitarhero') {
+        if (feature === 'campaign' || feature === 'typedie' || feature === 'racing' || feature === 'superbros' || feature === 'nuketown' || feature === 'citytycoon' || feature === 'tnt' || feature === 'tron' || feature === 'guitarhero' || feature === 'artillery') {
           const btn = feature === 'campaign' ? campaignBtn
                     : feature === 'typedie' ? typeDieBtn
                     : feature === 'racing' ? streetDemonsBtn
@@ -2377,6 +2403,7 @@ worldBtn.addEventListener('click', async () => {
                     : feature === 'tnt' ? tntBtn
                     : feature === 'tron' ? trnBtn
                     : feature === 'guitarhero' ? ghBtn
+                    : feature === 'artillery' ? waBtn
                     : sbBtn;
           setTimeout(() => btn?.click(), 0);
           return;

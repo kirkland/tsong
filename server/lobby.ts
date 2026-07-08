@@ -1727,6 +1727,90 @@ export class Lobby {
     });
   }
 
+  // --- Tsong Artillery (Worms-like, 1–4 players; bots fill empty seats) ---
+  // Same host-authoritative relay shape as Tron. Turn-based, so the relay just fans out
+  // shot/turn messages; every client replays them deterministically. Payouts require ≥2
+  // humans at start, a host-only report, a live match, and a minimum length.
+  private waSlots: WebSocket[] = [];
+  private waStatus: 'waiting' | 'playing' = 'waiting';
+  private waStartedAt = 0;
+  private waHumansAtStart = 0;
+  private static readonly WA_CAP = 4;
+  private static readonly WA_WIN_REWARD = 10_000;
+  private static readonly WA_MIN_MATCH_MS = 45_000;
+
+  waJoin(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return;
+    if (this.waSlots.includes(ws) || this.waSlots.length >= Lobby.WA_CAP) return;
+    if (this.waStatus === 'playing') return;
+    this.waSlots.push(ws);
+    this.broadcastWaLobby();
+  }
+
+  waLeave(ws: WebSocket) {
+    const i = this.waSlots.indexOf(ws);
+    if (i === -1) return;
+    const wasHost = i === 0;
+    this.waSlots.splice(i, 1);
+    if (wasHost) {
+      for (const other of this.waSlots) {
+        this.tell(other, { type: 'waLobby', status: 'ended', slot: 0, hostSlot: 0, players: [] });
+      }
+      this.waSlots = [];
+      this.waStatus = 'waiting';
+      return;
+    }
+    if (this.waSlots.length <= 1) this.waStatus = 'waiting';
+    this.broadcastWaLobby();
+  }
+
+  waStart(ws: WebSocket) {
+    if (this.waSlots[0] !== ws) return;
+    if (this.waSlots.length < 1) return;
+    this.waStatus = 'playing';
+    this.waStartedAt = Date.now();
+    this.waHumansAtStart = this.waSlots.length;
+    this.broadcastWaLobby();
+  }
+
+  waEnd(ws: WebSocket, winnerSlot: number) {
+    if (this.waSlots[0] !== ws) return;
+    if (this.waStatus !== 'playing') return;
+    this.waStatus = 'waiting';
+    const winSock = this.waSlots[winnerSlot];
+    if (winnerSlot < 0 || !winSock) { this.broadcastWaLobby(); return; }
+    if (this.waHumansAtStart < 2) { this.broadcastWaLobby(); return; }
+    if (Date.now() - this.waStartedAt < Lobby.WA_MIN_MATCH_MS) { this.broadcastWaLobby(); return; }
+    const conn = this.conns.get(winSock);
+    if (conn && conn.pid) {
+      this.housePay(conn.pid, conn.nickname, Lobby.WA_WIN_REWARD)
+        .then((paid) => {
+          this.sendWallet(winSock); this.refreshNetWorth().catch(() => {});
+          if (paid > 0) this.notify(winSock, `🪖 You won Worms: Tsong Edition — +${paid.toLocaleString()} coins!`);
+        })
+        .catch((e) => console.error('artillery reward failed:', e));
+    }
+    this.broadcastWaLobby();
+  }
+
+  waRelay(ws: WebSocket, data: unknown) {
+    if (!this.waSlots.includes(ws)) return;
+    for (const other of this.waSlots) {
+      if (other !== ws) this.tell(other, { type: 'waRelay', data });
+    }
+  }
+
+  private broadcastWaLobby() {
+    const players = this.waSlots.map((sock, slot) => ({
+      name: this.conns.get(sock)?.nickname ?? `P${slot}`,
+      slot,
+    }));
+    this.waSlots.forEach((sock, slot) => {
+      this.tell(sock, { type: 'waLobby', status: this.waStatus, slot, hostSlot: 0, players });
+    });
+  }
+
   // --- TNT Explosion Rally (1v1 bomb-parry maze duel) ---
   // Same host-authoritative relay shape as Super Tsong Bros, capped at 2 players. The server
   // only runs the lobby, tracks 'waiting'|'playing', fans relay payloads to the other player,
@@ -5839,6 +5923,7 @@ export class Lobby {
     this.srLeave(ws);   // drop any Street Demons grid slot (ends the race if the host left)
     this.sbLeave(ws);   // drop any Super Tsong Bros slot (ends the match if the host left)
     this.trnLeave(ws);  // drop any Tron slot (ends the match if the host left)
+    this.waLeave(ws);   // drop any Tsong Artillery slot (ends the match if the host left)
     this.tntLeave(ws);  // drop any TNT Explosion Rally slot (ends the duel if the host left)
     this.tdLeave(ws);   // drop out of the Type or Die arena
     this.bowlLeave(ws); // drop out of any bowling room

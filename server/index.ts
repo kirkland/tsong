@@ -408,6 +408,21 @@ wss.on('connection', (ws: WebSocket, req) => {
           lobby.ghScore(ws, msg.song, msg.diff, msg.score);
         }
         break;
+      case 'waJoin':
+        lobby.waJoin(ws);
+        break;
+      case 'waLeave':
+        lobby.waLeave(ws);
+        break;
+      case 'waStart':
+        lobby.waStart(ws);
+        break;
+      case 'waEnd':
+        if (typeof msg.winner === 'number') lobby.waEnd(ws, msg.winner);
+        break;
+      case 'waRelay':
+        if (msg.data !== undefined) lobby.waRelay(ws, msg.data);
+        break;
       case 'tntJoin':
         lobby.tntJoin(ws);
         break;
