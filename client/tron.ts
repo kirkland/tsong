@@ -65,7 +65,25 @@ interface Rider {
   pendingDir: number;
   alive: boolean;
   wins: number;
+  // powerup state (host-authoritative; guests only see the fx bitmask)
+  boostUntil: number;   // ⚡ 2× speed
+  cutter: boolean;      // ✂️ one free pass through a wall of light
+  phaseUntil: number;   // 👻 ghost through everything (and lay no trail)
+  jamUntil: number;     // 🐌 someone slowed YOU
+  fx: number;           // rendered bitmask: 1=boost 2=cutter 4=phase 8=jam
 }
+
+// --- powerups ---
+// Spawn on free cells every few seconds (host-side), ride over one to grab it.
+const PU = [
+  { icon: '⚡', name: 'BOOST', color: '#ffd060' },      // 0: 2× speed 2s
+  { icon: '✂️', name: 'CUTTER', color: '#ffffff' },     // 1: pass through one wall
+  { icon: '👻', name: 'PHASE', color: '#b090ff' },      // 2: ghost 1.5s, no trail
+  { icon: '🧨', name: 'DEREZ BOMB', color: '#ff5a3a' }, // 3: clears a 9×9 hole around you
+  { icon: '🐌', name: 'JAM', color: '#7fe089' },        // 4: half-speed everyone else 2s
+] as const;
+interface Pickup { x: number; y: number; kind: number; }
+const FX_BOOST = 1, FX_CUTTER = 2, FX_PHASE = 4, FX_JAM = 8;
 
 let tronOpen = false;
 
@@ -79,11 +97,17 @@ export function startTron(net: TronNet): void {
   let isHost = false;
   let lobbyState: TrnLobby | null = null;
   let botCount = 3; // host preference; clamped so humans+bots ≤ 4 (and total ≥ 2)
+  let powerupsOn = true; // host lobby toggle — purists may ride clean
 
   // --- match state (host simulates; guests mirror from snapshots) ---
   let riders: Rider[] = [];
   let grid = new Uint8Array(TRN_COLS * TRN_ROWS); // 0 = free, else riderIdx+1
   let round = 0;
+  let pickups: Pickup[] = [];
+  let tickNo = 0;             // host tick counter (jam skips odd ticks)
+  let nextPickupAt = 0;       // host: when the next pickup materializes
+  let puMsg = '';             // "BEX GRABBED PHASE" ticker under the round marker
+  let puMsgUntil = 0;
   let roundStartAt = 0;       // performance.now() when 'rd' landed (drives the countdown)
   let roundOver = false;      // between rounds / after match
   let matchWinner = -1;       // rider idx once the match is decided
@@ -216,7 +240,7 @@ export function startTron(net: TronNet): void {
       const title = document.createElement('div');
       title.innerHTML =
         '<div style="font-size:64px;font-weight:900;letter-spacing:18px;color:#00e5ff;animation:trnGlow 2.6s ease-in-out infinite">TRON</div>' +
-        '<div style="font-size:13px;opacity:.7;margin-top:6px;letter-spacing:3px">1–4 RIDERS · LIGHT CYCLES · LAST ONE RIDING WINS · FIRST TO 3</div>';
+        '<div style="font-size:13px;opacity:.7;margin-top:6px;letter-spacing:3px">1–4 RIDERS · LIGHT CYCLES · POWERUP DROPS · FIRST TO 3</div>';
       ui.appendChild(title);
       ui.appendChild(btn('Join Grid', '#00e5ff', () => net.join()));
       ui.appendChild(btn('Exit', '#8aa', close));
@@ -247,6 +271,9 @@ export function startTron(net: TronNet): void {
         label.textContent = `Bots: ${botCount}`;
         botRow.append(minus, label, plus);
         ui.appendChild(botRow);
+        const puToggle = btn(powerupsOn ? '⚡ Powerups: ON' : '⚡ Powerups: OFF', powerupsOn ? '#ffd060' : '#556', () => { powerupsOn = !powerupsOn; renderUi(); });
+        puToggle.style.fontSize = '13px'; puToggle.style.padding = '8px 20px';
+        ui.appendChild(puToggle);
         const canStart = humans.length + botCount >= 2;
         const start = btn('Start Match', '#89ff2a', () => { if (canStart) net.start(); });
         if (!canStart) { start.style.opacity = '0.4'; start.style.cursor = 'default'; }
@@ -257,6 +284,19 @@ export function startTron(net: TronNet): void {
         wait.textContent = 'waiting for the host to start...';
         ui.appendChild(wait);
       }
+      // powerup legend — so nobody grabs a 🧨 wondering what it does
+      const legend = document.createElement('div');
+      legend.style.cssText =
+        'font-size:12.5px;line-height:1.9;text-align:left;background:#04121acc;border:1px solid #0d3a4a;' +
+        'border-radius:10px;padding:12px 18px;margin-top:4px;';
+      legend.innerHTML =
+        '<div style="font-size:11px;letter-spacing:3px;color:#4a7a92;margin-bottom:4px">POWERUP DROPS — RIDE OVER TO GRAB</div>' +
+        `<span style="color:${PU[0].color}">⚡ BOOST</span> — double speed for 2s (steer carefully)<br>` +
+        `<span style="color:${PU[1].color}">✂️ CUTTER</span> — pass through the next wall of light (one charge)<br>` +
+        `<span style="color:${PU[2].color}">👻 PHASE</span> — ghost through everything for 1.5s, lay no trail<br>` +
+        `<span style="color:${PU[3].color}">🧨 DEREZ BOMB</span> — blows a 9×9 hole in every trail around you<br>` +
+        `<span style="color:${PU[4].color}">🐌 JAM</span> — every OTHER rider drops to half speed for 2s`;
+      ui.appendChild(legend);
       ui.appendChild(btn('Leave', '#8aa', () => { net.leave(); mode = 'menu'; renderUi(); }));
     } else if (mode === 'ended') {
       const msg = document.createElement('div');
@@ -278,15 +318,15 @@ export function startTron(net: TronNet): void {
 
   function hostBuildRiders() {
     const humans = lobbyState?.players ?? [];
-    riders = humans.map((p) => ({
-      name: p.name, color: COLORS[p.slot], bot: false, lobbySlot: p.slot,
+    const fresh = (over: Partial<Rider>): Rider => ({
+      name: '', color: COLORS[0], bot: false, lobbySlot: -1,
       x: 0, y: 0, dir: 0, pendingDir: 0, alive: true, wins: 0,
-    }));
+      boostUntil: 0, cutter: false, phaseUntil: 0, jamUntil: 0, fx: 0,
+      ...over,
+    });
+    riders = humans.map((p) => fresh({ name: p.name, color: COLORS[p.slot], lobbySlot: p.slot }));
     for (let i = 0; i < botCount && riders.length < TRN_MAX_PLAYERS; i++) {
-      riders.push({
-        name: BOT_NAMES[i], color: COLORS[riders.length], bot: true, lobbySlot: -1,
-        x: 0, y: 0, dir: 0, pendingDir: 0, alive: true, wins: 0,
-      });
+      riders.push(fresh({ name: BOT_NAMES[i], color: COLORS[riders.length], bot: true }));
     }
   }
 
@@ -296,13 +336,17 @@ export function startTron(net: TronNet): void {
     roundOver = false;
     tickMs = TICK_START_MS;
     acc = 0;
+    tickNo = 0;
+    pickups = [];
     riders.forEach((r, i) => {
       // rotate spawn assignment each round so nobody owns the "good" corner
       const [x, y, d] = SPAWNS[(i + round - 1) % SPAWNS.length];
       r.x = x; r.y = y; r.dir = d; r.pendingDir = d; r.alive = true;
+      r.boostUntil = 0; r.cutter = false; r.phaseUntil = 0; r.jamUntil = 0; r.fx = 0;
       grid[idx(x, y)] = i + 1;
     });
     roundStartAt = performance.now();
+    nextPickupAt = roundStartAt + COUNTDOWN_MS + 3000;
     net.relay({
       t: 'rd', round,
       riders: riders.map((r) => ({ name: r.name, bot: r.bot, lobbySlot: r.lobbySlot })),
@@ -326,44 +370,136 @@ export function startTron(net: TronNet): void {
       }
       return n;
     };
-    const straight = runLen(r.dir, 24);
-    const left = runLen((r.dir + 3) % 4, 24);
-    const right = runLen((r.dir + 1) % 4, 24);
-    // commit to a turn if the road ahead is short, or occasionally just for style
-    if (straight < 6 || (Math.random() < 0.03 && straight < Math.max(left, right))) {
+    // a pickup sitting on a candidate ray makes that direction tastier
+    const puOnRay = (d: number, cap: number) => {
+      let x = r.x, y = r.y;
+      for (let i = 0; i < cap; i++) {
+        x += DX[d]; y += DY[d];
+        if (!free(x, y)) return false;
+        if (pickups.some((p) => p.x === x && p.y === y)) return true;
+      }
+      return false;
+    };
+    const score = (d: number) => runLen(d, 24) + (puOnRay(d, 18) ? 14 : 0);
+    const straight = score(r.dir);
+    const left = score((r.dir + 3) % 4);
+    const right = score((r.dir + 1) % 4);
+    // commit to a turn if the road ahead is short, a pickup beckons, or occasionally for style
+    if (straight < 6 || (Math.random() < 0.03 && straight < Math.max(left, right)) || Math.max(left, right) > straight + 10) {
       if (left === right ? Math.random() < 0.5 : left > right) r.pendingDir = (r.dir + 3) % 4;
       else r.pendingDir = (r.dir + 1) % 4;
-      if (Math.max(left, right) === 0) r.pendingDir = r.dir; // boxed in — ride it out
+      if (Math.max(runLen((r.dir + 3) % 4, 24), runLen((r.dir + 1) % 4, 24)) === 0) r.pendingDir = r.dir; // boxed in — ride it out
     }
   }
 
   function hostTick() {
-    // apply queued turns (reversals are ignored — you can't ride through your own tail)
+    tickNo++;
+    const now = performance.now();
+    const writes: [number, number][] = []; // [cellIdx, value] mutations this tick (guests replay these)
+    const events: [number, number, number][] = []; // [0,riderIdx,kind]=grab  [1,x,y]=bomb
+    const put = (ci: number, v: number) => { grid[ci] = v; writes.push([ci, v]); };
+
+    // refresh fx bitmasks + apply queued turns (reversals ignored)
     for (let i = 0; i < riders.length; i++) {
       const r = riders[i];
+      r.fx = (now < r.boostUntil ? FX_BOOST : 0) | (r.cutter ? FX_CUTTER : 0)
+           | (now < r.phaseUntil ? FX_PHASE : 0) | (now < r.jamUntil ? FX_JAM : 0);
       if (!r.alive) continue;
       if (r.bot) botThink(r);
       if ((r.pendingDir + 2) % 4 !== r.dir) r.dir = r.pendingDir;
     }
-    // move all heads, then resolve deaths (handles head-on ties fairly)
-    const heads = riders.map((r) => r.alive ? [r.x + DX[r.dir], r.y + DY[r.dir]] : null);
-    for (let i = 0; i < riders.length; i++) {
-      const r = riders[i]; const h = heads[i];
-      if (!r.alive || !h) continue;
-      const [nx, ny] = h;
-      let dead = nx < 0 || nx >= TRN_COLS || ny < 0 || ny >= TRN_ROWS || grid[idx(nx, ny)] !== 0;
-      if (!dead) for (let j = 0; j < riders.length; j++) { // same-cell head-on: both explode
-        if (j !== i && heads[j] && heads[j]![0] === nx && heads[j]![1] === ny) dead = true;
+
+    const phased = (r: Rider) => now < r.phaseUntil;
+    const jammedOut = (r: Rider) => now < r.jamUntil && tickNo % 2 === 1; // jam = move on even ticks only
+
+    const grab = (r: Rider, i: number) => {
+      const pi = pickups.findIndex((p) => p.x === r.x && p.y === r.y);
+      if (pi === -1) return;
+      const kind = pickups[pi].kind;
+      pickups.splice(pi, 1);
+      events.push([0, i, kind]);
+      if (kind === 0) r.boostUntil = now + 2000;
+      else if (kind === 1) r.cutter = true;
+      else if (kind === 2) r.phaseUntil = now + 1500;
+      else if (kind === 3) {
+        // derez bomb: carve a 9×9 hole in every trail around the rider
+        events.push([1, r.x, r.y]);
+        spawnDerez({ x: r.x, y: r.y, color: '#ff5a3a' } as Rider);
+        for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+          const bx = r.x + dx, by = r.y + dy;
+          if (bx >= 0 && bx < TRN_COLS && by >= 0 && by < TRN_ROWS && grid[idx(bx, by)]) put(idx(bx, by), 0);
+        }
+        riders.forEach((o, oi) => { if (o.alive) put(idx(o.x, o.y), oi + 1); }); // heads stay solid
+      } else if (kind === 4) {
+        riders.forEach((o) => { if (o !== r && o.alive) o.jamUntil = now + 2000; });
       }
-      if (dead) { r.alive = false; heads[i] = null; spawnDerez(r); continue; }
-    }
+    };
+
+    // one movement sub-step for rider i; returns false if they derezzed
+    const step = (i: number): boolean => {
+      const r = riders[i];
+      const nx = r.x + DX[r.dir], ny = r.y + DY[r.dir];
+      if (nx < 0 || nx >= TRN_COLS || ny < 0 || ny >= TRN_ROWS) { // arena walls cut everything
+        r.alive = false; spawnDerez(r); return false;
+      }
+      const occupied = grid[idx(nx, ny)] !== 0;
+      if (occupied && !phased(r)) {
+        if (r.cutter) r.cutter = false; // ✂️ spend the charge, ride through
+        else { r.alive = false; spawnDerez(r); return false; }
+      }
+      r.x = nx; r.y = ny;
+      if (!phased(r)) put(idx(nx, ny), i + 1); // 👻 lays no trail
+      grab(r, i);
+      return true;
+    };
+
+    // main step: resolve all riders "simultaneously" for fair head-ons
+    const heads = riders.map((r) => r.alive && !jammedOut(r) ? [r.x + DX[r.dir], r.y + DY[r.dir]] : null);
     for (let i = 0; i < riders.length; i++) {
       const r = riders[i]; const h = heads[i];
       if (!r.alive || !h) continue;
-      r.x = h[0]; r.y = h[1];
-      grid[idx(r.x, r.y)] = i + 1;
+      for (let j = i + 1; j < riders.length; j++) { // same-cell head-on: both explode (unless ghosts)
+        const o = riders[j];
+        if (heads[j] && heads[j]![0] === h[0] && heads[j]![1] === h[1] && !phased(r) && !phased(o)) {
+          r.alive = false; o.alive = false; heads[i] = null; heads[j] = null;
+          spawnDerez(r); spawnDerez(o);
+        }
+      }
     }
-    net.relay({ t: 'st', r: riders.map((r) => [r.x, r.y, r.dir, r.alive ? 1 : 0]) });
+    for (let i = 0; i < riders.length; i++) {
+      if (riders[i].alive && heads[i]) step(i);
+    }
+    // ⚡ boosted riders take a second sub-step
+    for (let i = 0; i < riders.length; i++) {
+      const r = riders[i];
+      if (r.alive && now < r.boostUntil && !jammedOut(r)) step(i);
+    }
+
+    // spawn pickups on free cells away from every head
+    if (powerupsOn && now >= nextPickupAt && pickups.length < 4) {
+      for (let tries = 0; tries < 30; tries++) {
+        const px = 6 + Math.floor(Math.random() * (TRN_COLS - 12));
+        const py = 6 + Math.floor(Math.random() * (TRN_ROWS - 12));
+        if (grid[idx(px, py)]) continue;
+        if (riders.some((r) => r.alive && Math.abs(r.x - px) + Math.abs(r.y - py) < 10)) continue;
+        if (pickups.some((p) => p.x === px && p.y === py)) continue;
+        pickups.push({ x: px, y: py, kind: Math.floor(Math.random() * PU.length) });
+        break;
+      }
+      nextPickupAt = now + 3500 + Math.random() * 3000;
+    }
+
+    for (const [, ri, kind] of events.filter((e) => e[0] === 0)) {
+      puMsg = `${riders[ri].name} GRABBED ${PU[kind].name} ${PU[kind].icon}`;
+      puMsgUntil = now + 2200;
+    }
+    net.relay({
+      t: 'st',
+      r: riders.map((r) => [r.x, r.y, r.dir, r.alive ? 1 : 0, r.fx]),
+      w: writes,
+      p: pickups.map((p) => [p.x, p.y, p.kind]),
+      ev: events,
+    });
     tickMs = Math.max(TICK_MIN_MS, tickMs - 0.06); // slow, relentless speed-up
 
     const alive = riders.filter((r) => r.alive);
@@ -404,10 +540,13 @@ export function startTron(net: TronNet): void {
       grid.fill(0);
       roundOver = false;
       matchWinner = -1;
+      pickups = [];
+      puMsg = '';
       riders = (d.riders as any[]).map((r: any, i: number) => ({
         name: String(r.name), color: COLORS[i], bot: !!r.bot, lobbySlot: r.lobbySlot ?? -1,
         x: d.spawns[i][0], y: d.spawns[i][1], dir: d.spawns[i][2], pendingDir: d.spawns[i][2],
         alive: true, wins: (d.wins as number[])[i] ?? 0,
+        boostUntil: 0, cutter: false, phaseUntil: 0, jamUntil: 0, fx: 0,
       }));
       riders.forEach((r, i) => { grid[idx(r.x, r.y)] = i + 1; });
       roundStartAt = performance.now();
@@ -415,16 +554,27 @@ export function startTron(net: TronNet): void {
       bannerUntil = roundStartAt + COUNTDOWN_MS;
       if (mode !== 'play') { mode = 'play'; renderUi(); playRandomSong(); }
     } else if (d.t === 'st') {
-      (d.r as [number, number, number, number][]).forEach((h, i) => {
+      // replay the host's exact grid mutations (trails, cutter carves, bomb holes)
+      for (const [ci, v] of (d.w ?? []) as [number, number][]) grid[ci] = v;
+      (d.r as [number, number, number, number, number][]).forEach((h, i) => {
         const r = riders[i];
         if (!r) return;
         r.dir = h[2];
         const wasAlive = r.alive;
         r.alive = h[3] === 1;
+        r.fx = h[4] ?? 0;
         if (r.alive || wasAlive) { r.x = h[0]; r.y = h[1]; }
-        if (r.alive) grid[idx(r.x, r.y)] = i + 1;
-        else if (wasAlive) spawnDerez(r); // derez burst where the wall got them
+        if (!r.alive && wasAlive) spawnDerez(r); // derez burst where the wall got them
       });
+      pickups = ((d.p ?? []) as [number, number, number][]).map(([x, y, kind]) => ({ x, y, kind }));
+      for (const ev of ((d.ev ?? []) as [number, number, number][])) {
+        if (ev[0] === 0 && riders[ev[1]]) {
+          puMsg = `${riders[ev[1]].name} GRABBED ${PU[ev[2]].name} ${PU[ev[2]].icon}`;
+          puMsgUntil = performance.now() + 2200;
+        } else if (ev[0] === 1) {
+          spawnDerez({ x: ev[1], y: ev[2], color: '#ff5a3a' } as Rider); // bomb flash
+        }
+      }
     } else if (d.t === 're') {
       roundOver = true;
       (d.wins as number[]).forEach((w, i) => { if (riders[i]) riders[i].wins = w; });
@@ -513,13 +663,36 @@ export function startTron(net: TronNet): void {
       ctx.globalAlpha = 1;
     }
 
+    // powerup pickups — pulsing glow diamonds with their icon
+    for (const p of pickups) {
+      const cx = p.x * CELL + CELL / 2, cy = p.y * CELL + CELL / 2;
+      const pu = PU[p.kind];
+      const puls = 1 + 0.18 * Math.sin(now / 220 + p.x);
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(Math.PI / 4);
+      ctx.shadowColor = pu.color; ctx.shadowBlur = 22;
+      ctx.fillStyle = '#04121a';
+      ctx.strokeStyle = pu.color; ctx.lineWidth = 2.5;
+      const s = 13 * puls;
+      ctx.fillRect(-s, -s, s * 2, s * 2);
+      ctx.strokeRect(-s, -s, s * 2, s * 2);
+      ctx.restore();
+      ctx.shadowBlur = 0;
+      ctx.font = `${Math.round(17 * puls)}px serif`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(pu.icon, cx, cy + 1);
+    }
+
     // heads — elongated cycle body along the travel direction, white-hot core, big glow
     for (const r of riders) {
       if (!r.alive) continue;
       const cx = r.x * CELL + CELL / 2, cy = r.y * CELL + CELL / 2;
       const horiz = r.dir === 1 || r.dir === 3;
-      const len = CELL * 2.1, thick = CELL * 1.05;
-      ctx.shadowColor = r.color; ctx.shadowBlur = 26;
+      const boosted = !!(r.fx & FX_BOOST);
+      const len = CELL * (boosted ? 3 : 2.1), thick = CELL * 1.05;
+      if (r.fx & FX_PHASE) ctx.globalAlpha = 0.35 + 0.3 * Math.sin(now / 70); // 👻 flicker
+      ctx.shadowColor = r.color; ctx.shadowBlur = boosted ? 38 : 26;
       ctx.fillStyle = r.color;
       ctx.fillRect(cx - (horiz ? len : thick) / 2, cy - (horiz ? thick : len) / 2, horiz ? len : thick, horiz ? thick : len);
       ctx.shadowBlur = 12;
@@ -527,6 +700,15 @@ export function startTron(net: TronNet): void {
       const cl = len * 0.55, ct = thick * 0.5;
       ctx.fillRect(cx - (horiz ? cl : ct) / 2, cy - (horiz ? ct : cl) / 2, horiz ? cl : ct, horiz ? ct : cl);
       ctx.shadowBlur = 0;
+      if (r.fx & FX_CUTTER) { // ✂️ armed: white ring around the cycle
+        ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+        ctx.strokeRect(cx - len / 2 - 4, cy - len / 2 - 4, len + 8, len + 8);
+      }
+      if (r.fx & FX_JAM) { // 🐌 slimed
+        ctx.font = '16px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+        ctx.fillText('🐌', cx, cy - CELL);
+      }
+      ctx.globalAlpha = 1;
     }
 
     // derez sparks
@@ -564,6 +746,13 @@ export function startTron(net: TronNet): void {
         ctx.font = '700 17px ui-monospace, monospace';
         ctx.fillStyle = '#4a7a92';
         ctx.fillText(`— ROUND ${round} · FIRST TO ${TRN_ROUNDS_TO_WIN} —`, W / 2, 18);
+        if (puMsg && now < puMsgUntil) {
+          ctx.font = '700 16px ui-monospace, monospace';
+          ctx.fillStyle = '#ffd060';
+          ctx.shadowColor = '#ffd060'; ctx.shadowBlur = 12;
+          ctx.fillText(puMsg, W / 2, 42);
+          ctx.shadowBlur = 0;
+        }
       }
     }
 
