@@ -471,7 +471,7 @@ export function petById(id: string | null | undefined) {
 
 // What entering a building does (the client maps each `kind` to an action). Add a kind here
 // and a handler on the client to introduce a new venue.
-export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament' | 'arcade' | 'dungeon' | 'temple' | 'bowling' | 'mcdonald' | 'shop' | 'hall';
+export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament' | 'arcade' | 'dungeon' | 'temple' | 'bowling' | 'mcdonald' | 'shop' | 'hall' | 'noticeboard';
 // A venue's footprint on the map. The rectangle (top-left origin, world units) is solid —
 // avatars collide with it — and an apron just outside the door is the entry trigger zone.
 export interface WorldBuilding {
@@ -524,6 +524,10 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
   // Hall of Fame — a trophy hall NE of the plaza, between the pond and Bolwoing Alley. Displays
   // the live pong leaderboard and net-worth standings without needing to leave the World.
   { id: 'hall', kind: 'hall', name: 'HALL OF FAME', emoji: '🏆', x: 2700, y: 850, w: 280, h: 210, color: '#c9a227' },
+  // Notice Board — a little kiosk NE of the plaza, north of the Hall of Fame. Posts the
+  // Tournament bracket, the Season Pass, the Power-ups reference, and the Changelog — informational
+  // panels that otherwise have no walk-up home once the toolbar is hidden behind World.
+  { id: 'noticeboard', kind: 'noticeboard', name: 'NOTICE BOARD', emoji: '📌', x: 2700, y: 420, w: 260, h: 180, color: '#5a6a8a' },
 ] as const;
 
 // --- The Ruins dungeon economy: SERVER-AUTHORITATIVE so a tampered client can't mint coins. ---

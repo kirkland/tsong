@@ -72,8 +72,9 @@ export interface WorldNet {
   pet(): string | null;          // our equipped pet id (null = none → nothing trails us)
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'stocks' | 'loans' | 'petshop' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' | 'lootbox' | 'blackmarket' | 'news' | 'house' | 'shop'): void; // open a Casino/Bank/Pet-Shop/DOOM/Fishing/Arcade/Bowling/Shop feature
+  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'stocks' | 'loans' | 'petshop' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' | 'lootbox' | 'blackmarket' | 'news' | 'house' | 'shop' | 'tourney' | 'season' | 'powerups' | 'changelog'): void; // open a Casino/Bank/Pet-Shop/DOOM/Fishing/Arcade/Bowling/Shop/Notice-Board feature
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
+  openRename(): void;            // World's own 👤 button → reopen the nickname/color picker
   muted(): boolean;              // is game sound currently muted?
   toggleMute(): void;            // flip the mute toggle (same pref/state as the toolbar's 🔊 button)
   leaderboard(): { name: string; wins: number; losses: number; elo: number; title?: string | null }[]; // live pong standings (pre-ranked)
@@ -280,6 +281,7 @@ const ROADS: Rect[] = [
   { x: 2115, y: 1295, w: 110, h: 595 },  // spur south to McDonald's
   { x: 605, y: 1490, w: 110, h: 330 },   // spur further south, Casino → the General Store
   { x: 2595, y: 900, w: 110, h: 80 },    // spur east off the Pet-shack road → Hall of Fame
+  { x: 2595, y: 470, w: 110, h: 80 },    // spur east off the Pet-shack road → the Notice Board
 ];
 const PLAZA = { x: 1600, y: 1100, r: 240 }; // paved circle + fountain at town center
 // The Tavern's INTERIOR lives off the main map. When you step inside, the camera bounds switch to
@@ -2030,13 +2032,21 @@ export function startWorld(net: WorldNet): void {
   driveBtn.style.cssText =
     'pointer-events:auto;cursor:pointer;background:#243a6b;color:#cfe0ff;border:1px solid #3a558f;' +
     'border-radius:8px;padding:7px 12px;font-size:13px;font-weight:600;';
+  const renameBtn = document.createElement('button');
+  renameBtn.type = 'button';
+  renameBtn.textContent = '👤';
+  renameBtn.title = 'Change your name or color';
+  renameBtn.style.cssText =
+    'pointer-events:auto;cursor:pointer;background:#1b2542;color:#cdd8f5;border:1px solid #2c3a63;' +
+    'border-radius:8px;padding:7px 10px;font-size:15px;line-height:1;';
+  renameBtn.addEventListener('click', () => { pause(); net.openRename(); });
   const backBtn = document.createElement('button');
   backBtn.type = 'button';
   backBtn.textContent = '← Back to Pong';
   backBtn.style.cssText =
     'pointer-events:auto;cursor:pointer;background:#1b2542;color:#cdd8f5;' +
     'border:1px solid #2c3a63;border-radius:8px;padding:7px 12px;font-size:13px;';
-  topbar.append(title, count, muteBtn, driveBtn, backBtn);
+  topbar.append(title, count, muteBtn, renameBtn, driveBtn, backBtn);
   overlay.appendChild(topbar);
 
   // Weekly objectives panel (top-left, under the title).
@@ -2752,6 +2762,7 @@ export function startWorld(net: WorldNet): void {
       case 'mcdonald': return "🍔 Enter McDonald's";
       case 'shop': return '🛍️ Enter the General Store';
       case 'hall': return '🏆 Enter the Hall of Fame';
+      case 'noticeboard': return '📌 Check the Notice Board';
     }
   }
   function enterBuilding(kind: WorldBuildingKind) {
@@ -2797,6 +2808,15 @@ export function startWorld(net: WorldNet): void {
       return;
     }
     if (kind === 'hall') { enterHallOfFame(); return; }
+    if (kind === 'noticeboard') {
+      openDialog('📌 Notice Board', 'Pinned announcements, curling at the edges.', [
+        { label: '🏆 Tournament',   onPick: () => { pause(); net.openFeature('tourney'); } },
+        { label: '🎫 Season Pass',  onPick: () => { pause(); net.openFeature('season'); } },
+        { label: '⚡ Power-ups',    onPick: () => { pause(); net.openFeature('powerups'); } },
+        { label: '📜 Changelog',    onPick: () => { pause(); net.openFeature('changelog'); } },
+      ]);
+      return;
+    }
     if (kind === 'parliament') {
       openDialog('🏛️ Parliament', 'The perpetual game of Nomic is in session. The only rule that cannot change is that the rules can.', [
         { label: '🏛️ Take your seat', onPick: () => { pause(); net.openParliament(); } },

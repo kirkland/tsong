@@ -2232,6 +2232,11 @@ const WORLD_DELEGATE_CHECK: Record<string, () => boolean> = {
   bowling: overlayPresentCheck('bowlOverlay'),
   tnt: overlayVisibleCheck('#tntOverlay'),
   parliament: overlayVisibleCheck('.nom-overlay'),
+  rename: overlayVisibleCheck('#overlay'),
+  tourney: panelOpenCheck('tourneyPanel'),
+  season: panelOpenCheck('seasonPanel'),
+  powerups: panelOpenCheck('powerupInfoPanel'),
+  changelog: panelOpenCheck('changelogPanel'),
 };
 // Polls (rAF) until the delegated panel/minigame that World just handed off to has opened AND
 // then closed again, then brings World back — same position, same everything, no manual re-entry.
@@ -2339,6 +2344,10 @@ worldBtn.addEventListener('click', async () => {
                  : feature === 'news'       ? 'newsBtn'
                  : feature === 'house'      ? 'houseBtn'
                  : feature === 'shop'       ? 'shopBtn'
+                 : feature === 'tourney'    ? 'tourneyBtn'
+                 : feature === 'season'     ? 'seasonBtn'
+                 : feature === 'powerups'   ? 'powerupInfoBtn'
+                 : feature === 'changelog'  ? 'changelogBtn'
                  : 'loanBtn';
         setTimeout(() => (document.getElementById(id) as HTMLButtonElement | null)?.click(), 0);
       },
@@ -2372,6 +2381,8 @@ worldBtn.addEventListener('click', async () => {
       dayNightOffset: () => dayNightOffset,                   // per-deploy day/night clock offset
       // walk in → Nomic overlay; World only paused, so watch for it to close and bring World back
       openParliament: () => { watchWorldDelegate('parliament'); setTimeout(() => { void openParliament(); }, 0); },
+      // World's own 👤 button reopens the same nickname/color form renameBtn does.
+      openRename: () => { watchWorldDelegate('rename'); setTimeout(() => renameBtn.click(), 0); },
       // Robville land: buy from the bank, list/unlist your lots, buy listed lots off other owners.
       landReq: () => net.send({ type: 'landReq' }),
       landBuyBank: (id) => net.send({ type: 'landBuyBank', id }),
@@ -4356,6 +4367,10 @@ if (remembered) {
 
   const BALL_COLORS = ['#e8eefc', '#7da2ff', '#9fb0d8', '#3a6df0', '#ffd23f'];
   const TIPS = [
+    'WASD or the arrow keys walk around the World — E or Space interacts with whatever you\'re facing.',
+    'Walk into the Arena building to join the pong queue — same game, just reached on foot now.',
+    'Every building pauses World instead of leaving it — finish up and you\'ll land right back where you were.',
+    'Press M to pull up the full map of the World.',
     'Click the board to capture your mouse — your paddle stays put until you do.',
     'Press ↑/↓ or W/S to move, or just steer with your mouse.',
     'The ball takes on the color of whoever last hit it.',
