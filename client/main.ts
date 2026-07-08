@@ -1103,6 +1103,7 @@ function syncMyPaddleFromServer() {
 // --- nickname entry / rename (same form serves both) ---
 joinForm.addEventListener('submit', (e) => {
   e.preventDefault();
+  const firstJoin = !joined; // reopening this form later (renameBtn) must NOT re-launch World
   myName = nick.value.trim().slice(0, 20) || 'anon';
   setCookie('tsong_nick', myName);
   setCookie('tsong_color', myColor);
@@ -1113,6 +1114,7 @@ joinForm.addEventListener('submit', (e) => {
   enableChat();
   revealAds(); // the fake banner ad only appears once you're in (never over the join screen)
   startFlyovers();
+  if (firstJoin) worldBtn.click(); // World is the landing page — walk straight in after joining
 });
 
 // --- ping: notify everyone you want players ---
@@ -2176,11 +2178,12 @@ document.getElementById('crBtn')?.addEventListener('click', async () => {
   }
 });
 
-// --- Beta "World": a free-roam 2D overworld you walk around as a named avatar, seeing everyone
-// else who's currently in the world. It's the future main UI; for now its buildings deep-link
-// into existing features — the Arena (tsong itself, via the play queue), the Casino (roulette)
-// and the Bank (crypto market / loans). Lazy-loaded + fully self-contained (client/world.ts);
-// the server only relays avatar positions. ---
+// --- "World": the landing page — a free-roam 2D overworld you walk around as a named avatar,
+// seeing everyone else who's currently in it. Its buildings deep-link into the rest of the app —
+// the Arena (tsong itself, via the play queue), the Casino, the Bank, the Shop, and every arcade
+// minigame — pausing (not exiting) while you're inside one so you land right back in World when
+// it closes. Lazy-loaded + fully self-contained (client/world.ts); the server only relays avatar
+// positions. ---
 
 // Whether the panel/overlay a given openFeature() key delegates to is currently on screen.
 // Toolbar panels are `hidden`-attribute divs; lazy-loaded minigames create/remove (or
@@ -4337,6 +4340,7 @@ if (remembered) {
   enableChat();
   revealAds(); // returning players skip the join form — still show the banner ad
   startFlyovers();
+  worldBtn.click(); // World is the landing page — walk straight in
 } else {
   nick.focus();
 }

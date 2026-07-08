@@ -2013,7 +2013,7 @@ export function startWorld(net: WorldNet): void {
     'position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:12px;' +
     'padding:10px 14px;background:linear-gradient(#0b1020dd,#0b102000);pointer-events:none;z-index:2;';
   const title = document.createElement('div');
-  title.innerHTML = '🌍 <b>TSONG WORLD</b> <span style="opacity:.6;font-size:12px">beta</span>';
+  title.innerHTML = '🌍 <b>TSONG WORLD</b>';
   title.style.cssText = 'color:#e8eefc;font-size:18px;letter-spacing:.5px;text-shadow:0 2px 6px #000a;';
   const count = document.createElement('div');
   count.style.cssText = 'color:#8aa0d8;font-size:13px;margin-left:auto;pointer-events:none;text-shadow:0 1px 4px #000a;';
