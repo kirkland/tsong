@@ -26,6 +26,17 @@ const WIN_PERFECT = 45;     // ± ms
 const LEAD_IN_MS = 2600;    // silence before the song starts (first notes fall in)
 type Diff = 'easy' | 'normal' | 'hard';
 
+// One-time versioned wipe of local bests: v2 = scores earned before the overstrum
+// (anti-spam) penalty don't count. Bump to wipe again after future rule changes.
+try {
+  if (localStorage.getItem('tsong.gh.v') !== '2') {
+    for (const k of Object.keys(localStorage)) {
+      if (k.startsWith('tsong.gh.')) localStorage.removeItem(k);
+    }
+    localStorage.setItem('tsong.gh.v', '2');
+  }
+} catch { /* private browsing etc. — bests just won't persist */ }
+
 let ghOpen = false;
 
 export function startGuitarHero(net: GhNet): void {
@@ -44,7 +55,7 @@ export function startGuitarHero(net: GhNet): void {
   let audio: HTMLAudioElement | null = null;
   let startedAt = 0;          // perf.now() when the run began (lead-in reference)
   let score = 0, combo = 0, maxCombo = 0;
-  let perfects = 0, goods = 0, misses = 0;
+  let perfects = 0, goods = 0, misses = 0, overstrums = 0;
   let judgement = '';         // floating PERFECT/GOOD/MISS text
   let judgementColor = '#fff';
   let judgementAt = 0;
@@ -152,7 +163,7 @@ export function startGuitarHero(net: GhNet): void {
     } else if (mode === 'results' && chart) {
       const total = perfects + goods + misses;
       const acc = total ? (perfects + goods) / total : 0;
-      const fc = misses === 0 && total > 0;
+      const fc = misses === 0 && overstrums === 0 && total > 0; // a true FC is clean both ways
       const grade = fc && acc > 0.98 ? 'S' : acc >= 0.93 ? 'A' : acc >= 0.8 ? 'B' : acc >= 0.6 ? 'C' : 'D';
       const gradeColor = grade === 'S' ? '#ffd060' : grade === 'A' ? '#7fe089' : grade === 'B' ? '#00e5ff' : '#c890ff';
       let bestNote = '';
@@ -169,7 +180,8 @@ export function startGuitarHero(net: GhNet): void {
         `<div style="font-size:30px;font-weight:800">${score.toLocaleString()}</div>${bestNote}` +
         `<div style="font-size:14px;margin-top:8px;opacity:.85">` +
         `<span style="color:#ffd060">PERFECT ${perfects}</span> · <span style="color:#00e5ff">GOOD ${goods}</span> · ` +
-        `<span style="color:#ff5a5a">MISS ${misses}</span> · MAX COMBO ${maxCombo} · ${(acc * 100).toFixed(1)}%</div>`;
+        `<span style="color:#ff5a5a">MISS ${misses}</span> · <span style="color:#ff8a3a">OVERSTRUM ${overstrums}</span> · ` +
+        `MAX COMBO ${maxCombo} · ${(acc * 100).toFixed(1)}%</div>`;
       ui.appendChild(panel);
       // public top-5 for this song × difficulty (refreshes as the server broadcast lands)
       const board = document.createElement('div');
@@ -203,7 +215,7 @@ export function startGuitarHero(net: GhNet): void {
     chart = c;
     notes = c[diff].map(([t, lane]) => ({ t: t + LEAD_IN_MS, lane, hit: false, missed: false }));
     nextIdx = 0;
-    score = 0; combo = 0; maxCombo = 0; perfects = 0; goods = 0; misses = 0;
+    score = 0; combo = 0; maxCombo = 0; perfects = 0; goods = 0; misses = 0; overstrums = 0;
     judgement = '';
     audio?.pause();
     audio = new Audio(`/${c.file}`);
@@ -240,7 +252,14 @@ export function startGuitarHero(net: GhNet): void {
       const d = Math.abs(n.t - now);
       if (d < bestAbs) { best = i; bestAbs = d; }
     }
-    if (best === -1) return; // stray strum — receptor flashes, no penalty
+    if (best === -1) {
+      // OVERSTRUM — pressing a lane with no note there breaks your combo (kills spam:
+      // a masher never leaves x1 while an accurate player rides x4).
+      if (combo > 0 || overstrums === 0) { judgement = 'OVERSTRUM'; judgementColor = '#ff8a3a'; judgementAt = performance.now(); }
+      combo = 0;
+      overstrums++;
+      return;
+    }
     const n = notes[best];
     n.hit = true;
     combo++;

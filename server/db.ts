@@ -244,6 +244,17 @@ export async function initDb(): Promise<void> {
       PRIMARY KEY (pid, song, diff)
     )
   `);
+  // One-time versioned wipe of gh_scores: v2 = scores earned before the overstrum
+  // (anti-spam) penalty are invalid. Bump the version to wipe again after rule changes.
+  await pool.query(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+  const ghv = await pool.query(`SELECT value FROM meta WHERE key = 'gh_scores_v'`);
+  if (ghv.rows[0]?.value !== '2') {
+    await pool.query(`DELETE FROM gh_scores`);
+    await pool.query(
+      `INSERT INTO meta (key, value) VALUES ('gh_scores_v', '2')
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    );
+  }
   // Nomic (the Parliament sub-game) — ONE perpetual communal game persisted as a single JSON
   // snapshot row (rulebook, params, scores, log). Won seasons are sealed into nomic_hall.
   await pool.query(`CREATE TABLE IF NOT EXISTS nomic_state (id INTEGER PRIMARY KEY, data TEXT NOT NULL)`);
