@@ -138,6 +138,8 @@ interface Controller {
 }
 let controller: Controller | null = null;
 let _exitWorld: (() => void) | null = null;
+let _pauseWorld: (() => void) | null = null;
+let _resumeWorld: (() => void) | null = null;
 
 export function isWorldOpen(): boolean {
   return controller !== null;
@@ -146,6 +148,15 @@ export function isWorldOpen(): boolean {
 /** Tear down the world overlay if it's open. No-op if already closed. */
 export function exitWorld(): void {
   _exitWorld?.();
+}
+
+/** Hide + freeze World (it stays alive underneath) while a delegated panel/minigame is up. */
+export function pauseWorld(): void {
+  _pauseWorld?.();
+}
+/** Bring a paused World back — same position, same everything. No-op if World isn't paused. */
+export function resumeWorld(): void {
+  _resumeWorld?.();
 }
 
 /** Push the latest avatar roster (from a `world` server message) into the live overlay. */
@@ -1841,6 +1852,10 @@ export function startWorld(net: WorldNet): void {
   let joyCX = 0, joyCY = 0; // joystick current (screen px)
   let dialogOpen = false;   // movement pauses while a building dialog is up
   let nearId: string | null = null; // building the avatar is currently at the door of
+  // True while a Casino/Bank/Shop/arcade feature has been delegated to the main page (or a
+  // lazy-loaded minigame overlay) — World stays alive underneath (paused, hidden) instead of
+  // tearing down, so main.ts can bring it straight back once that panel/game closes.
+  let paused = false;
   // --- interior state (the Tavern AND the Temple share this walkable-room machinery) ---
   let inInterior = false;   // true while inside a walkable room (camera + collision switch to curInt)
   let inTemple = false;     // sub-flag: the current interior is the Temple (vs the Tavern)
@@ -2745,29 +2760,29 @@ export function startWorld(net: WorldNet): void {
     if (kind === 'casino') { enterCasino(); return; }
     if (kind === 'bank') {
       openDialog('🏦 Bank', 'How can we help you today?', [
-        { label: '📈 Crypto Market', onPick: () => { exit(); net.openFeature('stocks'); } },
-        { label: '💸 Get a Loan',    onPick: () => { exit(); net.openFeature('loans');  } },
-        { label: '📰 Market News',   onPick: () => { exit(); net.openFeature('news');   } },
-        { label: '🏛️ The Fed',       onPick: () => { exit(); net.openFeature('house');  } },
+        { label: '📈 Crypto Market', onPick: () => { pause(); net.openFeature('stocks'); } },
+        { label: '💸 Get a Loan',    onPick: () => { pause(); net.openFeature('loans');  } },
+        { label: '📰 Market News',   onPick: () => { pause(); net.openFeature('news');   } },
+        { label: '🏛️ The Fed',       onPick: () => { pause(); net.openFeature('house');  } },
       ]);
       return;
     }
     if (kind === 'petshop') {
       // The Pet Shop just opens the Shop panel on the Pets tab — a single choice keeps it tidy.
       openDialog('🐾 Pet Shop', 'Looking for a little companion?', [
-        { label: '🐾 Browse Pets', onPick: () => { exit(); net.openFeature('petshop'); } },
+        { label: '🐾 Browse Pets', onPick: () => { pause(); net.openFeature('petshop'); } },
       ]);
       return;
     }
     if (kind === 'doomportal') {
       openDialog('🔥 The Gates of DOOM', 'A hot wind howls up from below…', [
-        { label: '🔥 Descend', onPick: () => { exit(); net.openFeature('doom'); } },
+        { label: '🔥 Descend', onPick: () => { pause(); net.openFeature('doom'); } },
       ]);
       return;
     }
     if (kind === 'pond') {
       openDialog('🎣 Fishing Pond', 'The water is calm. A good day for fishing.', [
-        { label: '🎣 Fish', onPick: () => { exit(); net.openFeature('fishing'); } },
+        { label: '🎣 Fish', onPick: () => { pause(); net.openFeature('fishing'); } },
       ]);
       return;
     }
@@ -2777,32 +2792,32 @@ export function startWorld(net: WorldNet): void {
     if (kind === 'dungeon') { enterDungeon(); return; }
     if (kind === 'shop') {
       openDialog('🛍️ General Store', 'Shelves of paddle skins, titles, and theme songs — plus the day\'s free spin.', [
-        { label: '🛍️ Browse the Shop', onPick: () => { exit(); net.openFeature('shop'); } },
+        { label: '🛍️ Browse the Shop', onPick: () => { pause(); net.openFeature('shop'); } },
       ]);
       return;
     }
     if (kind === 'hall') { enterHallOfFame(); return; }
     if (kind === 'parliament') {
       openDialog('🏛️ Parliament', 'The perpetual game of Nomic is in session. The only rule that cannot change is that the rules can.', [
-        { label: '🏛️ Take your seat', onPick: () => { exit(); net.openParliament(); } },
+        { label: '🏛️ Take your seat', onPick: () => { pause(); net.openParliament(); } },
       ]);
       return;
     }
     if (kind === 'bowling') {
       openDialog('🎳 Bolwoing Alley', 'The sound of pins crashing echoes down the lane.', [
-        { label: '🎳 Bowl (2–4 players)', onPick: () => { exit(); net.openFeature('bowling'); } },
+        { label: '🎳 Bowl (2–4 players)', onPick: () => { pause(); net.openFeature('bowling'); } },
       ]);
       return;
     }
     if (kind === 'arcade') {
       openDialog('🎮 The Arcade', 'Rows of glowing cabinets hum and bleep. Pick your poison.', [
-        { label: '🏓 Davis Collects (Campaign)', onPick: () => { exit(); net.openFeature('campaign'); } },
-        { label: '⌨️ Type or Die', onPick: () => { exit(); net.openFeature('typedie'); } },
-        { label: '🏎️ Street Demons (Racing)', onPick: () => { exit(); net.openFeature('racing'); } },
-        { label: '🥊 Super Tsong Bros', onPick: () => { exit(); net.openFeature('superbros'); } },
-        { label: '💣 Nuketown', onPick: () => { exit(); net.openFeature('nuketown'); } },
-        { label: '🧨 TNT Explosion Rally', onPick: () => { exit(); net.openFeature('tnt'); } },
-        { label: '🏙️ City Tycoon', onPick: () => { exit(); net.openFeature('citytycoon'); } },
+        { label: '🏓 Davis Collects (Campaign)', onPick: () => { pause(); net.openFeature('campaign'); } },
+        { label: '⌨️ Type or Die', onPick: () => { pause(); net.openFeature('typedie'); } },
+        { label: '🏎️ Street Demons (Racing)', onPick: () => { pause(); net.openFeature('racing'); } },
+        { label: '🥊 Super Tsong Bros', onPick: () => { pause(); net.openFeature('superbros'); } },
+        { label: '💣 Nuketown', onPick: () => { pause(); net.openFeature('nuketown'); } },
+        { label: '🧨 TNT Explosion Rally', onPick: () => { pause(); net.openFeature('tnt'); } },
+        { label: '🏙️ City Tycoon', onPick: () => { pause(); net.openFeature('citytycoon'); } },
       ]);
       return;
     }
@@ -4813,6 +4828,7 @@ export function startWorld(net: WorldNet): void {
   // --- input (capture phase so the main game's global shortcuts don't also fire) ---
   const MOVE_KEYS = new Set(['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright']);
   function onKeyDown(e: KeyboardEvent) {
+    if (paused) return; // a delegated panel/minigame owns the screen — let its own input through untouched
     if (isEncounterOpen()) return; // the battle overlay owns input while it's up
     unlockAudio();
     const k = e.key.toLowerCase();
@@ -4856,6 +4872,7 @@ export function startWorld(net: WorldNet): void {
     if (MOVE_KEYS.has(k)) { keys.add(k); e.preventDefault(); e.stopPropagation(); }
   }
   function onKeyUp(e: KeyboardEvent) {
+    if (paused) return;
     const k = e.key.toLowerCase();
     if (k === 'shift') { handbrake = false; e.stopPropagation(); return; }
     if (MOVE_KEYS.has(k)) { keys.delete(k); e.stopPropagation(); }
@@ -4864,6 +4881,7 @@ export function startWorld(net: WorldNet): void {
   const pointers = new Map<number, { x: number; y: number }>();
   let pinchDist = 0;
   function onPointerDown(e: PointerEvent) {
+    if (paused) return;
     unlockAudio();
     // A tap anywhere but the open input dismisses it (and doesn't also start a walk).
     if (chatActive) { if (!(e.target instanceof Node && chatWrap.contains(e.target))) closeChat(); return; }
@@ -4890,6 +4908,7 @@ export function startWorld(net: WorldNet): void {
     joyOY = joyCY = e.clientY;
   }
   function onPointerMove(e: PointerEvent) {
+    if (paused) return;
     if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pointers.size >= 2) { // pinch: zoom by the change in finger spread
       const p = [...pointers.values()];
@@ -4902,12 +4921,14 @@ export function startWorld(net: WorldNet): void {
     joyCX = e.clientX; joyCY = e.clientY;
   }
   function onPointerUp(e?: PointerEvent) {
+    if (paused) return;
     if (e) pointers.delete(e.pointerId);
     if (pointers.size < 2) pinchDist = 0;
     if (pointers.size === 0) joyActive = false;
   }
   // Mouse wheel / trackpad scroll zooms the overworld (but let the chat backlog scroll normally).
   function onWheel(e: WheelEvent) {
+    if (paused) return;
     if (e.target instanceof Node && chatWrap.contains(e.target)) return;
     e.preventDefault();
     adjustZoom(e.deltaY < 0 ? 1.1 : 1 / 1.1);
@@ -6968,7 +6989,7 @@ export function startWorld(net: WorldNet): void {
     if (dialogOpen || talkOpen) return;
     const emoji = CASINO_GAMES.find((c) => c.feature === g.feature)?.emoji ?? '🎰';
     openDialog(`${emoji} ${g.label}`, `Step up and play ${g.label}.`, [
-      { label: `▶️ Play ${g.label}`, onPick: () => { exit(); net.openFeature(g.feature); } },
+      { label: `▶️ Play ${g.label}`, onPick: () => { pause(); net.openFeature(g.feature); } },
     ]);
   }
 
@@ -8593,10 +8614,34 @@ export function startWorld(net: WorldNet): void {
     rrHud?.remove(); rrHud = null;
     controller = null;
     _exitWorld = null;
+    _pauseWorld = null;
+    _resumeWorld = null;
     net.leave();
     net.onExit();
   }
   _exitWorld = exit;
+
+  // Delegating to a Casino/Bank/Shop panel or a lazy-loaded minigame: hide + freeze World instead
+  // of tearing it down, so main.ts can bring it straight back (same position, same everything)
+  // once that panel/game closes — see main.ts's watchWorldDelegate().
+  function pause() {
+    if (paused) return;
+    paused = true;
+    keys.clear(); joyActive = false; handbrake = false;
+    dialogOpen = false; dialog.style.display = 'none'; // don't resume back into the dialog that sent us here
+    game?.loop.sleep();
+    overlay.style.display = 'none';
+  }
+  function resume() {
+    if (!paused) return;
+    paused = false;
+    overlay.style.display = '';
+    game?.loop.wake();
+    game?.scale.refresh(); // the canvas measured 0×0 while display:none — recompute now it's visible
+    updateNearBuilding(); // refresh the door/interact prompt immediately, don't wait a frame
+  }
+  _pauseWorld = pause;
+  _resumeWorld = resume;
 
   controller = {
     feed(avatars) {

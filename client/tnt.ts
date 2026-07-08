@@ -236,6 +236,7 @@ function exit() {
 function build() {
   if (overlay) return;
   overlay = document.createElement('div');
+  overlay.id = 'tntOverlay';
   overlay.style.cssText =
     'position:fixed;inset:0;z-index:9000;background:#0b0e14;display:none;cursor:crosshair;touch-action:none;';
   canvas = document.createElement('canvas');

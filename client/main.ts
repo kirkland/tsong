@@ -2181,6 +2181,77 @@ document.getElementById('crBtn')?.addEventListener('click', async () => {
 // into existing features — the Arena (tsong itself, via the play queue), the Casino (roulette)
 // and the Bank (crypto market / loans). Lazy-loaded + fully self-contained (client/world.ts);
 // the server only relays avatar positions. ---
+
+// Whether the panel/overlay a given openFeature() key delegates to is currently on screen.
+// Toolbar panels are `hidden`-attribute divs; lazy-loaded minigames create/remove (or
+// show/hide) their own full-screen overlay by a stable id — see each module's `startX()`.
+function panelOpenCheck(panelId: string): () => boolean {
+  return () => {
+    const el = document.getElementById(panelId);
+    return !!el && !(el as HTMLElement).hidden;
+  };
+}
+function overlayPresentCheck(overlayId: string): () => boolean {
+  return () => !!document.getElementById(overlayId);
+}
+function overlayVisibleCheck(selector: string): () => boolean {
+  return () => {
+    const el = document.querySelector(selector) as HTMLElement | null;
+    return !!el && el.style.display !== 'none';
+  };
+}
+const WORLD_DELEGATE_CHECK: Record<string, () => boolean> = {
+  roulette: panelOpenCheck('roulettePanel'),
+  blackjack: panelOpenCheck('bjPanel'),
+  craps: panelOpenCheck('crapsPanel'),
+  crash: panelOpenCheck('crashPanel'),
+  slots: panelOpenCheck('slotsPanel'),
+  plinko: panelOpenCheck('plinkoPanel'),
+  horse: panelOpenCheck('horsePanel'),
+  hilo: panelOpenCheck('hiloPanel'),
+  mines: panelOpenCheck('minesPanel'),
+  lootbox: panelOpenCheck('lootPanel'),
+  blackmarket: panelOpenCheck('marketplacePanel'),
+  stocks: panelOpenCheck('marketPanel'),
+  loans: panelOpenCheck('loanPanel'),
+  news: panelOpenCheck('newsPanel'),
+  house: panelOpenCheck('housePanel'),
+  shop: panelOpenCheck('shopPanel'),
+  petshop: panelOpenCheck('shopPanel'),
+  doom: overlayPresentCheck('doomOverlay'),
+  fishing: overlayPresentCheck('fishingOverlay'),
+  campaign: overlayPresentCheck('campaignOverlay'),
+  typedie: overlayPresentCheck('typeDieOverlay'),
+  racing: overlayPresentCheck('streetDemonsOverlay'),
+  superbros: overlayPresentCheck('superbrosOverlay'),
+  nuketown: overlayPresentCheck('nuketownOverlay'),
+  citytycoon: overlayPresentCheck('crOverlay'),
+  bowling: overlayPresentCheck('bowlOverlay'),
+  tnt: overlayVisibleCheck('#tntOverlay'),
+  parliament: overlayVisibleCheck('.nom-overlay'),
+};
+// Polls (rAF) until the delegated panel/minigame that World just handed off to has opened AND
+// then closed again, then brings World back — same position, same everything, no manual re-entry.
+// Waits for "opened" first so a panel that takes an extra tick to appear doesn't look "already
+// closed" and resume World prematurely.
+function watchWorldDelegate(feature: string) {
+  const check = WORLD_DELEGATE_CHECK[feature];
+  if (!check) return; // e.g. 'loans' shares no distinct check — falls through to the id map below
+  let seenOpen = false;
+  let ticks = 0;
+  const tick = () => {
+    if (!worldMod?.isWorldOpen()) return; // World was hard-exited in the meantime — nothing to resume
+    if (check()) { seenOpen = true; ticks = 0; requestAnimationFrame(tick); return; }
+    if (!seenOpen) {
+      if (++ticks > 600) return; // ~10s and it never opened (failed import, etc.) — give up quietly
+      requestAnimationFrame(tick);
+      return;
+    }
+    worldMod.resumeWorld();
+  };
+  requestAnimationFrame(tick);
+}
+
 const worldBtn = document.getElementById('worldBtn') as HTMLButtonElement;
 let worldMod: typeof import('./world') | null = null;
 worldBtn.addEventListener('click', async () => {
@@ -2209,6 +2280,9 @@ worldBtn.addEventListener('click', async () => {
       // Tapping a netizen avatar in the world requests its info for the challenge dialog.
       onNetizenClick: (netizenId) => { net.send({ type: 'netizenInfoReq', netizenId }); },
       openFeature: (feature) => {
+        // World only paused (didn't exit) before calling this — watch for whatever panel/minigame
+        // this opens to close again, then bring World back automatically.
+        watchWorldDelegate(feature);
         // The Pet Shop is a cosmetic venue, not a gambling/bank feature: open the Shop panel and
         // jump straight to the Pets tab (deferred like the others to dodge the outside-click race).
         if (feature === 'petshop') {
@@ -2293,7 +2367,8 @@ worldBtn.addEventListener('click', async () => {
       bail: (targetId) => net.send({ type: 'bail', targetId }), // post 500🪙 bail for a jailed avatar
       amJailed: () => worldJailed,                            // are WE locked up right now?
       dayNightOffset: () => dayNightOffset,                   // per-deploy day/night clock offset
-      openParliament: () => { setTimeout(() => { void openParliament(); }, 0); }, // walk in → Nomic overlay
+      // walk in → Nomic overlay; World only paused, so watch for it to close and bring World back
+      openParliament: () => { watchWorldDelegate('parliament'); setTimeout(() => { void openParliament(); }, 0); },
       // Robville land: buy from the bank, list/unlist your lots, buy listed lots off other owners.
       landReq: () => net.send({ type: 'landReq' }),
       landBuyBank: (id) => net.send({ type: 'landBuyBank', id }),
