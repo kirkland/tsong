@@ -56,8 +56,8 @@ const STEP_UP = 17;          // max ledge a fighter can walk up
 const JUMP_VY = -350;        // W to jump (clears ~95px — craters are no longer prisons)
 const FALL_SAFE = 220;       // free-fall px before damage starts
 const WATER_BASE = WA_H - 26;   // starting waterline (rises in sudden death)
-const SUDDEN_DEATH_TURN = 14;   // after this many turns the water starts climbing
-const WATER_RISE = 34;          // px per turn once sudden death begins
+const SUDDEN_DEATH_ROUNDS = 9;  // full rounds EACH before the water starts climbing
+const WATER_RISE = 26;          // px per turn once sudden death begins
 const SUBDT = 1 / 120;       // fixed physics timestep — KEEP IDENTICAL EVERYWHERE (determinism)
 interface Weapon {
   name: string; icon: string; wind: boolean; bounce: boolean; fuseMs: number;
@@ -897,7 +897,7 @@ export function startArtillery(net: ArtilleryNet): void {
     turnCount++;
     // sudden death: the water climbs every turn past the threshold (deterministic — every
     // client counts the same 'turn' messages, so every client computes the same waterline)
-    const over = turnCount - SUDDEN_DEATH_TURN;
+    const over = turnCount - SUDDEN_DEATH_ROUNDS * Math.max(2, fighters.length);
     const newWater = WATER_BASE - Math.max(0, over) * WATER_RISE;
     if (newWater !== waterY) {
       waterY = newWater;
@@ -1380,28 +1380,42 @@ export function startArtillery(net: ArtilleryNet): void {
     ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
     for (const g of graves) ctx.fillText('🪦', g.x, Math.min(g.y, waterY) + 2);
 
-    // supply crates — parachute in, then sit there looking valuable
+    // supply crates — parachute in under a light beacon, contents on the label
     for (const c of crates) {
       const age = now - c.born;
       const drop = Math.min(1, age / 1300);
       const cy = c.y - (1 - drop) * 170;
-      if (drop < 1) {
+      const beaconCol = c.kind === 'hp' ? '255, 106, 138' : '255, 208, 96';
+      if (drop >= 1) {
+        // pulsing beacon column so crates read across the whole battlefield
+        const pulse = 0.5 + 0.5 * Math.sin(now / 320);
+        const bg = ctx.createLinearGradient(0, cy - 210, 0, cy);
+        bg.addColorStop(0, `rgba(${beaconCol}, 0)`);
+        bg.addColorStop(1, `rgba(${beaconCol}, ${0.16 + pulse * 0.12})`);
+        ctx.fillStyle = bg;
+        ctx.fillRect(c.x - 13, cy - 210, 26, 210);
+        // bouncing pointer
+        ctx.font = '17px ui-monospace, monospace';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+        ctx.fillStyle = `rgba(${beaconCol}, 0.95)`;
+        ctx.fillText('▼', c.x, cy - 58 + Math.sin(now / 260) * 5);
+        ctx.shadowColor = `rgb(${beaconCol})`; ctx.shadowBlur = 14 + 8 * pulse;
+      } else {
         ctx.strokeStyle = '#e8e0d8';
         ctx.lineWidth = 1.6;
         ctx.beginPath();
-        ctx.arc(c.x, cy - 26, 16, Math.PI * 1.05, Math.PI * 1.95);
-        ctx.moveTo(c.x - 14, cy - 18); ctx.lineTo(c.x - 6, cy - 6);
-        ctx.moveTo(c.x + 14, cy - 18); ctx.lineTo(c.x + 6, cy - 6);
+        ctx.arc(c.x, cy - 30, 18, Math.PI * 1.05, Math.PI * 1.95);
+        ctx.moveTo(c.x - 16, cy - 21); ctx.lineTo(c.x - 7, cy - 6);
+        ctx.moveTo(c.x + 16, cy - 21); ctx.lineTo(c.x + 7, cy - 6);
         ctx.stroke();
-      } else {
-        ctx.shadowColor = '#ffd060'; ctx.shadowBlur = 10 + 6 * Math.sin(now / 300);
       }
-      ctx.font = '22px serif';
+      ctx.font = '30px serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
-      ctx.fillText('📦', c.x, cy + 2);
+      ctx.fillText('📦', c.x, cy + 3);
       ctx.shadowBlur = 0;
-      ctx.font = '12px serif';
-      ctx.fillText(CRATE_ICON[c.kind], c.x + 11, cy - 12);
+      // the contents, printed right on the box — no mystery, pure greed
+      ctx.font = '17px serif';
+      ctx.fillText(CRATE_ICON[c.kind], c.x, cy - 26 + Math.sin(now / 260) * 3);
     }
 
     // fighters
@@ -1635,7 +1649,7 @@ export function startArtillery(net: ArtilleryNet): void {
     flashes = flashes.filter((flh) => flh.life < 0.32);
 
     // water on top (things sink INTO it) — reddens as sudden death squeezes the map
-    const sudden = turnCount > SUDDEN_DEATH_TURN;
+    const sudden = turnCount > SUDDEN_DEATH_ROUNDS * Math.max(2, fighters.length);
     ctx.fillStyle = sudden ? '#4a2038dd' : '#1a3a5add';
     ctx.beginPath();
     ctx.moveTo(0, WA_H);
