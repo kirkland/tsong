@@ -36,8 +36,8 @@ export function feedWaRelay(d: unknown) { handlers?.relay(d); }
 
 // --- constants ---
 const COLORS = ['#00e5ff', '#ff9a00', '#ff3df0', '#89ff2a'] as const;
-// The cast enlists. Kevin Jr. is a pothos with seventeen leaves and a grudge.
-const BOT_NAMES = ['KEVIN JR.', 'DOUG', 'DANA'] as const;
+// The town's most recognizable figures enlist.
+const BOT_NAMES = ['THE DORITO MAN', 'WALDO', 'THE MINION'] as const;
 
 // --- battlefield maps (host picks; the generator theme + profile per map) ---
 interface WaMap { name: string; desc: string; grass: string; dirtTop: string; dirtDeep: string; }
@@ -55,12 +55,19 @@ const WATER_BASE = WA_H - 26;   // starting waterline (rises in sudden death)
 const SUDDEN_DEATH_TURN = 14;   // after this many turns the water starts climbing
 const WATER_RISE = 34;          // px per turn once sudden death begins
 const SUBDT = 1 / 120;       // fixed physics timestep — KEEP IDENTICAL EVERYWHERE (determinism)
-interface Weapon { name: string; icon: string; wind: boolean; bounce: boolean; fuseMs: number; radius: number; dmg: number; hitscan: boolean; ammo: number; }
+interface Weapon {
+  name: string; icon: string; wind: boolean; bounce: boolean; fuseMs: number;
+  radius: number; dmg: number; hitscan: boolean; ammo: number;
+  rest?: number;                    // bounce restitution (default 0.45)
+  special?: 'air' | 'pong';         // airstrike (3 bomblets from the sky) / proximity pong ball
+}
 const WEAPONS: Weapon[] = [
   { name: 'BAZOOKA', icon: '🚀', wind: true, bounce: false, fuseMs: 0, radius: 62, dmg: 48, hitscan: false, ammo: -1 },
   { name: 'GRENADE', icon: '💣', wind: false, bounce: true, fuseMs: 3000, radius: 55, dmg: 42, hitscan: false, ammo: -1 },
   { name: 'SHOTGUN', icon: '🔫', wind: false, bounce: false, fuseMs: 0, radius: 18, dmg: 28, hitscan: true, ammo: -1 },
   { name: 'DYNAMITE', icon: '🧨', wind: false, bounce: false, fuseMs: 3500, radius: 85, dmg: 75, hitscan: false, ammo: 2 },
+  { name: 'AIRSTRIKE', icon: '🛩️', wind: false, bounce: false, fuseMs: 0, radius: 42, dmg: 32, hitscan: false, ammo: 1, special: 'air' },
+  { name: 'PONG BALL', icon: '🏓', wind: false, bounce: true, fuseMs: 5000, radius: 72, dmg: 62, hitscan: false, ammo: 1, rest: 0.72, special: 'pong' },
 ];
 
 // deterministic PRNG for terrain generation (both sides run it with the host's seed)
@@ -92,7 +99,7 @@ export function startArtillery(net: ArtilleryNet): void {
   interface Fighter {
     name: string; color: string; bot: boolean; lobbySlot: number;
     x: number; y: number; vy: number; face: number; // face: 1 right, -1 left
-    hp: number; alive: boolean; dyna: number;       // dynamite ammo
+    hp: number; alive: boolean; ammo: number[];     // per-weapon ammo (-1 = infinite)
     fallFrom: number;                                // y where the current fall began
   }
   let fighters: Fighter[] = [];
@@ -112,9 +119,6 @@ export function startArtillery(net: ArtilleryNet): void {
   let endReported = false;
   let botThinkAt = 0;                                // host: when the current bot fires
 
-  // in-flight projectile (cosmetic mirror of the deterministic sim, for drawing)
-  interface Shell { x: number; y: number; trail: [number, number][]; icon: string; }
-  let shell: Shell | null = null;
   interface Spark { x: number; y: number; vx: number; vy: number; life: number; max: number; color: string; }
   let sparks: Spark[] = [];
   let shakeUntil = 0, shakeAmp = 0;
@@ -124,26 +128,26 @@ export function startArtillery(net: ArtilleryNet): void {
   let quip = ''; let quipUntil = 0;                  // battlefield commentary
   const say = (text: string) => { quip = text; quipUntil = performance.now() + 3400; };
   const QUIPS = {
-    bigHit: ['DEVASTATING.', 'That one\'s going in the highlight reel.', 'Someone screenshot that.', 'Zara calls that "high-impact brand engagement."', 'Finn logged that under "pleasant surprises."'],
-    selfHit: ['Friendly fire! With yourself!', 'Bold strategy.', 'The enemy within.', 'Chad says self-sabotage is still reps. Bro.'],
+    bigHit: ['DEVASTATING.', 'That one\'s going in the highlight reel.', 'Someone screenshot that.', 'The House is adjusting the odds.', 'The leaderboard felt that.'],
+    selfHit: ['Friendly fire! With yourself!', 'Bold strategy.', 'The enemy within.', 'The tutorial did not cover this.'],
     drown: ['Gone swimming. Permanently.', 'The water always wins.', 'Blub blub.', 'The fountain claims another.', 'Should have equipped the boat.'],
-    miss: ['The dirt felt that one.', 'Warning shot. Probably.', 'The wind sends its regards.', 'Terraforming, technically.', 'Noodle says the crater is "expressive."'],
-    kevin: ['Kevin Jr. felt that. Energetically.', 'Kevin Jr. has dropped a leaf in protest.', 'All seventeen leaves... still. Forever still.'],
-    doug: ['Doug was a lot. Now he\'s a little bit everywhere.', 'Doug finally made his dentist appointment. In heaven.'],
-    dana: ['Dana benched more than that blast. Unrelated. Probably.', 'Somewhere a squat rack falls silent.'],
+    miss: ['The dirt felt that one.', 'Warning shot. Probably.', 'The wind sends its regards.', 'Terraforming, technically.', 'The Ruins gained a new pothole.'],
+    dorito: ['The Dorito man returns to the great bag.', 'Crunch. Then silence.', 'He was sentient. We all knew it.'],
+    waldo: ['Waldo has finally been found.', 'You found Waldo. Violently.', 'The stripes could not save him.'],
+    minion: ['The minion laughs no more.', 'A banana lies unattended.', 'Gru will hear about this.'],
     lore: [
       'The Dorito man watches from beyond the hills. He approves.',
-      'Somewhere out there, Waldo is hiding from this war.',
-      'Mira is spectating. She says she already knows how this ends.',
-      'The fountain\'s six splash patterns predicted this conflict.',
-      'Bex added this war to the document. New tab: WARS.',
-      'Finn is counting the craters. Forty-seven. He\'s thrilled.',
-      'Chad says explosions are just loud gains.',
-      'Biscotti & Things was lost in a war like this one. Never forget the Things.',
-      'Thaddeus the creak heard the first shot. Punctual as ever.',
+      'Somewhere out there, Waldo is watching this war. Unfound.',
+      'The fountain runs regardless. It always has.',
       'This violence is rated E for ELO.',
       'The Ruins have seen worse. Barely.',
       'Somewhere in the Tavern, someone just bet coins on this.',
+      'The House takes no sides. The House takes commission.',
+      'DOOM is still down there. This is nothing.',
+      'The changelog will remember this.',
+      'Kenny has seen this before. Kenny sees everything.',
+      'The stop-sign octagon demands eight players. This will do for now.',
+      'Somewhere, a paddle misses a ball. Priorities.',
     ],
   };
   const pick = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)];
@@ -308,9 +312,9 @@ export function startArtillery(net: ArtilleryNet): void {
     f.alive = false;
     if (drowned) { sfxSplash(); say(pick(QUIPS.drown)); }
     else graves.push({ x: f.x, y: f.y });
-    if (f.name === 'KEVIN JR.') say(pick(QUIPS.kevin));
-    else if (f.name === 'DOUG') say(pick(QUIPS.doug));
-    else if (f.name === 'DANA') say(pick(QUIPS.dana));
+    if (f.name === 'THE DORITO MAN') say(pick(QUIPS.dorito));
+    else if (f.name === 'WALDO') say(pick(QUIPS.waldo));
+    else if (f.name === 'THE MINION') say(pick(QUIPS.minion));
     floaties.push({ x: f.x, y: f.y - 40, text: drowned ? '🌊' : '💀', color: '#fff', life: 0 });
   }
 
@@ -367,12 +371,13 @@ export function startArtillery(net: ArtilleryNet): void {
     else if (!anyHit) say(pick(QUIPS.miss));
   }
 
-  function resolveShot(pi: number, w: number, sx: number, sy: number, ang: number, pow: number) {
+  function resolveShot(pi: number, w: number, sx: number, sy: number, ang: number, pow: number, tx?: number) {
     resolving = true;
     sfxFire();
     const wp = WEAPONS[w];
     const shooter = fighters[pi];
     if (shooter) { shooter.x = sx; shooter.y = sy; }
+    if (shooter && wp.ammo >= 0) shooter.ammo[w] = Math.max(0, shooter.ammo[w] - 1);
     if (wp.hitscan) {
       // instant ray to the first solid pixel or fighter within 750px
       let hx = sx, hy = sy - 12;
@@ -387,69 +392,76 @@ export function startArtillery(net: ArtilleryNet): void {
       finishShot();
       return;
     }
+    if (wp.special === 'air') {
+      // three bomblets scream in from above the target x (relayed as tx)
+      const at = Math.max(60, Math.min(WA_W - 60, tx ?? sx));
+      for (let k = 0; k < 3; k++) spawnFlight(at - 80 + k * 80, -30 - k * 60, 0, 140, wp);
+      say('Air support inbound. The pigeons scatter.');
+      return;
+    }
     if (w === 3) {
-      // dynamite: dropped at the feet, big fuse — resolve as a delayed blast in place
-      if (shooter) shooter.dyna--;
-      animateFuse(sx + (shooter?.face ?? 1) * 14, sy - 4, wp, 0, 0);
+      // dynamite: dropped at the feet, big fuse — a delayed blast in place
+      spawnFlight(sx + (shooter?.face ?? 1) * 14, sy - 4, 0, 0, wp);
       return;
     }
     // ballistic: fixed-timestep flight (deterministic)
     const speed = 380 + pow * 720;
-    animateFlight(sx + Math.cos(ang) * 16, sy - 12 + Math.sin(ang) * 16, Math.cos(ang) * speed, Math.sin(ang) * speed, wp);
+    spawnFlight(sx + Math.cos(ang) * 16, sy - 12 + Math.sin(ang) * 16, Math.cos(ang) * speed, Math.sin(ang) * speed, wp);
   }
 
-  // Ballistic flight, animated over real frames but STEPPED deterministically: the physics
+  // Ballistic flights, animated over real frames but STEPPED deterministically: physics
   // advance in fixed SUBDT increments regardless of frame rate, so every client computes the
-  // identical impact point; frames only decide how often we repaint along the way.
-  let flight: { x: number; y: number; vx: number; vy: number; wp: Weapon; fuse: number; steps: number } | null = null;
-  function animateFlight(x: number, y: number, vx: number, vy: number, wp: Weapon) {
-    flight = { x, y, vx, vy, wp, fuse: wp.fuseMs / 1000, steps: 0 };
-    shell = { x, y, trail: [], icon: wp.icon };
-  }
-  function animateFuse(x: number, y: number, wp: Weapon, vx: number, vy: number) {
-    flight = { x, y, vx, vy, wp, fuse: wp.fuseMs / 1000, steps: 0 };
-    shell = { x, y, trail: [], icon: wp.icon };
+  // identical impact points; frames only decide how often we repaint along the way. Multiple
+  // shells (airstrike) fly at once — the turn advances when the LAST one resolves.
+  interface Flight { x: number; y: number; vx: number; vy: number; wp: Weapon; fuse: number; steps: number; trail: [number, number][]; done: boolean; }
+  let flights: Flight[] = [];
+  function spawnFlight(x: number, y: number, vx: number, vy: number, wp: Weapon) {
+    flights.push({ x, y, vx, vy, wp, fuse: wp.fuseMs / 1000, steps: 0, trail: [], done: false });
   }
   function stepFlight(frames: number) {
-    if (!flight) return;
-    const fl = flight;
-    // advance a bounded number of fixed steps per frame (keeps sim identical everywhere)
-    for (let i = 0; i < frames && flight; i++) {
-      fl.steps++;
-      if (fl.steps > 12 * 120) { // 12s hard cap — lost shells fizzle
-        flight = null; shell = null; finishShot(); return;
-      }
-      if (fl.wp.wind) fl.vx += wind * 52 * SUBDT;
-      fl.vy += GRAV * SUBDT;
-      fl.x += fl.vx * SUBDT;
-      fl.y += fl.vy * SUBDT;
-      if (fl.fuse > 0) {
-        fl.fuse -= SUBDT;
-        if (fl.fuse <= 0) { const { x, y, wp } = fl; flight = null; shell = null; explode(x, y, wp); finishShot(); return; }
-      }
-      if (fl.y > waterY + 6) { // plunk — the water keeps it
-        sfxSplash();
-        for (let sp = 0; sp < 10; sp++) sparks.push({ x: fl.x, y: waterY + 4, vx: (Math.random() - 0.5) * 160, vy: -120 - Math.random() * 160, life: 0, max: 0.5, color: '#7fd0ff' });
-        say(pick(QUIPS.drown));
-        flight = null; shell = null; finishShot(); return;
-      }
-      if (fl.x < -80 || fl.x > WA_W + 80 || fl.y > WA_H + 40) { flight = null; shell = null; finishShot(); return; }
-      if (isSolid(fl.x, fl.y)) {
-        if (fl.wp.bounce || fl.wp.fuseMs > 0) {
-          // back out and reflect (grenade/dynamite bounce until the fuse blows)
-          while (isSolid(fl.x, fl.y)) { fl.x -= fl.vx * SUBDT; fl.y -= fl.vy * SUBDT; }
-          if (Math.abs(fl.vy) > Math.abs(fl.vx)) fl.vy = -fl.vy * 0.45; else fl.vx = -fl.vx * 0.45;
-          fl.vx *= 0.75;
-        } else {
-          const { x, y, wp } = fl; flight = null; shell = null; explode(x, y, wp); finishShot(); return;
+    if (!flights.length) return;
+    for (const fl of flights) {
+      for (let i = 0; i < frames && !fl.done; i++) {
+        fl.steps++;
+        if (fl.steps > 12 * 120) { fl.done = true; break; } // 12s hard cap — lost shells fizzle
+        if (fl.wp.wind) fl.vx += wind * 52 * SUBDT;
+        fl.vy += GRAV * SUBDT;
+        fl.x += fl.vx * SUBDT;
+        fl.y += fl.vy * SUBDT;
+        if (fl.fuse > 0) {
+          fl.fuse -= SUBDT;
+          if (fl.fuse <= 0) { fl.done = true; explode(fl.x, fl.y, fl.wp); break; }
+        }
+        if (fl.y > waterY + 6) { // plunk — the water keeps it
+          sfxSplash();
+          for (let sp = 0; sp < 10; sp++) sparks.push({ x: fl.x, y: waterY + 4, vx: (Math.random() - 0.5) * 160, vy: -120 - Math.random() * 160, life: 0, max: 0.5, color: '#7fd0ff' });
+          say(pick(QUIPS.drown));
+          fl.done = true; break;
+        }
+        if (fl.x < -80 || fl.x > WA_W + 80 || fl.y > WA_H + 40) { fl.done = true; break; }
+        if (isSolid(fl.x, fl.y)) {
+          if (fl.wp.bounce || fl.wp.fuseMs > 0) {
+            // back out and reflect (grenade/dynamite/pong ball bounce until the fuse blows)
+            while (isSolid(fl.x, fl.y)) { fl.x -= fl.vx * SUBDT; fl.y -= fl.vy * SUBDT; }
+            const rest = fl.wp.rest ?? 0.45;
+            if (Math.abs(fl.vy) > Math.abs(fl.vx)) fl.vy = -fl.vy * rest; else fl.vx = -fl.vx * rest;
+            fl.vx *= fl.wp.special === 'pong' ? 0.94 : 0.75;
+          } else {
+            fl.done = true; explode(fl.x, fl.y, fl.wp); break;
+          }
+        }
+        const prox = fl.wp.special === 'pong' ? 26 : 13;
+        const victim = fighters.find((f) => f.alive && f !== fighters[turnPi] && Math.abs(f.x - fl.x) < prox && Math.abs(f.y - 9 - fl.y) < prox);
+        if (victim && (fl.wp.special === 'pong' || (!fl.wp.bounce && fl.wp.fuseMs === 0))) {
+          // the pong ball smells fear — it detonates on contact with any enemy
+          fl.done = true; explode(fl.x, fl.y, fl.wp); break;
         }
       }
-      const victim = fighters.find((f) => f.alive && f !== fighters[turnPi] && Math.abs(f.x - fl.x) < 13 && Math.abs(f.y - 9 - fl.y) < 13);
-      if (victim && !fl.wp.bounce && fl.wp.fuseMs === 0) {
-        const { x, y, wp } = fl; flight = null; shell = null; explode(x, y, wp); finishShot(); return;
-      }
+      if (!fl.done) { fl.trail.push([fl.x, fl.y]); if (fl.trail.length > 40) fl.trail.shift(); }
     }
-    if (flight && shell) { shell.x = flight.x; shell.y = flight.y; shell.trail.push([flight.x, flight.y]); if (shell.trail.length > 40) shell.trail.shift(); }
+    const before = flights.length;
+    flights = flights.filter((fl) => !fl.done);
+    if (before > 0 && flights.length === 0) finishShot();
   }
 
   function finishShot() {
@@ -467,12 +479,12 @@ export function startArtillery(net: ArtilleryNet): void {
     const seed = (Math.random() * 0xffffffff) >>> 0;
     fighters = humans.map((p) => ({
       name: p.name, color: COLORS[p.slot], bot: false, lobbySlot: p.slot,
-      x: 0, y: 0, vy: 0, face: 1, hp: WA_HP, alive: true, dyna: WEAPONS[3].ammo, fallFrom: 0,
+      x: 0, y: 0, vy: 0, face: 1, hp: WA_HP, alive: true, ammo: WEAPONS.map((w) => w.ammo), fallFrom: 0,
     }));
     for (let i = 0; i < botCount && fighters.length < WA_MAX_PLAYERS; i++) {
       fighters.push({
         name: BOT_NAMES[i], color: COLORS[fighters.length], bot: true, lobbySlot: -1,
-        x: 0, y: 0, vy: 0, face: 1, hp: WA_HP, alive: true, dyna: WEAPONS[3].ammo, fallFrom: 0,
+        x: 0, y: 0, vy: 0, face: 1, hp: WA_HP, alive: true, ammo: WEAPONS.map((w) => w.ammo), fallFrom: 0,
       });
     }
     genTerrain(seed, mapChoice);
@@ -515,6 +527,8 @@ export function startArtillery(net: ArtilleryNet): void {
       matchWinner = winIdx;
       banner = winIdx >= 0 ? `${fighters[winIdx].name} WINS THE WAR` : 'MUTUAL DESTRUCTION';
       bannerUntil = performance.now() + 5200;
+      sfxBoom(1.3);
+      say(winIdx >= 0 ? 'The Tavern erupts. Drinks are on the House. (They are not.)' : 'Nobody won. The craters won.');
       net.relay({ t: 'end', winner: winIdx });
       if (!endReported) { endReported = true; net.end(winIdx >= 0 ? fighters[winIdx].lobbySlot : -1); }
       window.setTimeout(() => { if (waOpen) backToLobby(); }, 4800);
@@ -579,9 +593,9 @@ export function startArtillery(net: ArtilleryNet): void {
     // aim error keeps bots beatable (30-80px depending on which bot)
     const noise = (30 + fighters.indexOf(me) * 18) * (Math.random() - 0.5) / 200;
     if (Math.random() < 0.4) {
-      say(me.name === 'KEVIN JR.' ? 'Kevin Jr. photosynthesizes pure aggression.'
-        : me.name === 'DOUG' ? 'Doug would like to say: you\'re a lot.'
-        : 'Dana calls this "just another set."');
+      say(me.name === 'THE DORITO MAN' ? 'The Dorito man crunches menacingly.'
+        : me.name === 'WALDO' ? 'Waldo: "Years of hiding. For this moment."'
+        : 'The minion giggles. That\'s a bad sign.');
     }
     const shot = { t: 'shot', pi: turnPi, w: 0, x: Math.round(me.x), y: Math.round(me.y), ang: best.ang + noise, pow: best.pow };
     net.relay(shot);
@@ -589,11 +603,14 @@ export function startArtillery(net: ArtilleryNet): void {
   }
 
   // --- cosmetic helpers ---
+  interface Flash { x: number; y: number; r: number; life: number; }
+  let flashes: Flash[] = [];
   function boom(x: number, y: number, r: number) {
     for (let i = 0; i < 60; i++) {
       const a = Math.random() * Math.PI * 2, sp = 80 + Math.random() * 420;
       sparks.push({ x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 140, life: 0, max: 0.5 + Math.random() * 0.7, color: ['#ff9a3a', '#ffd060', '#ff5a3a', '#fff'][i % 4] });
     }
+    flashes.push({ x, y, r: r * 1.7, life: 0 });
     shakeUntil = performance.now() + 380;
     shakeAmp = Math.min(22, r * 0.28);
   }
@@ -601,7 +618,7 @@ export function startArtillery(net: ArtilleryNet): void {
   function backToLobby() {
     mode = 'lobby';
     matchWinner = -2;
-    flight = null; shell = null;
+    flights = [];
     resolving = false;
     renderUi();
   }
@@ -648,7 +665,7 @@ export function startArtillery(net: ArtilleryNet): void {
     if (mode === 'menu') {
       const title = document.createElement('div');
       title.innerHTML =
-        '<div style="font-size:58px;font-weight:900;letter-spacing:8px;color:#ffb847;text-shadow:0 0 30px #ffb84766">🪖 TSONG ARTILLERY</div>' +
+        '<div style="font-size:54px;font-weight:900;letter-spacing:6px;color:#ffb847;text-shadow:0 0 30px #ffb84766">🪖 WORMS: TSONG EDITION</div>' +
         '<div style="font-size:13px;opacity:.7;margin-top:6px;letter-spacing:2px">TURN-BASED MAYHEM · DESTRUCTIBLE EVERYTHING · LAST ONE STANDING</div>';
       ui.appendChild(title);
       ui.appendChild(btn('Enlist', '#ffb847', () => net.join()));
@@ -713,7 +730,8 @@ export function startArtillery(net: ArtilleryNet): void {
         '<div style="font-size:11px;letter-spacing:3px;color:#a08a5a;margin-bottom:4px">FIELD MANUAL</div>' +
         'A / D — walk · MOUSE — aim · HOLD SPACE — charge, release to FIRE<br>' +
         '1 🚀 Bazooka (rides the wind) · 2 💣 Grenade (bounces, 3s fuse)<br>' +
-        '3 🔫 Shotgun (point blank) · 4 🧨 Dynamite (drop &amp; RUN — ×2 per war)<br>' +
+        '3 🔫 Shotgun (point blank) · 4 🧨 Dynamite (drop &amp; RUN — ×2)<br>' +
+        '5 🛩️ Airstrike (three from above, ×1) · 6 🏓 Pong Ball (bounces, hunts, ×1)<br>' +
         'Fall damage is real. The water is fatal. The wind is not your friend.';
       ui.appendChild(legend);
       ui.appendChild(btn('Desert', '#8aa', () => { net.leave(); mode = 'menu'; renderUi(); }));
@@ -732,7 +750,7 @@ export function startArtillery(net: ArtilleryNet): void {
     if (d.t === 'init') {
       fighters = (d.fighters as any[]).map((f: any, i: number) => ({
         name: String(f.name), color: COLORS[i], bot: !!f.bot, lobbySlot: f.lobbySlot ?? -1,
-        x: 0, y: 0, vy: 0, face: 1, hp: WA_HP, alive: true, dyna: WEAPONS[3].ammo, fallFrom: 0,
+        x: 0, y: 0, vy: 0, face: 1, hp: WA_HP, alive: true, ammo: WEAPONS.map((w) => w.ammo), fallFrom: 0,
       }));
       turnCount = 0;
       waterY = WATER_BASE;
@@ -751,7 +769,7 @@ export function startArtillery(net: ArtilleryNet): void {
       const f = fighters[d.pi];
       if (f && d.pi !== myIdx()) { f.x = d.x; f.y = d.y; f.face = d.face; f.fallFrom = f.y; }
     } else if (d.t === 'shot') {
-      if (d.pi !== myIdx()) resolveShot(d.pi, d.w, d.x, d.y, d.ang, d.pow);
+      if (d.pi !== myIdx()) resolveShot(d.pi, d.w, d.x, d.y, d.ang, d.pow, d.tx);
       if (isHost && fighters[d.pi] && !fighters[d.pi].bot) { /* host re-simulates guests' shots via the same path */ }
     } else if (d.t === 'drown') {
       const f = fighters[d.pi];
@@ -770,6 +788,8 @@ export function startArtillery(net: ArtilleryNet): void {
       matchWinner = d.winner;
       banner = d.winner >= 0 ? `${fighters[d.winner]?.name ?? '?'} WINS THE WAR` : 'MUTUAL DESTRUCTION';
       bannerUntil = performance.now() + 5200;
+      sfxBoom(1.3);
+      say(d.winner >= 0 ? 'The Tavern erupts. Drinks are on the House. (They are not.)' : 'Nobody won. The craters won.');
       window.setTimeout(() => { if (waOpen) backToLobby(); }, 4800);
     }
   }
@@ -784,11 +804,11 @@ export function startArtillery(net: ArtilleryNet): void {
   function fire() {
     if (!myTurn() || charge < 0) return;
     const me = fighters[myIdx()];
-    if (weapon === 3 && me.dyna <= 0) { charge = -1; return; }
-    const shot = { t: 'shot', pi: myIdx(), w: weapon, x: Math.round(me.x), y: Math.round(me.y), ang: aimAngle, pow: Math.min(1, charge) };
+    if (WEAPONS[weapon].ammo >= 0 && me.ammo[weapon] <= 0) { charge = -1; return; }
+    const shot = { t: 'shot', pi: myIdx(), w: weapon, x: Math.round(me.x), y: Math.round(me.y), ang: aimAngle, pow: Math.min(1, charge), tx: Math.round(mouseX) };
     charge = -1;
     net.relay(shot);
-    resolveShot(shot.pi, shot.w, me.x, me.y, shot.ang, shot.pow);
+    resolveShot(shot.pi, shot.w, me.x, me.y, shot.ang, shot.pow, shot.tx);
   }
 
   function onKeyDown(e: KeyboardEvent) {
@@ -797,7 +817,7 @@ export function startArtillery(net: ArtilleryNet): void {
     const k = e.key.toLowerCase();
     if (['a', 'd', ' '].includes(k)) { e.preventDefault(); e.stopPropagation(); }
     if (k === ' ' && myTurn() && charge < 0 && !e.repeat) charge = 0;
-    if (['1', '2', '3', '4'].includes(k) && myTurn()) weapon = Number(k) - 1;
+    if (['1', '2', '3', '4', '5', '6'].includes(k) && myTurn()) weapon = Number(k) - 1;
     keys.add(k);
   }
   function onKeyUp(e: KeyboardEvent) {
@@ -885,6 +905,18 @@ export function startArtillery(net: ArtilleryNet): void {
       ctx.fillRect(x, y, 2, 2);
     }
     ctx.globalAlpha = 1;
+    // a fat harvest moon behind everything
+    ctx.fillStyle = '#f0e8d0';
+    ctx.shadowColor = '#f0e8d0'; ctx.shadowBlur = 60;
+    ctx.beginPath();
+    ctx.arc(WA_W * 0.78, WA_H * 0.2, 52, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = '#d8ceb455';
+    ctx.beginPath();
+    ctx.arc(WA_W * 0.78 - 14, WA_H * 0.2 - 8, 9, 0, Math.PI * 2);
+    ctx.arc(WA_W * 0.78 + 18, WA_H * 0.2 + 12, 6, 0, Math.PI * 2);
+    ctx.fill();
     // distant mountain silhouettes (two parallax bands)
     for (const [tone, amp, base, speed] of [['#141c38', 210, 0.52, 0], ['#1c2644', 150, 0.62, 0]] as const) {
       ctx.fillStyle = tone;
@@ -929,6 +961,11 @@ export function startArtillery(net: ArtilleryNet): void {
       const active = i === turnPi && matchWinner === -2;
       const bob = active ? Math.sin(now / 300) * 1.5 : 0;
       const fy = f.y + bob;
+      // grounding shadow
+      ctx.fillStyle = '#00000055';
+      ctx.beginPath();
+      ctx.ellipse(f.x, f.y + 1, 11, 3.2, 0, 0, Math.PI * 2);
+      ctx.fill();
       // body
       ctx.fillStyle = '#e8c8a0';
       ctx.beginPath();
@@ -949,6 +986,20 @@ export function startArtillery(net: ArtilleryNet): void {
       } else {
         ctx.fillRect(f.x + f.face * 2 - 1.4, fy - 9.6, 2.8, 1);
         ctx.fillRect(f.x + f.face * 6 - 1.4, fy - 9.6, 2.8, 1);
+      }
+      if (active && now < bannerUntil + 900) {
+        // a stage spotlight finds whoever's up
+        const lg = ctx.createLinearGradient(f.x, 0, f.x, fy);
+        lg.addColorStop(0, '#fff2c810');
+        lg.addColorStop(1, '#fff2c838');
+        ctx.fillStyle = lg;
+        ctx.beginPath();
+        ctx.moveTo(f.x - 14, 0);
+        ctx.lineTo(f.x + 14, 0);
+        ctx.lineTo(f.x + 46, fy + 4);
+        ctx.lineTo(f.x - 46, fy + 4);
+        ctx.closePath();
+        ctx.fill();
       }
       // the acting fighter shoulders a bazooka tube aimed along their aim (locals see live angle)
       if (active) {
@@ -984,7 +1035,20 @@ export function startArtillery(net: ArtilleryNet): void {
     if (myTurn()) {
       const me = fighters[myIdx()];
       const wp = WEAPONS[weapon];
-      if (!wp.hitscan && weapon !== 3) {
+      if (wp.special === 'air') {
+        // target designator: dashed drop line at the mouse
+        ctx.strokeStyle = '#ff5a3a99';
+        ctx.setLineDash([10, 10]);
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(mouseX, 0);
+        ctx.lineTo(mouseX, WA_H);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.font = '26px serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('🛩️', mouseX, 40 + Math.sin(now / 300) * 6);
+      } else if (!wp.hitscan && weapon !== 3) {
         // trajectory preview — brighter with charge, tinted red near max
         const pow = charge >= 0 ? charge : 0.55;
         const speed = 380 + pow * 720;
@@ -1031,21 +1095,21 @@ export function startArtillery(net: ArtilleryNet): void {
       }
     }
 
-    // in-flight shell + fuse countdown
-    if (shell) {
+    // in-flight shells + fuse countdowns (airstrike flies three at once)
+    for (const fl of flights) {
       ctx.strokeStyle = '#ffffff44';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      shell.trail.forEach(([x, y], i) => { if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+      fl.trail.forEach(([x, y], i) => { if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
       ctx.stroke();
       ctx.font = '22px serif';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(shell.icon, shell.x, shell.y);
-      if (flight && flight.wp.fuseMs > 0) {
-        const s = Math.max(0, flight.fuse);
+      ctx.fillText(fl.wp.icon, fl.x, fl.y);
+      if (fl.wp.fuseMs > 0) {
+        const sLeft = Math.max(0, fl.fuse);
         ctx.font = '800 17px ui-monospace, monospace';
-        ctx.fillStyle = s < 1 ? '#ff5a3a' : '#ffd060';
-        ctx.fillText(s.toFixed(1), shell.x, shell.y - 24);
+        ctx.fillStyle = sLeft < 1 ? '#ff5a3a' : '#ffd060';
+        ctx.fillText(sLeft.toFixed(1), fl.x, fl.y - 24);
       }
     }
     // sparks
@@ -1071,6 +1135,24 @@ export function startArtillery(net: ArtilleryNet): void {
     floaties = floaties.filter((fl) => fl.life < 1.2);
     ctx.globalAlpha = 1;
 
+    // explosion flashes — additive expanding rings
+    for (const flh of flashes) {
+      flh.life += 1 / 60;
+      const t = flh.life / 0.32;
+      if (t >= 1) continue;
+      ctx.globalCompositeOperation = 'lighter';
+      const rg = ctx.createRadialGradient(flh.x, flh.y, 0, flh.x, flh.y, flh.r * (0.4 + t * 0.6));
+      rg.addColorStop(0, `rgba(255, 240, 200, ${0.9 * (1 - t)})`);
+      rg.addColorStop(0.5, `rgba(255, 150, 60, ${0.5 * (1 - t)})`);
+      rg.addColorStop(1, 'rgba(255, 80, 20, 0)');
+      ctx.fillStyle = rg;
+      ctx.beginPath();
+      ctx.arc(flh.x, flh.y, flh.r * (0.4 + t * 0.6), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    flashes = flashes.filter((flh) => flh.life < 0.32);
+
     // water on top (things sink INTO it) — reddens as sudden death squeezes the map
     const sudden = turnCount > SUDDEN_DEATH_TURN;
     ctx.fillStyle = sudden ? '#4a2038dd' : '#1a3a5add';
@@ -1087,6 +1169,12 @@ export function startArtillery(net: ArtilleryNet): void {
       if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
     ctx.stroke();
+    // moonlight shimmer
+    ctx.fillStyle = '#ffffff22';
+    for (let i = 0; i < 14; i++) {
+      const sx = (WA_W * 0.7 + i * 37 + Math.sin(now / 700 + i) * 20) % WA_W;
+      ctx.fillRect(sx, waterY + 14 + (i % 3) * 9, 14 + (i % 4) * 6, 2);
+    }
 
     // --- HUD ---
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1127,12 +1215,12 @@ export function startArtillery(net: ArtilleryNet): void {
       let wx = 18;
       for (let w = 0; w < WEAPONS.length; w++) {
         const wp = WEAPONS[w];
-        const ammo = w === 3 ? `×${fighters[myIdx()].dyna}` : '';
+        const ammo = WEAPONS[w].ammo >= 0 ? `×${fighters[myIdx()].ammo[w]}` : '';
         const label = `${w + 1} ${wp.icon} ${wp.name}${ammo}`;
         ctx.font = '800 15px ui-monospace, monospace';
         const tw = ctx.measureText(label).width + 18;
         const sel = w === weapon;
-        const dead = w === 3 && fighters[myIdx()].dyna <= 0;
+        const dead = WEAPONS[w].ammo >= 0 && fighters[myIdx()].ammo[w] <= 0;
         ctx.fillStyle = sel ? '#241a0acc' : '#00000088';
         ctx.fillRect(wx, 12, tw, 28);
         if (sel) { ctx.strokeStyle = '#ffd060'; ctx.lineWidth = 2; ctx.strokeRect(wx, 12, tw, 28); }

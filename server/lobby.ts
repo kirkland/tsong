@@ -1787,7 +1787,7 @@ export class Lobby {
       this.housePay(conn.pid, conn.nickname, Lobby.WA_WIN_REWARD)
         .then((paid) => {
           this.sendWallet(winSock); this.refreshNetWorth().catch(() => {});
-          if (paid > 0) this.notify(winSock, `🪖 You won Tsong Artillery — +${paid.toLocaleString()} coins!`);
+          if (paid > 0) this.notify(winSock, `🪖 You won Worms: Tsong Edition — +${paid.toLocaleString()} coins!`);
         })
         .catch((e) => console.error('artillery reward failed:', e));
     }

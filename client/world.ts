@@ -2839,7 +2839,7 @@ export function startWorld(net: WorldNet): void {
         { label: '🧨 TNT Explosion Rally', onPick: () => { pause(); net.openFeature('tnt'); } },
         { label: '🏍️ Tron', onPick: () => { pause(); net.openFeature('tron'); } },
         { label: '🎸 Tsong Hero', onPick: () => { pause(); net.openFeature('guitarhero'); } },
-        { label: '🪖 Tsong Artillery', onPick: () => { pause(); net.openFeature('artillery'); } },
+        { label: '🪖 Worms: Tsong Edition', onPick: () => { pause(); net.openFeature('artillery'); } },
         { label: '🏙️ City Tycoon', onPick: () => { pause(); net.openFeature('citytycoon'); } },
       ]);
       return;
