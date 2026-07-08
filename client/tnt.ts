@@ -118,7 +118,7 @@ interface Snap {
   sd: boolean; tm: number;
   ov: number | null;
 }
-interface GuestIn { t: 'in'; u: boolean; d: boolean; l: boolean; r: boolean; ax: number; ay: number; nb: number; nk: number }
+interface GuestIn { t: 'in'; u: boolean; d: boolean; l: boolean; r: boolean; ax: number; ay: number; nb: number; nk: number; mx?: number; my?: number /* analog stick (touch) — overrides the key flags when present */ }
 
 // --- view (what gets drawn — host builds it from the sim, guest from snapshots) ---
 interface ViewPlayer { x: number; y: number; h: number; c: number; ax: number; ay: number; inv: boolean; cd: number }
@@ -164,6 +164,18 @@ let inputTimer = 0;
 // view transform (world→screen), recomputed each draw, used to invert the mouse
 let vScale = 1, vOx = 0, vOy = 0;
 
+// touch controls (tablets): the first held finger becomes a floating move stick wherever it
+// lands, any OTHER tap lobs a bomb right at the tapped spot, and a big SMACK button auto-
+// throws your wood at the nearest enemy bomb. A quick still tap of the "stick" finger counts
+// as a bomb too, so one-finger players can still fight.
+const JOY_R = 56; // stick throw radius, screen px
+let touchUI = false; // once touch is likely/seen: draw thumb controls + use touch wording
+let joyTouch: number | null = null; // Touch.identifier currently driving the stick
+let joyStart = 0; // performance.now() when the stick touch began
+let joyMoved = false; // did it ever drag? (release quick+still = it was a tap → bomb)
+let joyBaseX = 0, joyBaseY = 0, joyKnobX = 0, joyKnobY = 0; // screen px
+let touchMvX = 0, touchMvY = 0, touchMoveActive = false; // analog move intent -1..1
+
 // local juice
 interface Particle { x: number; y: number; vx: number; vy: number; life: number; max: number; size: number; color: string; grav: number; shape: 'dot' | 'wood' | 'confetti'; rot: number; vr: number }
 interface Floater { x: number; y: number; text: string; life: number; max: number; color: string; size: number }
@@ -186,6 +198,7 @@ export function startTnt(hooks: TntNetHooks) {
   build();
   if (!overlay) return;
   running = true;
+  try { touchUI = window.matchMedia('(pointer: coarse)').matches; } catch { /* keep mouse wording */ }
   screen = 'lobby';
   lobby = null;
   mySlot = -1;
@@ -224,15 +237,29 @@ function build() {
   if (overlay) return;
   overlay = document.createElement('div');
   overlay.style.cssText =
-    'position:fixed;inset:0;z-index:9000;background:#0b0e14;display:none;cursor:crosshair;';
+    'position:fixed;inset:0;z-index:9000;background:#0b0e14;display:none;cursor:crosshair;touch-action:none;';
   canvas = document.createElement('canvas');
-  canvas.style.cssText = 'width:100%;height:100%;display:block;';
+  canvas.style.cssText = 'width:100%;height:100%;display:block;touch-action:none;';
   overlay.appendChild(canvas);
+  // tablets have no Escape key — everyone gets a corner ✕
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = '✕';
+  closeBtn.title = 'Leave TNT Explosion Rally';
+  closeBtn.style.cssText =
+    'position:absolute;top:10px;right:12px;width:42px;height:42px;z-index:1;' +
+    'background:#1a2030cc;border:1px solid #3a4150;border-radius:10px;color:#9aa4b5;' +
+    'font-size:20px;line-height:1;cursor:pointer;touch-action:manipulation;';
+  closeBtn.addEventListener('click', () => exit());
+  overlay.appendChild(closeBtn);
   document.body.appendChild(overlay);
   ctx = canvas.getContext('2d');
   canvas.addEventListener('mousemove', onMouseMove);
   canvas.addEventListener('mousedown', onMouseDown);
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+  canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+  canvas.addEventListener('touchend', onTouchEnd, { passive: false });
+  canvas.addEventListener('touchcancel', onTouchCancel, { passive: false });
 }
 
 // ---------------------------------------------------------------- net feeds
@@ -346,20 +373,147 @@ function onMouseMove(e: MouseEvent) {
   inputDirty = true;
 }
 
+function backToLobby() {
+  screen = 'lobby';
+  sim = null;
+  snapPrev = snapCur = null;
+}
+
 function onMouseDown(e: MouseEvent) {
   if (!running) return;
   e.preventDefault();
   if (screen === 'lobby') { lobbyClick(e.clientX, e.clientY); return; }
-  const over = currentOver();
-  if (over !== null) {
-    // game-over banner → any click returns to the lobby screen
-    screen = 'lobby';
-    sim = null;
-    snapPrev = snapCur = null;
-    return;
+  if (currentOver() !== null) { backToLobby(); return; } // any click on the banner → lobby
+  // touchscreen laptops: the SMACK button is clickable too
+  if (touchUI) {
+    const wb = woodBtn();
+    if (Math.hypot(e.clientX - wb.x, e.clientY - wb.y) < wb.r + 8) { pressBlockAuto(); return; }
   }
   if (e.button === 2) pressBlock();
   else pressBomb();
+}
+
+// --- touch: floating stick + tap-to-lob + SMACK button ---
+
+function onTouchStart(e: TouchEvent) {
+  if (!running) return;
+  e.preventDefault(); // also suppresses the synthetic mouse events
+  touchUI = true;
+  for (const t of Array.from(e.changedTouches)) {
+    const x = t.clientX, y = t.clientY;
+    if (screen === 'lobby') { lobbyClick(x, y); continue; }
+    if (currentOver() !== null) { backToLobby(); continue; }
+    const wb = woodBtn();
+    if (Math.hypot(x - wb.x, y - wb.y) < wb.r + 10) { pressBlockAuto(); continue; }
+    if (joyTouch === null) {
+      // first finger down = the move stick (might turn out to be a tap — decided on release)
+      joyTouch = t.identifier;
+      joyStart = performance.now();
+      joyMoved = false;
+      joyBaseX = joyKnobX = x;
+      joyBaseY = joyKnobY = y;
+      touchMoveActive = true;
+      touchMvX = 0; touchMvY = 0;
+      inputDirty = true;
+    } else {
+      // any extra finger: lob a bomb right where it tapped
+      aimX = (x - vOx) / vScale;
+      aimY = (y - vOy) / vScale;
+      inputDirty = true;
+      pressBomb();
+    }
+  }
+}
+
+function onTouchMove(e: TouchEvent) {
+  if (!running) return;
+  e.preventDefault();
+  for (const t of Array.from(e.changedTouches)) {
+    if (t.identifier !== joyTouch) continue;
+    const dx = t.clientX - joyBaseX, dy = t.clientY - joyBaseY;
+    const d = Math.hypot(dx, dy);
+    if (d > 10) joyMoved = true;
+    if (d < 8) { touchMvX = 0; touchMvY = 0; } // deadzone
+    else {
+      const cl = Math.min(1, d / JOY_R);
+      touchMvX = (dx / d) * cl;
+      touchMvY = (dy / d) * cl;
+    }
+    joyKnobX = joyBaseX + (d ? (dx / d) * Math.min(d, JOY_R) : 0);
+    joyKnobY = joyBaseY + (d ? (dy / d) * Math.min(d, JOY_R) : 0);
+    inputDirty = true;
+  }
+}
+
+function endJoy(t: Touch, mayThrow: boolean) {
+  if (t.identifier !== joyTouch) return;
+  const quick = performance.now() - joyStart < 260 && !joyMoved;
+  joyTouch = null;
+  touchMoveActive = false;
+  touchMvX = 0; touchMvY = 0;
+  inputDirty = true;
+  if (mayThrow && quick && screen === 'playing' && currentOver() === null) {
+    // it never dragged — that was a tap: lob a bomb there
+    aimX = (t.clientX - vOx) / vScale;
+    aimY = (t.clientY - vOy) / vScale;
+    pressBomb();
+  }
+}
+
+function onTouchEnd(e: TouchEvent) {
+  if (!running) return;
+  e.preventDefault();
+  for (const t of Array.from(e.changedTouches)) endJoy(t, true);
+}
+
+function onTouchCancel(e: TouchEvent) {
+  if (!running) return;
+  for (const t of Array.from(e.changedTouches)) endJoy(t, false);
+}
+
+/** The SMACK button (bottom-right, screen px). Big enough for thumbs. */
+function woodBtn(): { x: number; y: number; r: number } {
+  return { x: window.innerWidth - 76, y: window.innerHeight - 88, r: 44 };
+}
+
+/** Tablet-friendly parry: auto-aim the wood at the nearest bomb that isn't mine
+ *  (or at the opponent, as a rude fallback), then throw. */
+function pressBlockAuto() {
+  if (screen !== 'playing' || currentOver() !== null) return;
+  const myIdx = mySlot === 0 ? 0 : 1;
+  let me: { x: number; y: number; carry: number } | null = null;
+  let target: { x: number; y: number } | null = null;
+  let bestD = Infinity;
+  if (mySlot === 0 && sim) {
+    const p = sim.pl[0];
+    me = { x: p.x, y: p.y, carry: p.carry };
+    for (const b of sim.bombs) {
+      if (b.dead || b.owner === myIdx) continue;
+      const d = Math.hypot(b.x - p.x, b.y - p.y);
+      if (d < bestD) { bestD = d; target = { x: b.x, y: b.y }; }
+    }
+    if (!target) target = { x: sim.pl[1].x, y: sim.pl[1].y };
+  } else if (snapCur) {
+    const p = snapCur.s.pl[myIdx];
+    if (!p) return;
+    me = { x: p.x, y: p.y, carry: p.c };
+    for (const b of snapCur.s.bo) {
+      if (b.o === myIdx) continue;
+      const d = Math.hypot(b.x - p.x, b.y - p.y);
+      if (d < bestD) { bestD = d; target = { x: b.x, y: b.y }; }
+    }
+    const op = snapCur.s.pl[1 - myIdx];
+    if (!target && op) target = { x: op.x, y: op.y };
+  }
+  if (!me || !target) return;
+  if (me.carry < 1) {
+    addFloater(me.x, me.y - PR - 12, 'no wood yet!', '#e8c07a', 16);
+    return;
+  }
+  aimX = target.x;
+  aimY = target.y;
+  inputDirty = true;
+  pressBlock();
 }
 
 function pressBomb() {
@@ -377,6 +531,7 @@ function pressBlock() {
 function sendInput() {
   if (mySlot !== 0 && screen === 'playing' && net) {
     const msg: GuestIn = { t: 'in', u: keys.u, d: keys.d, l: keys.l, r: keys.r, ax: aimX, ay: aimY, nb: gSentBomb, nk: gSentBlock };
+    if (touchMoveActive) { msg.mx = touchMvX; msg.my = touchMvY; }
     net.relay(msg);
     inputDirty = false;
     inputTimer = 0;
@@ -446,8 +601,13 @@ function solidAt(grid: number[], px: number, py: number): boolean {
 function applyGuestInput(m: GuestIn) {
   if (!sim || sim.practice) return;
   const p = sim.pl[1];
-  p.mvx = (m.r ? 1 : 0) - (m.l ? 1 : 0);
-  p.mvy = (m.d ? 1 : 0) - (m.u ? 1 : 0);
+  if (typeof m.mx === 'number' && typeof m.my === 'number' && isFinite(m.mx) && isFinite(m.my)) {
+    p.mvx = Math.max(-1, Math.min(1, m.mx));
+    p.mvy = Math.max(-1, Math.min(1, m.my));
+  } else {
+    p.mvx = (m.r ? 1 : 0) - (m.l ? 1 : 0);
+    p.mvy = (m.d ? 1 : 0) - (m.u ? 1 : 0);
+  }
   if (typeof m.ax === 'number' && isFinite(m.ax)) p.aimX = Math.max(0, Math.min(W, m.ax));
   if (typeof m.ay === 'number' && isFinite(m.ay)) p.aimY = Math.max(0, Math.min(H, m.ay));
   while (p.bombSeq < (m.nb | 0)) { p.bombSeq++; hostThrowBomb(sim, 1); }
@@ -565,10 +725,10 @@ function stepSim(s: Sim, dt: number) {
   }
   s.t += dt;
 
-  // local (host) input → player 0
+  // local (host) input → player 0 (thumb stick wins over keys while a finger is down)
   const p0 = s.pl[0];
-  p0.mvx = (keys.r ? 1 : 0) - (keys.l ? 1 : 0);
-  p0.mvy = (keys.d ? 1 : 0) - (keys.u ? 1 : 0);
+  p0.mvx = touchMoveActive ? touchMvX : (keys.r ? 1 : 0) - (keys.l ? 1 : 0);
+  p0.mvy = touchMoveActive ? touchMvY : (keys.d ? 1 : 0) - (keys.u ? 1 : 0);
   p0.aimX = aimX; p0.aimY = aimY;
 
   if (s.bot) stepBot(s, dt);
@@ -1139,14 +1299,23 @@ function drawLobby(cx: CanvasRenderingContext2D, cw: number, ch: number, nowSec:
   cx.fillText('a 1v1 maze duel — concept by a six-year-old game director', midX, ch * 0.16 + 38 + wob);
 
   // how to play
-  const lines = [
-    '🏃  WASD / arrows — run the maze',
-    '🧨  click (or SPACE) — lob a bomb at your enemy… it arcs right over walls',
-    '💥  BOOM! explosions sometimes drop wooden blocks',
-    '🪵  walk over wood to grab it',
-    '🏏  right-click (or E) — throw wood at a bomb to SMACK it back at them!',
-    '❤️  5 hearts each — hit zero and you lose',
-  ];
+  const lines = touchUI
+    ? [
+        '🏃  hold + drag a thumb — run the maze',
+        '🧨  tap anywhere — lob a bomb right there… it arcs over walls',
+        '💥  BOOM! explosions sometimes drop wooden blocks',
+        '🪵  walk over wood to grab it',
+        '🏏  tap the SMACK button — knock the nearest bomb back at them!',
+        '❤️  5 hearts each — hit zero and you lose',
+      ]
+    : [
+        '🏃  WASD / arrows — run the maze',
+        '🧨  aim with the mouse, click (or SPACE) — lob a bomb… it arcs over walls',
+        '💥  BOOM! explosions sometimes drop wooden blocks',
+        '🪵  walk over wood to grab it',
+        '🏏  right-click (or E) — throw wood at a bomb to SMACK it back at them!',
+        '❤️  5 hearts each — hit zero and you lose',
+      ];
   cx.font = '16px system-ui, sans-serif';
   cx.textAlign = 'left';
   const lx = midX - 260;
@@ -1204,7 +1373,7 @@ function drawLobby(cx: CanvasRenderingContext2D, cw: number, ch: number, nowSec:
 
   cx.font = '13px system-ui, sans-serif';
   cx.fillStyle = '#5a6375';
-  cx.fillText('ESC to leave', midX, ch - 28);
+  cx.fillText(touchUI ? 'tap ✕ to leave' : 'ESC (or ✕) to leave', midX, ch - 28);
 
   drawFloatersScreen(cx);
 }
@@ -1263,7 +1432,65 @@ function drawGame(cx: CanvasRenderingContext2D, cw: number, ch: number, nowSec: 
     cx.fillText('🌋 SUDDEN DEATH — THE SKY IS THROWING BOMBS 🌋', cw / 2, HUD_H + 24);
   }
 
+  // the first few seconds teach the controls (nobody reads the lobby, especially not at six)
+  if (view.ov === null && view.tm < 7) {
+    cx.save();
+    cx.globalAlpha = Math.max(0, Math.min(1, 7 - view.tm));
+    cx.font = '700 17px system-ui, sans-serif';
+    cx.fillStyle = '#ffd24f';
+    cx.fillText(
+      touchUI ? '👍 hold + drag to run  •  tap anywhere to throw!' : '🖱️ move the mouse to aim  •  click to throw!',
+      cw / 2, ch - 24,
+    );
+    cx.restore();
+  }
+
+  if (touchUI && view.ov === null) drawTouchControls(cx, view, nowSec);
+
   if (view.ov !== null) drawGameOver(cx, cw, ch, view.ov);
+}
+
+// --- on-screen thumb controls (screen space) ---
+function drawTouchControls(cx: CanvasRenderingContext2D, view: View, nowSec: number) {
+  cx.save();
+  // floating move stick, only while a finger holds it
+  if (joyTouch !== null) {
+    cx.globalAlpha = 0.35;
+    cx.fillStyle = '#9aa4b5';
+    cx.beginPath();
+    cx.arc(joyBaseX, joyBaseY, JOY_R, 0, Math.PI * 2);
+    cx.fill();
+    cx.globalAlpha = 0.7;
+    cx.fillStyle = '#d7dce6';
+    cx.beginPath();
+    cx.arc(joyKnobX, joyKnobY, 24, 0, Math.PI * 2);
+    cx.fill();
+  }
+  // the SMACK button: lit up wooden when you're armed, dim when you're not
+  const wb = woodBtn();
+  const me = view.pl[mySlot === 0 ? 0 : 1];
+  const armed = (me?.c ?? 0) > 0;
+  const pulse = armed ? 1 + Math.sin(nowSec * 6) * 0.05 : 1;
+  cx.globalAlpha = armed ? 0.95 : 0.4;
+  cx.fillStyle = armed ? '#b07a3a' : '#1a2030';
+  cx.strokeStyle = armed ? '#ffd24f' : '#3a4150';
+  cx.lineWidth = 3;
+  cx.beginPath();
+  cx.arc(wb.x, wb.y, wb.r * pulse, 0, Math.PI * 2);
+  cx.fill();
+  cx.stroke();
+  // little plank
+  cx.fillStyle = armed ? '#8a5a2b' : '#2a2f3c';
+  cx.fillRect(wb.x - 16, wb.y - 18, 32, 20);
+  cx.strokeStyle = armed ? '#6a4420' : '#3a4150';
+  cx.lineWidth = 2;
+  cx.strokeRect(wb.x - 16, wb.y - 18, 32, 20);
+  cx.textAlign = 'center';
+  cx.textBaseline = 'middle';
+  cx.font = '900 12px system-ui, sans-serif';
+  cx.fillStyle = armed ? '#fff3c4' : '#5a6375';
+  cx.fillText('SMACK!', wb.x, wb.y + 16);
+  cx.restore();
 }
 
 function drawArena(cx: CanvasRenderingContext2D, grid: number[], view: View, nowSec: number) {
@@ -1562,7 +1789,7 @@ function drawHud(cx: CanvasRenderingContext2D, cw: number, view: View, nowSec: n
     const p = view.pl[i];
     if (!p) continue;
     const rightSide = i === 1;
-    const baseX = rightSide ? cw - 24 : 24;
+    const baseX = rightSide ? cw - 72 : 24; // right block clears the corner ✕ button
     const dir = rightSide ? -1 : 1;
     cx.textAlign = rightSide ? 'right' : 'left';
     cx.textBaseline = 'alphabetic';
@@ -1638,6 +1865,6 @@ function drawGameOver(cx: CanvasRenderingContext2D, cw: number, ch: number, ov: 
   }
   cx.font = '700 18px system-ui, sans-serif';
   cx.fillStyle = '#9aa4b5';
-  cx.fillText('click for the lobby — rally again!', cw / 2, ch * 0.42 + (overNote ? 94 : 60));
+  cx.fillText(`${touchUI ? 'tap' : 'click'} for the lobby — rally again!`, cw / 2, ch * 0.42 + (overNote ? 94 : 60));
   cx.restore();
 }
