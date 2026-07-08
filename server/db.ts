@@ -515,6 +515,133 @@ export async function initDb(): Promise<void> {
       console.warn(`equalizer bounty skipped — no player named 'the equalizer' yet; will retry next boot`);
     }
   }
+  // One-time account consolidation: fold all duplicate accounts into the primary
+  // "lasso" account (japonte@linksquares.com). Merges every per-player table AND
+  // the doom_meta JSON blobs that embed a pid — the things mergePlayerFull() misses.
+  const lassoDone = await pool.query(`SELECT 1 FROM doom_meta WHERE k = 'lasso_consolidation_v1'`);
+  if (lassoDone.rowCount === 0) {
+    const tgt = await pool.query<{ id: string }>(
+      `SELECT id FROM players WHERE email = 'japonte@linksquares.com' ORDER BY id LIMIT 1`,
+    );
+    const targetPid = tgt.rows[0]?.id;
+    if (targetPid) {
+      const srcs = await pool.query<{ id: string; name: string }>(
+        `SELECT id, name FROM players
+         WHERE LOWER(TRIM(name)) IN ('lasso', 'lasso - mobile', 'tsong - mobile', 'josiel')
+           AND id <> $1`,
+        [targetPid],
+      );
+      for (const src of srcs.rows) {
+        const pid = src.id;
+        await pool.query(`UPDATE exclusive_instances SET owner_pid = $1 WHERE owner_pid = $2`, [targetPid, pid]);
+        await pool.query(`UPDATE listings SET seller_pid = $1, seller_name = 'lasso' WHERE seller_pid = $2`, [targetPid, pid]);
+        await pool.query(
+          `WITH moved AS (
+             DELETE FROM bounties WHERE target_pid = $2 RETURNING pot
+           )
+           INSERT INTO bounties (target_pid, target_name, pot)
+           SELECT $1, 'lasso', SUM(pot) FROM moved HAVING SUM(pot) IS NOT NULL
+           ON CONFLICT (target_pid) DO UPDATE
+             SET pot = bounties.pot + EXCLUDED.pot, target_name = 'lasso'`,
+          [targetPid, pid],
+        );
+        await pool.query(
+          `WITH moved AS (
+             DELETE FROM fishing_scores WHERE pid = $2 RETURNING best_lb
+           )
+           INSERT INTO fishing_scores (pid, name, best_lb)
+           SELECT $1, 'lasso', best_lb FROM moved
+           ON CONFLICT (pid) DO UPDATE
+             SET best_lb = GREATEST(fishing_scores.best_lb, EXCLUDED.best_lb), name = 'lasso'`,
+          [targetPid, pid],
+        );
+        await pool.query(
+          `WITH moved AS (
+             DELETE FROM gh_scores WHERE pid = $2 RETURNING song, diff, score
+           )
+           INSERT INTO gh_scores (pid, song, diff, name, score)
+           SELECT $1, song, diff, 'lasso', score FROM moved
+           ON CONFLICT (pid, song, diff) DO UPDATE
+             SET score = GREATEST(gh_scores.score, EXCLUDED.score), name = 'lasso'`,
+          [targetPid, pid],
+        );
+        await pool.query(
+          `WITH moved AS (
+             DELETE FROM dungeon_opened WHERE pid = $2 RETURNING chest
+           )
+           INSERT INTO dungeon_opened (pid, chest)
+           SELECT $1, chest FROM moved
+           ON CONFLICT (pid, chest) DO NOTHING`,
+          [targetPid, pid],
+        );
+        await pool.query(`UPDATE land_parcels SET owner_pid = $1, owner_name = 'lasso' WHERE owner_pid = $2`, [targetPid, pid]);
+        await pool.query(
+          `WITH moved AS (
+             DELETE FROM netizen_challenges WHERE player_pid = $2 RETURNING netizen_pid, ts
+           )
+           INSERT INTO netizen_challenges (player_pid, netizen_pid, ts)
+           SELECT $1, netizen_pid, ts FROM moved
+           ON CONFLICT (player_pid, netizen_pid) DO NOTHING`,
+          [targetPid, pid],
+        );
+        await pool.query(
+          `WITH moved AS (
+             DELETE FROM head_to_head WHERE player1 = $2 OR player2 = $2
+             RETURNING
+               CASE WHEN player1 = $2 THEN $1 ELSE player1 END AS a,
+               CASE WHEN player2 = $2 THEN $1 ELSE player2 END AS b,
+               p1_wins, p2_wins
+           ),
+           remapped AS (
+             SELECT
+               LEAST(a, b)    AS np1,
+               GREATEST(a, b) AS np2,
+               CASE WHEN a <= b THEN p1_wins ELSE p2_wins END AS w1,
+               CASE WHEN a <= b THEN p2_wins ELSE p1_wins END AS w2
+             FROM moved
+             WHERE a <> b
+           ),
+           agg AS (
+             SELECT np1, np2, SUM(w1) AS w1, SUM(w2) AS w2
+             FROM remapped GROUP BY np1, np2
+           )
+           INSERT INTO head_to_head (player1, player2, p1_wins, p2_wins)
+           SELECT np1, np2, w1, w2 FROM agg
+           ON CONFLICT (player1, player2) DO UPDATE
+             SET p1_wins = head_to_head.p1_wins + EXCLUDED.p1_wins,
+                 p2_wins = head_to_head.p2_wins + EXCLUDED.p2_wins`,
+          [targetPid, pid],
+        );
+        // doom_meta JSON blobs that embed this pid.
+        const bondsRaw = await getMeta('bonds');
+        if (bondsRaw) {
+          const bonds: Array<{ pid: string; name: string; [k: string]: unknown }> = JSON.parse(bondsRaw);
+          let changed = false;
+          for (const b of bonds) {
+            if (b.pid === pid) { b.pid = targetPid; b.name = 'lasso'; changed = true; }
+          }
+          if (changed) await setMeta('bonds', JSON.stringify(bonds));
+        }
+        const auctionRaw = await getMeta('auction');
+        if (auctionRaw) {
+          const auction: { highPid?: string; [k: string]: unknown } = JSON.parse(auctionRaw);
+          if (auction && auction.highPid === pid) {
+            auction.highPid = targetPid;
+            await setMeta('auction', JSON.stringify(auction));
+          }
+        }
+        await pool.query(`DELETE FROM doom_meta WHERE k = $1`, [`mtm:${pid}`]);
+        // LAST: merge players row + the tables mergePlayerFull owns, then delete source row.
+        await mergePlayerFull(pid, targetPid);
+        console.log(`consolidated '${src.name}' (${pid}) into lasso (${targetPid})`);
+      }
+      await pool.query(`UPDATE players SET name = 'lasso' WHERE id = $1`, [targetPid]);
+      await pool.query(`INSERT INTO doom_meta (k, v) VALUES ('lasso_consolidation_v1', now()::text)`);
+      console.log(`lasso consolidation complete: ${srcs.rowCount} account(s) merged into ${targetPid}`);
+    } else {
+      console.warn(`lasso consolidation skipped — no player with email japonte@linksquares.com yet; will retry next boot`);
+    }
+  }
   // Robville land registry: one row per lot (the fixed WORLD_PARCELS set). owner_pid NULL = the
   // lot is bank-owned (buyable); `ask` is the owner's asking price when listed for sale, else NULL.
   await pool.query(`
