@@ -8,7 +8,7 @@
 // music. Timing during play is slaved to the <audio> element's clock, which keeps the
 // highway and the song in lockstep even if frames hitch.
 //
-// Lanes are hit with W A S D (left→right: A W S D — bass rides the left lanes).
+// Lanes are hit with A S D F (home row, left→right — bass rides the left lanes).
 
 import { GH_CHARTS, type GhChart } from './gh-charts';
 
@@ -18,7 +18,7 @@ export interface GhNet {
   name(): string;
 }
 
-const LANE_KEYS = ['a', 'w', 's', 'd'] as const;         // lane 0..3, left→right
+const LANE_KEYS = ['a', 's', 'd', 'f'] as const;         // lane 0..3, left→right (home row)
 const LANE_COLORS = ['#00e5ff', '#ff9a00', '#ff3df0', '#89ff2a'] as const;
 const APPROACH_MS = 1500;   // note travel time from horizon to receptor
 const WIN_GOOD = 110;       // ± ms
@@ -111,7 +111,7 @@ export function startGuitarHero(net: GhNet): void {
       const title = document.createElement('div');
       title.innerHTML =
         '<div style="font-size:52px;font-weight:900;letter-spacing:10px;color:#c890ff;animation:ghGlow 2.4s ease-in-out infinite">🎸 TSONG HERO</div>' +
-        '<div style="font-size:12px;opacity:.7;margin-top:4px;letter-spacing:2px">CHARTS EXTRACTED FROM THE ACTUAL SONGS · HIT THE NOTES WITH W A S D</div>';
+        '<div style="font-size:12px;opacity:.7;margin-top:4px;letter-spacing:2px">CHARTS EXTRACTED FROM THE ACTUAL SONGS · HIT THE NOTES WITH A S D F</div>';
       ui.appendChild(title);
       // difficulty picker
       const diffRow = document.createElement('div');
