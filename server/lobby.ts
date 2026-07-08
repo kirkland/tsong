@@ -1644,7 +1644,7 @@ export class Lobby {
   private trnStartedAt = 0;
   private trnHumansAtStart = 0; // human count when the match went live (payout gate)
   private static readonly TRN_CAP = 4;
-  private static readonly TRN_WIN_REWARD = 750; // coins the winner earns per multi-human match
+  private static readonly TRN_WIN_REWARD = 10_000; // coins the winner earns per multi-human match
   private static readonly TRN_MIN_MATCH_MS = 20_000; // matches shorter than this don't pay (anti-farm)
 
   /** Take a slot in the Tron lobby (max 4). */
