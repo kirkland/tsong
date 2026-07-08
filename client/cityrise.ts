@@ -789,9 +789,13 @@ function renderActions(): void {
     actionBar.appendChild(btn(`🏢 Buy ($${sp.price})`, '#1c7c2e', () => net.send({ type: 'crBuy' })));
     actionBar.appendChild(btn('🔨 Auction it', '#7c561c', () => net.send({ type: 'crPass' })));
   } else if (g.phase === 'building') {
-    const bm = btn(buildMode ? '🏠 Building… (click a lot)' : '🏗️ Build Houses', buildMode ? '#2e7d32' : '#2a2a5a', () => { buildMode = !buildMode; renderActions(); });
-    actionBar.appendChild(bm);
-    if (buildMode) actionBar.appendChild(hint('Click a highlighted property on the board to build.'));
+    if (canBuildAnywhere()) {
+      const bm = btn(buildMode ? '🏠 Building… (click a lot)' : '🏗️ Build Houses', buildMode ? '#2e7d32' : '#2a2a5a', () => { buildMode = !buildMode; renderActions(); });
+      actionBar.appendChild(bm);
+      if (buildMode) actionBar.appendChild(hint('Click a highlighted property on the board to build.'));
+    } else {
+      buildMode = false;
+    }
     const endLabel = g.doublesStreak > 0 ? '🎲 Roll Again (doubles!)' : '➡️ End Turn';
     actionBar.appendChild(btn(endLabel, '#c0562e', () => { buildMode = false; net.send({ type: 'crEndTurn' }); }));
   }
@@ -922,13 +926,20 @@ function canBuild(pos: number): boolean {
   const me = game.players.find((p) => p.pid === selfPid);
   const sp = game.board[pos];
   if (!me || sp.kind !== 'property' || !me.owned.includes(pos) || !sp.group) return false;
+  if (me.mortgaged.includes(pos)) return false;
   const group = game.board.map((s, i) => (s.group === sp.group ? i : -1)).filter((i) => i >= 0);
   if (!group.every((q) => me.owned.includes(q))) return false;
   const cur = me.buildings[pos] ?? 0;
   if (cur >= 5) return false;
   const groupMin = Math.min(...group.map((q) => me.buildings[q] ?? 0));
   if (cur > groupMin) return false;
-  return me.money >= (sp.houseCost ?? 0);
+  if (me.money < (sp.houseCost ?? 0)) return false;
+  return (cur + 1 < 5) ? game.bankHouses > 0 : game.bankHotels > 0;
+}
+function canBuildAnywhere(): boolean {
+  if (!game) return false;
+  const me = game.players.find((p) => p.pid === selfPid);
+  return !!me && me.owned.some((pos) => canBuild(pos));
 }
 function countSets(p: CrPlayerView): number {
   if (!game) return 0;
