@@ -1863,9 +1863,9 @@ function addChatLine(line: ChatLine) {
     chatLog.append(sep);
   }
   const row = document.createElement('div');
-  const isNonPlayer = !line.player;
+  const isNetizen = !!line.netizen;
   const classes = line.command ? 'chat-row chat-row-cmd' : 'chat-row';
-  row.className = classes + (isNonPlayer ? ' chat-row-np' : '');
+  row.className = classes + (isNetizen ? ' chat-row-np' : '');
   const stamp = document.createElement('span');
   stamp.className = 'chatstamp';
   stamp.textContent = timeStr;
@@ -1882,7 +1882,7 @@ function addChatLine(line: ChatLine) {
   content.className = 'chatbody';
   content.append(who, body);
   row.append(stamp, content);
-  if (isNonPlayer && hideNetizenChatEl.checked) row.style.display = 'none';
+  if (isNetizen && hideNetizenChatEl.checked) row.style.display = 'none';
   chatLog.append(row);
   while (chatLog.childElementCount > 100) chatLog.firstElementChild!.remove();
   chatLog.scrollTop = chatLog.scrollHeight;

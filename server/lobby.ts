@@ -6531,12 +6531,13 @@ export class Lobby {
     const now = Date.now();
     if (now - this.lastNetizenChatAt < 40_000) return; // throttle: ~1 line per 40s (was 10s)
     this.lastNetizenChatAt = now;
-    this.botChat(name, text, Lobby.netizenColor(pid));
+    this.botChat(name, text, Lobby.netizenColor(pid), true);
   }
 
   /** Inject a fake chat message from a streamer bot (bypasses rate limiting). */
-  private botChat(from: string, text: string, color: string) {
+  private botChat(from: string, text: string, color: string, netizen = false) {
     const line: ChatLine = { from, text, player: false, color, time: Date.now() };
+    if (netizen) line.netizen = true;
     this.chatLog.push(line);
     if (this.chatLog.length > CHAT_HISTORY) this.chatLog.shift();
     const data = JSON.stringify({ type: 'chat', lines: [line] });

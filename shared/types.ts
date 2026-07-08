@@ -1411,6 +1411,7 @@ export interface ChatLine {
   from: string;
   text: string;
   player: boolean; // true if the sender held a paddle when they sent it
+  netizen?: boolean; // true only for the 10 trading netizens (market chatter)
   color: string; // hex color of the sender's name
   command?: boolean; // true if this line is a slash command someone ran (styled apart)
   whisper?: boolean; // true if this is a private /whisper line (rendered all-purple)
