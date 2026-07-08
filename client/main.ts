@@ -762,9 +762,11 @@ const net = connect(
     } else if (msg.type === 'netWorth') {
       renderNetWorth(msg.rows, msg.selfRow, msg.selfRank);
     } else if (msg.type === 'balanceSheet') {
-      showBalanceSheet(msg);
+      // A World Hall of Fame row may have fired this — if World's still open, render it there
+      // instead of the toolbar modal (which would be hidden behind World's overlay anyway).
+      if (worldMod?.isWorldOpen()) worldMod.feedBalanceSheet(msg); else showBalanceSheet(msg);
     } else if (msg.type === 'eloProfile') {
-      showEloProfile(msg);
+      if (worldMod?.isWorldOpen()) worldMod.feedEloProfile(msg); else showEloProfile(msg);
     } else if (msg.type === 'chat') {
       msg.lines.forEach(addChatLine);
       // Notify via tab title for a single new message while the tab is backgrounded.

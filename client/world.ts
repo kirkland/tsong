@@ -55,6 +55,8 @@ import {
   COSMETICS,
   EXCLUSIVES,
   type ChatLine,
+  type EloProfileMsg,
+  type BalanceSheetMsg,
 } from '../shared/types';
 
 // What the world needs from the rest of the app. main.ts supplies these (see startWorld call).
@@ -131,6 +133,8 @@ interface Controller {
   chestAccepted(chest: string, coins: number, potions: number, spin?: boolean, prize?: string, prizes?: string[]): void; // server accepted a chest open (prize/prizes = cosmetic names)
   dungeonSpinLoot(reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string }): void; // a spin chest's reward → run loot
   dungeonPurse(coins: number): void;                              // current run-purse total from the server
+  feedEloProfile(msg: EloProfileMsg): void;         // server's answer to an eloProfileReq fired from the Hall of Fame
+  feedBalanceSheet(msg: BalanceSheetMsg): void;     // server's answer to a balanceSheetReq fired from the Hall of Fame
 }
 let controller: Controller | null = null;
 let _exitWorld: (() => void) | null = null;
@@ -205,6 +209,15 @@ export function feedRoadRage(active: boolean, endsAt: number, standings: { name:
 /** Handle a McDonald's food result from the server. */
 export function feedMcFood(item: string, granted: boolean, bonus?: number): void {
   controller?.feedMcFood(item, granted, bonus);
+}
+
+/** Server's answer to an eloProfileReq fired from inside the Hall of Fame. No-op if World is closed. */
+export function feedEloProfile(msg: EloProfileMsg): void {
+  controller?.feedEloProfile(msg);
+}
+/** Server's answer to a balanceSheetReq fired from inside the Hall of Fame. No-op if World is closed. */
+export function feedBalanceSheet(msg: BalanceSheetMsg): void {
+  controller?.feedBalanceSheet(msg);
 }
 
 const SPEED = WORLD_AVATAR.speed; // on-foot walk speed
@@ -2876,7 +2889,7 @@ export function startWorld(net: WorldNet): void {
       val.style.cssText = `font-size:12px;color:${self ? '#ffd23f' : '#7da2ff'};font-variant-numeric:tabular-nums;flex-shrink:0;`;
       const tag = titleFlairTag(r.title);
       row.append(rank, name, ...(tag ? [tag] : []), val);
-      row.onclick = () => { selectBlip(); exit(); net.eloProfileReq(i); };
+      row.onclick = () => { selectBlip(); net.eloProfileReq(i); };
       lbList.appendChild(row);
     });
     // Pinned self-row (rank + Elo only, matching the toolbar board) when we're outside the top 8.
@@ -2896,7 +2909,7 @@ export function startWorld(net: WorldNet): void {
         val.textContent = `${Math.round(self.elo)}`;
         val.style.cssText = 'font-size:12px;color:#ffd23f;font-variant-numeric:tabular-nums;flex-shrink:0;';
         row.append(rank, name, val);
-        row.onclick = () => { selectBlip(); exit(); net.eloProfileReq(0, true); };
+        row.onclick = () => { selectBlip(); net.eloProfileReq(0, true); };
         lbList.appendChild(row);
       }
     }
@@ -2929,7 +2942,7 @@ export function startWorld(net: WorldNet): void {
         debt.style.cssText = 'font-size:10px;color:#f87171;opacity:0.85;flex-shrink:0;';
         row.appendChild(debt);
       }
-      row.onclick = () => { selectBlip(); exit(); net.balanceSheetReq(i); };
+      row.onclick = () => { selectBlip(); net.balanceSheetReq(i); };
       nwList.appendChild(row);
     });
     // Pinned self-row when we're outside the top 8 (matches the toolbar board — no title/crown).
@@ -2956,7 +2969,7 @@ export function startWorld(net: WorldNet): void {
           debt.style.cssText = 'font-size:10px;color:#f87171;opacity:0.85;flex-shrink:0;';
           row.appendChild(debt);
         }
-        row.onclick = () => { selectBlip(); exit(); net.balanceSheetReq(undefined, true); };
+        row.onclick = () => { selectBlip(); net.balanceSheetReq(undefined, true); };
         nwList.appendChild(row);
       }
     }
@@ -2969,6 +2982,131 @@ export function startWorld(net: WorldNet): void {
       'border:none;padding:8px;font-size:13px;';
     close.onclick = closeDialog;
     dialogBox.appendChild(close);
+    dialog.style.display = 'flex';
+  }
+
+  // A "← Back" (to the Hall of Fame list) + "Close" button pair, shared by the profile/balance-
+  // sheet drill-down views below so you can bounce between rows without leaving the dialog.
+  function appendDialogBackFooter(onBack: () => void) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:8px;margin-top:14px;';
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.textContent = '← Back';
+    back.style.cssText =
+      'flex:1;cursor:pointer;background:#21305a;color:#e8eefc;border:1px solid #38508f;' +
+      'border-radius:10px;padding:10px;font-size:14px;font-weight:600;';
+    back.onmouseenter = () => { back.style.background = '#2c4079'; };
+    back.onmouseleave = () => { back.style.background = '#21305a'; };
+    back.onclick = () => { selectBlip(); onBack(); };
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText =
+      'flex:1;cursor:pointer;background:transparent;color:#7c8ab5;border:1px solid #2c3a63;' +
+      'border-radius:10px;padding:10px;font-size:14px;';
+    close.onclick = closeDialog;
+    row.append(back, close);
+    dialogBox.appendChild(row);
+  }
+  // A label/value row shared by the profile + balance-sheet drill-down views.
+  function statRow(list: HTMLDivElement, label: string, val: string, color = '#e8eefc') {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;justify-content:space-between;gap:12px;font-size:13px;padding:3px 4px;';
+    const l = document.createElement('span');
+    l.textContent = label;
+    l.style.cssText = 'color:#9fb0d8;';
+    const v = document.createElement('span');
+    v.textContent = val;
+    v.style.cssText = `color:${color};font-variant-numeric:tabular-nums;font-weight:600;flex-shrink:0;`;
+    row.append(l, v);
+    list.appendChild(row);
+  }
+  function fmtLastPlayedWorld(ts: number | null): string {
+    if (!ts) return 'Never';
+    const diff = Date.now() - ts;
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'Just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  }
+
+  // The Elo profile drill-down — same fields as the toolbar's leaderboard-row modal, rendered
+  // in-World so clicking a Hall of Fame row never has to leave the World overlay.
+  function renderEloProfile(msg: EloProfileMsg) {
+    dialogOpen = true;
+    keys.clear(); joyActive = false;
+    dialogBox.replaceChildren();
+    const h = document.createElement('div');
+    h.textContent = `🏓 ${msg.name}`;
+    h.style.cssText = 'font-size:20px;color:#e8eefc;margin-bottom:14px;text-align:center;';
+    dialogBox.appendChild(h);
+
+    const list = document.createElement('div');
+    list.style.cssText = 'display:flex;flex-direction:column;gap:2px;min-width:280px;text-align:left;';
+    dialogBox.appendChild(list);
+    statRow(list, 'Wins', String(msg.wins));
+    statRow(list, 'Losses', String(msg.losses));
+    statRow(list, 'Games', String(msg.wins + msg.losses));
+    statRow(list, 'Elo', String(msg.elo));
+    statRow(list, 'Win rate', `${msg.winPct}%`);
+    statRow(list, 'Last played', fmtLastPlayedWorld(msg.lastPlayed));
+    if (msg.rival) {
+      const hr = document.createElement('div');
+      hr.style.cssText = 'border-top:1px solid #2c3a63;margin:8px 0 6px;';
+      list.appendChild(hr);
+      const rh = document.createElement('div');
+      rh.textContent = `Head-to-head vs ${msg.rival.name}`;
+      rh.style.cssText = 'font-size:11px;letter-spacing:0.5px;text-transform:uppercase;color:#7da2ff;margin-bottom:4px;';
+      list.appendChild(rh);
+      statRow(list, 'Record', `${msg.rival.wins}–${msg.rival.losses}`);
+    }
+    appendDialogBackFooter(enterHallOfFame);
+    dialog.style.display = 'flex';
+  }
+
+  // The balance-sheet drill-down — same fields as the toolbar's net-worth-row modal, rendered
+  // in-World so clicking a Hall of Fame row never has to leave the World overlay.
+  function renderBalanceSheet(msg: BalanceSheetMsg) {
+    dialogOpen = true;
+    keys.clear(); joyActive = false;
+    dialogBox.replaceChildren();
+    const h = document.createElement('div');
+    h.textContent = `💰 ${msg.name}`;
+    h.style.cssText = 'font-size:20px;color:#e8eefc;margin-bottom:14px;text-align:center;';
+    dialogBox.appendChild(h);
+
+    const list = document.createElement('div');
+    list.style.cssText = 'display:flex;flex-direction:column;gap:2px;min-width:290px;text-align:left;';
+    dialogBox.appendChild(list);
+    statRow(list, 'Coins on hand', `${Math.round(msg.coins).toLocaleString()}🪙`);
+    const sectionHdr = (text: string) => {
+      const s = document.createElement('div');
+      s.textContent = text;
+      s.style.cssText = 'font-size:11px;letter-spacing:0.5px;text-transform:uppercase;color:#7da2ff;margin:8px 0 4px;';
+      list.appendChild(s);
+    };
+    sectionHdr('Stock holdings');
+    if (msg.holdings.length) {
+      for (const hd of msg.holdings) {
+        const tag = hd.side === 'short' ? 'SHORT ' : '';
+        statRow(list, `${tag}${hd.ticker} (${hd.shares.toFixed(2)} sh @ ${Math.round(hd.price).toLocaleString()}🪙)`, `${Math.round(hd.value).toLocaleString()}🪙`);
+      }
+      statRow(list, 'Stock subtotal', `${Math.round(msg.stockValue).toLocaleString()}🪙`);
+    } else {
+      const e = document.createElement('div');
+      e.textContent = 'No open positions.';
+      e.style.cssText = 'color:#6b7796;font-size:12px;padding:3px 4px;';
+      list.appendChild(e);
+    }
+    if (msg.loan > 0) statRow(list, 'Owed to Davis', `−${Math.round(msg.loan).toLocaleString()}🪙`, '#f87171');
+    const hr = document.createElement('div');
+    hr.style.cssText = 'border-top:1px solid #2c3a63;margin:8px 0;';
+    list.appendChild(hr);
+    statRow(list, 'Net worth', `${Math.round(msg.net).toLocaleString()}🪙`, msg.net < 0 ? '#f87171' : '#ffd23f');
+    appendDialogBackFooter(enterHallOfFame);
     dialog.style.display = 'flex';
   }
 
@@ -8533,6 +8671,8 @@ export function startWorld(net: WorldNet): void {
         if (_bonus && _bonus >= 200) spawnMcConfetti();
       }
     },
+    feedEloProfile(msg) { renderEloProfile(msg); },
+    feedBalanceSheet(msg) { renderBalanceSheet(msg); },
   };
   syncDriveBtn();
   net.enter();
