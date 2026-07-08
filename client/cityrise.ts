@@ -241,19 +241,19 @@ function layout(): void {
   boardBox = { x: 0, y: 0, size, corner, span };
   cells = new Array(40);
   const S = size, C = corner, L = span;
-  // 0 = bottom-left corner
-  cells[0] = { x: 0, y: S - C, w: C, h: C, side: 'corner', pos: 0 };
-  // 1..9 bottom row left→right
-  for (let i = 1; i <= 9; i++) cells[i] = { x: C + (i - 1) * L, y: S - C, w: L, h: C, side: 'bottom', pos: i };
-  cells[10] = { x: S - C, y: S - C, w: C, h: C, side: 'corner', pos: 10 };
-  // 11..19 right column bottom→top
-  for (let i = 11; i <= 19; i++) { const k = i - 10; cells[i] = { x: S - C, y: S - C - k * L, w: C, h: L, side: 'right', pos: i }; }
-  cells[20] = { x: S - C, y: 0, w: C, h: C, side: 'corner', pos: 20 };
-  // 21..29 top row right→left
-  for (let i = 21; i <= 29; i++) { const k = i - 20; cells[i] = { x: S - C - k * L, y: 0, w: L, h: C, side: 'top', pos: i }; }
-  cells[30] = { x: 0, y: 0, w: C, h: C, side: 'corner', pos: 30 };
-  // 31..39 left column top→bottom
-  for (let i = 31; i <= 39; i++) { const k = i - 30; cells[i] = { x: 0, y: C + (k - 1) * L, w: C, h: L, side: 'left', pos: i }; }
+  // 0 = bottom-right corner (GO), play proceeds clockwise like the real board.
+  cells[0] = { x: S - C, y: S - C, w: C, h: C, side: 'corner', pos: 0 };
+  // 1..9 bottom row right→left
+  for (let i = 1; i <= 9; i++) cells[i] = { x: S - C - i * L, y: S - C, w: L, h: C, side: 'bottom', pos: i };
+  cells[10] = { x: 0, y: S - C, w: C, h: C, side: 'corner', pos: 10 }; // bottom-left
+  // 11..19 left column bottom→top
+  for (let i = 11; i <= 19; i++) { const k = i - 10; cells[i] = { x: 0, y: S - C - k * L, w: C, h: L, side: 'left', pos: i }; }
+  cells[20] = { x: 0, y: 0, w: C, h: C, side: 'corner', pos: 20 }; // top-left
+  // 21..29 top row left→right
+  for (let i = 21; i <= 29; i++) { const k = i - 20; cells[i] = { x: C + (k - 1) * L, y: 0, w: L, h: C, side: 'top', pos: i }; }
+  cells[30] = { x: S - C, y: 0, w: C, h: C, side: 'corner', pos: 30 }; // top-right
+  // 31..39 right column top→bottom
+  for (let i = 31; i <= 39; i++) { const k = i - 30; cells[i] = { x: S - C, y: C + (k - 1) * L, w: C, h: L, side: 'right', pos: i }; }
 }
 
 // ─── Render loop ─────────────────────────────────────────────────────────────
