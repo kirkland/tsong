@@ -1634,6 +1634,101 @@ export class Lobby {
     });
   }
 
+  // --- TNT Explosion Rally (1v1 bomb-parry maze duel) ---
+  // Same host-authoritative relay shape as Super Tsong Bros, capped at 2 players. The server
+  // only runs the lobby, tracks 'waiting'|'playing', fans relay payloads to the other player,
+  // and pays the House-funded reward to the reported winner. A solo host may start a practice
+  // match against the client-side bot; practice matches never pay out (anti-farm: payouts
+  // require 2 humans present at start, a host-only report, a live match, and a minimum length).
+  private tntSlots: WebSocket[] = [];
+  private tntStatus: 'waiting' | 'playing' = 'waiting';
+  private tntStartedAt = 0; // epoch ms the current match started (min-length reward guard)
+  private tntHumansAtStart = 0; // players present when the match began (1 = bot practice, no payout)
+  private static readonly TNT_CAP = 2;
+  private static readonly TNT_WIN_REWARD = 750; // coins the winner earns per match
+  private static readonly TNT_MIN_MATCH_MS = 20_000; // matches shorter than this don't pay (anti-farm)
+
+  /** Take a slot in the TNT Explosion Rally lobby (max 2). */
+  tntJoin(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return;
+    if (this.tntSlots.includes(ws) || this.tntSlots.length >= Lobby.TNT_CAP) return;
+    if (this.tntStatus === 'playing') return; // can't hop into a running duel
+    this.tntSlots.push(ws);
+    this.broadcastTntLobby();
+  }
+
+  /** Leave the lobby/match. If the HOST (slot 0) left, end the match for everyone. */
+  tntLeave(ws: WebSocket) {
+    const i = this.tntSlots.indexOf(ws);
+    if (i === -1) return;
+    const wasHost = i === 0;
+    this.tntSlots.splice(i, 1);
+    if (wasHost) {
+      // The authority is gone — no one can simulate the match. Tear it down for everyone left.
+      for (const other of this.tntSlots) {
+        this.tell(other, { type: 'tntLobby', status: 'ended', slot: 0, hostSlot: 0, players: [] });
+      }
+      this.tntSlots = [];
+      this.tntStatus = 'waiting';
+      return;
+    }
+    if (this.tntSlots.length <= 1) this.tntStatus = 'waiting';
+    this.broadcastTntLobby();
+  }
+
+  /** (Host only) start the match. A lone host starts a practice match vs the bot (no payout). */
+  tntStart(ws: WebSocket) {
+    if (this.tntSlots[0] !== ws) return; // only the host (slot 0) may start
+    if (this.tntSlots.length < 1) return;
+    this.tntStatus = 'playing';
+    this.tntStartedAt = Date.now();
+    this.tntHumansAtStart = this.tntSlots.length;
+    this.broadcastTntLobby();
+  }
+
+  /** (Host only) settle a finished match: pay the reported winning slot the House-funded reward.
+   *  Guards: host-only, only while live (status flips to 'waiting' so it pays exactly once), the
+   *  winner slot must be valid, 2 humans must have been present at start (bot practice never
+   *  pays), and the match must have lasted a minimum length (anti-farm). */
+  tntEnd(ws: WebSocket, winnerSlot: number) {
+    if (this.tntSlots[0] !== ws) return;      // only the authoritative host reports
+    if (this.tntStatus !== 'playing') return; // already settled / never started — ignore
+    this.tntStatus = 'waiting';               // settle once; any further tntEnd is a no-op
+    const winSock = this.tntSlots[winnerSlot];
+    if (winnerSlot < 0 || !winSock) { this.broadcastTntLobby(); return; } // invalid / bot won → no payout
+    if (this.tntHumansAtStart < 2) { this.broadcastTntLobby(); return; } // practice vs bot → no payout
+    if (Date.now() - this.tntStartedAt < Lobby.TNT_MIN_MATCH_MS) { this.broadcastTntLobby(); return; }
+    const conn = this.conns.get(winSock);
+    if (conn && conn.pid) {
+      this.housePay(conn.pid, conn.nickname, Lobby.TNT_WIN_REWARD)
+        .then((paid) => {
+          this.sendWallet(winSock); this.refreshNetWorth().catch(() => {});
+          if (paid > 0) this.notify(winSock, `💥 You won TNT Explosion Rally — +${paid.toLocaleString()} coins!`);
+        })
+        .catch((e) => console.error('tnt explosion rally reward failed:', e));
+    }
+    this.broadcastTntLobby();
+  }
+
+  /** Forward an opaque TNT Explosion Rally payload to the OTHER player (dumb fan-out). */
+  tntRelay(ws: WebSocket, data: unknown) {
+    if (!this.tntSlots.includes(ws)) return;
+    for (const other of this.tntSlots) {
+      if (other !== ws) this.tell(other, { type: 'tntRelay', data });
+    }
+  }
+
+  private broadcastTntLobby() {
+    const players = this.tntSlots.map((sock, slot) => ({
+      name: this.conns.get(sock)?.nickname ?? `P${slot}`,
+      slot,
+    }));
+    this.tntSlots.forEach((sock, slot) => {
+      this.tell(sock, { type: 'tntLobby', status: this.tntStatus, slot, hostSlot: 0, players });
+    });
+  }
+
   // --- Beta World (free-roam overworld) ---
 
   /** Step a player into the world map. Sends them the current roster right away so they see
@@ -5575,6 +5670,7 @@ export class Lobby {
     this.ntLeave(ws);   // drop any Nuketown slot (ends the match if the host left)
     this.srLeave(ws);   // drop any Street Demons grid slot (ends the race if the host left)
     this.sbLeave(ws);   // drop any Super Tsong Bros slot (ends the match if the host left)
+    this.tntLeave(ws);  // drop any TNT Explosion Rally slot (ends the duel if the host left)
     this.tdLeave(ws);   // drop out of the Type or Die arena
     this.bowlLeave(ws); // drop out of any bowling room
     this.crLeave(ws);   // drop out of any City Tycoon game (holdings return to the bank)

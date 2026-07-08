@@ -935,6 +935,11 @@ export type ClientMsg =
   | { type: 'sbStart' } // (host only) start the Super Tsong Bros match (needs ≥2 players, all locked)
   | { type: 'sbEnd'; winner: number } // (host only) report the winning slot so the server pays the winner
   | { type: 'sbRelay'; data: unknown } // forward an opaque Super Tsong Bros payload to all other participants
+  | { type: 'tntJoin' } // take a slot in the TNT Explosion Rally lobby (1v1 bomb-parry maze duel)
+  | { type: 'tntLeave' } // leave the TNT Explosion Rally lobby / match
+  | { type: 'tntStart' } // (host only) start the match (solo start = practice vs the TNT Bot, no payout)
+  | { type: 'tntEnd'; winner: number } // (host only) report the winning slot so the server pays the winner (-1 = the bot won)
+  | { type: 'tntRelay'; data: unknown } // forward an opaque TNT Explosion Rally payload to the other player
   | { type: 'tdJoin' } // join the shared co-op "Type or Die" arena
   | { type: 'tdLeave' } // leave the Type or Die arena
   | { type: 'tdStart' } // (any participant) start the next Type or Die run from the waiting room
@@ -1467,6 +1472,8 @@ export type ServerMsg =
   | SrRelayMsg
   | SbLobbyMsg
   | SbRelayMsg
+  | TntLobbyMsg
+  | TntRelayMsg
   | DoomLeaderboardMsg
   | TypeDieStateMsg
   | TypeDieLeaderboardMsg
@@ -2197,6 +2204,24 @@ export interface SbLobbyMsg {
 // snapshot / guest input). Clients pick out the messages they care about.
 export interface SbRelayMsg {
   type: 'sbRelay';
+  data: unknown;
+}
+// TNT Explosion Rally lobby (exactly 2 slots, 1v1 bomb-parry maze duel — concept by a
+// six-year-old game director). `slot` is which slot this client holds (0 = host/authority).
+// On 'playing', slot 0 simulates the whole match client-side and streams snapshots over the
+// relay; the guest sends inputs. A solo host may start a practice match vs a bot (no payout).
+// 'ended' bails everyone back to the menu (the host left).
+export interface TntLobbyMsg {
+  type: 'tntLobby';
+  status: 'waiting' | 'playing' | 'ended';
+  slot: number; // this client's slot (0 = host / authority)
+  hostSlot: number; // which slot is the authority (0)
+  players: { name: string; slot: number }[]; // everyone in the lobby
+}
+// An opaque payload forwarded from one TNT Explosion Rally player to the other (host world
+// snapshot / guest input). Clients pick out the messages they care about.
+export interface TntRelayMsg {
+  type: 'tntRelay';
   data: unknown;
 }
 // High-round leaderboards for the DOOM minigame (separate solo / co-op tables).

@@ -815,6 +815,10 @@ const net = connect(
       superBrosMod?.feedSbLobby(msg);
     } else if (msg.type === 'sbRelay') {
       superBrosMod?.feedSbRelay(msg.data);
+    } else if (msg.type === 'tntLobby') {
+      tntMod?.feedTntLobby(msg);
+    } else if (msg.type === 'tntRelay') {
+      tntMod?.feedTntRelay(msg.data);
     } else if (msg.type === 'doomLeaderboard') {
       doomScores = { solo: msg.solo, coop: msg.coop };
     } else if (msg.type === 'bowlState' || msg.type === 'bowlStart' || msg.type === 'bowlThrowResult' ||
@@ -2020,6 +2024,28 @@ sbBtn.addEventListener('click', async () => {
     });
   } catch (e) {
     console.error('Super Tsong Bros failed to load:', e);
+  }
+});
+
+// --- TNT Explosion Rally, a 1v1 bomb-parry maze duel designed by a 6-year-old (lazy-loaded,
+// self-contained). Host-authoritative over the same dumb relay shape as Super Tsong Bros:
+// the server is only a 2-slot lobby + fan-out (tnt* messages, routed above). Slot 0 simulates
+// the whole match (including the practice bot) and streams snapshots; the guest sends input. ---
+const tntBtn = document.getElementById('tntBtn') as HTMLButtonElement;
+let tntMod: typeof import('./tnt') | null = null;
+tntBtn.addEventListener('click', async () => {
+  try {
+    tntMod = await import('./tnt');
+    tntMod.startTnt({
+      join: () => net.send({ type: 'tntJoin' }),
+      leave: () => net.send({ type: 'tntLeave' }),
+      start: () => net.send({ type: 'tntStart' }),
+      end: (winner) => net.send({ type: 'tntEnd', winner }),
+      relay: (data) => net.send({ type: 'tntRelay', data }),
+      name: () => myName,
+    });
+  } catch (e) {
+    console.error('TNT Explosion Rally failed to load:', e);
   }
 });
 
