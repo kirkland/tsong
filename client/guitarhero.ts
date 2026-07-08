@@ -44,6 +44,7 @@ export function startGuitarHero(): void {
   let judgementAt = 0;
   const laneFlash = [0, 0, 0, 0];   // receptor flash timestamps
   const laneDown = [false, false, false, false];
+  let hitBurst: (lane: number, color: string, big: boolean) => void = () => {}; // set by the renderer
 
   const bestKey = () => `tsong.gh.${chart?.file}.${diff}`;
   const getBest = (c: GhChart, d: Diff) => {
@@ -217,6 +218,7 @@ export function startGuitarHero(): void {
     if (bestAbs <= WIN_PERFECT) { perfects++; score += 100 * mult; judgement = 'PERFECT'; judgementColor = '#ffd060'; }
     else { goods++; score += 50 * mult; judgement = 'GOOD'; judgementColor = '#00e5ff'; }
     judgementAt = performance.now();
+    hitBurst(lane, LANE_COLORS[lane], bestAbs <= WIN_PERFECT);
   }
   function onKeyDown(e: KeyboardEvent) {
     if (e.key === 'Escape') {
@@ -236,62 +238,136 @@ export function startGuitarHero(): void {
   window.addEventListener('keydown', onKeyDown, true);
   window.addEventListener('keyup', onKeyUp, true);
 
-  // --- rendering ---
+  // --- rendering: pseudo-3D highway rushing out of a glowing horizon ---
   const W = 900, H = 1350;
   const LANE_W = 150;
-  const HW_X = (W - LANE_W * 4) / 2;   // highway left edge
+  const HORIZON = 170;                 // vanishing region
   const REC_Y = H - 190;               // receptor line
+  const TOP_SCALE = 0.30;              // highway width at the horizon vs the bottom
+  // perspective helpers: f=0 at horizon → 1 at receptor line
+  const persp = (y: number) => Math.max(0, Math.min(1.15, (y - HORIZON) / (REC_Y - HORIZON)));
+  const widthAt = (y: number) => TOP_SCALE + (1 - TOP_SCALE) * persp(y);
+  const laneCx = (lane: number, y: number) => W / 2 + (lane - 1.5) * LANE_W * widthAt(y);
+  const edgeX = (edge: number, y: number) => W / 2 + (edge - 2) * LANE_W * widthAt(y);
+  // time → screen y: accelerates toward the player for the 3D rush
+  const noteY = (dt: number) => HORIZON + (REC_Y - HORIZON) * Math.pow(1 - dt / APPROACH_MS, 1.55);
 
+  // hit-burst particles
+  interface Spark { x: number; y: number; vx: number; vy: number; life: number; max: number; color: string; }
+  let sparks: Spark[] = [];
+  const burst = (lane: number, color: string, big: boolean) => {
+    const cx = laneCx(lane, REC_Y);
+    for (let i = 0; i < (big ? 22 : 12); i++) {
+      const a = -Math.PI / 2 + (Math.random() - 0.5) * 2.2;
+      const sp = 180 + Math.random() * (big ? 480 : 300);
+      sparks.push({ x: cx, y: REC_Y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, life: 0, max: 0.4 + Math.random() * 0.35, color: Math.random() < 0.3 ? '#fff' : color });
+    }
+  };
+  hitBurst = burst; // judge() fires bursts through this hook
+
+  // idle starfield behind the menus + above the horizon in play
+  const stars = Array.from({ length: 90 }, () => ({
+    x: Math.random() * W, y: Math.random() * H, s: 0.5 + Math.random() * 1.8, tw: Math.random() * Math.PI * 2,
+  }));
+
+  let lastT = performance.now();
   function render() {
     const now = performance.now();
+    const dts = Math.min(0.05, (now - lastT) / 1000);
+    lastT = now;
     const st = songTime();
-    ctx.fillStyle = '#05030c';
+
+    // deep-space backdrop
+    const bg = ctx.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, '#050310');
+    bg.addColorStop(0.6, '#0a0518');
+    bg.addColorStop(1, '#140a26');
+    ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
+    for (const s of stars) {
+      const a = 0.25 + 0.35 * Math.abs(Math.sin(now / 900 + s.tw));
+      ctx.globalAlpha = a;
+      ctx.fillStyle = '#cdbaff';
+      ctx.fillRect(s.x, s.y * (mode === 'play' ? HORIZON / H : 1), s.s, s.s);
+    }
+    ctx.globalAlpha = 1;
     if (mode !== 'play' || !chart) return;
 
-    // background pulse on the beat
+    // beat-pulsing horizon glow
     const beatMs = 60000 / chart.bpm;
-    const beatFrac = ((st - LEAD_IN_MS) % beatMs) / beatMs;
+    const beatFrac = (((st - LEAD_IN_MS) % beatMs) + beatMs) % beatMs / beatMs;
     const pulse = Math.max(0, 1 - beatFrac * 3);
-    ctx.fillStyle = `rgba(120, 60, 220, ${0.05 + pulse * 0.05})`;
-    ctx.fillRect(HW_X, 0, LANE_W * 4, H);
+    const hg = ctx.createRadialGradient(W / 2, HORIZON, 10, W / 2, HORIZON, 480);
+    hg.addColorStop(0, `rgba(170, 90, 255, ${0.5 + pulse * 0.35})`);
+    hg.addColorStop(1, 'rgba(170, 90, 255, 0)');
+    ctx.fillStyle = hg;
+    ctx.fillRect(0, 0, W, HORIZON + 500);
 
-    // lane dividers + receptors
+    // highway body (trapezoid) with combo heat
+    const mult = 1 + Math.min(3, Math.floor(combo / 10));
+    ctx.beginPath();
+    ctx.moveTo(edgeX(0, HORIZON), HORIZON);
+    ctx.lineTo(edgeX(4, HORIZON), HORIZON);
+    ctx.lineTo(edgeX(4, H), H);
+    ctx.lineTo(edgeX(0, H), H);
+    ctx.closePath();
+    const hwg = ctx.createLinearGradient(0, HORIZON, 0, H);
+    hwg.addColorStop(0, 'rgba(20, 8, 40, 0.9)');
+    hwg.addColorStop(1, `rgba(${30 + mult * 8}, 12, ${58 + mult * 6}, 0.95)`);
+    ctx.fillStyle = hwg;
+    ctx.fill();
+
+    // lane dividers converging on the horizon + beat ticks racing at you
     for (let l = 0; l <= 4; l++) {
-      ctx.strokeStyle = '#2a1a4a';
-      ctx.lineWidth = l === 0 || l === 4 ? 3 : 1;
+      ctx.strokeStyle = l === 0 || l === 4 ? '#5a3a9a' : '#2e1a55';
+      ctx.lineWidth = l === 0 || l === 4 ? 3 : 1.5;
       ctx.beginPath();
-      ctx.moveTo(HW_X + l * LANE_W, 0);
-      ctx.lineTo(HW_X + l * LANE_W, H);
+      ctx.moveTo(edgeX(l, HORIZON), HORIZON);
+      ctx.lineTo(edgeX(l, H), H);
       ctx.stroke();
     }
+    for (let k = 0; k < 6; k++) { // horizontal beat bars sliding down the highway
+      const bt = (Math.floor((st - LEAD_IN_MS) / beatMs) + k) * beatMs + LEAD_IN_MS;
+      const dt = bt - st;
+      if (dt < 0 || dt > APPROACH_MS) continue;
+      const y = noteY(dt);
+      ctx.strokeStyle = `rgba(120, 80, 200, ${0.28 * widthAt(y)})`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(edgeX(0, y), y);
+      ctx.lineTo(edgeX(4, y), y);
+      ctx.stroke();
+    }
+
+    // receptors
     for (let l = 0; l < 4; l++) {
-      const cx = HW_X + l * LANE_W + LANE_W / 2;
+      const cx = laneCx(l, REC_Y);
       const flash = Math.max(0, 1 - (now - laneFlash[l]) / 180);
       const col = LANE_COLORS[l];
       ctx.strokeStyle = col;
-      ctx.lineWidth = laneDown[l] ? 5 : 3;
-      ctx.shadowColor = col; ctx.shadowBlur = 12 + flash * 26;
+      ctx.lineWidth = laneDown[l] ? 6 : 3;
+      ctx.shadowColor = col; ctx.shadowBlur = 14 + flash * 30;
       ctx.beginPath();
-      ctx.arc(cx, REC_Y, 44, 0, Math.PI * 2);
+      ctx.arc(cx, REC_Y, 46, 0, Math.PI * 2);
       ctx.stroke();
       if (flash > 0) {
-        ctx.globalAlpha = flash * 0.55;
+        ctx.globalAlpha = flash * 0.6;
         ctx.fillStyle = col;
         ctx.beginPath();
-        ctx.arc(cx, REC_Y, 44, 0, Math.PI * 2);
+        ctx.arc(cx, REC_Y, 46 + flash * 14, 0, Math.PI * 2);
         ctx.fill();
         ctx.globalAlpha = 1;
       }
       ctx.shadowBlur = 0;
       ctx.fillStyle = laneDown[l] ? '#fff' : '#8a7aa8';
-      ctx.font = '800 26px ui-monospace, monospace';
+      ctx.font = '800 27px ui-monospace, monospace';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(LANE_KEYS[l].toUpperCase(), cx, REC_Y + 1);
     }
 
-    // notes — resolve misses, draw approaching ones
+    // notes — resolve misses, draw approaching gems (far first so near ones overlap)
     while (nextIdx < notes.length && (notes[nextIdx].hit || notes[nextIdx].missed)) nextIdx++;
+    const drawable: Note[] = [];
     for (let i = nextIdx; i < notes.length; i++) {
       const n = notes[i];
       if (n.hit || n.missed) continue;
@@ -302,52 +378,94 @@ export function startGuitarHero(): void {
         continue;
       }
       if (dt > APPROACH_MS) break;
-      const y = REC_Y - (dt / APPROACH_MS) * (REC_Y + 60);
-      const cx = HW_X + n.lane * LANE_W + LANE_W / 2;
+      drawable.push(n);
+    }
+    for (let i = drawable.length - 1; i >= 0; i--) {
+      const n = drawable[i];
+      const dt = n.t - st;
+      const y = noteY(Math.max(0, dt));
+      const wf = widthAt(y);
+      const cx = laneCx(n.lane, y);
       const col = LANE_COLORS[n.lane];
-      const near = 1 - Math.min(1, Math.abs(dt) / 400);
-      ctx.shadowColor = col; ctx.shadowBlur = 14 + near * 14;
+      const nw = 112 * wf, nh = 32 * wf;
+      ctx.shadowColor = col; ctx.shadowBlur = 10 + 16 * wf;
       ctx.fillStyle = col;
       ctx.beginPath();
-      ctx.roundRect(cx - 54, y - 15, 108, 30, 15);
+      ctx.roundRect(cx - nw / 2, y - nh / 2, nw, nh, nh / 2);
       ctx.fill();
       ctx.shadowBlur = 0;
-      ctx.fillStyle = '#ffffffbb';
+      ctx.fillStyle = 'rgba(0,0,0,0.35)'; // bottom bevel — gives the gem some body
       ctx.beginPath();
-      ctx.roundRect(cx - 36, y - 5, 72, 10, 5);
+      ctx.roundRect(cx - nw / 2, y + nh * 0.12, nw, nh * 0.38, nh / 3);
+      ctx.fill();
+      ctx.fillStyle = '#ffffffcc';
+      ctx.beginPath();
+      ctx.roundRect(cx - nw * 0.33, y - nh * 0.28, nw * 0.66, nh * 0.34, nh / 4);
       ctx.fill();
     }
 
-    // judgement text
-    if (judgement && now - judgementAt < 480) {
-      const t = (now - judgementAt) / 480;
-      ctx.globalAlpha = 1 - t;
-      ctx.fillStyle = judgementColor;
-      ctx.shadowColor = judgementColor; ctx.shadowBlur = 22;
-      ctx.font = `900 ${Math.round(52 - t * 10)}px ui-monospace, monospace`;
+    // hit bursts
+    for (const s of sparks) {
+      s.life += dts; s.x += s.vx * dts; s.y += s.vy * dts; s.vy += 900 * dts;
+      const t = 1 - s.life / s.max;
+      if (t <= 0) continue;
+      ctx.globalAlpha = t;
+      ctx.fillStyle = s.color;
+      const sz = 2.5 + t * 4;
+      ctx.fillRect(s.x - sz / 2, s.y - sz / 2, sz, sz);
+    }
+    sparks = sparks.filter((s) => s.life < s.max);
+    ctx.globalAlpha = 1;
+
+    // judgement text — pops in big, settles, drifts up
+    if (judgement && now - judgementAt < 500) {
+      const t = (now - judgementAt) / 500;
+      const pop = t < 0.15 ? 1.5 - t * 3.3 : 1;
+      ctx.globalAlpha = 1 - t * t;
+      ctx.font = `900 ${Math.round(56 * pop)}px ui-monospace, monospace`;
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(judgement, W / 2, REC_Y - 260 - t * 40);
+      const jy = REC_Y - 280 - t * 50;
+      ctx.fillStyle = '#ff3df055';
+      ctx.fillText(judgement, W / 2 - 3, jy);
+      ctx.fillStyle = '#00e5ff55';
+      ctx.fillText(judgement, W / 2 + 3, jy);
+      ctx.fillStyle = judgementColor;
+      ctx.shadowColor = judgementColor; ctx.shadowBlur = 26;
+      ctx.fillText(judgement, W / 2, jy);
       ctx.shadowBlur = 0; ctx.globalAlpha = 1;
     }
-    // combo
+    // combo — scales with a heartbeat on every 10th
     if (combo >= 5) {
-      ctx.fillStyle = '#fff';
-      ctx.font = '900 42px ui-monospace, monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(`${combo}`, W / 2, REC_Y - 340);
+      const comboPop = 1 + 0.25 * Math.max(0, 1 - ((combo % 10) === 0 ? (now - judgementAt) / 200 : 1));
+      ctx.fillStyle = mult === 4 ? '#ffd060' : '#fff';
+      ctx.shadowColor = mult === 4 ? '#ffd060' : '#a04aff'; ctx.shadowBlur = mult === 4 ? 24 : 10;
+      ctx.font = `900 ${Math.round(46 * comboPop)}px ui-monospace, monospace`;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(`${combo}`, W / 2, REC_Y - 370);
+      ctx.shadowBlur = 0;
       ctx.font = '700 15px ui-monospace, monospace';
       ctx.fillStyle = '#8a7aa8';
-      ctx.fillText('COMBO', W / 2, REC_Y - 310);
+      ctx.fillText('COMBO', W / 2, REC_Y - 335);
+    }
+    // side heat bars at full multiplier
+    if (mult === 4) {
+      const heat = 0.25 + 0.15 * Math.sin(now / 120);
+      for (const sx of [0, W - 10]) {
+        const g = ctx.createLinearGradient(sx, 0, sx + 10, 0);
+        g.addColorStop(sx === 0 ? 0 : 1, `rgba(255, 208, 96, ${heat})`);
+        g.addColorStop(sx === 0 ? 1 : 0, 'rgba(255, 208, 96, 0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(sx, 0, 10, H);
+      }
     }
     // score + multiplier + progress
-    const mult = 1 + Math.min(3, Math.floor(combo / 10));
     ctx.textAlign = 'right'; ctx.textBaseline = 'top';
-    ctx.font = '800 30px ui-monospace, monospace';
+    ctx.font = '800 32px ui-monospace, monospace';
     ctx.fillStyle = '#e8d8ff';
     ctx.fillText(score.toLocaleString(), W - 18, 16);
-    ctx.font = '800 18px ui-monospace, monospace';
+    ctx.font = '800 19px ui-monospace, monospace';
     ctx.fillStyle = mult === 4 ? '#ffd060' : '#8a7aa8';
-    ctx.fillText(`x${mult}`, W - 18, 52);
+    ctx.fillText(`x${mult}`, W - 18, 54);
     ctx.textAlign = 'left';
     ctx.font = '700 15px ui-monospace, monospace';
     ctx.fillStyle = '#8a7aa8';
@@ -356,7 +474,9 @@ export function startGuitarHero(): void {
     ctx.fillStyle = '#1a1030';
     ctx.fillRect(0, 0, W, 5);
     ctx.fillStyle = '#a04aff';
+    ctx.shadowColor = '#a04aff'; ctx.shadowBlur = 8;
     ctx.fillRect(0, 0, W * prog, 5);
+    ctx.shadowBlur = 0;
 
     if (st > chart.durationMs + LEAD_IN_MS + 600) endSong();
   }
