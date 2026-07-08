@@ -26,6 +26,17 @@ const WIN_PERFECT = 45;     // ± ms
 const LEAD_IN_MS = 2600;    // silence before the song starts (first notes fall in)
 type Diff = 'easy' | 'normal' | 'hard';
 
+// One-time versioned wipe of local bests: v2 = scores earned before the overstrum
+// (anti-spam) penalty don't count. Bump to wipe again after future rule changes.
+try {
+  if (localStorage.getItem('tsong.gh.v') !== '2') {
+    for (const k of Object.keys(localStorage)) {
+      if (k.startsWith('tsong.gh.')) localStorage.removeItem(k);
+    }
+    localStorage.setItem('tsong.gh.v', '2');
+  }
+} catch { /* private browsing etc. — bests just won't persist */ }
+
 let ghOpen = false;
 
 export function startGuitarHero(net: GhNet): void {
