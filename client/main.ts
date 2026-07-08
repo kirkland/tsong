@@ -821,6 +821,8 @@ const net = connect(
       tronMod?.feedTrnLobby(msg);
     } else if (msg.type === 'trnRelay') {
       tronMod?.feedTrnRelay(msg.data);
+    } else if (msg.type === 'ghLeaderboard') {
+      ghScores = msg.rows;
     } else if (msg.type === 'tntLobby') {
       tntMod?.feedTntLobby(msg);
     } else if (msg.type === 'tntRelay') {
@@ -2056,12 +2058,19 @@ trnBtn.addEventListener('click', async () => {
 });
 
 // --- Tsong Hero (lazy-loaded, self-contained): solo rhythm game over the 8-bit song covers.
-// Charts were extracted offline from the actual mp3 waveforms; no server involvement at all.
+// Charts were extracted offline from the actual mp3 waveforms; the server only keeps the
+// public per-song leaderboard (ghScore up, ghLeaderboard down).
 const ghBtn = document.getElementById('ghBtn') as HTMLButtonElement;
+let ghMod: typeof import('./guitarhero') | null = null;
+let ghScores: import('../shared/types').GhLeaderboardMsg['rows'] = [];
 ghBtn.addEventListener('click', async () => {
   try {
-    const mod = await import('./guitarhero');
-    mod.startGuitarHero();
+    ghMod = await import('./guitarhero');
+    ghMod.startGuitarHero({
+      submit: (song, diff, score) => net.send({ type: 'ghScore', song, diff, score }),
+      leaderboard: () => ghScores,
+      name: () => myName,
+    });
   } catch (e) {
     console.error('Tsong Hero failed to load:', e);
   }
