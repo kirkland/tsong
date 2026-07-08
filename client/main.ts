@@ -2055,6 +2055,18 @@ trnBtn.addEventListener('click', async () => {
   }
 });
 
+// --- Tsong Hero (lazy-loaded, self-contained): solo rhythm game over the 8-bit song covers.
+// Charts were extracted offline from the actual mp3 waveforms; no server involvement at all.
+const ghBtn = document.getElementById('ghBtn') as HTMLButtonElement;
+ghBtn.addEventListener('click', async () => {
+  try {
+    const mod = await import('./guitarhero');
+    mod.startGuitarHero();
+  } catch (e) {
+    console.error('Tsong Hero failed to load:', e);
+  }
+});
+
 // --- TNT Explosion Rally, a 1v1 bomb-parry maze duel designed by a 6-year-old (lazy-loaded,
 // self-contained). Host-authoritative over the same dumb relay shape as Super Tsong Bros:
 // the server is only a 2-slot lobby + fan-out (tnt* messages, routed above). Slot 0 simulates
@@ -2252,6 +2264,7 @@ const WORLD_DELEGATE_CHECK: Record<string, () => boolean> = {
   racing: overlayPresentCheck('streetDemonsOverlay'),
   superbros: overlayPresentCheck('superbrosOverlay'),
   tron: overlayPresentCheck('tronOverlay'),
+  guitarhero: overlayPresentCheck('ghOverlay'),
   nuketown: overlayPresentCheck('nuketownOverlay'),
   citytycoon: overlayPresentCheck('crOverlay'),
   bowling: overlayPresentCheck('bowlOverlay'),
@@ -2346,7 +2359,7 @@ worldBtn.addEventListener('click', async () => {
           return;
         }
         // Arcade cabinets launch the solo/co-op minigames via their toolbar buttons.
-        if (feature === 'campaign' || feature === 'typedie' || feature === 'racing' || feature === 'superbros' || feature === 'nuketown' || feature === 'citytycoon' || feature === 'tnt' || feature === 'tron') {
+        if (feature === 'campaign' || feature === 'typedie' || feature === 'racing' || feature === 'superbros' || feature === 'nuketown' || feature === 'citytycoon' || feature === 'tnt' || feature === 'tron' || feature === 'guitarhero') {
           const btn = feature === 'campaign' ? campaignBtn
                     : feature === 'typedie' ? typeDieBtn
                     : feature === 'racing' ? streetDemonsBtn
@@ -2354,6 +2367,7 @@ worldBtn.addEventListener('click', async () => {
                     : feature === 'citytycoon' ? (document.getElementById('crBtn') as HTMLButtonElement)
                     : feature === 'tnt' ? tntBtn
                     : feature === 'tron' ? trnBtn
+                    : feature === 'guitarhero' ? ghBtn
                     : sbBtn;
           setTimeout(() => btn?.click(), 0);
           return;
