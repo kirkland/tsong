@@ -38,13 +38,13 @@ export function feedTrnLobby(m: TrnLobby) { handlers?.lobby(m); }
 export function feedTrnRelay(d: unknown) { handlers?.relay(d); }
 
 // --- constants ---
-const CELL = 10;                       // px per grid cell (canvas 1280×720)
+const CELL = 6;                        // px per grid cell (canvas 1920×1080, 320×180 grid)
 const COLORS = ['#00e5ff', '#ff9a00', '#ff3df0', '#89ff2a'] as const; // cyan / orange / magenta / lime
 const BOT_NAMES = ['CLU', 'RINZLER', 'SARK'] as const;
 const DX = [0, 1, 0, -1] as const;     // 0=up 1=right 2=down 3=left
 const DY = [-1, 0, 1, 0] as const;
-const TICK_START_MS = 62;              // sim step at round start (arena is big — keep it moving)...
-const TICK_MIN_MS = 38;                // ...ramping down to this (faster = harder)
+const TICK_START_MS = 50;              // sim step at round start (arena is huge — keep it moving)...
+const TICK_MIN_MS = 32;                // ...ramping down to this (faster = harder)
 const COUNTDOWN_MS = 1800;             // 3-2-1 before the cycles launch
 // Everything in /public that plays like a SONG (deliberately not the stingers/sfx).
 const MUSIC = [
@@ -380,12 +380,12 @@ export function startTron(net: TronNet): void {
       }
       return false;
     };
-    const score = (d: number) => runLen(d, 24) + (puOnRay(d, 18) ? 14 : 0);
+    const score = (d: number) => runLen(d, 34) + (puOnRay(d, 26) ? 18 : 0);
     const straight = score(r.dir);
     const left = score((r.dir + 3) % 4);
     const right = score((r.dir + 1) % 4);
     // commit to a turn if the road ahead is short, a pickup beckons, or occasionally for style
-    if (straight < 6 || (Math.random() < 0.03 && straight < Math.max(left, right)) || Math.max(left, right) > straight + 10) {
+    if (straight < 9 || (Math.random() < 0.03 && straight < Math.max(left, right)) || Math.max(left, right) > straight + 10) {
       if (left === right ? Math.random() < 0.5 : left > right) r.pendingDir = (r.dir + 3) % 4;
       else r.pendingDir = (r.dir + 1) % 4;
       if (Math.max(runLen((r.dir + 3) % 4, 24), runLen((r.dir + 1) % 4, 24)) === 0) r.pendingDir = r.dir; // boxed in — ride it out
@@ -413,7 +413,7 @@ export function startTron(net: TronNet): void {
     const jammedOut = (r: Rider) => now < r.jamUntil && tickNo % 2 === 1; // jam = move on even ticks only
 
     const grab = (r: Rider, i: number) => {
-      const pi = pickups.findIndex((p) => p.x === r.x && p.y === r.y);
+      const pi = pickups.findIndex((p) => Math.abs(p.x - r.x) <= 3 && Math.abs(p.y - r.y) <= 3);
       if (pi === -1) return;
       const kind = pickups[pi].kind;
       pickups.splice(pi, 1);
@@ -425,7 +425,7 @@ export function startTron(net: TronNet): void {
         // derez bomb: carve a 9×9 hole in every trail around the rider
         events.push([1, r.x, r.y]);
         spawnDerez({ x: r.x, y: r.y, color: '#ff5a3a' } as Rider);
-        for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) {
+        for (let dy = -6; dy <= 6; dy++) for (let dx = -6; dx <= 6; dx++) {
           const bx = r.x + dx, by = r.y + dy;
           if (bx >= 0 && bx < TRN_COLS && by >= 0 && by < TRN_ROWS && grid[idx(bx, by)]) put(idx(bx, by), 0);
         }
@@ -476,17 +476,17 @@ export function startTron(net: TronNet): void {
     }
 
     // spawn pickups on free cells away from every head
-    if (powerupsOn && now >= nextPickupAt && pickups.length < 4) {
+    if (powerupsOn && now >= nextPickupAt && pickups.length < 6) {
       for (let tries = 0; tries < 30; tries++) {
         const px = 6 + Math.floor(Math.random() * (TRN_COLS - 12));
         const py = 6 + Math.floor(Math.random() * (TRN_ROWS - 12));
         if (grid[idx(px, py)]) continue;
-        if (riders.some((r) => r.alive && Math.abs(r.x - px) + Math.abs(r.y - py) < 10)) continue;
+        if (riders.some((r) => r.alive && Math.abs(r.x - px) + Math.abs(r.y - py) < 14)) continue;
         if (pickups.some((p) => p.x === px && p.y === py)) continue;
         pickups.push({ x: px, y: py, kind: Math.floor(Math.random() * PU.length) });
         break;
       }
-      nextPickupAt = now + 3500 + Math.random() * 3000;
+      nextPickupAt = now + 2800 + Math.random() * 2400;
     }
 
     for (const [, ri, kind] of events.filter((e) => e[0] === 0)) {
@@ -690,7 +690,7 @@ export function startTron(net: TronNet): void {
       const cx = r.x * CELL + CELL / 2, cy = r.y * CELL + CELL / 2;
       const horiz = r.dir === 1 || r.dir === 3;
       const boosted = !!(r.fx & FX_BOOST);
-      const len = CELL * (boosted ? 3 : 2.1), thick = CELL * 1.05;
+      const len = CELL * (boosted ? 4.4 : 3.2), thick = CELL * 1.7;
       if (r.fx & FX_PHASE) ctx.globalAlpha = 0.35 + 0.3 * Math.sin(now / 70); // 👻 flicker
       ctx.shadowColor = r.color; ctx.shadowBlur = boosted ? 38 : 26;
       ctx.fillStyle = r.color;
