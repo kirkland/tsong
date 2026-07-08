@@ -52,7 +52,8 @@ const MAPS: WaMap[] = [
 ];
 const GRAV = 640;            // px/s² for projectiles and fighters
 const WALK_SPEED = 95;       // px/s
-const STEP_UP = 14;          // max ledge a fighter can walk up
+const STEP_UP = 17;          // max ledge a fighter can walk up
+const JUMP_VY = -350;        // W to jump (clears ~95px — craters are no longer prisons)
 const FALL_SAFE = 220;       // free-fall px before damage starts
 const WATER_BASE = WA_H - 26;   // starting waterline (rises in sudden death)
 const SUDDEN_DEATH_TURN = 14;   // after this many turns the water starts climbing
@@ -62,7 +63,7 @@ interface Weapon {
   name: string; icon: string; wind: boolean; bounce: boolean; fuseMs: number;
   radius: number; dmg: number; hitscan: boolean; ammo: number;
   rest?: number;                    // bounce restitution (default 0.45)
-  special?: 'air' | 'pong' | 'girder' | 'dirt' | 'bowl'; // non-standard behaviors
+  special?: 'air' | 'pong' | 'girder' | 'dirt' | 'bowl' | 'tp'; // non-standard behaviors
 }
 const WEAPONS: Weapon[] = [
   { name: 'BAZOOKA', icon: '🚀', wind: true, bounce: false, fuseMs: 0, radius: 62, dmg: 48, hitscan: false, ammo: -1 },
@@ -74,13 +75,16 @@ const WEAPONS: Weapon[] = [
   { name: 'GIRDER', icon: '🧱', wind: false, bounce: false, fuseMs: 0, radius: 0, dmg: 0, hitscan: false, ammo: 1, special: 'girder' },   // BUILD: place a steel beam at the mouse
   { name: 'DIRT BALL', icon: '🪣', wind: false, bounce: false, fuseMs: 0, radius: 52, dmg: 0, hitscan: false, ammo: 1, special: 'dirt' }, // BUILD: lob a mound of fresh terrain
   { name: 'BOWLING BALL', icon: '🎳', wind: false, bounce: false, fuseMs: 0, radius: 70, dmg: 55, hitscan: false, ammo: 0, special: 'bowl' }, // crate-only: the 7-10 split
+  { name: 'TELEPORT', icon: '🌀', wind: false, bounce: false, fuseMs: 0, radius: 0, dmg: 0, hitscan: false, ammo: 1, special: 'tp' },        // key 0: escape hatch — ends your turn
 ];
 const GIRDER_RANGE = 340;  // how far from your soldier a beam can be placed
+// wildcard-event ordnance (not player-selectable)
+const METEOR: Weapon = { name: 'METEOR', icon: '☄️', wind: false, bounce: false, fuseMs: 0, radius: 36, dmg: 26, hitscan: false, ammo: 0 };
 // supply crate contents → weapon index (or hp)
-const CRATE_KINDS = ['hp', 'dyna', 'air', 'pong', 'girder', 'dirt', 'bowl'] as const;
+const CRATE_KINDS = ['hp', 'dyna', 'air', 'pong', 'girder', 'dirt', 'bowl', 'tp'] as const;
 type CrateKind = typeof CRATE_KINDS[number];
-const CRATE_WEAPON: Record<Exclude<CrateKind, 'hp'>, number> = { dyna: 3, air: 4, pong: 5, girder: 6, dirt: 7, bowl: 8 };
-const CRATE_ICON: Record<CrateKind, string> = { hp: '❤️', dyna: '🧨', air: '🛩️', pong: '🏓', girder: '🧱', dirt: '🪣', bowl: '🎳' };
+const CRATE_WEAPON: Record<Exclude<CrateKind, 'hp'>, number> = { dyna: 3, air: 4, pong: 5, girder: 6, dirt: 7, bowl: 8, tp: 9 };
+const CRATE_ICON: Record<CrateKind, string> = { hp: '❤️', dyna: '🧨', air: '🛩️', pong: '🏓', girder: '🧱', dirt: '🪣', bowl: '🎳', tp: '🌀' };
 
 // deterministic PRNG for terrain generation (both sides run it with the host's seed)
 function mulberry32(seed: number) {
@@ -134,6 +138,8 @@ export function startArtillery(net: ArtilleryNet): void {
   let solid = new Uint8Array(WA_W * WA_H);
   let terrain: HTMLCanvasElement | null = null;      // pre-rendered dirt, carved as we go
   let turnPi = -1;                                   // whose turn (fighter index)
+  let gravScale = 1;                                 // wildcard low-gravity turns scale projectile arcs
+  let eventResolving = false;                        // wildcard flights in the air (don't advance the turn)
   let turnCount = 0;                                 // total turns elapsed (drives sudden death — deterministic)
   let waterY = WATER_BASE;                           // current waterline
   let wind = 0;                                      // -1..1, bazooka drift
@@ -649,6 +655,23 @@ export function startArtillery(net: ArtilleryNet): void {
       finishShot();
       return;
     }
+    if (wp.special === 'tp') {
+      if (shooter) {
+        let px = Math.max(20, Math.min(WA_W - 20, tx ?? sx));
+        let py = Math.max(20, Math.min(WA_H - 30, ty ?? sy));
+        let guard = 0;
+        while (isSolid(px, py) && guard++ < 500) py--; // pop up out of solid ground
+        for (let i = 0; i < 18; i++) sparks.push({ x: shooter.x, y: shooter.y - 9, vx: (Math.random() - 0.5) * 200, vy: (Math.random() - 0.5) * 200, life: 0, max: 0.4, color: '#b090ff' });
+        shooter.x = px; shooter.y = py;
+        shooter.fallFrom = py; // teleporting resets the fall — you appear, THEN gravity applies
+        shooter.vy = 0;
+        settleFighter(shooter);
+        for (let i = 0; i < 18; i++) sparks.push({ x: px, y: shooter.y - 9, vx: (Math.random() - 0.5) * 200, vy: (Math.random() - 0.5) * 200, life: 0, max: 0.4, color: '#b090ff' });
+        say('Teleportation: the coward\'s cardio.');
+      }
+      finishShot();
+      return;
+    }
     if (wp.special === 'air') {
       // three bomblets scream in from above the target x (relayed as tx)
       const at = Math.max(60, Math.min(WA_W - 60, tx ?? sx));
@@ -682,7 +705,7 @@ export function startArtillery(net: ArtilleryNet): void {
         fl.steps++;
         if (fl.steps > 12 * 120) { fl.done = true; break; } // 12s hard cap — lost shells fizzle
         if (fl.wp.wind) fl.vx += wind * 52 * SUBDT;
-        fl.vy += GRAV * SUBDT;
+        fl.vy += GRAV * gravScale * SUBDT;
         fl.x += fl.vx * SUBDT;
         fl.y += fl.vy * SUBDT;
         if (fl.fuse > 0) {
@@ -728,6 +751,12 @@ export function startArtillery(net: ArtilleryNet): void {
 
   function finishShot() {
     resolving = false;
+    if (eventResolving) {
+      // wildcard ordnance has landed — sync the damage but the current player still shoots
+      eventResolving = false;
+      if (isHost) net.relay({ t: 'sync', hp: fighters.map((f) => f.hp), px: fighters.map((f) => Math.round(f.x)), py: fighters.map((f) => Math.round(f.y)), alive: fighters.map((f) => f.alive ? 1 : 0) });
+      return;
+    }
     if (isHost) {
       // safety-net sync + advance the turn
       net.relay({ t: 'sync', hp: fighters.map((f) => f.hp), px: fighters.map((f) => Math.round(f.x)), py: fighters.map((f) => Math.round(f.y)), alive: fighters.map((f) => f.alive ? 1 : 0) });
@@ -803,12 +832,58 @@ export function startArtillery(net: ArtilleryNet): void {
     const crate = crates.length < 3 && Math.random() < 0.45
       ? { x: 80 + Math.floor(Math.random() * (WA_W - 160)), kind: CRATE_KINDS[Math.floor(Math.random() * CRATE_KINDS.length)] }
       : null;
-    net.relay({ t: 'turn', pi: turnPi, wind, crate });
-    applyTurnLocal(crate);
+    // wildcard events: rolled by the host with every random parameter baked into the message,
+    // so every client replays the exact same chaos
+    let ev: any = null;
+    if (turnCount >= 3 && Math.random() < 0.15) {
+      const roll = Math.floor(Math.random() * 5);
+      if (roll === 0) ev = { k: 'meteor', rocks: Array.from({ length: 4 + Math.floor(Math.random() * 3) }, () => [80 + Math.floor(Math.random() * (WA_W - 160)), Math.floor((Math.random() - 0.5) * 120)]) };
+      else if (roll === 1) ev = { k: 'frenzy', drops: Array.from({ length: 3 }, () => ({ x: 80 + Math.floor(Math.random() * (WA_W - 160)), kind: CRATE_KINDS[Math.floor(Math.random() * CRATE_KINDS.length)] })) };
+      else if (roll === 2) ev = { k: 'gale', w: (Math.random() < 0.5 ? -1 : 1) * (1.3 + Math.random() * 0.5) };
+      else if (roll === 3) ev = { k: 'lowg' };
+      else ev = { k: 'bloom', x: 120 + Math.floor(Math.random() * (WA_W - 240)), r: 60 + Math.floor(Math.random() * 50) };
+    }
+    net.relay({ t: 'turn', pi: turnPi, wind, crate, ev });
+    applyTurnLocal(crate, ev);
     if (fighters[turnPi].bot) botThinkAt = performance.now() + 1500 + Math.random() * 900;
   }
 
-  function applyTurnLocal(crate?: { x: number; kind: CrateKind } | null) {
+  function applyTurnLocal(crate?: { x: number; kind: CrateKind } | null, ev?: any) {
+    gravScale = 1;
+    if (ev) {
+      if (ev.k === 'meteor') {
+        banner = '☄️ METEOR SHOWER';
+        bannerUntil = performance.now() + 2400;
+        eventResolving = true;
+        resolving = true; // inputs locked while the sky falls
+        for (const [mx, mvx] of ev.rocks as [number, number][]) spawnFlight(mx, -40 - Math.abs(mvx), mvx, 160, METEOR);
+        say('The Ruins send their regards.');
+        turnEndsAt += 2600; // don't eat the player's clock with cosmic events
+      } else if (ev.k === 'frenzy') {
+        banner = '🎁 SUPPLY FRENZY';
+        bannerUntil = performance.now() + 2200;
+        for (const d of ev.drops as { x: number; kind: CrateKind }[]) {
+          const cy = surfaceY(d.x) - 10;
+          if (cy < waterY - 20) crates.push({ x: d.x, y: cy, kind: d.kind, born: performance.now() });
+        }
+        say('The House is feeling generous. Suspicious.');
+      } else if (ev.k === 'gale') {
+        wind = ev.w;
+        banner = '💨 GALE FORCE';
+        bannerUntil = performance.now() + 2200;
+        say('The wind has opinions today.');
+      } else if (ev.k === 'lowg') {
+        gravScale = 0.45;
+        banner = '🌙 LOW GRAVITY';
+        bannerUntil = performance.now() + 2400;
+        say('The moon is interfering. Aim accordingly.');
+      } else if (ev.k === 'bloom') {
+        addTerrain(ev.x, surfaceY(ev.x) - 10, ev.r);
+        banner = '🌱 TERRAIN BLOOM';
+        bannerUntil = performance.now() + 2200;
+        say('The map grows. Nobody asked it to.');
+      }
+    }
     if (crate) {
       const cy = surfaceY(crate.x) - 10;
       if (cy < waterY - 20) {
@@ -829,7 +904,7 @@ export function startArtillery(net: ArtilleryNet): void {
       if (over === 1) { banner = '🌊 SUDDEN DEATH — THE WATER RISES'; bannerUntil = performance.now() + 2600; }
       for (const f of fighters) if (f.alive && f.y >= waterY) killFighter(f, true);
     }
-    if (!(banner === '🌊 SUDDEN DEATH — THE WATER RISES' && performance.now() < bannerUntil)) {
+    if (!(performance.now() < bannerUntil)) { // event/sudden-death banners get their moment
       banner = `${fighters[turnPi].name}'S TURN`;
       bannerUntil = performance.now() + 1400;
     }
@@ -1021,12 +1096,12 @@ export function startArtillery(net: ArtilleryNet): void {
         'border-radius:10px;padding:12px 18px;';
       legend.innerHTML =
         '<div style="font-size:11px;letter-spacing:3px;color:#a08a5a;margin-bottom:4px">FIELD MANUAL</div>' +
-        'A / D — walk · MOUSE — aim · HOLD SPACE — charge, release to FIRE<br>' +
+        'A / D — walk · W — JUMP (craters are not prisons) · MOUSE — aim · HOLD SPACE — charge, release to FIRE<br>' +
         '1 🚀 Bazooka (rides the wind) · 2 💣 Grenade (bounces, 3s fuse)<br>' +
         '3 🔫 Shotgun (point blank) · 4 🧨 Dynamite (drop &amp; RUN — ×2)<br>' +
         '5 🛩️ Airstrike (three from above, ×1) · 6 🏓 Pong Ball (bounces, hunts, ×1)<br>' +
         '7 🧱 Girder (BUILD a steel beam at the mouse, ×1) · 8 🪣 Dirt Ball (BUILD a mound, bury someone, ×1)<br>' +
-        '9 🎳 Bowling Ball (crate-only — find one) · 📦 supply crates drop between turns: walk over to grab<br>' +
+        '9 🎳 Bowling Ball (crate-only) · 0 🌀 Teleport (click anywhere, ×1) · 📦 crates drop between turns<br>' +
         'Fall damage is real. The water is fatal. The wind is not your friend.';
       ui.appendChild(legend);
       ui.appendChild(btn('Desert', '#8aa', () => { net.leave(); mode = 'menu'; renderUi(); }));
@@ -1060,10 +1135,16 @@ export function startArtillery(net: ArtilleryNet): void {
     } else if (d.t === 'turn') {
       turnPi = d.pi;
       wind = d.wind;
-      applyTurnLocal(d.crate);
+      applyTurnLocal(d.crate, d.ev);
     } else if (d.t === 'pos') {
       const f = fighters[d.pi];
-      if (f && d.pi !== myIdx()) { f.x = d.x; f.y = d.y; f.face = d.face; f.fallFrom = f.y; }
+      if (f && d.pi !== myIdx()) {
+        f.x = d.x; f.y = d.y; f.face = d.face; f.fallFrom = f.y;
+        if (typeof d.hp === 'number' && d.hp < f.hp) {
+          f.hp = d.hp;
+          if (f.hp <= 0 && f.alive) killFighter(f, false);
+        }
+      }
     } else if (d.t === 'shot') {
       if (d.pi !== myIdx()) resolveShot(d.pi, d.w, d.x, d.y, d.ang, d.pow, d.tx, d.ty);
       if (isHost && fighters[d.pi] && !fighters[d.pi].bot) { /* host re-simulates guests' shots via the same path */ }
@@ -1113,9 +1194,10 @@ export function startArtillery(net: ArtilleryNet): void {
     if (e.key === 'Escape') { e.preventDefault(); close(); return; }
     if (mode !== 'play') return;
     const k = e.key.toLowerCase();
-    if (['a', 'd', ' '].includes(k)) { e.preventDefault(); e.stopPropagation(); }
+    if (['a', 'd', 'w', ' '].includes(k)) { e.preventDefault(); e.stopPropagation(); }
     if (k === ' ' && myTurn() && charge < 0 && !e.repeat) charge = 0;
     if (['1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(k) && myTurn()) weapon = Number(k) - 1;
+    if (k === '0' && myTurn()) weapon = 9; // 🌀 teleport lives on the 0 key
     keys.add(k);
   }
   function onKeyUp(e: KeyboardEvent) {
@@ -1140,40 +1222,83 @@ export function startArtillery(net: ArtilleryNet): void {
       charge += dt / 1.6;
       if (charge >= 1) { charge = 1; fire(); } // max charge auto-fires, Worms-style
     }
-    // walking (acting player only, real-time within the turn)
+    // movement (acting player only, real-time within the turn): walk, JUMP, fall
     if (myTurn()) {
       const me = fighters[myIdx()];
       const ax = (keys.has('a') ? -1 : 0) + (keys.has('d') ? 1 : 0);
+      const onGround = isSolid(me.x, me.y + 1);
+      let moved = false;
+      // W = jump (facing drift comes from held A/D)
+      if (keys.has('w') && onGround && charge < 0) {
+        me.vy = JUMP_VY;
+        me.fallFrom = me.y;
+        me.y -= 2;
+        moved = true;
+      }
       if (ax !== 0 && charge < 0) {
         me.face = ax;
-        const nx = me.x + ax * WALK_SPEED * dt;
+        const speed = onGround ? WALK_SPEED : WALK_SPEED * 0.7; // air control, slightly clumsy
+        const nx = me.x + ax * speed * dt;
         if (nx > 8 && nx < WA_W - 8) {
-          // climb small ledges, refuse walls
-          let ny = me.y;
-          let blocked = false;
-          for (let up = 0; up <= STEP_UP; up++) {
-            if (!isSolid(nx, me.y - up)) { ny = me.y - up; blocked = false; break; }
-            blocked = true;
+          if (onGround) {
+            // climb small ledges, refuse walls
+            let ny = me.y;
+            let blocked = false;
+            for (let up = 0; up <= STEP_UP; up++) {
+              if (!isSolid(nx, me.y - up)) { ny = me.y - up; blocked = false; break; }
+              blocked = true;
+            }
+            if (!blocked) { me.x = nx; me.y = ny; moved = true; }
+          } else if (!isSolid(nx, me.y) && !isSolid(nx, me.y - 16)) {
+            me.x = nx; moved = true;
           }
-          if (!blocked) {
-            me.x = nx; me.y = ny;
-            while (!isSolid(me.x, me.y + 1) && me.y < waterY) me.y++; // hug gentle downslopes
-            if (me.y >= waterY) {
-              // walked into the drink — everyone needs to know, then the turn moves on
-              killFighter(me, true);
-              net.relay({ t: 'drown', pi: myIdx() });
+        }
+      }
+      // airborne physics: gravity, head bumps, landing (with fall damage), water
+      if (!isSolid(me.x, me.y + 1)) {
+        me.vy += GRAV * dt;
+        if (me.vy < 0 && isSolid(me.x, me.y - 20)) me.vy = 0; // bumped the ceiling
+        let ny = me.y + me.vy * dt;
+        let landed = false;
+        if (me.vy > 0) {
+          for (let yy = me.y + 1; yy <= ny; yy++) {
+            if (isSolid(me.x, yy + 1)) { ny = yy; landed = true; break; }
+          }
+        }
+        me.y = ny;
+        moved = true;
+        if (me.y >= waterY) {
+          killFighter(me, true);
+          net.relay({ t: 'drown', pi: myIdx() });
+          if (isHost) window.setTimeout(() => { if (waOpen && mode === 'play' && !resolving) hostNextTurn(); }, 1200);
+          return;
+        }
+        if (landed) {
+          me.vy = 0;
+          const fall = me.y - me.fallFrom;
+          if (fall > FALL_SAFE) {
+            const dmg = Math.round((fall - FALL_SAFE) * 0.18);
+            me.hp = Math.max(0, me.hp - dmg);
+            floaties.push({ x: me.x, y: me.y - 34, text: `-${dmg}`, color: '#ffd060', life: 0 });
+            if (me.hp <= 0) {
+              killFighter(me, false);
+              net.relay({ t: 'pos', pi: myIdx(), x: Math.round(me.x), y: Math.round(me.y), face: me.face, hp: me.hp });
               if (isHost) window.setTimeout(() => { if (waOpen && mode === 'play' && !resolving) hostNextTurn(); }, 1200);
               return;
             }
-            me.fallFrom = me.y;
-            // supply crate pickup — walk into it
-            const ci = crates.findIndex((c) => Math.abs(c.x - me.x) < 18 && Math.abs(c.y - me.y) < 30);
-            if (ci >= 0) { net.relay({ t: 'crate', pi: myIdx(), i: ci }); applyCrate(myIdx(), ci); }
           }
+          me.fallFrom = me.y;
         }
+      } else {
+        me.fallFrom = me.y;
+      }
+      if (moved) {
+        // supply crate pickup — walk (or fall) into it
+        const ci = crates.findIndex((c) => Math.abs(c.x - me.x) < 18 && Math.abs(c.y - me.y) < 30);
+        if (ci >= 0) { net.relay({ t: 'crate', pi: myIdx(), i: ci }); applyCrate(myIdx(), ci); }
         if (now - lastPosSend > 80) {
           lastPosSend = now;
-          net.relay({ t: 'pos', pi: myIdx(), x: Math.round(me.x), y: Math.round(me.y), face: me.face });
+          net.relay({ t: 'pos', pi: myIdx(), x: Math.round(me.x), y: Math.round(me.y), face: me.face, hp: me.hp });
         }
       }
       aimAngle = Math.atan2(mouseY - (me.y - 12), mouseX - me.x);
@@ -1360,7 +1485,22 @@ export function startArtillery(net: ArtilleryNet): void {
     if (myTurn()) {
       const me = fighters[myIdx()];
       const wp = WEAPONS[weapon];
-      if (wp.special === 'girder') {
+      if (wp.special === 'tp') {
+        // ghost soldier at the destination
+        ctx.globalAlpha = 0.5 + 0.2 * Math.sin(now / 200);
+        ctx.fillStyle = '#b090ff';
+        ctx.beginPath();
+        ctx.ellipse(mouseX, mouseY - 9, 9, 11, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = '#b090ff88';
+        ctx.setLineDash([3, 5]);
+        ctx.beginPath();
+        ctx.moveTo(me.x, me.y - 10);
+        ctx.lineTo(mouseX, mouseY - 10);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      } else if (wp.special === 'girder') {
         // beam ghost at the (range-clamped) mouse
         let gx = mouseX, gy = mouseY;
         const gdx = gx - me.x, gdy = gy - (me.y - 10);
@@ -1397,7 +1537,7 @@ export function startArtillery(net: ArtilleryNet): void {
         let vx = Math.cos(aimAngle) * speed, vy = Math.sin(aimAngle) * speed;
         for (let s = 0; s < 60; s++) {
           if (wp.wind) vx += wind * 52 * (1 / 60);
-          vy += GRAV * (1 / 60);
+          vy += GRAV * gravScale * (1 / 60);
           x += vx * (1 / 60); y += vy * (1 / 60);
           if (isSolid(x, y) || y > WA_H) break;
           if (s % 4 === 0) {
