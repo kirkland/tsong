@@ -53,6 +53,7 @@ interface CrGame {
   bankHotels: number;
   trades: CrTradeView[];
   chat: { pid: string; name: string; color: string; text: string }[];
+  spectatorCount: number;
 }
 
 let open = false;
@@ -80,6 +81,9 @@ let buildMode = false;
 let confetti: { x: number; y: number; vx: number; vy: number; c: string; life: number }[] = [];
 let lastTs = 0;
 let activeModal: HTMLDivElement | null = null;
+let myPropsBtn: HTMLButtonElement;
+let tooltipEl: HTMLDivElement;
+let tooltipPos = -1; // board position the tooltip is currently pinned to, -1 = hidden
 
 // --- geometry cache ---
 interface Cell { x: number; y: number; w: number; h: number; side: 'bottom' | 'right' | 'top' | 'left' | 'corner'; pos: number; }
@@ -87,6 +91,39 @@ let cells: Cell[] = [];
 let boardBox = { x: 0, y: 0, size: 0, corner: 0, span: 0 };
 
 const GROUP_ORDER = ['brown', 'cyan', 'pink', 'orange', 'red', 'yellow', 'green', 'navy'];
+
+// ─── Sound (same lazy-AudioContext synth idiom used elsewhere in the client) ────
+
+let ac: AudioContext | null = null;
+function soundOn(): boolean {
+  return !document.cookie.split('; ').includes('tsong_muted=1');
+}
+function tone(f0: number, f1: number, dur: number, type: OscillatorType, vol: number): void {
+  if (!soundOn()) return;
+  try {
+    if (!ac) ac = new AudioContext();
+    if (ac.state === 'suspended') ac.resume().catch(() => {});
+    const t0 = ac.currentTime;
+    const o = ac.createOscillator(); const g = ac.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(f0, t0);
+    o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t0 + dur);
+    g.gain.setValueAtTime(vol, t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g).connect(ac.destination);
+    o.start(t0); o.stop(t0 + dur + 0.02);
+  } catch { /* audio is a bonus, never a crash */ }
+}
+function snd(kind: 'roll' | 'cash' | 'pay' | 'bankrupt' | 'win' | 'chat'): void {
+  switch (kind) {
+    case 'roll': tone(180, 260, 0.12, 'square', 0.05); setTimeout(() => tone(200, 300, 0.1, 'square', 0.04), 90); break;
+    case 'cash': tone(660, 880, 0.14, 'sine', 0.06); break;
+    case 'pay': tone(300, 180, 0.16, 'sawtooth', 0.05); break;
+    case 'bankrupt': tone(220, 80, 0.5, 'sawtooth', 0.07); break;
+    case 'win': tone(523, 1046, 0.4, 'sine', 0.07); break;
+    case 'chat': tone(880, 1040, 0.08, 'sine', 0.04); break;
+  }
+}
 
 // ─── Entry / exit ──────────────────────────────────────────────────────────────
 
@@ -126,7 +163,8 @@ export function startCityTycoon(adapter: CityRiseNet): void {
   title.style.cssText = 'font-size:20px;letter-spacing:.5px;background:linear-gradient(90deg,#8b7bff,#4dd0e1);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;';
   sidePanel.appendChild(title);
 
-  sidePanel.appendChild(btn('crMyProps', '#2a2a5a', () => openPropertiesModal(), '🏢 My Properties'));
+  myPropsBtn = btn('crMyProps', '#2a2a5a', () => openPropertiesModal(), '🏢 My Properties');
+  sidePanel.appendChild(myPropsBtn);
 
   const bankLine = document.createElement('div');
   bankLine.id = 'crBank';
@@ -187,8 +225,16 @@ export function startCityTycoon(adapter: CityRiseNet): void {
   overlay.append(boardWrap, sidePanel);
   document.body.appendChild(overlay);
 
+  tooltipEl = document.createElement('div');
+  tooltipEl.style.cssText =
+    'position:fixed;z-index:970;background:#14142c;border:1px solid #33335a;border-radius:8px;padding:10px 12px;' +
+    'font-size:12px;line-height:1.5;color:#e8eefc;box-shadow:0 4px 16px rgba(0,0,0,.5);pointer-events:none;display:none;max-width:220px;';
+  document.body.appendChild(tooltipEl);
+
   window.addEventListener('resize', layout);
   canvas.addEventListener('click', onCanvasClick);
+  canvas.addEventListener('mousemove', onCanvasHover);
+  canvas.addEventListener('mouseleave', hideTooltip);
   document.addEventListener('keydown', onKey);
 
   layout();
@@ -209,9 +255,12 @@ export function closeCityTycoon(): void {
   cancelAnimationFrame(rafId);
   window.removeEventListener('resize', layout);
   canvas.removeEventListener('click', onCanvasClick);
+  canvas.removeEventListener('mousemove', onCanvasHover);
+  canvas.removeEventListener('mouseleave', hideTooltip);
   document.removeEventListener('keydown', onKey);
   overlay?.remove();
   activeModal?.remove(); activeModal = null;
+  tooltipEl?.remove(); tooltipPos = -1;
   game = null; tokens.clear(); floats = []; confetti = []; buildMode = false;
 }
 
@@ -253,11 +302,17 @@ export function onState(g: CrGame): void {
 
   // Trigger dice animation when a fresh roll arrives.
   const dk = `${g.turnPid}:${g.dice[0]}:${g.dice[1]}:${g.rolledThisTurn}`;
-  if (g.rolledThisTurn && dk !== lastDiceKey) { diceAnim = 0.9; }
+  if (g.rolledThisTurn && dk !== lastDiceKey) { diceAnim = 0.9; snd('roll'); }
   lastDiceKey = dk;
 
-  // Confetti on win.
-  if (g.phase === 'gameover' && g.winnerPid && (!prev || prev.phase !== 'gameover')) burstConfetti();
+  // A light ping for an incoming chat line from someone else (not your own, just sent).
+  if (prev && g.chat.length > prev.chat.length) {
+    const latest = g.chat[g.chat.length - 1];
+    if (latest && latest.pid !== selfPid) snd('chat');
+  }
+
+  // Confetti + fanfare on win.
+  if (g.phase === 'gameover' && g.winnerPid && (!prev || prev.phase !== 'gameover')) { burstConfetti(); snd('win'); }
 
   layout();
   renderPanel();
@@ -265,6 +320,9 @@ export function onState(g: CrGame): void {
 
 export function onEvent(text: string, kind: 'info' | 'warn' | 'success' | 'error'): void {
   if (!open) return;
+  if (kind === 'success') snd('cash');
+  else if (kind === 'error') snd('bankrupt');
+  else if (kind === 'warn') snd('pay');
   const el = document.createElement('div');
   const bg = kind === 'success' ? '#1c5c2e' : kind === 'error' ? '#6c1c1c' : kind === 'warn' ? '#6c561c' : '#22224a';
   el.textContent = text;
@@ -690,9 +748,13 @@ function renderPanel(): void {
   if (!game) return;
   const g = game;
 
+  const iAmSpectator = !g.players.some((p) => p.pid === selfPid);
+  myPropsBtn.style.display = iAmSpectator ? 'none' : '';
+
   const bankLine = document.getElementById('crBank')!;
-  bankLine.textContent = g.phase === 'waiting' ? ''
-    : `🏠 ${g.bankHouses}/32 · 🏨 ${g.bankHotels}/12 bank supply${g.jackpot > 0 ? ` · 🥪 Free Lunch pot: $${g.jackpot}` : ''}`;
+  const watching = g.spectatorCount > 0 ? ` · 👀 ${g.spectatorCount} watching` : '';
+  bankLine.textContent = g.phase === 'waiting' ? (watching ? watching.replace(' · ', '') : '')
+    : `🏠 ${g.bankHouses}/32 · 🏨 ${g.bankHotels}/12 bank supply${g.jackpot > 0 ? ` · 🥪 Free Lunch pot: $${g.jackpot}` : ''}${watching}`;
 
   const list = document.getElementById('crPlayers')!;
   list.innerHTML = '';
@@ -755,6 +817,12 @@ function renderTrades(): void {
     row.style.cssText = 'display:flex;gap:6px;';
     if (t.toPid === selfPid) {
       row.appendChild(btn('acc', '#1c7c2e', () => net.send({ type: 'crRespondTrade', tradeId: t.id, accept: true }), '✅ Accept'));
+      row.appendChild(btn('counter', '#7c561c', () => openTradeModal({
+        targetPid: t.fromPid,
+        counterOf: t.id,
+        // Mirror the deal from your side as the starting point — tweak and send back.
+        prefill: { offerProps: t.wantProps, offerCash: t.wantCash, offerJailFree: t.wantJailFree, wantProps: t.offerProps, wantCash: t.offerCash, wantJailFree: t.offerJailFree },
+      }), '🔁 Counter'));
       row.appendChild(btn('rej', '#5c1c1c', () => net.send({ type: 'crRespondTrade', tradeId: t.id, accept: false }), '❌ Reject'));
     } else if (t.fromPid === selfPid) {
       row.appendChild(btn('cancel', '#5c1c1c', () => net.send({ type: 'crCancelTrade', tradeId: t.id }), '🚫 Cancel Offer'));
@@ -777,6 +845,13 @@ function renderActions(): void {
   actionBar.innerHTML = '';
   const myTurn = g.turnPid === selfPid;
   const me = g.players.find((p) => p.pid === selfPid);
+
+  if (!me) {
+    // No seat in this room — just watching.
+    actionBar.appendChild(hint(`👀 You're spectating${g.spectatorCount > 1 ? ` (${g.spectatorCount} watching)` : ''}.`));
+    actionBar.appendChild(btn('🚪 Leave', '#5c1c1c', () => closeCityTycoon()));
+    return;
+  }
 
   if (g.phase === 'waiting') {
     if (me && !me.ready) actionBar.appendChild(btn('✅ Ready Up', '#1c7c2e', () => net.send({ type: 'crReady' })));
@@ -874,17 +949,27 @@ function openPropertiesModal(): void {
     empty.textContent = "You don't own any properties yet.";
     card.appendChild(empty);
   } else {
+    const canAct = g.turnPid === selfPid && g.phase === 'building';
     for (const pos of [...me.owned].sort((a, b) => a - b)) {
       const sp = g.board[pos];
       const level = me.buildings[pos] ?? 0;
       const built = level === 5 ? '🏨' : level > 0 ? '🏠'.repeat(level) : '';
+      const isMortgaged = me.mortgaged.includes(pos);
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 4px;border-bottom:1px solid #23233c;';
       row.innerHTML =
         `<span style="width:12px;height:12px;border-radius:3px;background:${sp.color ?? '#666'};flex:0 0 auto;"></span>` +
-        `<span style="flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(sp.name)}${me.mortgaged.includes(pos) ? ' <span style="color:#ff9a9a;font-size:11px;">(mortgaged)</span>' : ''}</span>` +
+        `<span style="flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(sp.name)}${isMortgaged ? ' <span style="color:#ff9a9a;font-size:11px;">(mortgaged)</span>' : ''}</span>` +
         `<span style="color:#9aa0c8;flex:0 0 auto;">${built}</span>` +
         `<span style="color:#8bff9a;flex:0 0 auto;">$${sp.price ?? 0}</span>`;
+      if (isMortgaged && canAct) {
+        const cost = Math.ceil(((sp.price ?? 0) / 2) * 1.1);
+        const unmort = document.createElement('button');
+        unmort.textContent = `Unmortgage ($${cost})`;
+        unmort.style.cssText = 'flex:0 0 auto;padding:5px 8px;border-radius:6px;border:none;background:#1c7c2e;color:#fff;font-size:11px;font-weight:600;cursor:pointer;';
+        unmort.onclick = () => { net.send({ type: 'crUnmortgage', position: pos }); closeModal(); };
+        row.appendChild(unmort);
+      }
       card.appendChild(row);
     }
   }
@@ -897,23 +982,29 @@ function openPropertiesModal(): void {
   activeModal = modal;
 }
 
-function buildTradeColumnHtml(label: string, p: CrPlayerView): string {
+function buildTradeColumnHtml(label: string, p: CrPlayerView, prefillProps?: number[], prefillCash?: number, prefillJailFree?: number): string {
   const g = game!;
   const unimproved = p.owned.filter((pos) => (p.buildings[pos] ?? 0) === 0);
   const propsHtml = unimproved.length
-    ? unimproved.map((pos) => `<label style="display:flex;gap:6px;align-items:center;font-size:12px;"><input type="checkbox" value="${pos}"> ${escapeHtml(g.board[pos]?.name ?? '?')}</label>`).join('')
+    ? unimproved.map((pos) => `<label style="display:flex;gap:6px;align-items:center;font-size:12px;"><input type="checkbox" value="${pos}" ${prefillProps?.includes(pos) ? 'checked' : ''}> ${escapeHtml(g.board[pos]?.name ?? '?')}</label>`).join('')
     : '<div style="color:#666;font-size:12px;">(no unimproved properties)</div>';
   return (
     `<div style="font-weight:600;">${escapeHtml(label)} (${escapeHtml(p.name)})</div>` +
     `<div style="max-height:140px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;border:1px solid #23233c;border-radius:6px;padding:6px;">${propsHtml}</div>` +
-    `<label style="display:flex;gap:6px;align-items:center;">Cash <input class="cr-cash" type="number" min="0" max="${p.money}" value="0" style="width:80px;padding:4px;border-radius:6px;border:1px solid #33335a;background:#0a0a16;color:#fff;"></label>` +
+    `<label style="display:flex;gap:6px;align-items:center;">Cash <input class="cr-cash" type="number" min="0" max="${p.money}" value="${prefillCash ?? 0}" style="width:80px;padding:4px;border-radius:6px;border:1px solid #33335a;background:#0a0a16;color:#fff;"></label>` +
     (p.jailFreeCards > 0
-      ? `<label style="display:flex;gap:6px;align-items:center;">🔓 cards <input class="cr-jail" type="number" min="0" max="${p.jailFreeCards}" value="0" style="width:60px;padding:4px;border-radius:6px;border:1px solid #33335a;background:#0a0a16;color:#fff;"></label>`
+      ? `<label style="display:flex;gap:6px;align-items:center;">🔓 cards <input class="cr-jail" type="number" min="0" max="${p.jailFreeCards}" value="${prefillJailFree ?? 0}" style="width:60px;padding:4px;border-radius:6px;border:1px solid #33335a;background:#0a0a16;color:#fff;"></label>`
       : '')
   );
 }
 
-function openTradeModal(): void {
+interface CounterOpts {
+  targetPid: string;
+  counterOf: number;
+  prefill: { offerProps: number[]; offerCash: number; offerJailFree: number; wantProps: number[]; wantCash: number; wantJailFree: number };
+}
+
+function openTradeModal(opts?: CounterOpts): void {
   if (!game) return;
   closeModal();
   const g = game;
@@ -925,11 +1016,16 @@ function openTradeModal(): void {
   modal.style.cssText = 'position:fixed;inset:0;z-index:960;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;';
   const card = document.createElement('div');
   card.style.cssText = 'background:#14142c;border:1px solid #33335a;border-radius:12px;padding:18px;width:420px;max-width:92vw;max-height:86vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px;color:#e8eefc;font-size:13px;';
-  card.innerHTML = '<div style="font-size:16px;font-weight:700;">🤝 Propose Trade</div>';
+  card.innerHTML = `<div style="font-size:16px;font-weight:700;">${opts ? '🔁 Counter Offer' : '🤝 Propose Trade'}</div>`;
 
   const select = document.createElement('select');
   select.style.cssText = 'padding:8px;border-radius:8px;border:1px solid #33335a;background:#0a0a16;color:#fff;font-size:13px;';
-  for (const p of others) { const o = document.createElement('option'); o.value = p.pid; o.textContent = p.name; select.appendChild(o); }
+  for (const p of others) {
+    const o = document.createElement('option');
+    o.value = p.pid; o.textContent = p.name;
+    if (opts && p.pid === opts.targetPid) o.selected = true;
+    select.appendChild(o);
+  }
   card.appendChild(select);
 
   const body = document.createElement('div');
@@ -943,8 +1039,10 @@ function openTradeModal(): void {
 
   const rebuild = () => {
     const target = g.players.find((p) => p.pid === select.value) ?? others[0];
-    giveCol.innerHTML = buildTradeColumnHtml('You give', me);
-    getCol.innerHTML = buildTradeColumnHtml('You get', target);
+    // Only pre-fill when the selected target still matches who this is a counter to.
+    const p = opts && target.pid === opts.targetPid ? opts.prefill : undefined;
+    giveCol.innerHTML = buildTradeColumnHtml('You give', me, p?.offerProps, p?.offerCash, p?.offerJailFree);
+    getCol.innerHTML = buildTradeColumnHtml('You get', target, p?.wantProps, p?.wantCash, p?.wantJailFree);
   };
   select.onchange = rebuild;
   rebuild();
@@ -959,9 +1057,11 @@ function openTradeModal(): void {
     const wantCash = Number((getCol.querySelector('.cr-cash') as HTMLInputElement | null)?.value || 0);
     const offerJailFree = Number((giveCol.querySelector('.cr-jail') as HTMLInputElement | null)?.value || 0);
     const wantJailFree = Number((getCol.querySelector('.cr-jail') as HTMLInputElement | null)?.value || 0);
-    net.send({ type: 'crProposeTrade', toPid: target.pid, offer: { offerProps, offerCash, offerJailFree, wantProps, wantCash, wantJailFree } });
+    const offer = { offerProps, offerCash, offerJailFree, wantProps, wantCash, wantJailFree };
+    if (opts) net.send({ type: 'crCounterTrade', tradeId: opts.counterOf, offer });
+    else net.send({ type: 'crProposeTrade', toPid: target.pid, offer });
     closeModal();
-  }, 'Send Offer'));
+  }, opts ? 'Send Counter' : 'Send Offer'));
   btnRow.appendChild(btn('cancel', '#5c1c1c', () => closeModal(), 'Cancel'));
   card.appendChild(btnRow);
 
@@ -988,16 +1088,83 @@ function hint(text: string): HTMLDivElement {
 }
 
 function onCanvasClick(e: MouseEvent): void {
-  if (!game || !buildMode || game.turnPid !== selfPid || game.phase !== 'building') return;
+  if (!game) return;
   const rect = canvas.getBoundingClientRect();
   const mx = (e.clientX - rect.left) * (boardBox.size / rect.width);
   const my = (e.clientY - rect.top) * (boardBox.size / rect.height);
   for (const c of cells) {
     if (mx >= c.x && mx <= c.x + c.w && my >= c.y && my <= c.y + c.h) {
-      if (canBuild(c.pos)) net.send({ type: 'crBuild', position: c.pos });
+      if (buildMode && game.turnPid === selfPid && game.phase === 'building' && canBuild(c.pos)) {
+        net.send({ type: 'crBuild', position: c.pos });
+        return;
+      }
+      // Not building — treat the tap as pinning/unpinning that space's info tooltip. Touch
+      // devices have no hover, so this is their only way to see rent/ownership details.
+      if (tooltipPos === c.pos) hideTooltip(); else showTooltip(c.pos, e.clientX, e.clientY);
       return;
     }
   }
+  hideTooltip();
+}
+
+function onCanvasHover(e: MouseEvent): void {
+  if (!game) { hideTooltip(); return; }
+  const rect = canvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (boardBox.size / rect.width);
+  const my = (e.clientY - rect.top) * (boardBox.size / rect.height);
+  for (const c of cells) {
+    if (mx >= c.x && mx <= c.x + c.w && my >= c.y && my <= c.y + c.h) {
+      showTooltip(c.pos, e.clientX, e.clientY);
+      return;
+    }
+  }
+  hideTooltip();
+}
+
+function showTooltip(pos: number, clientX: number, clientY: number): void {
+  const g = game;
+  const sp = g?.board[pos];
+  if (!g || !sp) return;
+  tooltipPos = pos;
+  tooltipEl.innerHTML = tooltipHtml(pos, sp);
+  tooltipEl.style.display = 'block';
+  // Keep it roughly on-screen — flip to the other side of the cursor near the right/bottom edge.
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const guessW = 220, guessH = 140;
+  const left = clientX + guessW + 16 > vw ? clientX - guessW - 14 : clientX + 14;
+  const top = clientY + guessH + 16 > vh ? clientY - guessH - 14 : clientY + 14;
+  tooltipEl.style.left = Math.max(4, left) + 'px';
+  tooltipEl.style.top = Math.max(4, top) + 'px';
+}
+
+function hideTooltip(): void {
+  tooltipPos = -1;
+  tooltipEl.style.display = 'none';
+}
+
+function tooltipHtml(pos: number, sp: Space): string {
+  const owner = ownerOf(pos);
+  let html = `<div style="font-weight:700;margin-bottom:4px;">${escapeHtml(sp.name)}</div>`;
+  if (sp.price) html += `<div>Price: $${sp.price}</div>`;
+  if (sp.kind === 'property' && sp.rent) {
+    const r = sp.rent;
+    html += `<div style="margin-top:4px;font-size:11px;">Rent: $${r[0]}<br>With monopoly: $${r[1]}<br>` +
+      `1🏠 $${r[2]} · 2🏠 $${r[3]} · 3🏠 $${r[4]} · 4🏠 $${r[5]}<br>Hotel: $${r[6]}</div>`;
+  } else if (sp.kind === 'transit') {
+    html += `<div style="margin-top:4px;font-size:11px;">Rent: $25 / $50 / $100 / $200 by circuits owned</div>`;
+  } else if (sp.kind === 'utility') {
+    html += `<div style="margin-top:4px;font-size:11px;">Rent: 4× dice roll (10× if both utilities owned)</div>`;
+  } else if (sp.kind === 'tax') {
+    html += `<div style="margin-top:4px;font-size:11px;">Tax: $${sp.taxAmount}</div>`;
+  }
+  if (owner) {
+    html += `<div style="margin-top:6px;padding-top:4px;border-top:1px solid #33335a;">Owner: <span style="color:${owner.color};font-weight:600;">${escapeHtml(owner.name)}</span>${owner.mortgaged.includes(pos) ? ' <span style="color:#ff9a9a;">(mortgaged)</span>' : ''}</div>`;
+    if (sp.kind === 'property') {
+      const lvl = owner.buildings[pos] ?? 0;
+      if (lvl > 0) html += `<div>${lvl === 5 ? 'Hotel 🏨' : `${lvl} house${lvl === 1 ? '' : 's'} 🏠`}</div>`;
+    }
+  }
+  return html;
 }
 
 // ─── helpers ───────────────────────────────────────────────────────────────────

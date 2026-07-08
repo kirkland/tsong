@@ -7,7 +7,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { WebSocketServer, WebSocket } from 'ws';
 import sirv from 'sirv';
-import { BOT_LEVELS, BotLevel, ClientMsg, TICK_MS, TickHealth } from '../shared/types';
+import { BOT_LEVELS, BotLevel, ClientMsg, CrTradeOffer, TICK_MS, TickHealth } from '../shared/types';
 import { Game, GameSnapshot } from './game';
 import { Lobby, LobbySnapshot } from './lobby';
 import { initDb, migratePlayer } from './db';
@@ -111,6 +111,20 @@ function tickHealth(): TickHealth {
     busyAvg: Math.round(busyAvg * 100) / 100,
     busyMax: Math.round(busyMax * 100) / 100,
     slowPct: Math.round((slow / tickWork.length) * 1000) / 10,
+  };
+}
+
+// Shared by crProposeTrade and crCounterTrade — sanitizes an untrusted trade offer payload.
+function parseCrTradeOffer(raw: unknown): CrTradeOffer | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  return {
+    offerProps: Array.isArray(o.offerProps) ? o.offerProps.filter((n): n is number => typeof n === 'number') : [],
+    offerCash: typeof o.offerCash === 'number' ? o.offerCash : 0,
+    offerJailFree: typeof o.offerJailFree === 'number' ? o.offerJailFree : 0,
+    wantProps: Array.isArray(o.wantProps) ? o.wantProps.filter((n): n is number => typeof n === 'number') : [],
+    wantCash: typeof o.wantCash === 'number' ? o.wantCash : 0,
+    wantJailFree: typeof o.wantJailFree === 'number' ? o.wantJailFree : 0,
   };
 }
 
@@ -474,6 +488,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'crBuild':
         if (typeof msg.position === 'number') lobby.crBuild(ws, msg.position);
         break;
+      case 'crUnmortgage':
+        if (typeof msg.position === 'number') lobby.crUnmortgage(ws, msg.position);
+        break;
       case 'crEndTurn':
         lobby.crEndTurn(ws);
         break;
@@ -489,25 +506,23 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'crUseJailFree':
         lobby.crUseJailFree(ws);
         break;
-      case 'crProposeTrade':
-        if (typeof msg.toPid === 'string' && msg.offer && typeof msg.offer === 'object') {
-          const o = msg.offer as Record<string, unknown>;
-          lobby.crProposeTrade(ws, msg.toPid, {
-            offerProps: Array.isArray(o.offerProps) ? o.offerProps.filter((n): n is number => typeof n === 'number') : [],
-            offerCash: typeof o.offerCash === 'number' ? o.offerCash : 0,
-            offerJailFree: typeof o.offerJailFree === 'number' ? o.offerJailFree : 0,
-            wantProps: Array.isArray(o.wantProps) ? o.wantProps.filter((n): n is number => typeof n === 'number') : [],
-            wantCash: typeof o.wantCash === 'number' ? o.wantCash : 0,
-            wantJailFree: typeof o.wantJailFree === 'number' ? o.wantJailFree : 0,
-          });
-        }
+      case 'crProposeTrade': {
+        const offer = typeof msg.toPid === 'string' ? parseCrTradeOffer(msg.offer) : null;
+        if (offer) lobby.crProposeTrade(ws, msg.toPid, offer);
         break;
+      }
       case 'crRespondTrade':
         if (typeof msg.tradeId === 'number' && typeof msg.accept === 'boolean') lobby.crRespondTrade(ws, msg.tradeId, msg.accept);
         break;
       case 'crCancelTrade':
         if (typeof msg.tradeId === 'number') lobby.crCancelTrade(ws, msg.tradeId);
         break;
+      case 'crCounterTrade': {
+        if (typeof msg.tradeId !== 'number') break;
+        const offer = parseCrTradeOffer(msg.offer);
+        if (offer) lobby.crCounterTrade(ws, msg.tradeId, offer);
+        break;
+      }
       case 'crChat':
         if (typeof msg.text === 'string') lobby.crChat(ws, msg.text);
         break;

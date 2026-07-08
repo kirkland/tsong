@@ -2247,6 +2247,11 @@ export class Lobby {
     if (!conn || !conn.pid) return;
     this.cityRise.build(conn.pid, position);
   }
+  crUnmortgage(ws: WebSocket, position: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    this.cityRise.unmortgage(conn.pid, position);
+  }
   crEndTurn(ws: WebSocket) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.pid) return;
@@ -2289,6 +2294,14 @@ export class Lobby {
     const conn = this.conns.get(ws);
     if (!conn || !conn.pid) return;
     this.cityRise.cancelTrade(conn.pid, tradeId);
+  }
+  crCounterTrade(ws: WebSocket, tradeId: number, offer: {
+    offerProps: number[]; offerCash: number; offerJailFree: number;
+    wantProps: number[]; wantCash: number; wantJailFree: number;
+  }) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    this.cityRise.counterTrade(conn.pid, tradeId, offer);
   }
   crChat(ws: WebSocket, text: string) {
     const conn = this.conns.get(ws);

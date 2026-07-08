@@ -289,6 +289,9 @@ interface CrRoom {
 export class CityRiseManager {
   private rooms = new Map<string, CrRoom>();
   private playerRoom = new Map<string, string>(); // pid → room id
+  // Watching an in-progress game without a seat — attached when someone joins and every room
+  // is either full or still waiting for a spot to free up. Never touches game state.
+  private spectators = new Map<string, { roomId: string; name: string; color: string; lastChatAt: number }>();
   private nextId = 1;
   private botSeq = 0;
 
@@ -298,8 +301,28 @@ export class CityRiseManager {
 
   join(pid: string, name: string, color?: string): void {
     if (this.playerRoom.has(pid)) { const r = this.roomOf(pid); if (r) this.pushState(r); return; }
+    const existingSpec = this.spectators.get(pid);
+    if (existingSpec) { const r = this.rooms.get(existingSpec.roomId); if (r) this.pushStateTo(pid, r); return; }
+
     let room = [...this.rooms.values()].find((r) => r.phase === 'waiting' && r.players.length < MAX_PLAYERS);
-    if (!room) room = this.createRoom();
+    if (!room) {
+      // No open seat anywhere — watch an in-progress game instead of starting a lonely new room.
+      const active = [...this.rooms.values()].find((r) => r.phase !== 'waiting');
+      if (active) {
+        const color2 = color && /^#[0-9a-fA-F]{3,8}$/.test(color) ? color : '#9aa0c8';
+        this.spectators.set(pid, { roomId: active.id, name, color: color2, lastChatAt: 0 });
+        this.emit(active, `👀 ${name} is watching.`, 'info');
+        this.pushStateTo(pid, active);
+        return;
+      }
+      room = this.createRoom();
+    }
+    this.seatPlayer(room, pid, name, color);
+    this.pushState(room);
+  }
+
+  /** Seat a brand-new player, or a spectator being promoted once a room reopens to the lobby. */
+  private seatPlayer(room: CrRoom, pid: string, name: string, color?: string): void {
     const idx = room.players.length;
     let color2 = color && /^#[0-9a-fA-F]{3,8}$/.test(color) ? color : TOKEN_COLORS[idx % TOKEN_COLORS.length];
     // Give each token a distinct colour even if players share a paddle colour.
@@ -313,10 +336,16 @@ export class CityRiseManager {
     room.players.push(player);
     this.playerRoom.set(pid, room.id);
     this.emit(room, `${name} entered City Tycoon.`, 'info');
-    this.pushState(room);
   }
 
   leave(pid: string): void {
+    const spec = this.spectators.get(pid);
+    if (spec) {
+      this.spectators.delete(pid);
+      const r = this.rooms.get(spec.roomId);
+      if (r) this.emit(r, `👀 ${spec.name} stopped watching.`, 'info');
+      return;
+    }
     const room = this.roomOf(pid);
     if (!room) return;
     this.playerRoom.delete(pid);
@@ -348,6 +377,7 @@ export class CityRiseManager {
 
   private teardownRoom(room: CrRoom): void {
     for (const p of room.players) this.playerRoom.delete(p.pid);
+    for (const [pid, info] of this.spectators) if (info.roomId === room.id) this.spectators.delete(pid);
     this.rooms.delete(room.id);
   }
 
@@ -568,6 +598,27 @@ export class CityRiseManager {
     this.pushState(room);
   }
 
+  /** Pay off a mortgage (+10% interest, same as the real rule) to bring a lot back online —
+   *  the inverse of the mortgage step in liquidate(). Your turn, building phase, like build(). */
+  unmortgage(pid: string, position: number): void {
+    const room = this.roomOf(pid);
+    if (!room || room.phase !== 'building') return;
+    const p = room.players[room.turnIdx];
+    if (!p || p.pid !== pid) return;
+    if (!p.owned.includes(position) || !p.mortgaged.has(position)) return;
+    const cost = this.unmortgageCost(position);
+    if (p.money < cost) { this.hooks.notify(pid, `Not enough cash ($${cost}) to unmortgage.`); return; }
+    p.money -= cost;
+    p.mortgaged.delete(position);
+    this.emit(room, `${p.name} paid off the mortgage on ${BOARD[position].name} for $${cost}. 🔓🏠`, 'success');
+    room.deadline = Date.now() + T_BUILD;
+    this.pushState(room);
+  }
+
+  private unmortgageCost(position: number): number {
+    return Math.ceil(((BOARD[position].price ?? 0) / 2) * 1.1);
+  }
+
   endTurn(pid: string): void {
     const room = this.roomOf(pid);
     if (!room) return;
@@ -637,6 +688,20 @@ export class CityRiseManager {
     this.pushState(room);
   }
 
+  /** Reply to a trade you were offered with different terms — withdraws the original and puts
+   *  a fresh offer on the table running the other way (you → them). */
+  counterTrade(pid: string, tradeId: number, offer: {
+    offerProps: number[]; offerCash: number; offerJailFree: number;
+    wantProps: number[]; wantCash: number; wantJailFree: number;
+  }): void {
+    const room = this.roomOf(pid);
+    if (!room) return;
+    const trade = room.trades.find((t) => t.id === tradeId);
+    if (!trade || trade.toPid !== pid) return;
+    room.trades = room.trades.filter((t) => t.id !== tradeId);
+    this.proposeTrade(pid, trade.fromPid, offer);
+  }
+
   private resolveTrade(room: CrRoom, trade: CrTrade, accept: boolean): void {
     room.trades = room.trades.filter((t) => t.id !== trade.id);
     const from = room.players.find((x) => x.pid === trade.fromPid);
@@ -684,16 +749,19 @@ export class CityRiseManager {
   /** In-room chat, separate from the auto-generated event log so table talk doesn't get
    *  buried under "X bought Y" spam. Works in any phase, including the waiting room. */
   chat(pid: string, text: string): void {
-    const room = this.roomOf(pid);
+    const playerRoom = this.roomOf(pid);
+    const p = playerRoom?.players.find((x) => x.pid === pid);
+    const spec = !p ? this.spectators.get(pid) : undefined;
+    const room = playerRoom ?? (spec ? this.rooms.get(spec.roomId) : undefined);
     if (!room) return;
-    const p = room.players.find((x) => x.pid === pid);
-    if (!p) return;
+    const throttleRef = p ?? spec;
+    if (!throttleRef) return;
     const now = Date.now();
-    if (now - p.lastChatAt < 400) return; // light anti-spam throttle
+    if (now - throttleRef.lastChatAt < 400) return; // light anti-spam throttle
     const clean = text.replace(/\s+/g, ' ').trim().slice(0, CHAT_MAX_LEN);
     if (!clean) return;
-    p.lastChatAt = now;
-    room.chat.push({ pid: p.pid, name: p.name, color: p.color, text: clean });
+    throttleRef.lastChatAt = now;
+    room.chat.push({ pid, name: p ? p.name : spec!.name, color: p ? p.color : spec!.color, text: clean });
     if (room.chat.length > 50) room.chat.shift();
     this.pushState(room);
   }
@@ -1023,6 +1091,13 @@ export class CityRiseManager {
       room.winnerPid = null; room.turnIdx = 0; room.startGraceAt = 0; room.deadline = 0;
       room.log = []; room.lastCard = null;
       room.jackpot = 0; room.bankHouses = HOUSE_SUPPLY; room.bankHotels = HOTEL_SUPPLY; room.trades = [];
+      // The room's open to the lobby again — pull in anyone who was watching.
+      for (const [pid, info] of [...this.spectators]) {
+        if (info.roomId !== room.id) continue;
+        if (room.players.length >= MAX_PLAYERS) break;
+        this.spectators.delete(pid);
+        this.seatPlayer(room, pid, info.name, info.color);
+      }
       if (room.players.length === 0) this.rooms.delete(room.id);
       else this.pushState(room);
     }, 15_000);
@@ -1184,6 +1259,8 @@ export class CityRiseManager {
   /** Builds one house/hotel on the cheapest eligible monopoly (keeping a cash buffer), or
    *  ends the turn once there's nothing left worth building. */
   private botBuild(room: CrRoom, bot: CrPlayer): void {
+    const toUnmortgage = bot.owned.find((pos) => bot.mortgaged.has(pos) && bot.money - this.unmortgageCost(pos) >= 100);
+    if (toUnmortgage != null) { this.unmortgage(bot.pid, toUnmortgage); return; }
     for (const group of Object.keys(GROUPS)) {
       if (!this.hasMonopoly(bot, group)) continue;
       const positions = GROUPS[group];
@@ -1239,16 +1316,27 @@ export class CityRiseManager {
     return room;
   }
 
+  /** Every pid that should see this room's broadcasts — seated players plus anyone spectating. */
+  private roomPids(room: CrRoom): string[] {
+    const pids = room.players.map((p) => p.pid);
+    for (const [pid, info] of this.spectators) if (info.roomId === room.id) pids.push(pid);
+    return pids;
+  }
+
   private emit(room: CrRoom, text: string, kind: 'info' | 'warn' | 'success' | 'error'): void {
     room.log.push(text);
     if (room.log.length > 40) room.log.shift();
-    const pids = room.players.map((p) => p.pid);
-    this.hooks.broadcast(pids, { type: 'crEvent', text, kind });
+    this.hooks.broadcast(this.roomPids(room), { type: 'crEvent', text, kind });
   }
 
   private pushState(room: CrRoom): void {
-    const pids = room.players.map((p) => p.pid);
-    this.hooks.broadcast(pids, { type: 'crState', game: this.snapshot(room) });
+    this.hooks.broadcast(this.roomPids(room), { type: 'crState', game: this.snapshot(room) });
+  }
+
+  /** Send the current snapshot to just one pid — used when a spectator first attaches, so we
+   *  don't re-broadcast a full state push to everyone else in the room for no reason. */
+  private pushStateTo(pid: string, room: CrRoom): void {
+    this.hooks.broadcast([pid], { type: 'crState', game: this.snapshot(room) });
   }
 
   private snapshot(room: CrRoom): object {
@@ -1268,6 +1356,7 @@ export class CityRiseManager {
       deadline: room.deadline,
       log: room.log.slice(-8),
       board: BOARD,
+      spectatorCount: [...this.spectators.values()].filter((s) => s.roomId === room.id).length,
       jackpot: room.jackpot,
       bankHouses: room.bankHouses,
       bankHotels: room.bankHotels,
@@ -1286,10 +1375,13 @@ export class CityRiseManager {
     };
   }
 
-  /** For a reconnecting player — returns their room snapshot or null. */
+  /** For a reconnecting player (or spectator) — returns their room snapshot or null. */
   getState(pid: string): object | null {
     const room = this.roomOf(pid);
-    return room ? this.snapshot(room) : null;
+    if (room) return this.snapshot(room);
+    const spec = this.spectators.get(pid);
+    const specRoom = spec ? this.rooms.get(spec.roomId) : undefined;
+    return specRoom ? this.snapshot(specRoom) : null;
   }
 }
 

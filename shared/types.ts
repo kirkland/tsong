@@ -875,6 +875,12 @@ export interface WorldRocketMsg {
   a: number;
 }
 
+// City Tycoon trade terms: properties + cash + jail-free cards offered in either direction.
+export interface CrTradeOffer {
+  offerProps: number[]; offerCash: number; offerJailFree: number;
+  wantProps: number[]; wantCash: number; wantJailFree: number;
+}
+
 // --- Client -> Server ---
 export type ClientMsg =
   // pid = stable per-browser identity; color = chosen paddle color
@@ -1037,17 +1043,16 @@ export type ClientMsg =
   | { type: 'crPass' }                            // decline → send it to auction
   | { type: 'crAuctionBid'; amount: number }      // bid in the current auction
   | { type: 'crBuild'; position: number }         // build a house/hotel on a lot you own
+  | { type: 'crUnmortgage'; position: number }    // pay off a mortgage (+10% interest) on a lot you own
   | { type: 'crEndTurn' }                         // end your turn
   | { type: 'crAddBot' }                          // drop an AI tycoon into an open seat (waiting room only)
   | { type: 'crRemoveBot'; pid: string }          // kick a bot from the room
   | { type: 'crPayBail' }                         // pay $50 to leave the drunk tank on demand
   | { type: 'crUseJailFree' }                     // spend a held jail-free card to leave the drunk tank
-  | { type: 'crProposeTrade'; toPid: string; offer: {
-      offerProps: number[]; offerCash: number; offerJailFree: number;
-      wantProps: number[]; wantCash: number; wantJailFree: number;
-    } }                                            // propose a property/cash/jail-free trade to another player
+  | { type: 'crProposeTrade'; toPid: string; offer: CrTradeOffer } // propose a property/cash/jail-free trade to another player
   | { type: 'crRespondTrade'; tradeId: number; accept: boolean } // accept/reject a trade offered to you
   | { type: 'crCancelTrade'; tradeId: number }    // withdraw a trade you proposed
+  | { type: 'crCounterTrade'; tradeId: number; offer: CrTradeOffer } // reply to a trade with different terms
   | { type: 'crChat'; text: string };             // send a chat line to your City Tycoon room
 
 // --- Server -> Client ---
