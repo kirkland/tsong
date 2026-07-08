@@ -2262,6 +2262,34 @@ export class Lobby {
     if (!conn || !conn.pid) return;
     this.cityRise.removeBot(conn.pid, botPid);
   }
+  crPayBail(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    this.cityRise.payBail(conn.pid);
+  }
+  crUseJailFree(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    this.cityRise.useJailFreeCard(conn.pid);
+  }
+  crProposeTrade(ws: WebSocket, toPid: string, offer: {
+    offerProps: number[]; offerCash: number; offerJailFree: number;
+    wantProps: number[]; wantCash: number; wantJailFree: number;
+  }) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    this.cityRise.proposeTrade(conn.pid, toPid, offer);
+  }
+  crRespondTrade(ws: WebSocket, tradeId: number, accept: boolean) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    this.cityRise.respondTrade(conn.pid, tradeId, accept);
+  }
+  crCancelTrade(ws: WebSocket, tradeId: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    this.cityRise.cancelTrade(conn.pid, tradeId);
+  }
 
   // --- Nomic (the Parliament) ---
 

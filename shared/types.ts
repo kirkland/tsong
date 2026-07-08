@@ -1039,7 +1039,15 @@ export type ClientMsg =
   | { type: 'crBuild'; position: number }         // build a house/hotel on a lot you own
   | { type: 'crEndTurn' }                         // end your turn
   | { type: 'crAddBot' }                          // drop an AI tycoon into an open seat (waiting room only)
-  | { type: 'crRemoveBot'; pid: string };         // kick a bot from the room
+  | { type: 'crRemoveBot'; pid: string }          // kick a bot from the room
+  | { type: 'crPayBail' }                         // pay $50 to leave the drunk tank on demand
+  | { type: 'crUseJailFree' }                     // spend a held jail-free card to leave the drunk tank
+  | { type: 'crProposeTrade'; toPid: string; offer: {
+      offerProps: number[]; offerCash: number; offerJailFree: number;
+      wantProps: number[]; wantCash: number; wantJailFree: number;
+    } }                                            // propose a property/cash/jail-free trade to another player
+  | { type: 'crRespondTrade'; tradeId: number; accept: boolean } // accept/reject a trade offered to you
+  | { type: 'crCancelTrade'; tradeId: number };   // withdraw a trade you proposed
 
 // --- Server -> Client ---
 

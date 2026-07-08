@@ -113,7 +113,8 @@ type CardEffect =
   | { t: 'payPercent'; f: number }
   | { t: 'nearestTransit' }
   | { t: 'nearestUtility' }
-  | { t: 'collectIfProperty'; n: number };
+  | { t: 'collectIfProperty'; n: number }
+  | { t: 'jailFree' };
 
 interface Card { text: string; e: CardEffect; }
 
@@ -148,6 +149,7 @@ const BULLETIN: Card[] = [
   { text: 'Speeding fine — pay $20', e: { t: 'pay', n: 20 } },
   { text: 'Property tax — pay $50 per property owned', e: { t: 'payPerProperty', n: 50 } },
   { text: 'Advance to nearest transit (pay double if owned)', e: { t: 'nearestTransit' } },
+  { text: 'Get Out of the Drunk Tank Free — keep this card until you need it', e: { t: 'jailFree' } },
 ];
 
 const DISPATCH: Card[] = [
@@ -181,6 +183,7 @@ const DISPATCH: Card[] = [
   { text: 'Advance to Free Lunch', e: { t: 'move', dest: 20 } },
   { text: 'Nearest utility — pay 10× dice if owned', e: { t: 'nearestUtility' } },
   { text: 'Building subsidy — collect $200 if you own property', e: { t: 'collectIfProperty', n: 200 } },
+  { text: 'Get Out of the Drunk Tank Free — keep this card until you need it', e: { t: 'jailFree' } },
 ];
 
 // --- Player / auction / room ---
@@ -190,6 +193,8 @@ const PASS_GO = 200;
 const MAX_PLAYERS = 8;
 const AUDIT_TURNS = 3;
 const AUDIT_BAIL = 50;
+const HOUSE_SUPPLY = 32; // shared bank pool — mirrors the real board's physical piece count
+const HOTEL_SUPPLY = 12;
 const TOKEN_COLORS = ['#ff5f6d', '#4dd0e1', '#ffd54f', '#81c784', '#ba68c8', '#ff8a65', '#7986cb', '#f06292'];
 
 // Phase timeouts (ms). Timing is driven by tick(now) rather than setTimeout.
@@ -216,6 +221,7 @@ export interface CrPlayer {
   online: boolean;
   bot: boolean;                 // AI-controlled seat — never touches the coin economy
   botNextActAt: number;         // ms timestamp the bot's next decision fires (0 = not scheduled)
+  jailFreeCards: number;        // held "Get Out of the Drunk Tank Free" cards
 }
 
 // A bot never wins real coins — the win payout is skipped entirely for a bot winner.
@@ -229,6 +235,23 @@ interface CrAuction {
   highBid: number;
   highPid: string | null;
   endsAt: number;
+}
+
+// A player-to-player trade offer. Properties change hands as-is (no buildings allowed on
+// either side — sell down to 0 houses first, same as the real rule) alongside cash and/or
+// jail-free cards. Sits pending until the other side accepts, rejects, or either side leaves.
+export interface CrTrade {
+  id: number;
+  fromPid: string;
+  toPid: string;
+  offerProps: number[];
+  offerCash: number;
+  offerJailFree: number;
+  wantProps: number[];
+  wantCash: number;
+  wantJailFree: number;
+  createdAt: number;
+  botRespondAt: number; // 0 = no bot auto-response scheduled (the recipient isn't a bot)
 }
 
 type Phase = 'waiting' | 'rolling' | 'buying' | 'auction' | 'building' | 'gameover';
@@ -252,6 +275,11 @@ interface CrRoom {
   winnerPid: string | null;
   deadline: number; // when the current phase auto-resolves (0 = none)
   startGraceAt: number; // when a not-yet-full lobby auto-starts (0 = none)
+  jackpot: number;      // Free Parking house rule — tax/card payments to the bank pile up here
+  bankHouses: number;   // shared building supply, mirrors the real board's physical piece count
+  bankHotels: number;
+  trades: CrTrade[];
+  nextTradeId: number;
 }
 
 export class CityRiseManager {
@@ -276,7 +304,7 @@ export class CityRiseManager {
       pid, name, color: color2,
       money: START_MONEY, position: 0, auditTurns: 0, bankrupt: false, ready: false,
       owned: [], buildings: {}, mortgaged: new Set(), goRounds: 0, online: true,
-      bot: false, botNextActAt: 0,
+      bot: false, botNextActAt: 0, jailFreeCards: 0,
     };
     room.players.push(player);
     this.playerRoom.set(pid, room.id);
@@ -361,7 +389,7 @@ export class CityRiseManager {
       pid: botPid, name, color,
       money: START_MONEY, position: 0, auditTurns: 0, bankrupt: false, ready: true,
       owned: [], buildings: {}, mortgaged: new Set(), goRounds: 0, online: true,
-      bot: true, botNextActAt: 0,
+      bot: true, botNextActAt: 0, jailFreeCards: 0,
     };
     room.players.push(bot);
     this.playerRoom.set(botPid, room.id);
@@ -436,6 +464,31 @@ export class CityRiseManager {
     this.advanceToken(room, p, total);
   }
 
+  /** Pay bail on demand instead of waiting out the drunk tank — real Monopoly lets you settle
+   *  up any turn you like, not just after the third failed roll. */
+  payBail(pid: string): void {
+    const room = this.roomOf(pid);
+    if (!room || room.phase !== 'rolling') return;
+    const p = room.players[room.turnIdx];
+    if (!p || p.pid !== pid || p.auditTurns <= 0) return;
+    p.auditTurns = 0;
+    this.emit(room, `${p.name} pays $${AUDIT_BAIL} bail and walks free. 💵`, 'info');
+    this.pay(room, p, AUDIT_BAIL, null);
+    this.pushState(room);
+  }
+
+  /** Spend a held jail-free card instead of paying bail. */
+  useJailFreeCard(pid: string): void {
+    const room = this.roomOf(pid);
+    if (!room || room.phase !== 'rolling') return;
+    const p = room.players[room.turnIdx];
+    if (!p || p.pid !== pid || p.auditTurns <= 0 || p.jailFreeCards <= 0) return;
+    p.auditTurns = 0;
+    p.jailFreeCards--;
+    this.emit(room, `${p.name} cashes in a Get Out of the Drunk Tank Free card. 🔓`, 'info');
+    this.pushState(room);
+  }
+
   buy(pid: string): void {
     const room = this.roomOf(pid);
     if (!room || room.phase !== 'buying') return;
@@ -494,9 +547,18 @@ export class CityRiseManager {
     if (cur > groupMin) { this.hooks.notify(pid, 'Build evenly across the group first.'); return; }
     const cost = space.houseCost ?? 0;
     if (p.money < cost) { this.hooks.notify(pid, `Not enough cash ($${cost}) to build.`); return; }
+    const next = cur + 1;
+    if (next < 5) {
+      if (room.bankHouses <= 0) { this.hooks.notify(pid, 'The bank is out of houses! 🏚️'); return; }
+      room.bankHouses--;
+    } else {
+      if (room.bankHotels <= 0) { this.hooks.notify(pid, 'The bank is out of hotels! 🏨'); return; }
+      room.bankHotels--;
+      room.bankHouses += 4; // the 4 houses that made way for the hotel return to the bank
+    }
     p.money -= cost;
-    p.buildings[position] = cur + 1;
-    const what = cur + 1 === 5 ? 'a hotel 🏨' : `house #${cur + 1} 🏠`;
+    p.buildings[position] = next;
+    const what = next === 5 ? 'a hotel 🏨' : `house #${next} 🏠`;
     this.emit(room, `${p.name} built ${what} on ${space.name}.`, 'success');
     room.deadline = Date.now() + T_BUILD; // building resets the idle clock
     this.pushState(room);
@@ -518,6 +580,99 @@ export class CityRiseManager {
       return;
     }
     this.nextTurn(room);
+  }
+
+  // --- trading ---
+
+  /** Propose a trade to another player: properties (must be unimproved — sell houses first,
+   *  same as the real rule), cash, and/or jail-free cards, in either direction. Sits pending
+   *  until the other side accepts, rejects, or either player leaves/goes bankrupt. */
+  proposeTrade(pid: string, toPid: string, offer: {
+    offerProps: number[]; offerCash: number; offerJailFree: number;
+    wantProps: number[]; wantCash: number; wantJailFree: number;
+  }): void {
+    const room = this.roomOf(pid);
+    if (!room || room.phase === 'waiting' || room.phase === 'gameover') return;
+    const from = room.players.find((x) => x.pid === pid);
+    const to = room.players.find((x) => x.pid === toPid);
+    if (!from || !to || from === to || from.bankrupt || to.bankrupt) return;
+    const offerProps = [...new Set(offer.offerProps)].filter((q) => from.owned.includes(q) && (from.buildings[q] ?? 0) === 0);
+    const wantProps = [...new Set(offer.wantProps)].filter((q) => to.owned.includes(q) && (to.buildings[q] ?? 0) === 0);
+    const offerCash = Math.max(0, Math.floor(offer.offerCash) || 0);
+    const wantCash = Math.max(0, Math.floor(offer.wantCash) || 0);
+    const offerJailFree = Math.max(0, Math.min(from.jailFreeCards, Math.floor(offer.offerJailFree) || 0));
+    const wantJailFree = Math.max(0, Math.min(to.jailFreeCards, Math.floor(offer.wantJailFree) || 0));
+    if (!offerProps.length && !wantProps.length && !offerCash && !wantCash && !offerJailFree && !wantJailFree) return;
+    if (offerCash > from.money || wantCash > to.money) return;
+    if (room.trades.filter((t) => t.fromPid === pid).length >= 5) return; // no spamming the trade log
+    const trade: CrTrade = {
+      id: room.nextTradeId++, fromPid: pid, toPid, offerProps, offerCash, offerJailFree,
+      wantProps, wantCash, wantJailFree, createdAt: Date.now(), botRespondAt: 0,
+    };
+    room.trades.push(trade);
+    this.emit(room, `${from.name} proposed a trade to ${to.name}. 🤝`, 'info');
+    this.pushState(room);
+  }
+
+  /** Accept or reject a trade you were offered. */
+  respondTrade(pid: string, tradeId: number, accept: boolean): void {
+    const room = this.roomOf(pid);
+    if (!room) return;
+    const trade = room.trades.find((t) => t.id === tradeId);
+    if (!trade || trade.toPid !== pid) return;
+    this.resolveTrade(room, trade, accept);
+  }
+
+  /** Withdraw a trade you proposed, before the other side responds. */
+  cancelTrade(pid: string, tradeId: number): void {
+    const room = this.roomOf(pid);
+    if (!room) return;
+    const trade = room.trades.find((t) => t.id === tradeId && t.fromPid === pid);
+    if (!trade) return;
+    room.trades = room.trades.filter((t) => t.id !== tradeId);
+    this.pushState(room);
+  }
+
+  private resolveTrade(room: CrRoom, trade: CrTrade, accept: boolean): void {
+    room.trades = room.trades.filter((t) => t.id !== trade.id);
+    const from = room.players.find((x) => x.pid === trade.fromPid);
+    const to = room.players.find((x) => x.pid === trade.toPid);
+    if (!from || !to) return;
+    if (!accept) {
+      this.emit(room, `${to.name} turned down ${from.name}'s trade offer.`, 'info');
+      this.pushState(room);
+      return;
+    }
+    // Re-validate against current state — holdings may have moved since the offer went out.
+    const propsOk = trade.offerProps.every((q) => from.owned.includes(q) && (from.buildings[q] ?? 0) === 0)
+      && trade.wantProps.every((q) => to.owned.includes(q) && (to.buildings[q] ?? 0) === 0);
+    if (!propsOk || trade.offerCash > from.money || trade.wantCash > to.money
+      || trade.offerJailFree > from.jailFreeCards || trade.wantJailFree > to.jailFreeCards) {
+      this.hooks.notify(from.pid, "That trade doesn't check out anymore — something changed.");
+      this.hooks.notify(to.pid, "That trade doesn't check out anymore — something changed.");
+      this.pushState(room);
+      return;
+    }
+    for (const pos of trade.offerProps) {
+      from.owned = from.owned.filter((q) => q !== pos);
+      to.owned.push(pos);
+      if (from.mortgaged.has(pos)) { from.mortgaged.delete(pos); to.mortgaged.add(pos); }
+    }
+    for (const pos of trade.wantProps) {
+      to.owned = to.owned.filter((q) => q !== pos);
+      from.owned.push(pos);
+      if (to.mortgaged.has(pos)) { to.mortgaged.delete(pos); from.mortgaged.add(pos); }
+    }
+    from.money -= trade.offerCash; to.money += trade.offerCash;
+    to.money -= trade.wantCash; from.money += trade.wantCash;
+    from.jailFreeCards -= trade.offerJailFree; to.jailFreeCards += trade.offerJailFree;
+    to.jailFreeCards -= trade.wantJailFree; from.jailFreeCards += trade.wantJailFree;
+    this.emit(room, `🤝 ${from.name} and ${to.name} struck a deal!`, 'success');
+    this.pushState(room);
+  }
+
+  private removePlayerTrades(room: CrRoom, pid: string): void {
+    room.trades = room.trades.filter((t) => t.fromPid !== pid && t.toPid !== pid);
   }
 
   // --- movement + landing resolution ---
@@ -547,9 +702,15 @@ export class CityRiseManager {
         this.toBuilding(room);
         break;
       case 'free_lunch':
-        // Usually nothing… but sometimes there really is a free lunch.
-        if (Math.random() < 0.25) { p.money += 50; this.emit(room, `${p.name} found $50 tucked under the free lunch tray! 🥪`, 'success'); }
-        else this.emit(room, `${p.name} enjoys a Free Lunch. 🥪`, 'info');
+        // Free Parking house rule: every tax/card payment to the bank piles up here until
+        // someone lands on it and cashes out the whole pot.
+        if (room.jackpot > 0) {
+          p.money += room.jackpot;
+          this.emit(room, `${p.name} scoops up the $${room.jackpot} sitting on Free Lunch! 🥪💰`, 'success');
+          room.jackpot = 0;
+        } else if (Math.random() < 0.25) {
+          p.money += 50; this.emit(room, `${p.name} found $50 tucked under the free lunch tray! 🥪`, 'success');
+        } else this.emit(room, `${p.name} enjoys a Free Lunch. 🥪`, 'info');
         this.toBuilding(room);
         break;
       case 'bust_zone':
@@ -638,6 +799,7 @@ export class CityRiseManager {
     switch (e.t) {
       case 'collect': p.money += e.n; this.afterResolve(room); break;
       case 'pay': this.pay(room, p, e.n, null); this.afterResolve(room); break;
+      case 'jailFree': p.jailFreeCards++; this.afterResolve(room); break;
       case 'collectEach': {
         for (const o of others()) { const take = Math.min(o.money, e.n); this.pay(room, o, take, p); }
         this.afterResolve(room); break;
@@ -701,7 +863,7 @@ export class CityRiseManager {
     if (amount <= 0) return;
     if (from.money < amount) {
       // Try to raise cash by liquidating buildings + mortgaging lots at half value.
-      this.liquidate(from, amount);
+      this.liquidate(room, from, amount);
     }
     if (from.money < amount) {
       // Still short → bankrupt. Give whatever's left to the creditor.
@@ -714,14 +876,20 @@ export class CityRiseManager {
     }
     from.money -= amount;
     if (to) to.money += amount;
+    // Free Parking house rule: money paid to the bank (not another player) piles up here.
+    else room.jackpot += amount;
   }
 
-  private liquidate(p: CrPlayer, need: number): void {
+  private liquidate(room: CrRoom, p: CrPlayer, need: number): void {
     // Sell houses (half cost) then mortgage lots (half price) until the need is met.
     for (const pos of p.owned) {
       while ((p.buildings[pos] ?? 0) > 0 && p.money < need) {
+        const wasHotel = p.buildings[pos] === 5;
         p.buildings[pos]--;
         p.money += Math.floor((BOARD[pos].houseCost ?? 0) / 2);
+        // Return the piece(s) to the shared bank supply.
+        if (wasHotel) { room.bankHotels++; room.bankHouses = Math.max(0, room.bankHouses - 4); }
+        else room.bankHouses++;
       }
     }
     for (const pos of p.owned) {
@@ -732,11 +900,28 @@ export class CityRiseManager {
 
   private bankruptPlayer(room: CrRoom, p: CrPlayer, creditor: CrPlayer | null): void {
     p.bankrupt = true;
-    // Properties revert to the bank (auction fodder). Buildings vanish.
+    if (creditor) {
+      // Bankrupt to a rival player: they inherit everything as-is — properties, any buildings
+      // still standing on them, and mortgages included — instead of it all going to auction.
+      for (const pos of p.owned) if (!creditor.owned.includes(pos)) creditor.owned.push(pos);
+      for (const pos of p.owned) if (p.buildings[pos]) creditor.buildings[pos] = p.buildings[pos];
+      for (const pos of p.mortgaged) creditor.mortgaged.add(pos);
+      creditor.jailFreeCards += p.jailFreeCards;
+      this.emit(room, `${creditor.name} inherits ${p.name}'s entire empire! 🏚️➡️🏢`, 'success');
+    } else {
+      // Bankrupt to the bank (tax, cards, bail): buildings return to the shared supply and the
+      // properties go back on the market for the next buyer/auction.
+      for (const pos of p.owned) {
+        const level = p.buildings[pos] ?? 0;
+        if (level === 5) { room.bankHotels++; room.bankHouses += 4; }
+        else room.bankHouses += level;
+      }
+    }
     p.owned = [];
     p.buildings = {};
     p.mortgaged = new Set();
-    void creditor;
+    p.jailFreeCards = 0;
+    this.removePlayerTrades(room, p.pid);
     const alive = room.players.filter((x) => !x.bankrupt);
     if (alive.length <= 1) this.endGame(room, alive[0] ?? null);
   }
@@ -809,10 +994,12 @@ export class CityRiseManager {
       for (const p of room.players) {
         p.money = START_MONEY; p.position = 0; p.auditTurns = 0; p.bankrupt = false;
         p.owned = []; p.buildings = {}; p.mortgaged = new Set(); p.ready = false; p.goRounds = 0;
+        p.jailFreeCards = 0;
       }
       room.phase = 'waiting';
       room.winnerPid = null; room.turnIdx = 0; room.startGraceAt = 0; room.deadline = 0;
       room.log = []; room.lastCard = null;
+      room.jackpot = 0; room.bankHouses = HOUSE_SUPPLY; room.bankHotels = HOTEL_SUPPLY; room.trades = [];
       if (room.players.length === 0) this.rooms.delete(room.id);
       else this.pushState(room);
     }, 15_000);
@@ -931,6 +1118,19 @@ export class CityRiseManager {
       bot.botNextActAt = 0;
       act();
     }
+    this.stepBotTrades(room, now);
+  }
+
+  /** Bots don't evaluate trade math — they mull an incoming offer over for a moment and pass,
+   *  so a trade aimed at a bot doesn't just sit in the log forever. */
+  private stepBotTrades(room: CrRoom, now: number): void {
+    for (const trade of [...room.trades]) {
+      const bot = room.players.find((x) => x.pid === trade.toPid && x.bot);
+      if (!bot) continue;
+      if (trade.botRespondAt === 0) { trade.botRespondAt = now + 1000 + Math.random() * 2000; continue; }
+      if (now < trade.botRespondAt) continue;
+      this.resolveTrade(room, trade, false);
+    }
   }
 
   /** What a bot should do right now, or null if it has nothing pending this tick. */
@@ -945,7 +1145,7 @@ export class CityRiseManager {
       return () => { if (bot.money - price >= 100) this.buy(bot.pid); else this.pass(bot.pid); };
     }
     if (room.phase === 'building' && turnPid === bot.pid) {
-      return () => this.botBuild(bot);
+      return () => this.botBuild(room, bot);
     }
     if (room.phase === 'auction' && room.auction && room.auction.highPid !== bot.pid) {
       const a = room.auction;
@@ -960,12 +1160,13 @@ export class CityRiseManager {
 
   /** Builds one house/hotel on the cheapest eligible monopoly (keeping a cash buffer), or
    *  ends the turn once there's nothing left worth building. */
-  private botBuild(bot: CrPlayer): void {
+  private botBuild(room: CrRoom, bot: CrPlayer): void {
     for (const group of Object.keys(GROUPS)) {
       if (!this.hasMonopoly(bot, group)) continue;
       const positions = GROUPS[group];
       const groupMin = Math.min(...positions.map((q) => bot.buildings[q] ?? 0));
       if (groupMin >= 5) continue;
+      if (groupMin === 4 ? room.bankHotels <= 0 : room.bankHouses <= 0) continue; // bank is dry — try the next group
       const pos = positions.find((q) => (bot.buildings[q] ?? 0) === groupMin && !bot.mortgaged.has(q));
       if (pos == null) continue;
       const cost = BOARD[pos].houseCost ?? 0;
@@ -1009,6 +1210,7 @@ export class CityRiseManager {
       rolledThisTurn: false, pendingBuy: null, auction: null, lastCard: null,
       bulletin: BULLETIN.map((_, i) => i), dispatch: DISPATCH.map((_, i) => i),
       bIdx: 0, dIdx: 0, log: [], winnerPid: null, deadline: 0, startGraceAt: 0,
+      jackpot: 0, bankHouses: HOUSE_SUPPLY, bankHotels: HOTEL_SUPPLY, trades: [], nextTradeId: 1,
     };
     this.rooms.set(id, room);
     return room;
@@ -1043,10 +1245,19 @@ export class CityRiseManager {
       deadline: room.deadline,
       log: room.log.slice(-8),
       board: BOARD,
+      jackpot: room.jackpot,
+      bankHouses: room.bankHouses,
+      bankHotels: room.bankHotels,
+      trades: room.trades.map((t) => ({
+        id: t.id, fromPid: t.fromPid, toPid: t.toPid,
+        offerProps: t.offerProps, offerCash: t.offerCash, offerJailFree: t.offerJailFree,
+        wantProps: t.wantProps, wantCash: t.wantCash, wantJailFree: t.wantJailFree,
+      })),
       players: room.players.map((p) => ({
         pid: p.pid, name: p.name, color: p.color, money: p.money, position: p.position,
         auditTurns: p.auditTurns, bankrupt: p.bankrupt, ready: p.ready, online: p.online,
         owned: p.owned, buildings: p.buildings, mortgaged: [...p.mortgaged], bot: p.bot,
+        jailFreeCards: p.jailFreeCards,
       })),
     };
   }

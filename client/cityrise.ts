@@ -26,6 +26,12 @@ interface CrPlayerView {
   pid: string; name: string; color: string; money: number; position: number;
   auditTurns: number; bankrupt: boolean; ready: boolean; online: boolean;
   owned: number[]; buildings: Record<number, number>; mortgaged: number[]; bot: boolean;
+  jailFreeCards: number;
+}
+interface CrTradeView {
+  id: number; fromPid: string; toPid: string;
+  offerProps: number[]; offerCash: number; offerJailFree: number;
+  wantProps: number[]; wantCash: number; wantJailFree: number;
 }
 interface CrGame {
   id: string;
@@ -42,6 +48,10 @@ interface CrGame {
   log: string[];
   board: Space[];
   players: CrPlayerView[];
+  jackpot: number;
+  bankHouses: number;
+  bankHotels: number;
+  trades: CrTradeView[];
 }
 
 let open = false;
@@ -68,6 +78,7 @@ let lastDiceKey = '';
 let buildMode = false;
 let confetti: { x: number; y: number; vx: number; vy: number; c: string; life: number }[] = [];
 let lastTs = 0;
+let tradeModal: HTMLDivElement | null = null;
 
 // --- geometry cache ---
 interface Cell { x: number; y: number; w: number; h: number; side: 'bottom' | 'right' | 'top' | 'left' | 'corner'; pos: number; }
@@ -114,10 +125,20 @@ export function startCityTycoon(adapter: CityRiseNet): void {
   title.style.cssText = 'font-size:20px;letter-spacing:.5px;background:linear-gradient(90deg,#8b7bff,#4dd0e1);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;';
   sidePanel.appendChild(title);
 
+  const bankLine = document.createElement('div');
+  bankLine.id = 'crBank';
+  bankLine.style.cssText = 'font-size:11px;color:#9aa0c8;';
+  sidePanel.appendChild(bankLine);
+
   const playerList = document.createElement('div');
   playerList.id = 'crPlayers';
   playerList.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
   sidePanel.appendChild(playerList);
+
+  const tradesBox = document.createElement('div');
+  tradesBox.id = 'crTrades';
+  tradesBox.style.cssText = 'display:flex;flex-direction:column;gap:6px;';
+  sidePanel.appendChild(tradesBox);
 
   const logBox = document.createElement('div');
   logBox.id = 'crLog';
@@ -156,6 +177,7 @@ export function closeCityTycoon(): void {
   canvas.removeEventListener('click', onCanvasClick);
   document.removeEventListener('keydown', onKey);
   overlay?.remove();
+  tradeModal?.remove(); tradeModal = null;
   game = null; tokens.clear(); floats = []; confetti = []; buildMode = false;
 }
 
@@ -163,7 +185,7 @@ export function isCityTycoonOpen(): boolean { return open; }
 
 function onKey(e: KeyboardEvent) {
   if (!open) return;
-  if (e.key === 'Escape') { closeCityTycoon(); return; }
+  if (e.key === 'Escape') { if (tradeModal) { closeTradeModal(); return; } closeCityTycoon(); return; }
   // Easter egg: press "R" to reroll the dice cosmetically for a little jiggle of hope.
   if (e.key === 'r' && game && game.phase === 'rolling' && game.turnPid === selfPid) { net.send({ type: 'crRoll' }); }
 }
@@ -633,6 +655,11 @@ function burstConfetti(): void {
 function renderPanel(): void {
   if (!game) return;
   const g = game;
+
+  const bankLine = document.getElementById('crBank')!;
+  bankLine.textContent = g.phase === 'waiting' ? ''
+    : `🏠 ${g.bankHouses}/32 · 🏨 ${g.bankHotels}/12 bank supply${g.jackpot > 0 ? ` · 🥪 Free Lunch pot: $${g.jackpot}` : ''}`;
+
   const list = document.getElementById('crPlayers')!;
   list.innerHTML = '';
   for (const p of g.players) {
@@ -648,7 +675,8 @@ function renderPanel(): void {
       `<span style="width:14px;height:14px;border-radius:50%;background:${p.color};flex:0 0 auto;border:1px solid #0008"></span>` +
       `<span style="flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.pid === selfPid ? '⭐ ' : ''}${escapeHtml(p.name)}${p.bankrupt ? ' 💀' : ''}${p.auditTurns > 0 ? ' 🔒' : ''}</span>` +
       `<span style="font-weight:700;color:#8bff9a">$${p.money}</span>` +
-      `<span style="color:#9aa0c8" title="properties / monopolies">🏢${props}${sets ? ' 👑' + sets : ''}</span>`;
+      `<span style="color:#9aa0c8" title="properties / monopolies">🏢${props}${sets ? ' 👑' + sets : ''}</span>` +
+      (p.jailFreeCards > 0 ? `<span style="color:#ffd750" title="Get Out of the Drunk Tank Free cards">🔓×${p.jailFreeCards}</span>` : '');
     if (p.bot) {
       const kick = document.createElement('button');
       kick.textContent = '✕';
@@ -660,11 +688,48 @@ function renderPanel(): void {
     list.appendChild(row);
   }
 
+  renderTrades();
+
   const logBox = document.getElementById('crLog')!;
   logBox.innerHTML = g.log.map((l) => `<div>${escapeHtml(l)}</div>`).join('');
   logBox.scrollTop = logBox.scrollHeight;
 
   renderActions();
+}
+
+function renderTrades(): void {
+  const g = game!;
+  const box = document.getElementById('crTrades')!;
+  box.innerHTML = '';
+  if (g.phase === 'waiting' || g.phase === 'gameover' || g.trades.length === 0) return;
+  for (const t of g.trades) {
+    const card = document.createElement('div');
+    card.style.cssText = 'background:#181834;border:1px solid #33335a;border-radius:8px;padding:8px;font-size:12px;display:flex;flex-direction:column;gap:6px;';
+    const give = describeTradeSide(g, t.offerProps, t.offerCash, t.offerJailFree);
+    const get = describeTradeSide(g, t.wantProps, t.wantCash, t.wantJailFree);
+    card.innerHTML =
+      `<div><b>${escapeHtml(nameOf(t.fromPid))}</b> → <b>${escapeHtml(nameOf(t.toPid))}</b></div>` +
+      `<div style="color:#b9c0dd">Gives: ${give || '(nothing)'}</div>` +
+      `<div style="color:#b9c0dd">For: ${get || '(nothing)'}</div>`;
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;gap:6px;';
+    if (t.toPid === selfPid) {
+      row.appendChild(btn('acc', '#1c7c2e', () => net.send({ type: 'crRespondTrade', tradeId: t.id, accept: true }), '✅ Accept'));
+      row.appendChild(btn('rej', '#5c1c1c', () => net.send({ type: 'crRespondTrade', tradeId: t.id, accept: false }), '❌ Reject'));
+    } else if (t.fromPid === selfPid) {
+      row.appendChild(btn('cancel', '#5c1c1c', () => net.send({ type: 'crCancelTrade', tradeId: t.id }), '🚫 Cancel Offer'));
+    }
+    if (row.children.length) card.appendChild(row);
+    box.appendChild(card);
+  }
+}
+
+function describeTradeSide(g: CrGame, props: number[], cash: number, jailFree: number): string {
+  const parts: string[] = [];
+  if (cash > 0) parts.push(`$${cash}`);
+  if (jailFree > 0) parts.push(`🔓×${jailFree}`);
+  for (const pos of props) parts.push(escapeHtml(g.board[pos]?.name ?? '?'));
+  return parts.join(', ');
 }
 
 function renderActions(): void {
@@ -700,18 +765,23 @@ function renderActions(): void {
     bidRow.appendChild(btn('quick', '#2a2a5a', () => net.send({ type: 'crAuctionBid', amount: a.highBid + 10 }), '💰 +$10'));
     bidRow.appendChild(btn('bid', '#6c4bff', () => { const v = parseInt(input.value, 10); if (v > a.highBid) net.send({ type: 'crAuctionBid', amount: v }); }, 'Bid'));
     actionBar.appendChild(bidRow);
-    actionBar.appendChild(btn('🚪 Leave', '#5c1c1c', () => closeCityTycoon()));
+    appendTradeAndLeave(g);
     return;
   }
 
   if (!myTurn) {
     actionBar.appendChild(hint(`⏳ ${nameOf(g.turnPid)}'s turn…`));
-    actionBar.appendChild(btn('🚪 Leave', '#5c1c1c', () => closeCityTycoon()));
+    appendTradeAndLeave(g);
     return;
   }
 
   // It's my turn.
   if (g.phase === 'rolling') {
+    if (me && me.auditTurns > 0) {
+      actionBar.appendChild(hint(`🔒 In the Drunk Tank (${me.auditTurns} turn${me.auditTurns === 1 ? '' : 's'} left unless you roll doubles).`));
+      actionBar.appendChild(btn('💵 Pay Bail ($50)', '#7c561c', () => net.send({ type: 'crPayBail' })));
+      if (me.jailFreeCards > 0) actionBar.appendChild(btn('🔓 Use Jail-Free Card', '#1c7c2e', () => net.send({ type: 'crUseJailFree' })));
+    }
     actionBar.appendChild(btn('🎲 Roll Dice', '#6c4bff', () => net.send({ type: 'crRoll' })));
   } else if (g.phase === 'buying' && g.pendingBuy != null) {
     const sp = g.board[g.pendingBuy];
@@ -725,7 +795,90 @@ function renderActions(): void {
     const endLabel = g.doublesStreak > 0 ? '🎲 Roll Again (doubles!)' : '➡️ End Turn';
     actionBar.appendChild(btn(endLabel, '#c0562e', () => { buildMode = false; net.send({ type: 'crEndTurn' }); }));
   }
+  appendTradeAndLeave(g);
+}
+
+function appendTradeAndLeave(g: CrGame): void {
+  if (g.players.filter((p) => !p.bankrupt).length > 1) {
+    actionBar.appendChild(btn('🤝 Propose Trade', '#2a2a5a', () => openTradeModal()));
+  }
   actionBar.appendChild(btn('🚪 Leave', '#5c1c1c', () => closeCityTycoon()));
+}
+
+function closeTradeModal(): void { tradeModal?.remove(); tradeModal = null; }
+
+function buildTradeColumnHtml(label: string, p: CrPlayerView): string {
+  const g = game!;
+  const unimproved = p.owned.filter((pos) => (p.buildings[pos] ?? 0) === 0);
+  const propsHtml = unimproved.length
+    ? unimproved.map((pos) => `<label style="display:flex;gap:6px;align-items:center;font-size:12px;"><input type="checkbox" value="${pos}"> ${escapeHtml(g.board[pos]?.name ?? '?')}</label>`).join('')
+    : '<div style="color:#666;font-size:12px;">(no unimproved properties)</div>';
+  return (
+    `<div style="font-weight:600;">${escapeHtml(label)} (${escapeHtml(p.name)})</div>` +
+    `<div style="max-height:140px;overflow-y:auto;display:flex;flex-direction:column;gap:4px;border:1px solid #23233c;border-radius:6px;padding:6px;">${propsHtml}</div>` +
+    `<label style="display:flex;gap:6px;align-items:center;">Cash <input class="cr-cash" type="number" min="0" max="${p.money}" value="0" style="width:80px;padding:4px;border-radius:6px;border:1px solid #33335a;background:#0a0a16;color:#fff;"></label>` +
+    (p.jailFreeCards > 0
+      ? `<label style="display:flex;gap:6px;align-items:center;">🔓 cards <input class="cr-jail" type="number" min="0" max="${p.jailFreeCards}" value="0" style="width:60px;padding:4px;border-radius:6px;border:1px solid #33335a;background:#0a0a16;color:#fff;"></label>`
+      : '')
+  );
+}
+
+function openTradeModal(): void {
+  if (!game) return;
+  closeTradeModal();
+  const g = game;
+  const me = g.players.find((p) => p.pid === selfPid);
+  const others = g.players.filter((p) => p.pid !== selfPid && !p.bankrupt);
+  if (!me || others.length === 0) return;
+
+  const modal = document.createElement('div');
+  modal.style.cssText = 'position:fixed;inset:0;z-index:960;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;';
+  const card = document.createElement('div');
+  card.style.cssText = 'background:#14142c;border:1px solid #33335a;border-radius:12px;padding:18px;width:420px;max-width:92vw;max-height:86vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px;color:#e8eefc;font-size:13px;';
+  card.innerHTML = '<div style="font-size:16px;font-weight:700;">🤝 Propose Trade</div>';
+
+  const select = document.createElement('select');
+  select.style.cssText = 'padding:8px;border-radius:8px;border:1px solid #33335a;background:#0a0a16;color:#fff;font-size:13px;';
+  for (const p of others) { const o = document.createElement('option'); o.value = p.pid; o.textContent = p.name; select.appendChild(o); }
+  card.appendChild(select);
+
+  const body = document.createElement('div');
+  body.style.cssText = 'display:flex;gap:10px;';
+  const giveCol = document.createElement('div');
+  giveCol.style.cssText = 'flex:1 1 0;display:flex;flex-direction:column;gap:6px;min-width:0;';
+  const getCol = document.createElement('div');
+  getCol.style.cssText = 'flex:1 1 0;display:flex;flex-direction:column;gap:6px;min-width:0;';
+  body.append(giveCol, getCol);
+  card.appendChild(body);
+
+  const rebuild = () => {
+    const target = g.players.find((p) => p.pid === select.value) ?? others[0];
+    giveCol.innerHTML = buildTradeColumnHtml('You give', me);
+    getCol.innerHTML = buildTradeColumnHtml('You get', target);
+  };
+  select.onchange = rebuild;
+  rebuild();
+
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display:flex;gap:8px;margin-top:6px;';
+  btnRow.appendChild(btn('send', '#1c7c2e', () => {
+    const target = g.players.find((p) => p.pid === select.value) ?? others[0];
+    const offerProps = [...giveCol.querySelectorAll('input[type=checkbox]:checked')].map((el) => Number((el as HTMLInputElement).value));
+    const wantProps = [...getCol.querySelectorAll('input[type=checkbox]:checked')].map((el) => Number((el as HTMLInputElement).value));
+    const offerCash = Number((giveCol.querySelector('.cr-cash') as HTMLInputElement | null)?.value || 0);
+    const wantCash = Number((getCol.querySelector('.cr-cash') as HTMLInputElement | null)?.value || 0);
+    const offerJailFree = Number((giveCol.querySelector('.cr-jail') as HTMLInputElement | null)?.value || 0);
+    const wantJailFree = Number((getCol.querySelector('.cr-jail') as HTMLInputElement | null)?.value || 0);
+    net.send({ type: 'crProposeTrade', toPid: target.pid, offer: { offerProps, offerCash, offerJailFree, wantProps, wantCash, wantJailFree } });
+    closeTradeModal();
+  }, 'Send Offer'));
+  btnRow.appendChild(btn('cancel', '#5c1c1c', () => closeTradeModal(), 'Cancel'));
+  card.appendChild(btnRow);
+
+  modal.appendChild(card);
+  modal.addEventListener('click', (e) => { if (e.target === modal) closeTradeModal(); });
+  document.body.appendChild(modal);
+  tradeModal = modal;
 }
 
 function btn(id: string, bg: string, on: () => void, label?: string): HTMLButtonElement {

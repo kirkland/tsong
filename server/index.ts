@@ -483,6 +483,31 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'crRemoveBot':
         if (typeof msg.pid === 'string') lobby.crRemoveBot(ws, msg.pid);
         break;
+      case 'crPayBail':
+        lobby.crPayBail(ws);
+        break;
+      case 'crUseJailFree':
+        lobby.crUseJailFree(ws);
+        break;
+      case 'crProposeTrade':
+        if (typeof msg.toPid === 'string' && msg.offer && typeof msg.offer === 'object') {
+          const o = msg.offer as Record<string, unknown>;
+          lobby.crProposeTrade(ws, msg.toPid, {
+            offerProps: Array.isArray(o.offerProps) ? o.offerProps.filter((n): n is number => typeof n === 'number') : [],
+            offerCash: typeof o.offerCash === 'number' ? o.offerCash : 0,
+            offerJailFree: typeof o.offerJailFree === 'number' ? o.offerJailFree : 0,
+            wantProps: Array.isArray(o.wantProps) ? o.wantProps.filter((n): n is number => typeof n === 'number') : [],
+            wantCash: typeof o.wantCash === 'number' ? o.wantCash : 0,
+            wantJailFree: typeof o.wantJailFree === 'number' ? o.wantJailFree : 0,
+          });
+        }
+        break;
+      case 'crRespondTrade':
+        if (typeof msg.tradeId === 'number' && typeof msg.accept === 'boolean') lobby.crRespondTrade(ws, msg.tradeId, msg.accept);
+        break;
+      case 'crCancelTrade':
+        if (typeof msg.tradeId === 'number') lobby.crCancelTrade(ws, msg.tradeId);
+        break;
       case 'worldEnter':
         lobby.worldEnter(ws);
         break;
