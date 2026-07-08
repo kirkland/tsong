@@ -487,7 +487,7 @@ function drawCenter(): void {
     ctx.strokeStyle = '#ffd750'; ctx.lineWidth = 2; ctx.stroke();
     ctx.fillStyle = '#ffd750'; ctx.textAlign = 'center';
     ctx.font = `bold ${panelH * 0.2}px system-ui`;
-    ctx.fillText(g.lastCard.deck === 'bulletin' ? '📰 CITY BULLETIN' : '📈 MARKET DISPATCH', cx, py + panelH * 0.24);
+    ctx.fillText(g.lastCard.deck === 'bulletin' ? '📰 NETIZEN CHATTER' : '📈 HOUSE MEMO', cx, py + panelH * 0.24);
     ctx.fillStyle = '#fff'; ctx.font = `${panelH * 0.17}px system-ui`;
     ctx.textBaseline = 'top';
     const words = g.lastCard.text.split(' '); let line = ''; let ly = py + panelH * 0.4;

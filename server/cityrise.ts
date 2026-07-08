@@ -3,7 +3,7 @@
 // Players walk into the arcade cabinet and queue into a room. Once 2+ players ready up,
 // the game begins. Each turn: the active player rolls two dice, their token walks around a
 // 40-space city, and the space they land on resolves (buy property, pay rent, draw a card,
-// pay tax, land in audit…). Own every property in a colour group to charge premium rent and
+// pay tax, land in the drunk tank…). Own every property in a colour group to charge premium rent and
 // build houses. Bankrupt your rivals; last tycoon standing wins tsong coins.
 //
 // The server owns ALL game state and logic. Clients send only discrete actions
@@ -39,48 +39,50 @@ export interface Space {
   taxAmount?: number;
 }
 
-// The 40-space city, clockwise from bottom-left corner.
+// The 40-space city, clockwise from bottom-left corner. Names lean on tsong's own world —
+// Robville, the Casino floor, the Fed, the Ruins, Parliament, the Street Demons circuits —
+// instead of generic Monopoly streets.
 export const BOARD: Space[] = [
   { kind: 'go', name: 'Payday' },                                                                                                              // 0
-  { kind: 'property', name: 'Junk Yard', color: '#8B4513', group: 'brown', price: 60, rent: [2, 4, 10, 30, 90, 160, 250], houseCost: 50 },     // 1
-  { kind: 'card_bulletin', name: 'City Bulletin' },                                                                                            // 2
-  { kind: 'property', name: 'Scrap Lane', color: '#8B4513', group: 'brown', price: 80, rent: [4, 8, 20, 60, 180, 320, 450], houseCost: 50 },   // 3
-  { kind: 'tax', name: 'Income Audit', taxAmount: 150 },                                                                                       // 4
-  { kind: 'transit', name: 'Metro North', price: 200 },                                                                                        // 5
-  { kind: 'property', name: 'Harbor View', color: '#5fe0e0', group: 'cyan', price: 100, rent: [6, 12, 30, 90, 270, 400, 550], houseCost: 50 }, // 6
-  { kind: 'card_dispatch', name: 'Market Dispatch' },                                                                                          // 7
-  { kind: 'property', name: 'Pier District', color: '#5fe0e0', group: 'cyan', price: 100, rent: [6, 12, 30, 90, 270, 400, 550], houseCost: 50 }, // 8
-  { kind: 'property', name: 'Bayfront Walk', color: '#5fe0e0', group: 'cyan', price: 120, rent: [8, 16, 40, 100, 300, 450, 600], houseCost: 50 }, // 9
-  { kind: 'visit_audit', name: 'Visit Audit' },                                                                                                // 10
-  { kind: 'property', name: 'Neon Alley', color: '#ff5fa8', group: 'pink', price: 140, rent: [10, 20, 50, 150, 450, 625, 750], houseCost: 100 }, // 11
-  { kind: 'utility', name: 'Electric Co.', price: 150 },                                                                                       // 12
-  { kind: 'property', name: 'Studio Row', color: '#ff5fa8', group: 'pink', price: 140, rent: [10, 20, 50, 150, 450, 625, 750], houseCost: 100 }, // 13
-  { kind: 'card_bulletin', name: 'City Bulletin' },                                                                                            // 14
-  { kind: 'transit', name: 'Metro East', price: 200 },                                                                                         // 15
-  { kind: 'property', name: 'Arts Plaza', color: '#ff5fa8', group: 'pink', price: 160, rent: [12, 24, 60, 180, 500, 700, 900], houseCost: 100 }, // 16
-  { kind: 'card_dispatch', name: 'Market Dispatch' },                                                                                          // 17
-  { kind: 'property', name: 'Sunset Strip', color: '#ff9d3d', group: 'orange', price: 180, rent: [14, 28, 70, 200, 550, 750, 950], houseCost: 100 }, // 18
-  { kind: 'property', name: 'Arcade Block', color: '#ff9d3d', group: 'orange', price: 180, rent: [14, 28, 70, 200, 550, 750, 950], houseCost: 100 }, // 19
+  { kind: 'property', name: 'Robville Cul-de-Sac', color: '#8B4513', group: 'brown', price: 60, rent: [2, 4, 10, 30, 90, 160, 250], houseCost: 50 },     // 1
+  { kind: 'card_bulletin', name: 'Netizen Chatter' },                                                                                          // 2
+  { kind: 'property', name: 'Robville Land Office', color: '#8B4513', group: 'brown', price: 80, rent: [4, 8, 20, 60, 180, 320, 450], houseCost: 50 },   // 3
+  { kind: 'tax', name: 'The House Cut', taxAmount: 150 },                                                                                      // 4
+  { kind: 'transit', name: 'IMOLA Circuit', price: 200 },                                                                                      // 5
+  { kind: 'property', name: "Wobbly Pete's Bar", color: '#5fe0e0', group: 'cyan', price: 100, rent: [6, 12, 30, 90, 270, 400, 550], houseCost: 50 }, // 6
+  { kind: 'card_dispatch', name: 'House Memo' },                                                                                                // 7
+  { kind: 'property', name: "Sloshed Sal's Tavern", color: '#5fe0e0', group: 'cyan', price: 100, rent: [6, 12, 30, 90, 270, 400, 550], houseCost: 50 }, // 8
+  { kind: 'property', name: 'The Tavern', color: '#5fe0e0', group: 'cyan', price: 120, rent: [8, 16, 40, 100, 300, 450, 600], houseCost: 50 }, // 9
+  { kind: 'visit_audit', name: 'Drunk Tank' },                                                                                                 // 10
+  { kind: 'property', name: "Drift's Arcade", color: '#ff5fa8', group: 'pink', price: 140, rent: [10, 20, 50, 150, 450, 625, 750], houseCost: 100 }, // 11
+  { kind: 'utility', name: 'Server Room', price: 150 },                                                                                        // 12
+  { kind: 'property', name: "Kevin's Banana Stand", color: '#ff5fa8', group: 'pink', price: 140, rent: [10, 20, 50, 150, 450, 625, 750], houseCost: 100 }, // 13
+  { kind: 'card_bulletin', name: 'Netizen Chatter' },                                                                                          // 14
+  { kind: 'transit', name: 'AVUS Circuit', price: 200 },                                                                                       // 15
+  { kind: 'property', name: "Lucky Lou's Corner", color: '#ff5fa8', group: 'pink', price: 160, rent: [12, 24, 60, 180, 500, 700, 900], houseCost: 100 }, // 16
+  { kind: 'card_dispatch', name: 'House Memo' },                                                                                                // 17
+  { kind: 'property', name: 'Pet Shop', color: '#ff9d3d', group: 'orange', price: 180, rent: [14, 28, 70, 200, 550, 750, 950], houseCost: 100 }, // 18
+  { kind: 'property', name: 'Fishing Pond', color: '#ff9d3d', group: 'orange', price: 180, rent: [14, 28, 70, 200, 550, 750, 950], houseCost: 100 }, // 19
   { kind: 'free_lunch', name: 'Free Lunch' },                                                                                                  // 20
-  { kind: 'property', name: 'Neon Boulevard', color: '#ff9d3d', group: 'orange', price: 200, rent: [16, 32, 80, 220, 600, 800, 1000], houseCost: 100 }, // 21
-  { kind: 'card_bulletin', name: 'City Bulletin' },                                                                                            // 22
-  { kind: 'utility', name: 'Aqua Works', price: 150 },                                                                                         // 23
-  { kind: 'property', name: 'Commerce Way', color: '#ef3d3d', group: 'red', price: 220, rent: [18, 36, 90, 250, 700, 875, 1050], houseCost: 150 }, // 24
-  { kind: 'transit', name: 'Metro West', price: 200 },                                                                                         // 25
-  { kind: 'property', name: 'Trade Avenue', color: '#ef3d3d', group: 'red', price: 220, rent: [18, 36, 90, 250, 700, 875, 1050], houseCost: 150 }, // 26
-  { kind: 'card_dispatch', name: 'Market Dispatch' },                                                                                          // 27
-  { kind: 'property', name: 'Exchange Tower', color: '#ef3d3d', group: 'red', price: 240, rent: [20, 40, 100, 300, 750, 925, 1100], houseCost: 150 }, // 28
-  { kind: 'tax', name: 'Luxury Levy', taxAmount: 100 },                                                                                        // 29
-  { kind: 'bust_zone', name: 'Bust Zone' },                                                                                                    // 30
-  { kind: 'property', name: 'Finance Hill', color: '#f7d94c', group: 'yellow', price: 260, rent: [22, 44, 110, 330, 800, 975, 1150], houseCost: 150 }, // 31
-  { kind: 'card_bulletin', name: 'City Bulletin' },                                                                                            // 32
-  { kind: 'property', name: 'Credit Tower', color: '#f7d94c', group: 'yellow', price: 260, rent: [22, 44, 110, 330, 800, 975, 1150], houseCost: 150 }, // 33
-  { kind: 'transit', name: 'Metro South', price: 200 },                                                                                        // 34
-  { kind: 'property', name: 'Gold Vault', color: '#f7d94c', group: 'yellow', price: 280, rent: [24, 48, 120, 360, 850, 1025, 1200], houseCost: 150 }, // 35
-  { kind: 'property', name: 'Silicon Row', color: '#3ddc84', group: 'green', price: 300, rent: [26, 52, 130, 390, 900, 1100, 1275], houseCost: 200 }, // 36
-  { kind: 'property', name: 'Tech Campus', color: '#3ddc84', group: 'green', price: 300, rent: [26, 52, 130, 390, 900, 1100, 1275], houseCost: 200 }, // 37
-  { kind: 'property', name: 'Skyline Court', color: '#2b3a8c', group: 'navy', price: 350, rent: [35, 70, 175, 500, 1100, 1300, 1500], houseCost: 200 }, // 38
-  { kind: 'property', name: 'Diamond Penthouse', color: '#2b3a8c', group: 'navy', price: 400, rent: [50, 100, 200, 600, 1400, 1700, 2000], houseCost: 200 }, // 39
+  { kind: 'property', name: "McDonald's", color: '#ff9d3d', group: 'orange', price: 200, rent: [16, 32, 80, 220, 600, 800, 1000], houseCost: 100 }, // 21
+  { kind: 'card_bulletin', name: 'Netizen Chatter' },                                                                                          // 22
+  { kind: 'utility', name: 'Water Cooler', price: 150 },                                                                                       // 23
+  { kind: 'property', name: 'Blackjack Table', color: '#ef3d3d', group: 'red', price: 220, rent: [18, 36, 90, 250, 700, 875, 1050], houseCost: 150 }, // 24
+  { kind: 'transit', name: 'AINTREE Circuit', price: 200 },                                                                                    // 25
+  { kind: 'property', name: 'Roulette Wheel', color: '#ef3d3d', group: 'red', price: 220, rent: [18, 36, 90, 250, 700, 875, 1050], houseCost: 150 }, // 26
+  { kind: 'card_dispatch', name: 'House Memo' },                                                                                                // 27
+  { kind: 'property', name: 'The Casino', color: '#ef3d3d', group: 'red', price: 240, rent: [20, 40, 100, 300, 750, 925, 1100], houseCost: 150 }, // 28
+  { kind: 'tax', name: 'Loot Box Tax', taxAmount: 100 },                                                                                       // 29
+  { kind: 'bust_zone', name: 'Busted!' },                                                                                                      // 30
+  { kind: 'property', name: "Banker Edna's Vault", color: '#f7d94c', group: 'yellow', price: 260, rent: [22, 44, 110, 330, 800, 975, 1150], houseCost: 150 }, // 31
+  { kind: 'card_bulletin', name: 'Netizen Chatter' },                                                                                          // 32
+  { kind: 'property', name: 'The Fed', color: '#f7d94c', group: 'yellow', price: 260, rent: [22, 44, 110, 330, 800, 975, 1150], houseCost: 150 }, // 33
+  { kind: 'transit', name: 'MEXICO Circuit', price: 200 },                                                                                     // 34
+  { kind: 'property', name: 'The Loan Book', color: '#f7d94c', group: 'yellow', price: 280, rent: [24, 48, 120, 360, 850, 1025, 1200], houseCost: 150 }, // 35
+  { kind: 'property', name: 'The Ruins', color: '#3ddc84', group: 'green', price: 300, rent: [26, 52, 130, 390, 900, 1100, 1275], houseCost: 200 }, // 36
+  { kind: 'property', name: "Clarence's Gate", color: '#3ddc84', group: 'green', price: 300, rent: [26, 52, 130, 390, 900, 1100, 1275], houseCost: 200 }, // 37
+  { kind: 'property', name: 'Parliament', color: '#2b3a8c', group: 'navy', price: 350, rent: [35, 70, 175, 500, 1100, 1300, 1500], houseCost: 200 }, // 38
+  { kind: 'property', name: 'The Arena', color: '#2b3a8c', group: 'navy', price: 400, rent: [50, 100, 200, 600, 1400, 1700, 2000], houseCost: 200 }, // 39
 ];
 
 // Group → its member positions (built once from the board).
@@ -128,9 +130,9 @@ const BULLETIN: Card[] = [
   { text: 'Parking ticket — pay $30', e: { t: 'pay', n: 30 } },
   { text: 'Health inspection fee — pay $50', e: { t: 'pay', n: 50 } },
   { text: 'Go to Payday — advance to GO, collect $200', e: { t: 'move', dest: 0 } },
-  { text: 'Advance to Finance Hill', e: { t: 'move', dest: 31 } },
-  { text: 'Advance to Skyline Court', e: { t: 'move', dest: 38 } },
-  { text: 'Go to Audit — do not pass Payday', e: { t: 'goAudit' } },
+  { text: "Advance to Banker Edna's Vault", e: { t: 'move', dest: 31 } },
+  { text: 'Advance to Parliament', e: { t: 'move', dest: 38 } },
+  { text: 'Go to the Drunk Tank — do not pass Payday', e: { t: 'goAudit' } },
   { text: 'Move back 3 spaces', e: { t: 'moveBack', n: 3 } },
   { text: 'Bank error in your favor — collect $200', e: { t: 'collect', n: 200 } },
   { text: 'Sale of stock — collect $150', e: { t: 'collect', n: 150 } },
@@ -156,9 +158,9 @@ const DISPATCH: Card[] = [
   { text: 'Market crash — pay $50 to each player', e: { t: 'payEach', n: 50 } },
   { text: 'Property value surge — collect $50 per property', e: { t: 'collectPerProperty', n: 50 } },
   { text: 'Supply chain disruption — pay $80', e: { t: 'pay', n: 80 } },
-  { text: 'Advance to Harbor View', e: { t: 'move', dest: 6 } },
-  { text: 'Advance to Neon Boulevard', e: { t: 'move', dest: 21 } },
-  { text: 'Go to Audit — do not pass Payday', e: { t: 'goAudit' } },
+  { text: "Advance to Wobbly Pete's Bar", e: { t: 'move', dest: 6 } },
+  { text: "Advance to McDonald's", e: { t: 'move', dest: 21 } },
+  { text: 'Go to the Drunk Tank — do not pass Payday', e: { t: 'goAudit' } },
   { text: 'Move forward 2 spaces', e: { t: 'moveForward', n: 2 } },
   { text: 'Energy price spike — pay $75', e: { t: 'pay', n: 75 } },
   { text: 'Crypto windfall — collect $200', e: { t: 'collect', n: 200 } },
@@ -391,34 +393,34 @@ export class CityRiseManager {
     const isDouble = d1 === d2;
     const total = d1 + d2;
 
-    // In audit: only doubles (or the third strike / bail) frees you.
+    // In the drunk tank: only doubles (or the third strike / bail) frees you.
     if (p.auditTurns > 0) {
       if (isDouble) {
         p.auditTurns = 0;
-        this.emit(room, `${p.name} rolled doubles and walked free from the audit! 🔓`, 'success');
-        room.doublesStreak = 0; // no bonus turn out of audit
+        this.emit(room, `${p.name} rolled doubles and walked free from the drunk tank! 🔓`, 'success');
+        room.doublesStreak = 0; // no bonus turn out of the drunk tank
         this.advanceToken(room, p, total);
       } else {
         p.auditTurns--;
         if (p.auditTurns <= 0) {
-          this.emit(room, `${p.name} settled the audit for $${AUDIT_BAIL} and moves on.`, 'info');
+          this.emit(room, `${p.name} posted bail for $${AUDIT_BAIL} and moves on.`, 'info');
           this.pay(room, p, AUDIT_BAIL, null);
           if (p.bankrupt) { this.afterResolve(room); return; }
           this.advanceToken(room, p, total);
         } else {
-          this.emit(room, `${p.name} is still under audit (${p.auditTurns} turn${p.auditTurns === 1 ? '' : 's'} left).`, 'warn');
+          this.emit(room, `${p.name} is still sleeping it off in the drunk tank (${p.auditTurns} turn${p.auditTurns === 1 ? '' : 's'} left).`, 'warn');
           this.pushState(room);
-          this.nextTurn(room); // audit turn burns your move
+          this.nextTurn(room); // drunk-tank turn burns your move
         }
       }
       return;
     }
 
-    // Three doubles in a row = reckless driving → straight to audit.
+    // Three doubles in a row = reckless driving → straight to the drunk tank.
     if (isDouble) {
       room.doublesStreak++;
       if (room.doublesStreak >= 3) {
-        this.emit(room, `${p.name} rolled three doubles — hauled off to Audit for reckless speeding! 🚔`, 'error');
+        this.emit(room, `${p.name} rolled three doubles — Busted! Hauled off to the Drunk Tank for reckless driving. 🚔`, 'error');
         this.sendToAudit(room, p);
         this.pushState(room);
         this.nextTurn(room);
@@ -550,14 +552,14 @@ export class CityRiseManager {
         this.toBuilding(room);
         break;
       case 'bust_zone':
-        this.emit(room, `${p.name} hit the Bust Zone — straight to Audit! 🚨`, 'error');
+        this.emit(room, `${p.name} got Busted! — straight to the Drunk Tank! 🚨`, 'error');
         this.sendToAudit(room, p);
         this.pushState(room);
         this.nextTurn(room);
         break;
       case 'tax': {
         let amt = space.taxAmount ?? 0;
-        if (space.name === 'Income Audit') amt = Math.min(150, Math.floor(this.netWorth(p) * 0.10));
+        if (space.name === 'The House Cut') amt = Math.min(150, Math.floor(this.netWorth(p) * 0.10));
         this.emit(room, `${p.name} pays ${space.name}: $${amt}. 🧾`, 'warn');
         this.pay(room, p, amt, null);
         this.afterResolve(room);
