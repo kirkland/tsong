@@ -2998,7 +2998,10 @@ export function startWorld(net: WorldNet): void {
       'border-radius:10px;padding:10px;font-size:14px;font-weight:600;';
     back.onmouseenter = () => { back.style.background = '#2c4079'; };
     back.onmouseleave = () => { back.style.background = '#21305a'; };
-    back.onclick = () => { selectBlip(); onBack(); };
+    // enterHallOfFame() guards against re-entry while a dialog is already open (so walking up
+    // to the building twice doesn't stack dialogs) — clear the flag first so navigating "back"
+    // from a drill-down view doesn't trip that same guard.
+    back.onclick = () => { selectBlip(); dialogOpen = false; onBack(); };
     const close = document.createElement('button');
     close.type = 'button';
     close.textContent = 'Close';
