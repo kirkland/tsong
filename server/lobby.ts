@@ -1767,29 +1767,35 @@ export class Lobby {
 
   waStart(ws: WebSocket) {
     if (this.waSlots[0] !== ws) return;
-    if (this.waSlots.length < 1) return;
+    if (this.waSlots.length < 2) return; // humans only — no bots to fill the trenches
     this.waStatus = 'playing';
     this.waStartedAt = Date.now();
     this.waHumansAtStart = this.waSlots.length;
     this.broadcastWaLobby();
   }
 
-  waEnd(ws: WebSocket, winnerSlot: number) {
+  waEnd(ws: WebSocket, winnerSlot: number, winnerSlot2?: number) {
     if (this.waSlots[0] !== ws) return;
     if (this.waStatus !== 'playing') return;
     this.waStatus = 'waiting';
-    const winSock = this.waSlots[winnerSlot];
-    if (winnerSlot < 0 || !winSock) { this.broadcastWaLobby(); return; }
+    if (winnerSlot < 0) { this.broadcastWaLobby(); return; }
     if (this.waHumansAtStart < 2) { this.broadcastWaLobby(); return; }
     if (Date.now() - this.waStartedAt < Lobby.WA_MIN_MATCH_MS) { this.broadcastWaLobby(); return; }
-    const conn = this.conns.get(winSock);
-    if (conn && conn.pid) {
-      this.housePay(conn.pid, conn.nickname, Lobby.WA_WIN_REWARD)
-        .then((paid) => {
-          this.sendWallet(winSock); this.refreshNetWorth().catch(() => {});
-          if (paid > 0) this.notify(winSock, `🪖 You won Worms: Tsong Edition — +${paid.toLocaleString()} coins!`);
-        })
-        .catch((e) => console.error('artillery reward failed:', e));
+    // 2v2 wins report both teammates — the House pays each in full
+    const slots = winnerSlot2 !== undefined && winnerSlot2 >= 0 && winnerSlot2 !== winnerSlot
+      ? [winnerSlot, winnerSlot2] : [winnerSlot];
+    for (const slot of slots) {
+      const winSock = this.waSlots[slot];
+      if (!winSock) continue;
+      const conn = this.conns.get(winSock);
+      if (conn && conn.pid) {
+        this.housePay(conn.pid, conn.nickname, Lobby.WA_WIN_REWARD)
+          .then((paid) => {
+            this.sendWallet(winSock); this.refreshNetWorth().catch(() => {});
+            if (paid > 0) this.notify(winSock, `🪖 You won Worms: Tsong Edition — +${paid.toLocaleString()} coins!`);
+          })
+          .catch((e) => console.error('artillery reward failed:', e));
+      }
     }
     this.broadcastWaLobby();
   }

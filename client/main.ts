@@ -2073,7 +2073,7 @@ waBtn.addEventListener('click', async () => {
       join: () => net.send({ type: 'waJoin' }),
       leave: () => net.send({ type: 'waLeave' }),
       start: () => net.send({ type: 'waStart' }),
-      end: (winner) => net.send({ type: 'waEnd', winner }),
+      end: (winner, winner2) => net.send({ type: 'waEnd', winner, winner2 }),
       relay: (data) => net.send({ type: 'waRelay', data }),
       name: () => myName,
     });
