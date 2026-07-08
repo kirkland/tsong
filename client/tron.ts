@@ -43,8 +43,8 @@ const COLORS = ['#00e5ff', '#ff9a00', '#ff3df0', '#89ff2a'] as const; // cyan / 
 const BOT_NAMES = ['CLU', 'RINZLER', 'SARK'] as const;
 const DX = [0, 1, 0, -1] as const;     // 0=up 1=right 2=down 3=left
 const DY = [-1, 0, 1, 0] as const;
-const TICK_START_MS = 75;              // sim step at round start...
-const TICK_MIN_MS = 45;                // ...ramping down to this (faster = harder)
+const TICK_START_MS = 62;              // sim step at round start (arena is big — keep it moving)...
+const TICK_MIN_MS = 38;                // ...ramping down to this (faster = harder)
 const COUNTDOWN_MS = 1800;             // 3-2-1 before the cycles launch
 // Everything in /public that plays like a SONG (deliberately not the stingers/sfx).
 const MUSIC = [
@@ -268,11 +268,12 @@ export function startTron(net: TronNet): void {
   }
 
   // --- round / match orchestration (HOST) ---
+  const MIDX = Math.floor(TRN_COLS / 2), MIDY = Math.floor(TRN_ROWS / 2);
   const SPAWNS: [number, number, number][] = [
-    [14, 36, 1],                     // left edge, facing right
-    [TRN_COLS - 15, 36, 3],          // right edge, facing left
-    [64, 10, 2],                     // top, facing down
-    [64, TRN_ROWS - 11, 0],          // bottom, facing up
+    [16, MIDY, 1],                   // left edge, facing right
+    [TRN_COLS - 17, MIDY, 3],        // right edge, facing left
+    [MIDX, 14, 2],                   // top, facing down
+    [MIDX, TRN_ROWS - 15, 0],        // bottom, facing up
   ];
 
   function hostBuildRiders() {
@@ -544,25 +545,25 @@ export function startTron(net: TronNet): void {
     // HUD — name plates with dim backing, glowing win pips, round marker up top
     if (riders.length) {
       ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-      ctx.font = '700 15px ui-monospace, monospace';
+      ctx.font = '700 20px ui-monospace, monospace';
       riders.forEach((r, i) => {
-        const x = 16 + i * 190;
+        const x = 20 + i * 250;
         ctx.fillStyle = '#00000088';
-        ctx.fillRect(x - 8, 6, 172, 40);
+        ctx.fillRect(x - 10, 8, 228, 52);
         ctx.fillStyle = r.alive || roundOver ? r.color : '#444a55';
-        ctx.fillText(`${r.name}${r.bot ? ' ·bot' : ''}`, x, 11);
+        ctx.fillText(`${r.name}${r.bot ? ' ·bot' : ''}`, x, 14);
         for (let w = 0; w < TRN_ROUNDS_TO_WIN; w++) {
-          if (w < r.wins) { ctx.shadowColor = r.color; ctx.shadowBlur = 8; ctx.fillStyle = r.color; }
+          if (w < r.wins) { ctx.shadowColor = r.color; ctx.shadowBlur = 10; ctx.fillStyle = r.color; }
           else { ctx.shadowBlur = 0; ctx.fillStyle = '#1a2230'; }
-          ctx.fillRect(x + w * 16, 33, 12, 6);
+          ctx.fillRect(x + w * 20, 44, 15, 8);
         }
         ctx.shadowBlur = 0;
       });
       if (mode === 'play') {
         ctx.textAlign = 'center';
-        ctx.font = '700 13px ui-monospace, monospace';
+        ctx.font = '700 17px ui-monospace, monospace';
         ctx.fillStyle = '#4a7a92';
-        ctx.fillText(`— ROUND ${round} · FIRST TO ${TRN_ROUNDS_TO_WIN} —`, W / 2, 14);
+        ctx.fillText(`— ROUND ${round} · FIRST TO ${TRN_ROUNDS_TO_WIN} —`, W / 2, 18);
       }
     }
 
@@ -575,14 +576,14 @@ export function startTron(net: TronNet): void {
         const n = 3 - Math.floor(elapsed / seg);
         const frac = (elapsed % seg) / seg;           // 0 → 1 within this digit
         const scale = 1.6 - frac * 0.6;               // slams from big to resting size
-        ctx.font = `900 ${Math.round(110 * scale)}px ui-monospace, monospace`;
+        ctx.font = `900 ${Math.round(160 * scale)}px ui-monospace, monospace`;
         ctx.globalAlpha = 1 - frac * 0.35;
         ctx.fillStyle = '#00e5ff';
         ctx.shadowColor = '#00e5ff'; ctx.shadowBlur = 40;
         ctx.fillText(String(n), W / 2, H / 2);
       } else {
         const frac = (elapsed - COUNTDOWN_MS) / 400;
-        ctx.font = '900 130px ui-monospace, monospace';
+        ctx.font = '900 190px ui-monospace, monospace';
         ctx.globalAlpha = 1 - frac;
         ctx.fillStyle = '#89ff2a';
         ctx.shadowColor = '#89ff2a'; ctx.shadowBlur = 50;
@@ -592,11 +593,11 @@ export function startTron(net: TronNet): void {
     } else if (banner && now < bannerUntil) {
       const col = matchWinner >= 0 ? COLORS[matchWinner] : '#bfe9ff';
       ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.font = '900 46px ui-monospace, monospace';
+      ctx.font = '900 64px ui-monospace, monospace';
       // chromatic double-print behind the main fill
       ctx.globalAlpha = 0.5;
-      ctx.fillStyle = '#ff3df0'; ctx.fillText(banner, W / 2 - 3, H / 2);
-      ctx.fillStyle = '#00e5ff'; ctx.fillText(banner, W / 2 + 3, H / 2);
+      ctx.fillStyle = '#ff3df0'; ctx.fillText(banner, W / 2 - 4, H / 2);
+      ctx.fillStyle = '#00e5ff'; ctx.fillText(banner, W / 2 + 4, H / 2);
       ctx.globalAlpha = 1;
       ctx.fillStyle = col;
       ctx.shadowColor = col; ctx.shadowBlur = 30;
@@ -605,9 +606,9 @@ export function startTron(net: TronNet): void {
     }
     if (mode === 'play') {
       ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
-      ctx.font = '12px ui-monospace, monospace';
+      ctx.font = '15px ui-monospace, monospace';
       ctx.fillStyle = '#3d5a6a';
-      ctx.fillText('ARROWS / WASD TO STEER · ESC TO EXIT', W / 2, H - 8);
+      ctx.fillText('ARROWS / WASD TO STEER · ESC TO EXIT', W / 2, H - 10);
     }
   }
 

@@ -2617,8 +2617,8 @@ export const SB_MAX_PLAYERS = 4;     // lobby cap
 export const SB_MIN_PLAYERS = 2;     // min to start
 
 // --- Tron (light cycles) ---
-export const TRN_COLS = 128;         // arena grid width in cells
-export const TRN_ROWS = 72;          // arena grid height in cells
+export const TRN_COLS = 192;         // arena grid width in cells
+export const TRN_ROWS = 108;         // arena grid height in cells
 export const TRN_MAX_PLAYERS = 4;    // lobby cap (humans; bots fill the rest)
 export const TRN_MIN_PLAYERS = 1;    // solo start allowed (vs bots, no payout)
 export const TRN_ROUNDS_TO_WIN = 3;  // first to this many round wins takes the match
