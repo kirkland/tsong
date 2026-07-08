@@ -75,6 +75,8 @@ export interface WorldNet {
   toggleMute(): void;            // flip the mute toggle (same pref/state as the toolbar's 🔊 button)
   leaderboard(): { name: string; wins: number; losses: number; elo: number }[]; // live pong standings (pre-ranked)
   netWorth(): { name: string; net: number; coins: number; loan: number }[];     // live net-worth board (pre-ranked)
+  eloProfileReq(rank: number): void;    // drill into a leaderboard row (index into leaderboard()) → opens the real Elo profile modal
+  balanceSheetReq(rank: number): void;  // drill into a net-worth row (index into netWorth()) → opens the real balance-sheet modal
   claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
   dungeonSync(): void;             // entering the Ruins → ask which chests we've opened
   dungeonChest(chest: string, captured?: boolean): void; // open a chest ('B1:col,row') → server pays coins / grants prize (once). captured=true → a monster box caught (grant the pet)
@@ -2790,19 +2792,113 @@ export function startWorld(net: WorldNet): void {
 
   // Hall of Fame — a read-only trophy-case dialog showing the live pong leaderboard and
   // net-worth board, so both stay checkable without ever leaving the World.
+  // Hall of Fame — a read-only trophy-case dialog styled after the real Leaderboard/Net Worth
+  // boards (rank chip, name, right-aligned stat, self-row highlight, crown + debt on Net Worth).
+  // Rows are clickable, same as the real boards: clicking one exits World and fires the same
+  // balanceSheetReq/eloProfileReq the toolbar boards send, so the real drill-down modal opens
+  // with real server data — no separate profile UI to maintain inside World.
   function enterHallOfFame() {
-    const lb = net.leaderboard().slice(0, 6);
-    const nw = net.netWorth().slice(0, 6);
-    const fmt = (n: number) => Math.round(n).toLocaleString();
-    const lines: string[] = [];
-    lines.push('🏓 PONG LEADERBOARD');
-    if (lb.length) lb.forEach((r, i) => lines.push(`${i + 1}. ${r.name} — ${r.wins}-${r.losses}, ${Math.round(r.elo)} ELO`));
-    else lines.push('(no ranked matches yet)');
-    lines.push('');
-    lines.push('🪙 NET WORTH');
-    if (nw.length) nw.forEach((r, i) => lines.push(`${i + 1}. ${r.name} — ${fmt(r.net)}🪙${r.loan > 0 ? ` (owes ${fmt(r.loan)})` : ''}`));
-    else lines.push('(nobody\'s banked a coin yet)');
-    openDialog('🏆 Hall of Fame', lines.join('\n'), []);
+    if (dialogOpen || talkOpen) return;
+    dialogOpen = true;
+    keys.clear(); joyActive = false;
+    dialogBox.replaceChildren();
+
+    const h = document.createElement('div');
+    h.textContent = '🏆 Hall of Fame';
+    h.style.cssText = 'font-size:22px;color:#e8eefc;margin-bottom:14px;text-align:center;';
+    dialogBox.appendChild(h);
+
+    const myName = net.name();
+    const rowStyle = (bg: string, dashed: boolean) =>
+      'display:flex;align-items:baseline;gap:8px;padding:5px 8px;border-radius:6px;cursor:pointer;text-align:left;' +
+      `background:${bg};` + (dashed ? 'border-top:1px dashed #3a4a6a;' : '');
+
+    // heading, empty-state text, and a list container for one board section
+    const buildSection = (title: string, color: string): HTMLDivElement => {
+      const sec = document.createElement('div');
+      sec.style.cssText = 'margin-bottom:14px;';
+      const st = document.createElement('div');
+      st.textContent = title;
+      st.style.cssText = `font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:${color};margin-bottom:5px;text-align:left;`;
+      const list = document.createElement('div');
+      list.style.cssText = 'display:flex;flex-direction:column;gap:2px;min-width:280px;';
+      sec.append(st, list);
+      dialogBox.appendChild(sec);
+      return list;
+    };
+    const emptyRow = (list: HTMLDivElement, text: string) => {
+      const e = document.createElement('div');
+      e.textContent = text;
+      e.style.cssText = 'color:#6b7796;font-size:12px;padding:4px 8px;text-align:left;';
+      list.appendChild(e);
+    };
+
+    // 🏓 Leaderboard
+    const lbList = buildSection('🏓 Pong Leaderboard', '#7da2ff');
+    const lb = net.leaderboard().slice(0, 8);
+    if (!lb.length) emptyRow(lbList, 'No ranked matches yet.');
+    lb.forEach((r, i) => {
+      const self = r.name === myName;
+      const bg = self ? '#0a1020' : i % 2 ? '#18203a' : 'transparent';
+      const row = document.createElement('div');
+      row.style.cssText = rowStyle(bg, self);
+      row.onmouseenter = () => { row.style.background = '#233158'; };
+      row.onmouseleave = () => { row.style.background = bg; };
+      const rank = document.createElement('span');
+      rank.textContent = `${i + 1}`;
+      rank.style.cssText = 'color:#6b7796;width:18px;flex-shrink:0;font-size:13px;';
+      const name = document.createElement('span');
+      name.textContent = r.name;
+      name.style.cssText = `flex:1;font-size:13px;color:${self ? '#b8c8e8' : '#cdd7f5'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
+      const val = document.createElement('span');
+      val.textContent = `${r.wins}-${r.losses} · ${Math.round(r.elo)}`;
+      val.style.cssText = `font-size:12px;color:${self ? '#ffd23f' : '#7da2ff'};font-variant-numeric:tabular-nums;flex-shrink:0;`;
+      row.append(rank, name, val);
+      row.onclick = () => { selectBlip(); exit(); net.eloProfileReq(i); };
+      lbList.appendChild(row);
+    });
+
+    // 🪙 Net Worth
+    const nwList = buildSection('🪙 Net Worth', '#ffd23f');
+    const nw = net.netWorth().slice(0, 8);
+    if (!nw.length) emptyRow(nwList, "Nobody's banked a coin yet.");
+    nw.forEach((r, i) => {
+      const self = r.name === myName;
+      const broke = r.net < 0;
+      const bg = self ? '#0a1020' : i % 2 ? '#18203a' : 'transparent';
+      const row = document.createElement('div');
+      row.style.cssText = rowStyle(bg, self);
+      row.onmouseenter = () => { row.style.background = '#233158'; };
+      row.onmouseleave = () => { row.style.background = bg; };
+      const rank = document.createElement('span');
+      rank.textContent = `${i + 1}`;
+      rank.style.cssText = 'color:#6b7796;width:18px;flex-shrink:0;font-size:13px;';
+      const name = document.createElement('span');
+      name.textContent = `${i === 0 ? '👑 ' : ''}${r.name}`;
+      name.style.cssText = `flex:1;font-size:13px;color:${self ? '#b8c8e8' : '#cdd7f5'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
+      const val = document.createElement('span');
+      val.textContent = `${Math.round(r.net).toLocaleString()}🪙`;
+      val.style.cssText = `font-size:12px;color:${broke ? '#f87171' : '#ffd23f'};font-variant-numeric:tabular-nums;flex-shrink:0;`;
+      row.append(rank, name, val);
+      if (r.loan > 0) {
+        const debt = document.createElement('span');
+        debt.textContent = `🔻${Math.round(r.loan).toLocaleString()}`;
+        debt.style.cssText = 'font-size:10px;color:#f87171;opacity:0.85;flex-shrink:0;';
+        row.appendChild(debt);
+      }
+      row.onclick = () => { selectBlip(); exit(); net.balanceSheetReq(i); };
+      nwList.appendChild(row);
+    });
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText =
+      'display:block;width:100%;margin-top:4px;cursor:pointer;background:transparent;color:#7c8ab5;' +
+      'border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+    dialog.style.display = 'flex';
   }
 
   // --- Robville lots: each lot's tint + hovering sign reflect its ownership/market state. ---
