@@ -56,8 +56,8 @@ const STEP_UP = 17;          // max ledge a fighter can walk up
 const JUMP_VY = -350;        // W to jump (clears ~95px — craters are no longer prisons)
 const FALL_SAFE = 220;       // free-fall px before damage starts
 const WATER_BASE = WA_H - 26;   // starting waterline (rises in sudden death)
-const SUDDEN_DEATH_TURN = 14;   // after this many turns the water starts climbing
-const WATER_RISE = 34;          // px per turn once sudden death begins
+const SUDDEN_DEATH_ROUNDS = 9;  // full rounds EACH before the water starts climbing
+const WATER_RISE = 26;          // px per turn once sudden death begins
 const SUBDT = 1 / 120;       // fixed physics timestep — KEEP IDENTICAL EVERYWHERE (determinism)
 interface Weapon {
   name: string; icon: string; wind: boolean; bounce: boolean; fuseMs: number;
@@ -897,7 +897,7 @@ export function startArtillery(net: ArtilleryNet): void {
     turnCount++;
     // sudden death: the water climbs every turn past the threshold (deterministic — every
     // client counts the same 'turn' messages, so every client computes the same waterline)
-    const over = turnCount - SUDDEN_DEATH_TURN;
+    const over = turnCount - SUDDEN_DEATH_ROUNDS * Math.max(2, fighters.length);
     const newWater = WATER_BASE - Math.max(0, over) * WATER_RISE;
     if (newWater !== waterY) {
       waterY = newWater;
@@ -1635,7 +1635,7 @@ export function startArtillery(net: ArtilleryNet): void {
     flashes = flashes.filter((flh) => flh.life < 0.32);
 
     // water on top (things sink INTO it) — reddens as sudden death squeezes the map
-    const sudden = turnCount > SUDDEN_DEATH_TURN;
+    const sudden = turnCount > SUDDEN_DEATH_ROUNDS * Math.max(2, fighters.length);
     ctx.fillStyle = sudden ? '#4a2038dd' : '#1a3a5add';
     ctx.beginPath();
     ctx.moveTo(0, WA_H);
