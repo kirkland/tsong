@@ -542,18 +542,20 @@ const CASINO_ZOOM = 1.7;
 // Every casino game gets its own walk-up cabinet on the gaming floor. `feature` is the same key
 // net.openFeature() already understands (these games already work via the exterior building's
 // dialog list) — walking up to a cabinet and playing just skips that list and goes straight in.
+// Colors are grouped by game type (table games share burgundy, machine games share gold, …)
+// rather than assigned near-randomly — a cohesive few-hue palette instead of 9 clashing ones.
 const CASINO_GAMES: readonly { feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'lootbox' | 'blackmarket'; emoji: string; label: string; color: number }[] = [
-  { feature: 'slots', emoji: '🎰', label: 'Slots', color: 0xe8b84b },
-  { feature: 'roulette', emoji: '🎡', label: 'Roulette', color: 0xa8323a },
-  { feature: 'blackjack', emoji: '🃏', label: 'Blackjack', color: 0x1f6b46 },
-  { feature: 'craps', emoji: '🎲', label: 'Craps', color: 0x1f6b46 },
-  { feature: 'crash', emoji: '🚀', label: 'Crash', color: 0x3a4ea8 },
-  { feature: 'plinko', emoji: '🎯', label: 'Plinko', color: 0x7a4fa8 },
-  { feature: 'horse', emoji: '🏇', label: 'Horse Racing', color: 0x5a3d2a },
-  { feature: 'hilo', emoji: '🔺', label: 'Hi-Lo', color: 0x1f6b46 },
-  { feature: 'mines', emoji: '💣', label: 'Mines', color: 0x3a2a2a },
-  { feature: 'lootbox', emoji: '🎁', label: 'Loot Box', color: 0xff3ea5 },
-  { feature: 'blackmarket', emoji: '🛒', label: 'Black Market', color: 0x555a66 },
+  { feature: 'slots', emoji: '🎰', label: 'Slots', color: 0xe8b84b },       // machines: gold
+  { feature: 'roulette', emoji: '🎡', label: 'Roulette', color: 0xa8323a }, // table games: burgundy
+  { feature: 'blackjack', emoji: '🃏', label: 'Blackjack', color: 0xa8323a },
+  { feature: 'craps', emoji: '🎲', label: 'Craps', color: 0xa8323a },
+  { feature: 'crash', emoji: '🚀', label: 'Crash', color: 0xe8b84b },
+  { feature: 'plinko', emoji: '🎯', label: 'Plinko', color: 0xe8b84b },
+  { feature: 'horse', emoji: '🏇', label: 'Horse Racing', color: 0x5a3d2a }, // sportsbook: its own earthy tone
+  { feature: 'hilo', emoji: '🔺', label: 'Hi-Lo', color: 0xa8323a },
+  { feature: 'mines', emoji: '💣', label: 'Mines', color: 0xe8b84b },
+  { feature: 'lootbox', emoji: '🎁', label: 'Loot Box', color: 0xff3ea5 },      // prize counter: pink
+  { feature: 'blackmarket', emoji: '🛒', label: 'Black Market', color: 0x7a4fa8 }, // prize counter: violet
 ] as const;
 
 // --- The Ruins dungeon: off-map tile floors (same trick as the Tavern interior). Tile legend —
@@ -2188,6 +2190,16 @@ export function startWorld(net: WorldNet): void {
   const title = document.createElement('div');
   title.innerHTML = '🌍 <b>TSONG WORLD</b>';
   title.style.cssText = 'color:#e8eefc;font-size:18px;letter-spacing:.5px;text-shadow:0 2px 6px #000a;';
+  // Persistent coin balance — previously only visible inside a dialog (Shop/Bank/Casino), so
+  // players had no way to check their coins while just walking around. Kept in sync by
+  // updateCoinsHud(), called once here and again from Controller.feedWallet() (the same push
+  // every server wallet update already goes through — see main.ts's refreshWallet()).
+  const coinsHud = document.createElement('div');
+  coinsHud.style.cssText =
+    'pointer-events:none;background:#1b2542;color:#ffd23f;border:1px solid #2c3a63;' +
+    'border-radius:8px;padding:6px 11px;font-size:13px;font-weight:700;text-shadow:0 1px 3px #000a;';
+  function updateCoinsHud() { coinsHud.textContent = `🪙 ${Math.round(net.wallet().coins).toLocaleString()}`; }
+  updateCoinsHud();
   const count = document.createElement('div');
   count.style.cssText = 'color:#8aa0d8;font-size:13px;margin-left:auto;pointer-events:none;text-shadow:0 1px 4px #000a;';
   const muteBtn = document.createElement('button');
@@ -2217,7 +2229,7 @@ export function startWorld(net: WorldNet): void {
   backBtn.style.cssText =
     'pointer-events:auto;cursor:pointer;background:#1b2542;color:#cdd8f5;' +
     'border:1px solid #2c3a63;border-radius:8px;padding:7px 12px;font-size:13px;';
-  topbar.append(title, count, muteBtn, renameBtn, driveBtn, backBtn);
+  topbar.append(title, coinsHud, count, muteBtn, renameBtn, driveBtn, backBtn);
   overlay.appendChild(topbar);
 
   // Weekly objectives panel (top-left, under the title).
@@ -8339,6 +8351,10 @@ export function startWorld(net: WorldNet): void {
     // proposal-text-input handling, not paused (World stays visible dimmed behind it).
     const nomOverlay = document.querySelector<HTMLElement>('.nom-overlay');
     if (nomOverlay && nomOverlay.style.display !== 'none') return;
+    // Let every browser/OS chord through untouched (Cmd/Ctrl+R to reload, Cmd+F to find, etc.) —
+    // none of World's single-key shortcuts (m, f, b, r, wasd, …) are meant to fire while a
+    // modifier is held, and preventDefault()-ing them was silently swallowing e.g. a refresh.
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
     unlockAudio();
     const k = e.key.toLowerCase();
     // While a chat/say input is open it owns the keyboard — let every keystroke (incl. Esc/Enter,
@@ -10500,12 +10516,17 @@ export function startWorld(net: WorldNet): void {
       color: '#ffd23f', stroke: '#1a0a14', strokeThickness: 5, resolution: 2,
     }).setOrigin(0.5, 0.5).setDepth(iy - 700);
 
-    // one cabinet per game, laid out in a 4-column grid across the floor
+    // one cabinet per game, laid out in a 4-column grid across the floor. Each row is centered
+    // on its OWN item count (not just the fixed 4-column grid) so a short last row (11 games
+    // doesn't divide evenly by 4) sits centered under the room instead of left-justified with a
+    // dead gap on the right.
     casinoStations = [];
     const cols = 4, marginX = 190, marginY = 260, stepX = (iw - marginX * 2) / (cols - 1), stepY = 200;
     CASINO_GAMES.forEach((g, i) => {
-      const col = i % cols, row = Math.floor(i / cols);
-      const x = ix + marginX + col * stepX, y = iy + marginY + row * stepY;
+      const row = Math.floor(i / cols), rowStart = row * cols;
+      const rowCount = Math.min(cols, CASINO_GAMES.length - rowStart), col = i - rowStart;
+      const rowStartX = ix + iw / 2 - ((rowCount - 1) * stepX) / 2;
+      const x = rowStartX + col * stepX, y = iy + marginY + row * stepY;
       casinoStations.push({ feature: g.feature, label: g.label, x, y });
       const glow = sc.add.ellipse(x, y + 6, 90, 30, g.color, 0.22).setDepth(y - 4); // glow puddle
       sc.add.rectangle(x - 46, y - 78, 92, 90, g.color).setOrigin(0, 0).setDepth(y)
@@ -10522,6 +10543,20 @@ export function startWorld(net: WorldNet): void {
       sc.tweens.add({ targets: glow, alpha: 0.34, scaleX: 1.12, scaleY: 1.12, duration: 1500, delay: phase, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
       sc.tweens.add({ targets: icon, y: y - 51, duration: 1100, delay: phase, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
     });
+
+    // Decorative pillars flanking the cabinet grid — the side strips between the wall and the
+    // grid's cabinets were bare carpet, making the room feel like an empty wall of signs. Gold
+    // capital/base + magenta glow echoes the wall's own neon-top/gold-baseboard trim above.
+    const pillar = (px: number, py: number) => {
+      sc.add.ellipse(px, py + 4, 50, 18, 0xff3ea5, 0.14).setDepth(py - 6); // soft glow puddle at the base
+      sc.add.rectangle(px - 12, py - 140, 24, 140, 0x1a0e30).setOrigin(0, 0).setDepth(py)
+        .setStrokeStyle(2, 0xe8b84b, 0.45);                                             // column shaft
+      sc.add.rectangle(px - 18, py - 150, 36, 12, 0xe8b84b, 0.9).setOrigin(0, 0).setDepth(py + 1); // gold capital
+      sc.add.rectangle(px - 18, py - 4, 36, 10, 0xe8b84b, 0.9).setOrigin(0, 0).setDepth(py - 5);   // gold base
+    };
+    for (const px of [ix + 70, ix + iw - 70]) {
+      for (const py of [iy + marginY, iy + marginY + stepY * 2]) pillar(px, py);
+    }
 
     // exit mat by the door (bottom-center, where the generic exit detector looks)
     sc.add.rectangle(cx - 70, iy + ih - T - 70, 140, 60, 0xe8b84b, 0.35).setOrigin(0, 0).setDepth(iy - 870);
@@ -12314,7 +12349,7 @@ export function startWorld(net: WorldNet): void {
     },
     feedEloProfile(msg) { renderEloProfile(msg); },
     feedBalanceSheet(msg) { renderBalanceSheet(msg); },
-    feedWallet() { if (shopDialogOpen) renderShopDialog(); },
+    feedWallet() { updateCoinsHud(); if (shopDialogOpen) renderShopDialog(); },
     feedNews() { if (newsDialogOpen) { const list = dialogBox.querySelector<HTMLDivElement>('#newsWorldList'); if (list) renderNewsWorldList(list); } },
     feedLoan() {
       if (!loanDialogOpen) return;
