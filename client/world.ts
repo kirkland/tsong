@@ -8406,8 +8406,14 @@ export function startWorld(net: WorldNet): void {
     if (inDungeon && k === 'p') { e.preventDefault(); usePotion(); return; } // drink a potion (+10 HP)
     if (inDungeon && k === 'l') { e.preventDefault(); toggleLoot(); return; } // 🎒 toggle the run-loot panel
     if (k === 'escape') {
+      // Escape dismisses whatever's layered on top of World — it never leaves World itself. This is
+      // the meeting place, not a minigame you back out of; the topbar's "← Back to Pong" is the
+      // deliberate way out. With nothing to dismiss, let the key through untouched.
+      if (fullMapOpen) toggleFullMap();
+      else if (talkOpen) npcClose?.();
+      else if (dialogOpen) { if (!creatingCharacter) closeDialog(); } // the creator refuses to be dismissed
+      else return;
       e.preventDefault(); e.stopPropagation();
-      if (fullMapOpen) toggleFullMap(); else if (talkOpen) npcClose?.(); else if (dialogOpen) { if (!creatingCharacter) closeDialog(); } else exit();
       return;
     }
     if (k === 'm') { e.preventDefault(); e.stopPropagation(); toggleFullMap(); return; } // M → full map
