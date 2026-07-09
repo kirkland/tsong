@@ -771,8 +771,16 @@ export function startArtillery(net: ArtilleryNet): void {
     else if (!anyHit) say(pick(QUIPS.miss));
   }
 
-  function resolveShot(pi: number, w: number, sx: number, sy: number, ang: number, pow: number, tx?: number, ty?: number, last = true) {
+  function resolveShot(pi: number, w: number, sx: number, sy: number, ang: number, pow: number, tx?: number, ty?: number, last = true, snap?: [number, number][]) {
     resolving = true;
+    // position snapshot from the shooter's client: every client simulates this shot against
+    // the exact same fighter positions, so contact-detonations carve the SAME crater
+    // everywhere (this was the terrain-desync bug — remote positions lag ~80ms)
+    if (snap) {
+      fighters.forEach((f, i) => {
+        if (f.alive && snap[i]) { f.x = snap[i][0]; f.y = snap[i][1]; f.fallFrom = f.y; }
+      });
+    }
     // shotgun pellet 1 is NOT the final shot — the clock keeps running so an abandoned
     // second pellet can't hang the turn
     if (pi === turnPi && last) turnShotTaken = true;
@@ -1308,7 +1316,7 @@ export function startArtillery(net: ArtilleryNet): void {
     } else if (d.t === 'shot') {
       if (d.pi !== myIdx()) {
         if (isHost && fighters[d.pi] && (d.last ?? true)) turnRetreatUntil = performance.now() + RETREAT_MS;
-        resolveShot(d.pi, d.w, d.x, d.y, d.ang, d.pow, d.tx, d.ty, d.last ?? true);
+        resolveShot(d.pi, d.w, d.x, d.y, d.ang, d.pow, d.tx, d.ty, d.last ?? true, d.snap);
       }
     } else if (d.t === 'crate') {
       if (d.pi !== myIdx()) applyCrate(d.pi, d.i);
@@ -1321,7 +1329,11 @@ export function startArtillery(net: ArtilleryNet): void {
         const f = fighters[i];
         if (!f) return;
         f.hp = hp; f.alive = d.alive[i] === 1;
-        f.x = d.px[i]; f.y = d.py[i]; f.fallFrom = f.y;
+        // don't teleport OUR OWN fighter back mid-retreat — we're authoritative for our
+        // position while scrambling; everyone else's spots come from the host
+        if (!(i === myIdx() && turnPi === myIdx() && performance.now() < retreatUntil)) {
+          f.x = d.px[i]; f.y = d.py[i]; f.fallFrom = f.y;
+        }
       });
     } else if (d.t === 'end') {
       matchWinner = d.winner;
@@ -1352,7 +1364,11 @@ export function startArtillery(net: ArtilleryNet): void {
     const isShotgun = weapon === 2;
     if (isShotgun) pelletsUsed++;
     const last = !isShotgun || pelletsUsed >= 2;
-    const shot = { t: 'shot', pi: myIdx(), w: weapon, x: Math.round(me.x), y: Math.round(me.y), ang: aimAngle, pow: Math.min(1, charge), tx: Math.round(mouseX), ty: Math.round(mouseY), last };
+    const shot = {
+      t: 'shot', pi: myIdx(), w: weapon, x: Math.round(me.x), y: Math.round(me.y),
+      ang: aimAngle, pow: Math.min(1, charge), tx: Math.round(mouseX), ty: Math.round(mouseY), last,
+      snap: fighters.map((f) => [Math.round(f.x), Math.round(f.y)]),
+    };
     charge = -1;
     if (last) {
       hasFired = true;
@@ -1361,7 +1377,7 @@ export function startArtillery(net: ArtilleryNet): void {
     }
     if (weapon === 3) say('Run. RUN.');
     net.relay(shot);
-    resolveShot(shot.pi, shot.w, me.x, me.y, shot.ang, shot.pow, shot.tx, shot.ty, last);
+    resolveShot(shot.pi, shot.w, me.x, me.y, shot.ang, shot.pow, shot.tx, shot.ty, last, shot.snap as [number, number][]);
   }
 
   function onKeyDown(e: KeyboardEvent) {
