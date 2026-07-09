@@ -66,6 +66,8 @@ export interface WorldNet {
   move(x: number, y: number, a?: number, car?: string | null, pet?: string | null): void; // stream our state
   name(): string;                // our nickname (for our own label)
   color(): string;               // our avatar color
+  needsCharacter(): boolean;      // true until a first-time visitor has confirmed a real name/color
+  setCharacter(name: string, color: string): void; // confirm identity from World's own character creator
   selfId(): string;              // our connection id (to skip our own avatar in the broadcast)
   car(): string | null;          // our equipped car id (null = none → can't drive)
   boat(): string | null;         // our equipped boat id (null = none → can't board a boat)
@@ -1853,6 +1855,7 @@ export function startWorld(net: WorldNet): void {
   let joyOX = 0, joyOY = 0; // joystick origin (screen px)
   let joyCX = 0, joyCY = 0; // joystick current (screen px)
   let dialogOpen = false;   // movement pauses while a building dialog is up
+  let creatingCharacter = false; // the first-time character creator is up — Escape must not dismiss it
   let nearId: string | null = null; // building the avatar is currently at the door of
   // True while a Casino/Bank/Shop/arcade feature has been delegated to the main page (or a
   // lazy-loaded minigame overlay) — World stays alive underneath (paused, hidden) instead of
@@ -2767,7 +2770,11 @@ export function startWorld(net: WorldNet): void {
   }
   function enterBuilding(kind: WorldBuildingKind) {
     enterChime();
-    if (kind === 'arena') { exit(); net.enterArena(); return; }
+    // Pause (not exit) — same idiom as every other delegated feature. main.ts's state handler
+    // watches for this player's match to hit 'over' and resumes World the instant it does; the
+    // worldBtn click handler is also wired to resume a paused World as a manual fallback (e.g.
+    // if you leave the queue before ever getting seated).
+    if (kind === 'arena') { pause(); net.enterArena(); return; }
     if (kind === 'casino') { enterCasino(); return; }
     if (kind === 'bank') {
       openDialog('🏦 Bank', 'How can we help you today?', [
@@ -4238,6 +4245,83 @@ export function startWorld(net: WorldNet): void {
     dialog.style.display = 'none';
   }
 
+  // First-time character creator — the ONE thing every brand-new visitor sees, and it's rendered
+  // as a dialog inside World's own overlay (same dialog/dialogBox nodes as every building prompt)
+  // instead of the old flat #joinForm page. World is already running behind it: you've spawned,
+  // the town is visible, you're just not nameable yet. No Cancel button — see `creatingCharacter`
+  // in the Escape handler above, which refuses to dismiss this one.
+  const CREATOR_COLORS = ['#e8eefc', '#ff6b6b', '#51cf66', '#339af0', '#fcc419', '#cc5de8', '#ff922b', '#20c997'];
+  function openCharacterCreator() {
+    dialogOpen = true;
+    creatingCharacter = true;
+    keys.clear(); joyActive = false;
+    dialogBox.replaceChildren();
+    const h = document.createElement('div');
+    h.textContent = '👋 Welcome to TSONG';
+    h.style.cssText = 'font-size:22px;color:#e8eefc;margin-bottom:6px;';
+    const s = document.createElement('div');
+    s.textContent = "Pick a name and a color, then head out into town.";
+    s.style.cssText = 'font-size:13px;color:#8aa0d8;margin-bottom:16px;';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.maxLength = 20;
+    input.placeholder = 'enter a nickname';
+    input.value = net.name().startsWith('Guest') ? '' : net.name();
+    input.style.cssText =
+      'display:block;width:100%;box-sizing:border-box;margin-bottom:14px;padding:10px 12px;font-size:15px;' +
+      'background:#0c1330;color:#e8eefc;border:1px solid #38508f;border-radius:8px;text-align:center;';
+    const swatchRow = document.createElement('div');
+    swatchRow.style.cssText = 'display:flex;justify-content:center;gap:8px;flex-wrap:wrap;margin-bottom:18px;';
+    let picked = net.color();
+    const swatchBtns: HTMLButtonElement[] = [];
+    const paintSwatches = () => {
+      for (const b of swatchBtns) b.style.boxShadow = b.dataset.color === picked ? '0 0 0 3px #fff' : 'none';
+    };
+    for (const c of CREATOR_COLORS) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.dataset.color = c;
+      b.style.cssText = `width:30px;height:30px;border-radius:50%;border:2px solid #0006;cursor:pointer;background:${c};`;
+      b.onclick = () => { picked = c; paintSwatches(); };
+      swatchBtns.push(b);
+      swatchRow.appendChild(b);
+    }
+    const dice = document.createElement('button');
+    dice.type = 'button';
+    dice.textContent = '🎲';
+    dice.title = 'Random color';
+    dice.dataset.color = '';
+    dice.style.cssText = 'width:30px;height:30px;border-radius:50%;border:2px dashed #8aa0d8;cursor:pointer;background:#1c2747;color:#e8eefc;font-size:14px;';
+    dice.onclick = () => {
+      const hue = Math.random() * 360, sat = 60 + Math.random() * 30, lit = 50 + Math.random() * 25;
+      picked = `hsl(${hue}, ${sat}%, ${lit}%)`;
+      dice.dataset.color = picked;
+      dice.style.background = picked;
+      paintSwatches();
+    };
+    swatchBtns.push(dice);
+    swatchRow.appendChild(dice);
+    paintSwatches();
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.textContent = "Let's go →";
+    go.style.cssText =
+      'display:block;width:100%;cursor:pointer;background:#2c4079;color:#e8eefc;' +
+      'border:1px solid #4a68b8;border-radius:10px;padding:13px;font-size:15px;font-weight:700;';
+    const submit = () => {
+      selectBlip();
+      net.setCharacter(input.value, picked);
+      creatingCharacter = false;
+      dialogOpen = false;
+      dialog.style.display = 'none';
+    };
+    go.onclick = submit;
+    input.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); submit(); } };
+    dialogBox.append(h, s, input, swatchRow, go);
+    dialog.style.display = 'flex';
+    setTimeout(() => input.focus(), 0);
+  }
+
   // --- weekly objectives (top-left panel + reward toast) ---
   // `progress` (optional) returns "[done, total]" for objectives that count toward a goal (e.g.
   // winning 10 games) so the panel can show "(7/10)".
@@ -4862,7 +4946,7 @@ export function startWorld(net: WorldNet): void {
     if (inDungeon && k === 'l') { e.preventDefault(); toggleLoot(); return; } // 🎒 toggle the run-loot panel
     if (k === 'escape') {
       e.preventDefault(); e.stopPropagation();
-      if (fullMapOpen) toggleFullMap(); else if (talkOpen) npcClose?.(); else if (dialogOpen) closeDialog(); else exit();
+      if (fullMapOpen) toggleFullMap(); else if (talkOpen) npcClose?.(); else if (dialogOpen) { if (!creatingCharacter) closeDialog(); } else exit();
       return;
     }
     if (k === 'm') { e.preventDefault(); e.stopPropagation(); toggleFullMap(); return; } // M → full map
@@ -6657,33 +6741,72 @@ export function startWorld(net: WorldNet): void {
     const depth = b.y + b.h;
     const g = sc.make.graphics({ x: 0, y: 0 }, false);
     const P = (x: number, y: number, w: number, h: number, c: number, a = 1) => px9(g, x, y, w, h, c, a);
+    const r = (i: number) => Math.abs((Math.sin(i * 12.9898) * 43758.5453) % 1); // deterministic pseudo-random 0..1
     const roofH = Math.round(H * 0.34);
     // concrete bowl
     P(0, roofH - 4, W, H - roofH + 4, 0x9aa1b0);
     P(3, roofH, W - 6, H - roofH - 3, 0xc6ccd8);
     // tiered seating hint (diagonal banding)
-    for (let r = 0; r < 4; r++) P(6, roofH + 4 + r * Math.round((H - roofH) * 0.12), W - 12, 2, 0xb0b7c4);
+    for (let t = 0; t < 4; t++) P(6, roofH + 4 + t * Math.round((H - roofH) * 0.12), W - 12, 2, 0xb0b7c4);
     // big curved blue roof
     P(0, 0, W, roofH, 0x2c3e8f);
     P(0, 0, W, 3, 0x4a5fc0);
     for (let i = 0; i < W; i++) { const dip = Math.round(Math.sin((i / W) * Math.PI) * 6); P(i, roofH - dip, 1, dip + 3, 0x24337a); }
+    // gold marquee band across the roofline (bulbs chase live, on top) — sized to read from across the plaza
+    const bandY = Math.round(roofH * 0.36), bandH = Math.round(roofH * 0.3);
+    P(Math.round(W * 0.08), bandY, Math.round(W * 0.84), bandH, 0xe8b84b);
+    P(Math.round(W * 0.08), bandY, Math.round(W * 0.84), 2, 0xffd87a);
+    P(Math.round(W * 0.08), bandY + bandH - 2, Math.round(W * 0.84), 2, 0x7a5a18);
     // floodlight towers (poles + lamp panels) at the top corners
-    const towerX = [Math.round(W * 0.12), Math.round(W * 0.88)];
+    const towerX = [Math.round(W * 0.1), Math.round(W * 0.9)];
     for (const tx of towerX) { P(tx - 1, 2, 3, roofH, 0x3a4252); P(tx - 5, 0, 11, 5, 0x2b3140); }
     // central arched entrance with a glimpse of the green pitch + net
     const ax = Math.round(W * 0.33), aw = Math.round(W * 0.34), ay = roofH + Math.round(H * 0.12), ah = H - ay - Math.round(H * 0.04);
     P(ax - 3, ay - 3, aw + 6, ah + 6, 0xe8eef6); P(ax, ay, aw, ah, 0x2f8f43);
     P(ax + 1, ay + 1, aw - 2, ah - 2, 0x3fa850); P(Math.round(W / 2), ay, 1, ah, 0xffffff);
+    // a packed crowd baked right into the bowl's tiers — flecks of color between the seating bands
+    for (let i = 0; i < 90; i++) {
+      const cx = 8 + r(i) * (W - 16), cy = roofH + 6 + r(i + 500) * (H - roofH - 12);
+      const shirt = [0xff4d4d, 0xffd23f, 0x3fa8ff, 0x4dd97a, 0xff8ac2, 0xffffff][Math.floor(r(i + 900) * 6)];
+      P(cx, cy, 2, 2, shirt);
+    }
     g.generateTexture('w-arena', W, H);
     g.destroy();
     sc.add.image(b.x, b.y, 'w-arena').setOrigin(0, 0).setScale(TEXEL).setDepth(depth);
 
+    // "TSONG ARENA" marquee text, backlit on the gold band, with a slow glowing pulse
+    sc.add.text(b.x + b.w / 2, b.y + (bandY + bandH / 2) * TEXEL, '🏓 TSONG ARENA', { fontSize: '20px', fontStyle: 'bold', color: '#3a1e00' })
+      .setOrigin(0.5).setDepth(depth + 1);
+    // chasing marquee bulbs along the gold band, same idiom as the Casino
+    const bulbY = b.y + (bandY + bandH - 3) * TEXEL;
+    const nBulbs = Math.max(8, Math.round(b.w / 40));
+    for (let i = 0; i < nBulbs; i++) {
+      const bx = b.x + b.w * 0.08 + (i / (nBulbs - 1)) * (b.w * 0.84);
+      const bulb = sc.add.circle(bx, bulbY, 4, 0xfff2a8).setDepth(depth + 1);
+      sc.tweens.add({ targets: bulb, alpha: 0.2, duration: 380, yoyo: true, repeat: -1, delay: i * 80 });
+    }
     // glowing floodlights that pulse, with a soft halo
     for (const tx of towerX) {
       sc.add.circle(b.x + tx * TEXEL, b.y + 3 * TEXEL, 16, 0xfff0c0, 0.18).setDepth(depth + 1);
       const lamp = sc.add.rectangle(b.x + tx * TEXEL, b.y + 2 * TEXEL, 12, 7, 0xfff6c8).setDepth(depth + 2);
       sc.tweens.add({ targets: lamp, alpha: 0.55, duration: 900, yoyo: true, repeat: -1 });
     }
+    // pennant flags fluttering off each floodlight tower
+    for (const tx of towerX) {
+      const flag = sc.add.triangle(b.x + tx * TEXEL + 6, b.y + 4 * TEXEL, 0, 0, 10, 4, 0, 8, 0xff3b3b).setDepth(depth + 2);
+      sc.tweens.add({ targets: flag, scaleX: 0.6, duration: 500, yoyo: true, repeat: -1, ease: 'Sine.inOut' });
+    }
+    // a hidden little crowd "wave" — every so often a ripple of brighter light sweeps across the
+    // stands, left to right, like the stadium is doing the wave. Easy to miss; that's the point.
+    const waveDots: Phaser.GameObjects.Arc[] = [];
+    for (let i = 0; i < 14; i++) {
+      const wx = b.x + b.w * (0.06 + (i / 13) * 0.88);
+      const wy = b.y + (roofH + (H - roofH) * 0.5) * TEXEL;
+      waveDots.push(sc.add.circle(wx, wy, 3, 0xffffff, 0).setDepth(depth + 1));
+    }
+    waveDots.forEach((d, i) => {
+      sc.tweens.add({ targets: d, alpha: 0.85, duration: 220, yoyo: true, delay: i * 90, repeat: -1, repeatDelay: 22000 });
+    });
   }
 
   // McDonald's: red facade with a YELLOW arch-sign panel containing a bold RED M (maximum contrast).
@@ -8752,4 +8875,7 @@ export function startWorld(net: WorldNet): void {
   };
   syncDriveBtn();
   net.enter();
+  // First-time visitor (no remembered nickname) — spawn straight into World, then ask who
+  // they are from inside it instead of showing the old flat join form first.
+  if (net.needsCharacter()) openCharacterCreator();
 }

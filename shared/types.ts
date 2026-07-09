@@ -412,7 +412,7 @@ export type BotLevel = (typeof BOT_LEVELS)[number];
 export const WORLD: { w: number; h: number; spawnX: number; spawnY: number } = {
   w: 4800, // widened east to make room for Robville, the suburban neighborhood (see WORLD_PARCELS)
   h: 2200,
-  spawnX: 1700, // just in front of the Arena (x1425–1775, y345–595), framing the Ruins (x1850+) to the right
+  spawnX: 1700, // just in front of the Arena (x1295–1775, y255–595), framing the Ruins (x1850+) to the right
   spawnY: 700,
 };
 export const WORLD_AVATAR = {
@@ -488,7 +488,10 @@ export interface WorldBuilding {
 export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
   // Shrunk to ~0.72× their old footprints and re-centred near their old spots (so the auto-tuned
   // roads still meet their doors). Old: arena 480×340, casino/bank 440×320, petshop 420×300.
-  { id: 'arena',  kind: 'arena',  name: 'TSONG ARENA', emoji: '🏓', x: 1425, y: 345,  w: 350, h: 250, color: '#3a4ea8' },
+  // The Arena was grown back to its original 480×340 footprint (the maintainer wants it to read as
+  // the town's main attraction) — right/bottom edges held fixed so the road spur and the Ruins'
+  // 75-unit clearance to the east are untouched; it only grows north and west.
+  { id: 'arena',  kind: 'arena',  name: 'TSONG ARENA', emoji: '🏓', x: 1295, y: 255,  w: 480, h: 340, color: '#3a4ea8' },
   { id: 'casino', kind: 'casino', name: 'CASINO',      emoji: '🎰', x: 500,  y: 1525, w: 320, h: 230, color: '#a8323a' },
   { id: 'bank',   kind: 'bank',   name: 'BANK',        emoji: '🏦', x: 2380, y: 1525, w: 320, h: 230, color: '#2f7d4f' },
   // A tiny dingy shack (not a real store) with a 'PETS' sign — strays mill around outside.

@@ -381,6 +381,11 @@ let myRole: Role = 'observer';
 let myId = ''; // per-connection id from the server; identifies our own paddle in state
 let myName = '';
 let myColor = '#e8eefc';
+// True from a fresh (no remembered-nickname) visit until the player confirms a real name/color
+// through World's own in-World character creator — see startWorld()'s `needsCharacter`/
+// `setCharacter` below. Lets a first-time visitor walk straight into World on a placeholder
+// guest identity instead of seeing the flat join form before World ever loads.
+let needsCharacter = false;
 let state: StateMsg | null = null;
 // Smoothed display positions for paddles — EMA-blended toward the server value each frame.
 // Ball renders directly from the latest server state (no added lag).
@@ -676,6 +681,11 @@ const net = connect(
       prevFatality = fatalityActive;
       // Theme song stops the instant a match leaves 'playing' (match over / back to waiting).
       if (msg.status !== 'playing' && prevStatus === 'playing') stopTheme();
+      // Arena entry pauses World instead of exiting it (see enterBuilding()'s 'arena' branch in
+      // world.ts) — the instant a match this player was seated for ends, snap straight back to
+      // World. resumeWorld() no-ops if World isn't paused, so this is harmless for every other
+      // match-end broadcast (classic non-World play, spectators, other players' matches).
+      if (msg.status === 'over' && prevStatus === 'playing') worldMod?.resumeWorld();
       prevStatus = msg.status;
       // Disco music: plays for the duration of the powerup, stops when the point ends.
       const discoActive = !!msg.disco;
@@ -1110,21 +1120,29 @@ function syncMyPaddleFromServer() {
   }
 }
 
-// --- nickname entry / rename (same form serves both) ---
-joinForm.addEventListener('submit', (e) => {
-  e.preventDefault();
-  const firstJoin = !joined; // reopening this form later (renameBtn) must NOT re-launch World
-  myName = nick.value.trim().slice(0, 20) || 'anon';
+// --- nickname entry / rename (same form serves both; World's in-World character creator
+// calls this too, via startWorld()'s `setCharacter`) ---
+function commitIdentity(name: string, color: string) {
+  const firstJoin = !joined; // reopening this later (renameBtn, or World's creator) must NOT re-launch World
+  myName = name.trim().slice(0, 20) || 'anon';
+  myColor = color;
+  nick.value = myName;
+  selectSwatch(myColor);
   setCookie('tsong_nick', myName);
   setCookie('tsong_color', myColor);
   // repeat join = rename; pid keeps the leaderboard identity stable
   net.send({ type: 'join', nickname: myName, pid: myPid, color: myColor });
   if (pendingMigrate) { pendingMigrate(); pendingMigrate = null; }
+  needsCharacter = false;
   overlay.style.display = 'none';
   enableChat();
   revealAds(); // the fake banner ad only appears once you're in (never over the join screen)
   startFlyovers();
   if (firstJoin) worldBtn.click(); // World is the landing page — walk straight in after joining
+}
+joinForm.addEventListener('submit', (e) => {
+  e.preventDefault();
+  commitIdentity(nick.value, myColor);
 });
 
 // --- ping: notify everyone you want players ---
@@ -2341,7 +2359,10 @@ const worldModPromise: Promise<typeof import('./world')> = import('./world');
 worldBtn.addEventListener('click', async () => {
   try {
     worldMod = await worldModPromise;
-    if (worldMod.isWorldOpen()) return; // already walking around
+    // Already walking around — but if World is merely paused (e.g. queued for the Arena, or
+    // waiting out a Casino panel), bring it back instead of no-op'ing, so the button always
+    // has a way to get you back in.
+    if (worldMod.isWorldOpen()) { worldMod.resumeWorld(); return; }
     worldBtn.setAttribute('aria-pressed', 'true');
     worldMod.startWorld({
       enter: () => net.send({ type: 'worldEnter' }),
@@ -2349,6 +2370,8 @@ worldBtn.addEventListener('click', async () => {
       move: (x, y, a, car, pet) => net.send({ type: 'worldMove', x, y, a, car, pet }),
       name: () => myName,
       color: () => myColor,
+      needsCharacter: () => needsCharacter,
+      setCharacter: (name, color) => commitIdentity(name, color),
       selfId: () => myId,
       car: () => wallet.car, // the car you've equipped in the shop (null = on foot only)
       boat: () => wallet.boat, // the boat you've equipped (null = none) — board it on water with B
@@ -4416,7 +4439,11 @@ document.addEventListener('keydown', (e) => {
 setInterval(() => net.send({ type: 'rtt', t: performance.now() }), 2000);
 
 // --- startup: a remembered nickname skips the prompt (the actual join is sent in
-// the onOpen handler once the socket connects). ---
+// the onOpen handler once the socket connects). A first-time visitor gets no flat prompt at
+// all — they walk straight into World on a placeholder guest identity, and World's own
+// character creator (see startWorld()'s `needsCharacter`/`setCharacter`) asks for a real
+// name/color from inside World itself, so nothing happens outside World anymore, not even
+// the very first click. ---
 const remembered = getCookie('tsong_nick');
 const savedColor = getCookie('tsong_color');
 if (savedColor) {
@@ -4426,14 +4453,16 @@ if (savedColor) {
 if (remembered) {
   myName = remembered;
   nick.value = remembered;
-  overlay.style.display = 'none';
-  enableChat();
-  revealAds(); // returning players skip the join form — still show the banner ad
-  startFlyovers();
-  worldBtn.click(); // World is the landing page — walk straight in
 } else {
-  nick.focus();
+  myName = `Guest${1000 + Math.floor(Math.random() * 9000)}`;
+  myColor = savedColor ?? randomColor();
+  needsCharacter = true;
 }
+overlay.style.display = 'none';
+enableChat();
+revealAds(); // returning players skip the join form — still show the banner ad
+startFlyovers();
+worldBtn.click(); // World is the landing page — walk straight in
 
 // --- loading splash: a hype screen on first paint — lightning bolts, an explosion of
 // pong balls radiating from center, and rotating pro tips. Purely cosmetic; it dismisses
