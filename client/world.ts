@@ -57,7 +57,30 @@ import {
   type ChatLine,
   type EloProfileMsg,
   type BalanceSheetMsg,
+  type Side,
 } from '../shared/types';
+import { drawCosmeticPreview } from './render';
+
+// The subset of the wallet the in-World shop dialog needs (see openShop()) — mirrors WalletMsg
+// minus the `type` discriminant and the loot-box `exclusives` list (not shown in the Shop tabs).
+export interface WorldWallet {
+  coins: number;
+  owned: string[];
+  hat: string | null; skin: string | null; trail: string | null; title: string | null;
+  song: string | null; car: string | null; boat: string | null; pet: string | null;
+  balltrail: string | null; goalcelebr: string | null;
+  bets: { side: Side; amount: number; odds: number }[];
+  nextSpinAt: number;
+  bonusSpins: number;
+}
+// Live-betting section state for World's shop dialog (mirrors main.ts's syncBetSection() inputs).
+export interface WorldBetInfo {
+  leftName: string; rightName: string;
+  oddsLeft: number | null; oddsRight: number | null;
+  amount: number; min: number; max: number;
+  affordable: boolean;
+  mine: { side: Side; amount: number; odds: number }[];
+}
 
 // What the world needs from the rest of the app. main.ts supplies these (see startWorld call).
 export interface WorldNet {
@@ -72,9 +95,20 @@ export interface WorldNet {
   car(): string | null;          // our equipped car id (null = none → can't drive)
   boat(): string | null;         // our equipped boat id (null = none → can't board a boat)
   pet(): string | null;          // our equipped pet id (null = none → nothing trails us)
+  // Shop — rendered natively inside World's own dialog (see openShop()) rather than delegated out
+  // to the flat panel, so browsing/buying/equipping/spinning/betting never leaves World's view.
+  wallet(): WorldWallet;
+  shopBuy(item: string): void;
+  shopEquip(slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' | 'title' | 'song' | 'car' | 'boat' | 'pet', item: string | null): void;
+  spinStatus(): { ready: boolean; label: string };
+  dailySpin(): void;
+  betInfo(): WorldBetInfo | null;
+  adjustBetAmount(delta: number): void;
+  setBetAmount(raw: number): void;
+  placeBet(side: Side): void;
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'stocks' | 'loans' | 'petshop' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' |'lootbox' | 'blackmarket' | 'news' | 'house' | 'shop' | 'tourney' | 'season' | 'powerups' | 'changelog'): void; // open a Casino/Bank/Pet-Shop/DOOM/Fishing/Arcade/Bowling/Shop/Notice-Board feature
+  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'stocks' | 'loans' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' |'lootbox' | 'blackmarket' | 'news' | 'house' | 'tourney' | 'season' | 'powerups' | 'changelog'): void; // open a Casino/Bank/DOOM/Fishing/Arcade/Bowling/Notice-Board feature (Shop/Pet-Shop are native World dialogs now — see openShop())
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   openRename(): void;            // World's own 👤 button → reopen the nickname/color picker
   muted(): boolean;              // is game sound currently muted?
@@ -138,6 +172,7 @@ interface Controller {
   dungeonPurse(coins: number): void;                              // current run-purse total from the server
   feedEloProfile(msg: EloProfileMsg): void;         // server's answer to an eloProfileReq fired from the Hall of Fame
   feedBalanceSheet(msg: BalanceSheetMsg): void;     // server's answer to a balanceSheetReq fired from the Hall of Fame
+  feedWallet(): void;                                // the wallet changed (buy/equip/spin settled) — re-render the shop dialog if it's open
 }
 let controller: Controller | null = null;
 let _exitWorld: (() => void) | null = null;
@@ -170,6 +205,11 @@ export function feedWorld(avatars: WorldAvatar[]): void {
 /** The server's list of dungeon chests this player has already opened (reply to dungeonSync). */
 export function feedDungeonChests(opened: string[]): void {
   controller?.dungeonChests(opened);
+}
+
+/** The wallet changed (buy/equip/daily-spin settled) — re-render the shop dialog if it's open. */
+export function feedWallet(): void {
+  controller?.feedWallet();
 }
 
 /** The server accepted a chest open (added the coins to the run purse / granted the potion). */
@@ -1783,6 +1823,7 @@ export function startWorld(net: WorldNet): void {
   let joyCX = 0, joyCY = 0; // joystick current (screen px)
   let dialogOpen = false;   // movement pauses while a building dialog is up
   let creatingCharacter = false; // the first-time character creator is up — Escape must not dismiss it
+  let shopDialogOpen = false; // the in-World shop dialog specifically is up — gates its per-frame refresh
   let nearId: string | null = null; // building the avatar is currently at the door of
   // True while a Casino/Bank/Shop/arcade feature has been delegated to the main page (or a
   // lazy-loaded minigame overlay) — World stays alive underneath (paused, hidden) instead of
@@ -2712,13 +2753,9 @@ export function startWorld(net: WorldNet): void {
       ]);
       return;
     }
-    if (kind === 'petshop') {
-      // The Pet Shop just opens the Shop panel on the Pets tab — a single choice keeps it tidy.
-      openDialog('🐾 Pet Shop', 'Looking for a little companion?', [
-        { label: '🐾 Browse Pets', onPick: () => { pause(); net.openFeature('petshop'); } },
-      ]);
-      return;
-    }
+    // The Pet Shop is just a walk-in door into the Shop, opened straight to the Pets tab — no
+    // separate confirm dialog, straight into the native shop dialog (see openShop() above).
+    if (kind === 'petshop') { openShop('pet'); return; }
     if (kind === 'doomportal') {
       openDialog('🔥 The Gates of DOOM', 'A hot wind howls up from below…', [
         { label: '🔥 Descend', onPick: () => { pause(); net.openFeature('doom'); } },
@@ -2735,12 +2772,8 @@ export function startWorld(net: WorldNet): void {
     if (kind === 'mcdonald') { enterMcdonald(); return; }
     if (kind === 'temple') { enterTemple(); return; }
     if (kind === 'dungeon') { enterDungeon(); return; }
-    if (kind === 'shop') {
-      openDialog('🛍️ General Store', 'Shelves of paddle skins, titles, and theme songs — plus the day\'s free spin.', [
-        { label: '🛍️ Browse the Shop', onPick: () => { pause(); net.openFeature('shop'); } },
-      ]);
-      return;
-    }
+    // The General Store — same walk-straight-in idiom as the Pet Shop.
+    if (kind === 'shop') { openShop(); return; }
     if (kind === 'hall') { enterHallOfFame(); return; }
     if (kind === 'noticeboard') {
       openDialog('📌 Notice Board', 'Pinned announcements, curling at the edges.', [
@@ -4169,7 +4202,265 @@ export function startWorld(net: WorldNet): void {
   }
   function closeDialog() {
     dialogOpen = false;
+    shopDialogOpen = false;
     dialog.style.display = 'none';
+  }
+
+  // --- Shop — rendered natively inside World's own dialog, containment-goal style, instead of
+  // pausing out to the flat toolbar panel. Walked into from the General Store or the Pet Shop
+  // (see enterBuilding() below). renderShopDialog() does the full rebuild (tabs, item list, bet
+  // section) on open/tab-switch/wallet-change; updateShopDialogLive() (called every frame from
+  // the scene's update() loop while shopDialogOpen) refreshes just the coin total, spin button,
+  // bet odds/status, and animated cosmetic previews, without disturbing the item list or scroll
+  // position — same split main.ts's flat panel already makes between renderShop()/syncBetSection().
+  type ShopTabId = 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'vehicle' | 'pet' | 'balltrail' | 'goalcelebr';
+  const SHOP_TABS: { id: ShopTabId; label: string }[] = [
+    { id: 'hat', label: 'Hats' },
+    { id: 'skin', label: 'Skins' },
+    { id: 'trail', label: 'Trails' },
+    { id: 'title', label: 'Titles' },
+    { id: 'song', label: '🎵 Tsongs' },
+    { id: 'vehicle', label: '🚗 Vehicles' },
+    { id: 'pet', label: '🐾 Pets' },
+    { id: 'balltrail', label: '🔮 Ball Trails' },
+    { id: 'goalcelebr', label: '🎆 Celebrations' },
+  ];
+  const SHOP_LOCK_LABEL: Record<string, { tag: string; how: string }> = {
+    campaign: { tag: '🔒 Campaign', how: 'Clear the campaign to unlock' },
+    fishing: { tag: '🔒 Fishing', how: 'Land a legendary fish to unlock' },
+    fishing_rare: { tag: '🔒 Fishing', how: 'Land a rare-or-better fish to unlock' },
+    fishing_junk: { tag: '🔒 Fishing', how: 'Fish up boat keys from junk to unlock' },
+    dungeon: { tag: '🔒 The Ruins', how: 'Loot the sealed vault in The Ruins to unlock' },
+  };
+  let shopWorldTab: ShopTabId = 'hat';
+  const shopWorldPreviewCanvases: { canvas: HTMLCanvasElement; id: string; slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' }[] = [];
+
+  function openShop(initialTab: ShopTabId = 'hat') {
+    if (dialogOpen || talkOpen) return;
+    dialogOpen = true;
+    shopDialogOpen = true;
+    shopWorldTab = initialTab;
+    keys.clear(); joyActive = false;
+    renderShopDialog();
+    dialog.style.display = 'flex';
+  }
+
+  function renderShopDialog() {
+    dialogBox.replaceChildren();
+    shopWorldPreviewCanvases.length = 0;
+    const w = net.wallet();
+
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px;';
+    const h = document.createElement('div');
+    h.textContent = '🛍️ Shop';
+    h.style.cssText = 'font-size:22px;color:#e8eefc;';
+    const coins = document.createElement('div');
+    coins.id = 'shopWorldCoins';
+    coins.textContent = `${w.coins.toLocaleString()}🪙`;
+    coins.style.cssText = 'font-size:15px;color:#ffd23f;font-weight:700;';
+    header.append(h, coins);
+    dialogBox.appendChild(header);
+
+    const spin = document.createElement('button');
+    spin.type = 'button';
+    spin.id = 'shopWorldSpin';
+    const spinState = net.spinStatus();
+    spin.textContent = spinState.label;
+    spin.disabled = !spinState.ready;
+    spin.style.cssText =
+      'display:block;width:100%;margin-bottom:12px;cursor:pointer;background:#ff5cc8;color:#1a1020;' +
+      'border:none;border-radius:10px;padding:11px;font-size:14px;font-weight:800;';
+    spin.onclick = () => net.dailySpin();
+    dialogBox.appendChild(spin);
+
+    const tabRow = document.createElement('div');
+    tabRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px;justify-content:center;';
+    for (const t of SHOP_TABS) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = t.label;
+      const active = shopWorldTab === t.id;
+      b.style.cssText =
+        'cursor:pointer;padding:6px 10px;border-radius:8px;font-size:12px;font-weight:700;' +
+        `background:${active ? '#3a5aa8' : '#1c2747'};color:${active ? '#fff' : '#9fb0d8'};border:1px solid ${active ? '#5a7ac8' : '#2c3a63'};`;
+      b.onclick = () => { selectBlip(); shopWorldTab = t.id; renderShopDialog(); };
+      tabRow.appendChild(b);
+    }
+    dialogBox.appendChild(tabRow);
+
+    const list = document.createElement('div');
+    list.style.cssText = 'display:flex;flex-direction:column;gap:4px;min-width:300px;text-align:left;';
+    const appendSubhead = (label: string) => {
+      const sh = document.createElement('div');
+      sh.textContent = label;
+      sh.style.cssText = 'font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:#7da2ff;margin:6px 0 2px;';
+      list.appendChild(sh);
+    };
+    const appendRow = (item: (typeof COSMETICS)[number]) => {
+      const owned = w.owned.includes(item.id);
+      const equippedValue =
+        item.slot === 'hat' ? w.hat : item.slot === 'skin' ? w.skin : item.slot === 'trail' ? w.trail
+        : item.slot === 'song' ? w.song : item.slot === 'car' ? w.car : item.slot === 'boat' ? w.boat
+        : item.slot === 'pet' ? w.pet : item.slot === 'balltrail' ? w.balltrail
+        : item.slot === 'goalcelebr' ? w.goalcelebr : w.title;
+      const equipped = equippedValue === item.id;
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:6px;background:#18203a;';
+
+      if (item.slot === 'song') {
+        const play = document.createElement('span');
+        play.textContent = '🎵';
+        play.style.cssText = 'width:26px;text-align:center;font-size:16px;flex-shrink:0;';
+        row.appendChild(play);
+      } else if (item.slot === 'car' || item.slot === 'boat') {
+        const car = carById(item.id);
+        const sw = document.createElement('span');
+        sw.style.cssText = `display:inline-block;width:26px;height:16px;border-radius:4px;flex-shrink:0;background:${car?.body ?? '#888'};border:2px solid ${car?.accent ?? '#222'};`;
+        row.appendChild(sw);
+      } else if (item.slot === 'pet') {
+        const sw = document.createElement('span');
+        sw.style.cssText = 'display:inline-block;width:26px;text-align:center;font-size:18px;flex-shrink:0;';
+        sw.textContent = petById(item.id)?.emoji ?? '🐾';
+        row.appendChild(sw);
+      } else if (item.slot === 'goalcelebr') {
+        const emoji = item.id.includes('confetti') ? '🎊' : item.id.includes('explosion') ? '💥' : item.id.includes('fireworks') ? '🎆' : item.id.includes('matrix') ? '👾' : item.id.includes('hyperspace') ? '🚀' : item.id.includes('supernova') ? '💫' : '✨';
+        const sw = document.createElement('span');
+        sw.style.cssText = 'display:inline-block;width:26px;text-align:center;font-size:18px;flex-shrink:0;';
+        sw.textContent = emoji;
+        row.appendChild(sw);
+      } else if (item.slot !== 'title') {
+        const preview = document.createElement('canvas');
+        preview.width = 26; preview.height = 48;
+        preview.style.cssText = 'flex-shrink:0;';
+        drawCosmeticPreview(preview, item.id, item.slot as 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr');
+        shopWorldPreviewCanvases.push({ canvas: preview, id: item.id, slot: item.slot as 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' });
+        row.appendChild(preview);
+      }
+
+      const name = document.createElement('span');
+      const priceSuffix = owned || item.locked ? '' : ` · ${item.price}🪙`;
+      name.textContent = item.name + priceSuffix;
+      name.style.cssText = 'flex:1;font-size:13px;color:#cdd7f5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+      row.appendChild(name);
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.style.cssText = 'cursor:pointer;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;flex-shrink:0;border:1px solid #38508f;';
+      if (!owned && item.locked) {
+        const lk = SHOP_LOCK_LABEL[item.locked] ?? { tag: '🔒 Locked', how: 'Unlocked by an in-game achievement' };
+        btn.textContent = lk.tag;
+        btn.disabled = true;
+        btn.title = lk.how;
+        btn.style.background = 'transparent'; btn.style.color = '#5a6a8a';
+      } else if (!owned) {
+        btn.textContent = 'Buy';
+        btn.disabled = w.coins < item.price;
+        btn.style.background = '#21305a'; btn.style.color = '#e8eefc';
+        btn.onclick = () => net.shopBuy(item.id);
+      } else {
+        btn.textContent = equipped ? 'Unequip' : 'Equip';
+        btn.style.background = equipped ? '#3a5aa8' : '#21305a'; btn.style.color = '#e8eefc';
+        btn.onclick = () => net.shopEquip(item.slot, equipped ? null : item.id);
+      }
+      row.appendChild(btn);
+      list.appendChild(row);
+    };
+    if (shopWorldTab === 'vehicle') {
+      appendSubhead('🚗 Cars');
+      for (const item of COSMETICS) if (item.slot === 'car') appendRow(item);
+      appendSubhead('🛥️ Boats');
+      for (const item of COSMETICS) if (item.slot === 'boat') appendRow(item);
+    } else {
+      for (const item of COSMETICS) if (item.slot === shopWorldTab) appendRow(item);
+    }
+    dialogBox.appendChild(list);
+
+    const betWrap = document.createElement('div');
+    betWrap.id = 'shopWorldBet';
+    dialogBox.appendChild(betWrap);
+    renderShopBetSection(betWrap);
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText =
+      'display:block;width:100%;margin-top:10px;cursor:pointer;background:transparent;color:#7c8ab5;' +
+      'border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+  }
+
+  // Rebuilds just the bet-section subtree — cheap (a handful of nodes), so it's safe to call every
+  // frame (see updateShopDialogLive()) without disturbing the item list's scroll position.
+  function renderShopBetSection(wrap: HTMLDivElement) {
+    const info = net.betInfo();
+    wrap.replaceChildren();
+    if (!info) { wrap.style.cssText = ''; return; }
+    wrap.style.cssText = 'margin-top:12px;padding-top:10px;border-top:1px solid #2c3a63;';
+    const headEl = document.createElement('div');
+    headEl.textContent = '🎲 Bet on the match · live odds';
+    headEl.style.cssText = 'font-size:11px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;color:#7da2ff;margin-bottom:6px;';
+    wrap.appendChild(headEl);
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:6px;justify-content:center;';
+    const sideBtnStyle = 'cursor:pointer;flex:1;padding:8px;border-radius:8px;border:1px solid #38508f;background:#21305a;color:#e8eefc;font-size:12px;';
+    const leftBtn = document.createElement('button');
+    leftBtn.type = 'button';
+    leftBtn.textContent = `◀ ${info.leftName} ${info.oddsLeft ? info.oddsLeft.toFixed(2) + '×' : '—'}`;
+    leftBtn.disabled = !info.affordable || !info.oddsLeft;
+    leftBtn.style.cssText = sideBtnStyle;
+    leftBtn.onclick = () => net.placeBet('left');
+    const stake = document.createElement('div');
+    stake.style.cssText = 'display:flex;align-items:center;gap:4px;flex-shrink:0;';
+    const stepBtnStyle = 'width:24px;height:24px;cursor:pointer;border-radius:6px;border:1px solid #38508f;background:#1c2747;color:#e8eefc;';
+    const minus = document.createElement('button');
+    minus.type = 'button'; minus.textContent = '−';
+    minus.style.cssText = stepBtnStyle;
+    minus.onclick = () => { net.adjustBetAmount(-1); renderShopBetSection(wrap); };
+    const amt = document.createElement('input');
+    amt.type = 'number'; amt.value = String(info.amount); amt.min = String(info.min); amt.max = String(info.max);
+    amt.style.cssText = 'width:56px;text-align:center;background:#0c1330;color:#e8eefc;border:1px solid #38508f;border-radius:6px;padding:4px;';
+    amt.oninput = () => net.setBetAmount(parseInt(amt.value, 10));
+    amt.onblur = () => renderShopBetSection(wrap);
+    const plus = document.createElement('button');
+    plus.type = 'button'; plus.textContent = '+';
+    plus.style.cssText = stepBtnStyle;
+    plus.onclick = () => { net.adjustBetAmount(1); renderShopBetSection(wrap); };
+    stake.append(minus, amt, plus);
+    const rightBtn = document.createElement('button');
+    rightBtn.type = 'button';
+    rightBtn.textContent = `${info.rightName} ${info.oddsRight ? info.oddsRight.toFixed(2) + '×' : '—'} ▶`;
+    rightBtn.disabled = !info.affordable || !info.oddsRight;
+    rightBtn.style.cssText = sideBtnStyle;
+    rightBtn.onclick = () => net.placeBet('right');
+    row.append(leftBtn, stake, rightBtn);
+    wrap.appendChild(row);
+    const status = document.createElement('div');
+    status.style.cssText = `font-size:11px;margin-top:6px;text-align:center;color:${info.affordable ? '#9fb0d8' : '#f87171'};`;
+    const payout = (amtN: number, o: number) => Math.max(amtN, Math.round(amtN * o));
+    if (!info.affordable) {
+      status.textContent = `💸 Insufficient funds — you have ${info.max.toLocaleString()}🪙.`;
+    } else if (info.mine.length) {
+      status.textContent = `Your bets: ${info.mine.map((b) => `${b.amount}🪙 on ${b.side} @ ${b.odds.toFixed(2)}× → ${payout(b.amount, b.odds)}🪙`).join('  ·  ')}`;
+    } else if (info.oddsLeft && info.oddsRight) {
+      status.textContent = `${info.amount}🪙 wins ${payout(info.amount, info.oddsLeft)}🪙 (left) / ${payout(info.amount, info.oddsRight)}🪙 (right)`;
+    }
+    wrap.appendChild(status);
+  }
+
+  // Called every frame from the scene's update() loop while shopDialogOpen — refreshes the coin
+  // total, spin button, live bet odds/status, and animated cosmetic previews without rebuilding
+  // the (stateful, scroll-positioned) item list. A full rebuild only happens on open/tab-switch/
+  // wallet-change (see feedWallet() below).
+  function updateShopDialogLive() {
+    const coinsEl = dialogBox.querySelector<HTMLDivElement>('#shopWorldCoins');
+    if (coinsEl) coinsEl.textContent = `${net.wallet().coins.toLocaleString()}🪙`;
+    const spinEl = dialogBox.querySelector<HTMLButtonElement>('#shopWorldSpin');
+    if (spinEl) { const s = net.spinStatus(); spinEl.textContent = s.label; spinEl.disabled = !s.ready; }
+    const betWrap = dialogBox.querySelector<HTMLDivElement>('#shopWorldBet');
+    if (betWrap) renderShopBetSection(betWrap);
+    for (const { canvas, id, slot } of shopWorldPreviewCanvases) drawCosmeticPreview(canvas, id, slot);
   }
 
   // First-time character creator — the ONE thing every brand-new visitor sees, and it's rendered
@@ -7902,6 +8193,7 @@ export function startWorld(net: WorldNet): void {
       const now = performance.now();
       const dt = Math.min(delta / 1000, 0.05);
       if (helpFlash && now >= helpFlashUntil) { helpFlash = ''; updateHelp(); }
+      if (shopDialogOpen) updateShopDialogLive();
 
       // --- day/night: derive purely from the wall clock so every client's sky matches ---
       {
@@ -8702,7 +8994,7 @@ export function startWorld(net: WorldNet): void {
     if (paused) return;
     paused = true;
     keys.clear(); joyActive = false; handbrake = false;
-    dialogOpen = false; dialog.style.display = 'none'; // don't resume back into the dialog that sent us here
+    dialogOpen = false; shopDialogOpen = false; dialog.style.display = 'none'; // don't resume back into the dialog that sent us here
     game?.loop.sleep();
     overlay.style.display = 'none';
   }
@@ -8795,6 +9087,7 @@ export function startWorld(net: WorldNet): void {
     },
     feedEloProfile(msg) { renderEloProfile(msg); },
     feedBalanceSheet(msg) { renderBalanceSheet(msg); },
+    feedWallet() { if (shopDialogOpen) renderShopDialog(); },
   };
   syncDriveBtn();
   net.enter();

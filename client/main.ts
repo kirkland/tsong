@@ -2,6 +2,7 @@
 // and the Join button. Input is only sent when this client holds a paddle.
 
 import { connect } from './net';
+import type { WorldBetInfo } from './world'; // type-only: erased at build time, doesn't force-load the lazy World chunk
 import { initRoulette } from './roulette';
 import { initBlackjack } from './blackjack';
 import { initCraps } from './craps';
@@ -1015,6 +1016,7 @@ const net = connect(
 // panels). Held back during a roulette spin so the result isn't revealed before the wheel lands.
 function refreshWallet() {
   renderShop();
+  worldMod?.feedWallet(); // re-render World's in-World shop dialog too, if it's open
   if (!marketPanel.hidden) renderMarket(); // coin balance gates the Invest buttons
   if (!loanPanel.hidden && loan) renderLoan(); // balance gates the Pay button
 }
@@ -2307,8 +2309,6 @@ const WORLD_DELEGATE_CHECK: Record<string, () => boolean> = {
   loans: panelOpenCheck('loanPanel'),
   news: panelOpenCheck('newsPanel'),
   house: panelOpenCheck('housePanel'),
-  shop: panelOpenCheck('shopPanel'),
-  petshop: panelOpenCheck('shopPanel'),
   doom: overlayPresentCheck('doomOverlay'),
   fishing: overlayPresentCheck('fishingOverlay'),
   campaign: overlayPresentCheck('campaignOverlay'),
@@ -2376,6 +2376,17 @@ worldBtn.addEventListener('click', async () => {
       car: () => wallet.car, // the car you've equipped in the shop (null = on foot only)
       boat: () => wallet.boat, // the boat you've equipped (null = none) — board it on water with B
       pet: () => wallet.pet, // the pet you've equipped in the shop — trails behind you (null = none)
+      // In-World shop dialog (see world.ts's openShop()) — reads/writes the same wallet, spin,
+      // and live-bet state as the flat panel so both stay in sync no matter which UI is used.
+      wallet: () => wallet,
+      shopBuy: (item) => { net.send({ type: 'shopBuy', item }); playChaChing(); },
+      shopEquip: (slot, item) => net.send({ type: 'shopEquip', slot, item }),
+      spinStatus: () => spinButtonState(),
+      dailySpin: () => triggerDailySpin(),
+      betInfo: () => betInfoForWorld(),
+      adjustBetAmount: (delta) => worldAdjustBetAmount(delta),
+      setBetAmount: (raw) => worldSetBetAmount(raw),
+      placeBet: (side) => net.send({ type: 'bet', side, amount: betAmount }),
       onExit: () => worldBtn.setAttribute('aria-pressed', 'false'),
       // Walk into the Arena → hop into the play queue (you'll be seated when a spot opens).
       enterArena: () => net.send({ type: 'queueJoin' }),
@@ -2390,15 +2401,6 @@ worldBtn.addEventListener('click', async () => {
         // World only paused (didn't exit) before calling this — watch for whatever panel/minigame
         // this opens to close again, then bring World back automatically.
         watchWorldDelegate(feature);
-        // The Pet Shop is a cosmetic venue, not a gambling/bank feature: open the Shop panel and
-        // jump straight to the Pets tab (deferred like the others to dodge the outside-click race).
-        if (feature === 'petshop') {
-          setTimeout(() => {
-            if (shopPanel.hidden) shopBtn.click(); // open the shop if it isn't already
-            selectShopTab('pet', tabPets);
-          }, 0);
-          return;
-        }
         // The DOOM portal launches DOOM the same way the toolbar's Doom button does (deferred a
         // tick like the others, so the world's teardown click finishes first).
         if (feature === 'doom') {
@@ -2445,7 +2447,6 @@ worldBtn.addEventListener('click', async () => {
                  : feature === 'blackmarket' ? 'marketplaceBtn'
                  : feature === 'news'       ? 'newsBtn'
                  : feature === 'house'      ? 'houseBtn'
-                 : feature === 'shop'       ? 'shopBtn'
                  : feature === 'tourney'    ? 'tourneyBtn'
                  : feature === 'season'     ? 'seasonBtn'
                  : feature === 'powerups'   ? 'powerupInfoBtn'
@@ -2745,13 +2746,17 @@ tabBallTrails.addEventListener('click', () => selectShopTab('balltrail', tabBall
 tabGoalCelebr.addEventListener('click', () => selectShopTab('goalcelebr', tabGoalCelebr));
 const spinBtn = document.getElementById('spinBtn') as HTMLButtonElement;
 let spinning = false; // a spin animation is currently playing
-spinBtn.addEventListener('click', () => {
+// Shared by the flat panel's spin button AND World's in-World shop dialog (see startWorld()'s
+// `dailySpin`/`spinStatus`) — one source of truth so triggering a spin from either place keeps
+// both in sync.
+function triggerDailySpin() {
   const onCooldown = !!wallet.nextSpinAt && wallet.nextSpinAt > Date.now();
   if (spinning || (onCooldown && wallet.bonusSpins <= 0)) return;
   spinning = true;
-  spinBtn.disabled = true;
+  updateSpinButton();
   net.send({ type: 'dailySpin' });
-});
+}
+spinBtn.addEventListener('click', triggerDailySpin);
 const betSection = document.getElementById('betSection') as HTMLDivElement;
 const betAmountEl = document.getElementById('betAmount') as HTMLInputElement;
 const betStatus = document.getElementById('betStatus') as HTMLDivElement;
@@ -2957,24 +2962,58 @@ betAmountEl.addEventListener('blur', () => { betAmountEl.value = String(betAmoun
 betLeftBtn.addEventListener('click', () => net.send({ type: 'bet', side: 'left', amount: betAmount }));
 betRightBtn.addEventListener('click', () => net.send({ type: 'bet', side: 'right', amount: betAmount }));
 
+// Pure view of the live-betting section for World's shop dialog (mirrors syncBetSection() above,
+// minus the flat panel's DOM writes) — same shared `betAmount`/`wallet`/`state`, so adjusting the
+// stake from either UI keeps the other in sync.
+function betInfoForWorld(): WorldBetInfo | null {
+  const canBet = !!state && state.status === 'playing' && !state.poly && myRole === 'observer' && !state.bot;
+  if (!canBet || !state) return null;
+  const min = minBet(wallet.coins);
+  betAmount = Math.max(min, Math.floor(betAmount) || min);
+  return {
+    leftName: state.paddles.left.name ?? 'Left',
+    rightName: state.paddles.right.name ?? 'Right',
+    oddsLeft: state.odds?.left ?? null,
+    oddsRight: state.odds?.right ?? null,
+    amount: betAmount,
+    min,
+    max: Math.max(1, wallet.coins),
+    affordable: wallet.coins >= betAmount,
+    mine: wallet.bets,
+  };
+}
+function worldAdjustBetAmount(delta: number) {
+  const min = minBet(wallet.coins);
+  betAmount = delta < 0 ? Math.max(min, betAmount + delta) : Math.min(Math.max(min, wallet.coins), betAmount + delta);
+  syncBetSection();
+}
+function worldSetBetAmount(raw: number) {
+  const min = minBet(wallet.coins);
+  betAmount = Number.isFinite(raw) ? Math.max(min, Math.floor(raw)) : min;
+  syncBetSection();
+}
+
 // Daily-spin button: bright pink + flashing when a spin is ready; otherwise a live countdown.
-function updateSpinButton() {
-  if (spinning) { spinBtn.textContent = '🎰 Spinning…'; spinBtn.disabled = true; spinBtn.classList.remove('ready'); return; }
+// Pure so World's shop dialog can read the same label without touching the flat button's DOM.
+function spinButtonState(): { ready: boolean; label: string } {
+  if (spinning) return { ready: false, label: '🎰 Spinning…' };
   const ms = wallet.nextSpinAt - Date.now();
   const dailyReady = !wallet.nextSpinAt || ms <= 0;
   const bonus = wallet.bonusSpins > 0;
   const ready = dailyReady || bonus;
+  // Bonus spins (from tournament wins) take priority and ignore the daily cooldown.
+  const label = bonus
+    ? (wallet.bonusSpins > 1 ? `🏆 BONUS SPIN! (${wallet.bonusSpins})` : '🏆 BONUS SPIN!')
+    : dailyReady
+      ? '🎰 DAILY SPIN — FREE!'
+      : `🎰 Next spin in ${Math.floor(ms / 3600000)}h ${Math.floor((ms % 3600000) / 60000)}m`;
+  return { ready, label };
+}
+function updateSpinButton() {
+  const { ready, label } = spinButtonState();
   spinBtn.disabled = !ready;
   spinBtn.classList.toggle('ready', ready);
-  if (bonus) {
-    // Bonus spins (from tournament wins) take priority and ignore the daily cooldown.
-    spinBtn.textContent = wallet.bonusSpins > 1 ? `🏆 BONUS SPIN! (${wallet.bonusSpins})` : '🏆 BONUS SPIN!';
-  } else if (dailyReady) {
-    spinBtn.textContent = '🎰 DAILY SPIN — FREE!';
-  } else {
-    const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
-    spinBtn.textContent = `🎰 Next spin in ${h}h ${m}m`;
-  }
+  spinBtn.textContent = label;
 }
 setInterval(updateSpinButton, 1000);
 
