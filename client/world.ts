@@ -64,6 +64,11 @@ import {
   type StockTf,
   positionWorth,
   FAST_SELL_BRACKETS,
+  type SlotsResultMsg,
+  type SlotsSymbol,
+  SLOTS_SYMBOLS,
+  SLOTS_PAYOUTS,
+  type CrapsResultMsg,
 } from '../shared/types';
 import { drawCosmeticPreview } from './render';
 
@@ -138,9 +143,18 @@ export interface WorldNet {
   market(): WorldMarket;
   stockInvest(coin: string, amount: number, side: StockSide): void;
   openSellModal(coinId: string, ticker: string, side: StockSide): void;
+  // Slots — the first Casino cabinet with a native World dialog (see openSlots()). Unlike Shop/
+  // Bank, Slots' flat-panel counterpart is a self-contained module (client/slots.ts) hardcoded
+  // against fixed DOM ids, not exposed state — so World reimplements its (small) reel-spin
+  // animation directly rather than reusing the module. playSound() reuses the flat game's actual
+  // win/purchase audio clips instead of re-synthesizing them.
+  slotsSpin(amount: number): void;
+  playSound(sound: 'win' | 'cha'): void;
+  // Craps — same reasoning/idiom as Slots above (client/craps.ts is a self-contained module).
+  crapsRoll(pass: number, dontPass: number): void;
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' |'lootbox' | 'blackmarket' | 'tourney' | 'season' | 'powerups' | 'changelog'): void; // open a Casino/DOOM/Fishing/Arcade/Bowling/Notice-Board feature (Shop/Pet-Shop/News/Loans/House/Market are native World dialogs now)
+  openFeature(feature: 'roulette' | 'blackjack' | 'crash' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' |'lootbox' | 'blackmarket' | 'tourney' | 'season' | 'powerups' | 'changelog'): void; // open a Casino/DOOM/Fishing/Arcade/Bowling/Notice-Board feature (Shop/Pet-Shop/News/Loans/House/Market/Slots/Craps are native World dialogs now)
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   openRename(): void;            // World's own 👤 button → reopen the nickname/color picker
   muted(): boolean;              // is game sound currently muted?
@@ -209,6 +223,8 @@ interface Controller {
   feedLoan(): void;                                  // the loan changed (taken/repaid/collected/countdown tick) — re-render the loan dialog if it's open
   feedHouse(): void;                                 // the Fed dashboard changed (bond/auction/tax update) — re-render the house dialog if it's open
   feedMarket(): void;                                // prices/holdings re-rolled — re-render the market dialog if it's open
+  feedSlotsResult(msg: SlotsResultMsg): void;        // a spin settled — animate it if the slots dialog is open
+  feedCrapsResult(msg: CrapsResultMsg): void;        // a roll settled — update it if the craps dialog is open
 }
 let controller: Controller | null = null;
 let _exitWorld: (() => void) | null = null;
@@ -266,6 +282,16 @@ export function feedHouse(): void {
 /** Prices/holdings re-rolled — re-render the market dialog if it's open. */
 export function feedMarket(): void {
   controller?.feedMarket();
+}
+
+/** A slots spin settled — animate it if the slots dialog is open. */
+export function feedSlotsResult(msg: SlotsResultMsg): void {
+  controller?.feedSlotsResult(msg);
+}
+
+/** A craps roll settled — update it if the craps dialog is open. */
+export function feedCrapsResult(msg: CrapsResultMsg): void {
+  controller?.feedCrapsResult(msg);
 }
 
 /** The server accepted a chest open (added the coins to the run purse / granted the potion). */
@@ -1884,6 +1910,8 @@ export function startWorld(net: WorldNet): void {
   let loanDialogOpen = false;  // the in-World loan dialog is up — gates re-rendering on feedLoan()
   let houseDialogOpen = false; // the in-World Fed dashboard is up — gates re-rendering on feedHouse()
   let marketDialogOpen = false; // the in-World Crypto Market is up — gates its per-frame tax-badge refresh
+  let slotsDialogOpen = false; // the in-World Slots cabinet is up — gates its spin-result animation
+  let crapsDialogOpen = false; // the in-World Craps cabinet is up — gates its roll-result update
   let nearId: string | null = null; // building the avatar is currently at the door of
   // True while a Casino/Bank/Shop/arcade feature has been delegated to the main page (or a
   // lazy-loaded minigame overlay) — World stays alive underneath (paused, hidden) instead of
@@ -4267,6 +4295,8 @@ export function startWorld(net: WorldNet): void {
     loanDialogOpen = false;
     houseDialogOpen = false;
     marketDialogOpen = false;
+    slotsDialogOpen = false;
+    crapsDialogOpen = false;
     dialog.style.display = 'none';
   }
 
@@ -5084,6 +5114,310 @@ export function startWorld(net: WorldNet): void {
       const badge = marketTaxBadge(Number(el.dataset.opened));
       el.textContent = ` · ${badge.text}`;
       el.className = `pos-tax ${badge.cls}`;
+    }
+  }
+
+  // --- Slots — the Casino's first native World cabinet. Unlike Shop/Bank, slots.ts is a
+  // self-contained module hardcoded against fixed flat-panel DOM ids (no exposed getters to wrap),
+  // so this reimplements its (small) reel-spin animation directly rather than reusing the module.
+  // Reels are queried by class each call rather than captured in a closure, matching the
+  // querySelector-on-dialogBox idiom used by Shop/Market's live-refresh hooks. ---
+  let slotsSpinning = false;
+  let slotsReelState: [SlotsSymbol[], SlotsSymbol[], SlotsSymbol[]] = [
+    ['🍒', '🍋', '🍊'], ['⭐', '🍀', '💎'], ['🍋', '🍒', '⭐'],
+  ];
+  let slotsAnimFrames: number[] = [];
+  function slotsRandSymbol(): SlotsSymbol {
+    return SLOTS_SYMBOLS[Math.floor(Math.random() * SLOTS_SYMBOLS.length)];
+  }
+  function slotsRenderReels(state: typeof slotsReelState, highlight = false) {
+    const els = dialogBox.querySelectorAll<HTMLDivElement>('.slots-world-reel');
+    els.forEach((el, i) => {
+      el.innerHTML = state[i].map((sym, row) =>
+        `<div style="font-size:26px;text-align:center;padding:5px 0;${row === 1 ? 'background:#16233f;' : 'opacity:0.5;'}${highlight && row === 1 ? 'box-shadow:inset 0 0 0 2px #ffd23f;' : ''}">${sym}</div>`
+      ).join('');
+    });
+  }
+  // Called from within the Casino's already-open cabinet dialog (see playCasinoGame() below) —
+  // no re-entry guard needed (same reasoning as openNews()/openLoan()/openHouse()/openMarket()).
+  function openSlots() {
+    dialogOpen = true;
+    slotsDialogOpen = true;
+    keys.clear(); joyActive = false;
+    renderSlotsDialog();
+    dialog.style.display = 'flex';
+  }
+  function renderSlotsDialog() {
+    dialogBox.replaceChildren();
+    const h = document.createElement('div');
+    h.textContent = '🎰 Slots';
+    h.style.cssText = 'font-size:22px;color:#e8eefc;margin-bottom:10px;text-align:center;';
+    dialogBox.appendChild(h);
+
+    const machine = document.createElement('div');
+    machine.style.cssText = 'background:#060c18;border:2px solid #3a4566;border-radius:8px;padding:10px;margin-bottom:10px;box-shadow:inset 0 2px 12px rgba(0,0,0,0.5);';
+    const reelsRow = document.createElement('div');
+    reelsRow.style.cssText = 'display:flex;gap:8px;justify-content:center;';
+    for (let i = 0; i < 3; i++) {
+      const reel = document.createElement('div');
+      reel.className = 'slots-world-reel';
+      reel.style.cssText = 'display:flex;flex-direction:column;background:#0c1830;border-radius:6px;overflow:hidden;width:56px;';
+      reelsRow.appendChild(reel);
+    }
+    machine.appendChild(reelsRow);
+    dialogBox.appendChild(machine);
+    slotsRenderReels(slotsReelState);
+
+    const betRow = document.createElement('div');
+    betRow.style.cssText = 'display:flex;gap:8px;align-items:center;justify-content:center;margin-bottom:8px;';
+    const betInput = document.createElement('input');
+    betInput.id = 'slotsWorldBet';
+    betInput.type = 'number'; betInput.min = '1'; betInput.step = '1'; betInput.value = '10';
+    betInput.style.cssText = 'width:80px;text-align:center;background:#0c1330;color:#e8eefc;border:1px solid #38508f;border-radius:8px;padding:6px;';
+    const spinBtn = document.createElement('button');
+    spinBtn.id = 'slotsWorldSpin';
+    spinBtn.type = 'button';
+    spinBtn.textContent = 'Spin';
+    spinBtn.disabled = slotsSpinning;
+    spinBtn.style.cssText = 'cursor:pointer;padding:8px 18px;border-radius:10px;font-weight:700;background:#3a5aa8;color:#fff;border:1px solid #5a7ac8;';
+    spinBtn.onclick = slotsDoSpin;
+    betRow.append(betInput, spinBtn);
+    dialogBox.appendChild(betRow);
+
+    const resultEl = document.createElement('div');
+    resultEl.id = 'slotsWorldResult';
+    resultEl.style.cssText = 'text-align:center;font-size:13px;min-height:18px;margin-bottom:8px;color:#9fb0d8;';
+    dialogBox.appendChild(resultEl);
+
+    const payTable = document.createElement('div');
+    payTable.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px;justify-content:center;font-size:11px;color:#9fb0d8;margin-bottom:10px;';
+    payTable.innerHTML = SLOTS_SYMBOLS.map((sym) => `<span>${sym}${sym}${sym} <b style="color:#ffd23f">${SLOTS_PAYOUTS[sym]}×</b></span>`).join('');
+    dialogBox.appendChild(payTable);
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+  }
+  function slotsDoSpin() {
+    if (slotsSpinning) return;
+    const betInput = dialogBox.querySelector<HTMLInputElement>('#slotsWorldBet');
+    const spinBtn = dialogBox.querySelector<HTMLButtonElement>('#slotsWorldSpin');
+    const resultEl = dialogBox.querySelector<HTMLDivElement>('#slotsWorldResult');
+    if (!betInput || !spinBtn || !resultEl) return;
+    const amount = Math.max(1, Math.floor(Number(betInput.value)));
+    slotsSpinning = true;
+    spinBtn.disabled = true;
+    resultEl.textContent = '';
+    net.slotsSpin(amount);
+    slotsAnimFrames.forEach(cancelAnimationFrame);
+    slotsAnimFrames = [];
+    let frame = 0;
+    const preSpinTick = () => {
+      frame++;
+      slotsRenderReels([
+        [slotsRandSymbol(), slotsRandSymbol(), slotsRandSymbol()],
+        [slotsRandSymbol(), slotsRandSymbol(), slotsRandSymbol()],
+        [slotsRandSymbol(), slotsRandSymbol(), slotsRandSymbol()],
+      ]);
+      if (frame < 8) slotsAnimFrames.push(requestAnimationFrame(preSpinTick));
+    };
+    slotsAnimFrames.push(requestAnimationFrame(preSpinTick));
+  }
+  // Called by feedSlotsResult() — animates the settled result, then reveals win/loss.
+  function slotsAnimateResult(result: SlotsResultMsg) {
+    const FRAMES = 24, STAGGER = 6;
+    slotsAnimFrames.forEach(cancelAnimationFrame);
+    slotsAnimFrames = [];
+    let frame = 0;
+    const tick = () => {
+      frame++;
+      const current: typeof slotsReelState = [
+        result.reels[0].map((_, row) => frame >= FRAMES ? result.reels[0][row] : slotsRandSymbol()) as SlotsSymbol[],
+        result.reels[1].map((_, row) => frame >= FRAMES - STAGGER ? result.reels[1][row] : slotsRandSymbol()) as SlotsSymbol[],
+        result.reels[2].map((_, row) => frame >= FRAMES - STAGGER * 2 ? result.reels[2][row] : slotsRandSymbol()) as SlotsSymbol[],
+      ];
+      slotsRenderReels(current, false);
+      if (frame < FRAMES) {
+        slotsAnimFrames.push(requestAnimationFrame(tick));
+      } else {
+        slotsReelState = result.reels;
+        slotsRenderReels(slotsReelState, !!result.win);
+        slotsSpinning = false;
+        const spinBtn = dialogBox.querySelector<HTMLButtonElement>('#slotsWorldSpin');
+        if (spinBtn) spinBtn.disabled = false;
+        const resultEl = dialogBox.querySelector<HTMLDivElement>('#slotsWorldResult');
+        if (resultEl) {
+          if (result.win) {
+            const netAmt = result.payout - result.bet;
+            resultEl.textContent = `🎰 ${result.win}${result.win}${result.win} — ${SLOTS_PAYOUTS[result.win]}× · +${netAmt}🪙`;
+            resultEl.style.color = '#6ee7a8';
+            net.playSound('win');
+          } else {
+            resultEl.textContent = `No match — lost ${result.bet}🪙`;
+            resultEl.style.color = '#ff7a7a';
+          }
+        }
+      }
+    };
+    slotsAnimFrames.push(requestAnimationFrame(tick));
+  }
+
+  // --- Craps — same idiom as Slots above (client/craps.ts is a self-contained module hardcoded
+  // against fixed DOM ids). Faithfully ports the original result-handling logic branch for branch,
+  // including its existing `if (net < 0) opts.playWin?.()` come-out-craps quirk (plays the win
+  // chime when the combined pass+don't-pass net is negative) — not something to "fix" while just
+  // relocating the UI; flag it as a possible pre-existing bug separately if it matters. ---
+  const CRAPS_FACES = ['', '⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
+  let crapsPoint: number | null = null;
+  let crapsRolling = false;
+  // Called from within the Casino's already-open cabinet dialog — no re-entry guard needed.
+  function openCraps() {
+    dialogOpen = true;
+    crapsDialogOpen = true;
+    crapsPoint = null;
+    crapsRolling = false;
+    keys.clear(); joyActive = false;
+    renderCrapsDialog();
+    dialog.style.display = 'flex';
+  }
+  function renderCrapsDialog() {
+    dialogBox.replaceChildren();
+    const h = document.createElement('div');
+    h.textContent = '🎲 Street Craps';
+    h.style.cssText = 'font-size:22px;color:#e8eefc;margin-bottom:10px;text-align:center;';
+    dialogBox.appendChild(h);
+
+    const pointEl = document.createElement('div');
+    pointEl.id = 'crapsWorldPoint';
+    pointEl.style.cssText = 'text-align:center;font-size:12px;margin-bottom:10px;padding:6px;border-radius:6px;background:#18203a;';
+    dialogBox.appendChild(pointEl);
+
+    const diceEl = document.createElement('div');
+    diceEl.id = 'crapsWorldDice';
+    diceEl.style.cssText = 'text-align:center;font-size:48px;margin-bottom:10px;';
+    diceEl.textContent = '⚀ ⚀';
+    dialogBox.appendChild(diceEl);
+
+    const betRow = document.createElement('div');
+    betRow.style.cssText = 'display:flex;gap:10px;justify-content:center;margin-bottom:8px;';
+    const inputStyle = 'width:70px;text-align:center;background:#0c1330;color:#e8eefc;border:1px solid #38508f;border-radius:8px;padding:6px;';
+    const passWrap = document.createElement('div');
+    passWrap.style.cssText = 'text-align:center;';
+    const passLabel = document.createElement('div');
+    passLabel.textContent = 'Pass Line';
+    passLabel.style.cssText = 'font-size:11px;color:#7da2ff;margin-bottom:4px;';
+    const passInput = document.createElement('input');
+    passInput.id = 'crapsWorldPass';
+    passInput.type = 'number'; passInput.min = '0'; passInput.step = '1'; passInput.value = '10';
+    passInput.style.cssText = inputStyle;
+    passWrap.append(passLabel, passInput);
+    const dontWrap = document.createElement('div');
+    dontWrap.style.cssText = 'text-align:center;';
+    const dontLabel = document.createElement('div');
+    dontLabel.textContent = "Don't Pass";
+    dontLabel.style.cssText = 'font-size:11px;color:#ff8a6a;margin-bottom:4px;';
+    const dontInput = document.createElement('input');
+    dontInput.id = 'crapsWorldDontPass';
+    dontInput.type = 'number'; dontInput.min = '0'; dontInput.step = '1'; dontInput.value = '0';
+    dontInput.style.cssText = inputStyle;
+    dontWrap.append(dontLabel, dontInput);
+    betRow.append(passWrap, dontWrap);
+    dialogBox.appendChild(betRow);
+
+    const rollBtn = document.createElement('button');
+    rollBtn.id = 'crapsWorldRoll';
+    rollBtn.type = 'button';
+    rollBtn.textContent = '🎲 Roll';
+    rollBtn.disabled = crapsRolling;
+    rollBtn.style.cssText = 'display:block;width:100%;cursor:pointer;padding:10px;border-radius:10px;font-weight:700;background:#3a5aa8;color:#fff;border:1px solid #5a7ac8;margin-bottom:8px;';
+    rollBtn.onclick = crapsDoRoll;
+    dialogBox.appendChild(rollBtn);
+
+    const resultEl = document.createElement('div');
+    resultEl.id = 'crapsWorldResult';
+    resultEl.style.cssText = 'text-align:center;font-size:13px;min-height:18px;margin-bottom:10px;color:#9fb0d8;';
+    dialogBox.appendChild(resultEl);
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+
+    crapsUpdatePoint();
+  }
+  function crapsUpdatePoint() {
+    const pointEl = dialogBox.querySelector<HTMLDivElement>('#crapsWorldPoint');
+    if (!pointEl) return;
+    if (crapsPoint !== null) {
+      pointEl.textContent = `🎯 Point: ${crapsPoint} — roll ${crapsPoint} to win, 7 to lose`;
+      pointEl.style.color = '#ffd23f';
+    } else {
+      pointEl.textContent = 'Come-out roll — 7/11 wins, 2/3/12 loses, any other sets the point';
+      pointEl.style.color = '#9fb0d8';
+    }
+  }
+  function crapsDoRoll() {
+    if (crapsRolling) return;
+    const passInput = dialogBox.querySelector<HTMLInputElement>('#crapsWorldPass');
+    const dontInput = dialogBox.querySelector<HTMLInputElement>('#crapsWorldDontPass');
+    const rollBtn = dialogBox.querySelector<HTMLButtonElement>('#crapsWorldRoll');
+    const resultEl = dialogBox.querySelector<HTMLDivElement>('#crapsWorldResult');
+    if (!passInput || !dontInput || !rollBtn || !resultEl) return;
+    const pass = Math.max(0, Math.floor(Number(passInput.value))) || 0;
+    const dontPass = Math.max(0, Math.floor(Number(dontInput.value))) || 0;
+    if (pass + dontPass <= 0) return;
+    crapsRolling = true;
+    rollBtn.disabled = true;
+    resultEl.textContent = '🎲 Rolling…';
+    resultEl.style.color = '#9fb0d8';
+    net.crapsRoll(pass, dontPass);
+  }
+  // Called by feedCrapsResult() — mirrors client/craps.ts's onResult() branch for branch.
+  function crapsApplyResult(msg: CrapsResultMsg) {
+    crapsRolling = false;
+    crapsPoint = msg.newPoint;
+    const rollBtn = dialogBox.querySelector<HTMLButtonElement>('#crapsWorldRoll');
+    if (rollBtn) rollBtn.disabled = false;
+    crapsUpdatePoint();
+    const diceEl = dialogBox.querySelector<HTMLDivElement>('#crapsWorldDice');
+    if (diceEl) diceEl.textContent = `${CRAPS_FACES[msg.dice[0]]} ${CRAPS_FACES[msg.dice[1]]}`;
+    const resultEl = dialogBox.querySelector<HTMLDivElement>('#crapsWorldResult');
+    const passInput = dialogBox.querySelector<HTMLInputElement>('#crapsWorldPass');
+    const dontInput = dialogBox.querySelector<HTMLInputElement>('#crapsWorldDontPass');
+    if (!resultEl || !passInput || !dontInput) return;
+    const pass = Math.max(0, Math.floor(Number(passInput.value))) || 0;
+    const dontPass = Math.max(0, Math.floor(Number(dontInput.value))) || 0;
+    if (msg.outcome === 'win') {
+      const netAmt = msg.passPayout + msg.dontPassPayout - pass - dontPass;
+      resultEl.textContent = msg.prevPoint === null
+        ? `🎉 Natural! ${msg.total} — Pass wins! +${netAmt}🪙`
+        : `🎉 Point hit! ${msg.total} — Pass wins! +${netAmt}🪙`;
+      resultEl.style.color = '#6ee7a8';
+      net.playSound('win');
+    } else if (msg.outcome === 'lose') {
+      if (msg.push12) {
+        resultEl.textContent = "🎲 12 — Pass loses, Don't Pass pushes";
+        resultEl.style.color = '#9fb0d8';
+      } else if (msg.prevPoint === null) {
+        const netAmt = msg.passPayout + msg.dontPassPayout - pass - dontPass;
+        resultEl.textContent = `💀 Craps! ${msg.total} — ${netAmt >= 0 ? `+${netAmt}` : `${netAmt}`}🪙`;
+        resultEl.style.color = netAmt >= 0 ? '#6ee7a8' : '#ff7a7a';
+        if (netAmt < 0) net.playSound('win');
+      } else {
+        const netAmt = msg.passPayout + msg.dontPassPayout - pass - dontPass;
+        resultEl.textContent = `💀 Seven out! — ${netAmt >= 0 ? `+${netAmt}` : `${netAmt}`}🪙`;
+        resultEl.style.color = netAmt >= 0 ? '#6ee7a8' : '#ff7a7a';
+      }
+    } else {
+      resultEl.textContent = msg.prevPoint === null
+        ? `🎯 Point set: ${msg.total}. Roll again!`
+        : `↩️ ${msg.total} — no count. Point still ${crapsPoint}. Keep rolling.`;
+      resultEl.style.color = '#9fb0d8';
     }
   }
 
@@ -7987,11 +8321,17 @@ export function startWorld(net: WorldNet): void {
   }
   // Walking up to a cabinet and confirming sends you straight into that game's real panel —
   // same net.openFeature() plumbing the old flat dialog list used, just reached by walking now.
+  // Slots and Craps are the exceptions: they're native World dialogs (see openSlots()/
+  // openCraps()), opened directly with no confirm step, matching the Shop/Pet-Shop walk-straight-in
+  // idiom.
   function playCasinoGame(g: NonNullable<typeof nearCasinoGame>) {
     if (dialogOpen || talkOpen) return;
-    const emoji = CASINO_GAMES.find((c) => c.feature === g.feature)?.emoji ?? '🎰';
+    if (g.feature === 'slots') { openSlots(); return; }
+    if (g.feature === 'craps') { openCraps(); return; }
+    const feature = g.feature; // captured as a const so the closure below keeps the narrowed (no 'slots'/'craps') type
+    const emoji = CASINO_GAMES.find((c) => c.feature === feature)?.emoji ?? '🎰';
     openDialog(`${emoji} ${g.label}`, `Step up and play ${g.label}.`, [
-      { label: `▶️ Play ${g.label}`, onPick: () => { pause(); net.openFeature(g.feature); } },
+      { label: `▶️ Play ${g.label}`, onPick: () => { pause(); net.openFeature(feature); } },
     ]);
   }
 
@@ -9631,7 +9971,7 @@ export function startWorld(net: WorldNet): void {
     if (paused) return;
     paused = true;
     keys.clear(); joyActive = false; handbrake = false;
-    dialogOpen = false; shopDialogOpen = false; newsDialogOpen = false; loanDialogOpen = false; houseDialogOpen = false; marketDialogOpen = false;
+    dialogOpen = false; shopDialogOpen = false; newsDialogOpen = false; loanDialogOpen = false; houseDialogOpen = false; marketDialogOpen = false; slotsDialogOpen = false; crapsDialogOpen = false;
     dialog.style.display = 'none'; // don't resume back into the dialog that sent us here
     game?.loop.sleep();
     overlay.style.display = 'none';
@@ -9735,6 +10075,8 @@ export function startWorld(net: WorldNet): void {
     },
     feedHouse() { if (houseDialogOpen) { const body = dialogBox.querySelector<HTMLDivElement>('#houseWorldBody'); if (body) renderHouseWorldBody(body); } },
     feedMarket() { if (marketDialogOpen) { const list = dialogBox.querySelector<HTMLDivElement>('#marketWorldList'); if (list) renderMarketWorldList(list); } },
+    feedSlotsResult(msg) { if (slotsDialogOpen) slotsAnimateResult(msg); },
+    feedCrapsResult(msg) { if (crapsDialogOpen) crapsApplyResult(msg); },
   };
   syncDriveBtn();
   net.enter();

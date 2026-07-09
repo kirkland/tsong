@@ -933,8 +933,10 @@ const net = connect(
       bjHandle.onResult(msg);
     } else if (msg.type === 'crapsResult') {
       crapsHandle.onResult(msg);
+      worldMod?.feedCrapsResult(msg);
     } else if (msg.type === 'slotsResult') {
       slotsHandle.onResult(msg);
+      worldMod?.feedSlotsResult(msg);
     } else if (msg.type === 'plinkoResult') {
       plinkoHandle.onResult(msg);
     } else if (msg.type === 'horseCard') {
@@ -2301,9 +2303,7 @@ function overlayVisibleCheck(selector: string): () => boolean {
 const WORLD_DELEGATE_CHECK: Record<string, () => boolean> = {
   roulette: panelOpenCheck('roulettePanel'),
   blackjack: panelOpenCheck('bjPanel'),
-  craps: panelOpenCheck('crapsPanel'),
   crash: panelOpenCheck('crashPanel'),
-  slots: panelOpenCheck('slotsPanel'),
   plinko: panelOpenCheck('plinkoPanel'),
   horse: panelOpenCheck('horsePanel'),
   hilo: panelOpenCheck('hiloPanel'),
@@ -2404,6 +2404,11 @@ worldBtn.addEventListener('click', async () => {
       market: () => market,
       stockInvest: (coin, amount, side) => { net.send({ type: 'stockInvest', coin, amount, side }); playChaChing(); },
       openSellModal: (coinId, ticker, side) => openSellModal(coinId, ticker, side),
+      // Slots — the first Casino cabinet with a native World dialog (world.ts's openSlots()).
+      slotsSpin: (amount) => net.send({ type: 'slotsSpin', amount }),
+      playSound: (sound) => (sound === 'win' ? playYay() : playChaChing()),
+      // Craps — same reasoning as Slots (client/craps.ts is a self-contained module).
+      crapsRoll: (pass, dontPass) => net.send({ type: 'crapsRoll', pass, dontPass }),
       onExit: () => worldBtn.setAttribute('aria-pressed', 'false'),
       // Walk into the Arena → hop into the play queue (you'll be seated when a spot opens).
       enterArena: () => net.send({ type: 'queueJoin' }),
@@ -2452,9 +2457,7 @@ worldBtn.addEventListener('click', async () => {
         }
         const id = feature === 'roulette'    ? 'rouletteBtn'
                  : feature === 'blackjack'  ? 'bjBtn'
-                 : feature === 'craps'      ? 'crapsBtn'
                  : feature === 'crash'      ? 'crashBtn'
-                 : feature === 'slots'      ? 'slotsBtn'
                  : feature === 'plinko'     ? 'plinkoBtn'
                  : feature === 'horse'      ? 'horseBtn'
                  : feature === 'hilo'       ? 'hiloBtn'
