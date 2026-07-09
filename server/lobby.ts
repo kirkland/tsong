@@ -116,6 +116,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
   recordFishCatch, getFishingLeaderboard, FishingScoreRow,
   recordGhScore, getGhLeaderboard, GhScoreRow,
+  bumpCounter,
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS, getAssessableWealth, stampActivity, getJailed, setJailed,
   getOpenedChests, addOpenedChests,
   getHoldings, investStock, closePosition, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
@@ -2246,6 +2247,23 @@ export class Lobby {
     'gangstas-paradise-8bit.mp3', 'heart-shaped-box-8bit.mp3', 'livin-on-a-prayer-8bit.mp3',
   ]);
   private static readonly GH_MAX_SCORE = 1_000_000;
+
+  /** Toss 10 coins in the plaza fountain. ~1 wish in 77 earns the Wisher title. */
+  async fountainWish(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    const w = await spendCoins(conn.pid, 10).catch(() => null);
+    if (!w) { this.notify(ws, '⛲ A wish costs 10 coins.'); return; }
+    this.sendWallet(ws);
+    const total = await bumpCounter('fountain_wishes').catch(() => 0);
+    let granted = false;
+    if (Math.random() < 1 / 77) {
+      granted = true;
+      awardTitle(conn.pid, conn.nickname, 'wisher').catch(() => {});
+      this.notify(ws, '⛲✨ The fountain heard you. Title unlocked: Wisher');
+    }
+    this.tell(ws, { type: 'wishResult', total, title: granted });
+  }
 
   /** Reload the Tsong Hero top-5-per-song×difficulty board and push it to everyone. */
   async refreshGhLeaderboard() {

@@ -252,6 +252,10 @@ export interface WorldNet {
   buyMcFood(item: string): void; // buy food at McDonald's (server charges coins + sends mcFoodResult)
   drunkLevel(): number;          // current drunkenness 0–6 (drives movement wobble + camera sway)
   stats(): { coins: number; elo: number | null; rank: number | null; fishLb: number }; // live wallet + pong rating + best catch (Mira reads these back to you)
+  topPlayer(): { name: string; elo: number } | null;   // current #1 on the ELO board (the plaza statue)
+  fishKing(): { name: string; lb: number } | null;     // biggest catch on record (billboard)
+  ghKing(): { name: string; score: number } | null;    // top Tsong Hero score (billboard)
+  wish(): void;                                        // toss 10 coins into the fountain
   jail(): void;                  // self-report a drunk-drive attempt (server jails you if 2+ beers in)
   bail(targetId: string): void;  // pay 500🪙 to bail a jailed avatar out (id; may be your own)
   amJailed(): boolean;           // are WE currently locked in the jail cell?
@@ -2014,6 +2018,9 @@ function hexToInt(c: string): number {
   if (c.length === 3) c = c[0] + c[0] + c[1] + c[1] + c[2] + c[2];
   return parseInt(c, 16) >>> 0;
 }
+let wishHandler: ((total: number, granted: boolean) => void) | null = null;
+export function feedWishResult(m: { total: number; title?: boolean }) { wishHandler?.(m.total, !!m.title); }
+
 export function startWorld(net: WorldNet): void {
   if (controller) return; // already open
 
@@ -8566,6 +8573,7 @@ export function startWorld(net: WorldNet): void {
     // Hold R to fire the equipped weapon; 1–4 equip directly, Q cycles to the next loaded one.
     if (k === 'r') { e.preventDefault(); e.stopPropagation(); firing = true; fireWeapon(); return; }
     if (k === 'q') { e.preventDefault(); e.stopPropagation(); cycleWeapon(); return; }
+    if (k === 'x') { if (townInteract()) { e.preventDefault(); e.stopPropagation(); return; } }
     if (k >= '1' && k <= '4') {
       const pick = WEAPON_ORDER[Number(k) - 1];
       if (pick) { e.preventDefault(); e.stopPropagation(); selectWeapon(pick); return; }
@@ -11540,6 +11548,7 @@ export function startWorld(net: WorldNet): void {
 
       // --- townsfolk ---
       for (const def of NPCS) npcs.push(makeNpc(sc, def));
+      makeTownLife(sc);
 
       // --- ammo crates scattered over the open ground ---
       buildCrates(sc);
@@ -11876,6 +11885,7 @@ export function startWorld(net: WorldNet): void {
       checkCarCrash(now);
       updateNpcs(now, dt);
       updateRex(now, dt);
+      updateTownLife(now, dt);
       updateNearBuilding();
       maybeSendMove(now);
 
@@ -12857,6 +12867,210 @@ export function startWorld(net: WorldNet): void {
         n.heart.setAlpha(0.7 + 0.3 * Math.sin(now / 650));
       }
     }
+  }
+
+  // --- town life: statue of the #1, live billboard, fountain wishes, benches, critters ---
+  // Everything here is cosmetic + social; interactions ride the X key. Emoji sprites keep it
+  // cheap and legible at world scale (same trick as the friend hearts).
+  interface TownCritter { t: Phaser.GameObjects.Text; x: number; y: number; tx: number; ty: number; state: number; ph: number; }
+  let lifeSc: Phaser.Scene | null = null;
+  let pigeons: TownCritter[] = [];
+  let duck: TownCritter | null = null;
+  let ducklings: TownCritter[] = [];
+  let statuePlaque: Phaser.GameObjects.Text | null = null;
+  let statueMoai: Phaser.GameObjects.Text | null = null;
+  let statuePigeon: Phaser.GameObjects.Text | null = null;
+  let billboardText: Phaser.GameObjects.Text | null = null;
+  let billboardIdx = 0;
+  let billboardNextAt = 0;
+  let wishPlaque: Phaser.GameObjects.Text | null = null;
+  let roofCat: Phaser.GameObjects.Text | null = null;
+  let seatedAt: { x: number; y: number } | null = null;
+  let seatBubble: Phaser.GameObjects.Text | null = null;
+  let lastChimeHour = new Date().getHours();
+  let chimeStars: TownCritter[] = [];
+  const STATUE = { x: PLAZA.x, y: PLAZA.y - 165 };
+  const BILLBOARD = { x: PLAZA.x + 205, y: PLAZA.y - 80 };
+  const BENCHES = [
+    { x: PLAZA.x - 170, y: PLAZA.y - 120 }, { x: PLAZA.x + 170, y: PLAZA.y + 120 },
+    { x: PLAZA.x - 170, y: PLAZA.y + 120 }, { x: PLAZA.x + 130, y: PLAZA.y - 150 },
+  ];
+  const CAT_ROOFS = [
+    { x: PLAZA.x - 360, y: 1300 }, { x: PLAZA.x + 360, y: 1300 }, { x: 2475, y: 560 },
+    { x: 1090, y: 1470 }, { x: 730, y: 850 },
+  ];
+  const POND = { x: 2110, y: 1000, r: 55 };
+
+  function makeTownLife(sc: Phaser.Scene) {
+    lifeSc = sc;
+    // 🗿 statue of the reigning #1 (auto-updates; pigeon included at no extra cost)
+    sc.add.rectangle(STATUE.x, STATUE.y + 8, 64, 18, 0x5a5a66).setDepth(STATUE.y + 8);
+    sc.add.rectangle(STATUE.x, STATUE.y + 16, 84, 8, 0x4a4a55).setDepth(STATUE.y + 16);
+    statueMoai = sc.add.text(STATUE.x, STATUE.y + 2, '🗿', { fontSize: '38px' }).setOrigin(0.5, 1).setDepth(STATUE.y + 2).setResolution(2);
+    statuePigeon = sc.add.text(STATUE.x + 4, STATUE.y - 36, '🐦', { fontSize: '11px' }).setOrigin(0.5, 1).setDepth(STATUE.y + 3).setResolution(2);
+    statuePlaque = sc.add.text(STATUE.x, STATUE.y + 30, '', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#ffe9b0', align: 'center',
+      stroke: '#1a1408', strokeThickness: 3, resolution: 2,
+    }).setOrigin(0.5, 0).setDepth(STATUE.y + 30);
+    // 📰 the billboard
+    sc.add.rectangle(BILLBOARD.x, BILLBOARD.y, 190, 74, 0x0c1330).setStrokeStyle(3, 0xe8b84b).setDepth(BILLBOARD.y + 40);
+    sc.add.rectangle(BILLBOARD.x, BILLBOARD.y + 48, 10, 26, 0x4a4a55).setDepth(BILLBOARD.y + 39);
+    billboardText = sc.add.text(BILLBOARD.x, BILLBOARD.y, 'TSONG TOWN NEWS', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '10px', color: '#ffe9b0', align: 'center',
+      wordWrap: { width: 174 }, resolution: 2,
+    }).setOrigin(0.5).setDepth(BILLBOARD.y + 41);
+    // ⛲ wish plaque
+    wishPlaque = sc.add.text(PLAZA.x, PLAZA.y + 58, '⛲ press X to wish (10🪙)', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#bfe9ff',
+      stroke: '#0b1020', strokeThickness: 3, resolution: 2,
+    }).setOrigin(0.5, 0).setDepth(PLAZA.y + 58);
+    // 🪑 benches
+    for (const b of BENCHES) {
+      sc.add.rectangle(b.x, b.y, 42, 6, 0x7a5a34).setDepth(b.y);
+      sc.add.rectangle(b.x - 16, b.y + 7, 5, 10, 0x5a4224).setDepth(b.y + 7);
+      sc.add.rectangle(b.x + 16, b.y + 7, 5, 10, 0x5a4224).setDepth(b.y + 7);
+    }
+    // 🐦 pigeon flock
+    for (let i = 0; i < 5; i++) {
+      const x = PLAZA.x + (Math.random() - 0.5) * 300, y = PLAZA.y + (Math.random() - 0.5) * 260;
+      pigeons.push({ t: sc.add.text(x, y, '🐦', { fontSize: '12px', resolution: 2 }).setOrigin(0.5, 1).setDepth(y), x, y, tx: x, ty: y, state: 0, ph: Math.random() * 9 });
+    }
+    // 🦆 the pond family
+    duck = { t: sc.add.text(POND.x, POND.y, '🦆', { fontSize: '14px', resolution: 2 }).setOrigin(0.5, 1).setDepth(POND.y), x: POND.x, y: POND.y, tx: POND.x, ty: POND.y, state: 0, ph: 0 };
+    for (let i = 0; i < 3; i++) {
+      ducklings.push({ t: sc.add.text(POND.x - 14 * (i + 1), POND.y, '🐥', { fontSize: '9px', resolution: 2 }).setOrigin(0.5, 1).setDepth(POND.y), x: POND.x - 14 * (i + 1), y: POND.y, tx: 0, ty: 0, state: 0, ph: i });
+    }
+    // 🐈 today's roof cat
+    const spot = CAT_ROOFS[Math.floor(Date.now() / 86400000) % CAT_ROOFS.length];
+    roofCat = sc.add.text(spot.x, spot.y, '🐈', { fontSize: '13px', resolution: 2 }).setOrigin(0.5, 1).setDepth(spot.y);
+    wishHandler = (total, granted) => {
+      wishPlaque?.setText(`⛲ town wishes: ${total.toLocaleString()} · X to wish (10🪙)`);
+      if (granted) showToast('⛲✨ <b>The fountain heard you.</b><br>Title unlocked: Wisher');
+    };
+  }
+
+  function townInteract(): boolean {
+    if (dialogOpen || talkOpen || inInterior || inDungeon) return false;
+    if (Math.hypot(selfX - PLAZA.x, selfY - PLAZA.y) < 120) {
+      net.wish();
+      const sc2 = lifeSc;
+      if (sc2) { // a coin arcs into the water
+        const coin = sc2.add.text(selfX, selfY - 20, '🪙', { fontSize: '12px' }).setOrigin(0.5).setDepth(99999);
+        sc2.tweens.add({ targets: coin, x: PLAZA.x, y: PLAZA.y - 10, duration: 550, ease: 'Quad.easeIn', onComplete: () => coin.destroy() });
+      }
+      return true;
+    }
+    const bench = BENCHES.find((b) => Math.hypot(selfX - b.x, selfY - b.y) < 46);
+    if (bench) {
+      seatedAt = seatedAt ? null : { x: bench.x, y: bench.y - 6 };
+      if (seatedAt && lifeSc && !seatBubble) {
+        seatBubble = lifeSc.add.text(0, 0, '💤', { fontSize: '11px', resolution: 2 }).setOrigin(0.5, 1).setDepth(999999);
+      }
+      if (!seatedAt) { seatBubble?.destroy(); seatBubble = null; }
+      return true;
+    }
+    if (roofCat && Math.hypot(selfX - roofCat.x, selfY - roofCat.y) < 60) {
+      showToast('🐈 <i>purrrrrrrrr.</i>');
+      if (lifeSc) {
+        const heart = lifeSc.add.text(roofCat.x + 8, roofCat.y - 18, '❤', { fontSize: '10px' }).setOrigin(0.5).setDepth(999999);
+        lifeSc.tweens.add({ targets: heart, y: heart.y - 16, alpha: 0, duration: 900, onComplete: () => heart.destroy() });
+      }
+      return true;
+    }
+    return false;
+  }
+
+  function updateTownLife(now: number, dt: number) {
+    // statue + billboard refresh
+    if (statuePlaque && Math.floor(now / 5000) !== Math.floor((now - dt * 1000) / 5000)) {
+      const top = net.topPlayer();
+      statuePlaque.setText(top ? `${top.name}\nELO ${top.elo} · #1` : 'this town awaits\na champion');
+      statuePigeon?.setVisible(((Math.floor(Date.now() / 86400000) + (net.topPlayer()?.elo ?? 0)) % 3) === 0);
+    }
+    if (billboardText && now >= billboardNextAt) {
+      billboardNextAt = now + 6000;
+      const top = net.topPlayer(), fish = net.fishKing(), gh = net.ghKing();
+      const slides = [
+        top ? `👑 ${top.name} holds the town\nELO ${top.elo}` : 'TSONG TOWN NEWS',
+        fish ? `🐟 biggest catch:\n${fish.name} — ${fish.lb.toFixed(1)} lb` : '🐟 the pond awaits',
+        gh ? `🎸 shredder-in-chief:\n${gh.name} — ${gh.score.toLocaleString()}` : '🎸 the arcade awaits',
+        '🪖 the war continues\nin the Arcade',
+        '⛲ wish responsibly',
+        '📦 Mira is watching\nthis billboard too',
+      ];
+      billboardIdx = (billboardIdx + 1) % slides.length;
+      billboardText.setText(slides[billboardIdx]);
+    }
+    // sitting: pin to the bench until a movement key breaks the spell
+    if (seatedAt) {
+      const moving = ['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright'].some((k) => keys.has(k));
+      if (moving) { seatedAt = null; seatBubble?.destroy(); seatBubble = null; }
+      else {
+        selfX = seatedAt.x; selfY = seatedAt.y;
+        if (seatBubble) {
+          seatBubble.setPosition(selfX + 10, selfY - 26 + Math.sin(now / 600) * 2);
+          seatBubble.setAlpha(0.5 + 0.4 * Math.sin(now / 800));
+        }
+      }
+    }
+    // pigeons: peck, wander, scatter from anyone who gets close
+    for (const p of pigeons) {
+      const threat = Math.hypot(selfX - p.x, selfY - p.y) < 64
+        || others.some((o) => Math.hypot(o.x - p.x, o.y - p.y) < 64);
+      if (threat && p.state !== 2) {
+        p.state = 2;
+        p.tx = PLAZA.x + (Math.random() - 0.5) * 420;
+        p.ty = PLAZA.y + (Math.random() - 0.5) * 340;
+      }
+      if (p.state === 2) { // airborne
+        const dx = p.tx - p.x, dy = p.ty - p.y, d = Math.hypot(dx, dy);
+        if (d < 8) p.state = 0;
+        else { p.x += (dx / d) * 170 * dt; p.y += (dy / d) * 170 * dt; }
+        p.t.setPosition(p.x, p.y - Math.abs(Math.sin(now / 90)) * 7); // flap
+      } else {
+        if (Math.random() < 0.004) { p.tx = p.x + (Math.random() - 0.5) * 60; p.ty = p.y + (Math.random() - 0.5) * 40; }
+        const dx = p.tx - p.x, dy = p.ty - p.y, d = Math.hypot(dx, dy);
+        if (d > 3) { p.x += (dx / d) * 26 * dt; p.y += (dy / d) * 26 * dt; }
+        p.t.setPosition(p.x, p.y + (Math.sin(now / 260 + p.ph) > 0.7 ? 1.5 : 0)); // peck
+      }
+      p.t.setDepth(p.y);
+    }
+    // the pond family paddles in a lazy line
+    if (duck) {
+      if (Math.random() < 0.006) {
+        const a = Math.random() * Math.PI * 2, r = Math.random() * POND.r;
+        duck.tx = POND.x + Math.cos(a) * r; duck.ty = POND.y + Math.sin(a) * r * 0.5;
+      }
+      const dx = duck.tx - duck.x, dy = duck.ty - duck.y, d = Math.hypot(dx, dy);
+      if (d > 2) { duck.x += (dx / d) * 18 * dt; duck.y += (dy / d) * 18 * dt; }
+      duck.t.setPosition(duck.x, duck.y + Math.sin(now / 500) * 1.5).setDepth(duck.y);
+      let leadX = duck.x, leadY = duck.y;
+      for (const dl of ducklings) {
+        const ddx = leadX - 13 * Math.sign(leadX - dl.x || 1) - dl.x, ddy = leadY - dl.y;
+        dl.x += ddx * 1.6 * dt; dl.y += ddy * 1.6 * dt;
+        dl.t.setPosition(dl.x, dl.y + Math.sin(now / 450 + dl.ph) * 1.5).setDepth(dl.y);
+        leadX = dl.x; leadY = dl.y;
+      }
+    }
+    // roof cat breathes
+    if (roofCat) roofCat.setScale(1, 1 + Math.sin(now / 1100) * 0.04);
+    // the clocktower chimes on the hour — brief meteor shower over town
+    const hour = new Date().getHours();
+    if (hour !== lastChimeHour && lifeSc) {
+      lastChimeHour = hour;
+      const h12 = hour % 12 === 0 ? 12 : hour % 12;
+      showToast(`🕰️ The clocktower chimes ${h12} — ${'🔔'.repeat(Math.min(4, h12))}`);
+      for (let i = 0; i < 7; i++) {
+        const sx2 = selfX + (Math.random() - 0.5) * 900, sy2 = selfY - 320 - Math.random() * 120;
+        chimeStars.push({ t: lifeSc.add.text(sx2, sy2, '✦', { fontSize: '13px', color: '#ffe9b0', resolution: 2 }).setOrigin(0.5).setDepth(999999), x: sx2, y: sy2, tx: sx2 - 140, ty: sy2 + 190, state: 0, ph: Math.random() });
+      }
+    }
+    for (const st of chimeStars) {
+      st.x += (st.tx - st.x) * 1.6 * dt; st.y += (st.ty - st.y) * 1.6 * dt;
+      st.t.setPosition(st.x, st.y).setAlpha(Math.max(0, st.t.alpha - dt * 0.5));
+      if (st.t.alpha <= 0.02) { st.t.destroy(); st.state = 9; }
+    }
+    chimeStars = chimeStars.filter((st) => st.state !== 9);
   }
 
   // --- launch Phaser ---

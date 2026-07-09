@@ -423,6 +423,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'waRelay':
         if (msg.data !== undefined) lobby.waRelay(ws, msg.data);
         break;
+      case 'fountainWish':
+        lobby.fountainWish(ws).catch((e) => console.error('fountain wish failed:', e));
+        break;
       case 'tntJoin':
         lobby.tntJoin(ws);
         break;

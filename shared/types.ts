@@ -250,6 +250,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'title-pindropper', name: '📍 Pin Dropper', slot: 'title', price: 0, locked: 'dungeon' }, // beat Rob, the final boss
   { id: 'bigcatch', name: '🐟 Big Catch', slot: 'title', price: 0, locked: 'fishing_rare' }, // land a rare-or-better fish
   { id: 'angler', name: '🎣 Angler', slot: 'title', price: 0, locked: 'fishing' }, // land a legendary fish
+  { id: 'wisher', name: '⛲ Wisher', slot: 'title', price: 0, locked: 'fountain' }, // the fountain grants ~1 wish in 77
   { id: 'clown', name: '🤡 Clown', slot: 'title', price: 1000 },
   { id: 'sharpshooter', name: '🎯 Sharpshooter', slot: 'title', price: 3000 },
   { id: 'champion', name: '🏅 Champion', slot: 'title', price: 3000 },
@@ -989,6 +990,7 @@ export type ClientMsg =
   | { type: 'waStart' } // (host only) start the match (solo start = you vs bots, no payout)
   | { type: 'waEnd'; winner: number; winner2?: number } // (host only) winning slot(s) — two for 2v2 team wins (-1 = nobody paid)
   | { type: 'waRelay'; data: unknown } // forward an opaque Artillery payload to all other players
+  | { type: 'fountainWish' } // toss 10 coins in the plaza fountain (tiny chance of the Wisher title)
   | { type: 'tntJoin' } // take a slot in the TNT Explosion Rally lobby (1v1 bomb-parry maze duel)
   | { type: 'tntLeave' } // leave the TNT Explosion Rally lobby / match
   | { type: 'tntStart' } // (host only) start the match (solo start = practice vs the TNT Bot, no payout)
@@ -1539,6 +1541,7 @@ export type ServerMsg =
   | TrnRelayMsg
   | WaLobbyMsg
   | WaRelayMsg
+  | WishResultMsg
   | GhLeaderboardMsg
   | TntLobbyMsg
   | TntRelayMsg
@@ -2304,6 +2307,12 @@ export interface WaLobbyMsg {
 export interface WaRelayMsg {
   type: 'waRelay';
   data: unknown;
+}
+// A fountain wish landed: the town's all-time wish count (and whether the fountain granted a title).
+export interface WishResultMsg {
+  type: 'wishResult';
+  total: number;
+  title?: boolean;
 }
 // Tsong Hero public leaderboard: the top 5 scores for every song × difficulty.
 export interface GhLeaderboardMsg {
