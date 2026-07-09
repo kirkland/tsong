@@ -481,10 +481,13 @@ export function startArtillery(net: ArtilleryNet): void {
     backwall = document.createElement('canvas');
     backwall.width = WA_W; backwall.height = WA_H;
     const bwc = backwall.getContext('2d')!;
+    // SAME tile pattern as the terrain, heavily darkened — so craters and caves read as the
+    // shadowed inside of the ground (matching the map) instead of flat black voids
+    const bwFill = fillCanvas ? bwc.createPattern(fillCanvas, 'repeat') : null;
     const bwGrad = bwc.createLinearGradient(0, 0, 0, WA_H);
     bwGrad.addColorStop(0, '#171223');
     bwGrad.addColorStop(1, '#0a0812');
-    bwc.fillStyle = bwGrad;
+    bwc.fillStyle = bwFill ?? bwGrad;
     for (let x = 0; x < WA_W; x++) {
       let top = -1, bot = -1;
       for (let y = 0; y < WA_H; y++) if (solid[y * WA_W + x]) { top = y; break; }
@@ -492,12 +495,19 @@ export function startArtillery(net: ArtilleryNet): void {
       for (let y = WA_H - 1; y >= top; y--) if (solid[y * WA_W + x]) { bot = y; break; }
       bwc.fillRect(x, top + 5, 1, Math.max(0, bot - top - 4));
     }
+    // shadow the pattern down (source-atop keeps it inside the silhouette) + the map's tint
+    bwc.save();
+    bwc.globalCompositeOperation = 'source-atop';
+    bwc.fillStyle = 'rgba(8, 5, 18, 0.62)';
+    bwc.fillRect(0, 0, WA_W, WA_H);
+    if (theme.tint) { bwc.fillStyle = theme.tint; bwc.fillRect(0, 0, WA_W, WA_H); }
     // faint rocky noise so big caverns don't read flat
     for (let i = 0; i < 1400; i++) {
       const rx = rnd() * WA_W, ry = rnd() * WA_H;
-      bwc.fillStyle = rnd() < 0.5 ? '#ffffff06' : '#00000018';
+      bwc.fillStyle = rnd() < 0.5 ? '#ffffff08' : '#00000020';
       bwc.fillRect(rx, ry, 2 + rnd() * 3, 2 + rnd() * 3);
     }
+    bwc.restore();
 
     // map mood tint over the tile pattern (source-atop keeps crater edges clean)
     if (theme.tint) {
