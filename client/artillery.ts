@@ -39,18 +39,20 @@ const COLORS = ['#00e5ff', '#ff9a00', '#ff3df0', '#89ff2a'] as const;
 // 2v2 teams interleave by slot (0&2 vs 1&3) so turn order naturally alternates sides.
 const TEAM_NAMES = ['🌊 TEAM TIDE', '🔥 TEAM FLAME'] as const;
 const TEAM_BADGE = ['🌊', '🔥'] as const;
+// in 2v2 the whole color scheme goes team-first: TIDE wears the blues, FLAME wears the fire
+const TEAM_COLORS = [['#00e5ff', '#4a90ff'], ['#ff9a00', '#ff4a4a']] as const;
 const teamOf = (idx: number) => idx % 2;
 
 // --- battlefield maps (host picks; the generator theme + profile per map) ---
-interface WaMap { name: string; desc: string; grass: string; dirtTop: string; dirtDeep: string; }
+interface WaMap { name: string; desc: string; grass: string; dirtTop: string; dirtDeep: string; tile: string; top: string; tint?: string; }
 const MAPS: WaMap[] = [
-  { name: 'THE HILLS', desc: 'classic rolling countryside', grass: '#3f7a3a', dirtTop: '#3d2a14', dirtDeep: '#180e05' },
-  { name: 'THE RUINS', desc: 'stepped stone + ancient pillars', grass: '#5a7a5a', dirtTop: '#4a4a55', dirtDeep: '#1a1a22' },
-  { name: 'FOUNTAIN VALLEY', desc: 'one deep basin, no cover in the middle', grass: '#4a8a5a', dirtTop: '#2a3a24', dirtDeep: '#0e1408' },
-  { name: 'THE ARENA', desc: 'two mesas, one fatal chasm', grass: '#7a6a3a', dirtTop: '#4a3520', dirtDeep: '#1c1208' },
-  { name: 'SKY ISLANDS', desc: 'no mainland — girders or death', grass: '#4aaa6a', dirtTop: '#3a4a5c', dirtDeep: '#141c26', },
-  { name: 'THE CAVERNS', desc: 'a hollowed-out underworld', grass: '#6a5a8a', dirtTop: '#3a2e4c', dirtDeep: '#120c1c' },
-  { name: 'ROBVILLE', desc: 'towers, floors, and bad intentions', grass: '#5a6a72', dirtTop: '#3c4248', dirtDeep: '#16181c' },
+  { name: 'THE HILLS', desc: 'classic rolling countryside', grass: '#3f7a3a', dirtTop: '#3d2a14', dirtDeep: '#180e05', tile: 'tile-grass', top: 'top-grass' },
+  { name: 'THE RUINS', desc: 'stepped stone + ancient pillars', grass: '#5a7a5a', dirtTop: '#4a4a55', dirtDeep: '#1a1a22', tile: 'tile-castle', top: 'top-castle' },
+  { name: 'FOUNTAIN VALLEY', desc: 'one deep basin, no cover in the middle', grass: '#4a8a5a', dirtTop: '#2a3a24', dirtDeep: '#0e1408', tile: 'tile-dirt', top: 'top-grass', tint: 'rgba(30, 80, 40, 0.28)' },
+  { name: 'THE ARENA', desc: 'two mesas, one fatal chasm', grass: '#7a6a3a', dirtTop: '#4a3520', dirtDeep: '#1c1208', tile: 'tile-sand', top: 'top-sand' },
+  { name: 'SKY ISLANDS', desc: 'no mainland — girders or death', grass: '#4aaa6a', dirtTop: '#3a4a5c', dirtDeep: '#141c26', tile: 'tile-grass', top: 'top-grass', tint: 'rgba(40, 60, 100, 0.22)' },
+  { name: 'THE CAVERNS', desc: 'a hollowed-out underworld', grass: '#6a5a8a', dirtTop: '#3a2e4c', dirtDeep: '#120c1c', tile: 'tile-stone', top: 'top-stone', tint: 'rgba(90, 60, 150, 0.35)' },
+  { name: 'ROBVILLE', desc: 'towers, floors, and bad intentions', grass: '#5a6a72', dirtTop: '#3c4248', dirtDeep: '#16181c', tile: 'tile-castle', top: 'top-castle', tint: 'rgba(60, 80, 100, 0.40)' },
 ];
 const GRAV = 640;            // px/s² for projectiles and fighters
 const WALK_SPEED = 95;       // px/s
@@ -115,6 +117,16 @@ function makeNoise2(rnd: () => number) {
   };
   return (x: number, y: number) => level(x, y, 150) * 0.65 + level(x, y, 55) * 0.35;
 }
+
+// Kenney CC0 sprites (client/public/worms/) — terrain fill tiles, crates, meteors.
+// Same deal as the overworld's Tiny Town sheet; tiny PNGs, preloaded at module import.
+const ASSETS: Record<string, HTMLImageElement> = {};
+for (const n of ['tile-grass', 'tile-dirt', 'tile-castle', 'tile-sand', 'tile-snow', 'tile-stone', 'top-grass', 'top-dirt', 'top-castle', 'top-sand', 'top-snow', 'top-stone', 'crate', 'crate-boom', 'meteor1', 'meteor2']) {
+  const img = new Image();
+  img.src = `/worms/${n}.png`;
+  ASSETS[n] = img;
+}
+const imgReady = (n: string) => ASSETS[n]?.complete && ASSETS[n].naturalWidth > 0;
 
 let waOpen = false;
 
@@ -378,7 +390,13 @@ export function startArtillery(net: ArtilleryNet): void {
     const dirt = tc.createLinearGradient(0, WA_H * 0.35, 0, WA_H);
     dirt.addColorStop(0, theme.dirtTop);
     dirt.addColorStop(1, theme.dirtDeep);
-    // paint each column as contiguous solid runs (grass lip on every run top)
+    // paint each column as contiguous solid runs (grass lip on every run top).
+    // Fill is a real Kenney tile pattern when the sprite is ready (it always is by match
+    // start — they're ~1KB), painted per-column so carving stays pixel-clean.
+    const tileImg = ASSETS[theme.tile];
+    const pat = tileImg?.complete && tileImg.naturalWidth > 0 ? tc.createPattern(tileImg, 'repeat') : null;
+    const topImg = ASSETS[theme.top];
+    const topOk = topImg?.complete && topImg.naturalWidth > 0;
     for (let x = 0; x < WA_W; x++) {
       let y = 0;
       while (y < WA_H) {
@@ -386,11 +404,25 @@ export function startArtillery(net: ArtilleryNet): void {
         if (y >= WA_H) break;
         const runTop = y;
         while (y < WA_H && solid[y * WA_W + x]) y++;
-        tc.fillStyle = dirt;
+        tc.fillStyle = pat ?? dirt;
         tc.fillRect(x, runTop, 1, y - runTop);
-        tc.fillStyle = theme.grass;
-        tc.fillRect(x, runTop, 1, Math.min(6, y - runTop));
+        if (topOk) {
+          // 1px slice of the themed top tile, aligned to this column's surface —
+          // the grass/sand/brick lip follows every hill, cave roof and crater rim
+          tc.drawImage(topImg, x % topImg.naturalWidth, 0, 1, Math.min(22, y - runTop), x, runTop, 1, Math.min(22, y - runTop));
+        } else {
+          tc.fillStyle = theme.grass;
+          tc.fillRect(x, runTop, 1, Math.min(6, y - runTop));
+        }
       }
+    }
+    // map mood tint over the tile pattern (source-atop keeps crater edges clean)
+    if (theme.tint) {
+      tc.save();
+      tc.globalCompositeOperation = 'source-atop';
+      tc.fillStyle = theme.tint;
+      tc.fillRect(0, 0, WA_W, WA_H);
+      tc.restore();
     }
     // texture pass — source-atop paints ONLY where terrain exists, so craters stay clean:
     tc.save();
@@ -781,8 +813,10 @@ export function startArtillery(net: ArtilleryNet): void {
     const humans = lobbyState?.players ?? [];
     const seed = (Math.random() * 0xffffffff) >>> 0;
     if (humans.length !== 4) teamMode = false; // 2v2 strictly needs four
-    fighters = humans.map((p) => ({
-      name: p.name, color: COLORS[p.slot], lobbySlot: p.slot,
+    fighters = humans.map((p, i) => ({
+      name: p.name,
+      color: teamMode ? TEAM_COLORS[teamOf(i)][i >> 1] : COLORS[p.slot],
+      lobbySlot: p.slot,
       x: 0, y: 0, vy: 0, face: 1, hp: WA_HP, alive: true, ammo: WEAPONS.map((w) => w.ammo), fallFrom: 0,
     }));
     genTerrain(seed, mapChoice);
@@ -1033,7 +1067,7 @@ export function startArtillery(net: ArtilleryNet): void {
       roster.innerHTML =
         '<div style="font-size:22px;font-weight:900;letter-spacing:6px;color:#ffb847;margin-bottom:8px">THE TRENCHES</div>' +
         humans.map((p, i) =>
-          `<div style="color:${COLORS[p.slot]}">${teamMode ? TEAM_BADGE[teamOf(i)] + ' ' : ''}🪖 ${p.name}${p.slot === 0 ? ' <span style="opacity:.6">(host)</span>' : ''}${p.slot === selfSlot ? ' <span style="opacity:.6">(you)</span>' : ''}</div>`,
+          `<div style="color:${teamMode ? TEAM_COLORS[teamOf(i)][i >> 1] : COLORS[p.slot]}">${teamMode ? TEAM_BADGE[teamOf(i)] + ' ' : ''}🪖 ${p.name}${p.slot === 0 ? ' <span style="opacity:.6">(host)</span>' : ''}${p.slot === selfSlot ? ' <span style="opacity:.6">(you)</span>' : ''}</div>`,
         ).join('') +
         (humans.length < 2 ? '<div style="opacity:.5;font-size:12px">waiting for at least one more human — no bots in these trenches</div>' : '');
       ui.appendChild(roster);
@@ -1102,7 +1136,9 @@ export function startArtillery(net: ArtilleryNet): void {
     if (d.t === 'init') {
       teamMode = !!d.teams;
       fighters = (d.fighters as any[]).map((f: any, i: number) => ({
-        name: String(f.name), color: COLORS[i], lobbySlot: f.lobbySlot ?? -1,
+        name: String(f.name),
+        color: teamMode ? TEAM_COLORS[teamOf(i)][i >> 1] : COLORS[i],
+        lobbySlot: f.lobbySlot ?? -1,
         x: 0, y: 0, vy: 0, face: 1, hp: WA_HP, alive: true, ammo: WEAPONS.map((w) => w.ammo), fallFrom: 0,
       }));
       turnCount = 0;
@@ -1411,10 +1447,15 @@ export function startArtillery(net: ArtilleryNet): void {
         ctx.moveTo(c.x + 16, cy - 21); ctx.lineTo(c.x + 7, cy - 6);
         ctx.stroke();
       }
-      ctx.font = '30px serif';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
-      ctx.fillText('📦', c.x, cy + 3);
+      if (imgReady('crate')) {
+        ctx.drawImage(ASSETS.crate, c.x - 16, cy - 30, 32, 32);
+      } else {
+        ctx.font = '30px serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+        ctx.fillText('📦', c.x, cy + 3);
+      }
       ctx.shadowBlur = 0;
+      ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
       // the contents, printed right on the box — no mystery, pure greed
       ctx.font = '17px serif';
       ctx.fillText(CRATE_ICON[c.kind], c.x, cy - 26 + Math.sin(now / 260) * 3);
@@ -1427,6 +1468,16 @@ export function startArtillery(net: ArtilleryNet): void {
       const active = i === turnPi && matchWinner === -2;
       const bob = active ? Math.sin(now / 300) * 1.5 : 0;
       const fy = f.y + bob;
+      if (teamMode) {
+        // always-on team ring — you can tell sides at a glance from across the map
+        ctx.strokeStyle = TEAM_COLORS[teamOf(i)][0];
+        ctx.globalAlpha = 0.85;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.ellipse(f.x, fy - 9, 14, 16, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
       // grounding shadow
       ctx.fillStyle = '#00000055';
       ctx.beginPath();
@@ -1599,9 +1650,18 @@ export function startArtillery(net: ArtilleryNet): void {
       ctx.beginPath();
       fl.trail.forEach(([x, y], i) => { if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
       ctx.stroke();
-      ctx.font = '22px serif';
-      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      ctx.fillText(fl.wp.icon, fl.x, fl.y);
+      if (fl.wp === METEOR && imgReady('meteor1')) {
+        ctx.save();
+        ctx.translate(fl.x, fl.y);
+        ctx.rotate(fl.steps * 0.02);
+        const m = fl.steps % 2 ? ASSETS.meteor1 : ASSETS.meteor1; // big rock, tumbling
+        ctx.drawImage(m, -22, -18, 44, 36);
+        ctx.restore();
+      } else {
+        ctx.font = '22px serif';
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(fl.wp.icon, fl.x, fl.y);
+      }
       if (fl.wp.fuseMs > 0) {
         const sLeft = Math.max(0, fl.fuse);
         ctx.font = '800 17px ui-monospace, monospace';
@@ -1724,6 +1784,30 @@ export function startArtillery(net: ArtilleryNet): void {
         ctx.fillStyle = dead ? '#665' : sel ? '#ffd060' : '#a08a5a';
         ctx.fillText(label, wx + 9, 18);
         wx += tw + 8;
+      }
+    }
+    // team panels: rosters + HP at a glance, pinned to the top corners
+    if (teamMode && fighters.length) {
+      for (const t of [0, 1] as const) {
+        const members = fighters.map((f, i) => ({ f, i })).filter(({ i }) => teamOf(i) === t);
+        const px = t === 0 ? 16 : WA_W - 246;
+        const py = 62;
+        ctx.fillStyle = '#00000088';
+        ctx.fillRect(px, py, 230, 26 + members.length * 24);
+        ctx.fillStyle = TEAM_COLORS[t][0];
+        ctx.font = '800 14px ui-monospace, monospace';
+        ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+        ctx.fillText(TEAM_NAMES[t], px + 10, py + 6);
+        members.forEach(({ f }, k) => {
+          const my = py + 28 + k * 24;
+          ctx.fillStyle = f.alive ? f.color : '#555c66';
+          ctx.font = '700 12px ui-monospace, monospace';
+          ctx.fillText(f.alive ? f.name.slice(0, 14) : `☠ ${f.name.slice(0, 12)}`, px + 10, my);
+          ctx.fillStyle = '#00000088';
+          ctx.fillRect(px + 138, my + 2, 82, 8);
+          ctx.fillStyle = f.alive ? f.color : '#333940';
+          ctx.fillRect(px + 138, my + 2, 82 * f.hp / WA_HP, 8);
+        });
       }
     }
     // RETREAT countdown for the shooter who's scrambling
