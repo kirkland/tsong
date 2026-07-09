@@ -9726,6 +9726,37 @@ export function startWorld(net: WorldNet): void {
       px(4, 8, 1, 2, CAT_D); px(6, 8, 1, 2, CAT_D); px(8, 8, 1, 2, CAT_D); // legs
       g.generateTexture('w-cat', 14, 12);
     }
+    // --- town critters: plaza pigeons + the pond family (face +x, same style as the strays) ---
+    {
+      const BODY = 0x8a8a94, WING = 0x6c6c78, NECK = 0x7a5a8a, BEAK = 0xd9924a, EYE = 0x1a1a1e, FOOT = 0xc06a5a;
+      g.clear();
+      px(2, 4, 7, 4, BODY); px(3, 5, 4, 2, WING);            // body + folded wing
+      px(8, 2, 3, 3, BODY); px(8, 4, 2, 2, NECK);            // head + iridescent neck
+      px(11, 3, 2, 1, BEAK);                                 // beak
+      px(9, 3, 1, 1, EYE);                                   // eye
+      px(1, 4, 1, 2, WING);                                  // tail
+      px(4, 8, 1, 2, FOOT); px(7, 8, 1, 2, FOOT);            // little pink legs
+      g.generateTexture('w-pigeon', 13, 10);
+    }
+    {
+      const HEAD = 0x2e7a3e, BODY = 0x8a6a4a, BODY_D = 0x6a4e34, BILL = 0xe8a03a, EYE = 0x141414, RING = 0xe8e0d0;
+      g.clear();
+      px(2, 5, 8, 4, BODY); px(2, 8, 8, 1, BODY_D);          // floating body (waterline hides legs)
+      px(1, 4, 2, 2, BODY_D);                                // tail nub
+      px(8, 2, 3, 4, HEAD); px(8, 5, 3, 1, RING);            // mallard head + neck ring
+      px(11, 3, 3, 2, BILL);                                 // bill
+      px(9, 3, 1, 1, EYE);                                   // eye
+      g.generateTexture('w-duck', 14, 10);
+    }
+    {
+      const FUZZ = 0xf0d060, FUZZ_D = 0xd0a840, BILL = 0xe8883a, EYE = 0x141414;
+      g.clear();
+      px(1, 3, 5, 3, FUZZ); px(1, 5, 5, 1, FUZZ_D);          // fuzzball body
+      px(4, 1, 3, 3, FUZZ);                                  // head
+      px(7, 2, 2, 1, BILL);                                  // beak
+      px(5, 2, 1, 1, EYE);                                   // eye
+      g.generateTexture('w-duckling', 9, 7);
+    }
     {
       // distant bird — a little dark seagull chevron (11×5), flap is done by squashing scaleY
       const B = 0x2a2f3a;
@@ -12872,7 +12903,7 @@ export function startWorld(net: WorldNet): void {
   // --- town life: statue of the #1, live billboard, fountain wishes, benches, critters ---
   // Everything here is cosmetic + social; interactions ride the X key. Emoji sprites keep it
   // cheap and legible at world scale (same trick as the friend hearts).
-  interface TownCritter { t: Phaser.GameObjects.Text; x: number; y: number; tx: number; ty: number; state: number; ph: number; }
+  interface TownCritter { t: Phaser.GameObjects.Text | Phaser.GameObjects.Image; x: number; y: number; tx: number; ty: number; state: number; ph: number; }
   let lifeSc: Phaser.Scene | null = null;
   let pigeons: TownCritter[] = [];
   let duck: TownCritter | null = null;
@@ -12884,7 +12915,7 @@ export function startWorld(net: WorldNet): void {
   let billboardIdx = 0;
   let billboardNextAt = 0;
   let wishPlaque: Phaser.GameObjects.Text | null = null;
-  let roofCat: Phaser.GameObjects.Text | null = null;
+  let roofCat: Phaser.GameObjects.Image | null = null;
   let seatedAt: { x: number; y: number } | null = null;
   let seatBubble: Phaser.GameObjects.Text | null = null;
   let lastChimeHour = new Date().getHours();
@@ -12933,16 +12964,16 @@ export function startWorld(net: WorldNet): void {
     // 🐦 pigeon flock
     for (let i = 0; i < 5; i++) {
       const x = PLAZA.x + (Math.random() - 0.5) * 300, y = PLAZA.y + (Math.random() - 0.5) * 260;
-      pigeons.push({ t: sc.add.text(x, y, '🐦', { fontSize: '12px', resolution: 2 }).setOrigin(0.5, 1).setDepth(y), x, y, tx: x, ty: y, state: 0, ph: Math.random() * 9 });
+      pigeons.push({ t: sc.add.image(x, y, 'w-pigeon').setScale(TEXEL).setOrigin(0.5, 1).setDepth(y), x, y, tx: x, ty: y, state: 0, ph: Math.random() * 9 });
     }
     // 🦆 the pond family
-    duck = { t: sc.add.text(POND.x, POND.y, '🦆', { fontSize: '14px', resolution: 2 }).setOrigin(0.5, 1).setDepth(POND.y), x: POND.x, y: POND.y, tx: POND.x, ty: POND.y, state: 0, ph: 0 };
+    duck = { t: sc.add.image(POND.x, POND.y, 'w-duck').setScale(TEXEL).setOrigin(0.5, 1).setDepth(POND.y), x: POND.x, y: POND.y, tx: POND.x, ty: POND.y, state: 0, ph: 0 };
     for (let i = 0; i < 3; i++) {
-      ducklings.push({ t: sc.add.text(POND.x - 14 * (i + 1), POND.y, '🐥', { fontSize: '9px', resolution: 2 }).setOrigin(0.5, 1).setDepth(POND.y), x: POND.x - 14 * (i + 1), y: POND.y, tx: 0, ty: 0, state: 0, ph: i });
+      ducklings.push({ t: sc.add.image(POND.x - 14 * (i + 1), POND.y, 'w-duckling').setScale(TEXEL).setOrigin(0.5, 1).setDepth(POND.y), x: POND.x - 14 * (i + 1), y: POND.y, tx: 0, ty: 0, state: 0, ph: i });
     }
     // 🐈 today's roof cat
     const spot = CAT_ROOFS[Math.floor(Date.now() / 86400000) % CAT_ROOFS.length];
-    roofCat = sc.add.text(spot.x, spot.y, '🐈', { fontSize: '13px', resolution: 2 }).setOrigin(0.5, 1).setDepth(spot.y);
+    roofCat = sc.add.image(spot.x, spot.y, 'w-cat').setScale(TEXEL).setOrigin(0.5, 1).setDepth(spot.y);
     wishHandler = (total, granted) => {
       wishPlaque?.setText(`⛲ town wishes: ${total.toLocaleString()} · X to wish (10🪙)`);
       if (granted) showToast('⛲✨ <b>The fountain heard you.</b><br>Title unlocked: Wisher');
@@ -13022,18 +13053,21 @@ export function startWorld(net: WorldNet): void {
         p.tx = PLAZA.x + (Math.random() - 0.5) * 420;
         p.ty = PLAZA.y + (Math.random() - 0.5) * 340;
       }
+      const spr = p.t as Phaser.GameObjects.Image;
       if (p.state === 2) { // airborne
         const dx = p.tx - p.x, dy = p.ty - p.y, d = Math.hypot(dx, dy);
         if (d < 8) p.state = 0;
-        else { p.x += (dx / d) * 170 * dt; p.y += (dy / d) * 170 * dt; }
-        p.t.setPosition(p.x, p.y - Math.abs(Math.sin(now / 90)) * 7); // flap
+        else { p.x += (dx / d) * 170 * dt; p.y += (dy / d) * 170 * dt; spr.setFlipX(dx < 0); }
+        spr.setPosition(p.x, p.y - Math.abs(Math.sin(now / 90)) * 7);
+        spr.setScale(TEXEL, TEXEL * (0.75 + Math.abs(Math.sin(now / 90)) * 0.45)); // wingbeat squash
       } else {
         if (Math.random() < 0.004) { p.tx = p.x + (Math.random() - 0.5) * 60; p.ty = p.y + (Math.random() - 0.5) * 40; }
         const dx = p.tx - p.x, dy = p.ty - p.y, d = Math.hypot(dx, dy);
-        if (d > 3) { p.x += (dx / d) * 26 * dt; p.y += (dy / d) * 26 * dt; }
-        p.t.setPosition(p.x, p.y + (Math.sin(now / 260 + p.ph) > 0.7 ? 1.5 : 0)); // peck
+        if (d > 3) { p.x += (dx / d) * 26 * dt; p.y += (dy / d) * 26 * dt; spr.setFlipX(dx < 0); }
+        spr.setScale(TEXEL, TEXEL);
+        spr.setPosition(p.x, p.y + (Math.sin(now / 260 + p.ph) > 0.7 ? 1.5 : 0)); // peck
       }
-      p.t.setDepth(p.y);
+      spr.setDepth(p.y);
     }
     // the pond family paddles in a lazy line
     if (duck) {
@@ -13042,18 +13076,19 @@ export function startWorld(net: WorldNet): void {
         duck.tx = POND.x + Math.cos(a) * r; duck.ty = POND.y + Math.sin(a) * r * 0.5;
       }
       const dx = duck.tx - duck.x, dy = duck.ty - duck.y, d = Math.hypot(dx, dy);
-      if (d > 2) { duck.x += (dx / d) * 18 * dt; duck.y += (dy / d) * 18 * dt; }
+      if (d > 2) { duck.x += (dx / d) * 18 * dt; duck.y += (dy / d) * 18 * dt; (duck.t as Phaser.GameObjects.Image).setFlipX(dx < 0); }
       duck.t.setPosition(duck.x, duck.y + Math.sin(now / 500) * 1.5).setDepth(duck.y);
       let leadX = duck.x, leadY = duck.y;
       for (const dl of ducklings) {
         const ddx = leadX - 13 * Math.sign(leadX - dl.x || 1) - dl.x, ddy = leadY - dl.y;
         dl.x += ddx * 1.6 * dt; dl.y += ddy * 1.6 * dt;
+        (dl.t as Phaser.GameObjects.Image).setFlipX(ddx < 0);
         dl.t.setPosition(dl.x, dl.y + Math.sin(now / 450 + dl.ph) * 1.5).setDepth(dl.y);
         leadX = dl.x; leadY = dl.y;
       }
     }
     // roof cat breathes
-    if (roofCat) roofCat.setScale(1, 1 + Math.sin(now / 1100) * 0.04);
+    if (roofCat) roofCat.setScale(TEXEL, TEXEL * (1 + Math.sin(now / 1100) * 0.05));
     // the clocktower chimes on the hour — brief meteor shower over town
     const hour = new Date().getHours();
     if (hour !== lastChimeHour && lifeSc) {
