@@ -170,6 +170,7 @@ export function startArtillery(net: ArtilleryNet): void {
   let gravScale = 1;                                 // wildcard low-gravity turns scale projectile arcs
   let eventResolving = false;                        // wildcard flights in the air (don't advance the turn)
   let hasFired = false;                              // acting player already shot this turn
+  let pelletsUsed = 0;                               // shotgun fires TWICE per turn (the Worms way)
   let retreatUntil = 0;                              // ...but may still RUN until this timestamp
   let turnRetreatUntil = 0;                          // host: when the current shooter's retreat window closes
   let turnShotTaken = false;                         // set on EVERY client when the acting player's shot arrives
@@ -715,9 +716,11 @@ export function startArtillery(net: ArtilleryNet): void {
     else if (!anyHit) say(pick(QUIPS.miss));
   }
 
-  function resolveShot(pi: number, w: number, sx: number, sy: number, ang: number, pow: number, tx?: number, ty?: number) {
+  function resolveShot(pi: number, w: number, sx: number, sy: number, ang: number, pow: number, tx?: number, ty?: number, last = true) {
     resolving = true;
-    if (pi === turnPi) turnShotTaken = true; // the acting player has used their shot (host's clock must stop)
+    // shotgun pellet 1 is NOT the final shot — the clock keeps running so an abandoned
+    // second pellet can't hang the turn
+    if (pi === turnPi && last) turnShotTaken = true;
     sfxFire();
     const wp = WEAPONS[w];
     const shooter = fighters[pi];
@@ -734,7 +737,8 @@ export function startArtillery(net: ArtilleryNet): void {
         if (victim) break;
       }
       explode(hx, hy, wp);
-      finishShot();
+      if (last) finishShot();
+      else resolving = false; // pellet one of two — keep aiming
       return;
     }
     if (wp.special === 'girder') {
@@ -965,6 +969,7 @@ export function startArtillery(net: ArtilleryNet): void {
   function applyTurnLocal(crate?: { x: number; kind: CrateKind } | null, ev?: any) {
     gravScale = 1;
     hasFired = false;
+    pelletsUsed = 0;
     retreatUntil = 0;
     turnRetreatUntil = 0;
     turnShotTaken = false;
@@ -1173,7 +1178,7 @@ export function startArtillery(net: ArtilleryNet): void {
         'A / D — walk · W — JUMP · MOUSE — aim · HOLD SPACE — charge, release to FIRE<br>' +
         'After firing you get 5s to RETREAT — run from your own dynamite, dive behind cover<br>' +
         '1 🚀 Bazooka (rides the wind) · 2 💣 Grenade (bounces, 3s fuse)<br>' +
-        '3 🔫 Shotgun (point blank) · 4 🧨 Dynamite (drop &amp; RUN — ×2)<br>' +
+        '3 🔫 Shotgun (fires TWICE per turn — aim between shots) · 4 🧨 Dynamite (drop &amp; RUN — ×2)<br>' +
         '5 🛩️ Airstrike (three from above, ×1) · 6 🏓 Pong Ball (bounces, hunts, ×1)<br>' +
         '7 🧱 Girder (BUILD a steel beam at the mouse, ×1) · 8 🪣 Dirt Ball (BUILD a mound, bury someone, ×1)<br>' +
         '9 🎳 Bowling Ball (crate-only) · 0 🌀 Teleport (click anywhere, ×1) · 📦 crates drop between turns<br>' +
@@ -1225,8 +1230,8 @@ export function startArtillery(net: ArtilleryNet): void {
       }
     } else if (d.t === 'shot') {
       if (d.pi !== myIdx()) {
-        if (isHost && fighters[d.pi]) turnRetreatUntil = performance.now() + RETREAT_MS;
-        resolveShot(d.pi, d.w, d.x, d.y, d.ang, d.pow, d.tx, d.ty);
+        if (isHost && fighters[d.pi] && (d.last ?? true)) turnRetreatUntil = performance.now() + RETREAT_MS;
+        resolveShot(d.pi, d.w, d.x, d.y, d.ang, d.pow, d.tx, d.ty, d.last ?? true);
       }
     } else if (d.t === 'crate') {
       if (d.pi !== myIdx()) applyCrate(d.pi, d.i);
@@ -1267,14 +1272,19 @@ export function startArtillery(net: ArtilleryNet): void {
     if (!myTurn() || charge < 0) return;
     const me = fighters[myIdx()];
     if (WEAPONS[weapon].ammo >= 0 && me.ammo[weapon] <= 0) { charge = -1; return; }
-    const shot = { t: 'shot', pi: myIdx(), w: weapon, x: Math.round(me.x), y: Math.round(me.y), ang: aimAngle, pow: Math.min(1, charge), tx: Math.round(mouseX), ty: Math.round(mouseY) };
+    const isShotgun = weapon === 2;
+    if (isShotgun) pelletsUsed++;
+    const last = !isShotgun || pelletsUsed >= 2;
+    const shot = { t: 'shot', pi: myIdx(), w: weapon, x: Math.round(me.x), y: Math.round(me.y), ang: aimAngle, pow: Math.min(1, charge), tx: Math.round(mouseX), ty: Math.round(mouseY), last };
     charge = -1;
-    hasFired = true;
-    retreatUntil = performance.now() + RETREAT_MS;
-    turnRetreatUntil = retreatUntil;
+    if (last) {
+      hasFired = true;
+      retreatUntil = performance.now() + RETREAT_MS;
+      turnRetreatUntil = retreatUntil;
+    }
     if (weapon === 3) say('Run. RUN.');
     net.relay(shot);
-    resolveShot(shot.pi, shot.w, me.x, me.y, shot.ang, shot.pow, shot.tx, shot.ty);
+    resolveShot(shot.pi, shot.w, me.x, me.y, shot.ang, shot.pow, shot.tx, shot.ty, last);
   }
 
   function onKeyDown(e: KeyboardEvent) {
@@ -1283,8 +1293,8 @@ export function startArtillery(net: ArtilleryNet): void {
     const k = e.key.toLowerCase();
     if (['a', 'd', 'w', ' '].includes(k)) { e.preventDefault(); e.stopPropagation(); }
     if (k === ' ' && myTurn() && charge < 0 && !e.repeat) charge = 0;
-    if (['1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(k) && myTurn()) weapon = Number(k) - 1;
-    if (k === '0' && myTurn()) weapon = 9; // 🌀 teleport lives on the 0 key
+    if (['1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(k) && myTurn() && pelletsUsed === 0) weapon = Number(k) - 1;
+    if (k === '0' && myTurn() && pelletsUsed === 0) weapon = 9; // 🌀 teleport lives on the 0 key
     keys.add(k);
   }
   function onKeyUp(e: KeyboardEvent) {
@@ -1880,6 +1890,15 @@ export function startArtillery(net: ArtilleryNet): void {
           ctx.fillRect(px + 138, my + 2, 82 * f.hp / WA_HP, 8);
         });
       }
+    }
+    // shotgun: second shell standing by
+    if (turnPi === myIdx() && pelletsUsed === 1 && !hasFired && matchWinner === -2) {
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      ctx.font = '900 24px ui-monospace, monospace';
+      ctx.fillStyle = '#ffd060';
+      ctx.shadowColor = '#ffd060'; ctx.shadowBlur = 12;
+      ctx.fillText('🔫 ONE SHELL LEFT', WA_W / 2, 70);
+      ctx.shadowBlur = 0;
     }
     // RETREAT countdown for the shooter who's scrambling
     if (hasFired && now < retreatUntil && turnPi === myIdx() && fighters[turnPi]?.alive && matchWinner === -2) {
