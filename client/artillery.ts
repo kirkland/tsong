@@ -39,6 +39,8 @@ const COLORS = ['#00e5ff', '#ff9a00', '#ff3df0', '#89ff2a'] as const;
 // 2v2 teams interleave by slot (0&2 vs 1&3) so turn order naturally alternates sides.
 const TEAM_NAMES = ['🌊 TEAM TIDE', '🔥 TEAM FLAME'] as const;
 const TEAM_BADGE = ['🌊', '🔥'] as const;
+// in 2v2 the whole color scheme goes team-first: TIDE wears the blues, FLAME wears the fire
+const TEAM_COLORS = [['#00e5ff', '#4a90ff'], ['#ff9a00', '#ff4a4a']] as const;
 const teamOf = (idx: number) => idx % 2;
 
 // --- battlefield maps (host picks; the generator theme + profile per map) ---
@@ -811,8 +813,10 @@ export function startArtillery(net: ArtilleryNet): void {
     const humans = lobbyState?.players ?? [];
     const seed = (Math.random() * 0xffffffff) >>> 0;
     if (humans.length !== 4) teamMode = false; // 2v2 strictly needs four
-    fighters = humans.map((p) => ({
-      name: p.name, color: COLORS[p.slot], lobbySlot: p.slot,
+    fighters = humans.map((p, i) => ({
+      name: p.name,
+      color: teamMode ? TEAM_COLORS[teamOf(i)][i >> 1] : COLORS[p.slot],
+      lobbySlot: p.slot,
       x: 0, y: 0, vy: 0, face: 1, hp: WA_HP, alive: true, ammo: WEAPONS.map((w) => w.ammo), fallFrom: 0,
     }));
     genTerrain(seed, mapChoice);
@@ -1063,7 +1067,7 @@ export function startArtillery(net: ArtilleryNet): void {
       roster.innerHTML =
         '<div style="font-size:22px;font-weight:900;letter-spacing:6px;color:#ffb847;margin-bottom:8px">THE TRENCHES</div>' +
         humans.map((p, i) =>
-          `<div style="color:${COLORS[p.slot]}">${teamMode ? TEAM_BADGE[teamOf(i)] + ' ' : ''}🪖 ${p.name}${p.slot === 0 ? ' <span style="opacity:.6">(host)</span>' : ''}${p.slot === selfSlot ? ' <span style="opacity:.6">(you)</span>' : ''}</div>`,
+          `<div style="color:${teamMode ? TEAM_COLORS[teamOf(i)][i >> 1] : COLORS[p.slot]}">${teamMode ? TEAM_BADGE[teamOf(i)] + ' ' : ''}🪖 ${p.name}${p.slot === 0 ? ' <span style="opacity:.6">(host)</span>' : ''}${p.slot === selfSlot ? ' <span style="opacity:.6">(you)</span>' : ''}</div>`,
         ).join('') +
         (humans.length < 2 ? '<div style="opacity:.5;font-size:12px">waiting for at least one more human — no bots in these trenches</div>' : '');
       ui.appendChild(roster);
@@ -1132,7 +1136,9 @@ export function startArtillery(net: ArtilleryNet): void {
     if (d.t === 'init') {
       teamMode = !!d.teams;
       fighters = (d.fighters as any[]).map((f: any, i: number) => ({
-        name: String(f.name), color: COLORS[i], lobbySlot: f.lobbySlot ?? -1,
+        name: String(f.name),
+        color: teamMode ? TEAM_COLORS[teamOf(i)][i >> 1] : COLORS[i],
+        lobbySlot: f.lobbySlot ?? -1,
         x: 0, y: 0, vy: 0, face: 1, hp: WA_HP, alive: true, ammo: WEAPONS.map((w) => w.ammo), fallFrom: 0,
       }));
       turnCount = 0;
@@ -1462,6 +1468,16 @@ export function startArtillery(net: ArtilleryNet): void {
       const active = i === turnPi && matchWinner === -2;
       const bob = active ? Math.sin(now / 300) * 1.5 : 0;
       const fy = f.y + bob;
+      if (teamMode) {
+        // always-on team ring — you can tell sides at a glance from across the map
+        ctx.strokeStyle = TEAM_COLORS[teamOf(i)][0];
+        ctx.globalAlpha = 0.85;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.ellipse(f.x, fy - 9, 14, 16, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
       // grounding shadow
       ctx.fillStyle = '#00000055';
       ctx.beginPath();
@@ -1768,6 +1784,30 @@ export function startArtillery(net: ArtilleryNet): void {
         ctx.fillStyle = dead ? '#665' : sel ? '#ffd060' : '#a08a5a';
         ctx.fillText(label, wx + 9, 18);
         wx += tw + 8;
+      }
+    }
+    // team panels: rosters + HP at a glance, pinned to the top corners
+    if (teamMode && fighters.length) {
+      for (const t of [0, 1] as const) {
+        const members = fighters.map((f, i) => ({ f, i })).filter(({ i }) => teamOf(i) === t);
+        const px = t === 0 ? 16 : WA_W - 246;
+        const py = 62;
+        ctx.fillStyle = '#00000088';
+        ctx.fillRect(px, py, 230, 26 + members.length * 24);
+        ctx.fillStyle = TEAM_COLORS[t][0];
+        ctx.font = '800 14px ui-monospace, monospace';
+        ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+        ctx.fillText(TEAM_NAMES[t], px + 10, py + 6);
+        members.forEach(({ f }, k) => {
+          const my = py + 28 + k * 24;
+          ctx.fillStyle = f.alive ? f.color : '#555c66';
+          ctx.font = '700 12px ui-monospace, monospace';
+          ctx.fillText(f.alive ? f.name.slice(0, 14) : `☠ ${f.name.slice(0, 12)}`, px + 10, my);
+          ctx.fillStyle = '#00000088';
+          ctx.fillRect(px + 138, my + 2, 82, 8);
+          ctx.fillStyle = f.alive ? f.color : '#333940';
+          ctx.fillRect(px + 138, my + 2, 82 * f.hp / WA_HP, 8);
+        });
       }
     }
     // RETREAT countdown for the shooter who's scrambling
