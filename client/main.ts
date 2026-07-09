@@ -2268,6 +2268,7 @@ async function openBowling(): Promise<void> {
       bowlLeave: () => net.send({ type: 'bowlLeave' }),
       name:   () => myName,
       selfId: () => myId,
+      muted:  () => muted,
     });
   } catch (e) {
     console.error('Bowling failed to load:', e);

@@ -10,6 +10,7 @@ export interface BowlingNet {
   bowlLeave(): void;
   name(): string;
   selfId(): string;
+  muted(): boolean; // whether the main page's mute toggle is on
 }
 
 // ─── Perspective constants ────────────────────────────────────────────────────
@@ -1411,7 +1412,11 @@ function drawGameOver() {
 }
 
 // ─── Sound (Web Audio synth) ─────────────────────────────────────────────────
+// Returns null when muted so every playXSfx() below no-ops via its existing `if (!ac) return;` —
+// same bug class as doom.ts's synth sounds: this module has its own sound path main.ts's
+// applyMute() has never heard of.
 function getAC(): AudioContext | null {
+  if (net.muted()) return null;
   if (!audioCtx) {
     try { audioCtx = new AudioContext(); } catch { return null; }
   }
