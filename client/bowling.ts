@@ -113,7 +113,10 @@ export function openBowling(netAdapter: BowlingNet) {
 
   overlay = document.createElement('div');
   overlay.id = 'bowlOverlay';
-  overlay.style.cssText = 'position:fixed;inset:0;z-index:900;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;';
+  // z-index above World's own overlay (9998) and a translucent (not opaque) backdrop so, when
+  // walked into from World, World stays visible — frozen on its last frame — dimmed around the
+  // edges instead of disappearing outright. See world.ts's enterBuilding() 'bowling' branch.
+  overlay.style.cssText = 'position:fixed;inset:0;z-index:20000;background:rgba(4,6,10,0.88);display:flex;flex-direction:column;align-items:center;justify-content:center;';
 
   canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;

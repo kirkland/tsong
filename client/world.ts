@@ -2991,8 +2991,11 @@ export function startWorld(net: WorldNet): void {
     // Market's reused sell modal.
     if (kind === 'parliament') { net.openParliament(); return; }
     if (kind === 'bowling') {
+      // First try of the "freeze but stay visible" recipe for a full-screen minigame (see
+      // pause()'s doc comment): World stays on screen, frozen, dimmed behind Bowling's own
+      // overlay instead of disappearing outright.
       openDialog('🎳 Bolwoing Alley', 'The sound of pins crashing echoes down the lane.', [
-        { label: '🎳 Bowl (2–4 players)', onPick: () => { pause(); net.openFeature('bowling'); } },
+        { label: '🎳 Bowl (2–4 players)', onPick: () => { pause(false); net.openFeature('bowling'); } },
       ]);
       return;
     }
@@ -12201,10 +12204,15 @@ export function startWorld(net: WorldNet): void {
   }
   _exitWorld = exit;
 
-  // Delegating to a Casino/Bank/Shop panel or a lazy-loaded minigame: hide + freeze World instead
-  // of tearing it down, so main.ts can bring it straight back (same position, same everything)
-  // once that panel/game closes — see main.ts's watchWorldDelegate().
-  function pause() {
+  // Delegating to a Casino/Bank/Shop panel or a lazy-loaded minigame: freeze World instead of
+  // tearing it down, so main.ts can bring it straight back (same position, same everything) once
+  // that panel/game closes — see main.ts's watchWorldDelegate(). `hide` defaults to true (World's
+  // overlay disappears entirely, the long-standing behavior every other delegate still uses).
+  // Passing false keeps the overlay visible — frozen on its last rendered frame, dimmed behind the
+  // delegate's own translucent backdrop — for delegates high-z-index enough to render on top of it
+  // (see the Bowling entry point below, the first to try this). Input is isolated either way:
+  // `paused` alone (not overlay visibility) is what every onKeyDown/onPointerDown/onWheel checks.
+  function pause(hide = true) {
     if (paused) return;
     paused = true;
     keys.clear(); joyActive = false; handbrake = false;
@@ -12213,7 +12221,7 @@ export function startWorld(net: WorldNet): void {
     tourneyDialogOpen = false; seasonDialogOpen = false; powerupsDialogOpen = false; lootDialogOpen = false; marketplaceDialogOpen = false;
     dialog.style.display = 'none'; // don't resume back into the dialog that sent us here
     game?.loop.sleep();
-    overlay.style.display = 'none';
+    if (hide) overlay.style.display = 'none';
   }
   function resume() {
     if (!paused) return;
