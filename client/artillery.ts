@@ -121,12 +121,43 @@ function makeNoise2(rnd: () => number) {
 // Kenney CC0 sprites (client/public/worms/) — terrain fill tiles, crates, meteors.
 // Same deal as the overworld's Tiny Town sheet; tiny PNGs, preloaded at module import.
 const ASSETS: Record<string, HTMLImageElement> = {};
-for (const n of ['sl-ground', 'sl-rockfill', 'sl-grasstop', 'sl-tree', 'sl-bush', 'sl-rock', 'sl-shrooms', 'sl-skulls', 'sl-crate', 'sl-house', 'sl-back', 'sl-middle', 'meteor1', 'meteor2']) {
+for (const n of ['sl-ground', 'sl-rockfill', 'sl-grasstop', 'sl-tree', 'sl-bush', 'sl-rock', 'sl-shrooms', 'sl-skulls', 'sl-crate', 'sl-house', 'sl-back', 'sl-middle', 'meteor1', 'meteor2',
+  'fox-idle-1', 'fox-idle-2', 'fox-idle-3', 'fox-idle-4',
+  'fox-run-1', 'fox-run-2', 'fox-run-3', 'fox-run-4', 'fox-run-5', 'fox-run-6',
+  'fox-jump-1', 'fox-jump-2', 'fox-hurt-1', 'fox-hurt-2']) {
   const img = new Image();
   img.src = `/worms/${n}.png`;
   ASSETS[n] = img;
 }
 const imgReady = (n: string) => ASSETS[n]?.complete && ASSETS[n].naturalWidth > 0;
+// the soldiers are Sunny Land's fox, 2x, tinted per player/team color. Frames cached.
+const FOX: Record<string, string[]> = {
+  idle: ['fox-idle-1', 'fox-idle-2', 'fox-idle-3', 'fox-idle-4'],
+  run: ['fox-run-1', 'fox-run-2', 'fox-run-3', 'fox-run-4', 'fox-run-5', 'fox-run-6'],
+  jump: ['fox-jump-1', 'fox-jump-2'],
+  hurt: ['fox-hurt-1', 'fox-hurt-2'],
+};
+const foxCache = new Map<string, HTMLCanvasElement>();
+function foxFrame(name: string, color: string): HTMLCanvasElement | null {
+  const key = color + name;
+  const hit = foxCache.get(key);
+  if (hit) return hit;
+  const img = ASSETS[name];
+  if (!(img?.complete && img.naturalWidth > 0)) return null;
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth * 2;
+  c.height = img.naturalHeight * 2;
+  const cc = c.getContext('2d')!;
+  cc.imageSmoothingEnabled = false;
+  cc.drawImage(img, 0, 0, c.width, c.height);
+  cc.globalCompositeOperation = 'source-atop';
+  cc.globalAlpha = 0.34; // enough tint to tell players apart, not enough to lose the fox
+  cc.fillStyle = color;
+  cc.fillRect(0, 0, c.width, c.height);
+  foxCache.set(key, c);
+  return c;
+}
+
 // pixel art wants integer upscales with no smoothing — pre-scale once per use
 function scaled(n: string, factor: number): HTMLCanvasElement | null {
   if (!imgReady(n)) return null;
@@ -160,6 +191,9 @@ export function startArtillery(net: ArtilleryNet): void {
     x: number; y: number; vy: number; face: number; // face: 1 right, -1 left
     hp: number; alive: boolean; ammo: number[];     // per-weapon ammo (-1 = infinite)
     fallFrom: number;                                // y where the current fall began
+    lastX: number; lastY: number;                    // motion detection for animation state
+    movingUntil: number;                             // treat as running until this timestamp
+    hurtUntil: number;                               // play the hurt pose until this timestamp
   }
   let fighters: Fighter[] = [];
   let solid = new Uint8Array(WA_W * WA_H);
@@ -528,6 +562,15 @@ export function startArtillery(net: ArtilleryNet): void {
         else if (!housePlaced && roll < 0.335) { stamp('sl-house', x, top, 1.8); housePlaced = true; } // somebody lives here. lived.
       }
     }
+    fireflies = [];
+    if (theme.grassy) {
+      for (let i = 0; i < 12; i++) {
+        const fx2 = 80 + rnd() * (WA_W - 160);
+        let sy = 0;
+        for (let y = 0; y < WA_H; y++) if (solid[y * WA_W + fx2 | 0]) { sy = y; break; }
+        if (sy > 80) fireflies.push({ x: fx2, y: sy - 24 - rnd() * 50, ph: rnd() * 9 });
+      }
+    }
     return hmap;
   }
 
@@ -642,6 +685,7 @@ export function startArtillery(net: ArtilleryNet): void {
     f.alive = false;
     if (drowned) { sfxSplash(); say(pick(QUIPS.drown)); }
     else graves.push({ x: f.x, y: f.y });
+    ghosts.push({ x: f.x, y: f.y - 20, born: performance.now() });
     floaties.push({ x: f.x, y: f.y - 40, text: drowned ? '🌊' : '💀', color: '#fff', life: 0 });
   }
 
@@ -679,7 +723,8 @@ export function startArtillery(net: ArtilleryNet): void {
         anyHit = anyHit || dmg > 4;
         bigHit = bigHit || dmg >= 40;
         if (fighters[turnPi] === f && dmg > 4) hitSelf = true;
-        if (dmg > 0) floaties.push({ x: f.x, y: f.y - 34, text: `-${dmg}`, color: dmg >= 35 ? '#ff5a3a' : '#ffd060', life: 0 });
+        if (dmg > 0) { floaties.push({ x: f.x, y: f.y - 34, text: `-${dmg}`, color: dmg >= 35 ? '#ff5a3a' : '#ffd060', life: 0 }); f.hurtUntil = performance.now() + 600; }
+        if (dmg >= 40) moonShadesUntil = performance.now() + 3400;
         // knockback away from the blast
         const ang = Math.atan2((f.y - 9) - cy, f.x - cx);
         const kick = 260 * (1 - d / reach);
@@ -881,6 +926,7 @@ export function startArtillery(net: ArtilleryNet): void {
       color: teamMode ? TEAM_COLORS[teamOf(i)][i >> 1] : COLORS[p.slot],
       lobbySlot: p.slot,
       x: 0, y: 0, vy: 0, face: 1, hp: WA_HP, alive: true, ammo: WEAPONS.map((w) => w.ammo), fallFrom: 0,
+      lastX: 0, lastY: 0, movingUntil: 0, hurtUntil: 0,
     }));
     genTerrain(seed, mapChoice);
     placeFighters();
@@ -949,7 +995,7 @@ export function startArtillery(net: ArtilleryNet): void {
     wind = Math.round((Math.random() * 2 - 1) * 100) / 100;
     turnEndsAt = performance.now() + WA_TURN_MS;
     const crate = crates.length < 3 && Math.random() < 0.45
-      ? { x: 80 + Math.floor(Math.random() * (WA_W - 160)), kind: CRATE_KINDS[Math.floor(Math.random() * CRATE_KINDS.length)] }
+      ? { x: 80 + Math.floor(Math.random() * (WA_W - 160)), kind: CRATE_KINDS[Math.floor(Math.random() * CRATE_KINDS.length)], gold: Math.random() < 1 / 12 }
       : null;
     // wildcard events: rolled by the host with every random parameter baked into the message,
     // so every client replays the exact same chaos
@@ -966,7 +1012,7 @@ export function startArtillery(net: ArtilleryNet): void {
     applyTurnLocal(crate, ev);
   }
 
-  function applyTurnLocal(crate?: { x: number; kind: CrateKind } | null, ev?: any) {
+  function applyTurnLocal(crate?: { x: number; kind: CrateKind; gold?: boolean } | null, ev?: any) {
     gravScale = 1;
     hasFired = false;
     pelletsUsed = 0;
@@ -1010,8 +1056,8 @@ export function startArtillery(net: ArtilleryNet): void {
     if (crate) {
       const cy = surfaceY(crate.x) - 10;
       if (cy < waterY - 20) {
-        crates.push({ x: crate.x, y: cy, kind: crate.kind, born: performance.now() });
-        say('Supply drop inbound. No questions about the logistics.');
+        crates.push({ x: crate.x, y: cy, kind: crate.kind, born: performance.now(), gold: crate.gold });
+        say(crate.gold ? '...is that crate GOLDEN?' : 'Supply drop inbound. No questions about the logistics.');
       }
     }
     turnEndsAt = performance.now() + WA_TURN_MS;
@@ -1037,13 +1083,21 @@ export function startArtillery(net: ArtilleryNet): void {
 
   // --- cosmetic helpers ---
   // supply crates: spawned by the host at turn start, collected by walking over them
-  interface Crate { x: number; y: number; kind: CrateKind; born: number; }
+  interface Crate { x: number; y: number; kind: CrateKind; born: number; gold?: boolean; }
   let crates: Crate[] = [];
   function applyCrate(pi: number, i: number) {
     const c = crates[i];
     const f = fighters[pi];
     if (!c || !f) return;
     crates.splice(i, 1);
+    if (c.gold) {
+      // the golden crate: one of everything, plus a snack
+      WEAPONS.forEach((w, wi) => { if (w.ammo >= 0) f.ammo[wi]++; });
+      f.hp = Math.min(WA_HP, f.hp + 20);
+      floaties.push({ x: f.x, y: f.y - 34, text: '⭐ EVERYTHING', color: '#ffd060', life: 0 });
+      say(`${f.name} opened the golden crate. Run.`);
+      return;
+    }
     if (c.kind === 'hp') {
       f.hp = Math.min(WA_HP, f.hp + 30);
       floaties.push({ x: f.x, y: f.y - 34, text: '+30', color: '#7fe089', life: 0 });
@@ -1055,6 +1109,18 @@ export function startArtillery(net: ArtilleryNet): void {
       say(c.kind === 'bowl' ? `${f.name} visited the bowling alley. Everyone should worry.` : `${f.name} unboxed a ${WEAPONS[wi].name}.`);
     }
   }
+
+  // drifting leaves — pretty AND functional: they ride the actual wind value
+  interface Leaf { x: number; y: number; ph: number; }
+  const leaves: Leaf[] = Array.from({ length: 14 }, (_, i) => ({
+    x: (i * 397) % WA_W, y: (i * 173) % (WA_H * 0.7), ph: i * 1.7,
+  }));
+  // the fallen rise: a pale fox spirit drifts up from where they died
+  interface Ghost { x: number; y: number; born: number; }
+  let ghosts: Ghost[] = [];
+  // fireflies on the green maps (anchored near the surface at genTerrain time)
+  let fireflies: { x: number; y: number; ph: number }[] = [];
+  let moonShadesUntil = 0; // the moon has seen some things
 
   interface Flash { x: number; y: number; r: number; life: number; }
   let flashes: Flash[] = [];
@@ -1204,6 +1270,7 @@ export function startArtillery(net: ArtilleryNet): void {
         color: teamMode ? TEAM_COLORS[teamOf(i)][i >> 1] : COLORS[i],
         lobbySlot: f.lobbySlot ?? -1,
         x: 0, y: 0, vy: 0, face: 1, hp: WA_HP, alive: true, ammo: WEAPONS.map((w) => w.ammo), fallFrom: 0,
+      lastX: 0, lastY: 0, movingUntil: 0, hurtUntil: 0,
       }));
       turnCount = 0;
       waterY = WATER_BASE;
@@ -1418,6 +1485,13 @@ export function startArtillery(net: ArtilleryNet): void {
     // sparks
     for (const s of sparks) { s.life += dt; s.x += s.vx * dt; s.y += s.vy * dt; s.vy += 700 * dt; }
     sparks = sparks.filter((s) => s.life < s.max);
+    // leaves ride the wind (and tell you which way it's really blowing)
+    for (const lf of leaves) {
+      lf.x += (wind * 110 + Math.sin(now / 900 + lf.ph) * 14) * dt;
+      lf.y += (26 + Math.sin(now / 700 + lf.ph * 2) * 18) * dt;
+      if (lf.x < -10) lf.x = WA_W + 8; else if (lf.x > WA_W + 10) lf.x = -8;
+      if (lf.y > waterY) lf.y = 40 + (lf.ph * 61) % 200;
+    }
   }
 
   // --- rendering ---
@@ -1503,7 +1577,7 @@ export function startArtillery(net: ArtilleryNet): void {
       const age = now - c.born;
       const drop = Math.min(1, age / 1300);
       const cy = c.y - (1 - drop) * 170;
-      const beaconCol = c.kind === 'hp' ? '255, 106, 138' : '255, 208, 96';
+      const beaconCol = c.gold ? '255, 240, 120' : c.kind === 'hp' ? '255, 106, 138' : '255, 208, 96';
       if (drop >= 1) {
         // pulsing beacon column so crates read across the whole battlefield
         const pulse = 0.5 + 0.5 * Math.sin(now / 320);
@@ -1539,7 +1613,7 @@ export function startArtillery(net: ArtilleryNet): void {
       ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
       // the contents, printed right on the box — no mystery, pure greed
       ctx.font = '17px serif';
-      ctx.fillText(CRATE_ICON[c.kind], c.x, cy - 26 + Math.sin(now / 260) * 3);
+      ctx.fillText(c.gold ? '⭐' : CRATE_ICON[c.kind], c.x, cy - 26 + Math.sin(now / 260) * 3);
     }
 
     // fighters
@@ -1547,15 +1621,19 @@ export function startArtillery(net: ArtilleryNet): void {
       const f = fighters[i];
       if (!f.alive) continue;
       const active = i === turnPi && matchWinner === -2;
-      const bob = active ? Math.sin(now / 300) * 1.5 : 0;
-      const fy = f.y + bob;
+      const fy = f.y; // the fox's idle animation replaces the old procedural bob
+      // animation state from observed motion (works for remote fighters too)
+      if (f.x !== f.lastX) f.movingUntil = now + 200;
+      const rising = f.y < f.lastY - 0.5;
+      const airborne = !isSolid(f.x, f.y + 1);
+      f.lastX = f.x; f.lastY = f.y;
       if (teamMode) {
         // always-on team ring — you can tell sides at a glance from across the map
         ctx.strokeStyle = TEAM_COLORS[teamOf(i)][0];
         ctx.globalAlpha = 0.85;
         ctx.lineWidth = 2.5;
         ctx.beginPath();
-        ctx.ellipse(f.x, fy - 9, 14, 16, 0, 0, Math.PI * 2);
+        ctx.ellipse(f.x, fy - 28, 22, 32, 0, 0, Math.PI * 2);
         ctx.stroke();
         ctx.globalAlpha = 1;
       }
@@ -1564,26 +1642,31 @@ export function startArtillery(net: ArtilleryNet): void {
       ctx.beginPath();
       ctx.ellipse(f.x, f.y + 1, 11, 3.2, 0, 0, Math.PI * 2);
       ctx.fill();
-      // body
-      ctx.fillStyle = '#e8c8a0';
-      ctx.beginPath();
-      ctx.ellipse(f.x, fy - 9, 9, 11, 0, 0, Math.PI * 2);
-      ctx.fill();
-      // color helmet (dome + rim) — the whole uniform
-      ctx.fillStyle = f.color;
-      ctx.beginPath();
-      ctx.arc(f.x, fy - 14, 9.5, Math.PI, 0);
-      ctx.fill();
-      ctx.fillRect(f.x - 11, fy - 15, 22, 3.4);
-      // eyes: blink every few seconds (they're at war, they're stressed)
-      const blink = Math.sin(now / 900 + i * 2.1) > 0.96;
-      ctx.fillStyle = '#000';
-      if (!blink) {
-        ctx.fillRect(f.x + f.face * 2 - 1.4, fy - 11, 2.8, 3.2);
-        ctx.fillRect(f.x + f.face * 6 - 1.4, fy - 11, 2.8, 3.2);
+      // the fox: hurt > airborne > running > idle
+      const state = now < f.hurtUntil ? 'hurt' : airborne ? 'jump' : now < f.movingUntil ? 'run' : 'idle';
+      const frames = FOX[state];
+      const fps = state === 'run' ? 90 : state === 'hurt' ? 140 : 180;
+      const frameIdx = state === 'jump' ? (rising ? 0 : 1) : Math.floor(now / fps + i * 3) % frames.length;
+      const fr = foxFrame(frames[frameIdx], f.color);
+      if (fr) {
+        ctx.save();
+        ctx.translate(f.x, fy + 2);
+        ctx.scale(f.face > 0 ? -1 : 1, 1); // native art faces left
+        ctx.imageSmoothingEnabled = false;
+        if (state === 'hurt') { ctx.globalAlpha = 0.65 + 0.35 * Math.sin(now / 60); } // damage flicker
+        ctx.drawImage(fr, -fr.width / 2, -fr.height);
+        ctx.restore();
+        ctx.globalAlpha = 1;
       } else {
-        ctx.fillRect(f.x + f.face * 2 - 1.4, fy - 9.6, 2.8, 1);
-        ctx.fillRect(f.x + f.face * 6 - 1.4, fy - 9.6, 2.8, 1);
+        // sprite still loading — the old faithful blob
+        ctx.fillStyle = '#e8c8a0';
+        ctx.beginPath();
+        ctx.ellipse(f.x, fy - 9, 9, 11, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = f.color;
+        ctx.beginPath();
+        ctx.arc(f.x, fy - 14, 9.5, Math.PI, 0);
+        ctx.fill();
       }
       if (active && now < bannerUntil + 900) {
         // a stage spotlight finds whoever's up
@@ -1603,7 +1686,7 @@ export function startArtillery(net: ArtilleryNet): void {
       if (active) {
         const ang = i === myIdx() ? aimAngle : (f.face > 0 ? -0.5 : Math.PI + 0.5);
         ctx.save();
-        ctx.translate(f.x, fy - 12);
+        ctx.translate(f.x, fy - 26); // shoulder height on the fox
         ctx.rotate(ang);
         ctx.fillStyle = '#2a2a30';
         ctx.fillRect(2, -3, 22, 6);
@@ -1614,7 +1697,7 @@ export function startArtillery(net: ArtilleryNet): void {
         ctx.globalAlpha = 0.5 + 0.3 * Math.sin(now / 200);
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(f.x, fy - 9, 17, 0, Math.PI * 2);
+        ctx.arc(f.x, fy - 28, 27, 0, Math.PI * 2);
         ctx.stroke();
         ctx.globalAlpha = 1;
       }
@@ -1622,11 +1705,11 @@ export function startArtillery(net: ArtilleryNet): void {
       ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
       ctx.font = '700 13px ui-monospace, monospace';
       ctx.fillStyle = f.color;
-      ctx.fillText(`${teamMode ? TEAM_BADGE[teamOf(i)] + ' ' : ''}${f.name}`, f.x, fy - 34);
+      ctx.fillText(`${teamMode ? TEAM_BADGE[teamOf(i)] + ' ' : ''}${f.name}`, f.x, fy - 74);
       ctx.fillStyle = '#0008';
-      ctx.fillRect(f.x - 20, fy - 32, 40, 5);
+      ctx.fillRect(f.x - 20, fy - 72, 40, 5);
       ctx.fillStyle = f.hp > 50 ? '#7fe089' : f.hp > 25 ? '#ffd060' : '#ff5a5a';
-      ctx.fillRect(f.x - 20, fy - 32, 40 * f.hp / WA_HP, 5);
+      ctx.fillRect(f.x - 20, fy - 72, 40 * f.hp / WA_HP, 5);
     }
 
     // aiming UI for the acting local player
@@ -1759,6 +1842,40 @@ export function startArtillery(net: ArtilleryNet): void {
       ctx.fillRect(s.x - sz / 2, s.y - sz / 2, sz, sz);
     }
     ctx.globalAlpha = 1;
+    // wind-blown leaves
+    ctx.fillStyle = '#7aa05a';
+    for (const lf of leaves) {
+      ctx.globalAlpha = 0.45 + 0.3 * Math.sin(now / 500 + lf.ph);
+      ctx.fillRect(lf.x, lf.y, 4, 3);
+    }
+    ctx.globalAlpha = 1;
+    // fireflies drifting over the meadows
+    for (const ff of fireflies) {
+      const a = 0.25 + 0.55 * Math.abs(Math.sin(now / 800 + ff.ph));
+      ctx.globalAlpha = a;
+      ctx.fillStyle = '#ffe98a';
+      ctx.shadowColor = '#ffe98a'; ctx.shadowBlur = 8;
+      ctx.fillRect(ff.x + Math.sin(now / 1300 + ff.ph) * 16, ff.y + Math.sin(now / 900 + ff.ph * 2) * 9, 3, 3);
+      ctx.shadowBlur = 0;
+    }
+    ctx.globalAlpha = 1;
+    // spirits of the fallen drift skyward
+    for (const gh of ghosts) {
+      const t = (now - gh.born) / 3000;
+      if (t >= 1) continue;
+      const fr = foxFrame('fox-jump-1', '#ffffff');
+      if (!fr) continue;
+      ctx.globalAlpha = 0.5 * (1 - t);
+      ctx.drawImage(fr, gh.x - fr.width / 2, gh.y - fr.height - t * 90 + Math.sin(now / 300 + gh.x) * 4);
+      ctx.globalAlpha = 1;
+    }
+    ghosts = ghosts.filter((gh) => now - gh.born < 3000);
+    // the moon has witnessed a devastating hit
+    if (now < moonShadesUntil) {
+      ctx.font = '52px serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('😎', WA_W * 0.78, WA_H * 0.2);
+    }
     // damage floaties
     for (const fl of floaties) {
       fl.life += 1 / 60;
