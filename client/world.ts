@@ -58,6 +58,8 @@ import {
   type EloProfileMsg,
   type BalanceSheetMsg,
   type Side,
+  type NewsItem,
+  type HouseStateMsg,
 } from '../shared/types';
 import { drawCosmeticPreview } from './render';
 
@@ -106,9 +108,21 @@ export interface WorldNet {
   adjustBetAmount(delta: number): void;
   setBetAmount(raw: number): void;
   placeBet(side: Side): void;
+  // Bank sub-panels — also rendered natively inside World's own dialog (see openNews()/openLoan()/
+  // openHouse()) rather than delegated out to the flat panels.
+  newsFeed(): NewsItem[];
+  newsReq(): void;
+  loan(): { amount: number; owed: number; dueAt: number } | null;
+  getLoan(amount: number): void;
+  repayLoan(): void;
+  houseState(): HouseStateMsg | null;
+  houseReq(): void;
+  bondBuy(amount: number, termDays: number): void;
+  bondWithdraw(id: string): void;
+  auctionBid(amount: number): void;
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'stocks' | 'loans' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' |'lootbox' | 'blackmarket' | 'news' | 'house' | 'tourney' | 'season' | 'powerups' | 'changelog'): void; // open a Casino/Bank/DOOM/Fishing/Arcade/Bowling/Notice-Board feature (Shop/Pet-Shop are native World dialogs now — see openShop())
+  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'stocks' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' |'lootbox' | 'blackmarket' | 'tourney' | 'season' | 'powerups' | 'changelog'): void; // open a Casino/DOOM/Fishing/Arcade/Bowling/Notice-Board feature (Shop/Pet-Shop/News/Loans/House are native World dialogs now)
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   openRename(): void;            // World's own 👤 button → reopen the nickname/color picker
   muted(): boolean;              // is game sound currently muted?
@@ -173,6 +187,9 @@ interface Controller {
   feedEloProfile(msg: EloProfileMsg): void;         // server's answer to an eloProfileReq fired from the Hall of Fame
   feedBalanceSheet(msg: BalanceSheetMsg): void;     // server's answer to a balanceSheetReq fired from the Hall of Fame
   feedWallet(): void;                                // the wallet changed (buy/equip/spin settled) — re-render the shop dialog if it's open
+  feedNews(): void;                                  // a new news item published — re-render the news dialog if it's open
+  feedLoan(): void;                                  // the loan changed (taken/repaid/collected/countdown tick) — re-render the loan dialog if it's open
+  feedHouse(): void;                                 // the Fed dashboard changed (bond/auction/tax update) — re-render the house dialog if it's open
 }
 let controller: Controller | null = null;
 let _exitWorld: (() => void) | null = null;
@@ -210,6 +227,21 @@ export function feedDungeonChests(opened: string[]): void {
 /** The wallet changed (buy/equip/daily-spin settled) — re-render the shop dialog if it's open. */
 export function feedWallet(): void {
   controller?.feedWallet();
+}
+
+/** A new news item published — re-render the news dialog if it's open. */
+export function feedNews(): void {
+  controller?.feedNews();
+}
+
+/** The loan changed (taken/repaid/collected/countdown tick) — re-render the loan dialog if it's open. */
+export function feedLoan(): void {
+  controller?.feedLoan();
+}
+
+/** The Fed dashboard changed (bond/auction/tax update) — re-render the house dialog if it's open. */
+export function feedHouse(): void {
+  controller?.feedHouse();
 }
 
 /** The server accepted a chest open (added the coins to the run purse / granted the potion). */
@@ -1824,6 +1856,9 @@ export function startWorld(net: WorldNet): void {
   let dialogOpen = false;   // movement pauses while a building dialog is up
   let creatingCharacter = false; // the first-time character creator is up — Escape must not dismiss it
   let shopDialogOpen = false; // the in-World shop dialog specifically is up — gates its per-frame refresh
+  let newsDialogOpen = false;  // the in-World news dialog is up — gates re-rendering on feedNews()
+  let loanDialogOpen = false;  // the in-World loan dialog is up — gates re-rendering on feedLoan()
+  let houseDialogOpen = false; // the in-World Fed dashboard is up — gates re-rendering on feedHouse()
   let nearId: string | null = null; // building the avatar is currently at the door of
   // True while a Casino/Bank/Shop/arcade feature has been delegated to the main page (or a
   // lazy-loaded minigame overlay) — World stays alive underneath (paused, hidden) instead of
@@ -2747,9 +2782,9 @@ export function startWorld(net: WorldNet): void {
     if (kind === 'bank') {
       openDialog('🏦 Bank', 'How can we help you today?', [
         { label: '📈 Crypto Market', onPick: () => { pause(); net.openFeature('stocks'); } },
-        { label: '💸 Get a Loan',    onPick: () => { pause(); net.openFeature('loans');  } },
-        { label: '📰 Market News',   onPick: () => { pause(); net.openFeature('news');   } },
-        { label: '🏛️ The Fed',       onPick: () => { pause(); net.openFeature('house');  } },
+        { label: '💸 Get a Loan',    onPick: openLoan },
+        { label: '📰 Market News',   onPick: openNews },
+        { label: '🏛️ The Fed',       onPick: openHouse },
       ]);
       return;
     }
@@ -4203,6 +4238,9 @@ export function startWorld(net: WorldNet): void {
   function closeDialog() {
     dialogOpen = false;
     shopDialogOpen = false;
+    newsDialogOpen = false;
+    loanDialogOpen = false;
+    houseDialogOpen = false;
     dialog.style.display = 'none';
   }
 
@@ -4461,6 +4499,305 @@ export function startWorld(net: WorldNet): void {
     const betWrap = dialogBox.querySelector<HTMLDivElement>('#shopWorldBet');
     if (betWrap) renderShopBetSection(betWrap);
     for (const { canvas, id, slot } of shopWorldPreviewCanvases) drawCosmeticPreview(canvas, id, slot);
+  }
+
+  function escapeHtml(s: string): string {
+    return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string, string>)[c]!);
+  }
+
+  // --- Market News — reuses the flat panel's .news-item/-time/-headline classes (global, not
+  // scoped to #newsPanel) so it looks identical rendered inside World's dialog. ---
+  // Called from within the Bank menu's already-open dialog (like the Hall of Fame's drill-downs) —
+  // not a top-level building entry, so no dialogOpen re-entry guard is needed here.
+  function openNews() {
+    dialogOpen = true;
+    newsDialogOpen = true;
+    keys.clear(); joyActive = false;
+    if (!net.newsFeed().length) net.newsReq();
+    renderNewsDialog();
+    dialog.style.display = 'flex';
+  }
+  function renderNewsDialog() {
+    dialogBox.replaceChildren();
+    const h = document.createElement('div');
+    h.textContent = '📰 Market News';
+    h.style.cssText = 'font-size:22px;color:#e8eefc;margin-bottom:12px;text-align:center;';
+    dialogBox.appendChild(h);
+    const list = document.createElement('div');
+    list.id = 'newsWorldList';
+    list.style.cssText = 'display:flex;flex-direction:column;gap:4px;min-width:300px;';
+    dialogBox.appendChild(list);
+    renderNewsWorldList(list);
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;margin-top:12px;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+  }
+  function renderNewsWorldList(list: HTMLDivElement) {
+    const feed = net.newsFeed();
+    if (!feed.length) {
+      list.innerHTML = '<div class="news-item" style="color:#5a647e">No news yet. Check back during market hours (M–F 9am–5pm ET).</div>';
+      return;
+    }
+    list.innerHTML = feed.map((item) => {
+      const time = new Date(item.ts).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' });
+      return `<div class="news-item"><span class="news-time">${time}</span><span class="news-headline">${escapeHtml(item.headline)}</span></div>`;
+    }).join('');
+  }
+
+  // --- Loan (Davis Clarke) — intro → amount → borrow, or the repay view while a loan is owed.
+  // `worldLoanStep` is this dialog's own copy of the intro/amount step (the flat panel's `loanStep`
+  // is a separate UI-only variable in main.ts — no need to share it between the two UIs). ---
+  type LoanStep = 'intro' | 'amount';
+  let worldLoanStep: LoanStep = 'intro';
+  const DAVIS_INTRO_IMG = '/davis_at_citizens.jpg';
+  const DAVIS_AMOUNT_IMG = '/davis_marathon.png';
+  const DAVIS_OWED_IMG = '/davis_glasses.jpg';
+  function fmtLoanCountdown(ms: number): string {
+    if (ms <= 0) return 'any moment now';
+    const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+    if (h > 0) return `${h}h ${m}m`;
+    const s = Math.floor((ms % 60000) / 1000);
+    return `${m}m ${String(s).padStart(2, '0')}s`;
+  }
+  // Called from within the Bank menu's already-open dialog — no re-entry guard needed (see openNews()).
+  function openLoan() {
+    dialogOpen = true;
+    loanDialogOpen = true;
+    worldLoanStep = 'intro';
+    keys.clear(); joyActive = false;
+    renderLoanDialog();
+    dialog.style.display = 'flex';
+  }
+  function renderLoanDialog() {
+    dialogBox.replaceChildren();
+    const imgWrap = document.createElement('div');
+    imgWrap.style.cssText = 'display:flex;justify-content:center;margin-bottom:10px;';
+    const img = document.createElement('img');
+    img.id = 'loanWorldImg';
+    img.style.cssText = 'width:96px;height:96px;object-fit:cover;border-radius:50%;border:2px solid #38508f;';
+    imgWrap.appendChild(img);
+    dialogBox.appendChild(imgWrap);
+    const body = document.createElement('div');
+    body.id = 'loanWorldBody';
+    body.style.cssText = 'text-align:left;min-width:300px;';
+    dialogBox.appendChild(body);
+    renderLoanWorldBody(img, body);
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;margin-top:12px;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+  }
+  function renderLoanWorldBody(img: HTMLImageElement, body: HTMLDivElement) {
+    body.replaceChildren();
+    const loan = net.loan();
+    const rowStyle = 'display:flex;gap:8px;margin-top:12px;';
+    const mkBtn = (label: string, primary: boolean) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = label;
+      b.style.cssText = `flex:1;cursor:pointer;border-radius:10px;padding:11px;font-size:14px;font-weight:700;border:1px solid #38508f;background:${primary ? '#3a5aa8' : 'transparent'};color:${primary ? '#fff' : '#7c8ab5'};`;
+      return b;
+    };
+    if (loan) {
+      img.src = DAVIS_OWED_IMG;
+      const due = loan.dueAt - Date.now();
+      const line = document.createElement('div');
+      line.innerHTML = `You borrowed <b>${loan.amount}</b>🪙. Davis wants <span style="color:#ff8a6a">${loan.owed}🪙</span> back.`;
+      line.style.cssText = 'font-size:14px;color:#cdd7f5;';
+      const due2 = document.createElement('div');
+      due2.innerHTML = `Due by <b>5pm</b> · <b>${fmtLoanCountdown(due)}</b> left. Miss it and he takes <b>everything</b> — coins, stocks, and cosmetics — and your unpaid debt destabilizes the whole market.`;
+      due2.style.cssText = 'font-size:12px;color:#f87171;margin-top:8px;';
+      body.append(line, due2);
+      const row = document.createElement('div');
+      row.style.cssText = rowStyle;
+      const pay = mkBtn(`Pay ${loan.owed}🪙`, true);
+      pay.disabled = net.wallet().coins < loan.owed;
+      pay.onclick = () => net.repayLoan();
+      const notYet = mkBtn('Not yet', false);
+      notYet.onclick = closeDialog;
+      row.append(pay, notYet);
+      body.appendChild(row);
+      return;
+    }
+    if (worldLoanStep === 'amount') {
+      img.src = DAVIS_AMOUNT_IMG;
+      const line = document.createElement('div');
+      line.innerHTML = "I respect a fellow heavy hitter. How much you need? I'll want <b>1.5×</b> back by <b>5pm</b>.";
+      line.style.cssText = 'font-size:14px;color:#cdd7f5;';
+      body.appendChild(line);
+      const input = document.createElement('input');
+      input.type = 'number'; input.min = '1'; input.step = '1'; input.value = '500';
+      input.style.cssText = 'display:block;width:100%;box-sizing:border-box;margin:10px 0;padding:8px;background:#0c1330;color:#e8eefc;border:1px solid #38508f;border-radius:8px;text-align:center;font-size:15px;';
+      body.appendChild(input);
+      const owe = document.createElement('div');
+      owe.style.cssText = 'font-size:12px;color:#9fb0d8;';
+      const previewOwed = (v: number) => Math.ceil(Math.max(0, Math.floor(v || 0)) * 1.5);
+      const refreshOwe = () => { owe.textContent = `You'll owe Davis ${previewOwed(Number(input.value))}🪙.`; };
+      refreshOwe();
+      input.oninput = refreshOwe;
+      body.appendChild(owe);
+      const warn = document.createElement('div');
+      warn.innerHTML = "⚠️ If you don't repay by <b>5pm</b>, Davis takes <b>EVERYTHING</b> — your coins, your stocks, and every cosmetic you own — and your unpaid debt destabilizes the market for everyone. No mercy.";
+      warn.style.cssText = 'font-size:11px;color:#f87171;margin-top:8px;';
+      body.appendChild(warn);
+      const row = document.createElement('div');
+      row.style.cssText = rowStyle;
+      const borrow = mkBtn('Borrow', true);
+      borrow.onclick = () => {
+        const amt = Math.floor(Number(input.value));
+        if (!Number.isFinite(amt) || amt < 1) return;
+        net.getLoan(amt);
+      };
+      const back = mkBtn('Back', false);
+      back.onclick = () => { worldLoanStep = 'intro'; renderLoanWorldBody(img, body); };
+      row.append(borrow, back);
+      body.appendChild(row);
+      return;
+    }
+    img.src = DAVIS_INTRO_IMG;
+    const quote = document.createElement('div');
+    quote.textContent = '"You miss 100% of the loans you don\'t take."';
+    quote.style.cssText = 'font-size:13px;font-style:italic;color:#8aa0d8;margin-bottom:8px;';
+    const line = document.createElement('div');
+    line.innerHTML = 'I can spot you some coins — pay me back <b>1.5×</b> by <b>5pm</b>. Would you like a loan?';
+    line.style.cssText = 'font-size:14px;color:#cdd7f5;';
+    body.append(quote, line);
+    const row = document.createElement('div');
+    row.style.cssText = rowStyle;
+    const yes = mkBtn('Yes', true);
+    yes.onclick = () => { worldLoanStep = 'amount'; renderLoanWorldBody(img, body); };
+    const no = mkBtn('No', false);
+    no.onclick = closeDialog;
+    row.append(yes, no);
+    body.appendChild(row);
+  }
+
+  // --- The Fed dashboard — reuses the flat panel's .house-* classes (global, not scoped to
+  // #housePanel) so the treasury/tax/bond/auction grid looks identical rendered inside World's
+  // dialog. Bond-amount/bid-amount inputs get World-local ids (houseWorldBondAmt/houseWorldBidAmt)
+  // so they never collide with the flat panel's #bondAmt/#bidAmt if both exist in the DOM at once. ---
+  // Called from within the Bank menu's already-open dialog — no re-entry guard needed (see openNews()).
+  function openHouse() {
+    dialogOpen = true;
+    houseDialogOpen = true;
+    keys.clear(); joyActive = false;
+    net.houseReq();
+    renderHouseDialog();
+    dialog.style.display = 'flex';
+  }
+  function renderHouseDialog() {
+    dialogBox.replaceChildren();
+    const h = document.createElement('div');
+    h.textContent = '🏛️ The Fed';
+    h.style.cssText = 'font-size:22px;color:#e8eefc;margin-bottom:12px;text-align:center;';
+    dialogBox.appendChild(h);
+    const body = document.createElement('div');
+    body.id = 'houseWorldBody';
+    body.style.cssText = 'text-align:left;min-width:320px;';
+    body.addEventListener('click', onHouseWorldClick);
+    dialogBox.appendChild(body);
+    renderHouseWorldBody(body);
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;margin-top:12px;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+  }
+  function onHouseWorldClick(e: Event) {
+    const btn = (e.target as HTMLElement).closest('.house-act') as HTMLElement | null;
+    if (!btn) return;
+    const act = btn.dataset.act;
+    if (act === 'bond') {
+      const amt = Math.floor(Number((dialogBox.querySelector('#houseWorldBondAmt') as HTMLInputElement | null)?.value));
+      if (amt >= 100) net.bondBuy(amt, Number(btn.dataset.term));
+    } else if (act === 'bondw') {
+      if (btn.dataset.id) net.bondWithdraw(btn.dataset.id);
+    } else if (act === 'bid') {
+      const amt = Math.floor(Number((dialogBox.querySelector('#houseWorldBidAmt') as HTMLInputElement | null)?.value));
+      if (amt > 0) net.auctionBid(amt);
+    }
+  }
+  function renderHouseWorldBody(body: HTMLDivElement) {
+    const s = net.houseState();
+    if (!s) { body.innerHTML = '<div style="color:#5a647e">Loading treasury data…</div>'; return; }
+    const c = (n: number) => n.toLocaleString();
+    const pct = (r: number) => `${(r * 100).toFixed(r < 0.01 ? 1 : 0)}%`;
+    const cap = (u: number) => (u < 0 ? '∞' : c(u));
+    const policy = s.tightening
+      ? '<span style="color:#ff8a6a">● TIGHTENING</span>'
+      : '<span style="color:#6ad19a">● EASING / NEUTRAL</span>';
+    const wealthRows = s.wealthBrackets.map((b, i) => {
+      const lo = i === 0 ? 0 : s.wealthBrackets[i - 1].upTo;
+      return `<tr><td>${cap(lo)} – ${cap(b.upTo)}</td><td>${pct(b.rate)}</td></tr>`;
+    }).join('');
+    const gainRows = s.capGainBrackets.map((b, i) => {
+      const lo = i === 0 ? 0 : s.capGainBrackets[i - 1].upTo;
+      return `<tr><td>${cap(lo)} – ${cap(b.upTo)}</td><td>${pct(b.rate)}</td></tr>`;
+    }).join('');
+    const fastRows = s.fastSell.map((b) => `<tr><td>&lt; ${b.underMin >= 60 ? `${b.underMin / 60}h` : `${b.underMin}m`}</td><td>${pct(b.rate)}</td></tr>`).join('') + '<tr><td>60m+</td><td>0%</td></tr>';
+    const idleRows = s.idleTiers.map((t, i) => {
+      const next = s.idleTiers[i + 1];
+      return `<tr><td>${t.days}${next ? `–${next.days}` : '+'} days</td><td>${pct(t.rate)}</td></tr>`;
+    }).join('');
+    const fed = s.fedNews.length
+      ? s.fedNews.map((n) => {
+          const time = new Date(n.ts).toLocaleTimeString('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit' });
+          return `<div class="news-item"><span class="news-time">${time}</span><span class="news-headline">${escapeHtml(n.headline.replace('🪙 FED: ', ''))}</span></div>`;
+        }).join('')
+      : '<div style="color:#5a647e">No Fed statements yet.</div>';
+    body.innerHTML = `
+      <div class="house-grid">
+        <div class="house-card"><h4>🏦 Treasury</h4>
+          <div>Balance: <b>${c(s.balance)}🪙</b></div>
+          <div>Trickle Fund: <b>${c(s.trickleFund)}🪙</b></div>
+          <div>Loan window: <b>${s.loanCapWaived ? '🔓 WAIVED' : '🔒 capped'}</b></div>
+        </div>
+        <div class="house-card"><h4>📊 Market State</h4>
+          <div>Coins in circulation: <b>${c(s.totalCoins)}🪙</b></div>
+          <div>Top-5 of players: <b>${s.top5Pct}%</b></div>
+          <div>Top-5 of total economy: <b>${s.top5ShareOfTotal}%</b></div>
+          <div>Player total: <b>${c(s.playerNetWorthTotal)}🪙</b></div>
+          <div>House / Player: <b>${(s.balance / s.playerNetWorthTotal).toFixed(1)}×</b></div>
+          <div>Economy total: <b>${c(s.economyTotal)}🪙</b></div>
+          <div>Per-stock cap: <b>${s.concentrationCap}%</b></div>
+          <div>Broker fee: <b>${s.brokerFeePct.toFixed(1)}%</b></div>
+        </div>
+        <div class="house-card"><h4>📈 Fed Policy</h4><div>${policy}</div>
+          <div style="color:#8aa0d8;font-size:12px;margin-top:4px">Tightens when top 5 hold &gt;40% of all coins, eases when &lt;20%.</div>
+        </div>
+        <div class="house-card"><h4>💰 Wealth Tax (daily)</h4><table class="house-tbl">${wealthRows}</table></div>
+        <div class="house-card"><h4>💹 Capital Gains</h4><table class="house-tbl">${gainRows}</table></div>
+        <div class="house-card"><h4>⏱ Fast-Sell Tax</h4><table class="house-tbl">${fastRows}</table></div>
+        <div class="house-card"><h4>💤 Idle Decay</h4><table class="house-tbl">${idleRows}</table></div>
+        <div class="house-card house-wide"><h4>🏦 Treasury Bonds</h4>
+          <div style="color:#8aa0d8;font-size:11px;margin-bottom:6px">Lock coins for a term, collect interest from the House at maturity. Early redemption forfeits interest + 5%.</div>
+          <div class="house-bondbuy">
+            <input id="houseWorldBondAmt" type="number" min="100" step="100" placeholder="amount" />
+            ${s.bondRates.map((b) => `<button class="house-act" data-act="bond" data-term="${b.termDays}">Buy ${b.termDays}d · ${(b.rate * 100).toFixed(0)}%</button>`).join('')}
+          </div>
+          ${s.myBonds.length ? `<table class="house-tbl">${s.myBonds.map((b) => {
+            const left = b.maturesAt - Date.now();
+            const when = left <= 0 ? 'matured ✓' : left > 86400000 ? `${Math.ceil(left / 86400000)}d` : `${Math.ceil(left / 3600000)}h`;
+            return `<tr><td>${c(b.amount)}🪙 · ${b.termDays}d @ ${(b.rate * 100).toFixed(0)}% · ${when}</td><td><button class="house-act" data-act="bondw" data-id="${b.id}">redeem</button></td></tr>`;
+          }).join('')}</table>` : '<div style="color:#5a647e;font-size:11px">No active bonds.</div>'}
+        </div>
+        <div class="house-card house-wide"><h4>🔨 Fed Exclusive Auction</h4>
+          ${s.auction ? (() => {
+            const left = s.auction.endsAt - Date.now();
+            const when = left <= 0 ? 'closing…' : left > 3600000 ? `${Math.ceil(left / 3600000)}h left` : `${Math.ceil(left / 60000)}m left`;
+            const min = Math.max(s.auction.startBid, s.auction.highBid + 1);
+            return `<div><b>${escapeHtml(s.auction.name)}</b> · ${when}</div>
+              <div>High bid: <b>${s.auction.highBid ? `${c(s.auction.highBid)}🪙 (${escapeHtml(s.auction.highName ?? '')})` : 'none yet'}</b></div>
+              <div class="house-bondbuy"><input id="houseWorldBidAmt" type="number" min="${min}" step="100" placeholder="min ${c(min)}" /><button class="house-act" data-act="bid">Place bid</button></div>`;
+          })() : '<div style="color:#5a647e;font-size:11px">No auction running. The Fed posts one when scarce items are available.</div>'}
+        </div>
+        <div class="house-card house-wide"><h4>📰 Fed Activity</h4>${fed}</div>
+      </div>`;
   }
 
   // First-time character creator — the ONE thing every brand-new visitor sees, and it's rendered
@@ -8998,7 +9335,8 @@ export function startWorld(net: WorldNet): void {
     if (paused) return;
     paused = true;
     keys.clear(); joyActive = false; handbrake = false;
-    dialogOpen = false; shopDialogOpen = false; dialog.style.display = 'none'; // don't resume back into the dialog that sent us here
+    dialogOpen = false; shopDialogOpen = false; newsDialogOpen = false; loanDialogOpen = false; houseDialogOpen = false;
+    dialog.style.display = 'none'; // don't resume back into the dialog that sent us here
     game?.loop.sleep();
     overlay.style.display = 'none';
   }
@@ -9092,6 +9430,14 @@ export function startWorld(net: WorldNet): void {
     feedEloProfile(msg) { renderEloProfile(msg); },
     feedBalanceSheet(msg) { renderBalanceSheet(msg); },
     feedWallet() { if (shopDialogOpen) renderShopDialog(); },
+    feedNews() { if (newsDialogOpen) { const list = dialogBox.querySelector<HTMLDivElement>('#newsWorldList'); if (list) renderNewsWorldList(list); } },
+    feedLoan() {
+      if (!loanDialogOpen) return;
+      const img = dialogBox.querySelector<HTMLImageElement>('#loanWorldImg');
+      const body = dialogBox.querySelector<HTMLDivElement>('#loanWorldBody');
+      if (img && body) renderLoanWorldBody(img, body);
+    },
+    feedHouse() { if (houseDialogOpen) { const body = dialogBox.querySelector<HTMLDivElement>('#houseWorldBody'); if (body) renderHouseWorldBody(body); } },
   };
   syncDriveBtn();
   net.enter();

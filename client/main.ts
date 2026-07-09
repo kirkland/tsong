@@ -955,12 +955,14 @@ const net = connect(
       // Taking/repaying resets the conversation; collecting (loan→null) drops back to the intro.
       if (!loan) loanStep = 'intro';
       if (!loanPanel.hidden) renderLoan();
+      worldMod?.feedLoan();
     } else if (msg.type === 'house') {
       houseBalance = msg.balance;
       renderHouse();
     } else if (msg.type === 'houseState') {
       houseState = msg;
       if (!housePanel.hidden) renderHouseDashboard();
+      worldMod?.feedHouse();
     } else if (msg.type === 'lootResult') {
       onLootResult(msg);
     } else if (msg.type === 'market') {
@@ -971,6 +973,7 @@ const net = connect(
     } else if (msg.type === 'news') {
       newsFeed = msg.items;
       if (!newsPanel.hidden) renderNews();
+      worldMod?.feedNews();
     } else if (msg.type === 'mcFoodResult') {
       worldMod?.feedMcFood(msg.item, msg.granted, msg.bonus);
     } else if (msg.type === 'drunk') {
@@ -2306,9 +2309,6 @@ const WORLD_DELEGATE_CHECK: Record<string, () => boolean> = {
   lootbox: panelOpenCheck('lootPanel'),
   blackmarket: panelOpenCheck('marketplacePanel'),
   stocks: panelOpenCheck('marketPanel'),
-  loans: panelOpenCheck('loanPanel'),
-  news: panelOpenCheck('newsPanel'),
-  house: panelOpenCheck('housePanel'),
   doom: overlayPresentCheck('doomOverlay'),
   fishing: overlayPresentCheck('fishingOverlay'),
   campaign: overlayPresentCheck('campaignOverlay'),
@@ -2387,6 +2387,17 @@ worldBtn.addEventListener('click', async () => {
       adjustBetAmount: (delta) => worldAdjustBetAmount(delta),
       setBetAmount: (raw) => worldSetBetAmount(raw),
       placeBet: (side) => net.send({ type: 'bet', side, amount: betAmount }),
+      // Bank sub-panels — also native World dialogs now (see world.ts's openNews()/openLoan()/openHouse()).
+      newsFeed: () => newsFeed,
+      newsReq: () => net.send({ type: 'newsReq' }),
+      loan: () => loan,
+      getLoan: (amount) => { net.send({ type: 'getLoan', amount }); playChaChing(); },
+      repayLoan: () => { net.send({ type: 'repayLoan' }); playChaChing(); },
+      houseState: () => houseState,
+      houseReq: () => net.send({ type: 'houseReq' }),
+      bondBuy: (amount, termDays) => net.send({ type: 'bondBuy', amount, termDays }),
+      bondWithdraw: (id) => net.send({ type: 'bondWithdraw', id }),
+      auctionBid: (amount) => net.send({ type: 'auctionBid', amount }),
       onExit: () => worldBtn.setAttribute('aria-pressed', 'false'),
       // Walk into the Arena → hop into the play queue (you'll be seated when a spot opens).
       enterArena: () => net.send({ type: 'queueJoin' }),
@@ -2445,13 +2456,10 @@ worldBtn.addEventListener('click', async () => {
                  : feature === 'stocks'     ? 'marketBtn'
                  : feature === 'lootbox'    ? 'lootBtn'
                  : feature === 'blackmarket' ? 'marketplaceBtn'
-                 : feature === 'news'       ? 'newsBtn'
-                 : feature === 'house'      ? 'houseBtn'
                  : feature === 'tourney'    ? 'tourneyBtn'
                  : feature === 'season'     ? 'seasonBtn'
                  : feature === 'powerups'   ? 'powerupInfoBtn'
-                 : feature === 'changelog'  ? 'changelogBtn'
-                 : 'loanBtn';
+                 : 'changelogBtn';
         setTimeout(() => (document.getElementById(id) as HTMLButtonElement | null)?.click(), 0);
       },
       claimQuest: (quest) => net.send({ type: 'questClaim', quest }),
@@ -3932,7 +3940,7 @@ loanBtn.addEventListener('click', () => {
   }
 });
 // Live-refresh the due countdown (and re-gate the Pay button on balance) while open.
-setInterval(() => { if (!loanPanel.hidden && loan) renderLoan(); }, 1000);
+setInterval(() => { if (!loanPanel.hidden && loan) renderLoan(); if (loan) worldMod?.feedLoan(); }, 1000);
 // Click-outside closes the panel (mirrors the market panel behavior).
 document.addEventListener('click', (e) => {
   if (loanPanel.hidden) return;
