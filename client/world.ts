@@ -4095,7 +4095,7 @@ export function startWorld(net: WorldNet): void {
   }
   // The big "THE RUINS — CONQUERED" spoils screen: victory fanfare + every reward listed, click to claim.
   function showBossRewards() {
-    try { const f = new Audio('/victory.mp3'); f.volume = 0.85; f.play().catch(() => {}); } catch { /* ignore */ }
+    try { const f = new Audio('/victory.mp3'); f.volume = 0.85; f.muted = net.muted(); f.play().catch(() => {}); } catch { /* ignore */ }
     const reward = DUNGEON_CHEST_CONTENTS['B6:boss'];
     const rows = [`💰 ${(reward?.coins ?? 0).toLocaleString()} coins`];
     for (const id of reward?.items ?? []) rows.push(COSMETICS.find((c) => c.id === id)?.name ?? id);
@@ -4277,6 +4277,7 @@ export function startWorld(net: WorldNet): void {
     if (on && DUNGEON_THEME[currentFloor]?.silent) on = false; // the boss sanctum (B5) plays NO music — silence is the dread
     dungeonMusicWanted = on;
     if (!dungeonMusic) return;
+    dungeonMusic.muted = net.muted(); // kept in sync every frame too — see the scene update() loop
     if (on) dungeonMusic.play().then(() => { if (!dungeonMusicWanted) dungeonMusic?.pause(); }).catch(() => { /* gesture */ });
     else dungeonMusic.pause();
   }
@@ -5774,7 +5775,10 @@ export function startWorld(net: WorldNet): void {
     betRow.style.cssText = 'display:flex;gap:8px;align-items:center;justify-content:center;margin-bottom:8px;';
     const betInput = document.createElement('input');
     betInput.id = 'hiloWorldBet';
-    betInput.type = 'number'; betInput.min = '1'; betInput.step = '1'; betInput.value = '10';
+    // The server enforces a wealth-scaled minimum bet for Hi-Lo (see minBet() below) — default to
+    // it, not a flat 10, or a wealthy player's default bet gets silently rejected server-side
+    // (no hiloState ever arrives, Deal just looks broken).
+    betInput.type = 'number'; betInput.min = '1'; betInput.step = '1'; betInput.value = String(minBet(net.wallet().coins));
     betInput.style.cssText = 'width:80px;text-align:center;background:#0c1330;color:#e8eefc;border:1px solid #38508f;border-radius:8px;padding:6px;';
     const dealBtn = document.createElement('button');
     dealBtn.id = 'hiloWorldDeal';
@@ -5850,7 +5854,8 @@ export function startWorld(net: WorldNet): void {
     const resultEl = dialogBox.querySelector<HTMLDivElement>('#hiloWorldResult');
     const dealBtn = dialogBox.querySelector<HTMLButtonElement>('#hiloWorldDeal');
     if (!betInput || !resultEl || !dealBtn) return;
-    const amount = Math.max(1, Math.floor(Number(betInput.value)));
+    const min = minBet(net.wallet().coins);
+    const amount = Math.max(min, Math.floor(Number(betInput.value)));
     resultEl.textContent = '';
     dealBtn.disabled = true;
     net.hiloBet(amount);
@@ -6585,7 +6590,7 @@ export function startWorld(net: WorldNet): void {
     chipsLabel.className = 'rl-chips-label';
     chipsLabel.textContent = 'Chip:';
     chipsRow.appendChild(chipsLabel);
-    for (const v of [1, 5, 25, 100, 500]) {
+    for (const v of [1, 5, 10, 25, 100, 500, 1000, 5000, 10000]) {
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'rl-chip' + (v === rlChip ? ' active' : '');
@@ -7761,7 +7766,7 @@ export function startWorld(net: WorldNet): void {
     try { localStorage.setItem(questKey(id), '1'); } catch { /* ignore */ }
     renderObjectives();
     net.claimQuest(id);                                   // server grants the coins (once)
-    try { chaching.currentTime = 0; void chaching.play(); } catch { /* ignore */ }
+    try { chaching.muted = net.muted(); chaching.currentTime = 0; void chaching.play(); } catch { /* ignore */ }
     showToast(`✅ Objective complete!<br><b>${o.label}</b> &nbsp;<span style="color:#ffe14d">+${o.reward} 🪙</span>`);
   }
   renderObjectives();
@@ -8809,7 +8814,12 @@ export function startWorld(net: WorldNet): void {
   const ac = () => (actx ??= new AudioContext());
   function unlockAudio() { try { const a = ac(); if (a.state === 'suspended') void a.resume(); } catch { /* ignore */ } }
   // One note with an exponential decay; optional pitch slide gives the chirpy GBA character.
+  // Checks net.muted() itself — unlike main.ts's <audio>-element sounds (which rely on the
+  // element's own .muted property), these are raw WebAudio oscillators with no such property,
+  // so every call site (footsteps, selectBlip(), McDonald's jingles, casino chips, …) would
+  // otherwise ignore the mute toggle entirely.
   function tone(freq: number, dur: number, type: OscillatorType, vol: number, slideTo?: number) {
+    if (net.muted()) return;
     try {
       const a = ac(); const t = a.currentTime;
       const o = a.createOscillator(); const g = a.createGain();
@@ -8823,6 +8833,7 @@ export function startWorld(net: WorldNet): void {
   }
   // A short band-passed noise burst — grass rustle on foot, tyre skid in a car.
   function noise(dur: number, vol: number, cutoff: number) {
+    if (net.muted()) return;
     try {
       const a = ac(); const t = a.currentTime;
       const buf = a.createBuffer(1, Math.max(1, Math.floor(a.sampleRate * dur)), a.sampleRate);
@@ -8910,6 +8921,7 @@ export function startWorld(net: WorldNet): void {
   // One sustained organ voice: swell in, hold, then release. Pushed to chantNodes so stopChant() can
   // cut everything cleanly when you leave.
   function holyVoice(freq: number, t: number, dur: number, peak: number, type: OscillatorType, attack: number) {
+    if (net.muted()) return; // same reasoning as tone()/noise() above — raw WebAudio, no .muted property to lean on
     const a = ac();
     const o = a.createOscillator(); const g = a.createGain();
     o.type = type; o.frequency.setValueAtTime(freq, t);
@@ -9043,6 +9055,7 @@ export function startWorld(net: WorldNet): void {
     tavernMusicWanted = on;
     if (on && !tavernMusic) { tavernMusic = new Audio('/livin-on-a-prayer-8bit.mp3'); tavernMusic.loop = true; tavernMusic.volume = 0.4; }
     if (!tavernMusic) return;
+    tavernMusic.muted = net.muted(); // kept in sync every frame too — see the scene update() loop
     if (on) { tavernMusic.currentTime = 0; tavernMusic.play().then(() => { if (!tavernMusicWanted) tavernMusic?.pause(); }).catch(() => { /* needs a gesture; entering the bar is one */ }); }
     else tavernMusic.pause();
   }
@@ -11390,6 +11403,11 @@ export function startWorld(net: WorldNet): void {
       if (marketDialogOpen) updateMarketDialogLive();
       if (tourneyDialogOpen) updateTourneyDialogLive();
       if (powerupsDialogOpen) updatePowerupsSpawnability();
+      // Keep World's own looping music elements in sync with the mute toggle every frame — they
+      // aren't part of main.ts's applyMute() list, so toggling mid-song wouldn't otherwise silence
+      // them until the next time each track happens to (re)start.
+      if (dungeonMusic) dungeonMusic.muted = net.muted();
+      if (tavernMusic) tavernMusic.muted = net.muted();
 
       // --- day/night: derive purely from the wall clock so every client's sky matches ---
       {
