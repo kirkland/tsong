@@ -191,8 +191,12 @@ export function startDoom(net: DoomNet): void {
   overlay.id = 'doomOverlay';
   // Note: no global cursor:none — the menu needs a visible pointer to click SOLO/CO-OP.
   // During play the mouse is pointer-locked (hidden by the browser) anyway.
+  // z-index above World's own overlay (9998) and a translucent (not opaque) backdrop so, when
+  // descended into from World, World stays visible — frozen on its last frame — dimmed around the
+  // letterboxed edges instead of disappearing outright. See world.ts's enterBuilding()
+  // 'doomportal' branch (same "freeze but stay visible" recipe as Bowling).
   overlay.style.cssText =
-    'position:fixed;inset:0;z-index:9999;background:#000;display:flex;align-items:center;' +
+    'position:fixed;inset:0;z-index:20000;background:rgba(4,2,2,0.9);display:flex;align-items:center;' +
     'justify-content:center;flex-direction:column;font-family:ui-monospace,monospace;';
 
   const canvas = document.createElement('canvas');

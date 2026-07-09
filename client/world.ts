@@ -2957,8 +2957,10 @@ export function startWorld(net: WorldNet): void {
     // separate confirm dialog, straight into the native shop dialog (see openShop() above).
     if (kind === 'petshop') { openShop('pet'); return; }
     if (kind === 'doomportal') {
+      // Freeze-but-stay-visible, same recipe as Bowling: World stays on screen, frozen, dimmed
+      // behind DOOM's own overlay instead of disappearing outright.
       openDialog('🔥 The Gates of DOOM', 'A hot wind howls up from below…', [
-        { label: '🔥 Descend', onPick: () => { pause(); net.openFeature('doom'); } },
+        { label: '🔥 Descend', onPick: () => { pause(false); net.openFeature('doom'); } },
       ]);
       return;
     }
