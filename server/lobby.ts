@@ -107,6 +107,8 @@ import {
   NomProposalKind, NomEffect, NomVote,
   FAST_SELL_BRACKETS,
   WORLD,
+  type WorldWeapon,
+  type WorldFx,
   WORLD_BUILDINGS,
 } from '../shared/types';
 import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSelfElo, getSelfNetWorth, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
@@ -1966,24 +1968,26 @@ export class Lobby {
 
   /** A player's car just exploded at (x,y) — fan the fireball out to everyone ELSE in the world (the
    *  crasher already drew their own locally). Must be in the world; coords are clamped to the map. */
-  worldBoom(ws: WebSocket, x: number, y: number, r?: number) {
+  worldBoom(ws: WebSocket, x: number, y: number, r?: number, fx?: WorldFx) {
     const conn = this.conns.get(ws);
     if (!conn || !this.world.has(ws)) return;
     const bx = Math.max(0, Math.min(WORLD.w, x));
     const by = Math.max(0, Math.min(WORLD.h, y));
-    const br = typeof r === 'number' ? Math.max(0, Math.min(300, r)) : undefined;
+    // The singularity's collapse blast is the widest thing in the game — give it headroom.
+    const br = typeof r === 'number' ? Math.max(0, Math.min(400, r)) : undefined;
     // Include shooter's pid so recipients can attribute kills during Road Rage.
-    const data = JSON.stringify({ type: 'worldBoom', x: bx, y: by, r: br, pid: conn.pid });
+    const data = JSON.stringify({ type: 'worldBoom', x: bx, y: by, r: br, fx, pid: conn.pid });
     for (const sock of this.world.sockets()) if (sock !== ws && sock.readyState === sock.OPEN) sock.send(data);
   }
 
-  /** A player launched a rocket — fan it out to everyone ELSE so they watch the missile fly. */
-  worldRocket(ws: WebSocket, x: number, y: number, a: number) {
+  /** A player fired a weapon — fan the shot out to everyone ELSE so they watch it fly. */
+  worldRocket(ws: WebSocket, x: number, y: number, a: number, w?: WorldWeapon, len?: number) {
     const conn = this.conns.get(ws);
     if (!conn || !this.world.has(ws)) return;
     const bx = Math.max(0, Math.min(WORLD.w, x));
     const by = Math.max(0, Math.min(WORLD.h, y));
-    const data = JSON.stringify({ type: 'worldRocket', x: bx, y: by, a });
+    const blen = typeof len === 'number' ? Math.max(0, Math.min(2000, len)) : undefined;
+    const data = JSON.stringify({ type: 'worldRocket', x: bx, y: by, a, w, len: blen });
     for (const sock of this.world.sockets()) if (sock !== ws && sock.readyState === sock.OPEN) sock.send(data);
   }
 

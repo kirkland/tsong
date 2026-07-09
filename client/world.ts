@@ -41,6 +41,8 @@ import {
   JAIL,
   JAIL_WALL,
   BAIL_COST,
+  type WorldWeapon,
+  type WorldFx,
   WorldAvatar,
   WorldBuilding,
   WorldBuildingKind,
@@ -263,9 +265,9 @@ export interface WorldNet {
   houseBuild(id: string, house: string): void; // build a HOUSE_KINDS house on a lot you own
   houseDemolish(id: string): void;          // tear the house down on a lot you own (free)
   say(text: string, asSay?: boolean): void; // → speech bubble over your avatar (+ to others in-world); asSay=true → purple "Say" bubble
-  boom(x: number, y: number, r?: number): void; // explosion here → fireball broadcast to everyone else; r>0 = a damaging rocket blast
-  rocket(x: number, y: number, a: number): void; // we launched a rocket → broadcast it so others watch it fly
-  blownUp(car: boolean, self: boolean, killedBy?: string): void; // a rocket blast got us (killedBy = shooter's pid for Road Rage)
+  boom(x: number, y: number, r?: number, fx?: WorldFx): void; // explosion here → broadcast to everyone else; r>0 = a damaging blast
+  rocket(x: number, y: number, a: number, w?: WorldWeapon, len?: number): void; // we fired → broadcast so others watch the shot
+  blownUp(car: boolean, self: boolean, killedBy?: string): void; // a blast got us (killedBy = shooter's pid for Road Rage)
   sendChat(text: string): void;             // → main game chat, so the line also shows in the side feed
   chatHistory(): ChatLine[];                // recent chat backlog, seeded (hidden) so it's there on T
   // Slash-command autocomplete, shared with the main chat (same COMMANDS list).
@@ -278,8 +280,8 @@ interface Controller {
   feed(avatars: WorldAvatar[]): void;
   feedLand(parcels: LandParcelView[], bankBought: number, bankCap: number): void; // Robville land book
   feedSay(id: string, name: string, text: string, say: boolean): void; // an in-world line → speech bubble (say=purple)
-  feedBoom(x: number, y: number, r?: number, shooterPid?: string): void; // someone else's explosion → fireball + blast effects; shooterPid for kill credit
-  feedRocket(x: number, y: number, a: number): void; // someone else launched a rocket → render it flying
+  feedBoom(x: number, y: number, r?: number, shooterPid?: string, fx?: WorldFx): void; // someone else's explosion → effect + blast; shooterPid for kill credit
+  feedRocket(x: number, y: number, a: number, w?: WorldWeapon, len?: number): void; // someone else fired → render their shot
   feedChat(line: ChatLine): void; // a new chat line (mirrors the main chat into the side feed)
   feedRoadRage(active: boolean, endsAt: number, standings: { name: string; kills: number }[]): void;
   feedMcFood(item: string, granted: boolean, bonus?: number): void;
@@ -418,13 +420,13 @@ export function feedSay(id: string, name: string, text: string, say = false): vo
 }
 
 /** Render an explosion at a world point (from a `worldBoom` server message). No-op if closed. */
-export function feedBoom(x: number, y: number, r?: number, shooterPid?: string): void {
-  controller?.feedBoom(x, y, r, shooterPid);
+export function feedBoom(x: number, y: number, r?: number, shooterPid?: string, fx?: WorldFx): void {
+  controller?.feedBoom(x, y, r, shooterPid, fx);
 }
 
-/** Render another player's rocket streaking across the world (from a `worldRocket` message). */
-export function feedRocket(x: number, y: number, a: number): void {
-  controller?.feedRocket(x, y, a);
+/** Render another player's shot streaking across the world (from a `worldRocket` message). */
+export function feedRocket(x: number, y: number, a: number, w?: WorldWeapon, len?: number): void {
+  controller?.feedRocket(x, y, a, w, len);
 }
 
 /** Mirror a chat line (from a `chat` server message) into the in-world side feed. No-op if closed. */
@@ -796,6 +798,75 @@ function hash(i: number, j: number): number {
   h = (h ^ (h >>> 13)) >>> 0;
   return (h % 1000) / 1000;
 }
+
+// ===============================================================================================
+// THE ARSENAL 🚀 🔫 ⚡ 🕳️
+// -----------------------------------------------------------------------------------------------
+// Four weapons, each with its own ammo pool. You spawn with a handful of rockets and nothing else;
+// everything past that comes out of supply crates that respawn around the map. Pick a weapon with
+// 1–4 (or Q to cycle, or by tapping the on-screen rack); hold R to fire.
+// ===============================================================================================
+interface WeaponSpec {
+  id: WorldWeapon;
+  name: string;
+  emoji: string;
+  blurb: string;    // one-liner shown when you pick the weapon up
+  cooldown: number; // ms between shots
+  perCrate: number; // ammo one crate gives you
+  max: number;      // ammo cap
+  start: number;    // what you walk into the world carrying
+  weight: number;   // relative crate-spawn frequency
+  tint: number;     // crate tint (Phaser)
+  css: string;      // HUD accent
+}
+const WEAPONS: readonly WeaponSpec[] = [
+  { id: 'rocket', name: 'Rocket Launcher',    emoji: '🚀', blurb: 'Slow, loud, and it flattens a whole street corner.',
+    cooldown: 850,  perCrate: 3,  max: 12,  start: 5, weight: 34, tint: 0xff8a8a, css: '#ff6a6a' },
+  { id: 'mg',     name: 'Machine Gun',        emoji: '🔫', blurb: 'Hold R and paint the town.',
+    cooldown: 80,   perCrate: 80, max: 300, start: 0, weight: 30, tint: 0xf2dd7a, css: '#f2dd7a' },
+  { id: 'laser',  name: 'Laser Rifle',        emoji: '⚡', blurb: 'A beam that punches straight through everything in line.',
+    cooldown: 340,  perCrate: 12, max: 48,  start: 0, weight: 24, tint: 0x8ef0ff, css: '#7ee8f6' },
+  { id: 'void',   name: 'Singularity Cannon', emoji: '🕳️', blurb: 'Opens a black hole. Do not stand near the black hole.',
+    cooldown: 2400, perCrate: 1,  max: 3,   start: 0, weight: 10, tint: 0xc79bff, css: '#c79bff' },
+];
+const WEAPON_BY_ID = Object.fromEntries(WEAPONS.map((w) => [w.id, w])) as Record<WorldWeapon, WeaponSpec>;
+const WEAPON_ORDER: readonly WorldWeapon[] = WEAPONS.map((w) => w.id);
+
+const CRATE_RESPAWN_MS = 22_000; // how long a looted crate stays gone
+
+// Where the crates sit. Seeded PRNG (not Math.random) so every client lands on the same 36 spots
+// without the server having to say a word about them — crates are a purely local, cosmetic layer
+// over a static map, exactly like the scenery scatter above.
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+interface CrateSpot { x: number; y: number; w: WorldWeapon }
+const CRATE_SPOTS: readonly CrateSpot[] = (() => {
+  const rnd = mulberry32(0x7501d);
+  const spots: CrateSpot[] = [];
+  const totalWeight = WEAPONS.reduce((s, w) => s + w.weight, 0);
+  const rollWeapon = (): WorldWeapon => {
+    let r = rnd() * totalWeight;
+    for (const w of WEAPONS) { r -= w.weight; if (r <= 0) return w.id; }
+    return 'rocket';
+  };
+  // Rejection-sample open ground: off building footprints (ponds included), out of the jail, and
+  // clear of Robville's lots. Spread them so no two crates sit within sight of each other.
+  for (let tries = 0; tries < 6000 && spots.length < 36; tries++) {
+    const x = 140 + rnd() * (WORLD.w - 280);
+    const y = 140 + rnd() * (WORLD.h - 280);
+    if (inAnyBuilding(x, y, 46) || inJail(x, y, 70) || onParcel(x, y, 18)) continue;
+    if (spots.some((s) => Math.hypot(s.x - x, s.y - y) < 250)) continue;
+    spots.push({ x, y, w: rollWeapon() });
+  }
+  return spots;
+})();
 
 // --- Day/night cycle + weather (all clients agree by deriving purely from the wall clock) ---
 const HOUR_MS = 3_600_000;
@@ -1957,8 +2028,13 @@ export function startWorld(net: WorldNet): void {
   let vx = 0, vy = 0; // car velocity, world units / s (drives the drift physics)
   let handbrake = false; // hold Shift (or the on-screen DRIFT button) → break the rear loose and slide
   let lastSkidMarkAt = 0; // throttle for laying rubber on the ground while drifting
-  let stunnedUntil = 0;   // ms; knocked off your feet by a rocket blast — can't move until then
-  let lastRocketAt = 0;   // rocket-launcher fire cooldown
+  let stunnedUntil = 0;   // ms; knocked off your feet by a blast — can't move until then
+
+  // --- arsenal state: what you're holding, what's left in it, and whether the trigger is down ---
+  const ammo = Object.fromEntries(WEAPONS.map((w) => [w.id, w.start])) as Record<WorldWeapon, number>;
+  let weapon: WorldWeapon = 'rocket';
+  let lastShotAt = 0;     // per-weapon cooldown clock (reset on every shot, whatever the weapon)
+  let firing = false;     // R (or the fire button) is held — the update loop pulls the trigger
 
   // --- Road Rage PvP event ---
   let rrActive = false, rrEndsAt = 0;
@@ -2275,7 +2351,9 @@ export function startWorld(net: WorldNet): void {
   driftBtn.addEventListener('pointercancel', releaseDrift);
   driftBtn.addEventListener('pointerleave', releaseDrift);
 
-  // Fire-rocket button (bottom-right, above the drift button) for touch — keyboard players press R.
+  // Fire button (bottom-right, above the drift button) for touch — keyboard players hold R. It's a
+  // HOLD button, not a tap: the update loop pulls the trigger every frame while it's down, so the
+  // machine gun rips and the single-shot weapons just wait out their own cooldowns.
   // Shown whenever you're out in the open world (hidden indoors, in the Ruins, in jail, or boating).
   const fireBtn = document.createElement('button');
   fireBtn.type = 'button';
@@ -2285,8 +2363,55 @@ export function startWorld(net: WorldNet): void {
     'width:72px;height:72px;border-radius:50%;background:#6b2a2a;color:#fff;border:2px solid #b85555;' +
     'font-size:30px;line-height:1;touch-action:none;user-select:none;box-shadow:0 4px 14px #0008;';
   overlay.appendChild(fireBtn);
-  fireBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); unlockAudio(); fireRocket(); });
+  fireBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); unlockAudio(); firing = true; fireWeapon(); });
+  const releaseFire = (e?: Event) => { e?.preventDefault(); firing = false; };
+  fireBtn.addEventListener('pointerup', releaseFire);
+  fireBtn.addEventListener('pointercancel', releaseFire);
+  fireBtn.addEventListener('pointerleave', releaseFire);
   let fireBtnShown = false;
+
+  // Weapon rack (right edge, above the fire button) — one chip per weapon showing its emoji and how
+  // many rounds are left. Tap a chip to equip it; keyboard players press 1–4 or cycle with Q. Chips
+  // for weapons you have no ammo for are dimmed, and can't be equipped.
+  const rack = document.createElement('div');
+  rack.style.cssText =
+    'position:absolute;right:20px;bottom:264px;display:none;pointer-events:auto;z-index:5;' +
+    'flex-direction:column;gap:6px;';
+  overlay.appendChild(rack);
+  const rackChips = WEAPONS.map((spec, i) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.style.cssText =
+      'display:flex;align-items:center;justify-content:space-between;gap:8px;width:96px;padding:5px 9px;' +
+      'cursor:pointer;border-radius:9px;background:#12162adc;border:2px solid #2c3554;color:#dfe6ff;' +
+      `font:800 12px ui-monospace,monospace;touch-action:none;user-select:none;box-shadow:0 3px 10px #0007;`;
+    chip.innerHTML =
+      `<span style="font-size:17px;line-height:1">${spec.emoji}</span>` +
+      `<span style="opacity:.5;font-size:9px">${i + 1}</span>` +
+      `<span class="wAmmo" style="min-width:26px;text-align:right">${spec.start}</span>`;
+    chip.addEventListener('pointerdown', (e) => {
+      e.preventDefault(); e.stopPropagation(); unlockAudio(); selectWeapon(spec.id);
+    });
+    rack.appendChild(chip);
+    return chip;
+  });
+  // Repaint the rack: highlight the equipped weapon, dim the empty ones, refresh the counts.
+  function updateWeaponHud() {
+    WEAPONS.forEach((spec, i) => {
+      const chip = rackChips[i];
+      const n = ammo[spec.id];
+      const equipped = spec.id === weapon;
+      chip.style.borderColor = equipped ? spec.css : '#2c3554';
+      chip.style.background = equipped ? '#1e2440f0' : '#12162adc';
+      chip.style.opacity = n > 0 ? '1' : '0.42';
+      const cnt = chip.querySelector('.wAmmo') as HTMLElement | null;
+      if (cnt) { cnt.textContent = String(n); cnt.style.color = equipped ? spec.css : '#dfe6ff'; }
+    });
+    fireBtn.textContent = WEAPON_BY_ID[weapon].emoji;
+  }
+  // Bootstrap the rack. Deliberately does NOT touch the help line — updateHelp() reads `helpFlash`,
+  // which isn't declared until much further down, and would blow up if we reached for it this early.
+  updateWeaponHud();
 
   // Blessing of the Ball badge (top-centre) — a gilded pill with a bar that drains as the blessing
   // wears off. Hidden whenever no blessing is active. Updated each frame in update().
@@ -2742,6 +2867,11 @@ export function startWorld(net: WorldNet): void {
     ctx.fillRect(JAIL.x * sx, JAIL.y * sy, JAIL.w * sx, JAIL.h * sy);
     ctx.font = `${full ? 22 : 12}px serif`; ctx.fillStyle = '#6b7079';
     ctx.fillText('🚔', (JAIL.x + JAIL.w / 2) * sx, (JAIL.y + JAIL.h / 2) * sy);
+    for (const c of crates) {                             // ammo crates still waiting to be looted
+      if (c.takenUntil) continue;
+      ctx.fillStyle = WEAPON_BY_ID[c.spot.w].css;
+      ctx.fillRect(c.spot.x * sx - (full ? 3 : 1.5), c.spot.y * sy - (full ? 3 : 1.5), full ? 6 : 3, full ? 6 : 3);
+    }
     ctx.fillStyle = 'rgba(220,230,255,0.55)';             // other avatars
     for (const a of others) { ctx.beginPath(); ctx.arc(a.x * sx, a.y * sy, full ? 4 : 2, 0, Math.PI * 2); ctx.fill(); }
     ctx.fillStyle = '#ffe14d';                            // you (bright dot)
@@ -2922,9 +3052,10 @@ export function startWorld(net: WorldNet): void {
       return;
     }
     const boatHint = boardableWater() ? ' · <b>B</b> board boat' : '';
+    const gun = `<b>R</b> fire ${WEAPON_BY_ID[weapon].emoji} · <b>1-4</b>/<b>Q</b> weapon`;
     help.innerHTML = driving
-      ? 'W/S or ↑/↓ throttle · A/D or ←/→ steer · <b>Shift</b> drift · <b>R</b> 🚀 · <b>F</b> get out · <b>T</b> chat'
-      : `WASD / arrows or drag to walk · <b>F</b> drive${boatHint} · <b>R</b> 🚀 · <b>Space</b> enter · <b>T</b> chat`;
+      ? `W/S or ↑/↓ throttle · A/D or ←/→ steer · <b>Shift</b> drift · ${gun} · <b>F</b> get out · <b>T</b> chat`
+      : `WASD / arrows or drag to walk · <b>F</b> drive${boatHint} · ${gun} · <b>Space</b> enter · <b>T</b> chat`;
   }
 
   // --- building entry ---
@@ -8432,7 +8563,13 @@ export function startWorld(net: WorldNet): void {
     if (dialogOpen) return;
     if (k === 'f') { e.preventDefault(); e.stopPropagation(); toggleDrive(); return; }
     if (k === 'b') { e.preventDefault(); e.stopPropagation(); toggleBoat(); return; } // board/dock a boat on water
-    if (k === 'r') { e.preventDefault(); e.stopPropagation(); fireRocket(); return; } // 🚀 fire the rocket launcher
+    // Hold R to fire the equipped weapon; 1–4 equip directly, Q cycles to the next loaded one.
+    if (k === 'r') { e.preventDefault(); e.stopPropagation(); firing = true; fireWeapon(); return; }
+    if (k === 'q') { e.preventDefault(); e.stopPropagation(); cycleWeapon(); return; }
+    if (k >= '1' && k <= '4') {
+      const pick = WEAPON_ORDER[Number(k) - 1];
+      if (pick) { e.preventDefault(); e.stopPropagation(); selectWeapon(pick); return; }
+    }
     if (k === '=' || k === '+') { e.preventDefault(); e.stopPropagation(); adjustZoom(1.12); return; }  // zoom in
     if (k === '-' || k === '_') { e.preventDefault(); e.stopPropagation(); adjustZoom(1 / 1.12); return; } // zoom out
     if (k === 'enter' || k === 'e' || k === ' ') {
@@ -8449,6 +8586,7 @@ export function startWorld(net: WorldNet): void {
     if (paused) return;
     const k = e.key.toLowerCase();
     if (k === 'shift') { handbrake = false; e.stopPropagation(); return; }
+    if (k === 'r') { firing = false; e.stopPropagation(); return; } // let go of the trigger
     if (MOVE_KEYS.has(k)) { keys.delete(k); e.stopPropagation(); }
   }
   // Active touch/mouse pointers on the world — one drives the walk joystick; two pinch-to-zoom.
@@ -8968,6 +9106,42 @@ export function startWorld(net: WorldNet): void {
   function rocketLaunchSound() {
     noise(0.3, 0.16, 900);
     tone(180, 0.22, 'sawtooth', 0.16, 520);
+  }
+  // Machine gun: a dry snap over a click of noise. Throttled — at 12 rounds/second two players
+  // holding the trigger would otherwise pile up dozens of overlapping oscillators.
+  let lastMgSoundAt = 0;
+  function mgSound() {
+    const now = performance.now();
+    if (now - lastMgSoundAt < 55) return;
+    lastMgSoundAt = now;
+    noise(0.05, 0.1, 2400);
+    tone(340, 0.045, 'square', 0.07, 110);
+  }
+  // Laser: a bright descending zap with a crisp noise edge — a capacitor dumping into thin air.
+  function laserSound() {
+    tone(1500, 0.17, 'sawtooth', 0.11, 240);
+    tone(2400, 0.07, 'square', 0.05, 900);
+    noise(0.1, 0.05, 3200);
+  }
+  // Singularity launch: a low, wrong-sounding swell that slides *down* where a rocket slides up.
+  function voidFireSound() {
+    tone(320, 0.4, 'sine', 0.16, 70);
+    tone(160, 0.42, 'triangle', 0.12, 44);
+    noise(0.22, 0.06, 320);
+  }
+  // The hole opening: an inhaling rumble that climbs for the two seconds before it swallows itself.
+  function voidCollapseSound() {
+    tone(46, 1.9, 'sine', 0.2, 190);
+    tone(70, 1.9, 'sawtooth', 0.08, 300);
+    noise(1.6, 0.09, 180);
+  }
+  // The empty click when you pull the trigger on nothing.
+  function dryFireSound() { tone(150, 0.05, 'square', 0.07, 80); }
+  // Crate grabbed: a bright three-note pickup arpeggio.
+  function pickupSound() {
+    tone(784, 0.07, 'square', 0.11);
+    window.setTimeout(() => tone(988, 0.07, 'square', 0.11), 60);
+    window.setTimeout(() => tone(1319, 0.12, 'square', 0.12), 120);
   }
   function revSound(starting: boolean) {
     if (starting) tone(80, 0.26, 'sawtooth', 0.18, 230);
@@ -9789,6 +9963,34 @@ export function startWorld(net: WorldNet): void {
     px(3, 2, 9, 4, 0xd23b3b); px(3, 2, 9, 1, 0xef6a6a);      // body + top highlight
     px(11, 3, 3, 2, 0x7a1414); px(13, 4, 1, 1, 0x7a1414);    // dark nose cone
     g.generateTexture('w-rocket', 16, 8);
+
+    // --- machine-gun tracer: a hot brass streak pointing +x, drawn additively so it glows ---
+    g.clear();
+    px(0, 1, 5, 1, 0xffb43a, 0.55);                          // trailing streak
+    px(4, 0, 3, 3, 0xfff0a8); px(5, 1, 2, 1, 0xffffff);      // bright head
+    g.generateTexture('w-bullet', 8, 3);
+
+    // --- singularity slug: a violet core wrapped in a darker event-horizon shell ---
+    g.clear();
+    g.fillStyle(0x3a1a6e, 0.55); g.fillCircle(6, 6, 6);
+    g.fillStyle(0xa46ce8, 0.85); g.fillCircle(6, 6, 4);
+    g.fillStyle(0xf0d9ff, 1);    g.fillCircle(6, 6, 2);
+    g.fillStyle(0x120522, 1);    g.fillCircle(6, 6, 1);      // the dot of nothing at the middle
+    g.generateTexture('w-orb', 12, 12);
+
+    // --- ammo crate: a banded wooden box with steel corners. Tinted per weapon at spawn. ---
+    {
+      g.clear();
+      const wd = 0x6b5636, wo = 0x8f7346, wl = 0xb08d55, st = 0x9aa3ad, sd = 0x5d666f;
+      px(0, 1, 14, 12, 0x241a0c);                            // dark outline
+      px(1, 2, 12, 10, wo);                                  // body
+      px(1, 2, 12, 1, wl); px(1, 11, 12, 1, wd);             // top highlight / bottom shade
+      px(1, 6, 12, 1, wd); px(6, 2, 2, 10, wd);              // the strapping cross
+      px(6, 6, 2, 1, wl);                                    // rivet band where the straps meet
+      px(1, 2, 2, 2, st); px(11, 2, 2, 2, st);               // steel corners
+      px(1, 10, 2, 2, sd); px(11, 10, 2, 2, sd);
+      g.generateTexture('w-crate', 14, 14);
+    }
 
     // --- avatar: the tsong ball with eyes (tintable white body) (10×10 texels) ---
     g.clear();
@@ -11339,6 +11541,9 @@ export function startWorld(net: WorldNet): void {
       // --- townsfolk ---
       for (const def of NPCS) npcs.push(makeNpc(sc, def));
 
+      // --- ammo crates scattered over the open ground ---
+      buildCrates(sc);
+
       // --- T-Rex: spawns after 45 seconds so players settle in before it shows up ---
       window.setTimeout(() => { if (petScene) spawnRex(petScene); }, 45_000);
 
@@ -11674,9 +11879,16 @@ export function startWorld(net: WorldNet): void {
       updateNearBuilding();
       maybeSendMove(now);
 
-      // show the touch fire button only out in the open world
-      const canRocket = !inInterior && !inDungeon && !boating && !net.amJailed();
-      if (fireBtnShown !== canRocket) { fireBtnShown = canRocket; fireBtn.style.display = canRocket ? 'block' : 'none'; }
+      // show the touch fire button + weapon rack only out in the open world
+      const armed = !inInterior && !inDungeon && !boating && !net.amJailed();
+      if (fireBtnShown !== armed) {
+        fireBtnShown = armed;
+        fireBtn.style.display = armed ? 'block' : 'none';
+        rack.style.display = armed ? 'flex' : 'none';
+        if (!armed) firing = false;
+      }
+      if (firing) fireWeapon();  // held trigger — the weapon's own cooldown paces it
+      updateCrates(now);
 
       // place our avatar straight from authoritative state (zero latency)
       if (self) { placeAvatar(self, selfX, selfY, facing, boating ? net.boat() : driving ? net.car() : null, net.color(), net.name() || 'you'); applySay(self, net.selfId(), now); }
@@ -11726,7 +11938,7 @@ export function startWorld(net: WorldNet): void {
       updatePets(dt);
       updateSmoke(dt);
       updateSkids(dt);
-      updateRockets(dt);
+      updateShots(dt);
       updateBoom(dt);
 
       // redraw the minimap ~8×/s (and the full map while it's open)
@@ -11811,22 +12023,24 @@ export function startWorld(net: WorldNet): void {
   // a rising cloud of black smoke. Pure synthesized sprites (w-fireball + w-smoke), animated here. ---
   const boomParts: { spr: Phaser.GameObjects.Image; t: number; max: number; vx: number; vy: number; kind: 'fire' | 'flash' | 'smoke'; r0: number; r1: number }[] = [];
   const FIRE_TINTS = [0xffffff, 0xffe066, 0xffae34, 0xff5722];
-  function spawnExplosion(x: number, y: number) {
+  // `scale` fattens the whole fireball (particle size, spread, and count) — 1 is a car crash or a
+  // rocket, ~2.4 is a singularity collapsing.
+  function spawnExplosion(x: number, y: number, scale = 1) {
     const sc = petScene; if (!sc) return;
     boomSound();
     // central white flash — short, bright, ADD-blended
-    boomParts.push({ spr: sc.add.image(x, y, 'w-fireball').setDepth(y + 400).setBlendMode(Phaser.BlendModes.ADD).setScale(2), t: 0, max: 0.16, vx: 0, vy: 0, kind: 'flash', r0: 2.2, r1: 6 });
+    boomParts.push({ spr: sc.add.image(x, y, 'w-fireball').setDepth(y + 400).setBlendMode(Phaser.BlendModes.ADD).setScale(2 * scale), t: 0, max: 0.16, vx: 0, vy: 0, kind: 'flash', r0: 2.2 * scale, r1: 6 * scale });
     // a fat ball of fire flung outward
-    for (let i = 0; i < 22; i++) {
-      const a = Math.random() * Math.PI * 2, sp = 50 + Math.random() * 190;
+    for (let i = 0; i < Math.round(22 * scale); i++) {
+      const a = Math.random() * Math.PI * 2, sp = (50 + Math.random() * 190) * scale;
       const spr = sc.add.image(x, y, 'w-fireball').setDepth(y + 300).setBlendMode(Phaser.BlendModes.ADD).setTint(FIRE_TINTS[i % FIRE_TINTS.length]);
-      boomParts.push({ spr, t: 0, max: 0.4 + Math.random() * 0.45, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 40, kind: 'fire', r0: 1.3 + Math.random() * 1.4, r1: 0.15 });
+      boomParts.push({ spr, t: 0, max: 0.4 + Math.random() * 0.45, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 40, kind: 'fire', r0: (1.3 + Math.random() * 1.4) * scale, r1: 0.15 });
     }
     // billowing black smoke that lingers and rises
-    for (let i = 0; i < 12; i++) {
-      const a = Math.random() * Math.PI * 2, sp = 18 + Math.random() * 75;
+    for (let i = 0; i < Math.round(12 * scale); i++) {
+      const a = Math.random() * Math.PI * 2, sp = (18 + Math.random() * 75) * scale;
       const spr = sc.add.image(x, y, 'w-smoke').setDepth(y + 60).setTint(0x2a2a2a).setAlpha(0);
-      boomParts.push({ spr, t: 0, max: 0.9 + Math.random() * 0.9, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 55, kind: 'smoke', r0: 0.5, r1: 2.8 });
+      boomParts.push({ spr, t: 0, max: 0.9 + Math.random() * 0.9, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 55, kind: 'smoke', r0: 0.5 * scale, r1: 2.8 * scale });
     }
   }
   function updateBoom(dt: number) {
@@ -11842,54 +12056,111 @@ export function startWorld(net: WorldNet): void {
   }
 
   // ============================================================================================
-  // ROCKET LAUNCHER 🚀 — fire with R (or the on-screen button); a missile streaks out along your
-  // heading and detonates on the first thing it hits (building, townsperson, car, or another player)
-  // or when it runs out of fuel. The blast squishes nearby townsfolk, blows up cars, and knocks
-  // people off their feet — and is broadcast so EVERYONE sees the fireball and takes the hit.
+  // THE ARSENAL 🚀 🔫 ⚡ 🕳️ — hold R (or the on-screen button) to fire whatever you have equipped.
+  // Every weapon draws from its own ammo pool; run one dry and you go looking for a crate.
+  //
+  //   🚀 Rocket Launcher    a missile that detonates on the first thing it touches
+  //   🔫 Machine Gun        a stream of tracers; each round pops whatever it lands on
+  //   ⚡ Laser Rifle        an instant beam that pierces every body in a straight line
+  //   🕳️ Singularity Cannon a slug that tears open a black hole, then closes it — violently
+  //
+  // Damage is authoritative on the FIRER. Everything a shot does to the shared world (blowing up a
+  // car, knocking someone down) is fanned out as a `worldBoom`, which every receiver resolves
+  // through applyBlast(). What travels over `worldRocket` is only the cosmetic shot, so remote
+  // clients can watch the missile fly / the beam flash / the orb drift.
   // ============================================================================================
-  // `ghost` rockets are other players' missiles, mirrored from a `worldRocket` broadcast — purely
-  // cosmetic (they fly + trail smoke but never detonate or deal a blast; the firer owns that and
-  // sends the authoritative `worldBoom`).
-  interface Rocket { spr: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number; t: number; ghost: boolean; }
-  const rockets: Rocket[] = [];
+  // `ghost` projectiles are other players' shots, mirrored from a `worldRocket` broadcast — purely
+  // cosmetic (they fly and trail but never detonate or deal a blast; the firer owns that).
+  interface Shot { spr: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number; t: number; ghost: boolean; }
+  const rockets: Shot[] = [];
+  const bullets: Shot[] = [];
+  const orbs: Shot[] = [];
   const ROCKET_SPEED = 640, ROCKET_LIFE = 1.7, BLAST_R = 96;
+  const MG_SPEED = 1500, MG_LIFE = 0.5, MG_SPREAD = 0.045, MG_HIT_R = 22;
+  const LASER_RANGE = 900, LASER_HIT_R = 20, LASER_STEP = 8;
+  const VOID_SPEED = 300, VOID_LIFE = 2.4, VOID_R = 200, VOID_HOLD = 2.0;
 
-  function spawnRocketSprite(x: number, y: number, a: number, ghost: boolean) {
-    const sc = petScene; if (!sc) return;
-    const spr = sc.add.image(x, y, 'w-rocket').setScale(TEXEL * 1.2).setRotation(a).setDepth(y + 8);
-    rockets.push({ spr, x, y, vx: Math.cos(a) * ROCKET_SPEED, vy: Math.sin(a) * ROCKET_SPEED, t: 0, ghost });
+  // --- weapon selection ------------------------------------------------------------------------
+  function selectWeapon(id: WorldWeapon) {
+    if (weapon === id) return;
+    if (ammo[id] <= 0) { dryFireSound(); flashHelp(`${WEAPON_BY_ID[id].emoji} No ammo for the ${WEAPON_BY_ID[id].name}`); return; }
+    weapon = id;
+    updateWeaponHud();
+    updateHelp();   // the hint line names the equipped weapon
+    selectBlip();
+  }
+  // Q → the next weapon (wrapping) that actually has rounds in it. No-op if nothing else is loaded.
+  function cycleWeapon() {
+    const start = WEAPON_ORDER.indexOf(weapon);
+    for (let i = 1; i <= WEAPON_ORDER.length; i++) {
+      const id = WEAPON_ORDER[(start + i) % WEAPON_ORDER.length];
+      if (ammo[id] > 0) { selectWeapon(id); return; }
+    }
+  }
+  // Everything that has to be true before any weapon will go off.
+  function canFire(): boolean {
+    return !inInterior && !inDungeon && !boating && !net.amJailed() && !talkOpen && !dialogOpen && !chatActive && !sayActive;
   }
 
-  function fireRocket() {
-    const sc = petScene; if (!sc) return;
+  function fireWeapon() {
+    if (!petScene) return;
     const now = performance.now();
-    if (now - lastRocketAt < 850) return;                                  // cooldown
-    if (inInterior || inDungeon || boating || net.amJailed() || talkOpen || dialogOpen || chatActive || sayActive) return;
+    if (!canFire()) return;
     if (now < stunnedUntil) return;                                        // can't fire while flattened
-    lastRocketAt = now;
-    const hx = Math.cos(facing), hy = Math.sin(facing);
+    const spec = WEAPON_BY_ID[weapon];
+    if (now - lastShotAt < spec.cooldown) return;                          // cooldown
+    if (ammo[weapon] <= 0) {
+      lastShotAt = now - spec.cooldown + 260;                              // throttle the empty click
+      dryFireSound();
+      flashHelp(`${spec.emoji} Out of ammo — go find a crate`);
+      return;
+    }
+    lastShotAt = now;
+    ammo[weapon]--;
+    updateWeaponHud();
+
     const muzzle = (driving ? CAR_LEN * 0.55 : R) + 12;                    // spawn ahead so you don't eat your own blast
-    const x = selfX + hx * muzzle, y = selfY + hy * muzzle;
-    spawnRocketSprite(x, y, facing, false);
-    net.rocket(x, y, facing);                                              // let everyone else watch it fly
-    rocketLaunchSound();
-  }
-  // A remote player's rocket (from a `worldRocket` broadcast) — render it streaking across our screen.
-  function feedRocket(x: number, y: number, a: number) {
-    if (inInterior || inDungeon) return; // not visible from inside a room/the Ruins
-    spawnRocketSprite(x, y, a, true);
-    if (Math.hypot(x - selfX, y - selfY) < 850) rocketLaunchSound(); // only nearby launches are audible
+    const x = selfX + Math.cos(facing) * muzzle, y = selfY + Math.sin(facing) * muzzle;
+    switch (weapon) {
+      case 'rocket':
+        spawnRocket(x, y, facing, false);
+        net.rocket(x, y, facing, 'rocket');
+        rocketLaunchSound();
+        break;
+      case 'mg': {
+        const a = facing + (Math.random() - 0.5) * 2 * MG_SPREAD;          // a little muzzle wander
+        spawnBullet(x, y, a, false);
+        net.rocket(x, y, a, 'mg');
+        mgSound();
+        break;
+      }
+      case 'laser':
+        fireLaser(x, y, facing);
+        break;
+      case 'void':
+        spawnOrb(x, y, facing, false);
+        net.rocket(x, y, facing, 'void');
+        voidFireSound();
+        break;
+    }
   }
 
-  function detonateRocket(x: number, y: number) {
-    spawnExplosion(x, y);              // local fireball + boom (spawnExplosion plays the boom sound)
-    net.boom(x, y, BLAST_R);          // fan a DAMAGING blast out to everyone else
-    applyBlast(x, y, BLAST_R, true);  // and apply it to our own world (NPCs, our car/self) — our own rocket
+  // A remote player's shot (from a `worldRocket` broadcast) — mirror it onto our screen. Cosmetic
+  // only; the firer's own `worldBoom` is what actually hurts anybody.
+  function feedShot(x: number, y: number, a: number, w: WorldWeapon, len?: number) {
+    if (inInterior || inDungeon) return; // not visible from inside a room/the Ruins
+    const near = Math.hypot(x - selfX, y - selfY) < 850; // only nearby shots are audible
+    switch (w) {
+      case 'mg':    spawnBullet(x, y, a, true); if (near) mgSound(); break;
+      case 'laser': drawBeam(x, y, a, len ?? LASER_RANGE); if (near) laserSound(); break;
+      case 'void':  spawnOrb(x, y, a, true); if (near) voidFireSound(); break;
+      default:      spawnRocket(x, y, a, true); if (near) rocketLaunchSound(); break;
+    }
   }
 
   // Resolve a blast at (x,y): flatten townsfolk in range; if WE are caught, our car blows up (driving)
   // or we get knocked off our feet (on foot). Runs on the firer locally AND on every receiver.
-  // mine=true → the rocket was ours; shooterPid → for Road Rage kill attribution.
+  // mine=true → the shot was ours; shooterPid → for Road Rage kill attribution.
   function applyBlast(x: number, y: number, r: number, mine: boolean, shooterPid?: string) {
     const now = performance.now();
     for (const n of npcs) {
@@ -11914,10 +12185,52 @@ export function startWorld(net: WorldNet): void {
     }
   }
 
+  // The townsperson standing at (x,y), if any. Townsfolk are simulated independently on every
+  // client (they wander on Math.random), so their positions already differ from screen to screen —
+  // which is why a shot that lands on one is settled purely locally and never broadcast.
+  function npcAt(x: number, y: number, now: number): LiveNpc | null {
+    for (const n of npcs) if (now >= n.squishedUntil && Math.hypot(n.x - x, n.y - y) < R + 4) return n;
+    return null;
+  }
+  // Another player (on foot or in a car) at (x,y). These hits DO have to be broadcast.
+  function playerAt(x: number, y: number): WorldAvatar | null {
+    const selfId = net.selfId();
+    for (const a of others) {
+      if (a.id === selfId) continue;
+      if (Math.hypot(a.x - x, a.y - y) < (a.car ? CAR_LEN * 0.5 : R * 1.3)) return a;
+    }
+    return null;
+  }
+  // Did this shot land on anything alive? (Rockets and singularity slugs don't care which.)
+  function hitsBody(x: number, y: number, now: number): boolean {
+    return npcAt(x, y, now) !== null || playerAt(x, y) !== null;
+  }
+  // Flatten a townsperson where they stand.
+  function squishNpc(n: LiveNpc, now: number) {
+    n.squishedUntil = now + 2600 + Math.random() * 1400;
+    n.getUpUntil = 0; n.walking = false; n.label.setText('💫');
+    squishSound();
+  }
+  // Off the map, or buried in a wall?
+  function hitsWorld(x: number, y: number): boolean {
+    if (x < 8 || y < 8 || x > WORLD.w - 8 || y > WORLD.h - 8) return true;
+    return resolveCollisions(x, y, 4).hit;
+  }
+
+  // --- 🚀 rockets -------------------------------------------------------------------------------
+  function spawnRocket(x: number, y: number, a: number, ghost: boolean) {
+    const sc = petScene; if (!sc) return;
+    const spr = sc.add.image(x, y, 'w-rocket').setScale(TEXEL * 1.2).setRotation(a).setDepth(y + 8);
+    rockets.push({ spr, x, y, vx: Math.cos(a) * ROCKET_SPEED, vy: Math.sin(a) * ROCKET_SPEED, t: 0, ghost });
+  }
+  function detonateRocket(x: number, y: number) {
+    spawnExplosion(x, y);              // local fireball + boom (spawnExplosion plays the boom sound)
+    net.boom(x, y, BLAST_R, 'blast');  // fan a DAMAGING blast out to everyone else
+    applyBlast(x, y, BLAST_R, true);   // and apply it to our own world (NPCs, our car/self)
+  }
   function updateRockets(dt: number) {
     const sc = petScene; if (!sc) return;
     const now = performance.now();
-    const selfId = net.selfId();
     for (let i = rockets.length - 1; i >= 0; i--) {
       const rk = rockets[i];
       rk.t += dt;
@@ -11928,27 +12241,329 @@ export function startWorld(net: WorldNet): void {
         smokePuffs.push({ spr: sc.add.image(rk.x, rk.y, 'w-smoke').setScale(0.35).setTint(0xdadada).setAlpha(0.45).setDepth(rk.y - 2),
           t: 0, max: 0.4, vx: (Math.random() - 0.5) * 24, vy: (Math.random() - 0.5) * 24 });
       }
-      let hit = rk.t >= ROCKET_LIFE;                                       // fuel ran out
-      if (!hit && resolveCollisions(rk.x, rk.y, 4).hit) hit = true;        // slammed a building/wall
-      if (!hit && (rk.x < 8 || rk.y < 8 || rk.x > WORLD.w - 8 || rk.y > WORLD.h - 8)) hit = true; // off the map edge
+      let hit = rk.t >= ROCKET_LIFE || hitsWorld(rk.x, rk.y);              // fuel ran out / slammed a wall
       // Ghost (remote) rockets never detonate or deal a blast — they just fly until they hit a
       // wall/edge/fuel-out, then vanish (the firer's own worldBoom drives the actual explosion).
       if (rk.ghost) { if (hit) { rk.spr.destroy(); rockets.splice(i, 1); } continue; }
-      if (!hit) for (const n of npcs) { if (now >= n.squishedUntil && Math.hypot(n.x - rk.x, n.y - rk.y) < R + 4) { hit = true; break; } }
-      if (!hit) for (const a of others) {                                  // a car or a person downrange
-        if (a.id === selfId) continue;
-        if (Math.hypot(a.x - rk.x, a.y - rk.y) < (a.car ? CAR_LEN * 0.5 : R * 1.3)) { hit = true; break; }
-      }
+      if (!hit) hit = hitsBody(rk.x, rk.y, now);                           // a car or a person downrange
       if (hit) { rk.spr.destroy(); rockets.splice(i, 1); detonateRocket(rk.x, rk.y); }
     }
   }
-  // Clean up any ghost rocket near a blast we just received, so a mirrored missile doesn't keep
-  // flying past the point where its owner actually detonated it (on an NPC/player we don't share).
-  function clearGhostRocketsNear(x: number, y: number, r: number) {
-    for (let i = rockets.length - 1; i >= 0; i--) {
-      const rk = rockets[i];
-      if (rk.ghost && Math.hypot(rk.x - x, rk.y - y) <= r + 40) { rk.spr.destroy(); rockets.splice(i, 1); }
+
+  // --- 🔫 machine gun ---------------------------------------------------------------------------
+  // Tracers, not hitscan — you can watch them fly, and lead a moving car. A round that lands on a
+  // body pops a tiny spark and fans a small `hit` blast out so the victim's own client resolves it.
+  function spawnBullet(x: number, y: number, a: number, ghost: boolean) {
+    const sc = petScene; if (!sc) return;
+    const spr = sc.add.image(x, y, 'w-bullet').setScale(TEXEL).setRotation(a).setDepth(y + 9)
+      .setBlendMode(Phaser.BlendModes.ADD);
+    bullets.push({ spr, x, y, vx: Math.cos(a) * MG_SPEED, vy: Math.sin(a) * MG_SPEED, t: 0, ghost });
+  }
+  function updateBullets(dt: number) {
+    const now = performance.now();
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i];
+      b.t += dt;
+      b.x += b.vx * dt; b.y += b.vy * dt;
+      b.spr.setPosition(b.x, b.y).setDepth(b.y + 9).setAlpha(1 - (b.t / MG_LIFE) * 0.6);
+      const spent = b.t >= MG_LIFE;
+      const wall = !spent && hitsWorld(b.x, b.y);
+      if (b.ghost) { if (spent || wall) { b.spr.destroy(); bullets.splice(i, 1); } continue; }
+      const npc = !spent && !wall ? npcAt(b.x, b.y, now) : null;
+      const victim = !spent && !wall && !npc ? playerAt(b.x, b.y) : null;
+      if (!spent && !wall && !npc && !victim) continue;
+      b.spr.destroy(); bullets.splice(i, 1);
+      if (wall) spawnSparks(b.x, b.y, 0xffe08a);                           // ricochet off the brickwork
+      else if (npc) { spawnSparks(b.x, b.y, 0xff9a5a); squishNpc(npc, now); } // settled locally — see npcAt()
+      else if (victim) {
+        spawnSparks(b.x, b.y, 0xff9a5a);
+        net.boom(b.x, b.y, MG_HIT_R, 'hit');                               // let the victim's client resolve it
+        applyBlast(b.x, b.y, MG_HIT_R, true);                              // …and take the splash ourselves if we're close
+      }
     }
+  }
+
+  // --- ⚡ laser rifle ---------------------------------------------------------------------------
+  // Hitscan: march the ray until it buries itself in a wall, then damage every body it crossed.
+  // Nothing blocks it but architecture — a well-lined-up shot takes out a whole queue of townsfolk.
+  const beams: { spr: Phaser.GameObjects.Rectangle; core: Phaser.GameObjects.Rectangle; t: number }[] = [];
+  // Perpendicular distance from p to the segment a→b (used to decide who the beam crossed).
+  function distToSegment(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 > 0 ? clamp(((px - ax) * dx + (py - ay) * dy) / len2, 0, 1) : 0;
+    return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+  }
+  function fireLaser(x: number, y: number, a: number) {
+    const now = performance.now();
+    const cx = Math.cos(a), cy = Math.sin(a);
+    let len = LASER_RANGE;
+    for (let d = LASER_STEP; d <= LASER_RANGE; d += LASER_STEP) {          // walk it into the first wall
+      if (hitsWorld(x + cx * d, y + cy * d)) { len = d; break; }
+    }
+    const ex = x + cx * len, ey = y + cy * len;
+    drawBeam(x, y, a, len);
+    laserSound();
+
+    for (const n of npcs) {                                                // everyone in the line goes down
+      if (now < n.squishedUntil) continue;
+      if (distToSegment(n.x, n.y, x, y, ex, ey) > LASER_HIT_R + R * 0.5) continue;
+      squishNpc(n, now);
+      spawnSparks(n.x, n.y, 0x8ef0ff);
+    }
+    const selfId = net.selfId();
+    let zapped = 0;
+    for (const o of others) {                                              // …and so does every player it crosses
+      if (o.id === selfId || zapped >= 4) continue;
+      if (distToSegment(o.x, o.y, x, y, ex, ey) > LASER_HIT_R + (o.car ? CAR_LEN * 0.4 : R)) continue;
+      zapped++;
+      spawnZap(o.x, o.y);
+      net.boom(o.x, o.y, 26, 'zap');                                       // their client resolves the hit
+    }
+  }
+  // The visible beam: a wide soft glow with a thin white core, both fading out over ~0.15s.
+  function drawBeam(x: number, y: number, a: number, len: number) {
+    const sc = petScene; if (!sc) return;
+    const mx = x + Math.cos(a) * len / 2, my = y + Math.sin(a) * len / 2;
+    const spr = sc.add.rectangle(mx, my, len, 9, 0x4fd6e8).setRotation(a).setDepth(my + 400).setBlendMode(Phaser.BlendModes.ADD);
+    const core = sc.add.rectangle(mx, my, len, 3, 0xf2ffff).setRotation(a).setDepth(my + 401).setBlendMode(Phaser.BlendModes.ADD);
+    beams.push({ spr, core, t: 0 });
+    spawnSparks(x + Math.cos(a) * 10, y + Math.sin(a) * 10, 0x8ef0ff);     // muzzle flash
+  }
+  function updateBeams(dt: number) {
+    for (let i = beams.length - 1; i >= 0; i--) {
+      const b = beams[i];
+      b.t += dt;
+      const k = b.t / 0.15;
+      if (k >= 1) { b.spr.destroy(); b.core.destroy(); beams.splice(i, 1); continue; }
+      b.spr.setAlpha(0.75 * (1 - k)).setScale(1, 1 - k * 0.7);
+      b.core.setAlpha(1 - k);
+    }
+  }
+
+  // --- 🕳️ singularity cannon --------------------------------------------------------------------
+  // A slow violet slug. Where it lands, spacetime gives up: a black hole opens, drags every loose
+  // body (townsfolk, you, your car) into its throat for two seconds, and then collapses into the
+  // biggest explosion in the game. Getting away is a matter of running early, not running fast.
+  interface BlackHole {
+    x: number; y: number; r: number; t: number; mine: boolean; shooterPid?: string;
+    g: Phaser.GameObjects.Graphics;
+    motes: { spr: Phaser.GameObjects.Image; ang: number; dist: number; spin: number }[];
+  }
+  const holes: BlackHole[] = [];
+
+  function spawnOrb(x: number, y: number, a: number, ghost: boolean) {
+    const sc = petScene; if (!sc) return;
+    const spr = sc.add.image(x, y, 'w-orb').setScale(TEXEL).setDepth(y + 8).setBlendMode(Phaser.BlendModes.ADD);
+    orbs.push({ spr, x, y, vx: Math.cos(a) * VOID_SPEED, vy: Math.sin(a) * VOID_SPEED, t: 0, ghost });
+  }
+  function updateOrbs(dt: number) {
+    const sc = petScene; if (!sc) return;
+    const now = performance.now();
+    for (let i = orbs.length - 1; i >= 0; i--) {
+      const o = orbs[i];
+      o.t += dt;
+      o.x += o.vx * dt; o.y += o.vy * dt;
+      o.spr.setPosition(o.x, o.y).setDepth(o.y + 8).setScale(TEXEL * (1 + Math.sin(o.t * 14) * 0.12)).setRotation(o.t * 6);
+      if (smokePuffs.length < 90) {                                        // a violet wake
+        smokePuffs.push({ spr: sc.add.image(o.x, o.y, 'w-smoke').setScale(0.4).setTint(0xa46ce8).setAlpha(0.5).setDepth(o.y - 2),
+          t: 0, max: 0.5, vx: (Math.random() - 0.5) * 20, vy: (Math.random() - 0.5) * 20 });
+      }
+      let hit = o.t >= VOID_LIFE || hitsWorld(o.x, o.y);
+      if (o.ghost) { if (hit) { o.spr.destroy(); orbs.splice(i, 1); } continue; }
+      if (!hit) hit = hitsBody(o.x, o.y, now);
+      if (hit) {
+        o.spr.destroy(); orbs.splice(i, 1);
+        net.boom(o.x, o.y, VOID_R, 'void');   // receivers open their own hole and run the same clock
+        spawnBlackHole(o.x, o.y, VOID_R, true);
+      }
+    }
+  }
+
+  function spawnBlackHole(x: number, y: number, r: number, mine: boolean, shooterPid?: string) {
+    const sc = petScene; if (!sc) return;
+    voidCollapseSound();
+    const g = sc.add.graphics().setDepth(y + 200);
+    const motes: BlackHole['motes'] = [];
+    for (let i = 0; i < 26; i++) {
+      motes.push({
+        spr: sc.add.image(x, y, 'w-fireball').setBlendMode(Phaser.BlendModes.ADD)
+          .setTint(i % 3 === 0 ? 0xf0d9ff : 0xa46ce8).setScale(0.5).setDepth(y + 201),
+        ang: Math.random() * Math.PI * 2,
+        dist: 30 + Math.random() * (r * 0.9),
+        spin: 2.4 + Math.random() * 2.6,
+      });
+    }
+    holes.push({ x, y, r, t: 0, mine, shooterPid, g, motes });
+    if (mainCam && Math.hypot(x - selfX, y - selfY) < 700) mainCam.shake(240, 0.006);
+  }
+
+  function updateHoles(dt: number) {
+    for (let i = holes.length - 1; i >= 0; i--) {
+      const h = holes[i];
+      h.t += dt;
+      const k = Math.min(1, h.t / VOID_HOLD);
+
+      // the throat: a dead-black disc that swells, ringed by a shimmering accretion halo
+      const core = 12 + k * 26;
+      h.g.clear();
+      h.g.fillStyle(0x05020a, 1); h.g.fillCircle(h.x, h.y, core);
+      h.g.lineStyle(3, 0xc79bff, 0.85 * (1 - k * 0.3)); h.g.strokeCircle(h.x, h.y, core + 4 + Math.sin(h.t * 9) * 2);
+      h.g.lineStyle(2, 0x7a3ecf, 0.5); h.g.strokeCircle(h.x, h.y, core + 12 + Math.sin(h.t * 6 + 1) * 4);
+      h.g.lineStyle(1, 0xe6d0ff, 0.22 * (1 - k)); h.g.strokeCircle(h.x, h.y, h.r * (1 - k * 0.25));
+
+      // matter spiralling down the drain
+      for (const m of h.motes) {
+        m.ang += m.spin * dt;
+        m.dist -= (55 + (1 - m.dist / h.r) * 190) * dt;
+        if (m.dist < core * 0.5) { m.dist = h.r * (0.75 + Math.random() * 0.25); m.ang = Math.random() * Math.PI * 2; }
+        m.spr.setPosition(h.x + Math.cos(m.ang) * m.dist, h.y + Math.sin(m.ang) * m.dist)
+          .setScale(0.22 + 0.5 * (1 - m.dist / h.r)).setAlpha(0.35 + 0.6 * (1 - m.dist / h.r));
+      }
+
+      // the pull. Reach a little past the blast radius, so people caught at the edge get dragged
+      // into the part of it that kills them.
+      const reach = h.r * 1.5;
+      const drag = (px: number, py: number, strength: number): { x: number; y: number } => {
+        const dx = h.x - px, dy = h.y - py, d = Math.hypot(dx, dy);
+        if (d < 1 || d > reach) return { x: px, y: py };
+        const f = strength * (1 - d / reach) * dt;
+        return { x: px + (dx / d) * f, y: py + (dy / d) * f };
+      };
+      const now = performance.now();
+      for (const n of npcs) {
+        const p = drag(n.x, n.y, 300);
+        n.x = p.x; n.y = p.y;
+        if (now < n.squishedUntil) continue;
+        if (Math.hypot(n.x - h.x, n.y - h.y) < core) {                     // swallowed whole
+          n.squishedUntil = now + 3200; n.getUpUntil = 0; n.walking = false; n.label.setText('💫');
+        }
+      }
+      if (!inInterior && !inDungeon && !boating) {
+        const p = drag(selfX, selfY, driving ? 190 : 260);                 // a car's mass fights it a bit
+        if (p.x !== selfX || p.y !== selfY) {
+          const rc = resolveCollisions(p.x, p.y, driving ? CAR_WID * 0.5 : R);
+          selfX = rc.x; selfY = rc.y;
+        }
+      }
+
+      if (h.t < VOID_HOLD) continue;
+      // …and it closes. Everything the hole gathered is at the centre — that's the point.
+      h.g.destroy();
+      for (const m of h.motes) m.spr.destroy();
+      holes.splice(i, 1);
+      spawnExplosion(h.x, h.y, 2.4);
+      applyBlast(h.x, h.y, h.r, h.mine, h.shooterPid);
+      if (mainCam && Math.hypot(h.x - selfX, h.y - selfY) < 700) mainCam.shake(520, 0.02);
+    }
+  }
+
+  // --- shared impact sparkle (bullet strike, laser burn, muzzle flash) --------------------------
+  function spawnSparks(x: number, y: number, tint: number) {
+    const sc = petScene; if (!sc) return;
+    for (let i = 0; i < 5; i++) {
+      const a = Math.random() * Math.PI * 2, sp = 40 + Math.random() * 120;
+      const spr = sc.add.image(x, y, 'w-fireball').setDepth(y + 300).setBlendMode(Phaser.BlendModes.ADD).setTint(tint);
+      boomParts.push({ spr, t: 0, max: 0.12 + Math.random() * 0.14, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, kind: 'fire', r0: 0.45, r1: 0.05 });
+    }
+  }
+  // A laser landing on a player — a bright cyan bloom where it burned through.
+  function spawnZap(x: number, y: number) {
+    const sc = petScene; if (!sc) return;
+    boomParts.push({ spr: sc.add.image(x, y, 'w-fireball').setDepth(y + 400).setBlendMode(Phaser.BlendModes.ADD).setTint(0x8ef0ff).setScale(1.6),
+      t: 0, max: 0.22, vx: 0, vy: 0, kind: 'flash', r0: 1.6, r1: 3.6 });
+    spawnSparks(x, y, 0x8ef0ff);
+  }
+
+  function updateShots(dt: number) {
+    updateRockets(dt);
+    updateBullets(dt);
+    updateBeams(dt);
+    updateOrbs(dt);
+    updateHoles(dt);
+  }
+
+  // Clean up any ghost projectile near a blast we just received, so a mirrored shot doesn't keep
+  // flying past the point where its owner actually detonated it (on an NPC/player we don't share).
+  function clearGhostShotsNear(x: number, y: number, r: number) {
+    for (const list of [rockets, orbs, bullets]) {
+      for (let i = list.length - 1; i >= 0; i--) {
+        const s = list[i];
+        if (s.ghost && Math.hypot(s.x - x, s.y - y) <= r + 40) { s.spr.destroy(); list.splice(i, 1); }
+      }
+    }
+  }
+
+  // ============================================================================================
+  // AMMO CRATES 📦 — 36 of them, on the fixed spots CRATE_SPOTS picked from a seeded PRNG, so every
+  // client draws them in the same places without a byte of server traffic. Walk over one to load up.
+  // Looting is local: a crate you take goes away for you and comes back 22 seconds later, and
+  // everyone else can still grab their own. Nobody races anybody to a box.
+  // ============================================================================================
+  interface Crate {
+    spot: CrateSpot;
+    box: Phaser.GameObjects.Image;
+    icon: Phaser.GameObjects.Text;
+    glow: Phaser.GameObjects.Arc;
+    takenUntil: number; // ms; 0 = sitting there waiting for you
+  }
+  const crates: Crate[] = [];
+  const CRATE_GRAB_R = R + 24;
+
+  function buildCrates(sc: Phaser.Scene) {
+    for (const spot of CRATE_SPOTS) {
+      const spec = WEAPON_BY_ID[spot.w];
+      const glow = sc.add.circle(spot.x, spot.y + 4, 20, spec.tint, 0.16)
+        .setBlendMode(Phaser.BlendModes.ADD).setDepth(spot.y - 2);
+      const box = sc.add.image(spot.x, spot.y, 'w-crate').setScale(TEXEL * 1.15).setTint(spec.tint).setDepth(spot.y);
+      const icon = sc.add.text(spot.x, spot.y - 20, spec.emoji, { fontSize: '15px' })
+        .setOrigin(0.5).setDepth(spot.y + 1);
+      crates.push({ spot, box, icon, glow, takenUntil: 0 });
+    }
+  }
+
+  function updateCrates(now: number) {
+    const active = !inInterior && !inDungeon;
+    for (const c of crates) {
+      if (c.takenUntil) {
+        if (now < c.takenUntil) continue;
+        c.takenUntil = 0;                                    // restocked
+        c.box.setVisible(true); c.icon.setVisible(true); c.glow.setVisible(true);
+        c.box.setScale(TEXEL * 1.15);
+      }
+      // idle bob + a breathing glow, so a crate reads as a pickup from across the street
+      const bob = Math.sin(now / 380 + c.spot.x) * 3;
+      c.box.setY(c.spot.y + bob);
+      c.icon.setY(c.spot.y - 20 + bob);
+      c.glow.setScale(1 + Math.sin(now / 300 + c.spot.y) * 0.12);
+
+      if (!active) continue;
+      if (Math.hypot(selfX - c.spot.x, selfY - c.spot.y) > CRATE_GRAB_R) continue;
+      takeCrate(c, now);
+    }
+  }
+
+  /** Walk over a crate: top the weapon up, hide the box, start its respawn clock. */
+  let lastFullNagAt = 0;
+  function takeCrate(c: Crate, now: number) {
+    const spec = WEAPON_BY_ID[c.spot.w];
+    if (ammo[spec.id] >= spec.max) {                         // leave it for later — you're carrying all you can
+      // We're standing ON the crate, so this runs every frame — say it once, then shut up.
+      if (now - lastFullNagAt > 2000) { lastFullNagAt = now; flashHelp(`${spec.emoji} ${spec.name} is full`); }
+      return;
+    }
+    const had = ammo[spec.id];
+    ammo[spec.id] = Math.min(spec.max, had + spec.perCrate);
+    c.takenUntil = now + CRATE_RESPAWN_MS;
+    c.box.setVisible(false); c.icon.setVisible(false); c.glow.setVisible(false);
+    pickupSound();
+    spawnSparks(c.spot.x, c.spot.y, spec.tint);
+    // First time you find a weapon, it introduces itself. After that just show the new count.
+    if (had === 0) showToast(`${spec.emoji} <b>${spec.name}</b> — ${spec.blurb} <i>(+${ammo[spec.id]})</i>`);
+    else flashHelp(`${spec.emoji} +${ammo[spec.id] - had} ${spec.name} (${ammo[spec.id]})`);
+    // Auto-equip only when you're holding an empty gun — never yank a loaded weapon out of your hands.
+    if (ammo[weapon] <= 0 && spec.id !== weapon) { weapon = spec.id; updateHelp(); }
+    updateWeaponHud();
   }
 
   // Two cars colliding → a huge fireball, and BOTH drivers bail out onto their feet. This is detected
@@ -12358,13 +12973,32 @@ export function startWorld(net: WorldNet): void {
       for (const [k, v] of says) if (v.until <= now) says.delete(k); // drop stale lines (e.g. speakers who left)
       says.set(id, { text, until: now + SAY_MS, purple: say });
     },
-    feedBoom(x, y, r, shooterPid) { spawnExplosion(x, y); if (r && r > 0) { clearGhostRocketsNear(x, y, r); applyBlast(x, y, r, false, shooterPid); } },
-    feedRocket(x, y, a) { feedRocket(x, y, a); },
+    // Someone else's shot landed. `fx` picks the effect; `r > 0` means it hurts, and we resolve that
+    // hit against our own world (our car, our feet, our townsfolk) exactly as the firer did.
+    feedBoom(x, y, r, shooterPid, fx) {
+      if (fx === 'void') {
+        clearGhostShotsNear(x, y, r ?? VOID_R);
+        spawnBlackHole(x, y, r ?? VOID_R, false, shooterPid); // the blast comes when it closes, VOID_HOLD later
+        return;
+      }
+      if (fx === 'hit') spawnSparks(x, y, 0xff9a5a);
+      else if (fx === 'zap') spawnZap(x, y);
+      else spawnExplosion(x, y);
+      if (r && r > 0) { clearGhostShotsNear(x, y, r); applyBlast(x, y, r, false, shooterPid); }
+    },
+    feedRocket(x, y, a, w, len) { feedShot(x, y, a, w ?? 'rocket', len); },
     feedChat(line) { pushChatLine(line); },
     feedRoadRage(active: boolean, endsAt: number, standings: { name: string; kills: number }[]) {
+      const starting = active && !rrActive;
       rrActive = active; rrEndsAt = endsAt; rrStandings = standings;
       updateRoadRageHud();
       if (!active) { rrHud?.remove(); rrHud = null; }
+      // Nobody should start a deathmatch dry — the event airdrops everyone a basic loadout.
+      if (starting) {
+        ammo.rocket = Math.max(ammo.rocket, 6);
+        ammo.mg = Math.max(ammo.mg, 120);
+        updateWeaponHud();
+      }
     },
     feedMcFood(item: string, granted: boolean, _bonus?: number) {
       if (!granted) return;

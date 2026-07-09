@@ -861,13 +861,34 @@ export interface WorldSayMsg {
   say?: boolean; // true → spoken via the "Say" popup (Y); renders the bubble in purple
 }
 
+// The overworld arsenal. Every weapon draws from its own ammo pool, refilled by crates that
+// respawn around the map. `rocket` is the original launcher; the rest were added alongside it.
+export type WorldWeapon =
+  | 'rocket'  // 🚀 slow missile, big blast radius
+  | 'mg'      // 🔫 rapid-fire bullets, pinpoint hits
+  | 'laser'   // ⚡ instant piercing beam
+  | 'void';   // 🕳️ singularity — collapses everything inward, then detonates
+
+// How a receiver should draw an incoming WorldBoomMsg. Omitted = 'blast' (the classic fireball),
+// so old clients and car crashes keep their current look.
+export type WorldFx =
+  | 'blast'   // full fireball (car crash, rocket)
+  | 'hit'     // small spark — a machine-gun round landing
+  | 'zap'     // laser scorch
+  | 'void';   // a black hole opens, drags everything in, then blows
+
+// Runtime lists of the above, for validating what arrives off the wire.
+export const WORLD_WEAPONS: readonly WorldWeapon[] = ['rocket', 'mg', 'laser', 'void'];
+export const WORLD_FX: readonly WorldFx[] = ['blast', 'hit', 'zap', 'void'];
+
 // A car blew up (car-vs-car collision or a high-speed building crash) at this world point. Fanned
 // out to everyone else in the world so the fireball is visible to all, not just the crasher.
 export interface WorldBoomMsg {
   type: 'worldBoom';
   x: number;
   y: number;
-  r?: number;      // blast radius (rocket strikes); when >0 receivers also take blast effects, not just the visual
+  r?: number;      // blast radius (weapon strikes); when >0 receivers also take blast effects, not just the visual
+  fx?: WorldFx;    // which effect to draw; omitted = 'blast'
   pid?: string;    // shooter's pid — set by server for kill attribution during Road Rage
 }
 
@@ -879,13 +900,16 @@ export interface WorldRoadRageMsg {
   standings: { name: string; kills: number }[];
 }
 
-// A player launched a rocket from (x,y) heading at angle a — fanned out so everyone watches the
-// missile fly. Detonation is authoritative on the firer and arrives separately as a WorldBoomMsg.
+// A player fired a weapon from (x,y) heading at angle a — fanned out so everyone watches the shot.
+// Damage is authoritative on the firer and arrives separately as a WorldBoomMsg; what receivers
+// draw from this message is purely cosmetic.
 export interface WorldRocketMsg {
   type: 'worldRocket';
   x: number;
   y: number;
   a: number;
+  w?: WorldWeapon; // which weapon; omitted = 'rocket' (what old clients send)
+  len?: number;    // laser only: how far the beam reached before it hit something
 }
 
 // City Tycoon trade terms: properties + cash + jail-free cards offered in either direction.
@@ -1013,9 +1037,9 @@ export type ClientMsg =
   | { type: 'worldLeave' } // leave the world map
   | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null; pet?: string | null } // client-authoritative avatar position (world units), heading + car when driving, pet trailing
   | { type: 'worldChat'; text: string; say?: boolean } // say a line in the World — pops as a speech bubble over your avatar; say=true (the Y popup) renders it purple
-  | { type: 'worldBoom'; x: number; y: number; r?: number } // an explosion here (car crash or rocket strike) — broadcast the fireball; r>0 = a damaging blast
-  | { type: 'worldRocket'; x: number; y: number; a: number } // we launched a rocket here, heading a → broadcast so others see it fly
-  | { type: 'worldBlownUp'; car: boolean; self: boolean; killedBy?: string } // a rocket blast got us; killedBy = shooter pid for Road Rage kill attribution
+  | { type: 'worldBoom'; x: number; y: number; r?: number; fx?: WorldFx } // an explosion here (car crash or weapon strike) — broadcast the effect; r>0 = a damaging blast
+  | { type: 'worldRocket'; x: number; y: number; a: number; w?: WorldWeapon; len?: number } // we fired here, heading a → broadcast so others see the shot
+  | { type: 'worldBlownUp'; car: boolean; self: boolean; killedBy?: string } // a blast got us; killedBy = shooter pid for Road Rage kill attribution
   | { type: 'worldRoadRage' } // start a Road Rage PvP event (any player can trigger; server enforces cooldown)
   // --- Robville land (the suburban neighborhood) ---
   | { type: 'landReq' } // request the current Robville parcel ownership/market book

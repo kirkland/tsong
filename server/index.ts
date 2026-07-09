@@ -7,7 +7,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { WebSocketServer, WebSocket } from 'ws';
 import sirv from 'sirv';
-import { BOT_LEVELS, BotLevel, ClientMsg, CrTradeOffer, TICK_MS, TickHealth } from '../shared/types';
+import { BOT_LEVELS, BotLevel, ClientMsg, CrTradeOffer, TICK_MS, TickHealth, WORLD_FX, WORLD_WEAPONS } from '../shared/types';
 import { Game, GameSnapshot } from './game';
 import { Lobby, LobbySnapshot } from './lobby';
 import { initDb, migratePlayer } from './db';
@@ -576,10 +576,16 @@ wss.on('connection', (ws: WebSocket, req) => {
         if (typeof msg.text === 'string') lobby.worldChat(ws, msg.text, msg.say === true);
         break;
       case 'worldBoom':
-        if (typeof msg.x === 'number' && typeof msg.y === 'number') lobby.worldBoom(ws, msg.x, msg.y, typeof msg.r === 'number' ? msg.r : undefined);
+        if (typeof msg.x === 'number' && typeof msg.y === 'number') {
+          const fx = msg.fx && WORLD_FX.includes(msg.fx) ? msg.fx : undefined;
+          lobby.worldBoom(ws, msg.x, msg.y, typeof msg.r === 'number' ? msg.r : undefined, fx);
+        }
         break;
       case 'worldRocket':
-        if (typeof msg.x === 'number' && typeof msg.y === 'number' && typeof msg.a === 'number') lobby.worldRocket(ws, msg.x, msg.y, msg.a);
+        if (typeof msg.x === 'number' && typeof msg.y === 'number' && typeof msg.a === 'number') {
+          const w = msg.w && WORLD_WEAPONS.includes(msg.w) ? msg.w : undefined;
+          lobby.worldRocket(ws, msg.x, msg.y, msg.a, w, typeof msg.len === 'number' ? msg.len : undefined);
+        }
         break;
       case 'worldBlownUp':
         lobby.worldBlownUp(ws, msg.car === true, msg.self === true, typeof msg.killedBy === 'string' ? msg.killedBy : undefined);
