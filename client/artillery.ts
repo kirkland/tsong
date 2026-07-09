@@ -44,15 +44,15 @@ const TEAM_COLORS = [['#00e5ff', '#4a90ff'], ['#ff9a00', '#ff4a4a']] as const;
 const teamOf = (idx: number) => idx % 2;
 
 // --- battlefield maps (host picks; the generator theme + profile per map) ---
-interface WaMap { name: string; desc: string; grass: string; dirtTop: string; dirtDeep: string; tile: string; top: string; tint?: string; }
+interface WaMap { name: string; desc: string; grass: string; dirtTop: string; dirtDeep: string; fill: 'sl-ground' | 'sl-rockfill'; grassy: boolean; tint?: string; }
 const MAPS: WaMap[] = [
-  { name: 'THE HILLS', desc: 'classic rolling countryside', grass: '#3f7a3a', dirtTop: '#3d2a14', dirtDeep: '#180e05', tile: 'tile-grass', top: 'top-grass' },
-  { name: 'THE RUINS', desc: 'stepped stone + ancient pillars', grass: '#5a7a5a', dirtTop: '#4a4a55', dirtDeep: '#1a1a22', tile: 'tile-castle', top: 'top-castle' },
-  { name: 'FOUNTAIN VALLEY', desc: 'one deep basin, no cover in the middle', grass: '#4a8a5a', dirtTop: '#2a3a24', dirtDeep: '#0e1408', tile: 'tile-dirt', top: 'top-grass', tint: 'rgba(30, 80, 40, 0.28)' },
-  { name: 'THE ARENA', desc: 'two mesas, one fatal chasm', grass: '#7a6a3a', dirtTop: '#4a3520', dirtDeep: '#1c1208', tile: 'tile-sand', top: 'top-sand' },
-  { name: 'SKY ISLANDS', desc: 'no mainland — girders or death', grass: '#4aaa6a', dirtTop: '#3a4a5c', dirtDeep: '#141c26', tile: 'tile-grass', top: 'top-grass', tint: 'rgba(40, 60, 100, 0.22)' },
-  { name: 'THE CAVERNS', desc: 'a hollowed-out underworld', grass: '#6a5a8a', dirtTop: '#3a2e4c', dirtDeep: '#120c1c', tile: 'tile-stone', top: 'top-stone', tint: 'rgba(90, 60, 150, 0.35)' },
-  { name: 'ROBVILLE', desc: 'towers, floors, and bad intentions', grass: '#5a6a72', dirtTop: '#3c4248', dirtDeep: '#16181c', tile: 'tile-castle', top: 'top-castle', tint: 'rgba(60, 80, 100, 0.40)' },
+  { name: 'THE HILLS', desc: 'classic rolling countryside', grass: '#3f7a3a', dirtTop: '#3d2a14', dirtDeep: '#180e05', fill: 'sl-ground', grassy: true },
+  { name: 'THE RUINS', desc: 'stepped stone + ancient pillars', grass: '#5a7a5a', dirtTop: '#4a4a55', dirtDeep: '#1a1a22', fill: 'sl-rockfill', grassy: false, tint: 'rgba(90, 110, 140, 0.18)' },
+  { name: 'FOUNTAIN VALLEY', desc: 'one deep basin, no cover in the middle', grass: '#4a8a5a', dirtTop: '#2a3a24', dirtDeep: '#0e1408', fill: 'sl-ground', grassy: true, tint: 'rgba(20, 70, 40, 0.20)' },
+  { name: 'THE ARENA', desc: 'two mesas, one fatal chasm', grass: '#7a6a3a', dirtTop: '#4a3520', dirtDeep: '#1c1208', fill: 'sl-ground', grassy: false, tint: 'rgba(190, 120, 40, 0.22)' },
+  { name: 'SKY ISLANDS', desc: 'no mainland — girders or death', grass: '#4aaa6a', dirtTop: '#3a4a5c', dirtDeep: '#141c26', fill: 'sl-ground', grassy: true, tint: 'rgba(40, 60, 120, 0.20)' },
+  { name: 'THE CAVERNS', desc: 'a hollowed-out underworld', grass: '#6a5a8a', dirtTop: '#3a2e4c', dirtDeep: '#120c1c', fill: 'sl-rockfill', grassy: false, tint: 'rgba(120, 70, 190, 0.16)' },
+  { name: 'ROBVILLE', desc: 'towers, floors, and bad intentions', grass: '#5a6a72', dirtTop: '#3c4248', dirtDeep: '#16181c', fill: 'sl-rockfill', grassy: false, tint: 'rgba(60, 90, 110, 0.25)' },
 ];
 const GRAV = 640;            // px/s² for projectiles and fighters
 const WALK_SPEED = 95;       // px/s
@@ -121,12 +121,24 @@ function makeNoise2(rnd: () => number) {
 // Kenney CC0 sprites (client/public/worms/) — terrain fill tiles, crates, meteors.
 // Same deal as the overworld's Tiny Town sheet; tiny PNGs, preloaded at module import.
 const ASSETS: Record<string, HTMLImageElement> = {};
-for (const n of ['tile-grass', 'tile-dirt', 'tile-castle', 'tile-sand', 'tile-snow', 'tile-stone', 'top-grass', 'top-dirt', 'top-castle', 'top-sand', 'top-snow', 'top-stone', 'crate', 'crate-boom', 'meteor1', 'meteor2']) {
+for (const n of ['sl-ground', 'sl-rockfill', 'sl-grasstop', 'sl-tree', 'sl-bush', 'sl-rock', 'sl-shrooms', 'sl-skulls', 'sl-crate', 'sl-house', 'sl-back', 'sl-middle', 'meteor1', 'meteor2']) {
   const img = new Image();
   img.src = `/worms/${n}.png`;
   ASSETS[n] = img;
 }
 const imgReady = (n: string) => ASSETS[n]?.complete && ASSETS[n].naturalWidth > 0;
+// pixel art wants integer upscales with no smoothing — pre-scale once per use
+function scaled(n: string, factor: number): HTMLCanvasElement | null {
+  if (!imgReady(n)) return null;
+  const img = ASSETS[n];
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth * factor;
+  c.height = img.naturalHeight * factor;
+  const cc = c.getContext('2d')!;
+  cc.imageSmoothingEnabled = false;
+  cc.drawImage(img, 0, 0, c.width, c.height);
+  return c;
+}
 
 let waOpen = false;
 
@@ -152,6 +164,8 @@ export function startArtillery(net: ArtilleryNet): void {
   let fighters: Fighter[] = [];
   let solid = new Uint8Array(WA_W * WA_H);
   let terrain: HTMLCanvasElement | null = null;      // pre-rendered dirt, carved as we go
+  let backwall: HTMLCanvasElement | null = null;     // dark rock BEHIND the terrain — caves and
+                                                     // craters reveal this instead of raw sky
   let turnPi = -1;                                   // whose turn (fighter index)
   let gravScale = 1;                                 // wildcard low-gravity turns scale projectile arcs
   let eventResolving = false;                        // wildcard flights in the air (don't advance the turn)
@@ -245,8 +259,10 @@ export function startArtillery(net: ArtilleryNet): void {
   const isSolid = (x: number, y: number) =>
     x >= 0 && x < WA_W && y >= 0 && y < WA_H && solid[sIdx(x, y)] === 1;
 
+  let mapIdxLive = 0; // which map the renderer is showing (parallax band selection)
   // --- terrain generation (seeded + map profile, deterministic on every client) ---
   function genTerrain(seed: number, map: number) {
+    mapIdxLive = map;
     const theme = MAPS[map] ?? MAPS[0];
     const rnd = mulberry32(seed);
     const phases = [rnd() * 9, rnd() * 9, rnd() * 9];
@@ -393,10 +409,12 @@ export function startArtillery(net: ArtilleryNet): void {
     // paint each column as contiguous solid runs (grass lip on every run top).
     // Fill is a real Kenney tile pattern when the sprite is ready (it always is by match
     // start — they're ~1KB), painted per-column so carving stays pixel-clean.
-    const tileImg = ASSETS[theme.tile];
-    const pat = tileImg?.complete && tileImg.naturalWidth > 0 ? tc.createPattern(tileImg, 'repeat') : null;
-    const topImg = ASSETS[theme.top];
-    const topOk = topImg?.complete && topImg.naturalWidth > 0;
+    // Sunny Land pixel fills at 2x (nearest-neighbor). The lip pattern is translated to
+    // each run's top so the grass surface hugs every hill, cave roof and crater rim.
+    const fillCanvas = scaled(theme.fill, 2);
+    const pat = fillCanvas ? tc.createPattern(fillCanvas, 'repeat') : null;
+    const lipCanvas = theme.grassy ? scaled('sl-grasstop', 2) : null;
+    const lipPat = lipCanvas ? tc.createPattern(lipCanvas, 'repeat') : null;
     for (let x = 0; x < WA_W; x++) {
       let y = 0;
       while (y < WA_H) {
@@ -406,16 +424,46 @@ export function startArtillery(net: ArtilleryNet): void {
         while (y < WA_H && solid[y * WA_W + x]) y++;
         tc.fillStyle = pat ?? dirt;
         tc.fillRect(x, runTop, 1, y - runTop);
-        if (topOk) {
-          // 1px slice of the themed top tile, aligned to this column's surface —
-          // the grass/sand/brick lip follows every hill, cave roof and crater rim
-          tc.drawImage(topImg, x % topImg.naturalWidth, 0, 1, Math.min(22, y - runTop), x, runTop, 1, Math.min(22, y - runTop));
+        const lipH = Math.min(theme.grassy ? 14 : 4, y - runTop);
+        if (lipPat) {
+          tc.save();
+          tc.translate(0, runTop); // align the grass strip's top to THIS run's surface
+          tc.fillStyle = lipPat;
+          tc.fillRect(x, 0, 1, lipH);
+          tc.restore();
         } else {
+          // non-grassy maps get a subtle lit edge instead of a colored stripe
+          tc.fillStyle = 'rgba(255, 240, 200, 0.28)';
+          tc.fillRect(x, runTop, 1, Math.min(3, y - runTop));
           tc.fillStyle = theme.grass;
-          tc.fillRect(x, runTop, 1, Math.min(6, y - runTop));
+          tc.fillRect(x, runTop + 3, 1, Math.max(0, lipH - 3));
         }
       }
     }
+    // the backwall: for every column, dark rock spans the solid's vertical extent. It is
+    // NEVER carved — so blowing a hole (or generating a cave) reveals dark underground
+    // instead of the night sky, which is what made caves look like black stickers.
+    backwall = document.createElement('canvas');
+    backwall.width = WA_W; backwall.height = WA_H;
+    const bwc = backwall.getContext('2d')!;
+    const bwGrad = bwc.createLinearGradient(0, 0, 0, WA_H);
+    bwGrad.addColorStop(0, '#171223');
+    bwGrad.addColorStop(1, '#0a0812');
+    bwc.fillStyle = bwGrad;
+    for (let x = 0; x < WA_W; x++) {
+      let top = -1, bot = -1;
+      for (let y = 0; y < WA_H; y++) if (solid[y * WA_W + x]) { top = y; break; }
+      if (top < 0) continue;
+      for (let y = WA_H - 1; y >= top; y--) if (solid[y * WA_W + x]) { bot = y; break; }
+      bwc.fillRect(x, top + 5, 1, Math.max(0, bot - top - 4));
+    }
+    // faint rocky noise so big caverns don't read flat
+    for (let i = 0; i < 1400; i++) {
+      const rx = rnd() * WA_W, ry = rnd() * WA_H;
+      bwc.fillStyle = rnd() < 0.5 ? '#ffffff06' : '#00000018';
+      bwc.fillRect(rx, ry, 2 + rnd() * 3, 2 + rnd() * 3);
+    }
+
     // map mood tint over the tile pattern (source-atop keeps crater edges clean)
     if (theme.tint) {
       tc.save();
@@ -445,39 +493,38 @@ export function startArtillery(net: ArtilleryNet): void {
     tc.fillStyle = light;
     tc.fillRect(0, 0, WA_W, WA_H);
     tc.restore();
-    // vegetation & set dressing, painted onto the terrain canvas so blasts remove it too
+    // set dressing: real Sunny Land props painted INTO the terrain canvas (blasts remove
+    // them with the ground they stood on). Pixel-crisp at 2x, per-map casts.
     const surface = (x: number) => { for (let y = 0; y < WA_H; y++) if (solid[y * WA_W + x]) return y; return -1; };
-    for (let x = 40; x < WA_W - 40; x += 16 + Math.floor(rnd() * 40)) {
+    tc.imageSmoothingEnabled = false;
+    const stamp = (n: string, x: number, top: number, f: number) => {
+      const img = ASSETS[n];
+      if (!imgReady(n)) return;
+      const w = img.naturalWidth * f, h = img.naturalHeight * f;
+      tc.drawImage(img, x - w / 2, top - h + 2, w, h);
+    };
+    let housePlaced = false;
+    for (let x = 60; x < WA_W - 60; x += 30 + Math.floor(rnd() * 70)) {
       const top = surface(x);
-      if (top < 60 || top > WA_H - 120) continue;
+      if (top < 70 || top > WA_H - 130) continue;
       const roll = rnd();
       if (map === 6) {
-        if (roll < 0.18) { // rooftop antenna
+        if (roll < 0.18) { // rooftop antenna (procedural — fits the skyline)
           tc.strokeStyle = '#8a949e'; tc.lineWidth = 2;
           tc.beginPath(); tc.moveTo(x, top); tc.lineTo(x, top - 26); tc.stroke();
           tc.fillStyle = '#ff5a5a'; tc.fillRect(x - 2, top - 30, 4, 4);
-        }
+        } else if (roll < 0.26) stamp('sl-crate', x, top, 2);
       } else if (map === 5) {
-        if (roll < 0.2) { // cave mushrooms
-          tc.fillStyle = '#c8b8ff';
-          tc.fillRect(x - 1, top - 8, 2, 8);
-          tc.beginPath(); tc.arc(x, top - 9, 5, Math.PI, 0); tc.fill();
-        }
-      } else if (roll < 0.16) { // trees
-        const th2 = 26 + rnd() * 26;
-        tc.fillStyle = '#4a3220';
-        tc.fillRect(x - 2, top - th2, 4, th2);
-        tc.fillStyle = theme.grass;
-        tc.beginPath();
-        tc.arc(x, top - th2, 13 + rnd() * 9, 0, Math.PI * 2);
-        tc.arc(x - 9, top - th2 + 8, 9, 0, Math.PI * 2);
-        tc.arc(x + 9, top - th2 + 8, 9, 0, Math.PI * 2);
-        tc.fill();
-      } else if (roll < 0.22) { // boulders
-        tc.fillStyle = '#6a6a72';
-        tc.beginPath(); tc.ellipse(x, top - 4, 7 + rnd() * 6, 5 + rnd() * 4, 0, 0, Math.PI * 2); tc.fill();
-        tc.fillStyle = '#ffffff22';
-        tc.fillRect(x - 3, top - 8, 4, 2);
+        if (roll < 0.26) stamp('sl-shrooms', x, top, 2);
+        else if (roll < 0.34) stamp('sl-skulls', x, top, 2);
+      } else if (map === 1 || map === 3) {
+        if (roll < 0.14) stamp('sl-skulls', x, top, 2);
+        else if (roll < 0.26) stamp('sl-rock', x, top, 2);
+      } else {
+        if (roll < 0.13) stamp('sl-tree', x, top, 1.6);
+        else if (roll < 0.24) stamp('sl-bush', x, top, 2);
+        else if (roll < 0.31) stamp('sl-rock', x, top, 2);
+        else if (!housePlaced && roll < 0.335) { stamp('sl-house', x, top, 1.8); housePlaced = true; } // somebody lives here. lived.
       }
     }
     return hmap;
@@ -514,6 +561,18 @@ export function startArtillery(net: ArtilleryNet): void {
       tc.arc(cx, cy, r - 2, 0, Math.PI * 2);
       tc.stroke();
       tc.restore();
+    }
+    // blast through the dark backwall too, at a smaller radius: craters keep a scorched
+    // dark rim, but the middle punches clean through to sky — the silhouette really shrinks
+    // instead of leaving "weird black things" where the floor used to be
+    if (backwall) {
+      const bc = backwall.getContext('2d')!;
+      bc.save();
+      bc.globalCompositeOperation = 'destination-out';
+      bc.beginPath();
+      bc.arc(cx, cy, r * 0.68, 0, Math.PI * 2);
+      bc.fill();
+      bc.restore();
     }
   }
 
@@ -1392,6 +1451,16 @@ export function startArtillery(net: ArtilleryNet): void {
       ctx.lineTo(WA_W, WA_H);
       ctx.fill();
     }
+    // Sunny Land parallax bands on the grassy maps (behind the backwall + terrain)
+    if (mode === 'play' && MAPS[mapIdxLive]?.grassy && imgReady('sl-back')) {
+      ctx.imageSmoothingEnabled = false;
+      const img = ASSETS['sl-back'];
+      const f = (WA_H * 0.5) / img.naturalHeight;
+      const w = img.naturalWidth * f;
+      ctx.globalAlpha = 0.55;
+      for (let x = 0; x < WA_W; x += w) ctx.drawImage(img, x, WA_H * 0.16, w, img.naturalHeight * f);
+      ctx.globalAlpha = 1;
+    }
     // drifting clouds
     ctx.fillStyle = '#ffffff14';
     for (let i = 0; i < 4; i++) {
@@ -1410,7 +1479,8 @@ export function startArtillery(net: ArtilleryNet): void {
       ctx.setTransform(1, 0, 0, 1, (Math.random() - 0.5) * a, (Math.random() - 0.5) * a);
     }
 
-    // terrain
+    // dark rock behind everything solid, then the carvable terrain on top
+    if (backwall) ctx.drawImage(backwall, 0, 0);
     if (terrain) ctx.drawImage(terrain, 0, 0);
 
     // gravestones where soldiers fell
@@ -1447,8 +1517,9 @@ export function startArtillery(net: ArtilleryNet): void {
         ctx.moveTo(c.x + 16, cy - 21); ctx.lineTo(c.x + 7, cy - 6);
         ctx.stroke();
       }
-      if (imgReady('crate')) {
-        ctx.drawImage(ASSETS.crate, c.x - 16, cy - 30, 32, 32);
+      if (imgReady('sl-crate')) {
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(ASSETS['sl-crate'], c.x - 16, cy - 32, 32, 32);
       } else {
         ctx.font = '30px serif';
         ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
