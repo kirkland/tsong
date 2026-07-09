@@ -704,6 +704,18 @@ export async function recordFishCatch(pid: string, name: string, lb: number): Pr
   );
 }
 
+// Bump a named counter in the meta table (used for the fountain's all-time wish count).
+export async function bumpCounter(key: string): Promise<number> {
+  if (!pool) return 0;
+  const { rows } = await pool.query(
+    `INSERT INTO meta (key, value) VALUES ($1, '1')
+       ON CONFLICT (key) DO UPDATE SET value = ((meta.value)::bigint + 1)::text
+       RETURNING value`,
+    [key],
+  );
+  return Number(rows[0]?.value ?? 0);
+}
+
 export interface GhScoreRow { song: string; diff: string; name: string; score: number; }
 
 // Record a Tsong Hero run: keep only each player's best score per song per difficulty.

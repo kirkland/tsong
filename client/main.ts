@@ -834,6 +834,8 @@ const net = connect(
       tronMod?.feedTrnRelay(msg.data);
     } else if (msg.type === 'ghLeaderboard') {
       ghScores = msg.rows;
+    } else if (msg.type === 'wishResult') {
+      worldMod?.feedWishResult(msg);
     } else if (msg.type === 'waLobby') {
       artilleryMod?.feedWaLobby(msg);
     } else if (msg.type === 'waRelay') {
@@ -2504,6 +2506,14 @@ worldBtn.addEventListener('click', async () => {
         coins: wallet.coins, elo: lastLbSelfElo ?? null, rank: lastLbSelfRank ?? null,
         fishLb: fishScores.find((r) => r.name === myName)?.lb ?? 0, // best charted catch (0 if unranked)
       }), // Mira reads these back to you
+      topPlayer: () => worldTopPlayer,
+      fishKing: () => (fishScores[0] ? { name: fishScores[0].name, lb: fishScores[0].lb } : null),
+      ghKing: () => {
+        let best: { name: string; score: number } | null = null;
+        for (const r of ghScores) if (!best || r.score > best.score) best = { name: r.name, score: r.score };
+        return best;
+      },
+      wish: () => net.send({ type: 'fountainWish' }),
       muted: () => muted,
       toggleMute: () => { muted = !muted; prefSet('muted', muted ? '1' : '0'); applyMute(); },
       leaderboard: () => lastLbRows,
@@ -6111,7 +6121,9 @@ for (const canvas of document.querySelectorAll<HTMLCanvasElement>('.pu-icon')) {
 // Track each player's last-known ELO so we can show a delta when it changes.
 const prevElo = new Map<string, number>();
 
+let worldTopPlayer: { name: string; elo: number } | null = null;
 function renderLeaderboard(rows: LeaderboardRow[], selfElo?: number, selfRank?: number) {
+  if (rows[0]) worldTopPlayer = { name: rows[0].name, elo: rows[0].elo };
   lastLbRows = rows;
   // A message carries fresh self data; a plain re-render reuses the last known values.
   if (selfElo !== undefined || selfRank !== undefined) { lastLbSelfElo = selfElo; lastLbSelfRank = selfRank; }
