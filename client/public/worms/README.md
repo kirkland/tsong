@@ -1,4 +1,6 @@
-Sprites from Kenney's asset packs (kenney.nl) — CC0 / public domain.
-tile-*.png: Platformer Base Pack center tiles (terrain fill patterns)
-crate*.png: Base Pack item/explosive boxes (supply crates)
-meteor*.png: Space Shooter Pack meteors (☄️ wildcard event)
+Art credits (all free for this use):
+- sl-*.png: "Sunny Land" by ansimuz (ansimuz.itch.io) — CC0/free pack.
+  Parallax back layer, tileset (mined into sl-ground / sl-rockfill /
+  sl-grasstop composites), props (tree, bush, rock, shrooms, skulls,
+  crate, house).
+- meteor*.png: Kenney Space Shooter pack (kenney.nl) — CC0.

@@ -44,15 +44,15 @@ const TEAM_COLORS = [['#00e5ff', '#4a90ff'], ['#ff9a00', '#ff4a4a']] as const;
 const teamOf = (idx: number) => idx % 2;
 
 // --- battlefield maps (host picks; the generator theme + profile per map) ---
-interface WaMap { name: string; desc: string; grass: string; dirtTop: string; dirtDeep: string; tile: string; top: string; tint?: string; }
+interface WaMap { name: string; desc: string; grass: string; dirtTop: string; dirtDeep: string; fill: 'sl-ground' | 'sl-rockfill'; grassy: boolean; tint?: string; }
 const MAPS: WaMap[] = [
-  { name: 'THE HILLS', desc: 'classic rolling countryside', grass: '#3f7a3a', dirtTop: '#3d2a14', dirtDeep: '#180e05', tile: 'tile-grass', top: 'top-grass' },
-  { name: 'THE RUINS', desc: 'stepped stone + ancient pillars', grass: '#5a7a5a', dirtTop: '#4a4a55', dirtDeep: '#1a1a22', tile: 'tile-castle', top: 'top-castle' },
-  { name: 'FOUNTAIN VALLEY', desc: 'one deep basin, no cover in the middle', grass: '#4a8a5a', dirtTop: '#2a3a24', dirtDeep: '#0e1408', tile: 'tile-dirt', top: 'top-grass', tint: 'rgba(30, 80, 40, 0.28)' },
-  { name: 'THE ARENA', desc: 'two mesas, one fatal chasm', grass: '#7a6a3a', dirtTop: '#4a3520', dirtDeep: '#1c1208', tile: 'tile-sand', top: 'top-sand' },
-  { name: 'SKY ISLANDS', desc: 'no mainland — girders or death', grass: '#4aaa6a', dirtTop: '#3a4a5c', dirtDeep: '#141c26', tile: 'tile-grass', top: 'top-grass', tint: 'rgba(40, 60, 100, 0.22)' },
-  { name: 'THE CAVERNS', desc: 'a hollowed-out underworld', grass: '#6a5a8a', dirtTop: '#3a2e4c', dirtDeep: '#120c1c', tile: 'tile-stone', top: 'top-stone', tint: 'rgba(90, 60, 150, 0.35)' },
-  { name: 'ROBVILLE', desc: 'towers, floors, and bad intentions', grass: '#5a6a72', dirtTop: '#3c4248', dirtDeep: '#16181c', tile: 'tile-castle', top: 'top-castle', tint: 'rgba(60, 80, 100, 0.40)' },
+  { name: 'THE HILLS', desc: 'classic rolling countryside', grass: '#3f7a3a', dirtTop: '#3d2a14', dirtDeep: '#180e05', fill: 'sl-ground', grassy: true },
+  { name: 'THE RUINS', desc: 'stepped stone + ancient pillars', grass: '#5a7a5a', dirtTop: '#4a4a55', dirtDeep: '#1a1a22', fill: 'sl-rockfill', grassy: false, tint: 'rgba(90, 110, 140, 0.18)' },
+  { name: 'FOUNTAIN VALLEY', desc: 'one deep basin, no cover in the middle', grass: '#4a8a5a', dirtTop: '#2a3a24', dirtDeep: '#0e1408', fill: 'sl-ground', grassy: true, tint: 'rgba(20, 70, 40, 0.20)' },
+  { name: 'THE ARENA', desc: 'two mesas, one fatal chasm', grass: '#7a6a3a', dirtTop: '#4a3520', dirtDeep: '#1c1208', fill: 'sl-ground', grassy: false, tint: 'rgba(190, 120, 40, 0.22)' },
+  { name: 'SKY ISLANDS', desc: 'no mainland — girders or death', grass: '#4aaa6a', dirtTop: '#3a4a5c', dirtDeep: '#141c26', fill: 'sl-ground', grassy: true, tint: 'rgba(40, 60, 120, 0.20)' },
+  { name: 'THE CAVERNS', desc: 'a hollowed-out underworld', grass: '#6a5a8a', dirtTop: '#3a2e4c', dirtDeep: '#120c1c', fill: 'sl-rockfill', grassy: false, tint: 'rgba(120, 70, 190, 0.16)' },
+  { name: 'ROBVILLE', desc: 'towers, floors, and bad intentions', grass: '#5a6a72', dirtTop: '#3c4248', dirtDeep: '#16181c', fill: 'sl-rockfill', grassy: false, tint: 'rgba(60, 90, 110, 0.25)' },
 ];
 const GRAV = 640;            // px/s² for projectiles and fighters
 const WALK_SPEED = 95;       // px/s
@@ -121,12 +121,55 @@ function makeNoise2(rnd: () => number) {
 // Kenney CC0 sprites (client/public/worms/) — terrain fill tiles, crates, meteors.
 // Same deal as the overworld's Tiny Town sheet; tiny PNGs, preloaded at module import.
 const ASSETS: Record<string, HTMLImageElement> = {};
-for (const n of ['tile-grass', 'tile-dirt', 'tile-castle', 'tile-sand', 'tile-snow', 'tile-stone', 'top-grass', 'top-dirt', 'top-castle', 'top-sand', 'top-snow', 'top-stone', 'crate', 'crate-boom', 'meteor1', 'meteor2']) {
+for (const n of ['sl-ground', 'sl-rockfill', 'sl-grasstop', 'sl-tree', 'sl-bush', 'sl-rock', 'sl-shrooms', 'sl-skulls', 'sl-crate', 'sl-house', 'sl-back', 'sl-middle', 'meteor1', 'meteor2',
+  'fox-idle-1', 'fox-idle-2', 'fox-idle-3', 'fox-idle-4',
+  'fox-run-1', 'fox-run-2', 'fox-run-3', 'fox-run-4', 'fox-run-5', 'fox-run-6',
+  'fox-jump-1', 'fox-jump-2', 'fox-hurt-1', 'fox-hurt-2']) {
   const img = new Image();
   img.src = `/worms/${n}.png`;
   ASSETS[n] = img;
 }
 const imgReady = (n: string) => ASSETS[n]?.complete && ASSETS[n].naturalWidth > 0;
+// the soldiers are Sunny Land's fox, 2x, tinted per player/team color. Frames cached.
+const FOX: Record<string, string[]> = {
+  idle: ['fox-idle-1', 'fox-idle-2', 'fox-idle-3', 'fox-idle-4'],
+  run: ['fox-run-1', 'fox-run-2', 'fox-run-3', 'fox-run-4', 'fox-run-5', 'fox-run-6'],
+  jump: ['fox-jump-1', 'fox-jump-2'],
+  hurt: ['fox-hurt-1', 'fox-hurt-2'],
+};
+const foxCache = new Map<string, HTMLCanvasElement>();
+function foxFrame(name: string, color: string): HTMLCanvasElement | null {
+  const key = color + name;
+  const hit = foxCache.get(key);
+  if (hit) return hit;
+  const img = ASSETS[name];
+  if (!(img?.complete && img.naturalWidth > 0)) return null;
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth * 2;
+  c.height = img.naturalHeight * 2;
+  const cc = c.getContext('2d')!;
+  cc.imageSmoothingEnabled = false;
+  cc.drawImage(img, 0, 0, c.width, c.height);
+  cc.globalCompositeOperation = 'source-atop';
+  cc.globalAlpha = 0.34; // enough tint to tell players apart, not enough to lose the fox
+  cc.fillStyle = color;
+  cc.fillRect(0, 0, c.width, c.height);
+  foxCache.set(key, c);
+  return c;
+}
+
+// pixel art wants integer upscales with no smoothing — pre-scale once per use
+function scaled(n: string, factor: number): HTMLCanvasElement | null {
+  if (!imgReady(n)) return null;
+  const img = ASSETS[n];
+  const c = document.createElement('canvas');
+  c.width = img.naturalWidth * factor;
+  c.height = img.naturalHeight * factor;
+  const cc = c.getContext('2d')!;
+  cc.imageSmoothingEnabled = false;
+  cc.drawImage(img, 0, 0, c.width, c.height);
+  return c;
+}
 
 let waOpen = false;
 
@@ -148,14 +191,20 @@ export function startArtillery(net: ArtilleryNet): void {
     x: number; y: number; vy: number; face: number; // face: 1 right, -1 left
     hp: number; alive: boolean; ammo: number[];     // per-weapon ammo (-1 = infinite)
     fallFrom: number;                                // y where the current fall began
+    lastX: number; lastY: number;                    // motion detection for animation state
+    movingUntil: number;                             // treat as running until this timestamp
+    hurtUntil: number;                               // play the hurt pose until this timestamp
   }
   let fighters: Fighter[] = [];
   let solid = new Uint8Array(WA_W * WA_H);
   let terrain: HTMLCanvasElement | null = null;      // pre-rendered dirt, carved as we go
+  let backwall: HTMLCanvasElement | null = null;     // dark rock BEHIND the terrain — caves and
+                                                     // craters reveal this instead of raw sky
   let turnPi = -1;                                   // whose turn (fighter index)
   let gravScale = 1;                                 // wildcard low-gravity turns scale projectile arcs
   let eventResolving = false;                        // wildcard flights in the air (don't advance the turn)
   let hasFired = false;                              // acting player already shot this turn
+  let pelletsUsed = 0;                               // shotgun fires TWICE per turn (the Worms way)
   let retreatUntil = 0;                              // ...but may still RUN until this timestamp
   let turnRetreatUntil = 0;                          // host: when the current shooter's retreat window closes
   let turnShotTaken = false;                         // set on EVERY client when the acting player's shot arrives
@@ -245,8 +294,10 @@ export function startArtillery(net: ArtilleryNet): void {
   const isSolid = (x: number, y: number) =>
     x >= 0 && x < WA_W && y >= 0 && y < WA_H && solid[sIdx(x, y)] === 1;
 
+  let mapIdxLive = 0; // which map the renderer is showing (parallax band selection)
   // --- terrain generation (seeded + map profile, deterministic on every client) ---
   function genTerrain(seed: number, map: number) {
+    mapIdxLive = map;
     const theme = MAPS[map] ?? MAPS[0];
     const rnd = mulberry32(seed);
     const phases = [rnd() * 9, rnd() * 9, rnd() * 9];
@@ -393,10 +444,12 @@ export function startArtillery(net: ArtilleryNet): void {
     // paint each column as contiguous solid runs (grass lip on every run top).
     // Fill is a real Kenney tile pattern when the sprite is ready (it always is by match
     // start — they're ~1KB), painted per-column so carving stays pixel-clean.
-    const tileImg = ASSETS[theme.tile];
-    const pat = tileImg?.complete && tileImg.naturalWidth > 0 ? tc.createPattern(tileImg, 'repeat') : null;
-    const topImg = ASSETS[theme.top];
-    const topOk = topImg?.complete && topImg.naturalWidth > 0;
+    // Sunny Land pixel fills at 2x (nearest-neighbor). The lip pattern is translated to
+    // each run's top so the grass surface hugs every hill, cave roof and crater rim.
+    const fillCanvas = scaled(theme.fill, 2);
+    const pat = fillCanvas ? tc.createPattern(fillCanvas, 'repeat') : null;
+    const lipCanvas = theme.grassy ? scaled('sl-grasstop', 2) : null;
+    const lipPat = lipCanvas ? tc.createPattern(lipCanvas, 'repeat') : null;
     for (let x = 0; x < WA_W; x++) {
       let y = 0;
       while (y < WA_H) {
@@ -406,16 +459,46 @@ export function startArtillery(net: ArtilleryNet): void {
         while (y < WA_H && solid[y * WA_W + x]) y++;
         tc.fillStyle = pat ?? dirt;
         tc.fillRect(x, runTop, 1, y - runTop);
-        if (topOk) {
-          // 1px slice of the themed top tile, aligned to this column's surface —
-          // the grass/sand/brick lip follows every hill, cave roof and crater rim
-          tc.drawImage(topImg, x % topImg.naturalWidth, 0, 1, Math.min(22, y - runTop), x, runTop, 1, Math.min(22, y - runTop));
+        const lipH = Math.min(theme.grassy ? 14 : 4, y - runTop);
+        if (lipPat) {
+          tc.save();
+          tc.translate(0, runTop); // align the grass strip's top to THIS run's surface
+          tc.fillStyle = lipPat;
+          tc.fillRect(x, 0, 1, lipH);
+          tc.restore();
         } else {
+          // non-grassy maps get a subtle lit edge instead of a colored stripe
+          tc.fillStyle = 'rgba(255, 240, 200, 0.28)';
+          tc.fillRect(x, runTop, 1, Math.min(3, y - runTop));
           tc.fillStyle = theme.grass;
-          tc.fillRect(x, runTop, 1, Math.min(6, y - runTop));
+          tc.fillRect(x, runTop + 3, 1, Math.max(0, lipH - 3));
         }
       }
     }
+    // the backwall: for every column, dark rock spans the solid's vertical extent. It is
+    // NEVER carved — so blowing a hole (or generating a cave) reveals dark underground
+    // instead of the night sky, which is what made caves look like black stickers.
+    backwall = document.createElement('canvas');
+    backwall.width = WA_W; backwall.height = WA_H;
+    const bwc = backwall.getContext('2d')!;
+    const bwGrad = bwc.createLinearGradient(0, 0, 0, WA_H);
+    bwGrad.addColorStop(0, '#171223');
+    bwGrad.addColorStop(1, '#0a0812');
+    bwc.fillStyle = bwGrad;
+    for (let x = 0; x < WA_W; x++) {
+      let top = -1, bot = -1;
+      for (let y = 0; y < WA_H; y++) if (solid[y * WA_W + x]) { top = y; break; }
+      if (top < 0) continue;
+      for (let y = WA_H - 1; y >= top; y--) if (solid[y * WA_W + x]) { bot = y; break; }
+      bwc.fillRect(x, top + 5, 1, Math.max(0, bot - top - 4));
+    }
+    // faint rocky noise so big caverns don't read flat
+    for (let i = 0; i < 1400; i++) {
+      const rx = rnd() * WA_W, ry = rnd() * WA_H;
+      bwc.fillStyle = rnd() < 0.5 ? '#ffffff06' : '#00000018';
+      bwc.fillRect(rx, ry, 2 + rnd() * 3, 2 + rnd() * 3);
+    }
+
     // map mood tint over the tile pattern (source-atop keeps crater edges clean)
     if (theme.tint) {
       tc.save();
@@ -445,39 +528,47 @@ export function startArtillery(net: ArtilleryNet): void {
     tc.fillStyle = light;
     tc.fillRect(0, 0, WA_W, WA_H);
     tc.restore();
-    // vegetation & set dressing, painted onto the terrain canvas so blasts remove it too
+    // set dressing: real Sunny Land props painted INTO the terrain canvas (blasts remove
+    // them with the ground they stood on). Pixel-crisp at 2x, per-map casts.
     const surface = (x: number) => { for (let y = 0; y < WA_H; y++) if (solid[y * WA_W + x]) return y; return -1; };
-    for (let x = 40; x < WA_W - 40; x += 16 + Math.floor(rnd() * 40)) {
+    tc.imageSmoothingEnabled = false;
+    const stamp = (n: string, x: number, top: number, f: number) => {
+      const img = ASSETS[n];
+      if (!imgReady(n)) return;
+      const w = img.naturalWidth * f, h = img.naturalHeight * f;
+      tc.drawImage(img, x - w / 2, top - h + 2, w, h);
+    };
+    let housePlaced = false;
+    for (let x = 60; x < WA_W - 60; x += 30 + Math.floor(rnd() * 70)) {
       const top = surface(x);
-      if (top < 60 || top > WA_H - 120) continue;
+      if (top < 70 || top > WA_H - 130) continue;
       const roll = rnd();
       if (map === 6) {
-        if (roll < 0.18) { // rooftop antenna
+        if (roll < 0.18) { // rooftop antenna (procedural — fits the skyline)
           tc.strokeStyle = '#8a949e'; tc.lineWidth = 2;
           tc.beginPath(); tc.moveTo(x, top); tc.lineTo(x, top - 26); tc.stroke();
           tc.fillStyle = '#ff5a5a'; tc.fillRect(x - 2, top - 30, 4, 4);
-        }
+        } else if (roll < 0.26) stamp('sl-crate', x, top, 2);
       } else if (map === 5) {
-        if (roll < 0.2) { // cave mushrooms
-          tc.fillStyle = '#c8b8ff';
-          tc.fillRect(x - 1, top - 8, 2, 8);
-          tc.beginPath(); tc.arc(x, top - 9, 5, Math.PI, 0); tc.fill();
-        }
-      } else if (roll < 0.16) { // trees
-        const th2 = 26 + rnd() * 26;
-        tc.fillStyle = '#4a3220';
-        tc.fillRect(x - 2, top - th2, 4, th2);
-        tc.fillStyle = theme.grass;
-        tc.beginPath();
-        tc.arc(x, top - th2, 13 + rnd() * 9, 0, Math.PI * 2);
-        tc.arc(x - 9, top - th2 + 8, 9, 0, Math.PI * 2);
-        tc.arc(x + 9, top - th2 + 8, 9, 0, Math.PI * 2);
-        tc.fill();
-      } else if (roll < 0.22) { // boulders
-        tc.fillStyle = '#6a6a72';
-        tc.beginPath(); tc.ellipse(x, top - 4, 7 + rnd() * 6, 5 + rnd() * 4, 0, 0, Math.PI * 2); tc.fill();
-        tc.fillStyle = '#ffffff22';
-        tc.fillRect(x - 3, top - 8, 4, 2);
+        if (roll < 0.26) stamp('sl-shrooms', x, top, 2);
+        else if (roll < 0.34) stamp('sl-skulls', x, top, 2);
+      } else if (map === 1 || map === 3) {
+        if (roll < 0.14) stamp('sl-skulls', x, top, 2);
+        else if (roll < 0.26) stamp('sl-rock', x, top, 2);
+      } else {
+        if (roll < 0.13) stamp('sl-tree', x, top, 1.6);
+        else if (roll < 0.24) stamp('sl-bush', x, top, 2);
+        else if (roll < 0.31) stamp('sl-rock', x, top, 2);
+        else if (!housePlaced && roll < 0.335) { stamp('sl-house', x, top, 1.8); housePlaced = true; } // somebody lives here. lived.
+      }
+    }
+    fireflies = [];
+    if (theme.grassy) {
+      for (let i = 0; i < 12; i++) {
+        const fx2 = 80 + rnd() * (WA_W - 160);
+        let sy = 0;
+        for (let y = 0; y < WA_H; y++) if (solid[y * WA_W + fx2 | 0]) { sy = y; break; }
+        if (sy > 80) fireflies.push({ x: fx2, y: sy - 24 - rnd() * 50, ph: rnd() * 9 });
       }
     }
     return hmap;
@@ -514,6 +605,18 @@ export function startArtillery(net: ArtilleryNet): void {
       tc.arc(cx, cy, r - 2, 0, Math.PI * 2);
       tc.stroke();
       tc.restore();
+    }
+    // blast through the dark backwall too, at a smaller radius: craters keep a scorched
+    // dark rim, but the middle punches clean through to sky — the silhouette really shrinks
+    // instead of leaving "weird black things" where the floor used to be
+    if (backwall) {
+      const bc = backwall.getContext('2d')!;
+      bc.save();
+      bc.globalCompositeOperation = 'destination-out';
+      bc.beginPath();
+      bc.arc(cx, cy, r * 0.68, 0, Math.PI * 2);
+      bc.fill();
+      bc.restore();
     }
   }
 
@@ -582,6 +685,7 @@ export function startArtillery(net: ArtilleryNet): void {
     f.alive = false;
     if (drowned) { sfxSplash(); say(pick(QUIPS.drown)); }
     else graves.push({ x: f.x, y: f.y });
+    ghosts.push({ x: f.x, y: f.y - 20, born: performance.now() });
     floaties.push({ x: f.x, y: f.y - 40, text: drowned ? '🌊' : '💀', color: '#fff', life: 0 });
   }
 
@@ -619,7 +723,8 @@ export function startArtillery(net: ArtilleryNet): void {
         anyHit = anyHit || dmg > 4;
         bigHit = bigHit || dmg >= 40;
         if (fighters[turnPi] === f && dmg > 4) hitSelf = true;
-        if (dmg > 0) floaties.push({ x: f.x, y: f.y - 34, text: `-${dmg}`, color: dmg >= 35 ? '#ff5a3a' : '#ffd060', life: 0 });
+        if (dmg > 0) { floaties.push({ x: f.x, y: f.y - 34, text: `-${dmg}`, color: dmg >= 35 ? '#ff5a3a' : '#ffd060', life: 0 }); f.hurtUntil = performance.now() + 600; }
+        if (dmg >= 40) moonShadesUntil = performance.now() + 3400;
         // knockback away from the blast
         const ang = Math.atan2((f.y - 9) - cy, f.x - cx);
         const kick = 260 * (1 - d / reach);
@@ -656,9 +761,11 @@ export function startArtillery(net: ArtilleryNet): void {
     else if (!anyHit) say(pick(QUIPS.miss));
   }
 
-  function resolveShot(pi: number, w: number, sx: number, sy: number, ang: number, pow: number, tx?: number, ty?: number) {
+  function resolveShot(pi: number, w: number, sx: number, sy: number, ang: number, pow: number, tx?: number, ty?: number, last = true) {
     resolving = true;
-    if (pi === turnPi) turnShotTaken = true; // the acting player has used their shot (host's clock must stop)
+    // shotgun pellet 1 is NOT the final shot — the clock keeps running so an abandoned
+    // second pellet can't hang the turn
+    if (pi === turnPi && last) turnShotTaken = true;
     sfxFire();
     const wp = WEAPONS[w];
     const shooter = fighters[pi];
@@ -675,7 +782,8 @@ export function startArtillery(net: ArtilleryNet): void {
         if (victim) break;
       }
       explode(hx, hy, wp);
-      finishShot();
+      if (last) finishShot();
+      else resolving = false; // pellet one of two — keep aiming
       return;
     }
     if (wp.special === 'girder') {
@@ -818,6 +926,7 @@ export function startArtillery(net: ArtilleryNet): void {
       color: teamMode ? TEAM_COLORS[teamOf(i)][i >> 1] : COLORS[p.slot],
       lobbySlot: p.slot,
       x: 0, y: 0, vy: 0, face: 1, hp: WA_HP, alive: true, ammo: WEAPONS.map((w) => w.ammo), fallFrom: 0,
+      lastX: 0, lastY: 0, movingUntil: 0, hurtUntil: 0,
     }));
     genTerrain(seed, mapChoice);
     placeFighters();
@@ -886,7 +995,7 @@ export function startArtillery(net: ArtilleryNet): void {
     wind = Math.round((Math.random() * 2 - 1) * 100) / 100;
     turnEndsAt = performance.now() + WA_TURN_MS;
     const crate = crates.length < 3 && Math.random() < 0.45
-      ? { x: 80 + Math.floor(Math.random() * (WA_W - 160)), kind: CRATE_KINDS[Math.floor(Math.random() * CRATE_KINDS.length)] }
+      ? { x: 80 + Math.floor(Math.random() * (WA_W - 160)), kind: CRATE_KINDS[Math.floor(Math.random() * CRATE_KINDS.length)], gold: Math.random() < 1 / 12 }
       : null;
     // wildcard events: rolled by the host with every random parameter baked into the message,
     // so every client replays the exact same chaos
@@ -903,9 +1012,10 @@ export function startArtillery(net: ArtilleryNet): void {
     applyTurnLocal(crate, ev);
   }
 
-  function applyTurnLocal(crate?: { x: number; kind: CrateKind } | null, ev?: any) {
+  function applyTurnLocal(crate?: { x: number; kind: CrateKind; gold?: boolean } | null, ev?: any) {
     gravScale = 1;
     hasFired = false;
+    pelletsUsed = 0;
     retreatUntil = 0;
     turnRetreatUntil = 0;
     turnShotTaken = false;
@@ -946,8 +1056,8 @@ export function startArtillery(net: ArtilleryNet): void {
     if (crate) {
       const cy = surfaceY(crate.x) - 10;
       if (cy < waterY - 20) {
-        crates.push({ x: crate.x, y: cy, kind: crate.kind, born: performance.now() });
-        say('Supply drop inbound. No questions about the logistics.');
+        crates.push({ x: crate.x, y: cy, kind: crate.kind, born: performance.now(), gold: crate.gold });
+        say(crate.gold ? '...is that crate GOLDEN?' : 'Supply drop inbound. No questions about the logistics.');
       }
     }
     turnEndsAt = performance.now() + WA_TURN_MS;
@@ -973,13 +1083,21 @@ export function startArtillery(net: ArtilleryNet): void {
 
   // --- cosmetic helpers ---
   // supply crates: spawned by the host at turn start, collected by walking over them
-  interface Crate { x: number; y: number; kind: CrateKind; born: number; }
+  interface Crate { x: number; y: number; kind: CrateKind; born: number; gold?: boolean; }
   let crates: Crate[] = [];
   function applyCrate(pi: number, i: number) {
     const c = crates[i];
     const f = fighters[pi];
     if (!c || !f) return;
     crates.splice(i, 1);
+    if (c.gold) {
+      // the golden crate: one of everything, plus a snack
+      WEAPONS.forEach((w, wi) => { if (w.ammo >= 0) f.ammo[wi]++; });
+      f.hp = Math.min(WA_HP, f.hp + 20);
+      floaties.push({ x: f.x, y: f.y - 34, text: '⭐ EVERYTHING', color: '#ffd060', life: 0 });
+      say(`${f.name} opened the golden crate. Run.`);
+      return;
+    }
     if (c.kind === 'hp') {
       f.hp = Math.min(WA_HP, f.hp + 30);
       floaties.push({ x: f.x, y: f.y - 34, text: '+30', color: '#7fe089', life: 0 });
@@ -991,6 +1109,18 @@ export function startArtillery(net: ArtilleryNet): void {
       say(c.kind === 'bowl' ? `${f.name} visited the bowling alley. Everyone should worry.` : `${f.name} unboxed a ${WEAPONS[wi].name}.`);
     }
   }
+
+  // drifting leaves — pretty AND functional: they ride the actual wind value
+  interface Leaf { x: number; y: number; ph: number; }
+  const leaves: Leaf[] = Array.from({ length: 14 }, (_, i) => ({
+    x: (i * 397) % WA_W, y: (i * 173) % (WA_H * 0.7), ph: i * 1.7,
+  }));
+  // the fallen rise: a pale fox spirit drifts up from where they died
+  interface Ghost { x: number; y: number; born: number; }
+  let ghosts: Ghost[] = [];
+  // fireflies on the green maps (anchored near the surface at genTerrain time)
+  let fireflies: { x: number; y: number; ph: number }[] = [];
+  let moonShadesUntil = 0; // the moon has seen some things
 
   interface Flash { x: number; y: number; r: number; life: number; }
   let flashes: Flash[] = [];
@@ -1114,7 +1244,7 @@ export function startArtillery(net: ArtilleryNet): void {
         'A / D — walk · W — JUMP · MOUSE — aim · HOLD SPACE — charge, release to FIRE<br>' +
         'After firing you get 5s to RETREAT — run from your own dynamite, dive behind cover<br>' +
         '1 🚀 Bazooka (rides the wind) · 2 💣 Grenade (bounces, 3s fuse)<br>' +
-        '3 🔫 Shotgun (point blank) · 4 🧨 Dynamite (drop &amp; RUN — ×2)<br>' +
+        '3 🔫 Shotgun (fires TWICE per turn — aim between shots) · 4 🧨 Dynamite (drop &amp; RUN — ×2)<br>' +
         '5 🛩️ Airstrike (three from above, ×1) · 6 🏓 Pong Ball (bounces, hunts, ×1)<br>' +
         '7 🧱 Girder (BUILD a steel beam at the mouse, ×1) · 8 🪣 Dirt Ball (BUILD a mound, bury someone, ×1)<br>' +
         '9 🎳 Bowling Ball (crate-only) · 0 🌀 Teleport (click anywhere, ×1) · 📦 crates drop between turns<br>' +
@@ -1140,6 +1270,7 @@ export function startArtillery(net: ArtilleryNet): void {
         color: teamMode ? TEAM_COLORS[teamOf(i)][i >> 1] : COLORS[i],
         lobbySlot: f.lobbySlot ?? -1,
         x: 0, y: 0, vy: 0, face: 1, hp: WA_HP, alive: true, ammo: WEAPONS.map((w) => w.ammo), fallFrom: 0,
+      lastX: 0, lastY: 0, movingUntil: 0, hurtUntil: 0,
       }));
       turnCount = 0;
       waterY = WATER_BASE;
@@ -1166,8 +1297,8 @@ export function startArtillery(net: ArtilleryNet): void {
       }
     } else if (d.t === 'shot') {
       if (d.pi !== myIdx()) {
-        if (isHost && fighters[d.pi]) turnRetreatUntil = performance.now() + RETREAT_MS;
-        resolveShot(d.pi, d.w, d.x, d.y, d.ang, d.pow, d.tx, d.ty);
+        if (isHost && fighters[d.pi] && (d.last ?? true)) turnRetreatUntil = performance.now() + RETREAT_MS;
+        resolveShot(d.pi, d.w, d.x, d.y, d.ang, d.pow, d.tx, d.ty, d.last ?? true);
       }
     } else if (d.t === 'crate') {
       if (d.pi !== myIdx()) applyCrate(d.pi, d.i);
@@ -1208,14 +1339,19 @@ export function startArtillery(net: ArtilleryNet): void {
     if (!myTurn() || charge < 0) return;
     const me = fighters[myIdx()];
     if (WEAPONS[weapon].ammo >= 0 && me.ammo[weapon] <= 0) { charge = -1; return; }
-    const shot = { t: 'shot', pi: myIdx(), w: weapon, x: Math.round(me.x), y: Math.round(me.y), ang: aimAngle, pow: Math.min(1, charge), tx: Math.round(mouseX), ty: Math.round(mouseY) };
+    const isShotgun = weapon === 2;
+    if (isShotgun) pelletsUsed++;
+    const last = !isShotgun || pelletsUsed >= 2;
+    const shot = { t: 'shot', pi: myIdx(), w: weapon, x: Math.round(me.x), y: Math.round(me.y), ang: aimAngle, pow: Math.min(1, charge), tx: Math.round(mouseX), ty: Math.round(mouseY), last };
     charge = -1;
-    hasFired = true;
-    retreatUntil = performance.now() + RETREAT_MS;
-    turnRetreatUntil = retreatUntil;
+    if (last) {
+      hasFired = true;
+      retreatUntil = performance.now() + RETREAT_MS;
+      turnRetreatUntil = retreatUntil;
+    }
     if (weapon === 3) say('Run. RUN.');
     net.relay(shot);
-    resolveShot(shot.pi, shot.w, me.x, me.y, shot.ang, shot.pow, shot.tx, shot.ty);
+    resolveShot(shot.pi, shot.w, me.x, me.y, shot.ang, shot.pow, shot.tx, shot.ty, last);
   }
 
   function onKeyDown(e: KeyboardEvent) {
@@ -1224,8 +1360,8 @@ export function startArtillery(net: ArtilleryNet): void {
     const k = e.key.toLowerCase();
     if (['a', 'd', 'w', ' '].includes(k)) { e.preventDefault(); e.stopPropagation(); }
     if (k === ' ' && myTurn() && charge < 0 && !e.repeat) charge = 0;
-    if (['1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(k) && myTurn()) weapon = Number(k) - 1;
-    if (k === '0' && myTurn()) weapon = 9; // 🌀 teleport lives on the 0 key
+    if (['1', '2', '3', '4', '5', '6', '7', '8', '9'].includes(k) && myTurn() && pelletsUsed === 0) weapon = Number(k) - 1;
+    if (k === '0' && myTurn() && pelletsUsed === 0) weapon = 9; // 🌀 teleport lives on the 0 key
     keys.add(k);
   }
   function onKeyUp(e: KeyboardEvent) {
@@ -1349,6 +1485,13 @@ export function startArtillery(net: ArtilleryNet): void {
     // sparks
     for (const s of sparks) { s.life += dt; s.x += s.vx * dt; s.y += s.vy * dt; s.vy += 700 * dt; }
     sparks = sparks.filter((s) => s.life < s.max);
+    // leaves ride the wind (and tell you which way it's really blowing)
+    for (const lf of leaves) {
+      lf.x += (wind * 110 + Math.sin(now / 900 + lf.ph) * 14) * dt;
+      lf.y += (26 + Math.sin(now / 700 + lf.ph * 2) * 18) * dt;
+      if (lf.x < -10) lf.x = WA_W + 8; else if (lf.x > WA_W + 10) lf.x = -8;
+      if (lf.y > waterY) lf.y = 40 + (lf.ph * 61) % 200;
+    }
   }
 
   // --- rendering ---
@@ -1392,6 +1535,16 @@ export function startArtillery(net: ArtilleryNet): void {
       ctx.lineTo(WA_W, WA_H);
       ctx.fill();
     }
+    // Sunny Land parallax bands on the grassy maps (behind the backwall + terrain)
+    if (mode === 'play' && MAPS[mapIdxLive]?.grassy && imgReady('sl-back')) {
+      ctx.imageSmoothingEnabled = false;
+      const img = ASSETS['sl-back'];
+      const f = (WA_H * 0.5) / img.naturalHeight;
+      const w = img.naturalWidth * f;
+      ctx.globalAlpha = 0.55;
+      for (let x = 0; x < WA_W; x += w) ctx.drawImage(img, x, WA_H * 0.16, w, img.naturalHeight * f);
+      ctx.globalAlpha = 1;
+    }
     // drifting clouds
     ctx.fillStyle = '#ffffff14';
     for (let i = 0; i < 4; i++) {
@@ -1410,7 +1563,8 @@ export function startArtillery(net: ArtilleryNet): void {
       ctx.setTransform(1, 0, 0, 1, (Math.random() - 0.5) * a, (Math.random() - 0.5) * a);
     }
 
-    // terrain
+    // dark rock behind everything solid, then the carvable terrain on top
+    if (backwall) ctx.drawImage(backwall, 0, 0);
     if (terrain) ctx.drawImage(terrain, 0, 0);
 
     // gravestones where soldiers fell
@@ -1423,7 +1577,7 @@ export function startArtillery(net: ArtilleryNet): void {
       const age = now - c.born;
       const drop = Math.min(1, age / 1300);
       const cy = c.y - (1 - drop) * 170;
-      const beaconCol = c.kind === 'hp' ? '255, 106, 138' : '255, 208, 96';
+      const beaconCol = c.gold ? '255, 240, 120' : c.kind === 'hp' ? '255, 106, 138' : '255, 208, 96';
       if (drop >= 1) {
         // pulsing beacon column so crates read across the whole battlefield
         const pulse = 0.5 + 0.5 * Math.sin(now / 320);
@@ -1447,8 +1601,9 @@ export function startArtillery(net: ArtilleryNet): void {
         ctx.moveTo(c.x + 16, cy - 21); ctx.lineTo(c.x + 7, cy - 6);
         ctx.stroke();
       }
-      if (imgReady('crate')) {
-        ctx.drawImage(ASSETS.crate, c.x - 16, cy - 30, 32, 32);
+      if (imgReady('sl-crate')) {
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(ASSETS['sl-crate'], c.x - 16, cy - 32, 32, 32);
       } else {
         ctx.font = '30px serif';
         ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
@@ -1458,7 +1613,7 @@ export function startArtillery(net: ArtilleryNet): void {
       ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
       // the contents, printed right on the box — no mystery, pure greed
       ctx.font = '17px serif';
-      ctx.fillText(CRATE_ICON[c.kind], c.x, cy - 26 + Math.sin(now / 260) * 3);
+      ctx.fillText(c.gold ? '⭐' : CRATE_ICON[c.kind], c.x, cy - 26 + Math.sin(now / 260) * 3);
     }
 
     // fighters
@@ -1466,15 +1621,19 @@ export function startArtillery(net: ArtilleryNet): void {
       const f = fighters[i];
       if (!f.alive) continue;
       const active = i === turnPi && matchWinner === -2;
-      const bob = active ? Math.sin(now / 300) * 1.5 : 0;
-      const fy = f.y + bob;
+      const fy = f.y; // the fox's idle animation replaces the old procedural bob
+      // animation state from observed motion (works for remote fighters too)
+      if (f.x !== f.lastX) f.movingUntil = now + 200;
+      const rising = f.y < f.lastY - 0.5;
+      const airborne = !isSolid(f.x, f.y + 1);
+      f.lastX = f.x; f.lastY = f.y;
       if (teamMode) {
         // always-on team ring — you can tell sides at a glance from across the map
         ctx.strokeStyle = TEAM_COLORS[teamOf(i)][0];
         ctx.globalAlpha = 0.85;
         ctx.lineWidth = 2.5;
         ctx.beginPath();
-        ctx.ellipse(f.x, fy - 9, 14, 16, 0, 0, Math.PI * 2);
+        ctx.ellipse(f.x, fy - 28, 22, 32, 0, 0, Math.PI * 2);
         ctx.stroke();
         ctx.globalAlpha = 1;
       }
@@ -1483,26 +1642,31 @@ export function startArtillery(net: ArtilleryNet): void {
       ctx.beginPath();
       ctx.ellipse(f.x, f.y + 1, 11, 3.2, 0, 0, Math.PI * 2);
       ctx.fill();
-      // body
-      ctx.fillStyle = '#e8c8a0';
-      ctx.beginPath();
-      ctx.ellipse(f.x, fy - 9, 9, 11, 0, 0, Math.PI * 2);
-      ctx.fill();
-      // color helmet (dome + rim) — the whole uniform
-      ctx.fillStyle = f.color;
-      ctx.beginPath();
-      ctx.arc(f.x, fy - 14, 9.5, Math.PI, 0);
-      ctx.fill();
-      ctx.fillRect(f.x - 11, fy - 15, 22, 3.4);
-      // eyes: blink every few seconds (they're at war, they're stressed)
-      const blink = Math.sin(now / 900 + i * 2.1) > 0.96;
-      ctx.fillStyle = '#000';
-      if (!blink) {
-        ctx.fillRect(f.x + f.face * 2 - 1.4, fy - 11, 2.8, 3.2);
-        ctx.fillRect(f.x + f.face * 6 - 1.4, fy - 11, 2.8, 3.2);
+      // the fox: hurt > airborne > running > idle
+      const state = now < f.hurtUntil ? 'hurt' : airborne ? 'jump' : now < f.movingUntil ? 'run' : 'idle';
+      const frames = FOX[state];
+      const fps = state === 'run' ? 90 : state === 'hurt' ? 140 : 180;
+      const frameIdx = state === 'jump' ? (rising ? 0 : 1) : Math.floor(now / fps + i * 3) % frames.length;
+      const fr = foxFrame(frames[frameIdx], f.color);
+      if (fr) {
+        ctx.save();
+        ctx.translate(f.x, fy + 2);
+        ctx.scale(f.face > 0 ? -1 : 1, 1); // native art faces left
+        ctx.imageSmoothingEnabled = false;
+        if (state === 'hurt') { ctx.globalAlpha = 0.65 + 0.35 * Math.sin(now / 60); } // damage flicker
+        ctx.drawImage(fr, -fr.width / 2, -fr.height);
+        ctx.restore();
+        ctx.globalAlpha = 1;
       } else {
-        ctx.fillRect(f.x + f.face * 2 - 1.4, fy - 9.6, 2.8, 1);
-        ctx.fillRect(f.x + f.face * 6 - 1.4, fy - 9.6, 2.8, 1);
+        // sprite still loading — the old faithful blob
+        ctx.fillStyle = '#e8c8a0';
+        ctx.beginPath();
+        ctx.ellipse(f.x, fy - 9, 9, 11, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = f.color;
+        ctx.beginPath();
+        ctx.arc(f.x, fy - 14, 9.5, Math.PI, 0);
+        ctx.fill();
       }
       if (active && now < bannerUntil + 900) {
         // a stage spotlight finds whoever's up
@@ -1522,7 +1686,7 @@ export function startArtillery(net: ArtilleryNet): void {
       if (active) {
         const ang = i === myIdx() ? aimAngle : (f.face > 0 ? -0.5 : Math.PI + 0.5);
         ctx.save();
-        ctx.translate(f.x, fy - 12);
+        ctx.translate(f.x, fy - 26); // shoulder height on the fox
         ctx.rotate(ang);
         ctx.fillStyle = '#2a2a30';
         ctx.fillRect(2, -3, 22, 6);
@@ -1533,7 +1697,7 @@ export function startArtillery(net: ArtilleryNet): void {
         ctx.globalAlpha = 0.5 + 0.3 * Math.sin(now / 200);
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(f.x, fy - 9, 17, 0, Math.PI * 2);
+        ctx.arc(f.x, fy - 28, 27, 0, Math.PI * 2);
         ctx.stroke();
         ctx.globalAlpha = 1;
       }
@@ -1541,11 +1705,11 @@ export function startArtillery(net: ArtilleryNet): void {
       ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
       ctx.font = '700 13px ui-monospace, monospace';
       ctx.fillStyle = f.color;
-      ctx.fillText(`${teamMode ? TEAM_BADGE[teamOf(i)] + ' ' : ''}${f.name}`, f.x, fy - 34);
+      ctx.fillText(`${teamMode ? TEAM_BADGE[teamOf(i)] + ' ' : ''}${f.name}`, f.x, fy - 74);
       ctx.fillStyle = '#0008';
-      ctx.fillRect(f.x - 20, fy - 32, 40, 5);
+      ctx.fillRect(f.x - 20, fy - 72, 40, 5);
       ctx.fillStyle = f.hp > 50 ? '#7fe089' : f.hp > 25 ? '#ffd060' : '#ff5a5a';
-      ctx.fillRect(f.x - 20, fy - 32, 40 * f.hp / WA_HP, 5);
+      ctx.fillRect(f.x - 20, fy - 72, 40 * f.hp / WA_HP, 5);
     }
 
     // aiming UI for the acting local player
@@ -1678,6 +1842,40 @@ export function startArtillery(net: ArtilleryNet): void {
       ctx.fillRect(s.x - sz / 2, s.y - sz / 2, sz, sz);
     }
     ctx.globalAlpha = 1;
+    // wind-blown leaves
+    ctx.fillStyle = '#7aa05a';
+    for (const lf of leaves) {
+      ctx.globalAlpha = 0.45 + 0.3 * Math.sin(now / 500 + lf.ph);
+      ctx.fillRect(lf.x, lf.y, 4, 3);
+    }
+    ctx.globalAlpha = 1;
+    // fireflies drifting over the meadows
+    for (const ff of fireflies) {
+      const a = 0.25 + 0.55 * Math.abs(Math.sin(now / 800 + ff.ph));
+      ctx.globalAlpha = a;
+      ctx.fillStyle = '#ffe98a';
+      ctx.shadowColor = '#ffe98a'; ctx.shadowBlur = 8;
+      ctx.fillRect(ff.x + Math.sin(now / 1300 + ff.ph) * 16, ff.y + Math.sin(now / 900 + ff.ph * 2) * 9, 3, 3);
+      ctx.shadowBlur = 0;
+    }
+    ctx.globalAlpha = 1;
+    // spirits of the fallen drift skyward
+    for (const gh of ghosts) {
+      const t = (now - gh.born) / 3000;
+      if (t >= 1) continue;
+      const fr = foxFrame('fox-jump-1', '#ffffff');
+      if (!fr) continue;
+      ctx.globalAlpha = 0.5 * (1 - t);
+      ctx.drawImage(fr, gh.x - fr.width / 2, gh.y - fr.height - t * 90 + Math.sin(now / 300 + gh.x) * 4);
+      ctx.globalAlpha = 1;
+    }
+    ghosts = ghosts.filter((gh) => now - gh.born < 3000);
+    // the moon has witnessed a devastating hit
+    if (now < moonShadesUntil) {
+      ctx.font = '52px serif';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText('😎', WA_W * 0.78, WA_H * 0.2);
+    }
     // damage floaties
     for (const fl of floaties) {
       fl.life += 1 / 60;
@@ -1809,6 +2007,15 @@ export function startArtillery(net: ArtilleryNet): void {
           ctx.fillRect(px + 138, my + 2, 82 * f.hp / WA_HP, 8);
         });
       }
+    }
+    // shotgun: second shell standing by
+    if (turnPi === myIdx() && pelletsUsed === 1 && !hasFired && matchWinner === -2) {
+      ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+      ctx.font = '900 24px ui-monospace, monospace';
+      ctx.fillStyle = '#ffd060';
+      ctx.shadowColor = '#ffd060'; ctx.shadowBlur = 12;
+      ctx.fillText('🔫 ONE SHELL LEFT', WA_W / 2, 70);
+      ctx.shadowBlur = 0;
     }
     // RETREAT countdown for the shooter who's scrambling
     if (hasFired && now < retreatUntil && turnPi === myIdx() && fighters[turnPi]?.alive && matchWinner === -2) {
