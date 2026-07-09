@@ -5291,10 +5291,7 @@ export function startWorld(net: WorldNet): void {
   }
   function renderSlotsDialog() {
     dialogBox.replaceChildren();
-    const h = document.createElement('div');
-    h.textContent = '🎰 Slots';
-    h.style.cssText = 'font-size:22px;color:#e8eefc;margin-bottom:10px;text-align:center;';
-    dialogBox.appendChild(h);
+    dialogBox.appendChild(casinoDialogHeader('🎰 Slots', 'slotsWorldCoins'));
 
     const machine = document.createElement('div');
     machine.style.cssText = 'background:#060c18;border:2px solid #3a4566;border-radius:8px;padding:10px;margin-bottom:10px;box-shadow:inset 0 2px 12px rgba(0,0,0,0.5);';
@@ -5353,6 +5350,7 @@ export function startWorld(net: WorldNet): void {
     slotsSpinning = true;
     spinBtn.disabled = true;
     resultEl.textContent = '';
+    casinoClearDelta('slotsWorldCoins');
     net.slotsSpin(amount);
     slotsAnimFrames.forEach(cancelAnimationFrame);
     slotsAnimFrames = [];
@@ -5393,15 +5391,16 @@ export function startWorld(net: WorldNet): void {
         const resultEl = dialogBox.querySelector<HTMLDivElement>('#slotsWorldResult');
         if (resultEl) {
           if (result.win) {
-            const netAmt = result.payout - result.bet;
-            resultEl.textContent = `🎰 ${result.win}${result.win}${result.win} — ${SLOTS_PAYOUTS[result.win]}× · +${netAmt}🪙`;
+            resultEl.textContent = `🎰 ${result.win}${result.win}${result.win} — ${SLOTS_PAYOUTS[result.win]}×`;
             resultEl.style.color = '#6ee7a8';
             net.playSound('win');
           } else {
-            resultEl.textContent = `No match — lost ${result.bet}🪙`;
+            resultEl.textContent = 'No match';
             resultEl.style.color = '#ff7a7a';
           }
         }
+        casinoShowDelta('slotsWorldCoins', result.payout - result.bet);
+        casinoRefreshCoins('slotsWorldCoins');
       }
     };
     slotsAnimFrames.push(requestAnimationFrame(tick));
@@ -5427,10 +5426,7 @@ export function startWorld(net: WorldNet): void {
   }
   function renderCrapsDialog() {
     dialogBox.replaceChildren();
-    const h = document.createElement('div');
-    h.textContent = '🎲 Street Craps';
-    h.style.cssText = 'font-size:22px;color:#e8eefc;margin-bottom:10px;text-align:center;';
-    dialogBox.appendChild(h);
+    dialogBox.appendChild(casinoDialogHeader('🎲 Street Craps', 'crapsWorldCoins'));
 
     const pointEl = document.createElement('div');
     pointEl.id = 'crapsWorldPoint';
@@ -5517,6 +5513,7 @@ export function startWorld(net: WorldNet): void {
     rollBtn.disabled = true;
     resultEl.textContent = '🎲 Rolling…';
     resultEl.style.color = '#9fb0d8';
+    casinoClearDelta('crapsWorldCoins');
     net.crapsRoll(pass, dontPass);
   }
   // Called by feedCrapsResult() — mirrors client/craps.ts's onResult() branch for branch.
@@ -5537,23 +5534,27 @@ export function startWorld(net: WorldNet): void {
     if (msg.outcome === 'win') {
       const netAmt = msg.passPayout + msg.dontPassPayout - pass - dontPass;
       resultEl.textContent = msg.prevPoint === null
-        ? `🎉 Natural! ${msg.total} — Pass wins! +${netAmt}🪙`
-        : `🎉 Point hit! ${msg.total} — Pass wins! +${netAmt}🪙`;
+        ? `🎉 Natural! ${msg.total} — Pass wins!`
+        : `🎉 Point hit! ${msg.total} — Pass wins!`;
       resultEl.style.color = '#6ee7a8';
       net.playSound('win');
+      casinoShowDelta('crapsWorldCoins', netAmt);
     } else if (msg.outcome === 'lose') {
       if (msg.push12) {
         resultEl.textContent = "🎲 12 — Pass loses, Don't Pass pushes";
         resultEl.style.color = '#9fb0d8';
+        casinoClearDelta('crapsWorldCoins');
       } else if (msg.prevPoint === null) {
         const netAmt = msg.passPayout + msg.dontPassPayout - pass - dontPass;
-        resultEl.textContent = `💀 Craps! ${msg.total} — ${netAmt >= 0 ? `+${netAmt}` : `${netAmt}`}🪙`;
+        resultEl.textContent = `💀 Craps! ${msg.total}`;
         resultEl.style.color = netAmt >= 0 ? '#6ee7a8' : '#ff7a7a';
         if (netAmt < 0) net.playSound('win');
+        casinoShowDelta('crapsWorldCoins', netAmt);
       } else {
         const netAmt = msg.passPayout + msg.dontPassPayout - pass - dontPass;
-        resultEl.textContent = `💀 Seven out! — ${netAmt >= 0 ? `+${netAmt}` : `${netAmt}`}🪙`;
+        resultEl.textContent = '💀 Seven out!';
         resultEl.style.color = netAmt >= 0 ? '#6ee7a8' : '#ff7a7a';
+        casinoShowDelta('crapsWorldCoins', netAmt);
       }
     } else {
       resultEl.textContent = msg.prevPoint === null
@@ -5561,26 +5562,51 @@ export function startWorld(net: WorldNet): void {
         : `↩️ ${msg.total} — no count. Point still ${crapsPoint}. Keep rolling.`;
       resultEl.style.color = '#9fb0d8';
     }
+    casinoRefreshCoins('crapsWorldCoins');
   }
 
-  // Shared header builder for the remaining Casino cabinets below — title + live coin balance,
-  // matching each flat panel's own coin readout in its header.
+  // Shared header builder for the Casino cabinets below — title + live coin balance, matching
+  // each flat panel's own coin readout in its header. Also carries a delta badge right beside
+  // the balance (see casinoShowDelta) so a round's win/loss reads at the same spot as the
+  // number it just changed, instead of buried in a separate result sentence below.
   function casinoDialogHeader(title: string, coinsId: string) {
     const header = document.createElement('div');
     header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px;';
     const h = document.createElement('div');
     h.textContent = title;
     h.style.cssText = 'font-size:22px;color:#e8eefc;';
+    const coinsWrap = document.createElement('div');
+    coinsWrap.style.cssText = 'display:flex;align-items:baseline;gap:7px;';
     const coins = document.createElement('div');
     coins.id = coinsId;
     coins.textContent = `${Math.round(net.wallet().coins).toLocaleString()}🪙`;
     coins.style.cssText = 'font-size:15px;color:#ffd23f;font-weight:700;';
-    header.append(h, coins);
+    const delta = document.createElement('div');
+    delta.id = `${coinsId}Delta`;
+    delta.style.cssText = 'font-size:13px;font-weight:800;opacity:0;transition:opacity .5s ease;';
+    coinsWrap.append(coins, delta);
+    header.append(h, coinsWrap);
     return header;
   }
   function casinoRefreshCoins(coinsId: string) {
     const el = dialogBox.querySelector<HTMLDivElement>(`#${coinsId}`);
     if (el) el.textContent = `${Math.round(net.wallet().coins).toLocaleString()}🪙`;
+  }
+  const casinoDeltaTimers: Record<string, number> = {};
+  // Flashes a round's net change (+win / −loss) right next to the balance it just applied to.
+  function casinoShowDelta(coinsId: string, amount: number) {
+    const el = dialogBox.querySelector<HTMLDivElement>(`#${coinsId}Delta`);
+    if (!el) return;
+    el.textContent = amount >= 0 ? `+${amount}🪙` : `−${Math.abs(amount)}🪙`;
+    el.style.color = amount >= 0 ? '#6ee7a8' : '#ff7a7a';
+    el.style.opacity = '1';
+    window.clearTimeout(casinoDeltaTimers[coinsId]);
+    casinoDeltaTimers[coinsId] = window.setTimeout(() => { el.style.opacity = '0'; }, 2800);
+  }
+  function casinoClearDelta(coinsId: string) {
+    window.clearTimeout(casinoDeltaTimers[coinsId]);
+    const el = dialogBox.querySelector<HTMLDivElement>(`#${coinsId}Delta`);
+    if (el) el.style.opacity = '0';
   }
 
   // --- Blackjack — same idiom as Slots/Craps above (client/blackjack.ts is a self-contained module). ---
@@ -5718,6 +5744,7 @@ export function startWorld(net: WorldNet): void {
     statusEl.textContent = `Your total: ${msg.playerTotal}`;
     bjSetActionBtns(true, msg.canDouble);
     resultEl.textContent = '';
+    casinoClearDelta('bjWorldCoins');
     casinoRefreshCoins('bjWorldCoins');
   }
   function bjApplyResult(msg: BjResultMsg) {
@@ -5732,19 +5759,23 @@ export function startWorld(net: WorldNet): void {
     bjSetActionBtns(false);
     const netAmt = msg.payout - msg.bet;
     if (msg.outcome === 'blackjack') {
-      resultEl.textContent = `🃏 BLACKJACK! +${netAmt}🪙`;
+      resultEl.textContent = '🃏 BLACKJACK!';
       resultEl.style.color = '#6ee7a8';
       net.playSound('win');
+      casinoShowDelta('bjWorldCoins', netAmt);
     } else if (msg.outcome === 'win') {
-      resultEl.textContent = `✅ WIN +${netAmt}🪙`;
+      resultEl.textContent = '✅ WIN';
       resultEl.style.color = '#6ee7a8';
       net.playSound('win');
+      casinoShowDelta('bjWorldCoins', netAmt);
     } else if (msg.outcome === 'push') {
       resultEl.textContent = '🤝 Push — bet returned';
       resultEl.style.color = '#9fb0d8';
+      casinoClearDelta('bjWorldCoins');
     } else {
-      resultEl.textContent = `❌ Bust / Lose −${msg.bet}🪙`;
+      resultEl.textContent = '❌ Bust / Lose';
       resultEl.style.color = '#ff7a7a';
+      casinoShowDelta('bjWorldCoins', -msg.bet);
     }
     casinoRefreshCoins('bjWorldCoins');
   }
@@ -5908,6 +5939,7 @@ export function startWorld(net: WorldNet): void {
     if (multEl) multEl.textContent = msg.multiplier.toFixed(2) + '×';
     if (pendingEl) pendingEl.textContent = String(msg.pendingPayout);
     if (resultEl) resultEl.textContent = '';
+    casinoClearDelta('hiloWorldCoins');
     hiloSetGameButtons(true, msg.card);
     if (cashoutBtn) cashoutBtn.disabled = msg.pendingPayout === 0;
     casinoRefreshCoins('hiloWorldCoins');
@@ -5924,14 +5956,15 @@ export function startWorld(net: WorldNet): void {
     if (newGameBtn) newGameBtn.hidden = false;
     if (resultEl) {
       if (msg.won) {
-        resultEl.textContent = `💰 Cashed out! +${msg.net}🪙 net`;
+        resultEl.textContent = '💰 Cashed out!';
         resultEl.style.color = '#6ee7a8';
         net.playSound('win');
       } else {
-        resultEl.textContent = `💀 Busted! Lost ${Math.abs(msg.net)}🪙`;
+        resultEl.textContent = '💀 Busted!';
         resultEl.style.color = '#ff7a7a';
       }
     }
+    casinoShowDelta('hiloWorldCoins', msg.net);
     if (multEl) multEl.textContent = '1.00×';
     if (pendingEl) pendingEl.textContent = '0';
     casinoRefreshCoins('hiloWorldCoins');
@@ -6096,6 +6129,7 @@ export function startWorld(net: WorldNet): void {
     minesSetSetupEnabled(false);
     const resultEl = dialogBox.querySelector<HTMLDivElement>('#minesWorldResult');
     if (resultEl) resultEl.textContent = '';
+    casinoClearDelta('minesWorldCoins');
     minesResetTiles();
     for (let i = 0; i < MINES_GRID; i++) if (msg.revealed[i]) minesSetTileSafe(i);
     minesUpdateHud(msg);
@@ -6115,14 +6149,15 @@ export function startWorld(net: WorldNet): void {
     if (payoutEl) payoutEl.textContent = '';
     if (resultEl) {
       if (msg.won) {
-        resultEl.textContent = `+${msg.net}🪙 · cashed out`;
+        resultEl.textContent = 'Cashed out 💰';
         resultEl.style.color = '#6ee7a8';
         net.playSound('win');
       } else {
-        resultEl.textContent = `−${-msg.net}🪙 · kaboom 💥`;
+        resultEl.textContent = 'Kaboom 💥';
         resultEl.style.color = '#ff7a7a';
       }
     }
+    casinoShowDelta('minesWorldCoins', msg.net);
     minesSetSetupEnabled(true);
     casinoRefreshCoins('minesWorldCoins');
   }
@@ -6302,6 +6337,7 @@ export function startWorld(net: WorldNet): void {
     if (placeBetBtn) placeBetBtn.disabled = true;
     if (newRaceBtn) newRaceBtn.hidden = true;
     if (resultEl) resultEl.textContent = '';
+    casinoClearDelta('horseWorldCoins');
     horseRenderList(msg.horses);
     horseDrawIdle();
     casinoRefreshCoins('horseWorldCoins');
@@ -6340,14 +6376,15 @@ export function startWorld(net: WorldNet): void {
         const resultEl = dialogBox.querySelector<HTMLDivElement>('#horseWorldResult');
         if (resultEl) {
           if (won) {
-            resultEl.textContent = `🏆 ${msg.horses[msg.winner].name} wins! +${netAmt}🪙`;
+            resultEl.textContent = `🏆 ${msg.horses[msg.winner].name} wins!`;
             resultEl.style.color = '#6ee7a8';
             net.playSound('win');
           } else {
-            resultEl.textContent = `💀 ${msg.horses[msg.winner].name} wins. Lost ${msg.bet}🪙`;
+            resultEl.textContent = `💀 ${msg.horses[msg.winner].name} wins.`;
             resultEl.style.color = '#ff7a7a';
           }
         }
+        casinoShowDelta('horseWorldCoins', netAmt);
         const newRaceBtn = dialogBox.querySelector<HTMLButtonElement>('#horseWorldNewRace');
         if (newRaceBtn) newRaceBtn.hidden = false;
         casinoRefreshCoins('horseWorldCoins');
@@ -6503,6 +6540,7 @@ export function startWorld(net: WorldNet): void {
       betBtn.disabled = msg.yourBet !== null;
       cancelBetBtn.hidden = msg.yourBet === null;
       cashoutBtn.hidden = true;
+      casinoClearDelta('crashWorldCoins'); // fresh round — clear the previous one's result
     } else if (msg.phase === 'live') {
       if (msg.yourBet !== null && msg.yourCashedAt === null) {
         statusEl.textContent = '🎰 In the air — cash out any time!';
@@ -6523,10 +6561,12 @@ export function startWorld(net: WorldNet): void {
       if (msg.yourBet !== null) {
         if (msg.yourCashedAt !== null) {
           const netAmt = Math.floor(msg.yourBet * msg.yourCashedAt) - msg.yourBet;
-          statusEl.textContent = `💥 Crashed at ${crashFmt(msg.crashedAt!)} — you cashed ${crashFmt(msg.yourCashedAt)} · +${netAmt}🪙`;
+          statusEl.textContent = `💥 Crashed at ${crashFmt(msg.crashedAt!)} — you cashed ${crashFmt(msg.yourCashedAt)}`;
           if (!crashAlreadyPlayedWin && netAmt > 0) { net.playSound('win'); crashAlreadyPlayedWin = true; }
+          casinoShowDelta('crashWorldCoins', netAmt);
         } else {
-          statusEl.textContent = `💥 Crashed at ${crashFmt(msg.crashedAt!)} — you lost ${msg.yourBet}🪙`;
+          statusEl.textContent = `💥 Crashed at ${crashFmt(msg.crashedAt!)} — you lost`;
+          casinoShowDelta('crashWorldCoins', -msg.yourBet);
         }
       } else {
         statusEl.textContent = `💥 Crashed at ${crashFmt(msg.crashedAt!)}`;
@@ -6850,6 +6890,7 @@ export function startWorld(net: WorldNet): void {
     if (spinBtn) spinBtn.disabled = true;
     if (clearBtn) clearBtn.disabled = true;
     if (resultEl) { resultEl.textContent = 'Spinning…'; resultEl.style.color = '#9fb0d8'; }
+    casinoClearDelta('rlWorldCoins');
     net.rouletteSpin(slate);
   }
   function rlApplyResult(msg: { number: number; staked: number; payout: number }) {
@@ -6864,14 +6905,15 @@ export function startWorld(net: WorldNet): void {
       const netAmt = msg.payout - msg.staked;
       if (resultEl) {
         if (msg.payout > 0) {
-          resultEl.textContent = `🎉 ${n} ${color} — won ${msg.payout}🪙 (net ${netAmt >= 0 ? '+' : ''}${netAmt})`;
+          resultEl.textContent = `🎉 ${n} ${color} — won ${msg.payout}🪙`;
           resultEl.style.color = '#6ee7a8';
           net.playSound('win');
         } else {
-          resultEl.textContent = `💀 ${n} ${color} — lost ${msg.staked}🪙`;
+          resultEl.textContent = `💀 ${n} ${color}`;
           resultEl.style.color = '#ff7a7a';
         }
       }
+      casinoShowDelta('rlWorldCoins', netAmt);
       rlBets.clear();
       rlSyncBadges();
       casinoRefreshCoins('rlWorldCoins');
@@ -7088,6 +7130,7 @@ export function startWorld(net: WorldNet): void {
     plinkoAnimating = true;
     dropBtn.disabled = true;
     resultEl.textContent = '';
+    casinoClearDelta('plinkoWorldCoins');
     net.plinkoDrop(amount);
   }
   function plinkoApplyResult(msg: PlinkoResultMsg) {
@@ -7118,14 +7161,10 @@ export function startWorld(net: WorldNet): void {
           if (dropBtn) dropBtn.disabled = false;
           const netAmt = msg.payout - msg.bet;
           if (resultEl) {
-            if (msg.payout > 0) {
-              resultEl.textContent = `${msg.multiplier}× · +${netAmt}🪙`;
-              resultEl.style.color = '#6ee7a8';
-            } else {
-              resultEl.textContent = `${msg.multiplier}× · lost ${msg.bet}🪙`;
-              resultEl.style.color = '#ff7a7a';
-            }
+            resultEl.textContent = `${msg.multiplier}×`;
+            resultEl.style.color = msg.payout > 0 ? '#6ee7a8' : '#ff7a7a';
           }
+          casinoShowDelta('plinkoWorldCoins', netAmt);
           casinoRefreshCoins('plinkoWorldCoins');
         }
         return;
