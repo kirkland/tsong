@@ -305,7 +305,7 @@ function injectStyles() {
   const css = document.createElement('style');
   css.id = 'nom-styles';
   css.textContent = `
-  .nom-overlay{position:fixed;inset:0;z-index:9000;display:flex;align-items:center;justify-content:center;background:rgba(10,8,4,.72);font-family:system-ui,sans-serif}
+  .nom-overlay{position:fixed;inset:0;z-index:20000;display:flex;align-items:center;justify-content:center;background:rgba(10,8,4,.72);font-family:system-ui,sans-serif}
   .nom-panel{position:relative;width:min(1040px,96vw);height:min(760px,94vh);background:#f4ecd6;color:#2a241a;border:3px solid #6b5a36;border-radius:10px;box-shadow:0 18px 60px rgba(0,0,0,.6);display:flex;flex-direction:column;overflow:hidden}
   .nom-head{display:flex;align-items:center;justify-content:space-between;padding:10px 16px;background:linear-gradient(#5b4a2c,#42351f);color:#f4ecd6;border-bottom:3px solid #6b5a36}
   .nom-title{font-size:20px;letter-spacing:.5px}

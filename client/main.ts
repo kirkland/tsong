@@ -979,9 +979,11 @@ const net = connect(
       worldMod?.feedHouse();
     } else if (msg.type === 'lootResult') {
       onLootResult(msg);
+      worldMod?.feedLootResult(msg);
     } else if (msg.type === 'market') {
       marketplace = msg.items;
       if (!marketplacePanel.hidden) renderMarketplace();
+      worldMod?.feedMarketplace(msg.items);
     } else if (msg.type === 'loanBook') {
       showLoanBook(msg);
     } else if (msg.type === 'news') {
@@ -1007,6 +1009,7 @@ const net = connect(
       }
     } else if (msg.type === 'seasonPass') {
       renderSeasonPass(msg.weekId, msg.challenges);
+      worldMod?.feedSeasonPass(msg.weekId, msg.challenges);
     }
   },
   () => {
@@ -2294,14 +2297,9 @@ document.getElementById('crBtn')?.addEventListener('click', async () => {
 // positions. ---
 
 // Whether the panel/overlay a given openFeature() key delegates to is currently on screen.
-// Toolbar panels are `hidden`-attribute divs; lazy-loaded minigames create/remove (or
-// show/hide) their own full-screen overlay by a stable id — see each module's `startX()`.
-function panelOpenCheck(panelId: string): () => boolean {
-  return () => {
-    const el = document.getElementById(panelId);
-    return !!el && !(el as HTMLElement).hidden;
-  };
-}
+// Lazy-loaded minigames create/remove (or show/hide) their own full-screen overlay by a stable
+// id — see each module's `startX()`. (Every toolbar-panel-backed feature is a native World
+// dialog now, so the `hidden`-attribute-div variant of this check is no longer needed.)
 function overlayPresentCheck(overlayId: string): () => boolean {
   return () => !!document.getElementById(overlayId);
 }
@@ -2312,8 +2310,6 @@ function overlayVisibleCheck(selector: string): () => boolean {
   };
 }
 const WORLD_DELEGATE_CHECK: Record<string, () => boolean> = {
-  lootbox: panelOpenCheck('lootPanel'),
-  blackmarket: panelOpenCheck('marketplacePanel'),
   doom: overlayPresentCheck('doomOverlay'),
   fishing: overlayPresentCheck('fishingOverlay'),
   campaign: overlayPresentCheck('campaignOverlay'),
@@ -2327,12 +2323,7 @@ const WORLD_DELEGATE_CHECK: Record<string, () => boolean> = {
   citytycoon: overlayPresentCheck('crOverlay'),
   bowling: overlayPresentCheck('bowlOverlay'),
   tnt: overlayVisibleCheck('#tntOverlay'),
-  parliament: overlayVisibleCheck('.nom-overlay'),
   rename: overlayVisibleCheck('#overlay'),
-  tourney: panelOpenCheck('tourneyPanel'),
-  season: panelOpenCheck('seasonPanel'),
-  powerups: panelOpenCheck('powerupInfoPanel'),
-  changelog: panelOpenCheck('changelogPanel'),
 };
 // Polls (rAF) until the delegated panel/minigame that World just handed off to has opened AND
 // then closed again, then brings World back — same position, same everything, no manual re-entry.
@@ -2435,6 +2426,22 @@ worldBtn.addEventListener('click', async () => {
       rouletteSpin: (bets) => net.send({ type: 'roulette', bets }),
       // Plinko — same reasoning (client/plinko.ts).
       plinkoDrop: (amount) => net.send({ type: 'plinko', amount }),
+      // Notice Board sub-panels — also native World dialogs now.
+      tournament: () => state?.tournament ?? null,
+      tournamentCreate: (size) => net.send({ type: 'tournamentCreate', size }),
+      tournamentJoin: () => net.send({ type: 'tournamentJoin' }),
+      tournamentCancel: () => net.send({ type: 'tournamentCancel' }),
+      seasonPassReq: () => net.send({ type: 'seasonPassReq' }),
+      seasonClaim: (id) => net.send({ type: 'seasonClaim', id }),
+      canSpawnPowerup: () => canSpawnPowerup(),
+      spawnPowerup: (kind) => net.send({ type: 'spawnPowerup', kind }),
+      // Lootbox / Marketplace — also native World dialogs now.
+      lootBoxOpen: () => net.send({ type: 'lootBoxOpen' }),
+      marketplace: () => marketplace,
+      marketplaceReq: () => net.send({ type: 'marketReq' }),
+      marketBuy: (item) => net.send({ type: 'marketBuy', item }),
+      marketCancel: (listingId) => net.send({ type: 'marketCancel', listingId }),
+      marketList: (instanceId, ask) => net.send({ type: 'marketList', instanceId, ask }),
       onExit: () => worldBtn.setAttribute('aria-pressed', 'false'),
       // Walk into the Arena → hop into the play queue (you'll be seated when a spot opens).
       enterArena: () => net.send({ type: 'queueJoin' }),
@@ -2481,13 +2488,6 @@ worldBtn.addEventListener('click', async () => {
           setTimeout(() => btn?.click(), 0);
           return;
         }
-        const id = feature === 'lootbox'    ? 'lootBtn'
-                 : feature === 'blackmarket' ? 'marketplaceBtn'
-                 : feature === 'tourney'    ? 'tourneyBtn'
-                 : feature === 'season'     ? 'seasonBtn'
-                 : feature === 'powerups'   ? 'powerupInfoBtn'
-                 : 'changelogBtn';
-        setTimeout(() => (document.getElementById(id) as HTMLButtonElement | null)?.click(), 0);
       },
       claimQuest: (quest) => net.send({ type: 'questClaim', quest }),
       dungeonSync: () => net.send({ type: 'dungeonSync' }),
@@ -2517,8 +2517,8 @@ worldBtn.addEventListener('click', async () => {
       bail: (targetId) => net.send({ type: 'bail', targetId }), // post 500🪙 bail for a jailed avatar
       amJailed: () => worldJailed,                            // are WE locked up right now?
       dayNightOffset: () => dayNightOffset,                   // per-deploy day/night clock offset
-      // walk in → Nomic overlay; World only paused, so watch for it to close and bring World back
-      openParliament: () => { watchWorldDelegate('parliament'); setTimeout(() => { void openParliament(); }, 0); },
+      // walk in → Nomic overlay, rendered above World (not paused) — see world.ts's onKeyDown guard.
+      openParliament: () => { void openParliament(); },
       // World's own 👤 button reopens the same nickname/color form renameBtn does.
       openRename: () => { watchWorldDelegate('rename'); setTimeout(() => renameBtn.click(), 0); },
       // Robville land: buy from the bank, list/unlist your lots, buy listed lots off other owners.

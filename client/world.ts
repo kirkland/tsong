@@ -88,17 +88,25 @@ import {
   type PlinkoResultMsg,
   PLINKO_ROWS,
   PLINKO_PAYOUTS,
+  type PowerupKind,
+  type TournamentView,
+  type SeasonChallenge,
+  type LootResultMsg,
+  type MarketItemView,
+  LOOT_TABLE,
 } from '../shared/types';
-import { drawCosmeticPreview } from './render';
+import { drawCosmeticPreview, drawLegendIcon } from './render';
 
-// The subset of the wallet the in-World shop dialog needs (see openShop()) — mirrors WalletMsg
-// minus the `type` discriminant and the loot-box `exclusives` list (not shown in the Shop tabs).
+// The subset of the wallet World's dialogs need — mirrors WalletMsg minus the `type` discriminant.
+// `exclusives` wasn't needed until the Lootbox/Marketplace conversion — kept here (not a separate
+// getter) since it's cheap to carry and Shop simply doesn't read it.
 export interface WorldWallet {
   coins: number;
   owned: string[];
   hat: string | null; skin: string | null; trail: string | null; title: string | null;
   song: string | null; car: string | null; boat: string | null; pet: string | null;
   balltrail: string | null; goalcelebr: string | null;
+  exclusives: { id: string; serial: number; instanceId: number }[];
   bets: { side: Side; amount: number; odds: number }[];
   nextSpinAt: number;
   bonusSpins: number;
@@ -197,9 +205,28 @@ export interface WorldNet {
   rouletteSpin(bets: RouletteBet[]): void;
   // Plinko — same reasoning (client/plinko.ts), ports its canvas peg-drop physics directly.
   plinkoDrop(amount: number): void;
+  // Notice Board sub-panels — also native World dialogs now (see openTourneyDialog()/
+  // openSeasonDialog()/openPowerupsDialog()/openChangelogDialog()).
+  tournament(): TournamentView | null;
+  tournamentCreate(size: number): void;
+  tournamentJoin(): void;
+  tournamentCancel(): void;
+  seasonPassReq(): void;
+  seasonClaim(id: string): void;
+  canSpawnPowerup(): boolean;
+  spawnPowerup(kind: PowerupKind): void;
+  // Lootbox / Marketplace — also native World dialogs now (see openLootDialog()/
+  // openMarketplaceDialog()). `marketplace` is named distinctly from the Crypto Market's
+  // `market()` above (different feature, same word in the flat UI's naming).
+  lootBoxOpen(): void;
+  marketplace(): MarketItemView[];
+  marketplaceReq(): void;
+  marketBuy(item: string): void;
+  marketCancel(listingId: number): void;
+  marketList(instanceId: number, ask: number): void;
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' |'lootbox' | 'blackmarket' | 'tourney' | 'season' | 'powerups' | 'changelog'): void; // open a DOOM/Fishing/Arcade/Bowling/Notice-Board feature — every Casino game is a native World dialog now
+  openFeature(feature: 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt'): void; // open a DOOM/Fishing/Arcade/Bowling feature — every Casino game + Notice-Board panel is a native World dialog now
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   openRename(): void;            // World's own 👤 button → reopen the nickname/color picker
   muted(): boolean;              // is game sound currently muted?
@@ -281,6 +308,9 @@ interface Controller {
   feedCrashState(msg: CrashStateMsg): void;
   feedRouletteResult(msg: { number: number; staked: number; payout: number }): void;
   feedPlinkoResult(msg: PlinkoResultMsg): void;
+  feedSeasonPass(weekId: string, challenges: SeasonChallenge[]): void;
+  feedLootResult(msg: LootResultMsg): void;
+  feedMarketplace(items: MarketItemView[]): void;
 }
 let controller: Controller | null = null;
 let _exitWorld: (() => void) | null = null;
@@ -360,6 +390,9 @@ export function feedHorseResult(msg: HorseResultMsg): void { controller?.feedHor
 export function feedCrashState(msg: CrashStateMsg): void { controller?.feedCrashState(msg); }
 export function feedRouletteResult(msg: { number: number; staked: number; payout: number }): void { controller?.feedRouletteResult(msg); }
 export function feedPlinkoResult(msg: PlinkoResultMsg): void { controller?.feedPlinkoResult(msg); }
+export function feedSeasonPass(weekId: string, challenges: SeasonChallenge[]): void { controller?.feedSeasonPass(weekId, challenges); }
+export function feedLootResult(msg: LootResultMsg): void { controller?.feedLootResult(msg); }
+export function feedMarketplace(items: MarketItemView[]): void { controller?.feedMarketplace(items); }
 
 /** The server accepted a chest open (added the coins to the run purse / granted the potion). */
 export function dungeonChestAccepted(chest: string, coins: number, potions: number, spin?: boolean, prize?: string, prizes?: string[]): void {
@@ -1986,6 +2019,11 @@ export function startWorld(net: WorldNet): void {
   let crashDialogOpen = false; // the in-World Crash cabinet is up — gates re-rendering, NOT the state cache (crashLastMsg is kept live regardless, so opening mid-round shows current progress)
   let rouletteDialogOpen = false; // the in-World Roulette cabinet is up
   let plinkoDialogOpen = false; // the in-World Plinko cabinet is up
+  let tourneyDialogOpen = false; // the in-World Tournament dialog is up — gates its per-frame live refresh
+  let seasonDialogOpen = false; // the in-World Season Pass dialog is up
+  let powerupsDialogOpen = false; // the in-World Power-ups legend is up — gates its per-frame spawnability refresh
+  let lootDialogOpen = false; // the in-World Lootbox dialog is up
+  let marketplaceDialogOpen = false; // the in-World Marketplace dialog is up
   let nearId: string | null = null; // building the avatar is currently at the door of
   // True while a Casino/Bank/Shop/arcade feature has been delegated to the main page (or a
   // lazy-loaded minigame overlay) — World stays alive underneath (paused, hidden) instead of
@@ -2939,19 +2977,19 @@ export function startWorld(net: WorldNet): void {
     if (kind === 'hall') { enterHallOfFame(); return; }
     if (kind === 'noticeboard') {
       openDialog('📌 Notice Board', 'Pinned announcements, curling at the edges.', [
-        { label: '🏆 Tournament',   onPick: () => { pause(); net.openFeature('tourney'); } },
-        { label: '🎫 Season Pass',  onPick: () => { pause(); net.openFeature('season'); } },
-        { label: '⚡ Power-ups',    onPick: () => { pause(); net.openFeature('powerups'); } },
-        { label: '📜 Changelog',    onPick: () => { pause(); net.openFeature('changelog'); } },
+        { label: '🏆 Tournament',   onPick: openTourneyDialog },
+        { label: '🎫 Season Pass',  onPick: openSeasonDialog },
+        { label: '⚡ Power-ups',    onPick: openPowerupsDialog },
+        { label: '📜 Changelog',    onPick: openChangelogDialog },
       ]);
       return;
     }
-    if (kind === 'parliament') {
-      openDialog('🏛️ Parliament', 'The perpetual game of Nomic is in session. The only rule that cannot change is that the rules can.', [
-        { label: '🏛️ Take your seat', onPick: () => { pause(); net.openParliament(); } },
-      ]);
-      return;
-    }
+    // Parliament doesn't pause World — Nomic renders its own overlay (client/nomic.ts) above
+    // World's (z-index 20000 vs World's 9998), backdrop dimmed like every other dialog, so World
+    // stays visible behind it. See the onKeyDown guard below (search "nom-overlay") that stands
+    // World's own input handling down entirely while it's open, the same idiom as the Crypto
+    // Market's reused sell modal.
+    if (kind === 'parliament') { net.openParliament(); return; }
     if (kind === 'bowling') {
       openDialog('🎳 Bolwoing Alley', 'The sound of pins crashing echoes down the lane.', [
         { label: '🎳 Bowl (2–4 players)', onPick: () => { pause(); net.openFeature('bowling'); } },
@@ -4378,6 +4416,11 @@ export function startWorld(net: WorldNet): void {
     crashDialogOpen = false;
     rouletteDialogOpen = false;
     plinkoDialogOpen = false;
+    tourneyDialogOpen = false;
+    seasonDialogOpen = false;
+    powerupsDialogOpen = false;
+    lootDialogOpen = false;
+    marketplaceDialogOpen = false;
     dialog.style.display = 'none';
   }
 
@@ -7093,6 +7136,499 @@ export function startWorld(net: WorldNet): void {
     plinkoRafId = requestAnimationFrame(frame);
   }
 
+  // --- Tournament — pull-based: state.tournament already flows via the constant `state`
+  // broadcast (same source main.ts's flat renderTournament() reads), so this reads
+  // net.tournament() fresh on open + every frame while open (see updateTourneyDialogLive()
+  // below) instead of needing a Controller push. ---
+  // Called from within the Notice Board menu's already-open dialog — no re-entry guard needed.
+  function openTourneyDialog() {
+    dialogOpen = true;
+    tourneyDialogOpen = true;
+    keys.clear(); joyActive = false;
+    renderTourneyDialog();
+    dialog.style.display = 'flex';
+  }
+  function renderTourneyDialog() {
+    dialogBox.replaceChildren();
+    const h = document.createElement('div');
+    h.textContent = '🏆 Tournament';
+    h.style.cssText = 'font-size:22px;color:#e8eefc;margin-bottom:10px;text-align:center;';
+    dialogBox.appendChild(h);
+    const body = document.createElement('div');
+    body.id = 'tourneyWorldBody';
+    body.style.cssText = 'text-align:left;min-width:320px;';
+    body.addEventListener('click', onTourneyWorldClick);
+    dialogBox.appendChild(body);
+    renderTourneyWorldBody(body);
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;margin-top:10px;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+  }
+  function onTourneyWorldClick(e: Event) {
+    const target = e.target as HTMLElement;
+    const sizeBtn = target.closest<HTMLElement>('[data-tsize]');
+    if (sizeBtn) { net.tournamentCreate(Number(sizeBtn.dataset.tsize)); return; }
+    if (target.closest('[data-tjoin]')) { net.tournamentJoin(); return; }
+    if (target.closest('[data-tcancel]')) {
+      if (confirm('Cancel the current tournament?')) net.tournamentCancel();
+    }
+  }
+  function renderTourneyWorldBody(body: HTMLDivElement) {
+    const t = net.tournament();
+    if (!t) {
+      body.innerHTML = `
+        <h3 style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:#6b7796;margin:0 0 6px;">Start a Tournament</h3>
+        <p class="tourney-blurb">Single-elimination bracket. Players take a slot; the bracket starts automatically once every slot is filled.</p>
+        <div class="tourney-sizes">
+          <button class="tourney-size" data-tsize="4" type="button">4 players</button>
+          <button class="tourney-size" data-tsize="8" type="button">8 players</button>
+        </div>`;
+      return;
+    }
+    const filled = t.slots.filter(Boolean).length;
+    const alreadyIn = t.slots.some((s) => s === net.name());
+    const canJoin = t.status === 'signup' && !alreadyIn && filled < t.size;
+    const canCancel = t.creator === net.name();
+    const flagOf = (name: string | null) => (name && t.countries[name] ? t.countries[name].flag + ' ' : '');
+    let html = '<div class="tourney-active-head">';
+    if (t.status === 'signup') {
+      html += `<span>⚽ World Cup — ${filled}/${t.size} joined</span>`;
+      if (canJoin) html += '<button data-tjoin type="button">Join</button>';
+    } else {
+      const liveMatch = t.matches.find((m) => m.live);
+      html += t.status === 'done'
+        ? `<span>⚽🏆 ${flagOf(t.champion)}${t.champion ?? '—'}</span>`
+        : `<span>${liveMatch && liveMatch.p1 && liveMatch.p2 ? `⚽ ${flagOf(liveMatch.p1)}${liveMatch.p1} vs ${flagOf(liveMatch.p2)}${liveMatch.p2}` : '⚽ World Cup'}</span>`;
+    }
+    if (canCancel) html += '<button data-tcancel type="button" title="Cancel the tournament">✕</button>';
+    html += '</div><div>';
+    if (t.status === 'signup') {
+      html += '<div class="t-slots">' + t.slots.map((s, i) => {
+        if (!s) return `<div class="t-slot open"><span class="t-seed">#${i + 1}</span>open</div>`;
+        const c = t.countries[s];
+        return `<div class="t-slot"><span class="t-seed">#${i + 1}</span>${c ? `<span class="t-flag">${c.flag}</span>` : ''}${escapeHtml(s)}${c ? `<span class="t-country">${escapeHtml(c.name)}</span>` : ''}</div>`;
+      }).join('') + '</div>';
+    } else {
+      const roundName = (r: number) => {
+        const fromEnd = t.rounds - 1 - r;
+        if (fromEnd === 0) return 'Final';
+        if (fromEnd === 1) return 'Semifinals';
+        if (fromEnd === 2) return 'Quarterfinals';
+        return `Round ${r + 1}`;
+      };
+      const player = (name: string | null, isWinner: boolean) => {
+        if (!name) return '<div class="t-player tbd">TBD</div>';
+        const c = t.countries[name];
+        return `<div class="t-player${isWinner ? ' winner' : ''}">${c ? `<span class="t-flag">${c.flag}</span>` : ''}${escapeHtml(name)}${isWinner ? ' ✓' : ''}</div>`;
+      };
+      html += '<div class="t-bracket">';
+      for (let r = 0; r < t.rounds; r++) {
+        html += `<div class="t-round"><div class="t-round-title">${roundName(r)}</div>`;
+        for (const m of t.matches.filter((x) => x.round === r)) {
+          html += `<div class="t-match${m.live ? ' live' : ''}">${player(m.p1, m.winner != null && m.winner === m.p1)}${player(m.p2, m.winner != null && m.winner === m.p2)}</div>`;
+        }
+        html += '</div>';
+      }
+      html += '</div>';
+      if (t.status === 'done' && t.champion) {
+        const champC = t.countries[t.champion];
+        html += `<div class="t-champion">⚽🏆 ${champC ? champC.flag + ' ' : ''}${escapeHtml(t.champion)} wins the World Cup!</div>`;
+      }
+    }
+    html += '</div>';
+    body.innerHTML = html;
+  }
+  // Called every frame from the scene's update() loop while tourneyDialogOpen — the bracket
+  // rebuild is cheap (a handful of divs), same cost main.ts's flat renderTournament() already
+  // pays every frame via updateUI().
+  function updateTourneyDialogLive() {
+    const body = dialogBox.querySelector<HTMLDivElement>('#tourneyWorldBody');
+    if (body) renderTourneyWorldBody(body);
+  }
+
+  // --- Season Pass — request/response: net.seasonPassReq() sends, Controller.feedSeasonPass()
+  // (wired from the same 'seasonPass' message main.ts's flat panel already handles) delivers. ---
+  function openSeasonDialog() {
+    dialogOpen = true;
+    seasonDialogOpen = true;
+    keys.clear(); joyActive = false;
+    renderSeasonDialog();
+    dialog.style.display = 'flex';
+    net.seasonPassReq();
+  }
+  function renderSeasonDialog() {
+    dialogBox.replaceChildren();
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;';
+    const title = document.createElement('div');
+    title.textContent = '🎫 Season Pass';
+    title.style.cssText = 'font-size:22px;color:#e8eefc;';
+    const week = document.createElement('div');
+    week.id = 'seasonWorldWeek';
+    week.style.cssText = 'font-size:12px;color:#9fb0d8;';
+    header.append(title, week);
+    dialogBox.appendChild(header);
+
+    const body = document.createElement('div');
+    body.id = 'seasonWorldChallenges';
+    body.style.cssText = 'display:flex;flex-direction:column;gap:8px;min-width:300px;';
+    body.addEventListener('click', (e) => {
+      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('.season-claim-btn');
+      if (btn?.dataset.id) net.seasonClaim(btn.dataset.id);
+    });
+    body.innerHTML = '<div style="color:#5a647e;font-size:12px;text-align:center;">Loading…</div>';
+    dialogBox.appendChild(body);
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;margin-top:10px;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+  }
+  function seasonApplyPass(weekId: string, challenges: SeasonChallenge[]) {
+    const week = dialogBox.querySelector<HTMLDivElement>('#seasonWorldWeek');
+    const body = dialogBox.querySelector<HTMLDivElement>('#seasonWorldChallenges');
+    if (!week || !body) return;
+    week.textContent = weekId.replace(/^(\d{4})-W(\d+)$/, (_m, y, w) => `Week ${parseInt(w)} · ${y}`);
+    body.innerHTML = challenges.map((ch) => {
+      const pct = Math.min(1, ch.progress / ch.goal) * 100;
+      const done = ch.progress >= ch.goal;
+      return `<div class="season-challenge${done && !ch.claimed ? ' season-claimable' : ''}${ch.claimed ? ' season-claimed' : ''}">
+        <div class="season-ch-top">
+          <span class="season-ch-emoji">${ch.emoji}</span>
+          <span class="season-ch-label">${ch.label}</span>
+          <span class="season-ch-reward">+${ch.reward.toLocaleString()}🪙</span>
+        </div>
+        <div class="season-ch-bar-wrap"><div class="season-ch-bar" style="width:${pct.toFixed(1)}%"></div></div>
+        <div class="season-ch-foot">
+          <span class="season-ch-progress">${Math.min(ch.progress, ch.goal)} / ${ch.goal}</span>
+          ${done && !ch.claimed ? `<button class="season-claim-btn" data-id="${ch.id}">CLAIM</button>` : ''}
+          ${ch.claimed ? '<span class="season-ch-done">✓ Claimed</span>' : ''}
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  // --- Power-ups legend — clones the flat panel's static .pu-list DOM (its ~28 rows are hand-
+  // authored HTML in index.html, not generated from a shared JS list) rather than duplicating
+  // them; canvases are redrawn via drawLegendIcon since cloning a canvas doesn't copy its pixel
+  // content. ---
+  function openPowerupsDialog() {
+    dialogOpen = true;
+    powerupsDialogOpen = true;
+    keys.clear(); joyActive = false;
+    renderPowerupsDialog();
+    dialog.style.display = 'flex';
+  }
+  function renderPowerupsDialog() {
+    dialogBox.replaceChildren();
+    const h = document.createElement('div');
+    h.textContent = '⚡ Power-ups';
+    h.style.cssText = 'font-size:22px;color:#e8eefc;margin-bottom:10px;text-align:center;';
+    dialogBox.appendChild(h);
+
+    const flatList = document.getElementById('powerupInfoPanel')?.querySelector('.pu-list');
+    if (flatList) {
+      const clone = flatList.cloneNode(true) as HTMLElement;
+      clone.id = 'powerupsWorldList';
+      clone.style.cssText = 'max-height:60vh;overflow-y:auto;min-width:280px;';
+      clone.querySelectorAll<HTMLCanvasElement>('.pu-icon').forEach((cv) => {
+        const kind = cv.dataset.kind as PowerupKind | undefined;
+        if (kind) drawLegendIcon(cv, kind);
+      });
+      clone.querySelectorAll<HTMLDivElement>('.pu-row').forEach((row) => {
+        const kind = row.querySelector<HTMLCanvasElement>('.pu-icon')?.dataset.kind as PowerupKind | undefined;
+        if (!kind) return;
+        row.onclick = () => { if (net.canSpawnPowerup()) net.spawnPowerup(kind); };
+      });
+      dialogBox.appendChild(clone);
+    }
+    updatePowerupsSpawnability();
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;margin-top:10px;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+  }
+  // Called on open + every frame while powerupsDialogOpen (canSpawnPowerup() depends on the live
+  // match state, same as main.ts's flat syncPowerupSpawnability() called every frame in updateUI()).
+  function updatePowerupsSpawnability() {
+    const list = dialogBox.querySelector<HTMLDivElement>('#powerupsWorldList');
+    if (!list) return;
+    const can = net.canSpawnPowerup();
+    for (const row of list.querySelectorAll<HTMLDivElement>('.pu-row')) row.style.cursor = can ? 'pointer' : 'default';
+  }
+
+  // --- Changelog — direct fetch, no server round-trip (matches main.ts's loadChangelog()); no
+  // dialogOpen-gated push/live-refresh needed since it's load-once. ---
+  function openChangelogDialog() {
+    dialogOpen = true;
+    keys.clear(); joyActive = false;
+    renderChangelogDialog();
+    dialog.style.display = 'flex';
+  }
+  function renderChangelogDialog() {
+    dialogBox.replaceChildren();
+    const h = document.createElement('div');
+    h.textContent = '📜 Changelog';
+    h.style.cssText = 'font-size:22px;color:#e8eefc;margin-bottom:10px;text-align:center;';
+    dialogBox.appendChild(h);
+    const body = document.createElement('div');
+    body.id = 'changelogWorldBody';
+    body.style.cssText = 'min-width:300px;max-height:60vh;overflow-y:auto;';
+    body.innerHTML = '<div class="changelog-empty">Loading…</div>';
+    dialogBox.appendChild(body);
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;margin-top:10px;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+    void loadChangelogWorld();
+  }
+  function changelogWorldTimeAgo(iso: string): string {
+    const then = new Date(iso).getTime();
+    if (!Number.isFinite(then)) return '';
+    let s = Math.max(0, (Date.now() - then) / 1000);
+    const steps: [number, string][] = [[60, 'second'], [60, 'minute'], [24, 'hour'], [30, 'day'], [12, 'month']];
+    let unit = 'year';
+    for (const [size, name] of steps) {
+      if (s < size) { unit = name; break; }
+      s /= size;
+    }
+    const n = Math.floor(s);
+    return `${n} ${unit}${n === 1 ? '' : 's'} ago`;
+  }
+  async function loadChangelogWorld() {
+    const body = dialogBox.querySelector<HTMLDivElement>('#changelogWorldBody');
+    if (!body) return;
+    try {
+      const res = await fetch('/api/changelog');
+      const data: { commits?: { hash: string; subject: string; author: string; date: string; url?: string }[] } = await res.json();
+      const commits = data.commits ?? [];
+      if (!commits.length) { body.innerHTML = '<div class="changelog-empty">No commits to show.</div>'; return; }
+      body.innerHTML = commits.map((c) => {
+        const tail = `${changelogWorldTimeAgo(c.date)}${c.author ? ` · ${escapeHtml(c.author)}` : ''}`;
+        const meta = c.url
+          ? `<a class="changelog-hash" href="${c.url}" target="_blank" rel="noopener noreferrer">${c.hash}</a> · ${tail}`
+          : `${c.hash} · ${tail}`;
+        return `<div class="changelog-item"><div class="changelog-subject">${escapeHtml(c.subject)}</div><div class="changelog-meta">${meta}</div></div>`;
+      }).join('');
+    } catch {
+      body.innerHTML = '<div class="changelog-empty">Could not load changelog.</div>';
+    }
+  }
+
+  // --- Lootbox — request/response via net.lootBoxOpen() + Controller.feedLootResult(), reusing
+  // the flat panel's .loot-* CSS classes (global, not scoped to #lootPanel). ---
+  const LOOT_PRICE = 2500; // mirrors server/lobby.ts's Lobby.LOOT_PRICE (display only)
+  let lootWorldBusy = false;
+  let lootWorldRevealHtml = '';
+  let lootWorldTimer: number | undefined;
+  function openLootDialog() {
+    dialogOpen = true;
+    lootDialogOpen = true;
+    keys.clear(); joyActive = false;
+    renderLootDialog();
+    dialog.style.display = 'flex';
+  }
+  function renderLootDialog() {
+    dialogBox.replaceChildren();
+    const h = document.createElement('div');
+    h.textContent = '🎁 Loot Box';
+    h.style.cssText = 'font-size:22px;color:#e8eefc;margin-bottom:10px;text-align:center;';
+    dialogBox.appendChild(h);
+    const body = document.createElement('div');
+    body.id = 'lootWorldBody';
+    body.style.cssText = 'min-width:300px;text-align:left;';
+    body.addEventListener('click', (e) => {
+      if ((e.target as HTMLElement).closest('#lootWorldOpenBtn')) lootWorldDoOpen();
+    });
+    dialogBox.appendChild(body);
+    renderLootWorldBody();
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;margin-top:10px;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+  }
+  function renderLootWorldBody() {
+    const body = dialogBox.querySelector<HTMLDivElement>('#lootWorldBody');
+    if (!body) return;
+    const w = net.wallet();
+    const canAfford = w.coins >= LOOT_PRICE;
+    const mine = w.exclusives;
+    const owned = mine.length
+      ? `<div class="loot-owned"><b>Your exclusives:</b> ${mine.map((e) => {
+          const def = EXCLUSIVES.find((x) => x.id === e.id);
+          return `<span class="loot-badge">${escapeHtml(def?.name ?? e.id)} <span class="loot-serial">#${e.serial}</span></span>`;
+        }).join(' ')}</div>`
+      : '';
+    const totalW = LOOT_TABLE.cosmeticWeight + LOOT_TABLE.exclusiveWeight + LOOT_TABLE.coinBackWeight + LOOT_TABLE.nothingWeight;
+    const pct = (n: number) => ((n / totalW) * 100).toFixed(1);
+    body.innerHTML = `
+      <div class="loot-blurb">Spend ${LOOT_PRICE.toLocaleString()}🪙 to crack a box — you get one of:</div>
+      <table class="loot-odds">
+        <tr><td>${pct(LOOT_TABLE.cosmeticWeight)}%</td><td>🎨 Common cosmetic</td><td>hat / skin / trail</td></tr>
+        <tr><td>${pct(LOOT_TABLE.exclusiveWeight)}%</td><td>✨ Scarce exclusive</td><td>hard mint cap · some 1-of-1</td></tr>
+        <tr><td>${pct(LOOT_TABLE.coinBackWeight)}%</td><td>🪙 Coin back</td><td>${LOOT_TABLE.coinBackMin.toLocaleString()}–${LOOT_TABLE.coinBackMax.toLocaleString()} coins</td></tr>
+        <tr><td>${pct(LOOT_TABLE.nothingWeight)}%</td><td>🫥 Nothing</td><td>the house thanks you</td></tr>
+      </table>
+      <button id="lootWorldOpenBtn" type="button" ${canAfford && !lootWorldBusy ? '' : 'disabled'}>${lootWorldBusy ? 'Opening…' : canAfford ? `🎁 Open Box · ${LOOT_PRICE.toLocaleString()}🪙` : `Need ${LOOT_PRICE.toLocaleString()}🪙 — you have ${w.coins.toLocaleString()}`}</button>
+      <div id="lootWorldReveal" class="loot-reveal">${lootWorldRevealHtml}</div>
+      ${owned}
+      <div class="loot-cap"><b>Mint caps:</b> ${EXCLUSIVES.map((x) => `${escapeHtml(x.name)} (${x.cap})`).join(' · ')}</div>`;
+  }
+  function lootWorldDoOpen() {
+    const w = net.wallet();
+    if (lootWorldBusy || w.coins < LOOT_PRICE) return;
+    lootWorldBusy = true; lootWorldRevealHtml = ''; renderLootWorldBody();
+    net.lootBoxOpen();
+    if (lootWorldTimer !== undefined) clearTimeout(lootWorldTimer);
+    lootWorldTimer = window.setTimeout(() => {
+      if (!lootWorldBusy) return;
+      lootWorldBusy = false;
+      lootWorldRevealHtml = '<div class="loot-pop">⚠️ No response — try again (you were not charged if it failed).</div>';
+      renderLootWorldBody();
+    }, 8000);
+  }
+  function lootWorldApplyResult(msg: LootResultMsg) {
+    if (lootWorldTimer !== undefined) { clearTimeout(lootWorldTimer); lootWorldTimer = undefined; }
+    lootWorldBusy = false;
+    const SLOT_LABEL: Record<string, string> = { hat: '🎩 Hat', skin: '🎨 Skin', trail: '✨ Trail', title: '🏷️ Title', song: '🎵 Song' };
+    if (msg.kind === 'exclusive') {
+      const excl = EXCLUSIVES.find((x) => x.id === (msg.item ?? ''));
+      const slotLabel = excl ? (SLOT_LABEL[excl.slot] ?? excl.slot) : '';
+      lootWorldRevealHtml = `<div class="loot-pop loot-rare"><div class="loot-slot">${slotLabel} · Exclusive</div>✨ <b>${escapeHtml(msg.name ?? '')}</b><br><span class="loot-serial">#${msg.serial} of ${msg.cap}</span><div class="loot-rarity">${escapeHtml(msg.rarity ?? '')}</div></div>`;
+      net.playSound('cha');
+    } else if (msg.kind === 'cosmetic') {
+      const cosm = COSMETICS.find((c) => c.id === (msg.item ?? ''));
+      const slotLabel = cosm ? (SLOT_LABEL[cosm.slot] ?? cosm.slot) : '';
+      lootWorldRevealHtml = `<div class="loot-pop"><div class="loot-slot">${slotLabel}</div>🎨 <b>${escapeHtml(msg.name ?? '')}</b><div class="loot-added">Added to your wardrobe!</div></div>`;
+    } else if (msg.kind === 'nothing') {
+      lootWorldRevealHtml = '<div class="loot-pop loot-nothing"><div class="loot-slot">Empty</div>🫥 <b>Better luck next time…</b><div class="loot-added">The house thanks you for your contribution.</div></div>';
+    } else {
+      lootWorldRevealHtml = `<div class="loot-pop"><div class="loot-slot">Coin Payout</div>🪙 <b>+${(msg.coins ?? 0).toLocaleString()}</b> coins</div>`;
+      net.playSound('cha');
+    }
+    renderLootWorldBody();
+  }
+
+  // --- Marketplace (Black Market) — request/response via net.marketplaceReq() +
+  // Controller.feedMarketplace(), reusing the flat panel's .mp-* CSS classes (global). Equip
+  // reuses the Shop's net.shopEquip() rather than duplicating that logic. ---
+  let mpWorldTab: 'browse' | 'mine' = 'browse';
+  function openMarketplaceDialog() {
+    dialogOpen = true;
+    marketplaceDialogOpen = true;
+    mpWorldTab = 'browse';
+    keys.clear(); joyActive = false;
+    renderMarketplaceDialog();
+    dialog.style.display = 'flex';
+    net.marketplaceReq();
+  }
+  function renderMarketplaceDialog() {
+    dialogBox.replaceChildren();
+    const h = document.createElement('div');
+    h.textContent = '🏴‍☠️ Black Market';
+    h.style.cssText = 'font-size:22px;color:#e8eefc;margin-bottom:10px;text-align:center;';
+    dialogBox.appendChild(h);
+    const body = document.createElement('div');
+    body.id = 'mpWorldBody';
+    body.style.cssText = 'min-width:320px;text-align:left;';
+    body.addEventListener('click', onMpWorldClick);
+    dialogBox.appendChild(body);
+    renderMpWorldBody();
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;margin-top:10px;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+  }
+  function onMpWorldClick(e: Event) {
+    const el = e.target as HTMLElement;
+    const tab = el.closest<HTMLButtonElement>('[data-mptab]');
+    if (tab) { mpWorldTab = tab.dataset.mptab as 'browse' | 'mine'; renderMpWorldBody(); return; }
+    const buy = el.closest<HTMLButtonElement>('[data-mpbuy]');
+    if (buy) { net.marketBuy(buy.dataset.mpbuy!); return; }
+    const cancel = el.closest<HTMLButtonElement>('[data-mpcancel]');
+    if (cancel) { net.marketCancel(Number(cancel.dataset.mpcancel)); return; }
+    const equip = el.closest<HTMLButtonElement>('[data-mpequip]');
+    if (equip) {
+      const id = equip.dataset.mpequip!;
+      const slot = equip.dataset.mpslot as 'hat' | 'skin' | 'trail' | 'title';
+      const w = net.wallet();
+      const equipped = w.hat === id || w.skin === id || w.trail === id || w.title === id;
+      net.shopEquip(slot, equipped ? null : id);
+      return;
+    }
+    const list = el.closest<HTMLButtonElement>('[data-mplist]');
+    if (list) {
+      const serial = Number(list.dataset.mpserial);
+      const itemId = list.dataset.mplist!;
+      const body = dialogBox.querySelector<HTMLDivElement>('#mpWorldBody');
+      const input = body?.querySelector<HTMLInputElement>(`input[data-mpask="${serial}"]`);
+      const ask = Math.floor(Number(input?.value));
+      if (!Number.isFinite(ask) || ask < 1) return;
+      const w = net.wallet();
+      const owned = w.exclusives.find((x) => x.id === itemId && x.serial === serial);
+      if (!owned) return;
+      net.marketList(owned.instanceId, ask);
+    }
+  }
+  function renderMpWorldBody() {
+    const body = dialogBox.querySelector<HTMLDivElement>('#mpWorldBody');
+    if (!body) return;
+    const items = net.marketplace();
+    const w = net.wallet();
+    const tabs = `<div class="mp-tabs">
+      <button type="button" class="mp-tab${mpWorldTab === 'browse' ? ' active' : ''}" data-mptab="browse">Browse</button>
+      <button type="button" class="mp-tab${mpWorldTab === 'mine' ? ' active' : ''}" data-mptab="mine">My Items</button>
+    </div>`;
+    let contentHtml = '';
+    if (mpWorldTab === 'browse') {
+      contentHtml = items.map((it) => {
+        const def = EXCLUSIVES.find((x) => x.id === it.item);
+        const floor = it.floor !== null ? `${it.floor.toLocaleString()}🪙` : '—';
+        const last = it.lastSale !== null ? `last ${it.lastSale.toLocaleString()}🪙` : 'no sales yet';
+        const canBuy = it.floor !== null && w.coins >= it.floor;
+        return `<div class="mp-row">
+          <div class="mp-name">${escapeHtml(def?.name ?? it.item)} <span class="mp-rarity">${escapeHtml(def?.rarity ?? '')}</span></div>
+          <div class="mp-meta">${it.minted} of ${it.cap} minted · floor ${floor} · ${last}</div>
+          <button type="button" class="mp-buy" data-mpbuy="${it.item}" ${canBuy ? '' : 'disabled'}>Buy Lowest${it.floor !== null ? ` (${it.floor.toLocaleString()}🪙)` : ''}</button>
+        </div>`;
+      }).join('') || '<div class="mp-empty">No exclusives minted yet — try a loot box.</div>';
+    } else {
+      const myListings = items.flatMap((it) => it.listings.filter((l) => l.mine).map((l) => ({ ...l, def: EXCLUSIVES.find((x) => x.id === it.item) })));
+      const listingRows = myListings.map((l) =>
+        `<div class="mp-row"><div class="mp-name">${escapeHtml(l.def?.name ?? l.item)} <span class="mp-serial">listed for ${l.ask.toLocaleString()}🪙</span></div>
+          <button type="button" class="mp-cancel" data-mpcancel="${l.id}">Cancel</button></div>`,
+      ).join('');
+      const ownRows = w.exclusives.map((e) => {
+        const def = EXCLUSIVES.find((x) => x.id === e.id);
+        const equipped = !!def && (w.hat === e.id || w.skin === e.id || w.trail === e.id || w.title === e.id);
+        return `<div class="mp-row">
+          <div class="mp-name">${escapeHtml(def?.name ?? e.id)} <span class="mp-serial">#${e.serial}</span></div>
+          <div class="mp-own-actions">
+            <button type="button" class="mp-equip" data-mpequip="${e.id}" data-mpslot="${def?.slot ?? ''}">${equipped ? 'Unequip' : 'Equip'}</button>
+            <input type="number" min="1" class="mp-ask" data-mpask="${e.serial}" placeholder="price" />
+            <button type="button" class="mp-list" data-mplist="${e.id}" data-mpserial="${e.serial}">List</button>
+          </div>
+        </div>`;
+      }).join('') || '<div class="mp-empty">You own no exclusives yet.</div>';
+      contentHtml = `${myListings.length ? `<div class="mp-section">Your listings</div>${listingRows}` : ''}<div class="mp-section">Your items</div>${ownRows}`;
+    }
+    body.innerHTML = tabs + contentHtml;
+  }
+
   // First-time character creator — the ONE thing every brand-new visitor sees, and it's rendered
   // as a dialog inside World's own overlay (same dialog/dialogBox nodes as every building prompt)
   // instead of the old flat #joinForm page. World is already running behind it: you've spawned,
@@ -7789,6 +8325,10 @@ export function startWorld(net: WorldNet): void {
     // above World with its own Escape/number-input handling — stand down entirely while it's up,
     // same idiom as isEncounterOpen() above.
     if (document.querySelector('.sell-modal')) return;
+    // Same for Parliament (client/nomic.ts) — its own document.body-level overlay, own Escape/
+    // proposal-text-input handling, not paused (World stays visible dimmed behind it).
+    const nomOverlay = document.querySelector<HTMLElement>('.nom-overlay');
+    if (nomOverlay && nomOverlay.style.display !== 'none') return;
     unlockAudio();
     const k = e.key.toLowerCase();
     // While a chat/say input is open it owns the keyboard — let every keystroke (incl. Esc/Enter,
@@ -9992,10 +10532,9 @@ export function startWorld(net: WorldNet): void {
     enterChime();
   }
   // Walking up to a cabinet steps straight into that game's native World dialog now — every
-  // Casino game is one now (see openSlots()/openCraps()/openBj()/openHilo()/openMines()/
-  // openHorse()/openCrash()/openRoulette()/openPlinko()), same walk-straight-in idiom as
-  // Shop/Pet-Shop (no confirm step). lootbox/blackmarket aren't played on a cabinet (they're
-  // Shop-adjacent panels) — walking up to one of those still delegates out via openFeature().
+  // Casino cabinet is one (see openSlots()/openCraps()/openBj()/openHilo()/openMines()/
+  // openHorse()/openCrash()/openRoulette()/openPlinko()/openLootDialog()/
+  // openMarketplaceDialog()), same walk-straight-in idiom as Shop/Pet-Shop (no confirm step).
   function playCasinoGame(g: NonNullable<typeof nearCasinoGame>) {
     if (dialogOpen || talkOpen) return;
     switch (g.feature) {
@@ -10008,14 +10547,8 @@ export function startWorld(net: WorldNet): void {
       case 'crash': openCrash(); return;
       case 'roulette': openRoulette(); return;
       case 'plinko': openPlinko(); return;
-      case 'lootbox': case 'blackmarket': {
-        const feature = g.feature;
-        const emoji = CASINO_GAMES.find((c) => c.feature === feature)?.emoji ?? '🎰';
-        openDialog(`${emoji} ${g.label}`, `Step up and play ${g.label}.`, [
-          { label: `▶️ Play ${g.label}`, onPick: () => { pause(); net.openFeature(feature); } },
-        ]);
-        return;
-      }
+      case 'lootbox': openLootDialog(); return;
+      case 'blackmarket': openMarketplaceDialog(); return;
     }
   }
 
@@ -10855,6 +11388,8 @@ export function startWorld(net: WorldNet): void {
       if (helpFlash && now >= helpFlashUntil) { helpFlash = ''; updateHelp(); }
       if (shopDialogOpen) updateShopDialogLive();
       if (marketDialogOpen) updateMarketDialogLive();
+      if (tourneyDialogOpen) updateTourneyDialogLive();
+      if (powerupsDialogOpen) updatePowerupsSpawnability();
 
       // --- day/night: derive purely from the wall clock so every client's sky matches ---
       {
@@ -11657,6 +12192,7 @@ export function startWorld(net: WorldNet): void {
     keys.clear(); joyActive = false; handbrake = false;
     dialogOpen = false; shopDialogOpen = false; newsDialogOpen = false; loanDialogOpen = false; houseDialogOpen = false; marketDialogOpen = false; slotsDialogOpen = false; crapsDialogOpen = false;
     bjDialogOpen = false; hiloDialogOpen = false; minesDialogOpen = false; horseDialogOpen = false; crashDialogOpen = false; rouletteDialogOpen = false; plinkoDialogOpen = false;
+    tourneyDialogOpen = false; seasonDialogOpen = false; powerupsDialogOpen = false; lootDialogOpen = false; marketplaceDialogOpen = false;
     dialog.style.display = 'none'; // don't resume back into the dialog that sent us here
     game?.loop.sleep();
     overlay.style.display = 'none';
@@ -11773,6 +12309,9 @@ export function startWorld(net: WorldNet): void {
     feedCrashState(msg) { crashApplyState(msg); }, // always tracks history/cache, not gated on crashDialogOpen (see crashApplyState)
     feedRouletteResult(msg) { if (rouletteDialogOpen) rlApplyResult(msg); },
     feedPlinkoResult(msg) { if (plinkoDialogOpen) plinkoApplyResult(msg); },
+    feedSeasonPass(weekId, challenges) { if (seasonDialogOpen) seasonApplyPass(weekId, challenges); },
+    feedLootResult(msg) { if (lootDialogOpen) lootWorldApplyResult(msg); },
+    feedMarketplace(_items) { if (marketplaceDialogOpen) renderMpWorldBody(); },
   };
   syncDriveBtn();
   net.enter();
