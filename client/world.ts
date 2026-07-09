@@ -5255,6 +5255,10 @@ export function startWorld(net: WorldNet): void {
   function onWheel(e: WheelEvent) {
     if (paused) return;
     if (e.target instanceof Node && chatWrap.contains(e.target)) return;
+    // Let a scrolled dialog (e.g. the Shop's item list) use the wheel natively instead of
+    // hijacking it into a camera zoom — dialogOpen also covers the character creator/Hall of
+    // Fame/etc., none of which want to zoom the map out from under themselves.
+    if (dialogOpen && e.target instanceof Node && dialogBox.contains(e.target)) return;
     e.preventDefault();
     adjustZoom(e.deltaY < 0 ? 1.1 : 1 / 1.1);
   }
