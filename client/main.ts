@@ -2011,6 +2011,7 @@ doomBtn.addEventListener('click', async () => {
       scores: () => doomScores,
       name: () => myName,
       awardCoin: () => net.send({ type: 'doomReward' }),
+      muted: () => muted,
     });
   } catch (e) {
     console.error('DOOM failed to load:', e);

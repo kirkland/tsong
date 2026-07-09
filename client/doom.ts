@@ -96,6 +96,7 @@ export interface DoomNet {
   scores(): { solo: DoomScore[]; coop: DoomScore[] }; // latest high-round leaderboards
   name(): string; // this client's display name
   awardCoin(): void; // grant this player 1 coin (for killing the minion boss)
+  muted(): boolean; // whether the main page's mute toggle is on
 }
 
 // The running instance feeds server messages back to itself through these module-level hooks,
@@ -406,18 +407,23 @@ export function startDoom(net: DoomNet): void {
   let audio: AudioContext | null = null;
   const ac = () => (audio ??= new AudioContext());
   const bossLaugh = new Audio('/minion-laugh.mp3'); // the boss cackles every time it's shot
-  function laughSound() { try { bossLaugh.currentTime = 0; void bossLaugh.play(); } catch { /* ignore */ } }
+  function laughSound() { if (net.muted()) return; try { bossLaugh.currentTime = 0; void bossLaugh.play(); } catch { /* ignore */ } }
   const bossMusic = new Audio('/disco.mp3'); // loops during boss-fight rounds
   bossMusic.loop = true;
   let bossMusicOn = false;
-  // Start/stop the boss music to match whether a live boss round is in progress.
+  // Start/stop the boss music to match whether a live boss round is in progress. Also syncs
+  // .muted every frame (this call happens in the main loop) since main.ts's mute toggle only
+  // covers its own <audio> elements, not this standalone one — see world.ts's dungeon/tavern
+  // music for the same pattern.
   function syncBossMusic() {
+    bossMusic.muted = net.muted();
     const want = isBossRound(round) && !over && !paused && betweenTimer <= 0
       && (mode === 'solo' || mode === 'host' || mode === 'guest');
     if (want && !bossMusicOn) { bossMusicOn = true; try { bossMusic.currentTime = 0; void bossMusic.play(); } catch { /* ignore */ } }
     else if (!want && bossMusicOn) { bossMusicOn = false; bossMusic.pause(); }
   }
   function shotSound() {
+    if (net.muted()) return;
     try {
       const a = ac();
       const buf = a.createBuffer(1, a.sampleRate * 0.18, a.sampleRate);
@@ -429,6 +435,7 @@ export function startDoom(net: DoomNet): void {
     } catch { /* ignore */ }
   }
   function deathSound() {
+    if (net.muted()) return;
     try {
       const a = ac();
       const o = a.createOscillator(); const g = a.createGain();
@@ -441,6 +448,7 @@ export function startDoom(net: DoomNet): void {
     } catch { /* ignore */ }
   }
   function pickupSound() {
+    if (net.muted()) return;
     try {
       const a = ac();
       const o = a.createOscillator(); const g = a.createGain();
@@ -453,6 +461,7 @@ export function startDoom(net: DoomNet): void {
     } catch { /* ignore */ }
   }
   function boomSound() {
+    if (net.muted()) return;
     try {
       const a = ac();
       const dur = 0.4;
