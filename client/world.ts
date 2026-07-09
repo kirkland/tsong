@@ -60,6 +60,10 @@ import {
   type Side,
   type NewsItem,
   type HouseStateMsg,
+  type StockSide,
+  type StockTf,
+  positionWorth,
+  FAST_SELL_BRACKETS,
 } from '../shared/types';
 import { drawCosmeticPreview } from './render';
 
@@ -82,6 +86,13 @@ export interface WorldBetInfo {
   amount: number; min: number; max: number;
   affordable: boolean;
   mine: { side: Side; amount: number; odds: number }[];
+}
+// The Crypto Market board for World's market dialog (mirrors main.ts's local `Market` type).
+export interface WorldMarket {
+  prices: { id: string; price: number; prev: number; flow?: number }[];
+  holdings: { id: string; side: StockSide; shares: number; cost: number; worth: number; openedAt: number }[];
+  history: { id: string; series: Record<StockTf, number[]> }[];
+  nextUpdateAt: number;
 }
 
 // What the world needs from the rest of the app. main.ts supplies these (see startWorld call).
@@ -120,9 +131,16 @@ export interface WorldNet {
   bondBuy(amount: number, termDays: number): void;
   bondWithdraw(id: string): void;
   auctionBid(amount: number): void;
+  // Crypto Market — also a native World dialog now (see openMarket()). The sell/cover modal is
+  // reused as-is (openSellModal delegates straight to main.ts's existing implementation): it's
+  // already a document.body-level overlay at z-index 100001, well above World's own dialog, so
+  // there was nothing World-specific to rebuild there.
+  market(): WorldMarket;
+  stockInvest(coin: string, amount: number, side: StockSide): void;
+  openSellModal(coinId: string, ticker: string, side: StockSide): void;
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'stocks' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' |'lootbox' | 'blackmarket' | 'tourney' | 'season' | 'powerups' | 'changelog'): void; // open a Casino/DOOM/Fishing/Arcade/Bowling/Notice-Board feature (Shop/Pet-Shop/News/Loans/House are native World dialogs now)
+  openFeature(feature: 'roulette' | 'blackjack' | 'craps' | 'crash' | 'slots' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' |'lootbox' | 'blackmarket' | 'tourney' | 'season' | 'powerups' | 'changelog'): void; // open a Casino/DOOM/Fishing/Arcade/Bowling/Notice-Board feature (Shop/Pet-Shop/News/Loans/House/Market are native World dialogs now)
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   openRename(): void;            // World's own 👤 button → reopen the nickname/color picker
   muted(): boolean;              // is game sound currently muted?
@@ -190,6 +208,7 @@ interface Controller {
   feedNews(): void;                                  // a new news item published — re-render the news dialog if it's open
   feedLoan(): void;                                  // the loan changed (taken/repaid/collected/countdown tick) — re-render the loan dialog if it's open
   feedHouse(): void;                                 // the Fed dashboard changed (bond/auction/tax update) — re-render the house dialog if it's open
+  feedMarket(): void;                                // prices/holdings re-rolled — re-render the market dialog if it's open
 }
 let controller: Controller | null = null;
 let _exitWorld: (() => void) | null = null;
@@ -242,6 +261,11 @@ export function feedLoan(): void {
 /** The Fed dashboard changed (bond/auction/tax update) — re-render the house dialog if it's open. */
 export function feedHouse(): void {
   controller?.feedHouse();
+}
+
+/** Prices/holdings re-rolled — re-render the market dialog if it's open. */
+export function feedMarket(): void {
+  controller?.feedMarket();
 }
 
 /** The server accepted a chest open (added the coins to the run purse / granted the potion). */
@@ -1859,6 +1883,7 @@ export function startWorld(net: WorldNet): void {
   let newsDialogOpen = false;  // the in-World news dialog is up — gates re-rendering on feedNews()
   let loanDialogOpen = false;  // the in-World loan dialog is up — gates re-rendering on feedLoan()
   let houseDialogOpen = false; // the in-World Fed dashboard is up — gates re-rendering on feedHouse()
+  let marketDialogOpen = false; // the in-World Crypto Market is up — gates its per-frame tax-badge refresh
   let nearId: string | null = null; // building the avatar is currently at the door of
   // True while a Casino/Bank/Shop/arcade feature has been delegated to the main page (or a
   // lazy-loaded minigame overlay) — World stays alive underneath (paused, hidden) instead of
@@ -2781,7 +2806,7 @@ export function startWorld(net: WorldNet): void {
     if (kind === 'casino') { enterCasino(); return; }
     if (kind === 'bank') {
       openDialog('🏦 Bank', 'How can we help you today?', [
-        { label: '📈 Crypto Market', onPick: () => { pause(); net.openFeature('stocks'); } },
+        { label: '📈 Crypto Market', onPick: openMarket },
         { label: '💸 Get a Loan',    onPick: openLoan },
         { label: '📰 Market News',   onPick: openNews },
         { label: '🏛️ The Fed',       onPick: openHouse },
@@ -4241,6 +4266,7 @@ export function startWorld(net: WorldNet): void {
     newsDialogOpen = false;
     loanDialogOpen = false;
     houseDialogOpen = false;
+    marketDialogOpen = false;
     dialog.style.display = 'none';
   }
 
@@ -4798,6 +4824,267 @@ export function startWorld(net: WorldNet): void {
         </div>
         <div class="house-card house-wide"><h4>📰 Fed Activity</h4>${fed}</div>
       </div>`;
+  }
+
+  // --- Crypto Market — reuses the flat panel's .coin-* classes (global, not scoped to
+  // #marketPanel) so the per-coin rows look identical rendered inside World's dialog. The sell/
+  // cover modal is NOT reimplemented here: net.openSellModal() delegates straight to main.ts's
+  // existing modal, which is already a document.body-level overlay above everything (World
+  // included) — see the WorldNet.openSellModal doc comment above. ---
+  let worldGraphTf: StockTf = '1h';
+  const worldInvestAmt = new Map<string, number>();
+  function marketSeriesFor(id: string): number[] {
+    const h = net.market().history.find((x) => x.id === id);
+    return h ? h.series[worldGraphTf] ?? [] : [];
+  }
+  function marketTaxBadge(openedAt: number): { text: string; cls: string } {
+    if (!openedAt) return { text: '✅ tax-free', cls: 'tax-free' };
+    const heldMs = Date.now() - openedAt;
+    for (const b of FAST_SELL_BRACKETS) {
+      if (heldMs < b.underMs) {
+        const left = b.underMs - heldMs;
+        const secs = Math.ceil(left / 1000);
+        const clock = secs >= 60 ? `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}` : `${secs}s`;
+        return { text: `🔒 ${Math.round(b.rate * 100)}% tax · drops in ${clock}`, cls: 'tax-wait' };
+      }
+    }
+    return { text: '✅ tax-free', cls: 'tax-free' };
+  }
+  function marketFmtCoins(n: number): string { return Math.round(n).toLocaleString('en-US'); }
+  function marketFmtPrice(n: number): string { return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  function marketFmtPct(n: number, dp = 1): string { return n.toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp }); }
+  function drawMarketSparkline(cv: HTMLCanvasElement, pts: number[]) {
+    const ctx2 = cv.getContext('2d');
+    if (!ctx2) return;
+    const w = cv.width, h = cv.height, pad = 2;
+    ctx2.clearRect(0, 0, w, h);
+    if (pts.length < 2) {
+      ctx2.strokeStyle = '#2a3550';
+      ctx2.beginPath(); ctx2.moveTo(pad, h / 2); ctx2.lineTo(w - pad, h / 2); ctx2.stroke();
+      return;
+    }
+    let lo = Math.min(...pts), hi = Math.max(...pts);
+    if (hi - lo < 1e-9) { lo -= 1; hi += 1; }
+    const x = (i: number) => pad + (i / (pts.length - 1)) * (w - 2 * pad);
+    const y = (v: number) => h - pad - ((v - lo) / (hi - lo)) * (h - 2 * pad);
+    ctx2.strokeStyle = pts[pts.length - 1] >= pts[0] ? '#6ee7a8' : '#ff7a7a';
+    ctx2.lineWidth = 1.5;
+    ctx2.beginPath();
+    pts.forEach((v, i) => (i ? ctx2.lineTo(x(i), y(v)) : ctx2.moveTo(x(i), y(v))));
+    ctx2.stroke();
+  }
+
+  // Called from within the Bank menu's already-open dialog — no re-entry guard needed (see openNews()).
+  function openMarket() {
+    dialogOpen = true;
+    marketDialogOpen = true;
+    keys.clear(); joyActive = false;
+    renderMarketDialog();
+    dialog.style.display = 'flex';
+  }
+  function renderMarketDialog() {
+    dialogBox.replaceChildren();
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:10px;';
+    const h = document.createElement('div');
+    h.textContent = '📈 Crypto Market';
+    h.style.cssText = 'font-size:22px;color:#e8eefc;';
+    const coins = document.createElement('div');
+    coins.id = 'marketWorldCoins';
+    coins.textContent = `${marketFmtCoins(net.wallet().coins)}🪙`;
+    coins.style.cssText = 'font-size:15px;color:#ffd23f;font-weight:700;';
+    header.append(h, coins);
+    dialogBox.appendChild(header);
+
+    const tfRow = document.createElement('div');
+    tfRow.style.cssText = 'display:flex;gap:4px;margin-bottom:10px;justify-content:center;';
+    const TFS: { id: StockTf; label: string }[] = [
+      { id: '5m', label: '5 Min' }, { id: '1h', label: '1 Hour' }, { id: '6h', label: '6 Hour' }, { id: '1d', label: '1 Day' },
+    ];
+    for (const tf of TFS) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = tf.label;
+      const active = worldGraphTf === tf.id;
+      b.style.cssText =
+        'cursor:pointer;padding:5px 10px;border-radius:8px;font-size:12px;font-weight:700;' +
+        `background:${active ? '#3a5aa8' : '#1c2747'};color:${active ? '#fff' : '#9fb0d8'};border:1px solid ${active ? '#5a7ac8' : '#2c3a63'};`;
+      b.onclick = () => { selectBlip(); worldGraphTf = tf.id; renderMarketDialog(); };
+      tfRow.appendChild(b);
+    }
+    dialogBox.appendChild(tfRow);
+
+    const list = document.createElement('div');
+    list.id = 'marketWorldList';
+    list.style.cssText = 'min-width:320px;';
+    dialogBox.appendChild(list);
+    renderMarketWorldList(list);
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;margin-top:10px;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+  }
+  function renderMarketWorldList(list: HTMLDivElement) {
+    list.innerHTML = '';
+    const m = net.market();
+    const w = net.wallet();
+    for (const stock of STOCKS) {
+      const p = m.prices.find((x) => x.id === stock.id);
+      const longPos = m.holdings.find((x) => x.id === stock.id && x.side === 'long');
+      const shortPos = m.holdings.find((x) => x.id === stock.id && x.side === 'short');
+      const price = p?.price ?? stock.base;
+      const series = marketSeriesFor(stock.id);
+      const last = series.length ? series[series.length - 1] : price;
+      const first = series.length >= 2 ? series[0] : last;
+      const pct = first > 0 ? ((last - first) / first) * 100 : 0;
+
+      const row = document.createElement('div');
+      row.className = 'coin-row';
+
+      const logo = document.createElement('img');
+      logo.className = 'coin-logo';
+      logo.src = stock.img;
+      logo.alt = stock.name;
+      row.appendChild(logo);
+
+      const main = document.createElement('div');
+      main.className = 'coin-main';
+      const name = document.createElement('div');
+      name.className = 'coin-name';
+      name.textContent = stock.name;
+      const supply = document.createElement('span');
+      supply.className = 'coin-supply';
+      supply.textContent = `${stock.supply.toLocaleString()} circ.`;
+      name.appendChild(supply);
+      main.appendChild(name);
+      const priceLine = document.createElement('div');
+      priceLine.className = 'coin-price';
+      const dir = pct > 0.01 ? 'up' : pct < -0.01 ? 'down' : 'flat';
+      const arrow = dir === 'up' ? '▲' : dir === 'down' ? '▼' : '•';
+      const flow = p?.flow ?? 0;
+      const flowTag = flow > 0 ? '<span class="coin-flow up" title="buy pressure">▲</span>'
+        : flow < 0 ? '<span class="coin-flow down" title="sell pressure">▼</span>' : '';
+      priceLine.innerHTML = `${marketFmtPrice(price)} 🪙<span class="coin-chg ${dir}">${arrow} ${marketFmtPct(Math.abs(pct))}%</span>${flowTag}`;
+      main.appendChild(priceLine);
+      const posLine = (hold: NonNullable<typeof longPos>) => {
+        const rawWorth = positionWorth(hold.side, hold.shares, hold.cost, price);
+        const cashOut = Math.round(rawWorth);
+        const plPct = hold.cost > 0 ? (rawWorth / hold.cost - 1) * 100 : 0;
+        const plClass = plPct > 0.05 ? 'pl-up' : plPct < -0.05 ? 'pl-down' : '';
+        const sign = plPct >= 0 ? '+' : '';
+        const tag = hold.side === 'short' ? '<span class="pos-short">SHORT</span> ' : '';
+        const verb = hold.side === 'short' ? 'cover' : 'cash out';
+        const closeTxt = cashOut >= 0 ? `${verb} ${marketFmtCoins(cashOut)}` : `${verb} costs ${marketFmtCoins(-cashOut)}`;
+        const div = document.createElement('div');
+        div.className = 'coin-pos';
+        div.innerHTML = `${tag}${marketFmtCoins(hold.cost)}🪙 → <span class="${plClass}">${marketFmtPrice(rawWorth)}🪙 (${sign}${marketFmtPct(plPct, 0)}%)</span> · ${closeTxt}`;
+        const badge = marketTaxBadge(hold.openedAt);
+        const taxEl = document.createElement('span');
+        taxEl.className = `pos-tax ${badge.cls}`;
+        taxEl.dataset.opened = String(hold.openedAt);
+        taxEl.textContent = ` · ${badge.text}`;
+        div.appendChild(taxEl);
+        return div;
+      };
+      if (longPos) main.appendChild(posLine(longPos));
+      if (shortPos) main.appendChild(posLine(shortPos));
+      const graph = document.createElement('canvas');
+      graph.className = 'coin-graph';
+      graph.width = 176; graph.height = 26;
+      drawMarketSparkline(graph, series);
+      main.appendChild(graph);
+      row.appendChild(main);
+
+      const actions = document.createElement('div');
+      actions.className = 'coin-actions';
+      const buy = document.createElement('div');
+      buy.className = 'coin-buy';
+      let amt = worldInvestAmt.get(stock.id) ?? 100;
+      amt = Math.max(1, Math.min(amt, Math.max(1, w.coins)));
+      worldInvestAmt.set(stock.id, amt);
+      const minus = document.createElement('button');
+      minus.type = 'button';
+      minus.textContent = '−';
+      const amtEl = document.createElement('input');
+      amtEl.type = 'number';
+      amtEl.min = '1'; amtEl.step = '1';
+      amtEl.className = 'coin-amt';
+      amtEl.setAttribute('inputmode', 'numeric');
+      amtEl.value = String(amt);
+      const plus = document.createElement('button');
+      plus.type = 'button';
+      plus.textContent = '+';
+      buy.append(minus, amtEl, plus);
+      actions.appendChild(buy);
+
+      const trade = document.createElement('div');
+      trade.className = 'coin-trade';
+      const invest = document.createElement('button');
+      invest.type = 'button';
+      invest.className = 'coin-long';
+      invest.textContent = 'Buy';
+      invest.disabled = w.coins < amt;
+      invest.onclick = () => net.stockInvest(stock.id, worldInvestAmt.get(stock.id) ?? 100, 'long');
+      const short = document.createElement('button');
+      short.type = 'button';
+      short.className = 'coin-shortbtn';
+      short.textContent = 'Short';
+      short.disabled = w.coins < amt;
+      short.onclick = () => net.stockInvest(stock.id, worldInvestAmt.get(stock.id) ?? 100, 'short');
+      trade.append(invest, short);
+      actions.appendChild(trade);
+
+      const setAmt = (v: number) => {
+        const clamped = Math.max(1, Math.min(v, Math.max(1, w.coins)));
+        worldInvestAmt.set(stock.id, clamped);
+        amtEl.value = String(clamped);
+        invest.disabled = short.disabled = w.coins < clamped;
+      };
+      amtEl.addEventListener('input', () => {
+        const v = Math.floor(Number(amtEl.value));
+        const valid = Number.isFinite(v) && v >= 1;
+        worldInvestAmt.set(stock.id, valid ? v : 1);
+        invest.disabled = short.disabled = !valid || w.coins < v;
+      });
+      amtEl.addEventListener('change', () => setAmt(Math.floor(Number(amtEl.value)) || 1));
+      minus.onclick = () => setAmt((worldInvestAmt.get(stock.id) ?? 100) - 1);
+      plus.onclick = () => setAmt((worldInvestAmt.get(stock.id) ?? 100) + 1);
+
+      const sellBtn = (hold: NonNullable<typeof longPos>) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        const isShort = hold.side === 'short';
+        b.className = isShort ? 'coin-cover' : 'coin-cash';
+        const cv = Math.round(positionWorth(hold.side, hold.shares, hold.cost, price));
+        b.textContent = isShort
+          ? (cv >= 0 ? `Cover (${marketFmtCoins(cv)}🪙)` : `Cover (pay ${marketFmtCoins(-cv)}🪙)`)
+          : `Sell (${marketFmtCoins(cv)}🪙)`;
+        b.onclick = () => net.openSellModal(stock.id, stock.ticker, hold.side);
+        return b;
+      };
+      if (longPos) actions.appendChild(sellBtn(longPos));
+      if (shortPos) actions.appendChild(sellBtn(shortPos));
+
+      row.appendChild(actions);
+      list.appendChild(row);
+    }
+  }
+  // Called every frame from the scene's update() loop while marketDialogOpen — refreshes just the
+  // coin total and each open position's tax-window badge in place, mirroring main.ts's
+  // updateMarketTimer(). A full rebuild happens on open/tab-switch/feedMarket() (price re-roll).
+  function updateMarketDialogLive() {
+    const coinsEl = dialogBox.querySelector<HTMLDivElement>('#marketWorldCoins');
+    if (coinsEl) coinsEl.textContent = `${marketFmtCoins(net.wallet().coins)}🪙`;
+    const list = dialogBox.querySelector<HTMLDivElement>('#marketWorldList');
+    if (!list) return;
+    for (const el of list.querySelectorAll<HTMLElement>('.pos-tax')) {
+      const badge = marketTaxBadge(Number(el.dataset.opened));
+      el.textContent = ` · ${badge.text}`;
+      el.className = `pos-tax ${badge.cls}`;
+    }
   }
 
   // First-time character creator — the ONE thing every brand-new visitor sees, and it's rendered
@@ -5492,11 +5779,19 @@ export function startWorld(net: WorldNet): void {
   function onKeyDown(e: KeyboardEvent) {
     if (paused) return; // a delegated panel/minigame owns the screen — let its own input through untouched
     if (isEncounterOpen()) return; // the battle overlay owns input while it's up
+    // The Crypto Market's sell/cover modal (net.openSellModal()) is a document.body-level overlay
+    // above World with its own Escape/number-input handling — stand down entirely while it's up,
+    // same idiom as isEncounterOpen() above.
+    if (document.querySelector('.sell-modal')) return;
     unlockAudio();
     const k = e.key.toLowerCase();
     // While a chat/say input is open it owns the keyboard — let every keystroke (incl. Esc/Enter,
     // handled by the input itself) flow through untouched, and never treat them as movement.
     if (chatActive || sayActive) return;
+    // Same, generalized: any dialog's own text input (character creator nickname, bet/invest/
+    // bond/bid/loan amount, …) owns typing while it's focused — don't let single-key shortcuts
+    // (m, f, b, r, wasd, …) hijack keystrokes meant for it.
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
     if (inDungeon && k === 'p') { e.preventDefault(); usePotion(); return; } // drink a potion (+10 HP)
     if (inDungeon && k === 'l') { e.preventDefault(); toggleLoot(); return; } // 🎒 toggle the run-loot panel
     if (k === 'escape') {
@@ -8535,6 +8830,7 @@ export function startWorld(net: WorldNet): void {
       const dt = Math.min(delta / 1000, 0.05);
       if (helpFlash && now >= helpFlashUntil) { helpFlash = ''; updateHelp(); }
       if (shopDialogOpen) updateShopDialogLive();
+      if (marketDialogOpen) updateMarketDialogLive();
 
       // --- day/night: derive purely from the wall clock so every client's sky matches ---
       {
@@ -9335,7 +9631,7 @@ export function startWorld(net: WorldNet): void {
     if (paused) return;
     paused = true;
     keys.clear(); joyActive = false; handbrake = false;
-    dialogOpen = false; shopDialogOpen = false; newsDialogOpen = false; loanDialogOpen = false; houseDialogOpen = false;
+    dialogOpen = false; shopDialogOpen = false; newsDialogOpen = false; loanDialogOpen = false; houseDialogOpen = false; marketDialogOpen = false;
     dialog.style.display = 'none'; // don't resume back into the dialog that sent us here
     game?.loop.sleep();
     overlay.style.display = 'none';
@@ -9438,6 +9734,7 @@ export function startWorld(net: WorldNet): void {
       if (img && body) renderLoanWorldBody(img, body);
     },
     feedHouse() { if (houseDialogOpen) { const body = dialogBox.querySelector<HTMLDivElement>('#houseWorldBody'); if (body) renderHouseWorldBody(body); } },
+    feedMarket() { if (marketDialogOpen) { const list = dialogBox.querySelector<HTMLDivElement>('#marketWorldList'); if (list) renderMarketWorldList(list); } },
   };
   syncDriveBtn();
   net.enter();

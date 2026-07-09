@@ -922,6 +922,7 @@ const net = connect(
       if (!marketPanel.hidden) renderMarket();
       updateMarketTimer();
       renderStability(msg.stability);
+      worldMod?.feedMarket();
     } else if (msg.type === 'spinResult') {
       celebrateSpin(msg.reward, msg.segment);
     } else if (msg.type === 'rouletteResult') {
@@ -1021,6 +1022,7 @@ function refreshWallet() {
   renderShop();
   worldMod?.feedWallet(); // re-render World's in-World shop dialog too, if it's open
   if (!marketPanel.hidden) renderMarket(); // coin balance gates the Invest buttons
+  worldMod?.feedMarket(); // same, for World's market dialog
   if (!loanPanel.hidden && loan) renderLoan(); // balance gates the Pay button
 }
 
@@ -2308,7 +2310,6 @@ const WORLD_DELEGATE_CHECK: Record<string, () => boolean> = {
   mines: panelOpenCheck('minesPanel'),
   lootbox: panelOpenCheck('lootPanel'),
   blackmarket: panelOpenCheck('marketplacePanel'),
-  stocks: panelOpenCheck('marketPanel'),
   doom: overlayPresentCheck('doomOverlay'),
   fishing: overlayPresentCheck('fishingOverlay'),
   campaign: overlayPresentCheck('campaignOverlay'),
@@ -2398,6 +2399,11 @@ worldBtn.addEventListener('click', async () => {
       bondBuy: (amount, termDays) => net.send({ type: 'bondBuy', amount, termDays }),
       bondWithdraw: (id) => net.send({ type: 'bondWithdraw', id }),
       auctionBid: (amount) => net.send({ type: 'auctionBid', amount }),
+      // Crypto Market — also a native World dialog now (see world.ts's openMarket()). The sell/
+      // cover modal is reused as-is: it's already a document.body-level overlay above everything.
+      market: () => market,
+      stockInvest: (coin, amount, side) => { net.send({ type: 'stockInvest', coin, amount, side }); playChaChing(); },
+      openSellModal: (coinId, ticker, side) => openSellModal(coinId, ticker, side),
       onExit: () => worldBtn.setAttribute('aria-pressed', 'false'),
       // Walk into the Arena → hop into the play queue (you'll be seated when a spot opens).
       enterArena: () => net.send({ type: 'queueJoin' }),
@@ -2453,7 +2459,6 @@ worldBtn.addEventListener('click', async () => {
                  : feature === 'horse'      ? 'horseBtn'
                  : feature === 'hilo'       ? 'hiloBtn'
                  : feature === 'mines'      ? 'minesBtn'
-                 : feature === 'stocks'     ? 'marketBtn'
                  : feature === 'lootbox'    ? 'lootBtn'
                  : feature === 'blackmarket' ? 'marketplaceBtn'
                  : feature === 'tourney'    ? 'tourneyBtn'
