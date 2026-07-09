@@ -927,10 +927,13 @@ const net = connect(
       celebrateSpin(msg.reward, msg.segment);
     } else if (msg.type === 'rouletteResult') {
       rouletteHandle.onResult(msg);
+      worldMod?.feedRouletteResult(msg);
     } else if (msg.type === 'bjState') {
       bjHandle.onState(msg);
+      worldMod?.feedBjState(msg);
     } else if (msg.type === 'bjResult') {
       bjHandle.onResult(msg);
+      worldMod?.feedBjResult(msg);
     } else if (msg.type === 'crapsResult') {
       crapsHandle.onResult(msg);
       worldMod?.feedCrapsResult(msg);
@@ -939,20 +942,28 @@ const net = connect(
       worldMod?.feedSlotsResult(msg);
     } else if (msg.type === 'plinkoResult') {
       plinkoHandle.onResult(msg);
+      worldMod?.feedPlinkoResult(msg);
     } else if (msg.type === 'horseCard') {
       horseHandle.onCard(msg);
+      worldMod?.feedHorseCard(msg);
     } else if (msg.type === 'horseResult') {
       horseHandle.onResult(msg);
+      worldMod?.feedHorseResult(msg);
     } else if (msg.type === 'hiloState') {
       hiloHandle.onState(msg);
+      worldMod?.feedHiloState(msg);
     } else if (msg.type === 'hiloResult') {
       hiloHandle.onResult(msg);
+      worldMod?.feedHiloResult(msg);
     } else if (msg.type === 'minesState') {
       minesHandle.onState(msg);
+      worldMod?.feedMinesState(msg);
     } else if (msg.type === 'minesResult') {
       minesHandle.onResult(msg);
+      worldMod?.feedMinesResult(msg);
     } else if (msg.type === 'crashState') {
       crashHandle.onState(msg);
+      worldMod?.feedCrashState(msg);
     } else if (msg.type === 'loan') {
       loan = msg.loan;
       // Taking/repaying resets the conversation; collecting (loan→null) drops back to the intro.
@@ -2301,13 +2312,6 @@ function overlayVisibleCheck(selector: string): () => boolean {
   };
 }
 const WORLD_DELEGATE_CHECK: Record<string, () => boolean> = {
-  roulette: panelOpenCheck('roulettePanel'),
-  blackjack: panelOpenCheck('bjPanel'),
-  crash: panelOpenCheck('crashPanel'),
-  plinko: panelOpenCheck('plinkoPanel'),
-  horse: panelOpenCheck('horsePanel'),
-  hilo: panelOpenCheck('hiloPanel'),
-  mines: panelOpenCheck('minesPanel'),
   lootbox: panelOpenCheck('lootPanel'),
   blackmarket: panelOpenCheck('marketplacePanel'),
   doom: overlayPresentCheck('doomOverlay'),
@@ -2409,6 +2413,28 @@ worldBtn.addEventListener('click', async () => {
       playSound: (sound) => (sound === 'win' ? playYay() : playChaChing()),
       // Craps — same reasoning as Slots (client/craps.ts is a self-contained module).
       crapsRoll: (pass, dontPass) => net.send({ type: 'crapsRoll', pass, dontPass }),
+      // Blackjack — same reasoning (client/blackjack.ts).
+      bjBet: (amount) => net.send({ type: 'bjBet', amount }),
+      bjAction: (action) => net.send({ type: 'bjAction', action }),
+      // Hi-Lo — same reasoning (client/hilo.ts).
+      hiloBet: (amount) => net.send({ type: 'hiloBet', amount }),
+      hiloGuess: (guess) => net.send({ type: 'hiloGuess', guess }),
+      hiloCashout: () => net.send({ type: 'hiloCashout' }),
+      // Mines — same reasoning (client/mines.ts).
+      minesBet: (amount, mines) => net.send({ type: 'minesBet', amount, mines }),
+      minesReveal: (cell) => net.send({ type: 'minesReveal', cell }),
+      minesCashout: () => net.send({ type: 'minesCashout' }),
+      // Horse Racing — same reasoning (client/horse.ts).
+      horseReq: () => net.send({ type: 'horseReq' }),
+      horseBet: (horse, amount) => net.send({ type: 'horseBet', horse, amount }),
+      // Crash — same reasoning (client/crash.ts).
+      crashBet: (amount, autoCashout) => net.send({ type: 'crashBet', amount, ...(autoCashout ? { autoCashout } : {}) }),
+      crashCancelBet: () => net.send({ type: 'crashCancelBet' }),
+      crashCashout: () => net.send({ type: 'crashCashout' }),
+      // Roulette — same reasoning (client/roulette.ts).
+      rouletteSpin: (bets) => net.send({ type: 'roulette', bets }),
+      // Plinko — same reasoning (client/plinko.ts).
+      plinkoDrop: (amount) => net.send({ type: 'plinko', amount }),
       onExit: () => worldBtn.setAttribute('aria-pressed', 'false'),
       // Walk into the Arena → hop into the play queue (you'll be seated when a spot opens).
       enterArena: () => net.send({ type: 'queueJoin' }),
@@ -2455,14 +2481,7 @@ worldBtn.addEventListener('click', async () => {
           setTimeout(() => btn?.click(), 0);
           return;
         }
-        const id = feature === 'roulette'    ? 'rouletteBtn'
-                 : feature === 'blackjack'  ? 'bjBtn'
-                 : feature === 'crash'      ? 'crashBtn'
-                 : feature === 'plinko'     ? 'plinkoBtn'
-                 : feature === 'horse'      ? 'horseBtn'
-                 : feature === 'hilo'       ? 'hiloBtn'
-                 : feature === 'mines'      ? 'minesBtn'
-                 : feature === 'lootbox'    ? 'lootBtn'
+        const id = feature === 'lootbox'    ? 'lootBtn'
                  : feature === 'blackmarket' ? 'marketplaceBtn'
                  : feature === 'tourney'    ? 'tourneyBtn'
                  : feature === 'season'     ? 'seasonBtn'

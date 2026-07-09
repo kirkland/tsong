@@ -69,6 +69,25 @@ import {
   SLOTS_SYMBOLS,
   SLOTS_PAYOUTS,
   type CrapsResultMsg,
+  type BjStateMsg,
+  type BjResultMsg,
+  type HiLoStateMsg,
+  type HiLoResultMsg,
+  type MinesStateMsg,
+  type MinesResultMsg,
+  MINES_GRID,
+  type HorseCardMsg,
+  type HorseResultMsg,
+  type CrashStateMsg,
+  type RouletteBet,
+  type RouletteBetKind,
+  ROULETTE_RED,
+  ROULETTE_WHEEL,
+  ROULETTE_MAX_TOTAL,
+  minBet,
+  type PlinkoResultMsg,
+  PLINKO_ROWS,
+  PLINKO_PAYOUTS,
 } from '../shared/types';
 import { drawCosmeticPreview } from './render';
 
@@ -152,9 +171,35 @@ export interface WorldNet {
   playSound(sound: 'win' | 'cha'): void;
   // Craps — same reasoning/idiom as Slots above (client/craps.ts is a self-contained module).
   crapsRoll(pass: number, dontPass: number): void;
+  // Blackjack — same reasoning (client/blackjack.ts).
+  bjBet(amount: number): void;
+  bjAction(action: 'hit' | 'stand' | 'double'): void;
+  // Hi-Lo — same reasoning (client/hilo.ts).
+  hiloBet(amount: number): void;
+  hiloGuess(guess: 'hi' | 'lo'): void;
+  hiloCashout(): void;
+  // Mines — same reasoning (client/mines.ts).
+  minesBet(amount: number, mines: number): void;
+  minesReveal(cell: number): void;
+  minesCashout(): void;
+  // Horse Racing — same reasoning (client/horse.ts).
+  horseReq(): void;
+  horseBet(horse: number, amount: number): void;
+  // Crash — same reasoning (client/crash.ts). Unlike the others, crash state is a shared,
+  // always-broadcasting spectacle (server pushes it every 100ms during a live round to every
+  // connected client, not just requesters) — World caches the latest message so opening the
+  // dialog mid-round shows current progress immediately, same as the flat panel does on open.
+  crashBet(amount: number, autoCashout?: number): void;
+  crashCancelBet(): void;
+  crashCashout(): void;
+  // Roulette — same reasoning (client/roulette.ts), the largest of the Casino cabinets (its own
+  // betting board + wheel spin animation).
+  rouletteSpin(bets: RouletteBet[]): void;
+  // Plinko — same reasoning (client/plinko.ts), ports its canvas peg-drop physics directly.
+  plinkoDrop(amount: number): void;
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'roulette' | 'blackjack' | 'crash' | 'plinko' | 'horse' | 'hilo' | 'mines' | 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' |'lootbox' | 'blackmarket' | 'tourney' | 'season' | 'powerups' | 'changelog'): void; // open a Casino/DOOM/Fishing/Arcade/Bowling/Notice-Board feature (Shop/Pet-Shop/News/Loans/House/Market/Slots/Craps are native World dialogs now)
+  openFeature(feature: 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' |'lootbox' | 'blackmarket' | 'tourney' | 'season' | 'powerups' | 'changelog'): void; // open a DOOM/Fishing/Arcade/Bowling/Notice-Board feature — every Casino game is a native World dialog now
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   openRename(): void;            // World's own 👤 button → reopen the nickname/color picker
   muted(): boolean;              // is game sound currently muted?
@@ -225,6 +270,17 @@ interface Controller {
   feedMarket(): void;                                // prices/holdings re-rolled — re-render the market dialog if it's open
   feedSlotsResult(msg: SlotsResultMsg): void;        // a spin settled — animate it if the slots dialog is open
   feedCrapsResult(msg: CrapsResultMsg): void;        // a roll settled — update it if the craps dialog is open
+  feedBjState(msg: BjStateMsg): void;
+  feedBjResult(msg: BjResultMsg): void;
+  feedHiloState(msg: HiLoStateMsg): void;
+  feedHiloResult(msg: HiLoResultMsg): void;
+  feedMinesState(msg: MinesStateMsg): void;
+  feedMinesResult(msg: MinesResultMsg): void;
+  feedHorseCard(msg: HorseCardMsg): void;
+  feedHorseResult(msg: HorseResultMsg): void;
+  feedCrashState(msg: CrashStateMsg): void;
+  feedRouletteResult(msg: { number: number; staked: number; payout: number }): void;
+  feedPlinkoResult(msg: PlinkoResultMsg): void;
 }
 let controller: Controller | null = null;
 let _exitWorld: (() => void) | null = null;
@@ -293,6 +349,17 @@ export function feedSlotsResult(msg: SlotsResultMsg): void {
 export function feedCrapsResult(msg: CrapsResultMsg): void {
   controller?.feedCrapsResult(msg);
 }
+export function feedBjState(msg: BjStateMsg): void { controller?.feedBjState(msg); }
+export function feedBjResult(msg: BjResultMsg): void { controller?.feedBjResult(msg); }
+export function feedHiloState(msg: HiLoStateMsg): void { controller?.feedHiloState(msg); }
+export function feedHiloResult(msg: HiLoResultMsg): void { controller?.feedHiloResult(msg); }
+export function feedMinesState(msg: MinesStateMsg): void { controller?.feedMinesState(msg); }
+export function feedMinesResult(msg: MinesResultMsg): void { controller?.feedMinesResult(msg); }
+export function feedHorseCard(msg: HorseCardMsg): void { controller?.feedHorseCard(msg); }
+export function feedHorseResult(msg: HorseResultMsg): void { controller?.feedHorseResult(msg); }
+export function feedCrashState(msg: CrashStateMsg): void { controller?.feedCrashState(msg); }
+export function feedRouletteResult(msg: { number: number; staked: number; payout: number }): void { controller?.feedRouletteResult(msg); }
+export function feedPlinkoResult(msg: PlinkoResultMsg): void { controller?.feedPlinkoResult(msg); }
 
 /** The server accepted a chest open (added the coins to the run purse / granted the potion). */
 export function dungeonChestAccepted(chest: string, coins: number, potions: number, spin?: boolean, prize?: string, prizes?: string[]): void {
@@ -1912,6 +1979,13 @@ export function startWorld(net: WorldNet): void {
   let marketDialogOpen = false; // the in-World Crypto Market is up — gates its per-frame tax-badge refresh
   let slotsDialogOpen = false; // the in-World Slots cabinet is up — gates its spin-result animation
   let crapsDialogOpen = false; // the in-World Craps cabinet is up — gates its roll-result update
+  let bjDialogOpen = false; // the in-World Blackjack cabinet is up
+  let hiloDialogOpen = false; // the in-World Hi-Lo cabinet is up
+  let minesDialogOpen = false; // the in-World Mines cabinet is up
+  let horseDialogOpen = false; // the in-World Horse Racing cabinet is up
+  let crashDialogOpen = false; // the in-World Crash cabinet is up — gates re-rendering, NOT the state cache (crashLastMsg is kept live regardless, so opening mid-round shows current progress)
+  let rouletteDialogOpen = false; // the in-World Roulette cabinet is up
+  let plinkoDialogOpen = false; // the in-World Plinko cabinet is up
   let nearId: string | null = null; // building the avatar is currently at the door of
   // True while a Casino/Bank/Shop/arcade feature has been delegated to the main page (or a
   // lazy-loaded minigame overlay) — World stays alive underneath (paused, hidden) instead of
@@ -4297,6 +4371,13 @@ export function startWorld(net: WorldNet): void {
     marketDialogOpen = false;
     slotsDialogOpen = false;
     crapsDialogOpen = false;
+    bjDialogOpen = false;
+    hiloDialogOpen = false;
+    minesDialogOpen = false;
+    horseDialogOpen = false;
+    crashDialogOpen = false;
+    rouletteDialogOpen = false;
+    plinkoDialogOpen = false;
     dialog.style.display = 'none';
   }
 
@@ -5419,6 +5500,1597 @@ export function startWorld(net: WorldNet): void {
         : `↩️ ${msg.total} — no count. Point still ${crapsPoint}. Keep rolling.`;
       resultEl.style.color = '#9fb0d8';
     }
+  }
+
+  // Shared header builder for the remaining Casino cabinets below — title + live coin balance,
+  // matching each flat panel's own coin readout in its header.
+  function casinoDialogHeader(title: string, coinsId: string) {
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px;';
+    const h = document.createElement('div');
+    h.textContent = title;
+    h.style.cssText = 'font-size:22px;color:#e8eefc;';
+    const coins = document.createElement('div');
+    coins.id = coinsId;
+    coins.textContent = `${Math.round(net.wallet().coins).toLocaleString()}🪙`;
+    coins.style.cssText = 'font-size:15px;color:#ffd23f;font-weight:700;';
+    header.append(h, coins);
+    return header;
+  }
+  function casinoRefreshCoins(coinsId: string) {
+    const el = dialogBox.querySelector<HTMLDivElement>(`#${coinsId}`);
+    if (el) el.textContent = `${Math.round(net.wallet().coins).toLocaleString()}🪙`;
+  }
+
+  // --- Blackjack — same idiom as Slots/Craps above (client/blackjack.ts is a self-contained module). ---
+  function bjCardHtml(card: string, faceDown = false): string {
+    if (faceDown) return '<div style="display:inline-block;width:38px;height:54px;border-radius:5px;background:#1c2747;border:1px solid #38508f;margin:2px;text-align:center;line-height:54px;font-size:20px;">🂠</div>';
+    const r = card[0];
+    const rank = r === 'T' ? '10' : r;
+    const suit = card[1];
+    const sym = ({ S: '♠', H: '♥', D: '♦', C: '♣' } as Record<string, string>)[suit] ?? suit;
+    const red = suit === 'H' || suit === 'D';
+    return `<div style="display:inline-block;width:38px;height:54px;border-radius:5px;background:#f5f0e6;border:1px solid #ccc;margin:2px;text-align:center;line-height:1.1;padding-top:4px;font-weight:800;font-size:15px;color:${red ? '#c0392b' : '#1a1a2e'};">${rank}<br><span style="font-size:16px;">${sym}</span></div>`;
+  }
+  function bjRenderCards(el: HTMLDivElement, cards: string[], hideSecond = false) {
+    el.innerHTML = cards.map((c, i) => bjCardHtml(c, hideSecond && i === 1)).join('');
+  }
+  // Called from within the Casino's already-open cabinet dialog — no re-entry guard needed.
+  function openBj() {
+    dialogOpen = true;
+    bjDialogOpen = true;
+    keys.clear(); joyActive = false;
+    renderBjDialog();
+    dialog.style.display = 'flex';
+  }
+  function renderBjDialog() {
+    dialogBox.replaceChildren();
+    dialogBox.appendChild(casinoDialogHeader('🃏 Blackjack', 'bjWorldCoins'));
+
+    const dealerLabel = document.createElement('div');
+    dealerLabel.textContent = 'Dealer';
+    dealerLabel.style.cssText = 'font-size:11px;color:#7da2ff;text-align:center;margin-bottom:4px;';
+    dialogBox.appendChild(dealerLabel);
+    const dealerArea = document.createElement('div');
+    dealerArea.id = 'bjWorldDealer';
+    dealerArea.style.cssText = 'text-align:center;margin-bottom:10px;min-height:58px;';
+    dialogBox.appendChild(dealerArea);
+
+    const statusEl = document.createElement('div');
+    statusEl.id = 'bjWorldStatus';
+    statusEl.style.cssText = 'text-align:center;font-size:12px;color:#9fb0d8;margin-bottom:6px;';
+    dialogBox.appendChild(statusEl);
+
+    const playerLabel = document.createElement('div');
+    playerLabel.textContent = 'You';
+    playerLabel.style.cssText = 'font-size:11px;color:#7da2ff;text-align:center;margin-bottom:4px;';
+    dialogBox.appendChild(playerLabel);
+    const playerArea = document.createElement('div');
+    playerArea.id = 'bjWorldPlayer';
+    playerArea.style.cssText = 'text-align:center;margin-bottom:10px;min-height:58px;';
+    dialogBox.appendChild(playerArea);
+
+    const resultEl = document.createElement('div');
+    resultEl.id = 'bjWorldResult';
+    resultEl.style.cssText = 'text-align:center;font-size:13px;min-height:18px;margin-bottom:8px;color:#9fb0d8;';
+    dialogBox.appendChild(resultEl);
+
+    const betRow = document.createElement('div');
+    betRow.style.cssText = 'display:flex;gap:8px;align-items:center;justify-content:center;margin-bottom:8px;';
+    const betInput = document.createElement('input');
+    betInput.id = 'bjWorldBet';
+    betInput.type = 'number'; betInput.min = '1'; betInput.step = '1'; betInput.value = String(minBet(net.wallet().coins));
+    betInput.style.cssText = 'width:80px;text-align:center;background:#0c1330;color:#e8eefc;border:1px solid #38508f;border-radius:8px;padding:6px;';
+    const dealBtn = document.createElement('button');
+    dealBtn.id = 'bjWorldDeal';
+    dealBtn.type = 'button';
+    dealBtn.textContent = 'Deal';
+    dealBtn.style.cssText = 'cursor:pointer;padding:8px 18px;border-radius:10px;font-weight:700;background:#3a5aa8;color:#fff;border:1px solid #5a7ac8;';
+    dealBtn.onclick = bjDoDeal;
+    betRow.append(betInput, dealBtn);
+    dialogBox.appendChild(betRow);
+
+    const actionRow = document.createElement('div');
+    actionRow.style.cssText = 'display:flex;gap:8px;justify-content:center;margin-bottom:10px;';
+    const btnStyle = 'cursor:pointer;padding:8px 14px;border-radius:8px;font-weight:700;background:#21305a;color:#e8eefc;border:1px solid #38508f;';
+    const hitBtn = document.createElement('button');
+    hitBtn.id = 'bjWorldHit'; hitBtn.type = 'button'; hitBtn.textContent = 'Hit';
+    hitBtn.disabled = true;
+    hitBtn.style.cssText = btnStyle;
+    hitBtn.onclick = () => net.bjAction('hit');
+    const standBtn = document.createElement('button');
+    standBtn.id = 'bjWorldStand'; standBtn.type = 'button'; standBtn.textContent = 'Stand';
+    standBtn.disabled = true;
+    standBtn.style.cssText = btnStyle;
+    standBtn.onclick = () => net.bjAction('stand');
+    const doubleBtn = document.createElement('button');
+    doubleBtn.id = 'bjWorldDouble'; doubleBtn.type = 'button'; doubleBtn.textContent = 'Double';
+    doubleBtn.disabled = true;
+    doubleBtn.style.cssText = btnStyle;
+    doubleBtn.onclick = () => net.bjAction('double');
+    actionRow.append(hitBtn, standBtn, doubleBtn);
+    dialogBox.appendChild(actionRow);
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+  }
+  function bjSetActionBtns(playing: boolean, canDouble = false) {
+    const hitBtn = dialogBox.querySelector<HTMLButtonElement>('#bjWorldHit');
+    const standBtn = dialogBox.querySelector<HTMLButtonElement>('#bjWorldStand');
+    const doubleBtn = dialogBox.querySelector<HTMLButtonElement>('#bjWorldDouble');
+    const dealBtn = dialogBox.querySelector<HTMLButtonElement>('#bjWorldDeal');
+    const betInput = dialogBox.querySelector<HTMLInputElement>('#bjWorldBet');
+    if (hitBtn) hitBtn.disabled = !playing;
+    if (standBtn) standBtn.disabled = !playing;
+    if (doubleBtn) doubleBtn.disabled = !playing || !canDouble;
+    if (dealBtn) dealBtn.disabled = playing;
+    if (betInput) betInput.disabled = playing;
+  }
+  function bjDoDeal() {
+    const betInput = dialogBox.querySelector<HTMLInputElement>('#bjWorldBet');
+    const resultEl = dialogBox.querySelector<HTMLDivElement>('#bjWorldResult');
+    const statusEl = dialogBox.querySelector<HTMLDivElement>('#bjWorldStatus');
+    const playerArea = dialogBox.querySelector<HTMLDivElement>('#bjWorldPlayer');
+    const dealerArea = dialogBox.querySelector<HTMLDivElement>('#bjWorldDealer');
+    if (!betInput || !resultEl || !statusEl || !playerArea || !dealerArea) return;
+    const min = minBet(net.wallet().coins);
+    const amount = Math.max(min, Math.floor(Number(betInput.value)));
+    resultEl.textContent = '';
+    statusEl.textContent = '';
+    playerArea.innerHTML = '';
+    dealerArea.innerHTML = '';
+    net.bjBet(amount);
+  }
+  // Called by feedBjState()/feedBjResult() (see Controller impl below).
+  function bjApplyState(msg: BjStateMsg) {
+    const playerArea = dialogBox.querySelector<HTMLDivElement>('#bjWorldPlayer');
+    const dealerArea = dialogBox.querySelector<HTMLDivElement>('#bjWorldDealer');
+    const statusEl = dialogBox.querySelector<HTMLDivElement>('#bjWorldStatus');
+    const resultEl = dialogBox.querySelector<HTMLDivElement>('#bjWorldResult');
+    if (!playerArea || !dealerArea || !statusEl || !resultEl) return;
+    bjRenderCards(playerArea, msg.playerCards);
+    dealerArea.innerHTML = bjCardHtml(msg.dealerCard) + bjCardHtml('', true);
+    statusEl.textContent = `Your total: ${msg.playerTotal}`;
+    bjSetActionBtns(true, msg.canDouble);
+    resultEl.textContent = '';
+    casinoRefreshCoins('bjWorldCoins');
+  }
+  function bjApplyResult(msg: BjResultMsg) {
+    const playerArea = dialogBox.querySelector<HTMLDivElement>('#bjWorldPlayer');
+    const dealerArea = dialogBox.querySelector<HTMLDivElement>('#bjWorldDealer');
+    const statusEl = dialogBox.querySelector<HTMLDivElement>('#bjWorldStatus');
+    const resultEl = dialogBox.querySelector<HTMLDivElement>('#bjWorldResult');
+    if (!playerArea || !dealerArea || !statusEl || !resultEl) return;
+    bjRenderCards(playerArea, msg.playerCards);
+    bjRenderCards(dealerArea, msg.dealerCards);
+    statusEl.textContent = `You: ${msg.playerTotal} · Dealer: ${msg.dealerTotal}`;
+    bjSetActionBtns(false);
+    const netAmt = msg.payout - msg.bet;
+    if (msg.outcome === 'blackjack') {
+      resultEl.textContent = `🃏 BLACKJACK! +${netAmt}🪙`;
+      resultEl.style.color = '#6ee7a8';
+      net.playSound('win');
+    } else if (msg.outcome === 'win') {
+      resultEl.textContent = `✅ WIN +${netAmt}🪙`;
+      resultEl.style.color = '#6ee7a8';
+      net.playSound('win');
+    } else if (msg.outcome === 'push') {
+      resultEl.textContent = '🤝 Push — bet returned';
+      resultEl.style.color = '#9fb0d8';
+    } else {
+      resultEl.textContent = `❌ Bust / Lose −${msg.bet}🪙`;
+      resultEl.style.color = '#ff7a7a';
+    }
+    casinoRefreshCoins('bjWorldCoins');
+  }
+
+  // --- Hi-Lo — same idiom (client/hilo.ts). ---
+  const HILO_RANKS = ['A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+  const HILO_SUITS = ['♠', '♥', '♦', '♣'];
+  function hiloRankLabel(card: number): string { return HILO_RANKS[card - 1] ?? String(card); }
+  function hiloSuitFor(card: number): string { return HILO_SUITS[(card - 1) % HILO_SUITS.length]; }
+  function hiloSuitColor(card: number): string { const s = hiloSuitFor(card); return s === '♥' || s === '♦' ? '#c0392b' : '#1a1a2e'; }
+  function hiloRenderCard(el: HTMLDivElement, card: number) {
+    if (!card) { el.innerHTML = '<div style="display:inline-block;width:70px;height:100px;border-radius:8px;background:#1c2747;border:1px solid #38508f;line-height:100px;font-size:32px;color:#9fb0d8;">?</div>'; return; }
+    const rank = hiloRankLabel(card), suit = hiloSuitFor(card), color = hiloSuitColor(card);
+    el.innerHTML = `<div style="display:inline-block;width:70px;height:100px;border-radius:8px;background:#f5f0e6;border:1px solid #ccc;padding-top:8px;color:${color};font-weight:800;"><div style="font-size:15px;">${rank}<br>${suit}</div><div style="font-size:28px;margin-top:6px;">${suit}</div></div>`;
+  }
+  let hiloInGame = false;
+  function openHilo() {
+    dialogOpen = true;
+    hiloDialogOpen = true;
+    hiloInGame = false;
+    keys.clear(); joyActive = false;
+    renderHiloDialog();
+    dialog.style.display = 'flex';
+  }
+  function renderHiloDialog() {
+    dialogBox.replaceChildren();
+    dialogBox.appendChild(casinoDialogHeader('🃏 Hi-Lo', 'hiloWorldCoins'));
+
+    const cardEl = document.createElement('div');
+    cardEl.id = 'hiloWorldCard';
+    cardEl.style.cssText = 'text-align:center;margin-bottom:10px;';
+    dialogBox.appendChild(cardEl);
+
+    const statsRow = document.createElement('div');
+    statsRow.style.cssText = 'display:flex;justify-content:center;gap:16px;font-size:12px;color:#9fb0d8;margin-bottom:8px;';
+    statsRow.innerHTML = '<span>Multiplier: <b id="hiloWorldMult" style="color:#ffd23f;">1.00×</b></span><span>Pending: <b id="hiloWorldPending" style="color:#ffd23f;">0</b>🪙</span>';
+    dialogBox.appendChild(statsRow);
+
+    const resultEl = document.createElement('div');
+    resultEl.id = 'hiloWorldResult';
+    resultEl.style.cssText = 'text-align:center;font-size:13px;min-height:18px;margin-bottom:8px;color:#9fb0d8;';
+    dialogBox.appendChild(resultEl);
+
+    const betRow = document.createElement('div');
+    betRow.style.cssText = 'display:flex;gap:8px;align-items:center;justify-content:center;margin-bottom:8px;';
+    const betInput = document.createElement('input');
+    betInput.id = 'hiloWorldBet';
+    betInput.type = 'number'; betInput.min = '1'; betInput.step = '1'; betInput.value = '10';
+    betInput.style.cssText = 'width:80px;text-align:center;background:#0c1330;color:#e8eefc;border:1px solid #38508f;border-radius:8px;padding:6px;';
+    const dealBtn = document.createElement('button');
+    dealBtn.id = 'hiloWorldDeal';
+    dealBtn.type = 'button'; dealBtn.textContent = 'Deal';
+    dealBtn.style.cssText = 'cursor:pointer;padding:8px 18px;border-radius:10px;font-weight:700;background:#3a5aa8;color:#fff;border:1px solid #5a7ac8;';
+    dealBtn.onclick = hiloDoDeal;
+    betRow.append(betInput, dealBtn);
+    dialogBox.appendChild(betRow);
+
+    const gameRow = document.createElement('div');
+    gameRow.style.cssText = 'display:flex;gap:8px;justify-content:center;margin-bottom:10px;';
+    const gameBtnStyle = 'cursor:pointer;padding:8px 12px;border-radius:8px;font-weight:700;background:#21305a;color:#e8eefc;border:1px solid #38508f;';
+    const hiBtn = document.createElement('button');
+    hiBtn.id = 'hiloWorldHi'; hiBtn.type = 'button'; hiBtn.textContent = '▲ Higher'; hiBtn.hidden = true;
+    hiBtn.style.cssText = gameBtnStyle;
+    hiBtn.onclick = () => hiloDoGuess('hi');
+    const loBtn = document.createElement('button');
+    loBtn.id = 'hiloWorldLo'; loBtn.type = 'button'; loBtn.textContent = '▼ Lower'; loBtn.hidden = true;
+    loBtn.style.cssText = gameBtnStyle;
+    loBtn.onclick = () => hiloDoGuess('lo');
+    const cashoutBtn = document.createElement('button');
+    cashoutBtn.id = 'hiloWorldCashout'; cashoutBtn.type = 'button'; cashoutBtn.textContent = '💰 Cash Out'; cashoutBtn.hidden = true;
+    cashoutBtn.style.cssText = gameBtnStyle;
+    cashoutBtn.onclick = hiloDoCashout;
+    const newGameBtn = document.createElement('button');
+    newGameBtn.id = 'hiloWorldNewGame'; newGameBtn.type = 'button'; newGameBtn.textContent = 'New Game'; newGameBtn.hidden = true;
+    newGameBtn.style.cssText = gameBtnStyle;
+    newGameBtn.onclick = hiloResetUI;
+    gameRow.append(hiBtn, loBtn, cashoutBtn, newGameBtn);
+    dialogBox.appendChild(gameRow);
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+
+    hiloResetUI();
+  }
+  function hiloSetGameButtons(active: boolean, card: number) {
+    const dealBtn = dialogBox.querySelector<HTMLButtonElement>('#hiloWorldDeal');
+    const betInput = dialogBox.querySelector<HTMLInputElement>('#hiloWorldBet');
+    const hiBtn = dialogBox.querySelector<HTMLButtonElement>('#hiloWorldHi');
+    const loBtn = dialogBox.querySelector<HTMLButtonElement>('#hiloWorldLo');
+    const cashoutBtn = dialogBox.querySelector<HTMLButtonElement>('#hiloWorldCashout');
+    const newGameBtn = dialogBox.querySelector<HTMLButtonElement>('#hiloWorldNewGame');
+    if (dealBtn) dealBtn.disabled = active;
+    if (betInput) betInput.disabled = active;
+    if (hiBtn) hiBtn.hidden = !active;
+    if (loBtn) loBtn.hidden = !active;
+    if (cashoutBtn) cashoutBtn.hidden = !active;
+    if (newGameBtn) newGameBtn.hidden = active;
+    if (active) {
+      if (hiBtn) hiBtn.disabled = card >= 13;
+      if (loBtn) loBtn.disabled = card <= 1;
+    }
+  }
+  function hiloResetUI() {
+    hiloInGame = false;
+    const cardEl = dialogBox.querySelector<HTMLDivElement>('#hiloWorldCard');
+    const multEl = dialogBox.querySelector<HTMLElement>('#hiloWorldMult');
+    const pendingEl = dialogBox.querySelector<HTMLElement>('#hiloWorldPending');
+    const resultEl = dialogBox.querySelector<HTMLDivElement>('#hiloWorldResult');
+    if (cardEl) hiloRenderCard(cardEl, 0);
+    if (multEl) multEl.textContent = '1.00×';
+    if (pendingEl) pendingEl.textContent = '0';
+    if (resultEl) resultEl.textContent = '';
+    hiloSetGameButtons(false, 0);
+  }
+  function hiloDoDeal() {
+    const betInput = dialogBox.querySelector<HTMLInputElement>('#hiloWorldBet');
+    const resultEl = dialogBox.querySelector<HTMLDivElement>('#hiloWorldResult');
+    const dealBtn = dialogBox.querySelector<HTMLButtonElement>('#hiloWorldDeal');
+    if (!betInput || !resultEl || !dealBtn) return;
+    const amount = Math.max(1, Math.floor(Number(betInput.value)));
+    resultEl.textContent = '';
+    dealBtn.disabled = true;
+    net.hiloBet(amount);
+  }
+  function hiloDoGuess(guess: 'hi' | 'lo') {
+    if (!hiloInGame) return;
+    const hiBtn = dialogBox.querySelector<HTMLButtonElement>('#hiloWorldHi');
+    const loBtn = dialogBox.querySelector<HTMLButtonElement>('#hiloWorldLo');
+    const cashoutBtn = dialogBox.querySelector<HTMLButtonElement>('#hiloWorldCashout');
+    if (hiBtn) hiBtn.disabled = true;
+    if (loBtn) loBtn.disabled = true;
+    if (cashoutBtn) cashoutBtn.disabled = true;
+    net.hiloGuess(guess);
+  }
+  function hiloDoCashout() {
+    if (!hiloInGame) return;
+    const hiBtn = dialogBox.querySelector<HTMLButtonElement>('#hiloWorldHi');
+    const loBtn = dialogBox.querySelector<HTMLButtonElement>('#hiloWorldLo');
+    const cashoutBtn = dialogBox.querySelector<HTMLButtonElement>('#hiloWorldCashout');
+    if (hiBtn) hiBtn.disabled = true;
+    if (loBtn) loBtn.disabled = true;
+    if (cashoutBtn) cashoutBtn.disabled = true;
+    net.hiloCashout();
+  }
+  function hiloApplyState(msg: HiLoStateMsg) {
+    hiloInGame = true;
+    const cardEl = dialogBox.querySelector<HTMLDivElement>('#hiloWorldCard');
+    const multEl = dialogBox.querySelector<HTMLElement>('#hiloWorldMult');
+    const pendingEl = dialogBox.querySelector<HTMLElement>('#hiloWorldPending');
+    const resultEl = dialogBox.querySelector<HTMLDivElement>('#hiloWorldResult');
+    const cashoutBtn = dialogBox.querySelector<HTMLButtonElement>('#hiloWorldCashout');
+    if (cardEl) hiloRenderCard(cardEl, msg.card);
+    if (multEl) multEl.textContent = msg.multiplier.toFixed(2) + '×';
+    if (pendingEl) pendingEl.textContent = String(msg.pendingPayout);
+    if (resultEl) resultEl.textContent = '';
+    hiloSetGameButtons(true, msg.card);
+    if (cashoutBtn) cashoutBtn.disabled = msg.pendingPayout === 0;
+    casinoRefreshCoins('hiloWorldCoins');
+  }
+  function hiloApplyResult(msg: HiLoResultMsg) {
+    hiloInGame = false;
+    const cardEl = dialogBox.querySelector<HTMLDivElement>('#hiloWorldCard');
+    const multEl = dialogBox.querySelector<HTMLElement>('#hiloWorldMult');
+    const pendingEl = dialogBox.querySelector<HTMLElement>('#hiloWorldPending');
+    const resultEl = dialogBox.querySelector<HTMLDivElement>('#hiloWorldResult');
+    const newGameBtn = dialogBox.querySelector<HTMLButtonElement>('#hiloWorldNewGame');
+    if (cardEl) hiloRenderCard(cardEl, msg.newCard);
+    hiloSetGameButtons(false, msg.newCard);
+    if (newGameBtn) newGameBtn.hidden = false;
+    if (resultEl) {
+      if (msg.won) {
+        resultEl.textContent = `💰 Cashed out! +${msg.net}🪙 net`;
+        resultEl.style.color = '#6ee7a8';
+        net.playSound('win');
+      } else {
+        resultEl.textContent = `💀 Busted! Lost ${Math.abs(msg.net)}🪙`;
+        resultEl.style.color = '#ff7a7a';
+      }
+    }
+    if (multEl) multEl.textContent = '1.00×';
+    if (pendingEl) pendingEl.textContent = '0';
+    casinoRefreshCoins('hiloWorldCoins');
+  }
+
+  // --- Mines — same idiom (client/mines.ts). ---
+  let minesPlaying = false;
+  let minesLastState: MinesStateMsg | null = null;
+  function openMines() {
+    dialogOpen = true;
+    minesDialogOpen = true;
+    minesPlaying = false;
+    minesLastState = null;
+    keys.clear(); joyActive = false;
+    renderMinesDialog();
+    dialog.style.display = 'flex';
+  }
+  function renderMinesDialog() {
+    dialogBox.replaceChildren();
+    dialogBox.appendChild(casinoDialogHeader('💣 Mines', 'minesWorldCoins'));
+
+    const setupRow = document.createElement('div');
+    setupRow.style.cssText = 'display:flex;gap:8px;align-items:center;justify-content:center;margin-bottom:8px;';
+    const betInput = document.createElement('input');
+    betInput.id = 'minesWorldBet';
+    betInput.type = 'number'; betInput.min = '1'; betInput.step = '1'; betInput.value = '10';
+    betInput.style.cssText = 'width:70px;text-align:center;background:#0c1330;color:#e8eefc;border:1px solid #38508f;border-radius:8px;padding:6px;';
+    const minesSel = document.createElement('select');
+    minesSel.id = 'minesWorldCount';
+    minesSel.style.cssText = 'background:#0c1330;color:#e8eefc;border:1px solid #38508f;border-radius:8px;padding:6px;';
+    for (const n of [1, 3, 5, 10, 24]) {
+      const opt = document.createElement('option');
+      opt.value = String(n); opt.textContent = `${n} 💣`;
+      minesSel.appendChild(opt);
+    }
+    const startBtn = document.createElement('button');
+    startBtn.id = 'minesWorldStart';
+    startBtn.type = 'button'; startBtn.textContent = 'Start';
+    startBtn.style.cssText = 'cursor:pointer;padding:8px 16px;border-radius:10px;font-weight:700;background:#3a5aa8;color:#fff;border:1px solid #5a7ac8;';
+    startBtn.onclick = minesDoStart;
+    setupRow.append(betInput, minesSel, startBtn);
+    dialogBox.appendChild(setupRow);
+
+    const statsRow = document.createElement('div');
+    statsRow.style.cssText = 'display:flex;justify-content:center;gap:16px;font-size:12px;color:#9fb0d8;margin-bottom:8px;min-height:16px;';
+    statsRow.innerHTML = '<span id="minesWorldMult" style="color:#ffd23f;font-weight:700;"></span><span id="minesWorldPayout" style="color:#ffd23f;"></span>';
+    dialogBox.appendChild(statsRow);
+
+    const grid = document.createElement('div');
+    grid.id = 'minesWorldGrid';
+    grid.style.cssText = 'display:grid;grid-template-columns:repeat(5,1fr);gap:5px;max-width:260px;margin:0 auto 10px;';
+    for (let i = 0; i < MINES_GRID; i++) {
+      const t = document.createElement('button');
+      t.type = 'button';
+      t.className = 'mines-world-tile';
+      t.dataset.cell = String(i);
+      t.disabled = true;
+      t.style.cssText = 'width:46px;height:46px;border-radius:6px;background:#1c2747;border:1px solid #38508f;font-size:18px;cursor:pointer;color:#e8eefc;';
+      t.onclick = () => minesDoReveal(i);
+      grid.appendChild(t);
+    }
+    dialogBox.appendChild(grid);
+
+    const cashoutBtn = document.createElement('button');
+    cashoutBtn.id = 'minesWorldCashout';
+    cashoutBtn.type = 'button'; cashoutBtn.textContent = '💰 Cash Out';
+    cashoutBtn.disabled = true;
+    cashoutBtn.style.cssText = 'display:block;width:100%;cursor:pointer;padding:10px;border-radius:10px;font-weight:700;background:#21305a;color:#e8eefc;border:1px solid #38508f;margin-bottom:8px;';
+    cashoutBtn.onclick = minesDoCashout;
+    dialogBox.appendChild(cashoutBtn);
+
+    const resultEl = document.createElement('div');
+    resultEl.id = 'minesWorldResult';
+    resultEl.style.cssText = 'text-align:center;font-size:13px;min-height:18px;margin-bottom:8px;color:#9fb0d8;';
+    dialogBox.appendChild(resultEl);
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+  }
+  function minesResetTiles() {
+    const grid = dialogBox.querySelector<HTMLDivElement>('#minesWorldGrid');
+    if (!grid) return;
+    for (const t of grid.querySelectorAll<HTMLButtonElement>('.mines-world-tile')) {
+      t.disabled = !minesPlaying;
+      t.textContent = '';
+      t.style.background = '#1c2747';
+    }
+  }
+  function minesSetTileSafe(i: number) {
+    const grid = dialogBox.querySelector<HTMLDivElement>('#minesWorldGrid');
+    const t = grid?.querySelector<HTMLButtonElement>(`[data-cell="${i}"]`);
+    if (!t) return;
+    t.textContent = '💎';
+    t.style.background = '#1a4a2e';
+    t.disabled = true;
+  }
+  function minesSetTileBoom(i: number, isHit: boolean) {
+    const grid = dialogBox.querySelector<HTMLDivElement>('#minesWorldGrid');
+    const t = grid?.querySelector<HTMLButtonElement>(`[data-cell="${i}"]`);
+    if (!t) return;
+    t.textContent = isHit ? '💥' : '💣';
+    t.style.background = isHit ? '#7a1f2b' : '#3a2a1a';
+    t.disabled = true;
+  }
+  function minesDisableAll() {
+    const grid = dialogBox.querySelector<HTMLDivElement>('#minesWorldGrid');
+    if (!grid) return;
+    for (const t of grid.querySelectorAll<HTMLButtonElement>('.mines-world-tile')) t.disabled = true;
+  }
+  function minesSetSetupEnabled(on: boolean) {
+    const betInput = dialogBox.querySelector<HTMLInputElement>('#minesWorldBet');
+    const minesSel = dialogBox.querySelector<HTMLSelectElement>('#minesWorldCount');
+    const startBtn = dialogBox.querySelector<HTMLButtonElement>('#minesWorldStart');
+    if (betInput) betInput.disabled = !on;
+    if (minesSel) minesSel.disabled = !on;
+    if (startBtn) startBtn.disabled = !on;
+  }
+  function minesUpdateHud(state: MinesStateMsg) {
+    const multEl = dialogBox.querySelector<HTMLElement>('#minesWorldMult');
+    const payoutEl = dialogBox.querySelector<HTMLElement>('#minesWorldPayout');
+    const cashoutBtn = dialogBox.querySelector<HTMLButtonElement>('#minesWorldCashout');
+    if (multEl) multEl.textContent = `${state.multiplier.toFixed(2)}×`;
+    if (payoutEl) payoutEl.textContent = state.safeCount > 0 ? `→ ${state.pendingPayout}🪙` : '';
+    if (cashoutBtn) cashoutBtn.disabled = state.safeCount === 0;
+  }
+  function minesDoStart() {
+    if (minesPlaying) return;
+    const betInput = dialogBox.querySelector<HTMLInputElement>('#minesWorldBet');
+    const minesSel = dialogBox.querySelector<HTMLSelectElement>('#minesWorldCount');
+    const resultEl = dialogBox.querySelector<HTMLDivElement>('#minesWorldResult');
+    const cashoutBtn = dialogBox.querySelector<HTMLButtonElement>('#minesWorldCashout');
+    const multEl = dialogBox.querySelector<HTMLElement>('#minesWorldMult');
+    const payoutEl = dialogBox.querySelector<HTMLElement>('#minesWorldPayout');
+    if (!betInput || !minesSel || !resultEl || !cashoutBtn || !multEl || !payoutEl) return;
+    const amount = Math.max(1, Math.floor(Number(betInput.value)));
+    const mines = Number(minesSel.value);
+    resultEl.textContent = '';
+    minesResetTiles();
+    cashoutBtn.disabled = true;
+    multEl.textContent = '1.00×';
+    payoutEl.textContent = '';
+    net.minesBet(amount, mines);
+  }
+  function minesDoReveal(cell: number) {
+    if (!minesPlaying) return;
+    const grid = dialogBox.querySelector<HTMLDivElement>('#minesWorldGrid');
+    const t = grid?.querySelector<HTMLButtonElement>(`[data-cell="${cell}"]`);
+    if (!t || t.disabled) return;
+    net.minesReveal(cell);
+  }
+  function minesDoCashout() {
+    if (!minesPlaying || !minesLastState || minesLastState.safeCount === 0) return;
+    net.minesCashout();
+  }
+  function minesApplyState(msg: MinesStateMsg) {
+    minesLastState = msg;
+    minesPlaying = true;
+    minesSetSetupEnabled(false);
+    const resultEl = dialogBox.querySelector<HTMLDivElement>('#minesWorldResult');
+    if (resultEl) resultEl.textContent = '';
+    minesResetTiles();
+    for (let i = 0; i < MINES_GRID; i++) if (msg.revealed[i]) minesSetTileSafe(i);
+    minesUpdateHud(msg);
+    casinoRefreshCoins('minesWorldCoins');
+  }
+  function minesApplyResult(msg: MinesResultMsg) {
+    minesPlaying = false;
+    minesLastState = null;
+    minesDisableAll();
+    for (const pos of msg.minePositions) minesSetTileBoom(pos, pos === msg.hitCell);
+    const cashoutBtn = dialogBox.querySelector<HTMLButtonElement>('#minesWorldCashout');
+    const multEl = dialogBox.querySelector<HTMLElement>('#minesWorldMult');
+    const payoutEl = dialogBox.querySelector<HTMLElement>('#minesWorldPayout');
+    const resultEl = dialogBox.querySelector<HTMLDivElement>('#minesWorldResult');
+    if (cashoutBtn) cashoutBtn.disabled = true;
+    if (multEl) multEl.textContent = '';
+    if (payoutEl) payoutEl.textContent = '';
+    if (resultEl) {
+      if (msg.won) {
+        resultEl.textContent = `+${msg.net}🪙 · cashed out`;
+        resultEl.style.color = '#6ee7a8';
+        net.playSound('win');
+      } else {
+        resultEl.textContent = `−${-msg.net}🪙 · kaboom 💥`;
+        resultEl.style.color = '#ff7a7a';
+      }
+    }
+    minesSetSetupEnabled(true);
+    casinoRefreshCoins('minesWorldCoins');
+  }
+
+  // --- Horse Racing — same idiom (client/horse.ts), reimplements its canvas race animation. ---
+  const HORSE_COLORS = ['#f97316', '#3b82f6', '#22d3ee', '#a855f7', '#22c55e'];
+  let horseSelected = -1;
+  let horseCurrentCard: { name: string; odds: number }[] | null = null;
+  let horseAnimFrame = 0;
+  function openHorse() {
+    dialogOpen = true;
+    horseDialogOpen = true;
+    horseSelected = -1;
+    horseCurrentCard = null;
+    keys.clear(); joyActive = false;
+    renderHorseDialog();
+    dialog.style.display = 'flex';
+    net.horseReq();
+  }
+  function renderHorseDialog() {
+    dialogBox.replaceChildren();
+    dialogBox.appendChild(casinoDialogHeader('🏇 Horse Racing', 'horseWorldCoins'));
+
+    const canvas = document.createElement('canvas');
+    canvas.id = 'horseWorldCanvas';
+    canvas.width = 300; canvas.height = 150;
+    canvas.style.cssText = 'display:block;width:100%;border-radius:8px;margin-bottom:10px;';
+    dialogBox.appendChild(canvas);
+    horseDrawIdle();
+
+    const listEl = document.createElement('div');
+    listEl.id = 'horseWorldList';
+    listEl.style.cssText = 'min-width:300px;margin-bottom:8px;';
+    listEl.innerHTML = '<div style="text-align:center;color:#9fb0d8;font-size:12px;">🐎 Loading race…</div>';
+    dialogBox.appendChild(listEl);
+
+    const betRow = document.createElement('div');
+    betRow.style.cssText = 'display:flex;gap:8px;align-items:center;justify-content:center;margin-bottom:8px;';
+    const betInput = document.createElement('input');
+    betInput.id = 'horseWorldBet';
+    betInput.type = 'number'; betInput.min = '1'; betInput.step = '1'; betInput.value = '10';
+    betInput.style.cssText = 'width:80px;text-align:center;background:#0c1330;color:#e8eefc;border:1px solid #38508f;border-radius:8px;padding:6px;';
+    const placeBetBtn = document.createElement('button');
+    placeBetBtn.id = 'horseWorldPlaceBet';
+    placeBetBtn.type = 'button'; placeBetBtn.textContent = 'Place Bet';
+    placeBetBtn.disabled = true;
+    placeBetBtn.style.cssText = 'cursor:pointer;padding:8px 16px;border-radius:10px;font-weight:700;background:#3a5aa8;color:#fff;border:1px solid #5a7ac8;';
+    placeBetBtn.onclick = horseDoPlaceBet;
+    betRow.append(betInput, placeBetBtn);
+    dialogBox.appendChild(betRow);
+
+    const newRaceBtn = document.createElement('button');
+    newRaceBtn.id = 'horseWorldNewRace';
+    newRaceBtn.type = 'button'; newRaceBtn.textContent = '🐎 New Race'; newRaceBtn.hidden = true;
+    newRaceBtn.style.cssText = 'display:block;width:100%;cursor:pointer;padding:8px;border-radius:10px;font-weight:700;background:#21305a;color:#e8eefc;border:1px solid #38508f;margin-bottom:8px;';
+    newRaceBtn.onclick = horseDoNewRace;
+    dialogBox.appendChild(newRaceBtn);
+
+    const resultEl = document.createElement('div');
+    resultEl.id = 'horseWorldResult';
+    resultEl.style.cssText = 'text-align:center;font-size:13px;min-height:18px;margin-bottom:8px;color:#9fb0d8;';
+    dialogBox.appendChild(resultEl);
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+  }
+  function horseDrawIdle() {
+    const canvas = dialogBox.querySelector<HTMLCanvasElement>('#horseWorldCanvas');
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    const W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#0e1830';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = '#2a3a50';
+    ctx.font = '13px ui-sans-serif, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Race starts when you bet', W / 2, H / 2);
+  }
+  function horseDrawRace(progress: number[], winner: number, done: boolean) {
+    const canvas = dialogBox.querySelector<HTMLCanvasElement>('#horseWorldCanvas');
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    const W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#0e1830';
+    ctx.fillRect(0, 0, W, H);
+    const n = progress.length;
+    const trackH = H / n;
+    for (let i = 0; i < n; i++) {
+      const y = i * trackH;
+      ctx.fillStyle = i % 2 === 0 ? '#0a1a2e' : '#0d1f35';
+      ctx.fillRect(0, y, W, trackH);
+      ctx.strokeStyle = '#1a2a40';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, y + trackH); ctx.lineTo(W, y + trackH); ctx.stroke();
+      ctx.strokeStyle = '#ffffff33';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([4, 4]);
+      ctx.beginPath(); ctx.moveTo(W - 20, y); ctx.lineTo(W - 20, y + trackH); ctx.stroke();
+      ctx.setLineDash([]);
+      const x = 20 + progress[i] * (W - 60);
+      const cy = y + trackH / 2;
+      ctx.font = `${Math.round(trackH * 0.55)}px serif`;
+      ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = HORSE_COLORS[i];
+      ctx.fillText('🐎', x, cy);
+      if (done && i === winner) {
+        ctx.font = `${Math.round(trackH * 0.45)}px serif`;
+        ctx.fillText('👑', x + Math.round(trackH * 0.55) + 2, cy - 4);
+      }
+    }
+  }
+  function horseRenderList(horses: { name: string; odds: number }[], winnerIdx = -1, betOn = -1) {
+    const listEl = dialogBox.querySelector<HTMLDivElement>('#horseWorldList');
+    if (!listEl) return;
+    listEl.innerHTML = horses.map((h, i) => {
+      let bg = 'transparent';
+      if (i === horseSelected) bg = '#233158';
+      if (winnerIdx >= 0 && i === winnerIdx) bg = '#1a4a2e';
+      if (winnerIdx >= 0 && i === betOn && i !== winnerIdx) bg = '#4a1a1a';
+      const selBtn = winnerIdx < 0
+        ? `<button class="horse-world-sel" data-idx="${i}" type="button" style="cursor:pointer;padding:4px 10px;border-radius:6px;background:#21305a;color:#e8eefc;border:1px solid #38508f;font-size:11px;">Pick</button>`
+        : '';
+      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;background:${bg};margin-bottom:3px;">` +
+        `<span style="color:${HORSE_COLORS[i]};font-size:18px;">🐎</span>` +
+        `<span style="flex:1;font-size:13px;color:#cdd7f5;">${h.name}</span>` +
+        `<span style="font-size:12px;color:#ffd23f;">${h.odds}×</span>${selBtn}</div>`;
+    }).join('');
+    listEl.querySelectorAll<HTMLButtonElement>('.horse-world-sel').forEach((b) => {
+      b.onclick = () => {
+        horseSelected = Number(b.dataset.idx);
+        horseRenderList(horses);
+        const placeBetBtn = dialogBox.querySelector<HTMLButtonElement>('#horseWorldPlaceBet');
+        if (placeBetBtn) placeBetBtn.disabled = false;
+      };
+    });
+  }
+  function horseDoPlaceBet() {
+    if (horseSelected < 0 || !horseCurrentCard) return;
+    const betInput = dialogBox.querySelector<HTMLInputElement>('#horseWorldBet');
+    const placeBetBtn = dialogBox.querySelector<HTMLButtonElement>('#horseWorldPlaceBet');
+    const newRaceBtn = dialogBox.querySelector<HTMLButtonElement>('#horseWorldNewRace');
+    const resultEl = dialogBox.querySelector<HTMLDivElement>('#horseWorldResult');
+    if (!betInput || !placeBetBtn || !newRaceBtn || !resultEl) return;
+    const amount = Math.max(1, Math.floor(Number(betInput.value)));
+    placeBetBtn.disabled = true;
+    newRaceBtn.hidden = true;
+    resultEl.textContent = '';
+    net.horseBet(horseSelected, amount);
+  }
+  function horseDoNewRace() {
+    horseSelected = -1;
+    horseCurrentCard = null;
+    const newRaceBtn = dialogBox.querySelector<HTMLButtonElement>('#horseWorldNewRace');
+    const placeBetBtn = dialogBox.querySelector<HTMLButtonElement>('#horseWorldPlaceBet');
+    const resultEl = dialogBox.querySelector<HTMLDivElement>('#horseWorldResult');
+    const listEl = dialogBox.querySelector<HTMLDivElement>('#horseWorldList');
+    if (newRaceBtn) newRaceBtn.hidden = true;
+    if (placeBetBtn) placeBetBtn.disabled = true;
+    if (resultEl) resultEl.textContent = '';
+    if (listEl) listEl.innerHTML = '<div style="text-align:center;color:#9fb0d8;font-size:12px;">🐎 Requesting new race…</div>';
+    horseDrawIdle();
+    net.horseReq();
+  }
+  function horseApplyCard(msg: HorseCardMsg) {
+    horseCurrentCard = msg.horses;
+    horseSelected = -1;
+    const placeBetBtn = dialogBox.querySelector<HTMLButtonElement>('#horseWorldPlaceBet');
+    const newRaceBtn = dialogBox.querySelector<HTMLButtonElement>('#horseWorldNewRace');
+    const resultEl = dialogBox.querySelector<HTMLDivElement>('#horseWorldResult');
+    if (placeBetBtn) placeBetBtn.disabled = true;
+    if (newRaceBtn) newRaceBtn.hidden = true;
+    if (resultEl) resultEl.textContent = '';
+    horseRenderList(msg.horses);
+    horseDrawIdle();
+    casinoRefreshCoins('horseWorldCoins');
+  }
+  function horseApplyResult(msg: HorseResultMsg) {
+    horseCurrentCard = null;
+    cancelAnimationFrame(horseAnimFrame);
+    const n = msg.horses.length;
+    const finishTime = 120;
+    const positions = new Array(n).fill(0);
+    const speeds = msg.horses.map((_, i) => {
+      const base = i === msg.winner ? 1.0 : 0.65 + Math.random() * 0.25;
+      return base / finishTime;
+    });
+    let frame = 0;
+    const tick = () => {
+      frame++;
+      for (let i = 0; i < n; i++) {
+        const t = frame / finishTime;
+        const ease = t < 0.3 ? t * t * 3.3 : t;
+        positions[i] = Math.min(1, speeds[i] * finishTime * ease);
+        if (frame < finishTime && i !== msg.winner) {
+          positions[i] += (Math.random() - 0.5) * 0.01;
+          positions[i] = Math.max(0, Math.min(0.97, positions[i]));
+        }
+      }
+      const done = frame >= finishTime;
+      if (done) positions[msg.winner] = 1.0;
+      horseDrawRace(positions, msg.winner, done);
+      if (!done) {
+        horseAnimFrame = requestAnimationFrame(tick);
+      } else {
+        horseRenderList(msg.horses, msg.winner, msg.horse);
+        const won = msg.horse === msg.winner;
+        const netAmt = msg.payout - msg.bet;
+        const resultEl = dialogBox.querySelector<HTMLDivElement>('#horseWorldResult');
+        if (resultEl) {
+          if (won) {
+            resultEl.textContent = `🏆 ${msg.horses[msg.winner].name} wins! +${netAmt}🪙`;
+            resultEl.style.color = '#6ee7a8';
+            net.playSound('win');
+          } else {
+            resultEl.textContent = `💀 ${msg.horses[msg.winner].name} wins. Lost ${msg.bet}🪙`;
+            resultEl.style.color = '#ff7a7a';
+          }
+        }
+        const newRaceBtn = dialogBox.querySelector<HTMLButtonElement>('#horseWorldNewRace');
+        if (newRaceBtn) newRaceBtn.hidden = false;
+        casinoRefreshCoins('horseWorldCoins');
+      }
+    };
+    horseAnimFrame = requestAnimationFrame(tick);
+  }
+
+  // --- Crash — same idiom (client/crash.ts). Server broadcasts crashState to everyone every
+  // 100ms during a live round; crashLastMsg/crashMultHistory/crashLastPhase are kept current
+  // regardless of whether the dialog is open (crashApplyState always tracks them), so opening the
+  // dialog mid-round shows the live multiplier immediately — matching the flat panel's
+  // `if (open && lastMsg) onState(lastMsg)` on-open behavior, but split so re-opening the dialog
+  // doesn't double-count a history point the way the flat panel's does. ---
+  let crashLastPhase = 'betting';
+  let crashMultHistory: number[] = [1];
+  let crashLastMsg: CrashStateMsg | null = null;
+  let crashAlreadyPlayedWin = false;
+  function crashFmt(m: number) { return m.toFixed(2) + '×'; }
+  function openCrash() {
+    dialogOpen = true;
+    crashDialogOpen = true;
+    keys.clear(); joyActive = false;
+    renderCrashDialog();
+    dialog.style.display = 'flex';
+    if (crashLastMsg) crashRenderState(crashLastMsg, crashLastMsg.phase === 'ended');
+  }
+  function renderCrashDialog() {
+    dialogBox.replaceChildren();
+    dialogBox.appendChild(casinoDialogHeader('📈 Crash', 'crashWorldCoins'));
+
+    const multEl = document.createElement('div');
+    multEl.id = 'crashWorldMult';
+    multEl.style.cssText = 'text-align:center;font-size:32px;font-weight:800;color:#22e8ff;margin-bottom:6px;';
+    multEl.textContent = '1.00×';
+    dialogBox.appendChild(multEl);
+
+    const canvas = document.createElement('canvas');
+    canvas.id = 'crashWorldCanvas';
+    canvas.width = 300; canvas.height = 120;
+    canvas.style.cssText = 'display:block;width:100%;border-radius:8px;margin-bottom:8px;';
+    dialogBox.appendChild(canvas);
+
+    const statusEl = document.createElement('div');
+    statusEl.id = 'crashWorldStatus';
+    statusEl.style.cssText = 'text-align:center;font-size:12px;color:#9fb0d8;margin-bottom:8px;';
+    dialogBox.appendChild(statusEl);
+
+    const betRow = document.createElement('div');
+    betRow.style.cssText = 'display:flex;gap:8px;align-items:center;justify-content:center;flex-wrap:wrap;margin-bottom:8px;';
+    const betInput = document.createElement('input');
+    betInput.id = 'crashWorldBet';
+    betInput.type = 'number'; betInput.min = '1'; betInput.step = '1'; betInput.value = '10';
+    betInput.style.cssText = 'width:70px;text-align:center;background:#0c1330;color:#e8eefc;border:1px solid #38508f;border-radius:8px;padding:6px;';
+    const autoInput = document.createElement('input');
+    autoInput.id = 'crashWorldAuto';
+    autoInput.type = 'number'; autoInput.min = '1.01'; autoInput.step = '0.1'; autoInput.placeholder = 'auto ×';
+    autoInput.style.cssText = 'width:70px;text-align:center;background:#0c1330;color:#e8eefc;border:1px solid #38508f;border-radius:8px;padding:6px;';
+    const betBtn = document.createElement('button');
+    betBtn.id = 'crashWorldBetBtn';
+    betBtn.type = 'button'; betBtn.textContent = 'Bet';
+    betBtn.style.cssText = 'cursor:pointer;padding:8px 14px;border-radius:8px;font-weight:700;background:#3a5aa8;color:#fff;border:1px solid #5a7ac8;';
+    betBtn.onclick = () => {
+      const amount = Math.max(1, Math.floor(Number(betInput.value)));
+      const autoVal = parseFloat(autoInput.value);
+      const auto = autoVal > 1 ? autoVal : undefined;
+      net.crashBet(amount, auto);
+      betBtn.disabled = true;
+    };
+    const cancelBetBtn = document.createElement('button');
+    cancelBetBtn.id = 'crashWorldCancelBet';
+    cancelBetBtn.type = 'button'; cancelBetBtn.textContent = 'Cancel'; cancelBetBtn.hidden = true;
+    cancelBetBtn.style.cssText = 'cursor:pointer;padding:8px 14px;border-radius:8px;font-weight:700;background:#21305a;color:#e8eefc;border:1px solid #38508f;';
+    cancelBetBtn.onclick = () => { net.crashCancelBet(); cancelBetBtn.hidden = true; betBtn.disabled = false; };
+    const cashoutBtn = document.createElement('button');
+    cashoutBtn.id = 'crashWorldCashout';
+    cashoutBtn.type = 'button'; cashoutBtn.textContent = '💰 Cash Out'; cashoutBtn.hidden = true;
+    cashoutBtn.style.cssText = 'cursor:pointer;padding:8px 14px;border-radius:8px;font-weight:700;background:#ffd23f;color:#1a1020;border:1px solid #ffd23f;';
+    cashoutBtn.onclick = () => { net.crashCashout(); cashoutBtn.hidden = true; };
+    betRow.append(betInput, autoInput, betBtn, cancelBetBtn, cashoutBtn);
+    dialogBox.appendChild(betRow);
+
+    const bettersEl = document.createElement('div');
+    bettersEl.id = 'crashWorldBetters';
+    bettersEl.style.cssText = 'display:flex;flex-direction:column;gap:3px;font-size:11px;max-height:140px;overflow-y:auto;margin-bottom:8px;';
+    dialogBox.appendChild(bettersEl);
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+
+    crashDrawChart(false);
+  }
+  function crashDrawChart(crashed: boolean) {
+    const canvas = dialogBox.querySelector<HTMLCanvasElement>('#crashWorldCanvas');
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    const W = canvas.width, H = canvas.height;
+    ctx.clearRect(0, 0, W, H);
+    if (crashMultHistory.length < 2) { ctx.fillStyle = '#1a2238'; ctx.fillRect(0, 0, W, H); return; }
+    ctx.fillStyle = '#0a1020';
+    ctx.fillRect(0, 0, W, H);
+    const maxM = Math.max(...crashMultHistory, 2);
+    const pts = crashMultHistory.map((m, i) => ({
+      x: 8 + (i / (crashMultHistory.length - 1)) * (W - 16),
+      y: H - 8 - ((m - 1) / (maxM - 1)) * (H - 16),
+    }));
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (const p of pts.slice(1)) ctx.lineTo(p.x, p.y);
+    ctx.strokeStyle = crashed ? '#ff4466' : '#22e8ff';
+    ctx.lineWidth = 2.5;
+    ctx.shadowColor = crashed ? '#ff4466' : '#22e8ff';
+    ctx.shadowBlur = 6;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.lineTo(pts[pts.length - 1].x, H);
+    ctx.lineTo(pts[0].x, H);
+    ctx.closePath();
+    ctx.fillStyle = crashed ? 'rgba(255,68,102,0.07)' : 'rgba(34,232,255,0.07)';
+    ctx.fill();
+  }
+  function crashRenderBetters(msg: CrashStateMsg) {
+    const bettersEl = dialogBox.querySelector<HTMLDivElement>('#crashWorldBetters');
+    if (!bettersEl) return;
+    if (msg.bets.length === 0) { bettersEl.innerHTML = '<div style="color:#5a647e;text-align:center;">No bets yet</div>'; return; }
+    bettersEl.innerHTML = msg.bets.map((b) => {
+      let badge: string;
+      if (b.cashedAt !== null) badge = `<span style="color:#6ee7a8;">✅ ${crashFmt(b.cashedAt)}</span>`;
+      else if (msg.phase === 'ended') badge = '<span>💀</span>';
+      else badge = '<span style="color:#6ee7a8;">🟢</span>';
+      return `<div style="display:flex;justify-content:space-between;padding:3px 6px;background:#18203a;border-radius:4px;"><span>${b.name}</span><span>${b.amount}🪙</span>${badge}</div>`;
+    }).join('');
+  }
+  // Renders the DOM for a given message (only while the dialog is open) — split out from history
+  // tracking so re-opening the dialog can repaint the CURRENT state without re-counting it.
+  function crashRenderState(msg: CrashStateMsg, crashed: boolean) {
+    const multEl = dialogBox.querySelector<HTMLDivElement>('#crashWorldMult');
+    const statusEl = dialogBox.querySelector<HTMLDivElement>('#crashWorldStatus');
+    const betBtn = dialogBox.querySelector<HTMLButtonElement>('#crashWorldBetBtn');
+    const cancelBetBtn = dialogBox.querySelector<HTMLButtonElement>('#crashWorldCancelBet');
+    const cashoutBtn = dialogBox.querySelector<HTMLButtonElement>('#crashWorldCashout');
+    if (!multEl || !statusEl || !betBtn || !cancelBetBtn || !cashoutBtn) return;
+    multEl.textContent = crashFmt(msg.multiplier);
+    multEl.style.color = crashed ? '#ff4466' : msg.phase === 'live' ? '#22e8ff' : '#9fb0d8';
+    crashDrawChart(crashed);
+    if (msg.phase === 'betting') {
+      const s = Math.ceil(msg.timeLeft / 1000);
+      statusEl.textContent = `Betting open — ${s}s to place bets`;
+      betBtn.disabled = msg.yourBet !== null;
+      cancelBetBtn.hidden = msg.yourBet === null;
+      cashoutBtn.hidden = true;
+    } else if (msg.phase === 'live') {
+      if (msg.yourBet !== null && msg.yourCashedAt === null) {
+        statusEl.textContent = '🎰 In the air — cash out any time!';
+        cashoutBtn.hidden = false;
+      } else if (msg.yourCashedAt !== null) {
+        statusEl.textContent = `✅ Cashed out at ${crashFmt(msg.yourCashedAt)}`;
+        cashoutBtn.hidden = true;
+      } else {
+        statusEl.textContent = 'Watch the multiplier rise…';
+        cashoutBtn.hidden = true;
+      }
+      betBtn.disabled = true;
+      cancelBetBtn.hidden = true;
+    } else {
+      cashoutBtn.hidden = true;
+      cancelBetBtn.hidden = true;
+      betBtn.disabled = false;
+      if (msg.yourBet !== null) {
+        if (msg.yourCashedAt !== null) {
+          const netAmt = Math.floor(msg.yourBet * msg.yourCashedAt) - msg.yourBet;
+          statusEl.textContent = `💥 Crashed at ${crashFmt(msg.crashedAt!)} — you cashed ${crashFmt(msg.yourCashedAt)} · +${netAmt}🪙`;
+          if (!crashAlreadyPlayedWin && netAmt > 0) { net.playSound('win'); crashAlreadyPlayedWin = true; }
+        } else {
+          statusEl.textContent = `💥 Crashed at ${crashFmt(msg.crashedAt!)} — you lost ${msg.yourBet}🪙`;
+        }
+      } else {
+        statusEl.textContent = `💥 Crashed at ${crashFmt(msg.crashedAt!)}`;
+      }
+    }
+    crashRenderBetters(msg);
+    casinoRefreshCoins('crashWorldCoins');
+  }
+  // Called on EVERY crashState broadcast (not gated on crashDialogOpen) so the history/cache stay
+  // current; only paints the DOM if the dialog is actually open.
+  function crashApplyState(msg: CrashStateMsg) {
+    crashLastMsg = msg;
+    const crashed = msg.phase === 'ended';
+    if (msg.phase === 'live') {
+      if (crashLastPhase !== 'live') crashMultHistory = [1];
+      crashMultHistory.push(msg.multiplier);
+    } else if (msg.phase === 'betting') {
+      crashMultHistory = [1];
+      crashAlreadyPlayedWin = false;
+    }
+    crashLastPhase = msg.phase;
+    if (crashDialogOpen) crashRenderState(msg, crashed);
+  }
+
+  // --- Roulette — same idiom (client/roulette.ts), the largest Casino cabinet: reuses its .rl-*
+  // CSS classes (global, not scoped to #roulettePanel) for the betting board + chips, plus its own
+  // wheel-spin canvas animation ported directly. ---
+  const ROULETTE_OUTSIDE: { kind: RouletteBetKind; label: string; cls?: string }[] = [
+    { kind: 'low', label: '1–18' },
+    { kind: 'even', label: 'EVEN' },
+    { kind: 'red', label: 'RED', cls: 'red-out' },
+    { kind: 'black', label: 'BLACK', cls: 'black-out' },
+    { kind: 'odd', label: 'ODD' },
+    { kind: 'high', label: '19–36' },
+  ];
+  const ROULETTE_DOZENS: { kind: RouletteBetKind; label: string }[] = [
+    { kind: 'dozen1', label: '1st 12' },
+    { kind: 'dozen2', label: '2nd 12' },
+    { kind: 'dozen3', label: '3rd 12' },
+  ];
+  type RlBetKey = string;
+  function rlStraightKey(n: number): RlBetKey { return `n:${n}`; }
+  let rlChip = 1;
+  let rlSpinning = false;
+  let rlRot = 0;
+  const rlBets = new Map<RlBetKey, number>();
+  const rlCells = new Map<RlBetKey, HTMLElement>();
+  const RL_SEG = (Math.PI * 2) / ROULETTE_WHEEL.length;
+  function rlTotalStaked() { return [...rlBets.values()].reduce((a, b) => a + b, 0); }
+  function rlCap() { return Math.min(ROULETTE_MAX_TOTAL, net.wallet().coins); }
+  function rlPocketColor(n: number): string {
+    if (n === 0) return '#1f8a4c';
+    return ROULETTE_RED.has(n) ? '#b6243a' : '#1b2236';
+  }
+  function openRoulette() {
+    dialogOpen = true;
+    rouletteDialogOpen = true;
+    rlBets.clear();
+    rlSpinning = false;
+    keys.clear(); joyActive = false;
+    renderRouletteDialog();
+    dialog.style.display = 'flex';
+  }
+  function renderRouletteDialog() {
+    dialogBox.replaceChildren();
+    dialogBox.appendChild(casinoDialogHeader('🎡 Roulette', 'rlWorldCoins'));
+
+    const wheel = document.createElement('canvas');
+    wheel.id = 'rlWorldWheel';
+    wheel.width = 200; wheel.height = 200;
+    wheel.style.cssText = 'display:block;margin:0 auto 10px;';
+    dialogBox.appendChild(wheel);
+
+    const chipsRow = document.createElement('div');
+    chipsRow.id = 'rlWorldChips';
+    chipsRow.style.cssText = 'display:flex;gap:6px;align-items:center;justify-content:center;margin-bottom:8px;flex-wrap:wrap;';
+    const chipsLabel = document.createElement('span');
+    chipsLabel.className = 'rl-chips-label';
+    chipsLabel.textContent = 'Chip:';
+    chipsRow.appendChild(chipsLabel);
+    for (const v of [1, 5, 25, 100, 500]) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'rl-chip' + (v === rlChip ? ' active' : '');
+      b.textContent = String(v);
+      b.dataset.chip = String(v);
+      b.onclick = () => {
+        rlChip = v;
+        chipsRow.querySelectorAll('.rl-chip').forEach((x) => x.classList.toggle('active', x === b));
+      };
+      chipsRow.appendChild(b);
+    }
+    dialogBox.appendChild(chipsRow);
+
+    const board = document.createElement('div');
+    board.id = 'rlWorldBoard';
+    board.style.cssText = 'min-width:340px;overflow-x:auto;margin-bottom:8px;';
+    dialogBox.appendChild(board);
+    rlBuildBoard(board);
+
+    const stakeEl = document.createElement('div');
+    stakeEl.id = 'rlWorldStake';
+    stakeEl.style.cssText = 'text-align:center;font-size:12px;color:#9fb0d8;margin-bottom:6px;';
+    dialogBox.appendChild(stakeEl);
+
+    const resultEl = document.createElement('div');
+    resultEl.id = 'rlWorldResult';
+    resultEl.style.cssText = 'text-align:center;font-size:13px;min-height:18px;margin-bottom:8px;color:#9fb0d8;';
+    dialogBox.appendChild(resultEl);
+
+    const footRow = document.createElement('div');
+    footRow.style.cssText = 'display:flex;gap:8px;margin-bottom:8px;';
+    const clearBtn = document.createElement('button');
+    clearBtn.id = 'rlWorldClear';
+    clearBtn.type = 'button'; clearBtn.textContent = 'Clear';
+    clearBtn.style.cssText = 'flex:1;cursor:pointer;padding:10px;border-radius:10px;font-weight:700;background:#21305a;color:#e8eefc;border:1px solid #38508f;';
+    clearBtn.onclick = rlClearAll;
+    const spinBtn = document.createElement('button');
+    spinBtn.id = 'rlWorldSpin';
+    spinBtn.type = 'button'; spinBtn.textContent = 'Spin';
+    spinBtn.disabled = true;
+    spinBtn.style.cssText = 'flex:2;cursor:pointer;padding:10px;border-radius:10px;font-weight:700;background:#3a5aa8;color:#fff;border:1px solid #5a7ac8;';
+    spinBtn.onclick = rlDoSpin;
+    footRow.append(clearBtn, spinBtn);
+    dialogBox.appendChild(footRow);
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+
+    rlDrawWheel(rlRot);
+    rlSyncBadges();
+  }
+  function rlBuildBoard(board: HTMLDivElement) {
+    board.innerHTML = '';
+    rlCells.clear();
+    const table = document.createElement('div');
+    table.className = 'rl-table';
+
+    const zero = document.createElement('button');
+    zero.type = 'button';
+    zero.className = 'rl-zero';
+    zero.textContent = '0';
+    zero.style.gridColumn = '1';
+    zero.style.gridRow = '1 / span 3';
+    rlBindCell(zero, rlStraightKey(0));
+    table.appendChild(zero);
+
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 12; col++) {
+        const n = col * 3 + (3 - row);
+        const c = document.createElement('button');
+        c.type = 'button';
+        c.className = `rl-num ${ROULETTE_RED.has(n) ? 'red' : 'black'}`;
+        c.textContent = String(n);
+        c.style.gridColumn = String(col + 2);
+        c.style.gridRow = String(row + 1);
+        rlBindCell(c, rlStraightKey(n));
+        table.appendChild(c);
+      }
+    }
+    ROULETTE_DOZENS.forEach((d, i) => {
+      const c = document.createElement('button');
+      c.type = 'button';
+      c.className = 'rl-out';
+      c.textContent = d.label;
+      c.style.gridColumn = `${2 + i * 4} / span 4`;
+      c.style.gridRow = '4';
+      rlBindCell(c, d.kind);
+      table.appendChild(c);
+    });
+    ROULETTE_OUTSIDE.forEach((o, i) => {
+      const c = document.createElement('button');
+      c.type = 'button';
+      c.className = `rl-out ${o.cls ?? ''}`.trim();
+      c.textContent = o.label;
+      c.style.gridColumn = `${2 + i * 2} / span 2`;
+      c.style.gridRow = '5';
+      rlBindCell(c, o.kind);
+      table.appendChild(c);
+    });
+    board.appendChild(table);
+  }
+  function rlBindCell(el: HTMLElement, key: RlBetKey) {
+    rlCells.set(key, el);
+    el.addEventListener('click', () => rlAddStake(key));
+    el.addEventListener('contextmenu', (e) => { e.preventDefault(); rlClearCell(key); });
+  }
+  function rlAddStake(key: RlBetKey) {
+    if (rlSpinning) return;
+    const room = rlCap() - rlTotalStaked();
+    if (room <= 0) return;
+    const add = Math.min(rlChip, room);
+    rlBets.set(key, (rlBets.get(key) ?? 0) + add);
+    rlSyncBadges();
+  }
+  function rlClearCell(key: RlBetKey) {
+    if (rlSpinning) return;
+    if (rlBets.delete(key)) rlSyncBadges();
+  }
+  function rlClearAll() {
+    if (rlSpinning) return;
+    rlBets.clear();
+    rlSyncBadges();
+  }
+  function rlSyncBadges() {
+    for (const [key, el] of rlCells) {
+      const amt = rlBets.get(key) ?? 0;
+      let badge = el.querySelector('.rl-stake-badge') as HTMLSpanElement | null;
+      if (amt > 0) {
+        if (!badge) { badge = document.createElement('span'); badge.className = 'rl-stake-badge'; el.appendChild(badge); }
+        badge.textContent = String(amt);
+      } else if (badge) badge.remove();
+    }
+    const stakeEl = dialogBox.querySelector<HTMLDivElement>('#rlWorldStake');
+    const spinBtn = dialogBox.querySelector<HTMLButtonElement>('#rlWorldSpin');
+    if (!stakeEl || !spinBtn) return;
+    const total = rlTotalStaked();
+    const coins = net.wallet().coins;
+    const min = minBet(coins);
+    const belowMin = total > 0 && total < min;
+    stakeEl.textContent = `Staked: ${total}🪙` + (belowMin ? ` (min ${min})` : '');
+    spinBtn.disabled = rlSpinning || total <= 0 || total > coins || belowMin;
+  }
+  function rlCollectBets(): RouletteBet[] {
+    const out: RouletteBet[] = [];
+    for (const [key, amount] of rlBets) {
+      if (amount <= 0) continue;
+      if (key.startsWith('n:')) out.push({ kind: 'straight', amount, number: Number(key.slice(2)) });
+      else out.push({ kind: key as RouletteBetKind, amount });
+    }
+    return out;
+  }
+  function rlDrawWheel(r: number) {
+    const wheel = dialogBox.querySelector<HTMLCanvasElement>('#rlWorldWheel');
+    const wctx = wheel?.getContext('2d');
+    if (!wheel || !wctx) return;
+    const W = wheel.width, cx = W / 2, cy = W / 2, R = W / 2 - 4;
+    wctx.clearRect(0, 0, W, W);
+    wctx.save();
+    wctx.translate(cx, cy);
+    for (let i = 0; i < ROULETTE_WHEEL.length; i++) {
+      const n = ROULETTE_WHEEL[i];
+      const a0 = -Math.PI / 2 + i * RL_SEG + r;
+      const a1 = a0 + RL_SEG;
+      wctx.beginPath();
+      wctx.moveTo(0, 0);
+      wctx.arc(0, 0, R, a0, a1);
+      wctx.closePath();
+      wctx.fillStyle = rlPocketColor(n);
+      wctx.fill();
+      const mid = a0 + RL_SEG / 2;
+      wctx.save();
+      wctx.rotate(mid);
+      wctx.fillStyle = '#fff';
+      wctx.font = '700 10px ui-monospace, monospace';
+      wctx.textAlign = 'center';
+      wctx.textBaseline = 'middle';
+      wctx.fillText(String(n), R * 0.8, 0);
+      wctx.restore();
+    }
+    wctx.beginPath();
+    wctx.arc(0, 0, R, 0, Math.PI * 2);
+    wctx.lineWidth = 3;
+    wctx.strokeStyle = '#3a4566';
+    wctx.stroke();
+    wctx.beginPath();
+    wctx.arc(0, 0, R * 0.26, 0, Math.PI * 2);
+    wctx.fillStyle = '#0e1424';
+    wctx.fill();
+    wctx.strokeStyle = '#3a4566';
+    wctx.lineWidth = 2;
+    wctx.stroke();
+    wctx.restore();
+    wctx.beginPath();
+    wctx.moveTo(cx - 8, 1);
+    wctx.lineTo(cx + 8, 1);
+    wctx.lineTo(cx, 16);
+    wctx.closePath();
+    wctx.fillStyle = '#ffd166';
+    wctx.fill();
+  }
+  function rlRestAngleFor(idx: number): number { return -(idx * RL_SEG + RL_SEG / 2); }
+  let rlRafId = 0;
+  function rlAnimateTo(number: number, done: () => void) {
+    const idx = ROULETTE_WHEEL.indexOf(number);
+    const turns = 6;
+    const target = turns * Math.PI * 2 + rlRestAngleFor(idx);
+    const start = rlRot % (Math.PI * 2);
+    const dur = 4200;
+    const t0 = performance.now();
+    const ease = (x: number) => 1 - Math.pow(1 - x, 3);
+    const step = (now: number) => {
+      const p = Math.min(1, (now - t0) / dur);
+      rlRot = start + (target - start) * ease(p);
+      rlDrawWheel(rlRot);
+      if (p < 1) {
+        rlRafId = requestAnimationFrame(step);
+      } else {
+        rlRot = target % (Math.PI * 2);
+        rlDrawWheel(rlRot);
+        done();
+      }
+    };
+    cancelAnimationFrame(rlRafId);
+    rlRafId = requestAnimationFrame(step);
+  }
+  function rlDoSpin() {
+    if (rlSpinning) return;
+    const slate = rlCollectBets();
+    const total = rlTotalStaked();
+    const coins = net.wallet().coins;
+    if (!slate.length || total <= 0 || total > coins) return;
+    rlSpinning = true;
+    const spinBtn = dialogBox.querySelector<HTMLButtonElement>('#rlWorldSpin');
+    const clearBtn = dialogBox.querySelector<HTMLButtonElement>('#rlWorldClear');
+    const resultEl = dialogBox.querySelector<HTMLDivElement>('#rlWorldResult');
+    if (spinBtn) spinBtn.disabled = true;
+    if (clearBtn) clearBtn.disabled = true;
+    if (resultEl) { resultEl.textContent = 'Spinning…'; resultEl.style.color = '#9fb0d8'; }
+    net.rouletteSpin(slate);
+  }
+  function rlApplyResult(msg: { number: number; staked: number; payout: number }) {
+    if (!rlSpinning) { rlDrawWheel(rlRestAngleFor(ROULETTE_WHEEL.indexOf(msg.number))); return; }
+    rlAnimateTo(msg.number, () => {
+      rlSpinning = false;
+      const clearBtn = dialogBox.querySelector<HTMLButtonElement>('#rlWorldClear');
+      const resultEl = dialogBox.querySelector<HTMLDivElement>('#rlWorldResult');
+      if (clearBtn) clearBtn.disabled = false;
+      const n = msg.number;
+      const color = n === 0 ? 'green' : ROULETTE_RED.has(n) ? 'red' : 'black';
+      const netAmt = msg.payout - msg.staked;
+      if (resultEl) {
+        if (msg.payout > 0) {
+          resultEl.textContent = `🎉 ${n} ${color} — won ${msg.payout}🪙 (net ${netAmt >= 0 ? '+' : ''}${netAmt})`;
+          resultEl.style.color = '#6ee7a8';
+          net.playSound('win');
+        } else {
+          resultEl.textContent = `💀 ${n} ${color} — lost ${msg.staked}🪙`;
+          resultEl.style.color = '#ff7a7a';
+        }
+      }
+      rlBets.clear();
+      rlSyncBadges();
+      casinoRefreshCoins('rlWorldCoins');
+    });
+  }
+
+  // --- Plinko — same idiom (client/plinko.ts), ports its canvas peg-drop physics directly. ---
+  const PLINKO_PAD = 18, PLINKO_PAD_TOP = 30, PLINKO_PAD_BOT = 54, PLINKO_PEG_R = 5, PLINKO_BALL_R = 7, PLINKO_STEP_MS = 155;
+  const PLINKO_SLOT_COLORS = ['#22d3ee', '#3b82f6', '#f59e0b', '#f97316', '#ef4444'];
+  function plinkoSlotColor(slot: number): string {
+    const dist = Math.abs(slot - 4);
+    return PLINKO_SLOT_COLORS[Math.min(dist, PLINKO_SLOT_COLORS.length - 1)];
+  }
+  function plinkoEaseInOut(t: number): number { return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t; }
+  function plinkoRoundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+  let plinkoAnimating = false;
+  let plinkoRafId = 0;
+  function openPlinko() {
+    dialogOpen = true;
+    plinkoDialogOpen = true;
+    plinkoAnimating = false;
+    keys.clear(); joyActive = false;
+    renderPlinkoDialog();
+    dialog.style.display = 'flex';
+  }
+  function renderPlinkoDialog() {
+    dialogBox.replaceChildren();
+    dialogBox.appendChild(casinoDialogHeader('🔴 Plinko', 'plinkoWorldCoins'));
+
+    const canvas = document.createElement('canvas');
+    canvas.id = 'plinkoWorldCanvas';
+    canvas.width = 300; canvas.height = 260;
+    canvas.style.cssText = 'display:block;width:100%;border-radius:8px;margin-bottom:8px;';
+    dialogBox.appendChild(canvas);
+
+    const betRow = document.createElement('div');
+    betRow.style.cssText = 'display:flex;gap:8px;align-items:center;justify-content:center;margin-bottom:8px;';
+    const betInput = document.createElement('input');
+    betInput.id = 'plinkoWorldBet';
+    betInput.type = 'number'; betInput.min = '1'; betInput.step = '1'; betInput.value = '10';
+    betInput.style.cssText = 'width:80px;text-align:center;background:#0c1330;color:#e8eefc;border:1px solid #38508f;border-radius:8px;padding:6px;';
+    const dropBtn = document.createElement('button');
+    dropBtn.id = 'plinkoWorldDrop';
+    dropBtn.type = 'button'; dropBtn.textContent = '🔴 Drop';
+    dropBtn.style.cssText = 'cursor:pointer;padding:8px 18px;border-radius:10px;font-weight:700;background:#3a5aa8;color:#fff;border:1px solid #5a7ac8;';
+    dropBtn.onclick = plinkoDoDrop;
+    betRow.append(betInput, dropBtn);
+    dialogBox.appendChild(betRow);
+
+    const resultEl = document.createElement('div');
+    resultEl.id = 'plinkoWorldResult';
+    resultEl.style.cssText = 'text-align:center;font-size:13px;min-height:18px;margin-bottom:8px;color:#9fb0d8;';
+    dialogBox.appendChild(resultEl);
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+
+    plinkoDrawIdle();
+  }
+  function plinkoLayout(canvas: HTMLCanvasElement) {
+    const W = canvas.width, H = canvas.height;
+    return { W, H, usableW: W - 2 * PLINKO_PAD, usableH: H - PLINKO_PAD_TOP - PLINKO_PAD_BOT };
+  }
+  function plinkoPegXY(canvas: HTMLCanvasElement, r: number, p: number) {
+    const { usableW, usableH } = plinkoLayout(canvas);
+    return {
+      x: PLINKO_PAD + (p + 0.5) * usableW / (r + 1),
+      y: PLINKO_PAD_TOP + (r + 1) * usableH / (PLINKO_ROWS + 1),
+    };
+  }
+  function plinkoBallPos(canvas: HTMLCanvasElement, path: boolean[], k: number) {
+    const { usableW, usableH } = plinkoLayout(canvas);
+    const rights = path.slice(0, k).filter(Boolean).length;
+    return {
+      x: PLINKO_PAD + (rights + 0.5) * usableW / (k + 1),
+      y: PLINKO_PAD_TOP + k * usableH / (PLINKO_ROWS + 1),
+    };
+  }
+  function plinkoDrawPeg(ctx: CanvasRenderingContext2D, x: number, y: number, glow: number, traced: boolean) {
+    ctx.save();
+    if (glow > 0) { ctx.shadowColor = '#ffffff'; ctx.shadowBlur = 14 * glow; }
+    else if (traced) { ctx.shadowColor = '#22d3ee'; ctx.shadowBlur = 6; }
+    const g = ctx.createRadialGradient(x - 1.5, y - 1.8, 0, x, y, PLINKO_PEG_R);
+    const top = glow > 0 ? `rgba(255,255,255,${0.85 + 0.15 * glow})` : traced ? '#70c8f0' : '#9ab4cc';
+    g.addColorStop(0, top);
+    g.addColorStop(0.4, traced ? '#3a7090' : '#4e6880');
+    g.addColorStop(1, '#1a2a3c');
+    ctx.beginPath();
+    ctx.arc(x, y, PLINKO_PEG_R, 0, Math.PI * 2);
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.restore();
+  }
+  function plinkoDrawBall(ctx: CanvasRenderingContext2D, x: number, y: number, alpha = 1) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.shadowColor = '#f9d71c';
+    ctx.shadowBlur = 22;
+    const g = ctx.createRadialGradient(x - 2.5, y - 2.5, 0.5, x, y, PLINKO_BALL_R);
+    g.addColorStop(0, '#fffde0');
+    g.addColorStop(0.4, '#f9d71c');
+    g.addColorStop(0.8, '#d97706');
+    g.addColorStop(1, '#92400e');
+    ctx.beginPath();
+    ctx.arc(x, y, PLINKO_BALL_R, 0, Math.PI * 2);
+    ctx.fillStyle = g;
+    ctx.fill();
+    ctx.restore();
+  }
+  function plinkoDrawScene(opts: {
+    ballX: number; ballY: number; ballAlpha: number;
+    hitPegs: Map<string, number>; tracedPegs: Set<string>;
+    trail: { x: number; y: number; a: number }[]; winSlot: number; winGlow: number;
+  }) {
+    const canvas = dialogBox.querySelector<HTMLCanvasElement>('#plinkoWorldCanvas');
+    const ctx = canvas?.getContext('2d');
+    if (!canvas || !ctx) return;
+    const { W, H, usableW, usableH } = plinkoLayout(canvas);
+    ctx.clearRect(0, 0, W, H);
+    const bg = ctx.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, '#0d1830');
+    bg.addColorStop(1, '#070c18');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(50,80,130,0.18)';
+    for (let gx = 10; gx < W; gx += 20) for (let gy = 10; gy < H; gy += 20) ctx.fillRect(gx - 0.5, gy - 0.5, 1, 1);
+    for (let s = 0; s <= PLINKO_ROWS + 1; s++) {
+      const x = PLINKO_PAD + s * usableW / (PLINKO_ROWS + 1);
+      ctx.strokeStyle = 'rgba(30,42,60,0.7)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x, PLINKO_PAD_TOP + usableH * 0.88);
+      ctx.lineTo(x, H - PLINKO_PAD_BOT + 4);
+      ctx.stroke();
+    }
+    const slotTop = H - PLINKO_PAD_BOT + 6;
+    const bw = usableW / (PLINKO_ROWS + 1) - 4;
+    const bh = 28;
+    for (let s = 0; s <= PLINKO_ROWS; s++) {
+      const sx = PLINKO_PAD + (s + 0.5) * usableW / (PLINKO_ROWS + 1);
+      const color = plinkoSlotColor(s);
+      const isWin = s === opts.winSlot;
+      const pulse = isWin ? opts.winGlow : 0;
+      ctx.save();
+      if (pulse > 0) { ctx.shadowColor = color; ctx.shadowBlur = 20 * pulse; }
+      plinkoRoundRect(ctx, sx - bw / 2, slotTop, bw, bh, 4);
+      const sg = ctx.createLinearGradient(sx, slotTop, sx, slotTop + bh);
+      sg.addColorStop(0, color + (isWin ? 'cc' : '40'));
+      sg.addColorStop(1, color + (isWin ? '55' : '1a'));
+      ctx.fillStyle = sg;
+      ctx.fill();
+      ctx.strokeStyle = color + (isWin ? 'ff' : '60');
+      ctx.lineWidth = isWin ? 1.5 : 0.75;
+      ctx.stroke();
+      ctx.restore();
+      ctx.fillStyle = isWin ? '#ffffff' : '#b0c4d8';
+      ctx.font = `bold ${isWin ? 10 : 9}px ui-monospace, monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(`${PLINKO_PAYOUTS[s]}×`, sx, slotTop + bh / 2);
+    }
+    for (let r = 0; r < PLINKO_ROWS; r++) {
+      for (let p = 0; p <= r; p++) {
+        const { x, y } = plinkoPegXY(canvas, r, p);
+        plinkoDrawPeg(ctx, x, y, opts.hitPegs.get(`${r},${p}`) ?? 0, opts.tracedPegs.has(`${r},${p}`));
+      }
+    }
+    for (const t of opts.trail) {
+      ctx.save();
+      ctx.globalAlpha = t.a * 0.55;
+      ctx.shadowColor = '#f9d71c';
+      ctx.shadowBlur = 10;
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, PLINKO_BALL_R * 0.55, 0, Math.PI * 2);
+      ctx.fillStyle = '#f9d71c';
+      ctx.fill();
+      ctx.restore();
+    }
+    if (opts.ballAlpha > 0) plinkoDrawBall(ctx, opts.ballX, opts.ballY, opts.ballAlpha);
+    if (opts.winGlow > 0.7) {
+      ctx.save();
+      ctx.globalAlpha = (opts.winGlow - 0.7) * 0.25;
+      ctx.fillStyle = plinkoSlotColor(opts.winSlot);
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+    }
+  }
+  function plinkoDrawIdle() {
+    plinkoDrawScene({ ballX: 0, ballY: 0, ballAlpha: 0, hitPegs: new Map(), tracedPegs: new Set(), trail: [], winSlot: -1, winGlow: 0 });
+  }
+  function plinkoDoDrop() {
+    if (plinkoAnimating) return;
+    const betInput = dialogBox.querySelector<HTMLInputElement>('#plinkoWorldBet');
+    const dropBtn = dialogBox.querySelector<HTMLButtonElement>('#plinkoWorldDrop');
+    const resultEl = dialogBox.querySelector<HTMLDivElement>('#plinkoWorldResult');
+    if (!betInput || !dropBtn || !resultEl) return;
+    const amount = Math.max(1, Math.floor(Number(betInput.value)));
+    plinkoAnimating = true;
+    dropBtn.disabled = true;
+    resultEl.textContent = '';
+    net.plinkoDrop(amount);
+  }
+  function plinkoApplyResult(msg: PlinkoResultMsg) {
+    if (plinkoRafId) cancelAnimationFrame(plinkoRafId);
+    const startTs = performance.now();
+    const hitPegs = new Map<string, number>();
+    const tracedPegs = new Set<string>();
+    const trail: { x: number; y: number; a: number }[] = [];
+    let lastTrailX = -999, lastTrailY = -999, lastHitRow = -1;
+    let winGlow = 0, winSettled = false;
+    const canvas = dialogBox.querySelector<HTMLCanvasElement>('#plinkoWorldCanvas');
+    const frame = (now: number) => {
+      if (!canvas) return;
+      const step = (now - startTs) / PLINKO_STEP_MS;
+      const k = Math.floor(step);
+      const frac = step - k;
+      if (k >= PLINKO_ROWS) {
+        if (!winSettled) { winSettled = true; winGlow = 1.0; net.playSound('win'); }
+        winGlow = Math.max(0, winGlow - 0.018);
+        const { x, y } = plinkoBallPos(canvas, msg.path, PLINKO_ROWS);
+        plinkoDrawScene({ ballX: x, ballY: y, ballAlpha: 1, hitPegs, tracedPegs, trail: [], winSlot: msg.slot, winGlow });
+        if (winGlow > 0) {
+          plinkoRafId = requestAnimationFrame(frame);
+        } else {
+          plinkoAnimating = false;
+          const dropBtn = dialogBox.querySelector<HTMLButtonElement>('#plinkoWorldDrop');
+          const resultEl = dialogBox.querySelector<HTMLDivElement>('#plinkoWorldResult');
+          if (dropBtn) dropBtn.disabled = false;
+          const netAmt = msg.payout - msg.bet;
+          if (resultEl) {
+            if (msg.payout > 0) {
+              resultEl.textContent = `${msg.multiplier}× · +${netAmt}🪙`;
+              resultEl.style.color = '#6ee7a8';
+            } else {
+              resultEl.textContent = `${msg.multiplier}× · lost ${msg.bet}🪙`;
+              resultEl.style.color = '#ff7a7a';
+            }
+          }
+          casinoRefreshCoins('plinkoWorldCoins');
+        }
+        return;
+      }
+      for (const [key, val] of hitPegs) {
+        const next = val - 0.07;
+        if (next <= 0) hitPegs.delete(key); else hitPegs.set(key, next);
+      }
+      const from = plinkoBallPos(canvas, msg.path, k);
+      const to = plinkoBallPos(canvas, msg.path, k + 1);
+      const t = plinkoEaseInOut(frac);
+      const arc = Math.sin(frac * Math.PI) * 5;
+      const bx = from.x + (to.x - from.x) * t;
+      const by = from.y + (to.y - from.y) * frac + arc;
+      if (frac < 0.18 && k !== lastHitRow && k < PLINKO_ROWS) {
+        lastHitRow = k;
+        const rights = msg.path.slice(0, k).filter(Boolean).length;
+        hitPegs.set(`${k},${rights}`, 1.0);
+        tracedPegs.add(`${k},${rights}`);
+      }
+      if (Math.abs(bx - lastTrailX) + Math.abs(by - lastTrailY) > 7) {
+        trail.unshift({ x: bx, y: by, a: 0.9 });
+        if (trail.length > 5) trail.pop();
+        lastTrailX = bx; lastTrailY = by;
+      }
+      for (const t2 of trail) t2.a *= 0.82;
+      plinkoDrawScene({ ballX: bx, ballY: by, ballAlpha: 1, hitPegs, tracedPegs, trail: [...trail], winSlot: -1, winGlow: 0 });
+      plinkoRafId = requestAnimationFrame(frame);
+    };
+    plinkoRafId = requestAnimationFrame(frame);
   }
 
   // First-time character creator — the ONE thing every brand-new visitor sees, and it's rendered
@@ -8319,20 +9991,32 @@ export function startWorld(net: WorldNet): void {
     if (c) { selfX = c.x + c.w / 2; selfY = c.y + c.h + 44; } // step back out the door
     enterChime();
   }
-  // Walking up to a cabinet and confirming sends you straight into that game's real panel —
-  // same net.openFeature() plumbing the old flat dialog list used, just reached by walking now.
-  // Slots and Craps are the exceptions: they're native World dialogs (see openSlots()/
-  // openCraps()), opened directly with no confirm step, matching the Shop/Pet-Shop walk-straight-in
-  // idiom.
+  // Walking up to a cabinet steps straight into that game's native World dialog now — every
+  // Casino game is one now (see openSlots()/openCraps()/openBj()/openHilo()/openMines()/
+  // openHorse()/openCrash()/openRoulette()/openPlinko()), same walk-straight-in idiom as
+  // Shop/Pet-Shop (no confirm step). lootbox/blackmarket aren't played on a cabinet (they're
+  // Shop-adjacent panels) — walking up to one of those still delegates out via openFeature().
   function playCasinoGame(g: NonNullable<typeof nearCasinoGame>) {
     if (dialogOpen || talkOpen) return;
-    if (g.feature === 'slots') { openSlots(); return; }
-    if (g.feature === 'craps') { openCraps(); return; }
-    const feature = g.feature; // captured as a const so the closure below keeps the narrowed (no 'slots'/'craps') type
-    const emoji = CASINO_GAMES.find((c) => c.feature === feature)?.emoji ?? '🎰';
-    openDialog(`${emoji} ${g.label}`, `Step up and play ${g.label}.`, [
-      { label: `▶️ Play ${g.label}`, onPick: () => { pause(); net.openFeature(feature); } },
-    ]);
+    switch (g.feature) {
+      case 'slots': openSlots(); return;
+      case 'craps': openCraps(); return;
+      case 'blackjack': openBj(); return;
+      case 'hilo': openHilo(); return;
+      case 'mines': openMines(); return;
+      case 'horse': openHorse(); return;
+      case 'crash': openCrash(); return;
+      case 'roulette': openRoulette(); return;
+      case 'plinko': openPlinko(); return;
+      case 'lootbox': case 'blackmarket': {
+        const feature = g.feature;
+        const emoji = CASINO_GAMES.find((c) => c.feature === feature)?.emoji ?? '🎰';
+        openDialog(`${emoji} ${g.label}`, `Step up and play ${g.label}.`, [
+          { label: `▶️ Play ${g.label}`, onPick: () => { pause(); net.openFeature(feature); } },
+        ]);
+        return;
+      }
+    }
   }
 
   // McDonald's confetti burst for jackpot Happy Meal wins.
@@ -9972,6 +11656,7 @@ export function startWorld(net: WorldNet): void {
     paused = true;
     keys.clear(); joyActive = false; handbrake = false;
     dialogOpen = false; shopDialogOpen = false; newsDialogOpen = false; loanDialogOpen = false; houseDialogOpen = false; marketDialogOpen = false; slotsDialogOpen = false; crapsDialogOpen = false;
+    bjDialogOpen = false; hiloDialogOpen = false; minesDialogOpen = false; horseDialogOpen = false; crashDialogOpen = false; rouletteDialogOpen = false; plinkoDialogOpen = false;
     dialog.style.display = 'none'; // don't resume back into the dialog that sent us here
     game?.loop.sleep();
     overlay.style.display = 'none';
@@ -10077,6 +11762,17 @@ export function startWorld(net: WorldNet): void {
     feedMarket() { if (marketDialogOpen) { const list = dialogBox.querySelector<HTMLDivElement>('#marketWorldList'); if (list) renderMarketWorldList(list); } },
     feedSlotsResult(msg) { if (slotsDialogOpen) slotsAnimateResult(msg); },
     feedCrapsResult(msg) { if (crapsDialogOpen) crapsApplyResult(msg); },
+    feedBjState(msg) { if (bjDialogOpen) bjApplyState(msg); },
+    feedBjResult(msg) { if (bjDialogOpen) bjApplyResult(msg); },
+    feedHiloState(msg) { if (hiloDialogOpen) hiloApplyState(msg); },
+    feedHiloResult(msg) { if (hiloDialogOpen) hiloApplyResult(msg); },
+    feedMinesState(msg) { if (minesDialogOpen) minesApplyState(msg); },
+    feedMinesResult(msg) { if (minesDialogOpen) minesApplyResult(msg); },
+    feedHorseCard(msg) { if (horseDialogOpen) horseApplyCard(msg); },
+    feedHorseResult(msg) { if (horseDialogOpen) horseApplyResult(msg); },
+    feedCrashState(msg) { crashApplyState(msg); }, // always tracks history/cache, not gated on crashDialogOpen (see crashApplyState)
+    feedRouletteResult(msg) { if (rouletteDialogOpen) rlApplyResult(msg); },
+    feedPlinkoResult(msg) { if (plinkoDialogOpen) plinkoApplyResult(msg); },
   };
   syncDriveBtn();
   net.enter();
