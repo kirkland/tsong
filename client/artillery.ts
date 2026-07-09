@@ -847,6 +847,7 @@ export function startArtillery(net: ArtilleryNet): void {
       window.setTimeout(() => { if (waOpen) backToLobby(); }, 4800);
       return;
     }
+    if (!fighters.some((f) => f.alive)) return; // everyone's gone — the decided-war check ends it
     do { turnPi = (turnPi + 1) % fighters.length; } while (!fighters[turnPi].alive);
     wind = Math.round((Math.random() * 2 - 1) * 100) / 100;
     turnEndsAt = performance.now() + WA_TURN_MS;
@@ -1298,6 +1299,16 @@ export function startArtillery(net: ArtilleryNet): void {
     // hasFired flag only knows about OUR shots, which is exactly the bug that skipped turns)
     if (isHost && matchWinner === -2 && !resolving && !eventResolving && !turnShotTaken && turnPi >= 0 && now > turnEndsAt) {
       hostNextTurn(); // clock expired — next soldier up
+    }
+    // host duty: end the war the MOMENT it's decided. Rising-water deaths happen at turn
+    // start (after hostNextTurn's win check), so without this the match kept going — dead
+    // players even got their full 30s turn clocks ("people be dying and the game still going").
+    if (isHost && mode === 'play' && matchWinner === -2 && !resolving && !eventResolving) {
+      const aliveNow = fighters.filter((f) => f.alive);
+      const teamsNow = new Set(aliveNow.map((f) => teamOf(fighters.indexOf(f))));
+      const decided = fighters.length > 0 && (teamMode ? teamsNow.size <= 1 : aliveNow.length <= 1);
+      if (decided) hostNextTurn(); // runs the end-of-war path immediately
+      else if (turnPi >= 0 && fighters[turnPi] && !fighters[turnPi].alive) scheduleAdvance(1000); // skip the fallen fast
     }
     // sparks
     for (const s of sparks) { s.life += dt; s.x += s.vx * dt; s.y += s.vy * dt; s.vy += 700 * dt; }
