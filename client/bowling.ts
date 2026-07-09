@@ -20,7 +20,6 @@ const FOCAL = 320;            // perspective focal length
 const CAM_H = 0.72;           // camera height above floor (world units)
 const LANE_HW = 0.62;         // lane half-width (world units)
 const PIN_Z0 = 10.0;          // head-pin Z distance (world units)
-const PIN_VR = 0.28;          // visual pin radius (exaggerated for visibility)
 const PIN_VH = 0.65;          // visual pin height
 const LANE_LEN = 14.0;        // visible lane depth
 
@@ -77,14 +76,9 @@ let pinFallTimer = 0;
 //   • drag left/right        — aim  (−1 = left gutter, +1 = right)
 //   • drag DOWN (toward you) — power (pulling back like a slingshot)
 //   • release                — fire
-const DRAG_AIM_SCALE  = 220;   // px of horizontal drag → ±1 aim
 const DRAG_POW_SCALE  = 180;   // px of downward drag  → power 0–1
 let dragging = false;
-let dragOriginX = 0, dragOriginY = 0;
 let dragCurX = 0, dragCurY = 0;
-// charging = true while dragging (kept for phase compatibility)
-let aimX = 0;     // current aim line X (−1..1), updated by mouse/drag
-let charging = false;
 let chargeT = 0;  // unused with drag controls but kept to avoid breakage
 const CHARGE_FULL = 1.2;
 let lockedAim = 0, lockedPower = 0;
@@ -167,8 +161,8 @@ function resetLocal() {
   pinState = new Array(10).fill(true);
   fallingPins = []; particles = []; cel = null; pendingResult = null; pendingNext = null;
   if (pinFallTimer) { clearTimeout(pinFallTimer); pinFallTimer = 0; }
-  rollT = 0; charging = false; chargeT = 0; aimX = 0; aimWobbleT = 0; shakeT = 0;
-  dragging = false; dragOriginX = 0; dragOriginY = 0; dragCurX = 0; dragCurY = 0;
+  rollT = 0; chargeT = 0; aimWobbleT = 0; shakeT = 0;
+  dragging = false; dragCurX = 0; dragCurY = 0;
   isMyTurn = false; ballInFrame = 1; pinsStandingBefore = 10;
   // drunkLevel intentionally NOT reset here — beer accumulates all game.
 }
@@ -308,7 +302,7 @@ function _applyNext(m: any) {
   scores = m.scores ?? scores; frames = m.frames ?? frames;
   currentPlayerId = m.playerId ?? m.currentPlayerId;
   isMyTurn = currentPlayerId === selfId;
-  fallingPins = []; charging = false; chargeT = 0; pendingResult = null;
+  fallingPins = []; chargeT = 0; pendingResult = null;
   // bowlNextBall = still same player, 2nd ball; bowlNextTurn = new player's first ball
   ballInFrame = m.type === 'bowlNextBall' ? 2 : 1;
   pinsStandingBefore = pinState.filter(Boolean).length;
@@ -365,15 +359,12 @@ function canvasXY(clientX: number, clientY: number): [number, number] {
 }
 function startDrag(sx: number, sy: number) {
   if (!isMyTurn || (phase !== 'aiming' && phase !== 'charging')) return;
-  dragging = true; charging = true; aimWobbleT = 0;
-  dragOriginX = sx; dragOriginY = sy;
+  dragging = true; aimWobbleT = 0;
   dragCurX = sx; dragCurY = sy;
   setPhase('charging');
 }
 function moveDrag(sx: number, sy: number) {
   if (dragging) { dragCurX = sx; dragCurY = sy; }
-  // Also track for aim line even before dragging
-  aimX = Math.max(-1, Math.min(1, (sx - W / 2) / (W * 0.28)));
 }
 function endDrag() {
   if (!dragging) return;
@@ -402,7 +393,7 @@ function fireThrow() {
   const drunkDrift = drunkLevel > 0 ? (Math.random() - 0.5) * drunkLevel * 0.35 : 0;
   lockedAim   = Math.max(-1, Math.min(1, rawAim + drunkDrift));
   lockedPower = Math.min(1, rawPow);
-  charging = false; chargeT = 0; dragging = false;
+  chargeT = 0; dragging = false;
   setPhase('rolling'); rollT = 0;
   rollBallX = VP_X + lockedAim * W * 0.22;
   rollBallY = H - 40; rollBallR = 52;

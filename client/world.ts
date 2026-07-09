@@ -728,79 +728,6 @@ function makeFriendPortrait(emoji: string, bgColor: string): string {
   ctx.fillText(emoji, 50, 55);
   return c.toDataURL();
 }
-function makeMiraPortrait(level: number, mood: string): string {
-  const revealed = level >= 4;
-  const c = document.createElement('canvas'); c.width = 100; c.height = 100;
-  const ctx = c.getContext('2d')!;
-  const bg = revealed ? '#3a0008' : '#1e0832';
-  const grd = ctx.createRadialGradient(42, 38, 6, 50, 50, 50);
-  grd.addColorStop(0, bg + 'ee'); grd.addColorStop(1, '#080818dd');
-  ctx.fillStyle = grd;
-  ctx.beginPath(); ctx.arc(50, 50, 48, 0, Math.PI * 2); ctx.fill();
-  ctx.strokeStyle = level >= 3 ? 'rgba(255,30,60,0.55)' : 'rgba(255,255,255,0.22)';
-  ctx.lineWidth = 2.5; ctx.stroke();
-  ctx.font = '54px serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-  ctx.fillText(revealed ? '😈' : mood, 50, 55);
-  // Level 1+: horizontal scan lines
-  if (level >= 1) {
-    for (let y = 0; y < 100; y += 4) {
-      ctx.fillStyle = `rgba(0,0,0,${0.08 + level * 0.025})`;
-      ctx.fillRect(0, y, 100, 1);
-    }
-  }
-  // Level 2+: chromatic aberration (R/B channel split)
-  if (level >= 2) {
-    const shift = level >= 3 ? 5 : 2;
-    const src = ctx.getImageData(0, 0, 100, 100);
-    const dst = ctx.createImageData(100, 100);
-    for (let y = 0; y < 100; y++) {
-      for (let x = 0; x < 100; x++) {
-        const i = (y * 100 + x) * 4;
-        const ri = (y * 100 + Math.max(0, x - shift)) * 4;
-        const bi = (y * 100 + Math.min(99, x + shift)) * 4;
-        dst.data[i] = src.data[ri]; dst.data[i+1] = src.data[i+1];
-        dst.data[i+2] = src.data[bi+2]; dst.data[i+3] = src.data[i+3];
-      }
-    }
-    ctx.putImageData(dst, 0, 0);
-  }
-  // Level 3+: displaced glitch strips
-  if (level >= 3) {
-    const src = ctx.getImageData(0, 0, 100, 100);
-    const dst = new ImageData(new Uint8ClampedArray(src.data), 100, 100);
-    for (let s = 0; s < 5 + level; s++) {
-      const gy = Math.floor(Math.random() * 88);
-      const gh = 2 + Math.floor(Math.random() * 5);
-      const off = Math.floor(Math.random() * 18) - 9;
-      for (let y = gy; y < gy + gh && y < 100; y++) {
-        for (let x = 0; x < 100; x++) {
-          const sx = Math.min(99, Math.max(0, x - off));
-          const si = (y * 100 + sx) * 4, di = (y * 100 + x) * 4;
-          dst.data[di] = src.data[si]; dst.data[di+1] = src.data[si+1];
-          dst.data[di+2] = src.data[si+2]; dst.data[di+3] = src.data[si+3];
-        }
-      }
-    }
-    ctx.putImageData(dst, 0, 0);
-  }
-  // Level 4: red vignette + noise pixels
-  if (level >= 4) {
-    const vg = ctx.createRadialGradient(50, 50, 18, 50, 50, 50);
-    vg.addColorStop(0, 'transparent'); vg.addColorStop(1, 'rgba(200,0,30,0.52)');
-    ctx.fillStyle = vg; ctx.beginPath(); ctx.arc(50, 50, 48, 0, Math.PI * 2); ctx.fill();
-    const nd = ctx.getImageData(0, 0, 100, 100);
-    for (let i = 0; i < nd.data.length; i += 4) {
-      if (Math.random() < 0.045) {
-        nd.data[i] = 200 + Math.random() * 55; nd.data[i+1] = 0;
-        nd.data[i+2] = Math.random() * 60; nd.data[i+3] = 210;
-      }
-    }
-    ctx.putImageData(nd, 0, 0);
-  }
-  return c.toDataURL();
-}
-// --------------------------------------------------------------------------------------
-
 const NPCS: NpcDef[] = [
   {
     id: 'pip', name: 'Pip', shirt: 0xe05a6d, hair: 0x4a2f1a, skin: SKINS[0], hairStyle: 'spiky',
@@ -6932,9 +6859,6 @@ export function startWorld(net: WorldNet): void {
     const T = MC_WALL, ix = MC_INT.x, iy = MC_INT.y, iw = MC_INT.w, ih = MC_INT.h;
     const cx = ix + iw / 2;
 
-    const tile = (key: string, x: number, y: number, w: number, h: number, depth: number) =>
-      sc.add.tileSprite(x, y, w, h, key).setOrigin(0, 0).setTileScale(TEXEL, TEXEL).setDepth(depth);
-
     // Dark surround so a big viewport doesn't show grass
     sc.add.rectangle(ix - 900, iy - 900, iw + 1800, ih + 1800, 0x2a0000).setOrigin(0, 0).setDepth(iy - 1000);
 
@@ -7224,7 +7148,6 @@ export function startWorld(net: WorldNet): void {
       if (now >= rex.nextTurn) {
         rex.nextTurn = now + 2000 + Math.random() * 4000;
         const a = Math.random() * Math.PI * 2;
-        const r = 200 + Math.random() * 400;
         rex.vx = Math.cos(a) * (55 + Math.random() * 40);
         rex.vy = Math.sin(a) * (55 + Math.random() * 40);
         rex.img.setFlipX(rex.vx < 0);
