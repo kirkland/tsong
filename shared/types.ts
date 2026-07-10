@@ -194,7 +194,7 @@ export const COIN_SCALE = 100;
 export interface CosmeticItem {
   id: string;
   name: string;
-  slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' | 'title' | 'song' | 'car' | 'boat' | 'pet';
+  slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' | 'title' | 'song' | 'car' | 'boat' | 'pet' | 'carcolor';
   price: number;
   locked?: 'campaign' | 'fishing' | 'fishing_rare' | 'fishing_junk' | 'dungeon' | 'fountain'; // not buyable — unlocked by in-game achievements
   audio?: string; // for 'song' items: path to the mp3 that plays during your matches
@@ -301,6 +301,15 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'car-monster', name: '🛻 Monster Truck', slot: 'car', price: 0, locked: 'dungeon' }, // the Ruins locked-room prize
   // Boats (slot 'boat') — equipped alongside a car; usable on water. Look/physics live in CARS.
   { id: 'car-boat', name: "🛥️ Bill's Boat", slot: 'boat', price: 0, locked: 'fishing_junk' }, // fish up boat keys from junk to unlock (it's a yacht)
+  // Car paint jobs (slot 'carcolor') — an optional repaint layered over whichever car you've
+  // equipped (never a boat — the yacht always keeps its own colours); look lives in CAR_COLORS
+  // below. Equip none to keep the car's stock paint.
+  { id: 'carcolor-white', name: '⚪ Pearl White', slot: 'carcolor', price: 0 },
+  { id: 'carcolor-black', name: '⚫ Matte Black', slot: 'carcolor', price: 0 },
+  { id: 'carcolor-neon', name: '🟢 Neon Green', slot: 'carcolor', price: 2500 },
+  { id: 'carcolor-gold', name: '🟡 Gold Rush', slot: 'carcolor', price: 3000 },
+  { id: 'carcolor-flame', name: '🔥 Flame Job', slot: 'carcolor', price: 3500 },
+  { id: 'carcolor-rainbow', name: '🌈 Rainbow', slot: 'carcolor', price: 6000 }, // animated — cycles hue in-world
   // Pets (slot 'pet') — follow you around the World map; look/animation keyed by PETS below.
   { id: 'pet-rock', name: '🪨 Pet Rock', slot: 'pet', price: 50000 },
   { id: 'pet-pikachu', name: '⚡ Pikachu', slot: 'pet', price: 100000 },
@@ -450,6 +459,29 @@ export const CARS: readonly CarSpec[] = [
 export function carById(id: string | null | undefined): CarSpec | null {
   if (!id) return null;
   return CARS.find((c) => c.id === id) ?? null;
+}
+
+// --- Car colors ---------------------------------------------------------------------------
+// An optional repaint layered over whichever car you've equipped (slot 'carcolor', separate
+// from the 'car' slot itself) — body/accent here override the CarSpec's defaults when equipped.
+// Never applies to the boat, which always renders in its own colours.
+export interface CarColorSpec {
+  id: string;
+  name: string;
+  body: string;
+  accent: string;
+}
+export const CAR_COLORS: readonly CarColorSpec[] = [
+  { id: 'carcolor-white', name: 'Pearl White', body: '#f4f4f4', accent: '#c9c9c9' },
+  { id: 'carcolor-black', name: 'Matte Black', body: '#1a1a1a', accent: '#0a0a0a' },
+  { id: 'carcolor-neon', name: 'Neon Green', body: '#39ff14', accent: '#0a3d0a' },
+  { id: 'carcolor-gold', name: 'Gold Rush', body: '#ffd23f', accent: '#8a6d1a' },
+  { id: 'carcolor-flame', name: 'Flame Job', body: '#ff5e1a', accent: '#ffcf33' },
+  { id: 'carcolor-rainbow', name: 'Rainbow', body: '#ff3df0', accent: '#3df0ff' }, // world.ts animates this one live; these are just the shop-swatch preview colours
+] as const;
+export function carColorById(id: string | null | undefined): CarColorSpec | null {
+  if (!id) return null;
+  return CAR_COLORS.find((c) => c.id === id) ?? null;
 }
 
 // --- Pets -------------------------------------------------------------------------------
@@ -827,6 +859,7 @@ export interface WorldAvatar {
   y: number;
   a?: number;          // heading in radians (only meaningful while driving)
   car?: string | null; // car id being driven, or null/undefined when on foot
+  carColor?: string | null; // equipped paint job overriding the car's stock colours, or null/undefined
   pet?: string | null; // pet id trailing behind this avatar, or null/undefined when none
   bot?: boolean;       // true for netizen avatars
   jailed?: boolean;    // true while locked in the jail cell (others can pay to bail them out)
@@ -1004,7 +1037,7 @@ export type ClientMsg =
   | { type: 'campaignScore'; score: number; stage: number; won: boolean } // record a campaign run (arcade score, furthest stage, whether Davis fell)
   | { type: 'fishCatch'; tier: string; sizeLb: number } // landed a fish — server picks the House-funded coin reward by tier (client never sends coins)
   | { type: 'shopBuy'; item: string } // buy a cosmetic from the shop
-  | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' | 'title' | 'song' | 'car' | 'boat' | 'pet'; item: string | null } // equip (item) or unequip (null) a cosmetic
+  | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' | 'title' | 'song' | 'car' | 'boat' | 'pet' | 'carcolor'; item: string | null } // equip (item) or unequip (null) a cosmetic
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
   | { type: 'dailySpin' } // claim the once-per-24h reward spin
   | { type: 'stockInvest'; coin: string; amount: number; side?: StockSide } // open a long or short position
@@ -1037,7 +1070,7 @@ export type ClientMsg =
   | { type: 'loanBookReq' } // request the public open-loan book (for the clickable stability-bar modal)
   | { type: 'worldEnter' } // step into the free-roam world map (start sending/receiving avatar positions)
   | { type: 'worldLeave' } // leave the world map
-  | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null; pet?: string | null } // client-authoritative avatar position (world units), heading + car when driving, pet trailing
+  | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null; pet?: string | null; carColor?: string | null } // client-authoritative avatar position (world units), heading + car when driving, pet trailing, car paint job
   | { type: 'worldChat'; text: string; say?: boolean } // say a line in the World — pops as a speech bubble over your avatar; say=true (the Y popup) renders it purple
   | { type: 'worldBoom'; x: number; y: number; r?: number; fx?: WorldFx } // an explosion here (car crash or weapon strike) — broadcast the effect; r>0 = a damaging blast
   | { type: 'worldRocket'; x: number; y: number; a: number; w?: WorldWeapon; len?: number } // we fired here, heading a → broadcast so others see the shot
@@ -1827,6 +1860,7 @@ export interface WalletMsg {
   car: string | null; // equipped car (driven in the World map)
   boat: string | null; // equipped boat (used on water; equipped alongside a car)
   pet: string | null; // equipped pet (trails behind you in the World map)
+  carcolor: string | null; // equipped car paint job (overrides the car's stock colours)
   balltrail: string | null; // equipped ball trail cosmetic
   goalcelebr: string | null; // equipped goal celebration cosmetic
   // Owned scarce exclusives (loot-box mints / marketplace buys): item id + mint serial +

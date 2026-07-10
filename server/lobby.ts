@@ -1945,15 +1945,15 @@ export class Lobby {
   }
 
   /** Record a client's self-reported avatar position. Jailed players are pinned to the cell. */
-  worldMove(ws: WebSocket, x: number, y: number, a?: number, car?: string | null, pet?: string | null) {
+  worldMove(ws: WebSocket, x: number, y: number, a?: number, car?: string | null, pet?: string | null, carColor?: string | null) {
     const conn = this.conns.get(ws);
     if (conn?.jailed) {
       const cx = Math.max(JAIL_CELL.x, Math.min(JAIL_CELL.x + JAIL_CELL.w, x));
       const cy = Math.max(JAIL_CELL.y, Math.min(JAIL_CELL.y + JAIL_CELL.h, y));
-      this.world.move(ws, cx, cy, a, null, pet); // no car while jailed
+      this.world.move(ws, cx, cy, a, null, pet); // no car (or paint job) while jailed
       return;
     }
-    this.world.move(ws, x, y, a, car, pet);
+    this.world.move(ws, x, y, a, car, pet, carColor);
   }
 
   /** A player pressed '/' in the World and said a line — fan it out to everyone in the world as a
@@ -2074,7 +2074,7 @@ export class Lobby {
       const c = this.conns.get(ws);
       const p = this.world.positionOf(ws);
       if (!c || !p) continue;
-      out.push({ id: c.id, name: c.nickname || 'anon', color: c.color, x: p.x, y: p.y, a: p.a, car: p.car, pet: p.pet, jailed: c.jailed });
+      out.push({ id: c.id, name: c.nickname || 'anon', color: c.color, x: p.x, y: p.y, a: p.a, car: p.car, carColor: p.carColor, pet: p.pet, jailed: c.jailed });
     }
     // Append spawned netizen avatars.
     for (let i = 0; i < Lobby.NETIZEN_NAMES.length; i++) {
@@ -3069,7 +3069,7 @@ export class Lobby {
         c.song = w.song;
         c.balltrail = w.balltrail;
         c.goalcelebr = w.goalcelebr;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, boat: w.boat, pet: w.pet, balltrail: w.balltrail, goalcelebr: w.goalcelebr, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, boat: w.boat, pet: w.pet, balltrail: w.balltrail, goalcelebr: w.goalcelebr, carcolor: w.carcolor, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet load failed:', e));
   }
@@ -3083,7 +3083,7 @@ export class Lobby {
         const c = this.conns.get(ws);
         if (!c) return;
         c.hat = w.hat; c.skin = w.skin; c.trail = w.trail; c.title = w.title; c.song = w.song; c.balltrail = w.balltrail; c.goalcelebr = w.goalcelebr;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, boat: w.boat, pet: w.pet, balltrail: w.balltrail, goalcelebr: w.goalcelebr, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, boat: w.boat, pet: w.pet, balltrail: w.balltrail, goalcelebr: w.goalcelebr, carcolor: w.carcolor, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
       })
       .catch((e) => console.error('wallet send failed:', e));
   }
@@ -3368,7 +3368,7 @@ export class Lobby {
   }
 
   /** Equip (item) or unequip (null) a cosmetic in its slot. */
-  shopEquip(ws: WebSocket, slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' | 'title' | 'song' | 'car' | 'boat' | 'pet', item: string | null) {
+  shopEquip(ws: WebSocket, slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' | 'title' | 'song' | 'car' | 'boat' | 'pet' | 'carcolor', item: string | null) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
     if (item !== null) {

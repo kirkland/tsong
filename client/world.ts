@@ -48,6 +48,7 @@ import {
   WorldBuildingKind,
   CarSpec,
   carById,
+  carColorById,
   petById,
   type PetKind,
   NETIZEN_DIALOGUE,
@@ -107,7 +108,7 @@ export interface WorldWallet {
   owned: string[];
   hat: string | null; skin: string | null; trail: string | null; title: string | null;
   song: string | null; car: string | null; boat: string | null; pet: string | null;
-  balltrail: string | null; goalcelebr: string | null;
+  balltrail: string | null; goalcelebr: string | null; carcolor: string | null;
   exclusives: { id: string; serial: number; instanceId: number }[];
   bets: { side: Side; amount: number; odds: number }[];
   nextSpinAt: number;
@@ -133,7 +134,7 @@ export interface WorldMarket {
 export interface WorldNet {
   enter(): void;                 // tell the server we're now in the world
   leave(): void;                 // tell the server we've left
-  move(x: number, y: number, a?: number, car?: string | null, pet?: string | null): void; // stream our state
+  move(x: number, y: number, a?: number, car?: string | null, pet?: string | null, carColor?: string | null): void; // stream our state
   name(): string;                // our nickname (for our own label)
   color(): string;               // our avatar color
   needsCharacter(): boolean;      // true until a first-time visitor has confirmed a real name/color
@@ -142,11 +143,12 @@ export interface WorldNet {
   car(): string | null;          // our equipped car id (null = none → can't drive)
   boat(): string | null;         // our equipped boat id (null = none → can't board a boat)
   pet(): string | null;          // our equipped pet id (null = none → nothing trails us)
+  carColor(): string | null;     // our equipped paint job overriding the car's stock colours (null = stock)
   // Shop — rendered natively inside World's own dialog (see openShop()) rather than delegated out
   // to the flat panel, so browsing/buying/equipping/spinning/betting never leaves World's view.
   wallet(): WorldWallet;
   shopBuy(item: string): void;
-  shopEquip(slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' | 'title' | 'song' | 'car' | 'boat' | 'pet', item: string | null): void;
+  shopEquip(slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' | 'title' | 'song' | 'car' | 'boat' | 'pet' | 'carcolor', item: string | null): void;
   spinStatus(): { ready: boolean; label: string };
   dailySpin(): void;
   betInfo(): WorldBetInfo | null;
@@ -2017,6 +2019,18 @@ function hexToInt(c: string): number {
   if (c[0] === '#') c = c.slice(1);
   if (c.length === 3) c = c[0] + c[0] + c[1] + c[1] + c[2] + c[2];
   return parseInt(c, 16) >>> 0;
+}
+// Hue (any real number, wraps mod 360) → a 0xRRGGBB int at fixed saturation/lightness — used to
+// animate the Rainbow car paint job (a Phaser tint needs an int, not a CSS hsl() string).
+function hueToInt(h: number, s = 0.85, l = 0.55): number {
+  h = ((h % 360) + 360) % 360;
+  const c = (1 - Math.abs(2 * l - 1)) * s;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = l - c / 2;
+  const [r, g, b] =
+    h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] :
+    h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+  return (Math.round((r + m) * 255) << 16) | (Math.round((g + m) * 255) << 8) | Math.round((b + m) * 255);
 }
 let wishHandler: ((total: number, granted: boolean) => void) | null = null;
 export function feedWishResult(m: { total: number; title?: boolean }) { wishHandler?.(m.total, !!m.title); }
@@ -4679,7 +4693,7 @@ export function startWorld(net: WorldNet): void {
         item.slot === 'hat' ? w.hat : item.slot === 'skin' ? w.skin : item.slot === 'trail' ? w.trail
         : item.slot === 'song' ? w.song : item.slot === 'car' ? w.car : item.slot === 'boat' ? w.boat
         : item.slot === 'pet' ? w.pet : item.slot === 'balltrail' ? w.balltrail
-        : item.slot === 'goalcelebr' ? w.goalcelebr : w.title;
+        : item.slot === 'goalcelebr' ? w.goalcelebr : item.slot === 'carcolor' ? w.carcolor : w.title;
       const equipped = equippedValue === item.id;
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:6px;background:#18203a;';
@@ -4693,6 +4707,17 @@ export function startWorld(net: WorldNet): void {
         const car = carById(item.id);
         const sw = document.createElement('span');
         sw.style.cssText = `display:inline-block;width:26px;height:16px;border-radius:4px;flex-shrink:0;background:${car?.body ?? '#888'};border:2px solid ${car?.accent ?? '#222'};`;
+        row.appendChild(sw);
+      } else if (item.slot === 'carcolor') {
+        // A paint job swap — same swatch idiom as cars/boats, just keyed off CAR_COLORS instead.
+        const cc = carColorById(item.id);
+        const sw = document.createElement('span');
+        sw.style.cssText = item.id === 'carcolor-rainbow'
+          // Hints that it animates in-world (a static swatch can't show the live hue-cycle itself).
+          ? 'display:inline-block;width:26px;height:16px;border-radius:4px;flex-shrink:0;border:2px solid #333;' +
+            'background:linear-gradient(90deg,#ff3b30,#ff9500,#ffd60a,#34c759,#0a84ff,#bf5af2,#ff3b30);' +
+            'background-size:200% auto;animation:lbrainbow 2s linear infinite;'
+          : `display:inline-block;width:26px;height:16px;border-radius:4px;flex-shrink:0;background:${cc?.body ?? '#888'};border:2px solid ${cc?.accent ?? '#222'};`;
         row.appendChild(sw);
       } else if (item.slot === 'pet') {
         const sw = document.createElement('span');
@@ -4747,6 +4772,8 @@ export function startWorld(net: WorldNet): void {
       for (const item of COSMETICS) if (item.slot === 'car') appendRow(item);
       appendSubhead('🛥️ Boats');
       for (const item of COSMETICS) if (item.slot === 'boat') appendRow(item);
+      appendSubhead('🎨 Paint Jobs');
+      for (const item of COSMETICS) if (item.slot === 'carcolor') appendRow(item);
     } else {
       for (const item of COSMETICS) if (item.slot === shopWorldTab) appendRow(item);
     }
@@ -9016,7 +9043,7 @@ export function startWorld(net: WorldNet): void {
     if (Math.abs(selfX - lastSentX) < 0.5 && Math.abs(selfY - lastSentY) < 0.5) return;
     lastSentX = selfX; lastSentY = selfY; lastSentAt = now;
     // Stream the boat id in the same field as the car id; others render it via carById (it's in CARS).
-    net.move(selfX, selfY, (driving || boating) ? facing : undefined, boating ? net.boat() : driving ? net.car() : null, net.pet());
+    net.move(selfX, selfY, (driving || boating) ? facing : undefined, boating ? net.boat() : driving ? net.car() : null, net.pet(), net.carColor());
   }
 
   // ============================================================================================
@@ -11934,7 +11961,7 @@ export function startWorld(net: WorldNet): void {
       updateCrates(now);
 
       // place our avatar straight from authoritative state (zero latency)
-      if (self) { placeAvatar(self, selfX, selfY, facing, boating ? net.boat() : driving ? net.car() : null, net.color(), net.name() || 'you'); applySay(self, net.selfId(), now); }
+      if (self) { placeAvatar(self, selfX, selfY, facing, boating ? net.boat() : driving ? net.car() : null, net.color(), net.name() || 'you', net.carColor()); applySay(self, net.selfId(), now); }
 
       // The Blessing of the Ball: a pulsing golden halo behind you + a draining HUD badge, both fading
       // as the swiftness wears off.
@@ -11972,7 +11999,7 @@ export function startWorld(net: WorldNet): void {
         }
         const ta = a.a ?? av.ra;
         av.ra += angDelta(av.ra, ta) * Math.min(1, dt * 12);
-        placeAvatar(av, av.rx, av.ry, av.ra, a.car ?? null, a.color, a.name);
+        placeAvatar(av, av.rx, av.ry, av.ra, a.car ?? null, a.color, a.name, a.carColor ?? null);
         applySay(av, a.id, now); // pop their speech bubble if they've said something recently
       }
       // drop avatars that left
@@ -12767,7 +12794,8 @@ export function startWorld(net: WorldNet): void {
   }
 
   // vehicleId: the car/boat id being driven, or null when on foot (then the person sprite shows).
-  function placeAvatar(av: Av, x: number, y: number, a: number, vehicleId: string | null, color: string, name: string) {
+  // carColor: an equipped paint-job id overriding the car's stock body/accent (never the boat's).
+  function placeAvatar(av: Av, x: number, y: number, a: number, vehicleId: string | null, color: string, name: string, carColor: string | null = null) {
     av.c.setPosition(x, y).setDepth(y);
     if (av.label.text !== name) av.label.setText(name);
     const tint = hexToInt(color);
@@ -12779,12 +12807,15 @@ export function startWorld(net: WorldNet): void {
       const spec = carById(vehicleId);
       const monster = spec?.id === 'car-monster';
       const boat = spec?.id === 'car-boat';
+      const paint = boat ? null : carColorById(carColor);
+      const rainbow = paint?.id === 'carcolor-rainbow';
       av.carWheels.setVisible(monster);
       av.carBody.setTexture(monster ? 'w-monster-body' : boat ? 'w-boat-body' : 'w-car-body');
       av.carRoof.setTexture(monster ? 'w-monster-roof' : boat ? 'w-boat-roof' : 'w-car-roof');
-      // The yacht is painted in full colour, so render it untinted; cars tint to their paint job.
-      av.carBody.setTint(boat ? 0xffffff : spec ? hexToInt(spec.body) : tint);
-      av.carRoof.setTint(boat ? 0xffffff : spec ? hexToInt(spec.accent) : 0xffffff);
+      // The yacht is painted in full colour, so render it untinted; cars tint to their paint job
+      // (an equipped carcolor overrides the car's own stock body/accent when present).
+      av.carBody.setTint(boat ? 0xffffff : rainbow ? hueToInt(performance.now() / 8) : paint ? hexToInt(paint.body) : spec ? hexToInt(spec.body) : tint);
+      av.carRoof.setTint(boat ? 0xffffff : rainbow ? hueToInt(performance.now() / 8 + 180) : paint ? hexToInt(paint.accent) : 0xffffff);
     }
   }
 

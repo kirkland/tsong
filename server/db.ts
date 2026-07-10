@@ -66,6 +66,7 @@ export async function initDb(): Promise<void> {
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS car TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS pet TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS boat TEXT`);
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS carcolor TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS balltrail TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS goalcelebr TEXT`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS email TEXT`);
@@ -937,13 +938,14 @@ export interface Wallet {
   pet: string | null; // equipped pet item id (trails behind you in the World map)
   balltrail: string | null; // equipped ball trail cosmetic
   goalcelebr: string | null; // equipped goal celebration cosmetic
+  carcolor: string | null; // equipped car paint job (overrides the car's stock colours)
   exclusives: { id: string; serial: number; instanceId: number }[]; // owned scarce exclusives (per-instance)
   lastSpin: number; // epoch ms of the last daily spin (0 = never)
   bonusSpins: number; // free extra wheel spins (e.g. from winning a tournament)
 }
-const EMPTY_WALLET: Wallet = { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, car: null, boat: null, pet: null, balltrail: null, goalcelebr: null, exclusives: [], lastSpin: 0, bonusSpins: 0 };
+const EMPTY_WALLET: Wallet = { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, car: null, boat: null, pet: null, balltrail: null, goalcelebr: null, carcolor: null, exclusives: [], lastSpin: 0, bonusSpins: 0 };
 
-function rowToWallet(r: { coins: number; owned: string; hat: string | null; skin: string | null; trail?: string | null; title?: string | null; song?: string | null; car?: string | null; boat?: string | null; pet?: string | null; balltrail?: string | null; goalcelebr?: string | null; last_spin?: string | number; bonus_spins?: number }): Wallet {
+function rowToWallet(r: { coins: number; owned: string; hat: string | null; skin: string | null; trail?: string | null; title?: string | null; song?: string | null; car?: string | null; boat?: string | null; pet?: string | null; balltrail?: string | null; goalcelebr?: string | null; carcolor?: string | null; last_spin?: string | number; bonus_spins?: number }): Wallet {
   return {
     coins: r.coins,
     owned: (r.owned || '').split(',').filter(Boolean),
@@ -957,6 +959,7 @@ function rowToWallet(r: { coins: number; owned: string; hat: string | null; skin
     pet: r.pet ?? null,
     balltrail: r.balltrail ?? null,
     goalcelebr: r.goalcelebr ?? null,
+    carcolor: r.carcolor ?? null,
     // Exclusives come from their own table, not the players row; callers using a RETURNING row
     // (equip/spend/etc.) leave this empty — only getWallet hydrates it (see below).
     exclusives: [],
@@ -993,7 +996,7 @@ export async function getElos(pids: string[]): Promise<Map<string, { elo: number
 /** Read a player's wallet (coins + owned items + equipped cosmetics + spin state). */
 export async function getWallet(pid: string): Promise<Wallet> {
   if (!pool || !pid) return { ...EMPTY_WALLET };
-  const { rows } = await pool.query(`SELECT coins, owned, hat, skin, trail, title, song, car, boat, pet, balltrail, goalcelebr, last_spin, bonus_spins FROM players WHERE id = $1`, [pid]);
+  const { rows } = await pool.query(`SELECT coins, owned, hat, skin, trail, title, song, car, boat, pet, balltrail, goalcelebr, carcolor, last_spin, bonus_spins FROM players WHERE id = $1`, [pid]);
   if (!rows.length) return { ...EMPTY_WALLET };
   const w = rowToWallet(rows[0]);
   w.exclusives = await getExclusives(pid); // hydrate owned scarce exclusives (their own table)
@@ -1119,7 +1122,7 @@ export async function buyItem(pid: string, name: string, item: string, price: nu
 }
 
 /** Equip (or unequip with item=null) a cosmetic in a slot. Only equips owned items. */
-export async function equipItem(pid: string, slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' | 'title' | 'song' | 'car' | 'boat' | 'pet', item: string | null): Promise<Wallet | null> {
+export async function equipItem(pid: string, slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' | 'title' | 'song' | 'car' | 'boat' | 'pet' | 'carcolor', item: string | null): Promise<Wallet | null> {
   if (!pool || !pid) return null;
   const cur = await getWallet(pid);
   // Ownership check: a scarce exclusive isn't in the `owned` CSV — verify it via the per-instance
@@ -1130,9 +1133,9 @@ export async function equipItem(pid: string, slot: 'hat' | 'skin' | 'trail' | 'b
       : cur.owned.includes(item);
     if (!owns) return null; // can't equip what you don't own
   }
-  const col = slot === 'hat' ? 'hat' : slot === 'skin' ? 'skin' : slot === 'trail' ? 'trail' : slot === 'balltrail' ? 'balltrail' : slot === 'goalcelebr' ? 'goalcelebr' : slot === 'song' ? 'song' : slot === 'car' ? 'car' : slot === 'boat' ? 'boat' : slot === 'pet' ? 'pet' : 'title';
+  const col = slot === 'hat' ? 'hat' : slot === 'skin' ? 'skin' : slot === 'trail' ? 'trail' : slot === 'balltrail' ? 'balltrail' : slot === 'goalcelebr' ? 'goalcelebr' : slot === 'song' ? 'song' : slot === 'car' ? 'car' : slot === 'boat' ? 'boat' : slot === 'pet' ? 'pet' : slot === 'carcolor' ? 'carcolor' : 'title';
   const { rows } = await pool.query(
-    `UPDATE players SET ${col} = $2 WHERE id = $1 RETURNING coins, owned, hat, skin, trail, title, song, car, boat, pet, balltrail, goalcelebr`,
+    `UPDATE players SET ${col} = $2 WHERE id = $1 RETURNING coins, owned, hat, skin, trail, title, song, car, boat, pet, balltrail, goalcelebr, carcolor`,
     [pid, item],
   );
   return rows.length ? rowToWallet(rows[0]) : null;

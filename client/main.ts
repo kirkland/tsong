@@ -39,6 +39,7 @@ import {
   TEAM_MAX,
   COSMETICS,
   carById,
+  carColorById,
   petById,
   SPIN_SEGMENTS,
   STOCKS,
@@ -900,7 +901,7 @@ const net = connect(
     } else if (msg.type === 'worldRoadRage') {
       worldMod?.feedRoadRage(msg.active, msg.endsAt, msg.standings ?? []);
     } else if (msg.type === 'wallet') {
-      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, car: msg.car, boat: msg.boat, pet: msg.pet, balltrail: msg.balltrail ?? null, goalcelebr: msg.goalcelebr ?? null, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
+      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, car: msg.car, boat: msg.boat, pet: msg.pet, balltrail: msg.balltrail ?? null, goalcelebr: msg.goalcelebr ?? null, carcolor: msg.carcolor ?? null, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
       rouletteHandle.setCoins(msg.coins);
       bjHandle.setCoins(msg.coins);
       crapsHandle.setCoins(msg.coins);
@@ -2376,7 +2377,7 @@ worldBtn.addEventListener('click', async () => {
     worldMod.startWorld({
       enter: () => net.send({ type: 'worldEnter' }),
       leave: () => net.send({ type: 'worldLeave' }),
-      move: (x, y, a, car, pet) => net.send({ type: 'worldMove', x, y, a, car, pet }),
+      move: (x, y, a, car, pet, carColor) => net.send({ type: 'worldMove', x, y, a, car, pet, carColor }),
       name: () => myName,
       color: () => myColor,
       needsCharacter: () => needsCharacter,
@@ -2385,6 +2386,7 @@ worldBtn.addEventListener('click', async () => {
       car: () => wallet.car, // the car you've equipped in the shop (null = on foot only)
       boat: () => wallet.boat, // the boat you've equipped (null = none) — board it on water with B
       pet: () => wallet.pet, // the pet you've equipped in the shop — trails behind you (null = none)
+      carColor: () => wallet.carcolor, // equipped paint job overriding the car's stock colours (null = stock)
       // In-World shop dialog (see world.ts's openShop()) — reads/writes the same wallet, spin,
       // and live-bet state as the flat panel so both stay in sync no matter which UI is used.
       wallet: () => wallet,
@@ -2766,8 +2768,8 @@ document.addEventListener('keydown', (e) => {
 });
 
 // --- Coins, cosmetics shop & betting ---
-let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; song: string | null; car: string | null; boat: string | null; pet: string | null; balltrail: string | null; goalcelebr: string | null; exclusives: { id: string; serial: number; instanceId: number }[]; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
-  { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, car: null, boat: null, pet: null, balltrail: null, goalcelebr: null, exclusives: [], bets: [], nextSpinAt: 0, bonusSpins: 0 };
+let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; song: string | null; car: string | null; boat: string | null; pet: string | null; balltrail: string | null; goalcelebr: string | null; carcolor: string | null; exclusives: { id: string; serial: number; instanceId: number }[]; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
+  { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, car: null, boat: null, pet: null, balltrail: null, goalcelebr: null, carcolor: null, exclusives: [], bets: [], nextSpinAt: 0, bonusSpins: 0 };
 let betAmount = 100; // default wager (economy is scaled ×100); min is still 1
 // 'vehicle' is a combined tab that renders Cars + Boats subsections; the rest map 1:1 to a slot.
 let shopTab: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'vehicle' | 'pet' | 'balltrail' | 'goalcelebr' = 'hat';
@@ -2870,7 +2872,7 @@ function renderShop() {
   };
   const appendRow = (item: (typeof COSMETICS)[number]) => {
     const owned = wallet.owned.includes(item.id);
-    const equipped = (item.slot === 'hat' ? wallet.hat : item.slot === 'skin' ? wallet.skin : item.slot === 'trail' ? wallet.trail : item.slot === 'song' ? wallet.song : item.slot === 'car' ? wallet.car : item.slot === 'boat' ? wallet.boat : item.slot === 'pet' ? wallet.pet : item.slot === 'balltrail' ? wallet.balltrail : item.slot === 'goalcelebr' ? wallet.goalcelebr : wallet.title) === item.id;
+    const equipped = (item.slot === 'hat' ? wallet.hat : item.slot === 'skin' ? wallet.skin : item.slot === 'trail' ? wallet.trail : item.slot === 'song' ? wallet.song : item.slot === 'car' ? wallet.car : item.slot === 'boat' ? wallet.boat : item.slot === 'pet' ? wallet.pet : item.slot === 'balltrail' ? wallet.balltrail : item.slot === 'goalcelebr' ? wallet.goalcelebr : item.slot === 'carcolor' ? wallet.carcolor : wallet.title) === item.id;
     const row = document.createElement('div');
     row.className = 'shop-row';
     // Titles are text flair and songs are audio — neither has a paddle preview. Songs get a ▶
@@ -2888,6 +2890,18 @@ function renderShop() {
       sw.className = 'shop-preview-car';
       sw.style.cssText = `display:inline-block;width:28px;height:18px;border-radius:4px;background:${car?.body ?? '#888'};border:2px solid ${car?.accent ?? '#222'};`;
       sw.title = car ? `top speed ${car.speed}, grip ${car.grip}` : '';
+      row.appendChild(sw);
+    } else if (item.slot === 'carcolor') {
+      // A paint job swap — same swatch idiom as cars/boats, just keyed off CAR_COLORS instead.
+      const cc = carColorById(item.id);
+      const sw = document.createElement('span');
+      sw.className = 'shop-preview-car';
+      sw.style.cssText = item.id === 'carcolor-rainbow'
+        // Hints that it animates in-world (a static swatch can't show the live hue-cycle itself).
+        ? 'display:inline-block;width:28px;height:18px;border-radius:4px;border:2px solid #333;' +
+          'background:linear-gradient(90deg,#ff3b30,#ff9500,#ffd60a,#34c759,#0a84ff,#bf5af2,#ff3b30);' +
+          'background-size:200% auto;animation:lbrainbow 2s linear infinite;'
+        : `display:inline-block;width:28px;height:18px;border-radius:4px;background:${cc?.body ?? '#888'};border:2px solid ${cc?.accent ?? '#222'};`;
       row.appendChild(sw);
     } else if (item.slot === 'pet') {
       // Pets show their emoji as the row preview (the look lives in PETS, keyed by id).
@@ -2953,6 +2967,8 @@ function renderShop() {
     for (const item of COSMETICS) if (item.slot === 'car') appendRow(item);
     appendSubhead('🛥️ Boats');
     for (const item of COSMETICS) if (item.slot === 'boat') appendRow(item);
+    appendSubhead('🎨 Paint Jobs');
+    for (const item of COSMETICS) if (item.slot === 'carcolor') appendRow(item);
   } else {
     for (const item of COSMETICS) if (item.slot === shopTab) appendRow(item);
   }
