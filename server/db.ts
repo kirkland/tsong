@@ -2205,15 +2205,19 @@ export async function seedNetizen(pid: string, name: string, startCoins: number)
   return true;
 }
 
+// Players who haven't touched a match or the economy in this long drop off the leaderboards
+// (Elo and net worth) — keeps the boards reflecting who's actually still around.
+const LEADERBOARD_ACTIVE_MS = 14 * 24 * 60 * 60 * 1000;
+
 export async function getLeaderboard(): Promise<LeaderboardRow[]> {
   if (!pool) return [];
   const { rows } = await pool.query(
     `SELECT name, wins, losses, elo, title
        FROM players
-      WHERE wins + losses > 0
+      WHERE wins + losses > 0 AND COALESCE(last_played, 0) >= $2
       ORDER BY elo DESC, name ASC
       LIMIT $1`,
-    [LEADERBOARD_SIZE],
+    [LEADERBOARD_SIZE, Date.now() - LEADERBOARD_ACTIVE_MS],
   );
   return rows.map((r) => ({ name: r.name, wins: r.wins, losses: r.losses, elo: r.elo, title: r.title ?? null }));
 }
@@ -2225,10 +2229,10 @@ export async function getEloBoard(): Promise<(LeaderboardRow & { pid: string })[
   const { rows } = await pool.query(
     `SELECT id AS pid, name, wins, losses, elo, title
        FROM players
-      WHERE wins + losses > 0
+      WHERE wins + losses > 0 AND COALESCE(last_played, 0) >= $2
       ORDER BY elo DESC, name ASC
       LIMIT $1`,
-    [LEADERBOARD_SIZE],
+    [LEADERBOARD_SIZE, Date.now() - LEADERBOARD_ACTIVE_MS],
   );
   return rows.map((r) => ({
     pid: r.pid,
@@ -2250,9 +2254,9 @@ export async function getSelfElo(pid: string): Promise<{ rank: number; elo: numb
        SELECT id, elo,
               ROW_NUMBER() OVER (ORDER BY elo DESC, name ASC) AS rnk
          FROM players
-        WHERE wins + losses > 0
+        WHERE wins + losses > 0 AND COALESCE(last_played, 0) >= $2
      ) sub WHERE id = $1`,
-    [pid],
+    [pid, Date.now() - LEADERBOARD_ACTIVE_MS],
   );
   return rows.length ? { rank: Number(rows[0].rnk), elo: Number(rows[0].elo) } : null;
 }
@@ -2283,12 +2287,13 @@ export async function getSelfNetWorth(pid: string): Promise<(NetWorthRow & { ran
             GROUP BY sh.pid
          ) h ON h.pid = p.id
          LEFT JOIN loans l ON l.pid = p.id
-        WHERE p.wins + p.losses > 0
+        WHERE (p.wins + p.losses > 0
            OR p.coins <> 0
            OR h.val IS NOT NULL
-           OR l.owed IS NOT NULL
+           OR l.owed IS NOT NULL)
+          AND COALESCE(p.last_played, 0) >= $2
      ) sub WHERE pid = $1`,
-    [pid],
+    [pid, Date.now() - LEADERBOARD_ACTIVE_MS],
   );
   if (!rows.length) return null;
   const r = rows[0];
@@ -2379,13 +2384,14 @@ export async function getNetWorthLeaderboard(): Promise<(NetWorthRow & { pid: st
           GROUP BY sh.pid
        ) h ON h.pid = p.id
        LEFT JOIN loans l ON l.pid = p.id
-      WHERE p.wins + p.losses > 0
+      WHERE (p.wins + p.losses > 0
          OR p.coins <> 0
          OR h.val IS NOT NULL
-         OR l.owed IS NOT NULL
+         OR l.owed IS NOT NULL)
+        AND COALESCE(p.last_played, 0) >= $2
       ORDER BY net DESC, p.name ASC
       LIMIT $1`,
-    [LEADERBOARD_SIZE],
+    [LEADERBOARD_SIZE, Date.now() - LEADERBOARD_ACTIVE_MS],
   );
   return rows.map((r) => ({
     pid: r.pid,
