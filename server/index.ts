@@ -289,7 +289,7 @@ wss.on('connection', (ws: WebSocket, req) => {
         if (typeof msg.item === 'string') lobby.shopBuy(ws, msg.item);
         break;
       case 'shopEquip':
-        if ((msg.slot === 'hat' || msg.slot === 'skin' || msg.slot === 'trail' || msg.slot === 'title' || msg.slot === 'song' || msg.slot === 'car' || msg.slot === 'boat' || msg.slot === 'pet' || msg.slot === 'balltrail' || msg.slot === 'goalcelebr') && (msg.item === null || typeof msg.item === 'string')) {
+        if ((msg.slot === 'hat' || msg.slot === 'skin' || msg.slot === 'trail' || msg.slot === 'title' || msg.slot === 'song' || msg.slot === 'car' || msg.slot === 'boat' || msg.slot === 'pet' || msg.slot === 'balltrail' || msg.slot === 'goalcelebr' || msg.slot === 'carcolor') && (msg.item === null || typeof msg.item === 'string')) {
           lobby.shopEquip(ws, msg.slot, msg.item);
         }
         break;
