@@ -143,6 +143,7 @@ export interface NuketownNet {
   relay(data: unknown): void;
   end(team: number): void; // (host only) report the winning team so the server can pay the winners
   name(): string; // this client's display name
+  muted(): boolean; // whether the main page's mute toggle is on
 }
 
 // Lobby message shape pushed from the server (matches shared/types NtLobbyMsg).
@@ -183,7 +184,7 @@ export function startNuketown(net: NuketownNet): void {
   const overlay = document.createElement('div');
   overlay.id = 'nuketownOverlay';
   overlay.style.cssText =
-    'position:fixed;inset:0;z-index:9999;background:#000;display:flex;align-items:center;' +
+    'position:fixed;inset:0;z-index:20000;background:rgba(20,16,4,0.9);display:flex;align-items:center;' +
     'justify-content:center;flex-direction:column;font-family:ui-monospace,monospace;';
 
   const canvas = document.createElement('canvas');
@@ -365,6 +366,7 @@ export function startNuketown(net: NuketownNet): void {
   let audio: AudioContext | null = null;
   const ac = () => (audio ??= new AudioContext());
   function shotSound() {
+    if (net.muted()) return;
     try {
       const a = ac();
       const buf = a.createBuffer(1, a.sampleRate * 0.18, a.sampleRate);
@@ -376,6 +378,7 @@ export function startNuketown(net: NuketownNet): void {
     } catch { /* ignore */ }
   }
   function boomSound() {
+    if (net.muted()) return;
     try {
       const a = ac();
       const dur = 0.4;

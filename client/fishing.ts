@@ -27,6 +27,7 @@ export interface FishingNet {
   catchFish(tier: FishTier, sizeLb: number): void;
   leaderboard(): FishLeaderboardRow[]; // latest biggest-catch board
   name(): string;                      // this client's display name
+  muted(): boolean;                    // whether the main page's mute toggle is on
 }
 
 // Per-tier flavour: a color for the reveal pop and how hard the reel mini-game fights.
@@ -81,7 +82,7 @@ export function startFishing(net: FishingNet): void {
   const overlay = document.createElement('div');
   overlay.id = 'fishingOverlay';
   overlay.style.cssText =
-    'position:fixed;inset:0;z-index:9999;background:#06121e;display:flex;align-items:center;' +
+    'position:fixed;inset:0;z-index:20000;background:rgba(6,18,30,0.9);display:flex;align-items:center;' +
     'justify-content:center;flex-direction:column;font-family:ui-monospace,monospace;gap:10px;';
 
   const title = document.createElement('div');
@@ -157,6 +158,7 @@ export function startFishing(net: FishingNet): void {
   let audio: AudioContext | null = null;
   const ac = () => (audio ??= new AudioContext());
   function blip(freq: number, dur: number, type: OscillatorType, vol: number, slideTo?: number) {
+    if (net.muted()) return;
     try {
       const a = ac(); const t = a.currentTime;
       const o = a.createOscillator(); const g = a.createGain();

@@ -24,6 +24,7 @@ export interface TntNetHooks {
   end: (winner: number) => void;
   relay: (data: unknown) => void;
   name: () => string;
+  muted: () => boolean; // whether the main page's mute toggle is on
 }
 
 // --- arena constants ---
@@ -238,7 +239,7 @@ function build() {
   overlay = document.createElement('div');
   overlay.id = 'tntOverlay';
   overlay.style.cssText =
-    'position:fixed;inset:0;z-index:9000;background:#0b0e14;display:none;cursor:crosshair;touch-action:none;';
+    'position:fixed;inset:0;z-index:20000;background:rgba(11,14,20,0.9);display:none;cursor:crosshair;touch-action:none;';
   canvas = document.createElement('canvas');
   canvas.style.cssText = 'width:100%;height:100%;display:block;touch-action:none;';
   overlay.appendChild(canvas);
@@ -1127,6 +1128,7 @@ function addFloater(x: number, y: number, text: string, color: string, size: num
 
 let ac: AudioContext | null = null;
 function tone(f0: number, f1: number, dur: number, type: OscillatorType, vol: number) {
+  if (net?.muted()) return;
   try {
     if (!ac) ac = new AudioContext();
     if (ac.state === 'suspended') ac.resume().catch(() => {});

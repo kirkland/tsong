@@ -24,6 +24,7 @@ export interface TronNet {
   end(winner: number): void; // (host only) winning LOBBY slot (-1 = a bot won → no payout)
   relay(data: unknown): void;
   name(): string;
+  muted(): boolean; // whether the main page's mute toggle is on
 }
 
 interface TrnLobby {
@@ -124,7 +125,7 @@ export function startTron(net: TronNet): void {
   const overlay = document.createElement('div');
   overlay.id = 'tronOverlay';
   overlay.style.cssText =
-    'position:fixed;inset:0;z-index:9999;background:#020208;display:flex;align-items:center;' +
+    'position:fixed;inset:0;z-index:20000;background:rgba(2,2,8,0.9);display:flex;align-items:center;' +
     'justify-content:center;flex-direction:column;font-family:ui-monospace,monospace;';
   // canvas wrapped so the CRT scanline layer can sit exactly on top of it
   const wrap = document.createElement('div');
@@ -213,6 +214,7 @@ export function startTron(net: TronNet): void {
     song?.pause();
     song = new Audio(`/${songName}`);
     song.volume = 0.4;
+    song.muted = net.muted();
     song.onended = () => { if (tronOpen && mode === 'play') playRandomSong(); };
     song.play().catch(() => { /* autoplay policy — next user gesture will land */ });
     showNowPlaying(songName);
@@ -811,6 +813,7 @@ export function startTron(net: TronNet): void {
       while (acc >= tickMs) { acc -= tickMs; hostTick(); if (roundOver) { acc = 0; break; } }
     }
     updateSparks(dt / 1000);
+    if (song) song.muted = net.muted();
     render();
     raf = requestAnimationFrame(loop);
   }

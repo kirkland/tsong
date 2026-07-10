@@ -16,6 +16,7 @@ export interface GhNet {
   submit(song: string, diff: string, score: number): void; // report a finished run to the server
   leaderboard(): { song: string; diff: string; name: string; score: number }[]; // live public board
   name(): string;
+  muted(): boolean; // whether the main page's mute toggle is on — silences the track, not the clock (songTime() reads audio.currentTime, which keeps advancing while muted)
 }
 
 const LANE_KEYS = ['a', 's', 'k', 'l'] as const;         // lane 0..3, left→right (two hands, home row)
@@ -72,7 +73,7 @@ export function startGuitarHero(net: GhNet): void {
   const overlay = document.createElement('div');
   overlay.id = 'ghOverlay';
   overlay.style.cssText =
-    'position:fixed;inset:0;z-index:9999;background:#05030c;display:flex;align-items:center;' +
+    'position:fixed;inset:0;z-index:20000;background:rgba(5,3,12,0.9);display:flex;align-items:center;' +
     'justify-content:center;flex-direction:column;font-family:ui-monospace,monospace;';
   const wrap = document.createElement('div');
   wrap.style.cssText = 'position:relative;height:min(94vh,150vw);aspect-ratio:2/3;';
@@ -220,6 +221,7 @@ export function startGuitarHero(net: GhNet): void {
     audio?.pause();
     audio = new Audio(`/${c.file}`);
     audio.volume = 0.65;
+    audio.muted = net.muted();
     startedAt = performance.now();
     window.setTimeout(() => { if (ghOpen && mode === 'play') audio?.play().catch(() => {}); }, LEAD_IN_MS);
     mode = 'play';
@@ -533,6 +535,7 @@ export function startGuitarHero(net: GhNet): void {
 
   let raf = 0;
   function loop() {
+    if (audio) audio.muted = net.muted();
     render();
     raf = requestAnimationFrame(loop);
   }

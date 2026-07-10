@@ -332,6 +332,7 @@ export interface StreetDemonsNet {
   relay(data: unknown): void;
   end(winner: number): void; // (host only) champion slot so the server can pay the racer (-1 = bot)
   name(): string;            // this client's display name
+  muted(): boolean;          // whether the main page's mute toggle is on
 }
 
 // Lobby snapshot pushed from the server (matches shared/types SrLobbyMsg).
@@ -367,7 +368,7 @@ export function startStreetDemons(net: StreetDemonsNet): void {
   const overlay = document.createElement('div');
   overlay.id = 'streetDemonsOverlay';
   overlay.style.cssText =
-    'position:fixed;inset:0;z-index:9999;background:#05060f;display:flex;align-items:center;' +
+    'position:fixed;inset:0;z-index:20000;background:rgba(5,6,15,0.9);display:flex;align-items:center;' +
     'justify-content:center;flex-direction:column;font-family:ui-monospace,monospace;';
 
   const canvas = document.createElement('canvas');
@@ -597,6 +598,7 @@ export function startStreetDemons(net: StreetDemonsNet): void {
     } catch { /* ignore */ }
   }
   function blip(freq: number, dur: number, type: OscillatorType, vol = 0.25) {
+    if (net.muted()) return;
     try {
       const a = ac();
       const osc = a.createOscillator(); osc.type = type; osc.frequency.value = freq;
@@ -606,6 +608,7 @@ export function startStreetDemons(net: StreetDemonsNet): void {
     } catch { /* ignore */ }
   }
   function crashSound() {
+    if (net.muted()) return;
     try {
       const a = ac();
       const b = a.createBuffer(1, a.sampleRate * 0.25, a.sampleRate);
@@ -838,7 +841,7 @@ export function startStreetDemons(net: StreetDemonsNet): void {
     if (engine) {
       const sp = Math.abs(me()?.speed ?? 0);
       engine.osc.frequency.value = 70 + sp * 3.2 + (me()?.boosting ? 60 : 0);
-      engine.gain.gain.value = mode === 'play' && phase !== 'done' ? 0.06 + Math.min(0.12, sp / MAX_SPD * 0.12) : 0;
+      engine.gain.gain.value = net.muted() || phase === 'done' || mode !== 'play' ? 0 : 0.06 + Math.min(0.12, sp / MAX_SPD * 0.12);
     }
   }
   let hurtFlash = 0;

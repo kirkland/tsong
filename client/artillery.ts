@@ -21,6 +21,7 @@ export interface ArtilleryNet {
   end(winner: number, winner2?: number): void; // (host only) winning lobby slot(s); -1 = nobody paid
   relay(data: unknown): void;
   name(): string;
+  muted(): boolean; // whether the main page's mute toggle is on
 }
 
 interface WaLobby {
@@ -255,6 +256,7 @@ export function startArtillery(net: ArtilleryNet): void {
   let ac: AudioContext | null = null;
   const audioCtx = () => (ac ??= new (window.AudioContext || (window as any).webkitAudioContext)());
   function sfxFire() {
+    if (net.muted()) return;
     try {
       const a = audioCtx(), t = a.currentTime;
       const o = a.createOscillator(), g = a.createGain();
@@ -264,6 +266,7 @@ export function startArtillery(net: ArtilleryNet): void {
     } catch { /* no audio — fine */ }
   }
   function sfxBoom(big: number) {
+    if (net.muted()) return;
     try {
       const a = audioCtx(), t = a.currentTime;
       const len = 0.5 + big * 0.3;
@@ -278,6 +281,7 @@ export function startArtillery(net: ArtilleryNet): void {
     } catch { /* no audio — fine */ }
   }
   function sfxSplash() {
+    if (net.muted()) return;
     try {
       const a = audioCtx(), t = a.currentTime;
       const buf = a.createBuffer(1, a.sampleRate * 0.35, a.sampleRate);
@@ -1164,7 +1168,7 @@ export function startArtillery(net: ArtilleryNet): void {
   const overlay = document.createElement('div');
   overlay.id = 'waOverlay';
   overlay.style.cssText =
-    'position:fixed;inset:0;z-index:9999;background:#060a14;display:flex;align-items:center;' +
+    'position:fixed;inset:0;z-index:20000;background:rgba(6,10,20,0.9);display:flex;align-items:center;' +
     'justify-content:center;flex-direction:column;font-family:ui-monospace,monospace;';
   const wrap = document.createElement('div');
   wrap.style.cssText = 'position:relative;height:min(90vh,50.6vw);aspect-ratio:16/9;';

@@ -16,6 +16,7 @@ export interface CampaignNet {
   submitScore(score: number, stage: number, won: boolean): void;
   leaderboard(): CampaignScoreRow[]; // latest top campaign scores
   name(): string; // this client's display name
+  muted(): boolean; // whether the main page's mute toggle is on
 }
 
 // --- Stage data (source of truth for the build; mirrors docs/campaign-script.md) ---
@@ -453,6 +454,7 @@ export function playMatch(host: HTMLElement, opts: MatchOpts, onEnd: (r: MatchRe
     if (!document.body.contains(canvas)) { running = false; cleanup(); return; }
     const dt = Math.min(0.033, (now - last) / 1000);
     last = now;
+    syncMusicMute();
     step(dt);
     render();
     raf = requestAnimationFrame(loop);
@@ -516,18 +518,29 @@ export function playMatch(host: HTMLElement, opts: MatchOpts, onEnd: (r: MatchRe
 function clamp(v: number, lo: number, hi: number): number { return v < lo ? lo : v > hi ? hi : v; }
 
 // --- Audio ---
+// Set once by startCampaign() from CampaignNet.muted() — module-level since sound()/blip() are
+// called from deep helper functions (playVN, playMatch) that don't carry `net` through directly.
+let campaignMuted: () => boolean = () => false;
 const audioCache = new Map<string, HTMLAudioElement>();
 function sound(src: string, loop = false, volume = 1): HTMLAudioElement {
   let a = audioCache.get(src);
   if (!a) { a = new Audio(src); audioCache.set(src, a); }
   a.loop = loop;
   a.volume = volume;
+  a.muted = campaignMuted();
   return a;
+}
+// Re-syncs every currently-loaded looping track (menu/stage music) to the live mute state —
+// called every frame during a match, the one stretch where nothing else calls sound() to
+// refresh it (same gap DOOM's bossMusic had; see world-qa-bug-patterns memory).
+function syncMusicMute() {
+  for (const a of audioCache.values()) { if (a.loop) a.muted = campaignMuted(); }
 }
 
 // VN text blip: the DOOM grenade-pickup synth, tuned shorter + quieter for per-character chatter.
 let actx: AudioContext | null = null;
 function blip() {
+  if (campaignMuted()) return;
   try {
     const a = (actx ??= new AudioContext());
     const o = a.createOscillator(); const g = a.createGain();
@@ -669,11 +682,12 @@ const DEFEAT_ENDING: VNLine[] = [
 export function startCampaign(net: CampaignNet): void {
   if (campaignOpen) return;
   campaignOpen = true;
+  campaignMuted = () => net.muted();
 
   const overlay = document.createElement('div');
   overlay.id = 'campaignOverlay';
   overlay.style.cssText =
-    'position:fixed;inset:0;z-index:9999;background:radial-gradient(circle at 50% 30%,#1a1230,#05030c 70%);' +
+    'position:fixed;inset:0;z-index:20000;background:radial-gradient(circle at 50% 30%,rgba(26,18,48,0.9),rgba(5,3,12,0.94) 70%);' +
     'display:flex;align-items:center;justify-content:center;flex-direction:column;' +
     "font-family:ui-monospace,monospace;color:#ffd166;overflow:hidden;";
 

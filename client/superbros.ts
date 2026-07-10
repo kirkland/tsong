@@ -78,6 +78,7 @@ export interface SuperBrosNet {
   end(winner: number): void; // (host only) report the winning slot so the server pays them
   relay(data: unknown): void;
   name(): string; // this client's display name
+  muted(): boolean; // whether the main page's mute toggle is on
 }
 
 // Lobby message shape pushed from the server (matches shared/types SbLobbyMsg).
@@ -122,7 +123,7 @@ export function startSuperBros(net: SuperBrosNet): void {
   const overlay = document.createElement('div');
   overlay.id = 'superbrosOverlay';
   overlay.style.cssText =
-    'position:fixed;inset:0;z-index:9999;background:#0a0a12;display:flex;align-items:center;' +
+    'position:fixed;inset:0;z-index:20000;background:rgba(10,10,18,0.9);display:flex;align-items:center;' +
     'justify-content:center;flex-direction:column;font-family:ui-monospace,monospace;';
 
   const canvas = document.createElement('canvas');
@@ -458,6 +459,7 @@ export function startSuperBros(net: SuperBrosNet): void {
   let audio: AudioContext | null = null;
   const ac = () => (audio ??= new AudioContext());
   function blip(freq: number, dur: number, type: OscillatorType = 'square', vol = 0.18) {
+    if (net.muted()) return;
     try {
       const a = ac();
       const o = a.createOscillator(); const g = a.createGain();

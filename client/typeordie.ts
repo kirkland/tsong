@@ -103,8 +103,8 @@ function build() {
   overlay = document.createElement('div');
   overlay.id = 'typeDieOverlay';
   Object.assign(overlay.style, {
-    position: 'fixed', inset: '0', zIndex: '9000', display: 'none',
-    background: '#05070d', overflow: 'hidden',
+    position: 'fixed', inset: '0', zIndex: '20000', display: 'none',
+    background: 'rgba(5,7,13,0.9)', overflow: 'hidden',
   } as CSSStyleDeclaration);
 
   canvas = document.createElement('canvas');

@@ -3116,7 +3116,7 @@ export function startWorld(net: WorldNet): void {
     }
     if (kind === 'pond') {
       openDialog('🎣 Fishing Pond', 'The water is calm. A good day for fishing.', [
-        { label: '🎣 Fish', onPick: () => { pause(); net.openFeature('fishing'); } },
+        { label: '🎣 Fish', onPick: () => { pause(false); net.openFeature('fishing'); } },
       ]);
       return;
     }
@@ -3152,17 +3152,19 @@ export function startWorld(net: WorldNet): void {
       return;
     }
     if (kind === 'arcade') {
+      // Freeze-but-stay-visible, same recipe as DOOM/Bowling/Fishing: World stays on screen,
+      // frozen, dimmed behind each game's own overlay instead of disappearing outright.
       openDialog('🎮 The Arcade', 'Rows of glowing cabinets hum and bleep. Pick your poison.', [
-        { label: '🏓 Davis Collects (Campaign)', onPick: () => { pause(); net.openFeature('campaign'); } },
-        { label: '⌨️ Type or Die', onPick: () => { pause(); net.openFeature('typedie'); } },
-        { label: '🏎️ Street Demons (Racing)', onPick: () => { pause(); net.openFeature('racing'); } },
-        { label: '🥊 Super Tsong Bros', onPick: () => { pause(); net.openFeature('superbros'); } },
-        { label: '💣 Nuketown', onPick: () => { pause(); net.openFeature('nuketown'); } },
-        { label: '🧨 TNT Explosion Rally', onPick: () => { pause(); net.openFeature('tnt'); } },
-        { label: '🏍️ Tron', onPick: () => { pause(); net.openFeature('tron'); } },
-        { label: '🎸 Tsong Hero', onPick: () => { pause(); net.openFeature('guitarhero'); } },
-        { label: '🪖 Worms: Tsong Edition', onPick: () => { pause(); net.openFeature('artillery'); } },
-        { label: '🏙️ City Tycoon', onPick: () => { pause(); net.openFeature('citytycoon'); } },
+        { label: '🏓 Davis Collects (Campaign)', onPick: () => { pause(false); net.openFeature('campaign'); } },
+        { label: '⌨️ Type or Die', onPick: () => { pause(false); net.openFeature('typedie'); } },
+        { label: '🏎️ Street Demons (Racing)', onPick: () => { pause(false); net.openFeature('racing'); } },
+        { label: '🥊 Super Tsong Bros', onPick: () => { pause(false); net.openFeature('superbros'); } },
+        { label: '💣 Nuketown', onPick: () => { pause(false); net.openFeature('nuketown'); } },
+        { label: '🧨 TNT Explosion Rally', onPick: () => { pause(false); net.openFeature('tnt'); } },
+        { label: '🏍️ Tron', onPick: () => { pause(false); net.openFeature('tron'); } },
+        { label: '🎸 Tsong Hero', onPick: () => { pause(false); net.openFeature('guitarhero'); } },
+        { label: '🪖 Worms: Tsong Edition', onPick: () => { pause(false); net.openFeature('artillery'); } },
+        { label: '🏙️ City Tycoon', onPick: () => { pause(false); net.openFeature('citytycoon'); } },
       ]);
       return;
     }

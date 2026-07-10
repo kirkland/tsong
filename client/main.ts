@@ -2035,6 +2035,7 @@ nuketownBtn.addEventListener('click', async () => {
       relay: (data) => net.send({ type: 'ntRelay', data }),
       end: (team) => net.send({ type: 'ntEnd', team }),
       name: () => myName,
+      muted: () => muted,
     });
   } catch (e) {
     console.error('Nuketown failed to load:', e);
@@ -2056,6 +2057,7 @@ streetDemonsBtn.addEventListener('click', async () => {
       relay: (data) => net.send({ type: 'srRelay', data }),
       end: (winner) => net.send({ type: 'srEnd', winner }),
       name: () => myName,
+      muted: () => muted,
     });
   } catch (e) {
     console.error('Street Demons failed to load:', e);
@@ -2079,6 +2081,7 @@ sbBtn.addEventListener('click', async () => {
       end: (winner) => net.send({ type: 'sbEnd', winner }),
       relay: (data) => net.send({ type: 'sbRelay', data }),
       name: () => myName,
+      muted: () => muted,
     });
   } catch (e) {
     console.error('Super Tsong Bros failed to load:', e);
@@ -2099,6 +2102,7 @@ trnBtn.addEventListener('click', async () => {
       end: (winner) => net.send({ type: 'trnEnd', winner }),
       relay: (data) => net.send({ type: 'trnRelay', data }),
       name: () => myName,
+      muted: () => muted,
     });
   } catch (e) {
     console.error('Tron failed to load:', e);
@@ -2120,6 +2124,7 @@ waBtn.addEventListener('click', async () => {
       end: (winner, winner2) => net.send({ type: 'waEnd', winner, winner2 }),
       relay: (data) => net.send({ type: 'waRelay', data }),
       name: () => myName,
+      muted: () => muted,
     });
   } catch (e) {
     console.error('Tsong Artillery failed to load:', e);
@@ -2139,6 +2144,7 @@ ghBtn.addEventListener('click', async () => {
       submit: (song, diff, score) => net.send({ type: 'ghScore', song, diff, score }),
       leaderboard: () => ghScores,
       name: () => myName,
+      muted: () => muted,
     });
   } catch (e) {
     console.error('Tsong Hero failed to load:', e);
@@ -2161,6 +2167,7 @@ tntBtn.addEventListener('click', async () => {
       end: (winner) => net.send({ type: 'tntEnd', winner }),
       relay: (data) => net.send({ type: 'tntRelay', data }),
       name: () => myName,
+      muted: () => muted,
     });
   } catch (e) {
     console.error('TNT Explosion Rally failed to load:', e);
@@ -2229,6 +2236,7 @@ campaignBtn.addEventListener('click', async () => {
       submitScore: (score, stage, won) => net.send({ type: 'campaignScore', score, stage, won }),
       leaderboard: () => campaignScores,
       name: () => myName,
+      muted: () => muted,
     });
   } catch (e) {
     console.error('Campaign failed to load:', e);
@@ -2248,6 +2256,7 @@ async function openFishing(): Promise<void> {
       catchFish: (tier, sizeLb) => net.send({ type: 'fishCatch', tier, sizeLb }),
       leaderboard: () => fishScores,
       name: () => myName,
+      muted: () => muted,
     });
   } catch (e) {
     console.error('Fishing failed to load:', e);

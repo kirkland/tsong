@@ -136,7 +136,7 @@ export function startCityTycoon(adapter: CityRiseNet): void {
   overlay = document.createElement('div');
   overlay.id = 'crOverlay';
   overlay.style.cssText =
-    'position:fixed;inset:0;z-index:950;background:radial-gradient(circle at 50% 30%,#161633,#0b0b16 70%);' +
+    'position:fixed;inset:0;z-index:20000;background:radial-gradient(circle at 50% 30%,rgba(22,22,51,0.9),rgba(11,11,22,0.94) 70%);' +
     'display:flex;flex-direction:row;align-items:stretch;font-family:system-ui,-apple-system,sans-serif;color:#e8eefc;overflow:hidden;';
 
   // Board area (canvas)
@@ -227,7 +227,7 @@ export function startCityTycoon(adapter: CityRiseNet): void {
 
   tooltipEl = document.createElement('div');
   tooltipEl.style.cssText =
-    'position:fixed;z-index:970;background:#14142c;border:1px solid #33335a;border-radius:8px;padding:10px 12px;' +
+    'position:fixed;z-index:20010;background:#14142c;border:1px solid #33335a;border-radius:8px;padding:10px 12px;' +
     'font-size:12px;line-height:1.5;color:#e8eefc;box-shadow:0 4px 16px rgba(0,0,0,.5);pointer-events:none;display:none;max-width:220px;';
   document.body.appendChild(tooltipEl);
 
@@ -934,7 +934,7 @@ function openPropertiesModal(): void {
   if (!me) return;
 
   const modal = document.createElement('div');
-  modal.style.cssText = 'position:fixed;inset:0;z-index:960;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;';
+  modal.style.cssText = 'position:fixed;inset:0;z-index:20005;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;';
   const card = document.createElement('div');
   card.style.cssText = 'background:#14142c;border:1px solid #33335a;border-radius:12px;padding:18px;width:380px;max-width:92vw;max-height:86vh;overflow-y:auto;display:flex;flex-direction:column;gap:4px;color:#e8eefc;font-size:13px;';
 
@@ -1013,7 +1013,7 @@ function openTradeModal(opts?: CounterOpts): void {
   if (!me || others.length === 0) return;
 
   const modal = document.createElement('div');
-  modal.style.cssText = 'position:fixed;inset:0;z-index:960;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;';
+  modal.style.cssText = 'position:fixed;inset:0;z-index:20005;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;';
   const card = document.createElement('div');
   card.style.cssText = 'background:#14142c;border:1px solid #33335a;border-radius:12px;padding:18px;width:420px;max-width:92vw;max-height:86vh;overflow-y:auto;display:flex;flex-direction:column;gap:10px;color:#e8eefc;font-size:13px;';
   card.innerHTML = `<div style="font-size:16px;font-weight:700;">${opts ? '🔁 Counter Offer' : '🤝 Propose Trade'}</div>`;
