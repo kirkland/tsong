@@ -196,7 +196,7 @@ export interface CosmeticItem {
   name: string;
   slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' | 'title' | 'song' | 'car' | 'boat' | 'pet';
   price: number;
-  locked?: 'campaign' | 'fishing' | 'fishing_rare' | 'fishing_junk' | 'dungeon'; // not buyable — unlocked by in-game achievements
+  locked?: 'campaign' | 'fishing' | 'fishing_rare' | 'fishing_junk' | 'dungeon' | 'fountain'; // not buyable — unlocked by in-game achievements
   audio?: string; // for 'song' items: path to the mp3 that plays during your matches
 }
 // Static cosmetics cost 1000 coins; animated ones cost 2000 (10×/20× the COIN_SCALE base).

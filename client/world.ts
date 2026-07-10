@@ -463,7 +463,6 @@ export function feedBalanceSheet(msg: BalanceSheetMsg): void {
 }
 
 const SPEED = WORLD_AVATAR.speed; // on-foot walk speed
-const SPRINT_MULT = 1.6; // hold Shift on foot to sprint (same key as the car's handbrake — see stepFoot())
 const R = WORLD_AVATAR.r;
 const TRIGGER_PAD = 34;     // how close (world units, beyond the wall) counts as "at the door"
 const JOY_DEADZONE = 14;    // screen px of drag before the virtual joystick engages
@@ -8696,9 +8695,7 @@ export function startWorld(net: WorldNet): void {
       dx = ndx; dy = ndy;
     }
     facing = Math.atan2(dy, dx);
-    // stepFoot() only ever runs when neither driving nor boating (see the call site), so `handbrake`
-    // — otherwise the car's drift key — is free to double as an on-foot sprint toggle here.
-    const SP = SPEED * blessMul() * (handbrake ? SPRINT_MULT : 1); // the Blessing of the Ball quickens your step (decays to 1×)
+    const SP = SPEED * blessMul(); // the Blessing of the Ball quickens your step (decays to 1×)
     if (inInterior) {
       // inside a room (Tavern/Temple): no town collision, just clamp to the inset play area
       selfX = clamp(selfX + dx * SP * dt, curInt.x + curWall + R, curInt.x + curInt.w - curWall - R);
@@ -12912,7 +12909,6 @@ export function startWorld(net: WorldNet): void {
   let duck: TownCritter | null = null;
   let ducklings: TownCritter[] = [];
   let statuePlaque: Phaser.GameObjects.Text | null = null;
-  let statueMoai: Phaser.GameObjects.Text | null = null;
   let statuePigeon: Phaser.GameObjects.Text | null = null;
   let billboardText: Phaser.GameObjects.Text | null = null;
   let billboardIdx = 0;
@@ -12940,7 +12936,7 @@ export function startWorld(net: WorldNet): void {
     // 🗿 statue of the reigning #1 (auto-updates; pigeon included at no extra cost)
     sc.add.rectangle(STATUE.x, STATUE.y + 8, 64, 18, 0x5a5a66).setDepth(STATUE.y + 8);
     sc.add.rectangle(STATUE.x, STATUE.y + 16, 84, 8, 0x4a4a55).setDepth(STATUE.y + 16);
-    statueMoai = sc.add.text(STATUE.x, STATUE.y + 2, '🗿', { fontSize: '38px' }).setOrigin(0.5, 1).setDepth(STATUE.y + 2).setResolution(2);
+    sc.add.text(STATUE.x, STATUE.y + 2, '🗿', { fontSize: '38px' }).setOrigin(0.5, 1).setDepth(STATUE.y + 2).setResolution(2);
     statuePigeon = sc.add.text(STATUE.x + 4, STATUE.y - 36, '🐦', { fontSize: '11px' }).setOrigin(0.5, 1).setDepth(STATUE.y + 3).setResolution(2);
     statuePlaque = sc.add.text(STATUE.x, STATUE.y + 30, '', {
       fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#ffe9b0', align: 'center',
