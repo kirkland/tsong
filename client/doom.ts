@@ -203,7 +203,7 @@ export function startDoom(net: DoomNet): void {
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
   canvas.style.cssText =
-    'image-rendering:pixelated;height:88vh;max-width:100vw;aspect-ratio:8/5;background:#000;';
+    'image-rendering:pixelated;height:88vh;max-width:100vw;aspect-ratio:8/5;background:#000;touch-action:none;';
   const ctx = canvas.getContext('2d')!;
   ctx.imageSmoothingEnabled = false;
   overlay.appendChild(canvas);
@@ -287,6 +287,72 @@ export function startDoom(net: DoomNet): void {
     'font:900 52px ui-monospace,monospace;color:#ff2d2d;text-shadow:4px 4px 0 #000;' +
     'text-align:center;white-space:pre;pointer-events:none;';
   overlay.appendChild(banner);
+
+  // A small tappable row under the banner for PAUSED / GAME OVER — the banner text itself is
+  // pointer-events:none (it's also used for the plain "ROUND n" splash, which shouldn't be
+  // clickable), so this is a separate sibling shown only for the two states that need actions.
+  // Fixes a gap that predates touch: neither state had a mouse-clickable way out either, only
+  // keyboard (P / R / Esc).
+  const bannerButtons = document.createElement('div');
+  bannerButtons.style.cssText =
+    'position:absolute;left:0;right:0;top:calc(50% + 70px);display:none;justify-content:center;gap:14px;';
+  const mkBannerBtn = (label: string) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = label;
+    b.style.cssText =
+      'font:700 18px ui-monospace,monospace;padding:10px 20px;border-radius:8px;cursor:pointer;' +
+      'border:1px solid #5a2230;background:#1a0e12;color:#ff7a7a;';
+    return b;
+  };
+  const resumeBtn = mkBannerBtn('▶ Resume');
+  const retryBtn = mkBannerBtn('🔄 Retry');
+  const quitBannerBtn = mkBannerBtn('🚪 Quit');
+  resumeBtn.onclick = () => togglePause();
+  retryBtn.onclick = () => restartSolo();
+  quitBannerBtn.onclick = () => close();
+  bannerButtons.append(resumeBtn, retryBtn, quitBannerBtn);
+  overlay.appendChild(bannerButtons);
+
+  // Touch action buttons (bottom-right) — same circular-chip look World uses for its own
+  // fire/drift buttons. Always shown (a mouse click works on them too, same as World's), not
+  // gated to touch — harmless extra affordance on desktop, essential on a phone since Pointer
+  // Lock has no touch equivalent to fire/act through.
+  const doomFireBtn = document.createElement('button');
+  doomFireBtn.type = 'button';
+  doomFireBtn.textContent = '🔫';
+  doomFireBtn.style.cssText =
+    'position:absolute;right:20px;bottom:20px;display:none;cursor:pointer;z-index:5;' +
+    'width:72px;height:72px;border-radius:50%;background:#6b2a2a;color:#fff;border:2px solid #b85555;' +
+    'font-size:30px;line-height:1;touch-action:none;user-select:none;box-shadow:0 4px 14px #0008;';
+  doomFireBtn.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    if (mode === 'menu' || mode === 'wait' || paused || over) return;
+    localFire();
+  });
+  const doomGrenadeBtn = document.createElement('button');
+  doomGrenadeBtn.type = 'button';
+  doomGrenadeBtn.textContent = '💣';
+  doomGrenadeBtn.style.cssText =
+    'position:absolute;right:104px;bottom:34px;display:none;cursor:pointer;z-index:5;' +
+    'width:52px;height:52px;border-radius:50%;background:#3a2a1a;color:#fff;border:2px solid #b8874a;' +
+    'font-size:22px;line-height:1;touch-action:none;user-select:none;box-shadow:0 4px 14px #0008;';
+  doomGrenadeBtn.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    if (!paused && !over) throwGrenade();
+  });
+  const doomDashBtn = document.createElement('button');
+  doomDashBtn.type = 'button';
+  doomDashBtn.textContent = '⚡';
+  doomDashBtn.style.cssText =
+    'position:absolute;right:20px;bottom:104px;display:none;cursor:pointer;z-index:5;' +
+    'width:52px;height:52px;border-radius:50%;background:#1a2a3a;color:#fff;border:2px solid #4a87b8;' +
+    'font-size:22px;line-height:1;touch-action:none;user-select:none;box-shadow:0 4px 14px #0008;';
+  doomDashBtn.addEventListener('pointerdown', (e) => {
+    e.preventDefault(); e.stopPropagation();
+    if (!paused && !over) localDash();
+  });
+  overlay.append(doomFireBtn, doomGrenadeBtn, doomDashBtn);
 
   // Menu layer (solo / co-op chooser, then the waiting screen).
   const menu = document.createElement('div');
@@ -389,6 +455,16 @@ export function startDoom(net: DoomNet): void {
   // local input / feedback
   const keys = new Set<string>();
   let myAngle = 0;
+  // --- touch controls: left half of the canvas is a drag-to-move joystick (same "direction only,
+  // no analog speed" model as World's), right half is a drag-to-look pad (mirrors onMouseMove's
+  // movementX handling, just fed from touch deltas instead). Both are gated to pointerType==='touch'
+  // so they never interfere with the desktop mouse/pointer-lock flow below. ---
+  const TOUCH_JOY_DEADZONE = 12; // screen px of drag before the move joystick engages
+  const TOUCH_LOOK_SENSITIVITY = 0.0026; // matches onMouseMove's movementX scale
+  let touchMoveId: number | null = null;
+  let touchMoveOX = 0, touchMoveOY = 0, touchMoveCX = 0, touchMoveCY = 0;
+  let touchLookId: number | null = null;
+  let touchLookLastX = 0;
   let muzzle = 0;
   let hurt = 0;
   let prevHealth = 100;
@@ -596,6 +672,13 @@ export function startDoom(net: DoomNet): void {
     if (keys.has('s') || keys.has('arrowdown')) forward -= 1;
     if (keys.has('a')) strafe -= 1;
     if (keys.has('d')) strafe += 1;
+    // No keyboard input? Fall back to the touch move joystick (direction only, like World's —
+    // dragging further doesn't move faster, it just has to clear the deadzone).
+    if (forward === 0 && strafe === 0 && touchMoveId !== null) {
+      const jx = touchMoveCX - touchMoveOX, jy = touchMoveCY - touchMoveOY;
+      const jmag = Math.hypot(jx, jy);
+      if (jmag > TOUCH_JOY_DEADZONE) { strafe = jx / jmag; forward = -jy / jmag; }
+    }
     if (forward || strafe) bob += dt * 9;
     return { forward, strafe };
   }
@@ -1095,12 +1178,14 @@ export function startDoom(net: DoomNet): void {
     }
     if (mode === 'menu' || mode === 'wait') {
       hud.style.display = 'none'; banner.style.display = 'none'; buddyBar.style.display = 'none';
-      coinsEl.style.display = 'none';
+      coinsEl.style.display = 'none'; bannerButtons.style.display = 'none';
+      doomFireBtn.style.display = 'none'; doomGrenadeBtn.style.display = 'none'; doomDashBtn.style.display = 'none';
       if (mode === 'menu') menu.style.display = 'flex';
       return;
     }
     const alive = enemies.filter((e) => e.alive).length;
     hud.style.display = 'flex';
+    doomFireBtn.style.display = 'block'; doomGrenadeBtn.style.display = 'block'; doomDashBtn.style.display = 'block';
     // Coins earned this run so far: stacking round rewards + boss bounties already banked.
     const earned = doomRoundCoins(round) + bossCoins;
     coinsEl.style.display = 'block';
@@ -1127,18 +1212,24 @@ export function startDoom(net: DoomNet): void {
       banner.style.color = '#9fd8ff';
       banner.style.fontSize = '48px';
       banner.style.display = 'flex';
+      resumeBtn.style.display = ''; retryBtn.style.display = 'none'; quitBannerBtn.style.display = '';
+      bannerButtons.style.display = 'flex';
     } else if (over === 'dead') {
       banner.textContent = `GAME OVER\nReached round ${round}\n🪙 ${earned.toLocaleString()} coins earned\n${mode === 'solo' ? 'press R to retry · ' : ''}ESC to quit`;
       banner.style.color = '#ff2d2d';
       banner.style.fontSize = '40px';
       banner.style.display = 'flex';
+      resumeBtn.style.display = 'none'; retryBtn.style.display = mode === 'solo' ? '' : 'none'; quitBannerBtn.style.display = '';
+      bannerButtons.style.display = 'flex';
     } else if (betweenTimer > 0) {
       banner.textContent = isBossRound(round) ? `ROUND ${round}\nBOSS BATTLE` : `ROUND ${round}`;
       banner.style.color = isBossRound(round) ? '#ffd21e' : '#ffd166';
       banner.style.fontSize = isBossRound(round) ? '44px' : '56px';
       banner.style.display = 'flex';
+      bannerButtons.style.display = 'none';
     } else {
       banner.style.display = 'none';
+      bannerButtons.style.display = 'none';
     }
   }
 
@@ -1262,6 +1353,37 @@ export function startDoom(net: DoomNet): void {
     if (document.pointerLockElement !== canvas) { canvas.requestPointerLock(); return; }
     localFire();
   };
+  // Touch: left half of the canvas = move joystick, right half = look-drag. Pointer Lock doesn't
+  // exist for touch, so these are the only way a touch player moves/looks at all.
+  const onTouchDown = (e: PointerEvent) => {
+    if (e.pointerType !== 'touch') return;
+    if (mode === 'menu' || mode === 'wait' || paused || over) return;
+    e.preventDefault();
+    const r = canvas.getBoundingClientRect();
+    if (e.clientX < r.left + r.width / 2) {
+      if (touchMoveId !== null) return;
+      touchMoveId = e.pointerId;
+      touchMoveOX = touchMoveCX = e.clientX;
+      touchMoveOY = touchMoveCY = e.clientY;
+    } else {
+      if (touchLookId !== null) return;
+      touchLookId = e.pointerId;
+      touchLookLastX = e.clientX;
+    }
+  };
+  const onTouchMoveEvt = (e: PointerEvent) => {
+    if (e.pointerType !== 'touch') return;
+    if (e.pointerId === touchMoveId) {
+      touchMoveCX = e.clientX; touchMoveCY = e.clientY;
+    } else if (e.pointerId === touchLookId) {
+      myAngle += (e.clientX - touchLookLastX) * TOUCH_LOOK_SENSITIVITY;
+      touchLookLastX = e.clientX;
+    }
+  };
+  const onTouchUp = (e: PointerEvent) => {
+    if (e.pointerId === touchMoveId) touchMoveId = null;
+    if (e.pointerId === touchLookId) touchLookId = null;
+  };
   // Boss key (Cmd+X spreadsheet mode in main.ts): force-pause while the disguise is up, resume on
   // exit — so the run doesn't keep going behind the spreadsheet. Works in any mode (not just solo).
   const onBossKey = (e: Event) => {
@@ -1274,6 +1396,10 @@ export function startDoom(net: DoomNet): void {
   window.addEventListener('keyup', onKeyUp, true);
   window.addEventListener('mousemove', onMouseMove);
   canvas.addEventListener('mousedown', onMouseDown);
+  canvas.addEventListener('pointerdown', onTouchDown);
+  window.addEventListener('pointermove', onTouchMoveEvt);
+  window.addEventListener('pointerup', onTouchUp);
+  window.addEventListener('pointercancel', onTouchUp);
 
   // --- loop + teardown ---
   let raf = 0;
@@ -1302,6 +1428,9 @@ export function startDoom(net: DoomNet): void {
     window.removeEventListener('keydown', onKeyDown, true);
     window.removeEventListener('keyup', onKeyUp, true);
     window.removeEventListener('mousemove', onMouseMove);
+    window.removeEventListener('pointermove', onTouchMoveEvt);
+    window.removeEventListener('pointerup', onTouchUp);
+    window.removeEventListener('pointercancel', onTouchUp);
     if (document.pointerLockElement === canvas) document.exitPointerLock();
     if (mode === 'wait' || mode === 'host' || mode === 'guest') net.leave();
     handlers = null;
