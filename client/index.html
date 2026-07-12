@@ -943,6 +943,18 @@
         cursor: pointer;
       }
       #muteBtn:hover { background: #18203a; }
+      #helpBtn {
+        font: inherit;
+        font-size: 12px;
+        letter-spacing: 1px;
+        padding: 7px 12px;
+        border-radius: 6px;
+        border: 1px solid #2a3550;
+        background: #0e1424;
+        color: #7da2ff;
+        cursor: pointer;
+      }
+      #helpBtn:hover { background: #18203a; }
       /* Work mode toggle — same nav style as the others, a touch more compact. */
       #workBtn {
         font: inherit; font-size: 11px; letter-spacing: 1px; padding: 6px 10px;
@@ -1172,6 +1184,14 @@
       }
       #spinBtn.ready:hover { filter: brightness(1.1); }
       #spinBtn:disabled { cursor: default; }
+      /* A quiet nudge toward "Join game" for a visitor who's never actually played a match yet —
+         cleared for good the moment they do (see joinBtn's click handler). Everyone else never
+         sees it. */
+      .first-join { animation: firstJoinPulse 1.6s ease-in-out infinite; }
+      @keyframes firstJoinPulse {
+        0%, 100% { box-shadow: 0 0 4px 0 rgba(58,109,240,0.6); }
+        50% { box-shadow: 0 0 16px 4px rgba(58,109,240,0.9); }
+      }
       @keyframes spinFlash {
         0%, 100% { background: #ff2db7; box-shadow: 0 0 6px 1px rgba(255,45,183,0.6); }
         50% { background: #ff7ad9; box-shadow: 0 0 18px 5px rgba(255,122,217,0.85); }
@@ -2596,6 +2616,85 @@
         line-height: 1.35;
       }
       #combosFoot {
+        margin: 14px 0 0;
+        font-size: 11px;
+        color: #6b7796;
+        text-align: center;
+      }
+      /* Help / controls reference — same modal chrome as #combosModal. */
+      #helpModal {
+        position: fixed;
+        inset: 0;
+        z-index: 120;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(4, 7, 16, 0.72);
+      }
+      #helpModal[hidden] { display: none; }
+      #helpCard {
+        width: min(92vw, 440px);
+        max-height: 80vh;
+        overflow-y: auto;
+        background: #0e1424;
+        border: 1px solid #2a3550;
+        border-radius: 12px;
+        box-shadow: 0 18px 48px rgba(0, 0, 0, 0.6);
+        padding: 16px 18px 18px;
+      }
+      #helpHead {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 1px;
+        color: #7da2ff;
+        margin-bottom: 12px;
+      }
+      #helpClose {
+        font: inherit;
+        font-size: 15px;
+        line-height: 1;
+        padding: 4px 8px;
+        border-radius: 6px;
+        border: 1px solid #2a3550;
+        background: #0e1424;
+        color: #9fb0d8;
+        cursor: pointer;
+      }
+      #helpClose:hover {
+        background: #18203a;
+        color: #e8eefc;
+      }
+      #helpList {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .help-row {
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+        padding: 8px 10px;
+        border: 1px solid #1f2940;
+        border-radius: 8px;
+        background: #0b1020;
+      }
+      .help-keys {
+        flex: 0 0 auto;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.3px;
+        color: #ffd166;
+        white-space: nowrap;
+      }
+      .help-desc {
+        font-size: 12px;
+        color: #9fb0d8;
+        line-height: 1.35;
+      }
+      #helpFoot {
         margin: 14px 0 0;
         font-size: 11px;
         color: #6b7796;
@@ -4062,6 +4161,7 @@
       <div class="load-skip">click anywhere to skip</div>
     </div>
     <div id="topLeft">
+      <button id="helpBtn" type="button" title="Controls &amp; keyboard shortcuts">❓ Help</button>
       <button id="muteBtn" type="button" aria-pressed="false" title="Toggle sound on/off (M)">🔊</button>
       <button id="worldBtn" type="button" aria-pressed="false" title="Walk around the TSONG world — a free-roam map with everyone on it">🌍 World</button>
       <div id="workMenu">
@@ -4794,6 +4894,23 @@
     </div>
     <!-- Live tournament bracket / signup, shown whenever a tournament is running. -->
     <!-- Fatality combos reference, opened from the modes panel (only while fatalities are on). -->
+    <div id="helpModal" hidden>
+      <div id="helpCard" role="dialog" aria-modal="true" aria-label="Controls and keyboard shortcuts">
+        <div id="helpHead">
+          <span>❓ Controls</span>
+          <button id="helpClose" type="button" aria-label="Close">✕</button>
+        </div>
+        <div id="helpList">
+          <div class="help-row"><span class="help-keys">↑/↓ · W/S · drag</span><span class="help-desc">Move your paddle</span></div>
+          <div class="help-row"><span class="help-keys">T</span><span class="help-desc">Focus chat — Enter to send</span></div>
+          <div class="help-row"><span class="help-keys">M</span><span class="help-desc">Mute / unmute sound</span></div>
+          <div class="help-row"><span class="help-keys">VIEW menu</span><span class="help-desc">Switch between 2D, 3D, and first-person</span></div>
+          <div class="help-row"><span class="help-keys">🌍 World</span><span class="help-desc">Free-roam the town — WASD/arrows or drag to walk, F to drive, R to fire, Space to interact, T to chat</span></div>
+          <div class="help-row"><span class="help-keys">📓 Fatality Combos</span><span class="help-desc">Appears once you win a match — arrow-key sequences that end the next one with style</span></div>
+        </div>
+        <p id="helpFoot">There's a lot more tucked into the menus above — Arcade, Casino, and the Shop are all worth a look.</p>
+      </div>
+    </div>
     <div id="combosModal" hidden>
       <div id="combosCard" role="dialog" aria-modal="true" aria-label="Fatality combos">
         <div id="combosHead">

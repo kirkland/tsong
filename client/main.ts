@@ -132,6 +132,10 @@ const combosModal = document.getElementById('combosModal') as HTMLDivElement;
 const combosCard = document.getElementById('combosCard') as HTMLDivElement;
 const combosClose = document.getElementById('combosClose') as HTMLButtonElement;
 const combosList = document.getElementById('combosList') as HTMLDivElement;
+const helpBtn = document.getElementById('helpBtn') as HTMLButtonElement;
+const helpModal = document.getElementById('helpModal') as HTMLDivElement;
+const helpCard = document.getElementById('helpCard') as HTMLDivElement;
+const helpClose = document.getElementById('helpClose') as HTMLButtonElement;
 const balanceModal = document.getElementById('balanceModal') as HTMLDivElement;
 const balanceCard = document.getElementById('balanceCard') as HTMLDivElement;
 const balanceClose = document.getElementById('balanceClose') as HTMLButtonElement;
@@ -1246,9 +1250,18 @@ renameBtn.addEventListener('click', () => {
 // --- claim a paddle spot ---
 // Classic mode: one auto-assigned button. Layered-teams mode: pick your side
 // (multiple players may share a side, staggered forward by join order).
-joinBtn.addEventListener('click', () => net.send({ type: 'claim' }));
-joinLeftBtn.addEventListener('click', () => net.send({ type: 'claim', side: 'left' }));
-joinRightBtn.addEventListener('click', () => net.send({ type: 'claim', side: 'right' }));
+// A quiet first-time nudge: a visitor who's never actually joined a match gets a soft pulse on
+// whichever join button is showing, cleared for good the moment they click one.
+if (prefGet('everJoined', '0') !== '1') {
+  for (const b of [joinBtn, joinLeftBtn, joinRightBtn]) b.classList.add('first-join');
+}
+function markEverJoined() {
+  prefSet('everJoined', '1');
+  for (const b of [joinBtn, joinLeftBtn, joinRightBtn]) b.classList.remove('first-join');
+}
+joinBtn.addEventListener('click', () => { markEverJoined(); net.send({ type: 'claim' }); });
+joinLeftBtn.addEventListener('click', () => { markEverJoined(); net.send({ type: 'claim', side: 'left' }); });
+joinRightBtn.addEventListener('click', () => { markEverJoined(); net.send({ type: 'claim', side: 'right' }); });
 
 // --- quit game: vacate your paddle spot (the side reverts to "— open —") ---
 quitBtn.addEventListener('click', () => net.send({ type: 'forfeit' }));
@@ -5123,6 +5136,23 @@ combosModal.addEventListener('click', (e) => {
 });
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !combosModal.hidden) closeCombos();
+});
+
+// Static controls/shortcuts reference — content lives directly in index.html (see #helpList),
+// there's nothing to build dynamically.
+function openHelp() {
+  helpModal.hidden = false;
+}
+function closeHelp() {
+  helpModal.hidden = true;
+}
+helpBtn.addEventListener('click', openHelp);
+helpClose.addEventListener('click', closeHelp);
+helpModal.addEventListener('click', (e) => {
+  if (!helpCard.contains(e.target as Node)) closeHelp();
+});
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !helpModal.hidden) closeHelp();
 });
 
 // Swap the canvas between landscape and portrait when the "rotate" power-up flips the

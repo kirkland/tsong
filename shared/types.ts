@@ -430,8 +430,11 @@ export type BotLevel = (typeof BOT_LEVELS)[number];
 export const WORLD: { w: number; h: number; spawnX: number; spawnY: number } = {
   w: 4800, // widened east to make room for Robville, the suburban neighborhood (see WORLD_PARCELS)
   h: 2200,
-  spawnX: 1700, // just in front of the Arena (x1295–1775, y255–595), framing the Ruins (x1850+) to the right
-  spawnY: 700,
+  // Just in front of the Arena (x1295–1775, y255–595), framing the Ruins (x1850+) to the right.
+  // Offset a bit from Coach Vito's home spot (1710, 720) — dead center on top of him meant a
+  // fresh player's own name tag landed stacked directly on top of his.
+  spawnX: 1660,
+  spawnY: 640,
 };
 export const WORLD_AVATAR = {
   r: 16,        // avatar body radius, world units

@@ -7960,7 +7960,7 @@ export function startWorld(net: WorldNet): void {
     h.textContent = '👋 Welcome to TSONG';
     h.style.cssText = 'font-size:22px;color:#e8eefc;margin-bottom:6px;';
     const s = document.createElement('div');
-    s.textContent = "Pick a name and a color, then head out into town.";
+    s.textContent = "Pick a name and a color, then head out into town — the actual game of Pong is always one click away (top-right).";
     s.style.cssText = 'font-size:13px;color:#8aa0d8;margin-bottom:16px;';
     const input = document.createElement('input');
     input.type = 'text';
