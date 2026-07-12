@@ -11538,20 +11538,27 @@ export function startWorld(net: WorldNet): void {
     pad(Math.round(W * 0.40), Math.round(H * 0.46), 5);
     pad(Math.round(W * 0.62), Math.round(H * 0.40), 4);
     pad(Math.round(W * 0.50), Math.round(H * 0.66), 4);
-    g.generateTexture('w-pond', W, H);
+    // Keyed per-building (not a shared 'w-pond' constant) — with a second pond-kind building (The
+    // Lake) now on the map, a shared key meant the second buildPond() call regenerated the SAME
+    // texture at its own (much bigger) dimensions, corrupting whichever pond had already made an
+    // Image out of it: that sprite kept its old position/scale but Phaser repaints it from the
+    // texture's current (now mismatched) pixels, which is exactly the "cut off" look reported.
+    const pondKey = `w-pond-${b.id}`;
+    g.generateTexture(pondKey, W, H);
     g.destroy();
-    sc.add.image(b.x, b.y, 'w-pond').setOrigin(0, 0).setScale(TEXEL).setDepth(depth);
+    sc.add.image(b.x, b.y, pondKey).setOrigin(0, 0).setScale(TEXEL).setDepth(depth);
 
     // Reed/cattail clusters dotted around the shore so the edge looks planted, not cut out.
+    const reedKey = `w-reeds-${b.id}`;
     const rg = sc.make.graphics({ x: 0, y: 0 }, false);
     const REED = 0x4a7d3a, REED_D = 0x3a6330, CAT = 0x7a4a26;
     rg.fillStyle(REED, 1); rg.fillRect(2, 4, 1, 11); rg.fillRect(4, 2, 1, 13); rg.fillRect(6, 5, 1, 10);
     rg.fillStyle(REED_D, 1); rg.fillRect(3, 8, 1, 7);
     rg.fillStyle(CAT, 1); rg.fillRect(4, 0, 1, 3); rg.fillRect(6, 4, 1, 2);
-    rg.generateTexture('w-reeds', 8, 16);
+    rg.generateTexture(reedKey, 8, 16);
     rg.destroy();
     for (const [fx, fy] of [[0.16, 0.20], [0.82, 0.26], [0.30, 0.86], [0.72, 0.80]] as const) {
-      sc.add.image(b.x + b.w * fx, b.y + b.h * fy, 'w-reeds')
+      sc.add.image(b.x + b.w * fx, b.y + b.h * fy, reedKey)
         .setOrigin(0.5, 1).setScale(TEXEL).setDepth(b.y + b.h * fy);
     }
 
@@ -11567,6 +11574,7 @@ export function startWorld(net: WorldNet): void {
 
     // Wooden pier/dock on the west (plaza-facing) side: planks reaching out over the water from the
     // shore, with two posts at the tip. Drawn as its own texture so it layers cleanly over the water.
+    const pierKey = `w-pier-${b.id}`;
     const pg = sc.make.graphics({ x: 0, y: 0 }, false);
     const PLANK = 0x9c6b3f, PLANK_D = 0x7a4f2c, POST = 0x5e3c20;
     const pierW = 24, pierH = 14; // texels
@@ -11574,10 +11582,10 @@ export function startWorld(net: WorldNet): void {
     pg.fillStyle(PLANK, 1);
     for (let py = 1; py < pierH - 1; py += 3) pg.fillRect(1, py, pierW - 2, 2); // plank slats
     pg.fillStyle(POST, 1); pg.fillRect(pierW - 3, 0, 2, pierH); pg.fillRect(pierW - 3, 0, 2, 2);
-    pg.generateTexture('w-pier', pierW, pierH);
+    pg.generateTexture(pierKey, pierW, pierH);
     pg.destroy();
     // Anchor the pier so it sticks out from the pond's west edge toward the plaza, vertically centered.
-    sc.add.image(b.x, b.y + b.h / 2, 'w-pier').setOrigin(1, 0.5).setScale(TEXEL).setDepth(b.y + b.h / 2);
+    sc.add.image(b.x, b.y + b.h / 2, pierKey).setOrigin(1, 0.5).setScale(TEXEL).setDepth(b.y + b.h / 2);
   }
 
   // --- the Phaser scene ---
