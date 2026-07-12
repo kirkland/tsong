@@ -2304,11 +2304,14 @@ export function startWorld(net: WorldNet): void {
   // Top bar: title + live player count + drive toggle + exit.
   const topbar = document.createElement('div');
   topbar.style.cssText =
-    'position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:12px;' +
+    // flex-wrap is a no-op whenever the row already fits (every desktop width) and only kicks in
+    // once the buttons genuinely don't fit — on a phone that means a clean second row instead of
+    // clipping off-screen or squeezing "TSONG WORLD" into wrapping mid-word inside its own box.
+    'position:absolute;top:0;left:0;right:0;display:flex;flex-wrap:wrap;align-items:center;gap:12px;' +
     'padding:10px 14px;background:linear-gradient(#0b1020dd,#0b102000);pointer-events:none;z-index:2;';
   const title = document.createElement('div');
   title.innerHTML = '🌍 <b>TSONG WORLD</b>';
-  title.style.cssText = 'color:#e8eefc;font-size:18px;letter-spacing:.5px;text-shadow:0 2px 6px #000a;';
+  title.style.cssText = 'color:#e8eefc;font-size:18px;letter-spacing:.5px;text-shadow:0 2px 6px #000a;white-space:nowrap;';
   // Persistent coin balance — previously only visible inside a dialog (Shop/Bank/Casino), so
   // players had no way to check their coins while just walking around. Kept in sync by
   // updateCoinsHud(), called once here and again from Controller.feedWallet() (the same push
@@ -2351,10 +2354,13 @@ export function startWorld(net: WorldNet): void {
   topbar.append(title, coinsHud, count, muteBtn, renameBtn, driveBtn, backBtn);
   overlay.appendChild(topbar);
 
-  // Weekly objectives panel (top-left, under the title).
+  // Weekly objectives panel (top-left, under the title). Its `top` is recomputed from the
+  // topbar's actual rendered height (see layoutTopHud below) instead of a hardcoded pixel guess,
+  // since the topbar can now wrap to a second row on narrow screens.
   const objPanel = document.createElement('div');
+  objPanel.className = 'w-objpanel';
   objPanel.style.cssText =
-    'position:absolute;top:46px;left:14px;z-index:2;min-width:188px;background:#0c1330d9;' +
+    'position:absolute;left:14px;z-index:2;min-width:188px;background:#0c1330d9;' +
     'border:1px solid #2c3a63;border-radius:10px;padding:9px 12px 10px;box-shadow:0 6px 20px #0006;pointer-events:none;';
   const objTitle = document.createElement('div');
   objTitle.textContent = '📋 Weekly Objectives';
@@ -2856,13 +2862,27 @@ export function startWorld(net: WorldNet): void {
   }
 
   // --- minimap (always-on, top-right) + full map (toggled with M) ---
+  // `top` is recomputed alongside the objectives panel from the topbar's real rendered height
+  // (see layoutTopHud) — a hardcoded guess broke as soon as the topbar wrapped to two rows.
   const minimap = document.createElement('canvas');
+  minimap.className = 'w-minimap';
   minimap.width = 200; minimap.height = Math.round(200 * WORLD.h / WORLD.w);
   minimap.style.cssText =
-    'position:absolute;top:48px;right:10px;width:200px;border:2px solid #2a3550;border-radius:8px;' + // below the topbar so it never covers the drive / back-to-pong buttons
+    'position:absolute;right:10px;width:200px;border:2px solid #2a3550;border-radius:8px;' +
     'box-shadow:0 6px 20px #0008;background:#1a2a1c;cursor:pointer;z-index:3;';
   minimap.title = 'Open full map (M)';
   overlay.appendChild(minimap);
+  // Keep the objectives panel and minimap pinned just below the topbar, whatever height it
+  // happens to be at the current viewport width (it can wrap to 2 rows on narrow screens). A
+  // ResizeObserver (rather than just a window resize listener) also catches height changes from
+  // the topbar's own content — e.g. the coin counter growing past a text-wrap threshold.
+  function layoutTopHud() {
+    const top = Math.round(topbar.getBoundingClientRect().height) + 8;
+    objPanel.style.top = `${top}px`;
+    minimap.style.top = `${top}px`;
+  }
+  layoutTopHud();
+  new ResizeObserver(layoutTopHud).observe(topbar);
   const fullMap = document.createElement('div');
   fullMap.style.cssText =
     'position:absolute;inset:0;display:none;align-items:center;justify-content:center;' +
@@ -8024,14 +8044,18 @@ export function startWorld(net: WorldNet): void {
       row.style.cssText = `display:flex;align-items:center;gap:8px;font-size:13px;margin:3px 0;color:${o.done ? '#8fe08f' : '#dbe4f7'};`;
       const box = document.createElement('span');
       box.textContent = o.done ? '☑' : '☐';
-      box.style.cssText = `font-size:15px;color:${o.done ? '#6bd06b' : '#9fb0d8'};`;
+      box.style.cssText = `font-size:15px;color:${o.done ? '#6bd06b' : '#9fb0d8'};flex-shrink:0;`;
       const lab = document.createElement('span');
       const prog = !o.done && o.progress && !o.hideProgress ? ` (${o.progress()[0]}/${o.progress()[1]})` : '';
       lab.textContent = o.label + prog;
+      // Lets the label wrap onto a second line instead of forcing the whole panel wider — matters
+      // once the panel has a max-width on mobile (see .w-objpanel), since the longest objective
+      // ("Open every chest in the Ruins") would otherwise stretch it past that cap.
+      lab.style.cssText = 'min-width:0;flex:1 1 auto;';
       if (o.done) lab.style.textDecoration = 'line-through';
       const rew = document.createElement('span');
       rew.textContent = `+${o.reward}🪙`;
-      rew.style.cssText = 'margin-left:auto;font-size:11px;opacity:.7;';
+      rew.style.cssText = 'margin-left:auto;font-size:11px;opacity:.7;flex-shrink:0;';
       row.append(box, lab, rew);
       objList.appendChild(row);
     }

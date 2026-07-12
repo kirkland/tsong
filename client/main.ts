@@ -5246,6 +5246,26 @@ if (isMobileView()) {
   boards.style.display = '';
 }
 
+// These toolbar dropdowns become full-width bottom sheets on mobile (see the shared mobile CSS
+// rule) and can cover their own trigger button, so tap-outside-to-dismiss (still there, per each
+// panel's own document click listener) isn't an obvious gesture. Give every one of them an
+// explicit ✕, injected once here rather than duplicated in each panel's markup.
+for (const id of [
+  'marketPanel', 'shopPanel', 'loanPanel', 'roulettePanel', 'bjPanel',
+  'crapsPanel', 'crashPanel', 'slotsPanel', 'lootPanel', 'marketplacePanel',
+  'newsPanel', 'housePanel', 'plinkoPanel', 'horsePanel', 'hiloPanel', 'minesPanel',
+]) {
+  const panel = document.getElementById(id);
+  if (!panel) continue;
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'mob-sheet-close';
+  closeBtn.setAttribute('aria-label', 'Close');
+  closeBtn.textContent = '✕';
+  closeBtn.addEventListener('click', (e) => { e.stopPropagation(); panel.hidden = true; });
+  panel.prepend(closeBtn);
+}
+
 // --- touch controls for paddle ---
 let touchActive = false;
 function onTouchStart() {

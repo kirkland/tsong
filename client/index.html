@@ -1152,6 +1152,9 @@
         box-shadow: 0 10px 28px rgba(0,0,0,0.55); padding: 8px 12px 12px; z-index: 50;
       }
       #shopPanel[hidden] { display: none; }
+      /* Desktop-only hidden; the mobile media query below turns this into a visible sticky ✕
+         inside each full-width sheet panel (Shop, Roulette, Market, …). */
+      .mob-sheet-close { display: none; }
       #shopPanel h3 {
         font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
         color: #6b7796; margin: 8px 0 6px;
@@ -3838,6 +3841,17 @@
         #tourney {
           z-index: auto;
         }
+        /* World's own HUD (topbar + Weekly Objectives + minimap) never got a mobile pass either —
+           the objectives panel sizes to its longest line (no cap), which reached wide enough to
+           overlap the minimap on narrow screens. Capping both keeps a clear gap between them;
+           their vertical position is computed at runtime from the topbar's real height (it can
+           wrap to 2 rows now — see layoutTopHud in world.ts), not a hardcoded pixel guess. */
+        .w-objpanel {
+          max-width: 56vw;
+        }
+        .w-minimap {
+          width: 120px !important;
+        }
         #viewModeBtn, #muteBtn, #worldBtn, #workMenuBtn, #gameModesBtn, #powerupInfoBtn, #tourneyBtn, #shopBtn, #arcadeBtn, #casinoBtn, #economyBtn, #seasonBtn {
           font-size: 10px;
           padding: 4px 8px;
@@ -3887,16 +3901,41 @@
           font-size: 11px;
           padding: 3px 8px;
         }
-        /* Mobile panels: full-width sheets for usability */
+        /* Mobile panels: full-width sheets for usability. Each of these panels sets its own
+           desktop `width` in px (e.g. #shopPanel: 280px, #roulettePanel: 340px) — left/right:0
+           alone can't override an explicit width, so without this they silently rendered at
+           their desktop width with dead space down one side instead of actually going edge to
+           edge. `width: auto` is the piece that was missing. */
         #marketPanel, #shopPanel, #loanPanel, #roulettePanel, #bjPanel,
         #crapsPanel, #crashPanel, #slotsPanel, #lootPanel, #marketplacePanel,
         #newsPanel, #housePanel, #plinkoPanel, #horsePanel, #hiloPanel, #minesPanel {
           position: fixed; left: 0; right: 0; top: auto; bottom: 0;
-          max-width: 100vw; max-height: 80vh; overflow-y: auto;
+          width: auto; max-width: 100vw; max-height: 80vh; overflow-y: auto;
           border-radius: 12px 12px 0 0; z-index: 70;
           box-shadow: 0 -6px 24px rgba(0,0,0,0.5);
         }
         #marketPanel, #shopPanel { top: 0; max-height: 90vh; } /* taller sheets for content-heavy panels */
+        /* An explicit close affordance for these sheets — tap-outside-to-dismiss still works (see
+           the per-panel document click listeners in main.ts) but isn't an obvious gesture once the
+           panel is a full-width sheet covering its own trigger button. Sticky so it stays reachable
+           even when the sheet's own content scrolls. */
+        .mob-sheet-close {
+          display: block;
+          position: sticky;
+          top: 0;
+          float: right;
+          margin: -4px -8px 6px 6px;
+          width: 30px; height: 30px;
+          border-radius: 50%;
+          border: 1px solid #2a3550;
+          background: #1b2542;
+          color: #cdd8f5;
+          font-size: 15px;
+          line-height: 28px;
+          text-align: center;
+          cursor: pointer;
+          z-index: 5;
+        }
       }
 
       /* --- Work mode: a full-screen spreadsheet disguise ("boss key"). Covers everything,
