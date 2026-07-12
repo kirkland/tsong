@@ -2932,7 +2932,12 @@ export function startWorld(net: WorldNet): void {
     ctx.fillStyle = '#6b7079';                            // jail
     ctx.fillRect(JAIL.x * sx, JAIL.y * sy, JAIL.w * sx, JAIL.h * sy);
     ctx.font = `${full ? 22 : 12}px serif`; ctx.fillStyle = '#6b7079';
-    ctx.fillText('🚔', (JAIL.x + JAIL.w / 2) * sx, (JAIL.y + JAIL.h / 2) * sy);
+    const jailCx = (JAIL.x + JAIL.w / 2) * sx, jailCy = (JAIL.y + JAIL.h / 2) * sy;
+    ctx.fillText('🚔', jailCx, jailCy);
+    // Every WORLD_BUILDINGS entry gets its name labeled below the icon in full-map mode — the jail
+    // is the one fixed structure on the map that isn't in that array, so it was the one unlabeled
+    // box on the map (easy to mistake for clutter/leftover debug art rather than "that's the jail").
+    if (full) { ctx.fillStyle = '#fff'; ctx.font = '700 12px system-ui'; ctx.fillText('JAIL', jailCx, jailCy + 22); }
     for (const c of crates) {                             // ammo crates still waiting to be looted
       if (c.takenUntil) continue;
       ctx.fillStyle = WEAPON_BY_ID[c.spot.w].css;
