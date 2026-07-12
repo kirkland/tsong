@@ -2378,8 +2378,9 @@ export function startWorld(net: WorldNet): void {
     'position:absolute;left:14px;bottom:12px;color:#cdd8f5;font-size:12px;pointer-events:none;line-height:1.5;z-index:2;text-shadow:0 1px 4px #000a;';
   overlay.appendChild(help);
 
-  // Hold-to-DRIFT button (bottom-right) for touch — keyboard players use Shift. Shown only while
-  // driving; press-and-hold engages the handbrake, exactly like holding Shift.
+  // Hold-to-DRIFT / SPRINT button (bottom-right) for touch — keyboard players use Shift for both.
+  // Hidden only while boating (drift behind the wheel, sprint on foot); press-and-hold sets the
+  // same handbrake flag as holding Shift.
   const driftBtn = document.createElement('button');
   driftBtn.type = 'button';
   driftBtn.textContent = '🌀 DRIFT';
@@ -3079,7 +3080,8 @@ export function startWorld(net: WorldNet): void {
       driveBtn.textContent = car ? `🚗 Drive ${car.name}` : '🚗 Drive';
     }
     driveBtn.style.opacity = car || driving ? '1' : '0.6';
-    driftBtn.style.display = driving ? 'block' : 'none'; // hold-to-drift only makes sense behind the wheel
+    driftBtn.style.display = boating ? 'none' : 'block'; // drift behind the wheel, sprint on foot
+    driftBtn.textContent = driving ? '🌀 DRIFT' : '🏃 SPRINT';
     if (!driving) { handbrake = false; driftBtn.style.background = '#4a2a6b'; }
     updateHelp();
   }
@@ -8340,6 +8342,13 @@ export function startWorld(net: WorldNet): void {
     type Page = { text: string; choices?: readonly [NpcChoice, NpcChoice] };
     const pages: Page[] = [{ text: n.def.lines[n.lineIdx % n.def.lines.length] }];
     n.lineIdx++;
+    // The Muttonista appraises more than pints — if your cortisol reading is way off in either
+    // direction, he clocks it and says so instead of his usual verdict.
+    if (n.def.id === 'prime-mutton') {
+      const cort = net.selfCortisolRow()?.cortisol ?? 0;
+      if (cort >= 90) pages[0].text = '*sets the pint down, actually looks at you* …mate. You look like you need this more than I need to appraise it. Sit. Breathe. On the house.';
+      else if (cort <= 3) pages[0].text = '*studies you for a long moment* You\'ve got the calmest eyes I\'ve seen in this bar all week. Whatever you\'re doing — keep doing it.';
+    }
     if (n.def.ask) pages.push({ text: n.def.ask.q, choices: n.def.ask.choices });
 
     npcName.textContent = n.def.name;
