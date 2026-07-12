@@ -2431,8 +2431,10 @@ export function startWorld(net: WorldNet): void {
   const rackChips = WEAPONS.map((spec, i) => {
     const chip = document.createElement('button');
     chip.type = 'button';
+    // padding:11px (not the original 5px) brings each chip up to a ~44px touch target — at 5px it
+    // rendered at 96×31px, well under the comfortable minimum for a row of adjacent tap targets.
     chip.style.cssText =
-      'display:flex;align-items:center;justify-content:space-between;gap:8px;width:96px;padding:5px 9px;' +
+      'display:flex;align-items:center;justify-content:space-between;gap:8px;width:96px;padding:11px 9px;' +
       'cursor:pointer;border-radius:9px;background:#12162adc;border:2px solid #2c3554;color:#dfe6ff;' +
       `font:800 12px ui-monospace,monospace;touch-action:none;user-select:none;box-shadow:0 3px 10px #0007;`;
     chip.innerHTML =
