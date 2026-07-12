@@ -230,7 +230,7 @@ export interface WorldNet {
   marketList(instanceId: number, ask: number): void;
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt'): void; // open a DOOM/Fishing/Arcade/Bowling feature — every Casino game + Notice-Board panel is a native World dialog now
+  openFeature(feature: 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' | 'monsterjam'): void; // open a DOOM/Fishing/Arcade/Bowling feature — every Casino game + Notice-Board panel is a native World dialog now
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   openRename(): void;            // World's own 👤 button → reopen the nickname/color picker
   muted(): boolean;              // is game sound currently muted?
@@ -3244,6 +3244,7 @@ export function startWorld(net: WorldNet): void {
         { label: '🥊 Super Tsong Bros', onPick: () => { pause(false); net.openFeature('superbros'); } },
         { label: '💣 Nuketown', onPick: () => { pause(false); net.openFeature('nuketown'); } },
         { label: '🧨 TNT Explosion Rally', onPick: () => { pause(false); net.openFeature('tnt'); } },
+        { label: '🚚 Monster Jam: Stunt Showdown', onPick: () => { pause(false); net.openFeature('monsterjam'); } },
         { label: '🏍️ Tron', onPick: () => { pause(false); net.openFeature('tron'); } },
         { label: '🎸 Tsong Hero', onPick: () => { pause(false); net.openFeature('guitarhero'); } },
         { label: '🪖 Worms: Tsong Edition', onPick: () => { pause(false); net.openFeature('artillery'); } },

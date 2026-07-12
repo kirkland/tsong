@@ -862,6 +862,10 @@ const net = connect(
       tntMod?.feedTntLobby(msg);
     } else if (msg.type === 'tntRelay') {
       tntMod?.feedTntRelay(msg.data);
+    } else if (msg.type === 'mjLobby') {
+      mjMod?.feedMjLobby(msg);
+    } else if (msg.type === 'mjRelay') {
+      mjMod?.feedMjRelay(msg.data);
     } else if (msg.type === 'doomLeaderboard') {
       doomScores = { solo: msg.solo, coop: msg.coop };
     } else if (msg.type === 'bowlState' || msg.type === 'bowlStart' || msg.type === 'bowlThrowResult' ||
@@ -2224,6 +2228,29 @@ tntBtn.addEventListener('click', async () => {
   }
 });
 
+// --- Monster Jam: Stunt Showdown, a 1v1 monster-truck stunt competition designed by a
+// 6-year-old (lazy-loaded, self-contained). Host-authoritative over the same dumb relay shape
+// as TNT: the server is only a 2-slot lobby + fan-out (mj* messages, routed above). Slot 0
+// simulates the whole show (truck picks, practice yard, Crushbot) and streams snapshots. ---
+const mjBtn = document.getElementById('mjBtn') as HTMLButtonElement;
+let mjMod: typeof import('./monsterjam') | null = null;
+mjBtn.addEventListener('click', async () => {
+  try {
+    mjMod = await import('./monsterjam');
+    mjMod.startMonsterJam({
+      join: () => net.send({ type: 'mjJoin' }),
+      leave: () => net.send({ type: 'mjLeave' }),
+      start: () => net.send({ type: 'mjStart' }),
+      end: (winner) => net.send({ type: 'mjEnd', winner }),
+      relay: (data) => net.send({ type: 'mjRelay', data }),
+      name: () => myName,
+      muted: () => muted,
+    });
+  } catch (e) {
+    console.error('Monster Jam failed to load:', e);
+  }
+});
+
 // --- "Type or Die" co-op typing horde-defense (lazy-loaded). Server-authoritative: the
 // overlay just renders tdState and sends keystroke outcomes (td* messages, routed above). ---
 const typeDieBtn = document.getElementById('typeDieBtn') as HTMLButtonElement;
@@ -2386,6 +2413,7 @@ const WORLD_DELEGATE_CHECK: Record<string, () => boolean> = {
   citytycoon: overlayPresentCheck('crOverlay'),
   bowling: overlayPresentCheck('bowlOverlay'),
   tnt: overlayVisibleCheck('#tntOverlay'),
+  monsterjam: overlayVisibleCheck('#mjOverlay'),
   rename: overlayVisibleCheck('#overlay'),
 };
 // Polls (rAF) until the delegated panel/minigame that World just handed off to has opened AND
@@ -2538,13 +2566,14 @@ worldBtn.addEventListener('click', async () => {
           return;
         }
         // Arcade cabinets launch the solo/co-op minigames via their toolbar buttons.
-        if (feature === 'campaign' || feature === 'typedie' || feature === 'racing' || feature === 'superbros' || feature === 'nuketown' || feature === 'citytycoon' || feature === 'tnt' || feature === 'tron' || feature === 'guitarhero' || feature === 'artillery') {
+        if (feature === 'campaign' || feature === 'typedie' || feature === 'racing' || feature === 'superbros' || feature === 'nuketown' || feature === 'citytycoon' || feature === 'tnt' || feature === 'monsterjam' || feature === 'tron' || feature === 'guitarhero' || feature === 'artillery') {
           const btn = feature === 'campaign' ? campaignBtn
                     : feature === 'typedie' ? typeDieBtn
                     : feature === 'racing' ? streetDemonsBtn
                     : feature === 'nuketown' ? nuketownBtn
                     : feature === 'citytycoon' ? (document.getElementById('crBtn') as HTMLButtonElement)
                     : feature === 'tnt' ? tntBtn
+                    : feature === 'monsterjam' ? mjBtn
                     : feature === 'tron' ? trnBtn
                     : feature === 'guitarhero' ? ghBtn
                     : feature === 'artillery' ? waBtn

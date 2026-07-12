@@ -1940,6 +1940,99 @@ export class Lobby {
     });
   }
 
+  // --- Monster Jam: Stunt Showdown (1v1 monster-truck stunt competition, by a 6-year-old) ---
+  // Same shape as TNT Explosion Rally: 2-slot lobby, slot 0 is the authority and simulates the
+  // whole show (truck picks → practice yard → main event); the server just relays payloads and
+  // pays the winner of human-vs-human shows.
+  private mjSlots: WebSocket[] = [];
+  private mjStatus: 'waiting' | 'playing' = 'waiting';
+  private mjStartedAt = 0; // epoch ms the current show started (min-length reward guard)
+  private mjHumansAtStart = 0; // players present when the show began (1 = vs Crushbot, no payout)
+  private static readonly MJ_CAP = 2;
+  private static readonly MJ_WIN_REWARD = 750; // coins the stunt champion earns per show
+  private static readonly MJ_MIN_MATCH_MS = 40_000; // shows shorter than this don't pay (anti-farm)
+
+  /** Take a slot in the Monster Jam lobby (max 2). */
+  mjJoin(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return;
+    if (this.mjSlots.includes(ws) || this.mjSlots.length >= Lobby.MJ_CAP) return;
+    if (this.mjStatus === 'playing') return; // can't hop into a running show
+    this.mjSlots.push(ws);
+    this.broadcastMjLobby();
+  }
+
+  /** Leave the lobby/show. If the HOST (slot 0) left, end the show for everyone. */
+  mjLeave(ws: WebSocket) {
+    const i = this.mjSlots.indexOf(ws);
+    if (i === -1) return;
+    const wasHost = i === 0;
+    this.mjSlots.splice(i, 1);
+    if (wasHost) {
+      // The authority is gone — no one can simulate the show. Tear it down for everyone left.
+      for (const other of this.mjSlots) {
+        this.tell(other, { type: 'mjLobby', status: 'ended', slot: 0, hostSlot: 0, players: [] });
+      }
+      this.mjSlots = [];
+      this.mjStatus = 'waiting';
+      return;
+    }
+    if (this.mjSlots.length <= 1) this.mjStatus = 'waiting';
+    this.broadcastMjLobby();
+  }
+
+  /** (Host only) start the show. A lone host puts on a solo show vs Crushbot 9000 (no payout). */
+  mjStart(ws: WebSocket) {
+    if (this.mjSlots[0] !== ws) return; // only the host (slot 0) may start
+    if (this.mjSlots.length < 1) return;
+    this.mjStatus = 'playing';
+    this.mjStartedAt = Date.now();
+    this.mjHumansAtStart = this.mjSlots.length;
+    this.broadcastMjLobby();
+  }
+
+  /** (Host only) settle a finished show: pay the reported winning slot the House-funded reward.
+   *  Guards: host-only, only while live (status flips to 'waiting' so it pays exactly once), the
+   *  winner slot must be valid, 2 humans must have been present at start (a Crushbot show never
+   *  pays), and the show must have lasted a minimum length (anti-farm). */
+  mjEnd(ws: WebSocket, winnerSlot: number) {
+    if (this.mjSlots[0] !== ws) return;      // only the authoritative host reports
+    if (this.mjStatus !== 'playing') return; // already settled / never started — ignore
+    this.mjStatus = 'waiting';               // settle once; any further mjEnd is a no-op
+    const winSock = this.mjSlots[winnerSlot];
+    if (winnerSlot < 0 || !winSock) { this.broadcastMjLobby(); return; } // invalid / bot won / draw → no payout
+    if (this.mjHumansAtStart < 2) { this.broadcastMjLobby(); return; } // solo vs Crushbot → no payout
+    if (Date.now() - this.mjStartedAt < Lobby.MJ_MIN_MATCH_MS) { this.broadcastMjLobby(); return; }
+    const conn = this.conns.get(winSock);
+    if (conn && conn.pid) {
+      this.housePay(conn.pid, conn.nickname, Lobby.MJ_WIN_REWARD)
+        .then((paid) => {
+          this.sendWallet(winSock); this.refreshNetWorth().catch(() => {});
+          if (paid > 0) this.notify(winSock, `🏆 Stunt Champion of Monster Jam — +${paid.toLocaleString()} coins!`);
+        })
+        .catch((e) => console.error('monster jam reward failed:', e));
+    }
+    this.broadcastMjLobby();
+  }
+
+  /** Forward an opaque Monster Jam payload to the OTHER player (dumb fan-out). */
+  mjRelay(ws: WebSocket, data: unknown) {
+    if (!this.mjSlots.includes(ws)) return;
+    for (const other of this.mjSlots) {
+      if (other !== ws) this.tell(other, { type: 'mjRelay', data });
+    }
+  }
+
+  private broadcastMjLobby() {
+    const players = this.mjSlots.map((sock, slot) => ({
+      name: this.conns.get(sock)?.nickname ?? `P${slot}`,
+      slot,
+    }));
+    this.mjSlots.forEach((sock, slot) => {
+      this.tell(sock, { type: 'mjLobby', status: this.mjStatus, slot, hostSlot: 0, players });
+    });
+  }
+
   // --- Beta World (free-roam overworld) ---
 
   /** Step a player into the world map. Sends them the current roster right away so they see
@@ -5990,6 +6083,7 @@ export class Lobby {
     this.trnLeave(ws);  // drop any Tron slot (ends the match if the host left)
     this.waLeave(ws);   // drop any Tsong Artillery slot (ends the match if the host left)
     this.tntLeave(ws);  // drop any TNT Explosion Rally slot (ends the duel if the host left)
+    this.mjLeave(ws);   // drop any Monster Jam slot (ends the show if the host left)
     this.tdLeave(ws);   // drop out of the Type or Die arena
     this.bowlLeave(ws); // drop out of any bowling room
     this.crLeave(ws);   // drop out of any City Tycoon game (holdings return to the bank)

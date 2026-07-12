@@ -1041,6 +1041,11 @@ export type ClientMsg =
   | { type: 'tntStart' } // (host only) start the match (solo start = practice vs the TNT Bot, no payout)
   | { type: 'tntEnd'; winner: number } // (host only) report the winning slot so the server pays the winner (-1 = the bot won)
   | { type: 'tntRelay'; data: unknown } // forward an opaque TNT Explosion Rally payload to the other player
+  | { type: 'mjJoin' } // take a slot in the Monster Jam lobby (1v1 monster-truck stunt showdown)
+  | { type: 'mjLeave' } // leave the Monster Jam lobby / show
+  | { type: 'mjStart' } // (host only) start the show (solo start = you vs Crushbot 9000, no payout)
+  | { type: 'mjEnd'; winner: number } // (host only) report the winning slot so the server pays the winner (-1 = bot/draw)
+  | { type: 'mjRelay'; data: unknown } // forward an opaque Monster Jam payload to the other player
   | { type: 'tdJoin' } // join the shared co-op "Type or Die" arena
   | { type: 'tdLeave' } // leave the Type or Die arena
   | { type: 'tdStart' } // (any participant) start the next Type or Die run from the waiting room
@@ -1610,6 +1615,8 @@ export type ServerMsg =
   | GhLeaderboardMsg
   | TntLobbyMsg
   | TntRelayMsg
+  | MjLobbyMsg
+  | MjRelayMsg
   | DoomLeaderboardMsg
   | TypeDieStateMsg
   | TypeDieLeaderboardMsg
@@ -2402,6 +2409,23 @@ export interface TntLobbyMsg {
 // snapshot / guest input). Clients pick out the messages they care about.
 export interface TntRelayMsg {
   type: 'tntRelay';
+  data: unknown;
+}
+// Monster Jam: Stunt Showdown lobby (1v1 monster-truck stunt competition, designed by a
+// six-year-old). Same shape as TNT: on 'playing', slot 0 simulates the whole show client-side
+// (truck picks, the practice yard, and the main event) and streams snapshots over the relay;
+// the guest sends inputs. A solo host puts on a show vs Crushbot 9000 (no payout).
+// 'ended' bails everyone back to the menu (the host left).
+export interface MjLobbyMsg {
+  type: 'mjLobby';
+  status: 'waiting' | 'playing' | 'ended';
+  slot: number; // this client's slot (0 = host / authority)
+  hostSlot: number; // which slot is the authority (0)
+  players: { name: string; slot: number }[]; // everyone in the lobby
+}
+// An opaque payload forwarded from one Monster Jam player to the other (host snapshot / guest input).
+export interface MjRelayMsg {
+  type: 'mjRelay';
   data: unknown;
 }
 // High-round leaderboards for the DOOM minigame (separate solo / co-op tables).
