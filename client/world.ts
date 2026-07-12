@@ -507,6 +507,10 @@ const ROADS: Rect[] = [
   { x: 1060, y: 1300, w: 110, h: 300 }, // spur down to the Tavern (south of centre)
   { x: 585, y: 640, w: 110, h: 560 },   // spur up to Parliament (NW)
   { x: 985, y: 630, w: 110, h: 570 },   // spur up to the Arcade (N, between Parliament & Arena)
+  // Spur down to the Temple — the one building with no road at all before this (a 400+-unit gap
+  // to the nearest paved anything). Offset right of center (x1560-1900) to clear the DOOM portal
+  // (x1520-1680), which sits between the plaza and the Temple on the left side of that span.
+  { x: 1780, y: 1300, w: 110, h: 430 },
   // --- Robville (the suburban neighborhood, east side) ---
   { x: 2640, y: 1180, w: 1270, h: 120 }, // connector avenue off the main street
   { x: 3790, y: 700,  w: 120,  h: 1010 }, // residential spine (vertical)

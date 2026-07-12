@@ -545,6 +545,12 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
   // Fishing pond — a body of water east of the plaza with a wooden pier on its west (plaza) side.
   // Footprint clears the plaza (x ends 1840), the petshop (x starts 2370) and the bank (y 1525+).
   { id: 'pond', kind: 'pond', name: 'FISHING POND', emoji: '🎣', x: 2020, y: 860, w: 300, h: 260, color: '#2a6f97' },
+  // The Lake — a much bigger second body of water (kind 'pond' is genuinely generic: "add water
+  // by adding pond buildings" per WATER's own comment in world.ts, so this gets fishing, a pier,
+  // ripples and a boardable ellipse for free). Tucked in the open grass north of the Notice Board/
+  // Hall of Fame and above Robville's upper cul-de-sacs — clear of both with room to spare — so
+  // boats have real open water to actually use instead of one small pond's tight little ellipse.
+  { id: 'lake', kind: 'pond', name: 'THE LAKE', emoji: '⛵', x: 3050, y: 130, w: 900, h: 450, color: '#2a6f97' },
   // The Tavern — south-of-centre off a path spur. Buy a beer, get progressively drunker.
   { id: 'bar', kind: 'bar', name: 'THE TAVERN', emoji: '🍺', x: 1020, y: 1600, w: 230, h: 180, color: '#5a3d2a' },
   // Parliament — a stately marble hall in the upper-left, home of the Nomic rules game. Walk in to
