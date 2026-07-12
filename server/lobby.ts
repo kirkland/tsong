@@ -282,6 +282,7 @@ const CORTISOL_NEAR_ELIM = 4;       // per-tick spike while the ball bears down 
 const CORTISOL_FINAL_TWO_MULT = 2;  // …doubled when you're one of the last two standing
 const CORTISOL_STRESS_MAX_MSG = 40; // cap on a single client-reported 'stress' bump (anti-tamper)
 const CORTISOL_FLUSH_TICKS = 600;   // flush live cortisol → DB + rebroadcast the board every ~10s (60Hz)
+const CORTISOL_BEER_RELIEF = 10;    // a pint takes the edge off — quiet liquid-courage stress relief
 // Pong is the economy's faucet. Each recorded PvP match MINTS fresh coins: the winner already gets
 // their WIN_REWARD minted by recordResult(), and we mint the SAME amount again into the House — so
 // every match nets the treasury +MATCH_HOUSE_MINT (think "200 minted, 100 to the winner, 100 kept").
@@ -3334,6 +3335,7 @@ export class Lobby {
         await this.houseCredit(BEER_COST); // the bar's takings go to the House
         conn.drunkLevel++;
         conn.drunkUntil = Date.now() + DRUNK_MS;
+        this.bumpCortisol(conn, -CORTISOL_BEER_RELIEF); // liquid courage takes the edge off
         this.sendWallet(ws);
         this.tell(ws, { type: 'drunk', level: conn.drunkLevel });
         const quip = [
