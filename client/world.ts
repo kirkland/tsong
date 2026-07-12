@@ -1304,6 +1304,23 @@ const NPCS: NpcDef[] = [
       'One more and I\'m emailing my broker something I\'ll regret.',
     ],
   },
+  {
+    // Prime Mutton, the Muttonista — the Tavern's resident stout connoisseur. Brown pork-pie hat,
+    // olive shirt, forever appraising a fresh pint. His verdict on a good one is legendary. His
+    // real portrait (primemutton.jpg) floats over the dialog when you talk to him.
+    id: 'prime-mutton', name: 'Prime Mutton', shirt: 0x8a8f4a, hair: 0x2a1d12, skin: SKINS[2],
+    hairStyle: 'short', hat: 'cap', hatColor: 0x6b4e2e,
+    x: TAVERN_INT.x + TAVERN_INT.w * 0.46, y: TAVERN_INT.y + 140, roam: 24,
+    portraitSrc: '/primemutton.jpg',
+    lines: [
+      '*raises the pint, admires the head, takes a slow pull* …that\'s an absolute creamer.',
+      'Absolute creamer. Write it down. Frame it. Absolute. Creamer.',
+      'Look at that head on it. Two fingers of pure cream. Poured like a poem.',
+      'A lesser man drinks. I APPRAISE. And my appraisal is: creamer. Absolute.',
+      'You want to know what makes a creamer? Patience. Love. And a proper two-part pour, ya animal.',
+      'I once gave a pint eleven out of ten. My hand slipped on the way to ten and I let it. It was a creamer.',
+    ],
+  },
   // --- McDonald's INTERIOR cast (stationary, off-map at MC_INT; only reachable once you're inside) ---
   {
     id: 'mc-cashier', name: 'Mac', shirt: 0xcc0000, hair: 0x1a1a1a, skin: SKINS[2],
@@ -8277,7 +8294,10 @@ export function startWorld(net: WorldNet): void {
 
     npcName.textContent = n.def.name;
     npcBox.style.display = 'block';
-    npcPortrait.style.display = 'none'; // world NPCs have no portrait (only the imp, for now)
+    // Most world NPCs are portrait-less, but one with a static portraitSrc (e.g. Prime Mutton's
+    // real photo) gets it floated over the box, visual-novel style.
+    if (n.def.portraitSrc) { npcPortrait.src = n.def.portraitSrc; npcPortrait.style.display = 'block'; }
+    else npcPortrait.style.display = 'none';
 
     let pageI = 0;
     let typing = false;
@@ -8651,6 +8671,20 @@ export function startWorld(net: WorldNet): void {
       for (const a of others) {
         if (!(a.bot || a.id.startsWith('netizen:'))) continue;
         if (Math.hypot(wp.x - a.x, wp.y - a.y) <= R * 2.5) { net.onNetizenClick(a.id); return; }
+      }
+    }
+    // Tapped directly on a townsperson? → talk to them (walking up + action still works too).
+    // Off-map interior cast (the Tavern's Prime Mutton et al.) are only under the pointer when
+    // you're actually inside, so this can't reach them from the street.
+    if (mainCam) {
+      const wp = mainCam.getWorldPoint(e.clientX, e.clientY);
+      for (const n of npcs) {
+        if (Math.hypot(wp.x - n.x, wp.y - n.y) > R * 1.7) continue;
+        nearNpc = n;
+        if (n.def.id === 'bartender') { orderBeer(); return; }
+        if (n.def.id === 'mc-cashier') { orderMcFood(); return; }
+        startTalk(n);
+        return;
       }
     }
     joyActive = true;
