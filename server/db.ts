@@ -3,7 +3,7 @@
 // simply empty, so the rest of the app runs unchanged.
 
 import pg from 'pg';
-import { LeaderboardRow, NetWorthRow, LEADERBOARD_SIZE, CampaignScoreRow, StockSide, StockTf, positionWorth, EXCLUSIVES, isExclusive, WORLD_PARCELS } from '../shared/types';
+import { LeaderboardRow, NetWorthRow, CortisolRow, LEADERBOARD_SIZE, CORTISOL_MAX, CampaignScoreRow, StockSide, StockTf, positionWorth, EXCLUSIVES, isExclusive, WORLD_PARCELS } from '../shared/types';
 import type { NomicSnapshot } from './nomic';
 
 // Economy Overhaul: the House treasury is seeded ONCE with a genesis allocation. This is the
@@ -51,6 +51,9 @@ export async function initDb(): Promise<void> {
   `);
   // Reset any players still at the old default of 1000 to the new default of 500.
   await pool.query(`UPDATE players SET elo = 500 WHERE elo = 1000`);
+  // Cortisol: a stress/tension gauge (0 = calm … 100 = maxed). Rises on stressful events, decays
+  // toward calm; ranked high→low on the "Most Stressed" board. Starts calm at 0.
+  await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS cortisol INTEGER NOT NULL DEFAULT 0`);
   // Wallet + cosmetics: coins (1 per win), owned items (comma list), and equipped hat/skin.
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS coins INTEGER NOT NULL DEFAULT 0`);
   await pool.query(`ALTER TABLE players ADD COLUMN IF NOT EXISTS owned TEXT NOT NULL DEFAULT ''`);
@@ -2262,6 +2265,56 @@ export async function getSelfElo(pid: string): Promise<{ rank: number; elo: numb
     [pid, Date.now() - LEADERBOARD_ACTIVE_MS],
   );
   return rows.length ? { rank: Number(rows[0].rnk), elo: Number(rows[0].elo) } : null;
+}
+
+/** Load a player's stored cortisol (0 if unknown / no DB). Called on join to seed the live value. */
+export async function getCortisol(pid: string): Promise<number> {
+  if (!pool) return 0;
+  const { rows } = await pool.query(`SELECT cortisol FROM players WHERE id = $1`, [pid]);
+  return rows.length ? Math.max(0, Math.min(CORTISOL_MAX, Number(rows[0].cortisol) || 0)) : 0;
+}
+
+/** Persist a player's current cortisol (clamped 0..CORTISOL_MAX). Upserts the row and stamps
+ *  last_played so a stressed-out player shows on the (active-only) board even without a match. */
+export async function setCortisol(pid: string, name: string, value: number): Promise<void> {
+  if (!pool) return;
+  const v = Math.max(0, Math.min(CORTISOL_MAX, Math.round(value)));
+  await pool.query(
+    `INSERT INTO players (id, name, cortisol, last_played) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (id) DO UPDATE SET cortisol = $3, name = EXCLUDED.name, last_played = EXCLUDED.last_played`,
+    [pid, name, v, Date.now()],
+  );
+}
+
+/** Full "Most Stressed" board (cortisol high→low), including the server-only pid so the lobby can
+ *  resolve a rank back to a player. Mirrors getEloBoard's active-player filter. */
+export async function getCortisolBoard(): Promise<(CortisolRow & { pid: string })[]> {
+  if (!pool) return [];
+  const { rows } = await pool.query(
+    `SELECT id AS pid, name, cortisol, title
+       FROM players
+      WHERE cortisol > 0 AND COALESCE(last_played, 0) >= $2
+      ORDER BY cortisol DESC, name ASC
+      LIMIT $1`,
+    [LEADERBOARD_SIZE, Date.now() - LEADERBOARD_ACTIVE_MS],
+  );
+  return rows.map((r) => ({ pid: r.pid, name: r.name, cortisol: Number(r.cortisol), title: r.title ?? null }));
+}
+
+/** This player's own cortisol standing across the WHOLE field (not just the visible top-N), so the
+ *  client can pin their row even when they sit below the cutoff. Ordering mirrors getCortisolBoard. */
+export async function getSelfCortisol(pid: string): Promise<{ rank: number; cortisol: number } | null> {
+  if (!pool) return null;
+  const { rows } = await pool.query(
+    `SELECT rnk, cortisol FROM (
+       SELECT id, cortisol,
+              ROW_NUMBER() OVER (ORDER BY cortisol DESC, name ASC) AS rnk
+         FROM players
+        WHERE cortisol > 0 AND COALESCE(last_played, 0) >= $2
+     ) sub WHERE id = $1`,
+    [pid, Date.now() - LEADERBOARD_ACTIVE_MS],
+  );
+  return rows.length ? { rank: Number(rows[0].rnk), cortisol: Number(rows[0].cortisol) } : null;
 }
 
 /** This player's own Net Worth standing across the WHOLE field (not just the visible top-N).

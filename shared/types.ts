@@ -182,6 +182,14 @@ export type PowerupKind = (typeof POWERUPS)[number];
 export const LEADERBOARD_MIN_GAMES = 3; // games needed before win% is ranked
 export const LEADERBOARD_SIZE = 10;
 
+// Cortisol: a per-player stress/tension gauge (0 = zen … 100 = maxed out). It rises on stressful
+// events (bad friend-sim interactions, long rallies, near-elimination in Arena) and decays back
+// toward calm over time. The "Most Stressed" leaderboard ranks it high→low.
+export const CORTISOL_MAX = 100;
+// When your OWN cortisol sits below this the screen gets a faint tremor — the "eerie calm / running
+// on empty" jitters. Get some action going (rallies spike your cortisol) and the screen steadies.
+export const CORTISOL_SHAKE_BELOW = 12;
+
 // Money is whole coins, scaled ×100 so the stock market has integer room for percentage moves
 // (a 1% move on a 100-coin stock = 1 coin) instead of needing fractional cents. Every coin
 // amount in the game — rewards, store prices, stock base prices, spin payouts — lives in these
@@ -964,6 +972,7 @@ export type ClientMsg =
   | { type: 'chat'; text: string }
   | { type: 'reaction'; emoji: string } // a floating emoji reaction, shown to everyone
   | { type: 'summonPlane' } // secret: summon the banner-plane for the whole room to see
+  | { type: 'stress'; amount: number } // a bad friend-sim interaction — bump this player's cortisol
   // Type Racer: a correct keystroke typed while the ball is heading AWAY — relayed to the
   // other side, whose paddles get knocked a quarter-step off course (see TypeShoveMsg).
   | { type: 'typeShove' }
@@ -1155,6 +1164,7 @@ export interface TeamPlayer {
   balltrail?: string | null; // equipped ball trail cosmetic
   goalcelebr?: string | null; // equipped goal celebration cosmetic
   title?: string | null; // equipped name title (flair shown by the name)
+  cortisol?: number; // 0..100 live stress level — drives this player's HUD meter + low-cortisol jitter
 }
 
 export interface PaddleState {
@@ -1195,6 +1205,7 @@ export interface PolyPlayer {
   alive: boolean; // false once knocked out — its edge is now a solid wall
   shielded: boolean; // next goal against this player is absorbed (shield power-up)
   curveReady: boolean; // next hit puts spin on the ball (curve power-up)
+  cortisol?: number; // 0..100 live stress level
 }
 
 // The live Arena (free-for-all polygon) view. Present on StateMsg only while arena mode
@@ -1432,6 +1443,24 @@ export interface NetWorthMsg {
   selfRank?: number;
 }
 
+// One row of the Cortisol ("Most Stressed") board: the player's current stress level, ranked
+// high→low. Rises with bad friend-sim interactions, long rallies, and near-elimination; decays
+// back toward calm over time.
+export interface CortisolRow {
+  name: string;
+  cortisol: number; // 0..100 current stress level
+  title?: string | null; // equipped title id (flair shown by the name)
+}
+
+// Broadcast alongside the other standings — periodically (cortisol drifts as it decays) and on
+// connect. `selfCortisol` / `selfRank` pin the recipient's own row when they're below the top-N.
+export interface CortisolMsg {
+  type: 'cortisol';
+  rows: CortisolRow[];
+  selfCortisol?: number;
+  selfRank?: number;
+}
+
 // One line item on a player's balance sheet: an open stock position valued live.
 export interface BalanceSheetHolding {
   coin: string;       // display name (e.g. "Davis Clarke Coin")
@@ -1627,6 +1656,7 @@ export type ServerMsg =
   | JailMsg
   | NomStateMsg
   | EloProfileMsg
+  | CortisolMsg
   | SeasonPassMsg
   | MatchStatsMsg
   // --- Bolwoing Alley server→client messages ---

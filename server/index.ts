@@ -184,6 +184,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'summonPlane':
         lobby.summonPlane(ws);
         break;
+      case 'stress':
+        if (typeof msg.amount === 'number' && Number.isFinite(msg.amount)) lobby.reportStress(ws, msg.amount);
+        break;
       case 'typeShove':
         lobby.typeShove(ws);
         break;

@@ -302,6 +302,58 @@
         font-size: 11px;
         opacity: 0.85;
       }
+      /* Cortisol board — "Most Stressed" (cortisol high→low). Same column look as the leaderboard,
+         with an anxious orange accent and a tiny per-row stress bar. */
+      #cortisol {
+        flex: 1 1 340px;
+        max-width: 440px;
+        min-width: 300px;
+        font-size: 14px;
+      }
+      #cortisol h2 {
+        font-size: 13px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+        color: #ff9d4a;
+        text-align: center;
+        margin: 8px 0 6px;
+      }
+      #cortisol ol {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      #cortisol li {
+        display: grid;
+        grid-template-columns: 22px 1fr auto;
+        gap: 8px;
+        align-items: baseline;
+        padding: 4px 8px;
+        border-radius: 4px;
+      }
+      #cortisol li:nth-child(odd) {
+        background: #0e1424;
+      }
+      #cortisol .rank {
+        color: #6b7796;
+      }
+      #cortisol .lbname {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #cortisol .pct {
+        color: #ff9d4a;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      #cortisol .self-row {
+        border-top: 1px dashed #3a4a6a;
+        background: #0a1020;
+        color: #b8c8e8;
+      }
+      #cortisol .self-row .rank { color: #7a8aaa; }
+      #cortisol .self-row .pct { color: #ff9d4a; }
       #chat {
         width: 300px;
         /* Match the canvas height (width min(94vw,1040px) at a 800/500 ratio) so the
@@ -3429,6 +3481,40 @@
         white-space: nowrap;
         line-height: 1.6;
       }
+      /* Cortisol meter — a slim stress gauge under the power-up chips (green calm → red maxed). */
+      #cortisolMeter {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        width: min(94vw, 1040px);
+        max-width: 100%;
+        margin: 3px auto 0;
+        font-size: 11px;
+        color: #9fb0d8;
+      }
+      #cortisolMeter .cort-ico { flex-shrink: 0; font-size: 12px; }
+      #cortisolMeter .cort-track {
+        flex: 1;
+        height: 6px;
+        border-radius: 3px;
+        background: #0e1424;
+        overflow: hidden;
+      }
+      #cortFill {
+        height: 100%;
+        width: 0%;
+        border-radius: 3px;
+        background: #4ade80;
+        transition: width 0.25s ease, background-color 0.25s ease;
+      }
+      /* Faint pulse while cortisol is "really really low" — the eerie-calm jitters. */
+      #cortisolMeter.jittery { animation: cortJitter 0.12s steps(2) infinite; }
+      @keyframes cortJitter {
+        0% { transform: translate(0, 0); }
+        50% { transform: translate(-0.5px, 0.5px); }
+        100% { transform: translate(0.5px, -0.5px); }
+      }
+      #cortLabel { flex-shrink: 0; font-variant-numeric: tabular-nums; white-space: nowrap; }
       /* Personal section header inside the modes panel. */
       .modes-section-head {
         font-size: 9px; letter-spacing: 1px; text-transform: uppercase;
@@ -4788,6 +4874,11 @@
           <button id="mobDown" class="mob-paddle-btn" type="button" aria-label="Move paddle down">▼</button>
         </div>
         <div id="puHud"></div>
+        <div id="cortisolMeter" hidden title="Your cortisol — stress rises with long rallies, near-elimination, and rough friendships. Let it drop too low and the world starts to shimmer.">
+          <span class="cort-ico">😰</span>
+          <div class="cort-track"><div id="cortFill"></div></div>
+          <span id="cortLabel"></span>
+        </div>
         <div id="joinButtons">
           <button id="join" style="display: none">Join game</button>
           <button id="joinLeft" style="display: none">Join left</button>
@@ -4806,6 +4897,7 @@
         <div id="boards">
           <div id="leaderboard"></div>
           <div id="netWorth"></div>
+          <div id="cortisol"></div>
         </div>
       </div>
 

@@ -29,6 +29,9 @@ import {
   ChatLine,
   LeaderboardRow,
   NetWorthRow,
+  CortisolRow,
+  CORTISOL_MAX,
+  CORTISOL_SHAKE_BELOW,
   BalanceSheetMsg,
   EloProfileMsg,
   Role,
@@ -84,6 +87,10 @@ const statusEl = document.getElementById('status') as HTMLDivElement;
 const watchersEl = document.getElementById('watchers') as HTMLDivElement;
 const leaderboardEl = document.getElementById('leaderboard') as HTMLDivElement;
 const netWorthEl = document.getElementById('netWorth') as HTMLDivElement;
+const cortisolEl = document.getElementById('cortisol') as HTMLDivElement;
+const cortisolMeter = document.getElementById('cortisolMeter') as HTMLDivElement;
+const cortFill = document.getElementById('cortFill') as HTMLDivElement;
+const cortLabel = document.getElementById('cortLabel') as HTMLSpanElement;
 const colorPicker = document.getElementById('colorPicker') as HTMLDivElement;
 const chatLog = document.getElementById('chatlog') as HTMLDivElement;
 const chatEl = document.getElementById('chat') as HTMLDivElement;
@@ -405,12 +412,15 @@ let dayNightOffset = 0; // ms offset for the day/night clock, randomized per ser
 // auto-rejoin path (which can run enableChat during module init) never hits them in the TDZ.
 let lastLbRows: LeaderboardRow[] = [];
 let lastNwRows: NetWorthRow[] = [];
+let lastCortisolRows: CortisolRow[] = [];
 // Cached "self" pin-rows so plain re-renders (e.g. on a bounty update) keep showing the
 // player's own row when they're below the visible top-N.
 let lastLbSelfElo: number | undefined;
 let lastLbSelfRank: number | undefined;
 let lastNwSelfRow: NetWorthRow | undefined;
 let lastNwSelfRank: number | undefined;
+let lastCortisolSelf: number | undefined;
+let lastCortisolSelfRank: number | undefined;
 // Rolling buffer of recent chat lines, surfaced as a "memos" column in Work mode.
 const workChat: string[] = [];
 // Rolling buffer of recent chat lines (full objects), replayed into the in-world chat when the
@@ -773,6 +783,8 @@ const net = connect(
       renderLeaderboard(msg.rows, msg.selfElo, msg.selfRank);
     } else if (msg.type === 'netWorth') {
       renderNetWorth(msg.rows, msg.selfRow, msg.selfRank);
+    } else if (msg.type === 'cortisol') {
+      renderCortisol(msg.rows, msg.selfCortisol, msg.selfRank);
     } else if (msg.type === 'balanceSheet') {
       // A World Hall of Fame row may have fired this — if World's still open, render it there
       // instead of the toolbar modal (which would be hidden behind World's overlay anyway).
@@ -798,6 +810,7 @@ const net = connect(
       // Repaint the boards so 🎯 badges appear/update immediately.
       renderLeaderboard(lastLbRows);
       renderNetWorth(lastNwRows);
+      renderCortisol(lastCortisolRows);
     } else if (msg.type === 'bountyHit') {
       celebrateTip(msg.winner, msg.target, msg.amount);
     } else if (msg.type === 'themeSong') {
@@ -1117,6 +1130,29 @@ const inArena = () => myRole === 'player';
 // My paddle in the arena state (the polygon edge I own), or undefined.
 function myPolyPlayer(s: StateMsg) {
   return s.poly?.players.find((p) => p.id === myId);
+}
+
+// My own live cortisol from the state, or null when I'm not a seated player (observers have none).
+function myCortisol(s: StateMsg): number | null {
+  if (s.poly) return myPolyPlayer(s)?.cortisol ?? null;
+  if (myRole === 'left' || myRole === 'right') {
+    return s.paddles[myRole].players.find((p) => p.id === myId)?.cortisol ?? null;
+  }
+  return null;
+}
+
+// Paint the HUD cortisol meter from the local player's live value (hidden for observers). Green
+// (calm) → red (maxed); the bar shivers while cortisol sits "really really low".
+function renderCortisolMeter(s: StateMsg) {
+  const c = myCortisol(s);
+  if (c === null) { cortisolMeter.hidden = true; return; }
+  cortisolMeter.hidden = false;
+  const frac = Math.max(0, Math.min(1, c / CORTISOL_MAX));
+  cortFill.style.width = `${frac * 100}%`;
+  // Green when calm → red as stress climbs.
+  cortFill.style.backgroundColor = `hsl(${Math.round(140 * (1 - frac))} 70% 55%)`;
+  cortLabel.textContent = `${Math.round(c)}`;
+  cortisolMeter.classList.toggle('jittery', c < CORTISOL_SHAKE_BELOW);
 }
 
 // Farthest my arena paddle may slide from its edge midpoint before overhanging a corner.
@@ -2529,10 +2565,14 @@ worldBtn.addEventListener('click', async () => {
       toggleMute: () => { muted = !muted; prefSet('muted', muted ? '1' : '0'); applyMute(); },
       leaderboard: () => lastLbRows,
       netWorth: () => lastNwRows,
+      cortisolBoard: () => lastCortisolRows,
       selfLbRow: () => (lastLbSelfElo !== undefined && lastLbSelfRank !== undefined)
         ? { rank: lastLbSelfRank, elo: lastLbSelfElo } : null,
       selfNwRow: () => (lastNwSelfRow !== undefined && lastNwSelfRank !== undefined)
         ? { rank: lastNwSelfRank, net: lastNwSelfRow.net, loan: lastNwSelfRow.loan } : null,
+      selfCortisolRow: () => (lastCortisolSelf !== undefined && lastCortisolSelfRank !== undefined)
+        ? { rank: lastCortisolSelfRank, cortisol: lastCortisolSelf } : null,
+      stress: (amount: number) => net.send({ type: 'stress', amount }),
       eloProfileReq: (rank, self) => net.send({ type: 'eloProfileReq', rank: rank ?? 0, self: self ? true : undefined }),
       balanceSheetReq: (rank, self) => net.send({ type: 'balanceSheetReq', rank, self }),
 
@@ -5114,12 +5154,18 @@ const fxSmoke = screenFx.querySelector('.fx-smoke') as HTMLElement;
 let boardFxOn = false;
 function applyScreenFx(s: StateMsg) {
   const live = s.status === 'playing';
-  // Board transform: earthquake shake + tilt perspective, combined.
+  // Board transform: earthquake shake + tilt perspective + the low-cortisol tremor, combined.
   const quake = live && s.earthquake;
   const tilt = live && s.tilt;
-  if (quake || tilt) {
-    const dx = quake ? (Math.random() * 2 - 1) * 7 : 0;
-    const dy = quake ? (Math.random() * 2 - 1) * 7 : 0;
+  // "Really really low" cortisol during a live match gives the whole board a faint tremor — the
+  // eerie-calm jitters. It fades in the lower your cortisol is; a heated rally spikes it and steadies
+  // the screen. Capped small (≈3px) so it reads as a shiver, not the 7px earthquake.
+  const myCort = live ? myCortisol(s) : null;
+  const jitter = (myCort !== null && myCort < CORTISOL_SHAKE_BELOW)
+    ? (1 - myCort / CORTISOL_SHAKE_BELOW) * 3 : 0;
+  if (quake || tilt || jitter > 0) {
+    const dx = (quake ? (Math.random() * 2 - 1) * 7 : 0) + (jitter ? (Math.random() * 2 - 1) * jitter : 0);
+    const dy = (quake ? (Math.random() * 2 - 1) * 7 : 0) + (jitter ? (Math.random() * 2 - 1) * jitter : 0);
     const t = `${tilt ? 'perspective(640px) rotateX(16deg)' : ''} translate(${dx}px, ${dy}px)`.trim();
     const active = boardEl();
     active.style.transform = t;
@@ -5809,6 +5855,7 @@ function loop(t: number) {
     // Apply canvas effects against the fully-resolved renderState (replay frame or live).
     applyCanvasRotation(renderState.rotated);
     applyScreenFx(renderState);
+    renderCortisolMeter(renderState);
     if (renderState.viewMode !== 'normal' && renderer3d && !renderState.fatality && !replayActive) {
       const side = renderState.viewMode === 'firstperson'
         ? (myRole !== 'observer' ? (myRole as 'left' | 'right') : fpSide)
@@ -6252,6 +6299,33 @@ function renderNetWorth(rows: NetWorthRow[], selfRow?: NetWorthRow, selfRank?: n
     selfLi = `<li class="self-row"><span class="rank">#${selfRank}</span><span class="lbname">${escapeHtml(selfRow.name)}${debt}</span><span class="worth${broke}">${fmtCoins(selfRow.net)}🪙</span></li>`;
   }
   netWorthEl.innerHTML = `<h2>💰 Net Worth</h2><ol>${items}${selfLi}</ol>`;
+}
+
+// The Cortisol board — "Most Stressed", ranked by current stress level (high → low). The most
+// frazzled player wears a 🥵. Rises with long rallies, near-elimination, and rough friendships.
+function renderCortisol(rows: CortisolRow[], selfCortisol?: number, selfRank?: number) {
+  lastCortisolRows = rows;
+  if (selfCortisol !== undefined || selfRank !== undefined) { lastCortisolSelf = selfCortisol; lastCortisolSelfRank = selfRank; }
+  else { selfCortisol = lastCortisolSelf; selfRank = lastCortisolSelfRank; }
+  if (!rows.length) {
+    cortisolEl.innerHTML = '';
+    return;
+  }
+  const items = rows
+    .map((r, i) => {
+      const crown = i === 0 ? '🥵 ' : '';
+      const t = r.title ? (COSMETICS.find((c) => c.id === r.title) ?? EXCLUSIVES.find((e) => e.id === r.title)) : undefined;
+      const tag = t ? `<span class="lbtitle${r.title === 'opstask' ? ' rainbow' : ''}">${escapeHtml(t.name)}</span>` : '';
+      return `<li data-rank="${i}"><span class="rank">${i + 1}</span><span class="lbname">${crown}${escapeHtml(
+        r.name,
+      )}${tag}${bountyBadgeHtml(r.name)}</span><span class="pct">${Math.round(r.cortisol)}</span></li>`;
+    })
+    .join('');
+  let selfRow = '';
+  if (selfCortisol !== undefined && selfRank !== undefined && myName && !rows.some((r) => r.name === myName)) {
+    selfRow = `<li class="self-row"><span class="rank">#${selfRank}</span><span class="lbname">${escapeHtml(myName)}</span><span class="pct">${Math.round(selfCortisol)}</span></li>`;
+  }
+  cortisolEl.innerHTML = `<h2>😰 Most Stressed</h2><ol>${items}${selfRow}</ol>`;
 }
 
 // Click a Net Worth row to ask the server for that player's balance sheet (resolved by

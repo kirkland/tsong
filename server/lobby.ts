@@ -22,6 +22,8 @@ import {
   FATALITY_MOVES,
   LeaderboardRow,
   NetWorthRow,
+  CortisolRow,
+  CORTISOL_MAX,
   BalanceSheetHolding,
   MAX_PLAYERS,
   PaddleState,
@@ -112,6 +114,7 @@ import {
   WORLD_BUILDINGS,
 } from '../shared/types';
 import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSelfElo, getSelfNetWorth, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
+  getCortisol, setCortisol, getCortisolBoard, getSelfCortisol,
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
   recordFishCatch, getFishingLeaderboard, FishingScoreRow,
@@ -187,6 +190,11 @@ interface Conn {
   drunkLevel: number;
   drunkUntil: number;
   jailed: boolean; // locked in the jail cell (loaded from the DB on join; cleared only by bail)
+  // Cortisol: live stress gauge (0..CORTISOL_MAX). Seeded from the DB on join, nudged up by
+  // stressful events, decays toward calm every tick, and flushed back to the DB periodically.
+  cortisol: number;
+  cortisolLoaded: boolean; // true once the stored value has been read in (avoids clobbering it)
+  cortisolFlushed: number; // last integer value written to the DB (skip no-op flushes)
 }
 
 // One step of a crypto's price random walk. Pure RNG — never tied to who invested or how
@@ -266,6 +274,14 @@ const TOURNEY_INTER_MS = 5000; // pause between tournament matches so the result
 const TOURNEY_DONE_MS = 12000; // how long the champion screen lingers before the tournament tears down
 const MAX_TIP = 1_000_000; // sanity cap on a single /tip (balance is the real limit)
 const MAX_BOUNTY = 1_000_000; // sanity cap on a single bounty contribution (balance is the real limit)
+// --- Cortisol (stress gauge) tuning ---
+const CORTISOL_DECAY_PER_SEC = 3;   // points bled off per second — you calm down over time
+const CORTISOL_RALLY_START = 6;     // rally length (paddle hits) past which the tension really builds
+const CORTISOL_PER_RALLY_HIT = 2;   // cortisol added to both sides per hit once a rally goes long
+const CORTISOL_NEAR_ELIM = 4;       // per-tick spike while the ball bears down on your Arena edge…
+const CORTISOL_FINAL_TWO_MULT = 2;  // …doubled when you're one of the last two standing
+const CORTISOL_STRESS_MAX_MSG = 40; // cap on a single client-reported 'stress' bump (anti-tamper)
+const CORTISOL_FLUSH_TICKS = 600;   // flush live cortisol → DB + rebroadcast the board every ~10s (60Hz)
 // Pong is the economy's faucet. Each recorded PvP match MINTS fresh coins: the winner already gets
 // their WIN_REWARD minted by recordResult(), and we mint the SAME amount again into the House — so
 // every match nets the treasury +MATCH_HOUSE_MINT (think "200 minted, 100 to the winner, 100 kept").
@@ -418,6 +434,10 @@ export class Lobby {
   private netWorth: NetWorthRow[] = []; // cached net-worth board (coins + holdings − debt)
   private netWorthPids: string[] = []; // pid per net-worth row (server-only; resolves a rank → player)
   private eloPids: string[] = []; // pid per Elo leaderboard row (server-only; resolves a rank → player)
+  private cortisol: CortisolRow[] = []; // cached "Most Stressed" board (cortisol high→low)
+  private cortisolPids: string[] = []; // pid per cortisol row (server-only; resolves a rank → player)
+  private cortisolTick = 0; // counts sync() ticks; drives the periodic cortisol flush + rebroadcast
+  private prevRallyHits = 0; // last-seen duel rally length, so a growing rally spikes cortisol once per hit
   private chatLog: ChatLine[] = []; // recent chat, replayed to new connections
   private nextId = 1;
 
@@ -710,6 +730,9 @@ export class Lobby {
       drunkLevel: 0,
       drunkUntil: 0,
       jailed: false,
+      cortisol: 0,
+      cortisolLoaded: false,
+      cortisolFlushed: 0,
     };
     this.conns.set(ws, conn);
     this.tell(ws, { type: 'you', id: conn.id, role: 'observer', tOff: Lobby.DAY_NIGHT_OFFSET });
@@ -717,6 +740,7 @@ export class Lobby {
     // re-sends these personalised with the player's own pinned row.
     this.tell(ws, { type: 'leaderboard', rows: this.leaderboard });
     this.tell(ws, { type: 'netWorth', rows: this.netWorth });
+    this.tell(ws, { type: 'cortisol', rows: this.cortisol });
     this.tell(ws, { type: 'doomLeaderboard', solo: this.doomBoards.solo, coop: this.doomBoards.coop });
     this.tell(ws, { type: 'tdLeaderboard', rows: this.tdBoard });
     this.tell(ws, { type: 'campaignLeaderboard', rows: this.campaignBoard });
@@ -2899,6 +2923,9 @@ export class Lobby {
       drunkLevel: 0,
       drunkUntil: 0,
       jailed: false,
+      cortisol: 0,
+      cortisolLoaded: false,
+      cortisolFlushed: 0,
     };
     this.conns.set(ws, conn);
     this.teams[side].push(ws);
@@ -3057,6 +3084,14 @@ export class Lobby {
       const c = this.conns.get(ws); if (!c) return;
       c.jailed = j;
       if (j) this.tell(ws, { type: 'jailed', jailed: true });
+    }).catch(() => {});
+    // Seed the live cortisol gauge from the stored value (only if no stress has landed yet, so a
+    // bump that arrives before this resolves isn't clobbered).
+    getCortisol(conn.pid).then((v) => {
+      const c = this.conns.get(ws); if (!c) return;
+      if (!c.cortisolLoaded) c.cortisol = Math.max(c.cortisol, v);
+      c.cortisolLoaded = true;
+      c.cortisolFlushed = Math.round(c.cortisol);
     }).catch(() => {});
     getWallet(conn.pid)
       .then((w) => {
@@ -5959,6 +5994,8 @@ export class Lobby {
     this.nomLeave(ws);  // drop out of the Parliament (Nomic) rotation
     this.world.leave(ws); // drop their avatar from the free-roam world map
     const leavingPid = this.conns.get(ws)?.pid ?? '';
+    // Persist their final stress level before the connection is torn down.
+    this.flushCortisol(this.conns.get(ws));
     // Tournament participant left: advance their opponent / free their slot before the
     // generic seat teardown below (which would lose the bracket context).
     const inTournament = !!this.tournament && !!leavingPid && this.tournament.hasPid(leavingPid);
@@ -6034,6 +6071,46 @@ export class Lobby {
     this.refreshPause();
     if (this.streamerMode && this.mode === 'duel' && this.game.status === 'playing') {
       this.tickStreamer();
+    }
+    this.tickCortisol();
+  }
+
+  /** Once per tick: raise cortisol on stressful gameplay (long rallies, near-elimination in Arena),
+   *  bleed it back toward calm, and periodically flush the live values to the DB + rebroadcast the
+   *  "Most Stressed" board. The live value rides down in every StateMsg (drives the meter + jitter). */
+  private tickCortisol() {
+    const dt = TICK_MS / 1000;
+    // Long rallies (duel): once a rally runs long, every additional paddle hit stresses BOTH sides.
+    if (this.mode === 'duel' && this.game.status === 'playing') {
+      const hits = this.game.rallyHits;
+      if (hits > this.prevRallyHits && hits >= CORTISOL_RALLY_START) {
+        for (const c of [...this.connsOn('left'), ...this.connsOn('right')]) this.bumpCortisol(c, CORTISOL_PER_RALLY_HIT);
+      }
+      this.prevRallyHits = hits;
+    } else {
+      this.prevRallyHits = 0;
+    }
+    // Near-elimination (Arena): the ball just reached a still-alive player's edge. Consume the
+    // one-shot danger flag and spike that player — harder when they're one of the last two.
+    if (this.mode === 'poly') {
+      const dangerId = this.poly.dangerId;
+      this.poly.dangerId = null;
+      if (dangerId && this.poly.status === 'playing') {
+        const mult = this.poly.aliveCount <= 2 ? CORTISOL_FINAL_TWO_MULT : 1;
+        this.bumpCortisol(this.connById(dangerId), CORTISOL_NEAR_ELIM * mult);
+      }
+    }
+    // Everyone calms down over time.
+    for (const c of this.conns.values()) {
+      if (c.cortisol > 0) c.cortisol = Math.max(0, c.cortisol - CORTISOL_DECAY_PER_SEC * dt);
+    }
+    // Periodically persist the live values and rebroadcast the board (it drifts as cortisol decays).
+    // Only re-query/broadcast when a value actually moved, so an idle server doesn't churn.
+    if (++this.cortisolTick >= CORTISOL_FLUSH_TICKS) {
+      this.cortisolTick = 0;
+      let changed = false;
+      for (const c of this.conns.values()) if (this.flushCortisol(c)) changed = true;
+      if (changed) this.refreshCortisol().catch((e) => console.error('cortisol board refresh failed:', e));
     }
   }
 
@@ -6316,6 +6393,8 @@ export class Lobby {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'leaderboard', rows: this.leaderboard, ...elo }));
     const nw = await this.selfNetWorthData(ws);
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'netWorth', rows: this.netWorth, ...nw }));
+    const cort = await this.selfCortisolData(ws);
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'cortisol', rows: this.cortisol, ...cort }));
   }
 
   /** Recompute the Net Worth board (coins + live holdings − debt) and push it to everyone.
@@ -6330,6 +6409,55 @@ export class Lobby {
       const extra = await this.selfNetWorthData(ws);
       ws.send(JSON.stringify({ type: 'netWorth', rows: this.netWorth, ...extra }));
     }
+  }
+
+  /** Nudge a connection's live cortisol by `delta` (may be negative), clamped to [0, CORTISOL_MAX].
+   *  The value is broadcast in every StateMsg (meter + shake) and flushed to the DB periodically. */
+  private bumpCortisol(conn: Conn | undefined, delta: number) {
+    if (!conn || !conn.pid) return;
+    conn.cortisol = Math.max(0, Math.min(CORTISOL_MAX, conn.cortisol + delta));
+  }
+
+  /** Write one connection's live cortisol back to the DB, unless it's unchanged since the last
+   *  flush (skips no-op writes for players idling at a steady value). Returns true if it wrote. */
+  private flushCortisol(conn: Conn | undefined): boolean {
+    if (!conn || !conn.pid || !conn.cortisolLoaded) return false;
+    const v = Math.round(conn.cortisol);
+    if (v === conn.cortisolFlushed) return false;
+    conn.cortisolFlushed = v;
+    setCortisol(conn.pid, conn.nickname || 'anon', v).catch((e) => console.error('cortisol flush failed:', e));
+    return true;
+  }
+
+  /** Re-query the "Most Stressed" board, cache it, and push it to every client (personalised with
+   *  their own pinned row when they're below the visible top-N). Mirrors refreshNetWorth. */
+  async refreshCortisol() {
+    const board = await getCortisolBoard();
+    this.cortisolPids = board.map((r) => r.pid);
+    this.cortisol = board.map(({ pid: _pid, ...row }) => row);
+    for (const ws of this.conns.keys()) {
+      if (ws.readyState !== ws.OPEN) continue;
+      const extra = await this.selfCortisolData(ws);
+      ws.send(JSON.stringify({ type: 'cortisol', rows: this.cortisol, ...extra }));
+    }
+  }
+
+  /** Produce `selfCortisol` / `selfRank` for one connection so the client can always pin the player
+   *  to the board. Uses the cached top-N when they're on it; otherwise their true field-wide rank. */
+  private async selfCortisolData(ws: WebSocket): Promise<{ selfCortisol?: number; selfRank?: number }> {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return {};
+    const idx = this.cortisolPids.indexOf(conn.pid);
+    if (idx !== -1) return { selfCortisol: this.cortisol[idx]?.cortisol, selfRank: idx + 1 };
+    const self = await getSelfCortisol(conn.pid).catch(() => null);
+    return self ? { selfCortisol: self.cortisol, selfRank: self.rank } : {};
+  }
+
+  /** Client-reported stress bump (a bad friend-sim interaction). Clamped so a tampered client can't
+   *  slam the meter to 100 in one message. */
+  reportStress(ws: WebSocket, amount: number) {
+    if (!Number.isFinite(amount) || amount <= 0) return;
+    this.bumpCortisol(this.conns.get(ws), Math.min(CORTISOL_STRESS_MAX_MSG, amount));
   }
 
   /** Build and send the balance sheet for the player at `rank` on the current net-worth board,
@@ -6693,6 +6821,7 @@ export class Lobby {
           title: c.title,
           balltrail: c.balltrail,
           goalcelebr: c.goalcelebr,
+          cortisol: Math.round(c.cortisol),
         };
       });
       return {
@@ -6813,6 +6942,7 @@ export class Lobby {
         alive: p.alive,
         shielded: p.shielded,
         curveReady: p.curveHits > 0,
+        cortisol: Math.round(c?.cortisol ?? 0),
       };
     });
     return {

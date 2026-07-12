@@ -237,10 +237,14 @@ export interface WorldNet {
   toggleMute(): void;            // flip the mute toggle (same pref/state as the toolbar's 🔊 button)
   leaderboard(): { name: string; wins: number; losses: number; elo: number; title?: string | null }[]; // live pong standings (pre-ranked)
   netWorth(): { name: string; net: number; coins: number; loan: number; title?: string | null }[];     // live net-worth board (pre-ranked)
+  cortisolBoard(): { name: string; cortisol: number; title?: string | null }[];                        // live "Most Stressed" board (pre-ranked high→low)
   // Our own rank + stat when we're NOT already in the visible top-N above (mirrors the toolbar
   // boards' pinned self-row) — null once we're already shown in leaderboard()/netWorth().
   selfLbRow(): { rank: number; elo: number } | null;
   selfNwRow(): { rank: number; net: number; loan: number } | null;
+  selfCortisolRow(): { rank: number; cortisol: number } | null;
+  // Report a stressful moment (a bad friend-sim interaction) so the server bumps our cortisol.
+  stress(amount: number): void;
   eloProfileReq(rank?: number, self?: boolean): void;    // drill into a leaderboard row (index into leaderboard(), or self) → opens the real Elo profile modal
   balanceSheetReq(rank?: number, self?: boolean): void;  // drill into a net-worth row (index into netWorth(), or self) → opens the real balance-sheet modal
   claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
@@ -3365,6 +3369,50 @@ export function startWorld(net: WorldNet): void {
         }
         row.onclick = () => { selectBlip(); net.balanceSheetReq(undefined, true); };
         nwList.appendChild(row);
+      }
+    }
+
+    // 😰 Most Stressed (cortisol high→low)
+    const cortList = buildSection('😰 Most Stressed', '#ff9d4a');
+    const cort = net.cortisolBoard().slice(0, 8);
+    if (!cort.length) emptyRow(cortList, 'Everyone is perfectly zen. For now.');
+    cort.forEach((r, i) => {
+      const self = r.name === myName;
+      const bg = self ? '#0a1020' : i % 2 ? '#18203a' : 'transparent';
+      const row = document.createElement('div');
+      row.style.cssText = rowStyle(bg, self);
+      hoverable(row, bg);
+      const rank = document.createElement('span');
+      rank.textContent = `${i + 1}`;
+      rank.style.cssText = 'color:#6b7796;width:18px;flex-shrink:0;font-size:13px;';
+      const name = document.createElement('span');
+      name.textContent = `${i === 0 ? '🥵 ' : ''}${r.name}`;
+      name.style.cssText = `flex:1;font-size:13px;color:${self ? '#b8c8e8' : '#cdd7f5'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
+      const val = document.createElement('span');
+      val.textContent = `${Math.round(r.cortisol)}`;
+      val.style.cssText = `font-size:12px;color:${self ? '#ffd23f' : '#ff9d4a'};font-variant-numeric:tabular-nums;flex-shrink:0;`;
+      const tag = titleFlairTag(r.title);
+      row.append(rank, name, ...(tag ? [tag] : []), val);
+      cortList.appendChild(row);
+    });
+    // Pinned self-row when we're outside the top 8.
+    if (!cort.some((r) => r.name === myName)) {
+      const self = net.selfCortisolRow();
+      if (self) {
+        const row = document.createElement('div');
+        row.style.cssText = rowStyle('#0a1020', true);
+        hoverable(row, '#0a1020');
+        const rank = document.createElement('span');
+        rank.textContent = `#${self.rank}`;
+        rank.style.cssText = 'color:#7a8aaa;width:28px;flex-shrink:0;font-size:13px;';
+        const name = document.createElement('span');
+        name.textContent = myName;
+        name.style.cssText = 'flex:1;font-size:13px;color:#b8c8e8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+        const val = document.createElement('span');
+        val.textContent = `${Math.round(self.cortisol)}`;
+        val.style.cssText = 'font-size:12px;color:#ffd23f;font-variant-numeric:tabular-nums;flex-shrink:0;';
+        row.append(rank, name, val);
+        cortList.appendChild(row);
       }
     }
 
@@ -8191,11 +8239,13 @@ export function startWorld(net: WorldNet): void {
             pendingXp += xp;
             floatXp(won ? `🎲 +${xp}` : `🎲 ${xp}`, won ? '#7fe089' : '#ff6a5a');
             pages.push(won ? { text: ch.reply, mood: ch.mood } : { text: ch.risk.reply, mood: ch.risk.mood ?? ch.mood });
+            // A failed gamble is stressful — spike cortisol by how badly it went.
+            if (!won && xp < 0) net.stress(Math.min(40, Math.abs(xp) * 0.6));
           } else {
             pendingXp += ch.xp;
             choicesMade++;
             if (ch.xp >= pageMax) { perfectPicks++; floatXp(`♪ +${ch.xp}`, '#ffd060'); }
-            else if (ch.xp < 0) floatXp(`💔 ${ch.xp}`, '#ff6a5a');
+            else if (ch.xp < 0) { floatXp(`💔 ${ch.xp}`, '#ff6a5a'); net.stress(Math.min(40, Math.abs(ch.xp) * 0.6)); }
             else floatXp(`+${ch.xp}`, '#9fb4e8');
           }
           updateTally();

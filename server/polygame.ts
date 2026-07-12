@@ -87,6 +87,10 @@ export class PolyGame {
   lastHitId: string | null = null; // id of the player whose paddle last touched a ball
   hitSeq = 0; // incremented on every paddle bounce
   winnerId: string | null = null; // last player standing, when status === 'over'
+  // Transient "the ball is bearing down on my edge" signal: the id of an alive player the ball just
+  // reached this tick (whether they save it or get knocked out). The lobby consumes it once per
+  // tick to spike that player's cortisol, then clears it. null when no edge was under threat.
+  dangerId: string | null = null;
 
   // Power-up target on the board; bouncing a ball over it grants its kind to the last hitter.
   target: { x: number; y: number; kind: PowerupKind } | null = null;
@@ -378,6 +382,9 @@ export class PolyGame {
     const push = r - minDist; // distance to shove the ball back to the surface
 
     if (ent.alive) {
+      // The ball just reached this player's edge — a near-elimination moment. Flag it for the
+      // lobby to read (last one wins if several balls arrive the same tick — good enough).
+      this.dangerId = ent.id;
       const half = this.paddleLen(ent) / 2;
       if (Math.abs(s - ent.pos) <= half + r) {
         // Paddle hit: reflect off the edge normal with English from the contact offset.
