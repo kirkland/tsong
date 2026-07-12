@@ -2921,7 +2921,25 @@ export function startWorld(net: WorldNet): void {
     for (const r of ROADS) ctx.fillRect(r.x * sx, r.y * sy, r.w * sx, r.h * sy);
     ctx.fillStyle = '#a8975e';                            // plaza
     ctx.beginPath(); ctx.arc(PLAZA.x * sx, PLAZA.y * sy, PLAZA.r * sx, 0, Math.PI * 2); ctx.fill();
+    // Robville: the roads out east were already drawn above (they're in ROADS), but nothing at
+    // the end of them was — cul-de-sac bulbs (same paved look as the plaza) + each buyable lot,
+    // tinted by its live ownership state so the neighborhood doesn't read as a dead stretch of
+    // empty road on the map.
+    for (const b of ROBVILLE_BULBS) {
+      ctx.beginPath(); ctx.arc(b.cx * sx, b.cy * sy, b.r * sx, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.globalAlpha = 0.6;
+    for (const p of WORLD_PARCELS) {
+      const st = land.get(p.id);
+      ctx.fillStyle = st && st.ownerName ? (st.mine ? '#e8c84b' : st.ask != null ? '#e09a3a' : '#5a78c8') : '#6fbf73';
+      ctx.fillRect(p.x * sx, p.y * sy, Math.max(2, p.w * sx), Math.max(2, p.h * sy));
+    }
+    ctx.globalAlpha = 1;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    if (full) {
+      ctx.fillStyle = '#fff'; ctx.font = '700 13px system-ui';
+      ctx.fillText('🏘️ ROBVILLE', 3850 * sx, 1150 * sy);
+    }
     for (const b of WORLD_BUILDINGS) {                    // buildings: footprint + emoji icon
       ctx.fillStyle = b.color;
       ctx.fillRect(b.x * sx, b.y * sy, Math.max(2, b.w * sx), Math.max(2, b.h * sy));
