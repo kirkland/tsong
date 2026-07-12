@@ -512,12 +512,15 @@ const ROADS: Rect[] = [
   // (x1520-1680), which sits between the plaza and the Temple on the left side of that span.
   { x: 1780, y: 1300, w: 110, h: 430 },
   // --- Robville (the suburban neighborhood, east side) ---
+  // Spine + stems shifted +400 (y) along with ROBVILLE_BULBS in shared/types.ts — the connector
+  // avenue itself doesn't need to move: it's a horizontal road at y1180-1300, and the spine's new
+  // span (1100-2110) still passes through that band exactly like its old span (700-1710) did.
   { x: 2640, y: 1180, w: 1270, h: 120 }, // connector avenue off the main street
-  { x: 3790, y: 700,  w: 120,  h: 1010 }, // residential spine (vertical)
-  { x: 3500, y: 720,  w: 300,  h: 80 },   // stem → Maple Court (west, upper)
-  { x: 3910, y: 720,  w: 390,  h: 80 },   // stem → Birch Circle (east, upper)
-  { x: 3500, y: 1600, w: 300,  h: 80 },   // stem → Willow Court (west, lower)
-  { x: 3910, y: 1600, w: 390,  h: 80 },   // stem → Cedar Circle (east, lower)
+  { x: 3790, y: 1100, w: 120,  h: 1010 }, // residential spine (vertical)
+  { x: 3500, y: 1120, w: 300,  h: 80 },   // stem → Maple Court (west, upper)
+  { x: 3910, y: 1120, w: 390,  h: 80 },   // stem → Birch Circle (east, upper)
+  { x: 3500, y: 2000, w: 300,  h: 80 },   // stem → Willow Court (west, lower)
+  { x: 3910, y: 2000, w: 390,  h: 80 },   // stem → Cedar Circle (east, lower)
   { x: 2945, y: 1290, w: 110, h: 130 },  // spur south to the Bolwoing Alley
   { x: 2115, y: 1295, w: 110, h: 595 },  // spur south to McDonald's
   { x: 605, y: 1490, w: 110, h: 330 },   // spur further south, Casino → the General Store
@@ -2942,7 +2945,7 @@ export function startWorld(net: WorldNet): void {
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     if (full) {
       ctx.fillStyle = '#fff'; ctx.font = '700 13px system-ui';
-      ctx.fillText('🏘️ ROBVILLE', 3850 * sx, 1150 * sy);
+      ctx.fillText('🏘️ ROBVILLE', 3850 * sx, 1550 * sy);
     }
     for (const b of WORLD_BUILDINGS) {                    // buildings: footprint + emoji icon
       ctx.fillStyle = b.color;
@@ -11742,7 +11745,7 @@ export function startWorld(net: WorldNet): void {
         }
         refreshParcels();
         // Neighborhood entrance sign where the avenue meets the residential spine.
-        sc.add.text(3850, 1150, '🏘️ ROBVILLE', {
+        sc.add.text(3850, 1550, '🏘️ ROBVILLE', {
           fontFamily: 'system-ui, sans-serif', fontSize: '17px', fontStyle: 'bold',
           color: '#ffffff', stroke: '#0b1020', strokeThickness: 5, resolution: 2,
         }).setOrigin(0.5, 1).setDepth(100000);

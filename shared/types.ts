@@ -429,7 +429,10 @@ export type BotLevel = (typeof BOT_LEVELS)[number];
 // the protocol needs to change.
 export const WORLD: { w: number; h: number; spawnX: number; spawnY: number } = {
   w: 4800, // widened east to make room for Robville, the suburban neighborhood (see WORLD_PARCELS)
-  h: 2200,
+  // Grown from 2200 — Robville's bulbs shifted 400 south to clear The Lake (see ROBVILLE_BULBS),
+  // and the lower bulbs' own lot ring reaches close enough to the old bottom edge that it needed
+  // the extra room too.
+  h: 2600,
   // Just in front of the Arena (x1295–1775, y255–595), framing the Ruins (x1850+) to the right.
   // Offset a bit from Coach Vito's home spot (1710, 720) — dead center on top of him meant a
   // fresh player's own name tag landed stacked directly on top of his.
@@ -547,10 +550,11 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
   { id: 'pond', kind: 'pond', name: 'FISHING POND', emoji: '🎣', x: 2020, y: 860, w: 300, h: 260, color: '#2a6f97' },
   // The Lake — a much bigger second body of water (kind 'pond' is genuinely generic: "add water
   // by adding pond buildings" per WATER's own comment in world.ts, so this gets fishing, a pier,
-  // ripples and a boardable ellipse for free). Tucked in the open grass north of the Notice Board/
-  // Hall of Fame and above Robville's upper cul-de-sacs — clear of both with room to spare — so
-  // boats have real open water to actually use instead of one small pond's tight little ellipse.
-  { id: 'lake', kind: 'pond', name: 'THE LAKE', emoji: '⛵', x: 3050, y: 130, w: 900, h: 450, color: '#2a6f97' },
+  // ripples and a boardable ellipse for free). North of the Notice Board/Hall of Fame (clear on x)
+  // and of Robville's upper cul-de-sacs — moved up near the top of the map, with Robville's bulbs
+  // shifted 400 south (see ROBVILLE_BULBS) to give ~300 units of real clearance from the actual lot
+  // ring, not just the bulb circles, which is what the lake used to (barely) overlap.
+  { id: 'lake', kind: 'pond', name: 'THE LAKE', emoji: '⛵', x: 3050, y: 100, w: 900, h: 450, color: '#2a6f97' },
   // The Tavern — south-of-centre off a path spur. Buy a beer, get progressively drunker.
   { id: 'bar', kind: 'bar', name: 'THE TAVERN', emoji: '🍺', x: 1020, y: 1600, w: 230, h: 180, color: '#5a3d2a' },
   // Parliament — a stately marble hall in the upper-left, home of the Nomic rules game. Walk in to
@@ -658,11 +662,16 @@ export const PARCEL_PRICE = 1000; // coins to buy an empty lot from the bank
 // compass direction (radians, +x = east) from the bulb back toward the spine — the side of the
 // ring kept clear of lots so the street can enter.
 export interface RobBulb { cx: number; cy: number; r: number; stem: number; }
+// cy shifted +400 south of the original 760/1640 — the lot RING around each bulb reaches roughly
+// 310 units past the bulb's own radius (lot centers sit at r+140, and each lot is 120 wide), which
+// is a lot further than it looks from the bulb circle alone. At the old cy:760 that put the
+// northernmost lot's edge at y≈446, well inside The Lake's footprint (y100-550) — this shift (plus
+// WORLD.h growing to match) gives it real clearance instead of just clearing the bulb itself.
 export const ROBVILLE_BULBS: readonly RobBulb[] = [
-  { cx: 3500, cy: 760,  r: 130, stem: 0 },        // Maple Court (west, upper)
-  { cx: 4300, cy: 760,  r: 130, stem: Math.PI },  // Birch Circle (east, upper)
-  { cx: 3500, cy: 1640, r: 130, stem: 0 },        // Willow Court (west, lower)
-  { cx: 4300, cy: 1640, r: 130, stem: Math.PI },  // Cedar Circle (east, lower)
+  { cx: 3500, cy: 1160, r: 130, stem: 0 },        // Maple Court (west, upper)
+  { cx: 4300, cy: 1160, r: 130, stem: Math.PI },  // Birch Circle (east, upper)
+  { cx: 3500, cy: 2040, r: 130, stem: 0 },        // Willow Court (west, lower)
+  { cx: 4300, cy: 2040, r: 130, stem: Math.PI },  // Cedar Circle (east, lower)
 ];
 
 // One buyable lot. `x,y,w,h` is the lot footprint (top-left origin, world units — the future
