@@ -512,10 +512,16 @@ const ROADS: Rect[] = [
   // (x1520-1680), which sits between the plaza and the Temple on the left side of that span.
   { x: 1780, y: 1300, w: 110, h: 430 },
   // --- Robville (the suburban neighborhood, east side) ---
-  // Spine + stems shifted +400 (y) along with ROBVILLE_BULBS in shared/types.ts — the connector
-  // avenue itself doesn't need to move: it's a horizontal road at y1180-1300, and the spine's new
-  // span (1100-2110) still passes through that band exactly like its old span (700-1710) did.
-  { x: 2640, y: 1180, w: 1270, h: 120 }, // connector avenue off the main street
+  // Spine + stems shifted +400 (y) along with ROBVILLE_BULBS in shared/types.ts. The connector
+  // avenue COULDN'T stay at y1180-1300 like it looked at first — that's fine for reaching the
+  // spine (whose new span 1100-2110 still crosses that band), but the connector's x-range
+  // (2640-3910) also passes directly under Maple/Birch Court, and those bulbs' new y-range
+  // (1030-1290) now overlaps y1180-1300 by 110 units. The result was the two merging into one
+  // lumpy blob instead of a clean circle + a separate road. Moved the connector down to y1540
+  // (clear of both the upper bulbs above and the lower bulbs at cy2040 below) and added a short
+  // bridge to reconnect it to the main street, which doesn't move.
+  { x: 2640, y: 1300, w: 120,  h: 360 },  // bridge: main street down to the relocated connector
+  { x: 2640, y: 1540, w: 1270, h: 120 }, // connector avenue off the main street
   { x: 3790, y: 1100, w: 120,  h: 1010 }, // residential spine (vertical)
   { x: 3500, y: 1120, w: 300,  h: 80 },   // stem → Maple Court (west, upper)
   { x: 3910, y: 1120, w: 390,  h: 80 },   // stem → Birch Circle (east, upper)
