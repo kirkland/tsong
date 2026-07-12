@@ -4,6 +4,17 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>tsong — multiplayer pong</title>
+    <!-- "Add to Home Screen" support: launches without the browser's address bar/chrome, i.e. the
+         closest thing to true fullscreen the web platform allows (a page can't hide that chrome
+         while running in a normal browser tab — only a standalone-launched PWA can). -->
+    <meta name="theme-color" content="#060912" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/icons/favicon-32.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="TSONG" />
     <!-- Phaser is externalized from the bundle (too big to build on the 1 GB VPS) and loaded from a
          CDN. The build emits ESM, where Rollup's `output.globals` is ignored, so `import 'phaser'`
          survives as a bare specifier — this import map resolves it to Phaser's CDN ESM build so the

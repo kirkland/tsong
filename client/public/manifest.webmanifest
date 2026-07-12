@@ -1,0 +1,14 @@
+{
+  "name": "TSONG — Multiplayer Pong",
+  "short_name": "TSONG",
+  "description": "A multiplayer online Pong game — join a match, walk around the World, or hit the Casino.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#060912",
+  "theme_color": "#060912",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
