@@ -3734,6 +3734,11 @@
           padding: 0 6px 76px;
           /* The sticky tab bar handles top clearance; no extra padding needed. */
           padding-top: 0;
+          /* Desktop centers the lone game board with justify-content:center. On mobile, once a tab
+             hides stage/chat/boards the remaining content is short enough that centering shoves it
+             (and the sticky tab bar with it) into the middle of the screen — right under the fixed
+             menu drawer. Content should hang from the top here, not float in the middle. */
+          justify-content: flex-start;
         }
         #mobileTabs {
           display: flex;
@@ -3791,11 +3796,36 @@
         input[type="number"], input[type="text"], input:not([type]) {
           font-size: 16px;
         }
+        /* On mobile the full nav toolbar (World/Work/Arcade/Shop/Economy/Casino/View/Modes/…) no
+           longer floats fixed over the top of the screen — position:fixed there used to overlap
+           the sticky Play/Chat/Leaderboard tabs AND the top of the game canvas. Instead it's
+           hidden by default and shown as a full-screen takeover panel via the "☰ Menu" tab
+           (see #mobMenuTab in main.ts), exactly like the Chat/Leaderboard tabs take over the view. */
         #topLeft {
-          top: 6px;
-          left: 6px;
-          gap: 4px;
-          flex-wrap: wrap;
+          display: none;
+          position: fixed;
+          top: 40px;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          z-index: 95;
+          background: #060912;
+          padding: 10px 10px 24px;
+          flex-direction: column;
+          align-items: stretch;
+          flex-wrap: nowrap;
+          gap: 6px;
+          overflow-y: auto;
+        }
+        #topLeft.mob-open {
+          display: flex;
+        }
+        /* #tourney's z-index:200 exists so its dropdown wins against neighbours in the old
+           horizontal row — in the new vertical drawer it instead punches through whichever OTHER
+           menu (Arcade, Casino, …) is currently open below it. Neutralize it here; #tourneyPanel's
+           own z-index still lifts its dropdown above the row when it's the one open. */
+        #tourney {
+          z-index: auto;
         }
         #viewModeBtn, #muteBtn, #worldBtn, #workMenuBtn, #gameModesBtn, #powerupInfoBtn, #tourneyBtn, #shopBtn, #arcadeBtn, #casinoBtn, #economyBtn, #seasonBtn {
           font-size: 10px;
@@ -4844,6 +4874,7 @@
       <button class="mob-tab active" data-tab="play">Play</button>
       <button class="mob-tab" data-tab="chat">Chat</button>
       <button class="mob-tab" data-tab="leaderboard">Leaderboard</button>
+      <button class="mob-tab" data-tab="menu">☰</button>
     </div>
     <h1>T S O N G</h1>
     <div class="arena">

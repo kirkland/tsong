@@ -5193,9 +5193,11 @@ function resetMobileLayout() {
   const stage = document.getElementById('stage') as HTMLDivElement;
   const chat = document.getElementById('chat') as HTMLDivElement;
   const boards = document.getElementById('boards') as HTMLDivElement;
+  const topLeft = document.getElementById('topLeft') as HTMLDivElement;
   stage.style.display = '';
   chat.style.display = '';
   boards.style.display = '';
+  topLeft.classList.remove('mob-open');
 }
 for (const btn of mobileTabs.querySelectorAll<HTMLButtonElement>('.mob-tab')) {
   btn.addEventListener('click', () => {
@@ -5206,6 +5208,11 @@ for (const btn of mobileTabs.querySelectorAll<HTMLButtonElement>('.mob-tab')) {
     const stage = document.getElementById('stage') as HTMLDivElement;
     const chat = document.getElementById('chat') as HTMLDivElement;
     const boards = document.getElementById('boards') as HTMLDivElement;
+    // The full nav toolbar (World/Work/Arcade/Shop/…) is hidden by default on mobile (it used to
+    // float fixed over the sticky tab bar and the top of the canvas) — the "☰" tab takes over the
+    // whole screen to show it, exactly like Chat/Leaderboard take over for their own content.
+    const topLeft = document.getElementById('topLeft') as HTMLDivElement;
+    topLeft.classList.remove('mob-open');
     if (tab === 'play') {
       stage.style.display = '';
       chat.style.display = 'none';
@@ -5218,6 +5225,11 @@ for (const btn of mobileTabs.querySelectorAll<HTMLButtonElement>('.mob-tab')) {
       stage.style.display = 'none';
       chat.style.display = 'none';
       boards.style.display = '';
+    } else if (tab === 'menu') {
+      stage.style.display = 'none';
+      chat.style.display = 'none';
+      boards.style.display = 'none';
+      topLeft.classList.add('mob-open');
     }
   });
 }
