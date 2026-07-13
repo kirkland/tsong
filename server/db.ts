@@ -2269,14 +2269,6 @@ export async function getSelfElo(pid: string): Promise<{ rank: number; elo: numb
   return rows.length ? { rank: Number(rows[0].rnk), elo: Number(rows[0].elo) } : null;
 }
 
-/** Load a player's stored cortisol (mid-point if unknown / no DB). Seeds the live value on join. */
-export async function getCortisol(pid: string): Promise<number> {
-  if (!pool) return CORTISOL_START;
-  const { rows } = await pool.query(`SELECT cortisol FROM players WHERE id = $1`, [pid]);
-  if (!rows.length) return CORTISOL_START;
-  return Math.max(0, Math.min(CORTISOL_MAX, Number(rows[0].cortisol)));
-}
-
 /** Persist a player's current cortisol (clamped 0..CORTISOL_MAX). Upserts the row and stamps
  *  last_played so a stressed-out player shows on the (active-only) board even without a match. */
 export async function setCortisol(pid: string, name: string, value: number): Promise<void> {

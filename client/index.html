@@ -357,10 +357,19 @@
         text-overflow: ellipsis;
         white-space: nowrap;
       }
-      #cortisol .pct {
-        color: #ff9d4a;
-        text-align: right;
-        font-variant-numeric: tabular-nums;
+      /* Per-row cortisol bar — fuller = more stressed (green→red set inline). */
+      #cortisol .cortbar {
+        align-self: center;
+        width: 72px;
+        height: 8px;
+        background: #11182c;
+        border-radius: 5px;
+        overflow: hidden;
+      }
+      #cortisol .cortbar i {
+        display: block;
+        height: 100%;
+        border-radius: 5px;
       }
       #cortisol .self-row {
         border-top: 1px dashed #3a4a6a;
@@ -3599,20 +3608,12 @@
         line-height: 1.6;
       }
       /* Cortisol meter — a small stress gauge under the Market Stability bar, same look.
-         Green (calm) → red (maxed); shivers while cortisol sits "really really low". */
+         Just a bar (no number): green (calm) → red (maxed), filling as stress rises. */
       #cortisolMeter { position: relative; background: #0e1424; border: 1px solid #1c2640; border-radius: 6px; padding: 7px 9px; margin-top: 6px; }
       #cortisolMeter .cort-head { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
       #cortisolMeter .cort-title { font-size: 11px; letter-spacing: 0.5px; text-transform: uppercase; color: #ff9d4a; font-weight: 700; }
-      #cortisolMeter .cort-pct { margin-left: auto; font-size: 11px; color: #8a93ac; font-variant-numeric: tabular-nums; }
       #cortisolMeter .cort-track { height: 8px; background: #11182c; border-radius: 5px; overflow: hidden; }
       #cortFill { height: 100%; width: 50%; border-radius: 5px; background: #3ad17a; transition: width 0.4s ease, background-color 0.4s ease; }
-      /* Faint tremor while cortisol is "really really low" — the eerie-calm jitters. */
-      #cortisolMeter.jittery { animation: cortJitter 0.12s steps(2) infinite; }
-      @keyframes cortJitter {
-        0% { transform: translate(0, 0); }
-        50% { transform: translate(-0.5px, 0.5px); }
-        100% { transform: translate(0.5px, -0.5px); }
-      }
       /* Personal section header inside the modes panel. */
       .modes-section-head {
         font-size: 9px; letter-spacing: 1px; text-transform: uppercase;
@@ -5103,10 +5104,9 @@
             bar resets. Pay your loans on time to keep the market stable.
           </div>
         </div>
-        <div id="cortisolMeter" hidden title="Your cortisol — a stress gauge. Rises with long rallies, near-elimination, and rough friendships; drifts back down as you calm. The calmest players top the leaderboard; let it drop really low and the screen gets the eerie-calm jitters.">
+        <div id="cortisolMeter" hidden title="Your cortisol — a stress gauge. Starts in the middle; rises with long rallies, near-elimination, and rough friendships; drifts back down as you calm.">
           <div class="cort-head">
             <span class="cort-title">Cortisol</span>
-            <span id="cortLabel" class="cort-pct"></span>
           </div>
           <div class="cort-track"><div id="cortFill"></div></div>
         </div>

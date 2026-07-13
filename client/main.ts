@@ -31,7 +31,6 @@ import {
   NetWorthRow,
   CortisolRow,
   CORTISOL_MAX,
-  CORTISOL_SHAKE_BELOW,
   BalanceSheetMsg,
   EloProfileMsg,
   Role,
@@ -90,7 +89,6 @@ const netWorthEl = document.getElementById('netWorth') as HTMLDivElement;
 const cortisolEl = document.getElementById('cortisol') as HTMLDivElement;
 const cortisolMeter = document.getElementById('cortisolMeter') as HTMLDivElement;
 const cortFill = document.getElementById('cortFill') as HTMLDivElement;
-const cortLabel = document.getElementById('cortLabel') as HTMLSpanElement;
 const colorPicker = document.getElementById('colorPicker') as HTMLDivElement;
 const chatLog = document.getElementById('chatlog') as HTMLDivElement;
 const chatEl = document.getElementById('chat') as HTMLDivElement;
@@ -1154,8 +1152,8 @@ function myCortisol(s: StateMsg): number | null {
 // "Calmest" board last told us about ourselves.
 let localCortisol: number | null = null;
 
-// Paint the cortisol meter (under the Market Stability bar). Green (calm) → red (maxed); the bar
-// shivers while cortisol sits "really really low". Hidden until we've joined and have a value.
+// Paint the cortisol meter (under the Market Stability bar) — just a bar, no number. Green (calm)
+// → red (maxed), filling as stress rises. Hidden until we've joined and have a value.
 function renderCortisolMeter(s: StateMsg) {
   const live = myCortisol(s);
   if (live !== null) localCortisol = live;
@@ -1166,8 +1164,6 @@ function renderCortisolMeter(s: StateMsg) {
   cortFill.style.width = `${frac * 100}%`;
   // Green when calm → red as stress climbs.
   cortFill.style.backgroundColor = `hsl(${Math.round(140 * (1 - frac))} 70% 55%)`;
-  cortLabel.textContent = `${Math.round(c)} / ${CORTISOL_MAX}`;
-  cortisolMeter.classList.toggle('jittery', c < CORTISOL_SHAKE_BELOW);
 }
 
 // Farthest my arena paddle may slide from its edge midpoint before overhanging a corner.
@@ -5220,18 +5216,12 @@ const fxSmoke = screenFx.querySelector('.fx-smoke') as HTMLElement;
 let boardFxOn = false;
 function applyScreenFx(s: StateMsg) {
   const live = s.status === 'playing';
-  // Board transform: earthquake shake + tilt perspective + the low-cortisol tremor, combined.
+  // Board transform: earthquake shake + tilt perspective, combined.
   const quake = live && s.earthquake;
   const tilt = live && s.tilt;
-  // "Really really low" cortisol during a live match gives the whole board a faint tremor — the
-  // eerie-calm jitters. It fades in the lower your cortisol is; a heated rally spikes it and steadies
-  // the screen. Capped small (≈3px) so it reads as a shiver, not the 7px earthquake.
-  const myCort = live ? myCortisol(s) : null;
-  const jitter = (myCort !== null && myCort < CORTISOL_SHAKE_BELOW)
-    ? (1 - myCort / CORTISOL_SHAKE_BELOW) * 3 : 0;
-  if (quake || tilt || jitter > 0) {
-    const dx = (quake ? (Math.random() * 2 - 1) * 7 : 0) + (jitter ? (Math.random() * 2 - 1) * jitter : 0);
-    const dy = (quake ? (Math.random() * 2 - 1) * 7 : 0) + (jitter ? (Math.random() * 2 - 1) * jitter : 0);
+  if (quake || tilt) {
+    const dx = quake ? (Math.random() * 2 - 1) * 7 : 0;
+    const dy = quake ? (Math.random() * 2 - 1) * 7 : 0;
     const t = `${tilt ? 'perspective(640px) rotateX(16deg)' : ''} translate(${dx}px, ${dy}px)`.trim();
     const active = boardEl();
     active.style.transform = t;
@@ -6409,25 +6399,34 @@ function renderCortisol(rows: CortisolRow[], selfCortisol?: number, selfRank?: n
   // Keep the meter's cached value fresh from our own board standing (freshest source between matches).
   if (selfCortisol !== undefined) localCortisol = selfCortisol;
   else { const mine = rows.find((r) => r.name === myName); if (mine) localCortisol = mine.cortisol; }
+  // Each player's cortisol is shown as a bar (no number) — the fuller it is, the higher the stress.
   if (!rows.length) {
     cortisolEl.innerHTML = '';
+    worldMod?.feedCortisol();
     return;
   }
   const items = rows
     .map((r, i) => {
-      const crown = i === 0 ? '🧘 ' : '';
       const t = r.title ? (COSMETICS.find((c) => c.id === r.title) ?? EXCLUSIVES.find((e) => e.id === r.title)) : undefined;
       const tag = t ? `<span class="lbtitle${r.title === 'opstask' ? ' rainbow' : ''}">${escapeHtml(t.name)}</span>` : '';
-      return `<li data-rank="${i}"><span class="rank">${i + 1}</span><span class="lbname">${crown}${escapeHtml(
+      return `<li data-rank="${i}"><span class="rank">${i + 1}</span><span class="lbname">${escapeHtml(
         r.name,
-      )}${tag}${bountyBadgeHtml(r.name)}</span><span class="pct">${Math.round(r.cortisol)}</span></li>`;
+      )}${tag}${bountyBadgeHtml(r.name)}</span>${cortisolBarHtml(r.cortisol)}</li>`;
     })
     .join('');
   let selfRow = '';
   if (selfCortisol !== undefined && selfRank !== undefined && myName && !rows.some((r) => r.name === myName)) {
-    selfRow = `<li class="self-row"><span class="rank">#${selfRank}</span><span class="lbname">${escapeHtml(myName)}</span><span class="pct">${Math.round(selfCortisol)}</span></li>`;
+    selfRow = `<li class="self-row"><span class="rank">#${selfRank}</span><span class="lbname">${escapeHtml(myName)}</span>${cortisolBarHtml(selfCortisol)}</li>`;
   }
-  cortisolEl.innerHTML = `<h2>🧘 Calmest</h2><ol>${items}${selfRow}</ol>`;
+  cortisolEl.innerHTML = `<h2>😰 Cortisol</h2><ol>${items}${selfRow}</ol>`;
+  worldMod?.feedCortisol();
+}
+
+// A little green→red fill bar for a cortisol value (0..CORTISOL_MAX), used in the board rows.
+function cortisolBarHtml(cort: number): string {
+  const frac = Math.max(0, Math.min(1, cort / CORTISOL_MAX));
+  const color = `hsl(${Math.round(140 * (1 - frac))} 70% 55%)`;
+  return `<span class="cortbar"><i style="width:${frac * 100}%;background:${color}"></i></span>`;
 }
 
 // Click a Net Worth row to ask the server for that player's balance sheet (resolved by

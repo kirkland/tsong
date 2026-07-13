@@ -237,7 +237,7 @@ export interface WorldNet {
   toggleMute(): void;            // flip the mute toggle (same pref/state as the toolbar's 🔊 button)
   leaderboard(): { name: string; wins: number; losses: number; elo: number; title?: string | null }[]; // live pong standings (pre-ranked)
   netWorth(): { name: string; net: number; coins: number; loan: number; title?: string | null }[];     // live net-worth board (pre-ranked)
-  cortisolBoard(): { name: string; cortisol: number; title?: string | null }[];                        // live "Calmest" board (pre-ranked low→high)
+  cortisolBoard(): { name: string; cortisol: number; title?: string | null }[];                        // live Cortisol board (pre-ranked low→high)
   // Our own rank + stat when we're NOT already in the visible top-N above (mirrors the toolbar
   // boards' pinned self-row) — null once we're already shown in leaderboard()/netWorth().
   selfLbRow(): { rank: number; elo: number } | null;
@@ -303,6 +303,7 @@ interface Controller {
   feedEloProfile(msg: EloProfileMsg): void;         // server's answer to an eloProfileReq fired from the Hall of Fame
   feedBalanceSheet(msg: BalanceSheetMsg): void;     // server's answer to a balanceSheetReq fired from the Hall of Fame
   feedWallet(): void;                                // the wallet changed (buy/equip/spin settled) — re-render the shop dialog if it's open
+  feedCortisol(): void;                               // the "Cortisol" board updated — refresh the top-bar cortisol gauge
   feedNews(): void;                                  // a new news item published — re-render the news dialog if it's open
   feedLoan(): void;                                  // the loan changed (taken/repaid/collected/countdown tick) — re-render the loan dialog if it's open
   feedHouse(): void;                                 // the Fed dashboard changed (bond/auction/tax update) — re-render the house dialog if it's open
@@ -360,6 +361,11 @@ export function feedDungeonChests(opened: string[]): void {
 /** The wallet changed (buy/equip/daily-spin settled) — re-render the shop dialog if it's open. */
 export function feedWallet(): void {
   controller?.feedWallet();
+}
+
+/** The "Cortisol" board updated — refresh the World top-bar cortisol gauge. */
+export function feedCortisol(): void {
+  controller?.feedCortisol();
 }
 
 /** A new news item published — re-render the news dialog if it's open. */
@@ -2335,6 +2341,28 @@ export function startWorld(net: WorldNet): void {
     'border-radius:8px;padding:6px 11px;font-size:13px;font-weight:700;text-shadow:0 1px 3px #000a;';
   function updateCoinsHud() { coinsHud.textContent = `🪙 ${Math.round(net.wallet().coins).toLocaleString()}`; }
   updateCoinsHud();
+  // Cortisol gauge, right next to the coins — a small labelled bar (no number), green (calm) → red
+  // (maxed). Kept in sync by updateCortHud(), called here and whenever the "Cortisol" board updates.
+  const cortHud = document.createElement('div');
+  cortHud.style.cssText =
+    'pointer-events:none;background:#1b2542;border:1px solid #2c3a63;border-radius:8px;' +
+    'padding:6px 10px;display:flex;align-items:center;gap:7px;text-shadow:0 1px 3px #000a;';
+  const cortHudTitle = document.createElement('span');
+  cortHudTitle.textContent = 'Cortisol';
+  cortHudTitle.style.cssText = 'color:#ff9d4a;font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;';
+  const cortHudTrack = document.createElement('div');
+  cortHudTrack.style.cssText = 'width:58px;height:8px;background:#11182c;border-radius:5px;overflow:hidden;';
+  const cortHudFill = document.createElement('div');
+  cortHudFill.style.cssText = 'height:100%;width:50%;border-radius:5px;background:#3ad17a;transition:width .3s ease,background-color .3s ease;';
+  cortHudTrack.appendChild(cortHudFill);
+  cortHud.append(cortHudTitle, cortHudTrack);
+  function updateCortHud() {
+    const c = net.selfCortisolRow()?.cortisol ?? 50; // mid-point until the board first reports us
+    const frac = Math.max(0, Math.min(1, c / 100));
+    cortHudFill.style.width = `${frac * 100}%`;
+    cortHudFill.style.backgroundColor = `hsl(${Math.round(140 * (1 - frac))} 70% 55%)`;
+  }
+  updateCortHud();
   const count = document.createElement('div');
   count.style.cssText = 'color:#8aa0d8;font-size:13px;margin-left:auto;pointer-events:none;text-shadow:0 1px 4px #000a;';
   const muteBtn = document.createElement('button');
@@ -2364,7 +2392,7 @@ export function startWorld(net: WorldNet): void {
   backBtn.style.cssText =
     'pointer-events:auto;cursor:pointer;background:#1b2542;color:#cdd8f5;' +
     'border:1px solid #2c3a63;border-radius:8px;padding:7px 12px;font-size:13px;';
-  topbar.append(title, coinsHud, count, muteBtn, renameBtn, driveBtn, backBtn);
+  topbar.append(title, coinsHud, cortHud, count, muteBtn, renameBtn, driveBtn, backBtn);
   overlay.appendChild(topbar);
 
   // Weekly objectives panel (top-left, under the title). Its `top` is recomputed from the
@@ -3433,8 +3461,18 @@ export function startWorld(net: WorldNet): void {
       }
     }
 
-    // 🧘 Calmest (cortisol low→high — server sends it pre-sorted, most zen on top)
-    const cortList = buildSection('🧘 Calmest', '#ff9d4a');
+    // 😰 Cortisol (low→high — server sends it pre-sorted). Each player's stress is a bar (no number),
+    // fuller = higher cortisol.
+    const cortBar = (cort: number): HTMLElement => {
+      const track = document.createElement('div');
+      track.style.cssText = 'width:70px;height:8px;background:#11182c;border-radius:5px;overflow:hidden;flex-shrink:0;';
+      const frac = Math.max(0, Math.min(1, cort / 100));
+      const fill = document.createElement('div');
+      fill.style.cssText = `height:100%;width:${frac * 100}%;border-radius:5px;background:hsl(${Math.round(140 * (1 - frac))} 70% 55%);`;
+      track.appendChild(fill);
+      return track;
+    };
+    const cortList = buildSection('😰 Cortisol', '#ff9d4a');
     const cort = net.cortisolBoard().slice(0, 8);
     if (!cort.length) emptyRow(cortList, 'Nobody has clocked in yet.');
     cort.forEach((r, i) => {
@@ -3447,13 +3485,10 @@ export function startWorld(net: WorldNet): void {
       rank.textContent = `${i + 1}`;
       rank.style.cssText = 'color:#6b7796;width:18px;flex-shrink:0;font-size:13px;';
       const name = document.createElement('span');
-      name.textContent = `${i === 0 ? '🧘 ' : ''}${r.name}`;
+      name.textContent = r.name;
       name.style.cssText = `flex:1;font-size:13px;color:${self ? '#b8c8e8' : '#cdd7f5'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
-      const val = document.createElement('span');
-      val.textContent = `${Math.round(r.cortisol)}`;
-      val.style.cssText = `font-size:12px;color:${self ? '#ffd23f' : '#ff9d4a'};font-variant-numeric:tabular-nums;flex-shrink:0;`;
       const tag = titleFlairTag(r.title);
-      row.append(rank, name, ...(tag ? [tag] : []), val);
+      row.append(rank, name, ...(tag ? [tag] : []), cortBar(r.cortisol));
       cortList.appendChild(row);
     });
     // Pinned self-row when we're outside the top 8.
@@ -3469,10 +3504,7 @@ export function startWorld(net: WorldNet): void {
         const name = document.createElement('span');
         name.textContent = myName;
         name.style.cssText = 'flex:1;font-size:13px;color:#b8c8e8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-        const val = document.createElement('span');
-        val.textContent = `${Math.round(self.cortisol)}`;
-        val.style.cssText = 'font-size:12px;color:#ffd23f;font-variant-numeric:tabular-nums;flex-shrink:0;';
-        row.append(rank, name, val);
+        row.append(rank, name, cortBar(self.cortisol));
         cortList.appendChild(row);
       }
     }
@@ -13477,6 +13509,7 @@ export function startWorld(net: WorldNet): void {
     feedEloProfile(msg) { renderEloProfile(msg); },
     feedBalanceSheet(msg) { renderBalanceSheet(msg); },
     feedWallet() { updateCoinsHud(); if (shopDialogOpen) renderShopDialog(); },
+    feedCortisol() { updateCortHud(); },
     feedNews() { if (newsDialogOpen) { const list = dialogBox.querySelector<HTMLDivElement>('#newsWorldList'); if (list) renderNewsWorldList(list); } },
     feedLoan() {
       if (!loanDialogOpen) return;

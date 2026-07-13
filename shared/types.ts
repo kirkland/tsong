@@ -188,9 +188,6 @@ export const LEADERBOARD_SIZE = 10;
 export const CORTISOL_MAX = 100;
 // Everyone starts here — right in the middle. Stress pushes it up; calm bleeds it back down.
 export const CORTISOL_START = 50;
-// When your OWN cortisol sits below this the screen gets a faint tremor — the "eerie calm / running
-// on empty" jitters. Get some action going (rallies spike your cortisol) and the screen steadies.
-export const CORTISOL_SHAKE_BELOW = 12;
 
 // Money is whole coins, scaled ×100 so the stock market has integer room for percentage moves
 // (a 1% move on a 100-coin stock = 1 coin) instead of needing fractional cents. Every coin

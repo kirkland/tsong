@@ -115,7 +115,7 @@ import {
   WORLD_BUILDINGS,
 } from '../shared/types';
 import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSelfElo, getSelfNetWorth, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
-  getCortisol, setCortisol, getCortisolBoard, getSelfCortisol,
+  setCortisol, getCortisolBoard, getSelfCortisol,
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
   recordFishCatch, getFishingLeaderboard, FishingScoreRow,
@@ -3180,14 +3180,11 @@ export class Lobby {
       c.jailed = j;
       if (j) this.tell(ws, { type: 'jailed', jailed: true });
     }).catch(() => {});
-    // Seed the live cortisol gauge from the stored value (which can be above OR below the mid-start,
-    // since a calm player persists a low score). Only adopt it if no stress has landed yet.
-    getCortisol(conn.pid).then((v) => {
-      const c = this.conns.get(ws); if (!c) return;
-      if (!c.cortisolLoaded) c.cortisol = v;
-      c.cortisolLoaded = true;
-      c.cortisolFlushed = -1; // force one flush so this active player lands on the board
-    }).catch(() => {});
+    // Everyone starts each session right in the middle. Force one flush (cortisolFlushed = -1) so
+    // this active player lands on the board straight away.
+    conn.cortisol = CORTISOL_START;
+    conn.cortisolLoaded = true;
+    conn.cortisolFlushed = -1;
     getWallet(conn.pid)
       .then((w) => {
         const c = this.conns.get(ws);
