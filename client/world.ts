@@ -237,7 +237,7 @@ export interface WorldNet {
   toggleMute(): void;            // flip the mute toggle (same pref/state as the toolbar's 🔊 button)
   leaderboard(): { name: string; wins: number; losses: number; elo: number; title?: string | null }[]; // live pong standings (pre-ranked)
   netWorth(): { name: string; net: number; coins: number; loan: number; title?: string | null }[];     // live net-worth board (pre-ranked)
-  cortisolBoard(): { name: string; cortisol: number; title?: string | null }[];                        // live "Most Stressed" board (pre-ranked high→low)
+  cortisolBoard(): { name: string; cortisol: number; title?: string | null }[];                        // live "Calmest" board (pre-ranked low→high)
   // Our own rank + stat when we're NOT already in the visible top-N above (mirrors the toolbar
   // boards' pinned self-row) — null once we're already shown in leaderboard()/netWorth().
   selfLbRow(): { rank: number; elo: number } | null;
@@ -3433,10 +3433,10 @@ export function startWorld(net: WorldNet): void {
       }
     }
 
-    // 😰 Most Stressed (cortisol high→low)
-    const cortList = buildSection('😰 Most Stressed', '#ff9d4a');
+    // 🧘 Calmest (cortisol low→high — server sends it pre-sorted, most zen on top)
+    const cortList = buildSection('🧘 Calmest', '#ff9d4a');
     const cort = net.cortisolBoard().slice(0, 8);
-    if (!cort.length) emptyRow(cortList, 'Everyone is perfectly zen. For now.');
+    if (!cort.length) emptyRow(cortList, 'Nobody has clocked in yet.');
     cort.forEach((r, i) => {
       const self = r.name === myName;
       const bg = self ? '#0a1020' : i % 2 ? '#18203a' : 'transparent';
@@ -3447,7 +3447,7 @@ export function startWorld(net: WorldNet): void {
       rank.textContent = `${i + 1}`;
       rank.style.cssText = 'color:#6b7796;width:18px;flex-shrink:0;font-size:13px;';
       const name = document.createElement('span');
-      name.textContent = `${i === 0 ? '🥵 ' : ''}${r.name}`;
+      name.textContent = `${i === 0 ? '🧘 ' : ''}${r.name}`;
       name.style.cssText = `flex:1;font-size:13px;color:${self ? '#b8c8e8' : '#cdd7f5'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
       const val = document.createElement('span');
       val.textContent = `${Math.round(r.cortisol)}`;

@@ -184,8 +184,10 @@ export const LEADERBOARD_SIZE = 10;
 
 // Cortisol: a per-player stress/tension gauge (0 = zen … 100 = maxed out). It rises on stressful
 // events (bad friend-sim interactions, long rallies, near-elimination in Arena) and decays back
-// toward calm over time. The "Most Stressed" leaderboard ranks it high→low.
+// toward calm over time. The "Calmest" leaderboard ranks it low→high (most zen on top).
 export const CORTISOL_MAX = 100;
+// Everyone starts here — right in the middle. Stress pushes it up; calm bleeds it back down.
+export const CORTISOL_START = 50;
 // When your OWN cortisol sits below this the screen gets a faint tremor — the "eerie calm / running
 // on empty" jitters. Get some action going (rallies spike your cortisol) and the screen steadies.
 export const CORTISOL_SHAKE_BELOW = 12;
@@ -1466,9 +1468,9 @@ export interface NetWorthMsg {
   selfRank?: number;
 }
 
-// One row of the Cortisol ("Most Stressed") board: the player's current stress level, ranked
-// high→low. Rises with bad friend-sim interactions, long rallies, and near-elimination; decays
-// back toward calm over time.
+// One row of the Cortisol ("Calmest") board: the player's current stress level, ranked low→high
+// (calmest on top). Rises with bad friend-sim interactions, long rallies, and near-elimination;
+// decays back toward calm over time.
 export interface CortisolRow {
   name: string;
   cortisol: number; // 0..100 current stress level

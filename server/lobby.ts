@@ -24,6 +24,7 @@ import {
   NetWorthRow,
   CortisolRow,
   CORTISOL_MAX,
+  CORTISOL_START,
   BalanceSheetHolding,
   MAX_PLAYERS,
   PaddleState,
@@ -435,7 +436,7 @@ export class Lobby {
   private netWorth: NetWorthRow[] = []; // cached net-worth board (coins + holdings − debt)
   private netWorthPids: string[] = []; // pid per net-worth row (server-only; resolves a rank → player)
   private eloPids: string[] = []; // pid per Elo leaderboard row (server-only; resolves a rank → player)
-  private cortisol: CortisolRow[] = []; // cached "Most Stressed" board (cortisol high→low)
+  private cortisol: CortisolRow[] = []; // cached "Calmest" board (cortisol low→high)
   private cortisolPids: string[] = []; // pid per cortisol row (server-only; resolves a rank → player)
   private cortisolTick = 0; // counts sync() ticks; drives the periodic cortisol flush + rebroadcast
   private prevRallyHits = 0; // last-seen duel rally length, so a growing rally spikes cortisol once per hit
@@ -731,9 +732,9 @@ export class Lobby {
       drunkLevel: 0,
       drunkUntil: 0,
       jailed: false,
-      cortisol: 0,
+      cortisol: CORTISOL_START,
       cortisolLoaded: false,
-      cortisolFlushed: 0,
+      cortisolFlushed: -1, // -1 forces the first flush to write (stamps last_played → board)
     };
     this.conns.set(ws, conn);
     this.tell(ws, { type: 'you', id: conn.id, role: 'observer', tOff: Lobby.DAY_NIGHT_OFFSET });
@@ -3017,9 +3018,9 @@ export class Lobby {
       drunkLevel: 0,
       drunkUntil: 0,
       jailed: false,
-      cortisol: 0,
+      cortisol: CORTISOL_START,
       cortisolLoaded: false,
-      cortisolFlushed: 0,
+      cortisolFlushed: -1, // -1 forces the first flush to write (stamps last_played → board)
     };
     this.conns.set(ws, conn);
     this.teams[side].push(ws);
@@ -3179,13 +3180,13 @@ export class Lobby {
       c.jailed = j;
       if (j) this.tell(ws, { type: 'jailed', jailed: true });
     }).catch(() => {});
-    // Seed the live cortisol gauge from the stored value (only if no stress has landed yet, so a
-    // bump that arrives before this resolves isn't clobbered).
+    // Seed the live cortisol gauge from the stored value (which can be above OR below the mid-start,
+    // since a calm player persists a low score). Only adopt it if no stress has landed yet.
     getCortisol(conn.pid).then((v) => {
       const c = this.conns.get(ws); if (!c) return;
-      if (!c.cortisolLoaded) c.cortisol = Math.max(c.cortisol, v);
+      if (!c.cortisolLoaded) c.cortisol = v;
       c.cortisolLoaded = true;
-      c.cortisolFlushed = Math.round(c.cortisol);
+      c.cortisolFlushed = -1; // force one flush so this active player lands on the board
     }).catch(() => {});
     getWallet(conn.pid)
       .then((w) => {
@@ -6173,7 +6174,7 @@ export class Lobby {
 
   /** Once per tick: raise cortisol on stressful gameplay (long rallies, near-elimination in Arena),
    *  bleed it back toward calm, and periodically flush the live values to the DB + rebroadcast the
-   *  "Most Stressed" board. The live value rides down in every StateMsg (drives the meter + jitter). */
+   *  "Calmest" board. The live value rides down in every StateMsg (drives the meter + jitter). */
   private tickCortisol() {
     const dt = TICK_MS / 1000;
     // Long rallies (duel): once a rally runs long, every additional paddle hit stresses BOTH sides.
@@ -6525,7 +6526,7 @@ export class Lobby {
     return true;
   }
 
-  /** Re-query the "Most Stressed" board, cache it, and push it to every client (personalised with
+  /** Re-query the "Calmest" board, cache it, and push it to every client (personalised with
    *  their own pinned row when they're below the visible top-N). Mirrors refreshNetWorth. */
   async refreshCortisol() {
     const board = await getCortisolBoard();

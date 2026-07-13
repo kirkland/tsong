@@ -1149,17 +1149,24 @@ function myCortisol(s: StateMsg): number | null {
   return null;
 }
 
-// Paint the HUD cortisol meter from the local player's live value (hidden for observers). Green
-// (calm) → red (maxed); the bar shivers while cortisol sits "really really low".
+// Our own cortisol, cached so the meter stays populated even when we're not in a live match. The
+// live in-match value (from StateMsg) is freshest; between matches we fall back to what the
+// "Calmest" board last told us about ourselves.
+let localCortisol: number | null = null;
+
+// Paint the cortisol meter (under the Market Stability bar). Green (calm) → red (maxed); the bar
+// shivers while cortisol sits "really really low". Hidden until we've joined and have a value.
 function renderCortisolMeter(s: StateMsg) {
-  const c = myCortisol(s);
-  if (c === null) { cortisolMeter.hidden = true; return; }
+  const live = myCortisol(s);
+  if (live !== null) localCortisol = live;
+  const c = localCortisol;
+  if (c === null || !joined) { cortisolMeter.hidden = true; return; }
   cortisolMeter.hidden = false;
   const frac = Math.max(0, Math.min(1, c / CORTISOL_MAX));
   cortFill.style.width = `${frac * 100}%`;
   // Green when calm → red as stress climbs.
   cortFill.style.backgroundColor = `hsl(${Math.round(140 * (1 - frac))} 70% 55%)`;
-  cortLabel.textContent = `${Math.round(c)}`;
+  cortLabel.textContent = `${Math.round(c)} / ${CORTISOL_MAX}`;
   cortisolMeter.classList.toggle('jittery', c < CORTISOL_SHAKE_BELOW);
 }
 
@@ -6392,19 +6399,23 @@ function renderNetWorth(rows: NetWorthRow[], selfRow?: NetWorthRow, selfRank?: n
   netWorthEl.innerHTML = `<h2>💰 Net Worth</h2><ol>${items}${selfLi}</ol>`;
 }
 
-// The Cortisol board — "Most Stressed", ranked by current stress level (high → low). The most
-// frazzled player wears a 🥵. Rises with long rallies, near-elimination, and rough friendships.
+// The Cortisol board — "Calmest", ranked by current stress level low → high (server sends it
+// pre-sorted), so the most zen player sits on top wearing a 🧘. Cortisol rises with long rallies,
+// near-elimination, and rough friendships, and drifts back down as you calm.
 function renderCortisol(rows: CortisolRow[], selfCortisol?: number, selfRank?: number) {
   lastCortisolRows = rows;
   if (selfCortisol !== undefined || selfRank !== undefined) { lastCortisolSelf = selfCortisol; lastCortisolSelfRank = selfRank; }
   else { selfCortisol = lastCortisolSelf; selfRank = lastCortisolSelfRank; }
+  // Keep the meter's cached value fresh from our own board standing (freshest source between matches).
+  if (selfCortisol !== undefined) localCortisol = selfCortisol;
+  else { const mine = rows.find((r) => r.name === myName); if (mine) localCortisol = mine.cortisol; }
   if (!rows.length) {
     cortisolEl.innerHTML = '';
     return;
   }
   const items = rows
     .map((r, i) => {
-      const crown = i === 0 ? '🥵 ' : '';
+      const crown = i === 0 ? '🧘 ' : '';
       const t = r.title ? (COSMETICS.find((c) => c.id === r.title) ?? EXCLUSIVES.find((e) => e.id === r.title)) : undefined;
       const tag = t ? `<span class="lbtitle${r.title === 'opstask' ? ' rainbow' : ''}">${escapeHtml(t.name)}</span>` : '';
       return `<li data-rank="${i}"><span class="rank">${i + 1}</span><span class="lbname">${crown}${escapeHtml(
@@ -6416,7 +6427,7 @@ function renderCortisol(rows: CortisolRow[], selfCortisol?: number, selfRank?: n
   if (selfCortisol !== undefined && selfRank !== undefined && myName && !rows.some((r) => r.name === myName)) {
     selfRow = `<li class="self-row"><span class="rank">#${selfRank}</span><span class="lbname">${escapeHtml(myName)}</span><span class="pct">${Math.round(selfCortisol)}</span></li>`;
   }
-  cortisolEl.innerHTML = `<h2>😰 Most Stressed</h2><ol>${items}${selfRow}</ol>`;
+  cortisolEl.innerHTML = `<h2>🧘 Calmest</h2><ol>${items}${selfRow}</ol>`;
 }
 
 // Click a Net Worth row to ask the server for that player's balance sheet (resolved by
