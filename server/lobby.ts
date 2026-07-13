@@ -284,6 +284,18 @@ const CORTISOL_FINAL_TWO_MULT = 2;  // …doubled when you're one of the last tw
 const CORTISOL_STRESS_MAX_MSG = 40; // cap on a single client-reported 'stress' bump (anti-tamper)
 const CORTISOL_FLUSH_TICKS = 600;   // flush live cortisol → DB + rebroadcast the board every ~10s (60Hz)
 const CORTISOL_BEER_RELIEF = 10;    // a pint takes the edge off — quiet liquid-courage stress relief
+// More things that move the needle (pong + open-world/economy — arcade minigames stay out of it).
+const CORTISOL_GOAL_FOR = 2;        // scoring a point in a duel eases you a touch
+const CORTISOL_GOAL_AGAINST = 3;    // conceding one ratchets you up
+const CORTISOL_MATCH_WIN = 15;      // winning a match — a rush of relief, cortisol drops
+const CORTISOL_MATCH_LOSS = 15;     // losing stings — cortisol climbs
+const CORTISOL_BET_WIN = 8;         // a wager cashes in — sweet relief
+const CORTISOL_BET_LOSS = 10;       // a wager busts — ouch
+const CORTISOL_LOAN_TAKE = 12;      // going into debt to Davis is stressful
+const CORTISOL_LOAN_REPAY = 12;     // clearing the debt is a weight off your shoulders
+const CORTISOL_JAIL = 25;           // getting slammed in the drunk tank spikes it hard
+const CORTISOL_BAIL = 20;           // walking free brings it back down
+const CORTISOL_TIP_RECV = 6;        // a surprise tip brightens your day
 // Pong is the economy's faucet. Each recorded PvP match MINTS fresh coins: the winner already gets
 // their WIN_REWARD minted by recordResult(), and we mint the SAME amount again into the House — so
 // every match nets the treasury +MATCH_HOUSE_MINT (think "200 minted, 100 to the winner, 100 kept").
@@ -2927,6 +2939,8 @@ export class Lobby {
       const loserSide: Side | null = winnerSide ? (winnerSide === 'left' ? 'right' : 'left') : null;
       const winners = winnerSide ? this.connsOn(winnerSide) : [];
       const losers = loserSide ? this.connsOn(loserSide) : [];
+      for (const c of winners) this.bumpCortisol(c, -CORTISOL_MATCH_WIN);
+      for (const c of losers) this.bumpCortisol(c, CORTISOL_MATCH_LOSS);
       this.winnerName = winners.length ? winners[0].nickname : null;
       if (this.liveMatchId !== null && winners[0]?.pid) {
         t.reportWinner(this.liveMatchId, winners[0].pid);
@@ -3281,6 +3295,8 @@ export class Lobby {
         // Refresh the tipper's wallet, plus any tab the recipient has open, and the net-worth board.
         this.sendWallet(ws);
         this.refreshWalletsFor([...this.conns.values()].filter((c) => c.pid === recip.pid));
+        // A surprise tip is a nice little mood-lifter for the recipient (if they're online).
+        for (const rc of [...this.conns.values()].filter((c) => c.pid === recip.pid)) this.bumpCortisol(rc, -CORTISOL_TIP_RECV);
         this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
         // Celebrate it room-wide: a chat line + the coin-shower/cha-ching broadcast.
         this.echoCommand(conn, `/tip ${recip.name} ${amt}`);
@@ -3448,6 +3464,7 @@ export class Lobby {
     const conn = this.conns.get(ws);
     if (!conn || !conn.pid || conn.jailed || conn.drunkLevel < 2) return;
     conn.jailed = true;
+    this.bumpCortisol(conn, CORTISOL_JAIL); // the cuffs are a serious stressor
     setJailed(conn.pid, true).catch((e) => console.error('jail persist failed:', e));
     if (this.world.has(ws)) this.world.move(ws, JAIL_CELL.x + JAIL_CELL.w / 2, JAIL_CELL.y + JAIL_CELL.h / 2);
     this.tell(ws, { type: 'jailed', jailed: true });
@@ -3470,6 +3487,7 @@ export class Lobby {
         if (!w) { this.notify(ws, `Bail is ${BAIL_COST}🪙 — you're short.`); this.sendWallet(ws); return; }
         await this.houseCredit(BAIL_COST); // bail money goes to the House
         target.jailed = false;
+        this.bumpCortisol(target, -CORTISOL_BAIL); // freedom — a big exhale
         setJailed(target.pid, false).catch((e) => console.error('bail persist failed:', e));
         this.sendWallet(ws);
         this.tell(targetWs, { type: 'jailed', jailed: false });
@@ -5127,6 +5145,7 @@ export class Lobby {
           this.sendWallet(ws);
           this.sendLoan(ws);
           this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
+          this.bumpCortisol(this.conns.get(ws), CORTISOL_LOAN_TAKE); // debt weighs on you
           this.notify(ws, `💸 Davis fronted you ${amt}🪙 — bring back ${res.loan.owed}🪙 by 5pm. Miss it and the market takes the hit. Keep grinding.`);
         });
       })
@@ -5148,6 +5167,7 @@ export class Lobby {
         this.sendWallet(ws);
         this.sendLoan(ws);
         this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
+        this.bumpCortisol(conn, -CORTISOL_LOAN_REPAY); // debt cleared — a weight off
         this.notify(ws, `🤝 Loan settled. Davis respects the hustle.`);
       })
       .catch((e) => console.error('loan repay failed:', e));
@@ -5674,6 +5694,7 @@ export class Lobby {
       // back out of it. This keeps bets a closed transfer: stakes → House, payouts → House.
       this.houseCredit(b.amount).catch((e) => console.error('bet stake → house failed:', e));
       if (b.side === winnerSide) {
+        this.bumpCortisol(this.conns.get(b.ws), -CORTISOL_BET_WIN); // called it right — relief
         const want = Math.max(b.amount, Math.round(b.amount * b.odds)); // never quote below stake
         this.housePay(pid, b.name, want)
           .then((payout) => {
@@ -5683,6 +5704,7 @@ export class Lobby {
           })
           .catch((e) => console.error('payout failed:', e));
       } else {
+        this.bumpCortisol(this.conns.get(b.ws), CORTISOL_BET_LOSS); // stake gone — stress
         // Lost — stake was escrowed at bet time and routed to the House above; just refresh.
         if (this.conns.has(b.ws)) {
           this.sendWallet(b.ws);
@@ -6128,10 +6150,12 @@ export class Lobby {
     if (this.mode === 'duel' && this.game.status === 'playing') {
       const s = this.game.score;
       if (s.left > this.lastGameScore.left) {
-        for (const c of this.connsOn('left')) if (c.pid) this.trackSeasonProgress(c.pid, 'goals');
+        for (const c of this.connsOn('left')) { if (c.pid) this.trackSeasonProgress(c.pid, 'goals'); this.bumpCortisol(c, -CORTISOL_GOAL_FOR); }
+        for (const c of this.connsOn('right')) this.bumpCortisol(c, CORTISOL_GOAL_AGAINST);
       }
       if (s.right > this.lastGameScore.right) {
-        for (const c of this.connsOn('right')) if (c.pid) this.trackSeasonProgress(c.pid, 'goals');
+        for (const c of this.connsOn('right')) { if (c.pid) this.trackSeasonProgress(c.pid, 'goals'); this.bumpCortisol(c, -CORTISOL_GOAL_FOR); }
+        for (const c of this.connsOn('left')) this.bumpCortisol(c, CORTISOL_GOAL_AGAINST);
       }
     }
     if (this.mode === 'duel') this.lastGameScore = { ...this.game.score };
@@ -6259,8 +6283,12 @@ export class Lobby {
       .filter((c): c is Conn => !!c && !!c.pid);
     const winnerConns = refs.filter((c) => c.id === winnerId);
     const winners = winnerConns.map((c) => ({ pid: c.pid, name: c.nickname }));
-    const losers = refs.filter((c) => c.id !== winnerId).map((c) => ({ pid: c.pid, name: c.nickname }));
+    const loserConns = refs.filter((c) => c.id !== winnerId);
+    const losers = loserConns.map((c) => ({ pid: c.pid, name: c.nickname }));
     if (winners.length && losers.length) {
+      // Last one standing exhales; everyone else took a beating.
+      for (const c of winnerConns) this.bumpCortisol(c, -CORTISOL_MATCH_WIN);
+      for (const c of loserConns) this.bumpCortisol(c, CORTISOL_MATCH_LOSS);
       recordResult(winners, losers)
         .then(() => { this.refreshLeaderboard(); this.refreshWalletsFor(winnerConns); })
         .catch((e) => console.error('leaderboard update failed:', e));
@@ -6322,6 +6350,9 @@ export class Lobby {
           : null;
         const winners = winnerSide ? this.connsOn(winnerSide) : [];
         const losers = loserSide ? this.connsOn(loserSide) : [];
+        // Win → relief (cortisol drops); loss → it climbs.
+        for (const c of winners) this.bumpCortisol(c, -CORTISOL_MATCH_WIN);
+        for (const c of losers) this.bumpCortisol(c, CORTISOL_MATCH_LOSS);
         this.winnerName = winners.length ? winners.map((c) => c.nickname).join(' & ') : null;
         // Fatalities are a solo flourish: armed only when one player won the match.
         this.fatalityWinnerPid = winners.length === 1 ? winners[0].pid : null;

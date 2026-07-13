@@ -261,6 +261,17 @@ export async function initDb(): Promise<void> {
          ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
     );
   }
+  // Cortisol launch baseline: set EVERY existing player to the mid-point once, so the whole field
+  // starts the feature at medium (new players already default to it; this normalizes older rows
+  // that may sit at a prior default). Guarded so a later restart never re-flattens live values.
+  const cbv = await pool.query(`SELECT value FROM meta WHERE key = 'cortisol_baseline_v'`);
+  if (cbv.rows[0]?.value !== '1') {
+    await pool.query(`UPDATE players SET cortisol = $1`, [CORTISOL_START]);
+    await pool.query(
+      `INSERT INTO meta (key, value) VALUES ('cortisol_baseline_v', '1')
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    );
+  }
   // Nomic (the Parliament sub-game) — ONE perpetual communal game persisted as a single JSON
   // snapshot row (rulebook, params, scores, log). Won seasons are sealed into nomic_hall.
   await pool.query(`CREATE TABLE IF NOT EXISTS nomic_state (id INTEGER PRIMARY KEY, data TEXT NOT NULL)`);
