@@ -489,6 +489,9 @@ const CAR_WID = 28;         // car body width, world units
 const TEXEL = 2;            // world units per source texel (also the Kenney sprite/tile upscale)
 const ZOOM = 2;            // camera zoom (screen px per world unit)
 const TILE = 32;           // ground tile size, world units (a 16px Kenney tile drawn at TEXEL×)
+// The Great Western Nothing: a seeded, chunk-streamed desert 5× the size of the whole town,
+// stretching west of x=0. Mostly empty. That's the point. A few things are out there.
+const DESERT = { w: 24000, seed: 0xC0FFEE };
 
 // --- Kenney "Tiny Town" tileset (16×16, packed 12×11). Frame indices we use, named for clarity. ---
 const TT = {
@@ -2033,6 +2036,73 @@ const NPCS: NpcDef[] = [
       hint: "Reach Best Friend with another friend first",
     },
   },
+  // --- the desert dwellers: sparse souls of the Great Western Nothing ---
+  {
+    id: 'desert-hermit', name: 'The Hermit', shirt: 0x8a7a5a, hair: 0xd8d0c0, skin: SKINS[3],
+    hairStyle: 'long' as const,
+    x: -6200, y: 1100, roam: 120,
+    lines: [
+      'Forty years out here. The sand still surprises me. Nothing else does.',
+      'You came WEST? On purpose? Huh. Takes all kinds.',
+      'The moai? Don\'t dig it up. Some things are half-buried for a reason.',
+      'I had a high ELO once. Gave it all up. The desert doesn\'t keep score.',
+      'Water\'s another nine thousand west, if the oasis is real today. Sometimes it isn\'t.',
+    ],
+  },
+  {
+    id: 'desert-dave', name: 'Dave (HR)', shirt: 0x4a6a9a, hair: 0x3a2a18, skin: SKINS[1],
+    glasses: true,
+    x: -11800, y: 900, roam: 60,
+    lines: [
+      'Team-building exercise. 2019. The trust fall went long. Very long.',
+      'Have you seen a group of accountants? They had the compass. And the snacks.',
+      'Per my last email... sorry. Habit. There\'s no email out here. It\'s wonderful.',
+      'I\'m technically still on the clock. Overtime laws are unclear this far west.',
+      'If you get back... don\'t tell HR where I am. I AM HR. Tell no one.',
+    ],
+  },
+  {
+    id: 'desert-cartographer', name: 'The Cartographer', shirt: 0x6a4a8a, hair: 0x8a4a2a, skin: SKINS[0],
+    hairStyle: 'bun' as const, glasses: true,
+    x: -17800, y: 1250, roam: 90,
+    lines: [
+      'I\'m mapping the desert. Twelve years of work. Look — *unrolls an empty page* — perfect accuracy.',
+      'Cartography joke: what\'s west of here? *flips page* More page.',
+      'I labeled one dune once. The wind moved it. We don\'t label dunes anymore.',
+      'The far wall? It\'s on the map. It\'s the edge of the map. That\'s what makes it the wall.',
+      'Scale is 1:1. It\'s the only honest scale.',
+    ],
+  },
+  {
+    // GAS. No gas since 2019. Corporate hasn't noticed. Pete has stopped asking questions.
+    id: 'desert-pete', name: 'Pump Jockey Pete', shirt: 0xc0392b, hair: 0x6a5235, skin: SKINS[1],
+    hat: 'cap' as const, hatColor: 0xc0392b,
+    x: -4780, y: 1010, roam: 70,
+    lines: [
+      'Welcome to GAS. The G is for gas. The A and S are also for gas.',
+      'Tank\'s been dry since \'19. Corporate keeps wiring money. I keep the lights half on.',
+      'You\'re my third customer this year. The first two were tumbleweeds.',
+      'The pumps play a little song if you hold the handle. There\'s no gas. Just the song.',
+    ],
+    ask: {
+      q: 'You want somethin\'? We got no gas, no snacks, and a road trip fund I\'m supposed to hand out. Corporate\'s idea. Nobody\'s ever claimed it.',
+      choices: [
+        { label: 'I\'ll take the road trip fund', reply: 'Atta way. Five grand, courtesy of GAS™. Spend it on somethin\' with wheels. Or don\'t. The desert don\'t judge.', claim: 'gas-station' },
+        { label: 'Just looking', reply: 'Look long. Look hard, friend. It\'s the same in every direction. That\'s the charm.' },
+      ] as [NpcChoice, NpcChoice],
+    },
+  },
+  {
+    id: 'desert-regular', name: 'The Regular', shirt: 0x7a2a2a, hair: 0x1a1a1a, skin: SKINS[2],
+    x: -22500, y: 1050, roam: 40,
+    lines: [
+      'The Tavern got crowded. Eight people. EIGHT. So I built the shack.',
+      'Happy hour out here is whenever I say it is. It\'s always happy hour.',
+      'You want a drink? The bar\'s that rock. Help yourself to the ambience.',
+      'Past my shack there\'s just the wall. Knocked once. Something knocked back. Anyway.',
+      'Tell Kenny the darts night invitation still stands. He knows where I am. Roughly.',
+    ],
+  },
 ];
 
 // A spawned, live townsperson.
@@ -3056,7 +3126,7 @@ export function startWorld(net: WorldNet): void {
       }
     }
     return {
-      x: clamp(x, rad, WORLD.w - rad),
+      x: clamp(x, -DESERT.w + rad, WORLD.w - rad), // the west is open — walk into the Nothing
       y: clamp(y, rad, WORLD.h - rad),
       hit,
     };
@@ -3825,7 +3895,7 @@ export function startWorld(net: WorldNet): void {
     inInterior = false;
     nearExit = false;
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(0, 0, WORLD.w, WORLD.h);
+    mainCam?.setBounds(-DESERT.w, 0, WORLD.w + DESERT.w, WORLD.h);
     const bar = WORLD_BUILDINGS.find((b) => b.kind === 'bar');
     if (bar) { selfX = bar.x + bar.w / 2; selfY = bar.y + bar.h + 44; } // step back out the door
     setTavernMusic(false);
@@ -3913,7 +3983,7 @@ export function startWorld(net: WorldNet): void {
     inInterior = false; inTemple = false;
     nearExit = false; nearBook = false;
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(0, 0, WORLD.w, WORLD.h);
+    mainCam?.setBounds(-DESERT.w, 0, WORLD.w + DESERT.w, WORLD.h);
     const t = WORLD_BUILDINGS.find((b) => b.kind === 'temple');
     if (t) { selfX = t.x + t.w / 2; selfY = t.y + t.h + 44; } // step back out the door
     stopChant();
@@ -4686,7 +4756,7 @@ export function startWorld(net: WorldNet): void {
     dungeonPurseDisplay = 0;
     encounterPending = false;
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(0, 0, WORLD.w, WORLD.h);
+    mainCam?.setBounds(-DESERT.w, 0, WORLD.w + DESERT.w, WORLD.h);
     setDungeonMusic(false);
     minimap.style.display = 'block'; help.style.display = 'block'; // restore overworld HUD
     dungeonBanner.style.display = 'none'; dungeonControls.style.display = 'none';
@@ -8104,6 +8174,7 @@ export function startWorld(net: WorldNet): void {
     { id: 'give-banana', label: 'Give Kevin a banana', reward: 400, done: false },
     { id: 'win-ten', label: 'Win 10 tsong games', reward: 1000, done: false, progress: () => [Math.min(pongWins(), 10), 10] },
     { id: 'ruins-chests', label: 'Open every chest in the Ruins', reward: 50000, done: false, progress: () => [chestsFound(), DUNGEON_TOTAL_CHESTS], hideProgress: true },
+    { id: 'gas-station', label: 'Find the gas station in the Nothing', reward: 5000, done: false },
   ];
   const questKey = (id: string) => `tsong.world.quest.${id}`;
   for (const o of objectives) { try { o.done = localStorage.getItem(questKey(o.id)) === '1'; } catch { /* ignore */ } }
@@ -9977,6 +10048,109 @@ export function startWorld(net: WorldNet): void {
       px(5, 2, 1, 1, EYE);                                   // eye
       g.generateTexture('w-duckling', 9, 7);
     }
+    // --- desert set: cacti, bones, wildlife and landmarks of the Great Western Nothing ---
+    {
+      const CAC = 0x4a7a3e, CAC_D = 0x35592c, SPINE = 0xd8d0a0;
+      g.clear();
+      px(5, 2, 3, 16, CAC); px(5, 2, 1, 16, CAC_D);          // trunk
+      px(1, 5, 4, 3, CAC); px(1, 3, 3, 3, CAC);              // left arm up
+      px(8, 8, 4, 3, CAC); px(9, 6, 3, 3, CAC);              // right arm up
+      px(6, 1, 1, 1, SPINE); px(2, 2, 1, 1, SPINE); px(10, 5, 1, 1, SPINE);
+      g.generateTexture('w-cactus', 13, 18);
+    }
+    {
+      const CAC = 0x5a8a4a, CAC_D = 0x3f6136;
+      g.clear();
+      px(3, 3, 4, 9, CAC); px(3, 3, 1, 9, CAC_D);            // squat barrel cactus
+      px(2, 6, 6, 3, CAC); px(2, 8, 6, 1, CAC_D);
+      g.generateTexture('w-cactus2', 10, 12);
+    }
+    {
+      const BONE = 0xe8e0d0, BONE_D = 0xc0b8a8, HORN = 0xd0c8b8;
+      g.clear();
+      px(2, 2, 7, 5, BONE); px(3, 6, 5, 2, BONE_D);          // skull
+      px(0, 0, 2, 3, HORN); px(9, 0, 2, 3, HORN);            // horns
+      px(3, 3, 2, 2, 0x1a1410); px(6, 3, 2, 2, 0x1a1410);    // sockets
+      g.generateTexture('w-skullcow', 11, 8);
+    }
+    {
+      const TUM = 0x9a7a4a, TUM_D = 0x6f5836;
+      g.clear();
+      px(2, 1, 6, 8, TUM); px(1, 3, 8, 4, TUM);              // scraggly ball
+      px(3, 2, 1, 6, TUM_D); px(6, 2, 1, 6, TUM_D); px(2, 4, 6, 1, TUM_D);
+      px(4, 0, 2, 1, TUM_D); px(4, 9, 2, 1, TUM_D);
+      g.generateTexture('w-tumble', 10, 10);
+    }
+    {
+      const TRUNK = 0x8a6a3a, FROND = 0x3f7a3a, FROND_D = 0x2c5a2c;
+      g.clear();
+      px(7, 8, 2, 14, TRUNK); px(7, 8, 1, 14, 0x6f5328);     // curved trunk
+      px(1, 4, 6, 2, FROND); px(0, 6, 4, 2, FROND_D);        // fronds
+      px(9, 4, 6, 2, FROND); px(12, 6, 4, 2, FROND_D);
+      px(5, 2, 6, 2, FROND); px(6, 0, 4, 2, FROND_D);
+      g.generateTexture('w-palm', 16, 22);
+    }
+    {
+      const WOOD = 0x6a4a2a, WOOD_D = 0x4a3018;
+      g.clear();
+      px(5, 4, 2, 12, WOOD); px(5, 4, 1, 12, WOOD_D);        // dead tree
+      px(1, 2, 5, 1, WOOD); px(7, 5, 4, 1, WOOD); px(2, 8, 4, 1, WOOD_D);
+      g.generateTexture('w-deadtree', 12, 16);
+    }
+    {
+      const RR = 0x5a4a8a, RR_D = 0x3f3462, BEAK2 = 0xe8a03a;
+      g.clear();
+      px(1, 3, 6, 3, RR); px(1, 5, 6, 1, RR_D);              // roadrunner body
+      px(6, 1, 3, 3, RR); px(9, 2, 3, 1, BEAK2);             // head + long beak
+      px(0, 1, 2, 3, RR_D);                                  // tail up
+      px(7, 2, 1, 1, 0x141414);                              // eye
+      px(3, 6, 1, 3, BEAK2); px(5, 6, 1, 3, BEAK2);          // fast legs
+      g.generateTexture('w-roadrunner', 12, 9);
+    }
+    {
+      const SNK = 0x7a9a3a, SNK_D = 0x566d28;
+      g.clear();
+      px(0, 2, 3, 2, SNK); px(3, 1, 3, 2, SNK_D); px(6, 2, 3, 2, SNK); px(9, 1, 2, 2, SNK_D);
+      px(10, 0, 2, 2, SNK); px(11, 0, 1, 1, 0x141414);       // head + eye
+      g.generateTexture('w-snake', 12, 4);
+    }
+    {
+      const MOAI = 0x8a8a94, MOAI_D = 0x63636d;
+      g.clear();
+      px(2, 0, 10, 4, MOAI); px(2, 4, 10, 10, MOAI);          // long head
+      px(2, 0, 2, 14, MOAI_D);                                // shaded side
+      px(4, 5, 2, 2, MOAI_D); px(9, 5, 2, 2, MOAI_D);         // brow shadow eyes
+      px(6, 8, 2, 4, MOAI_D);                                 // that nose
+      g.generateTexture('w-moai-buried', 14, 14);
+    }
+    {
+      const WD = 0x6a4a2a, WD_D = 0x4a3018, TIN = 0x8a8a94;
+      g.clear();
+      px(1, 8, 22, 12, WD); px(1, 8, 22, 1, WD_D);            // shack body
+      px(0, 4, 24, 4, TIN); px(0, 7, 24, 1, 0x63636d);        // tin roof
+      px(15, 11, 5, 9, WD_D); px(18, 15, 1, 1, 0xe8b84b);     // door + knob
+      px(4, 11, 5, 4, 0x2a3a4a); px(4, 11, 5, 1, WD_D);       // window (dark — he's out)
+      g.generateTexture('w-shack', 24, 20);
+    }
+    {
+      const SCR = 0xe8e0d0, FRAME = 0x5a5a66, POLE = 0x4a4a55;
+      g.clear();
+      px(2, 2, 32, 18, FRAME); px(4, 4, 28, 14, SCR);         // the big blank screen
+      px(6, 22, 3, 8, POLE); px(27, 22, 3, 8, POLE);          // legs
+      g.generateTexture('w-drivein', 36, 30);
+    }
+    {
+      // GAS: canopy on poles, a kiosk, one loyal pump
+      const CAN = 0xc0392b, CAN_D = 0x8e2a20, POLE2 = 0x8a8a94, KIOSK = 0xd8d0c0, PUMP = 0xe8b84b;
+      g.clear();
+      px(0, 2, 30, 4, CAN); px(0, 5, 30, 1, CAN_D);           // canopy
+      px(3, 6, 2, 12, POLE2); px(25, 6, 2, 12, POLE2);        // poles
+      px(17, 9, 9, 9, KIOSK); px(18, 12, 3, 3, 0x2a3a4a);     // kiosk + window
+      px(22, 12, 3, 6, 0x4a3018);                             // door
+      px(8, 11, 4, 7, PUMP); px(9, 9, 2, 2, PUMP);            // the pump
+      px(8, 12, 4, 2, 0x1a1410);                              // pump face
+      g.generateTexture('w-gasstation', 30, 18);
+    }
     {
       // distant bird — a little dark seagull chevron (11×5), flap is done by squashing scaleY
       const B = 0x2a2f3a;
@@ -10983,7 +11157,7 @@ export function startWorld(net: WorldNet): void {
     inInterior = false; inMcdonald = false;
     nearExit = false;
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(0, 0, WORLD.w, WORLD.h);
+    mainCam?.setBounds(-DESERT.w, 0, WORLD.w + DESERT.w, WORLD.h);
     const mc = WORLD_BUILDINGS.find((b) => b.kind === 'mcdonald');
     if (mc) { selfX = mc.x + mc.w / 2; selfY = mc.y + mc.h + 44; }
     enterChime();
@@ -11085,7 +11259,7 @@ export function startWorld(net: WorldNet): void {
     inInterior = false; inCasino = false;
     nearExit = false; nearCasinoGame = null;
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(0, 0, WORLD.w, WORLD.h);
+    mainCam?.setBounds(-DESERT.w, 0, WORLD.w + DESERT.w, WORLD.h);
     const c = WORLD_BUILDINGS.find((b) => b.kind === 'casino');
     if (c) { selfX = c.x + c.w / 2; selfY = c.y + c.h + 44; } // step back out the door
     enterChime();
@@ -11649,7 +11823,7 @@ export function startWorld(net: WorldNet): void {
       const sc = this;
       makeTextures(sc);
 
-      sc.cameras.main.setBounds(0, 0, WORLD.w, WORLD.h);
+      sc.cameras.main.setBounds(-DESERT.w, 0, WORLD.w + DESERT.w, WORLD.h);
       sc.cameras.main.setZoom(ZOOM);
       sc.cameras.main.setBackgroundColor(0x3f7a3a);
       mainCam = sc.cameras.main;
@@ -11808,6 +11982,7 @@ export function startWorld(net: WorldNet): void {
       // --- townsfolk ---
       for (const def of NPCS) npcs.push(makeNpc(sc, def));
       makeTownLife(sc);
+      makeDesert(sc);
 
       // --- ammo crates scattered over the open ground ---
       buildCrates(sc);
@@ -12145,6 +12320,7 @@ export function startWorld(net: WorldNet): void {
       updateNpcs(now, dt);
       updateRex(now, dt);
       updateTownLife(now, dt);
+      updateDesert(now, dt);
       updateNearBuilding();
       maybeSendMove(now);
 
@@ -13128,6 +13304,219 @@ export function startWorld(net: WorldNet): void {
       if (n.heart) {
         n.heart.y = -R - 46 + Math.sin(now / 650) * 3.5;
         n.heart.setAlpha(0.7 + 0.3 * Math.sin(now / 650));
+      }
+    }
+  }
+
+  // --- the Great Western Nothing: chunk-streamed desert west of x=0 ------------------------
+  // Deterministic from DESERT.seed. Floor + props stream in 960px chunks around the player;
+  // landmarks, dwellers (in NPCS) and wildlife are fixed anchors. Mostly empty. On purpose.
+  const CHUNK_W = 960;
+  const desertChunks = new Map<number, Phaser.GameObjects.Container>();
+  let desertSc: Phaser.Scene | null = null;
+  let desertEntered = false;
+  const desertMilestones = new Set<number>();
+  interface DesertBeast { spr: Phaser.GameObjects.Image; x: number; y: number; tx: number; ty: number; kind: string; ph: number; state: number; }
+  let beasts: DesertBeast[] = [];
+  let mirage: Phaser.GameObjects.Container | null = null;
+  let mirageGone = false;
+  let gasSign: Phaser.GameObjects.Text | null = null;
+
+  function desertRand(chunk: number) {
+    // per-chunk deterministic PRNG (mulberry-style over seed + chunk index)
+    let a = (DESERT.seed ^ (chunk * 0x9e3779b9)) >>> 0;
+    return () => {
+      a |= 0; a = (a + 0x6d2b79f5) | 0;
+      let t = Math.imul(a ^ (a >>> 15), 1 | a);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  function buildChunk(sc: Phaser.Scene, ci: number): Phaser.GameObjects.Container {
+    const x0 = -CHUNK_W * (ci + 1);
+    const rnd = desertRand(ci);
+    const c = sc.add.container(0, 0);
+    c.setDepth(0);
+    // sand floor
+    const floor = sc.add.rectangle(x0 + CHUNK_W / 2, WORLD.h / 2, CHUNK_W, WORLD.h, 0xcfae72).setDepth(-10);
+    c.add(floor);
+    // dune ridge strokes + cracked patches + speckle
+    const gfx = sc.add.graphics().setDepth(-9);
+    for (let i = 0; i < 7; i++) {
+      const dx = x0 + rnd() * CHUNK_W, dy = 120 + rnd() * (WORLD.h - 240), dw = 120 + rnd() * 260;
+      gfx.lineStyle(3, 0xbf9a5e, 0.55);
+      gfx.beginPath();
+      gfx.arc(dx, dy, dw, Math.PI * 1.1, Math.PI * 1.9);
+      gfx.strokePath();
+    }
+    for (let i = 0; i < 4; i++) {
+      const dx = x0 + rnd() * CHUNK_W, dy = 120 + rnd() * (WORLD.h - 240);
+      gfx.fillStyle(0xb8945a, 0.35);
+      gfx.fillEllipse(dx, dy, 90 + rnd() * 140, 40 + rnd() * 60);
+    }
+    for (let i = 0; i < 90; i++) {
+      gfx.fillStyle(rnd() < 0.5 ? 0xdfc088 : 0xb8945a, 0.5);
+      gfx.fillRect(x0 + rnd() * CHUNK_W, 60 + rnd() * (WORLD.h - 120), 3, 2);
+    }
+    c.add(gfx);
+    // sparse props (mostly empty is the brief — ~6 per chunk across 2200px of height)
+    const props = ['w-cactus', 'w-cactus', 'w-cactus2', 'w-skullcow', 'w-deadtree', 'w-cactus2'];
+    const n = 3 + Math.floor(rnd() * 5);
+    for (let i = 0; i < n; i++) {
+      const key = props[Math.floor(rnd() * props.length)];
+      const px2 = x0 + 30 + rnd() * (CHUNK_W - 60), py2 = 140 + rnd() * (WORLD.h - 280);
+      const sh = sc.add.image(px2, py2 + 2, 'w-shadow').setScale(TEXEL * 0.8).setAlpha(0.35).setDepth(py2 - 1);
+      const im = sc.add.image(px2, py2, key).setScale(TEXEL * (0.9 + rnd() * 0.5)).setOrigin(0.5, 1).setDepth(py2);
+      c.add(sh); c.add(im);
+    }
+    // fading powerlines in the first chunks — civilization petering out
+    if (ci < 3) {
+      for (let k = 0; k < 3; k++) {
+        const lx = x0 + 160 + k * 320, ly = 640;
+        const pole = sc.add.rectangle(lx, ly - 40, 6, 80, 0x4a3a28).setOrigin(0.5, 0).setDepth(ly + 40);
+        const arm = sc.add.rectangle(lx, ly - 34, 34, 5, 0x4a3a28).setDepth(ly + 40);
+        if (ci === 2 && k === 2) pole.setRotation(0.35); // the last one is giving up
+        c.add(pole); c.add(arm);
+      }
+    }
+    return c;
+  }
+
+  function makeDesert(sc: Phaser.Scene) {
+    desertSc = sc;
+    // fixed landmarks (drawn once, always present — the desert's constellation)
+    const mark = (key: string, x: number, y: number, scale = TEXEL * 1.6) =>
+      sc.add.image(x, y, key).setScale(scale).setOrigin(0.5, 1).setDepth(y);
+    // the skeleton + sign at the border
+    mark('w-skullcow', -330, 980, TEXEL * 1.4);
+    const sign = sc.add.text(-330, 930, 'LAST GRASS\nFOR 24,000 UNITS', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#3a2a18', align: 'center',
+      backgroundColor: '#c8a86a', padding: { x: 4, y: 3 }, resolution: 2,
+    }).setOrigin(0.5, 1).setDepth(932);
+    sign.setAngle(-3);
+    // the half-buried moai — don't dig it up
+    mark('w-moai-buried', -8000, 1180, TEXEL * 2.6);
+    // the true oasis
+    const oy = 1160;
+    desertSc.add.ellipse(-14500, oy, 260, 110, 0x3a7a9a, 0.9).setDepth(oy - 60);
+    desertSc.add.ellipse(-14500, oy, 220, 86, 0x4a9aba, 0.9).setDepth(oy - 59);
+    mark('w-palm', -14620, oy - 30, TEXEL * 1.8);
+    mark('w-palm', -14380, oy - 44, TEXEL * 1.5);
+    // the mirage (fades when approached; it was never there)
+    mirage = sc.add.container(0, 0);
+    const mgy = 860;
+    mirage.add(sc.add.ellipse(-10500, mgy, 240, 100, 0x4a9aba, 0.75).setDepth(mgy - 60));
+    const mgp = sc.add.image(-10560, mgy - 26, 'w-palm').setScale(TEXEL * 1.7).setOrigin(0.5, 1).setDepth(mgy);
+    mgp.setAlpha(0.9);
+    mirage.add(mgp);
+    // the drive-in: NOW SHOWING — NOTHING
+    mark('w-drivein', -19000, 1000, TEXEL * 3);
+    sc.add.text(-19000, 830, 'NOW SHOWING:\n(nothing)', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '11px', color: '#8a8478', align: 'center', resolution: 2,
+    }).setOrigin(0.5).setDepth(1001);
+    // GAS — the loneliest franchise (Pete's out front; the sign has given up on the S)
+    mark('w-gasstation', -4800, 990, TEXEL * 2.4);
+    gasSign = sc.add.text(-4800, 850, 'GAS', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '22px', fontStyle: '900', color: '#ff5a4a',
+      stroke: '#3a0a08', strokeThickness: 4, resolution: 2,
+    }).setOrigin(0.5, 1).setDepth(852);
+    // the Regular's shack
+    mark('w-shack', -22620, 1020, TEXEL * 2.2);
+    // THE WALL at the end of the world (with a door that is definitely locked)
+    const wallG = sc.add.graphics().setDepth(WORLD.h + 10);
+    wallG.fillStyle(0x2a2a33, 1);
+    wallG.fillRect(-DESERT.w, 0, 46, WORLD.h);
+    wallG.fillStyle(0x3a3a44, 1);
+    for (let y = 0; y < WORLD.h; y += 42) wallG.fillRect(-DESERT.w + (y % 84 === 0 ? 0 : 12), y, 34, 4);
+    wallG.fillStyle(0x1a1a22, 1);
+    wallG.fillRect(-DESERT.w + 30, 1040, 18, 60); // the door
+    wallG.fillStyle(0xe8b84b, 1);
+    wallG.fillRect(-DESERT.w + 44, 1068, 3, 3);   // the knob
+    // wildlife anchors
+    for (let i = 0; i < 3; i++) { // buzzards circling the deep desert
+      const bx = -4000 - i * 6500, by = 330 + i * 90;
+      beasts.push({ spr: sc.add.image(bx, by, 'w-bird').setScale(TEXEL * 1.1).setDepth(100000).setAlpha(0.8), x: bx, y: by, tx: bx, ty: by, kind: 'buzzard', ph: i * 2.1, state: 0 });
+    }
+    for (let i = 0; i < 4; i++) { // tumbleweeds
+      const tx2 = -1500 - i * 5200, ty2 = 500 + (i * 431) % 1400;
+      beasts.push({ spr: sc.add.image(tx2, ty2, 'w-tumble').setScale(TEXEL).setOrigin(0.5, 1).setDepth(ty2), x: tx2, y: ty2, tx: 0, ty: 0, kind: 'tumble', ph: i * 1.3, state: 0 });
+    }
+    beasts.push({ spr: sc.add.image(-9000, 1500, 'w-roadrunner').setScale(TEXEL).setOrigin(0.5, 1).setDepth(1500), x: -9000, y: 1500, tx: -9000, ty: 1500, kind: 'roadrunner', ph: 0, state: 0 });
+    beasts.push({ spr: sc.add.image(-16000, 700, 'w-snake').setScale(TEXEL).setOrigin(0.5, 1).setDepth(700), x: -16000, y: 700, tx: -16000, ty: 700, kind: 'snake', ph: 0, state: 0 });
+  }
+
+  function updateDesert(now: number, dt: number) {
+    if (!desertSc) return;
+    // chunk streaming around the player (only when west-ish)
+    if (selfX < CHUNK_W) {
+      const myChunk = Math.floor(-Math.min(selfX, -1) / CHUNK_W);
+      for (let ci = Math.max(0, myChunk - 3); ci <= Math.min(Math.ceil(DESERT.w / CHUNK_W) - 1, myChunk + 3); ci++) {
+        if (!desertChunks.has(ci)) desertChunks.set(ci, buildChunk(desertSc, ci));
+      }
+      for (const [ci, cont] of desertChunks) {
+        if (Math.abs(ci - myChunk) > 5) { cont.destroy(true); desertChunks.delete(ci); }
+      }
+    }
+    // border crossing + milestones
+    if (selfX < 0 && !desertEntered) {
+      desertEntered = true;
+      showToast('🏜️ <b>THE GREAT WESTERN NOTHING</b><br>turn back. or don\'t.');
+    }
+    const marks: [number, string][] = [
+      [-2000, 'the grass gave up around here.'],
+      [-7600, 'something is watching from under the sand. it\'s the moai. it\'s fine.'],
+      [-12000, 'you are very, very far from the pong.'],
+      [-20000, 'Mira: "even I don\'t render out here."'],
+      [-23600, 'the wall. the door. don\'t.'],
+    ];
+    for (const [mx, msg] of marks) {
+      if (selfX < mx && !desertMilestones.has(mx)) { desertMilestones.add(mx); showToast(`🏜️ <i>${msg}</i>`); }
+    }
+    // the mirage was never there
+    if (mirage && !mirageGone && Math.hypot(selfX + 10500, selfY - 860) < 300) {
+      mirageGone = true;
+      const m = mirage;
+      desertSc.tweens.add({ targets: m.list, alpha: 0, duration: 1600, onComplete: () => m.destroy(true) });
+      showToast('🏜️ <i>a mirage. of course.</i>');
+    }
+    // the GAS sign flickers — the S is on its way out
+    if (gasSign) {
+      const dying = Math.sin(now / 320) > 0.6 || Math.sin(now / 77) > 0.93;
+      gasSign.setText(dying ? 'GA ' : 'GAS');
+      gasSign.setAlpha(0.75 + 0.25 * Math.sin(now / 500));
+    }
+    // wildlife
+    for (const b of beasts) {
+      if (b.kind === 'buzzard') {
+        b.ph += dt * 0.5;
+        b.spr.setPosition(b.x + Math.cos(b.ph) * 160, b.y + Math.sin(b.ph) * 46);
+        b.spr.setFlipX(Math.sin(b.ph) > 0);
+        b.spr.setScale(TEXEL * 1.1, TEXEL * (0.8 + Math.abs(Math.sin(now / 150 + b.ph)) * 0.4));
+      } else if (b.kind === 'tumble') {
+        b.x -= (14 + Math.sin(now / 800 + b.ph) * 8) * dt;
+        if (b.x < -DESERT.w + 80) b.x = -200;
+        b.spr.setPosition(b.x, b.y - Math.abs(Math.sin(now / 220 + b.ph)) * 6);
+        b.spr.setRotation(b.spr.rotation - dt * 4);
+        b.spr.setDepth(b.y);
+      } else if (b.kind === 'roadrunner') {
+        if (b.state === 0 && Math.random() < 0.002) { b.state = 1; b.tx = b.x < -12000 ? -4000 : -14000; }
+        if (b.state === 1) {
+          const dir2 = Math.sign(b.tx - b.x);
+          b.x += dir2 * 340 * dt;
+          b.spr.setFlipX(dir2 < 0);
+          b.spr.setPosition(b.x, b.y + (Math.sin(now / 60) > 0 ? -1.5 : 0));
+          if (Math.abs(b.x - b.tx) < 30) b.state = 0;
+        }
+      } else if (b.kind === 'snake') {
+        if (Math.random() < 0.004) { b.tx = b.x + (Math.random() - 0.5) * 300; b.ty = Math.max(200, Math.min(WORLD.h - 200, b.y + (Math.random() - 0.5) * 200)); }
+        const dx = b.tx - b.x, dy = b.ty - b.y, d = Math.hypot(dx, dy);
+        if (d > 4) {
+          b.x += (dx / d) * 22 * dt; b.y += (dy / d) * 22 * dt;
+          b.spr.setFlipX(dx < 0);
+          b.spr.setScale(TEXEL * (1 + Math.sin(now / 120) * 0.12), TEXEL);
+        }
+        b.spr.setPosition(b.x, b.y).setDepth(b.y);
       }
     }
   }

@@ -1153,7 +1153,7 @@ export class Lobby {
 
   // World "weekly objective" rewards, in coins (NOT win-units — these are paid as-is, not ×COIN_SCALE).
   // Granted once per player per quest (tracked in-memory for the server's lifetime), paid from the House.
-  private static QUEST_REWARDS: Record<string, number> = { 'find-waldo': 400, 'give-banana': 400, 'win-ten': 1000, 'ruins-chests': 50000 };
+  private static QUEST_REWARDS: Record<string, number> = { 'find-waldo': 400, 'give-banana': 400, 'win-ten': 1000, 'ruins-chests': 50000, 'gas-station': 5000 };
   private claimedQuests = new Set<string>(); // `${pid}:${quest}`
   questClaim(ws: WebSocket, quest: string) {
     const conn = this.conns.get(ws);
