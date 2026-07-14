@@ -203,7 +203,7 @@ export interface CosmeticItem {
   name: string;
   slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' | 'title' | 'song' | 'car' | 'boat' | 'pet' | 'carcolor';
   price: number;
-  locked?: 'campaign' | 'fishing' | 'fishing_rare' | 'fishing_junk' | 'dungeon' | 'fountain'; // not buyable — unlocked by in-game achievements
+  locked?: 'campaign' | 'fishing' | 'fishing_rare' | 'fishing_junk' | 'dungeon' | 'fountain' | 'desert' | 'club'; // not buyable — unlocked by in-game achievements
   audio?: string; // for 'song' items: path to the mp3 that plays during your matches
 }
 // Static cosmetics cost 1000 coins; animated ones cost 2000 (10×/20× the COIN_SCALE base).
@@ -258,6 +258,8 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'bigcatch', name: '🐟 Big Catch', slot: 'title', price: 0, locked: 'fishing_rare' }, // land a rare-or-better fish
   { id: 'angler', name: '🎣 Angler', slot: 'title', price: 0, locked: 'fishing' }, // land a legendary fish
   { id: 'wisher', name: '⛲ Wisher', slot: 'title', price: 0, locked: 'fountain' }, // the fountain grants ~1 wish in 77
+  { id: 'club-member', name: '⛳ Old Money', slot: 'title', price: 0, locked: 'club' }, // the Country Club initiation fee is not discussed in public
+  { id: 'club-champ', name: '🏌️ Club Champion', slot: 'title', price: 0, locked: 'club' }, // earned, not bought (unlike everything else up there)
   { id: 'clown', name: '🤡 Clown', slot: 'title', price: 1000 },
   { id: 'sharpshooter', name: '🎯 Sharpshooter', slot: 'title', price: 3000 },
   { id: 'champion', name: '🏅 Champion', slot: 'title', price: 3000 },
@@ -324,6 +326,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'pet-slime', name: '🟢 Crypt Slime', slot: 'pet', price: 0, locked: 'dungeon' }, // caught in the Ruins (B4 monster box)
   { id: 'pet-dragon', name: '🐉 Dragon', slot: 'pet', price: 0, locked: 'dungeon' }, // the Rob boss prize — flies around you
   { id: 'pet-tumbleweed', name: '🌵 Rusty (Tumbleweed)', slot: 'pet', price: 0, locked: 'desert' }, // Pete's road trip fund. It's a friend.
+  { id: 'pet-swan', name: '🦢 Bartholomew (Swan)', slot: 'pet', price: 0, locked: 'club' }, // he chose you. the club pretends not to notice he's gone.
   // New common loot-box refresh items
   { id: 'beret', name: 'Beret', slot: 'hat', price: 1000 },
   { id: 'catears', name: 'Cat Ears', slot: 'hat', price: 2000 }, // animated
@@ -503,7 +506,7 @@ export function carColorById(id: string | null | undefined): CarColorSpec | null
 // follows you around (unlike a car, which replaces/IS the avatar while driving). A pet id
 // matches a COSMETICS entry with slot 'pet'. `kind` selects the custom drawn sprite in the
 // World renderer; `emoji` is just the small shop-tile preview glyph.
-export type PetKind = 'rock' | 'pikachu' | 'pacman' | 'slime' | 'dragon' | 'tumbleweed';
+export type PetKind = 'rock' | 'pikachu' | 'pacman' | 'slime' | 'dragon' | 'tumbleweed' | 'swan';
 export const PETS: readonly { id: string; emoji: string; kind: PetKind }[] = [
   { id: 'pet-rock', emoji: '🪨', kind: 'rock' },       // a googly-eyed rock
   { id: 'pet-pikachu', emoji: '⚡', kind: 'pikachu' },  // Pikachu
@@ -511,6 +514,7 @@ export const PETS: readonly { id: string; emoji: string; kind: PetKind }[] = [
   { id: 'pet-slime', emoji: '🟢', kind: 'slime' },     // a Crypt Slime caught in the Ruins
   { id: 'pet-dragon', emoji: '🐉', kind: 'dragon' },   // a dragon that flies around you (Rob boss prize),
   { id: 'pet-tumbleweed', emoji: '🌵', kind: 'tumbleweed' },
+  { id: 'pet-swan', emoji: '🦢', kind: 'swan' },
 ];
 export function petById(id: string | null | undefined) {
   if (!id) return null;
@@ -1052,6 +1056,8 @@ export type ClientMsg =
   | { type: 'waEnd'; winner: number; winner2?: number } // (host only) winning slot(s) — two for 2v2 team wins (-1 = nobody paid)
   | { type: 'waRelay'; data: unknown } // forward an opaque Artillery payload to all other players
   | { type: 'fountainWish' } // toss 10 coins in the plaza fountain (tiny chance of the Wisher title)
+  | { type: 'clubJoin' } // apply to the Country Club (server validates the 1,000,000🪙 initiation fee)
+  | { type: 'clubDrink' } // order the good stuff at the 19th Hole (server charges; effects mirror buyBeer)
   | { type: 'tntJoin' } // take a slot in the TNT Explosion Rally lobby (1v1 bomb-parry maze duel)
   | { type: 'tntLeave' } // leave the TNT Explosion Rally lobby / match
   | { type: 'tntStart' } // (host only) start the match (solo start = practice vs the TNT Bot, no payout)

@@ -262,6 +262,9 @@ export interface WorldNet {
   fishKing(): { name: string; lb: number } | null;     // biggest catch on record (billboard)
   ghKing(): { name: string; score: number } | null;    // top Tsong Hero score (billboard)
   wish(): void;                                        // toss 10 coins into the fountain
+  owns(id: string): boolean;                           // do we own this cosmetic/item id? (wallet.owned)
+  joinClub(): void;                                    // apply to the Country Club (server validates the 1,000,000🪙 fee)
+  clubDrink(): void;                                   // order the '52 Reserve at the 19th Hole (server charges)
   jail(): void;                  // self-report a drunk-drive attempt (server jails you if 2+ beers in)
   bail(targetId: string): void;  // pay 500🪙 to bail a jailed avatar out (id; may be your own)
   amJailed(): boolean;           // are WE currently locked in the jail cell?
@@ -492,6 +495,14 @@ const TILE = 32;           // ground tile size, world units (a 16px Kenney tile 
 // The Great Western Nothing: a seeded, chunk-streamed desert 5× the size of the whole town,
 // stretching west of x=0. Mostly empty. That's the point. A few things are out there.
 const DESERT = { w: 24000, seed: 0xC0FFEE };
+// Tsong Country Club: a members-only golf establishment north of town. The gate has been
+// broken since '09. Spiritually, it stands.
+const CLUB = { h: 1300 };
+// The Great Southern Damp — a bayou-bog south of town. Smaller than the Nothing, considerably
+// wetter, and much more inhabited. Walkable ground ends at the shore; the pier goes further.
+const SOUTH = { h: 4200, seed: 0xB0661E };
+const SWAMP_SHORE_Y = WORLD.h + SOUTH.h - 520; // where solid-ish ground gives up
+const SWAMP_PIER_X = 2400;                      // the pier's centerline (walkable out over the water)
 
 // --- Kenney "Tiny Town" tileset (16×16, packed 12×11). Frame indices we use, named for clarity. ---
 const TT = {
@@ -574,6 +585,25 @@ const MC_ZOOM = 3;
 const CASINO_INT = { x: 5400, y: 2700, w: 1400, h: 820 };
 const CASINO_WALL = 30;
 const CASINO_ZOOM = 1.7;
+// The Country Club's CLUBHOUSE interior — off-map below the Casino block (which ends at y≈3520).
+// The door outside checks the wallet: members only. Same camera/collision swap as the other rooms.
+const CLUB_INT = { x: 5400, y: 3700, w: 1320, h: 800 };
+const CLUB_WALL = 30;
+const CLUB_ZOOM = 2.1;
+// A small annex somewhere behind the clubhouse's shelving — reached only from inside.
+const VAULT_INT = { x: 5400, y: 4700, w: 560, h: 440 };
+const VAULT_WALL = 26;
+const VAULT_ZOOM = 3;
+// Walk-up hotspots on the clubhouse floor (world coords, derived from CLUB_INT so they move with it).
+const CLUB_SPOTS = {
+  putt:     { x: CLUB_INT.x + 170, y: CLUB_INT.y + 610 },  // the practice green's ball spot
+  cup:      { x: CLUB_INT.x + 170, y: CLUB_INT.y + 330 },  // …and its cup
+  registry: { x: CLUB_INT.x + CLUB_INT.w / 2 + 190, y: CLUB_INT.y + CLUB_INT.h - 160 },
+  trophies: { x: CLUB_INT.x + CLUB_INT.w / 2 + 280, y: CLUB_INT.y + 140 },
+  portrait: { x: CLUB_INT.x + CLUB_INT.w / 2, y: CLUB_INT.y + 150 },
+  candle:   { x: CLUB_INT.x + 470, y: CLUB_INT.y + 140 },  // the suspiciously polished one
+  fire:     { x: CLUB_INT.x + 330, y: CLUB_INT.y + 120 },  // hearth centre
+} as const;
 // Every casino game gets its own walk-up cabinet on the gaming floor. `feature` is the same key
 // net.openFeature() already understands (these games already work via the exterior building's
 // dialog list) — walking up to a cabinet and playing just skips that list and goes straight in.
@@ -984,7 +1014,7 @@ interface NpcDef {
   body?: 'pants' | 'dress'; // silhouette, default 'pants'
   hat?: 'cap' | 'sun';  // optional headwear
   hatColor?: number;    // cap tint (sun hat is fixed straw)
-  kind?: 'minion' | 'kenny' | 'demon' | 'soul' | 'angler' | 'protester' | 'fed' | 'dorito'; // special one-off sprite; default is the little-person
+  kind?: 'minion' | 'kenny' | 'demon' | 'soul' | 'angler' | 'protester' | 'fed' | 'dorito' | 'shrek' | 'donkey'; // special one-off sprite; default is the little-person
   glasses?: boolean;    // overlay specs
   stripes?: boolean;    // red/white striped shirt instead of a flat tinted one (Waldo!)
   x: number; y: number; // home anchor (NPC roams around this)
@@ -2073,6 +2103,165 @@ const NPCS: NpcDef[] = [
       'Scale is 1:1. It\'s the only honest scale.',
     ],
   },
+  // --- Tsong Country Club (north of town) ---
+  {
+    id: 'club-commodore', name: 'The Commodore', shirt: 0xf0ead8, hair: 0xd8d0c0, skin: SKINS[0],
+    hat: 'cap' as const, hatColor: 0x2a4a8a,
+    x: 2450, y: -180, roam: 60,
+    lines: [
+      'This is a members-only establishment. The gate? Broken since \'09. Spiritually, it stands.',
+      'Membership requirements: a collared shirt, a firm handshake, and eleven references.',
+      'We don\'t say "mini golf" here. The windmill is REGULATION.',
+      'The 19th hole is in the pond. It\'s a long story and a longer putt.',
+      'You may play through. I shall be noting everything in the ledger of grievances.',
+    ],
+  },
+  {
+    id: 'club-chip', name: 'Chip', shirt: 0xe86a8a, hair: 0xe8d060, skin: SKINS[0],
+    x: 1150, y: -700, roam: 40,
+    lines: [
+      'My handicap? Emotional, mostly.',
+      'I\'ve been lining up this putt since Tuesday. The green reads left. Life reads left.',
+      'Golf is just pong where the wall is your own expectations.',
+      'FORE! ...sorry. Reflex. There\'s no ball. There hasn\'t been a ball in weeks.',
+    ],
+  },
+  {
+    id: 'club-bill', name: 'Bunker Bill', shirt: 0xc8a86a, hair: 0x6a5235, skin: SKINS[2],
+    x: 3350, y: -520, roam: 20,
+    lines: [
+      'Day six in the bunker. The sand has accepted me.',
+      'You get out of the bunker by accepting you were never IN the bunker. I\'m still in the bunker.',
+      'They said use the sand wedge. Nobody said which sand.',
+      'Tell my wife I\'m fine. Tell the sand nothing. It knows too much already.',
+    ],
+  },
+  // --- Clubhouse INTERIOR cast (stationary, off-map at CLUB_INT; only reachable as a member) ---
+  {
+    id: 'club-sterling', name: 'Sterling', shirt: 0x14141c, hair: 0xd8d0c0, skin: SKINS[1],
+    hairStyle: 'short', x: CLUB_INT.x + CLUB_INT.w - 200, y: CLUB_INT.y + 170, roam: 0,
+    lines: ['(Sterling has already begun polishing the glass you were about to ask for.)'],
+  },
+  {
+    id: 'club-bunny', name: 'Bunny Vandertsong', shirt: 0xe8d8f0, hair: 0xf0f0e8, skin: SKINS[0],
+    body: 'dress', hairStyle: 'bun', x: CLUB_INT.x + CLUB_INT.w * 0.42, y: CLUB_INT.y + 340, roam: 26,
+    lines: [
+      'Vandertsong. Yes, THOSE Vandertsongs. Great-grandpapa invented the second paddle. Before him, everyone simply lost.',
+      'I hear the casino lets absolutely anyone in now. I went once. I won eleven million and felt nothing.',
+      'Our gardener says there\'s a whole "desert" out west. I do hope somebody waters it eventually.',
+      'The fountain in town grants wishes for ten coins. Adorable. Mine cost a million and only granted this conversation.',
+      'Davis offered me a loan once. I bought his loan company. He still doesn\'t know. Don\'t tell Davis.',
+      'You\'re new money, aren\'t you. It\'s fine. In eighty years your descendants will be insufferable too.',
+      'I once fished up a boot. We had it appraised, mounted, and insured. One must never let on which things are worthless.',
+    ],
+  },
+  {
+    id: 'club-chadwick', name: 'Chadwick Tsongworth IV', shirt: 0x2a4a8a, hair: 0x3a2a18, skin: SKINS[0],
+    x: CLUB_INT.x + CLUB_INT.w * 0.62, y: CLUB_INT.y + 430, roam: 30,
+    lines: [
+      'Tsongworth the Fourth. The first three are on the wall. I\'m told I\'m "the disappointing one," which at our altitude still means quite comfortable.',
+      'I tried that "Worms" business the members\' children play. I called an airstrike on my own team. Never again. Probably again.',
+      'Father says the Arena is for the help. Father says most things are for the help. Father has never once helped.',
+      'My handicap is listed in the registry as "inherited."',
+      'The swan bit me in \'19. Legally, we agreed it never happened. The swan has better lawyers.',
+    ],
+    ask: {
+      q: 'Settle a wager: at the fish course, one uses—?',
+      choices: [
+        { label: 'The fish fork. Obviously.', reply: 'HA! Reginald, you owe me a vineyard. — I like you. You\'ll do well here, or at least expensively.' },
+        { label: 'Your hands. It\'s fish.', reply: '…Margaux, get the smelling salts. — And yet, you know, great-grandpapa said exactly that. Right before he bought the river. Carry on.' },
+      ],
+    },
+  },
+  {
+    id: 'club-margaux', name: 'Margaux', shirt: 0x6a1f2a, hair: 0x1a1a22, skin: SKINS[2],
+    body: 'dress', hairStyle: 'long', x: CLUB_INT.x + CLUB_INT.w * 0.28, y: CLUB_INT.y + 520, roam: 34,
+    lines: [
+      '*leans in* The Commodore hasn\'t been commodore of anything since the pond incident. We let him keep the title. We keep the pond drained of witnesses.',
+      '*whispers* Bunny\'s fortune? Paddle futures. When the Arena reopened she cried actual tears. Then bought the tissue company.',
+      '*sotto voce* They say the girl by the spawn point talks to people who aren\'t there. Then again, so does Chadwick, and we made him treasurer.',
+      '*conspiratorially* Sterling has never once been seen arriving or leaving. We checked the registry. There is no Sterling in the registry.',
+      '*barely audible* The nineteenth hole is in the pond because SOMEONE—I shan\'t say the Commodore—bet the eighteenth on a coin flip.',
+      '*glances around* You didn\'t hear this from me, but the candlesticks in this room are not all decorative.',
+    ],
+  },
+  // --- The Great Southern Damp (south of town) ---
+  {
+    id: 'swamp-granny', name: 'Grandmaw Toadsworth', shirt: 0x3a2a4a, hair: 0xd8d8d0, skin: SKINS[3],
+    body: 'dress', hairStyle: 'bun', x: 1150, y: 3480, roam: 30,
+    lines: [
+      'Come closer, sugar. Closer. …That\'s far enough. The mud past that point has opinions.',
+      'I moved down here for the quiet. Then the quiet started talkin\'. We get along fine now.',
+      'Folks up in town wish into a fountain. Down here we don\'t wish. We NEGOTIATE.',
+      'The cauldron? Gumbo. Mostly gumbo. On the equinox, other things. You hungry?',
+      'That golf club up north keeps sendin\' me letters about my "property\'s appearance." I keep sendin\' back frogs.',
+      'Don\'t kiss the frogs. Not because of curses — they simply don\'t care for it.',
+      'The church sank in \'31. Congregation kept attending for two more years. Faith like that, you don\'t question the water level.',
+    ],
+    ask: {
+      q: 'You want somethin\' told, sugar: your fortune, or the truth?',
+      choices: [
+        { label: 'My fortune', reply: 'Then stir the pot yourself and see what rises. Go on. It\'s right there. It don\'t bite on Tuesdays.' },
+        { label: 'The truth', reply: 'The truth is the fortune costs nothin\' and the truth costs somethin\' you ain\'t offered yet. Come back when you\'ve lost a ball to that pond up north. Then we\'ll talk truth.' },
+      ],
+    },
+  },
+  {
+    id: 'swamp-gary', name: 'Gary of the Bog', shirt: 0x5a6a3a, hair: 0x4a3a22, skin: SKINS[1],
+    x: 2740, y: 3020, roam: 50,
+    lines: [
+      'Welcome to my wetland estate. Six thousand square units, water feature, original everything.',
+      'Robville wanted 30,000 a lot. You know what I paid down here? Respect. And one boot. The mud took the boot.',
+      'It\'s not "sinking," it\'s settling into itself. Like a good stew. Or a bad decision.',
+      'The stilts? Load-bearing. The house? Optimistic. Me? Extremely home.',
+      'People say "Gary, it\'s a swamp." And I say "it\'s a MARSH-adjacent lifestyle community," and then usually they\'ve already left.',
+      'My neighbor\'s a heron. Quiet fella. Judgmental, but quiet.',
+    ],
+  },
+  {
+    id: 'swamp-shrek', name: 'Shrek', shirt: 0xe8e0d0, hair: 0x8aba4a, kind: 'shrek',
+    x: 660, y: 2900, roam: 46,
+    lines: [
+      'WHAT are you doing in my swamp?!',
+      'This is MY corner of the Damp. The desert is somebody else\'s problem. The golf course is EVERYBODY else\'s problem.',
+      'Ogres are like onions. LAYERS. Not everything needs a deeper meaning, but this one has layers of \'em.',
+      'Better out than in, I always say.',
+      'The donkey? Not mine. He just… occurred one day. Like weather. Loud weather.',
+      'I put up signs. TEN signs. Y\'all have read a combined total of none of them.',
+      'The witch down the way trades me onions for quiet. Best neighbor I\'ve ever had. I\'ve had two.',
+    ],
+    ask: {
+      q: 'You\'re still here. WHY are you still here?',
+      choices: [
+        { label: 'Ogres have layers, right?', reply: 'Oh. You LISTEN. …Fine. You can stay for one more minute. No, I will NOT say the thing louder for your friends.' },
+        { label: 'Donkey sent me', reply: 'Of course he did. OF COURSE he did. *long exhale* …He\'s a good friend. Tell absolutely nobody I said that. I know where you live. It\'s the town. Everyone lives in the town.' },
+      ],
+    },
+  },
+  {
+    id: 'swamp-donkey', name: 'Donkey', shirt: 0x8a8a92, hair: 0x3a3a42, kind: 'donkey',
+    x: 780, y: 2985, roam: 80,
+    lines: [
+      'HEY! I know you! …no, wait. Nope. Don\'t know you. You wanna be best friends anyway?? Blink twice for yes. Or once! I\'m flexible!',
+      'And in the MORNIN\'… I\'m makin\' WAFFLES! The witch said her pot is "off limits" and "for gumbo" and "cursed," so. Waffles. Somehow.',
+      'Shrek says I talk too much, but I counted, and HE said "my swamp" forty-one times yesterday, so who\'s repetitive NOW, big guy?',
+      'You know what everybody likes? PARFAITS. You ever meet a person, you say "hey, let\'s get some parfait," they say "no"? Exactly.',
+      'I\'m not sayin\' there\'s a dragon-girlfriend situation, I\'m just sayin\' don\'t wait up, and if you see a large shadow, wave. Politely.',
+      'That ferryman down south? Great listener. GREAT listener. Hasn\'t said a word in three visits. That\'s a friendship, baby.',
+      'STAIRS? You think a noble steed can\'t do STAIRS?',
+    ],
+  },
+  {
+    id: 'swamp-ferryman', name: 'The Ferryman', shirt: 0x2a2a33, hair: 0x8a8a92, skin: SKINS[2],
+    x: 2430, y: 5810, roam: 0,
+    lines: [
+      'Ferry\'s out of service. Been out of service since I got here. I don\'t remember getting here.',
+      'Where\'s it go? Across. Where\'s across? *long pause* Also here, mostly.',
+      'One passenger, one coin, no questions. That was the deal. Nobody\'s ever made it to the second rule.',
+      'The water at the end of the pier is deeper than the pier is long. Don\'t check my math.',
+      'You hear the bell some nights. Church went down holding it. Some things don\'t stop just \'cause they sank.',
+    ],
+  },
   {
     // GAS. No gas since 2019. Corporate hasn't noticed. Pete has stopped asking questions.
     id: 'desert-pete', name: 'Pump Jockey Pete', shirt: 0xc0392b, hair: 0x6a5235, skin: SKINS[1],
@@ -2244,6 +2433,8 @@ export function startWorld(net: WorldNet): void {
   let inTemple = false;     // sub-flag: the current interior is the Temple (vs the Tavern)
   let inMcdonald = false;   // sub-flag: the current interior is McDonald's
   let inCasino = false;     // sub-flag: the current interior is the Casino gaming floor
+  let inClub = false;       // sub-flag: the current interior is the Country Club's clubhouse
+  let inVault = false;      // sub-flag: the annex behind the clubhouse bookcase
   // The ACTIVE interior's geometry — swapped on entry so the movement clamp / exit mat / zoom all
   // read one rect instead of hard-coding the Tavern's. Defaults to the Tavern.
   let curInt = TAVERN_INT, curWall = TAVERN_WALL, curZoom = TAVERN_ZOOM;
@@ -3125,9 +3316,13 @@ export function startWorld(net: WorldNet): void {
         else y = b.y + b.h + rad;
       }
     }
+    const inTownX = x >= 0 && x <= WORLD.w; // the club (N) and the Damp (S) open off TOWN only (not the desert)
+    // South: ground ends at the shore — except the pier, which you may walk to the end of. Carefully.
+    const onPier = x > SWAMP_PIER_X - 26 && x < SWAMP_PIER_X + 26;
+    const southMax = inTownX ? (onPier ? SWAMP_SHORE_Y + 380 : SWAMP_SHORE_Y) - rad : WORLD.h - rad;
     return {
       x: clamp(x, -DESERT.w + rad, WORLD.w - rad), // the west is open — walk into the Nothing
-      y: clamp(y, rad, WORLD.h - rad),
+      y: clamp(y, inTownX ? -CLUB.h + rad : rad, southMax),
       hit,
     };
   }
@@ -3895,7 +4090,7 @@ export function startWorld(net: WorldNet): void {
     inInterior = false;
     nearExit = false;
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(-DESERT.w, 0, WORLD.w + DESERT.w, WORLD.h);
+    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
     const bar = WORLD_BUILDINGS.find((b) => b.kind === 'bar');
     if (bar) { selfX = bar.x + bar.w / 2; selfY = bar.y + bar.h + 44; } // step back out the door
     setTavernMusic(false);
@@ -3983,7 +4178,7 @@ export function startWorld(net: WorldNet): void {
     inInterior = false; inTemple = false;
     nearExit = false; nearBook = false;
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(-DESERT.w, 0, WORLD.w + DESERT.w, WORLD.h);
+    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
     const t = WORLD_BUILDINGS.find((b) => b.kind === 'temple');
     if (t) { selfX = t.x + t.w / 2; selfY = t.y + t.h + 44; } // step back out the door
     stopChant();
@@ -4756,7 +4951,7 @@ export function startWorld(net: WorldNet): void {
     dungeonPurseDisplay = 0;
     encounterPending = false;
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(-DESERT.w, 0, WORLD.w + DESERT.w, WORLD.h);
+    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
     setDungeonMusic(false);
     minimap.style.display = 'block'; help.style.display = 'block'; // restore overworld HUD
     dungeonBanner.style.display = 'none'; dungeonControls.style.display = 'none';
@@ -8612,6 +8807,7 @@ export function startWorld(net: WorldNet): void {
 
   function triggerNear() {
     if (dialogOpen || talkOpen) return;
+    if (puttCharging) { strikePutt(); return; } // mid-swing: the button IS the putter
     if (nearNetizen) {
       const a = others.find((o) => o.id === nearNetizen);
       if (!a) return;
@@ -8622,8 +8818,12 @@ export function startWorld(net: WorldNet): void {
     if (nearNpc && nearNpc.def.id === 'bartender') { orderBeer(); return; }
     // Mac the cashier takes your order too.
     if (nearNpc && nearNpc.def.id === 'mc-cashier') { orderMcFood(); return; }
+    // Sterling pours, quietly.
+    if (nearNpc && nearNpc.def.id === 'club-sterling') { orderClubPour(); return; }
     if (nearNpc) { startTalk(nearNpc); return; }
-    if (nearExit) { if (inDungeon) leaveDungeon(); else if (inTemple) leaveTemple(); else if (inMcdonald) leaveMcdonald(); else if (inCasino) leaveCasino(); else leaveTavern(); return; }
+    if (nearExit) { if (inDungeon) leaveDungeon(); else if (inTemple) leaveTemple(); else if (inMcdonald) leaveMcdonald(); else if (inCasino) leaveCasino(); else if (inVault) leaveVault(); else if (inClub) leaveClubhouse(); else leaveTavern(); return; }
+    if (nearClubSpot) { clubSpotInteract(nearClubSpot); return; }
+    if (nearSwan) { adoptSwan(); return; }
     if (nearBook) { readHolyBook(); return; }
     if (nearCasinoGame) { playCasinoGame(nearCasinoGame); return; }
     if (nearStairs) { changeFloor(nearStairs.to, nearStairs.dir === 'down' ? '<' : '>'); return; }
@@ -9186,6 +9386,17 @@ export function startWorld(net: WorldNet): void {
         if (d < bd) { bd = d; nearCasinoGame = st; }
       }
     }
+    // Inside the clubhouse: the nearest walk-up (green / registry / cabinet / portrait / candlestick).
+    nearClubSpot = null;
+    if (inClub && !nearExit && !nearNpc) {
+      let cd = 52;
+      for (const key of ['putt', 'registry', 'trophies', 'portrait', 'candle'] as const) {
+        const s = CLUB_SPOTS[key];
+        const d = Math.hypot(selfX - s.x, selfY - s.y);
+        if (d < cd) { cd = d; nearClubSpot = key; }
+      }
+    }
+    nearSwan = !!(inVault && !nearExit && vaultSwan && Math.hypot(selfX - vaultSwan.x, selfY - vaultSwan.y) < 64);
     if (inDungeon && cellWorldOf('@')) { // the '@' arrival cell (B1 only) doubles as the way out
       const e = dungeonEntry();
       if (Math.abs(selfX - e.x) < 44 && Math.abs(selfY - e.y) < 44) nearExit = true;
@@ -9260,9 +9471,17 @@ export function startWorld(net: WorldNet): void {
       const a = others.find((o) => o.id === nearNetizen);
       prompt.textContent = `💬 Talk to ${a?.name ?? 'Netizen'}`;
     } else if (nearNpc) {
-      prompt.textContent = nearNpc.def.id === 'bartender' ? '🍺 Order from the Barkeep' : nearNpc.def.id === 'mc-cashier' ? '🍔 Order from Mac' : nearNpc.def.friendKey ? `💕 Chat with ${nearNpc.def.name}` : `💬 Talk to ${nearNpc.def.name}`;
+      prompt.textContent = nearNpc.def.id === 'bartender' ? '🍺 Order from the Barkeep' : nearNpc.def.id === 'mc-cashier' ? '🍔 Order from Mac' : nearNpc.def.id === 'club-sterling' ? '🥃 A word with Sterling' : nearNpc.def.friendKey ? `💕 Chat with ${nearNpc.def.name}` : `💬 Talk to ${nearNpc.def.name}`;
     } else if (nearExit) {
-      prompt.textContent = inDungeon ? '🚪 Leave the Ruins' : inTemple ? '🚪 Leave the Temple' : inMcdonald ? "🍔 Leave McDonald's" : inCasino ? '🎰 Leave the Casino' : '🚪 Leave the Tavern';
+      prompt.textContent = inDungeon ? '🚪 Leave the Ruins' : inTemple ? '🚪 Leave the Temple' : inMcdonald ? "🍔 Leave McDonald's" : inCasino ? '🎰 Leave the Casino' : inVault ? '🚪 Back through the bookcase' : inClub ? '🚪 Leave the Clubhouse' : '🚪 Leave the Tavern';
+    } else if (nearClubSpot) {
+      prompt.textContent = nearClubSpot === 'putt' ? (puttCharging ? '⛳ Strike!' : '⛳ Address the ball')
+        : nearClubSpot === 'registry' ? '📖 The Member Registry'
+        : nearClubSpot === 'trophies' ? '🏆 Examine the trophies'
+        : nearClubSpot === 'portrait' ? '🖼️ Regard The Founder'
+        : '🕯️ A suspiciously polished candlestick';
+    } else if (nearSwan) {
+      prompt.textContent = '🦢 Bartholomew';
     } else if (nearBook) {
       prompt.textContent = '📖 Read the holy book';
     } else if (nearCasinoGame) {
@@ -9995,6 +10214,39 @@ export function startWorld(net: WorldNet): void {
       px(5, 14, 2, 2, HAIR); px(9, 14, 2, 2, HAIR); px(4, 15, 3, 1, SHOE); px(9, 15, 3, 1, SHOE);
       g.generateTexture('w-dorito', 16, 16);
     }
+    // --- Shrek (16×18). it's Shrek. ---
+    {
+      const GRN = 0x8aba4a, GRN_D = 0x6a9636, TUNIC = 0xe8e0d0, VEST = 0x6a4a2a, PANT = 0x5a4028;
+      g.clear();
+      px(0, 3, 3, 2, GRN); px(13, 3, 3, 2, GRN);              // the trumpet ears
+      px(0, 2, 1, 1, GRN_D); px(15, 2, 1, 1, GRN_D);          // ear tips
+      px(4, 1, 8, 7, GRN);                                     // head
+      px(4, 2, 8, 1, GRN_D);                                   // heavy brow
+      px(6, 4, 1, 1, 0x101010); px(9, 4, 1, 1, 0x101010);     // eyes
+      px(6, 6, 4, 1, GRN_D);                                   // the smirk
+      px(3, 8, 10, 6, TUNIC);                                  // tunic
+      px(3, 8, 2, 6, VEST); px(11, 8, 2, 6, VEST);            // vest
+      px(3, 13, 10, 1, 0x3a2a18);                              // belt
+      px(1, 9, 2, 4, GRN); px(13, 9, 2, 4, GRN);              // arms
+      px(5, 14, 2, 3, PANT); px(9, 14, 2, 3, PANT);           // legs
+      px(4, 17, 3, 1, 0x3a2a18); px(9, 17, 3, 1, 0x3a2a18);   // boots
+      g.generateTexture('w-shrek', 16, 18);
+    }
+    // --- his associate: a noble steed (18×14, faces right) ---
+    {
+      const GRY = 0x8a8a92, GRY_D = 0x6a6a72, MANE = 0x3a3a42, MUZ = 0xbfb8b0;
+      g.clear();
+      px(2, 5, 1, 4, GRY_D); px(1, 8, 1, 2, MANE);            // tail + tuft
+      px(3, 5, 10, 5, GRY); px(3, 9, 10, 1, GRY_D);           // body
+      px(11, 2, 4, 4, GRY);                                    // head
+      px(14, 4, 4, 3, MUZ);                                    // the muzzle (mid-sentence)
+      px(15, 5, 2, 1, 0x2a2a2a);                               // it is always mid-sentence
+      px(12, 3, 1, 1, 0x101010);                               // bright eager eye
+      px(11, 0, 1, 3, GRY); px(13, 0, 1, 3, GRY);             // the ears
+      px(10, 1, 1, 5, MANE);                                   // mane
+      px(4, 10, 1, 4, GRY); px(7, 10, 1, 4, GRY); px(10, 10, 1, 4, GRY); px(12, 10, 1, 4, GRY); // legs
+      g.generateTexture('w-donkey', 18, 14);
+    }
 
     // --- shelter critters: little dogs & cats milling around the pet shack (14×10, face +x) ---
     {
@@ -10194,7 +10446,8 @@ export function startWorld(net: WorldNet): void {
     {
       const BLU = 0x3a6ab8, RED2 = 0xc0392b, SKIN2 = 0xf6d3b0, BEARD = 0xe8e0d0;
       g.clear();
-      px(3, 0, 4, 5, RED2);
+      // unmistakably a gnome: tall pointy hat, big beard
+      px(4, 0, 2, 2, RED2); px(3, 2, 4, 2, RED2); px(2, 4, 6, 1, RED2);
       px(2, 5, 6, 3, SKIN2); px(3, 6, 4, 3, BEARD);
       px(2, 9, 6, 6, BLU); px(2, 13, 6, 2, 0x2a4a8a);
       px(1, 10, 1, 4, SKIN2); px(8, 10, 1, 4, SKIN2);
@@ -10744,6 +10997,19 @@ export function startWorld(net: WorldNet): void {
       px(3, 2, 1, 5, TUM_D); px(6, 2, 1, 5, TUM_D); px(2, 4, 6, 1, TUM_D);
       g.generateTexture('w-pet-tumbleweed', 10, 9);
     }
+    // Bartholomew: a small imperious swan (14×10). Faces right; flipped to face travel.
+    {
+      const SWB = 0xf4f4ee, SWD = 0xd4d4c8, BEAK = 0xe8963a;
+      g.clear();
+      px(1, 4, 9, 4, SWB); px(2, 3, 7, 1, SWB);   // hull
+      px(2, 8, 8, 1, SWD);                          // waterline shading
+      px(3, 5, 4, 2, SWD);                          // folded wing
+      px(9, 1, 2, 4, SWB);                          // the neck (an S, abbreviated)
+      px(9, 0, 3, 2, SWB);                          // head
+      px(12, 0, 2, 1, BEAK);                        // beak
+      px(10, 0, 1, 1, 0x1a1a1a);                    // the withering eye
+      g.generateTexture('w-pet-swan', 14, 10);
+    }
 
     // Crypt Slime: a green gelatinous blob with two beady eyes + a little tongue lolling out (12×11).
     g.clear();
@@ -11265,7 +11531,7 @@ export function startWorld(net: WorldNet): void {
     inInterior = false; inMcdonald = false;
     nearExit = false;
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(-DESERT.w, 0, WORLD.w + DESERT.w, WORLD.h);
+    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
     const mc = WORLD_BUILDINGS.find((b) => b.kind === 'mcdonald');
     if (mc) { selfX = mc.x + mc.w / 2; selfY = mc.y + mc.h + 44; }
     enterChime();
@@ -11367,7 +11633,7 @@ export function startWorld(net: WorldNet): void {
     inInterior = false; inCasino = false;
     nearExit = false; nearCasinoGame = null;
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(-DESERT.w, 0, WORLD.w + DESERT.w, WORLD.h);
+    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
     const c = WORLD_BUILDINGS.find((b) => b.kind === 'casino');
     if (c) { selfX = c.x + c.w / 2; selfY = c.y + c.h + 44; } // step back out the door
     enterChime();
@@ -11931,7 +12197,7 @@ export function startWorld(net: WorldNet): void {
       const sc = this;
       makeTextures(sc);
 
-      sc.cameras.main.setBounds(-DESERT.w, 0, WORLD.w + DESERT.w, WORLD.h);
+      sc.cameras.main.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
       sc.cameras.main.setZoom(ZOOM);
       sc.cameras.main.setBackgroundColor(0x3f7a3a);
       mainCam = sc.cameras.main;
@@ -12091,6 +12357,8 @@ export function startWorld(net: WorldNet): void {
       for (const def of NPCS) npcs.push(makeNpc(sc, def));
       makeTownLife(sc);
       makeDesert(sc);
+      makeClub(sc);
+      makeSwamp(sc);
 
       // --- ammo crates scattered over the open ground ---
       buildCrates(sc);
@@ -12429,6 +12697,9 @@ export function startWorld(net: WorldNet): void {
       updateRex(now, dt);
       updateTownLife(now, dt);
       updateDesert(now, dt);
+      updateClub(now);
+      updateClubhouse(now, dt);
+      updateSwamp(now, dt);
       updateNearBuilding();
       maybeSendMove(now);
 
@@ -13175,7 +13446,7 @@ export function startWorld(net: WorldNet): void {
       if (!ps || ps.id !== petId) {
         // First sight of this owner's pet (or it changed) — (re)create the custom sprite.
         if (ps) ps.sprite.destroy();
-        const tex = pet.kind === 'rock' ? 'w-pet-rock' : pet.kind === 'pikachu' ? 'w-pet-pikachu' : pet.kind === 'slime' ? 'w-pet-slime' : pet.kind === 'dragon' ? 'w-pet-dragon' : pet.kind === 'tumbleweed' ? 'w-pet-tumbleweed' : 'w-pet-pacman-0';
+        const tex = pet.kind === 'rock' ? 'w-pet-rock' : pet.kind === 'pikachu' ? 'w-pet-pikachu' : pet.kind === 'slime' ? 'w-pet-slime' : pet.kind === 'dragon' ? 'w-pet-dragon' : pet.kind === 'tumbleweed' ? 'w-pet-tumbleweed' : pet.kind === 'swan' ? 'w-pet-swan' : 'w-pet-pacman-0';
         const sprite = sc.add.image(ox, oy, tex).setScale(TEXEL).setOrigin(0.5, 0.6);
         ps = { sprite, id: petId, kind: pet.kind, x: ox, y: oy, lastX: ox, lastY: oy, chomp: 0 };
         petSprites.set(a.id, ps);
@@ -13213,6 +13484,10 @@ export function startWorld(net: WorldNet): void {
         // Breathe: a gentle squash-stretch pulse (wider as it flattens), like it's a living blob.
         const b = Math.sin(performance.now() / 520) * 0.09;
         ps.sprite.setScale(TEXEL * (1 + b), TEXEL * (1 - b));
+      } else if (ps.kind === 'swan') {
+        // A stately glide: face the way he's going, bob as if on invisible water.
+        if (Math.abs(pvx) > 0.5) ps.sprite.setFlipX(pvx < 0);
+        ps.sprite.setY(ps.y + Math.sin(performance.now() / 640) * 1.6);
       }
     }
     // Tear down pets whose owner left the world or unequipped.
@@ -13322,6 +13597,10 @@ export function startWorld(net: WorldNet): void {
       parts = [sc.add.image(0, 0, 'w-fed').setScale(TEXEL * 1.2).setOrigin(0.5, 0.95)];
     } else if (def.kind === 'dorito') {
       parts = [sc.add.image(0, 0, 'w-dorito').setScale(TEXEL * 1.25).setOrigin(0.5, 0.95)];
+    } else if (def.kind === 'shrek') {
+      parts = [sc.add.image(0, 0, 'w-shrek').setScale(TEXEL * 1.35).setOrigin(0.5, 0.95)];
+    } else if (def.kind === 'donkey') {
+      parts = [sc.add.image(0, 0, 'w-donkey').setScale(TEXEL * 1.15).setOrigin(0.5, 0.95)];
     } else {
       const layer = (key: string, tint?: number) => {
         const im = sc.add.image(0, 0, key).setScale(TEXEL).setOrigin(0.5, 0.95);
@@ -13696,7 +13975,1026 @@ export function startWorld(net: WorldNet): void {
     }
   }
 
-  // --- town life: statue of the #1, live billboard, fountain wishes, benches, critters ---
+  // --- Tsong Country Club: grounds, windmill, and the eternal war against the bunker ------
+  let windmillBlades: Phaser.GameObjects.Container | null = null;
+  let clubSprinklers: { x: number; y: number; g: Phaser.GameObjects.Graphics }[] = [];
+  const TEE = { x: 900, y: -650 };
+  const CLUBHOUSE = { x: 2450, y: -300 };
+
+  function makeClub(sc: Phaser.Scene) {
+    // grounds: deep manicured green with mow stripes (the most golf a rectangle can be)
+    sc.add.rectangle(WORLD.w / 2, -CLUB.h / 2, WORLD.w, CLUB.h, 0x3f8a3e).setDepth(-20);
+    const mow = sc.add.graphics().setDepth(-19);
+    for (let y = -CLUB.h; y < 0; y += 64) {
+      mow.fillStyle(0x4a9a48, (y / 64) % 2 === 0 ? 0.5 : 0);
+      mow.fillRect(0, y, WORLD.w, 64);
+    }
+    // fairway rough edges
+    mow.fillStyle(0x35722f, 0.6);
+    mow.fillRect(0, -CLUB.h, WORLD.w, 26);
+    // bunkers (Bill lives in the big one)
+    const bunkers: [number, number, number, number][] = [[3350, -500, 260, 110], [1700, -950, 180, 80], [700, -350, 150, 70], [4100, -800, 200, 90]];
+    for (const [bx, by, bw, bh] of bunkers) {
+      sc.add.ellipse(bx, by, bw, bh, 0xd8c088).setDepth(-18);
+      sc.add.ellipse(bx, by, bw - 14, bh - 12, 0xe8d4a0).setDepth(-17);
+    }
+    // greens + numbered flags
+    const holes: [number, number, string][] = [[1150, -720, '1'], [2100, -1050, '2'], [3000, -820, '3'], [3900, -1100, '4'], [520, -1050, '7']];
+    for (const [hx, hy, num] of holes) {
+      sc.add.ellipse(hx, hy, 190, 96, 0x5aba58).setDepth(-16);
+      sc.add.circle(hx, hy, 6, 0x1a2410).setDepth(-15);
+      const pole = sc.add.rectangle(hx, hy - 26, 3, 52, 0xe8e0d0).setDepth(hy + 2);
+      void pole;
+      const flag = sc.add.triangle(hx + 12, hy - 44, 0, 0, 22, 7, 0, 14, 0xc0392b).setDepth(hy + 2);
+      void flag;
+      sc.add.text(hx + 8, hy - 46, num, { fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#fff', resolution: 2 }).setOrigin(0, 0.5).setDepth(hy + 3);
+    }
+    // the 19th hole: flag planted IN the club pond
+    sc.add.ellipse(3050, -260, 300, 130, 0x3a7a9a).setDepth(-16);
+    sc.add.ellipse(3050, -260, 260, 104, 0x4a9aba).setDepth(-15);
+    sc.add.rectangle(3050, -290, 3, 60, 0xe8e0d0).setDepth(-240);
+    sc.add.triangle(3062, -312, 0, 0, 22, 7, 0, 14, 0xc0392b).setDepth(-240);
+    sc.add.text(3058, -314, '19', { fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#fff', resolution: 2 }).setOrigin(0, 0.5).setDepth(-239);
+    // the REGULATION windmill
+    const wm = { x: 2100, y: -1000 };
+    sc.add.rectangle(wm.x, wm.y - 30, 46, 74, 0x8e4a2a).setDepth(wm.y);
+    sc.add.triangle(wm.x, wm.y - 84, 0, 26, 30, 0, 60, 26, 0x6a3018).setOrigin(0.5, 0).setDepth(wm.y);
+    sc.add.rectangle(wm.x, wm.y - 8, 12, 20, 0x4a2810).setDepth(wm.y + 1);
+    windmillBlades = sc.add.container(wm.x, wm.y - 62);
+    for (let i = 0; i < 4; i++) {
+      const blade = sc.add.rectangle(0, 0, 8, 58, 0xe8e0d0).setOrigin(0.5, 0);
+      blade.setRotation((i * Math.PI) / 2);
+      windmillBlades.add(blade);
+    }
+    windmillBlades.setDepth(wm.y + 2);
+    // clubhouse (the door works; the gate does not)
+    sc.add.rectangle(CLUBHOUSE.x, CLUBHOUSE.y, 220, 110, 0xf0ead8).setStrokeStyle(3, 0xc8b890).setDepth(CLUBHOUSE.y + 55);
+    sc.add.rectangle(CLUBHOUSE.x, CLUBHOUSE.y - 66, 240, 26, 0x8e2a20).setDepth(CLUBHOUSE.y + 56);
+    sc.add.rectangle(CLUBHOUSE.x, CLUBHOUSE.y + 34, 34, 42, 0x6a4a2a).setDepth(CLUBHOUSE.y + 57);
+    sc.add.text(CLUBHOUSE.x, CLUBHOUSE.y - 84, 'TSONG COUNTRY CLVB', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '12px', color: '#3a2a18', resolution: 2,
+    }).setOrigin(0.5, 1).setDepth(CLUBHOUSE.y + 58);
+    // the gate: two proud posts, no fence, one plaque
+    sc.add.rectangle(2380, -30, 14, 60, 0xc8b890).setDepth(-25);
+    sc.add.rectangle(2520, -30, 14, 60, 0xc8b890).setDepth(-25);
+    sc.add.text(2450, -64, 'MEMBERS ONLY', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#3a2a18', backgroundColor: '#e8d8b0',
+      padding: { x: 4, y: 2 }, resolution: 2,
+    }).setOrigin(0.5, 1).setAngle(-6).setDepth(-24);
+    // tee box
+    sc.add.rectangle(TEE.x, TEE.y, 60, 34, 0x5aba58).setStrokeStyle(2, 0x35722f).setDepth(-16);
+    sc.add.text(TEE.x, TEE.y + 22, 'TEE · press X', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '8px', color: '#e8f4e8', resolution: 2,
+    }).setOrigin(0.5, 0).setAlpha(0.8).setDepth(-15);
+    // an abandoned golf cart, wheels-deep in the rough
+    sc.add.rectangle(3620, -940, 40, 22, 0xf0ead8).setDepth(-940);
+    sc.add.rectangle(3620, -958, 34, 5, 0xf0ead8).setDepth(-940);
+    sc.add.rectangle(3608, -928, 9, 9, 0x2a2a33).setDepth(-939);
+    sc.add.rectangle(3634, -928, 9, 9, 0x2a2a33).setDepth(-939);
+    // sprinklers
+    for (const [sx2, sy2] of [[1500, -400], [2800, -1150], [600, -800]] as [number, number][]) {
+      clubSprinklers.push({ x: sx2, y: sy2, g: sc.add.graphics().setDepth(sy2) });
+    }
+  }
+
+  function updateClub(now: number) {
+    if (windmillBlades) windmillBlades.setRotation(now / 900); // regulation speed
+    for (let i = 0; i < clubSprinklers.length; i++) {
+      const sp = clubSprinklers[i];
+      sp.g.clear();
+      if (Math.floor(now / 4000 + i) % 3 === 0) { // each takes turns
+        const sweep = Math.sin(now / 300 + i) * 0.9;
+        sp.g.lineStyle(2, 0x9adaf0, 0.6);
+        for (let k = 0; k < 5; k++) {
+          const a = sweep + (k - 2) * 0.09 - Math.PI / 2;
+          sp.g.lineBetween(sp.x, sp.y, sp.x + Math.cos(a) * (30 + k * 8), sp.y + Math.sin(a) * (30 + k * 8));
+        }
+      }
+    }
+  }
+
+  function clubInteract(): boolean {
+    if (Math.hypot(selfX - TEE.x, selfY - TEE.y) < 50) {
+      let lost = 0;
+      try { lost = (parseInt(localStorage.getItem('tsong.golf.lost') || '0', 10) || 0) + 1; localStorage.setItem('tsong.golf.lost', String(lost)); } catch { /* ignore */ }
+      const sc4 = lifeSc;
+      if (sc4) {
+        const ball = sc4.add.circle(selfX, selfY - 14, 4, 0xffffff).setDepth(999999);
+        sc4.tweens.add({
+          targets: ball, x: selfX + 500 + Math.random() * 700, y: selfY - 420 - Math.random() * 200,
+          alpha: 0, duration: 1400, ease: 'Quad.easeOut', onComplete: () => ball.destroy(),
+        });
+      }
+      showToast(`⛳ <b>fore.</b> <i>the ball is gone. it was always going to be gone.</i><br>balls lost to the void: <b>${lost}</b>`);
+      return true;
+    }
+    if (Math.hypot(selfX - CLUBHOUSE.x, selfY - (CLUBHOUSE.y + 40)) < 60) {
+      if (net.owns('club-member')) { enterClubhouse(); return true; }
+      const coins = net.stats().coins;
+      const rich = coins >= 1_000_000;
+      openDialog('⛳ Tsong Country Club',
+        rich
+          ? 'The Commodore appears from nowhere, produces a ledger, and runs a finger down it. "…Everything checks out. Distressingly. The initiation fee is one million coins. Payable now, discussed never."'
+          : `The Commodore appears from nowhere and looks at you the way one looks at weather. "The initiation fee is one million coins. You have ${Math.floor(coins).toLocaleString()}. Mathematics can be so cruel to the aspirational."`,
+        [
+          { label: '🏛️ Pay the initiation — 1,000,000🪙', onPick: () => { closeDialog(); net.joinClub(); } },
+          { label: 'Absolutely not', onPick: () => { closeDialog(); showToast('🏛️ The Commodore nods, as if he expected nothing more.'); } },
+        ]);
+      return true;
+    }
+    return false;
+  }
+
+  // --- The clubhouse INTERIOR: mahogany, quiet money, and at least one load-bearing secret.
+  // Same walkable-room machinery as the Tavern/Temple (curInt/curWall/curZoom swap). Members only —
+  // the door outside checks net.owns('club-member') before calling enterClubhouse().
+  let clubBuilt = false, vaultBuilt = false;
+  let founderPupils: Phaser.GameObjects.Arc[] = [];
+  let clubFireGlow: Phaser.GameObjects.Arc | null = null;
+  let loungeTimer = 0;
+  let puttBall: Phaser.GameObjects.Arc | null = null;
+  let puttMeter: Phaser.GameObjects.Graphics | null = null;
+  let puttCharging = false, puttBusy = false, puttPhase = 0, puttStreak = 0;
+  let puttStreakTxt: Phaser.GameObjects.Text | null = null;
+  let nearClubSpot: 'putt' | 'registry' | 'trophies' | 'portrait' | 'candle' | null = null;
+  let vaultSwan: { spr: Phaser.GameObjects.Image; x: number; y: number; tx: number; ty: number } | null = null;
+  let nearSwan = false;
+
+  function buildClubhouse(sc: Phaser.Scene) {
+    if (clubBuilt) return;
+    clubBuilt = true;
+    const T = CLUB_WALL, ix = CLUB_INT.x, iy = CLUB_INT.y, iw = CLUB_INT.w, ih = CLUB_INT.h;
+    const cx = ix + iw / 2;
+    const ADD = Phaser.BlendModes.ADD;
+    // --- interior textures, generated here so the factory above stays untouched ---
+    const g = sc.add.graphics();
+    const px2 = (x: number, y: number, w: number, h: number, c: number) => { g.fillStyle(c, 1); g.fillRect(x, y, w, h); };
+    { // parquet floor: staggered mahogany planks
+      const A = 0x6a4426, B = 0x744c2c, LINE = 0x50331c;
+      g.clear(); px2(0, 0, 16, 16, A);
+      px2(0, 0, 8, 8, B); px2(8, 8, 8, 8, B);
+      px2(0, 7, 16, 1, LINE); px2(0, 15, 16, 1, LINE); px2(7, 0, 1, 8, LINE); px2(15, 8, 1, 8, LINE);
+      g.generateTexture('w-club-floor', 16, 16);
+    }
+    { // wall: deep-green paper over mahogany wainscot
+      const PAPER = 0x1f3a2c, PAPER_L = 0x27452f, WOOD = 0x5a3820, WOOD_D = 0x422a14;
+      g.clear(); px2(0, 0, 16, 10, PAPER);
+      for (let i = 0; i < 4; i++) px2(i * 4 + 1, 2, 1, 1, PAPER_L); // faint damask dots
+      px2(0, 10, 16, 6, WOOD); px2(0, 10, 16, 1, WOOD_D); px2(4, 11, 1, 5, WOOD_D); px2(12, 11, 1, 5, WOOD_D);
+      g.generateTexture('w-club-wall', 16, 16);
+    }
+    { // the great rug: burgundy with a gold border
+      const R1 = 0x5a1f26, R2 = 0x69262e, GOLD = 0xb08a3a;
+      g.clear(); px2(0, 0, 16, 16, R1);
+      px2(1, 1, 14, 14, R2); px2(0, 0, 16, 1, GOLD); px2(0, 15, 16, 1, GOLD); px2(0, 0, 1, 16, GOLD); px2(15, 0, 1, 16, GOLD);
+      px2(7, 7, 2, 2, GOLD); // a modest medallion
+      g.generateTexture('w-club-rug', 16, 16);
+    }
+    { // wing-back leather armchair (facing down/out, 18×16)
+      const LEA = 0x4a2a1a, LEA_L = 0x5c3622, LEA_D = 0x33190c;
+      g.clear();
+      px2(1, 0, 16, 10, LEA); px2(2, 1, 14, 8, LEA_L);           // high back
+      px2(0, 4, 3, 9, LEA); px2(15, 4, 3, 9, LEA);               // wings/arms
+      px2(3, 9, 12, 5, LEA_D); px2(3, 13, 12, 2, LEA);           // seat + skirt
+      g.generateTexture('w-club-chair', 18, 16);
+    }
+    { // fireplace: stone surround, dark firebox (fire glow layered live), 30×24
+      const ST = 0x8a8276, ST_D = 0x6a6256, BOX = 0x140a06, MANTLE = 0x5a3820;
+      g.clear();
+      px2(0, 2, 30, 22, ST); px2(2, 4, 26, 20, ST_D);
+      px2(5, 8, 20, 16, BOX);
+      px2(0, 0, 30, 3, MANTLE);
+      g.generateTexture('w-club-fire', 30, 24);
+    }
+    { // trophy cabinet: glass shelves of gold things nobody may touch, 30×20
+      const WD = 0x4a2c16, GLASS = 0x2a3a3f, AU = 0xd8a83a, AG = 0xb8c0c8;
+      g.clear();
+      px2(0, 0, 30, 20, WD); px2(2, 2, 26, 16, GLASS);
+      px2(2, 9, 26, 1, WD);
+      for (const [tx2, ty2, c] of [[5, 4, AU], [12, 3, AU], [20, 5, AG], [6, 12, AG], [14, 11, AU], [22, 12, AU]] as [number, number, number][]) {
+        px2(tx2, ty2, 3, 4, c); px2(tx2 + 1, ty2 + 4, 1, 1, c);
+      }
+      g.generateTexture('w-club-trophy', 30, 20);
+    }
+    { // The Founder: gilt frame, stern oil portrait (eyes are live sprites), 22×28
+      const FRAME = 0xb08a3a, CANVAS = 0x2a2420, COAT = 0x1a1a24, FACE = 0xd8b890, HAIRC = 0xd8d0c0;
+      g.clear();
+      px2(0, 0, 22, 28, FRAME); px2(2, 2, 18, 24, CANVAS);
+      px2(6, 14, 10, 10, COAT);                       // the coat
+      px2(8, 6, 6, 8, FACE);                          // the face
+      px2(7, 5, 8, 2, HAIRC); px2(7, 12, 8, 2, HAIRC); // hair + magnificent sideburn-beard band
+      g.generateTexture('w-club-founder', 22, 28);
+    }
+    { // bar counter tile (16×14): mahogany with a brass rail
+      const WD = 0x5a3820, WD_D = 0x422a14, BRASS = 0xc8a04a;
+      g.clear(); px2(0, 0, 16, 14, WD); px2(0, 0, 16, 2, WD_D); px2(0, 11, 16, 1, BRASS);
+      g.generateTexture('w-club-bar', 16, 14);
+    }
+    { // gold: a frankly irresponsible pile (26×16)
+      const AU = 0xd8a83a, AU_L = 0xf0c860, AU_D = 0xa87820;
+      g.clear();
+      px2(4, 8, 18, 8, AU); px2(7, 4, 12, 5, AU); px2(10, 2, 6, 3, AU);
+      px2(8, 3, 2, 1, AU_L); px2(12, 6, 3, 1, AU_L); px2(6, 10, 2, 1, AU_L); px2(16, 11, 3, 1, AU_L);
+      px2(4, 14, 18, 2, AU_D);
+      g.generateTexture('w-club-gold', 26, 16);
+    }
+    g.destroy();
+
+    const tile = (key: string, x: number, y: number, w: number, h: number, depth: number) =>
+      sc.add.tileSprite(x, y, w, h, key).setOrigin(0, 0).setTileScale(TEXEL, TEXEL).setDepth(depth);
+    const prop = (key: string, x: number, y: number, depth = y) =>
+      sc.add.image(x, y, key).setScale(TEXEL).setOrigin(0.5, 1).setDepth(depth);
+
+    // dark surround so a large viewport never shows grass past the room edges
+    sc.add.rectangle(ix - 900, iy - 900, iw + 1800, ih + 1800, 0x0d0a08).setOrigin(0, 0).setDepth(iy - 1000);
+    tile('w-club-floor', ix, iy, iw, ih, iy - 900);
+    tile('w-club-rug', cx - 260, iy + 300, 520, 300, iy - 880);            // the great rug
+    tile('w-club-wall', ix, iy, iw, 84, iy - 800);                         // back wall
+    tile('w-club-wall', ix, iy, T + 10, ih, iy - 800);                     // left wall
+    tile('w-club-wall', ix + iw - T - 10, iy, T + 10, ih, iy - 800);       // right wall
+    tile('w-club-wall', ix, iy + ih - T, iw, T, iy - 790);                 // bottom baseboard
+    // chandeliers: two pools of warm light over the floor
+    for (const chx of [cx - 240, cx + 240]) {
+      sc.add.circle(chx, iy + 300, 120, 0xffd98a, 0.07).setBlendMode(ADD).setDepth(iy - 700);
+      sc.add.circle(chx, iy + 292, 10, 0xffe9b0, 0.5).setBlendMode(ADD).setDepth(iy - 700);
+    }
+    // hearth (back wall, left): stone fireplace + live flicker
+    sc.add.image(CLUB_SPOTS.fire.x, iy + 88, 'w-club-fire').setScale(TEXEL).setOrigin(0.5, 1).setDepth(iy - 795);
+    clubFireGlow = sc.add.circle(CLUB_SPOTS.fire.x, iy + 66, 34, 0xff9a3a, 0.22).setBlendMode(ADD).setDepth(iy - 794);
+    // the candlestick — polished daily; screwed to the wall, oddly
+    sc.add.rectangle(CLUB_SPOTS.candle.x, iy + 66, 5, 18, 0xc8a04a).setDepth(iy - 794);
+    sc.add.circle(CLUB_SPOTS.candle.x, iy + 54, 3, 0xffe9b0, 0.9).setBlendMode(ADD).setDepth(iy - 793);
+    // The Founder, glowering from above the mantel; his pupils are live and they are watching
+    sc.add.image(CLUB_SPOTS.portrait.x, iy + 92, 'w-club-founder').setScale(TEXEL * 1.4).setOrigin(0.5, 1).setDepth(iy - 795);
+    founderPupils = [
+      sc.add.circle(CLUB_SPOTS.portrait.x - 7, iy + 66, 2.2, 0x101010).setDepth(iy - 794),
+      sc.add.circle(CLUB_SPOTS.portrait.x + 7, iy + 66, 2.2, 0x101010).setDepth(iy - 794),
+    ];
+    // trophy cabinet on the back wall, right of the portrait
+    sc.add.image(CLUB_SPOTS.trophies.x, iy + 88, 'w-club-trophy').setScale(TEXEL).setOrigin(0.5, 1).setDepth(iy - 795);
+    // the 19th Hole Lounge: brass-railed bar along the right wall (Sterling stands behind it)
+    tile('w-club-bar', ix + iw - 340, iy + 200, 300, 30, iy + 246);
+    tile('w-tav-shelf', ix + iw - 330, iy + 130, 280, 32, iy + 140);       // the good bottles (reused shelf)
+    prop('w-tav-stool', ix + iw - 300, iy + 280); prop('w-tav-stool', ix + iw - 120, iy + 280);
+    // reading corner: wing chairs facing the hearth + a card table on the rug
+    prop('w-club-chair', ix + 260, iy + 260); prop('w-club-chair', ix + 400, iy + 280);
+    prop('w-tav-table', cx + 40, iy + 470);
+    prop('w-tav-stool', cx - 6, iy + 480, iy + 480); prop('w-tav-stool', cx + 86, iy + 480, iy + 480);
+    // the practice green: a strip of impossible indoor turf down the left side
+    sc.add.rectangle(CLUB_SPOTS.putt.x, (CLUB_SPOTS.putt.y + CLUB_SPOTS.cup.y) / 2, 120, CLUB_SPOTS.putt.y - CLUB_SPOTS.cup.y + 90, 0x3f8a3e).setDepth(iy - 870);
+    sc.add.rectangle(CLUB_SPOTS.putt.x, (CLUB_SPOTS.putt.y + CLUB_SPOTS.cup.y) / 2, 108, CLUB_SPOTS.putt.y - CLUB_SPOTS.cup.y + 78, 0x4a9a48).setDepth(iy - 869);
+    sc.add.circle(CLUB_SPOTS.cup.x, CLUB_SPOTS.cup.y, 7, 0x1a2410).setDepth(iy - 868);
+    sc.add.rectangle(CLUB_SPOTS.cup.x, CLUB_SPOTS.cup.y - 22, 2, 40, 0xe8e0d0).setDepth(CLUB_SPOTS.cup.y);
+    sc.add.triangle(CLUB_SPOTS.cup.x + 9, CLUB_SPOTS.cup.y - 36, 0, 0, 16, 5, 0, 10, 0xc0392b).setDepth(CLUB_SPOTS.cup.y);
+    puttBall = sc.add.circle(CLUB_SPOTS.putt.x, CLUB_SPOTS.putt.y, 4, 0xffffff).setDepth(iy - 860);
+    puttMeter = sc.add.graphics().setDepth(iy - 200);
+    puttStreakTxt = sc.add.text(CLUB_SPOTS.putt.x, CLUB_SPOTS.putt.y + 34, '', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '10px', color: '#e8f4e8', resolution: 2,
+    }).setOrigin(0.5, 0).setDepth(iy - 200);
+    // the Member Registry on its lectern by the door
+    prop('w-tmp-book', CLUB_SPOTS.registry.x, CLUB_SPOTS.registry.y + 14);
+    sc.add.circle(CLUB_SPOTS.registry.x, CLUB_SPOTS.registry.y - 6, 15, 0xffe9a0, 0.10).setBlendMode(ADD).setDepth(iy - 600);
+    // exit mat by the door
+    tile('w-club-rug', cx - 70, iy + ih - T - 70, 140, 60, iy - 870);
+    sc.add.text(cx, iy + ih - T - 38, '🚪 EXIT', { fontFamily: 'system-ui, sans-serif', fontSize: '16px', fontStyle: 'bold', color: '#ffe2b0', stroke: '#1a0f08', strokeThickness: 4 })
+      .setOrigin(0.5).setDepth(iy - 200);
+  }
+
+  function buildVault(sc: Phaser.Scene) {
+    if (vaultBuilt) return;
+    vaultBuilt = true;
+    const T = VAULT_WALL, ix = VAULT_INT.x, iy = VAULT_INT.y, iw = VAULT_INT.w, ih = VAULT_INT.h;
+    const cx = ix + iw / 2;
+    const ADD = Phaser.BlendModes.ADD;
+    const tile = (key: string, x: number, y: number, w: number, h: number, depth: number) =>
+      sc.add.tileSprite(x, y, w, h, key).setOrigin(0, 0).setTileScale(TEXEL, TEXEL).setDepth(depth);
+    sc.add.rectangle(ix - 900, iy - 900, iw + 1800, ih + 1800, 0x08060c).setOrigin(0, 0).setDepth(iy - 1000);
+    tile('w-tmp-floor', ix, iy, iw, ih, iy - 900);                       // cold stone (reused)
+    tile('w-tmp-wall', ix, iy, iw, 70, iy - 800);
+    tile('w-tmp-wall', ix, iy, T + 10, ih, iy - 800);
+    tile('w-tmp-wall', ix + iw - T - 10, iy, T + 10, ih, iy - 800);
+    tile('w-tmp-wall', ix, iy + ih - T, iw, T, iy - 790);
+    // one bare bulb; the club spared every expense back here
+    sc.add.circle(cx, iy + 120, 90, 0xffe9b0, 0.08).setBlendMode(ADD).setDepth(iy - 700);
+    // gold. so much gold. none of it is for you.
+    for (const [gx2, gy2, s] of [[cx - 110, iy + 190, 2.4], [cx - 30, iy + 170, 3], [cx + 70, iy + 200, 2.2], [cx + 10, iy + 240, 2.6]] as [number, number, number][]) {
+      sc.add.image(gx2, gy2, 'w-club-gold').setScale(s).setOrigin(0.5, 1).setDepth(gy2);
+    }
+    sc.add.text(cx, iy + 100, 'DO NOT FEED THE SWAN', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '10px', color: '#c8b890', resolution: 2,
+    }).setOrigin(0.5).setDepth(iy - 600);
+    // Bartholomew. He has always been here. The gold is, as far as he is concerned, his.
+    const spr = sc.add.image(cx + 40, iy + 300, 'w-pet-swan').setScale(TEXEL * 1.8).setOrigin(0.5, 1).setDepth(iy + 300);
+    vaultSwan = { spr, x: cx + 40, y: iy + 300, tx: cx + 40, ty: iy + 300 };
+    // exit mat back through the bookcase
+    tile('w-club-rug', cx - 70, iy + ih - T - 70, 140, 60, iy - 870);
+    sc.add.text(cx, iy + ih - T - 38, '🚪 BACK', { fontFamily: 'system-ui, sans-serif', fontSize: '16px', fontStyle: 'bold', color: '#ffe2b0', stroke: '#1a0f08', strokeThickness: 4 })
+      .setOrigin(0.5).setDepth(iy - 200);
+  }
+
+  function enterClubhouse() {
+    const sc = petScene; if (!sc) return;
+    buildClubhouse(sc);
+    enterChime();
+    inInterior = true; inClub = true; inVault = false;
+    curInt = CLUB_INT; curWall = CLUB_WALL; curZoom = CLUB_ZOOM;
+    driving = false; vx = 0; vy = 0;
+    keys.clear(); joyActive = false;
+    selfX = CLUB_INT.x + CLUB_INT.w / 2;
+    selfY = CLUB_INT.y + CLUB_INT.h - 180;
+    mainCam?.setBounds(CLUB_INT.x, CLUB_INT.y, CLUB_INT.w, CLUB_INT.h);
+    startLounge();
+  }
+  function leaveClubhouse() {
+    inInterior = false; inClub = false;
+    nearExit = false; nearClubSpot = null;
+    cancelPutt();
+    keys.clear(); joyActive = false;
+    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
+    selfX = CLUBHOUSE.x; selfY = CLUBHOUSE.y + 96; // back out the front door
+    stopLounge();
+    enterChime();
+  }
+  function enterVault() {
+    const sc = petScene; if (!sc) return;
+    buildVault(sc);
+    cancelPutt();
+    tone(60, 0.5, 'sawtooth', 0.08, 40); window.setTimeout(() => tone(48, 0.7, 'sine', 0.06, 36), 160); // stone grinding aside
+    inClub = false; inVault = true;
+    curInt = VAULT_INT; curWall = VAULT_WALL; curZoom = VAULT_ZOOM;
+    keys.clear(); joyActive = false;
+    selfX = VAULT_INT.x + VAULT_INT.w / 2;
+    selfY = VAULT_INT.y + VAULT_INT.h - 160;
+    mainCam?.setBounds(VAULT_INT.x, VAULT_INT.y, VAULT_INT.w, VAULT_INT.h);
+    stopLounge();
+    showToast('🕯️ the bookcase swings shut behind you.');
+  }
+  function leaveVault() {
+    inVault = false; inClub = true;
+    nearExit = false; nearSwan = false;
+    curInt = CLUB_INT; curWall = CLUB_WALL; curZoom = CLUB_ZOOM;
+    keys.clear(); joyActive = false;
+    selfX = CLUB_SPOTS.candle.x; selfY = CLUB_SPOTS.candle.y + 40; // back at the hearth
+    mainCam?.setBounds(CLUB_INT.x, CLUB_INT.y, CLUB_INT.w, CLUB_INT.h);
+    startLounge();
+    tone(60, 0.5, 'sawtooth', 0.06, 40);
+  }
+
+  // Soft lounge jazz, synthesized: a slow ii–V–I that has been playing since before you were born.
+  function loungeChord(root: number, third: number, seventh: number) {
+    tone(root, 2.3, 'sine', 0.045);
+    tone(third, 2.0, 'triangle', 0.026);
+    tone(seventh, 2.0, 'triangle', 0.022);
+  }
+  function startLounge() {
+    if (loungeTimer) return;
+    const prog: [number, number, number][] = [
+      [98.00, 293.66, 349.23],   // Gm7
+      [130.81, 329.63, 466.16],  // C9
+      [174.61, 261.63, 329.63],  // Fmaj7
+      [146.83, 349.23, 440.00],  // Dm7
+    ];
+    let i = 0;
+    loungeChord(...prog[0]);
+    loungeTimer = window.setInterval(() => {
+      i = (i + 1) % prog.length;
+      loungeChord(...prog[i]);
+      noise(0.06, 0.012, 6800); // brushed hats, barely
+    }, 2600);
+  }
+  function stopLounge() {
+    if (loungeTimer) { window.clearInterval(loungeTimer); loungeTimer = 0; }
+  }
+
+  // The practice green: press once to address the ball (the meter starts swinging), press again to
+  // putt. The needle rewards nerve — the sweet zone sits near the top of the arc. Five consecutive
+  // sinks and the club must, by its own bylaws, acknowledge you.
+  function startPutt() {
+    if (puttBusy || puttCharging) return;
+    puttCharging = true; puttPhase = 0;
+  }
+  function cancelPutt() {
+    puttCharging = false; puttBusy = false;
+    puttMeter?.clear();
+  }
+  function strikePutt() {
+    if (!puttCharging || !puttBall) return;
+    puttCharging = false; puttBusy = true;
+    puttMeter?.clear();
+    const sc = petScene; if (!sc) { puttBusy = false; return; }
+    const p = Math.abs(Math.sin(puttPhase)); // 0..1, where you froze the needle
+    const sunk = p >= 0.72 && p <= 0.90;     // firm but not through the break
+    const short = p < 0.72;
+    const travel = CLUB_SPOTS.putt.y - CLUB_SPOTS.cup.y; // full distance to the cup
+    const endY = sunk ? CLUB_SPOTS.cup.y : short ? CLUB_SPOTS.putt.y - travel * (p / 0.72) * 0.85 : CLUB_SPOTS.cup.y - 60 - (p - 0.90) * 400;
+    tone(220, 0.05, 'square', 0.05); // the click of a putter that cost more than a car
+    sc.tweens.add({
+      targets: puttBall, y: endY, x: CLUB_SPOTS.cup.x + (sunk ? 0 : (Math.random() * 10 - 5)),
+      duration: 650 + Math.abs(CLUB_SPOTS.putt.y - endY) * 0.5, ease: 'Quad.easeOut',
+      onComplete: () => {
+        if (sunk) {
+          tone(880, 0.12, 'sine', 0.06, 660); // the plink of quiet triumph
+          puttStreak++;
+          if (puttStreak === 5) net.claimQuest('club-putt'); // the bylaws are clear (server grants once)
+          showToast(puttStreak >= 5 ? `⛳ sunk. streak: ${puttStreak}. the lounge pretends not to watch.` : `⛳ sunk. streak: ${puttStreak}.`);
+        } else {
+          tone(140, 0.2, 'sine', 0.05, 100);
+          if (puttStreak >= 2) showToast(`⛳ ${short ? 'short. always short.' : 'through the break and past it.'} streak over at ${puttStreak}.`);
+          puttStreak = 0;
+        }
+        if (puttStreakTxt) puttStreakTxt.setText(puttStreak > 0 ? `streak ${puttStreak}` : '');
+        const sc2 = petScene;
+        sc2?.tweens.add({
+          targets: puttBall, x: CLUB_SPOTS.putt.x, y: CLUB_SPOTS.putt.y, alpha: 1,
+          delay: 420, duration: 300, ease: 'Sine.easeInOut',
+          onComplete: () => { puttBusy = false; },
+        });
+      },
+    });
+  }
+
+  function clubSpotInteract(spot: NonNullable<typeof nearClubSpot>) {
+    if (spot === 'putt') { startPutt(); return; }
+    if (spot === 'registry') {
+      openDialog('📖 The Member Registry',
+        'Bound in leather older than the town. The early pages are water-damaged — deliberately, one suspects. Among the legible: '
+        + 'T. Vandertsong (Founder, "posthumously reinstated") · The Commodore (title disputed, see appendix) · B. Vandertsong · C. Tsongworth IV ("dues pending, 11 years") · '
+        + 'Sterling (entry scratched out) · Bartholomew (species not recorded) · …and, in ink still wet no matter when you look: '
+        + `${net.name() || 'you'}.`,
+        []);
+      return;
+    }
+    if (spot === 'trophies') {
+      showToast(pick2([
+        '🏆 "CLUB CHAMPION, 1987 — RETROACTIVELY VACATED." no further plaque.',
+        '🏆 a golden paddle, crossed with a golden putter. the plaque just says "THE MERGER."',
+        '🏆 "LONGEST DRIVE — 24,000 UNITS, WESTWARD." the trophy is a tiny car. wait.',
+        '🥈 second place, engraved "THERE IS NO SECOND PLACE," which raises questions.',
+        '🏆 "BIGGEST CATCH (POND DIVISION)" — the fish depicted is clearly a boot.',
+        '🏆 an empty plinth labeled "BARTHOLOMEW\'S. DO NOT ASK."',
+      ]));
+      return;
+    }
+    if (spot === 'portrait') {
+      showToast(pick2([
+        '🖼️ THE FOUNDER. his eyes… no. surely not.',
+        '🖼️ the brass plate reads: "T. VANDERTSONG — HE PAID FULL PRICE SO YOU WOULDN\'T HAVE TO. YOU DID ANYWAY."',
+        '🖼️ you look away. you can feel him not looking away.',
+        '🖼️ up close, the oil paint over his left eye is suspiciously fresh.',
+      ]));
+      return;
+    }
+    if (spot === 'candle') {
+      tone(90, 0.15, 'square', 0.04);
+      enterVault();
+      return;
+    }
+  }
+
+  function adoptSwan() {
+    if (net.owns('pet-swan')) {
+      showToast('🦢 Bartholomew regards you as staff. From him, this is affection.');
+      tone(340, 0.15, 'square', 0.04, 300);
+      return;
+    }
+    tone(340, 0.2, 'square', 0.05, 260); // an imperious honk
+    net.claimQuest('club-vault'); // the server grants him once; he does the rest
+    showToast('🦢 Bartholomew looks at you. Looks at the gold. Looks at you. …He has made his decision.');
+  }
+
+  function orderClubPour() {
+    if (dialogOpen || talkOpen) return;
+    const quips = [
+      '"Good evening. The usual? You don\'t have a usual. You do now."',
+      '"The \'52 Reserve. Laid down before the town had a name. Or laws."',
+      '"Some members drink to remember, some to forget. At these prices, most drink to invest."',
+      '"I recommend the \'52. I always recommend the \'52. We only have the \'52."',
+    ];
+    openDialog('🥃 Sterling', quips[Math.floor(Math.random() * quips.length)], [
+      { label: "🥃 The '52 Reserve — 5,000🪙", onPick: () => { closeDialog(); net.clubDrink(); } },
+      { label: '💧 Just water, please', onPick: () => { closeDialog(); showToast('💧 It is, admittedly, exceptional water.'); } },
+    ]);
+  }
+
+  // Live clubhouse touches: the fire breathes, the needle swings, the Founder watches, the swan patrols.
+  function updateClubhouse(now: number, dt: number) {
+    if (inClub) {
+      if (clubFireGlow) {
+        const f = 0.18 + Math.abs(Math.sin(now / 190)) * 0.10 + Math.abs(Math.sin(now / 77)) * 0.04;
+        clubFireGlow.setAlpha(f).setRadius(30 + Math.sin(now / 240) * 5);
+      }
+      // The Founder's pupils track you across the room. It's probably a mechanism. Probably.
+      for (let i = 0; i < founderPupils.length; i++) {
+        const p = founderPupils[i];
+        const bx = CLUB_SPOTS.portrait.x + (i === 0 ? -7 : 7), by = CLUB_INT.y + 66;
+        const dx = selfX - bx, dy = selfY - by, m = Math.hypot(dx, dy) || 1;
+        p.setPosition(bx + (dx / m) * 2.4, by + (dy / m) * 2.4);
+      }
+      if (puttCharging && Math.hypot(selfX - CLUB_SPOTS.putt.x, selfY - CLUB_SPOTS.putt.y) > 70) cancelPutt(); // wandered off mid-address
+      if (puttCharging && puttMeter) {
+        puttPhase += dt * 2.4;
+        const p = Math.abs(Math.sin(puttPhase));
+        const mx = CLUB_SPOTS.putt.x - 40, my = CLUB_SPOTS.putt.y - 60, mw = 80, mh = 8;
+        puttMeter.clear();
+        puttMeter.fillStyle(0x0a1410, 0.85); puttMeter.fillRect(mx - 2, my - 2, mw + 4, mh + 4);
+        puttMeter.fillStyle(0x2a4a2a, 1); puttMeter.fillRect(mx, my, mw, mh);
+        puttMeter.fillStyle(0xd8c088, 0.9); puttMeter.fillRect(mx + mw * 0.72, my, mw * 0.18, mh); // the sweet zone
+        puttMeter.fillStyle(0xffffff, 1); puttMeter.fillRect(mx + p * (mw - 2), my - 1, 2, mh + 2); // the needle
+      } else if (puttMeter && !puttCharging && !puttBusy) {
+        puttMeter.clear();
+      }
+    }
+    if (inVault && vaultSwan) {
+      // Bartholomew patrols his hoard with the unhurried menace of the truly wealthy.
+      const s = vaultSwan;
+      if (Math.hypot(s.tx - s.x, s.ty - s.y) < 4) {
+        s.tx = VAULT_INT.x + 120 + Math.random() * (VAULT_INT.w - 240);
+        s.ty = VAULT_INT.y + 180 + Math.random() * (VAULT_INT.h - 300);
+      }
+      const spd = 18 * dt;
+      const dx = s.tx - s.x, dy = s.ty - s.y, m = Math.hypot(dx, dy) || 1;
+      s.x += (dx / m) * spd; s.y += (dy / m) * spd;
+      s.spr.setFlipX(dx < 0);
+      s.spr.setPosition(s.x, s.y + Math.sin(now / 600) * 2).setDepth(s.y);
+    }
+  }
+
+  // --- The Great Southern Damp: a bayou-bog south of town. The same Kenney canopy as the
+  // overworld, tinted murk-wards, over px pools, stilt architecture, and a citizenry of frogs.
+  // Curated landmarks + a seeded scatter (SOUTH.seed) so every client grows the same swamp. ---
+  interface SwampBeast { spr: Phaser.GameObjects.Image; x: number; y: number; tx: number; ty: number; kind: 'frog' | 'heron'; ph: number; state: number; busyUntil: number }
+  let swampFlies: { spr: Phaser.GameObjects.Arc; ox: number; oy: number; ph: number }[] = [];
+  let swampFog: { spr: Phaser.GameObjects.Ellipse; sp: number }[] = [];
+  let swampBeasts: SwampBeast[] = [];
+  let gatorEyes: { spr: Phaser.GameObjects.Container; x: number; y: number; hidUntil: number; ph: number }[] = [];
+  let cauldronGlow: Phaser.GameObjects.Arc | null = null;
+  let nextCroakAt = 0;
+  const SWAMP_SPOTS = {
+    cauldron: { x: 1290, y: 3470 },
+    stump: { x: 900, y: 4400 },
+    ring: { x: 3900, y: 3300 },
+    bell: { x: 3620, y: 4060 },
+    bottle: { x: SWAMP_PIER_X, y: SWAMP_SHORE_Y + 330 },
+    gator: { x: 1900, y: 2680 },
+  } as const;
+
+  function makeSwamp(sc: Phaser.Scene) {
+    const rnd = mulberry32(SOUTH.seed);
+    const top = WORLD.h, bot = WORLD.h + SOUTH.h;
+    const ADD = Phaser.BlendModes.ADD;
+    // --- px textures (local factory, same trick as the clubhouse) ---
+    const g = sc.add.graphics();
+    const px2 = (x: number, y: number, w: number, h: number, c: number) => { g.fillStyle(c, 1); g.fillRect(x, y, w, h); };
+    { // lily pad (10×8) with a notch
+      g.clear(); g.fillStyle(0x4a8a4a, 1); g.fillEllipse(5, 4, 10, 7);
+      g.fillStyle(0x5a9a56, 1); g.fillEllipse(5, 3.4, 7, 4);
+      g.fillStyle(0x27403c, 1); g.fillTriangle(5, 4, 10, 1, 10, 5);
+      g.generateTexture('w-sw-lily', 10, 8);
+    }
+    { // cattail (8×18)
+      g.clear(); px2(3, 4, 1, 14, 0x5a7a3a); px2(2, 0, 3, 6, 0x6a4a2a); px2(3, 0, 1, 1, 0xc8b890);
+      px2(5, 8, 1, 9, 0x5a7a3a); px2(6, 6, 1, 3, 0x4a6a30);
+      g.generateTexture('w-sw-cattail', 8, 18);
+    }
+    { // dead tree (18×26): bare gnarled branches
+      const D = 0x4a4038, D2 = 0x3a322a;
+      g.clear();
+      px2(8, 8, 3, 18, D); px2(8, 24, 5, 2, D2);
+      px2(4, 4, 5, 2, D); px2(3, 2, 2, 4, D);         // left branch, up
+      px2(11, 6, 5, 2, D); px2(15, 3, 2, 4, D);       // right branch, up
+      px2(6, 10, 2, 2, D2); px2(12, 11, 2, 2, D2);    // stubs
+      g.generateTexture('w-sw-deadtree', 18, 26);
+    }
+    { // hanging moss (12×10): drips for the canopy
+      const M = 0x6a8a5a, M2 = 0x5a7a4c;
+      g.clear();
+      px2(0, 0, 12, 2, M);
+      px2(1, 2, 1, 5, M2); px2(4, 2, 1, 7, M); px2(7, 2, 1, 4, M2); px2(10, 2, 1, 6, M);
+      g.generateTexture('w-sw-moss', 12, 10);
+    }
+    { // frog (9×6), facing right
+      const F = 0x5aa04a, F2 = 0x478a3a;
+      g.clear();
+      px2(1, 2, 7, 3, F); px2(1, 5, 7, 1, F2);      // body
+      px2(5, 0, 2, 2, F); px2(6, 0, 1, 1, 0x101010); // eye bump, watching
+      g.generateTexture('w-sw-frog', 9, 6);
+    }
+    { // heron (12×20): tall, white-gray, judgmental
+      const H = 0xd8dce0, H2 = 0xb8bcc4;
+      g.clear();
+      px2(3, 4, 6, 6, H); px2(3, 9, 6, 1, H2);        // body
+      px2(7, 0, 2, 5, H);                              // neck
+      px2(8, 0, 3, 2, H2); px2(11, 1, 1, 1, 0xe8a03a); // head + beak
+      px2(5, 10, 1, 9, 0x3a3a42); px2(7, 10, 1, 9, 0x3a3a42); // legs
+      g.generateTexture('w-sw-heron', 12, 20);
+    }
+    { // stilt shack (30×26): tin roof, porch, legs in the water table
+      const WD = 0x6a4a2a, WD2 = 0x54381e, TIN = 0x8a8f96, TIN2 = 0x6a6f76;
+      g.clear();
+      px2(2, 10, 26, 10, WD); px2(2, 10, 26, 2, WD2);           // cabin
+      px2(0, 6, 30, 5, TIN); px2(0, 6, 30, 1, TIN2);            // roof
+      px2(12, 14, 5, 6, 0x1a140c);                               // door
+      px2(21, 13, 4, 4, 0x2a3a4a);                               // window
+      px2(4, 20, 2, 6, WD2); px2(24, 20, 2, 6, WD2); px2(14, 20, 2, 6, WD2); // stilts
+      g.generateTexture('w-sw-shack', 30, 26);
+    }
+    { // firefly jar on a post (8×16)
+      g.clear();
+      px2(3, 8, 2, 8, 0x54381e);
+      px2(2, 2, 4, 6, 0x8aa0a8); px2(2, 2, 4, 1, 0xb8c8c8);
+      px2(3, 4, 1, 1, 0xffe98a); px2(5, 6, 1, 1, 0xffe98a);
+      g.generateTexture('w-sw-jar', 8, 16);
+    }
+    { // glowing mushroom (8×9) — brighter cousin of the town's
+      g.clear();
+      px2(1, 0, 6, 3, 0x7ae0c8); px2(0, 1, 8, 2, 0x5ac8b0); px2(2, 0, 2, 1, 0xb8f0e0);
+      px2(3, 3, 2, 6, 0xd8d8c8);
+      g.generateTexture('w-sw-glowshroom', 8, 9);
+    }
+    { // the cauldron (14×12)
+      g.clear();
+      px2(1, 2, 12, 8, 0x2a2a33); px2(2, 1, 10, 2, 0x3a3a44);
+      px2(2, 2, 10, 2, 0x4a9a4a);                                // the contents (gumbo, mostly)
+      px2(0, 10, 3, 2, 0x2a2a33); px2(11, 10, 3, 2, 0x2a2a33);   // feet
+      g.generateTexture('w-sw-cauldron', 14, 12);
+    }
+    { // cardboard alligator (34×12): convincing from one very specific angle
+      const C = 0x5a8a4a, C2 = 0x4a7a3c;
+      g.clear();
+      px2(0, 4, 26, 5, C); px2(24, 2, 10, 4, C);                 // body + snout
+      px2(26, 1, 2, 2, 0xffffff); px2(27, 1, 1, 1, 0x101010);    // googly-ish eye
+      for (let i = 0; i < 5; i++) px2(3 + i * 5, 2, 2, 2, C2);   // "scutes"
+      px2(30, 5, 3, 1, 0xffffff);                                 // painted-on teeth
+      px2(12, 9, 2, 3, 0xc8b890);                                 // the visible cardboard stand
+      g.generateTexture('w-sw-gator', 34, 12);
+    }
+    { // THE STUMP (30×20): what remains of something that should not have fit here
+      const S1 = 0x7a5a36, S2 = 0x6a4c2c, RINGS = 0x8a6a42;
+      g.clear();
+      g.fillStyle(S2, 1); g.fillEllipse(15, 14, 30, 12);          // trunk base
+      g.fillStyle(S1, 1); g.fillEllipse(15, 8, 28, 11);           // the cut face
+      g.fillStyle(RINGS, 1);
+      g.fillEllipse(15, 8, 20, 7); g.fillStyle(S1, 1); g.fillEllipse(15, 8, 14, 5);
+      g.fillStyle(RINGS, 1); g.fillEllipse(15, 8, 8, 3); g.fillStyle(S1, 1); g.fillEllipse(15, 8, 3, 1.4);
+      g.generateTexture('w-sw-stump', 30, 22);
+    }
+    { // onion (6×8): the region's principal export
+      g.clear();
+      px2(2, 4, 2, 3, 0xe8e0d0); px2(1, 5, 4, 2, 0xd8ccc0); px2(2, 7, 2, 1, 0xb8aca0);
+      px2(2, 0, 1, 4, 0x6a9a4a); px2(3, 1, 1, 3, 0x5a8a3c);
+      g.generateTexture('w-sw-onion', 6, 8);
+    }
+    { // the drowned steeple (16×26): all that shows of the church of \'31
+      const ST = 0x8a8276, ST2 = 0x6a6256, SLATE = 0x4a5058;
+      g.clear();
+      px2(3, 10, 10, 16, ST); px2(3, 10, 10, 2, ST2);
+      g.fillStyle(SLATE, 1); g.fillTriangle(1, 10, 8, 0, 15, 10);
+      px2(7, 2, 2, 3, 0xd8c088);                                  // the bell, glinting
+      px2(5, 16, 6, 6, 0x1a2028);                                 // the louvre window
+      g.generateTexture('w-sw-steeple', 16, 26);
+    }
+    g.destroy();
+
+    // --- ground: murk, mottle, and a polite gradient out of the town's grass ---
+    sc.add.rectangle(WORLD.w / 2, top + SOUTH.h / 2, WORLD.w, SOUTH.h, 0x33452e).setDepth(-30);
+    for (let i = 0; i < 5; i++) {
+      sc.add.rectangle(WORLD.w / 2, top + 30 + i * 60, WORLD.w, 60, 0x3e7a3c, 0.42 - i * 0.08).setDepth(-29);
+    }
+    const mott = sc.add.graphics().setDepth(-29);
+    for (let i = 0; i < 90; i++) {
+      mott.fillStyle(rnd() > 0.5 ? 0x2c3d28 : 0x3a4c34, 0.5);
+      mott.fillEllipse(rnd() * WORLD.w, top + 300 + rnd() * (SOUTH.h - 400), 80 + rnd() * 160, 30 + rnd() * 60);
+    }
+    // --- the Endless Bayou along the bottom (the pier is the only way out over it) ---
+    sc.add.rectangle(WORLD.w / 2, SWAMP_SHORE_Y + 30, WORLD.w, 60, 0x4a3c28).setDepth(-28);      // mud shore
+    sc.add.rectangle(WORLD.w / 2, (SWAMP_SHORE_Y + 60 + bot) / 2, WORLD.w, bot - SWAMP_SHORE_Y - 60, 0x203438).setDepth(-28);
+    sc.add.rectangle(WORLD.w / 2, bot - 120, WORLD.w, 240, 0x18282c).setDepth(-27);              // the deep
+    const rip = sc.add.graphics().setDepth(-26);
+    rip.lineStyle(1, 0x3a5a5e, 0.5);
+    for (let i = 0; i < 40; i++) {
+      const wx = rnd() * WORLD.w, wy = SWAMP_SHORE_Y + 90 + rnd() * (SOUTH.h - (SWAMP_SHORE_Y - top) - 150);
+      rip.lineBetween(wx, wy, wx + 30 + rnd() * 50, wy);
+    }
+    // --- pools (each may or may not contain an opinion) ---
+    const pools: { x: number; y: number; w: number; h: number }[] = [];
+    for (let i = 0; i < 12; i++) {
+      const pw = 140 + rnd() * 220, ph = 60 + rnd() * 90;
+      const pxx = 120 + rnd() * (WORLD.w - 240), pyy = top + 420 + rnd() * (SWAMP_SHORE_Y - top - 720);
+      pools.push({ x: pxx, y: pyy, w: pw, h: ph });
+      sc.add.ellipse(pxx, pyy, pw, ph, 0x27403c).setDepth(-25);
+      sc.add.ellipse(pxx, pyy, pw - 22, ph - 16, 0x2e4a44).setDepth(-24);
+      const nLily = 1 + Math.floor(rnd() * 3);
+      for (let l = 0; l < nLily; l++) {
+        const a = rnd() * Math.PI * 2, rr = rnd() * 0.3 + 0.1;
+        sc.add.image(pxx + Math.cos(a) * pw * rr, pyy + Math.sin(a) * ph * rr, 'w-sw-lily').setScale(TEXEL).setDepth(-23);
+      }
+      const nCat = 2 + Math.floor(rnd() * 4);
+      for (let cta = 0; cta < nCat; cta++) {
+        const a = rnd() * Math.PI * 2;
+        const cxx = pxx + Math.cos(a) * (pw / 2 + 10), cyy = pyy + Math.sin(a) * (ph / 2 + 8);
+        sc.add.image(cxx, cyy, 'w-sw-cattail').setScale(TEXEL).setOrigin(0.5, 1).setDepth(cyy);
+      }
+    }
+    // three of the pools are occupied. the occupants are patient.
+    for (let i = 0; i < 3; i++) {
+      const p = pools[i * 3];
+      const c = sc.add.container(p.x, p.y);
+      for (const off of [-7, 7]) {
+        c.add(sc.add.ellipse(off, 0, 8, 5, 0x3a4a2a));
+        c.add(sc.add.circle(off, -1, 2, 0xe8d44a));
+        c.add(sc.add.circle(off, -1, 0.9, 0x101010));
+      }
+      c.setDepth(p.y + 4);
+      gatorEyes.push({ spr: c, x: p.x, y: p.y, hidUntil: 0, ph: rnd() * 9 });
+    }
+    // --- canopy: the town's own Kenney trees, gone feral. tinted, mossy, swaying ---
+    const feature = (x: number, y: number, r: number) => (fx2: number, fy2: number) => Math.hypot(fx2 - x, fy2 - y) < r;
+    const keepOuts = [
+      feature(1200, 3450, 220), feature(2740, 3000, 260), feature(3620, 4080, 240),
+      feature(900, 4400, 140), feature(3900, 3300, 170), feature(SWAMP_PIER_X, SWAMP_SHORE_Y, 160),
+      feature(2400, 2340, 120), feature(1900, 2680, 140), feature(700, 2900, 260),
+      ...pools.map((p) => feature(p.x, p.y, Math.max(p.w, p.h) / 2 + 40)),
+    ];
+    const clearOf = (x: number, y: number) => !keepOuts.some((k) => k(x, y));
+    const TINTS = [0x8aa87a, 0x7a9a6e, 0x6c8c60, 0x96b088];
+    for (let i = 0; i < 150; i++) {
+      const tx2 = 60 + rnd() * (WORLD.w - 120), ty2 = top + 260 + rnd() * (SWAMP_SHORE_Y - top - 420);
+      if (!clearOf(tx2, ty2)) continue;
+      const pine = rnd() > 0.6;
+      const frame = pine ? TT.pines[Math.floor(rnd() * TT.pines.length)] : TT.trees[Math.floor(rnd() * TT.trees.length)];
+      const s = 0.9 + rnd() * 0.7;
+      sc.add.image(tx2 + 3, ty2 + 1, 'w-shadow').setScale(TEXEL * s * 1.5).setOrigin(0.5, 0.4).setDepth(ty2 - 1).setAlpha(0.4);
+      const img = sc.add.image(tx2, ty2, 'townFrames', frame).setScale(TEXEL * s * 1.7).setOrigin(0.5, 0.92).setDepth(ty2);
+      img.setTint(TINTS[Math.floor(rnd() * TINTS.length)]);
+      swayers.push(img);
+      if (rnd() > 0.62) { // hanging moss, where the damp has climbed
+        sc.add.image(tx2 + (rnd() * 14 - 7), ty2 - 26 - rnd() * 10, 'w-sw-moss').setScale(TEXEL * s).setOrigin(0.5, 0).setDepth(ty2 + 1).setAlpha(0.9);
+      }
+    }
+    for (let i = 0; i < 16; i++) { // and the trees the damp already finished with
+      const tx2 = 60 + rnd() * (WORLD.w - 120), ty2 = top + 300 + rnd() * (SWAMP_SHORE_Y - top - 460);
+      if (!clearOf(tx2, ty2)) continue;
+      sc.add.image(tx2, ty2, 'w-sw-deadtree').setScale(TEXEL * (1 + rnd() * 0.8)).setOrigin(0.5, 1).setDepth(ty2).setAlpha(0.95);
+    }
+    for (let i = 0; i < 22; i++) { // glow-shrooms, freelance
+      const mx2 = 60 + rnd() * (WORLD.w - 120), my2 = top + 320 + rnd() * (SWAMP_SHORE_Y - top - 480);
+      if (!clearOf(mx2, my2)) continue;
+      sc.add.circle(mx2, my2 - 6, 12, 0x5ae0c0, 0.10).setBlendMode(ADD).setDepth(my2 - 1);
+      sc.add.image(mx2, my2, 'w-sw-glowshroom').setScale(TEXEL).setOrigin(0.5, 1).setDepth(my2);
+    }
+    // --- landmarks ---
+    // the border sign
+    const sgn = sc.add.text(2400, 2340, 'THE GREAT SOUTHERN DAMP', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '11px', color: '#e8e4d0', align: 'center',
+      backgroundColor: '#4a3c28', padding: { x: 6, y: 3 }, resolution: 2,
+    }).setOrigin(0.5, 1).setDepth(2340);
+    sgn.setAngle(-2);
+    sc.add.text(2400, 2352, 'watch your step. all of it.', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '8px', color: '#b8b4a0', resolution: 2,
+    }).setOrigin(0.5, 0).setAngle(-2).setDepth(2352);
+    // Grandmaw's hut + cauldron
+    sc.add.image(1200, 3450, 'w-sw-shack').setScale(TEXEL * 2.6).setOrigin(0.5, 1).setDepth(3450).setTint(0xb8a8d8);
+    sc.add.image(SWAMP_SPOTS.cauldron.x, SWAMP_SPOTS.cauldron.y, 'w-sw-cauldron').setScale(TEXEL * 1.4).setOrigin(0.5, 1).setDepth(SWAMP_SPOTS.cauldron.y);
+    cauldronGlow = sc.add.circle(SWAMP_SPOTS.cauldron.x, SWAMP_SPOTS.cauldron.y - 16, 22, 0x4ae05a, 0.16).setBlendMode(ADD).setDepth(SWAMP_SPOTS.cauldron.y + 1);
+    for (let i = 0; i < 3; i++) { // gumbo bubbles (definitely gumbo)
+      const b = sc.add.circle(SWAMP_SPOTS.cauldron.x + (i - 1) * 7, SWAMP_SPOTS.cauldron.y - 22, 2.4, 0x8ae87a, 0.8).setDepth(SWAMP_SPOTS.cauldron.y + 2);
+      sc.tweens.add({ targets: b, y: SWAMP_SPOTS.cauldron.y - 44, alpha: 0, duration: 1700, delay: i * 560, repeat: -1, ease: 'Sine.easeOut' });
+    }
+    // Gary's estate: two shacks, three jars, one dream
+    sc.add.image(2700, 2950, 'w-sw-shack').setScale(TEXEL * 2.2).setOrigin(0.5, 1).setDepth(2950);
+    sc.add.image(2860, 3060, 'w-sw-shack').setScale(TEXEL * 1.8).setOrigin(0.5, 1).setDepth(3060).setFlipX(true);
+    for (const [jx, jy] of [[2600, 3010], [2790, 2990], [2930, 3100]] as [number, number][]) {
+      sc.add.image(jx, jy, 'w-sw-jar').setScale(TEXEL).setOrigin(0.5, 1).setDepth(jy);
+      const jg = sc.add.circle(jx, jy - 22, 10, 0xffe98a, 0.16).setBlendMode(ADD).setDepth(jy + 1);
+      sc.tweens.add({ targets: jg, alpha: 0.30, duration: 900 + jx % 400, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    }
+    // the drowned church: a pool with a steeple where a congregation used to be
+    sc.add.ellipse(3620, 4080, 340, 150, 0x27403c).setDepth(-25);
+    sc.add.ellipse(3620, 4080, 300, 122, 0x2e4a44).setDepth(-24);
+    sc.add.image(3620, 4092, 'w-sw-steeple').setScale(TEXEL * 1.8).setOrigin(0.5, 1).setDepth(4092);
+    sc.add.ellipse(3620, 4092, 60, 18, 0x2e4a44).setDepth(4093); // the waterline lapping the stone
+    // THE STUMP (ask it nothing)
+    sc.add.image(SWAMP_SPOTS.stump.x, SWAMP_SPOTS.stump.y, 'w-sw-stump').setScale(TEXEL * 3.2).setOrigin(0.5, 1).setDepth(SWAMP_SPOTS.stump.y);
+    // the fairy ring: nine glow-shrooms and a low hum
+    for (let i = 0; i < 9; i++) {
+      const a = (i / 9) * Math.PI * 2;
+      const rx2 = SWAMP_SPOTS.ring.x + Math.cos(a) * 62, ry2 = SWAMP_SPOTS.ring.y + Math.sin(a) * 44;
+      sc.add.circle(rx2, ry2 - 6, 12, 0x5ae0c0, 0.14).setBlendMode(ADD).setDepth(ry2 - 1);
+      sc.add.image(rx2, ry2, 'w-sw-glowshroom').setScale(TEXEL).setOrigin(0.5, 1).setDepth(ry2);
+    }
+    sc.add.ellipse(SWAMP_SPOTS.ring.x, SWAMP_SPOTS.ring.y, 130, 92, 0x5ae0c0, 0.05).setBlendMode(ADD).setDepth(-23);
+    // somebody's swamp. the signage is extensive and completely ignored.
+    sc.add.image(600, 2850, 'w-sw-shack').setScale(TEXEL * 2.4).setOrigin(0.5, 1).setDepth(2850).setTint(0xb0c890);
+    sc.add.ellipse(800, 2910, 150, 68, 0x4a3826).setDepth(-25); // the mud wallow
+    sc.add.ellipse(800, 2910, 120, 50, 0x5a4630).setDepth(-24);
+    for (let i = 0; i < 2; i++) {
+      const mb = sc.add.circle(784 + i * 30, 2904, 3, 0x6a563c).setDepth(-23);
+      sc.tweens.add({ targets: mb, scale: 1.8, alpha: 0, duration: 1600, delay: i * 800, repeat: -1, ease: 'Sine.easeOut' });
+    }
+    const warn = (wx2: number, wy2: number, t: string, a: number) =>
+      sc.add.text(wx2, wy2, t, {
+        fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#e8e4d0', backgroundColor: '#54381e',
+        padding: { x: 4, y: 2 }, resolution: 2,
+      }).setOrigin(0.5, 1).setAngle(a).setDepth(wy2);
+    warn(520, 2750, 'KEEP OUT', -5);
+    warn(680, 2726, "SOMEBODY'S SWAMP", 3);
+    warn(850, 2756, 'SERIOUSLY.', -2);
+    for (let i = 0; i < 6; i++) { // the onion patch, in two tidy rows (the only tidy thing here)
+      sc.add.image(500 + (i % 3) * 26, 2924 + Math.floor(i / 3) * 22, 'w-sw-onion').setScale(TEXEL).setOrigin(0.5, 1).setDepth(2924 + Math.floor(i / 3) * 22);
+    }
+    // BEWARE OF ALLIGATOR (the alligator is cardboard; the sign is sincere)
+    const gsn = sc.add.text(1900, 2640, 'BEWARE OF ALLIGATOR', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#e8d44a', backgroundColor: '#2a2a22',
+      padding: { x: 4, y: 2 }, resolution: 2,
+    }).setOrigin(0.5, 1).setDepth(2640);
+    gsn.setAngle(3);
+    sc.add.image(1955, 2695, 'w-sw-gator').setScale(TEXEL * 1.3).setOrigin(0.5, 1).setDepth(2695);
+    // the pier, out into the Endless Bayou
+    const pierG = sc.add.graphics().setDepth(SWAMP_SHORE_Y + 500);
+    pierG.fillStyle(0x54381e, 1);
+    pierG.fillRect(SWAMP_PIER_X - 26, SWAMP_SHORE_Y - 20, 52, 400);
+    pierG.fillStyle(0x6a4a2a, 1);
+    for (let py2 = SWAMP_SHORE_Y - 16; py2 < SWAMP_SHORE_Y + 372; py2 += 12) pierG.fillRect(SWAMP_PIER_X - 24, py2, 48, 7);
+    pierG.fillStyle(0x3a2814, 1);
+    for (const [ppx, ppy] of [[-30, 60], [30, 60], [-30, 220], [30, 220], [-30, 372], [30, 372]] as [number, number][]) {
+      pierG.fillRect(SWAMP_PIER_X + ppx - 3, SWAMP_SHORE_Y + ppy - 8, 7, 26);
+    }
+    // the ferryman's raft, tied up, going nowhere (gently)
+    const raft = sc.add.rectangle(SWAMP_PIER_X + 74, SWAMP_SHORE_Y + 100, 56, 26, 0x6a4a2a).setDepth(SWAMP_SHORE_Y + 501);
+    raft.setStrokeStyle(2, 0x54381e);
+    sc.tweens.add({ targets: raft, y: SWAMP_SHORE_Y + 104, angle: 1.6, duration: 2400, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    // the bottle at the end of the pier
+    sc.add.rectangle(SWAMP_SPOTS.bottle.x + 14, SWAMP_SPOTS.bottle.y, 5, 9, 0x4a8a6a).setDepth(SWAMP_SHORE_Y + 502);
+    sc.add.rectangle(SWAMP_SPOTS.bottle.x + 14, SWAMP_SPOTS.bottle.y - 6, 2, 3, 0x6aaa8a).setDepth(SWAMP_SHORE_Y + 502);
+    // --- the citizenry ---
+    for (let i = 0; i < 8; i++) {
+      const p = pools[Math.floor(rnd() * pools.length)];
+      const fx2 = p.x + (rnd() - 0.5) * (p.w + 90), fy2 = p.y + (rnd() - 0.5) * (p.h + 70);
+      swampBeasts.push({
+        spr: sc.add.image(fx2, fy2, 'w-sw-frog').setScale(TEXEL).setOrigin(0.5, 1).setDepth(fy2),
+        x: fx2, y: fy2, tx: fx2, ty: fy2, kind: 'frog', ph: rnd() * 9, state: 0, busyUntil: 0,
+      });
+    }
+    for (const [hx2, hy2] of [[2980, 3560], [1500, 5140]] as [number, number][]) {
+      swampBeasts.push({
+        spr: sc.add.image(hx2, hy2, 'w-sw-heron').setScale(TEXEL).setOrigin(0.5, 1).setDepth(hy2),
+        x: hx2, y: hy2, tx: hx2, ty: hy2, kind: 'heron', ph: rnd() * 9, state: 0, busyUntil: 0,
+      });
+    }
+    for (let i = 0; i < 26; i++) {
+      const fx2 = 100 + rnd() * (WORLD.w - 200), fy2 = top + 400 + rnd() * (SOUTH.h - 700);
+      swampFlies.push({
+        spr: sc.add.circle(fx2, fy2, 1.6, 0xd8f088, 0.9).setBlendMode(ADD).setDepth(100000),
+        ox: fx2, oy: fy2, ph: rnd() * 20,
+      });
+    }
+    for (let i = 0; i < 10; i++) {
+      const fw = 280 + rnd() * 260;
+      const f = sc.add.ellipse(rnd() * WORLD.w, top + 500 + rnd() * (SOUTH.h - 800), fw, 60 + rnd() * 50, 0xa8b8b0, 0.055 + rnd() * 0.035);
+      f.setDepth(99000);
+      swampFog.push({ spr: f, sp: 3 + rnd() * 5 });
+    }
+  }
+
+  function updateSwamp(now: number, dt: number) {
+    if (!swampFlies.length) return;
+    const inSwamp = selfY > WORLD.h - 400 && !inInterior && !inDungeon;
+    const nf = nightFactor(Date.now() + net.dayNightOffset());
+    for (const f of swampFlies) {
+      f.ph += dt * 0.7;
+      f.spr.setPosition(f.ox + Math.sin(f.ph * 1.3) * 26 + Math.sin(f.ph * 0.31) * 40, f.oy + Math.cos(f.ph) * 18);
+      f.spr.setAlpha((0.25 + nf * 0.75) * (0.45 + Math.abs(Math.sin(f.ph * 2.2)) * 0.55));
+    }
+    for (const f of swampFog) {
+      f.spr.x += f.sp * dt;
+      if (f.spr.x - f.spr.width / 2 > WORLD.w) f.spr.x = -f.spr.width / 2;
+    }
+    if (cauldronGlow) cauldronGlow.setAlpha(0.12 + Math.abs(Math.sin(now / 300)) * 0.10);
+    for (const b of swampBeasts) {
+      if (b.kind === 'frog') {
+        if (b.state === 0 && now >= b.busyUntil) {
+          if (Math.random() < 0.02) { // contemplate, then hop
+            b.state = 1;
+            const a = Math.random() * Math.PI * 2;
+            b.tx = clamp(b.x + Math.cos(a) * 50, 40, WORLD.w - 40);
+            b.ty = clamp(b.y + Math.sin(a) * 36, WORLD.h + 260, SWAMP_SHORE_Y - 30);
+            b.busyUntil = now + 460;
+            if (inSwamp && Math.hypot(b.x - selfX, b.y - selfY) < 640 && Math.random() < 0.5) {
+              tone(88 + Math.random() * 36, 0.11, 'square', 0.022, 70); // a local statement
+            }
+          } else b.busyUntil = now + 400 + Math.random() * 800;
+        } else if (b.state === 1) {
+          const k = Math.min(1, 1 - (b.busyUntil - now) / 460);
+          b.x += (b.tx - b.x) * k; b.y += (b.ty - b.y) * k;
+          const arc = Math.sin(k * Math.PI) * 9;
+          b.spr.setPosition(b.x, b.y - arc).setDepth(b.y);
+          b.spr.setFlipX(b.tx < b.x);
+          if (now >= b.busyUntil) { b.state = 0; b.busyUntil = now + 600 + Math.random() * 2400; b.spr.setPosition(b.x, b.y); }
+        }
+      } else { // heron: tolerates nothing
+        if (b.state === 0 && Math.hypot(b.x - selfX, b.y - selfY) < 110) {
+          b.state = 1; b.busyUntil = now + 2600;
+          b.ph = selfX < b.x ? 1 : -1; // depart away from the visitor
+        } else if (b.state === 1) {
+          b.x += b.ph * 260 * dt; b.y -= 150 * dt;
+          b.spr.setPosition(b.x, b.y).setDepth(100001).setFlipX(b.ph < 0);
+          b.spr.setAlpha(Math.max(0, (b.busyUntil - now) / 2600));
+          if (now >= b.busyUntil) { b.state = 2; b.busyUntil = now + 30000 + Math.random() * 30000; }
+        } else if (b.state === 2 && now >= b.busyUntil) { // it returns. it always returns.
+          b.x = 300 + Math.random() * (WORLD.w - 600);
+          b.y = WORLD.h + 500 + Math.random() * (SWAMP_SHORE_Y - WORLD.h - 700);
+          b.state = 0;
+          b.spr.setPosition(b.x, b.y).setDepth(b.y).setAlpha(1);
+        }
+      }
+    }
+    for (const ge of gatorEyes) {
+      if (now < ge.hidUntil) { ge.spr.setAlpha(Math.max(0, ge.spr.alpha - dt * 2)); continue; }
+      if (Math.hypot(ge.x - selfX, ge.y - selfY) < 150) { ge.hidUntil = now + 9000; continue; } // it saw you first
+      ge.ph += dt;
+      ge.spr.setAlpha(Math.min(1, ge.spr.alpha + dt));
+      ge.spr.setScale(1, Math.abs(Math.sin(ge.ph * 0.5)) > 0.06 ? 1 : 0.15); // the long blink
+    }
+    if (inSwamp && now >= nextCroakAt) { // the ambient chorus
+      nextCroakAt = now + 3200 + Math.random() * 6400;
+      const f0 = 78 + Math.random() * 44;
+      tone(f0, 0.13, 'square', 0.018, f0 * 0.8);
+      window.setTimeout(() => tone(f0 * 1.06, 0.1, 'square', 0.014, f0 * 0.85), 170);
+    }
+  }
+
+  function swampInteract(): boolean {
+    const near = (s: { x: number; y: number }, r = 55) => Math.hypot(selfX - s.x, selfY - s.y) < r;
+    if (near(SWAMP_SPOTS.cauldron)) {
+      tone(120, 0.3, 'sine', 0.04, 90);
+      showToast(pick2([
+        '🔮 the gumbo parts. it shows… a ball approaching that you will not return. it does not say when. it never says when.',
+        '🔮 the gumbo shows a man in glasses offering you a loan. the gumbo strongly advises against.',
+        '🔮 the gumbo shows you standing exactly where you are standing now. the gumbo has been known to stall.',
+        '🔮 the gumbo shows the number 7. or 1. it\'s gumbo, sugar, the resolution is limited.',
+        '🔮 the gumbo shows a swan. the swan sees you seeing it. the gumbo goes abruptly opaque.',
+        '🔮 the gumbo shows a great fish beneath a small boat. it shows the fish is also fishing.',
+        '🔮 the gumbo shows you winning big at the casino. Grandmaw hollers from the porch: "it lies about exactly one thing per day!"',
+        '🔮 the gumbo shows the windmill up north, turning. behind it, something else turning. slower.',
+        '🔮 the gumbo shows tomorrow. it looks a lot like today, but with better odds.',
+        '🔮 the gumbo declines. even gumbo has days.',
+      ]));
+      return true;
+    }
+    if (near(SWAMP_SPOTS.stump)) {
+      const rings = 800 + Math.floor(Math.random() * 8000);
+      showToast(pick2([
+        `🪵 you count the rings. you lose track at ${rings}. the rings do not lose track of you.`,
+        '🪵 the cut is perfectly smooth. whatever felled this did it in one motion, and apologized to nobody.',
+        `🪵 near the center the rings stop being circles. you decide not to think about what shape they are.`,
+        '🪵 someone has carved "R + T" near the edge. someone ELSE has crossed out the T.',
+      ]));
+      return true;
+    }
+    if (near(SWAMP_SPOTS.ring, 46)) {
+      if (Math.random() < 1 / 7) {
+        tone(660, 0.4, 'sine', 0.06, 990); tone(880, 0.5, 'triangle', 0.04, 1320);
+        selfX = PLAZA.x + 60; selfY = PLAZA.y + 40;
+        showToast('🍄 the ring blinks. you are somewhere else. the mushrooms do not explain themselves.');
+      } else {
+        showToast(pick2([
+          '🍄 you stand in the ring. the hum rises slightly, like being noticed.',
+          '🍄 nothing happens. the mushrooms glow a little brighter, like laughing.',
+          '🍄 a low hum. the fireflies give the ring a wide, professional berth.',
+        ]));
+      }
+      return true;
+    }
+    if (near(SWAMP_SPOTS.bell, 80)) {
+      tone(65, 1.4, 'sine', 0.07, 52); window.setTimeout(() => tone(60, 1.2, 'sine', 0.04, 48), 500);
+      showToast(pick2([
+        '🔔 you can\'t reach the bell, but the water can. a slow, drowned dong rolls out from under the surface.',
+        '🔔 the steeple\'s bell answers before you touch it. the pool ripples outward in perfect rings.',
+        '🔔 dong. somewhere below, unhurried, something keeps time with it.',
+      ]));
+      return true;
+    }
+    if (near(SWAMP_SPOTS.bottle, 46)) {
+      showToast(pick2([
+        '🍾 the note reads: "day 40 on the water. still no across. beginning to suspect the ferryman." — no signature.',
+        '🍾 the note reads: "IF FOUND: the gumbo lies about one thing per day. Tuesday it was the number of my toes."',
+        '🍾 the note reads: "gone to the wall out west to knock. if a door opens, do not tell my wife which side I was on."',
+        '🍾 the note is blank. the bottle, however, has been recorked from the inside.',
+      ]));
+      return true;
+    }
+    if (near(SWAMP_SPOTS.gator, 70)) {
+      showToast(pick2([
+        '🐊 it\'s cardboard. from this angle, extremely cardboard. the BEWARE sign, though, is brand new.',
+        '🐊 painted-on teeth. a wooden stand. and yet — fresh drag marks in the mud all around it.',
+        '🐊 you knock on the alligator. the alligator is hollow. behind you, a pool blinks.',
+      ]));
+      return true;
+    }
+    return false;
+  }
+
+  // --- town life: statue of the #1, live billboard, fountain wishes, critters ---
   // Everything here is cosmetic + social; interactions ride the X key. Emoji sprites keep it
   // cheap and legible at world scale (same trick as the friend hearts).
   interface TownCritter { t: Phaser.GameObjects.Text | Phaser.GameObjects.Image; x: number; y: number; tx: number; ty: number; state: number; ph: number; }
@@ -13978,7 +15276,7 @@ export function startWorld(net: WorldNet): void {
       ]));
       return true;
     }
-    if (gnomeA && nearS(SPOTS.gnomes, 60)) {
+    if (gnomeA && gnomeB && nearS(SPOTS.gnomes, 60)) {
       showToast('🧙 <i>neither has blinked since the incident. they swap ground at midnight. nobody has seen it happen.</i>');
       return true;
     }
@@ -13989,6 +15287,8 @@ export function startWorld(net: WorldNet): void {
   function townInteract(): boolean {
     if (dialogOpen || talkOpen || inInterior || inDungeon) return false;
     if (curiosityInteract()) return true;
+    if (selfY < 60 && clubInteract()) return true;
+    if (selfY > WORLD.h - 60 && swampInteract()) return true;
     if (Math.hypot(selfX - PLAZA.x, selfY - PLAZA.y) < 120) {
       net.wish();
       const sc2 = lifeSc;
@@ -14145,6 +15445,9 @@ export function startWorld(net: WorldNet): void {
     setDungeonMusic(false); dungeonMusic = null; inDungeon = false;
     setTavernMusic(false); tavernMusic = null;
     stopChant(); inInterior = false; inTemple = false; inMcdonald = false; inCasino = false;
+    stopLounge(); inClub = false; inVault = false; clubBuilt = false; vaultBuilt = false; vaultSwan = null;
+    founderPupils = []; clubFireGlow = null; puttBall = null; puttMeter = null; puttStreakTxt = null;
+    puttCharging = false; puttBusy = false;
     rex?.img.destroy(); rex?.nametag.destroy(); rex = null;
     try { void actx?.close(); } catch { /* ignore */ }
     actx = null;

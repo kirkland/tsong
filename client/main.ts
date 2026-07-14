@@ -2606,6 +2606,9 @@ worldBtn.addEventListener('click', async () => {
         return best;
       },
       wish: () => net.send({ type: 'fountainWish' }),
+      owns: (id: string) => wallet.owned.includes(id),
+      joinClub: () => net.send({ type: 'clubJoin' }),
+      clubDrink: () => net.send({ type: 'clubDrink' }),
       muted: () => muted,
       toggleMute: () => { muted = !muted; prefSet('muted', muted ? '1' : '0'); applyMute(); },
       leaderboard: () => lastLbRows,
