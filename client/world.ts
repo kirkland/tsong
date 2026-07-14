@@ -498,6 +498,7 @@ const DESERT = { w: 24000, seed: 0xC0FFEE };
 // Tsong Country Club: a members-only golf establishment north of town. The gate has been
 // broken since '09. Spiritually, it stands.
 const CLUB = { h: 1300 };
+const CLUB_GATE_Y = -4; // non-members are clamped here — right at the gate posts, not one step past
 // The Great Southern Damp — a bayou-bog south of town. Smaller than the Nothing, considerably
 // wetter, and much more inhabited. Walkable ground ends at the shore; the pier goes further.
 const SOUTH = { h: 4200, seed: 0xB0661E };
@@ -3422,9 +3423,12 @@ export function startWorld(net: WorldNet): void {
     // South: ground ends at the shore — except the pier, which you may walk to the end of. Carefully.
     const onPier = x > SWAMP_PIER_X - 26 && x < SWAMP_PIER_X + 26;
     const southMax = inTownX ? (onPier ? SWAMP_SHORE_Y + 380 : SWAMP_SHORE_Y) - rad : WORLD.h - rad;
+    // The gate reads "MEMBERS ONLY" and means it: non-members are clamped at the property line
+    // (they can walk right up to the gate/plaque, just never past it onto the grounds proper).
+    const northMin = !inTownX ? rad : net.owns('club-member') ? -CLUB.h + rad : CLUB_GATE_Y;
     return {
       x: clamp(x, -DESERT.w + rad, WORLD.w + EAST.w - rad), // west into the Nothing, east into the Frostreach
-      y: clamp(y, inTownX ? -CLUB.h + rad : rad, southMax),
+      y: clamp(y, northMin, southMax),
       hit,
     };
   }
@@ -9575,11 +9579,12 @@ export function startWorld(net: WorldNet): void {
         if (d < jD) { jD = d; nearJailed = { id: a.id, name: a.name }; }
       }
     }
-    // The exterior clubhouse door (join / enter) — a real prompt like every other building, so it
-    // no longer only works via the hidden X-key check (and doesn't lose out to the Commodore, who
-    // likes to wander right up to it).
+    // The exterior clubhouse door (members: enter) and the gate (everyone: apply) — real prompts
+    // like every other building, so this no longer only works via the hidden X-key check (and
+    // doesn't lose out to the Commodore, who likes to wander right up to both).
     nearClubDoor = !best && !nearNpc && !nearNetizen && !inInterior
-      && Math.hypot(selfX - CLUBHOUSE.x, selfY - (CLUBHOUSE.y + 40)) < 60;
+      && (Math.hypot(selfX - CLUBHOUSE.x, selfY - (CLUBHOUSE.y + 40)) < 60
+        || Math.hypot(selfX - CLUB_GATE.x, selfY - CLUB_GATE.y) < 70);
     // A Robville lot you're standing on (or right beside) → buy/sell prompt. Lowest priority so it
     // never steals focus from a door, person, or jailed neighbor.
     nearParcel = null;
@@ -14184,6 +14189,7 @@ export function startWorld(net: WorldNet): void {
   let clubSprinklers: { x: number; y: number; g: Phaser.GameObjects.Graphics }[] = [];
   const TEE = { x: 900, y: -650 };
   const CLUBHOUSE = { x: 2450, y: -300 };
+  const CLUB_GATE = { x: 2450, y: -30 }; // the actual gate posts — where non-members apply (the only part of the property they can reach)
 
   function makeClub(sc: Phaser.Scene) {
     // NOTE on depth: up here y (and thus avatar depth) is NEGATIVE, so ground layers must sit far
@@ -14406,8 +14412,14 @@ export function startWorld(net: WorldNet): void {
       showToast(`⛳ <b>fore.</b> <i>the ball is gone. it was always going to be gone.</i><br>balls lost to the void: <b>${lost}</b>`);
       return true;
     }
-    if (Math.hypot(selfX - CLUBHOUSE.x, selfY - (CLUBHOUSE.y + 40)) < 60) {
-      if (net.owns('club-member')) { enterClubhouse(); return true; }
+    // The door: reachable only once you're already a member (the gate stops everyone else).
+    if (net.owns('club-member') && Math.hypot(selfX - CLUBHOUSE.x, selfY - (CLUBHOUSE.y + 40)) < 60) {
+      enterClubhouse(); return true;
+    }
+    // The gate: the only part of the property a non-member can physically reach. Applications
+    // (and the Commodore) are handled right here.
+    if (Math.hypot(selfX - CLUB_GATE.x, selfY - CLUB_GATE.y) < 70) {
+      if (net.owns('club-member')) { showToast('🏛️ The gate creaks. It always creaks. Walk on up to the clubhouse.'); return true; }
       const coins = net.stats().coins;
       const rich = coins >= 1_000_000;
       openDialog('⛳ Tsong Country Club',
