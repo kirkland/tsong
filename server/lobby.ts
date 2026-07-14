@@ -1153,11 +1153,24 @@ export class Lobby {
 
   // World "weekly objective" rewards, in coins (NOT win-units — these are paid as-is, not ×COIN_SCALE).
   // Granted once per player per quest (tracked in-memory for the server's lifetime), paid from the House.
-  private static QUEST_REWARDS: Record<string, number> = { 'find-waldo': 400, 'give-banana': 400, 'win-ten': 1000, 'ruins-chests': 50000, 'gas-station': 5000 };
+  private static QUEST_REWARDS: Record<string, number> = { 'find-waldo': 400, 'give-banana': 400, 'win-ten': 1000, 'ruins-chests': 50000 };
   private claimedQuests = new Set<string>(); // `${pid}:${quest}`
   questClaim(ws: WebSocket, quest: string) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
+    if (quest === 'gas-station') {
+      // Pete's road trip fund is not money. It's a friend.
+      const gkey = `${conn.pid}:${quest}`;
+      if (this.claimedQuests.has(gkey)) return;
+      this.claimedQuests.add(gkey);
+      grantItem(conn.pid, conn.nickname, 'pet-tumbleweed')
+        .then(() => {
+          this.sendWallet(ws);
+          this.notify(ws, '🌵 Pete gave you Rusty the Tumbleweed! Equip him in the Shop → Pets.');
+        })
+        .catch((e) => { this.claimedQuests.delete(gkey); console.error('gas station grant failed:', e); });
+      return;
+    }
     const reward = Lobby.QUEST_REWARDS[quest];
     if (!reward) return;
     const key = `${conn.pid}:${quest}`;

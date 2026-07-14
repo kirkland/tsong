@@ -2087,7 +2087,7 @@ const NPCS: NpcDef[] = [
     ask: {
       q: 'You want somethin\'? We got no gas, no snacks, and a road trip fund I\'m supposed to hand out. Corporate\'s idea. Nobody\'s ever claimed it.',
       choices: [
-        { label: 'I\'ll take the road trip fund', reply: 'Atta way. Five grand, courtesy of GAS™. Spend it on somethin\' with wheels. Or don\'t. The desert don\'t judge.', claim: 'gas-station' },
+        { label: 'I\'ll take the road trip fund', reply: 'Atta way. *reaches behind the pump* This here\'s Rusty. Best tumbleweed I ever met. Rolls after you wherever you go. Corporate said "hand out somethin\' memorable." Beat THAT, corporate.', claim: 'gas-station' },
         { label: 'Just looking', reply: 'Look long. Look hard, friend. It\'s the same in every direction. That\'s the charm.' },
       ] as [NpcChoice, NpcChoice],
     },
@@ -8174,7 +8174,7 @@ export function startWorld(net: WorldNet): void {
     { id: 'give-banana', label: 'Give Kevin a banana', reward: 400, done: false },
     { id: 'win-ten', label: 'Win 10 tsong games', reward: 1000, done: false, progress: () => [Math.min(pongWins(), 10), 10] },
     { id: 'ruins-chests', label: 'Open every chest in the Ruins', reward: 50000, done: false, progress: () => [chestsFound(), DUNGEON_TOTAL_CHESTS], hideProgress: true },
-    { id: 'gas-station', label: 'Find the gas station in the Nothing', reward: 5000, done: false },
+    { id: 'gas-station', label: 'Find the gas station in the Nothing', reward: 0, done: false, hideProgress: true },
   ];
   const questKey = (id: string) => `tsong.world.quest.${id}`;
   for (const o of objectives) { try { o.done = localStorage.getItem(questKey(o.id)) === '1'; } catch { /* ignore */ } }
@@ -8224,7 +8224,9 @@ export function startWorld(net: WorldNet): void {
     renderObjectives();
     net.claimQuest(id);                                   // server grants the coins (once)
     try { chaching.muted = net.muted(); chaching.currentTime = 0; void chaching.play(); } catch { /* ignore */ }
-    showToast(`✅ Objective complete!<br><b>${o.label}</b> &nbsp;<span style="color:#ffe14d">+${o.reward} 🪙</span>`);
+    showToast(o.reward > 0
+      ? `✅ Objective complete!<br><b>${o.label}</b> &nbsp;<span style="color:#ffe14d">+${o.reward} 🪙</span>`
+      : `✅ Objective complete!<br><b>${o.label}</b>`);
   }
   renderObjectives();
   checkProgressObjectives(); // claim "win 10 games" if you finished it before coming back to town
@@ -10152,6 +10154,35 @@ export function startWorld(net: WorldNet): void {
       g.generateTexture('w-gasstation', 30, 18);
     }
     {
+      const WIRE = 0x9aa4b2, WIRE_D = 0x6a7482;
+      g.clear();
+      px(1, 3, 10, 6, WIRE); px(2, 4, 8, 4, 0x00000000 ? 0 : 0x1a1a22);
+      px(1, 3, 10, 1, WIRE_D); px(1, 8, 10, 1, WIRE_D);
+      px(2, 4, 1, 4, WIRE); px(5, 4, 1, 4, WIRE); px(8, 4, 1, 4, WIRE);
+      px(0, 9, 2, 3, WIRE_D); px(10, 9, 2, 3, WIRE_D);
+      px(3, 1, 6, 2, WIRE);
+      g.generateTexture('w-cart', 12, 12);
+    }
+    {
+      const DOOR = 0x3f8a3e, DOOR_D = 0x2c612c, FRAME = 0x8a6a3a;
+      g.clear();
+      px(0, 0, 12, 2, FRAME); px(0, 0, 2, 18, FRAME); px(10, 0, 2, 18, FRAME);
+      px(2, 2, 8, 16, DOOR); px(2, 2, 1, 16, DOOR_D);
+      px(8, 9, 1, 2, 0xe8b84b);
+      g.generateTexture('w-lonedoor', 12, 18);
+    }
+    {
+      const SNOW = 0xf0f4f8, SNOW_D = 0xc8d4e0, COAL = 0x1a1a1e, CARROT = 0xe8883a;
+      g.clear();
+      px(2, 8, 8, 7, SNOW); px(2, 13, 8, 2, SNOW_D);
+      px(3, 3, 6, 6, SNOW); px(3, 7, 6, 1, SNOW_D);
+      px(4, 5, 1, 1, COAL); px(7, 5, 1, 1, COAL);
+      px(6, 6, 2, 1, CARROT);
+      px(4, 10, 1, 1, COAL); px(6, 11, 1, 1, COAL);
+      px(1, 1, 10, 2, 0x2a3a4a); px(3, 0, 6, 2, 0x2a3a4a);
+      g.generateTexture('w-snowman', 12, 16);
+    }
+    {
       // distant bird — a little dark seagull chevron (11×5), flap is done by squashing scaleY
       const B = 0x2a2f3a;
       g.clear();
@@ -10636,6 +10667,13 @@ export function startWorld(net: WorldNet): void {
     px(3, 2, 3, 3, 0xffffff); px(4, 3, 1, 1, 0x111111);                             // left googly eye
     px(6, 2, 3, 3, 0xffffff); px(7, 3, 1, 1, 0x111111);                             // right googly eye
     g.generateTexture('w-pet-rock', 12, 10);
+    {
+      const TUM = 0x9a7a4a, TUM_D = 0x6f5836;
+      g.clear();
+      px(2, 1, 6, 7, TUM); px(1, 3, 8, 3, TUM);
+      px(3, 2, 1, 5, TUM_D); px(6, 2, 1, 5, TUM_D); px(2, 4, 6, 1, TUM_D);
+      g.generateTexture('w-pet-tumbleweed', 10, 9);
+    }
 
     // Crypt Slime: a green gelatinous blob with two beady eyes + a little tongue lolling out (12×11).
     g.clear();
@@ -13067,7 +13105,7 @@ export function startWorld(net: WorldNet): void {
       if (!ps || ps.id !== petId) {
         // First sight of this owner's pet (or it changed) — (re)create the custom sprite.
         if (ps) ps.sprite.destroy();
-        const tex = pet.kind === 'rock' ? 'w-pet-rock' : pet.kind === 'pikachu' ? 'w-pet-pikachu' : pet.kind === 'slime' ? 'w-pet-slime' : pet.kind === 'dragon' ? 'w-pet-dragon' : 'w-pet-pacman-0';
+        const tex = pet.kind === 'rock' ? 'w-pet-rock' : pet.kind === 'pikachu' ? 'w-pet-pikachu' : pet.kind === 'slime' ? 'w-pet-slime' : pet.kind === 'dragon' ? 'w-pet-dragon' : pet.kind === 'tumbleweed' ? 'w-pet-tumbleweed' : 'w-pet-pacman-0';
         const sprite = sc.add.image(ox, oy, tex).setScale(TEXEL).setOrigin(0.5, 0.6);
         ps = { sprite, id: petId, kind: pet.kind, x: ox, y: oy, lastX: ox, lastY: oy, chomp: 0 };
         petSprites.set(a.id, ps);
@@ -13321,6 +13359,7 @@ export function startWorld(net: WorldNet): void {
   let mirage: Phaser.GameObjects.Container | null = null;
   let mirageGone = false;
   let gasSign: Phaser.GameObjects.Text | null = null;
+  let ufoShadow: Phaser.GameObjects.Ellipse | null = null;
 
   function desertRand(chunk: number) {
     // per-chunk deterministic PRNG (mulberry-style over seed + chunk index)
@@ -13360,14 +13399,18 @@ export function startWorld(net: WorldNet): void {
       gfx.fillRect(x0 + rnd() * CHUNK_W, 60 + rnd() * (WORLD.h - 120), 3, 2);
     }
     c.add(gfx);
-    // sparse props (mostly empty is the brief — ~6 per chunk across 2200px of height)
-    const props = ['w-cactus', 'w-cactus', 'w-cactus2', 'w-skullcow', 'w-deadtree', 'w-cactus2'];
+    // sparse props (mostly empty is the brief — ~6 per chunk across 2200px of height).
+    // Kenney cacti (loaded at runtime) headline; px() bones/dead trees fill in.
+    const kenneyCacti = ['d-cactus1', 'd-cactus2', 'd-cactus3', 'd-cactustall'].filter((k) => sc.textures.exists(k));
+    const pxProps = ['w-cactus', 'w-cactus2', 'w-skullcow', 'w-deadtree', 'w-tumble'];
     const n = 3 + Math.floor(rnd() * 5);
     for (let i = 0; i < n; i++) {
-      const key = props[Math.floor(rnd() * props.length)];
+      const useKenney = kenneyCacti.length > 0 && rnd() < 0.6;
+      const key = useKenney ? kenneyCacti[Math.floor(rnd() * kenneyCacti.length)] : pxProps[Math.floor(rnd() * pxProps.length)];
       const px2 = x0 + 30 + rnd() * (CHUNK_W - 60), py2 = 140 + rnd() * (WORLD.h - 280);
       const sh = sc.add.image(px2, py2 + 2, 'w-shadow').setScale(TEXEL * 0.8).setAlpha(0.35).setDepth(py2 - 1);
-      const im = sc.add.image(px2, py2, key).setScale(TEXEL * (0.9 + rnd() * 0.5)).setOrigin(0.5, 1).setDepth(py2);
+      const im = sc.add.image(px2, py2, key).setOrigin(0.5, 1).setDepth(py2);
+      im.setScale(useKenney ? 0.75 + rnd() * 0.45 : TEXEL * (0.9 + rnd() * 0.5));
       c.add(sh); c.add(im);
     }
     // fading powerlines in the first chunks — civilization petering out
@@ -13385,6 +13428,12 @@ export function startWorld(net: WorldNet): void {
 
   function makeDesert(sc: Phaser.Scene) {
     desertSc = sc;
+    // runtime-load the Kenney cacti (chunks built before they land use px props; later chunks mix)
+    sc.load.image('d-cactus1', '/desert/cactus-hex1.png');
+    sc.load.image('d-cactus2', '/desert/cactus-hex2.png');
+    sc.load.image('d-cactus3', '/desert/cactus-hex3.png');
+    sc.load.image('d-cactustall', '/desert/cactus-tall.png');
+    sc.load.start();
     // fixed landmarks (drawn once, always present — the desert's constellation)
     const mark = (key: string, x: number, y: number, scale = TEXEL * 1.6) =>
       sc.add.image(x, y, key).setScale(scale).setOrigin(0.5, 1).setDepth(y);
@@ -13443,6 +13492,45 @@ export function startWorld(net: WorldNet): void {
       beasts.push({ spr: sc.add.image(tx2, ty2, 'w-tumble').setScale(TEXEL).setOrigin(0.5, 1).setDepth(ty2), x: tx2, y: ty2, tx: 0, ty: 0, kind: 'tumble', ph: i * 1.3, state: 0 });
     }
     beasts.push({ spr: sc.add.image(-9000, 1500, 'w-roadrunner').setScale(TEXEL).setOrigin(0.5, 1).setDepth(1500), x: -9000, y: 1500, tx: -9000, ty: 1500, kind: 'roadrunner', ph: 0, state: 0 });
+    // --- set dressing (unlabeled) ---
+    mark('w-cart', -3777, 1355, TEXEL * 1.2);
+    { // a workstation, unattended
+      const dy = 802;
+      sc.add.rectangle(-5555, dy, 52, 6, 0x6a4a2a).setDepth(dy);
+      sc.add.rectangle(-5573, dy + 8, 5, 14, 0x4a3018).setDepth(dy + 8);
+      sc.add.rectangle(-5537, dy + 8, 5, 14, 0x4a3018).setDepth(dy + 8);
+      sc.add.rectangle(-5560, dy - 12, 18, 13, 0x2a3a4a).setStrokeStyle(2, 0x1a2430).setDepth(dy - 4);
+      sc.add.rectangle(-5540, dy - 5, 8, 6, 0xe8e14d).setAngle(8).setDepth(dy - 4);
+      sc.add.rectangle(-5590, dy + 16, 16, 4, 0x6a4a2a).setDepth(dy + 16); // the chair has seen things
+      sc.add.rectangle(-5590, dy + 6, 4, 12, 0x6a4a2a).setDepth(dy + 8);
+    }
+    mark('w-lonedoor', -9999, 1160, TEXEL * 1.4);
+    mark('w-snowman', -16161, 962, TEXEL * 1.4);
+    { // the fallen colossus
+      const py3 = 1310;
+      const shaft = sc.add.rectangle(-18700, py3, 26, 130, 0xd8d0c0).setAngle(64).setDepth(py3);
+      shaft.setStrokeStyle(3, 0xb8b0a0);
+      sc.add.rectangle(-18770, py3 + 42, 60, 22, 0xc8a86a).setAngle(64).setAlpha(0.9).setDepth(py3 + 42);
+      sc.add.text(-18700, py3 + 78, 'OZYMANDIAS.exe\n"look on my rallies, ye mighty"', {
+        fontFamily: 'ui-monospace, monospace', fontSize: '8px', color: '#5a4a34', align: 'center',
+        backgroundColor: '#c8a86a', padding: { x: 3, y: 2 }, resolution: 2,
+      }).setOrigin(0.5, 0).setAngle(-2).setDepth(py3 + 79);
+    }
+    { // civic infrastructure
+      const by2 = 884;
+      sc.add.rectangle(-21000, by2 - 20, 4, 56, 0x8a8a94).setDepth(by2 + 8);
+      sc.add.text(-21000, by2 - 48, 'BUS STOP\nNEXT BUS: NEVER', {
+        fontFamily: 'ui-monospace, monospace', fontSize: '8px', color: '#e8eefc', align: 'center',
+        backgroundColor: '#2a4a8a', padding: { x: 4, y: 3 }, resolution: 2,
+      }).setOrigin(0.5, 1).setDepth(by2 + 9);
+    }
+    { // hospitality
+      sc.add.rectangle(-DESERT.w + 62, 1104, 26, 10, 0x8a4a2a).setStrokeStyle(1, 0x5a3018).setDepth(1104);
+      sc.add.text(-DESERT.w + 62, 1104, 'NO', {
+        fontFamily: 'ui-monospace, monospace', fontSize: '7px', color: '#e8d8c0', resolution: 2,
+      }).setOrigin(0.5).setDepth(1105);
+    }
+    ufoShadow = sc.add.ellipse(-13131, 900, 90, 30, 0x000000, 0.28).setDepth(1);
     beasts.push({ spr: sc.add.image(-16000, 700, 'w-snake').setScale(TEXEL).setOrigin(0.5, 1).setDepth(700), x: -16000, y: 700, tx: -16000, ty: 700, kind: 'snake', ph: 0, state: 0 });
   }
 
@@ -13462,6 +13550,23 @@ export function startWorld(net: WorldNet): void {
     if (selfX < 0 && !desertEntered) {
       desertEntered = true;
       showToast('🏜️ <b>THE GREAT WESTERN NOTHING</b><br>turn back. or don\'t.');
+    }
+    if (ufoShadow) { // something large passes overhead, sometimes
+      const t = now / 20000;
+      ufoShadow.setPosition(-13131 + Math.cos(t) * 1400, 900 + Math.sin(t * 2.3) * 500);
+      ufoShadow.setAlpha(Math.sin(t * 5) > 0.55 ? 0.28 : 0);
+    }
+    const near = (x: number, y: number, r: number) => Math.hypot(selfX - x, selfY - y) < r;
+    const whispers: [number, number, number, string][] = [
+      [-3777, 1355, 90, 'no returns this far out.'],
+      [-5555, 810, 100, 'someone was reachable at this desk. once.'],
+      [-9999, 1160, 90, 'it was already open.'],
+      [-16161, 962, 90, 'don\'t ask.'],
+      [-21000, 884, 90, 'the schedule is accurate.'],
+      [-DESERT.w + 62, 1104, 70, 'the mat says NO.'],
+    ];
+    for (const [wx, wy, wr, msg] of whispers) {
+      if (near(wx, wy, wr) && !desertMilestones.has(wx)) { desertMilestones.add(wx); showToast(`🏜️ <i>${msg}</i>`); }
     }
     const marks: [number, string][] = [
       [-2000, 'the grass gave up around here.'],

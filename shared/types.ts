@@ -323,6 +323,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'pet-pacman', name: '🟡 Pac-Man', slot: 'pet', price: 150000 },
   { id: 'pet-slime', name: '🟢 Crypt Slime', slot: 'pet', price: 0, locked: 'dungeon' }, // caught in the Ruins (B4 monster box)
   { id: 'pet-dragon', name: '🐉 Dragon', slot: 'pet', price: 0, locked: 'dungeon' }, // the Rob boss prize — flies around you
+  { id: 'pet-tumbleweed', name: '🌵 Rusty (Tumbleweed)', slot: 'pet', price: 0, locked: 'desert' }, // Pete's road trip fund. It's a friend.
   // New common loot-box refresh items
   { id: 'beret', name: 'Beret', slot: 'hat', price: 1000 },
   { id: 'catears', name: 'Cat Ears', slot: 'hat', price: 2000 }, // animated
@@ -502,13 +503,14 @@ export function carColorById(id: string | null | undefined): CarColorSpec | null
 // follows you around (unlike a car, which replaces/IS the avatar while driving). A pet id
 // matches a COSMETICS entry with slot 'pet'. `kind` selects the custom drawn sprite in the
 // World renderer; `emoji` is just the small shop-tile preview glyph.
-export type PetKind = 'rock' | 'pikachu' | 'pacman' | 'slime' | 'dragon';
+export type PetKind = 'rock' | 'pikachu' | 'pacman' | 'slime' | 'dragon' | 'tumbleweed';
 export const PETS: readonly { id: string; emoji: string; kind: PetKind }[] = [
   { id: 'pet-rock', emoji: '🪨', kind: 'rock' },       // a googly-eyed rock
   { id: 'pet-pikachu', emoji: '⚡', kind: 'pikachu' },  // Pikachu
   { id: 'pet-pacman', emoji: '🟡', kind: 'pacman' },    // Pac-Man, chomping as it follows
   { id: 'pet-slime', emoji: '🟢', kind: 'slime' },     // a Crypt Slime caught in the Ruins
-  { id: 'pet-dragon', emoji: '🐉', kind: 'dragon' },   // a dragon that flies around you (Rob boss prize)
+  { id: 'pet-dragon', emoji: '🐉', kind: 'dragon' },   // a dragon that flies around you (Rob boss prize),
+  { id: 'pet-tumbleweed', emoji: '🌵', kind: 'tumbleweed' },
 ];
 export function petById(id: string | null | undefined) {
   if (!id) return null;
