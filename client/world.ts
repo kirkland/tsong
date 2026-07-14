@@ -10183,6 +10183,67 @@ export function startWorld(net: WorldNet): void {
       g.generateTexture('w-snowman', 12, 16);
     }
     {
+      const MTL = 0x8a929e, MTL_D = 0x5a626e, GLOW = 0xe8b84b;
+      g.clear();
+      px(0, 0, 16, 22, MTL_D); px(1, 1, 14, 20, MTL);
+      px(2, 2, 6, 19, 0x6a727e); px(9, 2, 6, 19, 0x6a727e);
+      px(7, 2, 1, 19, MTL_D);
+      px(6, 0, 4, 1, GLOW);
+      g.generateTexture('w-lift', 16, 22);
+    }
+    {
+      const BLU = 0x3a6ab8, RED2 = 0xc0392b, SKIN2 = 0xf6d3b0, BEARD = 0xe8e0d0;
+      g.clear();
+      px(3, 0, 4, 5, RED2);
+      px(2, 5, 6, 3, SKIN2); px(3, 6, 4, 3, BEARD);
+      px(2, 9, 6, 6, BLU); px(2, 13, 6, 2, 0x2a4a8a);
+      px(1, 10, 1, 4, SKIN2); px(8, 10, 1, 4, SKIN2);
+      g.generateTexture('w-gnome', 10, 15);
+    }
+    {
+      const GRT = 0x4a525e, GRT_D = 0x2a323e;
+      g.clear();
+      px(0, 0, 14, 8, GRT_D); px(1, 1, 12, 6, GRT);
+      for (let i = 0; i < 5; i++) px(2 + i * 2.4 | 0, 2, 1, 4, GRT_D);
+      g.generateTexture('w-grate', 14, 8);
+    }
+    {
+      const SHED = 0xb89a6a, SHED_D = 0x8a6f42, ROOF2 = 0x8e2a20;
+      g.clear();
+      px(1, 6, 18, 12, SHED); px(1, 6, 18, 1, SHED_D);
+      px(0, 2, 20, 4, ROOF2);
+      px(8, 9, 5, 9, SHED_D); px(11, 13, 1, 1, 0xe8b84b);
+      px(3, 9, 4, 4, 0x2a3a4a);
+      g.generateTexture('w-museum', 20, 18);
+    }
+    {
+      const PET2 = 0xe8c832, CTR = 0x6a4a1a, STEM = 0x3f7a3a;
+      g.clear();
+      px(5, 8, 2, 14, STEM); px(3, 14, 3, 2, STEM); px(7, 12, 3, 2, STEM);
+      px(3, 2, 6, 6, PET2); px(1, 4, 3, 3, PET2); px(8, 4, 3, 3, PET2);
+      px(4, 0, 4, 3, PET2); px(4, 7, 4, 3, PET2);
+      px(4, 3, 4, 4, CTR);
+      g.generateTexture('w-bigflower', 12, 22);
+    }
+    {
+      const DMP = 0x2a6a3e, DMP_D = 0x1a4a2a, LID = 0x3a7a4e;
+      g.clear();
+      px(1, 4, 16, 9, DMP); px(1, 11, 16, 2, DMP_D);
+      px(0, 2, 18, 3, LID); px(0, 2, 18, 1, DMP_D);
+      px(3, 6, 2, 4, DMP_D); px(8, 6, 2, 4, DMP_D); px(13, 6, 2, 4, DMP_D);
+      g.generateTexture('w-dumpster', 18, 14);
+    }
+    {
+      const WHL = 0x4a6a9a, WHL_D = 0x35507a, BELLY = 0xc8d4e0;
+      g.clear();
+      px(4, 4, 34, 12, WHL); px(6, 12, 30, 4, BELLY);
+      px(0, 2, 6, 8, WHL); px(0, 0, 4, 4, WHL_D);
+      px(38, 6, 6, 4, WHL_D); px(42, 2, 4, 4, WHL_D); px(42, 10, 4, 4, WHL_D);
+      px(8, 7, 2, 2, 0x141a24);
+      px(10, 1, 1, 3, BELLY); px(11, 0, 1, 2, BELLY); px(12, 1, 1, 3, BELLY);
+      g.generateTexture('w-leviathan', 46, 16);
+    }
+    {
       // distant bird — a little dark seagull chevron (11×5), flap is done by squashing scaleY
       const B = 0x2a2f3a;
       g.clear();
@@ -13699,14 +13760,194 @@ export function startWorld(net: WorldNet): void {
     // 🐈 today's roof cat
     const spot = CAT_ROOFS[Math.floor(Date.now() / 86400000) % CAT_ROOFS.length];
     roofCat = sc.add.image(spot.x, spot.y, 'w-cat').setScale(TEXEL).setOrigin(0.5, 1).setDepth(spot.y);
+    makeCuriosities(sc);
     wishHandler = (total, granted) => {
       wishPlaque?.setText(`⛲ town wishes: ${total.toLocaleString()} · X to wish (10🪙)`);
       if (granted) showToast('⛲✨ <b>The fountain heard you.</b><br>Title unlocked: Wisher');
     };
   }
 
+  // --- assorted municipal improvements (details withheld by request) --------------------
+  let liftDoor: Phaser.GameObjects.Image | null = null;
+  let liftBusyUntil = 0;
+  let leviathan: Phaser.GameObjects.Image | null = null;
+  let leviathanAt = 0;
+  let gnomeA: Phaser.GameObjects.Image | null = null;
+  let gnomeB: Phaser.GameObjects.Image | null = null;
+  let councilBirds: Phaser.GameObjects.Image[] = [];
+  let chalkBall: Phaser.GameObjects.Arc | null = null;
+  let flower: Phaser.GameObjects.Image | null = null;
+  const curiositySeen = new Set<string>();
+  const SPOTS = {
+    lift: { x: 2680, y: 420 },
+    grate: { x: 1385, y: 1615 },
+    museum: { x: 585, y: 1740 },
+    gnomes: { x: 3120, y: 1660 },
+    chalk: { x: 950, y: 420 },
+    flower: { x: 2255, y: 1445 },
+    dumpster: { x: 1230, y: 330 },
+    crack: { x: 4770, y: 360 },
+    council: { x: 1600, y: 240 },
+  };
+
+  function makeCuriosities(sc: Phaser.Scene) {
+    liftDoor = sc.add.image(SPOTS.lift.x, SPOTS.lift.y, 'w-lift').setScale(TEXEL * 1.4).setOrigin(0.5, 1).setDepth(SPOTS.lift.y);
+    sc.add.text(SPOTS.lift.x, SPOTS.lift.y - 66, '▼', { fontSize: '10px', color: '#e8b84b', resolution: 2 }).setOrigin(0.5, 1).setDepth(SPOTS.lift.y);
+    sc.add.image(SPOTS.grate.x, SPOTS.grate.y, 'w-grate').setScale(TEXEL * 1.2).setOrigin(0.5, 1).setDepth(SPOTS.grate.y - 1);
+    sc.add.image(SPOTS.museum.x, SPOTS.museum.y, 'w-museum').setScale(TEXEL * 1.6).setOrigin(0.5, 1).setDepth(SPOTS.museum.y);
+    sc.add.text(SPOTS.museum.x, SPOTS.museum.y - 62, 'MVSEVM OF THE NICKEL', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '8px', color: '#3a2a18', backgroundColor: '#c8a86a',
+      padding: { x: 3, y: 2 }, resolution: 2,
+    }).setOrigin(0.5, 1).setDepth(SPOTS.museum.y + 1);
+    const swap = Math.floor(Date.now() / 86400000) % 2 === 0;
+    gnomeA = sc.add.image(SPOTS.gnomes.x - (swap ? 26 : -26), SPOTS.gnomes.y, 'w-gnome').setScale(TEXEL).setOrigin(0.5, 1).setDepth(SPOTS.gnomes.y);
+    gnomeB = sc.add.image(SPOTS.gnomes.x + (swap ? 26 : -26), SPOTS.gnomes.y, 'w-gnome').setScale(TEXEL).setOrigin(0.5, 1).setDepth(SPOTS.gnomes.y).setFlipX(true).setTint(0xffd0d0);
+    sc.add.text(SPOTS.gnomes.x, SPOTS.gnomes.y + 12, `day ${4381 + Math.floor((Date.now() - 1730000000000) / 86400000)} of the standoff`, {
+      fontFamily: 'ui-monospace, monospace', fontSize: '8px', color: '#5a4a34', backgroundColor: '#c8a86a', padding: { x: 3, y: 2 }, resolution: 2,
+    }).setOrigin(0.5, 0).setDepth(SPOTS.gnomes.y + 12);
+    { // regulation half-court, chalk, eternal
+      const g2 = sc.add.graphics().setDepth(2);
+      g2.lineStyle(3, 0xffffff, 0.35);
+      g2.strokeRect(SPOTS.chalk.x - 110, SPOTS.chalk.y - 60, 220, 120);
+      g2.lineBetween(SPOTS.chalk.x, SPOTS.chalk.y - 60, SPOTS.chalk.x, SPOTS.chalk.y + 60);
+      g2.fillStyle(0xffffff, 0.35);
+      g2.fillRect(SPOTS.chalk.x - 104, SPOTS.chalk.y - 22, 6, 44);
+      g2.fillRect(SPOTS.chalk.x + 98, SPOTS.chalk.y - 22, 6, 44);
+      chalkBall = sc.add.circle(SPOTS.chalk.x, SPOTS.chalk.y, 5, 0xffffff, 0.5).setDepth(3);
+    }
+    flower = sc.add.image(SPOTS.flower.x, SPOTS.flower.y, 'w-bigflower').setScale(TEXEL * 1.8).setOrigin(0.5, 1).setDepth(SPOTS.flower.y);
+    sc.add.text(SPOTS.flower.x, SPOTS.flower.y + 10, 'follows the money', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '8px', color: '#5a4a34', resolution: 2,
+    }).setOrigin(0.5, 0).setAlpha(0.7).setDepth(SPOTS.flower.y + 10);
+    sc.add.image(SPOTS.dumpster.x, SPOTS.dumpster.y, 'w-dumpster').setScale(TEXEL * 1.4).setOrigin(0.5, 1).setDepth(SPOTS.dumpster.y);
+    { // maintenance backlog
+      const g3 = sc.add.graphics().setDepth(1);
+      g3.fillStyle(0x000000, 0.9);
+      g3.beginPath();
+      g3.moveTo(SPOTS.crack.x - 4, SPOTS.crack.y - 90);
+      g3.lineTo(SPOTS.crack.x + 6, SPOTS.crack.y - 40);
+      g3.lineTo(SPOTS.crack.x - 8, SPOTS.crack.y + 10);
+      g3.lineTo(SPOTS.crack.x + 3, SPOTS.crack.y + 70);
+      g3.lineTo(SPOTS.crack.x + 14, SPOTS.crack.y + 20);
+      g3.lineTo(SPOTS.crack.x + 8, SPOTS.crack.y - 50);
+      g3.closePath();
+      g3.fillPath();
+      for (let i = 0; i < 9; i++) {
+        const mx = SPOTS.crack.x - 6 + ((i * 53) % 18), my = SPOTS.crack.y - 80 + i * 17;
+        sc.add.rectangle(mx, my, 2, 2, [0xff00ff, 0x00ffff, 0xffffff][i % 3], 0.8).setDepth(2);
+      }
+      sc.add.text(SPOTS.crack.x - 20, SPOTS.crack.y + 84, '// TODO: fix this', {
+        fontFamily: 'ui-monospace, monospace', fontSize: '8px', color: '#8a8478', resolution: 2,
+      }).setOrigin(0.5, 0).setAngle(-4).setDepth(3);
+    }
+    leviathan = sc.add.image(-500, -500, 'w-leviathan').setScale(TEXEL * 2.2).setDepth(100001).setVisible(false);
+    for (let i = 0; i < 7; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const bx = SPOTS.council.x + Math.cos(a) * (i === 6 ? 0 : 46);
+      const by = SPOTS.council.y + Math.sin(a) * (i === 6 ? 0 : 30);
+      const b = sc.add.image(bx, by, 'w-pigeon').setScale(TEXEL).setOrigin(0.5, 1).setDepth(by).setVisible(false);
+      if (i !== 6) b.setFlipX(bx > SPOTS.council.x);
+      councilBirds.push(b);
+    }
+  }
+
+  function updateCuriosities(now: number) {
+    const sc2 = lifeSc;
+    if (!sc2) return;
+    if (chalkBall) { // the rally never ends
+      const t = now / 900;
+      const bx = SPOTS.chalk.x + Math.sin(t) * 96;
+      chalkBall.setPosition(bx, SPOTS.chalk.y + Math.sin(t * 3.7) * 44);
+      chalkBall.setAlpha(0.35 + 0.2 * Math.sin(now / 300));
+    }
+    if (flower) { // heliotropism, revised
+      const casinoDir = Math.atan2(0, 1) + Math.sin(now / 4000) * 0.06;
+      flower.setRotation(-0.12 + casinoDir);
+    }
+    if (leviathan) { // it surfaces when it surfaces
+      const cycle = Math.floor(now / 60000);
+      if (cycle % 9 === 3 && now - leviathanAt > 120000) {
+        leviathanAt = now;
+        leviathan.setVisible(true).setPosition(2110 - 700, 1010);
+        leviathan.setFlipX(false);
+        sc2.tweens.add({
+          targets: leviathan,
+          x: 2110 + 700,
+          duration: 9000,
+          ease: 'Sine.easeInOut',
+          onUpdate: (tw) => {
+            const pr = tw.progress;
+            leviathan!.setY(1010 - Math.sin(pr * Math.PI) * 330);
+            leviathan!.setRotation(Math.cos(pr * Math.PI) * -0.35);
+          },
+          onComplete: () => leviathan!.setVisible(false),
+        });
+        if (Math.hypot(selfX - 2110, selfY - 1000) < 900 && !curiositySeen.has('leviathan')) {
+          curiositySeen.add('leviathan');
+          showToast('🐋 <i>nobody will believe you.</i>');
+        }
+      }
+    }
+    const hr = new Date().getHours();
+    const councilNow = hr === 3;
+    for (const b of councilBirds) b.setVisible(councilNow);
+    if (councilNow && Math.hypot(selfX - SPOTS.council.x, selfY - SPOTS.council.y) < 160 && !curiositySeen.has('council')) {
+      curiositySeen.add('council');
+      showToast('🐦 <i>you were not supposed to see this.</i>');
+    }
+    if (Math.hypot(selfX - SPOTS.crack.x, selfY - SPOTS.crack.y) < 90 && !curiositySeen.has('crack')) {
+      curiositySeen.add('crack');
+      showToast('<i>don\'t look at it too long. it looks back in hex.</i>');
+    }
+  }
+
+  function curiosityInteract(): boolean {
+    const nearS = (p2: { x: number; y: number }, r: number) => Math.hypot(selfX - p2.x, selfY - p2.y) < r;
+    if (liftDoor && nearS(SPOTS.lift, 50)) {
+      const nowT = performance.now();
+      if (nowT < liftBusyUntil) return true;
+      liftBusyUntil = nowT + 4000;
+      const roll = Math.random();
+      if (roll < 0.12) {
+        showToast('🛗 <b>ding.</b> doors open somewhere else entirely.');
+        selfX = 2000; selfY = 990; // pier-adjacent. the elevator does not explain itself
+      } else {
+        showToast(pick2(['🛗 <b>ding.</b> the doors open onto a wall of dirt. floor B?', '🛗 muzak plays. nothing else happens.', '🛗 <b>ding.</b> same floor. it seems proud of this.', '🛗 the button lights up. that\'s it. that\'s the feature.']));
+      }
+      return true;
+    }
+    if (nearS(SPOTS.grate, 46)) {
+      const hr2 = new Date().getHours();
+      showToast(hr2 >= 21 || hr2 < 2
+        ? '🎶 <i>from below: disco. distant, but committed. the rats are having a better night than you.</i>'
+        : '🕳️ <i>silence below. the grate is saving itself for tonight.</i>');
+      return true;
+    }
+    if (nearS(SPOTS.museum, 56)) {
+      showToast('🏛️ <b>MVSEVM OF THE NICKEL</b><br><i>exhibit: the nickel. donated under duress by the man at the fountain. no photography.</i>');
+      return true;
+    }
+    if (nearS(SPOTS.dumpster, 52)) {
+      showToast(pick2([
+        '🗑️ a signed photo of Rob. signed by someone else.',
+        '🗑️ thirty-one paddle grips, all left-handed.',
+        '🗑️ a to-do list: "1. win. 2. see 1."',
+        '🗑️ an unopened protein bar. you leave it. it has an owner somewhere.',
+        '🗑️ blueprints for a SECOND fountain. suppressed, clearly.',
+      ]));
+      return true;
+    }
+    if (gnomeA && nearS(SPOTS.gnomes, 60)) {
+      showToast('🧙 <i>neither has blinked since the incident. they swap ground at midnight. nobody has seen it happen.</i>');
+      return true;
+    }
+    return false;
+  }
+  const pick2 = (arr: string[]) => arr[Math.floor(Math.random() * arr.length)];
+
   function townInteract(): boolean {
     if (dialogOpen || talkOpen || inInterior || inDungeon) return false;
+    if (curiosityInteract()) return true;
     if (Math.hypot(selfX - PLAZA.x, selfY - PLAZA.y) < 120) {
       net.wish();
       const sc2 = lifeSc;
@@ -13814,6 +14055,7 @@ export function startWorld(net: WorldNet): void {
     }
     // roof cat breathes
     if (roofCat) roofCat.setScale(TEXEL, TEXEL * (1 + Math.sin(now / 1100) * 0.05));
+    updateCuriosities(now);
     // the clocktower chimes on the hour — brief meteor shower over town
     const hour = new Date().getHours();
     if (hour !== lastChimeHour && lifeSc) {
