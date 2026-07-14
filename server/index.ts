@@ -435,6 +435,24 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'clubDrink':
         lobby.clubDrink(ws);
         break;
+      case 'bgJoin':
+        if (typeof msg.game === 'string') lobby.bgJoin(ws, msg.game);
+        break;
+      case 'bgLeave':
+        if (typeof msg.game === 'string') lobby.bgLeave(ws, msg.game);
+        break;
+      case 'bgStake':
+        if (typeof msg.game === 'string' && typeof msg.stake === 'number') lobby.bgStake(ws, msg.game, msg.stake);
+        break;
+      case 'bgStart':
+        if (typeof msg.game === 'string') lobby.bgStart(ws, msg.game).catch((e) => console.error('bg start failed:', e));
+        break;
+      case 'bgResult':
+        if (typeof msg.game === 'string' && typeof msg.winner === 'number') lobby.bgResult(ws, msg.game, msg.winner);
+        break;
+      case 'bgRelay':
+        if (typeof msg.game === 'string' && msg.data !== undefined) lobby.bgRelay(ws, msg.game, msg.data);
+        break;
       case 'tntJoin':
         lobby.tntJoin(ws);
         break;
