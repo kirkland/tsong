@@ -10244,6 +10244,15 @@ export function startWorld(net: WorldNet): void {
       g.generateTexture('w-leviathan', 46, 16);
     }
     {
+      const F = 0x101018;
+      g.clear();
+      px(3, 0, 4, 4, F);
+      px(2, 4, 6, 7, F);
+      px(1, 5, 1, 4, F); px(8, 5, 1, 4, F);
+      px(3, 11, 2, 5, F); px(6, 11, 2, 5, F);
+      g.generateTexture('w-figure', 10, 16);
+    }
+    {
       // distant bird — a little dark seagull chevron (11×5), flap is done by squashing scaleY
       const B = 0x2a2f3a;
       g.clear();
@@ -13851,6 +13860,38 @@ export function startWorld(net: WorldNet): void {
     }
   }
 
+  // (unlisted)
+  let figure: Phaser.GameObjects.Image | null = null;
+  let figureLabel: Phaser.GameObjects.Text | null = null;
+  let figureNextAt = performance.now() + (8 + Math.random() * 12) * 60000;
+  let figureSightings = 0;
+
+  function updateFigure(now: number) {
+    const sc3 = lifeSc;
+    if (!sc3) return;
+    if (!figure && figureSightings < 2 && now >= figureNextAt && !inInterior && !inDungeon) {
+      const a = Math.random() * Math.PI * 2;
+      const d = 480 + Math.random() * 320;
+      const fx2 = clamp(selfX + Math.cos(a) * d, 60, WORLD.w - 60);
+      const fy2 = clamp(selfY + Math.sin(a) * d, 60, WORLD.h - 60);
+      figure = sc3.add.image(fx2, fy2, 'w-figure').setScale(TEXEL * (figureSightings === 1 ? 1.06 : 1)).setOrigin(0.5, 1).setDepth(fy2).setAlpha(0.92);
+      figure.setFlipX(selfX < fx2);
+      figureLabel = sc3.add.text(fx2, fy2 - 38, net.name() || '', {
+        fontFamily: 'ui-monospace, monospace', fontSize: '10px', color: '#6a6a78',
+        stroke: '#0b1020', strokeThickness: 3, resolution: 2,
+      }).setOrigin(0.5, 1).setDepth(fy2);
+    }
+    if (figure) {
+      figure.setFlipX(selfX < figure.x);
+      if (Math.hypot(selfX - figure.x, selfY - figure.y) < 320) {
+        figure.destroy(); figureLabel?.destroy();
+        figure = null; figureLabel = null;
+        figureSightings++;
+        figureNextAt = now + (10 + Math.random() * 15) * 60000;
+      }
+    }
+  }
+
   function updateCuriosities(now: number) {
     const sc2 = lifeSc;
     if (!sc2) return;
@@ -14056,6 +14097,7 @@ export function startWorld(net: WorldNet): void {
     // roof cat breathes
     if (roofCat) roofCat.setScale(TEXEL, TEXEL * (1 + Math.sin(now / 1100) * 0.05));
     updateCuriosities(now);
+    updateFigure(now);
     // the clocktower chimes on the hour — brief meteor shower over town
     const hour = new Date().getHours();
     if (hour !== lastChimeHour && lifeSc) {
