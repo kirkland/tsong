@@ -13982,42 +13982,102 @@ export function startWorld(net: WorldNet): void {
   const CLUBHOUSE = { x: 2450, y: -300 };
 
   function makeClub(sc: Phaser.Scene) {
-    // grounds: deep manicured green with mow stripes (the most golf a rectangle can be)
-    sc.add.rectangle(WORLD.w / 2, -CLUB.h / 2, WORLD.w, CLUB.h, 0x3f8a3e).setDepth(-20);
-    const mow = sc.add.graphics().setDepth(-19);
+    // NOTE on depth: up here y (and thus avatar depth) is NEGATIVE, so ground layers must sit far
+    // below -CLUB.h or they paint over the players walking on them. Everything flat lives in the
+    // GD stack; everything standing gets depth = its base y and sorts with avatars normally.
+    const GD = -9500;
+    const rnd = mulberry32(0xC1AB);
+    // grounds: deep manicured green, mow-striped and mottled (the most golf a rectangle can be)
+    sc.add.rectangle(WORLD.w / 2, -CLUB.h / 2, WORLD.w, CLUB.h, 0x3f8a3e).setDepth(GD);
+    const mow = sc.add.graphics().setDepth(GD + 1);
     for (let y = -CLUB.h; y < 0; y += 64) {
-      mow.fillStyle(0x4a9a48, (y / 64) % 2 === 0 ? 0.5 : 0);
-      mow.fillRect(0, y, WORLD.w, 64);
+      if ((y / 64) % 2 === 0) { mow.fillStyle(0x4a9a48, 0.45); mow.fillRect(0, y, WORLD.w, 64); }
     }
-    // fairway rough edges
-    mow.fillStyle(0x35722f, 0.6);
-    mow.fillRect(0, -CLUB.h, WORLD.w, 26);
-    // bunkers (Bill lives in the big one)
+    for (let i = 0; i < 80; i++) { // organic patchiness so it isn't a flat green void
+      mow.fillStyle(rnd() > 0.5 ? 0x37803a : 0x46a04a, 0.30);
+      mow.fillEllipse(rnd() * WORLD.w, -rnd() * (CLUB.h - 80) - 40, 90 + rnd() * 200, 24 + rnd() * 44);
+    }
+    mow.fillStyle(0x2f6329, 0.9); mow.fillRect(0, -CLUB.h, WORLD.w, 54); // the deep rough at the property line
+    // cart paths: tan ribbons from the gate to everywhere that matters
+    const path = sc.add.graphics().setDepth(GD + 2);
+    path.lineStyle(30, 0xcbb083, 0.92);
+    path.beginPath();
+    path.moveTo(2450, -6); path.lineTo(2450, -196);                       // gate → clubhouse
+    path.moveTo(2450, -196); path.lineTo(1800, -480); path.lineTo(1150, -640); path.lineTo(TEE.x + 40, TEE.y + 10); // west loop: green 1 + the tee
+    path.moveTo(1800, -480); path.lineTo(2060, -930);                     // spur up to the windmill
+    path.moveTo(2450, -196); path.lineTo(3050, -350); path.lineTo(3350, -440); // east loop: the pond + Bill's bunker
+    path.strokePath();
+    // the boundary: a white post-and-rail fence with a proud gate gap (and one flattened span)
+    const RAIL = 0xe8e4d8, RAIL_D = 0xd4cfc0;
+    for (const [x0, x1] of [[30, 2330], [2570, 3540], [3680, WORLD.w - 30]] as [number, number][]) {
+      sc.add.rectangle(x0, -26, x1 - x0, 5, RAIL_D).setOrigin(0, 0).setDepth(-6);
+      sc.add.rectangle(x0, -14, x1 - x0, 5, RAIL_D).setOrigin(0, 0).setDepth(-6);
+      for (let px3 = x0; px3 < x1; px3 += 84) sc.add.rectangle(px3, -34, 8, 32, RAIL).setOrigin(0.5, 0).setDepth(-3);
+    }
+    sc.add.rectangle(3610, -10, 8, 32, RAIL).setAngle(78).setDepth(-4);   // the flattened span (cart-shaped dent)
+    sc.add.rectangle(3612, -8, 60, 5, RAIL_D).setAngle(6).setDepth(-5);
+    // bunkers (Bill lives in the big one), rimmed and speckled
     const bunkers: [number, number, number, number][] = [[3350, -500, 260, 110], [1700, -950, 180, 80], [700, -350, 150, 70], [4100, -800, 200, 90]];
+    const speck = sc.add.graphics().setDepth(GD + 6);
     for (const [bx, by, bw, bh] of bunkers) {
-      sc.add.ellipse(bx, by, bw, bh, 0xd8c088).setDepth(-18);
-      sc.add.ellipse(bx, by, bw - 14, bh - 12, 0xe8d4a0).setDepth(-17);
+      sc.add.ellipse(bx, by, bw + 16, bh + 12, 0x35722f).setDepth(GD + 3); // the lip
+      sc.add.ellipse(bx, by, bw, bh, 0xd8c088).setDepth(GD + 4);
+      sc.add.ellipse(bx, by, bw - 14, bh - 12, 0xe8d4a0).setDepth(GD + 5);
+      speck.fillStyle(0xc8a86a, 0.8);
+      for (let i = 0; i < 14; i++) {
+        const a = rnd() * Math.PI * 2, rr = Math.sqrt(rnd()) * 0.42;
+        speck.fillRect(bx + Math.cos(a) * bw * rr, by + Math.sin(a) * bh * rr, 3, 2);
+      }
     }
-    // greens + numbered flags
+    // greens: fringe ring + putting surface + cup + numbered flag (flags y-sort with avatars)
     const holes: [number, number, string][] = [[1150, -720, '1'], [2100, -1050, '2'], [3000, -820, '3'], [3900, -1100, '4'], [520, -1050, '7']];
     for (const [hx, hy, num] of holes) {
-      sc.add.ellipse(hx, hy, 190, 96, 0x5aba58).setDepth(-16);
-      sc.add.circle(hx, hy, 6, 0x1a2410).setDepth(-15);
-      const pole = sc.add.rectangle(hx, hy - 26, 3, 52, 0xe8e0d0).setDepth(hy + 2);
-      void pole;
-      const flag = sc.add.triangle(hx + 12, hy - 44, 0, 0, 22, 7, 0, 14, 0xc0392b).setDepth(hy + 2);
-      void flag;
-      sc.add.text(hx + 8, hy - 46, num, { fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#fff', resolution: 2 }).setOrigin(0, 0.5).setDepth(hy + 3);
+      sc.add.ellipse(hx, hy, 214, 112, 0x4da24b).setDepth(GD + 3);        // fringe
+      sc.add.ellipse(hx, hy, 190, 96, 0x5fc25c).setDepth(GD + 4);         // the green
+      sc.add.ellipse(hx - 14, hy - 8, 120, 52, 0x6ed26a, 0.55).setDepth(GD + 5); // sheen
+      sc.add.circle(hx, hy, 6, 0x1a2410).setDepth(GD + 6);
+      sc.add.rectangle(hx, hy - 26, 3, 52, 0xe8e0d0).setDepth(hy);
+      sc.add.triangle(hx + 12, hy - 44, 0, 0, 22, 7, 0, 14, 0xc0392b).setDepth(hy);
+      sc.add.text(hx + 8, hy - 46, num, { fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#fff', resolution: 2 }).setOrigin(0, 0.5).setDepth(hy + 1);
     }
-    // the 19th hole: flag planted IN the club pond
-    sc.add.ellipse(3050, -260, 300, 130, 0x3a7a9a).setDepth(-16);
-    sc.add.ellipse(3050, -260, 260, 104, 0x4a9aba).setDepth(-15);
-    sc.add.rectangle(3050, -290, 3, 60, 0xe8e0d0).setDepth(-240);
-    sc.add.triangle(3062, -312, 0, 0, 22, 7, 0, 14, 0xc0392b).setDepth(-240);
-    sc.add.text(3058, -314, '19', { fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#fff', resolution: 2 }).setOrigin(0, 0.5).setDepth(-239);
-    // the REGULATION windmill
+    // the 19th hole: flag planted IN the club pond, which also gets reeds and a glint
+    sc.add.ellipse(3050, -260, 320, 142, 0x2f6329).setDepth(GD + 3);      // the bank
+    sc.add.ellipse(3050, -260, 300, 130, 0x3a7a9a).setDepth(GD + 4);
+    sc.add.ellipse(3050, -260, 260, 104, 0x4a9aba).setDepth(GD + 5);
+    sc.add.ellipse(3010, -282, 120, 34, 0x6ab8d4, 0.5).setDepth(GD + 6);  // the glint
+    for (let i = 0; i < 7; i++) { // reeds around the rim
+      const a = rnd() * Math.PI * 2;
+      const rx3 = 3050 + Math.cos(a) * 158, ry3 = -260 + Math.sin(a) * 68;
+      sc.add.rectangle(rx3, ry3, 3, 14 + rnd() * 8, 0x4a7a3a).setOrigin(0.5, 1).setDepth(ry3);
+    }
+    sc.add.rectangle(3050, -290, 3, 60, 0xe8e0d0).setDepth(-259);
+    sc.add.triangle(3062, -312, 0, 0, 22, 7, 0, 14, 0xc0392b).setDepth(-259);
+    sc.add.text(3058, -314, '19', { fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#fff', resolution: 2 }).setOrigin(0, 0.5).setDepth(-258);
+    // landscaping: a stately treeline along the far edge + scattered clumps (same Kenney canopy as town)
+    const clear2 = (x: number, y: number) =>
+      Math.hypot(x - CLUBHOUSE.x, y - CLUBHOUSE.y) > 260 && Math.hypot(x - 2100, y + 1000) > 180 &&
+      Math.hypot(x - TEE.x, y - TEE.y) > 120 && Math.hypot(x - 3050, y + 260) > 240 &&
+      !holes.some(([hx, hy]) => Math.hypot(x - hx, y - hy) < 170) &&
+      !bunkers.some(([bx, by, bw]) => Math.hypot(x - bx, y - by) < bw / 2 + 60);
+    for (let i = 0; i < 46; i++) { // the treeline
+      const tx3 = 40 + rnd() * (WORLD.w - 80), ty3 = -CLUB.h + 44 + rnd() * 60;
+      const img = sc.add.image(tx3, ty3, 'townFrames', rnd() > 0.5 ? TT.pines[Math.floor(rnd() * 2)] : TT.trees[Math.floor(rnd() * 2)])
+        .setScale(TEXEL * (1.5 + rnd() * 0.5)).setOrigin(0.5, 0.92).setDepth(ty3);
+      swayers.push(img);
+    }
+    for (let i = 0; i < 26; i++) { // specimen clumps about the grounds
+      const tx3 = 60 + rnd() * (WORLD.w - 120), ty3 = -80 - rnd() * (CLUB.h - 220);
+      if (!clear2(tx3, ty3)) continue;
+      sc.add.image(tx3 + 3, ty3 + 1, 'w-shadow').setScale(TEXEL * 1.5).setOrigin(0.5, 0.4).setDepth(ty3 - 1).setAlpha(0.4);
+      const img = sc.add.image(tx3, ty3, 'townFrames', rnd() > 0.4 ? TT.trees[Math.floor(rnd() * 2)] : TT.pines[Math.floor(rnd() * 2)])
+        .setScale(TEXEL * (1.3 + rnd() * 0.6)).setOrigin(0.5, 0.92).setDepth(ty3);
+      swayers.push(img);
+    }
+    // the REGULATION windmill, now on a landscaped mound
     const wm = { x: 2100, y: -1000 };
+    sc.add.ellipse(wm.x, wm.y + 4, 120, 44, 0x4da24b).setDepth(GD + 3);
     sc.add.rectangle(wm.x, wm.y - 30, 46, 74, 0x8e4a2a).setDepth(wm.y);
+    sc.add.rectangle(wm.x - 23, wm.y - 30, 6, 74, 0x7a3c20).setDepth(wm.y);
     sc.add.triangle(wm.x, wm.y - 84, 0, 26, 30, 0, 60, 26, 0x6a3018).setOrigin(0.5, 0).setDepth(wm.y);
     sc.add.rectangle(wm.x, wm.y - 8, 12, 20, 0x4a2810).setDepth(wm.y + 1);
     windmillBlades = sc.add.container(wm.x, wm.y - 62);
@@ -14027,30 +14087,78 @@ export function startWorld(net: WorldNet): void {
       windmillBlades.add(blade);
     }
     windmillBlades.setDepth(wm.y + 2);
-    // clubhouse (the door works; the gate does not)
-    sc.add.rectangle(CLUBHOUSE.x, CLUBHOUSE.y, 220, 110, 0xf0ead8).setStrokeStyle(3, 0xc8b890).setDepth(CLUBHOUSE.y + 55);
-    sc.add.rectangle(CLUBHOUSE.x, CLUBHOUSE.y - 66, 240, 26, 0x8e2a20).setDepth(CLUBHOUSE.y + 56);
-    sc.add.rectangle(CLUBHOUSE.x, CLUBHOUSE.y + 34, 34, 42, 0x6a4a2a).setDepth(CLUBHOUSE.y + 57);
-    sc.add.text(CLUBHOUSE.x, CLUBHOUSE.y - 84, 'TSONG COUNTRY CLVB', {
-      fontFamily: 'ui-monospace, monospace', fontSize: '12px', color: '#3a2a18', resolution: 2,
-    }).setOrigin(0.5, 1).setDepth(CLUBHOUSE.y + 58);
-    // the gate: two proud posts, no fence, one plaque
-    sc.add.rectangle(2380, -30, 14, 60, 0xc8b890).setDepth(-25);
-    sc.add.rectangle(2520, -30, 14, 60, 0xc8b890).setDepth(-25);
-    sc.add.text(2450, -64, 'MEMBERS ONLY', {
+    // THE CLUBHOUSE — white clapboard, green trim, a portico it does not need (the door works; the gate does not)
+    {
+      const CH = CLUBHOUSE, base = CH.y + 90; // front step line: everything sorts against this
+      sc.add.rectangle(CH.x + 14, CH.y + 96, 320, 22, 0x0a1226, 0.30).setOrigin(0.5, 0).setDepth(GD + 7); // ground shadow
+      sc.add.rectangle(CH.x, CH.y + 20, 300, 140, 0xf4efe2).setStrokeStyle(3, 0xc8bfa8).setDepth(base);   // clapboard body
+      const clap = sc.add.graphics().setDepth(base + 1);
+      clap.lineStyle(1, 0xd8d0bc, 0.9);
+      for (let cy2 = CH.y - 40; cy2 < CH.y + 84; cy2 += 12) clap.lineBetween(CH.x - 148, cy2, CH.x + 148, cy2);
+      sc.add.rectangle(CH.x, CH.y - 66, 330, 42, 0x2f6b3f).setDepth(base + 2);                            // hipped green roof
+      sc.add.rectangle(CH.x, CH.y - 84, 300, 8, 0x3d8550).setDepth(base + 2);
+      sc.add.rectangle(CH.x + 110, CH.y - 104, 18, 34, 0xb85c4a).setDepth(base + 2);                      // chimney
+      // windows: shutters + mullions, two per side
+      for (const wx2 of [-112, -66, 66, 112]) {
+        sc.add.rectangle(CH.x + wx2, CH.y + 6, 30, 38, 0xbcd8e8).setStrokeStyle(2, 0xffffff).setDepth(base + 3);
+        sc.add.rectangle(CH.x + wx2, CH.y + 6, 2, 38, 0xffffff).setDepth(base + 4);
+        sc.add.rectangle(CH.x + wx2, CH.y + 6, 30, 2, 0xffffff).setDepth(base + 4);
+        sc.add.rectangle(CH.x + wx2 - 19, CH.y + 6, 6, 38, 0x2f6b3f).setDepth(base + 3);
+        sc.add.rectangle(CH.x + wx2 + 19, CH.y + 6, 6, 38, 0x2f6b3f).setDepth(base + 3);
+      }
+      // portico: four columns + entablature over the doors
+      sc.add.rectangle(CH.x, CH.y - 34, 130, 14, 0xf8f4ea).setStrokeStyle(2, 0xd8d0bc).setDepth(base + 5);
+      for (const cx2 of [-54, -20, 20, 54]) sc.add.rectangle(CH.x + cx2, CH.y + 28, 9, 110, 0xf8f4ea).setStrokeStyle(1, 0xd8d0bc).setDepth(base + 4);
+      // double doors, dark green, brass hardware
+      sc.add.rectangle(CH.x, CH.y + 56, 44, 52, 0x1f4a2c).setStrokeStyle(2, 0x143520).setDepth(base + 3);
+      sc.add.rectangle(CH.x, CH.y + 56, 2, 52, 0x143520).setDepth(base + 4);
+      sc.add.circle(CH.x - 7, CH.y + 58, 1.5, 0xd8b45a).setDepth(base + 5);
+      sc.add.circle(CH.x + 7, CH.y + 58, 1.5, 0xd8b45a).setDepth(base + 5);
+      // the letters, in brass, and the fine print
+      sc.add.text(CH.x, CH.y - 88, 'TSONG COUNTRY CLVB', {
+        fontFamily: 'Georgia, "Times New Roman", serif', fontSize: '15px', fontStyle: 'bold', color: '#e8c86a',
+        stroke: '#1c3a26', strokeThickness: 4, resolution: 2,
+      }).setOrigin(0.5, 1).setDepth(base + 6);
+      sc.add.text(CH.x, CH.y - 86, 'est. before you asked', {
+        fontFamily: 'ui-monospace, monospace', fontSize: '8px', color: '#cfe4cf', resolution: 2,
+      }).setOrigin(0.5, 0).setDepth(base + 6);
+      // roof pennant, satisfied with itself
+      sc.add.rectangle(CH.x - 130, CH.y - 118, 3, 30, 0xd8d0bc).setDepth(base + 2);
+      const pen = sc.add.triangle(CH.x - 128, CH.y - 128, 0, 0, 22, 6, 0, 12, 0x2f6b3f).setDepth(base + 2);
+      sc.tweens.add({ targets: pen, scaleX: 0.82, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      // lamps + planters flanking the approach
+      for (const lx of [-70, 70]) {
+        const ly = CH.y + 104;
+        sc.add.rectangle(CH.x + lx, ly, 5, 30, 0x2a2a33).setOrigin(0.5, 1).setDepth(ly);
+        sc.add.circle(CH.x + lx, ly - 32, 5, 0xffe9b0).setDepth(ly);
+        sc.add.circle(CH.x + lx, ly - 32, 12, 0xffd98a, 0.18).setBlendMode(Phaser.BlendModes.ADD).setDepth(ly + 1);
+      }
+      for (const bx2 of [-150, 150]) {
+        sc.add.image(CH.x + bx2, CH.y + 92, 'townFrames', TT.bush).setScale(TEXEL * 1.2).setOrigin(0.5, 0.92).setDepth(CH.y + 92);
+      }
+    }
+    // the gate: two proud stone posts, finials, one plaque, zero fence problems solved
+    for (const gx of [2380, 2520]) {
+      sc.add.rectangle(gx, -2, 18, 64, 0xc8b890).setOrigin(0.5, 1).setDepth(-4);
+      sc.add.rectangle(gx, -64, 24, 8, 0xb8a880).setOrigin(0.5, 1).setDepth(-4);
+      sc.add.circle(gx, -74, 6, 0xb8a880).setDepth(-4);
+    }
+    sc.add.text(2450, -66, 'MEMBERS ONLY', {
       fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#3a2a18', backgroundColor: '#e8d8b0',
       padding: { x: 4, y: 2 }, resolution: 2,
-    }).setOrigin(0.5, 1).setAngle(-6).setDepth(-24);
+    }).setOrigin(0.5, 1).setAngle(-6).setDepth(-3);
     // tee box
-    sc.add.rectangle(TEE.x, TEE.y, 60, 34, 0x5aba58).setStrokeStyle(2, 0x35722f).setDepth(-16);
-    sc.add.text(TEE.x, TEE.y + 22, 'TEE · press X', {
+    sc.add.rectangle(TEE.x, TEE.y, 64, 36, 0x5fc25c).setStrokeStyle(2, 0x35722f).setDepth(GD + 4);
+    sc.add.rectangle(TEE.x - 14, TEE.y - 4, 3, 10, 0xffffff).setDepth(GD + 5); // tee markers
+    sc.add.rectangle(TEE.x + 14, TEE.y - 4, 3, 10, 0xffffff).setDepth(GD + 5);
+    sc.add.text(TEE.x, TEE.y + 24, 'TEE · press X', {
       fontFamily: 'ui-monospace, monospace', fontSize: '8px', color: '#e8f4e8', resolution: 2,
-    }).setOrigin(0.5, 0).setAlpha(0.8).setDepth(-15);
-    // an abandoned golf cart, wheels-deep in the rough
-    sc.add.rectangle(3620, -940, 40, 22, 0xf0ead8).setDepth(-940);
-    sc.add.rectangle(3620, -958, 34, 5, 0xf0ead8).setDepth(-940);
-    sc.add.rectangle(3608, -928, 9, 9, 0x2a2a33).setDepth(-939);
-    sc.add.rectangle(3634, -928, 9, 9, 0x2a2a33).setDepth(-939);
+    }).setOrigin(0.5, 0).setAlpha(0.8).setDepth(GD + 5);
+    // an abandoned golf cart, wheels-deep in the rough (its final score: unknowable)
+    sc.add.rectangle(3620, -940, 40, 22, 0xf0ead8).setOrigin(0.5, 1).setDepth(-940);
+    sc.add.rectangle(3620, -962, 34, 5, 0xf0ead8).setOrigin(0.5, 1).setDepth(-940);
+    sc.add.rectangle(3608, -938, 9, 9, 0x2a2a33).setDepth(-939);
+    sc.add.rectangle(3634, -938, 9, 9, 0x2a2a33).setDepth(-939);
     // sprinklers
     for (const [sx2, sy2] of [[1500, -400], [2800, -1150], [600, -800]] as [number, number][]) {
       clubSprinklers.push({ x: sx2, y: sy2, g: sc.add.graphics().setDepth(sy2) });
