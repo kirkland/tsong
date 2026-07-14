@@ -230,7 +230,7 @@ export interface WorldNet {
   marketList(instanceId: number, ask: number): void;
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' | 'monsterjam' | 'chess' | 'morris'): void; // open a DOOM/Fishing/Arcade/Bowling feature — every Casino game + Notice-Board panel is a native World dialog now
+  openFeature(feature: 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' | 'monsterjam' | 'chess' | 'morris' | 'ski'): void; // open a DOOM/Fishing/Arcade/Bowling feature — every Casino game + Notice-Board panel is a native World dialog now
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   openRename(): void;            // World's own 👤 button → reopen the nickname/color picker
   muted(): boolean;              // is game sound currently muted?
@@ -503,6 +503,13 @@ const CLUB = { h: 1300 };
 const SOUTH = { h: 4200, seed: 0xB0661E };
 const SWAMP_SHORE_Y = WORLD.h + SOUTH.h - 520; // where solid-ish ground gives up
 const SWAMP_PIER_X = 2400;                      // the pier's centerline (walkable out over the water)
+// The Frostreach — a snowfield east of town. Same vertical band as the town (like the desert,
+// mirrored); the off-map interiors that used to live out here moved to x≈40000 to make room.
+const EAST = { w: 9600, seed: 0xF057 };
+// The frozen pond (skating + ice fishing + pucks): an ellipse, world coords.
+const POND_ICE = { x: WORLD.w + 3400, y: 1150, rx: 760, ry: 420 };
+const onIce = (x: number, y: number) =>
+  ((x - POND_ICE.x) / POND_ICE.rx) ** 2 + ((y - POND_ICE.y) / POND_ICE.ry) ** 2 < 1;
 
 // --- Kenney "Tiny Town" tileset (16×16, packed 12×11). Frame indices we use, named for clarity. ---
 const TT = {
@@ -567,31 +574,31 @@ const JAIL_WALLS: Rect[] = [
 ];
 // The Tavern interior lives OFF the playable map. It used to sit at x:4200, but Robville widened
 // the world to 4800, so it was relocated east of the new bounds to stay out of sight.
-const TAVERN_INT = { x: 5400, y: 300, w: 880, h: 560 };
+const TAVERN_INT = { x: 40000, y: 300, w: 880, h: 560 };
 const TAVERN_WALL = 28; // interior wall thickness (play area is inset by this)
 const TAVERN_ZOOM = 3;  // zoom in while inside so the small cozy room fills the viewport
 // The Temple's INTERIOR — a grand candlelit nave, off-map BELOW the Tavern block (which ends at y860)
 // so the two never overlap. Same camera/collision swap trick as the Tavern.
-const TEMPLE_INT = { x: 5400, y: 1120, w: 920, h: 700 };
+const TEMPLE_INT = { x: 40000, y: 1120, w: 920, h: 700 };
 const TEMPLE_WALL = 34;  // thick stone walls (play area is inset by this)
 const TEMPLE_ZOOM = 2.4; // a touch wider than the Tavern — let the lofty nave breathe
 // McDonald's INTERIOR — off-map below the Temple block (which ends at y≈1820)
-const MC_INT = { x: 5400, y: 2100, w: 780, h: 500 };
+const MC_INT = { x: 40000, y: 2100, w: 780, h: 500 };
 const MC_WALL = 26;
 const MC_ZOOM = 3;
 // The Casino's INTERIOR — a neon gaming floor off-map below McDonald's (which ends at y≈2600).
 // Bigger than the other rooms (it hosts a whole row of machines), so the zoom stays wider than
 // the cozy Tavern/Temple/McDonald's rooms to keep several cabinets on screen at once.
-const CASINO_INT = { x: 5400, y: 2700, w: 1400, h: 820 };
+const CASINO_INT = { x: 40000, y: 2700, w: 1400, h: 820 };
 const CASINO_WALL = 30;
 const CASINO_ZOOM = 1.7;
 // The Country Club's CLUBHOUSE interior — off-map below the Casino block (which ends at y≈3520).
 // The door outside checks the wallet: members only. Same camera/collision swap as the other rooms.
-const CLUB_INT = { x: 5400, y: 3700, w: 1320, h: 800 };
+const CLUB_INT = { x: 40000, y: 3700, w: 1320, h: 800 };
 const CLUB_WALL = 30;
 const CLUB_ZOOM = 2.1;
 // A small annex somewhere behind the clubhouse's shelving — reached only from inside.
-const VAULT_INT = { x: 5400, y: 4700, w: 560, h: 440 };
+const VAULT_INT = { x: 40000, y: 4700, w: 560, h: 440 };
 const VAULT_WALL = 26;
 const VAULT_ZOOM = 3;
 // Walk-up hotspots on the clubhouse floor (world coords, derived from CLUB_INT so they move with it).
@@ -2263,6 +2270,47 @@ const NPCS: NpcDef[] = [
       'You hear the bell some nights. Church went down holding it. Some things don\'t stop just \'cause they sank.',
     ],
   },
+  // --- The Frostreach (east of town) ---
+  {
+    id: 'east-marlene', name: 'Marlene', shirt: 0x8a2a3a, hair: 0xd8d0c0, skin: SKINS[1],
+    body: 'dress', hairStyle: 'bun', x: WORLD.w + 1500, y: 640, roam: 30,
+    lines: [
+      'Cocoa\'s on. Cocoa\'s always on. The day the cocoa\'s off, you\'ll know the world ended.',
+      'The lodge has never once been cold. We don\'t discuss the furnace. There isn\'t one.',
+      'Folks come east for the skiing and stay for the... no, it\'s the skiing. But they DO stay.',
+      'The bear? Sweet as anything. Just don\'t be between him and the spring on a Sunday.',
+      'You want marshmallows, sugar? Trick question. It\'s already got marshmallows.',
+    ],
+  },
+  {
+    id: 'east-gunnar', name: 'Gunnar', shirt: 0x2a5a8a, hair: 0xe8d060, skin: SKINS[0],
+    hat: 'cap' as const, hatColor: 0xc0392b, x: WORLD.w + 6120, y: 480, roam: 40,
+    lines: [
+      'Lift\'s running. Lift\'s always running. Getting DOWN is the sport, my friend.',
+      'Course record? Officially, me. Unofficially, something large set it in \'19 and we don\'t audit that run.',
+      'Wax your skis. Wax your courage. One of those is for sale in the lodge.',
+      'You see footprints up top, you ski FASTER. That\'s not a rule, it\'s physics with self-respect.',
+      'Two to four racers. The mountain doesn\'t care how many go up. Only how many check back in.',
+    ],
+    ask: {
+      q: 'First time on the hill?',
+      choices: [
+        { label: 'Born on skis', reply: 'HA! Nobody\'s born on skis. One guy was born NEAR skis and we never heard the end of it. Get up there.' },
+        { label: 'How do I stop?', reply: 'Stop? *long pause* The bottom of the hill handles that part. See you down there.' },
+      ],
+    },
+  },
+  {
+    id: 'east-frida', name: 'Frida', shirt: 0x4a6a8a, hair: 0x3a2a18, skin: SKINS[2],
+    hat: 'sun' as const, x: WORLD.w + 5150, y: 1880, roam: 30,
+    lines: [
+      'Four hours at the hole today. Two fish. One of them was the same fish twice. I respect the commitment.',
+      'The ice sings at night. Long notes. The old folks say it\'s just the cold. The old folks don\'t sit out here.',
+      'The thing in the ice out east? Been there longer than the town. Pays no dues. Causes no trouble. Best neighbor I got.',
+      'You fish the town pond, you\'re fishing. You fish through three feet of ice, you\'re NEGOTIATING.',
+      'My grandmother cut the first hole here. The pond remembered her name. Ponds do that, if you\'re patient.',
+    ],
+  },
   {
     // GAS. No gas since 2019. Corporate hasn't noticed. Pete has stopped asking questions.
     id: 'desert-pete', name: 'Pump Jockey Pete', shirt: 0xc0392b, hair: 0x6a5235, skin: SKINS[1],
@@ -2444,11 +2492,11 @@ export function startWorld(net: WorldNet): void {
   let currentFloor = 'B1';
   let dmap: string[] = DUNGEON_FLOORS.B1;       // the active floor's tile rows
   let dCols = 0, dRows = 0;                       // its dimensions in tiles
-  let dInt = { x: 7200, y: 300, w: 0, h: 0 };    // its world-space rect (off-map, EAST of the Tavern so they don't overlap)
+  let dInt = { x: 44000, y: 300, w: 0, h: 0 };    // its world-space rect (off-map, EAST of the Tavern so they don't overlap)
   const setFloorGeom = (id: string) => {
     currentFloor = id; dmap = DUNGEON_FLOORS[id];
     dCols = Math.max(...dmap.map((r) => r.length)); dRows = dmap.length;
-    dInt = { x: 7200, y: 300, w: dCols * DUNGEON_TILE, h: dRows * DUNGEON_TILE };
+    dInt = { x: 44000, y: 300, w: dCols * DUNGEON_TILE, h: dRows * DUNGEON_TILE };
   };
   const dungeonCell = (cx: number, cy: number): string => (dmap[cy] && dmap[cy][cx]) || ' ';
   const chestCells = (): string[] => { // the 'c' tiles on the active floor → ['col,row', …]
@@ -3210,7 +3258,7 @@ export function startWorld(net: WorldNet): void {
     fullMapOpen = !fullMapOpen;
     fullMap.style.display = fullMapOpen ? 'flex' : 'none';
     if (fullMapOpen) {
-      const FULLW = WORLD.w + DESERT.w, FULLH = CLUB.h + WORLD.h + SOUTH.h;
+      const FULLW = WORLD.w + DESERT.w + EAST.w, FULLH = CLUB.h + WORLD.h + SOUTH.h;
       const sz = Math.min(window.innerWidth * 0.9, window.innerHeight * 0.78 * FULLW / FULLH);
       fullMapCanvas.width = Math.round(sz); fullMapCanvas.height = Math.round(sz * FULLH / FULLW);
       drawMap(fullMapCanvas, true);
@@ -3225,10 +3273,10 @@ export function startWorld(net: WorldNet): void {
     const W = cv.width, H = cv.height;
     let wx0: number, wy0: number, ww: number, wh: number;
     if (full) {
-      wx0 = -DESERT.w; wy0 = -CLUB.h; ww = WORLD.w + DESERT.w; wh = CLUB.h + WORLD.h + SOUTH.h;
+      wx0 = -DESERT.w; wy0 = -CLUB.h; ww = WORLD.w + DESERT.w + EAST.w; wh = CLUB.h + WORLD.h + SOUTH.h;
     } else {
       ww = MINI_VIEW_W; wh = ww * H / W;
-      wx0 = clamp(selfX - ww / 2, -DESERT.w, WORLD.w - ww);
+      wx0 = clamp(selfX - ww / 2, -DESERT.w, WORLD.w + EAST.w - ww);
       wy0 = clamp(selfY - wh / 2, -CLUB.h, WORLD.h + SOUTH.h - wh);
     }
     const sx = W / ww, sy = H / wh;
@@ -3242,6 +3290,9 @@ export function startWorld(net: WorldNet): void {
     region(0, 0, WORLD.w, WORLD.h, '#2f5d36');                             // town grass
     region(0, WORLD.h, WORLD.w, SOUTH.h, '#2c3d28');                       // the Damp
     region(0, SWAMP_SHORE_Y, WORLD.w, WORLD.h + SOUTH.h - SWAMP_SHORE_Y, '#203438'); // the Endless Bayou
+    region(WORLD.w, 0, EAST.w, WORLD.h, '#e4e9ee');                        // the Frostreach
+    ctx.fillStyle = '#b8d8e8';                                             // the frozen pond
+    ctx.beginPath(); ctx.ellipse(X(POND_ICE.x), Y(POND_ICE.y), POND_ICE.rx * sx, POND_ICE.ry * sy, 0, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#8a7448';                                             // roads
     for (const r of ROADS) ctx.fillRect(X(r.x), Y(r.y), r.w * sx, r.h * sy);
     ctx.fillStyle = '#a8975e';                                             // plaza
@@ -3278,6 +3329,10 @@ export function startWorld(net: WorldNet): void {
     mark(-4800, 990, '⛽', iconPx); mark(-8000, 1160, '🗿', iconPx); mark(-14500, 1160, '🌴', iconPx);
     mark(-19000, 1000, '🎬', iconPx); mark(-22620, 1020, '🛖', iconPx);
     ctx.fillStyle = '#2a2a33'; ctx.fillRect(X(-DESERT.w), Y(0), Math.max(2, 46 * sx), WORLD.h * sy);
+    // the Frostreach: the lodge, the lift, the igloos, the spring, the big tree
+    mark(WORLD.w + 1500, 500, '\u{1F3E0}', iconPx); mark(WORLD.w + 6200, 350, '\u{1F6A1}', iconPx);
+    mark(WORLD.w + 5200, 1800, '\u{26F8}', iconPx); mark(WORLD.w + 7600, 1500, '\u{2668}', iconPx);
+    mark(WORLD.w + 1900, 900, '\u{1F384}', iconPx);
     // the Damp: dwellings, the drowned church, the pier
     mark(1200, 3450, '🛖', iconPx); mark(2700, 2950, '🛖', iconPx); mark(3620, 4080, '⛪', iconPx);
     ctx.fillStyle = '#54381e'; ctx.fillRect(X(SWAMP_PIER_X - 26), Y(SWAMP_SHORE_Y - 20), Math.max(2, 52 * sx), 400 * sy);
@@ -3290,6 +3345,8 @@ export function startWorld(net: WorldNet): void {
       ctx.fillText('TSONG COUNTRY CLVB', X(2400), Y(-1180));
       ctx.fillStyle = '#b8d0b0';
       ctx.fillText('THE GREAT SOUTHERN DAMP', X(2400), Y(5300));
+      ctx.fillStyle = '#9ab8d0';
+      ctx.fillText('THE FROSTREACH', X(WORLD.w + EAST.w / 2), Y(200));
     }
     for (const b of WORLD_BUILDINGS) {                    // buildings: footprint + emoji icon
       ctx.fillStyle = b.color;
@@ -3361,12 +3418,12 @@ export function startWorld(net: WorldNet): void {
         else y = b.y + b.h + rad;
       }
     }
-    const inTownX = x >= 0 && x <= WORLD.w; // the club (N) and the Damp (S) open off TOWN only (not the desert)
+    const inTownX = x >= 0 && x <= WORLD.w; // the club (N) and the Damp (S) open off TOWN only (not the frontiers)
     // South: ground ends at the shore — except the pier, which you may walk to the end of. Carefully.
     const onPier = x > SWAMP_PIER_X - 26 && x < SWAMP_PIER_X + 26;
     const southMax = inTownX ? (onPier ? SWAMP_SHORE_Y + 380 : SWAMP_SHORE_Y) - rad : WORLD.h - rad;
     return {
-      x: clamp(x, -DESERT.w + rad, WORLD.w - rad), // the west is open — walk into the Nothing
+      x: clamp(x, -DESERT.w + rad, WORLD.w + EAST.w - rad), // west into the Nothing, east into the Frostreach
       y: clamp(y, inTownX ? -CLUB.h + rad : rad, southMax),
       hit,
     };
@@ -4145,7 +4202,7 @@ export function startWorld(net: WorldNet): void {
     inInterior = false;
     nearExit = false;
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
+    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w + EAST.w, WORLD.h + CLUB.h + SOUTH.h);
     const bar = WORLD_BUILDINGS.find((b) => b.kind === 'bar');
     if (bar) { selfX = bar.x + bar.w / 2; selfY = bar.y + bar.h + 44; } // step back out the door
     setTavernMusic(false);
@@ -4233,7 +4290,7 @@ export function startWorld(net: WorldNet): void {
     inInterior = false; inTemple = false;
     nearExit = false; nearBook = false;
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
+    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w + EAST.w, WORLD.h + CLUB.h + SOUTH.h);
     const t = WORLD_BUILDINGS.find((b) => b.kind === 'temple');
     if (t) { selfX = t.x + t.w / 2; selfY = t.y + t.h + 44; } // step back out the door
     stopChant();
@@ -5006,7 +5063,7 @@ export function startWorld(net: WorldNet): void {
     dungeonPurseDisplay = 0;
     encounterPending = false;
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
+    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w + EAST.w, WORLD.h + CLUB.h + SOUTH.h);
     setDungeonMusic(false);
     minimap.style.display = 'block'; help.style.display = 'block'; // restore overworld HUD
     dungeonBanner.style.display = 'none'; dungeonControls.style.display = 'none';
@@ -11598,7 +11655,7 @@ export function startWorld(net: WorldNet): void {
     inInterior = false; inMcdonald = false;
     nearExit = false;
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
+    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w + EAST.w, WORLD.h + CLUB.h + SOUTH.h);
     const mc = WORLD_BUILDINGS.find((b) => b.kind === 'mcdonald');
     if (mc) { selfX = mc.x + mc.w / 2; selfY = mc.y + mc.h + 44; }
     enterChime();
@@ -11700,7 +11757,7 @@ export function startWorld(net: WorldNet): void {
     inInterior = false; inCasino = false;
     nearExit = false; nearCasinoGame = null;
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
+    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w + EAST.w, WORLD.h + CLUB.h + SOUTH.h);
     const c = WORLD_BUILDINGS.find((b) => b.kind === 'casino');
     if (c) { selfX = c.x + c.w / 2; selfY = c.y + c.h + 44; } // step back out the door
     enterChime();
@@ -12256,7 +12313,7 @@ export function startWorld(net: WorldNet): void {
       this.load.spritesheet('townFrames', '/tiles/tiny-town.png', { frameWidth: 16, frameHeight: 16 });
       // Ninja Adventure (CC0) terrain cuts — same pack the Ruins props came from. Sand for the
       // desert floor + club bunkers, mud for the bog. See client/public/biome/README.md.
-      for (const k of ['sand-field', 'sand-pan', 'sand-ring', 'sand-mound', 'mud-blob', 'mud-strip', 'mud-field']) {
+      for (const k of ['sand-field', 'sand-pan', 'sand-ring', 'sand-mound', 'mud-blob', 'mud-strip', 'mud-field', 'snow-field', 'snow-patch', 'ice-field', 'ice-patch', 'snow-d0', 'snow-d1']) {
         this.load.image('na-' + k, '/biome/' + k + '.png');
       }
       // Dungeon (the Ruins): 0x72 stone-floor variants (f0–f6) + wall variants (w0–w3).
@@ -12269,7 +12326,7 @@ export function startWorld(net: WorldNet): void {
       const sc = this;
       makeTextures(sc);
 
-      sc.cameras.main.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
+      sc.cameras.main.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w + EAST.w, WORLD.h + CLUB.h + SOUTH.h);
       sc.cameras.main.setZoom(ZOOM);
       sc.cameras.main.setBackgroundColor(0x3f7a3a);
       mainCam = sc.cameras.main;
@@ -12474,6 +12531,7 @@ export function startWorld(net: WorldNet): void {
       makeDesert(sc);
       makeClub(sc);
       makeSwamp(sc);
+      makeEast(sc);
 
       // --- ammo crates scattered over the open ground ---
       buildCrates(sc);
@@ -12815,6 +12873,7 @@ export function startWorld(net: WorldNet): void {
       updateClub(now);
       updateClubhouse(now, dt);
       updateSwamp(now, dt);
+      updateEast(now, dt);
       updateNearBuilding();
       maybeSendMove(now);
 
@@ -13156,7 +13215,7 @@ export function startWorld(net: WorldNet): void {
     const inTownX = x >= 0 && x <= WORLD.w;
     const minY = inTownX ? -CLUB.h + 8 : 8;
     const maxY = inTownX ? WORLD.h + SOUTH.h - 8 : WORLD.h - 8;
-    if (x < -DESERT.w + 8 || x > WORLD.w - 8 || y < minY || y > maxY) return true;
+    if (x < -DESERT.w + 8 || x > WORLD.w + EAST.w - 8 || y < minY || y > maxY) return true;
     return resolveCollisions(x, y, 4).hit;
   }
 
@@ -14569,7 +14628,7 @@ export function startWorld(net: WorldNet): void {
     nearExit = false; nearClubSpot = null;
     cancelPutt();
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
+    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w + EAST.w, WORLD.h + CLUB.h + SOUTH.h);
     selfX = CLUBHOUSE.x; selfY = CLUBHOUSE.y + 96; // back out the front door
     stopLounge();
     enterChime();
@@ -15306,6 +15365,576 @@ export function startWorld(net: WorldNet): void {
     return false;
   }
 
+  // --- THE FROSTREACH: a snowfield east of town. Ninja Adventure snow/ice ground (same pack as
+  // the desert/bog floors), a frozen pond with real skating physics, and winter in every drawer.
+  const EAST_SPOTS = {
+    lodge:   { x: WORLD.w + 1500, y: 520 },
+    grove:   { x: WORLD.w + 1900, y: 940 },   // the decorated trees
+    pole:    { x: WORLD.w + 900, y: 1420 },   // DO NOT LICK
+    frosty:  { x: WORLD.w + 2900, y: 700 },   // the snowman with the hat
+    gallery: { x: WORLD.w + 2600, y: 1700 },  // the ice sculptures
+    lift:    { x: WORLD.w + 6200, y: 380 },   // the chairlift (ski race)
+    sled:    { x: WORLD.w + 4300, y: 620 },   // the dog team
+    igloos:  { x: WORLD.w + 5200, y: 1800 },
+    spring:  { x: WORLD.w + 7600, y: 1500 },  // the hot spring
+    mammoth: { x: WORLD.w + 8400, y: 720 },   // do not think about the ice being warm
+    goal:    { x: POND_ICE.x + 560, y: POND_ICE.y }, // the hockey goal, on the pond
+  } as const;
+  const FISH_HOLES: { x: number; y: number }[] = [
+    { x: POND_ICE.x - 420, y: POND_ICE.y - 160 }, { x: POND_ICE.x - 120, y: POND_ICE.y + 220 }, { x: POND_ICE.x + 300, y: POND_ICE.y - 220 },
+  ];
+  interface EastBeast { spr: Phaser.GameObjects.Image; x: number; y: number; tx: number; ty: number; kind: 'penguin' | 'bear' | 'husky'; ph: number; state: number; busyUntil: number }
+  let eastBeasts: EastBeast[] = [];
+  let snowFlakes: { spr: Phaser.GameObjects.Arc; sp: number; sw: number; ph: number }[] = [];
+  let auroraG: Phaser.GameObjects.Graphics | null = null;
+  let xmasBulbs: { spr: Phaser.GameObjects.Arc; ph: number }[] = [];
+  let pucks: { spr: Phaser.GameObjects.Arc; x: number; y: number; vx: number; vy: number }[] = [];
+  let skVx = 0, skVy = 0;          // skating momentum (the pond keeps what you give it)
+  let goalsScored = 0;
+  let snowPacked = false;          // first snowball-refill toast
+  let bearCalmUntil = 0;
+  let poleLicked = 0;
+  let springSighAt = 0;
+
+  function makeEast(sc: Phaser.Scene) {
+    const rnd = mulberry32(EAST.seed);
+    const x0 = WORLD.w;
+    const ADD = Phaser.BlendModes.ADD;
+    // --- px textures for the locals ---
+    const g = sc.add.graphics();
+    const px2 = (x: number, y: number, w: number, h: number, c: number) => { g.fillStyle(c, 1); g.fillRect(x, y, w, h); };
+    { // penguin (10×12), faces right
+      g.clear();
+      px2(2, 1, 6, 10, 0x22262e); px2(3, 0, 4, 2, 0x22262e);          // body + head
+      px2(3, 4, 4, 7, 0xf0f4f8);                                       // belly
+      px2(7, 2, 2, 1, 0xe8a03a); px2(6, 1, 1, 1, 0xffffff);            // beak + eye
+      px2(2, 11, 2, 1, 0xe8a03a); px2(6, 11, 2, 1, 0xe8a03a);          // feet
+      px2(1, 4, 1, 4, 0x22262e); px2(8, 4, 1, 4, 0x22262e);            // flippers
+      g.generateTexture('e-penguin', 10, 12);
+    }
+    { // polar bear (26×16), faces right, unbothered
+      const W1 = 0xf0f2f4, W2 = 0xd8dce2;
+      g.clear();
+      px2(2, 5, 18, 8, W1); px2(2, 11, 18, 2, W2);                     // bulk
+      px2(18, 2, 6, 6, W1); px2(23, 4, 2, 2, 0x2a2e36);                // head + snout tip
+      px2(21, 3, 1, 1, 0x101418);                                       // a small dark eye, incapable of surprise
+      px2(18, 1, 2, 2, W1); px2(22, 1, 2, 2, W1);                       // ears
+      px2(3, 13, 3, 3, W2); px2(9, 13, 3, 3, W2); px2(15, 13, 3, 3, W2); // legs
+      g.generateTexture('e-bear', 26, 16);
+    }
+    { // husky (13×10), faces right, professional
+      const GR = 0x9aa2ae, WH = 0xeef0f4;
+      g.clear();
+      px2(1, 3, 9, 5, GR); px2(1, 6, 9, 2, WH);                        // body
+      px2(9, 1, 4, 4, GR); px2(11, 3, 2, 2, WH);                       // head + muzzle
+      px2(9, 0, 1, 2, GR); px2(11, 0, 1, 2, GR);                       // ears
+      px2(10, 2, 1, 1, 0x4aa0e8);                                       // one ice-blue eye
+      px2(0, 3, 1, 3, WH);                                              // tail curl
+      px2(2, 8, 1, 2, GR); px2(5, 8, 1, 2, GR); px2(8, 8, 1, 2, GR);   // legs
+      g.generateTexture('e-husky', 13, 10);
+    }
+    { // igloo (24×15)
+      const W1 = 0xf0f4f8, W2 = 0xd0dae4;
+      g.clear();
+      g.fillStyle(W1, 1); g.fillEllipse(12, 12, 24, 18);
+      g.fillStyle(W2, 1);
+      for (let yy = 3; yy < 14; yy += 3) g.fillRect(1, yy, 22, 1);
+      px2(4, 6, 1, 6, W2); px2(10, 4, 1, 8, W2); px2(16, 5, 1, 7, W2);
+      px2(9, 9, 6, 6, 0x1a2430); g.fillStyle(0x101820, 1); g.fillEllipse(12, 12, 6, 8);
+      g.generateTexture('e-igloo', 24, 15);
+    }
+    g.destroy();
+
+    // --- ground: NA snow tiles + a scalloped snow-line onto the town grass ---
+    const snowy = sc.textures.exists('na-snow-field');
+    if (snowy) {
+      sc.add.tileSprite(x0, 0, EAST.w, WORLD.h, 'na-snow-field').setOrigin(0, 0).setTileScale(2, 2).setDepth(-32);
+      for (let y = -10; y < WORLD.h; y += 60 + rnd() * 40) { // the snow line laps over the lawn
+        sc.add.image(x0 - 8 + rnd() * 30, y, 'na-snow-patch').setScale(1.1 + rnd() * 0.9).setDepth(-31);
+      }
+      for (let i = 0; i < 42; i++) { // drifts and pans about the field
+        sc.add.image(x0 + 160 + rnd() * (EAST.w - 320), 80 + rnd() * (WORLD.h - 160), 'na-snow-patch')
+          .setScale(1.2 + rnd() * 1.6).setDepth(-31);
+      }
+      for (let i = 0; i < 70; i++) {
+        sc.add.image(x0 + 60 + rnd() * (EAST.w - 120), 60 + rnd() * (WORLD.h - 120), rnd() > 0.5 ? 'na-snow-d0' : 'na-snow-d1')
+          .setScale(2).setDepth(-31);
+      }
+    } else {
+      sc.add.rectangle(x0 + EAST.w / 2, WORLD.h / 2, EAST.w, WORLD.h, 0xeef1f4).setDepth(-32);
+    }
+    // --- the frozen pond ---
+    if (sc.textures.exists('na-ice-field')) {
+      const ice = sc.add.tileSprite(POND_ICE.x - POND_ICE.rx, POND_ICE.y - POND_ICE.ry, POND_ICE.rx * 2, POND_ICE.ry * 2, 'na-ice-field')
+        .setOrigin(0, 0).setTileScale(2, 2).setDepth(-30);
+      const maskG = sc.make.graphics();
+      maskG.fillStyle(0xffffff, 1);
+      maskG.fillEllipse(POND_ICE.x, POND_ICE.y, POND_ICE.rx * 2, POND_ICE.ry * 2);
+      ice.setMask(maskG.createGeometryMask());
+      sc.add.image(POND_ICE.x - 200, POND_ICE.y - 120, 'na-ice-patch').setScale(2).setDepth(-29);
+      sc.add.image(POND_ICE.x + 260, POND_ICE.y + 140, 'na-ice-patch').setScale(1.5).setDepth(-29);
+    } else {
+      sc.add.ellipse(POND_ICE.x, POND_ICE.y, POND_ICE.rx * 2, POND_ICE.ry * 2, 0xc4dce8).setDepth(-30);
+    }
+    const rim = sc.add.graphics().setDepth(-29);
+    rim.lineStyle(7, 0xf4f7fa, 1);
+    rim.strokeEllipse(POND_ICE.x, POND_ICE.y, POND_ICE.rx * 2, POND_ICE.ry * 2);
+    rim.lineStyle(2, 0x8ab0c4, 0.7);
+    rim.strokeEllipse(POND_ICE.x, POND_ICE.y, POND_ICE.rx * 2 - 14, POND_ICE.ry * 2 - 12);
+    for (let i = 0; i < 7; i++) { // old cracks + skate scars
+      const a = rnd() * Math.PI * 2, rr = rnd() * 0.7;
+      const cx2 = POND_ICE.x + Math.cos(a) * POND_ICE.rx * rr, cy2 = POND_ICE.y + Math.sin(a) * POND_ICE.ry * rr;
+      rim.lineStyle(1.5, 0x9ac0d4, 0.6);
+      rim.lineBetween(cx2, cy2, cx2 + (rnd() - 0.5) * 160, cy2 + (rnd() - 0.5) * 90);
+    }
+    // fishing holes: a dark circle, a stool, a bucket of optimism
+    for (const h of FISH_HOLES) {
+      sc.add.circle(h.x, h.y, 16, 0x16222e).setDepth(-28);
+      sc.add.circle(h.x, h.y, 16, 0x000000, 0).setStrokeStyle(4, 0xf4f7fa).setDepth(-28);
+      sc.add.rectangle(h.x + 30, h.y + 6, 14, 10, 0x6a4a2a).setDepth(h.y + 6);
+      sc.add.rectangle(h.x - 30, h.y + 2, 10, 10, 0x4a6a8a).setDepth(h.y + 2);
+    }
+    // the hockey goal + pucks
+    const gl = sc.add.graphics().setDepth(EAST_SPOTS.goal.y + 40);
+    gl.lineStyle(4, 0xc0392b, 1);
+    gl.strokeRect(EAST_SPOTS.goal.x - 6, EAST_SPOTS.goal.y - 46, 12, 92);
+    gl.lineStyle(1.5, 0xdfe8f0, 0.9);
+    for (let i = 0; i < 5; i++) gl.lineBetween(EAST_SPOTS.goal.x - 4 + i * 2, EAST_SPOTS.goal.y - 44, EAST_SPOTS.goal.x - 4 + i * 2, EAST_SPOTS.goal.y + 44);
+    for (let i = 0; i < 3; i++) {
+      const puckX = POND_ICE.x - 200 + i * 90, puckY = POND_ICE.y - 40 + i * 60;
+      pucks.push({ spr: sc.add.circle(puckX, puckY, 7, 0x14181e).setStrokeStyle(2, 0x2e3640).setDepth(puckY), x: puckX, y: puckY, vx: 0, vy: 0 });
+    }
+    // --- the Thawless Lodge ---
+    {
+      const L = EAST_SPOTS.lodge;
+      sc.add.rectangle(L.x + 12, L.y + 78, 300, 20, 0x0a1226, 0.3).setOrigin(0.5, 0).setDepth(-28);
+      sc.add.rectangle(L.x, L.y + 20, 280, 120, 0x6a4a2a).setStrokeStyle(3, 0x4a3218).setDepth(L.y + 80);
+      const logs = sc.add.graphics().setDepth(L.y + 81);
+      logs.lineStyle(2, 0x54381e, 0.8);
+      for (let yy = L.y - 30; yy < L.y + 76; yy += 14) logs.lineBetween(L.x - 138, yy, L.x + 138, yy);
+      sc.add.triangle(L.x, L.y - 100, 0, 60, 160, 0, 320, 60, 0x8a6a4a).setOrigin(0.5, 0).setDepth(L.y + 82);
+      sc.add.triangle(L.x, L.y - 106, 0, 56, 160, 0, 320, 56, 0xf0f4f8).setOrigin(0.5, 0).setDepth(L.y + 83); // snow on the roof
+      sc.add.rectangle(L.x + 90, L.y - 120, 22, 40, 0x8a5a3a).setDepth(L.y + 84); // chimney
+      for (const wx2 of [-90, 90]) {
+        sc.add.rectangle(L.x + wx2, L.y + 10, 34, 30, 0xffd98a).setStrokeStyle(3, 0x4a3218).setDepth(L.y + 84);
+        sc.add.circle(L.x + wx2, L.y + 10, 26, 0xffd98a, 0.14).setBlendMode(ADD).setDepth(L.y + 85);
+      }
+      sc.add.rectangle(L.x, L.y + 44, 40, 52, 0x3a2814).setDepth(L.y + 84); // door
+      sc.add.text(L.x, L.y - 128, 'THE THAWLESS LODGE', {
+        fontFamily: 'Georgia, serif', fontSize: '13px', fontStyle: 'bold', color: '#ffe2b0', stroke: '#2a1808', strokeThickness: 4, resolution: 2,
+      }).setOrigin(0.5, 1).setDepth(L.y + 86);
+      for (let i = 0; i < 3; i++) { // chimney smoke, forever
+        const puff = sc.add.circle(L.x + 90, L.y - 140, 6 + i * 2, 0xcfd4da, 0.5).setDepth(L.y + 87);
+        sc.tweens.add({ targets: puff, y: L.y - 210 - i * 16, x: L.x + 104 + i * 10, alpha: 0, scale: 2.2, duration: 2600, delay: i * 850, repeat: -1, ease: 'Sine.easeOut' });
+      }
+    }
+    // --- the decorated grove (nobody remembers planting it; nobody dares undecorate it) ---
+    {
+      const G2 = EAST_SPOTS.grove;
+      const spots: [number, number, number][] = [[0, 0, 2.6], [-90, 50, 1.9], [95, 40, 2.0], [-40, 110, 1.7], [60, 120, 1.8]];
+      for (const [dx2, dy2, s2] of spots) {
+        const tx3 = G2.x + dx2, ty3 = G2.y + dy2;
+        const img = sc.add.image(tx3, ty3, 'townFrames', TT.pines[0]).setScale(TEXEL * s2).setOrigin(0.5, 0.92).setDepth(ty3);
+        img.setTint(0x3a8a52);
+        swayers.push(img);
+        const nBulb = 4 + Math.floor(rnd() * 3);
+        for (let b = 0; b < nBulb; b++) {
+          const bx2 = tx3 + (rnd() - 0.5) * 22 * s2, by2 = ty3 - 10 - rnd() * 22 * s2;
+          const col = [0xff5a4a, 0xffd23f, 0x4aa0e8, 0x8ae88a][Math.floor(rnd() * 4)];
+          const bulb = sc.add.circle(bx2, by2, 2.4, col).setDepth(ty3 + 1);
+          xmasBulbs.push({ spr: bulb, ph: rnd() * 6.28 });
+        }
+      }
+      const star = sc.add.text(G2.x, G2.y - 88, '⭐', { fontSize: '16px' }).setOrigin(0.5).setDepth(G2.y + 2);
+      sc.tweens.add({ targets: star, angle: 8, duration: 1800, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    }
+    // --- pines everywhere, wearing the weather ---
+    const feature2 = (x: number, y: number, r: number) => (fx3: number, fy3: number) => Math.hypot(fx3 - x, fy3 - y) < r;
+    const keepOut2 = [
+      feature2(POND_ICE.x, POND_ICE.y, Math.max(POND_ICE.rx, POND_ICE.ry) + 80),
+      ...Object.values(EAST_SPOTS).map((s) => feature2(s.x, s.y, 190)),
+    ];
+    const clear3 = (x: number, y: number) => !keepOut2.some((k) => k(x, y));
+    const SNOW_TINTS = [0xdce8f0, 0xcadcE8, 0xe8f0f4, 0xbfd4e0];
+    for (let i = 0; i < 30; i++) { // the border treeline (both sides of the snow line)
+      const tx3 = x0 - 90 + rnd() * 240, ty3 = 60 + rnd() * (WORLD.h - 120);
+      const img = sc.add.image(tx3, ty3, 'townFrames', TT.pines[Math.floor(rnd() * 2)])
+        .setScale(TEXEL * (1.4 + rnd() * 0.7)).setOrigin(0.5, 0.92).setDepth(ty3);
+      if (tx3 > x0) img.setTint(SNOW_TINTS[Math.floor(rnd() * SNOW_TINTS.length)]);
+      swayers.push(img);
+    }
+    for (let i = 0; i < 120; i++) {
+      const tx3 = x0 + 200 + rnd() * (EAST.w - 400), ty3 = 60 + rnd() * (WORLD.h - 120);
+      if (!clear3(tx3, ty3)) continue;
+      sc.add.image(tx3 + 3, ty3 + 1, 'w-shadow').setScale(TEXEL * 1.4).setOrigin(0.5, 0.4).setDepth(ty3 - 1).setAlpha(0.25);
+      const img = sc.add.image(tx3, ty3, 'townFrames', rnd() > 0.25 ? TT.pines[Math.floor(rnd() * 2)] : TT.trees[Math.floor(rnd() * 2)])
+        .setScale(TEXEL * (1.1 + rnd() * 0.9)).setOrigin(0.5, 0.92).setDepth(ty3);
+      img.setTint(SNOW_TINTS[Math.floor(rnd() * SNOW_TINTS.length)]);
+      swayers.push(img);
+    }
+    // --- snowmen (six standard, one aspirational) ---
+    for (let i = 0; i < 6; i++) {
+      const sx3 = x0 + 400 + rnd() * (EAST.w - 800), sy3 = 100 + rnd() * (WORLD.h - 200);
+      if (!clear3(sx3, sy3)) continue;
+      sc.add.image(sx3, sy3, 'w-snowman').setScale(TEXEL * (1 + rnd() * 0.6)).setOrigin(0.5, 1).setDepth(sy3);
+    }
+    sc.add.image(EAST_SPOTS.frosty.x, EAST_SPOTS.frosty.y, 'w-snowman').setScale(TEXEL * 2.2).setOrigin(0.5, 1).setDepth(EAST_SPOTS.frosty.y);
+    const hat = sc.add.graphics().setDepth(EAST_SPOTS.frosty.y + 1); // the hat came with the yard
+    hat.fillStyle(0x1a1a22, 1);
+    hat.fillRect(EAST_SPOTS.frosty.x - 14, EAST_SPOTS.frosty.y - 70, 28, 4);
+    hat.fillRect(EAST_SPOTS.frosty.x - 8, EAST_SPOTS.frosty.y - 86, 16, 16);
+    // --- the ice gallery: three sculptures, one sculptor, zero explanations ---
+    {
+      const Gx = EAST_SPOTS.gallery.x, Gy = EAST_SPOTS.gallery.y;
+      const ig = sc.add.graphics().setDepth(Gy);
+      for (const [dx2, label] of [[-80, 'paddle'], [0, 'fish'], [80, 'swan']] as [number, string][]) {
+        ig.fillStyle(0xd8e8f0, 1); ig.fillRect(Gx + dx2 - 18, Gy - 8, 36, 10);           // pedestal
+        ig.fillStyle(0xbce0f0, 0.88);
+        if (label === 'paddle') { ig.fillRect(Gx + dx2 - 3, Gy - 44, 6, 26); ig.fillEllipse(Gx + dx2, Gy - 48, 18, 22); }
+        if (label === 'fish') { ig.fillEllipse(Gx + dx2, Gy - 32, 30, 14); ig.fillTriangle(Gx + dx2 + 13, Gy - 32, Gx + dx2 + 22, Gy - 40, Gx + dx2 + 22, Gy - 24); }
+        if (label === 'swan') { ig.fillEllipse(Gx + dx2, Gy - 24, 22, 12); ig.fillRect(Gx + dx2 + 6, Gy - 44, 4, 20); ig.fillEllipse(Gx + dx2 + 9, Gy - 44, 10, 6); }
+        ig.fillStyle(0xffffff, 0.5); ig.fillRect(Gx + dx2 - 6, Gy - 40, 2, 14);          // the gleam
+      }
+    }
+    // --- the flagpole (with signage the town lawyer insisted on) ---
+    sc.add.rectangle(EAST_SPOTS.pole.x, EAST_SPOTS.pole.y, 5, 86, 0x8a929e).setOrigin(0.5, 1).setDepth(EAST_SPOTS.pole.y);
+    sc.add.triangle(EAST_SPOTS.pole.x + 12, EAST_SPOTS.pole.y - 82, 0, 0, 24, 6, 0, 12, 0xc0392b).setDepth(EAST_SPOTS.pole.y);
+    sc.add.text(EAST_SPOTS.pole.x, EAST_SPOTS.pole.y + 12, 'DO NOT LICK THE FLAGPOLE', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#2a3440', backgroundColor: '#dfe8f0',
+      padding: { x: 4, y: 2 }, resolution: 2,
+    }).setOrigin(0.5, 0).setAngle(-2).setDepth(EAST_SPOTS.pole.y + 12);
+    // --- the chairlift (the race starts here) ---
+    {
+      const L = EAST_SPOTS.lift;
+      sc.add.rectangle(L.x - 60, L.y, 8, 90, 0x4a5058).setOrigin(0.5, 1).setDepth(L.y);
+      sc.add.rectangle(L.x + 60, L.y - 30, 8, 60, 0x4a5058).setOrigin(0.5, 1).setDepth(L.y - 30);
+      const cab = sc.add.graphics().setDepth(L.y + 1);
+      cab.lineStyle(3, 0x2a3038, 1);
+      cab.lineBetween(L.x - 60, L.y - 88, L.x + 220, L.y - 150);
+      for (let i = 0; i < 3; i++) {
+        const cx3 = L.x - 20 + i * 90, cy3 = L.y - 96 - i * 20;
+        cab.fillStyle(0xc0392b, 1); cab.fillRect(cx3 - 10, cy3, 20, 14);
+        cab.lineBetween(cx3, cy3 - 8, cx3, cy3);
+      }
+      sc.add.text(L.x, L.y + 14, '🚡 FROSTREACH DOWNHILL — RACE OFFICE', {
+        fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#e8f0f8', backgroundColor: '#2a3845',
+        padding: { x: 4, y: 2 }, resolution: 2,
+      }).setOrigin(0.5, 0).setDepth(L.y + 14);
+      // yeti footprints, heading somewhere with great confidence
+      const fp = sc.add.graphics().setDepth(-28);
+      fp.fillStyle(0xc2d4e0, 0.8);
+      for (let i = 0; i < 12; i++) {
+        fp.fillEllipse(L.x + 260 + i * 44 + (i % 2 === 0 ? -10 : 10), L.y - 40 - i * 24, 13, 20);
+      }
+      sc.add.text(L.x + 810, L.y - 330, 'GONE SKIING', {
+        fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#2a3440', backgroundColor: '#dfe8f0',
+        padding: { x: 3, y: 2 }, resolution: 2,
+      }).setOrigin(0.5).setAngle(6).setDepth(L.y);
+    }
+    // --- the dog team (they know the way; nobody has asked them where) ---
+    {
+      const S2 = EAST_SPOTS.sled;
+      const sg = sc.add.graphics().setDepth(S2.y);
+      sg.fillStyle(0x8a5a3a, 1); sg.fillRect(S2.x - 20, S2.y - 16, 44, 6);
+      sg.lineStyle(3, 0x6a4a2a, 1);
+      sg.beginPath(); sg.arc(S2.x + 24, S2.y - 22, 12, -1.5, 1.2); sg.strokePath();
+      sg.fillRect(S2.x - 20, S2.y - 10, 6, 4); sg.fillRect(S2.x + 14, S2.y - 10, 6, 4);
+      for (let i = 0; i < 3; i++) {
+        const hx2 = S2.x - 70 - i * 34, hy2 = S2.y - 6 + (i % 2 === 0 ? -8 : 8);
+        eastBeasts.push({
+          spr: sc.add.image(hx2, hy2, 'e-husky').setScale(TEXEL).setOrigin(0.5, 1).setDepth(hy2),
+          x: hx2, y: hy2, tx: hx2, ty: hy2, kind: 'husky', ph: rnd() * 9, state: 0, busyUntil: 0,
+        });
+      }
+    }
+    // --- the igloo camp ---
+    {
+      const I2 = EAST_SPOTS.igloos;
+      for (const [dx2, dy2, s2] of [[-70, 0, 2.2], [40, 40, 1.7], [90, -30, 1.4]] as [number, number, number][]) {
+        sc.add.image(I2.x + dx2, I2.y + dy2, 'e-igloo').setScale(TEXEL * s2).setOrigin(0.5, 1).setDepth(I2.y + dy2);
+      }
+      const fire = sc.add.circle(I2.x, I2.y + 40, 8, 0xff9a3a).setDepth(I2.y + 40);
+      sc.add.circle(I2.x, I2.y + 40, 20, 0xff9a3a, 0.2).setBlendMode(ADD).setDepth(I2.y + 41);
+      sc.tweens.add({ targets: fire, scale: 1.3, duration: 300, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    }
+    // --- the hot spring (the one warm argument against the whole biome) ---
+    {
+      const H2 = EAST_SPOTS.spring;
+      sc.add.ellipse(H2.x, H2.y, 190, 110, 0x8a929e).setDepth(-29);
+      sc.add.ellipse(H2.x, H2.y, 160, 88, 0x3aa0a8).setDepth(-28);
+      sc.add.ellipse(H2.x - 20, H2.y - 10, 70, 30, 0x5ac8cc, 0.6).setDepth(-27);
+      sc.add.circle(H2.x, H2.y, 90, 0x5ac8cc, 0.08).setBlendMode(ADD).setDepth(-27);
+      for (let i = 0; i < 3; i++) {
+        const steam = sc.add.ellipse(H2.x - 30 + i * 30, H2.y - 10, 26, 14, 0xe8f0f4, 0.4).setDepth(H2.y + 60);
+        sc.tweens.add({ targets: steam, y: H2.y - 90 - i * 14, alpha: 0, scaleX: 2, duration: 2900, delay: i * 950, repeat: -1, ease: 'Sine.easeOut' });
+      }
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2 + 0.3;
+        sc.add.circle(H2.x + Math.cos(a) * 92, H2.y + Math.sin(a) * 54, 7 + (i % 3) * 3, 0x6a727e).setDepth(H2.y + Math.sin(a) * 54);
+      }
+    }
+    // --- the mammoth (the ice is warm here. don't think about it.) ---
+    {
+      const M2 = EAST_SPOTS.mammoth;
+      if (sc.textures.exists('na-ice-patch')) sc.add.image(M2.x, M2.y, 'na-ice-patch').setScale(4.4).setDepth(-29);
+      else sc.add.ellipse(M2.x, M2.y, 200, 150, 0xc4dce8).setDepth(-29);
+      const mm = sc.add.graphics().setDepth(-28);
+      mm.fillStyle(0x5a4030, 0.42);
+      mm.fillEllipse(M2.x, M2.y + 6, 130, 78);
+      mm.fillEllipse(M2.x + 62, M2.y - 14, 52, 44);
+      mm.lineStyle(5, 0xe8e0d0, 0.55);
+      mm.beginPath(); mm.arc(M2.x + 84, M2.y + 10, 26, 2.4, 4.6); mm.strokePath();
+      mm.fillStyle(0xffffff, 0.14);
+      mm.fillEllipse(M2.x - 20, M2.y - 16, 90, 30);
+    }
+    // --- the locals ---
+    for (let i = 0; i < 8; i++) {
+      const a = rnd() * Math.PI * 2, rr = 0.5 + rnd() * 0.7;
+      const px3 = POND_ICE.x + Math.cos(a) * POND_ICE.rx * rr, py3 = POND_ICE.y + Math.sin(a) * POND_ICE.ry * rr;
+      eastBeasts.push({
+        spr: sc.add.image(px3, py3, 'e-penguin').setScale(TEXEL).setOrigin(0.5, 1).setDepth(py3),
+        x: px3, y: py3, tx: px3, ty: py3, kind: 'penguin', ph: rnd() * 9, state: 0, busyUntil: 0,
+      });
+    }
+    {
+      const bx2 = x0 + 8000, by2 = 420;
+      eastBeasts.push({
+        spr: sc.add.image(bx2, by2, 'e-bear').setScale(TEXEL * 1.3).setOrigin(0.5, 1).setDepth(by2),
+        x: bx2, y: by2, tx: bx2, ty: by2, kind: 'bear', ph: rnd() * 9, state: 0, busyUntil: 0,
+      });
+    }
+    // --- snowfall (camera-fixed; drifts only while you're out here) ---
+    for (let i = 0; i < 80; i++) {
+      const f = sc.add.circle(Math.random() * 1920, Math.random() * 1080, 1.2 + Math.random() * 1.8, 0xffffff, 0.85)
+        .setScrollFactor(0).setDepth(150000).setVisible(false);
+      snowFlakes.push({ spr: f, sp: 34 + Math.random() * 56, sw: 10 + Math.random() * 26, ph: Math.random() * 6.28 });
+    }
+    auroraG = sc.add.graphics().setDepth(-27);
+  }
+
+  function updateEast(now: number, dt: number) {
+    if (!snowFlakes.length) return;
+    const here = selfX > WORLD.w - 700 && !inInterior && !inDungeon;
+    // snowballs restock wherever there's snow to pack
+    if (selfX > WORLD.w + 30 && !inInterior && !inDungeon && ammo.snow < WEAPON_BY_ID.snow.max) {
+      ammo.snow = WEAPON_BY_ID.snow.max;
+      updateWeaponHud();
+      if (!snowPacked) { snowPacked = true; showToast('❄️ You pack some snowballs. For science. (weapon rack: ❄️)'); }
+    }
+    // snowfall, camera-fixed
+    const cam = mainCam;
+    for (const f of snowFlakes) {
+      if (!here || !cam) { if (f.spr.visible) f.spr.setVisible(false); continue; }
+      if (!f.spr.visible) f.spr.setVisible(true);
+      f.ph += dt;
+      const w2 = cam.width, h2 = cam.height;
+      let ny = f.spr.y + f.sp * dt;
+      if (ny > h2 + 4) ny -= h2 + 8;
+      f.spr.setPosition(((f.spr.x + Math.sin(f.ph * 1.7) * f.sw * dt) % (w2 + 8) + w2 + 8) % (w2 + 8), ny);
+      f.spr.setAlpha(0.5 + Math.sin(f.ph * 2.3) * 0.3);
+    }
+    // aurora, in the deep night only
+    if (auroraG) {
+      const nf = nightFactor(Date.now() + net.dayNightOffset());
+      auroraG.clear();
+      if (here && nf > 0.45) {
+        const a0 = (nf - 0.45) * 1.4;
+        for (let band = 0; band < 3; band++) {
+          const col = [0x5ae88a, 0x5ac8cc, 0xc176ff][band];
+          auroraG.lineStyle(16 - band * 4, col, 0.10 * a0 + band * 0.008);
+          auroraG.beginPath();
+          for (let x = WORLD.w; x <= WORLD.w + EAST.w; x += 160) {
+            const y = 70 + band * 42 + Math.sin(x / 420 + now / (2600 + band * 700)) * 34;
+            if (x === WORLD.w) auroraG.moveTo(x, y); else auroraG.lineTo(x, y);
+          }
+          auroraG.strokePath();
+        }
+      }
+    }
+    for (const b of xmasBulbs) {
+      b.ph += dt;
+      b.spr.setAlpha(0.55 + Math.sin(b.ph * 3 + b.spr.x) * 0.45);
+    }
+    // the locals
+    for (const b of eastBeasts) {
+      if (b.kind === 'penguin') {
+        if (b.state === 0 && now >= b.busyUntil) {
+          if (Math.random() < 0.012) {
+            b.state = Math.random() < 0.35 ? 2 : 1; // 2 = belly slide
+            const a = Math.random() * Math.PI * 2, d = b.state === 2 ? 150 : 60;
+            b.tx = clamp(b.x + Math.cos(a) * d, POND_ICE.x - POND_ICE.rx - 120, POND_ICE.x + POND_ICE.rx + 120);
+            b.ty = clamp(b.y + Math.sin(a) * d * 0.6, POND_ICE.y - POND_ICE.ry - 90, POND_ICE.y + POND_ICE.ry + 90);
+            b.busyUntil = now + (b.state === 2 ? 900 : 1400);
+          }
+        } else if (b.state > 0) {
+          const k = Math.min(1, dt * (b.state === 2 ? 5 : 2.2));
+          b.x += (b.tx - b.x) * k; b.y += (b.ty - b.y) * k;
+          b.spr.setFlipX(b.tx < b.x);
+          if (b.state === 2) b.spr.setScale(TEXEL * 1.15, TEXEL * 0.7); else b.spr.setScale(TEXEL);
+          b.spr.setPosition(b.x, b.y + (b.state === 1 ? Math.abs(Math.sin(now / 90)) * -2 : 0)).setDepth(b.y);
+          if (now >= b.busyUntil) { b.state = 0; b.busyUntil = now + 600 + Math.random() * 2000; b.spr.setScale(TEXEL); }
+        }
+      } else if (b.kind === 'bear') {
+        const d = Math.hypot(b.x - selfX, b.y - selfY);
+        if (d < 170 && now >= bearCalmUntil) {
+          bearCalmUntil = now + 14000;
+          tone(70, 0.7, 'sawtooth', 0.05, 48);
+          showToast(pick2([
+            '🐻‍❄️ the bear looks at you. the bear looks away. you have been assessed.',
+            '🐻‍❄️ the bear yawns. you count the teeth. the bear lets you.',
+            '🐻‍❄️ the bear sits down. this is somehow more alarming.',
+          ]));
+        }
+        if (now >= b.busyUntil) {
+          const a = Math.random() * Math.PI * 2;
+          b.tx = clamp(b.x + Math.cos(a) * 160, WORLD.w + 7300, WORLD.w + 9200);
+          b.ty = clamp(b.y + Math.sin(a) * 120, 160, 900);
+          b.busyUntil = now + 4000 + Math.random() * 5000;
+        }
+        const k = Math.min(1, dt * 0.5);
+        b.x += (b.tx - b.x) * k; b.y += (b.ty - b.y) * k;
+        b.spr.setFlipX(b.tx < b.x);
+        b.spr.setPosition(b.x, b.y).setDepth(b.y);
+      } else { // husky: mostly professional standing, occasional shuffle
+        if (now >= b.busyUntil && Math.random() < 0.004) {
+          b.spr.setFlipX(!b.spr.flipX);
+          b.busyUntil = now + 3000;
+        }
+      }
+    }
+    // pucks: proper ice physics + the goal horn
+    for (const p of pucks) {
+      const speed = Math.hypot(p.vx, p.vy);
+      if (speed > 1) {
+        p.x += p.vx * dt; p.y += p.vy * dt;
+        const keep = Math.pow(onIce(p.x, p.y) ? 0.5 : 0.02, dt);
+        p.vx *= keep; p.vy *= keep;
+        // bank off the pond rim
+        const ex = (p.x - POND_ICE.x) / POND_ICE.rx, ey = (p.y - POND_ICE.y) / POND_ICE.ry;
+        if (ex * ex + ey * ey > 1) {
+          const nx2 = ex / POND_ICE.rx, ny2 = ey / POND_ICE.ry;
+          const nl = Math.hypot(nx2, ny2) || 1;
+          const dot = (p.vx * nx2 + p.vy * ny2) / nl;
+          p.vx -= 2 * dot * (nx2 / nl); p.vy -= 2 * dot * (ny2 / nl);
+          p.vx *= 0.7; p.vy *= 0.7;
+          const scale = 0.995 / Math.sqrt(ex * ex + ey * ey);
+          p.x = POND_ICE.x + (p.x - POND_ICE.x) * scale;
+          p.y = POND_ICE.y + (p.y - POND_ICE.y) * scale;
+          noise(0.04, 0.02, 1800);
+        }
+        // goal!
+        if (Math.abs(p.x - EAST_SPOTS.goal.x) < 10 && Math.abs(p.y - EAST_SPOTS.goal.y) < 44 && p.vx > 40) {
+          goalsScored++;
+          tone(392, 0.5, 'sawtooth', 0.06); window.setTimeout(() => tone(392, 0.8, 'sawtooth', 0.05), 550); // the horn
+          showToast(`🚨 GOAL! (${goalsScored} this visit — the penguins remain unimpressed)`);
+          p.x = POND_ICE.x; p.y = POND_ICE.y; p.vx = p.vy = 0;
+        }
+        p.spr.setPosition(p.x, p.y).setDepth(p.y);
+      }
+      // kick it by skating through it
+      if (!driving && Math.hypot(selfX - p.x, selfY - p.y) < R + 10) {
+        const mySpeed = Math.hypot(skVx, skVy);
+        const a = Math.atan2(p.y - selfY, p.x - selfX);
+        p.vx = Math.cos(a) * (140 + mySpeed * 1.1);
+        p.vy = Math.sin(a) * (140 + mySpeed * 1.1);
+        noise(0.05, 0.03, 2400);
+      }
+    }
+    // the hot spring is warm and will tell you so
+    if (here && Math.hypot(selfX - EAST_SPOTS.spring.x, selfY - EAST_SPOTS.spring.y) < 85 && now >= springSighAt) {
+      springSighAt = now + 12000;
+      showToast(pick2([
+        '♨️ warm. actually warm. you consider moving here.',
+        '♨️ the steam unknots something between your shoulders you didn\'t know had knotted.',
+        '♨️ a penguin is already in here. neither of you mentions it.',
+      ]));
+    }
+  }
+
+  function eastInteract(): boolean {
+    const near2 = (s: { x: number; y: number }, r = 60) => Math.hypot(selfX - s.x, selfY - s.y) < r;
+    for (const h of FISH_HOLES) {
+      if (near2(h, 46)) {
+        openDialog('🎣 Ice Fishing', 'A hole in the ice, a stool, and the particular patience of the very cold. The fish down there are the same fish as the pond in town. They simply respect you more for the effort.', [
+          { label: '🎣 Drop a line', onPick: () => { pause(false); net.openFeature('fishing'); } },
+        ]);
+        return true;
+      }
+    }
+    if (near2(EAST_SPOTS.lift, 90)) {
+      openDialog('🚡 Frostreach Downhill', 'The chairlift rattles up into weather that hasn\'t been named yet. At the top: one course, no rules, and — according to the footprints — at least one prior contestant who never checked back in.', [
+        { label: '⛷️ Race (2–4 players, PvP)', onPick: () => { pause(false); net.openFeature('ski'); } },
+      ]);
+      return true;
+    }
+    if (near2(EAST_SPOTS.lodge, 80)) {
+      openDialog('🏠 The Thawless Lodge', 'Warm light, wet mittens drying by the fire, and a cocoa pot that has never once been empty. Marlene nods at you like you\'ve always come here.', [
+        { label: '☕ Cocoa (on the house)', onPick: () => {
+          closeDialog();
+          bestowBlessing();
+          showToast('☕ Warmth spreads to your toes. Your stride lengthens. The cold has been postponed.');
+        } },
+      ]);
+      return true;
+    }
+    if (near2(EAST_SPOTS.pole, 40)) {
+      poleLicked++;
+      stunnedUntil = performance.now() + 2600;
+      keys.clear();
+      tone(880, 0.1, 'square', 0.03);
+      showToast(poleLicked === 1
+        ? '👅 you lick the flagpole. the flagpole was expecting this. you are now part of the flagpole.'
+        : poleLicked === 2 ? '👅 AGAIN?? the sign is RIGHT THERE.'
+        : `👅 stuck again. (${poleLicked} times. the pole has stopped judging. the pole simply waits.)`);
+      return true;
+    }
+    if (near2(EAST_SPOTS.frosty, 56)) {
+      showToast(pick2([
+        '⛄ the snowman\'s coal smile is fractionally wider than yesterday. you have no proof. you have no doubt.',
+        '⛄ someone gave him a real top hat. nobody will say who. he wears it like he earned it.',
+        '⛄ you pat the snowman. compacting him slightly. he forgives you, slightly.',
+        '⛄ there are no footprints around him. there are never any footprints around him.',
+      ]));
+      return true;
+    }
+    if (near2(EAST_SPOTS.gallery, 90)) {
+      showToast(pick2([
+        '🧊 "PADDLE, TRIUMPHANT" — ice, artist unknown, on loan from nobody.',
+        '🧊 "THE ONE THAT GOT AWAY" — carved from memory, which explains the size.',
+        '🧊 "SWAN (BARTHOLOMEW?)" — the plaque\'s question mark was added later, by someone in a hurry.',
+        '🧊 the sculptures do not melt. the gallery\'s insurer has stopped asking why.',
+      ]));
+      return true;
+    }
+    if (near2(EAST_SPOTS.sled, 80)) {
+      tone(520, 0.5, 'sine', 0.04, 780); window.setTimeout(() => tone(440, 0.7, 'sine', 0.04, 660), 240);
+      showToast(pick2([
+        '🐕 the dogs howl in harmony. the lead dog holds the fifth. they\'ve been practicing.',
+        '🐕 three huskies, ready since dawn, hitched to a sled going nowhere. they consider this a job well done.',
+        '🐕 you pet the lead dog. the other two file formal complaints.',
+      ]));
+      return true;
+    }
+    if (near2(EAST_SPOTS.igloos, 90)) {
+      showToast(pick2([
+        '🧊 you peek into the igloo. it\'s warmer than your apartment. you leave before you do something drastic.',
+        '🧊 inside: a fish rack, a neat bedroll, and a framed photo of a warmer igloo.',
+        '🧊 Frida\'s igloo has a doorbell. it plays a tiny, perfect arpeggio into the snow.',
+      ]));
+      return true;
+    }
+    if (near2(EAST_SPOTS.mammoth, 90)) {
+      showToast(pick2([
+        '🦣 there is absolutely something enormous in the ice. its eye is closed. probably closed.',
+        '🦣 you put your hand on the ice. the ice is warm. you take your hand off the ice.',
+        '🦣 the tusk curls up through six feet of blue. scratch marks on the INSIDE have been officially attributed to "settling."',
+        '🦣 a sign nearby: "GEOLOGICAL FEATURE. DO NOT THAW." the word THAW has been underlined twice, recently.',
+      ]));
+      return true;
+    }
+    return false;
+  }
+
   // --- town life: statue of the #1, live billboard, fountain wishes, critters ---
   // Everything here is cosmetic + social; interactions ride the X key. Emoji sprites keep it
   // cheap and legible at world scale (same trick as the friend hearts).
@@ -15601,6 +16230,7 @@ export function startWorld(net: WorldNet): void {
     if (curiosityInteract()) return true;
     if (selfY < 60 && clubInteract()) return true;
     if (selfY > WORLD.h - 60 && swampInteract()) return true;
+    if (selfX > WORLD.w - 60 && eastInteract()) return true;
     if (Math.hypot(selfX - PLAZA.x, selfY - PLAZA.y) < 120) {
       net.wish();
       const sc2 = lifeSc;
