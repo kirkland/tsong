@@ -498,6 +498,11 @@ const DESERT = { w: 24000, seed: 0xC0FFEE };
 // Tsong Country Club: a members-only golf establishment north of town. The gate has been
 // broken since '09. Spiritually, it stands.
 const CLUB = { h: 1300 };
+// The Great Southern Damp — a bayou-bog south of town. Smaller than the Nothing, considerably
+// wetter, and much more inhabited. Walkable ground ends at the shore; the pier goes further.
+const SOUTH = { h: 4200, seed: 0xB0661E };
+const SWAMP_SHORE_Y = WORLD.h + SOUTH.h - 520; // where solid-ish ground gives up
+const SWAMP_PIER_X = 2400;                      // the pier's centerline (walkable out over the water)
 
 // --- Kenney "Tiny Town" tileset (16×16, packed 12×11). Frame indices we use, named for clarity. ---
 const TT = {
@@ -1009,7 +1014,7 @@ interface NpcDef {
   body?: 'pants' | 'dress'; // silhouette, default 'pants'
   hat?: 'cap' | 'sun';  // optional headwear
   hatColor?: number;    // cap tint (sun hat is fixed straw)
-  kind?: 'minion' | 'kenny' | 'demon' | 'soul' | 'angler' | 'protester' | 'fed' | 'dorito'; // special one-off sprite; default is the little-person
+  kind?: 'minion' | 'kenny' | 'demon' | 'soul' | 'angler' | 'protester' | 'fed' | 'dorito' | 'shrek' | 'donkey'; // special one-off sprite; default is the little-person
   glasses?: boolean;    // overlay specs
   stripes?: boolean;    // red/white striped shirt instead of a flat tinted one (Waldo!)
   x: number; y: number; // home anchor (NPC roams around this)
@@ -2180,6 +2185,83 @@ const NPCS: NpcDef[] = [
       '*glances around* You didn\'t hear this from me, but the candlesticks in this room are not all decorative.',
     ],
   },
+  // --- The Great Southern Damp (south of town) ---
+  {
+    id: 'swamp-granny', name: 'Grandmaw Toadsworth', shirt: 0x3a2a4a, hair: 0xd8d8d0, skin: SKINS[3],
+    body: 'dress', hairStyle: 'bun', x: 1150, y: 3480, roam: 30,
+    lines: [
+      'Come closer, sugar. Closer. …That\'s far enough. The mud past that point has opinions.',
+      'I moved down here for the quiet. Then the quiet started talkin\'. We get along fine now.',
+      'Folks up in town wish into a fountain. Down here we don\'t wish. We NEGOTIATE.',
+      'The cauldron? Gumbo. Mostly gumbo. On the equinox, other things. You hungry?',
+      'That golf club up north keeps sendin\' me letters about my "property\'s appearance." I keep sendin\' back frogs.',
+      'Don\'t kiss the frogs. Not because of curses — they simply don\'t care for it.',
+      'The church sank in \'31. Congregation kept attending for two more years. Faith like that, you don\'t question the water level.',
+    ],
+    ask: {
+      q: 'You want somethin\' told, sugar: your fortune, or the truth?',
+      choices: [
+        { label: 'My fortune', reply: 'Then stir the pot yourself and see what rises. Go on. It\'s right there. It don\'t bite on Tuesdays.' },
+        { label: 'The truth', reply: 'The truth is the fortune costs nothin\' and the truth costs somethin\' you ain\'t offered yet. Come back when you\'ve lost a ball to that pond up north. Then we\'ll talk truth.' },
+      ],
+    },
+  },
+  {
+    id: 'swamp-gary', name: 'Gary of the Bog', shirt: 0x5a6a3a, hair: 0x4a3a22, skin: SKINS[1],
+    x: 2740, y: 3020, roam: 50,
+    lines: [
+      'Welcome to my wetland estate. Six thousand square units, water feature, original everything.',
+      'Robville wanted 30,000 a lot. You know what I paid down here? Respect. And one boot. The mud took the boot.',
+      'It\'s not "sinking," it\'s settling into itself. Like a good stew. Or a bad decision.',
+      'The stilts? Load-bearing. The house? Optimistic. Me? Extremely home.',
+      'People say "Gary, it\'s a swamp." And I say "it\'s a MARSH-adjacent lifestyle community," and then usually they\'ve already left.',
+      'My neighbor\'s a heron. Quiet fella. Judgmental, but quiet.',
+    ],
+  },
+  {
+    id: 'swamp-shrek', name: 'Shrek', shirt: 0xe8e0d0, hair: 0x8aba4a, kind: 'shrek',
+    x: 660, y: 2900, roam: 46,
+    lines: [
+      'WHAT are you doing in my swamp?!',
+      'This is MY corner of the Damp. The desert is somebody else\'s problem. The golf course is EVERYBODY else\'s problem.',
+      'Ogres are like onions. LAYERS. Not everything needs a deeper meaning, but this one has layers of \'em.',
+      'Better out than in, I always say.',
+      'The donkey? Not mine. He just… occurred one day. Like weather. Loud weather.',
+      'I put up signs. TEN signs. Y\'all have read a combined total of none of them.',
+      'The witch down the way trades me onions for quiet. Best neighbor I\'ve ever had. I\'ve had two.',
+    ],
+    ask: {
+      q: 'You\'re still here. WHY are you still here?',
+      choices: [
+        { label: 'Ogres have layers, right?', reply: 'Oh. You LISTEN. …Fine. You can stay for one more minute. No, I will NOT say the thing louder for your friends.' },
+        { label: 'Donkey sent me', reply: 'Of course he did. OF COURSE he did. *long exhale* …He\'s a good friend. Tell absolutely nobody I said that. I know where you live. It\'s the town. Everyone lives in the town.' },
+      ],
+    },
+  },
+  {
+    id: 'swamp-donkey', name: 'Donkey', shirt: 0x8a8a92, hair: 0x3a3a42, kind: 'donkey',
+    x: 780, y: 2985, roam: 80,
+    lines: [
+      'HEY! I know you! …no, wait. Nope. Don\'t know you. You wanna be best friends anyway?? Blink twice for yes. Or once! I\'m flexible!',
+      'And in the MORNIN\'… I\'m makin\' WAFFLES! The witch said her pot is "off limits" and "for gumbo" and "cursed," so. Waffles. Somehow.',
+      'Shrek says I talk too much, but I counted, and HE said "my swamp" forty-one times yesterday, so who\'s repetitive NOW, big guy?',
+      'You know what everybody likes? PARFAITS. You ever meet a person, you say "hey, let\'s get some parfait," they say "no"? Exactly.',
+      'I\'m not sayin\' there\'s a dragon-girlfriend situation, I\'m just sayin\' don\'t wait up, and if you see a large shadow, wave. Politely.',
+      'That ferryman down south? Great listener. GREAT listener. Hasn\'t said a word in three visits. That\'s a friendship, baby.',
+      'STAIRS? You think a noble steed can\'t do STAIRS?',
+    ],
+  },
+  {
+    id: 'swamp-ferryman', name: 'The Ferryman', shirt: 0x2a2a33, hair: 0x8a8a92, skin: SKINS[2],
+    x: 2430, y: 5810, roam: 0,
+    lines: [
+      'Ferry\'s out of service. Been out of service since I got here. I don\'t remember getting here.',
+      'Where\'s it go? Across. Where\'s across? *long pause* Also here, mostly.',
+      'One passenger, one coin, no questions. That was the deal. Nobody\'s ever made it to the second rule.',
+      'The water at the end of the pier is deeper than the pier is long. Don\'t check my math.',
+      'You hear the bell some nights. Church went down holding it. Some things don\'t stop just \'cause they sank.',
+    ],
+  },
   {
     // GAS. No gas since 2019. Corporate hasn't noticed. Pete has stopped asking questions.
     id: 'desert-pete', name: 'Pump Jockey Pete', shirt: 0xc0392b, hair: 0x6a5235, skin: SKINS[1],
@@ -3234,10 +3316,13 @@ export function startWorld(net: WorldNet): void {
         else y = b.y + b.h + rad;
       }
     }
-    const northOpen = x >= 0 && x <= WORLD.w; // the club is north of TOWN only (not the desert)
+    const inTownX = x >= 0 && x <= WORLD.w; // the club (N) and the Damp (S) open off TOWN only (not the desert)
+    // South: ground ends at the shore — except the pier, which you may walk to the end of. Carefully.
+    const onPier = x > SWAMP_PIER_X - 26 && x < SWAMP_PIER_X + 26;
+    const southMax = inTownX ? (onPier ? SWAMP_SHORE_Y + 380 : SWAMP_SHORE_Y) - rad : WORLD.h - rad;
     return {
       x: clamp(x, -DESERT.w + rad, WORLD.w - rad), // the west is open — walk into the Nothing
-      y: clamp(y, northOpen ? -CLUB.h + rad : rad, WORLD.h - rad),
+      y: clamp(y, inTownX ? -CLUB.h + rad : rad, southMax),
       hit,
     };
   }
@@ -4005,7 +4090,7 @@ export function startWorld(net: WorldNet): void {
     inInterior = false;
     nearExit = false;
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h);
+    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
     const bar = WORLD_BUILDINGS.find((b) => b.kind === 'bar');
     if (bar) { selfX = bar.x + bar.w / 2; selfY = bar.y + bar.h + 44; } // step back out the door
     setTavernMusic(false);
@@ -4093,7 +4178,7 @@ export function startWorld(net: WorldNet): void {
     inInterior = false; inTemple = false;
     nearExit = false; nearBook = false;
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h);
+    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
     const t = WORLD_BUILDINGS.find((b) => b.kind === 'temple');
     if (t) { selfX = t.x + t.w / 2; selfY = t.y + t.h + 44; } // step back out the door
     stopChant();
@@ -4866,7 +4951,7 @@ export function startWorld(net: WorldNet): void {
     dungeonPurseDisplay = 0;
     encounterPending = false;
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h);
+    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
     setDungeonMusic(false);
     minimap.style.display = 'block'; help.style.display = 'block'; // restore overworld HUD
     dungeonBanner.style.display = 'none'; dungeonControls.style.display = 'none';
@@ -10129,6 +10214,39 @@ export function startWorld(net: WorldNet): void {
       px(5, 14, 2, 2, HAIR); px(9, 14, 2, 2, HAIR); px(4, 15, 3, 1, SHOE); px(9, 15, 3, 1, SHOE);
       g.generateTexture('w-dorito', 16, 16);
     }
+    // --- Shrek (16×18). it's Shrek. ---
+    {
+      const GRN = 0x8aba4a, GRN_D = 0x6a9636, TUNIC = 0xe8e0d0, VEST = 0x6a4a2a, PANT = 0x5a4028;
+      g.clear();
+      px(0, 3, 3, 2, GRN); px(13, 3, 3, 2, GRN);              // the trumpet ears
+      px(0, 2, 1, 1, GRN_D); px(15, 2, 1, 1, GRN_D);          // ear tips
+      px(4, 1, 8, 7, GRN);                                     // head
+      px(4, 2, 8, 1, GRN_D);                                   // heavy brow
+      px(6, 4, 1, 1, 0x101010); px(9, 4, 1, 1, 0x101010);     // eyes
+      px(6, 6, 4, 1, GRN_D);                                   // the smirk
+      px(3, 8, 10, 6, TUNIC);                                  // tunic
+      px(3, 8, 2, 6, VEST); px(11, 8, 2, 6, VEST);            // vest
+      px(3, 13, 10, 1, 0x3a2a18);                              // belt
+      px(1, 9, 2, 4, GRN); px(13, 9, 2, 4, GRN);              // arms
+      px(5, 14, 2, 3, PANT); px(9, 14, 2, 3, PANT);           // legs
+      px(4, 17, 3, 1, 0x3a2a18); px(9, 17, 3, 1, 0x3a2a18);   // boots
+      g.generateTexture('w-shrek', 16, 18);
+    }
+    // --- his associate: a noble steed (18×14, faces right) ---
+    {
+      const GRY = 0x8a8a92, GRY_D = 0x6a6a72, MANE = 0x3a3a42, MUZ = 0xbfb8b0;
+      g.clear();
+      px(2, 5, 1, 4, GRY_D); px(1, 8, 1, 2, MANE);            // tail + tuft
+      px(3, 5, 10, 5, GRY); px(3, 9, 10, 1, GRY_D);           // body
+      px(11, 2, 4, 4, GRY);                                    // head
+      px(14, 4, 4, 3, MUZ);                                    // the muzzle (mid-sentence)
+      px(15, 5, 2, 1, 0x2a2a2a);                               // it is always mid-sentence
+      px(12, 3, 1, 1, 0x101010);                               // bright eager eye
+      px(11, 0, 1, 3, GRY); px(13, 0, 1, 3, GRY);             // the ears
+      px(10, 1, 1, 5, MANE);                                   // mane
+      px(4, 10, 1, 4, GRY); px(7, 10, 1, 4, GRY); px(10, 10, 1, 4, GRY); px(12, 10, 1, 4, GRY); // legs
+      g.generateTexture('w-donkey', 18, 14);
+    }
 
     // --- shelter critters: little dogs & cats milling around the pet shack (14×10, face +x) ---
     {
@@ -11413,7 +11531,7 @@ export function startWorld(net: WorldNet): void {
     inInterior = false; inMcdonald = false;
     nearExit = false;
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h);
+    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
     const mc = WORLD_BUILDINGS.find((b) => b.kind === 'mcdonald');
     if (mc) { selfX = mc.x + mc.w / 2; selfY = mc.y + mc.h + 44; }
     enterChime();
@@ -11515,7 +11633,7 @@ export function startWorld(net: WorldNet): void {
     inInterior = false; inCasino = false;
     nearExit = false; nearCasinoGame = null;
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h);
+    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
     const c = WORLD_BUILDINGS.find((b) => b.kind === 'casino');
     if (c) { selfX = c.x + c.w / 2; selfY = c.y + c.h + 44; } // step back out the door
     enterChime();
@@ -12079,7 +12197,7 @@ export function startWorld(net: WorldNet): void {
       const sc = this;
       makeTextures(sc);
 
-      sc.cameras.main.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h);
+      sc.cameras.main.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
       sc.cameras.main.setZoom(ZOOM);
       sc.cameras.main.setBackgroundColor(0x3f7a3a);
       mainCam = sc.cameras.main;
@@ -12240,6 +12358,7 @@ export function startWorld(net: WorldNet): void {
       makeTownLife(sc);
       makeDesert(sc);
       makeClub(sc);
+      makeSwamp(sc);
 
       // --- ammo crates scattered over the open ground ---
       buildCrates(sc);
@@ -12580,6 +12699,7 @@ export function startWorld(net: WorldNet): void {
       updateDesert(now, dt);
       updateClub(now);
       updateClubhouse(now, dt);
+      updateSwamp(now, dt);
       updateNearBuilding();
       maybeSendMove(now);
 
@@ -13477,6 +13597,10 @@ export function startWorld(net: WorldNet): void {
       parts = [sc.add.image(0, 0, 'w-fed').setScale(TEXEL * 1.2).setOrigin(0.5, 0.95)];
     } else if (def.kind === 'dorito') {
       parts = [sc.add.image(0, 0, 'w-dorito').setScale(TEXEL * 1.25).setOrigin(0.5, 0.95)];
+    } else if (def.kind === 'shrek') {
+      parts = [sc.add.image(0, 0, 'w-shrek').setScale(TEXEL * 1.35).setOrigin(0.5, 0.95)];
+    } else if (def.kind === 'donkey') {
+      parts = [sc.add.image(0, 0, 'w-donkey').setScale(TEXEL * 1.15).setOrigin(0.5, 0.95)];
     } else {
       const layer = (key: string, tint?: number) => {
         const im = sc.add.image(0, 0, key).setScale(TEXEL).setOrigin(0.5, 0.95);
@@ -14186,7 +14310,7 @@ export function startWorld(net: WorldNet): void {
     nearExit = false; nearClubSpot = null;
     cancelPutt();
     keys.clear(); joyActive = false;
-    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h);
+    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w, WORLD.h + CLUB.h + SOUTH.h);
     selfX = CLUBHOUSE.x; selfY = CLUBHOUSE.y + 96; // back out the front door
     stopLounge();
     enterChime();
@@ -14393,6 +14517,481 @@ export function startWorld(net: WorldNet): void {
       s.spr.setFlipX(dx < 0);
       s.spr.setPosition(s.x, s.y + Math.sin(now / 600) * 2).setDepth(s.y);
     }
+  }
+
+  // --- The Great Southern Damp: a bayou-bog south of town. The same Kenney canopy as the
+  // overworld, tinted murk-wards, over px pools, stilt architecture, and a citizenry of frogs.
+  // Curated landmarks + a seeded scatter (SOUTH.seed) so every client grows the same swamp. ---
+  interface SwampBeast { spr: Phaser.GameObjects.Image; x: number; y: number; tx: number; ty: number; kind: 'frog' | 'heron'; ph: number; state: number; busyUntil: number }
+  let swampFlies: { spr: Phaser.GameObjects.Arc; ox: number; oy: number; ph: number }[] = [];
+  let swampFog: { spr: Phaser.GameObjects.Ellipse; sp: number }[] = [];
+  let swampBeasts: SwampBeast[] = [];
+  let gatorEyes: { spr: Phaser.GameObjects.Container; x: number; y: number; hidUntil: number; ph: number }[] = [];
+  let cauldronGlow: Phaser.GameObjects.Arc | null = null;
+  let nextCroakAt = 0;
+  const SWAMP_SPOTS = {
+    cauldron: { x: 1290, y: 3470 },
+    stump: { x: 900, y: 4400 },
+    ring: { x: 3900, y: 3300 },
+    bell: { x: 3620, y: 4060 },
+    bottle: { x: SWAMP_PIER_X, y: SWAMP_SHORE_Y + 330 },
+    gator: { x: 1900, y: 2680 },
+  } as const;
+
+  function makeSwamp(sc: Phaser.Scene) {
+    const rnd = mulberry32(SOUTH.seed);
+    const top = WORLD.h, bot = WORLD.h + SOUTH.h;
+    const ADD = Phaser.BlendModes.ADD;
+    // --- px textures (local factory, same trick as the clubhouse) ---
+    const g = sc.add.graphics();
+    const px2 = (x: number, y: number, w: number, h: number, c: number) => { g.fillStyle(c, 1); g.fillRect(x, y, w, h); };
+    { // lily pad (10×8) with a notch
+      g.clear(); g.fillStyle(0x4a8a4a, 1); g.fillEllipse(5, 4, 10, 7);
+      g.fillStyle(0x5a9a56, 1); g.fillEllipse(5, 3.4, 7, 4);
+      g.fillStyle(0x27403c, 1); g.fillTriangle(5, 4, 10, 1, 10, 5);
+      g.generateTexture('w-sw-lily', 10, 8);
+    }
+    { // cattail (8×18)
+      g.clear(); px2(3, 4, 1, 14, 0x5a7a3a); px2(2, 0, 3, 6, 0x6a4a2a); px2(3, 0, 1, 1, 0xc8b890);
+      px2(5, 8, 1, 9, 0x5a7a3a); px2(6, 6, 1, 3, 0x4a6a30);
+      g.generateTexture('w-sw-cattail', 8, 18);
+    }
+    { // dead tree (18×26): bare gnarled branches
+      const D = 0x4a4038, D2 = 0x3a322a;
+      g.clear();
+      px2(8, 8, 3, 18, D); px2(8, 24, 5, 2, D2);
+      px2(4, 4, 5, 2, D); px2(3, 2, 2, 4, D);         // left branch, up
+      px2(11, 6, 5, 2, D); px2(15, 3, 2, 4, D);       // right branch, up
+      px2(6, 10, 2, 2, D2); px2(12, 11, 2, 2, D2);    // stubs
+      g.generateTexture('w-sw-deadtree', 18, 26);
+    }
+    { // hanging moss (12×10): drips for the canopy
+      const M = 0x6a8a5a, M2 = 0x5a7a4c;
+      g.clear();
+      px2(0, 0, 12, 2, M);
+      px2(1, 2, 1, 5, M2); px2(4, 2, 1, 7, M); px2(7, 2, 1, 4, M2); px2(10, 2, 1, 6, M);
+      g.generateTexture('w-sw-moss', 12, 10);
+    }
+    { // frog (9×6), facing right
+      const F = 0x5aa04a, F2 = 0x478a3a;
+      g.clear();
+      px2(1, 2, 7, 3, F); px2(1, 5, 7, 1, F2);      // body
+      px2(5, 0, 2, 2, F); px2(6, 0, 1, 1, 0x101010); // eye bump, watching
+      g.generateTexture('w-sw-frog', 9, 6);
+    }
+    { // heron (12×20): tall, white-gray, judgmental
+      const H = 0xd8dce0, H2 = 0xb8bcc4;
+      g.clear();
+      px2(3, 4, 6, 6, H); px2(3, 9, 6, 1, H2);        // body
+      px2(7, 0, 2, 5, H);                              // neck
+      px2(8, 0, 3, 2, H2); px2(11, 1, 1, 1, 0xe8a03a); // head + beak
+      px2(5, 10, 1, 9, 0x3a3a42); px2(7, 10, 1, 9, 0x3a3a42); // legs
+      g.generateTexture('w-sw-heron', 12, 20);
+    }
+    { // stilt shack (30×26): tin roof, porch, legs in the water table
+      const WD = 0x6a4a2a, WD2 = 0x54381e, TIN = 0x8a8f96, TIN2 = 0x6a6f76;
+      g.clear();
+      px2(2, 10, 26, 10, WD); px2(2, 10, 26, 2, WD2);           // cabin
+      px2(0, 6, 30, 5, TIN); px2(0, 6, 30, 1, TIN2);            // roof
+      px2(12, 14, 5, 6, 0x1a140c);                               // door
+      px2(21, 13, 4, 4, 0x2a3a4a);                               // window
+      px2(4, 20, 2, 6, WD2); px2(24, 20, 2, 6, WD2); px2(14, 20, 2, 6, WD2); // stilts
+      g.generateTexture('w-sw-shack', 30, 26);
+    }
+    { // firefly jar on a post (8×16)
+      g.clear();
+      px2(3, 8, 2, 8, 0x54381e);
+      px2(2, 2, 4, 6, 0x8aa0a8); px2(2, 2, 4, 1, 0xb8c8c8);
+      px2(3, 4, 1, 1, 0xffe98a); px2(5, 6, 1, 1, 0xffe98a);
+      g.generateTexture('w-sw-jar', 8, 16);
+    }
+    { // glowing mushroom (8×9) — brighter cousin of the town's
+      g.clear();
+      px2(1, 0, 6, 3, 0x7ae0c8); px2(0, 1, 8, 2, 0x5ac8b0); px2(2, 0, 2, 1, 0xb8f0e0);
+      px2(3, 3, 2, 6, 0xd8d8c8);
+      g.generateTexture('w-sw-glowshroom', 8, 9);
+    }
+    { // the cauldron (14×12)
+      g.clear();
+      px2(1, 2, 12, 8, 0x2a2a33); px2(2, 1, 10, 2, 0x3a3a44);
+      px2(2, 2, 10, 2, 0x4a9a4a);                                // the contents (gumbo, mostly)
+      px2(0, 10, 3, 2, 0x2a2a33); px2(11, 10, 3, 2, 0x2a2a33);   // feet
+      g.generateTexture('w-sw-cauldron', 14, 12);
+    }
+    { // cardboard alligator (34×12): convincing from one very specific angle
+      const C = 0x5a8a4a, C2 = 0x4a7a3c;
+      g.clear();
+      px2(0, 4, 26, 5, C); px2(24, 2, 10, 4, C);                 // body + snout
+      px2(26, 1, 2, 2, 0xffffff); px2(27, 1, 1, 1, 0x101010);    // googly-ish eye
+      for (let i = 0; i < 5; i++) px2(3 + i * 5, 2, 2, 2, C2);   // "scutes"
+      px2(30, 5, 3, 1, 0xffffff);                                 // painted-on teeth
+      px2(12, 9, 2, 3, 0xc8b890);                                 // the visible cardboard stand
+      g.generateTexture('w-sw-gator', 34, 12);
+    }
+    { // THE STUMP (30×20): what remains of something that should not have fit here
+      const S1 = 0x7a5a36, S2 = 0x6a4c2c, RINGS = 0x8a6a42;
+      g.clear();
+      g.fillStyle(S2, 1); g.fillEllipse(15, 14, 30, 12);          // trunk base
+      g.fillStyle(S1, 1); g.fillEllipse(15, 8, 28, 11);           // the cut face
+      g.fillStyle(RINGS, 1);
+      g.fillEllipse(15, 8, 20, 7); g.fillStyle(S1, 1); g.fillEllipse(15, 8, 14, 5);
+      g.fillStyle(RINGS, 1); g.fillEllipse(15, 8, 8, 3); g.fillStyle(S1, 1); g.fillEllipse(15, 8, 3, 1.4);
+      g.generateTexture('w-sw-stump', 30, 22);
+    }
+    { // onion (6×8): the region's principal export
+      g.clear();
+      px2(2, 4, 2, 3, 0xe8e0d0); px2(1, 5, 4, 2, 0xd8ccc0); px2(2, 7, 2, 1, 0xb8aca0);
+      px2(2, 0, 1, 4, 0x6a9a4a); px2(3, 1, 1, 3, 0x5a8a3c);
+      g.generateTexture('w-sw-onion', 6, 8);
+    }
+    { // the drowned steeple (16×26): all that shows of the church of \'31
+      const ST = 0x8a8276, ST2 = 0x6a6256, SLATE = 0x4a5058;
+      g.clear();
+      px2(3, 10, 10, 16, ST); px2(3, 10, 10, 2, ST2);
+      g.fillStyle(SLATE, 1); g.fillTriangle(1, 10, 8, 0, 15, 10);
+      px2(7, 2, 2, 3, 0xd8c088);                                  // the bell, glinting
+      px2(5, 16, 6, 6, 0x1a2028);                                 // the louvre window
+      g.generateTexture('w-sw-steeple', 16, 26);
+    }
+    g.destroy();
+
+    // --- ground: murk, mottle, and a polite gradient out of the town's grass ---
+    sc.add.rectangle(WORLD.w / 2, top + SOUTH.h / 2, WORLD.w, SOUTH.h, 0x33452e).setDepth(-30);
+    for (let i = 0; i < 5; i++) {
+      sc.add.rectangle(WORLD.w / 2, top + 30 + i * 60, WORLD.w, 60, 0x3e7a3c, 0.42 - i * 0.08).setDepth(-29);
+    }
+    const mott = sc.add.graphics().setDepth(-29);
+    for (let i = 0; i < 90; i++) {
+      mott.fillStyle(rnd() > 0.5 ? 0x2c3d28 : 0x3a4c34, 0.5);
+      mott.fillEllipse(rnd() * WORLD.w, top + 300 + rnd() * (SOUTH.h - 400), 80 + rnd() * 160, 30 + rnd() * 60);
+    }
+    // --- the Endless Bayou along the bottom (the pier is the only way out over it) ---
+    sc.add.rectangle(WORLD.w / 2, SWAMP_SHORE_Y + 30, WORLD.w, 60, 0x4a3c28).setDepth(-28);      // mud shore
+    sc.add.rectangle(WORLD.w / 2, (SWAMP_SHORE_Y + 60 + bot) / 2, WORLD.w, bot - SWAMP_SHORE_Y - 60, 0x203438).setDepth(-28);
+    sc.add.rectangle(WORLD.w / 2, bot - 120, WORLD.w, 240, 0x18282c).setDepth(-27);              // the deep
+    const rip = sc.add.graphics().setDepth(-26);
+    rip.lineStyle(1, 0x3a5a5e, 0.5);
+    for (let i = 0; i < 40; i++) {
+      const wx = rnd() * WORLD.w, wy = SWAMP_SHORE_Y + 90 + rnd() * (SOUTH.h - (SWAMP_SHORE_Y - top) - 150);
+      rip.lineBetween(wx, wy, wx + 30 + rnd() * 50, wy);
+    }
+    // --- pools (each may or may not contain an opinion) ---
+    const pools: { x: number; y: number; w: number; h: number }[] = [];
+    for (let i = 0; i < 12; i++) {
+      const pw = 140 + rnd() * 220, ph = 60 + rnd() * 90;
+      const pxx = 120 + rnd() * (WORLD.w - 240), pyy = top + 420 + rnd() * (SWAMP_SHORE_Y - top - 720);
+      pools.push({ x: pxx, y: pyy, w: pw, h: ph });
+      sc.add.ellipse(pxx, pyy, pw, ph, 0x27403c).setDepth(-25);
+      sc.add.ellipse(pxx, pyy, pw - 22, ph - 16, 0x2e4a44).setDepth(-24);
+      const nLily = 1 + Math.floor(rnd() * 3);
+      for (let l = 0; l < nLily; l++) {
+        const a = rnd() * Math.PI * 2, rr = rnd() * 0.3 + 0.1;
+        sc.add.image(pxx + Math.cos(a) * pw * rr, pyy + Math.sin(a) * ph * rr, 'w-sw-lily').setScale(TEXEL).setDepth(-23);
+      }
+      const nCat = 2 + Math.floor(rnd() * 4);
+      for (let cta = 0; cta < nCat; cta++) {
+        const a = rnd() * Math.PI * 2;
+        const cxx = pxx + Math.cos(a) * (pw / 2 + 10), cyy = pyy + Math.sin(a) * (ph / 2 + 8);
+        sc.add.image(cxx, cyy, 'w-sw-cattail').setScale(TEXEL).setOrigin(0.5, 1).setDepth(cyy);
+      }
+    }
+    // three of the pools are occupied. the occupants are patient.
+    for (let i = 0; i < 3; i++) {
+      const p = pools[i * 3];
+      const c = sc.add.container(p.x, p.y);
+      for (const off of [-7, 7]) {
+        c.add(sc.add.ellipse(off, 0, 8, 5, 0x3a4a2a));
+        c.add(sc.add.circle(off, -1, 2, 0xe8d44a));
+        c.add(sc.add.circle(off, -1, 0.9, 0x101010));
+      }
+      c.setDepth(p.y + 4);
+      gatorEyes.push({ spr: c, x: p.x, y: p.y, hidUntil: 0, ph: rnd() * 9 });
+    }
+    // --- canopy: the town's own Kenney trees, gone feral. tinted, mossy, swaying ---
+    const feature = (x: number, y: number, r: number) => (fx2: number, fy2: number) => Math.hypot(fx2 - x, fy2 - y) < r;
+    const keepOuts = [
+      feature(1200, 3450, 220), feature(2740, 3000, 260), feature(3620, 4080, 240),
+      feature(900, 4400, 140), feature(3900, 3300, 170), feature(SWAMP_PIER_X, SWAMP_SHORE_Y, 160),
+      feature(2400, 2340, 120), feature(1900, 2680, 140), feature(700, 2900, 260),
+      ...pools.map((p) => feature(p.x, p.y, Math.max(p.w, p.h) / 2 + 40)),
+    ];
+    const clearOf = (x: number, y: number) => !keepOuts.some((k) => k(x, y));
+    const TINTS = [0x8aa87a, 0x7a9a6e, 0x6c8c60, 0x96b088];
+    for (let i = 0; i < 150; i++) {
+      const tx2 = 60 + rnd() * (WORLD.w - 120), ty2 = top + 260 + rnd() * (SWAMP_SHORE_Y - top - 420);
+      if (!clearOf(tx2, ty2)) continue;
+      const pine = rnd() > 0.6;
+      const frame = pine ? TT.pines[Math.floor(rnd() * TT.pines.length)] : TT.trees[Math.floor(rnd() * TT.trees.length)];
+      const s = 0.9 + rnd() * 0.7;
+      sc.add.image(tx2 + 3, ty2 + 1, 'w-shadow').setScale(TEXEL * s * 1.5).setOrigin(0.5, 0.4).setDepth(ty2 - 1).setAlpha(0.4);
+      const img = sc.add.image(tx2, ty2, 'townFrames', frame).setScale(TEXEL * s * 1.7).setOrigin(0.5, 0.92).setDepth(ty2);
+      img.setTint(TINTS[Math.floor(rnd() * TINTS.length)]);
+      swayers.push(img);
+      if (rnd() > 0.62) { // hanging moss, where the damp has climbed
+        sc.add.image(tx2 + (rnd() * 14 - 7), ty2 - 26 - rnd() * 10, 'w-sw-moss').setScale(TEXEL * s).setOrigin(0.5, 0).setDepth(ty2 + 1).setAlpha(0.9);
+      }
+    }
+    for (let i = 0; i < 16; i++) { // and the trees the damp already finished with
+      const tx2 = 60 + rnd() * (WORLD.w - 120), ty2 = top + 300 + rnd() * (SWAMP_SHORE_Y - top - 460);
+      if (!clearOf(tx2, ty2)) continue;
+      sc.add.image(tx2, ty2, 'w-sw-deadtree').setScale(TEXEL * (1 + rnd() * 0.8)).setOrigin(0.5, 1).setDepth(ty2).setAlpha(0.95);
+    }
+    for (let i = 0; i < 22; i++) { // glow-shrooms, freelance
+      const mx2 = 60 + rnd() * (WORLD.w - 120), my2 = top + 320 + rnd() * (SWAMP_SHORE_Y - top - 480);
+      if (!clearOf(mx2, my2)) continue;
+      sc.add.circle(mx2, my2 - 6, 12, 0x5ae0c0, 0.10).setBlendMode(ADD).setDepth(my2 - 1);
+      sc.add.image(mx2, my2, 'w-sw-glowshroom').setScale(TEXEL).setOrigin(0.5, 1).setDepth(my2);
+    }
+    // --- landmarks ---
+    // the border sign
+    const sgn = sc.add.text(2400, 2340, 'THE GREAT SOUTHERN DAMP', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '11px', color: '#e8e4d0', align: 'center',
+      backgroundColor: '#4a3c28', padding: { x: 6, y: 3 }, resolution: 2,
+    }).setOrigin(0.5, 1).setDepth(2340);
+    sgn.setAngle(-2);
+    sc.add.text(2400, 2352, 'watch your step. all of it.', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '8px', color: '#b8b4a0', resolution: 2,
+    }).setOrigin(0.5, 0).setAngle(-2).setDepth(2352);
+    // Grandmaw's hut + cauldron
+    sc.add.image(1200, 3450, 'w-sw-shack').setScale(TEXEL * 2.6).setOrigin(0.5, 1).setDepth(3450).setTint(0xb8a8d8);
+    sc.add.image(SWAMP_SPOTS.cauldron.x, SWAMP_SPOTS.cauldron.y, 'w-sw-cauldron').setScale(TEXEL * 1.4).setOrigin(0.5, 1).setDepth(SWAMP_SPOTS.cauldron.y);
+    cauldronGlow = sc.add.circle(SWAMP_SPOTS.cauldron.x, SWAMP_SPOTS.cauldron.y - 16, 22, 0x4ae05a, 0.16).setBlendMode(ADD).setDepth(SWAMP_SPOTS.cauldron.y + 1);
+    for (let i = 0; i < 3; i++) { // gumbo bubbles (definitely gumbo)
+      const b = sc.add.circle(SWAMP_SPOTS.cauldron.x + (i - 1) * 7, SWAMP_SPOTS.cauldron.y - 22, 2.4, 0x8ae87a, 0.8).setDepth(SWAMP_SPOTS.cauldron.y + 2);
+      sc.tweens.add({ targets: b, y: SWAMP_SPOTS.cauldron.y - 44, alpha: 0, duration: 1700, delay: i * 560, repeat: -1, ease: 'Sine.easeOut' });
+    }
+    // Gary's estate: two shacks, three jars, one dream
+    sc.add.image(2700, 2950, 'w-sw-shack').setScale(TEXEL * 2.2).setOrigin(0.5, 1).setDepth(2950);
+    sc.add.image(2860, 3060, 'w-sw-shack').setScale(TEXEL * 1.8).setOrigin(0.5, 1).setDepth(3060).setFlipX(true);
+    for (const [jx, jy] of [[2600, 3010], [2790, 2990], [2930, 3100]] as [number, number][]) {
+      sc.add.image(jx, jy, 'w-sw-jar').setScale(TEXEL).setOrigin(0.5, 1).setDepth(jy);
+      const jg = sc.add.circle(jx, jy - 22, 10, 0xffe98a, 0.16).setBlendMode(ADD).setDepth(jy + 1);
+      sc.tweens.add({ targets: jg, alpha: 0.30, duration: 900 + jx % 400, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    }
+    // the drowned church: a pool with a steeple where a congregation used to be
+    sc.add.ellipse(3620, 4080, 340, 150, 0x27403c).setDepth(-25);
+    sc.add.ellipse(3620, 4080, 300, 122, 0x2e4a44).setDepth(-24);
+    sc.add.image(3620, 4092, 'w-sw-steeple').setScale(TEXEL * 1.8).setOrigin(0.5, 1).setDepth(4092);
+    sc.add.ellipse(3620, 4092, 60, 18, 0x2e4a44).setDepth(4093); // the waterline lapping the stone
+    // THE STUMP (ask it nothing)
+    sc.add.image(SWAMP_SPOTS.stump.x, SWAMP_SPOTS.stump.y, 'w-sw-stump').setScale(TEXEL * 3.2).setOrigin(0.5, 1).setDepth(SWAMP_SPOTS.stump.y);
+    // the fairy ring: nine glow-shrooms and a low hum
+    for (let i = 0; i < 9; i++) {
+      const a = (i / 9) * Math.PI * 2;
+      const rx2 = SWAMP_SPOTS.ring.x + Math.cos(a) * 62, ry2 = SWAMP_SPOTS.ring.y + Math.sin(a) * 44;
+      sc.add.circle(rx2, ry2 - 6, 12, 0x5ae0c0, 0.14).setBlendMode(ADD).setDepth(ry2 - 1);
+      sc.add.image(rx2, ry2, 'w-sw-glowshroom').setScale(TEXEL).setOrigin(0.5, 1).setDepth(ry2);
+    }
+    sc.add.ellipse(SWAMP_SPOTS.ring.x, SWAMP_SPOTS.ring.y, 130, 92, 0x5ae0c0, 0.05).setBlendMode(ADD).setDepth(-23);
+    // somebody's swamp. the signage is extensive and completely ignored.
+    sc.add.image(600, 2850, 'w-sw-shack').setScale(TEXEL * 2.4).setOrigin(0.5, 1).setDepth(2850).setTint(0xb0c890);
+    sc.add.ellipse(800, 2910, 150, 68, 0x4a3826).setDepth(-25); // the mud wallow
+    sc.add.ellipse(800, 2910, 120, 50, 0x5a4630).setDepth(-24);
+    for (let i = 0; i < 2; i++) {
+      const mb = sc.add.circle(784 + i * 30, 2904, 3, 0x6a563c).setDepth(-23);
+      sc.tweens.add({ targets: mb, scale: 1.8, alpha: 0, duration: 1600, delay: i * 800, repeat: -1, ease: 'Sine.easeOut' });
+    }
+    const warn = (wx2: number, wy2: number, t: string, a: number) =>
+      sc.add.text(wx2, wy2, t, {
+        fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#e8e4d0', backgroundColor: '#54381e',
+        padding: { x: 4, y: 2 }, resolution: 2,
+      }).setOrigin(0.5, 1).setAngle(a).setDepth(wy2);
+    warn(520, 2750, 'KEEP OUT', -5);
+    warn(680, 2726, "SOMEBODY'S SWAMP", 3);
+    warn(850, 2756, 'SERIOUSLY.', -2);
+    for (let i = 0; i < 6; i++) { // the onion patch, in two tidy rows (the only tidy thing here)
+      sc.add.image(500 + (i % 3) * 26, 2924 + Math.floor(i / 3) * 22, 'w-sw-onion').setScale(TEXEL).setOrigin(0.5, 1).setDepth(2924 + Math.floor(i / 3) * 22);
+    }
+    // BEWARE OF ALLIGATOR (the alligator is cardboard; the sign is sincere)
+    const gsn = sc.add.text(1900, 2640, 'BEWARE OF ALLIGATOR', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#e8d44a', backgroundColor: '#2a2a22',
+      padding: { x: 4, y: 2 }, resolution: 2,
+    }).setOrigin(0.5, 1).setDepth(2640);
+    gsn.setAngle(3);
+    sc.add.image(1955, 2695, 'w-sw-gator').setScale(TEXEL * 1.3).setOrigin(0.5, 1).setDepth(2695);
+    // the pier, out into the Endless Bayou
+    const pierG = sc.add.graphics().setDepth(SWAMP_SHORE_Y + 500);
+    pierG.fillStyle(0x54381e, 1);
+    pierG.fillRect(SWAMP_PIER_X - 26, SWAMP_SHORE_Y - 20, 52, 400);
+    pierG.fillStyle(0x6a4a2a, 1);
+    for (let py2 = SWAMP_SHORE_Y - 16; py2 < SWAMP_SHORE_Y + 372; py2 += 12) pierG.fillRect(SWAMP_PIER_X - 24, py2, 48, 7);
+    pierG.fillStyle(0x3a2814, 1);
+    for (const [ppx, ppy] of [[-30, 60], [30, 60], [-30, 220], [30, 220], [-30, 372], [30, 372]] as [number, number][]) {
+      pierG.fillRect(SWAMP_PIER_X + ppx - 3, SWAMP_SHORE_Y + ppy - 8, 7, 26);
+    }
+    // the ferryman's raft, tied up, going nowhere (gently)
+    const raft = sc.add.rectangle(SWAMP_PIER_X + 74, SWAMP_SHORE_Y + 100, 56, 26, 0x6a4a2a).setDepth(SWAMP_SHORE_Y + 501);
+    raft.setStrokeStyle(2, 0x54381e);
+    sc.tweens.add({ targets: raft, y: SWAMP_SHORE_Y + 104, angle: 1.6, duration: 2400, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    // the bottle at the end of the pier
+    sc.add.rectangle(SWAMP_SPOTS.bottle.x + 14, SWAMP_SPOTS.bottle.y, 5, 9, 0x4a8a6a).setDepth(SWAMP_SHORE_Y + 502);
+    sc.add.rectangle(SWAMP_SPOTS.bottle.x + 14, SWAMP_SPOTS.bottle.y - 6, 2, 3, 0x6aaa8a).setDepth(SWAMP_SHORE_Y + 502);
+    // --- the citizenry ---
+    for (let i = 0; i < 8; i++) {
+      const p = pools[Math.floor(rnd() * pools.length)];
+      const fx2 = p.x + (rnd() - 0.5) * (p.w + 90), fy2 = p.y + (rnd() - 0.5) * (p.h + 70);
+      swampBeasts.push({
+        spr: sc.add.image(fx2, fy2, 'w-sw-frog').setScale(TEXEL).setOrigin(0.5, 1).setDepth(fy2),
+        x: fx2, y: fy2, tx: fx2, ty: fy2, kind: 'frog', ph: rnd() * 9, state: 0, busyUntil: 0,
+      });
+    }
+    for (const [hx2, hy2] of [[2980, 3560], [1500, 5140]] as [number, number][]) {
+      swampBeasts.push({
+        spr: sc.add.image(hx2, hy2, 'w-sw-heron').setScale(TEXEL).setOrigin(0.5, 1).setDepth(hy2),
+        x: hx2, y: hy2, tx: hx2, ty: hy2, kind: 'heron', ph: rnd() * 9, state: 0, busyUntil: 0,
+      });
+    }
+    for (let i = 0; i < 26; i++) {
+      const fx2 = 100 + rnd() * (WORLD.w - 200), fy2 = top + 400 + rnd() * (SOUTH.h - 700);
+      swampFlies.push({
+        spr: sc.add.circle(fx2, fy2, 1.6, 0xd8f088, 0.9).setBlendMode(ADD).setDepth(100000),
+        ox: fx2, oy: fy2, ph: rnd() * 20,
+      });
+    }
+    for (let i = 0; i < 10; i++) {
+      const fw = 280 + rnd() * 260;
+      const f = sc.add.ellipse(rnd() * WORLD.w, top + 500 + rnd() * (SOUTH.h - 800), fw, 60 + rnd() * 50, 0xa8b8b0, 0.055 + rnd() * 0.035);
+      f.setDepth(99000);
+      swampFog.push({ spr: f, sp: 3 + rnd() * 5 });
+    }
+  }
+
+  function updateSwamp(now: number, dt: number) {
+    if (!swampFlies.length) return;
+    const inSwamp = selfY > WORLD.h - 400 && !inInterior && !inDungeon;
+    const nf = nightFactor(Date.now() + net.dayNightOffset());
+    for (const f of swampFlies) {
+      f.ph += dt * 0.7;
+      f.spr.setPosition(f.ox + Math.sin(f.ph * 1.3) * 26 + Math.sin(f.ph * 0.31) * 40, f.oy + Math.cos(f.ph) * 18);
+      f.spr.setAlpha((0.25 + nf * 0.75) * (0.45 + Math.abs(Math.sin(f.ph * 2.2)) * 0.55));
+    }
+    for (const f of swampFog) {
+      f.spr.x += f.sp * dt;
+      if (f.spr.x - f.spr.width / 2 > WORLD.w) f.spr.x = -f.spr.width / 2;
+    }
+    if (cauldronGlow) cauldronGlow.setAlpha(0.12 + Math.abs(Math.sin(now / 300)) * 0.10);
+    for (const b of swampBeasts) {
+      if (b.kind === 'frog') {
+        if (b.state === 0 && now >= b.busyUntil) {
+          if (Math.random() < 0.02) { // contemplate, then hop
+            b.state = 1;
+            const a = Math.random() * Math.PI * 2;
+            b.tx = clamp(b.x + Math.cos(a) * 50, 40, WORLD.w - 40);
+            b.ty = clamp(b.y + Math.sin(a) * 36, WORLD.h + 260, SWAMP_SHORE_Y - 30);
+            b.busyUntil = now + 460;
+            if (inSwamp && Math.hypot(b.x - selfX, b.y - selfY) < 640 && Math.random() < 0.5) {
+              tone(88 + Math.random() * 36, 0.11, 'square', 0.022, 70); // a local statement
+            }
+          } else b.busyUntil = now + 400 + Math.random() * 800;
+        } else if (b.state === 1) {
+          const k = Math.min(1, 1 - (b.busyUntil - now) / 460);
+          b.x += (b.tx - b.x) * k; b.y += (b.ty - b.y) * k;
+          const arc = Math.sin(k * Math.PI) * 9;
+          b.spr.setPosition(b.x, b.y - arc).setDepth(b.y);
+          b.spr.setFlipX(b.tx < b.x);
+          if (now >= b.busyUntil) { b.state = 0; b.busyUntil = now + 600 + Math.random() * 2400; b.spr.setPosition(b.x, b.y); }
+        }
+      } else { // heron: tolerates nothing
+        if (b.state === 0 && Math.hypot(b.x - selfX, b.y - selfY) < 110) {
+          b.state = 1; b.busyUntil = now + 2600;
+          b.ph = selfX < b.x ? 1 : -1; // depart away from the visitor
+        } else if (b.state === 1) {
+          b.x += b.ph * 260 * dt; b.y -= 150 * dt;
+          b.spr.setPosition(b.x, b.y).setDepth(100001).setFlipX(b.ph < 0);
+          b.spr.setAlpha(Math.max(0, (b.busyUntil - now) / 2600));
+          if (now >= b.busyUntil) { b.state = 2; b.busyUntil = now + 30000 + Math.random() * 30000; }
+        } else if (b.state === 2 && now >= b.busyUntil) { // it returns. it always returns.
+          b.x = 300 + Math.random() * (WORLD.w - 600);
+          b.y = WORLD.h + 500 + Math.random() * (SWAMP_SHORE_Y - WORLD.h - 700);
+          b.state = 0;
+          b.spr.setPosition(b.x, b.y).setDepth(b.y).setAlpha(1);
+        }
+      }
+    }
+    for (const ge of gatorEyes) {
+      if (now < ge.hidUntil) { ge.spr.setAlpha(Math.max(0, ge.spr.alpha - dt * 2)); continue; }
+      if (Math.hypot(ge.x - selfX, ge.y - selfY) < 150) { ge.hidUntil = now + 9000; continue; } // it saw you first
+      ge.ph += dt;
+      ge.spr.setAlpha(Math.min(1, ge.spr.alpha + dt));
+      ge.spr.setScale(1, Math.abs(Math.sin(ge.ph * 0.5)) > 0.06 ? 1 : 0.15); // the long blink
+    }
+    if (inSwamp && now >= nextCroakAt) { // the ambient chorus
+      nextCroakAt = now + 3200 + Math.random() * 6400;
+      const f0 = 78 + Math.random() * 44;
+      tone(f0, 0.13, 'square', 0.018, f0 * 0.8);
+      window.setTimeout(() => tone(f0 * 1.06, 0.1, 'square', 0.014, f0 * 0.85), 170);
+    }
+  }
+
+  function swampInteract(): boolean {
+    const near = (s: { x: number; y: number }, r = 55) => Math.hypot(selfX - s.x, selfY - s.y) < r;
+    if (near(SWAMP_SPOTS.cauldron)) {
+      tone(120, 0.3, 'sine', 0.04, 90);
+      showToast(pick2([
+        '🔮 the gumbo parts. it shows… a ball approaching that you will not return. it does not say when. it never says when.',
+        '🔮 the gumbo shows a man in glasses offering you a loan. the gumbo strongly advises against.',
+        '🔮 the gumbo shows you standing exactly where you are standing now. the gumbo has been known to stall.',
+        '🔮 the gumbo shows the number 7. or 1. it\'s gumbo, sugar, the resolution is limited.',
+        '🔮 the gumbo shows a swan. the swan sees you seeing it. the gumbo goes abruptly opaque.',
+        '🔮 the gumbo shows a great fish beneath a small boat. it shows the fish is also fishing.',
+        '🔮 the gumbo shows you winning big at the casino. Grandmaw hollers from the porch: "it lies about exactly one thing per day!"',
+        '🔮 the gumbo shows the windmill up north, turning. behind it, something else turning. slower.',
+        '🔮 the gumbo shows tomorrow. it looks a lot like today, but with better odds.',
+        '🔮 the gumbo declines. even gumbo has days.',
+      ]));
+      return true;
+    }
+    if (near(SWAMP_SPOTS.stump)) {
+      const rings = 800 + Math.floor(Math.random() * 8000);
+      showToast(pick2([
+        `🪵 you count the rings. you lose track at ${rings}. the rings do not lose track of you.`,
+        '🪵 the cut is perfectly smooth. whatever felled this did it in one motion, and apologized to nobody.',
+        `🪵 near the center the rings stop being circles. you decide not to think about what shape they are.`,
+        '🪵 someone has carved "R + T" near the edge. someone ELSE has crossed out the T.',
+      ]));
+      return true;
+    }
+    if (near(SWAMP_SPOTS.ring, 46)) {
+      if (Math.random() < 1 / 7) {
+        tone(660, 0.4, 'sine', 0.06, 990); tone(880, 0.5, 'triangle', 0.04, 1320);
+        selfX = PLAZA.x + 60; selfY = PLAZA.y + 40;
+        showToast('🍄 the ring blinks. you are somewhere else. the mushrooms do not explain themselves.');
+      } else {
+        showToast(pick2([
+          '🍄 you stand in the ring. the hum rises slightly, like being noticed.',
+          '🍄 nothing happens. the mushrooms glow a little brighter, like laughing.',
+          '🍄 a low hum. the fireflies give the ring a wide, professional berth.',
+        ]));
+      }
+      return true;
+    }
+    if (near(SWAMP_SPOTS.bell, 80)) {
+      tone(65, 1.4, 'sine', 0.07, 52); window.setTimeout(() => tone(60, 1.2, 'sine', 0.04, 48), 500);
+      showToast(pick2([
+        '🔔 you can\'t reach the bell, but the water can. a slow, drowned dong rolls out from under the surface.',
+        '🔔 the steeple\'s bell answers before you touch it. the pool ripples outward in perfect rings.',
+        '🔔 dong. somewhere below, unhurried, something keeps time with it.',
+      ]));
+      return true;
+    }
+    if (near(SWAMP_SPOTS.bottle, 46)) {
+      showToast(pick2([
+        '🍾 the note reads: "day 40 on the water. still no across. beginning to suspect the ferryman." — no signature.',
+        '🍾 the note reads: "IF FOUND: the gumbo lies about one thing per day. Tuesday it was the number of my toes."',
+        '🍾 the note reads: "gone to the wall out west to knock. if a door opens, do not tell my wife which side I was on."',
+        '🍾 the note is blank. the bottle, however, has been recorked from the inside.',
+      ]));
+      return true;
+    }
+    if (near(SWAMP_SPOTS.gator, 70)) {
+      showToast(pick2([
+        '🐊 it\'s cardboard. from this angle, extremely cardboard. the BEWARE sign, though, is brand new.',
+        '🐊 painted-on teeth. a wooden stand. and yet — fresh drag marks in the mud all around it.',
+        '🐊 you knock on the alligator. the alligator is hollow. behind you, a pool blinks.',
+      ]));
+      return true;
+    }
+    return false;
   }
 
   // --- town life: statue of the #1, live billboard, fountain wishes, critters ---
@@ -14689,6 +15288,7 @@ export function startWorld(net: WorldNet): void {
     if (dialogOpen || talkOpen || inInterior || inDungeon) return false;
     if (curiosityInteract()) return true;
     if (selfY < 60 && clubInteract()) return true;
+    if (selfY > WORLD.h - 60 && swampInteract()) return true;
     if (Math.hypot(selfX - PLAZA.x, selfY - PLAZA.y) < 120) {
       net.wish();
       const sc2 = lifeSc;
