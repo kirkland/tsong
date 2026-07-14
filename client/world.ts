@@ -12231,6 +12231,11 @@ export function startWorld(net: WorldNet): void {
       // (for the ground layer) and as a 16×16 spritesheet (for scenery frames).
       this.load.image('townTiles', '/tiles/tiny-town.png');
       this.load.spritesheet('townFrames', '/tiles/tiny-town.png', { frameWidth: 16, frameHeight: 16 });
+      // Ninja Adventure (CC0) terrain cuts — same pack the Ruins props came from. Sand for the
+      // desert floor + club bunkers, mud for the bog. See client/public/biome/README.md.
+      for (const k of ['sand-field', 'sand-pan', 'sand-ring', 'sand-mound', 'mud-blob', 'mud-strip', 'mud-field']) {
+        this.load.image('na-' + k, '/biome/' + k + '.png');
+      }
       // Dungeon (the Ruins): 0x72 stone-floor variants (f0–f6) + wall variants (w0–w3).
       for (let i = 0; i < 7; i++) this.load.image('d-f' + i, '/dungeon/f' + i + '.png');
       for (let i = 0; i < 4; i++) this.load.image('d-w' + i, '/dungeon/w' + i + '.png');
@@ -12306,7 +12311,7 @@ export function startWorld(net: WorldNet): void {
         for (let r = 0; r < ROWS; r++) for (let c = 0; c < DSTRIP; c++) {
           // easternmost column keeps its grass fringe (the dirt autotile's right-border frame)
           const t = edgeLayer.putTileAt(c === DSTRIP - 1 ? TT.dirt[5] : TT.dirt[4], c, r);
-          t.tint = mixTint(((DSTRIP - 1 - c) / DSTRIP) * 0.9, 240, 214, 150); // warming toward the sand
+          t.tint = mixTint(((DSTRIP - 1 - c) / DSTRIP) * 0.9, 252, 200, 142); // warming toward the NA sand
         }
       }
 
@@ -13817,29 +13822,46 @@ export function startWorld(net: WorldNet): void {
     const rnd = desertRand(ci);
     const c = sc.add.container(0, 0);
     c.setDepth(0);
-    // sand floor (chunk 0 cedes its easternmost 256 units to the dirt-tile border band)
+    // sand floor (chunk 0 cedes its easternmost 256 units to the dirt-tile border band):
+    // real Ninja Adventure sand tiles when they've loaded, with ragged wind-pans, ridge rings and
+    // mounds cut from the same sheet — the flat rect + doodles only remain as a fallback.
     const fw = ci === 0 ? CHUNK_W - 256 : CHUNK_W;
-    const floor = sc.add.rectangle(x0 + fw / 2, WORLD.h / 2, fw, WORLD.h, 0xcfae72).setDepth(-10);
-    c.add(floor);
-    // dune ridge strokes + cracked patches + speckle
-    const gfx = sc.add.graphics().setDepth(-9);
-    for (let i = 0; i < 7; i++) {
-      const dx = x0 + rnd() * CHUNK_W, dy = 120 + rnd() * (WORLD.h - 240), dw = 120 + rnd() * 260;
-      gfx.lineStyle(3, 0xbf9a5e, 0.55);
-      gfx.beginPath();
-      gfx.arc(dx, dy, dw, Math.PI * 1.1, Math.PI * 1.9);
-      gfx.strokePath();
+    if (sc.textures.exists('na-sand-field')) {
+      const floor = sc.add.tileSprite(x0, 0, fw, WORLD.h, 'na-sand-field').setOrigin(0, 0).setTileScale(2, 2).setDepth(-10);
+      c.add(floor);
+      for (let i = 0; i < 3; i++) { // wind-pans: ragged ridge-rimmed depressions
+        const pw = 150 + rnd() * 200;
+        const pan = sc.add.image(x0 + rnd() * (CHUNK_W - 200) + 100, 160 + rnd() * (WORLD.h - 380), 'na-sand-pan')
+          .setDisplaySize(pw, pw * (0.62 + rnd() * 0.25)).setDepth(-9);
+        c.add(pan);
+      }
+      for (let i = 0; i < 2; i++) { // small ridge rings
+        const ring = sc.add.image(x0 + rnd() * (CHUNK_W - 120) + 60, 140 + rnd() * (WORLD.h - 320), 'na-sand-ring')
+          .setScale(1.6 + rnd() * 1.2).setDepth(-9);
+        c.add(ring);
+      }
+      for (let i = 0; i < 3; i++) { // mounds
+        const m = sc.add.image(x0 + rnd() * (CHUNK_W - 80) + 40, 120 + rnd() * (WORLD.h - 280), 'na-sand-mound')
+          .setScale(1.4 + rnd() * 1.2).setDepth(-9);
+        c.add(m);
+      }
+    } else {
+      const floor = sc.add.rectangle(x0 + fw / 2, WORLD.h / 2, fw, WORLD.h, 0xf8c586).setDepth(-10);
+      c.add(floor);
+      const gfx = sc.add.graphics().setDepth(-9);
+      for (let i = 0; i < 7; i++) {
+        const dx = x0 + rnd() * CHUNK_W, dy = 120 + rnd() * (WORLD.h - 240), dw = 120 + rnd() * 260;
+        gfx.lineStyle(3, 0xe89a5e, 0.45);
+        gfx.beginPath();
+        gfx.arc(dx, dy, dw, Math.PI * 1.1, Math.PI * 1.9);
+        gfx.strokePath();
+      }
+      for (let i = 0; i < 90; i++) {
+        gfx.fillStyle(rnd() < 0.5 ? 0xffdca8 : 0xe8a86a, 0.5);
+        gfx.fillRect(x0 + rnd() * CHUNK_W, 60 + rnd() * (WORLD.h - 120), 3, 2);
+      }
+      c.add(gfx);
     }
-    for (let i = 0; i < 4; i++) {
-      const dx = x0 + rnd() * CHUNK_W, dy = 120 + rnd() * (WORLD.h - 240);
-      gfx.fillStyle(0xb8945a, 0.35);
-      gfx.fillEllipse(dx, dy, 90 + rnd() * 140, 40 + rnd() * 60);
-    }
-    for (let i = 0; i < 90; i++) {
-      gfx.fillStyle(rnd() < 0.5 ? 0xdfc088 : 0xb8945a, 0.5);
-      gfx.fillRect(x0 + rnd() * CHUNK_W, 60 + rnd() * (WORLD.h - 120), 3, 2);
-    }
-    c.add(gfx);
     // sparse props (mostly empty is the brief — ~6 per chunk across 2200px of height).
     // Kenney cacti (loaded at runtime) headline; px() bones/dead trees fill in.
     const kenneyCacti = ['d-cactus1', 'd-cactus2', 'd-cactus3', 'd-cactustall'].filter((k) => sc.textures.exists(k));
@@ -14108,10 +14130,16 @@ export function startWorld(net: WorldNet): void {
     }
     sc.add.rectangle(3610, -10, 8, 32, RAIL).setAngle(78).setDepth(-4);   // the flattened span (cart-shaped dent)
     sc.add.rectangle(3612, -8, 60, 5, RAIL_D).setAngle(6).setDepth(-5);
-    // bunkers (Bill lives in the big one), rimmed and speckled
+    // bunkers (Bill lives in the big one): real ragged sand pans cut from the Ninja Adventure
+    // sheet, squashed to bunker proportions. Ellipse fallback if the sheet hasn't loaded.
     const bunkers: [number, number, number, number][] = [[3350, -500, 260, 110], [1700, -950, 180, 80], [700, -350, 150, 70], [4100, -800, 200, 90]];
+    const pans = sc.textures.exists('na-sand-pan');
     const speck = sc.add.graphics().setDepth(GD + 6);
     for (const [bx, by, bw, bh] of bunkers) {
+      if (pans) {
+        sc.add.image(bx, by, 'na-sand-pan').setDisplaySize(bw * 1.35, bh * 1.65).setDepth(GD + 4);
+        continue;
+      }
       sc.add.ellipse(bx, by, bw + 16, bh + 12, 0x35722f).setDepth(GD + 3); // the lip
       sc.add.ellipse(bx, by, bw, bh, 0xd8c088).setDepth(GD + 4);
       sc.add.ellipse(bx, by, bw - 14, bh - 12, 0xe8d4a0).setDepth(GD + 5);
@@ -14723,7 +14751,9 @@ export function startWorld(net: WorldNet): void {
   // overworld, tinted murk-wards, over px pools, stilt architecture, and a citizenry of frogs.
   // Curated landmarks + a seeded scatter (SOUTH.seed) so every client grows the same swamp. ---
   interface SwampBeast { spr: Phaser.GameObjects.Image; x: number; y: number; tx: number; ty: number; kind: 'frog' | 'heron'; ph: number; state: number; busyUntil: number }
-  let swampFlies: { spr: Phaser.GameObjects.Arc; ox: number; oy: number; ph: number }[] = [];
+  // Fireflies use the Ruins' exact recipe: a tinted 'd-glow' halo + a bright white core, drifting
+  // on jittered velocities and twinkling on a sine phase (see dungeonFlies).
+  let swampFlies: { glow: Phaser.GameObjects.Image; core: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number; phase: number }[] = [];
   let swampFog: { spr: Phaser.GameObjects.Ellipse; sp: number }[] = [];
   let swampBeasts: SwampBeast[] = [];
   let gatorEyes: { spr: Phaser.GameObjects.Container; x: number; y: number; hidUntil: number; ph: number }[] = [];
@@ -14863,7 +14893,15 @@ export function startWorld(net: WorldNet): void {
       mott.fillEllipse(rnd() * WORLD.w, top + 300 + rnd() * (SOUTH.h - 400), 80 + rnd() * 160, 30 + rnd() * 60);
     }
     // --- the Endless Bayou along the bottom (the pier is the only way out over it) ---
-    sc.add.rectangle(WORLD.w / 2, SWAMP_SHORE_Y + 30, WORLD.w, 60, 0x4a3c28).setDepth(-28);      // mud shore
+    const naMud = sc.textures.exists('na-mud-field');
+    if (naMud) { // a real mud shore: Ninja Adventure mud tiles with a ragged strip-lobed top edge
+      sc.add.tileSprite(0, SWAMP_SHORE_Y, WORLD.w, 60, 'na-mud-field').setOrigin(0, 0).setTileScale(2, 2).setTint(0xd8d0c8).setDepth(-28);
+      for (let x = -20; x < WORLD.w; x += 100 + rnd() * 60) {
+        sc.add.image(x, SWAMP_SHORE_Y - 4 + rnd() * 8, 'na-mud-strip').setScale(1.6 + rnd(), 1.4).setTint(0xd8d0c8).setDepth(-28);
+      }
+    } else {
+      sc.add.rectangle(WORLD.w / 2, SWAMP_SHORE_Y + 30, WORLD.w, 60, 0x4a3c28).setDepth(-28);    // mud shore
+    }
     sc.add.rectangle(WORLD.w / 2, (SWAMP_SHORE_Y + 60 + bot) / 2, WORLD.w, bot - SWAMP_SHORE_Y - 60, 0x203438).setDepth(-28);
     sc.add.rectangle(WORLD.w / 2, bot - 120, WORLD.w, 240, 0x18282c).setDepth(-27);              // the deep
     const rip = sc.add.graphics().setDepth(-26);
@@ -14878,6 +14916,9 @@ export function startWorld(net: WorldNet): void {
       const pw = 140 + rnd() * 220, ph = 60 + rnd() * 90;
       const pxx = 120 + rnd() * (WORLD.w - 240), pyy = top + 420 + rnd() * (SWAMP_SHORE_Y - top - 720);
       pools.push({ x: pxx, y: pyy, w: pw, h: ph });
+      if (naMud) { // every pool sits in a mud basin (a keyed blob from the sheet, murk-tinted)
+        sc.add.image(pxx, pyy + 4, 'na-mud-blob').setDisplaySize(pw + 64, ph + 48).setTint(0xd8d0c8).setDepth(-26);
+      }
       sc.add.ellipse(pxx, pyy, pw, ph, 0x27403c).setDepth(-25);
       sc.add.ellipse(pxx, pyy, pw - 22, ph - 16, 0x2e4a44).setDepth(-24);
       const nLily = 1 + Math.floor(rnd() * 3);
@@ -14939,6 +14980,16 @@ export function startWorld(net: WorldNet): void {
       sc.add.circle(mx2, my2 - 6, 12, 0x5ae0c0, 0.10).setBlendMode(ADD).setDepth(my2 - 1);
       sc.add.image(mx2, my2, 'w-sw-glowshroom').setScale(TEXEL).setOrigin(0.5, 1).setDepth(my2);
     }
+    if (naMud) { // and mud, freelance — blobs and strips of it wherever the ground gave up
+      for (let i = 0; i < 16; i++) {
+        const mx2 = 80 + rnd() * (WORLD.w - 160), my2 = top + 340 + rnd() * (SWAMP_SHORE_Y - top - 520);
+        if (!clearOf(mx2, my2)) continue;
+        const strip = rnd() > 0.6;
+        const w2 = strip ? 90 + rnd() * 90 : 70 + rnd() * 70;
+        sc.add.image(mx2, my2, strip ? 'na-mud-strip' : 'na-mud-blob')
+          .setDisplaySize(w2, strip ? 20 + rnd() * 12 : w2 * (0.7 + rnd() * 0.25)).setTint(0xd8d0c8).setDepth(-26);
+      }
+    }
     // --- landmarks ---
     // the border sign
     const sgn = sc.add.text(2400, 2340, 'THE GREAT SOUTHERN DAMP', {
@@ -14982,8 +15033,12 @@ export function startWorld(net: WorldNet): void {
     sc.add.ellipse(SWAMP_SPOTS.ring.x, SWAMP_SPOTS.ring.y, 130, 92, 0x5ae0c0, 0.05).setBlendMode(ADD).setDepth(-23);
     // somebody's swamp. the signage is extensive and completely ignored.
     sc.add.image(600, 2850, 'w-sw-shack').setScale(TEXEL * 2.4).setOrigin(0.5, 1).setDepth(2850).setTint(0xb0c890);
-    sc.add.ellipse(800, 2910, 150, 68, 0x4a3826).setDepth(-25); // the mud wallow
-    sc.add.ellipse(800, 2910, 120, 50, 0x5a4630).setDepth(-24);
+    if (naMud) { // the mud wallow, in actual mud
+      sc.add.image(800, 2910, 'na-mud-blob').setDisplaySize(190, 96).setTint(0xc8bcb0).setDepth(-25);
+    } else {
+      sc.add.ellipse(800, 2910, 150, 68, 0x4a3826).setDepth(-25);
+      sc.add.ellipse(800, 2910, 120, 50, 0x5a4630).setDepth(-24);
+    }
     for (let i = 0; i < 2; i++) {
       const mb = sc.add.circle(784 + i * 30, 2904, 3, 0x6a563c).setDepth(-23);
       sc.tweens.add({ targets: mb, scale: 1.8, alpha: 0, duration: 1600, delay: i * 800, repeat: -1, ease: 'Sine.easeOut' });
@@ -15038,12 +15093,27 @@ export function startWorld(net: WorldNet): void {
         x: hx2, y: hy2, tx: hx2, ty: hy2, kind: 'heron', ph: rnd() * 9, state: 0, busyUntil: 0,
       });
     }
+    // fireflies — the Ruins' exact recipe (tinted d-glow halo + white core, drift + twinkle).
+    // The d-glow texture is normally built later in create(), so ensure it exists here first.
+    if (!sc.textures.exists('d-glow')) {
+      const sz = 128, ct = sc.textures.createCanvas('d-glow', sz, sz);
+      if (ct) {
+        const c2 = ct.getContext();
+        const g2 = c2.createRadialGradient(sz / 2, sz / 2, 0, sz / 2, sz / 2, sz / 2);
+        g2.addColorStop(0, 'rgba(255,255,255,1)');
+        g2.addColorStop(0.46, 'rgba(255,255,255,0.95)');
+        g2.addColorStop(0.72, 'rgba(255,255,255,0.30)');
+        g2.addColorStop(1, 'rgba(255,255,255,0)');
+        c2.fillStyle = g2; c2.fillRect(0, 0, sz, sz); ct.refresh();
+      }
+    }
+    const FLY_COLS = [0xff5a4a, 0xffa838, 0xc176ff];
     for (let i = 0; i < 26; i++) {
-      const fx2 = 100 + rnd() * (WORLD.w - 200), fy2 = top + 400 + rnd() * (SOUTH.h - 700);
-      swampFlies.push({
-        spr: sc.add.circle(fx2, fy2, 1.6, 0xd8f088, 0.9).setBlendMode(ADD).setDepth(100000),
-        ox: fx2, oy: fy2, ph: rnd() * 20,
-      });
+      const fx2 = 100 + rnd() * (WORLD.w - 200), fy2 = top + 380 + rnd() * (SWAMP_SHORE_Y - top - 480);
+      const col = FLY_COLS[i % 3];
+      const glow = sc.add.image(fx2, fy2, 'd-glow').setTint(col).setBlendMode(ADD).setDepth(100000).setAlpha(0).setDisplaySize(TILE * 0.45, TILE * 0.45);
+      const core = sc.add.image(fx2, fy2, 'd-glow').setTint(0xffffff).setBlendMode(ADD).setDepth(100001).setAlpha(0).setDisplaySize(TILE * 0.14, TILE * 0.14);
+      swampFlies.push({ glow, core, x: fx2, y: fy2, vx: (rnd() * 2 - 1) * 12, vy: (rnd() * 2 - 1) * 12, phase: rnd() * 6.28 });
     }
     for (let i = 0; i < 10; i++) {
       const fw = 280 + rnd() * 260;
@@ -15056,11 +15126,18 @@ export function startWorld(net: WorldNet): void {
   function updateSwamp(now: number, dt: number) {
     if (!swampFlies.length) return;
     const inSwamp = selfY > WORLD.h - 400 && !inInterior && !inDungeon;
-    const nf = nightFactor(Date.now() + net.dayNightOffset());
-    for (const f of swampFlies) {
-      f.ph += dt * 0.7;
-      f.spr.setPosition(f.ox + Math.sin(f.ph * 1.3) * 26 + Math.sin(f.ph * 0.31) * 40, f.oy + Math.cos(f.ph) * 18);
-      f.spr.setAlpha((0.25 + nf * 0.75) * (0.45 + Math.abs(Math.sin(f.ph * 2.2)) * 0.55));
+    const t = now / 1000;
+    for (const f of swampFlies) { // the Ruins' firefly math, verbatim: jittered drift + sine twinkle
+      f.vx = clamp(f.vx + (Math.random() * 2 - 1) * 9 * dt, -16, 16);
+      f.vy = clamp(f.vy + (Math.random() * 2 - 1) * 9 * dt, -16, 16);
+      f.x += f.vx * dt; f.y += f.vy * dt;
+      if (f.x < 60 || f.x > WORLD.w - 60) f.vx *= -1;
+      if (f.y < WORLD.h + 260 || f.y > SWAMP_SHORE_Y - 40) f.vy *= -1;
+      f.x = clamp(f.x, 60, WORLD.w - 60);
+      f.y = clamp(f.y, WORLD.h + 260, SWAMP_SHORE_Y - 40);
+      const tw = 0.3 + 0.6 * Math.max(0, Math.sin(t * 2.1 + f.phase));
+      f.glow.setPosition(f.x, f.y).setAlpha(0.5 * tw);
+      f.core.setPosition(f.x, f.y).setAlpha(0.95 * tw);
     }
     for (const f of swampFog) {
       f.spr.x += f.sp * dt;
