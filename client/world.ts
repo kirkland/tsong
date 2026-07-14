@@ -8961,6 +8961,7 @@ export function startWorld(net: WorldNet): void {
     if (nearJailed) { net.bail(nearJailed.id); return; } // post their bail
     const b = WORLD_BUILDINGS.find((x) => x.id === nearId);
     if (b) { enterBuilding(b.kind); return; }
+    if (nearClubDoor) { clubInteract(); return; } // the exterior clubhouse door (join / enter)
     if (nearParcel) openLandDialog(nearParcel); // walk onto a Robville lot → buy/sell it
   }
 
@@ -9574,6 +9575,11 @@ export function startWorld(net: WorldNet): void {
         if (d < jD) { jD = d; nearJailed = { id: a.id, name: a.name }; }
       }
     }
+    // The exterior clubhouse door (join / enter) — a real prompt like every other building, so it
+    // no longer only works via the hidden X-key check (and doesn't lose out to the Commodore, who
+    // likes to wander right up to it).
+    nearClubDoor = !best && !nearNpc && !nearNetizen && !inInterior
+      && Math.hypot(selfX - CLUBHOUSE.x, selfY - (CLUBHOUSE.y + 40)) < 60;
     // A Robville lot you're standing on (or right beside) → buy/sell prompt. Lowest priority so it
     // never steals focus from a door, person, or jailed neighbor.
     nearParcel = null;
@@ -9604,6 +9610,8 @@ export function startWorld(net: WorldNet): void {
         : '🕯️ A suspiciously polished candlestick';
     } else if (nearTavernMorris) {
       prompt.textContent = "⊞ Nine Men's Morris (PvP)";
+    } else if (nearClubDoor) {
+      prompt.textContent = net.owns('club-member') ? '🏛️ Enter the Clubhouse' : '🏛️ Apply for Membership';
     } else if (nearSwan) {
       prompt.textContent = '🦢 Bartholomew';
     } else if (nearBook) {
@@ -14427,6 +14435,7 @@ export function startWorld(net: WorldNet): void {
   let puttCharging = false, puttBusy = false, puttPhase = 0, puttStreak = 0;
   let puttStreakTxt: Phaser.GameObjects.Text | null = null;
   let nearClubSpot: 'putt' | 'registry' | 'trophies' | 'portrait' | 'candle' | 'games' | null = null;
+  let nearClubDoor = false; // standing at the exterior clubhouse door (join / enter)
   let nearTavernMorris = false; // standing at the Tavern's corner board
   let vaultSwan: { spr: Phaser.GameObjects.Image; x: number; y: number; tx: number; ty: number } | null = null;
   let nearSwan = false;
@@ -15463,18 +15472,19 @@ export function startWorld(net: WorldNet): void {
     } else {
       sc.add.rectangle(x0 + EAST.w / 2, WORLD.h / 2, EAST.w, WORLD.h, 0xeef1f4).setDepth(-32);
     }
-    // --- the frozen pond ---
-    if (sc.textures.exists('na-ice-field')) {
-      const ice = sc.add.tileSprite(POND_ICE.x - POND_ICE.rx, POND_ICE.y - POND_ICE.ry, POND_ICE.rx * 2, POND_ICE.ry * 2, 'na-ice-field')
-        .setOrigin(0, 0).setTileScale(2, 2).setDepth(-30);
-      const maskG = sc.make.graphics();
-      maskG.fillStyle(0xffffff, 1);
-      maskG.fillEllipse(POND_ICE.x, POND_ICE.y, POND_ICE.rx * 2, POND_ICE.ry * 2);
-      ice.setMask(maskG.createGeometryMask());
-      sc.add.image(POND_ICE.x - 200, POND_ICE.y - 120, 'na-ice-patch').setScale(2).setDepth(-29);
-      sc.add.image(POND_ICE.x + 260, POND_ICE.y + 140, 'na-ice-patch').setScale(1.5).setDepth(-29);
-    } else {
-      sc.add.ellipse(POND_ICE.x, POND_ICE.y, POND_ICE.rx * 2, POND_ICE.ry * 2, 0xc4dce8).setDepth(-30);
+    // --- the frozen pond: a plain ellipse base (same trick as the town pond/desert oasis — no
+    // masks anywhere else in this codebase) with keyed ice-patch texture layered on top ---
+    sc.add.ellipse(POND_ICE.x, POND_ICE.y, POND_ICE.rx * 2, POND_ICE.ry * 2, 0xc4dce8).setDepth(-30);
+    sc.add.ellipse(POND_ICE.x, POND_ICE.y, POND_ICE.rx * 2 - 20, POND_ICE.ry * 2 - 16, 0xd4e8f0).setDepth(-29);
+    if (sc.textures.exists('na-ice-patch')) {
+      // an inscribed grid of patches, clipped to stay well inside the ellipse (no square corners)
+      const cols = 5, rows = 3;
+      for (let cRow = 0; cRow < rows; cRow++) for (let cCol = 0; cCol < cols; cCol++) {
+        const fx = (cCol + 0.5) / cols - 0.5, fy = (cRow + 0.5) / rows - 0.5; // -0.5..0.5
+        if (fx * fx + fy * fy > 0.22) continue; // stay inside the oval
+        const px3 = POND_ICE.x + fx * POND_ICE.rx * 1.7, py3 = POND_ICE.y + fy * POND_ICE.ry * 1.7;
+        sc.add.image(px3, py3, 'na-ice-patch').setScale(1.4 + rnd() * 0.5).setAlpha(0.85).setDepth(-28);
+      }
     }
     const rim = sc.add.graphics().setDepth(-29);
     rim.lineStyle(7, 0xf4f7fa, 1);
