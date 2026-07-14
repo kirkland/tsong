@@ -851,9 +851,11 @@ const net = connect(
     } else if (msg.type === 'bgLobby') {
       if (msg.game === 'chess') chessMod?.feedLobby(msg);
       else if (msg.game === 'morris') morrisMod?.feedLobby(msg);
+      else if (msg.game === 'ski') skiMod?.feedLobby(msg);
     } else if (msg.type === 'bgRelay') {
       if (msg.game === 'chess') chessMod?.feedRelay(msg.data);
       else if (msg.game === 'morris') morrisMod?.feedRelay(msg.data);
+      else if (msg.game === 'ski') skiMod?.feedRelay(msg.data);
     } else if (msg.type === 'ghLeaderboard') {
       ghScores = msg.rows;
     } else if (msg.type === 'wishResult') {
@@ -2376,7 +2378,8 @@ async function openBowling(): Promise<void> {
 // One `bg` relay serves both — game-keyed rooms server-side, one net-hook shape client-side.
 let chessMod: typeof import('./chess') | null = null;
 let morrisMod: typeof import('./morris') | null = null;
-function bgNetFor(game: 'chess' | 'morris') {
+let skiMod: typeof import('./ski') | null = null;
+function bgNetFor(game: 'chess' | 'morris' | 'ski') {
   return {
     join:   () => net.send({ type: 'bgJoin', game }),
     leave:  () => net.send({ type: 'bgLeave', game }),
@@ -2401,6 +2404,13 @@ async function openMorrisGame(): Promise<void> {
     if (morrisMod.isMorrisOpen()) return;
     morrisMod.openMorris(bgNetFor('morris'));
   } catch (e) { console.error('Morris failed to load:', e); }
+}
+async function openSkiGame(): Promise<void> {
+  try {
+    skiMod = await import('./ski');
+    if (skiMod.isSkiOpen()) return;
+    skiMod.openSki(bgNetFor('ski'));
+  } catch (e) { console.error('Ski failed to load:', e); }
 }
 
 // --- City Tycoon: 2–8 player Monopoly-style board game, entered from the arcade cabinet ---
@@ -2456,6 +2466,7 @@ const WORLD_DELEGATE_CHECK: Record<string, () => boolean> = {
   monsterjam: overlayVisibleCheck('#mjOverlay'),
   chess: overlayVisibleCheck('#chessOverlay'),
   morris: overlayVisibleCheck('#morrisOverlay'),
+  ski: overlayVisibleCheck('#skiOverlay'),
   rename: overlayVisibleCheck('#overlay'),
 };
 // Polls (rAF) until the delegated panel/minigame that World just handed off to has opened AND
@@ -2614,6 +2625,10 @@ worldBtn.addEventListener('click', async () => {
         }
         if (feature === 'morris') {
           setTimeout(() => { void openMorrisGame(); }, 0);
+          return;
+        }
+        if (feature === 'ski') {
+          setTimeout(() => { void openSkiGame(); }, 0);
           return;
         }
         // Arcade cabinets launch the solo/co-op minigames via their toolbar buttons.

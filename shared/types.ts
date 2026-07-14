@@ -455,7 +455,7 @@ export const WORLD_AVATAR = {
 export const WORLD_BOUNDS = {
   minX: -24000,           // ← the Great Western Nothing
   minY: -1300,            // ↑ the Tsong Country Club
-  maxX: 4800,             // (= WORLD.w)
+  maxX: 4800 + 9600,      // → the Frostreach (= WORLD.w + its width)
   maxY: 2200 + 4200,      // ↓ the Great Southern Damp (= WORLD.h + its depth)
 } as const;
 
@@ -944,7 +944,8 @@ export type WorldWeapon =
   | 'rocket'  // 🚀 slow missile, big blast radius
   | 'mg'      // 🔫 rapid-fire bullets, pinpoint hits
   | 'laser'   // ⚡ instant piercing beam
-  | 'void';   // 🕳️ singularity — collapses everything inward, then detonates
+  | 'void'    // 🕳️ singularity — collapses everything inward, then detonates
+  | 'snow';   // ❄️ a lobbed snowball — harmless, humiliating (packed in the Frostreach)
 
 // How a receiver should draw an incoming WorldBoomMsg. Omitted = 'blast' (the classic fireball),
 // so old clients and car crashes keep their current look.
@@ -952,11 +953,12 @@ export type WorldFx =
   | 'blast'   // full fireball (car crash, rocket)
   | 'hit'     // small spark — a machine-gun round landing
   | 'zap'     // laser scorch
-  | 'void';   // a black hole opens, drags everything in, then blows
+  | 'void'    // a black hole opens, drags everything in, then blows
+  | 'snow';   // a snowball splat — knocks nobody's car out, ruins everybody's dignity
 
 // Runtime lists of the above, for validating what arrives off the wire.
-export const WORLD_WEAPONS: readonly WorldWeapon[] = ['rocket', 'mg', 'laser', 'void'];
-export const WORLD_FX: readonly WorldFx[] = ['blast', 'hit', 'zap', 'void'];
+export const WORLD_WEAPONS: readonly WorldWeapon[] = ['rocket', 'mg', 'laser', 'void', 'snow'];
+export const WORLD_FX: readonly WorldFx[] = ['blast', 'hit', 'zap', 'void', 'snow'];
 
 // A car blew up (car-vs-car collision or a high-speed building crash) at this world point. Fanned
 // out to everyone else in the world so the fireball is visible to all, not just the crasher.
