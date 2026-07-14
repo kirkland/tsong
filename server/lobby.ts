@@ -1171,6 +1171,32 @@ export class Lobby {
         .catch((e) => { this.claimedQuests.delete(gkey); console.error('gas station grant failed:', e); });
       return;
     }
+    if (quest === 'club-putt') {
+      // Five in a row on the practice green — a title, not a payout. Members don't discuss money.
+      const pkey = `${conn.pid}:${quest}`;
+      if (this.claimedQuests.has(pkey)) return;
+      this.claimedQuests.add(pkey);
+      awardTitle(conn.pid, conn.nickname, 'club-champ')
+        .then(() => {
+          this.sendWallet(ws);
+          this.notify(ws, '🏌️ Five consecutive putts. The lounge applauds at a tasteful volume. Title unlocked: Club Champion');
+        })
+        .catch((e) => { this.claimedQuests.delete(pkey); console.error('club putt grant failed:', e); });
+      return;
+    }
+    if (quest === 'club-vault') {
+      // What was found behind the bookcase stays behind the bookcase. Except the swan.
+      const vkey = `${conn.pid}:${quest}`;
+      if (this.claimedQuests.has(vkey)) return;
+      this.claimedQuests.add(vkey);
+      grantItem(conn.pid, conn.nickname, 'pet-swan')
+        .then(() => {
+          this.sendWallet(ws);
+          this.notify(ws, '🦢 Bartholomew has decided he lives with you now. Equip him in the Shop → Pets. Tell no one.');
+        })
+        .catch((e) => { this.claimedQuests.delete(vkey); console.error('club vault grant failed:', e); });
+      return;
+    }
     const reward = Lobby.QUEST_REWARDS[quest];
     if (!reward) return;
     const key = `${conn.pid}:${quest}`;
@@ -2407,6 +2433,58 @@ export class Lobby {
       this.notify(ws, '⛲✨ The fountain heard you. Title unlocked: Wisher');
     }
     this.tell(ws, { type: 'wishResult', total, title: granted });
+  }
+
+  /** Country Club initiation: 1,000,000🪙 into the House, membership (a title) into the wallet.
+   *  The whole town hears about it — nobody quietly spends a million coins. */
+  async clubJoin(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    const FEE = 1_000_000;
+    const cur = await getWallet(conn.pid).catch(() => null);
+    if (cur && cur.owned.includes('club-member')) { this.notify(ws, '⛳ You are already a member. The Commodore would find this question gauche.'); return; }
+    const w = await spendCoins(conn.pid, FEE).catch(() => null);
+    if (!w) { this.notify(ws, '⛳ The Commodore glances at your finances and suddenly remembers a prior engagement. (Initiation: 1,000,000🪙)'); return; }
+    try {
+      await this.houseCredit(FEE); // the fee is a sink — into the House, like the bar's takings
+      await grantItem(conn.pid, conn.nickname, 'club-member');
+    } catch (e) {
+      console.error('club join failed, refunding:', e);
+      await addCoins(conn.pid, conn.nickname, FEE).catch(() => {});
+      this.sendWallet(ws);
+      return;
+    }
+    const memberNo = await bumpCounter('club_members').catch(() => 0);
+    this.sendWallet(ws);
+    this.notify(ws, `⛳ Welcome to the Tsong Country Club${memberNo ? ` — Member №${memberNo}` : ''}. Do try the putting green. And do NOT feed the swan.`);
+    const flex = JSON.stringify({ type: 'announce', text: `🏛️ ${conn.nickname} has joined the Tsong Country Club.`, toast: true });
+    for (const sock of this.conns.keys()) {
+      if (sock !== ws && sock.readyState === sock.OPEN) sock.send(flex);
+    }
+  }
+
+  /** The 19th Hole pour: 5,000🪙 for "the '52 Reserve". Its effects are, chemically speaking,
+   *  indistinguishable from the Tavern's 20🪙 beer. Nobody at the club has ever said this aloud. */
+  clubDrink(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    if (conn.drunkLevel >= DRUNK_MAX) {
+      this.notify(ws, '🥃 Sterling polishes a glass and does not pour. "Perhaps some water, sir."');
+      return;
+    }
+    const POUR = 5000;
+    spendCoins(conn.pid, POUR)
+      .then(async (w) => {
+        if (!w) { this.notify(ws, `🥃 "I'm afraid the '52 Reserve is ${POUR.toLocaleString()}🪙. Per pour."`); this.sendWallet(ws); return; }
+        await this.houseCredit(POUR);
+        conn.drunkLevel++;
+        conn.drunkUntil = Date.now() + DRUNK_MS;
+        this.bumpCortisol(conn, -CORTISOL_BEER_RELIEF);
+        this.sendWallet(ws);
+        this.tell(ws, { type: 'drunk', level: conn.drunkLevel });
+        this.notify(ws, '🥃 Notes of oak, heritage, and generational wealth. It tastes exactly like the Tavern\'s 20🪙 beer. Exactly.');
+      })
+      .catch((e) => console.error('club pour failed:', e));
   }
 
   /** Reload the Tsong Hero top-5-per-song×difficulty board and push it to everyone. */
