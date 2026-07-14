@@ -110,6 +110,7 @@ import {
   NomProposalKind, NomEffect, NomVote,
   FAST_SELL_BRACKETS,
   WORLD,
+  WORLD_BOUNDS,
   type WorldWeapon,
   type WorldFx,
   WORLD_BUILDINGS,
@@ -2142,8 +2143,8 @@ export class Lobby {
   worldBoom(ws: WebSocket, x: number, y: number, r?: number, fx?: WorldFx) {
     const conn = this.conns.get(ws);
     if (!conn || !this.world.has(ws)) return;
-    const bx = Math.max(0, Math.min(WORLD.w, x));
-    const by = Math.max(0, Math.min(WORLD.h, y));
+    const bx = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, x));
+    const by = Math.max(WORLD_BOUNDS.minY, Math.min(WORLD_BOUNDS.maxY, y));
     // The singularity's collapse blast is the widest thing in the game — give it headroom.
     const br = typeof r === 'number' ? Math.max(0, Math.min(400, r)) : undefined;
     // Include shooter's pid so recipients can attribute kills during Road Rage.
@@ -2155,8 +2156,8 @@ export class Lobby {
   worldRocket(ws: WebSocket, x: number, y: number, a: number, w?: WorldWeapon, len?: number) {
     const conn = this.conns.get(ws);
     if (!conn || !this.world.has(ws)) return;
-    const bx = Math.max(0, Math.min(WORLD.w, x));
-    const by = Math.max(0, Math.min(WORLD.h, y));
+    const bx = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, x));
+    const by = Math.max(WORLD_BOUNDS.minY, Math.min(WORLD_BOUNDS.maxY, y));
     const blen = typeof len === 'number' ? Math.max(0, Math.min(2000, len)) : undefined;
     const data = JSON.stringify({ type: 'worldRocket', x: bx, y: by, a, w, len: blen });
     for (const sock of this.world.sockets()) if (sock !== ws && sock.readyState === sock.OPEN) sock.send(data);
