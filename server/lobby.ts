@@ -1158,6 +1158,19 @@ export class Lobby {
   questClaim(ws: WebSocket, quest: string) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
+    if (quest === 'gas-station') {
+      // Pete's road trip fund is not money. It's a friend.
+      const gkey = `${conn.pid}:${quest}`;
+      if (this.claimedQuests.has(gkey)) return;
+      this.claimedQuests.add(gkey);
+      grantItem(conn.pid, conn.nickname, 'pet-tumbleweed')
+        .then(() => {
+          this.sendWallet(ws);
+          this.notify(ws, '🌵 Pete gave you Rusty the Tumbleweed! Equip him in the Shop → Pets.');
+        })
+        .catch((e) => { this.claimedQuests.delete(gkey); console.error('gas station grant failed:', e); });
+      return;
+    }
     const reward = Lobby.QUEST_REWARDS[quest];
     if (!reward) return;
     const key = `${conn.pid}:${quest}`;
