@@ -447,6 +447,18 @@ export const WORLD_AVATAR = {
   speed: 280,   // on-foot walk speed, world units / second
 } as const;
 
+// The FULL traversable extent of the overworld: the town rect (WORLD) plus its frontiers —
+// the desert west of x0, the country club north of y0, and the bog south of the town's bottom
+// edge. Shared so the server relays positions anywhere a client can legitimately stand (it used
+// to clamp to the town rect, which pinned frontier explorers to the map edge on everyone else's
+// screen), and so client geometry derives from one source of truth.
+export const WORLD_BOUNDS = {
+  minX: -24000,           // ← the Great Western Nothing
+  minY: -1300,            // ↑ the Tsong Country Club
+  maxX: 4800 + 9600,      // → the Frostreach (= WORLD.w + its width)
+  maxY: 2200 + 4200,      // ↓ the Great Southern Damp (= WORLD.h + its depth)
+} as const;
+
 // --- Cars -------------------------------------------------------------------------------
 // You buy a car in the shop (it lives in the `car` cosmetic slot, like a hat) and drive it
 // around the world — roughly twice walking speed, with arcade drift (low grip = more slide).
@@ -932,7 +944,8 @@ export type WorldWeapon =
   | 'rocket'  // 🚀 slow missile, big blast radius
   | 'mg'      // 🔫 rapid-fire bullets, pinpoint hits
   | 'laser'   // ⚡ instant piercing beam
-  | 'void';   // 🕳️ singularity — collapses everything inward, then detonates
+  | 'void'    // 🕳️ singularity — collapses everything inward, then detonates
+  | 'snow';   // ❄️ a lobbed snowball — harmless, humiliating (packed in the Frostreach)
 
 // How a receiver should draw an incoming WorldBoomMsg. Omitted = 'blast' (the classic fireball),
 // so old clients and car crashes keep their current look.
@@ -940,11 +953,12 @@ export type WorldFx =
   | 'blast'   // full fireball (car crash, rocket)
   | 'hit'     // small spark — a machine-gun round landing
   | 'zap'     // laser scorch
-  | 'void';   // a black hole opens, drags everything in, then blows
+  | 'void'    // a black hole opens, drags everything in, then blows
+  | 'snow';   // a snowball splat — knocks nobody's car out, ruins everybody's dignity
 
 // Runtime lists of the above, for validating what arrives off the wire.
-export const WORLD_WEAPONS: readonly WorldWeapon[] = ['rocket', 'mg', 'laser', 'void'];
-export const WORLD_FX: readonly WorldFx[] = ['blast', 'hit', 'zap', 'void'];
+export const WORLD_WEAPONS: readonly WorldWeapon[] = ['rocket', 'mg', 'laser', 'void', 'snow'];
+export const WORLD_FX: readonly WorldFx[] = ['blast', 'hit', 'zap', 'void', 'snow'];
 
 // A car blew up (car-vs-car collision or a high-speed building crash) at this world point. Fanned
 // out to everyone else in the world so the fireball is visible to all, not just the crasher.
@@ -1058,6 +1072,12 @@ export type ClientMsg =
   | { type: 'fountainWish' } // toss 10 coins in the plaza fountain (tiny chance of the Wisher title)
   | { type: 'clubJoin' } // apply to the Country Club (server validates the 1,000,000🪙 initiation fee)
   | { type: 'clubDrink' } // order the good stuff at the 19th Hole (server charges; effects mirror buyBeer)
+  | { type: 'bgJoin'; game: string } // take a seat at a board-game table (chess/morris; 2 seats, PvP only)
+  | { type: 'bgLeave'; game: string } // leave the board-game lobby / match
+  | { type: 'bgStake'; game: string; stake: number } // (host only, pre-start) set the winner-takes-all stake
+  | { type: 'bgStart'; game: string } // (host only) start — requires all seats consented; server escrows the stake
+  | { type: 'bgRelay'; game: string; data: unknown } // forward an opaque board-game payload to the other seat
+  | { type: 'bgResult'; game: string; winner: number } // report the finish (winner slot, -1 = draw) — first report settles the pot
   | { type: 'tntJoin' } // take a slot in the TNT Explosion Rally lobby (1v1 bomb-parry maze duel)
   | { type: 'tntLeave' } // leave the TNT Explosion Rally lobby / match
   | { type: 'tntStart' } // (host only) start the match (solo start = practice vs the TNT Bot, no payout)
@@ -1633,6 +1653,8 @@ export type ServerMsg =
   | TrnRelayMsg
   | WaLobbyMsg
   | WaRelayMsg
+  | BgLobbyMsg
+  | BgRelayMsg
   | WishResultMsg
   | GhLeaderboardMsg
   | TntLobbyMsg
@@ -2388,6 +2410,22 @@ export interface TrnLobbyMsg {
 // guest direction input). Clients pick out the messages they care about.
 export interface TrnRelayMsg {
   type: 'trnRelay';
+  data: unknown;
+}
+// Board-game (chess / Nine Men's Morris) lobby — the smallest relay shape yet: exactly two seats,
+// PvP only (the club does not stock bots), no payouts (members do not discuss money). Slot 0 is
+// the host and plays white/first; moves ride the bg relay and both clients run the same rules.
+export interface BgLobbyMsg {
+  type: 'bgLobby';
+  game: string; // 'chess' | 'morris'
+  status: 'waiting' | 'playing' | 'ended';
+  slot: number; // this client's seat (0 = host)
+  players: { name: string; slot: number }[];
+  stake: number; // winner-takes-all stake per player (0 = friendly game); escrowed by the server at start
+}
+export interface BgRelayMsg {
+  type: 'bgRelay';
+  game: string;
   data: unknown;
 }
 // Tsong Artillery lobby (1–4 players; the host fills empty seats with bots at start). Same
