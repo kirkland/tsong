@@ -3209,64 +3209,108 @@ export function startWorld(net: WorldNet): void {
     fullMapOpen = !fullMapOpen;
     fullMap.style.display = fullMapOpen ? 'flex' : 'none';
     if (fullMapOpen) {
-      const sz = Math.min(window.innerWidth * 0.9, window.innerHeight * 0.78 * WORLD.w / WORLD.h);
-      fullMapCanvas.width = Math.round(sz); fullMapCanvas.height = Math.round(sz * WORLD.h / WORLD.w);
+      const FULLW = WORLD.w + DESERT.w, FULLH = CLUB.h + WORLD.h + SOUTH.h;
+      const sz = Math.min(window.innerWidth * 0.9, window.innerHeight * 0.78 * FULLW / FULLH);
+      fullMapCanvas.width = Math.round(sz); fullMapCanvas.height = Math.round(sz * FULLH / FULLW);
       drawMap(fullMapCanvas, true);
     }
   }
-  // Draw the world to a canvas (scaled): grass, roads, plaza, building icons, jail, avatars, you.
+  // Draw the world to a canvas. The world got big (desert west, club north, bog south), so the
+  // minimap is a VIEWPORT — a window of the world centered on you — while the full map (M) still
+  // shows everything, frontiers included. All draws go through X()/Y() so both modes share code.
+  const MINI_VIEW_W = 3000; // world units across the minimap window
   function drawMap(cv: HTMLCanvasElement, full: boolean) {
     const ctx = cv.getContext('2d'); if (!ctx) return;
-    const W = cv.width, H = cv.height, sx = W / WORLD.w, sy = H / WORLD.h;
-    ctx.fillStyle = '#2f5d36'; ctx.fillRect(0, 0, W, H); // grass
-    ctx.fillStyle = '#8a7448';                            // roads
-    for (const r of ROADS) ctx.fillRect(r.x * sx, r.y * sy, r.w * sx, r.h * sy);
-    ctx.fillStyle = '#a8975e';                            // plaza
-    ctx.beginPath(); ctx.arc(PLAZA.x * sx, PLAZA.y * sy, PLAZA.r * sx, 0, Math.PI * 2); ctx.fill();
-    // Robville: the roads out east were already drawn above (they're in ROADS), but nothing at
-    // the end of them was — cul-de-sac bulbs (same paved look as the plaza) + each buyable lot,
-    // tinted by its live ownership state so the neighborhood doesn't read as a dead stretch of
-    // empty road on the map.
+    const W = cv.width, H = cv.height;
+    let wx0: number, wy0: number, ww: number, wh: number;
+    if (full) {
+      wx0 = -DESERT.w; wy0 = -CLUB.h; ww = WORLD.w + DESERT.w; wh = CLUB.h + WORLD.h + SOUTH.h;
+    } else {
+      ww = MINI_VIEW_W; wh = ww * H / W;
+      wx0 = clamp(selfX - ww / 2, -DESERT.w, WORLD.w - ww);
+      wy0 = clamp(selfY - wh / 2, -CLUB.h, WORLD.h + SOUTH.h - wh);
+    }
+    const sx = W / ww, sy = H / wh;
+    const X = (x: number) => (x - wx0) * sx, Y = (y: number) => (y - wy0) * sy;
+    const region = (x: number, y: number, w: number, h: number, c: string) => {
+      ctx.fillStyle = c; ctx.fillRect(X(x), Y(y), w * sx, h * sy);
+    };
+    ctx.fillStyle = '#10161f'; ctx.fillRect(0, 0, W, H);                  // beyond the world
+    region(-DESERT.w, 0, DESERT.w, WORLD.h, '#c9a86e');                    // the Nothing
+    region(0, -CLUB.h, WORLD.w, CLUB.h, '#3f8a3e');                        // the Club
+    region(0, 0, WORLD.w, WORLD.h, '#2f5d36');                             // town grass
+    region(0, WORLD.h, WORLD.w, SOUTH.h, '#2c3d28');                       // the Damp
+    region(0, SWAMP_SHORE_Y, WORLD.w, WORLD.h + SOUTH.h - SWAMP_SHORE_Y, '#203438'); // the Endless Bayou
+    ctx.fillStyle = '#8a7448';                                             // roads
+    for (const r of ROADS) ctx.fillRect(X(r.x), Y(r.y), r.w * sx, r.h * sy);
+    ctx.fillStyle = '#a8975e';                                             // plaza
+    ctx.beginPath(); ctx.arc(X(PLAZA.x), Y(PLAZA.y), PLAZA.r * sx, 0, Math.PI * 2); ctx.fill();
+    // Robville bulbs + lots, tinted by live ownership.
     for (const b of ROBVILLE_BULBS) {
-      ctx.beginPath(); ctx.arc(b.cx * sx, b.cy * sy, b.r * sx, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(X(b.cx), Y(b.cy), b.r * sx, 0, Math.PI * 2); ctx.fill();
     }
     ctx.globalAlpha = 0.6;
     for (const p of WORLD_PARCELS) {
       const st = land.get(p.id);
       ctx.fillStyle = st && st.ownerName ? (st.mine ? '#e8c84b' : st.ask != null ? '#e09a3a' : '#5a78c8') : '#6fbf73';
-      ctx.fillRect(p.x * sx, p.y * sy, Math.max(2, p.w * sx), Math.max(2, p.h * sy));
+      ctx.fillRect(X(p.x), Y(p.y), Math.max(2, p.w * sx), Math.max(2, p.h * sy));
     }
     ctx.globalAlpha = 1;
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    // --- frontier landmarks (cheap markers; canvas clips whatever's outside the window) ---
+    const mark = (x: number, y: number, emoji: string, px: number) => {
+      ctx.font = `${px}px serif`; ctx.fillText(emoji, X(x), Y(y));
+    };
+    const iconPx = full ? Math.max(9, Math.min(20, 300 * sx)) : 13;
+    // the Club: pond, bunkers, greens, then the landmarks
+    ctx.fillStyle = '#4a9aba'; ctx.beginPath(); ctx.ellipse(X(3050), Y(-260), 150 * sx, 65 * sy, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#e8d4a0';
+    for (const [bx, by] of [[3350, -500], [1700, -950], [700, -350], [4100, -800]]) {
+      ctx.beginPath(); ctx.ellipse(X(bx), Y(by), 110 * sx, 50 * sy, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.fillStyle = '#5fc25c';
+    for (const [hx, hy] of [[1150, -720], [2100, -1050], [3000, -820], [3900, -1100], [520, -1050]]) {
+      ctx.beginPath(); ctx.ellipse(X(hx), Y(hy), 95 * sx, 48 * sy, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    mark(CLUBHOUSE.x, CLUBHOUSE.y, '🏛️', iconPx); mark(2100, -1000, '🌀', iconPx); mark(TEE.x, TEE.y, '⛳', iconPx);
+    // the Nothing: its constellation of landmarks (plus the wall at the end)
+    mark(-4800, 990, '⛽', iconPx); mark(-8000, 1160, '🗿', iconPx); mark(-14500, 1160, '🌴', iconPx);
+    mark(-19000, 1000, '🎬', iconPx); mark(-22620, 1020, '🛖', iconPx);
+    ctx.fillStyle = '#2a2a33'; ctx.fillRect(X(-DESERT.w), Y(0), Math.max(2, 46 * sx), WORLD.h * sy);
+    // the Damp: dwellings, the drowned church, the pier
+    mark(1200, 3450, '🛖', iconPx); mark(2700, 2950, '🛖', iconPx); mark(3620, 4080, '⛪', iconPx);
+    ctx.fillStyle = '#54381e'; ctx.fillRect(X(SWAMP_PIER_X - 26), Y(SWAMP_SHORE_Y - 20), Math.max(2, 52 * sx), 400 * sy);
     if (full) {
       ctx.fillStyle = '#fff'; ctx.font = '700 13px system-ui';
-      ctx.fillText('🏘️ ROBVILLE', 3850 * sx, 1550 * sy);
+      ctx.fillText('🏘️ ROBVILLE', X(3850), Y(1550));
+      ctx.fillStyle = '#e8dcc0'; ctx.font = '700 12px ui-monospace,monospace';
+      ctx.fillText('THE GREAT WESTERN NOTHING', X(-12000), Y(360));
+      ctx.fillStyle = '#d8f0d0';
+      ctx.fillText('TSONG COUNTRY CLVB', X(2400), Y(-1180));
+      ctx.fillStyle = '#b8d0b0';
+      ctx.fillText('THE GREAT SOUTHERN DAMP', X(2400), Y(5300));
     }
     for (const b of WORLD_BUILDINGS) {                    // buildings: footprint + emoji icon
       ctx.fillStyle = b.color;
-      ctx.fillRect(b.x * sx, b.y * sy, Math.max(2, b.w * sx), Math.max(2, b.h * sy));
-      const cx = (b.x + b.w / 2) * sx, cy = (b.y + b.h / 2) * sy;
-      ctx.font = `${full ? 24 : 13}px serif`; ctx.fillText(b.emoji, cx, cy);
-      if (full) { ctx.fillStyle = '#fff'; ctx.font = '700 12px system-ui'; ctx.fillText(b.name, cx, cy + 22); }
+      ctx.fillRect(X(b.x), Y(b.y), Math.max(2, b.w * sx), Math.max(2, b.h * sy));
+      const cx = X(b.x + b.w / 2), cy = Y(b.y + b.h / 2);
+      ctx.font = `${full ? iconPx : 13}px serif`; ctx.fillText(b.emoji, cx, cy);
+      if (full && ww <= WORLD.w * 2) { ctx.fillStyle = '#fff'; ctx.font = '700 12px system-ui'; ctx.fillText(b.name, cx, cy + 22); }
     }
     ctx.fillStyle = '#6b7079';                            // jail
-    ctx.fillRect(JAIL.x * sx, JAIL.y * sy, JAIL.w * sx, JAIL.h * sy);
-    ctx.font = `${full ? 22 : 12}px serif`; ctx.fillStyle = '#6b7079';
-    const jailCx = (JAIL.x + JAIL.w / 2) * sx, jailCy = (JAIL.y + JAIL.h / 2) * sy;
+    ctx.fillRect(X(JAIL.x), Y(JAIL.y), JAIL.w * sx, JAIL.h * sy);
+    ctx.font = `${full ? iconPx : 12}px serif`;
+    const jailCx = X(JAIL.x + JAIL.w / 2), jailCy = Y(JAIL.y + JAIL.h / 2);
     ctx.fillText('🚔', jailCx, jailCy);
-    // Every WORLD_BUILDINGS entry gets its name labeled below the icon in full-map mode — the jail
-    // is the one fixed structure on the map that isn't in that array, so it was the one unlabeled
-    // box on the map (easy to mistake for clutter/leftover debug art rather than "that's the jail").
-    if (full) { ctx.fillStyle = '#fff'; ctx.font = '700 12px system-ui'; ctx.fillText('JAIL', jailCx, jailCy + 22); }
     for (const c of crates) {                             // ammo crates still waiting to be looted
       if (c.takenUntil) continue;
       ctx.fillStyle = WEAPON_BY_ID[c.spot.w].css;
-      ctx.fillRect(c.spot.x * sx - (full ? 3 : 1.5), c.spot.y * sy - (full ? 3 : 1.5), full ? 6 : 3, full ? 6 : 3);
+      ctx.fillRect(X(c.spot.x) - (full ? 3 : 1.5), Y(c.spot.y) - (full ? 3 : 1.5), full ? 6 : 3, full ? 6 : 3);
     }
     ctx.fillStyle = 'rgba(220,230,255,0.55)';             // other avatars
-    for (const a of others) { ctx.beginPath(); ctx.arc(a.x * sx, a.y * sy, full ? 4 : 2, 0, Math.PI * 2); ctx.fill(); }
+    for (const a of others) { ctx.beginPath(); ctx.arc(X(a.x), Y(a.y), full ? 4 : 2, 0, Math.PI * 2); ctx.fill(); }
     ctx.fillStyle = '#ffe14d';                            // you (bright dot)
-    ctx.beginPath(); ctx.arc(selfX * sx, selfY * sy, full ? 7 : 4, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(X(selfX), Y(selfY), full ? 6 : 4, 0, Math.PI * 2); ctx.fill();
     ctx.lineWidth = full ? 2 : 1.5; ctx.strokeStyle = '#1a1408'; ctx.stroke();
   }
 
@@ -12223,6 +12267,49 @@ export function startWorld(net: WorldNet): void {
         layer.putTileAt(idx, c, r);
       }
 
+      // --- frontier ground: the SAME tileset and engine as town, so the borders are seamless ---
+      // The club and the bog are grass-tile layers (per-tile tinted — manicured up north, murkier
+      // the deeper south you go), and the desert border gets a dirt-tile band that eases the lawn
+      // into the sand. Depths sit far below the frontier overlays AND the negative avatar depths
+      // north of town (the ground must never paint over a player again).
+      const mixTint = (t: number, tr: number, tg: number, tb: number) => {
+        const ch = (a: number, b: number) => Math.round(a + (b - a) * t);
+        return (ch(255, tr) << 16) | (ch(255, tg) << 8) | ch(255, tb);
+      };
+      {
+        const clubRows = Math.ceil(CLUB.h / TILE);
+        const clubLayer = map.createBlankLayer('clubGround', ts, 0, -CLUB.h, COLS, clubRows)!;
+        clubLayer.setScale(TILE / 16).setDepth(-10000);
+        for (let r = 0; r < clubRows; r++) for (let c = 0; c < COLS; c++) {
+          const h = hash(c + 31, r + 977);
+          const t = clubLayer.putTileAt(h > 0.93 ? TT.grass[2] : h > 0.5 ? TT.grass[1] : TT.grass[0], c, r);
+          // groundskeeping: a touch lusher toward the back nine, neutral at the town line
+          t.tint = mixTint((1 - r / clubRows) * 0.5, 214, 240, 198);
+        }
+      }
+      {
+        const swampRows = Math.ceil(SOUTH.h / TILE);
+        const swampLayer = map.createBlankLayer('swampGround', ts, 0, WORLD.h, COLS, swampRows)!;
+        swampLayer.setScale(TILE / 16).setDepth(-10000);
+        for (let r = 0; r < swampRows; r++) for (let c = 0; c < COLS; c++) {
+          const h = hash(c + 613, r + 4409);
+          const t = swampLayer.putTileAt(h > 0.95 ? TT.grass[2] : h > 0.5 ? TT.grass[1] : TT.grass[0], c, r);
+          // the murk rises with every step south — neutral at the town line, bog-dark by the bayou
+          const murk = Math.min(1, (r / swampRows) * 1.7) * (0.92 + hash(c * 7 + 1, r * 3 + 1) * 0.16);
+          t.tint = mixTint(Math.min(1, murk) * 0.62, 106, 138, 104);
+        }
+      }
+      {
+        const DSTRIP = 8; // dirt-tile band easing the lawn into the Nothing (chunk 0's floor cedes this space)
+        const edgeLayer = map.createBlankLayer('desertEdge', ts, -DSTRIP * TILE, 0, DSTRIP, ROWS)!;
+        edgeLayer.setScale(TILE / 16).setDepth(-999);
+        for (let r = 0; r < ROWS; r++) for (let c = 0; c < DSTRIP; c++) {
+          // easternmost column keeps its grass fringe (the dirt autotile's right-border frame)
+          const t = edgeLayer.putTileAt(c === DSTRIP - 1 ? TT.dirt[5] : TT.dirt[4], c, r);
+          t.tint = mixTint(((DSTRIP - 1 - c) / DSTRIP) * 0.9, 240, 214, 150); // warming toward the sand
+        }
+      }
+
       // --- pixel fountain at the plaza center (animated water shimmer) ---
       const fountain = sc.add.image(PLAZA.x, PLAZA.y, 'w-fountain-0').setScale(TEXEL * 1.6).setDepth(PLAZA.y);
       sc.time.addEvent({
@@ -13035,9 +13122,13 @@ export function startWorld(net: WorldNet): void {
     n.getUpUntil = 0; n.walking = false; n.label.setText('💫');
     squishSound();
   }
-  // Off the map, or buried in a wall?
+  // Off the map, or buried in a wall? (The frontiers count as ON the map — a rocket may sail
+  // over the dunes, the fairways, and the bog just like it does over town.)
   function hitsWorld(x: number, y: number): boolean {
-    if (x < 8 || y < 8 || x > WORLD.w - 8 || y > WORLD.h - 8) return true;
+    const inTownX = x >= 0 && x <= WORLD.w;
+    const minY = inTownX ? -CLUB.h + 8 : 8;
+    const maxY = inTownX ? WORLD.h + SOUTH.h - 8 : WORLD.h - 8;
+    if (x < -DESERT.w + 8 || x > WORLD.w - 8 || y < minY || y > maxY) return true;
     return resolveCollisions(x, y, 4).hit;
   }
 
@@ -13726,8 +13817,9 @@ export function startWorld(net: WorldNet): void {
     const rnd = desertRand(ci);
     const c = sc.add.container(0, 0);
     c.setDepth(0);
-    // sand floor
-    const floor = sc.add.rectangle(x0 + CHUNK_W / 2, WORLD.h / 2, CHUNK_W, WORLD.h, 0xcfae72).setDepth(-10);
+    // sand floor (chunk 0 cedes its easternmost 256 units to the dirt-tile border band)
+    const fw = ci === 0 ? CHUNK_W - 256 : CHUNK_W;
+    const floor = sc.add.rectangle(x0 + fw / 2, WORLD.h / 2, fw, WORLD.h, 0xcfae72).setDepth(-10);
     c.add(floor);
     // dune ridge strokes + cracked patches + speckle
     const gfx = sc.add.graphics().setDepth(-9);
@@ -13987,17 +14079,17 @@ export function startWorld(net: WorldNet): void {
     // GD stack; everything standing gets depth = its base y and sorts with avatars normally.
     const GD = -9500;
     const rnd = mulberry32(0xC1AB);
-    // grounds: deep manicured green, mow-striped and mottled (the most golf a rectangle can be)
-    sc.add.rectangle(WORLD.w / 2, -CLUB.h / 2, WORLD.w, CLUB.h, 0x3f8a3e).setDepth(GD);
+    // grounds: the tile lawn continues from town (see the clubGround tilemap layer); up here it
+    // just gets mow stripes and a little organic patchiness laid over it.
     const mow = sc.add.graphics().setDepth(GD + 1);
     for (let y = -CLUB.h; y < 0; y += 64) {
-      if ((y / 64) % 2 === 0) { mow.fillStyle(0x4a9a48, 0.45); mow.fillRect(0, y, WORLD.w, 64); }
+      if ((y / 64) % 2 === 0) { mow.fillStyle(0x4a9a48, 0.22); mow.fillRect(0, y, WORLD.w, 64); }
     }
     for (let i = 0; i < 80; i++) { // organic patchiness so it isn't a flat green void
-      mow.fillStyle(rnd() > 0.5 ? 0x37803a : 0x46a04a, 0.30);
+      mow.fillStyle(rnd() > 0.5 ? 0x37803a : 0x46a04a, 0.16);
       mow.fillEllipse(rnd() * WORLD.w, -rnd() * (CLUB.h - 80) - 40, 90 + rnd() * 200, 24 + rnd() * 44);
     }
-    mow.fillStyle(0x2f6329, 0.9); mow.fillRect(0, -CLUB.h, WORLD.w, 54); // the deep rough at the property line
+    mow.fillStyle(0x2f6329, 0.5); mow.fillRect(0, -CLUB.h, WORLD.w, 54); // the deep rough at the property line
     // cart paths: tan ribbons from the gate to everywhere that matters
     const path = sc.add.graphics().setDepth(GD + 2);
     path.lineStyle(30, 0xcbb083, 0.92);
@@ -14763,14 +14855,11 @@ export function startWorld(net: WorldNet): void {
     }
     g.destroy();
 
-    // --- ground: murk, mottle, and a polite gradient out of the town's grass ---
-    sc.add.rectangle(WORLD.w / 2, top + SOUTH.h / 2, WORLD.w, SOUTH.h, 0x33452e).setDepth(-30);
-    for (let i = 0; i < 5; i++) {
-      sc.add.rectangle(WORLD.w / 2, top + 30 + i * 60, WORLD.w, 60, 0x3e7a3c, 0.42 - i * 0.08).setDepth(-29);
-    }
+    // --- ground: the tile lawn continues from town, tinted murkier per-tile the deeper south
+    // you go (see the swampGround tilemap layer). Here we just lay wet mottle over it.
     const mott = sc.add.graphics().setDepth(-29);
     for (let i = 0; i < 90; i++) {
-      mott.fillStyle(rnd() > 0.5 ? 0x2c3d28 : 0x3a4c34, 0.5);
+      mott.fillStyle(rnd() > 0.5 ? 0x2c3d28 : 0x3a4c34, 0.32);
       mott.fillEllipse(rnd() * WORLD.w, top + 300 + rnd() * (SOUTH.h - 400), 80 + rnd() * 160, 30 + rnd() * 60);
     }
     // --- the Endless Bayou along the bottom (the pier is the only way out over it) ---

@@ -6,7 +6,7 @@
 // game.ts/polygame.ts it's a small, self-contained state holder the Lobby drives.
 
 import type { WebSocket } from 'ws';
-import { WORLD } from '../shared/types';
+import { WORLD, WORLD_BOUNDS } from '../shared/types';
 
 // One avatar's live state in the world. `a` (heading, radians) and `car` (driven car id, or
 // null on foot) are purely cosmetic relay state — set from the client's worldMove and fanned
@@ -57,8 +57,10 @@ export class World {
     const p = this.pos.get(ws);
     if (!p) return;
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
-    p.x = Math.max(0, Math.min(WORLD.w, x));
-    p.y = Math.max(0, Math.min(WORLD.h, y));
+    // Clamp to the FULL traversable world — town + frontiers (desert/club/bog) — not just the
+    // town rect, so explorers out there don't render pinned to the map edge for everyone else.
+    p.x = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, x));
+    p.y = Math.max(WORLD_BOUNDS.minY, Math.min(WORLD_BOUNDS.maxY, y));
     if (typeof a === 'number' && Number.isFinite(a)) p.a = a;
     p.car = typeof car === 'string' ? car : null;
     p.carColor = typeof carColor === 'string' ? carColor : null;

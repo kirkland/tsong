@@ -447,6 +447,18 @@ export const WORLD_AVATAR = {
   speed: 280,   // on-foot walk speed, world units / second
 } as const;
 
+// The FULL traversable extent of the overworld: the town rect (WORLD) plus its frontiers —
+// the desert west of x0, the country club north of y0, and the bog south of the town's bottom
+// edge. Shared so the server relays positions anywhere a client can legitimately stand (it used
+// to clamp to the town rect, which pinned frontier explorers to the map edge on everyone else's
+// screen), and so client geometry derives from one source of truth.
+export const WORLD_BOUNDS = {
+  minX: -24000,           // ← the Great Western Nothing
+  minY: -1300,            // ↑ the Tsong Country Club
+  maxX: 4800,             // (= WORLD.w)
+  maxY: 2200 + 4200,      // ↓ the Great Southern Damp (= WORLD.h + its depth)
+} as const;
+
 // --- Cars -------------------------------------------------------------------------------
 // You buy a car in the shop (it lives in the `car` cosmetic slot, like a hat) and drive it
 // around the world — roughly twice walking speed, with arcade drift (low grip = more slide).
