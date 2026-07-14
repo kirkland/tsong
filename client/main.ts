@@ -848,6 +848,12 @@ const net = connect(
       tronMod?.feedTrnLobby(msg);
     } else if (msg.type === 'trnRelay') {
       tronMod?.feedTrnRelay(msg.data);
+    } else if (msg.type === 'bgLobby') {
+      if (msg.game === 'chess') chessMod?.feedLobby(msg);
+      else if (msg.game === 'morris') morrisMod?.feedLobby(msg);
+    } else if (msg.type === 'bgRelay') {
+      if (msg.game === 'chess') chessMod?.feedRelay(msg.data);
+      else if (msg.game === 'morris') morrisMod?.feedRelay(msg.data);
     } else if (msg.type === 'ghLeaderboard') {
       ghScores = msg.rows;
     } else if (msg.type === 'wishResult') {
@@ -2366,6 +2372,37 @@ async function openBowling(): Promise<void> {
   }
 }
 
+// --- Board games (chess / Nine Men's Morris): 2-player PvP tables at the Club and the Tavern ---
+// One `bg` relay serves both — game-keyed rooms server-side, one net-hook shape client-side.
+let chessMod: typeof import('./chess') | null = null;
+let morrisMod: typeof import('./morris') | null = null;
+function bgNetFor(game: 'chess' | 'morris') {
+  return {
+    join:   () => net.send({ type: 'bgJoin', game }),
+    leave:  () => net.send({ type: 'bgLeave', game }),
+    start:  () => net.send({ type: 'bgStart', game }),
+    stake:  (stake: number) => net.send({ type: 'bgStake', game, stake }),
+    result: (winner: number) => net.send({ type: 'bgResult', game, winner }),
+    relay:  (data: unknown) => net.send({ type: 'bgRelay', game, data }),
+    name:   () => myName,
+    muted:  () => muted,
+  };
+}
+async function openChessGame(): Promise<void> {
+  try {
+    chessMod = await import('./chess');
+    if (chessMod.isChessOpen()) return;
+    chessMod.openChess(bgNetFor('chess'));
+  } catch (e) { console.error('Chess failed to load:', e); }
+}
+async function openMorrisGame(): Promise<void> {
+  try {
+    morrisMod = await import('./morris');
+    if (morrisMod.isMorrisOpen()) return;
+    morrisMod.openMorris(bgNetFor('morris'));
+  } catch (e) { console.error('Morris failed to load:', e); }
+}
+
 // --- City Tycoon: 2–8 player Monopoly-style board game, entered from the arcade cabinet ---
 let crMod: typeof import('./cityrise') | null = null;
 document.getElementById('crBtn')?.addEventListener('click', async () => {
@@ -2417,6 +2454,8 @@ const WORLD_DELEGATE_CHECK: Record<string, () => boolean> = {
   bowling: overlayPresentCheck('bowlOverlay'),
   tnt: overlayVisibleCheck('#tntOverlay'),
   monsterjam: overlayVisibleCheck('#mjOverlay'),
+  chess: overlayVisibleCheck('#chessOverlay'),
+  morris: overlayVisibleCheck('#morrisOverlay'),
   rename: overlayVisibleCheck('#overlay'),
 };
 // Polls (rAF) until the delegated panel/minigame that World just handed off to has opened AND
@@ -2566,6 +2605,15 @@ worldBtn.addEventListener('click', async () => {
         // Bolwoing Alley opens the bowling overlay (lazy-loaded).
         if (feature === 'bowling') {
           setTimeout(() => { void openBowling(); }, 0);
+          return;
+        }
+        // The board-game tables (clubhouse + tavern) open their overlays (lazy-loaded).
+        if (feature === 'chess') {
+          setTimeout(() => { void openChessGame(); }, 0);
+          return;
+        }
+        if (feature === 'morris') {
+          setTimeout(() => { void openMorrisGame(); }, 0);
           return;
         }
         // Arcade cabinets launch the solo/co-op minigames via their toolbar buttons.

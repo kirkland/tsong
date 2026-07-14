@@ -230,7 +230,7 @@ export interface WorldNet {
   marketList(instanceId: number, ask: number): void;
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' | 'monsterjam'): void; // open a DOOM/Fishing/Arcade/Bowling feature — every Casino game + Notice-Board panel is a native World dialog now
+  openFeature(feature: 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' | 'monsterjam' | 'chess' | 'morris'): void; // open a DOOM/Fishing/Arcade/Bowling feature — every Casino game + Notice-Board panel is a native World dialog now
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   openRename(): void;            // World's own 👤 button → reopen the nickname/color picker
   muted(): boolean;              // is game sound currently muted?
@@ -602,6 +602,7 @@ const CLUB_SPOTS = {
   trophies: { x: CLUB_INT.x + CLUB_INT.w / 2 + 280, y: CLUB_INT.y + 140 },
   portrait: { x: CLUB_INT.x + CLUB_INT.w / 2, y: CLUB_INT.y + 150 },
   candle:   { x: CLUB_INT.x + 470, y: CLUB_INT.y + 140 },  // the suspiciously polished one
+  games:    { x: CLUB_INT.x + CLUB_INT.w / 2 + 40, y: CLUB_INT.y + 470 }, // the game table (chess + morris)
   fire:     { x: CLUB_INT.x + 330, y: CLUB_INT.y + 120 },  // hearth centre
 } as const;
 // Every casino game gets its own walk-up cabinet on the gaming floor. `feature` is the same key
@@ -4112,6 +4113,16 @@ export function startWorld(net: WorldNet): void {
       prop('w-tav-stool', cx - 44, cy + 8, cy + 8); prop('w-tav-stool', cx + 44, cy + 8, cy + 8);
     };
     table(ix + iw * 0.30, iy + ih - 130); table(ix + iw * 0.72, iy + ih - 165);
+    { // the corner table has a Nine Men's Morris board burned into it (see nearTavernMorris)
+      const mb = sc.add.graphics().setDepth(iy + ih - 164);
+      const bx2 = ix + iw * 0.72 - 12, by2 = iy + ih - 187;
+      mb.lineStyle(1.5, 0x3a2814, 1);
+      for (const inset of [0, 4, 8]) mb.strokeRect(bx2 + inset, by2 + inset, 24 - inset * 2, 24 - inset * 2);
+      mb.lineBetween(bx2 + 12, by2, bx2 + 12, by2 + 8);
+      mb.lineBetween(bx2 + 12, by2 + 16, bx2 + 12, by2 + 24);
+      mb.lineBetween(bx2, by2 + 12, bx2 + 8, by2 + 12);
+      mb.lineBetween(bx2 + 16, by2 + 12, bx2 + 24, by2 + 12);
+    }
     // exit mat by the door
     tile('w-tav-rug', ix + iw / 2 - 70, iy + ih - T - 70, 140, 60, iy - 870);
     sc.add.text(ix + iw / 2, iy + ih - T - 38, '🚪 EXIT', { fontFamily: 'system-ui, sans-serif', fontSize: '16px', fontStyle: 'bold', color: '#ffe2b0', stroke: '#1a0f08', strokeThickness: 4 })
@@ -8867,6 +8878,12 @@ export function startWorld(net: WorldNet): void {
     if (nearNpc) { startTalk(nearNpc); return; }
     if (nearExit) { if (inDungeon) leaveDungeon(); else if (inTemple) leaveTemple(); else if (inMcdonald) leaveMcdonald(); else if (inCasino) leaveCasino(); else if (inVault) leaveVault(); else if (inClub) leaveClubhouse(); else leaveTavern(); return; }
     if (nearClubSpot) { clubSpotInteract(nearClubSpot); return; }
+    if (nearTavernMorris) {
+      openDialog("⊞ Nine Men's Morris", 'Three in a row makes a mill; a mill takes a stone. The board is older than the tavern. The grudges are older than the board.', [
+        { label: '⊞ Play (2-player PvP)', onPick: () => { pause(false); net.openFeature('morris'); } },
+      ]);
+      return;
+    }
     if (nearSwan) { adoptSwan(); return; }
     if (nearBook) { readHolyBook(); return; }
     if (nearCasinoGame) { playCasinoGame(nearCasinoGame); return; }
@@ -9434,13 +9451,16 @@ export function startWorld(net: WorldNet): void {
     nearClubSpot = null;
     if (inClub && !nearExit && !nearNpc) {
       let cd = 52;
-      for (const key of ['putt', 'registry', 'trophies', 'portrait', 'candle'] as const) {
+      for (const key of ['putt', 'registry', 'trophies', 'portrait', 'candle', 'games'] as const) {
         const s = CLUB_SPOTS[key];
         const d = Math.hypot(selfX - s.x, selfY - s.y);
         if (d < cd) { cd = d; nearClubSpot = key; }
       }
     }
     nearSwan = !!(inVault && !nearExit && vaultSwan && Math.hypot(selfX - vaultSwan.x, selfY - vaultSwan.y) < 64);
+    // Inside the Tavern (the default interior): the corner morris board.
+    nearTavernMorris = inInterior && !inTemple && !inMcdonald && !inCasino && !inClub && !inVault && !nearExit && !nearNpc
+      && Math.hypot(selfX - (TAVERN_INT.x + TAVERN_INT.w * 0.72), selfY - (TAVERN_INT.y + TAVERN_INT.h - 165)) < 62;
     if (inDungeon && cellWorldOf('@')) { // the '@' arrival cell (B1 only) doubles as the way out
       const e = dungeonEntry();
       if (Math.abs(selfX - e.x) < 44 && Math.abs(selfY - e.y) < 44) nearExit = true;
@@ -9523,7 +9543,10 @@ export function startWorld(net: WorldNet): void {
         : nearClubSpot === 'registry' ? '📖 The Member Registry'
         : nearClubSpot === 'trophies' ? '🏆 Examine the trophies'
         : nearClubSpot === 'portrait' ? '🖼️ Regard The Founder'
+        : nearClubSpot === 'games' ? '♟️ The game table (PvP)'
         : '🕯️ A suspiciously polished candlestick';
+    } else if (nearTavernMorris) {
+      prompt.textContent = "⊞ Nine Men's Morris (PvP)";
     } else if (nearSwan) {
       prompt.textContent = '🦢 Bartholomew';
     } else if (nearBook) {
@@ -14344,7 +14367,8 @@ export function startWorld(net: WorldNet): void {
   let puttMeter: Phaser.GameObjects.Graphics | null = null;
   let puttCharging = false, puttBusy = false, puttPhase = 0, puttStreak = 0;
   let puttStreakTxt: Phaser.GameObjects.Text | null = null;
-  let nearClubSpot: 'putt' | 'registry' | 'trophies' | 'portrait' | 'candle' | null = null;
+  let nearClubSpot: 'putt' | 'registry' | 'trophies' | 'portrait' | 'candle' | 'games' | null = null;
+  let nearTavernMorris = false; // standing at the Tavern's corner board
   let vaultSwan: { spr: Phaser.GameObjects.Image; x: number; y: number; tx: number; ty: number } | null = null;
   let nearSwan = false;
 
@@ -14468,6 +14492,13 @@ export function startWorld(net: WorldNet): void {
     prop('w-club-chair', ix + 260, iy + 260); prop('w-club-chair', ix + 400, iy + 280);
     prop('w-tav-table', cx + 40, iy + 470);
     prop('w-tav-stool', cx - 6, iy + 480, iy + 480); prop('w-tav-stool', cx + 86, iy + 480, iy + 480);
+    { // a chessboard, mid-game, permanently — nobody remembers whose move it is
+      const bd = sc.add.graphics().setDepth(iy + 471);
+      for (let r2 = 0; r2 < 4; r2++) for (let c2 = 0; c2 < 4; c2++) {
+        bd.fillStyle((r2 + c2) % 2 === 0 ? 0xe8dcc0 : 0x4a6b4a, 1);
+        bd.fillRect(cx + 28 + c2 * 6, iy + 448 + r2 * 5, 6, 5);
+      }
+    }
     // the practice green: a strip of impossible indoor turf down the left side
     sc.add.rectangle(CLUB_SPOTS.putt.x, (CLUB_SPOTS.putt.y + CLUB_SPOTS.cup.y) / 2, 120, CLUB_SPOTS.putt.y - CLUB_SPOTS.cup.y + 90, 0x3f8a3e).setDepth(iy - 870);
     sc.add.rectangle(CLUB_SPOTS.putt.x, (CLUB_SPOTS.putt.y + CLUB_SPOTS.cup.y) / 2, 108, CLUB_SPOTS.putt.y - CLUB_SPOTS.cup.y + 78, 0x4a9a48).setDepth(iy - 869);
@@ -14670,6 +14701,13 @@ export function startWorld(net: WorldNet): void {
         '🖼️ you look away. you can feel him not looking away.',
         '🖼️ up close, the oil paint over his left eye is suspiciously fresh.',
       ]));
+      return;
+    }
+    if (spot === 'games') {
+      openDialog('♞ The Game Room', 'Two boards are maintained in tournament condition. The club recognizes victory, defeat, and — reluctantly — draws. Wagers are held by the house and paid in full.', [
+        { label: '♟️ Chess (2-player PvP)', onPick: () => { pause(false); net.openFeature('chess'); } },
+        { label: "⊞ Nine Men's Morris (2-player PvP)", onPick: () => { pause(false); net.openFeature('morris'); } },
+      ]);
       return;
     }
     if (spot === 'candle') {

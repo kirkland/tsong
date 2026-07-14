@@ -1808,6 +1808,155 @@ export class Lobby {
     });
   }
 
+  // --- Board games (chess / Nine Men's Morris / ski) — game-keyed relay rooms ---
+  // The smallest relay shape: per-game seat lists, PvP only (no bots). Slot 0 hosts and moves
+  // first; both clients run the same rules and the relay just fans moves across. Stakes are
+  // winner-takes-all: the host sets one pre-start, the server escrows it from EVERY seat at
+  // start (all-or-nothing, refunds on failure), and the pot settles on the first bgResult —
+  // draws refund, a mid-match leaver forfeits the pot to whoever stayed.
+  private bgRooms = new Map<string, { slots: WebSocket[]; status: 'waiting' | 'playing'; stake: number; escrow: { pid: string; nick: string; sock: WebSocket }[] }>();
+  private static readonly BG_CAPS: Record<string, number> = { chess: 2, morris: 2, ski: 4 };
+  private static readonly BG_MAX_STAKE = 10_000_000;
+
+  private bgRoom(game: string) {
+    let r = this.bgRooms.get(game);
+    if (!r) { r = { slots: [], status: 'waiting', stake: 0, escrow: [] }; this.bgRooms.set(game, r); }
+    return r;
+  }
+
+  bgJoin(ws: WebSocket, game: string) {
+    const cap = Lobby.BG_CAPS[game];
+    if (!cap) return;
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname) return;
+    const r = this.bgRoom(game);
+    if (r.slots.includes(ws) || r.slots.length >= cap || r.status === 'playing') return;
+    r.slots.push(ws);
+    this.broadcastBgLobby(game);
+  }
+
+  /** (Host only, pre-start) set the winner-takes-all stake everyone will be charged at start. */
+  bgStake(ws: WebSocket, game: string, stake: number) {
+    const r = this.bgRooms.get(game);
+    if (!r || r.slots[0] !== ws || r.status === 'playing') return;
+    if (!Number.isFinite(stake) || stake < 0) return;
+    r.stake = Math.min(Lobby.BG_MAX_STAKE, Math.floor(stake));
+    this.broadcastBgLobby(game);
+  }
+
+  bgLeave(ws: WebSocket, game: string) {
+    const r = this.bgRooms.get(game);
+    if (!r) return;
+    const i = r.slots.indexOf(ws);
+    if (i === -1) return;
+    const wasHost = i === 0;
+    r.slots.splice(i, 1);
+    if (r.status === 'playing') {
+      // Leaving mid-match forfeits: the pot (if any) goes to whoever stayed; the table breaks up.
+      if (r.escrow.length) {
+        const leaver = this.conns.get(ws);
+        const stayers = r.escrow.filter((e) => e.pid !== leaver?.pid);
+        void this.bgSettlePot(r, stayers.length === 1 ? stayers[0] : null, stayers.length === 1 ? 'forfeit' : 'refund');
+      }
+      for (const other of r.slots) {
+        this.tell(other, { type: 'bgLobby', game, status: 'ended', slot: 0, players: [], stake: 0 });
+      }
+      r.slots = []; r.status = 'waiting'; r.stake = 0;
+      return;
+    }
+    if (wasHost) {
+      for (const other of r.slots) {
+        this.tell(other, { type: 'bgLobby', game, status: 'ended', slot: 0, players: [], stake: 0 });
+      }
+      r.slots = []; r.stake = 0;
+      return;
+    }
+    this.broadcastBgLobby(game);
+  }
+
+  /** Drop this socket from every board-game room (disconnect sweep). */
+  bgLeaveAll(ws: WebSocket) {
+    for (const game of this.bgRooms.keys()) this.bgLeave(ws, game);
+  }
+
+  /** (Host only) start. Escrows the stake from every seat first — all-or-nothing with refunds. */
+  async bgStart(ws: WebSocket, game: string) {
+    const r = this.bgRooms.get(game);
+    if (!r || r.slots[0] !== ws) return; // host only
+    if (r.status === 'playing') return;
+    if (r.slots.length < 2) return;      // PvP only — the club does not stock bots
+    r.escrow = [];
+    if (r.stake > 0) {
+      const taken: { pid: string; nick: string; sock: WebSocket }[] = [];
+      for (const sock of r.slots) {
+        const conn = this.conns.get(sock);
+        const pid = conn?.pid;
+        if (!pid) { await this.bgRefund(taken, r.stake); this.broadcastBgLobby(game); return; }
+        const w = await spendCoins(pid, r.stake).catch(() => null);
+        if (!w) {
+          await this.bgRefund(taken, r.stake);
+          for (const s of r.slots) this.notify(s, `🪙 ${conn?.nickname ?? 'A player'} can't cover the ${r.stake.toLocaleString()}🪙 stake. The wager is off.`);
+          this.broadcastBgLobby(game);
+          return;
+        }
+        this.sendWallet(sock);
+        taken.push({ pid, nick: conn!.nickname || 'Player', sock });
+      }
+      r.escrow = taken;
+    }
+    r.status = 'playing';
+    this.broadcastBgLobby(game);
+  }
+
+  private async bgRefund(taken: { pid: string; nick: string; sock: WebSocket }[], stake: number) {
+    for (const t of taken) {
+      await addCoins(t.pid, t.nick, stake).catch((e) => console.error('bg refund failed:', e));
+      this.sendWallet(t.sock);
+    }
+  }
+
+  /** Pay out (or refund) the escrowed pot. Clears the escrow so it can only settle once. */
+  private async bgSettlePot(r: { stake: number; escrow: { pid: string; nick: string; sock: WebSocket }[] }, winner: { pid: string; nick: string; sock: WebSocket } | null, why: 'win' | 'forfeit' | 'refund') {
+    const escrow = r.escrow;
+    r.escrow = [];
+    if (!escrow.length || r.stake <= 0) return;
+    if (!winner || why === 'refund') { await this.bgRefund(escrow, r.stake); return; }
+    const pot = r.stake * escrow.length;
+    await addCoins(winner.pid, winner.nick, pot).catch((e) => console.error('bg pot payout failed:', e));
+    this.sendWallet(winner.sock);
+    this.refreshNetWorth().catch(() => {});
+    this.notify(winner.sock, why === 'forfeit'
+      ? `🪙 Your opponent left the table. The ${pot.toLocaleString()}🪙 pot is yours.`
+      : `🏆 Winner takes all — +${pot.toLocaleString()}🪙.`);
+  }
+
+  /** First finish report settles: winner slot takes the pot, -1 (draw) refunds everyone. */
+  bgResult(ws: WebSocket, game: string, winner: number) {
+    const r = this.bgRooms.get(game);
+    if (!r || !r.slots.includes(ws) || r.status !== 'playing') return;
+    r.status = 'waiting'; // settle once; the table stays seated for a rematch (host re-starts → re-escrow)
+    const winSock = r.slots[winner];
+    const winEntry = winSock ? r.escrow.find((e) => e.sock === winSock) ?? null : null;
+    void this.bgSettlePot(r, winEntry, winEntry ? 'win' : 'refund');
+    this.broadcastBgLobby(game);
+  }
+
+  bgRelay(ws: WebSocket, game: string, data: unknown) {
+    const r = this.bgRooms.get(game);
+    if (!r || !r.slots.includes(ws)) return;
+    for (const other of r.slots) {
+      if (other !== ws) this.tell(other, { type: 'bgRelay', game, data });
+    }
+  }
+
+  private broadcastBgLobby(game: string) {
+    const r = this.bgRoom(game);
+    const players = r.slots.map((sock, slot) => ({ name: this.conns.get(sock)?.nickname ?? `P${slot}`, slot }));
+    r.slots.forEach((sock, slot) => {
+      this.tell(sock, { type: 'bgLobby', game, status: r.status, slot, players, stake: r.stake });
+    });
+  }
+
   // --- Tsong Artillery (Worms-like, 1–4 players; bots fill empty seats) ---
   // Same host-authoritative relay shape as Tron. Turn-based, so the relay just fans out
   // shot/turn messages; every client replays them deterministically. Payouts require ≥2
@@ -6193,6 +6342,7 @@ export class Lobby {
     this.srLeave(ws);   // drop any Street Demons grid slot (ends the race if the host left)
     this.sbLeave(ws);   // drop any Super Tsong Bros slot (ends the match if the host left)
     this.trnLeave(ws);  // drop any Tron slot (ends the match if the host left)
+    this.bgLeaveAll(ws); // drop any board-game seats (chess/morris/ski)
     this.waLeave(ws);   // drop any Tsong Artillery slot (ends the match if the host left)
     this.tntLeave(ws);  // drop any TNT Explosion Rally slot (ends the duel if the host left)
     this.mjLeave(ws);   // drop any Monster Jam slot (ends the show if the host left)
