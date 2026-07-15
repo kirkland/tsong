@@ -62,6 +62,7 @@ import {
   minBet,
   SeasonChallenge,
   MatchStatsMsg,
+  levelForXp,
 } from '../shared/types';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -934,7 +935,8 @@ const net = connect(
     } else if (msg.type === 'worldRoadRage') {
       worldMod?.feedRoadRage(msg.active, msg.endsAt, msg.standings ?? []);
     } else if (msg.type === 'wallet') {
-      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, car: msg.car, boat: msg.boat, pet: msg.pet, balltrail: msg.balltrail ?? null, goalcelebr: msg.goalcelebr ?? null, carcolor: msg.carcolor ?? null, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins };
+      wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, car: msg.car, boat: msg.boat, pet: msg.pet, balltrail: msg.balltrail ?? null, goalcelebr: msg.goalcelebr ?? null, carcolor: msg.carcolor ?? null, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins, xp: msg.xp ?? 0 };
+      renderLevelHud();
       rouletteHandle.setCoins(msg.coins);
       bjHandle.setCoins(msg.coins);
       crapsHandle.setCoins(msg.coins);
@@ -950,6 +952,10 @@ const net = connect(
       // pre-result value until the wheel lands — otherwise the settled balance reveals the outcome
       // before the animation finishes. The roulette `onSettled` callback runs refreshWallet then.
       if (!rouletteHandle.isSpinning()) refreshWallet();
+    } else if (msg.type === 'levelUp') {
+      celebrateLevelUp(msg.level, msg.reward);
+    } else if (msg.type === 'mobLoot') {
+      worldMod?.feedMobLoot(msg.purse, msg.gained, msg.banked);
     } else if (msg.type === 'matchStats') {
       matchStats = msg;
       updateUI();
@@ -2689,6 +2695,9 @@ worldBtn.addEventListener('click', async () => {
         return best;
       },
       wish: () => net.send({ type: 'fountainWish' }),
+      mobKill: (kind: string) => net.send({ type: 'mobKill', kind }),
+      worldBank: () => net.send({ type: 'worldBank' }),
+      worldDied: () => net.send({ type: 'worldDied' }),
       owns: (id: string) => wallet.owned.includes(id),
       joinClub: () => net.send({ type: 'clubJoin' }),
       clubDrink: (tier) => net.send({ type: 'clubDrink', tier }),
@@ -2951,8 +2960,8 @@ document.addEventListener('keydown', (e) => {
 });
 
 // --- Coins, cosmetics shop & betting ---
-let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; song: string | null; car: string | null; boat: string | null; pet: string | null; balltrail: string | null; goalcelebr: string | null; carcolor: string | null; exclusives: { id: string; serial: number; instanceId: number }[]; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number } =
-  { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, car: null, boat: null, pet: null, balltrail: null, goalcelebr: null, carcolor: null, exclusives: [], bets: [], nextSpinAt: 0, bonusSpins: 0 };
+let wallet: { coins: number; owned: string[]; hat: string | null; skin: string | null; trail: string | null; title: string | null; song: string | null; car: string | null; boat: string | null; pet: string | null; balltrail: string | null; goalcelebr: string | null; carcolor: string | null; exclusives: { id: string; serial: number; instanceId: number }[]; bets: Array<{ side: Side; amount: number; odds: number }>; nextSpinAt: number; bonusSpins: number; xp: number } =
+  { coins: 0, owned: [], hat: null, skin: null, trail: null, title: null, song: null, car: null, boat: null, pet: null, balltrail: null, goalcelebr: null, carcolor: null, exclusives: [], bets: [], nextSpinAt: 0, bonusSpins: 0, xp: 0 };
 let betAmount = 100; // default wager (economy is scaled ×100); min is still 1
 // 'vehicle' is a combined tab that renders Cars + Boats subsections; the rest map 1:1 to a slot.
 let shopTab: 'hat' | 'skin' | 'trail' | 'title' | 'song' | 'vehicle' | 'pet' | 'balltrail' | 'goalcelebr' = 'hat';
@@ -3060,6 +3069,41 @@ function carColorSwatchCss(id: string, cc: { body: string; accent: string } | nu
     return base + 'border:2px solid #111;animation:lbpolice 0.5s steps(1) infinite;';
   }
   return base + `background:${cc?.body ?? '#888'};border:2px solid ${cc?.accent ?? '#222'};`;
+}
+
+// --- Account level HUD -----------------------------------------------------------------------
+const levelBadge = document.getElementById('levelBadge') as HTMLButtonElement;
+function renderLevelHud() {
+  if (!levelBadge) return;
+  const { level, into, need } = levelForXp(wallet.xp);
+  const pct = Math.max(0, Math.min(100, Math.round((into / Math.max(1, need)) * 100)));
+  levelBadge.style.display = '';
+  levelBadge.title = `Level ${level} · ${into.toLocaleString()} / ${need.toLocaleString()} XP to level ${level + 1}\nEarn XP by winning matches, minigames, fishing, the dungeon, and more.`;
+  levelBadge.innerHTML =
+    `<span style="font-weight:800;color:#ffd23f;">Lv ${level}</span>` +
+    `<span style="display:inline-block;width:46px;height:7px;border-radius:4px;background:#2a3350;overflow:hidden;vertical-align:middle;margin-left:6px;">` +
+    `<span style="display:block;height:100%;width:${pct}%;background:linear-gradient(90deg,#ffd23f,#ff8a3f);"></span></span>`;
+}
+function celebrateLevelUp(level: number, reward: number) {
+  playChaChing();
+  showAnnouncement(`⭐ LEVEL ${level}!  +${reward.toLocaleString()}🪙`, { color: '#ffd23f' });
+  // a quick burst of stars from the level badge
+  const host = levelBadge?.getBoundingClientRect();
+  const cx = host ? host.left + host.width / 2 : window.innerWidth / 2;
+  const cy = host ? host.bottom : 60;
+  for (let i = 0; i < 16; i++) {
+    const s = document.createElement('div');
+    s.textContent = '⭐';
+    s.style.cssText = `position:fixed;left:${cx}px;top:${cy}px;font-size:${12 + Math.random() * 14}px;pointer-events:none;z-index:99999;`;
+    document.body.appendChild(s);
+    const ang = Math.random() * Math.PI * 2, dist = 40 + Math.random() * 120;
+    s.animate(
+      [{ transform: 'translate(-50%,-50%) scale(0.3)', opacity: 1 },
+       { transform: `translate(${Math.cos(ang) * dist - 50}%,${Math.sin(ang) * dist + 50}px) scale(1.2)`, opacity: 0 }],
+      { duration: 900 + Math.random() * 500, easing: 'cubic-bezier(.2,.7,.3,1)' },
+    ).onfinish = () => s.remove();
+  }
+  renderLevelHud();
 }
 
 function renderShop() {

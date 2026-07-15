@@ -195,6 +195,26 @@ export const CORTISOL_START = 50;
 // units. (Bumping this does NOT retro-scale existing data; that's a one-time DB migration.)
 export const COIN_SCALE = 100;
 
+// --- Account level, derived purely from lifetime XP (see server db.grantXp) -------------------
+// Each level costs a bit more than the last (linear increments → a gentle quadratic total): the
+// first level-up is quick and satisfying, and the curve stretches out so high levels are earned.
+export function xpForLevelUp(level: number): number {
+  return 100 + Math.max(0, level - 1) * 60; // XP needed to go from `level` → `level+1`
+}
+/** Break a lifetime XP total into { level, into (xp into the current level), need (xp for the
+ *  next level) } — everything the HUD needs to draw a level badge + progress bar. Level 1 = 0 XP. */
+export function levelForXp(xp: number): { level: number; into: number; need: number } {
+  let level = 1;
+  let rem = Math.max(0, Math.floor(xp || 0));
+  for (let guard = 0; guard < 100000; guard++) {
+    const need = xpForLevelUp(level);
+    if (rem < need) return { level, into: rem, need };
+    rem -= need;
+    level++;
+  }
+  return { level, into: 0, need: xpForLevelUp(level) };
+}
+
 // Cosmetic shop. Purely visual — equipped items are drawn on the paddle but never affect
 // the ball's collision (the hitbox is always the plain paddle rectangle). You earn 1 coin
 // per match win and can spend coins here. `slot` is mutually exclusive per player.
@@ -1117,6 +1137,9 @@ export type ClientMsg =
   | { type: 'waEnd'; winner: number; winner2?: number } // (host only) winning slot(s) — two for 2v2 team wins (-1 = nobody paid)
   | { type: 'waRelay'; data: unknown } // forward an opaque Artillery payload to all other players
   | { type: 'fountainWish' } // toss 10 coins in the plaza fountain (tiny chance of the Wisher title)
+  | { type: 'mobKill'; kind: string } // downed a biome critter → coins + XP by species (server owns the reward table), rate-limited
+  | { type: 'worldBank' } // reached town alive → bank the at-risk mob-loot purse into the wallet
+  | { type: 'worldDied' } // died out in the wild → forfeit the unbanked purse
   | { type: 'clubJoin' } // apply to the Country Club (server validates the 1,000,000🪙 initiation fee)
   | { type: 'clubDrink'; tier: number } // order off the 19th Hole's menu (1=House Pour, 2='52 Reserve, 3=Founder's Vintage; server charges, effects mirror buyBeer)
   | { type: 'bgJoin'; game: string } // take a seat at a board-game table (chess/morris/billiards; 2 seats, PvP only)
@@ -1717,6 +1740,8 @@ export type ServerMsg =
   | FishLeaderboardMsg
   | GolfLeaderboardMsg
   | WalletMsg
+  | LevelUpMsg
+  | MobLootMsg
   | StockMsg
   | LoanMsg
   | SpinResultMsg
@@ -1981,6 +2006,21 @@ export interface BountyHitMsg {
 }
 
 // A player's private wallet + cosmetics + active bet, sent only to that client.
+// Sent when a coin/activity reward pushes you past one or more level boundaries — the client
+// throws a little celebration. `level` is your new level, `reward` any coins the House chipped in.
+export interface LevelUpMsg {
+  type: 'levelUp';
+  level: number;
+  reward: number;
+}
+// The at-risk mob-loot purse total after a kill/bank/forfeit. Coins from biome mobs accumulate
+// here (server-held) and only reach the wallet once you bank them safely in town; dying forfeits them.
+export interface MobLootMsg {
+  type: 'mobLoot';
+  purse: number;   // current unbanked coins
+  gained?: number; // coins just added by a kill (for the floating "+N" on the client)
+  banked?: number; // coins just moved into the wallet (for a "banked N" toast)
+}
 export interface WalletMsg {
   type: 'wallet';
   coins: number;
@@ -2005,6 +2045,7 @@ export interface WalletMsg {
   bets: Array<{ side: Side; amount: number; odds: number }>;
   nextSpinAt: number; // epoch ms when the daily spin is next available (0 = available now)
   bonusSpins: number; // banked free spins (e.g. from winning a tournament); bypass the cooldown
+  xp: number; // lifetime XP; the client derives the account level + progress bar via levelForXp
 }
 
 // A player's private loan status, sent only to that client (on join and after any loan

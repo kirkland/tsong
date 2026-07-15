@@ -1162,6 +1162,13 @@
       #worldBtn:hover { background: linear-gradient(#1a423f, #133230); color: #9af3e9; }
       #worldBtn[aria-pressed="true"] { box-shadow: 0 0 0 2px #2c6f6a inset; color: #c6fff7; }
       /* Coin balance + shop dropdown */
+      #levelBadge {
+        font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 0.5px;
+        padding: 6px 10px; border-radius: 6px; border: 1px solid #38508f;
+        background: #14203a; color: #cdd8f5; cursor: pointer; white-space: nowrap;
+        display: inline-flex; align-items: center;
+      }
+      #levelBadge:hover { background: #1c2c50; }
       #shop { position: relative; }
       #shopBtn {
         font: inherit; font-size: 12px; font-weight: 700; letter-spacing: 1px;
@@ -4178,6 +4185,7 @@
           <button id="crBtn" type="button" title="City Tycoon — 2–8 player Monopoly-style property empire builder">🏙️ City Tycoon</button>
         </div>
       </div>
+      <button id="levelBadge" type="button" title="Your account level — earn XP by winning matches, minigames, fishing, the dungeon, and more" style="display:none"></button>
       <div id="shop">
         <button id="shopBtn" type="button" aria-expanded="false" title="Coins, cosmetics & betting">🪙 <span id="coinCount">0</span></button>
         <div id="shopPanel" hidden>

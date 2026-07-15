@@ -100,6 +100,7 @@ import {
   LOOT_TABLE,
   type BgLobbyMsg,
   type GolfScoreRow,
+  levelForXp,
 } from '../shared/types';
 import { drawCosmeticPreview, drawLegendIcon } from './render';
 
@@ -116,6 +117,7 @@ export interface WorldWallet {
   bets: { side: Side; amount: number; odds: number }[];
   nextSpinAt: number;
   bonusSpins: number;
+  xp: number;
 }
 // Live-betting section state for World's shop dialog (mirrors main.ts's syncBetSection() inputs).
 export interface WorldBetInfo {
@@ -268,6 +270,9 @@ export interface WorldNet {
   fishKing(): { name: string; lb: number } | null;     // biggest catch on record (billboard)
   ghKing(): { name: string; score: number } | null;    // top Tsong Hero score (billboard)
   wish(): void;                                        // toss 10 coins into the fountain
+  mobKill(kind: string): void;                         // downed a biome critter → coins into the at-risk purse + XP
+  worldBank(): void;                                   // reached town alive → bank the at-risk mob purse
+  worldDied(): void;                                   // died in the wild → forfeit the unbanked purse
   owns(id: string): boolean;                           // do we own this cosmetic/item id? (wallet.owned)
   joinClub(): void;                                    // apply to the Country Club (server validates the 1,000,000🪙 fee)
   clubDrink(tier: number): void;                       // order off the 19th Hole's menu (server charges)
@@ -322,6 +327,7 @@ interface Controller {
   feedEloProfile(msg: EloProfileMsg): void;         // server's answer to an eloProfileReq fired from the Hall of Fame
   feedBalanceSheet(msg: BalanceSheetMsg): void;     // server's answer to a balanceSheetReq fired from the Hall of Fame
   feedWallet(): void;                                // the wallet changed (buy/equip/spin settled) — re-render the shop dialog if it's open
+  feedMobLoot(purse: number, gained?: number, banked?: number): void; // the at-risk mob-loot purse changed
   feedCortisol(): void;                               // the "Cortisol" board updated — refresh the top-bar cortisol gauge
   feedNews(): void;                                  // a new news item published — re-render the news dialog if it's open
   feedLoan(): void;                                  // the loan changed (taken/repaid/collected/countdown tick) — re-render the loan dialog if it's open
@@ -380,6 +386,11 @@ export function feedDungeonChests(opened: string[]): void {
 /** The wallet changed (buy/equip/daily-spin settled) — re-render the shop dialog if it's open. */
 export function feedWallet(): void {
   controller?.feedWallet();
+}
+
+/** The server-held at-risk mob-loot purse changed (a kill added to it, or it banked/forfeited). */
+export function feedMobLoot(purse: number, gained?: number, banked?: number): void {
+  controller?.feedMobLoot(purse, gained, banked);
 }
 
 /** The "Cortisol" board updated — refresh the World top-bar cortisol gauge. */
@@ -2519,6 +2530,14 @@ export function startWorld(net: WorldNet): void {
   let handbrake = false; // hold Shift (or the on-screen DRIFT button) → break the rear loose and slide
   let lastSkidMarkAt = 0; // throttle for laying rubber on the ground while drifting
   let stunnedUntil = 0;   // ms; knocked off your feet by a blast — can't move until then
+  let mobBiteCooldown = 0; // ms; throttles biome-mob contact nips so they don't chain-stun
+  // --- survival: player health, field loot, potions ---
+  const PLAYER_MAX_HP = 100;
+  let playerHp = PLAYER_MAX_HP;
+  let lastDamagedAt = 0;   // for out-of-combat regen
+  let playerDead = false;
+  let fieldPotions = 0;    // healing potions carried (dropped by some mobs) — lost on death
+  let fieldPurse = 0;      // coins earned from mobs, NOT yet banked — forfeit if you die in the wild
 
   // --- arsenal state: what you're holding, what's left in it, and whether the trigger is down ---
   const ammo = Object.fromEntries(WEAPONS.map((w) => [w.id, w.start])) as Record<WorldWeapon, number>;
@@ -2771,6 +2790,68 @@ export function startWorld(net: WorldNet): void {
     'border-radius:8px;padding:6px 11px;font-size:13px;font-weight:700;text-shadow:0 1px 3px #000a;';
   function updateCoinsHud() { coinsHud.textContent = `🪙 ${Math.round(net.wallet().coins).toLocaleString()}`; }
   updateCoinsHud();
+  // Account level + XP bar, right by the coins. Earned by winning matches, minigames, fishing,
+  // the dungeon, blasting biome critters, and generally doing things.
+  const lvlHud = document.createElement('div');
+  lvlHud.style.cssText =
+    'pointer-events:none;background:#1b2542;border:1px solid #2c3a63;border-radius:8px;' +
+    'padding:6px 10px;display:flex;align-items:center;gap:7px;text-shadow:0 1px 3px #000a;';
+  const lvlHudTxt = document.createElement('span');
+  lvlHudTxt.style.cssText = 'color:#ffd23f;font-size:12px;font-weight:800;letter-spacing:.3px;';
+  const lvlHudTrack = document.createElement('div');
+  lvlHudTrack.style.cssText = 'width:52px;height:8px;background:#11182c;border-radius:5px;overflow:hidden;';
+  const lvlHudFill = document.createElement('div');
+  lvlHudFill.style.cssText = 'height:100%;width:0%;border-radius:5px;background:linear-gradient(90deg,#ffd23f,#ff8a3f);transition:width .3s ease;';
+  lvlHudTrack.appendChild(lvlHudFill);
+  lvlHud.append(lvlHudTxt, lvlHudTrack);
+  let lastLevel = -1;
+  function updateLevelHud() {
+    const { level, into, need } = levelForXp(net.wallet().xp ?? 0);
+    lvlHudTxt.textContent = `Lv ${level}`;
+    lvlHudFill.style.width = `${Math.max(0, Math.min(100, Math.round((into / Math.max(1, need)) * 100)))}%`;
+    if (lastLevel >= 0 && level > lastLevel) worldLevelUp(level);
+    lastLevel = level;
+  }
+  // A small in-World celebration when you cross a level boundary (the toolbar's own confetti is
+  // hidden behind the World overlay, so the World throws its own).
+  function worldLevelUp(level: number) {
+    showToast(`⭐ <b>LEVEL ${level}!</b>`);
+    const sc = lifeSc;
+    if (sc) {
+      for (let i = 0; i < 14; i++) {
+        const st = sc.add.text(selfX, selfY - 20, '⭐', { fontSize: `${12 + Math.random() * 12}px` }).setOrigin(0.5).setDepth(999999);
+        const a = Math.random() * Math.PI * 2, d = 40 + Math.random() * 90;
+        sc.tweens.add({ targets: st, x: selfX + Math.cos(a) * d, y: selfY - 20 + Math.sin(a) * d, alpha: 0, duration: 900 + Math.random() * 500, ease: 'Quad.easeOut', onComplete: () => st.destroy() });
+      }
+    }
+    tone(660, 0.15, 'square', 0.05, 990); window.setTimeout(() => tone(880, 0.2, 'sine', 0.05, 1320), 120);
+  }
+  updateLevelHud();
+  // Player health + at-risk mob-loot purse — only shown once you've ventured out and taken damage
+  // or picked up loot (kept out of the way in town). ❤️ bar + a 💰 held-coins readout.
+  const hpHud = document.createElement('div');
+  hpHud.style.cssText =
+    'pointer-events:none;background:#1b2542;border:1px solid #2c3a63;border-radius:8px;' +
+    'padding:6px 10px;display:none;align-items:center;gap:7px;text-shadow:0 1px 3px #000a;';
+  const hpHudTxt = document.createElement('span');
+  hpHudTxt.style.cssText = 'color:#ff6a6a;font-size:12px;font-weight:800;';
+  const hpHudTrack = document.createElement('div');
+  hpHudTrack.style.cssText = 'width:64px;height:9px;background:#2a1010;border-radius:5px;overflow:hidden;';
+  const hpHudFill = document.createElement('div');
+  hpHudFill.style.cssText = 'height:100%;width:100%;border-radius:5px;background:linear-gradient(90deg,#ff5a4a,#ff9a4a);transition:width .2s ease;';
+  hpHudTrack.appendChild(hpHudFill);
+  const hpHudPurse = document.createElement('span');
+  hpHudPurse.style.cssText = 'color:#ffd23f;font-size:12px;font-weight:700;';
+  hpHud.append(hpHudTxt, hpHudTrack, hpHudPurse);
+  function updateHealthHud() {
+    // reveal the moment you've got something at stake (damaged, carrying potions, or holding loot)
+    const show = playerHp < PLAYER_MAX_HP || fieldPotions > 0 || fieldPurse > 0;
+    hpHud.style.display = show ? 'flex' : 'none';
+    hpHudTxt.textContent = `❤️ ${Math.ceil(playerHp)}`;
+    hpHudFill.style.width = `${Math.max(0, Math.min(100, (playerHp / PLAYER_MAX_HP) * 100))}%`;
+    hpHudFill.style.background = playerHp <= 25 ? '#ff2a2a' : 'linear-gradient(90deg,#ff5a4a,#ff9a4a)';
+    hpHudPurse.textContent = (fieldPurse > 0 ? ` 💰${fieldPurse.toLocaleString()}` : '') + (fieldPotions > 0 ? ` 🧪${fieldPotions}` : '');
+  }
   // Cortisol gauge, right next to the coins — a small labelled bar (no number), green (calm) → red
   // (maxed). Kept in sync by updateCortHud(), called here and whenever the "Cortisol" board updates.
   const cortHud = document.createElement('div');
@@ -2822,7 +2903,7 @@ export function startWorld(net: WorldNet): void {
   backBtn.style.cssText =
     'pointer-events:auto;cursor:pointer;background:#1b2542;color:#cdd8f5;' +
     'border:1px solid #2c3a63;border-radius:8px;padding:7px 12px;font-size:13px;';
-  topbar.append(title, coinsHud, cortHud, count, muteBtn, renameBtn, driveBtn, backBtn);
+  topbar.append(title, coinsHud, lvlHud, hpHud, cortHud, count, muteBtn, renameBtn, driveBtn, backBtn);
   overlay.appendChild(topbar);
 
   // Weekly objectives panel (top-left, under the title). Its `top` is recomputed from the
@@ -3405,6 +3486,11 @@ export function startWorld(net: WorldNet): void {
       ctx.fillStyle = c; ctx.fillRect(X(x), Y(y), w * sx, h * sy);
     };
     ctx.fillStyle = '#10161f'; ctx.fillRect(0, 0, W, H);                  // beyond the world
+    // the ocean fills the diagonal corners between the frontiers (an island of land ringed by sea)
+    region(-DESERT.w, -CLUB.h, DESERT.w, CLUB.h, '#1c3f5c');               // NW
+    region(WORLD.w, -CLUB.h, EAST.w, CLUB.h, '#1c3f5c');                   // NE
+    region(-DESERT.w, WORLD.h, DESERT.w, SOUTH.h, '#1c3f5c');              // SW
+    region(WORLD.w, WORLD.h, EAST.w, SOUTH.h, '#1c3f5c');                  // SE
     region(-DESERT.w, 0, DESERT.w, WORLD.h, '#c9a86e');                    // the Nothing
     region(0, -CLUB.h, WORLD.w, CLUB.h, '#3f8a3e');                        // the Club
     region(0, 0, WORLD.w, WORLD.h, '#2f5d36');                             // town grass
@@ -9330,6 +9416,7 @@ export function startWorld(net: WorldNet): void {
     if (k === 'r') { e.preventDefault(); e.stopPropagation(); firing = true; fireWeapon(); return; }
     if (k === 'q') { e.preventDefault(); e.stopPropagation(); cycleWeapon(); return; }
     if (k === 'x') { if (townInteract()) { e.preventDefault(); e.stopPropagation(); return; } }
+    if (k === 'h') { drinkPotion(); e.preventDefault(); e.stopPropagation(); return; } // drink a held potion
     if (k >= '1' && k <= '4') {
       const pick = WEAPON_ORDER[Number(k) - 1];
       if (pick) { e.preventDefault(); e.stopPropagation(); selectWeapon(pick); return; }
@@ -9910,6 +9997,13 @@ export function startWorld(net: WorldNet): void {
     tone(200, 0.18, 'sawtooth', 0.22, 38);   // squelchy downward squish
     noise(0.2, 0.24, 360);                    // wet splat
     window.setTimeout(() => tone(950, 0.05, 'square', 0.08, 1500), 55); // cartoon squeak
+  }
+  // A biome mob taking a hit — a short crunchy thwack.
+  function hitMobSound() { tone(300, 0.06, 'square', 0.05, 180); noise(0.05, 0.06, 900); }
+  // A biome mob going down — a little descending death warble + a coin chime.
+  function killMobSound() {
+    tone(220, 0.14, 'sawtooth', 0.06, 90);
+    window.setTimeout(() => tone(880, 0.1, 'sine', 0.05, 1200), 90); // the coin ping
   }
   // The dust-yourself-off "pop" as a flattened townsperson springs back upright.
   function getUpSound() { tone(280, 0.13, 'square', 0.1, 660); }
@@ -12595,9 +12689,18 @@ export function startWorld(net: WorldNet): void {
         for (let r = 0; r < swampRows; r++) for (let c = 0; c < COLS; c++) {
           const h = hash(c + 613, r + 4409);
           const t = swampLayer.putTileAt(h > 0.95 ? TT.grass[2] : h > 0.5 ? TT.grass[1] : TT.grass[0], c, r);
-          // the murk rises with every step south — neutral at the town line, bog-dark by the bayou
-          const murk = Math.min(1, (r / swampRows) * 1.7) * (0.92 + hash(c * 7 + 1, r * 3 + 1) * 0.16);
-          t.tint = mixTint(Math.min(1, murk) * 0.62, 106, 138, 104);
+          // Boggy, not grassy: even the town line is already a dark sickly olive, and it sinks
+          // toward near-black peat by the bayou. Per-tile jitter keeps it wet and uneven, never lawn.
+          const depthF = Math.min(1, (r / swampRows) * 1.5);
+          const jit = hash(c * 7 + 1, r * 3 + 1);
+          // two moods mixed per tile: sickly olive-green and muddy brown, both dark
+          const olive = mixTint(0.55 + depthF * 0.4, 78, 96, 52);
+          const oliveR = (olive >> 16) & 255, oliveG = (olive >> 8) & 255, oliveB = olive & 255;
+          const mud = 0x4a3c26;
+          const k = jit > 0.62 ? 0.5 : 0; // muddy patches
+          t.tint = (Math.round(oliveR + (((mud >> 16) & 255) - oliveR) * k) << 16)
+            | (Math.round(oliveG + (((mud >> 8) & 255) - oliveG) * k) << 8)
+            | Math.round(oliveB + ((mud & 255) - oliveB) * k);
         }
       }
       {
@@ -12607,7 +12710,7 @@ export function startWorld(net: WorldNet): void {
         for (let r = 0; r < ROWS; r++) for (let c = 0; c < DSTRIP; c++) {
           // easternmost column keeps its grass fringe (the dirt autotile's right-border frame)
           const t = edgeLayer.putTileAt(c === DSTRIP - 1 ? TT.dirt[5] : TT.dirt[4], c, r);
-          t.tint = mixTint(((DSTRIP - 1 - c) / DSTRIP) * 0.9, 252, 200, 142); // warming toward the NA sand
+          t.tint = mixTint(((DSTRIP - 1 - c) / DSTRIP) * 0.9, 230, 193, 132); // warming toward the smooth sand (0xe6c184)
         }
       }
 
@@ -12748,6 +12851,8 @@ export function startWorld(net: WorldNet): void {
       makeClub(sc);
       makeSwamp(sc);
       makeEast(sc);
+      makeCornerOceans(sc);
+      makeMobs(sc);
 
       // --- ammo crates scattered over the open ground ---
       buildCrates(sc);
@@ -13098,6 +13203,8 @@ export function startWorld(net: WorldNet): void {
       safeStep('golf', () => updateGolf(dt));
       safeStep('swamp', () => updateSwamp(now, dt));
       safeStep('east', () => updateEast(now, dt));
+      safeStep('mobs', () => updateMobs(now, dt));
+      safeStep('biome', () => updateBiome());
       safeStep('nearBuilding', () => updateNearBuilding());
       safeStep('sendMove', () => maybeSendMove(now));
 
@@ -13392,6 +13499,7 @@ export function startWorld(net: WorldNet): void {
       n.getUpUntil = 0; n.walking = false; n.label.setText('💫');
       squishSound();
     }
+    if (mine) hitMobs(x, y, r, 3); // only OUR blasts hurt biome mobs (avoid double-credit from relayed booms)
     if (Math.hypot(selfX - x, selfY - y) <= r) {
       if (driving) {
         if (blowUpMyCar('💥 Your car took a direct hit — summon a fresh one anytime.')) net.blownUp(true, mine, mine ? undefined : shooterPid);
@@ -13495,6 +13603,9 @@ export function startWorld(net: WorldNet): void {
       const spent = b.t >= MG_LIFE;
       const wall = !spent && hitsWorld(b.x, b.y);
       if (b.ghost) { if (spent || wall) { b.spr.destroy(); bullets.splice(i, 1); } continue; }
+      // a mob standing in the round's path takes 1 damage and stops the bullet
+      const mobHit = !spent && !wall ? hitMobs(b.x, b.y, 6, 1) : false;
+      if (mobHit) { spawnSparks(b.x, b.y, 0xff9a5a); b.spr.destroy(); bullets.splice(i, 1); continue; }
       const npc = !spent && !wall ? npcAt(b.x, b.y, now) : null;
       const victim = !spent && !wall && !npc ? playerAt(b.x, b.y) : null;
       if (!spent && !wall && !npc && !victim) continue;
@@ -13536,6 +13647,12 @@ export function startWorld(net: WorldNet): void {
       if (distToSegment(n.x, n.y, x, y, ex, ey) > LASER_HIT_R + R * 0.5) continue;
       squishNpc(n, now);
       spawnSparks(n.x, n.y, 0x8ef0ff);
+    }
+    for (const m of mobs) {                                                // the beam skewers mobs too (2 dmg)
+      if (m.dead) continue;
+      if (distToSegment(m.x, m.y, x, y, ex, ey) > LASER_HIT_R + R * 0.5) continue;
+      hitMobs(m.x, m.y, 4, 2);
+      spawnSparks(m.x, m.y, 0x8ef0ff);
     }
     const selfId = net.selfId();
     let zapped = 0;
@@ -14132,25 +14249,28 @@ export function startWorld(net: WorldNet): void {
     // real Ninja Adventure sand tiles when they've loaded, with ragged wind-pans, ridge rings and
     // mounds cut from the same sheet — the flat rect + doodles only remain as a fallback.
     const fw = ci === 0 ? CHUNK_W - 256 : CHUNK_W;
-    if (sc.textures.exists('na-sand-field')) {
-      const floor = sc.add.tileSprite(x0, 0, fw, WORLD.h, 'na-sand-field').setOrigin(0, 0).setTileScale(2, 2).setDepth(-10);
+    if (sc.textures.exists('w-desert-sand')) {
+      const floor = sc.add.tileSprite(x0, 0, fw, WORLD.h, 'w-desert-sand').setOrigin(0, 0).setDepth(-10);
       c.add(floor);
-      for (let i = 0; i < 3; i++) { // wind-pans: ragged ridge-rimmed depressions
-        const pw = 150 + rnd() * 200;
-        const pan = sc.add.image(x0 + rnd() * (CHUNK_W - 200) + 100, 160 + rnd() * (WORLD.h - 380), 'na-sand-pan')
-          .setDisplaySize(pw, pw * (0.62 + rnd() * 0.25)).setDepth(-9);
-        c.add(pan);
+      // soft dune shading: broad translucent light/shadow lobes for gentle relief (no hard rings)
+      const dg = sc.add.graphics().setDepth(-9);
+      for (let i = 0; i < 6; i++) {
+        const dx = x0 + rnd() * CHUNK_W, dy = 120 + rnd() * (WORLD.h - 240);
+        const dw = 220 + rnd() * 360, dh = 90 + rnd() * 150;
+        dg.fillStyle(rnd() > 0.5 ? 0xf2d49a : 0xcea46a, 0.16); // sun-lit crest / shaded trough
+        dg.fillEllipse(dx, dy, dw, dh);
       }
-      for (let i = 0; i < 2; i++) { // small ridge rings
-        const ring = sc.add.image(x0 + rnd() * (CHUNK_W - 120) + 60, 140 + rnd() * (WORLD.h - 320), 'na-sand-ring')
-          .setScale(1.6 + rnd() * 1.2).setDepth(-9);
-        c.add(ring);
+      c.add(dg);
+      // a few darker wind-scour streaks, long and low, following the dune lines
+      const wg = sc.add.graphics().setDepth(-9);
+      wg.lineStyle(2, 0xc49a64, 0.28);
+      for (let i = 0; i < 4; i++) {
+        const sy = 120 + rnd() * (WORLD.h - 240), sx = x0 + rnd() * (CHUNK_W - 300);
+        wg.beginPath();
+        for (let x = 0; x <= 280; x += 8) wg.lineTo(sx + x, sy + Math.sin(x / 40 + i) * 10);
+        wg.strokePath();
       }
-      for (let i = 0; i < 3; i++) { // mounds
-        const m = sc.add.image(x0 + rnd() * (CHUNK_W - 80) + 40, 120 + rnd() * (WORLD.h - 280), 'na-sand-mound')
-          .setScale(1.4 + rnd() * 1.2).setDepth(-9);
-        c.add(m);
-      }
+      c.add(wg);
     } else {
       const floor = sc.add.rectangle(x0 + fw / 2, WORLD.h / 2, fw, WORLD.h, 0xf8c586).setDepth(-10);
       c.add(floor);
@@ -14197,6 +14317,34 @@ export function startWorld(net: WorldNet): void {
 
   function makeDesert(sc: Phaser.Scene) {
     desertSc = sc;
+    // A clean, smooth procedural sand tile — warm, soft, low-contrast speckle only, no busy
+    // repeating pattern (the old asset tiled like brickwork). Seamless: speckle wraps, so a
+    // tileSprite of it reads as an endless calm dune field. Generated once, reused per chunk.
+    if (!sc.textures.exists('w-desert-sand')) {
+      const S = 64, cv = document.createElement('canvas'); cv.width = S; cv.height = S;
+      const cx = cv.getContext('2d');
+      if (cx) {
+        // warm base gradient (very subtle) so it isn't a dead flat fill
+        cx.fillStyle = '#e6c184'; cx.fillRect(0, 0, S, S);
+        // fine speckle, low contrast, tinted warm — a couple hundred soft dots
+        const sr = mulberry32(0x5A11D);
+        for (let i = 0; i < 900; i++) {
+          const x = sr() * S, y = sr() * S, r = 0.5 + sr() * 1.2;
+          const up = sr() > 0.5;
+          cx.fillStyle = up ? `rgba(245,225,180,${0.25 + sr() * 0.3})` : `rgba(198,158,104,${0.18 + sr() * 0.28})`;
+          cx.beginPath(); cx.arc(x, y, r, 0, 7); cx.fill();
+        }
+        // a few gentle wind ripples (soft translucent arcs), drawn wrapping so they tile
+        cx.strokeStyle = 'rgba(206,168,112,0.35)'; cx.lineWidth = 1.2;
+        for (let i = 0; i < 5; i++) {
+          const y0 = sr() * S;
+          cx.beginPath();
+          for (let x = 0; x <= S; x += 4) cx.lineTo(x, (y0 + Math.sin(x / 9 + i) * 3 + S) % S);
+          cx.stroke();
+        }
+      }
+      sc.textures.addCanvas('w-desert-sand', cv);
+    }
     // runtime-load the Kenney cacti (chunks built before they land use px props; later chunks mix)
     sc.load.image('d-cactus1', '/desert/cactus-hex1.png');
     sc.load.image('d-cactus2', '/desert/cactus-hex2.png');
@@ -15681,12 +15829,30 @@ export function startWorld(net: WorldNet): void {
     }
     g.destroy();
 
-    // --- ground: the tile lawn continues from town, tinted murkier per-tile the deeper south
-    // you go (see the swampGround tilemap layer). Here we just lay wet mottle over it.
-    const mott = sc.add.graphics().setDepth(-29);
-    for (let i = 0; i < 90; i++) {
-      mott.fillStyle(rnd() > 0.5 ? 0x2c3d28 : 0x3a4c34, 0.32);
-      mott.fillEllipse(rnd() * WORLD.w, top + 300 + rnd() * (SOUTH.h - 400), 80 + rnd() * 160, 30 + rnd() * 60);
+    // --- ground: the dark boggy tilemap (see swampGround) gets a proper swamp dressing on top —
+    // sheets of standing murk-water, big mud flats, and wet mottle, so it never reads as lawn. ---
+    const naMudBase = sc.textures.exists('na-mud-field');
+    // broad muddy flats: real Ninja Adventure mud, murk-tinted, scattered thickly across the bog
+    if (naMudBase) {
+      for (let i = 0; i < 34; i++) {
+        const mw = 200 + rnd() * 420, mh = 120 + rnd() * 220;
+        const mx = rnd() * WORLD.w, my = top + 160 + rnd() * (SWAMP_SHORE_Y - top - 260);
+        sc.add.tileSprite(mx - mw / 2, my - mh / 2, mw, mh, 'na-mud-field').setTileScale(2, 2)
+          .setTint(0x6a5a3e).setAlpha(0.5 + rnd() * 0.3).setDepth(-27);
+      }
+    }
+    // standing water: dark sheets of still murk, with a faint algal sheen
+    for (let i = 0; i < 26; i++) {
+      const ww = 180 + rnd() * 340, wh = 90 + rnd() * 150;
+      const wx = rnd() * WORLD.w, wy = top + 220 + rnd() * (SWAMP_SHORE_Y - top - 340);
+      sc.add.ellipse(wx, wy, ww, wh, 0x243a30, 0.55).setDepth(-27);
+      sc.add.ellipse(wx, wy, ww * 0.8, wh * 0.8, 0x2e4a3a, 0.4).setDepth(-26);
+      sc.add.ellipse(wx - ww * 0.12, wy - wh * 0.14, ww * 0.4, wh * 0.28, 0x4a7a5a, 0.22).setDepth(-26); // algal glint
+    }
+    const mott = sc.add.graphics().setDepth(-25);
+    for (let i = 0; i < 150; i++) {
+      mott.fillStyle(rnd() > 0.5 ? 0x1f2c1a : 0x3a2e1c, 0.28);
+      mott.fillEllipse(rnd() * WORLD.w, top + 200 + rnd() * (SOUTH.h - 300), 50 + rnd() * 120, 22 + rnd() * 46);
     }
     // --- the Endless Bayou along the bottom (the pier is the only way out over it) ---
     const naMud = sc.textures.exists('na-mud-field');
@@ -16094,6 +16260,37 @@ export function startWorld(net: WorldNet): void {
   let bearCalmUntil = 0;
   let poleLicked = 0;
   let springSighAt = 0;
+
+  // The four diagonal corners between the frontiers (NW of the desert / west of the club, etc.) are
+  // awkward unreachable void. Fill them with ocean — deep water with a few wave strokes and a
+  // shoreline — so the world reads as an island of land ringed by sea instead of empty gaps.
+  function makeCornerOceans(sc: Phaser.Scene) {
+    const OCEAN = 0x1c3f5c, OCEAN_D = 0x12304a, FOAM = 0x3a6f92;
+    const corners: [number, number, number, number][] = [
+      [-DESERT.w, -CLUB.h, DESERT.w, CLUB.h],                 // NW
+      [WORLD.w, -CLUB.h, EAST.w, CLUB.h],                     // NE
+      [-DESERT.w, WORLD.h, DESERT.w, SOUTH.h],               // SW
+      [WORLD.w, WORLD.h, EAST.w, SOUTH.h],                   // SE
+    ];
+    const wave = sc.add.graphics().setDepth(-9998);
+    for (const [x, y, w, h] of corners) {
+      sc.add.rectangle(x, y, w, h, OCEAN).setOrigin(0, 0).setDepth(-9999);
+      // depth gradient toward the far edges
+      sc.add.rectangle(x, y, w, h, OCEAN_D, 0.5).setOrigin(0, 0).setDepth(-9998);
+      // static wave crests (a calm sea; cheap — a few strokes per corner)
+      wave.lineStyle(2, FOAM, 0.3);
+      const rr = mulberry32(((x & 0xffff) ^ (y & 0xffff)) >>> 0);
+      for (let i = 0; i < 60; i++) {
+        const wx = x + rr() * w, wy = y + rr() * h, wl = 20 + rr() * 40;
+        wave.beginPath(); wave.moveTo(wx, wy);
+        wave.lineTo(wx + wl, wy + Math.sin(wx) * 2); wave.strokePath();
+      }
+      // a foamy shoreline where the ocean meets the land edges of this corner
+      wave.lineStyle(4, 0xbfe0ee, 0.5);
+      if (x < 0) wave.lineBetween(0, Math.max(y, 0), 0, y + h);     // east edge (against land)
+      if (x >= WORLD.w) wave.lineBetween(WORLD.w, Math.max(y, 0), WORLD.w, y + h);
+    }
+  }
 
   function makeEast(sc: Phaser.Scene) {
     const rnd = mulberry32(EAST.seed);
@@ -16635,6 +16832,507 @@ export function startWorld(net: WorldNet): void {
     return false;
   }
 
+  // ============================================================================================
+  // BIOME MOBS — hostile-ish critters that roam the frontiers, take weapon damage, and drop
+  // coins + XP when downed. One species per biome (desert scorpion, swamp mosquito, frost wolf),
+  // rendered as detailed px sprites (same house style as the penguins/huskies) with a hit-flash,
+  // a health pip bar, damage numbers, and a death puff that scatters coins toward you. Kills are
+  // reported to the server (net.mobKill) which pays a small, rate-limited bounty.
+  // ============================================================================================
+  type MobKind = 'scorpion' | 'rattler' | 'buzzard' | 'mosquito' | 'slime' | 'toad' | 'wolf' | 'snowman' | 'yeti';
+  interface Mob {
+    spr: Phaser.GameObjects.Image; bar: Phaser.GameObjects.Graphics;
+    kind: MobKind; biome: string; x: number; y: number; tx: number; ty: number;
+    hp: number; maxHp: number; hitUntil: number; state: number; busyUntil: number;
+    homeX: number; homeY: number; ph: number; dead: boolean; nextShotAt: number;
+  }
+  interface MobSpec {
+    biome: string; hp: number; speed: number; aggro: number; scale: number; label: string; emoji: string;
+    fly?: boolean;            // hovers with a bob (skeeter/buzzard/wraith)
+    dmg: number;              // stun ms it inflicts on contact / projectile hit — scales the difficulty
+    barW: number;             // health-bar width; tankier mobs wear a visibly bigger bar
+    ranged?: { range: number; cooldownMs: number; projSpeed: number; projTex: string }; // ranged attackers lob a projectile
+  }
+  // Difficulty scales by biome: DESERT is gentle (low HP, soft hits, small bars, small bounty),
+  // SWAMP is a step up, SNOW is brutal (tanky, hard-hitting, ranged, big bars). Rewards live
+  // server-side (Lobby.MOB_REWARDS) and mirror this ordering.
+  const MOB_SPECS: Record<MobKind, MobSpec> = {
+    // --- desert (easiest) ---
+    scorpion: { biome: 'desert', hp: 3, speed: 44, aggro: 220, scale: TEXEL * 1.15, label: 'Sand Scorpion', emoji: '🦂', dmg: 450, barW: 20 },
+    rattler:  { biome: 'desert', hp: 2, speed: 78, aggro: 240, scale: TEXEL * 1.15, label: 'Rattlesnake', emoji: '🐍', dmg: 500, barW: 18 },
+    buzzard:  { biome: 'desert', hp: 3, speed: 60, aggro: 300, scale: TEXEL * 1.2, label: 'Buzzard', emoji: '🦅', dmg: 500, barW: 22, fly: true,
+      ranged: { range: 300, cooldownMs: 3400, projSpeed: 260, projTex: 'w-proj-rock' } },
+    // --- swamp (medium) ---
+    mosquito: { biome: 'swamp', hp: 3, speed: 62, aggro: 260, scale: TEXEL * 1.1, label: 'Bog Skeeter', emoji: '🦟', dmg: 650, barW: 22, fly: true },
+    slime:    { biome: 'swamp', hp: 6, speed: 30, aggro: 240, scale: TEXEL * 1.35, label: 'Bog Slime', emoji: '🟢', dmg: 800, barW: 30 },
+    toad:     { biome: 'swamp', hp: 4, speed: 40, aggro: 320, scale: TEXEL * 1.25, label: 'Spitter Toad', emoji: '🐸', dmg: 700, barW: 26,
+      ranged: { range: 320, cooldownMs: 2600, projSpeed: 300, projTex: 'w-proj-venom' } },
+    // --- snow (hardest) ---
+    wolf:     { biome: 'snow', hp: 5, speed: 66, aggro: 320, scale: TEXEL * 1.2, label: 'Frost Wolf', emoji: '🐺', dmg: 850, barW: 26 },
+    snowman:  { biome: 'snow', hp: 6, speed: 24, aggro: 380, scale: TEXEL * 1.5, label: 'Evil Snowman', emoji: '⛄', dmg: 1000, barW: 32,
+      ranged: { range: 380, cooldownMs: 1900, projSpeed: 320, projTex: 'w-proj-snow' } },
+    yeti:     { biome: 'snow', hp: 12, speed: 46, aggro: 340, scale: TEXEL * 1.9, label: 'Yeti', emoji: '👹', dmg: 1300, barW: 44 },
+  };
+  interface MobProj { spr: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number; t: number; dmg: number; }
+  let mobProjectiles: MobProj[] = [];
+  let mobs: Mob[] = [];
+  let mobScene: Phaser.Scene | null = null;
+
+  function makeMobTextures(sc: Phaser.Scene) {
+    if (sc.textures.exists('w-mob-scorpion')) return;
+    const g = sc.add.graphics();
+    const px2 = (x: number, y: number, w: number, h: number, c: number) => { g.fillStyle(c, 1); g.fillRect(x, y, w, h); };
+    { // desert scorpion (20×14), faces right — dark carapace, raised stinger tail, pincers
+      const C = 0x6a2a1e, C2 = 0x8a3826, DK = 0x431409, EYE = 0xffd23f;
+      g.clear();
+      px2(5, 6, 9, 5, C); px2(6, 5, 7, 1, C2);                 // body segments
+      px2(7, 7, 1, 3, DK); px2(9, 7, 1, 3, DK); px2(11, 7, 1, 3, DK); // segment lines
+      // legs
+      px2(5, 11, 1, 3, DK); px2(8, 11, 1, 3, DK); px2(11, 11, 1, 3, DK);
+      px2(5, 4, 1, 2, DK); px2(8, 4, 1, 2, DK); px2(11, 4, 1, 2, DK);
+      // head + pincers (right)
+      px2(13, 6, 3, 4, C2); px2(16, 5, 2, 1, C); px2(16, 9, 2, 1, C); px2(18, 4, 1, 2, DK); px2(18, 9, 1, 2, DK);
+      px2(14, 7, 1, 1, EYE);                                    // eye
+      // curling tail up-and-over from the left, ending in a stinger
+      px2(4, 5, 2, 2, C); px2(3, 3, 2, 2, C); px2(3, 1, 2, 2, C2); px2(4, 0, 2, 1, DK); px2(5, 0, 1, 1, 0xff5a4a); // stinger
+      g.generateTexture('w-mob-scorpion', 20, 14);
+    }
+    { // bog skeeter (16×14), faces right — fat body, long proboscis, translucent wings
+      const B = 0x3a4a2a, B2 = 0x4a5e34, WING = 0xbfe0d8, PROB = 0x2a1a12, EYE = 0xc0392b;
+      g.clear();
+      px2(5, 6, 6, 5, B); px2(6, 5, 4, 1, B2);                 // abdomen
+      px2(10, 5, 3, 4, B2);                                     // thorax
+      px2(12, 5, 2, 2, 0x2a3a1e); px2(13, 5, 1, 1, EYE);       // head + red eye
+      px2(14, 6, 2, 1, PROB);                                   // proboscis (the bite)
+      px2(3, 6, 2, 3, B);                                       // rear
+      // wings (up), light and glassy
+      px2(6, 1, 5, 4, WING); px2(5, 2, 1, 2, WING); px2(11, 2, 1, 2, WING);
+      // dangly legs
+      px2(6, 11, 1, 3, PROB); px2(9, 11, 1, 3, PROB); px2(11, 10, 1, 3, PROB);
+      g.generateTexture('w-mob-mosquito', 16, 14);
+    }
+    { // frost wolf (22×15), faces right — grey-white, hunched, glowing ice-blue eyes
+      const F = 0xbcc6d0, F2 = 0x9aa6b4, DK = 0x5a6472, EYE = 0x6ad0ff, MAW = 0x2a2e36;
+      g.clear();
+      px2(3, 6, 13, 6, F); px2(3, 10, 13, 2, F2);              // body
+      px2(2, 5, 3, 4, F2);                                      // haunch (rear, left)
+      px2(1, 4, 2, 3, F); px2(0, 3, 1, 2, DK);                 // tail up
+      px2(15, 4, 5, 5, F); px2(19, 6, 2, 3, F2);               // head + snout (right)
+      px2(20, 7, 1, 2, MAW);                                    // muzzle tip
+      px2(18, 8, 3, 1, MAW);                                    // jaw line
+      px2(17, 6, 2, 1, EYE);                                    // the eye, glowing
+      px2(15, 2, 2, 3, F2); px2(18, 2, 2, 3, F2);              // ears
+      px2(14, 3, 1, 2, DK); px2(20, 3, 1, 2, DK);
+      // legs
+      px2(4, 12, 2, 3, DK); px2(8, 12, 2, 3, DK); px2(12, 12, 2, 3, DK); px2(15, 12, 2, 3, DK);
+      // a frosty back ruff
+      px2(6, 5, 1, 1, 0xffffff); px2(9, 4, 1, 1, 0xffffff); px2(12, 5, 1, 1, 0xffffff);
+      g.generateTexture('w-mob-wolf', 22, 15);
+    }
+    { // rattlesnake (18×12), coiled S facing right, rattle on the tail
+      const S = 0xc8a24a, S2 = 0xa8823a, DK = 0x6a5020, EYE = 0xc0392b, RAT = 0xe8dcc0;
+      g.clear();
+      px2(2, 7, 10, 3, S); px2(2, 9, 10, 1, S2);              // lower coil
+      px2(4, 4, 8, 3, S); px2(4, 6, 8, 1, S2);                // upper coil
+      for (let i = 0; i < 4; i++) { px2(3 + i * 2, 5, 1, 1, DK); px2(4 + i * 2, 8, 1, 1, DK); } // diamond pattern
+      px2(12, 3, 4, 3, S); px2(15, 4, 1, 1, EYE);             // head (right, raised)
+      px2(16, 4, 1, 1, DK); px2(15, 6, 2, 1, DK);             // tongue-ish + jaw
+      px2(1, 8, 2, 2, S2); px2(0, 9, 1, 2, RAT);              // tail + rattle
+      g.generateTexture('w-mob-rattler', 18, 12);
+    }
+    { // buzzard (24×14), wings spread, faces right — brown raptor
+      const B = 0x4a3826, B2 = 0x63482e, HEAD = 0xc8a86a, BEAK = 0xe8a03a, EYE = 0x101010;
+      g.clear();
+      px2(9, 6, 6, 5, B); px2(9, 9, 6, 2, 0x2a1e12);          // body
+      px2(1, 4, 8, 3, B2); px2(0, 5, 2, 2, B);                // left wing
+      px2(15, 4, 8, 3, B2); px2(22, 5, 2, 2, B);              // right wing
+      px2(3, 3, 4, 1, B); px2(17, 3, 4, 1, B);                // wing tips
+      px2(14, 4, 3, 3, HEAD); px2(16, 5, 2, 2, 0xd8b87a);     // bald head (right)
+      px2(17, 6, 2, 1, BEAK); px2(15, 5, 1, 1, EYE);          // beak + eye
+      px2(10, 11, 1, 2, BEAK); px2(13, 11, 1, 2, BEAK);       // talons
+      g.generateTexture('w-mob-buzzard', 24, 14);
+    }
+    { // bog slime (18×14), a fat sickly-green blob with drippy edges + two eyes
+      const S = 0x5a8a3a, S2 = 0x6ea048, S3 = 0x3f6828, EYE = 0xf0f4e0, PUP = 0x1a2a10;
+      g.clear();
+      px2(3, 5, 12, 8, S); px2(2, 7, 14, 5, S); px2(4, 4, 10, 2, S2);   // gooey mass
+      px2(3, 11, 2, 2, S3); px2(8, 12, 2, 2, S3); px2(13, 11, 2, 2, S3); // drips
+      px2(5, 6, 3, 3, EYE); px2(10, 6, 3, 3, EYE);            // eyes
+      px2(6, 7, 1, 2, PUP); px2(11, 7, 1, 2, PUP);            // pupils
+      px2(5, 4, 4, 1, S2); px2(6, 3, 1, 1, 0x8ec464);         // sheen highlight
+      g.generateTexture('w-mob-slime', 18, 14);
+    }
+    { // spitter toad (18×13), squat, wide mouth, spots — faces right
+      const T = 0x6a8a3a, T2 = 0x557029, BELLY = 0xc8c86a, EYE = 0xf0d24a, PUP = 0x101010, SPOT = 0x3f5220;
+      g.clear();
+      px2(3, 6, 12, 6, T); px2(4, 10, 10, 2, T2);            // body
+      px2(5, 9, 8, 2, BELLY);                                 // pale belly
+      px2(4, 4, 4, 3, T); px2(10, 4, 4, 3, T);               // two eye humps
+      px2(5, 4, 2, 2, EYE); px2(11, 4, 2, 2, EYE); px2(5, 5, 1, 1, PUP); px2(11, 5, 1, 1, PUP);
+      px2(13, 8, 3, 1, 0x8a2a2a);                             // wide mouth line (right)
+      px2(6, 7, 1, 1, SPOT); px2(9, 8, 1, 1, SPOT); px2(11, 7, 1, 1, SPOT); // warty spots
+      px2(3, 11, 2, 2, T2); px2(13, 11, 2, 2, T2);           // squat legs
+      g.generateTexture('w-mob-toad', 18, 13);
+    }
+    { // EVIL SNOWMAN (16×20) — three balls, coal scowl, stick arms, a menacing carrot
+      const SN = 0xf0f4f8, SN2 = 0xd4dee6, COAL = 0x1a1a1a, STICK = 0x6a4a2a, CARROT = 0xe8811a;
+      g.clear();
+      g.fillStyle(SN, 1); g.fillEllipse(8, 16, 14, 8);        // base
+      g.fillStyle(SN2, 1); g.fillEllipse(8, 17, 14, 4);
+      g.fillStyle(SN, 1); g.fillEllipse(8, 11, 11, 8);        // middle
+      g.fillStyle(SN, 1); g.fillEllipse(8, 5, 8, 7);          // head
+      px2(5, 4, 1, 1, COAL); px2(10, 4, 1, 1, COAL);          // angry coal eyes
+      px2(4, 3, 2, 1, COAL); px2(10, 3, 2, 1, COAL);          // furrowed brow (the "evil")
+      px2(8, 5, 3, 1, CARROT); px2(10, 5, 1, 1, 0xc86a10);    // carrot nose, jutting right
+      px2(5, 7, 1, 1, COAL); px2(7, 7, 1, 1, COAL); px2(9, 7, 1, 1, COAL); // frowning coal mouth
+      px2(5, 6, 1, 1, COAL); px2(9, 6, 1, 1, COAL);
+      px2(5, 10, 1, 1, COAL); px2(8, 10, 1, 1, COAL); px2(11, 10, 1, 1, COAL); // belly buttons
+      px2(0, 9, 4, 1, STICK); px2(0, 8, 1, 2, STICK);         // left arm
+      px2(12, 9, 4, 1, STICK); px2(15, 8, 1, 2, STICK);       // right arm (throwing)
+      g.generateTexture('w-mob-snowman', 16, 20);
+    }
+    { // YETI (24×22) — big shaggy white bruiser, blue face, fangs
+      const Y = 0xe4ecf2, Y2 = 0xc4d0da, FACE = 0x9ab8d0, DK = 0x6a7a8a, EYE = 0x1a1a2a, FANG = 0xffffff;
+      g.clear();
+      px2(3, 8, 18, 12, Y); px2(3, 17, 18, 3, Y2);            // shaggy torso
+      px2(1, 9, 3, 7, Y); px2(20, 9, 3, 7, Y);               // big arms
+      px2(0, 14, 3, 3, Y2); px2(21, 14, 3, 3, Y2);           // fists
+      px2(7, 2, 10, 8, Y); px2(7, 2, 10, 1, Y2);             // head
+      px2(9, 4, 6, 5, FACE);                                  // blue face
+      px2(10, 5, 1, 2, EYE); px2(13, 5, 1, 2, EYE);          // eyes
+      px2(10, 8, 4, 1, DK); px2(10, 8, 1, 1, FANG); px2(13, 8, 1, 1, FANG); // mouth + fangs
+      // shaggy fur flecks
+      px2(4, 10, 1, 1, Y2); px2(18, 12, 1, 1, Y2); px2(8, 15, 1, 1, Y2); px2(15, 16, 1, 1, Y2);
+      px2(6, 20, 3, 2, Y2); px2(15, 20, 3, 2, Y2);           // feet
+      g.generateTexture('w-mob-yeti', 24, 22);
+    }
+    // --- projectiles ---
+    { g.clear(); px2(1, 1, 4, 4, 0x8a6a4a); px2(2, 1, 2, 1, 0xa88a6a); px2(1, 3, 4, 1, 0x6a4a2a); g.generateTexture('w-proj-rock', 6, 6); }
+    { g.clear(); px2(1, 1, 4, 4, 0x7ed06a); px2(2, 0, 2, 1, 0x9ae884); px2(0, 2, 1, 2, 0x5aa84a); px2(5, 2, 1, 2, 0x5aa84a); g.generateTexture('w-proj-venom', 6, 6); }
+    { g.clear(); g.fillStyle(0xffffff, 1); g.fillCircle(4, 4, 3.5); g.fillStyle(0xcfe0ee, 1); g.fillCircle(5, 5, 1.5); g.generateTexture('w-proj-snow', 8, 8); }
+    g.destroy();
+  }
+
+  function spawnMob(sc: Phaser.Scene, kind: MobKind, x: number, y: number) {
+    const spec = MOB_SPECS[kind];
+    const spr = sc.add.image(x, y, `w-mob-${kind}`).setScale(spec.scale).setOrigin(0.5, 1).setDepth(y);
+    const bar = sc.add.graphics().setDepth(y + 1).setVisible(false);
+    mobs.push({ spr, bar, kind, biome: spec.biome, x, y, tx: x, ty: y, hp: spec.hp, maxHp: spec.hp, hitUntil: 0, state: 0, busyUntil: 0, homeX: x, homeY: y, ph: Math.random() * 9, dead: false, nextShotAt: 0 });
+  }
+
+  // Pick a random roam point inside a mob's biome (used for spawns + respawns).
+  function mobBiomeSpot(kind: MobKind, rnd: () => number): { x: number; y: number } {
+    const b = MOB_SPECS[kind].biome;
+    if (b === 'desert') return { x: -400 - rnd() * 9000, y: 120 + rnd() * (WORLD.h - 240) };
+    if (b === 'swamp') return { x: 120 + rnd() * (WORLD.w - 240), y: WORLD.h + 240 + rnd() * (SWAMP_SHORE_Y - WORLD.h - 360) };
+    return { x: WORLD.w + 300 + rnd() * (EAST.w - 600), y: 120 + rnd() * (WORLD.h - 240) };
+  }
+  function makeMobs(sc: Phaser.Scene) {
+    mobScene = sc;
+    makeMobTextures(sc);
+    const rnd = mulberry32(0x30B5);
+    // Each biome gets a mix of its species (commons more numerous than the tanky bosses).
+    const ROSTER: [MobKind, number][] = [
+      ['scorpion', 8], ['rattler', 6], ['buzzard', 5],   // desert — many, weak
+      ['mosquito', 7], ['toad', 5], ['slime', 4],         // swamp — medium
+      ['wolf', 6], ['snowman', 4], ['yeti', 3],           // snow — fewer, brutal
+    ];
+    for (const [kind, n] of ROSTER) {
+      for (let i = 0; i < n; i++) { const s = mobBiomeSpot(kind, rnd); spawnMob(sc, kind, s.x, s.y); }
+    }
+  }
+
+  // Apply `dmg` to any mobs within `r` of (x,y). Returns true if at least one was hit. Called from
+  // the weapon-impact paths (rockets/void blasts, bullets, the laser beam).
+  function hitMobs(x: number, y: number, r: number, dmg: number): boolean {
+    const now = performance.now();
+    let any = false;
+    for (const m of mobs) {
+      if (m.dead) continue;
+      if (Math.hypot(m.x - x, m.y - y) > r + 12) continue;
+      any = true;
+      m.hp -= dmg;
+      m.hitUntil = now + 140;
+      // knockback away from the blast
+      const a = Math.atan2(m.y - y, m.x - x);
+      m.x += Math.cos(a) * 14; m.y += Math.sin(a) * 14;
+      m.state = 1; // aggro/flee after being hit
+      m.busyUntil = now + 400;
+      spawnDamageNumber(m.x, m.y - 18, dmg);
+      hitMobSound();
+      if (m.hp <= 0) killMob(m);
+    }
+    return any;
+  }
+
+  function spawnDamageNumber(x: number, y: number, dmg: number) {
+    const sc = mobScene; if (!sc) return;
+    const t = sc.add.text(x, y, `-${dmg}`, { fontFamily: 'ui-monospace, monospace', fontSize: '13px', fontStyle: 'bold', color: '#ffd23f', stroke: '#1a1006', strokeThickness: 3, resolution: 2 })
+      .setOrigin(0.5, 1).setDepth(999998);
+    sc.tweens.add({ targets: t, y: y - 26, alpha: 0, duration: 620, ease: 'Quad.easeOut', onComplete: () => t.destroy() });
+  }
+
+  function killMob(m: Mob) {
+    if (m.dead) return;
+    m.dead = true;
+    const spec = MOB_SPECS[m.kind];
+    const sc = mobScene;
+    net.mobKill(m.kind); // server adds the species bounty to your at-risk purse + grants XP
+    if (sc) {
+      // death puff
+      for (let i = 0; i < 10; i++) {
+        const a = (i / 10) * Math.PI * 2;
+        const p = sc.add.circle(m.x, m.y - 6, 3, m.biome === 'snow' ? 0xe8f0f4 : m.biome === 'swamp' ? 0x4a5e34 : 0x8a3826).setDepth(999997);
+        sc.tweens.add({ targets: p, x: m.x + Math.cos(a) * 30, y: m.y - 6 + Math.sin(a) * 22, alpha: 0, duration: 500, ease: 'Quad.easeOut', onComplete: () => p.destroy() });
+      }
+      // coins burst toward you (the real payout is the server-held purse)
+      for (let i = 0; i < 4; i++) {
+        const coin = sc.add.text(m.x + (Math.random() * 24 - 12), m.y - 10, '🪙', { fontSize: '14px' }).setOrigin(0.5).setDepth(999999);
+        sc.tweens.add({ targets: coin, x: selfX, y: selfY - 16, alpha: 0.2, duration: 520 + i * 80, delay: i * 55, ease: 'Quad.easeIn', onComplete: () => coin.destroy() });
+      }
+      // some mobs occasionally drop a healing potion — the tanky/dangerous ones more often
+      const potionChance = m.kind === 'yeti' ? 0.6 : m.kind === 'slime' || m.kind === 'snowman' ? 0.35 : m.biome === 'snow' ? 0.22 : m.biome === 'swamp' ? 0.15 : 0.08;
+      if (Math.random() < potionChance) dropPotion(sc, m.x, m.y);
+      m.spr.destroy(); m.bar.destroy();
+    }
+    killMobSound();
+    // respawn a fresh one of the same species elsewhere in the biome after a while
+    window.setTimeout(() => respawnMob(m.kind), 14000 + Math.random() * 14000);
+    void spec;
+  }
+
+  // A healing potion pickup — bobs on the ground until you walk over it, then heals + is banked.
+  interface PotionDrop { spr: Phaser.GameObjects.Text; x: number; y: number; born: number; }
+  let potionDrops: PotionDrop[] = [];
+  function dropPotion(sc: Phaser.Scene, x: number, y: number) {
+    const spr = sc.add.text(x, y, '🧪', { fontSize: '18px' }).setOrigin(0.5, 1).setDepth(y + 2);
+    sc.tweens.add({ targets: spr, y: y - 6, duration: 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+    potionDrops.push({ spr, x, y, born: performance.now() });
+  }
+
+  function respawnMob(kind: MobKind) {
+    const sc = mobScene; if (!sc || !game) return;
+    const s = mobBiomeSpot(kind, Math.random);
+    spawnMob(sc, kind, s.x, s.y);
+  }
+
+  // Drink a held potion (H key) → +40 HP. Lost on death, so hoard at your peril.
+  function drinkPotion() {
+    if (playerDead || fieldPotions <= 0) { if (fieldPotions <= 0) flashHelp('🧪 No potions — down a biome mob to find one.'); return; }
+    if (playerHp >= PLAYER_MAX_HP) { flashHelp('❤️ Already at full health.'); return; }
+    fieldPotions--;
+    playerHp = Math.min(PLAYER_MAX_HP, playerHp + 40);
+    updateHealthHud();
+    tone(520, 0.1, 'sine', 0.05, 780); window.setTimeout(() => tone(780, 0.12, 'sine', 0.05, 1040), 90);
+    showToast('🧪 <i>glug.</i> +40 HP.');
+  }
+
+  // The player took a hit from a mob (contact or projectile). Damage scales with biome difficulty
+  // (already baked into spec.dmg). Drives the health bar; at 0 you die.
+  function damagePlayer(dmg: number, srcX: number, srcY: number, label: string) {
+    const now = performance.now();
+    if (playerDead || driving || inInterior || inDungeon) return;
+    if (now < mobBiteCooldown) return; // brief i-frames so you're not chain-shredded
+    mobBiteCooldown = now + 650;
+    // dmg came in as a "stun ms" figure historically; convert to HP loss (roughly 1 HP per 50ms)
+    const hpLoss = Math.max(4, Math.round(dmg / 45));
+    playerHp = Math.max(0, playerHp - hpLoss);
+    lastDamagedAt = now;
+    stunnedUntil = now + Math.min(500, dmg * 0.35); keys.clear();
+    // knockback
+    const a = Math.atan2(selfY - srcY, selfX - srcX);
+    const moved = resolveCollisions(selfX + Math.cos(a) * 22, selfY + Math.sin(a) * 22, R);
+    selfX = moved.x; selfY = moved.y;
+    bumpSound(true);
+    if (mainCam) mainCam.shake(160, 0.008);
+    spawnDamageNumber(selfX, selfY - 30, hpLoss); // shown in red-ish below
+    if (playerHp <= 0) playerDie(label);
+    else if (playerHp <= 25) flashHelp(`❤️ ${playerHp} HP — find a 🧪 or get to town!`);
+  }
+
+  let deathVeil: Phaser.GameObjects.Rectangle | null = null;
+  function playerDie(label: string) {
+    if (playerDead) return;
+    playerDead = true;
+    net.worldDied(); // forfeit the unbanked mob purse
+    const lostP = fieldPotions; fieldPotions = 0;
+    keys.clear(); driving = false; vx = 0; vy = 0;
+    const sc = lifeSc || mobScene;
+    if (sc) {
+      deathVeil = sc.add.rectangle(0, 0, 10, 10, 0x400000, 0).setScrollFactor(0).setDepth(200000).setOrigin(0);
+      const cam = mainCam;
+      if (cam) deathVeil.setSize(cam.width, cam.height);
+      sc.tweens.add({ targets: deathVeil, alpha: 0.55, duration: 400, yoyo: true, hold: 700, onComplete: () => { deathVeil?.destroy(); deathVeil = null; } });
+    }
+    tone(160, 0.5, 'sawtooth', 0.07, 60); window.setTimeout(() => tone(90, 0.7, 'sine', 0.06, 40), 200);
+    showToast(`💀 <b>${label} finished you off.</b><br>You wake up in town. Your held coins${lostP ? ` and ${lostP} potion${lostP > 1 ? 's' : ''}` : ''} are gone.`);
+    // respawn in town after a beat
+    window.setTimeout(() => {
+      selfX = WORLD.spawnX; selfY = WORLD.spawnY;
+      playerHp = PLAYER_MAX_HP; playerDead = false; stunnedUntil = 0;
+      mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w + EAST.w, WORLD.h + CLUB.h + SOUTH.h);
+      updateHealthHud();
+    }, 1400);
+  }
+
+  function launchMobProjectile(m: Mob, spec: MobSpec) {
+    const sc = mobScene; if (!sc || !spec.ranged) return;
+    const a = Math.atan2(selfY - m.y, selfX - m.x);
+    const spr = sc.add.image(m.x, m.y - 8, spec.ranged.projTex).setScale(TEXEL * 1.1).setDepth(999995);
+    mobProjectiles.push({ spr, x: m.x, y: m.y - 8, vx: Math.cos(a) * spec.ranged.projSpeed, vy: Math.sin(a) * spec.ranged.projSpeed, t: 0, dmg: spec.dmg });
+    tone(300, 0.08, 'square', 0.03, 200);
+  }
+
+  function updateMobProjectiles(dt: number) {
+    if (!mobProjectiles.length) return;
+    const now = performance.now();
+    for (let i = mobProjectiles.length - 1; i >= 0; i--) {
+      const p = mobProjectiles[i];
+      p.t += dt;
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      p.spr.setPosition(p.x, p.y).setRotation(p.spr.rotation + dt * 8);
+      const hitSelf = !playerDead && !driving && Math.hypot(p.x - selfX, p.y - (selfY - 14)) < R + 6;
+      if (hitSelf) { damagePlayer(p.dmg, p.x, p.y, 'A ranged hit'); p.spr.destroy(); mobProjectiles.splice(i, 1); continue; }
+      if (p.t > 2.4 || hitsWorld(p.x, p.y)) { p.spr.destroy(); mobProjectiles.splice(i, 1); }
+    }
+    void now;
+  }
+
+  function updateMobs(now: number, dt: number) {
+    updateHealthHud();
+    updateMobProjectiles(dt);
+    // potion pickups (walk over → heal + carry). Time out after a while so the world doesn't litter.
+    if (potionDrops.length) {
+      for (let i = potionDrops.length - 1; i >= 0; i--) {
+        const p = potionDrops[i];
+        if (!playerDead && Math.hypot(p.x - selfX, p.y - selfY) < R + 14) {
+          fieldPotions++;
+          updateHealthHud();
+          showToast(`🧪 Picked up a potion (${fieldPotions} held) — press <b>H</b> to drink (+40 HP).`);
+          tone(660, 0.1, 'sine', 0.05, 990);
+          p.spr.destroy(); potionDrops.splice(i, 1); continue;
+        }
+        if (now - p.born > 45000) { p.spr.destroy(); potionDrops.splice(i, 1); }
+      }
+    }
+    // out-of-combat regen + bank the purse when you're safe in town
+    if (!playerDead && now - lastDamagedAt > 5000 && playerHp < PLAYER_MAX_HP) {
+      playerHp = Math.min(PLAYER_MAX_HP, playerHp + 6 * dt);
+      updateHealthHud();
+    }
+    maybeBankPurse();
+    if (!mobs.length) return;
+    if (mobs.some((m) => m.dead)) mobs = mobs.filter((m) => !m.dead);
+    const active = !inInterior && !inDungeon && !playerDead;
+    for (const m of mobs) {
+      const spec = MOB_SPECS[m.kind];
+      const near = Math.hypot(m.x - selfX, m.y - selfY) < 1400;
+      if (active && near) {
+        const distToSelf = Math.hypot(selfX - m.x, selfY - m.y);
+        const aggro = distToSelf < spec.aggro && (m.hp < m.maxHp || distToSelf < spec.aggro * 0.55);
+        // ranged mobs hold their ground and lob projectiles; melee mobs close in
+        if (spec.ranged && aggro && distToSelf < spec.ranged.range) {
+          // keep some distance, then fire on cooldown
+          if (distToSelf < spec.ranged.range * 0.55) { m.tx = m.x - (selfX - m.x); m.ty = m.y - (selfY - m.y); }
+          else { m.tx = m.x; m.ty = m.y; }
+          m.state = 1;
+          if (now >= m.nextShotAt) { m.nextShotAt = now + spec.ranged.cooldownMs; launchMobProjectile(m, spec); }
+        } else if (aggro) {
+          m.tx = selfX; m.ty = selfY; m.state = 1;
+        } else if (now >= m.busyUntil) {
+          const a = Math.random() * Math.PI * 2, d = 40 + Math.random() * 90;
+          m.tx = clamp(m.homeX + Math.cos(a) * d, m.homeX - 180, m.homeX + 180);
+          m.ty = m.homeY + Math.sin(a) * d;
+          m.busyUntil = now + 1200 + Math.random() * 2600;
+          m.state = 0;
+        }
+        const dx = m.tx - m.x, dy = m.ty - m.y, mag = Math.hypot(dx, dy);
+        if (mag > 2) {
+          const sp = spec.speed * (m.state === 1 ? 1.5 : 1) * dt;
+          m.x += (dx / mag) * sp; m.y += (dy / mag) * sp;
+          if (Math.abs(dx) > 1) m.spr.setFlipX(dx < 0);
+        }
+        // melee contact → real HP damage (i-frames handled in damagePlayer)
+        if (!spec.ranged && distToSelf < R + 10 && now >= stunnedUntil && !driving) {
+          damagePlayer(spec.dmg, m.x, m.y, spec.label);
+        }
+      }
+      const bob = spec.fly ? Math.sin(now / 160 + m.ph) * 3 : 0;
+      m.spr.setPosition(m.x, m.y + bob).setDepth(m.y);
+      if (now < m.hitUntil) m.spr.setTintFill(0xffffff); else m.spr.clearTint();
+      // health bar — width scales with the mob's max HP, so tanky ones wear a visibly bigger bar
+      if (m.hp < m.maxHp && !m.dead) {
+        m.bar.setVisible(true).clear();
+        const bw = spec.barW, bx = m.x - bw / 2, by = m.y - m.spr.displayHeight - 6;
+        m.bar.fillStyle(0x1a1006, 0.85); m.bar.fillRect(bx - 1, by - 1, bw + 2, 5);
+        m.bar.fillStyle(0x3a1010, 1); m.bar.fillRect(bx, by, bw, 3);
+        m.bar.fillStyle(0xff5a4a, 1); m.bar.fillRect(bx, by, bw * (m.hp / m.maxHp), 3);
+        m.bar.setDepth(m.y + 1);
+      } else if (m.bar.visible) {
+        m.bar.setVisible(false);
+      }
+    }
+  }
+
+  // Bank the at-risk mob purse the moment you step back onto safe town ground.
+  let wasInFrontier = false;
+  function maybeBankPurse() {
+    const inTown = selfX >= 0 && selfX <= WORLD.w && selfY >= 0 && selfY <= WORLD.h;
+    if (inTown && wasInFrontier && fieldPurse > 0) { net.worldBank(); }
+    wasInFrontier = !inTown && !inInterior && !inDungeon;
+  }
+
+  // --- biome ambience: each frontier has its own anthem + an entry banner ---
+  // Desert → Heart-Shaped Box · Swamp → Everlong · Snow → In The End. The track loops while you're
+  // in the biome and fades when you leave; crossing in also flashes a title card.
+  const BIOME_INFO: Record<string, { name: string; sub: string; track: string; color: string }> = {
+    desert: { name: '🌵 THE GREAT WESTERN NOTHING', sub: 'mostly empty. bring water.', track: '/heart-shaped-box-8bit.mp3', color: '#e8b060' },
+    swamp: { name: '🐊 THE GREAT SOUTHERN DAMP', sub: 'watch your step. all of it.', track: '/everlong.mp3', color: '#7ec87e' },
+    snow: { name: '❄️ THE FROSTREACH', sub: 'the cold keeps things. and people.', track: '/inthend.mp3', color: '#9fd0ff' },
+  };
+  let curBiome: string | null = null;
+  let biomeMusic: HTMLAudioElement | null = null;
+  let biomeMusicKey = '';
+  function currentBiome(): string | null {
+    if (inInterior || inDungeon) return null;
+    if (selfX < 0) return 'desert';
+    if (selfX > WORLD.w) return 'snow';
+    if (selfY > WORLD.h && selfY < SWAMP_SHORE_Y) return 'swamp';
+    return null; // town (or the deep bayou / club grounds)
+  }
+  function setBiomeMusic(track: string | null) {
+    if (track === biomeMusicKey) { if (biomeMusic) biomeMusic.muted = net.muted(); return; }
+    if (biomeMusic) { biomeMusic.pause(); biomeMusic = null; }
+    biomeMusicKey = track ?? '';
+    if (track) {
+      biomeMusic = new Audio(track);
+      biomeMusic.loop = true; biomeMusic.volume = 0.32; biomeMusic.muted = net.muted();
+      biomeMusic.play().catch(() => { /* needs a gesture; walking in usually follows one */ });
+    }
+  }
+  function updateBiome() {
+    const b = currentBiome();
+    if (b === curBiome) { if (biomeMusic) biomeMusic.muted = net.muted(); return; }
+    curBiome = b;
+    if (b && BIOME_INFO[b]) {
+      const info = BIOME_INFO[b];
+      setBiomeMusic(info.track);
+      showBiomeBanner(info.name, info.sub, info.color);
+    } else {
+      setBiomeMusic(null); // back in town (or an interior) → silence the biome track
+    }
+  }
+  let biomeBanner: Phaser.GameObjects.Container | null = null;
+  function showBiomeBanner(name: string, sub: string, color: string) {
+    const sc = lifeSc || mobScene; const cam = mainCam; if (!sc || !cam) return;
+    biomeBanner?.destroy();
+    const cx = cam.width / 2, cy = cam.height * 0.26;
+    const title = sc.add.text(0, 0, name, { fontFamily: 'Georgia, serif', fontSize: '30px', fontStyle: 'bold', color, stroke: '#0a0f18', strokeThickness: 6, resolution: 2 }).setOrigin(0.5);
+    const subt = sc.add.text(0, 30, sub, { fontFamily: 'ui-monospace, monospace', fontSize: '13px', color: '#e8eefc', stroke: '#0a0f18', strokeThickness: 4, resolution: 2 }).setOrigin(0.5);
+    biomeBanner = sc.add.container(cx, cy, [title, subt]).setScrollFactor(0).setDepth(190000).setAlpha(0);
+    sc.tweens.add({ targets: biomeBanner, alpha: 1, y: cy - 10, duration: 500, ease: 'Quad.easeOut', yoyo: true, hold: 1800, onComplete: () => { biomeBanner?.destroy(); biomeBanner = null; } });
+  }
+
   // --- town life: statue of the #1, live billboard, fountain wishes, critters ---
   // Everything here is cosmetic + social; interactions ride the X key. Emoji sprites keep it
   // cheap and legible at world scale (same trick as the friend hearts).
@@ -17109,6 +17807,7 @@ export function startWorld(net: WorldNet): void {
     if (inDungeon) net.dungeonExit(false); // bailed out of the World mid-dungeon → forfeit the run purse
     setDungeonMusic(false); dungeonMusic = null; inDungeon = false;
     setTavernMusic(false); tavernMusic = null;
+    setBiomeMusic(null); curBiome = null;
     stopChant(); inInterior = false; inTemple = false; inMcdonald = false; inCasino = false;
     stopLounge(); inClub = false; inVault = false; clubBuilt = false; vaultBuilt = false; vaultSwan = null;
     founderPupils = []; clubFireGlow = null; puttBall = null; puttMeter = null; puttStreakTxt = null;
@@ -17254,7 +17953,13 @@ export function startWorld(net: WorldNet): void {
     },
     feedEloProfile(msg) { renderEloProfile(msg); },
     feedBalanceSheet(msg) { renderBalanceSheet(msg); },
-    feedWallet() { updateCoinsHud(); if (shopDialogOpen) renderShopDialog(); },
+    feedWallet() { updateCoinsHud(); updateLevelHud(); if (shopDialogOpen) renderShopDialog(); },
+    feedMobLoot(purse: number, gained?: number, banked?: number) {
+      fieldPurse = purse;
+      updateHealthHud();
+      if (banked && banked > 0) showToast(`🏦 Banked <b>${banked.toLocaleString()}🪙</b> of mob loot. Safe now.`);
+      else if (gained && gained > 0) showToast(`💰 +${gained.toLocaleString()}🪙 held — bank it in town (lose it if you die).`);
+    },
     feedCortisol() { updateCortHud(); },
     feedNews() { if (newsDialogOpen) { const list = dialogBox.querySelector<HTMLDivElement>('#newsWorldList'); if (list) renderNewsWorldList(list); } },
     feedLoan() {
