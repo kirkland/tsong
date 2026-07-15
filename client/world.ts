@@ -2541,7 +2541,6 @@ export function startWorld(net: WorldNet): void {
   // --- survival: player health, field loot, potions ---
   const PLAYER_MAX_HP = 100;
   let playerHp = PLAYER_MAX_HP;
-  let lastDamagedAt = 0;   // for out-of-combat regen
   let playerDead = false;
   let fieldPotions = 0;    // healing potions carried (dropped by some mobs) — lost on death
   let fieldPurse = 0;      // coins earned from mobs, NOT yet banked — forfeit if you die in the wild
@@ -17037,15 +17036,15 @@ export function startWorld(net: WorldNet): void {
     buzzard:  { biome: 'desert', hp: 3, speed: 60, aggro: 300, scale: TEXEL * 1.9, label: 'Buzzard', emoji: '🦅', dmg: 500, barW: 22, fly: true,
       ranged: { range: 300, cooldownMs: 3400, projSpeed: 260, projTex: 'w-proj-rock' } },
     // --- swamp (medium) ---
-    mosquito: { biome: 'swamp', hp: 3, speed: 62, aggro: 260, scale: TEXEL * 1.8, label: 'Bog Skeeter', emoji: '🦟', dmg: 650, barW: 22, fly: true },
-    slime:    { biome: 'swamp', hp: 6, speed: 30, aggro: 240, scale: TEXEL * 2.2, label: 'Bog Slime', emoji: '🟢', dmg: 800, barW: 30 },
-    toad:     { biome: 'swamp', hp: 4, speed: 40, aggro: 320, scale: TEXEL * 2.0, label: 'Spitter Toad', emoji: '🐸', dmg: 700, barW: 26,
-      ranged: { range: 320, cooldownMs: 2600, projSpeed: 300, projTex: 'w-proj-venom' } },
-    // --- snow (hardest) ---
-    wolf:     { biome: 'snow', hp: 5, speed: 66, aggro: 320, scale: TEXEL * 2.0, label: 'Frost Wolf', emoji: '🐺', dmg: 850, barW: 26 },
-    snowman:  { biome: 'snow', hp: 6, speed: 24, aggro: 380, scale: TEXEL * 2.3, label: 'Evil Snowman', emoji: '⛄', dmg: 1000, barW: 32,
-      ranged: { range: 380, cooldownMs: 1900, projSpeed: 320, projTex: 'w-proj-snow' } },
-    yeti:     { biome: 'snow', hp: 12, speed: 46, aggro: 340, scale: TEXEL * 2.8, label: 'Yeti', emoji: '👹', dmg: 1300, barW: 44 },
+    mosquito: { biome: 'swamp', hp: 3, speed: 74, aggro: 340, scale: TEXEL * 1.8, label: 'Bog Skeeter', emoji: '🦟', dmg: 700, barW: 22, fly: true },
+    slime:    { biome: 'swamp', hp: 6, speed: 38, aggro: 300, scale: TEXEL * 2.2, label: 'Bog Slime', emoji: '🟢', dmg: 850, barW: 30 },
+    toad:     { biome: 'swamp', hp: 4, speed: 48, aggro: 380, scale: TEXEL * 2.0, label: 'Spitter Toad', emoji: '🐸', dmg: 750, barW: 26,
+      ranged: { range: 360, cooldownMs: 2000, projSpeed: 320, projTex: 'w-proj-venom' } },
+    // --- snow (hardest — fast, far-sighted, relentless) ---
+    wolf:     { biome: 'snow', hp: 6, speed: 92, aggro: 480, scale: TEXEL * 2.0, label: 'Frost Wolf', emoji: '🐺', dmg: 950, barW: 26 },
+    snowman:  { biome: 'snow', hp: 7, speed: 30, aggro: 520, scale: TEXEL * 2.3, label: 'Evil Snowman', emoji: '⛄', dmg: 1150, barW: 32,
+      ranged: { range: 460, cooldownMs: 1200, projSpeed: 380, projTex: 'w-proj-snow' } },
+    yeti:     { biome: 'snow', hp: 15, speed: 60, aggro: 500, scale: TEXEL * 2.8, label: 'Yeti', emoji: '👹', dmg: 1450, barW: 44 },
   };
   interface MobProj { spr: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number; t: number; dmg: number; }
   let mobProjectiles: MobProj[] = [];
@@ -17207,9 +17206,9 @@ export function startWorld(net: WorldNet): void {
     const rnd = mulberry32(0x30B5);
     // Each biome gets a mix of its species (commons more numerous than the tanky bosses).
     const ROSTER: [MobKind, number][] = [
-      ['scorpion', 8], ['rattler', 6], ['buzzard', 5],   // desert — many, weak
-      ['mosquito', 7], ['toad', 5], ['slime', 4],         // swamp — medium
-      ['wolf', 6], ['snowman', 4], ['yeti', 3],           // snow — fewer, brutal
+      ['scorpion', 10], ['rattler', 8], ['buzzard', 6],   // desert — many, weak
+      ['mosquito', 11], ['toad', 8], ['slime', 6],         // swamp — medium, thicker
+      ['wolf', 14], ['snowman', 9], ['yeti', 6],           // snow — a proper gauntlet
     ];
     for (const [kind, n] of ROSTER) {
       for (let i = 0; i < n; i++) { const s = mobBiomeSpot(kind, rnd); spawnMob(sc, kind, s.x, s.y); }
@@ -17290,7 +17289,9 @@ export function startWorld(net: WorldNet): void {
     }
     killMobSound();
     // respawn a fresh one of the same species elsewhere in the biome after a while
-    window.setTimeout(() => respawnMob(m.kind), 14000 + Math.random() * 14000);
+    // snow mobs come back fast (the Frostreach never really thins out); others a touch slower
+    const respawnMs = (m.biome === 'snow' ? 5000 : 8000) + Math.random() * 8000;
+    window.setTimeout(() => respawnMob(m.kind), respawnMs);
     void spec;
   }
 
@@ -17331,7 +17332,6 @@ export function startWorld(net: WorldNet): void {
     // dmg came in as a "stun ms" figure historically; convert to HP loss (roughly 1 HP per 45ms).
     const hpLoss = Math.max(4, Math.round(dmg / 45));
     playerHp = Math.max(0, playerHp - hpLoss);
-    lastDamagedAt = now;
     stunnedUntil = now + Math.min(500, dmg * 0.35); keys.clear();
     // knockback
     const a = Math.atan2(selfY - srcY, selfX - srcX);
@@ -17426,11 +17426,7 @@ export function startWorld(net: WorldNet): void {
         if (now - p.born > 45000) { p.spr.destroy(); potionDrops.splice(i, 1); }
       }
     }
-    // out-of-combat regen + bank the purse when you're safe in town
-    if (!playerDead && now - lastDamagedAt > 5000 && playerHp < PLAYER_MAX_HP) {
-      playerHp = Math.min(PLAYER_MAX_HP, playerHp + 6 * dt);
-      updateHealthHud();
-    }
+    // No passive regen — health only comes back from a potion (H) or from returning to town.
     maybeBankPurse();
     if (!mobs.length) return;
     if (mobs.some((m) => m.dead)) mobs = mobs.filter((m) => !m.dead);
@@ -17440,7 +17436,9 @@ export function startWorld(net: WorldNet): void {
       const near = Math.hypot(m.x - selfX, m.y - selfY) < 1400;
       if (active && near) {
         const distToSelf = Math.hypot(selfX - m.x, selfY - m.y);
-        const aggro = distToSelf < spec.aggro && (m.hp < m.maxHp || distToSelf < spec.aggro * 0.55);
+        // Aggressive on sight: anything within its (now generous) aggro range comes for you,
+        // no need to shoot it first. Snow mobs see the furthest and never let up.
+        const aggro = distToSelf < spec.aggro;
         // ranged mobs hold their ground and lob projectiles; melee mobs close in
         if (spec.ranged && aggro && distToSelf < spec.ranged.range) {
           // keep some distance, then fire on cooldown
@@ -17507,11 +17505,15 @@ export function startWorld(net: WorldNet): void {
     }
   }
 
-  // Bank the at-risk mob purse the moment you step back onto safe town ground.
+  // Step back onto safe town ground → bank the at-risk mob purse AND recover to full health
+  // (town is the only place you heal for free — out in the wild it's potions or nothing).
   let wasInFrontier = false;
   function maybeBankPurse() {
     const inTown = selfX >= 0 && selfX <= WORLD.w && selfY >= 0 && selfY <= WORLD.h;
-    if (inTown && wasInFrontier && fieldPurse > 0) { net.worldBank(); }
+    if (inTown && wasInFrontier) {
+      if (fieldPurse > 0) net.worldBank();
+      if (playerHp < PLAYER_MAX_HP) { playerHp = PLAYER_MAX_HP; updateHealthHud(); showToast('🏥 Back in town — patched up to full health.'); }
+    }
     wasInFrontier = !inTown && !inInterior && !inDungeon;
   }
 
