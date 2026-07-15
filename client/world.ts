@@ -17184,20 +17184,17 @@ export function startWorld(net: WorldNet): void {
   }
 
   // The player took a hit from a mob (contact or projectile). Damage scales with biome difficulty
-  // (already baked into spec.dmg). You take hits on foot OR in a car — the car is a little armor,
-  // not immunity (a big enough hit can still blow it up). Drives the health bar; at 0 you die.
+  // (already baked into spec.dmg). You take the SAME hit on foot or in a car — the car is no
+  // armor. Drives the health bar; at 0 you die.
   function damagePlayer(dmg: number, srcX: number, srcY: number, label: string) {
     const now = performance.now();
     if (playerDead || inInterior || inDungeon) return;
     if (now < mobBiteCooldown) return; // brief i-frames so you're not chain-shredded
     mobBiteCooldown = now + 650;
     // dmg came in as a "stun ms" figure historically; convert to HP loss (roughly 1 HP per 45ms).
-    // A car soaks ~40% of the blow (you're behind metal) but still takes the rest.
-    const hpLoss = Math.max(4, Math.round((dmg / 45) * (driving ? 0.6 : 1)));
+    const hpLoss = Math.max(4, Math.round(dmg / 45));
     playerHp = Math.max(0, playerHp - hpLoss);
     lastDamagedAt = now;
-    // a hard enough hit while driving wrecks the car (and knocks you out of it)
-    if (driving && hpLoss >= 14) { if (blowUpMyCar('💥 A mob wrecked your car!')) net.blownUp(true, true); }
     stunnedUntil = now + Math.min(500, dmg * 0.35); keys.clear();
     // knockback
     const a = Math.atan2(selfY - srcY, selfX - srcX);
