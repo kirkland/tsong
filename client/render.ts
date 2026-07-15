@@ -160,6 +160,31 @@ const BALL_TRAIL_CUSTOM: Record<string, BallTrailCustom> = {
       ctx.fill();
     }
   },
+  'balltrail-prism': (ctx, hist, r, t) => {
+    const n = hist.length;
+    ctx.globalCompositeOperation = 'lighter';
+    // Chromatic-aberration streak: red/green/blue copies of the trail, each drifting apart and
+    // back together on its own slow cycle, like light splitting through a prism.
+    const bands: [string, number][] = [['#ff3b3b', 0], ['#3bff6a', 2.094], ['#3b8bff', 4.189]];
+    for (const [color, phase] of bands) {
+      const spread = 1.6 + Math.sin(t / 400 + phase) * 1.2;
+      const ang = t / 900 + phase;
+      const ox = Math.cos(ang) * spread, oy = Math.sin(ang) * spread;
+      for (let i = 0; i < n; i++) {
+        const f = (i + 1) / n;
+        ctx.globalAlpha = 0.34 * Math.pow(f, 1.3);
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(hist[i].x + ox * f, hist[i].y + oy * f, r * (0.22 + 0.7 * f), 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    // A bright white core so the head still reads as one ball, not three
+    const head = hist[n - 1];
+    ctx.globalAlpha = 0.9;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath(); ctx.arc(head.x, head.y, r * 0.4, 0, Math.PI * 2); ctx.fill();
+  },
 };
 
 function drawBallTrail(ctx: CanvasRenderingContext2D, bx: number, by: number, r: number, id: string) {
@@ -1230,6 +1255,8 @@ const SKIN_RENDERERS: Record<string, CosmeticDraw> = {
   aurora: fillAurora,
   carbon: fillCarbon,
   mermaid: fillMermaid,
+  circuit: fillCircuit,
+  kaleidoscope: fillKaleidoscope,
   'x-midas': fillMidas,
   'x-genesis': fillGenesis,
   'x-quantum': fillQuantum,
@@ -1247,6 +1274,11 @@ const TRAIL_TINTS: Record<string, TrailTint> = {
   ember: () => '#ff4619',
   neonstreak: () => '#ff3cdc',
   rainbowtrail: (i, _n, t) => `hsl(${(t / 12 + i * 26) % 360},92%,62%)`,
+  auroratrail: (i, n, t) => { // shifting green→violet curtain, like the northern lights
+    const f = i / n;
+    const hue = 140 + 80 * (0.5 + 0.5 * Math.sin(t / 900 + f * 3));
+    return `hsl(${hue},85%,${55 + f * 15}%)`;
+  },
   stardust: (i) => (i % 2 ? '#ffffff' : '#9fd8ff'),
   inferno: (i, n) => `hsl(${20 + (i / n) * 35},100%,${50 + (i / n) * 12}%)`, // red tail → yellow head
   lightning: () => '#8ab4ff',
@@ -1278,7 +1310,7 @@ const TRAIL_TINTS: Record<string, TrailTint> = {
     return `hsl(${hue},${sat}%,${light}%)`;
   },
 };
-const TRAIL_GLOW = new Set(['comet', 'frostwake', 'ember', 'neonstreak', 'rainbowtrail', 'stardust', 'inferno', 'lightning', 'phoenix', 'x-eclipse', 'x-singularity']); // additive blend
+const TRAIL_GLOW = new Set(['comet', 'frostwake', 'ember', 'neonstreak', 'rainbowtrail', 'stardust', 'inferno', 'lightning', 'phoenix', 'auroratrail', 'x-eclipse', 'x-singularity']); // additive blend
 const TRAIL_LEN = 14; // samples of paddle history kept for the streak
 const trailHistory = new Map<string, { x: number; y: number }[]>();
 function drawTrail(ctx: CanvasRenderingContext2D, key: string, cx: number, cy: number, h: number, id: string) {
@@ -1500,6 +1532,8 @@ const HAT_RENDERERS: Record<string, CosmeticDraw> = {
   'x-jackpot': drawJackpotCrown,
   beret: drawBeret,
   catears: drawCatEars,
+  disco: drawDisco,
+  ufo: drawUfo,
   mushroom: drawMushroom,
   'x-voidcrown': drawVoidCrown,
   'x-prismhalo': drawPrismHalo,
@@ -1997,6 +2031,68 @@ function drawHeadphones(ctx: CanvasRenderingContext2D, cx: number, cy: number, h
   }
   ctx.restore();
 }
+// Cosmetic "disco ball" hat: a faceted mirrored sphere that spins slowly, with a couple of bright
+// scanning glints sweeping across it and little colored light specks flung outward — a nod to the
+// Tavern's disco tsong.
+function drawDisco(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const top = cy - h / 2 - 8;
+  const r = 5.5, t = Date.now() / 1000;
+  ctx.save();
+  const g = ctx.createRadialGradient(cx - 2, top - 2, 0.5, cx, top, r);
+  g.addColorStop(0, '#f4f8ff'); g.addColorStop(0.55, '#b9c6e0'); g.addColorStop(1, '#5a6a8a');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(cx, top, r, 0, Math.PI * 2); ctx.fill();
+  // facet grid
+  ctx.strokeStyle = 'rgba(20,24,40,0.35)'; ctx.lineWidth = 0.6;
+  for (let i = -2; i <= 2; i++) { ctx.beginPath(); ctx.moveTo(cx - r, top + i * r * 0.4); ctx.lineTo(cx + r, top + i * r * 0.4); ctx.stroke(); }
+  for (let i = -2; i <= 2; i++) { ctx.beginPath(); ctx.moveTo(cx + i * r * 0.4, top - r); ctx.lineTo(cx + i * r * 0.4, top + r); ctx.stroke(); }
+  // sweeping glint
+  const ga = t * 2.4;
+  ctx.fillStyle = 'rgba(255,255,255,0.9)';
+  ctx.beginPath(); ctx.arc(cx + Math.cos(ga) * r * 0.6, top + Math.sin(ga) * r * 0.6, 1.1, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx + Math.cos(ga + Math.PI) * r * 0.6, top + Math.sin(ga + Math.PI) * r * 0.6, 0.8, 0, Math.PI * 2); ctx.fill();
+  // flung colored light specks
+  const colors = ['#ff5ecb', '#5ecbff', '#ffe15e', '#5eff8a'];
+  for (let i = 0; i < 4; i++) {
+    const a = t * 1.6 + (i / 4) * Math.PI * 2;
+    const d = r + 3 + Math.sin(t * 3 + i) * 1.2;
+    ctx.globalAlpha = 0.55 + 0.35 * Math.sin(t * 4 + i);
+    ctx.fillStyle = colors[i];
+    ctx.beginPath(); ctx.arc(cx + Math.cos(a) * d, top + Math.sin(a) * d * 0.6, 0.9, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
+// Cosmetic "UFO" hat: a hovering flying saucer that bobs, with pulsing rim lights and a faint,
+// flickering abduction beam underneath.
+function drawUfo(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  const t = Date.now() / 1000;
+  const top = cy - h / 2 - 9 + Math.sin(t * 1.8) * 1.5;
+  ctx.save();
+  // beam
+  const beamA = 0.12 + 0.08 * Math.sin(t * 6);
+  ctx.fillStyle = `rgba(150,255,180,${beamA})`;
+  ctx.beginPath();
+  ctx.moveTo(cx - 2.5, top + 2); ctx.lineTo(cx + 2.5, top + 2);
+  ctx.lineTo(cx + 7, top + 12); ctx.lineTo(cx - 7, top + 12);
+  ctx.closePath(); ctx.fill();
+  // saucer body
+  const body = ctx.createLinearGradient(cx - 9, 0, cx + 9, 0);
+  body.addColorStop(0, '#5a6a80'); body.addColorStop(0.5, '#c8d4e6'); body.addColorStop(1, '#5a6a80');
+  ctx.fillStyle = body;
+  ctx.beginPath(); ctx.ellipse(cx, top, 9, 3, 0, 0, Math.PI * 2); ctx.fill();
+  // dome
+  ctx.fillStyle = 'rgba(150,220,255,0.75)';
+  ctx.beginPath(); ctx.ellipse(cx, top - 2.4, 4, 3, 0, Math.PI, 0); ctx.fill();
+  // pulsing rim lights
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2 + t * 2;
+    const on = 0.4 + 0.6 * Math.max(0, Math.sin(a + t * 3));
+    ctx.globalAlpha = on;
+    ctx.fillStyle = i % 2 ? '#ff5e5e' : '#5ef0ff';
+    ctx.beginPath(); ctx.arc(cx + Math.cos(i * 1.26) * 7.5, top + Math.sin(i * 1.26) * 1.6, 0.8, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
 
 // --- additional cosmetic skins (fill the paddle rect; some animated; visual only) ---
 function paddleRect(cx: number, cy: number, h: number) {
@@ -2058,6 +2154,59 @@ function fillMermaid(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: n
     ctx.ellipse(r.x + r.w / 2, sy, r.w * 0.3, sh, 0, 0, Math.PI * 2);
     ctx.fill();
   }
+  skinHighlight(ctx, cx, cy, h); ctx.restore();
+}
+// Circuit Board — a dark PCB base etched with green traces; bright pulses of light travel down
+// the traces like data packets.
+function fillCircuit(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save(); clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 1000;
+  ctx.fillStyle = '#0a1c12'; ctx.fillRect(r.x, r.y, r.w, r.h);
+  const lanes = [r.x + r.w * 0.22, r.x + r.w * 0.5, r.x + r.w * 0.78];
+  ctx.strokeStyle = 'rgba(60,180,110,0.5)'; ctx.lineWidth = 1.2;
+  for (const lx of lanes) { ctx.beginPath(); ctx.moveTo(lx, r.y); ctx.lineTo(lx, r.y + r.h); ctx.stroke(); }
+  ctx.strokeStyle = 'rgba(60,180,110,0.3)';
+  for (let i = 1; i < 4; i++) { const ly = r.y + (r.h * i) / 4; ctx.beginPath(); ctx.moveTo(r.x, ly); ctx.lineTo(r.x + r.w, ly); ctx.stroke(); }
+  // solder-pad nodes at each intersection
+  ctx.fillStyle = 'rgba(90,220,150,0.55)';
+  for (const lx of lanes) for (let i = 0; i <= 4; i++) {
+    ctx.beginPath(); ctx.arc(lx, r.y + (r.h * i) / 4, 1, 0, Math.PI * 2); ctx.fill();
+  }
+  // traveling data pulses down each lane
+  for (let i = 0; i < lanes.length; i++) {
+    const lx = lanes[i];
+    const p = ((t * 0.6 + i * 0.33) % 1);
+    const py = r.y + p * r.h;
+    ctx.fillStyle = '#baffcf';
+    ctx.shadowColor = '#5cffa0'; ctx.shadowBlur = 5;
+    ctx.beginPath(); ctx.arc(lx, py, 1.6, 0, Math.PI * 2); ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+  skinHighlight(ctx, cx, cy, h); ctx.restore();
+}
+// Kaleidoscope — radial wedges of shifting color spinning slowly around the paddle's center,
+// like looking down a kaleidoscope tube.
+function fillKaleidoscope(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {
+  ctx.save(); clipPaddle(ctx, cx, cy, h);
+  const r = paddleRect(cx, cy, h);
+  const t = Date.now() / 1000;
+  const mx = cx, my = cy;
+  const wedges = 8, rad = Math.max(r.w, r.h);
+  for (let i = 0; i < wedges; i++) {
+    const a0 = (i / wedges) * Math.PI * 2 + t * 0.7;
+    const a1 = a0 + (Math.PI * 2) / wedges;
+    ctx.fillStyle = `hsl(${(i / wedges) * 360 + t * 40},85%,60%)`;
+    ctx.beginPath();
+    ctx.moveTo(mx, my);
+    ctx.arc(mx, my, rad, a0, a1);
+    ctx.closePath();
+    ctx.fill();
+  }
+  // soft center bloom for a lens-like read
+  const bloom = ctx.createRadialGradient(mx, my, 0, mx, my, rad * 0.4);
+  bloom.addColorStop(0, 'rgba(255,255,255,0.45)'); bloom.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = bloom; ctx.fillRect(r.x, r.y, r.w, r.h);
   skinHighlight(ctx, cx, cy, h); ctx.restore();
 }
 function fillMidas(ctx: CanvasRenderingContext2D, cx: number, cy: number, h: number) {

@@ -250,6 +250,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'ember', name: 'Ember', slot: 'trail', price: 1000 },
   { id: 'neonstreak', name: 'Neon Streak', slot: 'trail', price: 2000 }, // animated
   { id: 'rainbowtrail', name: 'Rainbow Trail', slot: 'trail', price: 2000 }, // animated
+  { id: 'auroratrail', name: 'Aurora Trail', slot: 'trail', price: 2000 }, // animated
   // Titles — flair shown next to your name on the leaderboard. Mostly buyable; "Davis Slayer"
   // is NOT buyable — it's unlocked only by clearing the campaign.
   { id: 'davisslayer', name: '🏆 Davis Slayer', slot: 'title', price: 0, locked: 'campaign' },
@@ -321,6 +322,9 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'carcolor-gold', name: '🟡 Gold Rush', slot: 'carcolor', price: 3000 },
   { id: 'carcolor-flame', name: '🔥 Flame Job', slot: 'carcolor', price: 3500 },
   { id: 'carcolor-rainbow', name: '🌈 Rainbow', slot: 'carcolor', price: 6000 }, // animated — cycles hue in-world
+  { id: 'carcolor-chrome', name: '⚙️ Liquid Chrome', slot: 'carcolor', price: 4500 }, // animated — pulses a moving specular shimmer in-world
+  { id: 'carcolor-holo', name: '🌟 Holo Shift', slot: 'carcolor', price: 5500 }, // animated — cycles a narrow pastel hue band in-world
+  { id: 'carcolor-police', name: '🚨 Police Flash', slot: 'carcolor', price: 5000 }, // animated — strobes red/blue in-world
   // Pets (slot 'pet') — follow you around the World map; look/animation keyed by PETS below.
   { id: 'pet-rock', name: '🪨 Pet Rock', slot: 'pet', price: 50000 },
   { id: 'pet-pikachu', name: '⚡ Pikachu', slot: 'pet', price: 100000 },
@@ -332,8 +336,12 @@ export const COSMETICS: readonly CosmeticItem[] = [
   // New common loot-box refresh items
   { id: 'beret', name: 'Beret', slot: 'hat', price: 1000 },
   { id: 'catears', name: 'Cat Ears', slot: 'hat', price: 2000 }, // animated
+  { id: 'disco', name: '🪩 Disco Ball', slot: 'hat', price: 2000 }, // animated
+  { id: 'ufo', name: '🛸 UFO', slot: 'hat', price: 2000 }, // animated
   { id: 'carbon', name: 'Carbon Fiber', slot: 'skin', price: 2000 }, // animated
   { id: 'mermaid', name: 'Mermaid', slot: 'skin', price: 2000 }, // animated
+  { id: 'circuit', name: 'Circuit Board', slot: 'skin', price: 2000 }, // animated
+  { id: 'kaleidoscope', name: 'Kaleidoscope', slot: 'skin', price: 2000 }, // animated
   // Ball trails — a fading comet tail behind the ball as it zips across the court
   { id: 'balltrail-comet',     name: 'Ball Comet',      slot: 'balltrail', price: 2000 },
   { id: 'balltrail-rainbow',   name: 'Rainbow Streak',  slot: 'balltrail', price: 3000 },
@@ -343,6 +351,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'balltrail-plasma',    name: '🔵 Plasma',       slot: 'balltrail', price: 8000 },
   { id: 'balltrail-galaxy',    name: '🌌 Galaxy',       slot: 'balltrail', price: 9000 },
   { id: 'balltrail-void',      name: '🕳️ Void',         slot: 'balltrail', price: 12000 },
+  { id: 'balltrail-prism',     name: '🔺 Prism Split',   slot: 'balltrail', price: 13000 },
   // Goal celebrations — Rocket League-style screen explosion when you score
   { id: 'goalcelebr-confetti',    name: '🎊 Confetti',      slot: 'goalcelebr', price: 2000 },
   { id: 'goalcelebr-explosion',   name: '💥 Rocket Blast',  slot: 'goalcelebr', price: 5000 },
@@ -511,6 +520,9 @@ export const CAR_COLORS: readonly CarColorSpec[] = [
   { id: 'carcolor-gold', name: 'Gold Rush', body: '#ffd23f', accent: '#8a6d1a' },
   { id: 'carcolor-flame', name: 'Flame Job', body: '#ff5e1a', accent: '#ffcf33' },
   { id: 'carcolor-rainbow', name: 'Rainbow', body: '#ff3df0', accent: '#3df0ff' }, // world.ts animates this one live; these are just the shop-swatch preview colours
+  { id: 'carcolor-chrome', name: 'Liquid Chrome', body: '#c8c8c8', accent: '#f6f6f6' }, // world.ts animates a shimmer live; fallback swatch colours
+  { id: 'carcolor-holo', name: 'Holo Shift', body: '#c48bff', accent: '#7ad8ff' }, // world.ts animates a hue-shift live; fallback swatch colours
+  { id: 'carcolor-police', name: 'Police Flash', body: '#e21b1b', accent: '#1b3ee2' }, // world.ts animates a strobe live; fallback swatch colours
 ] as const;
 export function carColorById(id: string | null | undefined): CarColorSpec | null {
   if (!id) return null;

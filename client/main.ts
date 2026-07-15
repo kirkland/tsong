@@ -3018,6 +3018,29 @@ function flashCoinDelta(delta: number) {
   el.addEventListener('animationend', () => el.remove());
 }
 
+// CSS for a shop-row paint-job swatch. Most are a flat body/accent chip; the animated ones (see
+// carPaintTint in world.ts, which does the live in-world version) get a CSS animation instead so
+// the shop list hints at the live look.
+function carColorSwatchCss(id: string, cc: { body: string; accent: string } | null, w: number, h: number): string {
+  const base = `display:inline-block;width:${w}px;height:${h}px;border-radius:4px;`;
+  if (id === 'carcolor-rainbow') {
+    return base + 'border:2px solid #333;background:linear-gradient(90deg,#ff3b30,#ff9500,#ffd60a,#34c759,#0a84ff,#bf5af2,#ff3b30);' +
+      'background-size:200% auto;animation:lbrainbow 2s linear infinite;';
+  }
+  if (id === 'carcolor-chrome') {
+    return base + 'border:2px solid #333;background:linear-gradient(90deg,#6c6c6c,#f6f6f6,#6c6c6c,#dcdcdc,#f6f6f6,#6c6c6c);' +
+      'background-size:200% auto;animation:lbrainbow 1.4s linear infinite;';
+  }
+  if (id === 'carcolor-holo') {
+    return base + 'border:2px solid #333;background:linear-gradient(90deg,#c48bff,#7ad8ff,#c48bff);' +
+      'background-size:200% auto;animation:lbrainbow 2.6s linear infinite;';
+  }
+  if (id === 'carcolor-police') {
+    return base + 'border:2px solid #111;animation:lbpolice 0.5s steps(1) infinite;';
+  }
+  return base + `background:${cc?.body ?? '#888'};border:2px solid ${cc?.accent ?? '#222'};`;
+}
+
 function renderShop() {
   if (shownCoins !== null && wallet.coins !== shownCoins) flashCoinDelta(wallet.coins - shownCoins);
   shownCoins = wallet.coins;
@@ -3058,12 +3081,7 @@ function renderShop() {
       const cc = carColorById(item.id);
       const sw = document.createElement('span');
       sw.className = 'shop-preview-car';
-      sw.style.cssText = item.id === 'carcolor-rainbow'
-        // Hints that it animates in-world (a static swatch can't show the live hue-cycle itself).
-        ? 'display:inline-block;width:28px;height:18px;border-radius:4px;border:2px solid #333;' +
-          'background:linear-gradient(90deg,#ff3b30,#ff9500,#ffd60a,#34c759,#0a84ff,#bf5af2,#ff3b30);' +
-          'background-size:200% auto;animation:lbrainbow 2s linear infinite;'
-        : `display:inline-block;width:28px;height:18px;border-radius:4px;background:${cc?.body ?? '#888'};border:2px solid ${cc?.accent ?? '#222'};`;
+      sw.style.cssText = carColorSwatchCss(item.id, cc, 28, 18);
       row.appendChild(sw);
     } else if (item.slot === 'pet') {
       // Pets show their emoji as the row preview (the look lives in PETS, keyed by id).

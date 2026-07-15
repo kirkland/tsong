@@ -2422,6 +2422,58 @@ function hueToInt(h: number, s = 0.85, l = 0.55): number {
     h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
   return (Math.round((r + m) * 255) << 16) | (Math.round((g + m) * 255) << 8) | Math.round((b + m) * 255);
 }
+// Linear-blend two 0xRRGGBB ints — used to pulse the Liquid Chrome paint job between dim/bright silver.
+function lerpColorInt(a: number, b: number, t: number): number {
+  const ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
+  const br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
+  return (Math.round(ar + (br - ar) * t) << 16) | (Math.round(ag + (bg - ag) * t) << 8) | Math.round(ab + (bb - ab) * t);
+}
+// Live tint for an equipped car paint job — most colours are static (just hexToInt of body/accent),
+// but a few animate every frame: Rainbow hue-cycles, Liquid Chrome pulses a silver shimmer, Holo
+// Shift cycles a narrow pastel hue band, and Police Flash hard-strobes red/blue (body and roof
+// alternate oppositely so it reads as a light bar).
+function carPaintTint(paint: { id: string; body: string; accent: string }, isRoof: boolean): number {
+  const t = performance.now();
+  switch (paint.id) {
+    case 'carcolor-rainbow':
+      return hueToInt(t / 8 + (isRoof ? 180 : 0));
+    case 'carcolor-chrome': {
+      const p = 0.5 + 0.5 * Math.sin(t / 260 + (isRoof ? Math.PI : 0));
+      return lerpColorInt(0x6c6c6c, 0xf6f6f6, p);
+    }
+    case 'carcolor-holo': {
+      const hue = 250 + 70 * Math.sin(t / 950 + (isRoof ? Math.PI : 0));
+      return hueToInt(hue, 0.6, 0.72);
+    }
+    case 'carcolor-police': {
+      const on = Math.floor(t / 220) % 2 === 0;
+      return isRoof ? (on ? 0x1b3ee2 : 0xe21b1b) : (on ? 0xe21b1b : 0x1b3ee2);
+    }
+    default:
+      return hexToInt(isRoof ? paint.accent : paint.body);
+  }
+}
+// CSS for a shop-row paint-job swatch. Most are a flat body/accent chip; the animated ones (see
+// carPaintTint above) get a CSS animation instead so the shop list hints at the live in-world look.
+function carColorSwatchCss(id: string, cc: { body: string; accent: string } | null, w: number, h: number): string {
+  const base = `display:inline-block;width:${w}px;height:${h}px;border-radius:4px;flex-shrink:0;`;
+  if (id === 'carcolor-rainbow') {
+    return base + 'border:2px solid #333;background:linear-gradient(90deg,#ff3b30,#ff9500,#ffd60a,#34c759,#0a84ff,#bf5af2,#ff3b30);' +
+      'background-size:200% auto;animation:lbrainbow 2s linear infinite;';
+  }
+  if (id === 'carcolor-chrome') {
+    return base + 'border:2px solid #333;background:linear-gradient(90deg,#6c6c6c,#f6f6f6,#6c6c6c,#dcdcdc,#f6f6f6,#6c6c6c);' +
+      'background-size:200% auto;animation:lbrainbow 1.4s linear infinite;';
+  }
+  if (id === 'carcolor-holo') {
+    return base + 'border:2px solid #333;background:linear-gradient(90deg,#c48bff,#7ad8ff,#c48bff);' +
+      'background-size:200% auto;animation:lbrainbow 2.6s linear infinite;';
+  }
+  if (id === 'carcolor-police') {
+    return base + 'border:2px solid #111;animation:lbpolice 0.5s steps(1) infinite;';
+  }
+  return base + `background:${cc?.body ?? '#888'};border:2px solid ${cc?.accent ?? '#222'};`;
+}
 let wishHandler: ((total: number, granted: boolean) => void) | null = null;
 export function feedWishResult(m: { total: number; title?: boolean }) { wishHandler?.(m.total, !!m.title); }
 let golfLobbyHandler: ((msg: BgLobbyMsg) => void) | null = null;
@@ -5297,12 +5349,7 @@ export function startWorld(net: WorldNet): void {
         // A paint job swap — same swatch idiom as cars/boats, just keyed off CAR_COLORS instead.
         const cc = carColorById(item.id);
         const sw = document.createElement('span');
-        sw.style.cssText = item.id === 'carcolor-rainbow'
-          // Hints that it animates in-world (a static swatch can't show the live hue-cycle itself).
-          ? 'display:inline-block;width:26px;height:16px;border-radius:4px;flex-shrink:0;border:2px solid #333;' +
-            'background:linear-gradient(90deg,#ff3b30,#ff9500,#ffd60a,#34c759,#0a84ff,#bf5af2,#ff3b30);' +
-            'background-size:200% auto;animation:lbrainbow 2s linear infinite;'
-          : `display:inline-block;width:26px;height:16px;border-radius:4px;flex-shrink:0;background:${cc?.body ?? '#888'};border:2px solid ${cc?.accent ?? '#222'};`;
+        sw.style.cssText = carColorSwatchCss(item.id, cc, 26, 16);
         row.appendChild(sw);
       } else if (item.slot === 'pet') {
         const sw = document.createElement('span');
@@ -13817,14 +13864,13 @@ export function startWorld(net: WorldNet): void {
       const monster = spec?.id === 'car-monster';
       const boat = spec?.id === 'car-boat';
       const paint = boat ? null : carColorById(carColor);
-      const rainbow = paint?.id === 'carcolor-rainbow';
       av.carWheels.setVisible(monster);
       av.carBody.setTexture(monster ? 'w-monster-body' : boat ? 'w-boat-body' : 'w-car-body');
       av.carRoof.setTexture(monster ? 'w-monster-roof' : boat ? 'w-boat-roof' : 'w-car-roof');
       // The yacht is painted in full colour, so render it untinted; cars tint to their paint job
       // (an equipped carcolor overrides the car's own stock body/accent when present).
-      av.carBody.setTint(boat ? 0xffffff : rainbow ? hueToInt(performance.now() / 8) : paint ? hexToInt(paint.body) : spec ? hexToInt(spec.body) : tint);
-      av.carRoof.setTint(boat ? 0xffffff : rainbow ? hueToInt(performance.now() / 8 + 180) : paint ? hexToInt(paint.accent) : 0xffffff);
+      av.carBody.setTint(boat ? 0xffffff : paint ? carPaintTint(paint, false) : spec ? hexToInt(spec.body) : tint);
+      av.carRoof.setTint(boat ? 0xffffff : paint ? carPaintTint(paint, true) : 0xffffff);
     }
   }
 
