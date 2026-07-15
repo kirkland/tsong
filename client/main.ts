@@ -852,10 +852,12 @@ const net = connect(
       if (msg.game === 'chess') chessMod?.feedLobby(msg);
       else if (msg.game === 'morris') morrisMod?.feedLobby(msg);
       else if (msg.game === 'ski') skiMod?.feedLobby(msg);
+      else if (msg.game === 'golf') worldMod?.feedGolfLobby(msg);
     } else if (msg.type === 'bgRelay') {
       if (msg.game === 'chess') chessMod?.feedRelay(msg.data);
       else if (msg.game === 'morris') morrisMod?.feedRelay(msg.data);
       else if (msg.game === 'ski') skiMod?.feedRelay(msg.data);
+      else if (msg.game === 'golf') worldMod?.feedGolfRelay(msg.data);
     } else if (msg.type === 'ghLeaderboard') {
       ghScores = msg.rows;
     } else if (msg.type === 'wishResult') {
@@ -2672,6 +2674,15 @@ worldBtn.addEventListener('click', async () => {
       owns: (id: string) => wallet.owned.includes(id),
       joinClub: () => net.send({ type: 'clubJoin' }),
       clubDrink: () => net.send({ type: 'clubDrink' }),
+      // The Course — same bg-relay room shape as chess/morris/ski (game key 'golf'), fed straight
+      // back into World (worldMod.feedGolfLobby/feedGolfRelay below) instead of a lazy-loaded
+      // overlay module, since golf plays out on the grounds rather than in a teleported-away game.
+      golfJoin: () => net.send({ type: 'bgJoin', game: 'golf' }),
+      golfLeave: () => net.send({ type: 'bgLeave', game: 'golf' }),
+      golfStake: (stake) => net.send({ type: 'bgStake', game: 'golf', stake }),
+      golfStart: () => net.send({ type: 'bgStart', game: 'golf' }),
+      golfResult: (winner) => net.send({ type: 'bgResult', game: 'golf', winner }),
+      golfRelay: (data) => net.send({ type: 'bgRelay', game: 'golf', data }),
       muted: () => muted,
       toggleMute: () => { muted = !muted; prefSet('muted', muted ? '1' : '0'); applyMute(); },
       leaderboard: () => lastLbRows,

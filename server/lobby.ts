@@ -1185,6 +1185,21 @@ export class Lobby {
         .catch((e) => { this.claimedQuests.delete(pkey); console.error('club putt grant failed:', e); });
       return;
     }
+    if (quest === 'golf-18') {
+      // Played all 18. A title, a cart, and — unlike the club's other trophies — actual coins.
+      const gkey = `${conn.pid}:${quest}`;
+      if (this.claimedQuests.has(gkey)) return;
+      this.claimedQuests.add(gkey);
+      awardTitle(conn.pid, conn.nickname, 'golf-champ')
+        .then(() => grantItem(conn.pid, conn.nickname, 'car-golfcart'))
+        .then(() => this.housePay(conn.pid, conn.nickname, 5000))
+        .then(() => {
+          this.sendWallet(ws);
+          this.notify(ws, '⛳ 18 holes, in the books. Title unlocked: Golf Champion — plus a Golf Cart (Shop → Vehicles) and 5,000🪙.');
+        })
+        .catch((e) => { this.claimedQuests.delete(gkey); console.error('golf-18 grant failed:', e); });
+      return;
+    }
     if (quest === 'club-vault') {
       // What was found behind the bookcase stays behind the bookcase. Except the swan.
       const vkey = `${conn.pid}:${quest}`;
@@ -1815,7 +1830,7 @@ export class Lobby {
   // start (all-or-nothing, refunds on failure), and the pot settles on the first bgResult —
   // draws refund, a mid-match leaver forfeits the pot to whoever stayed.
   private bgRooms = new Map<string, { slots: WebSocket[]; status: 'waiting' | 'playing'; stake: number; escrow: { pid: string; nick: string; sock: WebSocket }[] }>();
-  private static readonly BG_CAPS: Record<string, number> = { chess: 2, morris: 2, ski: 4 };
+  private static readonly BG_CAPS: Record<string, number> = { chess: 2, morris: 2, ski: 4, golf: 4 };
   private static readonly BG_MAX_STAKE = 10_000_000;
 
   private bgRoom(game: string) {

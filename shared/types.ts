@@ -203,7 +203,7 @@ export interface CosmeticItem {
   name: string;
   slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' | 'title' | 'song' | 'car' | 'boat' | 'pet' | 'carcolor';
   price: number;
-  locked?: 'campaign' | 'fishing' | 'fishing_rare' | 'fishing_junk' | 'dungeon' | 'fountain' | 'desert' | 'club'; // not buyable — unlocked by in-game achievements
+  locked?: 'campaign' | 'fishing' | 'fishing_rare' | 'fishing_junk' | 'dungeon' | 'fountain' | 'desert' | 'club' | 'golf'; // not buyable — unlocked by in-game achievements
   audio?: string; // for 'song' items: path to the mp3 that plays during your matches
 }
 // Static cosmetics cost 1000 coins; animated ones cost 2000 (10×/20× the COIN_SCALE base).
@@ -260,6 +260,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'wisher', name: '⛲ Wisher', slot: 'title', price: 0, locked: 'fountain' }, // the fountain grants ~1 wish in 77
   { id: 'club-member', name: '⛳ Old Money', slot: 'title', price: 0, locked: 'club' }, // the Country Club initiation fee is not discussed in public
   { id: 'club-champ', name: '🏌️ Club Champion', slot: 'title', price: 0, locked: 'club' }, // earned, not bought (unlike everything else up there)
+  { id: 'golf-champ', name: '⛳ Golf Champion', slot: 'title', price: 0, locked: 'golf' }, // shot all 18. the course does not care that it hurt.
   { id: 'clown', name: '🤡 Clown', slot: 'title', price: 1000 },
   { id: 'sharpshooter', name: '🎯 Sharpshooter', slot: 'title', price: 3000 },
   { id: 'champion', name: '🏅 Champion', slot: 'title', price: 3000 },
@@ -310,6 +311,7 @@ export const COSMETICS: readonly CosmeticItem[] = [
   { id: 'car-monster', name: '🛻 Monster Truck', slot: 'car', price: 0, locked: 'dungeon' }, // the Ruins locked-room prize
   // Boats (slot 'boat') — equipped alongside a car; usable on water. Look/physics live in CARS.
   { id: 'car-boat', name: "🛥️ Bill's Boat", slot: 'boat', price: 0, locked: 'fishing_junk' }, // fish up boat keys from junk to unlock (it's a yacht)
+  { id: 'car-golfcart', name: '🛺 Golf Cart', slot: 'car', price: 0, locked: 'golf' }, // shoot 18 holes to unlock — drive it anywhere, not just the fairway
   // Car paint jobs (slot 'carcolor') — an optional repaint layered over whichever car you've
   // equipped (never a boat — the yacht always keeps its own colours); look lives in CAR_COLORS
   // below. Equip none to keep the car's stock paint.
@@ -454,7 +456,7 @@ export const WORLD_AVATAR = {
 // screen), and so client geometry derives from one source of truth.
 export const WORLD_BOUNDS = {
   minX: -24000,           // ← the Great Western Nothing
-  minY: -1300,            // ↑ the Tsong Country Club
+  minY: -2600,            // ↑ the Tsong Country Club (grown to fit the real 18-hole course — keep in sync with CLUB.h in client/world.ts)
   maxX: 4800 + 9600,      // → the Frostreach (= WORLD.w + its width)
   maxY: 2200 + 4200,      // ↓ the Great Southern Damp (= WORLD.h + its depth)
 } as const;
@@ -484,6 +486,8 @@ export const CARS: readonly CarSpec[] = [
   { id: 'car-monster', name: 'Monster Truck', body: '#cc2222', accent: '#1a1a1a', speed: 600, accel: 820, turn: 2.0, grip: 0.92 },
   // Bill's Boat: a little white-and-navy yacht fished up from junk. Glides on water — low grip.
   { id: 'car-boat',    name: "Bill's Boat",  body: '#eef3f8', accent: '#2f6fa8', speed: 560, accel: 600, turn: 2.5, grip: 0.55 },
+  // The Golf Cart: the 18-hole course's own prize. Slow and stately, but turns on a dime.
+  { id: 'car-golfcart', name: 'Golf Cart', body: '#f4f0e0', accent: '#2f6b3f', speed: 420, accel: 520, turn: 3.4, grip: 0.9 },
 ] as const;
 export function carById(id: string | null | undefined): CarSpec | null {
   if (!id) return null;

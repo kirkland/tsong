@@ -97,6 +97,7 @@ import {
   type LootResultMsg,
   type MarketItemView,
   LOOT_TABLE,
+  type BgLobbyMsg,
 } from '../shared/types';
 import { drawCosmeticPreview, drawLegendIcon } from './render';
 
@@ -265,6 +266,15 @@ export interface WorldNet {
   owns(id: string): boolean;                           // do we own this cosmetic/item id? (wallet.owned)
   joinClub(): void;                                    // apply to the Country Club (server validates the 1,000,000🪙 fee)
   clubDrink(): void;                                   // order the '52 Reserve at the 19th Hole (server charges)
+  // The Course — 2-4 player PvP rounds ride the same bg-relay room shape as chess/morris/ski
+  // (game key 'golf'), just fed straight back into World instead of a lazy-loaded overlay, since
+  // golf is played in-place on the grounds rather than in a teleported-away minigame.
+  golfJoin(): void;
+  golfLeave(): void;
+  golfStake(stake: number): void;
+  golfStart(): void;
+  golfResult(winner: number): void;
+  golfRelay(data: unknown): void;
   jail(): void;                  // self-report a drunk-drive attempt (server jails you if 2+ beers in)
   bail(targetId: string): void;  // pay 500🪙 to bail a jailed avatar out (id; may be your own)
   amJailed(): boolean;           // are WE currently locked in the jail cell?
@@ -497,8 +507,38 @@ const TILE = 32;           // ground tile size, world units (a 16px Kenney tile 
 const DESERT = { w: 24000, seed: 0xC0FFEE };
 // Tsong Country Club: a members-only golf establishment north of town. The gate has been
 // broken since '09. Spiritually, it stands.
-const CLUB = { h: 1300 };
+const CLUB = { h: 2600 }; // grown from 1300 to fit the real 18-hole course (see GOLF_HOLES) — keep in sync with WORLD_BOUNDS.minY in shared/types.ts
 const CLUB_GATE_Y = -4; // non-members are clamped here — right at the gate posts, not one step past
+
+// --- The Course: a real, playable 18-hole layout north of the clubhouse -----------------------
+// A 6-column × 3-row snake grid (holes 1–6 run west→east, 7–12 back east→west, 13–18 west→east
+// again) so each hole's green sits close to the next hole's tee. Par totals a regulation 72.
+// Purely geometric — no art here, just the numbers makeClub()/golf gameplay both read from.
+const GOLF_PARS: readonly number[] = [4, 3, 5, 4, 3, 4, 5, 3, 4, 4, 5, 3, 4, 4, 3, 5, 4, 5]; // sums to 72
+const GOLF_COLS_X: readonly number[] = [420, 1170, 1920, 2670, 3420, 4170];
+const GOLF_ROW_GAP = 220; // cart-path breathing room between one row's deepest green and the next row's tee line
+const GOLF_DIST_BY_PAR: Record<number, number> = { 3: 260, 4: 420, 5: 580 };
+export interface GolfHole { n: number; par: number; tee: { x: number; y: number }; green: { x: number; y: number }; greenR: number }
+function buildGolfHoles(): GolfHole[] {
+  const holes: GolfHole[] = [];
+  let rowTeeY = -140;
+  for (let row = 0; row < 3; row++) {
+    const colOrder = row % 2 === 0 ? [0, 1, 2, 3, 4, 5] : [5, 4, 3, 2, 1, 0];
+    let deepestGreenY = 0;
+    for (let k = 0; k < 6; k++) {
+      const n = row * 6 + k + 1;
+      const par = GOLF_PARS[n - 1];
+      const dist = GOLF_DIST_BY_PAR[par];
+      const x = GOLF_COLS_X[colOrder[k]];
+      const greenY = rowTeeY - dist;
+      holes.push({ n, par, tee: { x, y: rowTeeY }, green: { x, y: greenY }, greenR: 95 });
+      deepestGreenY = Math.min(deepestGreenY, greenY);
+    }
+    rowTeeY = deepestGreenY - GOLF_ROW_GAP;
+  }
+  return holes;
+}
+const GOLF_HOLES: readonly GolfHole[] = buildGolfHoles();
 // The Great Southern Damp — a bayou-bog south of town. Smaller than the Nothing, considerably
 // wetter, and much more inhabited. Walkable ground ends at the shore; the pier goes further.
 const SOUTH = { h: 4200, seed: 0xB0661E };
@@ -2384,6 +2424,10 @@ function hueToInt(h: number, s = 0.85, l = 0.55): number {
 }
 let wishHandler: ((total: number, granted: boolean) => void) | null = null;
 export function feedWishResult(m: { total: number; title?: boolean }) { wishHandler?.(m.total, !!m.title); }
+let golfLobbyHandler: ((msg: BgLobbyMsg) => void) | null = null;
+let golfRelayHandler: ((data: unknown) => void) | null = null;
+export function feedGolfLobby(msg: BgLobbyMsg): void { golfLobbyHandler?.(msg); }
+export function feedGolfRelay(data: unknown): void { golfRelayHandler?.(data); }
 
 export function startWorld(net: WorldNet): void {
   if (controller) return; // already open
@@ -3322,10 +3366,10 @@ export function startWorld(net: WorldNet): void {
       ctx.beginPath(); ctx.ellipse(X(bx), Y(by), 110 * sx, 50 * sy, 0, 0, Math.PI * 2); ctx.fill();
     }
     ctx.fillStyle = '#5fc25c';
-    for (const [hx, hy] of [[1150, -720], [2100, -1050], [3000, -820], [3900, -1100], [520, -1050]]) {
-      ctx.beginPath(); ctx.ellipse(X(hx), Y(hy), 95 * sx, 48 * sy, 0, 0, Math.PI * 2); ctx.fill();
+    for (const gh of GOLF_HOLES) {
+      ctx.beginPath(); ctx.ellipse(X(gh.green.x), Y(gh.green.y), 95 * sx, 48 * sy, 0, 0, Math.PI * 2); ctx.fill();
     }
-    mark(CLUBHOUSE.x, CLUBHOUSE.y, '🏛️', iconPx); mark(2100, -1000, '🌀', iconPx); mark(TEE.x, TEE.y, '⛳', iconPx);
+    mark(CLUBHOUSE.x, CLUBHOUSE.y, '🏛️', iconPx); mark(2100, -1000, '🌀', iconPx); mark(GOLF_HOLES[0].tee.x, GOLF_HOLES[0].tee.y, '⛳', iconPx);
     // the Nothing: its constellation of landmarks (plus the wall at the end)
     mark(-4800, 990, '⛽', iconPx); mark(-8000, 1160, '🗿', iconPx); mark(-14500, 1160, '🌴', iconPx);
     mark(-19000, 1000, '🎬', iconPx); mark(-22620, 1020, '🛖', iconPx);
@@ -5161,6 +5205,7 @@ export function startWorld(net: WorldNet): void {
     fishing_rare: { tag: '🔒 Fishing', how: 'Land a rare-or-better fish to unlock' },
     fishing_junk: { tag: '🔒 Fishing', how: 'Fish up boat keys from junk to unlock' },
     dungeon: { tag: '🔒 The Ruins', how: 'Loot the sealed vault in The Ruins to unlock' },
+    golf: { tag: '🔒 The Course', how: 'Play all 18 holes at the Country Club to unlock' },
   };
   let shopWorldTab: ShopTabId = 'hat';
   const shopWorldPreviewCanvases: { canvas: HTMLCanvasElement; id: string; slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' }[] = [];
@@ -8924,6 +8969,7 @@ export function startWorld(net: WorldNet): void {
   function triggerNear() {
     if (dialogOpen || talkOpen) return;
     if (puttCharging) { strikePutt(); return; } // mid-swing: the button IS the putter
+    if (golfCharging) { strikeGolfSwing(); return; } // mid-swing on the Course: same idea
     if (nearNetizen) {
       const a = others.find((o) => o.id === nearNetizen);
       if (!a) return;
@@ -8966,6 +9012,8 @@ export function startWorld(net: WorldNet): void {
     const b = WORLD_BUILDINGS.find((x) => x.id === nearId);
     if (b) { enterBuilding(b.kind); return; }
     if (nearClubDoor) { clubInteract(); return; } // the exterior clubhouse door (join / enter)
+    if (nearGolfTee) { openGolfStartDialog(); return; }
+    if (nearGolfBall) { startGolfSwing(); return; }
     if (nearParcel) openLandDialog(nearParcel); // walk onto a Robville lot → buy/sell it
   }
 
@@ -9585,6 +9633,13 @@ export function startWorld(net: WorldNet): void {
     nearClubDoor = !best && !nearNpc && !nearNetizen && !inInterior
       && (Math.hypot(selfX - CLUBHOUSE.x, selfY - (CLUBHOUSE.y + 40)) < 60
         || Math.hypot(selfX - CLUB_GATE.x, selfY - CLUB_GATE.y) < 70);
+    // The Course: the live ball mid-round (swing) wins over hole 1's tee (manage/start a round) —
+    // they sit in the same spot at the start of hole 1, and a round in progress there should
+    // always let you swing rather than re-opening the start/abandon menu.
+    nearGolfBall = !best && !nearNpc && !nearNetizen && !inInterior && golfMode !== 'off' && !!golfBallPos
+      && Math.hypot(selfX - golfBallPos.x, selfY - golfBallPos.y) < 60;
+    nearGolfTee = !nearGolfBall && !best && !nearNpc && !nearNetizen && !inInterior
+      && Math.hypot(selfX - GOLF_HOLES[0].tee.x, selfY - GOLF_HOLES[0].tee.y) < 60;
     // A Robville lot you're standing on (or right beside) → buy/sell prompt. Lowest priority so it
     // never steals focus from a door, person, or jailed neighbor.
     nearParcel = null;
@@ -9617,6 +9672,10 @@ export function startWorld(net: WorldNet): void {
       prompt.textContent = "⊞ Nine Men's Morris (PvP)";
     } else if (nearClubDoor) {
       prompt.textContent = net.owns('club-member') ? '🏛️ Enter the Clubhouse' : '🏛️ Apply for Membership';
+    } else if (nearGolfTee) {
+      prompt.textContent = golfMode === 'off' ? '⛳ Play the Course' : '⛳ The Course (manage round)';
+    } else if (nearGolfBall) {
+      prompt.textContent = golfCharging ? '⛳ Strike!' : golfMode === 'pvp' && golfPvpTurnSlot !== golfPvpMySlot ? '⛳ Waiting for your turn…' : '⛳ Swing';
     } else if (nearSwan) {
       prompt.textContent = '🦢 Bartholomew';
     } else if (nearBook) {
@@ -12885,6 +12944,7 @@ export function startWorld(net: WorldNet): void {
       updateDesert(now, dt);
       updateClub(now);
       updateClubhouse(now, dt);
+      updateGolf(dt);
       updateSwamp(now, dt);
       updateEast(now, dt);
       updateNearBuilding();
@@ -14187,7 +14247,6 @@ export function startWorld(net: WorldNet): void {
   // --- Tsong Country Club: grounds, windmill, and the eternal war against the bunker ------
   let windmillBlades: Phaser.GameObjects.Container | null = null;
   let clubSprinklers: { x: number; y: number; g: Phaser.GameObjects.Graphics }[] = [];
-  const TEE = { x: 900, y: -650 };
   const CLUBHOUSE = { x: 2450, y: -300 };
   const CLUB_GATE = { x: 2450, y: -30 }; // the actual gate posts — where non-members apply (the only part of the property they can reach)
 
@@ -14213,10 +14272,17 @@ export function startWorld(net: WorldNet): void {
     path.lineStyle(30, 0xcbb083, 0.92);
     path.beginPath();
     path.moveTo(2450, -6); path.lineTo(2450, -196);                       // gate → clubhouse
-    path.moveTo(2450, -196); path.lineTo(1800, -480); path.lineTo(1150, -640); path.lineTo(TEE.x + 40, TEE.y + 10); // west loop: green 1 + the tee
     path.moveTo(1800, -480); path.lineTo(2060, -930);                     // spur up to the windmill
     path.moveTo(2450, -196); path.lineTo(3050, -350); path.lineTo(3350, -440); // east loop: the pond + Bill's bunker
     path.strokePath();
+    // the real course: one continuous cart path, clubhouse → hole 1 → … → hole 18
+    const coursePath = sc.add.graphics().setDepth(GD + 2);
+    coursePath.lineStyle(24, 0xcbb083, 0.85);
+    coursePath.beginPath();
+    coursePath.moveTo(CLUBHOUSE.x, CLUBHOUSE.y + 90);
+    coursePath.lineTo(GOLF_HOLES[0].tee.x, GOLF_HOLES[0].tee.y);
+    for (const gh of GOLF_HOLES) { coursePath.lineTo(gh.tee.x, gh.tee.y); coursePath.lineTo(gh.green.x, gh.green.y); }
+    coursePath.strokePath();
     // the boundary: a white post-and-rail fence with a proud gate gap (and one flattened span)
     const RAIL = 0xe8e4d8, RAIL_D = 0xd4cfc0;
     for (const [x0, x1] of [[30, 2330], [2570, 3540], [3680, WORLD.w - 30]] as [number, number][]) {
@@ -14245,16 +14311,27 @@ export function startWorld(net: WorldNet): void {
         speck.fillRect(bx + Math.cos(a) * bw * rr, by + Math.sin(a) * bh * rr, 3, 2);
       }
     }
-    // greens: fringe ring + putting surface + cup + numbered flag (flags y-sort with avatars)
-    const holes: [number, number, string][] = [[1150, -720, '1'], [2100, -1050, '2'], [3000, -820, '3'], [3900, -1100, '4'], [520, -1050, '7']];
-    for (const [hx, hy, num] of holes) {
-      sc.add.ellipse(hx, hy, 214, 112, 0x4da24b).setDepth(GD + 3);        // fringe
-      sc.add.ellipse(hx, hy, 190, 96, 0x5fc25c).setDepth(GD + 4);         // the green
-      sc.add.ellipse(hx - 14, hy - 8, 120, 52, 0x6ed26a, 0.55).setDepth(GD + 5); // sheen
-      sc.add.circle(hx, hy, 6, 0x1a2410).setDepth(GD + 6);
-      sc.add.rectangle(hx, hy - 26, 3, 52, 0xe8e0d0).setDepth(hy);
-      sc.add.triangle(hx + 12, hy - 44, 0, 0, 22, 7, 0, 14, 0xc0392b).setDepth(hy);
-      sc.add.text(hx + 8, hy - 46, num, { fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#fff', resolution: 2 }).setOrigin(0, 0.5).setDepth(hy + 1);
+    // THE COURSE: 18 real holes — fairway strip, tee box + signage, green/cup/numbered flag.
+    // (flags y-sort with avatars, same as the old decorative ones did.)
+    for (const gh of GOLF_HOLES) {
+      const { x: fx, y: ty } = gh.tee, { x: gx, y: gy } = gh.green;
+      // fairway: a mown strip running tee → green (this grid's fairways are always vertical)
+      sc.add.rectangle(fx, (ty + gy) / 2, 200, Math.abs(ty - gy) + 20, 0x4fae4d).setDepth(GD + 2);
+      // tee box
+      sc.add.rectangle(fx, ty, 70, 40, 0x5fc25c).setStrokeStyle(2, 0x35722f).setDepth(GD + 4);
+      sc.add.rectangle(fx - 16, ty - 4, 3, 10, 0xffffff).setDepth(GD + 5);
+      sc.add.rectangle(fx + 16, ty - 4, 3, 10, 0xffffff).setDepth(GD + 5);
+      sc.add.text(fx, ty + 26, `⛳ HOLE ${gh.n} · PAR ${gh.par}`, {
+        fontFamily: 'ui-monospace, monospace', fontSize: '8px', color: '#e8f4e8', resolution: 2,
+      }).setOrigin(0.5, 0).setAlpha(0.85).setDepth(GD + 5);
+      // green: fringe ring + putting surface + cup + numbered flag
+      sc.add.ellipse(gx, gy, 214, 112, 0x4da24b).setDepth(GD + 3);        // fringe
+      sc.add.ellipse(gx, gy, 190, 96, 0x5fc25c).setDepth(GD + 4);         // the green
+      sc.add.ellipse(gx - 14, gy - 8, 120, 52, 0x6ed26a, 0.55).setDepth(GD + 5); // sheen
+      sc.add.circle(gx, gy, 6, 0x1a2410).setDepth(GD + 6);
+      sc.add.rectangle(gx, gy - 26, 3, 52, 0xe8e0d0).setDepth(gy);
+      sc.add.triangle(gx + 12, gy - 44, 0, 0, 22, 7, 0, 14, 0xc0392b).setDepth(gy);
+      sc.add.text(gx + 8, gy - 46, String(gh.n), { fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#fff', resolution: 2 }).setOrigin(0, 0.5).setDepth(gy + 1);
     }
     // the 19th hole: flag planted IN the club pond, which also gets reeds and a glint
     sc.add.ellipse(3050, -260, 320, 142, 0x2f6329).setDepth(GD + 3);      // the bank
@@ -14272,9 +14349,10 @@ export function startWorld(net: WorldNet): void {
     // landscaping: a stately treeline along the far edge + scattered clumps (same Kenney canopy as town)
     const clear2 = (x: number, y: number) =>
       Math.hypot(x - CLUBHOUSE.x, y - CLUBHOUSE.y) > 260 && Math.hypot(x - 2100, y + 1000) > 180 &&
-      Math.hypot(x - TEE.x, y - TEE.y) > 120 && Math.hypot(x - 3050, y + 260) > 240 &&
-      !holes.some(([hx, hy]) => Math.hypot(x - hx, y - hy) < 170) &&
-      !bunkers.some(([bx, by, bw]) => Math.hypot(x - bx, y - by) < bw / 2 + 60);
+      Math.hypot(x - 3050, y + 260) > 240 &&
+      !bunkers.some(([bx, by, bw]) => Math.hypot(x - bx, y - by) < bw / 2 + 60) &&
+      !GOLF_HOLES.some((h) => Math.hypot(x - h.green.x, y - h.green.y) < 170 || Math.hypot(x - h.tee.x, y - h.tee.y) < 110
+        || (Math.abs(x - h.tee.x) < 110 && y < h.tee.y + 20 && y > h.green.y - 20)); // clear the fairway strip too
     for (let i = 0; i < 46; i++) { // the treeline
       const tx3 = 40 + rnd() * (WORLD.w - 80), ty3 = -CLUB.h + 44 + rnd() * 60;
       const img = sc.add.image(tx3, ty3, 'townFrames', rnd() > 0.5 ? TT.pines[Math.floor(rnd() * 2)] : TT.trees[Math.floor(rnd() * 2)])
@@ -14363,13 +14441,6 @@ export function startWorld(net: WorldNet): void {
       fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#3a2a18', backgroundColor: '#e8d8b0',
       padding: { x: 4, y: 2 }, resolution: 2,
     }).setOrigin(0.5, 1).setAngle(-6).setDepth(-3);
-    // tee box
-    sc.add.rectangle(TEE.x, TEE.y, 64, 36, 0x5fc25c).setStrokeStyle(2, 0x35722f).setDepth(GD + 4);
-    sc.add.rectangle(TEE.x - 14, TEE.y - 4, 3, 10, 0xffffff).setDepth(GD + 5); // tee markers
-    sc.add.rectangle(TEE.x + 14, TEE.y - 4, 3, 10, 0xffffff).setDepth(GD + 5);
-    sc.add.text(TEE.x, TEE.y + 24, 'TEE · press X', {
-      fontFamily: 'ui-monospace, monospace', fontSize: '8px', color: '#e8f4e8', resolution: 2,
-    }).setOrigin(0.5, 0).setAlpha(0.8).setDepth(GD + 5);
     // an abandoned golf cart, wheels-deep in the rough (its final score: unknowable)
     sc.add.rectangle(3620, -940, 40, 22, 0xf0ead8).setOrigin(0.5, 1).setDepth(-940);
     sc.add.rectangle(3620, -962, 34, 5, 0xf0ead8).setOrigin(0.5, 1).setDepth(-940);
@@ -14398,20 +14469,6 @@ export function startWorld(net: WorldNet): void {
   }
 
   function clubInteract(): boolean {
-    if (Math.hypot(selfX - TEE.x, selfY - TEE.y) < 50) {
-      let lost = 0;
-      try { lost = (parseInt(localStorage.getItem('tsong.golf.lost') || '0', 10) || 0) + 1; localStorage.setItem('tsong.golf.lost', String(lost)); } catch { /* ignore */ }
-      const sc4 = lifeSc;
-      if (sc4) {
-        const ball = sc4.add.circle(selfX, selfY - 14, 4, 0xffffff).setDepth(999999);
-        sc4.tweens.add({
-          targets: ball, x: selfX + 500 + Math.random() * 700, y: selfY - 420 - Math.random() * 200,
-          alpha: 0, duration: 1400, ease: 'Quad.easeOut', onComplete: () => ball.destroy(),
-        });
-      }
-      showToast(`⛳ <b>fore.</b> <i>the ball is gone. it was always going to be gone.</i><br>balls lost to the void: <b>${lost}</b>`);
-      return true;
-    }
     // The door: reachable only once you're already a member (the gate stops everyone else).
     if (net.owns('club-member') && Math.hypot(selfX - CLUBHOUSE.x, selfY - (CLUBHOUSE.y + 40)) < 60) {
       enterClubhouse(); return true;
@@ -14862,6 +14919,326 @@ export function startWorld(net: WorldNet): void {
       s.x += (dx / m) * spd; s.y += (dy / m) * spd;
       s.spr.setFlipX(dx < 0);
       s.spr.setPosition(s.x, s.y + Math.sin(now / 600) * 2).setDepth(s.y);
+    }
+  }
+
+  // --- The Course: 18 real holes, played out on the grounds built in makeClub(). One shared
+  // charge-meter "swing" (reused for both the tee/approach shot and the putt — see the sweet
+  // zone in computeGolfSwingOutcome) carries you hole to hole. Solo is pure client-side, like the
+  // clubhouse's practice green; Multiplayer rides the same bg-relay room shape as chess/morris/ski
+  // (game key 'golf') but every client runs identical logic and trusts the shot that comes over
+  // the relay, exactly like chess trusts a move — there's no "host simulates" step to keep in sync.
+  type GolfMode = 'off' | 'solo' | 'pvp';
+  let golfMode: GolfMode = 'off';
+  let golfHoleIdx = 0;                    // solo: 0-based index into GOLF_HOLES
+  let golfStrokesThisHole = 0;            // solo
+  let golfScorecard: number[] = [];       // solo: strokes per completed hole
+  let golfBallPos: { x: number; y: number } | null = null; // MY ball's current world position
+  let golfBallSpr: Phaser.GameObjects.Arc | null = null;
+  let golfMeter: Phaser.GameObjects.Graphics | null = null;
+  let golfCharging = false, golfBusy = false, golfPhase = 0;
+  let nearGolfTee = false;  // standing at hole 1's tee — offer to start/manage a round
+  let nearGolfBall = false; // standing at the live ball mid-round — offer to swing
+
+  interface GolfPvpPlayer { slot: number; name: string; strokes: number[]; curStrokes: number; ballX: number; ballY: number; holedOut: boolean }
+  let golfLobbyView: { status: 'waiting' | 'playing' | 'ended'; slot: number; players: { name: string; slot: number }[]; stake: number } = { status: 'waiting', slot: 0, players: [], stake: 0 };
+  let golfPvpPlayers: GolfPvpPlayer[] = [];
+  let golfPvpHoleIdx = 0;
+  let golfPvpTurnSlot = 0;
+  let golfPvpMySlot = 0;
+  let golfPvpHud: HTMLDivElement | null = null;
+  let golfShowingResults = false; // a "Round Complete" dialog is up — don't let a rematch-lobby broadcast steal it
+
+  function ensureGolfBall() {
+    const sc = petScene;
+    if (!sc || golfBallSpr) return;
+    golfBallSpr = sc.add.circle(0, 0, 5, 0xffffff).setStrokeStyle(1, 0x1a2410).setDepth(999998).setVisible(false);
+    golfMeter = sc.add.graphics().setDepth(999998);
+  }
+
+  function loseGolfBall(): number {
+    let lost = 0;
+    try { lost = (parseInt(localStorage.getItem('tsong.golf.lost') || '0', 10) || 0) + 1; localStorage.setItem('tsong.golf.lost', String(lost)); } catch { /* ignore */ }
+    return lost;
+  }
+
+  function parFlavor(strokes: number, par: number): string {
+    const d = strokes - par;
+    if (d <= -3) return '🦅🦅 Albatross!';
+    if (d === -2) return '🦅 Eagle!';
+    if (d === -1) return '🐦 Birdie!';
+    if (d === 0) return '⛳ Par.';
+    if (d === 1) return '😬 Bogey.';
+    if (d === 2) return '😩 Double bogey.';
+    return '🙈 Chaos.';
+  }
+
+  // Pure outcome math: given where the sinusoid needle froze (p, 0..1) and where the ball sits,
+  // decide where it ends up. On the green, the sweet zone sinks it (or rolls it most of the way
+  // there on a long green); off the green, the sweet zone flies it onto the green outright.
+  // A missed swing always still advances toward the pin — the round is guaranteed to end — except
+  // for a rare shank on a full-length shot, which sends the ball over the fence (a stroke, and a
+  // nod to the joke tee this course grew out of) back to this hole's tee.
+  function computeGolfSwingOutcome(p: number, hole: GolfHole, from: { x: number; y: number }): { toX: number; toY: number; holedOut: boolean; lost: boolean } {
+    const remaining = Math.hypot(from.x - hole.green.x, from.y - hole.green.y);
+    const onGreen = remaining <= hole.greenR;
+    const sweet = p >= 0.68 && p <= 0.90;
+    if (onGreen) {
+      if (sweet) {
+        if (remaining < 45) return { toX: hole.green.x, toY: hole.green.y, holedOut: true, lost: false };
+        const frac = 0.85;
+        return { toX: from.x + (hole.green.x - from.x) * frac, toY: from.y + (hole.green.y - from.y) * frac, holedOut: false, lost: false };
+      }
+      const frac = 0.3 + p * 0.35;
+      const toX = from.x + (hole.green.x - from.x) * frac + (Math.random() - 0.5) * 22;
+      const toY = from.y + (hole.green.y - from.y) * frac + (Math.random() - 0.5) * 14;
+      const holedOut = Math.hypot(toX - hole.green.x, toY - hole.green.y) < 16; // a lucky tap-in
+      return { toX, toY, holedOut, lost: false };
+    }
+    if (sweet) {
+      const ang = Math.random() * Math.PI * 2, r = Math.random() * hole.greenR * 0.35;
+      return { toX: hole.green.x + Math.cos(ang) * r, toY: hole.green.y + Math.sin(ang) * r, holedOut: false, lost: false };
+    }
+    if (remaining > 300 && Math.random() < 0.05) return { toX: hole.tee.x, toY: hole.tee.y, holedOut: false, lost: true };
+    const frac = 0.35 + p * 0.4;
+    const toX = from.x + (hole.green.x - from.x) * frac + (Math.random() - 0.5) * 90;
+    const toY = from.y + (hole.green.y - from.y) * frac;
+    return { toX, toY, holedOut: false, lost: false };
+  }
+
+  // Animates the shared ball sprite from → to (spectators and the acting player alike). A "lost"
+  // shot gets the joke-tee treatment: flung off-screen, then quietly reset at the tee.
+  function playGolfShot(from: { x: number; y: number }, to: { x: number; y: number }, lost: boolean, onDone: () => void) {
+    ensureGolfBall();
+    const sc = petScene;
+    if (!sc || !golfBallSpr) { onDone(); return; }
+    golfBallSpr.setPosition(from.x, from.y).setAlpha(1).setVisible(true);
+    if (lost) {
+      tone(140, 0.2, 'sawtooth', 0.06, 60);
+      sc.tweens.add({
+        targets: golfBallSpr, x: from.x + 500 + Math.random() * 700, y: from.y - 420 - Math.random() * 200, alpha: 0,
+        duration: 1200, ease: 'Quad.easeOut',
+        onComplete: () => { golfBallSpr!.setPosition(to.x, to.y).setAlpha(1); onDone(); },
+      });
+      return;
+    }
+    tone(220, 0.05, 'square', 0.05);
+    sc.tweens.add({
+      targets: golfBallSpr, x: to.x, y: to.y,
+      duration: 500 + Math.min(900, Math.hypot(to.x - from.x, to.y - from.y) * 0.6), ease: 'Quad.easeOut',
+      onComplete: onDone,
+    });
+  }
+
+  function startGolfSwing() {
+    if (golfBusy || golfCharging || golfMode === 'off') return;
+    if (golfMode === 'pvp' && golfPvpTurnSlot !== golfPvpMySlot) { showToast('⛳ Not your shot yet.'); return; }
+    golfCharging = true; golfPhase = 0;
+  }
+  function cancelGolfSwing() {
+    golfCharging = false; golfBusy = false;
+    golfMeter?.clear();
+  }
+  function strikeGolfSwing() {
+    if (!golfCharging || !golfBallPos) return;
+    golfCharging = false; golfBusy = true;
+    golfMeter?.clear();
+    const hole = GOLF_HOLES[golfMode === 'pvp' ? golfPvpHoleIdx : golfHoleIdx];
+    const p = Math.abs(Math.sin(golfPhase));
+    const from = { ...golfBallPos };
+    const outcome = computeGolfSwingOutcome(p, hole, from);
+    playGolfShot(from, { x: outcome.toX, y: outcome.toY }, outcome.lost, () => {
+      if (outcome.holedOut) tone(880, 0.12, 'sine', 0.06, 660); else tone(140, 0.15, 'sine', 0.05, 100);
+      if (outcome.lost) {
+        const lost = loseGolfBall();
+        showToast(`⛳ <b>fore.</b> <i>gone. always gone.</i> back to the tee. balls lost to the void: <b>${lost}</b>`);
+      }
+      if (golfMode === 'solo') {
+        golfBallPos = { x: outcome.toX, y: outcome.toY };
+        golfStrokesThisHole++;
+        if (outcome.holedOut) {
+          golfScorecard.push(golfStrokesThisHole);
+          showToast(`${parFlavor(golfStrokesThisHole, hole.par)} Hole ${hole.n}: ${golfStrokesThisHole} (par ${hole.par})`);
+          if (golfHoleIdx >= GOLF_HOLES.length - 1) finishGolfSolo();
+          else startGolfHole(golfHoleIdx + 1);
+        }
+      } else if (golfMode === 'pvp') {
+        const mine = golfPvpPlayers.find((pl) => pl.slot === golfPvpMySlot);
+        const strokes = (mine?.curStrokes ?? 0) + 1;
+        net.golfRelay({ slot: golfPvpMySlot, holeIdx: golfPvpHoleIdx, toX: outcome.toX, toY: outcome.toY, holedOut: outcome.holedOut, strokes });
+        commitGolfPvpShot(golfPvpMySlot, { toX: outcome.toX, toY: outcome.toY, holedOut: outcome.holedOut, strokes });
+      }
+      golfBusy = false;
+    });
+  }
+
+  // --- Solo round ---
+  function startGolfHole(idx: number) {
+    golfHoleIdx = idx;
+    golfStrokesThisHole = 0;
+    const t = GOLF_HOLES[idx].tee;
+    golfBallPos = { x: t.x, y: t.y };
+    ensureGolfBall();
+    golfBallSpr?.setPosition(t.x, t.y).setVisible(true);
+  }
+  function startGolfSolo() {
+    golfMode = 'solo';
+    golfScorecard = [];
+    startGolfHole(0);
+    showToast('⛳ Round started — Hole 1. Walk to your ball and press X to swing.');
+  }
+  function finishGolfSolo() {
+    const total = golfScorecard.reduce((a, b) => a + b, 0);
+    const par = GOLF_HOLES.reduce((a, h) => a + h.par, 0);
+    const diff = total - par;
+    const rows = GOLF_HOLES.map((h, i) => `${h.n}: ${golfScorecard[i]} (par ${h.par})`).join('\n');
+    golfMode = 'off';
+    golfBallSpr?.setVisible(false);
+    net.claimQuest('golf-18');
+    openDialog('⛳ Round Complete', `${rows}\n\nTotal: ${total} (${diff > 0 ? '+' : ''}${diff} to par)`, [
+      { label: 'Nice.', onPick: () => closeDialog() },
+    ]);
+  }
+  function abandonGolfRound() {
+    if (golfMode === 'pvp') net.golfLeave();
+    golfMode = 'off';
+    golfBallSpr?.setVisible(false);
+    removeGolfPvpHud();
+    showToast('⛳ Round abandoned.');
+  }
+
+  // --- Multiplayer round (2-4, PvP) — lobby via the shared bg-relay room (game key 'golf') ---
+  function nameForGolfSlot(slot: number) { return golfPvpPlayers.find((p) => p.slot === slot)?.name ?? `P${slot}`; }
+  function renderGolfLobbyDialog() {
+    const isHost = golfLobbyView.slot === 0;
+    const names = golfLobbyView.players.map((p) => p.name).join(', ') || '…';
+    const choices: { label: string; onPick: () => void }[] = [];
+    if (isHost) {
+      for (const s of [0, 1000, 10000, 100000]) {
+        if (s === golfLobbyView.stake) continue;
+        choices.push({ label: s === 0 ? '🤝 Friendly (no stake)' : `💰 Stake ${s.toLocaleString()}🪙 (winner takes all)`, onPick: () => net.golfStake(s) });
+      }
+    }
+    if (isHost && golfLobbyView.players.length >= 2) {
+      choices.push({ label: `🏁 Start Round (${golfLobbyView.players.length} players)`, onPick: () => net.golfStart() });
+    }
+    choices.push({ label: '🚪 Leave lobby', onPick: () => { closeDialog(); net.golfLeave(); } });
+    const stakeLine = golfLobbyView.stake > 0 ? `${golfLobbyView.stake.toLocaleString()}🪙 winner takes all` : 'Friendly (no stake)';
+    openDialog('🏆 Multiplayer Round — Lobby',
+      `Players seated (2-4): ${names}\nStake: ${stakeLine}\n${isHost ? 'You are the host — start once 2+ players are seated.' : "Waiting for the host to start…"}`,
+      choices);
+  }
+  function openGolfPvpLobby() {
+    golfLobbyView = { status: 'waiting', slot: 0, players: [], stake: 0 };
+    net.golfJoin();
+    renderGolfLobbyDialog();
+  }
+  function beginGolfPvpRound(players: { name: string; slot: number }[]) {
+    golfMode = 'pvp';
+    const t = GOLF_HOLES[0].tee;
+    golfPvpPlayers = players.map((p) => ({ slot: p.slot, name: p.name, strokes: [], curStrokes: 0, ballX: t.x, ballY: t.y, holedOut: false }));
+    golfPvpHoleIdx = 0;
+    golfPvpTurnSlot = golfPvpPlayers[0]?.slot ?? 0;
+    golfBallPos = { x: t.x, y: t.y };
+    ensureGolfBall();
+    golfBallSpr?.setPosition(t.x, t.y).setVisible(true);
+    showToast(`🏆 Round started! Hole 1 — ${nameForGolfSlot(golfPvpTurnSlot)} tees off first.`);
+    updateGolfPvpHud();
+  }
+  function advanceGolfPvpTurn() {
+    const order = golfPvpPlayers;
+    if (!order.length) return;
+    const curIdx = Math.max(0, order.findIndex((p) => p.slot === golfPvpTurnSlot));
+    for (let step = 1; step <= order.length; step++) {
+      const cand = order[(curIdx + step) % order.length];
+      if (!cand.holedOut) { golfPvpTurnSlot = cand.slot; return; }
+    }
+  }
+  function maybeAdvanceGolfPvpHole() {
+    if (golfPvpHoleIdx >= GOLF_HOLES.length - 1) { finishGolfPvpRound(); return; }
+    golfPvpHoleIdx++;
+    const t = GOLF_HOLES[golfPvpHoleIdx].tee;
+    for (const p of golfPvpPlayers) { p.holedOut = false; p.curStrokes = 0; p.ballX = t.x; p.ballY = t.y; }
+    golfPvpTurnSlot = golfPvpPlayers[0]?.slot ?? 0;
+    golfBallPos = { x: t.x, y: t.y };
+    golfBallSpr?.setPosition(t.x, t.y);
+    showToast(`⛳ Hole ${golfPvpHoleIdx + 1} — Par ${GOLF_HOLES[golfPvpHoleIdx].par}. ${nameForGolfSlot(golfPvpTurnSlot)} is up.`);
+  }
+  function finishGolfPvpRound() {
+    const totals = golfPvpPlayers.map((p) => ({ slot: p.slot, name: p.name, total: p.strokes.reduce((a, b) => a + b, 0) }));
+    totals.sort((a, b) => a.total - b.total);
+    const winner = totals[0];
+    const rows = totals.map((t, i) => `${i === 0 ? '🏆' : `${i + 1}.`} ${t.name} — ${t.total}`).join('\n');
+    if (winner) net.golfResult(winner.slot);
+    golfMode = 'off';
+    golfBallSpr?.setVisible(false);
+    removeGolfPvpHud();
+    golfShowingResults = true; // the table stays seated for a rematch — don't let that lobby refresh steal this dialog
+    openDialog('🏆 Round Complete', rows, [{ label: 'Nice.', onPick: () => { golfShowingResults = false; closeDialog(); } }]);
+  }
+  function commitGolfPvpShot(slot: number, result: { toX: number; toY: number; holedOut: boolean; strokes: number }) {
+    const pl = golfPvpPlayers.find((p) => p.slot === slot);
+    if (!pl) return;
+    pl.ballX = result.toX; pl.ballY = result.toY; pl.curStrokes = result.strokes;
+    if (result.holedOut) {
+      pl.strokes.push(result.strokes); pl.holedOut = true; pl.curStrokes = 0;
+      if (slot === golfPvpMySlot && pl.strokes.length === GOLF_HOLES.length) net.claimQuest('golf-18');
+    }
+    if (slot === golfPvpMySlot) golfBallPos = { x: result.toX, y: result.toY };
+    else golfBallSpr?.setPosition(golfBallPos?.x ?? result.toX, golfBallPos?.y ?? result.toY); // rest the shared sprite back on my own ball once the spectacle's over
+    if (golfPvpPlayers.every((p) => p.holedOut)) maybeAdvanceGolfPvpHole();
+    else advanceGolfPvpTurn();
+    updateGolfPvpHud();
+  }
+  function removeGolfPvpHud() { golfPvpHud?.remove(); golfPvpHud = null; }
+  function updateGolfPvpHud() {
+    if (golfMode !== 'pvp') { removeGolfPvpHud(); return; }
+    if (!golfPvpHud) {
+      golfPvpHud = document.createElement('div');
+      golfPvpHud.id = 'golfPvpHud';
+      golfPvpHud.style.cssText = 'position:fixed;top:12px;right:12px;z-index:9999;background:rgba(10,20,10,0.82);border:2px solid #4da24b;border-radius:8px;padding:8px 12px;color:#fff;font:13px/1.5 system-ui;min-width:180px;pointer-events:none;';
+      document.body.appendChild(golfPvpHud);
+    }
+    const hole = GOLF_HOLES[golfPvpHoleIdx];
+    const rows = golfPvpPlayers.map((p) => {
+      const total = p.strokes.reduce((a, b) => a + b, 0);
+      const turn = p.slot === golfPvpTurnSlot ? '▶ ' : '';
+      const live = !p.holedOut ? ` +${p.curStrokes}` : '';
+      return `<div style="display:flex;justify-content:space-between;gap:12px">`
+        + `<span>${turn}${p.name}${p.slot === golfPvpMySlot ? ' (you)' : ''}</span><span>${total}${live}</span></div>`;
+    }).join('');
+    golfPvpHud.innerHTML = `<div style="color:#8ee88a;font-weight:700;margin-bottom:4px">⛳ HOLE ${hole.n}/18 · PAR ${hole.par}</div>${rows}`;
+  }
+
+  function openGolfStartDialog() {
+    if (golfMode !== 'off') {
+      const hole = GOLF_HOLES[golfMode === 'pvp' ? golfPvpHoleIdx : golfHoleIdx];
+      openDialog('⛳ The Course', `Round in progress — Hole ${hole.n}. Your ball is out on the course.`, [
+        { label: 'Abandon round', onPick: () => { closeDialog(); abandonGolfRound(); } },
+      ]);
+      return;
+    }
+    openDialog('⛳ The Course', "Eighteen holes, a par of 72, and the club's good name riding on every stroke. How would you like to play?", [
+      { label: '🏌️ Solo Round', onPick: () => { closeDialog(); startGolfSolo(); } },
+      { label: '🏆 Multiplayer Round (2-4, PvP)', onPick: () => { closeDialog(); openGolfPvpLobby(); } },
+    ]);
+  }
+
+  function updateGolf(dt: number) {
+    if (golfMode === 'off' || !golfMeter) return;
+    if (golfCharging && golfBallPos && Math.hypot(selfX - golfBallPos.x, selfY - golfBallPos.y) > 70) cancelGolfSwing(); // wandered off mid-swing
+    if (golfCharging) {
+      golfPhase += dt * 2.2;
+      const p = Math.abs(Math.sin(golfPhase));
+      const bx = golfBallPos?.x ?? selfX, by = (golfBallPos?.y ?? selfY) - 40;
+      const mx = bx - 44, my = by - 16, mw = 88, mh = 9;
+      golfMeter.clear();
+      golfMeter.fillStyle(0x0a1410, 0.85); golfMeter.fillRect(mx - 2, my - 2, mw + 4, mh + 4);
+      golfMeter.fillStyle(0x2a4a2a, 1); golfMeter.fillRect(mx, my, mw, mh);
+      golfMeter.fillStyle(0xd8c088, 0.9); golfMeter.fillRect(mx + mw * 0.68, my, mw * 0.22, mh); // the sweet zone
+      golfMeter.fillStyle(0xffffff, 1); golfMeter.fillRect(mx + p * (mw - 2), my - 1, 2, mh + 2); // the needle
+    } else if (!golfBusy) {
+      golfMeter.clear();
     }
   }
 
@@ -16034,6 +16411,29 @@ export function startWorld(net: WorldNet): void {
     wishHandler = (total, granted) => {
       wishPlaque?.setText(`⛲ town wishes: ${total.toLocaleString()} · X to wish (10🪙)`);
       if (granted) showToast('⛲✨ <b>The fountain heard you.</b><br>Title unlocked: Wisher');
+    };
+    golfLobbyHandler = (msg) => {
+      const wasPlaying = golfLobbyView.status === 'playing';
+      golfLobbyView = msg;
+      golfPvpMySlot = msg.slot;
+      if (msg.status === 'ended') {
+        if (golfMode === 'pvp') { showToast('⛳ The round broke up — a player left.'); golfMode = 'off'; golfBallSpr?.setVisible(false); removeGolfPvpHud(); }
+        else if (dialogOpen) closeDialog();
+        return;
+      }
+      if (msg.status === 'playing' && !wasPlaying) { closeDialog(); beginGolfPvpRound(msg.players); return; }
+      if (dialogOpen && golfMode === 'off' && !golfShowingResults) renderGolfLobbyDialog(); // live-update the seated list
+    };
+    golfRelayHandler = (data) => {
+      const d = data as { slot?: number; holeIdx?: number; toX?: number; toY?: number; holedOut?: boolean; strokes?: number };
+      if (!d || typeof d.slot !== 'number' || typeof d.toX !== 'number' || typeof d.toY !== 'number' || typeof d.holeIdx !== 'number') return;
+      if (golfMode !== 'pvp' || d.holeIdx !== golfPvpHoleIdx) return; // stale/out-of-sync — ignore
+      const pl = golfPvpPlayers.find((p) => p.slot === d.slot);
+      if (!pl) return;
+      const from = { x: pl.ballX, y: pl.ballY };
+      playGolfShot(from, { x: d.toX, y: d.toY }, false, () => {
+        commitGolfPvpShot(d.slot!, { toX: d.toX!, toY: d.toY!, holedOut: !!d.holedOut, strokes: d.strokes ?? pl.curStrokes + 1 });
+      });
     };
   }
 
