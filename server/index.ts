@@ -522,14 +522,20 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'fountainWish':
         lobby.fountainWish(ws).catch((e) => console.error('fountain wish failed:', e));
         break;
-      case 'mobKill':
-        if (typeof msg.kind === 'string') lobby.mobKilled(ws, msg.kind);
+      case 'mobHit':
+        if (typeof msg.id === 'number' && typeof msg.dmg === 'number') lobby.mobHit(ws, msg.id, msg.dmg);
         break;
       case 'worldBank':
         lobby.worldBankPurse(ws);
         break;
       case 'worldDied':
         lobby.worldForfeitPurse(ws);
+        break;
+      case 'frogEnter':
+        if (typeof msg.frog === 'string') lobby.frogEnter(ws, msg.frog);
+        break;
+      case 'frogFinish':
+        if (typeof msg.won === 'boolean') lobby.frogFinish(ws, msg.won);
         break;
       case 'clubJoin':
         lobby.clubJoin(ws).catch((e) => console.error('club join failed:', e));

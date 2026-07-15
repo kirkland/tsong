@@ -1137,9 +1137,11 @@ export type ClientMsg =
   | { type: 'waEnd'; winner: number; winner2?: number } // (host only) winning slot(s) — two for 2v2 team wins (-1 = nobody paid)
   | { type: 'waRelay'; data: unknown } // forward an opaque Artillery payload to all other players
   | { type: 'fountainWish' } // toss 10 coins in the plaza fountain (tiny chance of the Wisher title)
-  | { type: 'mobKill'; kind: string } // downed a biome critter → coins + XP by species (server owns the reward table), rate-limited
+  | { type: 'mobHit'; id: number; dmg: number } // dealt damage to a server-owned biome mob (server resolves HP/death/bounty)
   | { type: 'worldBank' } // reached town alive → bank the at-risk mob-loot purse into the wallet
   | { type: 'worldDied' } // died out in the wild → forfeit the unbanked purse
+  | { type: 'frogEnter'; frog: string } // ante into Grandmaw's frog race (server charges the entry fee)
+  | { type: 'frogFinish'; won: boolean } // report the race result (won = your frog placed 1st) → prize on a win
   | { type: 'clubJoin' } // apply to the Country Club (server validates the 1,000,000🪙 initiation fee)
   | { type: 'clubDrink'; tier: number } // order off the 19th Hole's menu (1=House Pour, 2='52 Reserve, 3=Founder's Vintage; server charges, effects mirror buyBeer)
   | { type: 'bgJoin'; game: string } // take a seat at a board-game table (chess/morris/billiards; 2 seats, PvP only)
@@ -1741,6 +1743,7 @@ export type ServerMsg =
   | BgLobbyMsg
   | BgRelayMsg
   | WishResultMsg
+  | FrogResultMsg
   | GhLeaderboardMsg
   | TntLobbyMsg
   | TntRelayMsg
@@ -1756,6 +1759,8 @@ export type ServerMsg =
   | WalletMsg
   | LevelUpMsg
   | MobLootMsg
+  | WorldMobsMsg
+  | MobDeadMsg
   | StockMsg
   | LoanMsg
   | SpinResultMsg
@@ -2035,6 +2040,24 @@ export interface MobLootMsg {
   purse: number;   // current unbanked coins
   gained?: number; // coins just added by a kill (for the floating "+N" on the client)
   banked?: number; // coins just moved into the wallet (for a "banked N" toast)
+}
+// One server-owned biome mob in a broadcast snapshot. Compact keys (sent ~10Hz to everyone in the
+// world). The client renders these instead of simulating its own — so every player sees the SAME mob.
+export interface WorldMob { i: number; k: string; x: number; y: number; h: number; m: number }
+export interface WorldMobsMsg {
+  type: 'worldMobs';
+  mobs: WorldMob[];
+}
+// A mob just died — every client plays the death FX at (x,y); `mine` = the recipient landed the kill
+// (so their client scatters coins toward them; the coin bounty itself rides the mobLoot purse).
+export interface MobDeadMsg {
+  type: 'mobDead';
+  id: number;
+  x: number;
+  y: number;
+  kind: string;
+  mine: boolean;
+  potion: boolean; // this mob dropped a potion at (x,y)
 }
 export interface WalletMsg {
   type: 'wallet';
@@ -2559,6 +2582,13 @@ export interface WaRelayMsg {
   data: unknown;
 }
 // A fountain wish landed: the town's all-time wish count (and whether the fountain granted a title).
+// Result of a frog race: the entry was charged (ok=true) or refused (can't afford), and on a win
+// `prize` coins were paid. Drives the client's payout toast.
+export interface FrogResultMsg {
+  type: 'frogResult';
+  stage: 'entered' | 'won' | 'lost' | 'broke';
+  prize?: number; // coins paid on a win
+}
 export interface WishResultMsg {
   type: 'wishResult';
   total: number;

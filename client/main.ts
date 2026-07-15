@@ -960,6 +960,12 @@ const net = connect(
       celebrateLevelUp(msg.level, msg.reward);
     } else if (msg.type === 'mobLoot') {
       worldMod?.feedMobLoot(msg.purse, msg.gained, msg.banked);
+    } else if (msg.type === 'worldMobs') {
+      worldMod?.feedMobs(msg.mobs);
+    } else if (msg.type === 'mobDead') {
+      worldMod?.feedMobDead(msg.id, msg.x, msg.y, msg.kind, msg.mine, msg.potion);
+    } else if (msg.type === 'frogResult') {
+      frogMod?.feedResult(msg.stage, msg.prize);
     } else if (msg.type === 'matchStats') {
       matchStats = msg;
       updateUI();
@@ -2430,6 +2436,19 @@ async function openSkiGame(): Promise<void> {
     skiMod.openSki({ ...bgNetFor('ski'), onFinish: () => worldMod?.completeSkiObjective() });
   } catch (e) { console.error('Ski failed to load:', e); }
 }
+let frogMod: typeof import('./frog') | null = null;
+async function openFrogGame(): Promise<void> {
+  try {
+    frogMod = await import('./frog');
+    if (frogMod.isFrogOpen()) return;
+    frogMod.openFrog({
+      enter:  (frog: string) => net.send({ type: 'frogEnter', frog }),
+      finish: (won: boolean) => net.send({ type: 'frogFinish', won }),
+      name:   () => myName,
+      muted:  () => muted,
+    });
+  } catch (e) { console.error('Frog race failed to load:', e); }
+}
 async function openBilliardsGame(): Promise<void> {
   try {
     billiardsMod = await import('./billiards');
@@ -2492,6 +2511,7 @@ const WORLD_DELEGATE_CHECK: Record<string, () => boolean> = {
   chess: overlayVisibleCheck('#chessOverlay'),
   morris: overlayVisibleCheck('#morrisOverlay'),
   ski: overlayVisibleCheck('#skiOverlay'),
+  frograce: overlayVisibleCheck('#frogOverlay'),
   billiards: overlayVisibleCheck('#billiardsOverlay'),
   rename: overlayVisibleCheck('#overlay'),
 };
@@ -2657,6 +2677,10 @@ worldBtn.addEventListener('click', async () => {
           setTimeout(() => { void openSkiGame(); }, 0);
           return;
         }
+        if (feature === 'frograce') {
+          setTimeout(() => { void openFrogGame(); }, 0);
+          return;
+        }
         if (feature === 'billiards') {
           setTimeout(() => { void openBilliardsGame(); }, 0);
           return;
@@ -2699,7 +2723,7 @@ worldBtn.addEventListener('click', async () => {
         return best;
       },
       wish: () => net.send({ type: 'fountainWish' }),
-      mobKill: (kind: string) => net.send({ type: 'mobKill', kind }),
+      mobHit: (id: number, dmg: number) => net.send({ type: 'mobHit', id, dmg }),
       worldBank: () => net.send({ type: 'worldBank' }),
       worldDied: () => net.send({ type: 'worldDied' }),
       owns: (id: string) => wallet.owned.includes(id),

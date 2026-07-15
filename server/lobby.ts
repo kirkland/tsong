@@ -2538,11 +2538,14 @@ export class Lobby {
         }
       }
     }
+    // shared biome mobs: tick their AI every frame, broadcast on the same ~15Hz cadence as avatars
+    this.tickWorldMobs(dt);
     if (++this.worldBcTick % Lobby.WORLD_BROADCAST_EVERY !== 0) return;
     const data = JSON.stringify({ type: 'world', avatars: this.worldAvatars() });
     for (const ws of this.world.sockets()) {
       if (ws.readyState === ws.OPEN) ws.send(data);
     }
+    this.broadcastWorldMobs();
   }
 
   // DOOM high-round leaderboards (solo + co-op), cached and pushed to clients.
@@ -2630,44 +2633,193 @@ export class Lobby {
     this.tell(ws, { type: 'wishResult', total, title: granted });
   }
 
-  // Biome-critter kills. Mobs are client-simulated (like NPCs), so the reward is deliberately
-  // small and rate-limited (a rolling window per player) — enough to make hunting worth it, capped
-  // low enough that a tampered client can't farm meaningfully. Coins come from the House (a sink,
-  // so no minting), plus a little XP toward the account level.
-  private mobKills = new Map<string, number[]>(); // pid → recent kill timestamps (ms)
-  private mobPurse = new Map<string, number>();   // pid → unbanked mob coins (banked in town, forfeit on death)
-  private static readonly MOB_WINDOW_MS = 60_000;
-  private static readonly MOB_MAX_PER_WINDOW = 40; // hard cap on paid kills/minute
-  // Reward per SPECIES — the server owns this table (a tampered client can only pick a valid
-  // species string, and the rate-limit + house throttle cap total payout regardless). Coins scale
-  // ~1k (weakest desert) → ~5k (the yeti) with difficulty; the tanky bosses pay the most.
+  // ============================================================================================
+  // BIOME MOBS — server-authoritative + SHARED (MMO-style). The server owns every mob's position
+  // and HP, ticks their AI, and broadcasts them to everyone in the world, so two players out in the
+  // same biome see and fight the SAME mobs. Clients report hits; the server resolves HP + death and
+  // credits the last hitter. Density scales with how many players are in each biome — bring friends,
+  // face a bigger horde. Coins go into the at-risk purse (banked in town, forfeit on death); XP is
+  // granted immediately. ---
+  private mobPurse = new Map<string, number>(); // pid → unbanked mob coins (banked in town, forfeit on death)
   private static readonly MOB_REWARDS: Record<string, { coins: number; xp: number }> = {
-    // desert (easiest) — ~1k–1.5k
     scorpion: { coins: 1000, xp: 8 }, rattler: { coins: 1100, xp: 8 }, buzzard: { coins: 1400, xp: 10 },
-    // swamp (medium) — ~2k–3k
     mosquito: { coins: 2000, xp: 16 }, toad: { coins: 2600, xp: 18 }, slime: { coins: 3000, xp: 22 },
-    // snow (hardest) — ~3.5k–5k
     wolf: { coins: 3500, xp: 26 }, snowman: { coins: 4200, xp: 32 }, yeti: { coins: 5000, xp: 48 },
   };
-  /** A biome mob went down. XP is granted immediately (progression, never lost). Coins go into an
-   *  at-risk purse — you only get them once you bank them in town, and you forfeit them if you die
-   *  out in the wild. */
-  mobKilled(ws: WebSocket, kind: string) {
+  // Per-species server AI stats (hp/speed/aggro). Kept in step with the client's visual specs.
+  private static readonly MOB_AI: Record<string, { biome: 'desert' | 'swamp' | 'snow'; hp: number; speed: number; aggro: number }> = {
+    scorpion: { biome: 'desert', hp: 3, speed: 44, aggro: 220 }, rattler: { biome: 'desert', hp: 2, speed: 78, aggro: 240 }, buzzard: { biome: 'desert', hp: 3, speed: 60, aggro: 300 },
+    mosquito: { biome: 'swamp', hp: 3, speed: 74, aggro: 340 }, slime: { biome: 'swamp', hp: 6, speed: 38, aggro: 300 }, toad: { biome: 'swamp', hp: 4, speed: 48, aggro: 380 },
+    wolf: { biome: 'snow', hp: 6, speed: 92, aggro: 480 }, snowman: { biome: 'snow', hp: 7, speed: 30, aggro: 520 }, yeti: { biome: 'snow', hp: 15, speed: 60, aggro: 500 },
+  };
+  private static readonly MOB_ROSTER: Record<'desert' | 'swamp' | 'snow', string[]> = {
+    desert: ['scorpion', 'scorpion', 'rattler', 'rattler', 'buzzard'],
+    swamp: ['mosquito', 'mosquito', 'toad', 'slime'],
+    snow: ['wolf', 'wolf', 'wolf', 'snowman', 'snowman', 'yeti'],
+  };
+  // Town rect + frontier bounds (mirror the client). Density: a base horde per occupied biome, plus
+  // more per extra player — capped. Empty biomes hold no mobs (spawned when a player arrives).
+  private static readonly W_W = 4800;
+  private static readonly W_H = 2200;
+  private static readonly SWAMP_SHORE = 2200 + 4200 - 520;
+  private static readonly EAST_W = 9600;
+  private static readonly DESERT_W = 24000;
+  private static readonly MOB_DENSITY: Record<'desert' | 'swamp' | 'snow', { base: number; per: number; max: number }> = {
+    desert: { base: 8, per: 4, max: 26 }, swamp: { base: 8, per: 4, max: 26 }, snow: { base: 12, per: 5, max: 40 },
+  };
+  private worldMobs: { id: number; kind: string; biome: 'desert' | 'swamp' | 'snow'; x: number; y: number; hp: number; maxHp: number; tx: number; ty: number; homeX: number; homeY: number; wanderUntil: number; lastHit: string | null }[] = [];
+  private mobIdSeq = 1;
+
+  private static mobBiomeOf(x: number, y: number): 'desert' | 'swamp' | 'snow' | null {
+    if (x < 0 && y >= 0 && y <= Lobby.W_H) return 'desert';
+    if (x > Lobby.W_W && y >= 0 && y <= Lobby.W_H) return 'snow';
+    if (y > Lobby.W_H && y < Lobby.SWAMP_SHORE) return 'swamp';
+    return null;
+  }
+  private mobSpawnSpot(biome: 'desert' | 'swamp' | 'snow'): { x: number; y: number } {
+    const r = Math.random;
+    if (biome === 'desert') return { x: -400 - r() * (Lobby.DESERT_W - 800), y: 120 + r() * (Lobby.W_H - 240) };
+    if (biome === 'swamp') return { x: 120 + r() * (Lobby.W_W - 240), y: Lobby.W_H + 240 + r() * (Lobby.SWAMP_SHORE - Lobby.W_H - 360) };
+    return { x: Lobby.W_W + 300 + r() * (Lobby.EAST_W - 600), y: 120 + r() * (Lobby.W_H - 240) };
+  }
+
+  /** Tick the shared mob horde: adjust each biome's population to the live player count, then move
+   *  every mob (chase the nearest player in its biome, else wander home). Called from broadcast(). */
+  private tickWorldMobs(dt: number) {
+    // count players per biome
+    const players: Record<string, { x: number; y: number }[]> = { desert: [], swamp: [], snow: [] };
+    for (const sock of this.world.sockets()) {
+      const p = this.world.positionOf(sock);
+      if (!p) continue;
+      const b = Lobby.mobBiomeOf(p.x, p.y);
+      if (b) players[b].push({ x: p.x, y: p.y });
+    }
+    // population control per biome
+    for (const biome of ['desert', 'swamp', 'snow'] as const) {
+      const n = players[biome].length;
+      const d = Lobby.MOB_DENSITY[biome];
+      const target = n === 0 ? 0 : Math.min(d.max, d.base + d.per * (n - 1));
+      const live = this.worldMobs.filter((m) => m.biome === biome);
+      if (live.length < target) {
+        for (let i = live.length; i < target; i++) {
+          const kinds = Lobby.MOB_ROSTER[biome];
+          const kind = kinds[Math.floor(Math.random() * kinds.length)];
+          const s = this.mobSpawnSpot(biome);
+          this.worldMobs.push({ id: this.mobIdSeq++, kind, biome, x: s.x, y: s.y, hp: Lobby.MOB_AI[kind].hp, maxHp: Lobby.MOB_AI[kind].hp, tx: s.x, ty: s.y, homeX: s.x, homeY: s.y, wanderUntil: 0, lastHit: null });
+        }
+      } else if (live.length > target) {
+        // trim the extras that are farthest from any player (least likely to be seen popping out)
+        const far = live.sort((a, b2) => this.mobDistToNearest(b2, players[biome]) - this.mobDistToNearest(a, players[biome])).slice(0, live.length - target);
+        const drop = new Set(far.map((m) => m.id));
+        this.worldMobs = this.worldMobs.filter((m) => !drop.has(m.id));
+      }
+    }
+    // movement
+    const now = Date.now();
+    for (const m of this.worldMobs) {
+      const ai = Lobby.MOB_AI[m.kind];
+      const near = this.nearestPlayer(m, players[m.biome]);
+      if (near && near.d < ai.aggro) { m.tx = near.x; m.ty = near.y; }
+      else if (now >= m.wanderUntil) {
+        const a = Math.random() * Math.PI * 2, r = 40 + Math.random() * 120;
+        m.tx = m.homeX + Math.cos(a) * r; m.ty = m.homeY + Math.sin(a) * r;
+        m.wanderUntil = now + 1200 + Math.random() * 2600;
+      }
+      const dx = m.tx - m.x, dy = m.ty - m.y, mag = Math.hypot(dx, dy);
+      if (mag > 2) {
+        const sp = ai.speed * (near && near.d < ai.aggro ? 1.4 : 1) * dt;
+        m.x += (dx / mag) * sp; m.y += (dy / mag) * sp;
+      }
+      // clamp to the biome so nothing wanders into town/void
+      if (m.biome === 'desert') { m.x = Math.max(-Lobby.DESERT_W + 40, Math.min(-40, m.x)); m.y = Math.max(40, Math.min(Lobby.W_H - 40, m.y)); }
+      else if (m.biome === 'snow') { m.x = Math.max(Lobby.W_W + 40, Math.min(Lobby.W_W + Lobby.EAST_W - 40, m.x)); m.y = Math.max(40, Math.min(Lobby.W_H - 40, m.y)); }
+      else { m.x = Math.max(40, Math.min(Lobby.W_W - 40, m.x)); m.y = Math.max(Lobby.W_H + 40, Math.min(Lobby.SWAMP_SHORE - 40, m.y)); }
+    }
+  }
+  private mobDistToNearest(m: { x: number; y: number }, ps: { x: number; y: number }[]): number {
+    let best = Infinity;
+    for (const p of ps) best = Math.min(best, Math.hypot(p.x - m.x, p.y - m.y));
+    return best;
+  }
+  private nearestPlayer(m: { x: number; y: number }, ps: { x: number; y: number }[]): { x: number; y: number; d: number } | null {
+    let best: { x: number; y: number; d: number } | null = null;
+    for (const p of ps) { const d = Math.hypot(p.x - m.x, p.y - m.y); if (!best || d < best.d) best = { x: p.x, y: p.y, d }; }
+    return best;
+  }
+  private broadcastWorldMobs() {
+    if (this.world.size === 0) { if (this.worldMobs.length) this.worldMobs = []; return; }
+    const mobs = this.worldMobs.map((m) => ({ i: m.id, k: m.kind, x: Math.round(m.x), y: Math.round(m.y), h: m.hp, m: m.maxHp }));
+    const data = JSON.stringify({ type: 'worldMobs', mobs });
+    for (const ws of this.world.sockets()) if (ws.readyState === ws.OPEN) ws.send(data);
+  }
+
+  /** A client reported hitting a shared mob. Apply the damage server-side; on death, credit the
+   *  hitter (purse + XP), scatter a chance of a potion, and broadcast the death to everyone. */
+  mobHit(ws: WebSocket, id: number, dmg: number) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.pid || !conn.nickname) return;
-    const reward = Lobby.MOB_REWARDS[kind];
-    if (!reward) return;
-    const now = Date.now();
-    const arr = (this.mobKills.get(conn.pid) ?? []).filter((t) => now - t < Lobby.MOB_WINDOW_MS);
-    if (arr.length >= Lobby.MOB_MAX_PER_WINDOW) { this.mobKills.set(conn.pid, arr); return; } // capped — silently
-    arr.push(now);
-    this.mobKills.set(conn.pid, arr);
-    const gained = reward.coins + Math.floor(Math.random() * (reward.coins * 0.2)); // a little variety
+    if (!(dmg > 0) || dmg > 6) return; // no weapon does more than the singularity's few points
+    const m = this.worldMobs.find((x) => x.id === id);
+    if (!m || m.hp <= 0) return;
+    m.lastHit = conn.pid;
+    m.hp -= dmg;
+    if (m.hp > 0) return;
+    // dead — remove, reward the killer, roll a potion, tell everyone
+    this.worldMobs = this.worldMobs.filter((x) => x.id !== id);
+    const reward = Lobby.MOB_REWARDS[m.kind] ?? { coins: 1000, xp: 8 };
+    const gained = reward.coins + Math.floor(Math.random() * (reward.coins * 0.2));
     const purse = (this.mobPurse.get(conn.pid) ?? 0) + gained;
     this.mobPurse.set(conn.pid, purse);
     this.tell(ws, { type: 'mobLoot', purse, gained });
     void this.awardXp(conn.pid, conn.nickname, reward.xp);
+    const potionChance = m.kind === 'yeti' ? 0.6 : m.kind === 'slime' || m.kind === 'snowman' ? 0.35 : m.biome === 'snow' ? 0.22 : m.biome === 'swamp' ? 0.15 : 0.08;
+    const potion = Math.random() < potionChance;
+    const dead = { type: 'mobDead' as const, id, x: Math.round(m.x), y: Math.round(m.y), kind: m.kind, potion };
+    for (const sock of this.world.sockets()) {
+      if (sock.readyState !== sock.OPEN) continue;
+      sock.send(JSON.stringify({ ...dead, mine: sock === ws }));
+    }
   }
+  // --- Grandmaw's Frog Race: ante an entry fee, race your frog (a skill minigame on the client),
+  // and take a House-funded prize if it places first. The prize is fixed per frog (harder frogs
+  // pay more — the "odds"), server-owned, and rate-limited so a tampered client can't farm it. ---
+  private frogRuns = new Map<string, { frog: string; at: number }>(); // pid → active race
+  private frogWins = new Map<string, number[]>(); // pid → recent paid-win timestamps
+  private static readonly FROG_ENTRY = 200;
+  private static readonly FROG_PRIZE: Record<string, number> = { reliable: 800, hopscotch: 1400, lightning: 2600 };
+  private static readonly FROG_MAX_WINS_PER_MIN = 12;
+  frogEnter(ws: WebSocket, frog: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    if (!(frog in Lobby.FROG_PRIZE)) return;
+    spendCoins(conn.pid, Lobby.FROG_ENTRY)
+      .then((w) => {
+        if (!w) { this.tell(ws, { type: 'frogResult', stage: 'broke' }); return; }
+        this.frogRuns.set(conn.pid!, { frog, at: Date.now() });
+        this.houseCredit(Lobby.FROG_ENTRY).catch(() => {}); // the ante goes into the pot (a sink)
+        this.sendWallet(ws);
+        this.tell(ws, { type: 'frogResult', stage: 'entered' });
+      })
+      .catch((e) => console.error('frog entry failed:', e));
+  }
+  frogFinish(ws: WebSocket, won: boolean) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    const run = this.frogRuns.get(conn.pid);
+    if (!run) return;                       // no active race (already settled / never entered)
+    this.frogRuns.delete(conn.pid);
+    if (!won) { this.tell(ws, { type: 'frogResult', stage: 'lost' }); return; }
+    const now = Date.now();
+    const wins = (this.frogWins.get(conn.pid) ?? []).filter((t) => now - t < 60_000);
+    if (wins.length >= Lobby.FROG_MAX_WINS_PER_MIN) { this.frogWins.set(conn.pid, wins); this.tell(ws, { type: 'frogResult', stage: 'lost' }); return; }
+    wins.push(now); this.frogWins.set(conn.pid, wins);
+    const prize = Lobby.FROG_PRIZE[run.frog] ?? 800;
+    this.housePay(conn.pid, conn.nickname, prize)
+      .then((paid) => { this.sendWallet(ws); this.tell(ws, { type: 'frogResult', stage: 'won', prize: paid }); })
+      .catch((e) => console.error('frog prize failed:', e));
+    void this.awardXp(conn.pid, conn.nickname, 20);
+  }
+
   /** Reached town alive → move the at-risk purse into the wallet (House-funded, so it's conserved). */
   worldBankPurse(ws: WebSocket) {
     const conn = this.conns.get(ws);

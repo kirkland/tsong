@@ -100,6 +100,7 @@ import {
   LOOT_TABLE,
   type BgLobbyMsg,
   type GolfScoreRow,
+  type WorldMob,
   levelForXp,
 } from '../shared/types';
 import { drawCosmeticPreview, drawLegendIcon } from './render';
@@ -235,7 +236,7 @@ export interface WorldNet {
   marketList(instanceId: number, ask: number): void;
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' | 'monsterjam' | 'chess' | 'morris' | 'ski' | 'billiards'): void; // open a DOOM/Fishing/Arcade/Bowling feature — every Casino game + Notice-Board panel is a native World dialog now
+  openFeature(feature: 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' | 'monsterjam' | 'chess' | 'morris' | 'ski' | 'billiards' | 'frograce'): void; // open a DOOM/Fishing/Arcade/Bowling feature — every Casino game + Notice-Board panel is a native World dialog now
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   openRename(): void;            // World's own 👤 button → reopen the nickname/color picker
   muted(): boolean;              // is game sound currently muted?
@@ -271,7 +272,7 @@ export interface WorldNet {
   fishKing(): { name: string; lb: number } | null;     // biggest catch on record (billboard)
   ghKing(): { name: string; score: number } | null;    // top Tsong Hero score (billboard)
   wish(): void;                                        // toss 10 coins into the fountain
-  mobKill(kind: string): void;                         // downed a biome critter → coins into the at-risk purse + XP
+  mobHit(id: number, dmg: number): void;               // dealt damage to a shared server-owned mob (server resolves HP/death/bounty)
   worldBank(): void;                                   // reached town alive → bank the at-risk mob purse
   worldDied(): void;                                   // died in the wild → forfeit the unbanked purse
   owns(id: string): boolean;                           // do we own this cosmetic/item id? (wallet.owned)
@@ -330,6 +331,8 @@ interface Controller {
   feedWallet(): void;                                // the wallet changed (buy/equip/spin settled) — re-render the shop dialog if it's open
   completeSkiObjective(): void;                       // a Frostreach ski race finished → mark the objective
   feedMobLoot(purse: number, gained?: number, banked?: number): void; // the at-risk mob-loot purse changed
+  feedMobs(list: WorldMob[]): void;                    // server's authoritative mob roster → reconcile our sprites
+  feedMobDead(id: number, x: number, y: number, kind: string, mine: boolean, potion: boolean): void; // a shared mob died → FX
   feedCortisol(): void;                               // the "Cortisol" board updated — refresh the top-bar cortisol gauge
   feedNews(): void;                                  // a new news item published — re-render the news dialog if it's open
   feedLoan(): void;                                  // the loan changed (taken/repaid/collected/countdown tick) — re-render the loan dialog if it's open
@@ -398,6 +401,16 @@ export function feedWallet(): void {
 /** The server-held at-risk mob-loot purse changed (a kill added to it, or it banked/forfeited). */
 export function feedMobLoot(purse: number, gained?: number, banked?: number): void {
   controller?.feedMobLoot(purse, gained, banked);
+}
+
+/** The server's authoritative shared-mob roster (a `worldMobs` broadcast) → reconcile our sprites. */
+export function feedMobs(list: WorldMob[]): void {
+  controller?.feedMobs(list);
+}
+
+/** A shared mob died (`mobDead`) → play the death FX for everyone; `mine` = we landed the kill. */
+export function feedMobDead(id: number, x: number, y: number, kind: string, mine: boolean, potion: boolean): void {
+  controller?.feedMobDead(id, x, y, kind, mine, potion);
 }
 
 /** The "Cortisol" board updated — refresh the World top-bar cortisol gauge. */
@@ -649,6 +662,9 @@ const JAIL_WALLS: Rect[] = [
   { x: JAIL.x + JAIL.w - JAIL_WALL, y: JAIL.y, w: JAIL_WALL, h: JAIL.h },  // right
   { x: JAIL.x, y: JAIL.y + JAIL.h - JAIL_WALL, w: JAIL.w, h: JAIL_WALL },  // front bars
 ];
+// Solid rects registered at build time (the clubhouse footprint, …) that aren't WORLD_BUILDINGS —
+// resolveCollisions pushes the avatar out of them just like a building. Populated in makeClub.
+const extraColliders: Rect[] = [];
 // The Tavern interior lives OFF the playable map. It used to sit at x:4200, but Robville widened
 // the world to 4800, so it was relocated east of the new bounds to stay out of sight.
 const TAVERN_INT = { x: 40000, y: 300, w: 880, h: 560 };
@@ -2541,7 +2557,6 @@ export function startWorld(net: WorldNet): void {
   // --- survival: player health, field loot, potions ---
   const PLAYER_MAX_HP = 100;
   let playerHp = PLAYER_MAX_HP;
-  let lastDamagedAt = 0;   // for out-of-combat regen
   let playerDead = false;
   let fieldPotions = 0;    // healing potions carried (dropped by some mobs) — lost on death
   let fieldPurse = 0;      // coins earned from mobs, NOT yet banked — forfeit if you die in the wild
@@ -3615,6 +3630,27 @@ export function startWorld(net: WorldNet): void {
     }
     // ...and the jail's solid walls/bars (same circle-vs-rect pushout)
     for (const b of JAIL_WALLS) {
+      const nx = clamp(x, b.x, b.x + b.w);
+      const ny = clamp(y, b.y, b.y + b.h);
+      const dx = x - nx, dy = y - ny;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= rad * rad) continue;
+      hit = true;
+      if (d2 > 0.0001) {
+        const d = Math.sqrt(d2);
+        x = nx + (dx / d) * rad;
+        y = ny + (dy / d) * rad;
+      } else {
+        const left = x - b.x, right = b.x + b.w - x, top = y - b.y, bottom = b.y + b.h - y;
+        const m = Math.min(left, right, top, bottom);
+        if (m === left) x = b.x - rad;
+        else if (m === right) x = b.x + b.w + rad;
+        else if (m === top) y = b.y - rad;
+        else y = b.y + b.h + rad;
+      }
+    }
+    // extra solid rects registered at build time (the clubhouse footprint, etc.) — same pushout
+    for (const b of extraColliders) {
       const nx = clamp(x, b.x, b.x + b.w);
       const ny = clamp(y, b.y, b.y + b.h);
       const dx = x - nx, dy = y - ny;
@@ -9252,6 +9288,7 @@ export function startWorld(net: WorldNet): void {
     if (nearNpc && nearNpc.def.id === 'mc-cashier') { orderMcFood(); return; }
     // Sterling pours, quietly.
     if (nearNpc && nearNpc.def.id === 'club-sterling') { orderClubPour(); return; }
+    if (nearNpc && nearNpc.def.id === 'club-commodore' && !net.owns('club-member')) { offerClubMembership(); return; }
     if (nearNpc) { startTalk(nearNpc); return; }
     if (nearExit) { if (inDungeon) leaveDungeon(); else if (inTemple) leaveTemple(); else if (inMcdonald) leaveMcdonald(); else if (inCasino) leaveCasino(); else if (inVault) leaveVault(); else if (inClub) leaveClubhouse(); else leaveTavern(); return; }
     if (nearClubSpot) { clubSpotInteract(nearClubSpot); return; }
@@ -9557,6 +9594,8 @@ export function startWorld(net: WorldNet): void {
         nearNpc = n;
         if (n.def.id === 'bartender') { orderBeer(); return; }
         if (n.def.id === 'mc-cashier') { orderMcFood(); return; }
+        if (n.def.id === 'club-sterling') { orderClubPour(); return; }
+        if (n.def.id === 'club-commodore' && !net.owns('club-member')) { offerClubMembership(); return; }
         startTalk(n);
         return;
       }
@@ -9666,8 +9705,13 @@ export function startWorld(net: WorldNet): void {
     const SP = SPEED * blessMul() * (handbrake ? SPRINT_MULT : 1); // the Blessing of the Ball quickens your step (decays to 1×)
     if (inInterior) {
       // inside a room (Tavern/Temple): no town collision, just clamp to the inset play area
-      selfX = clamp(selfX + dx * SP * dt, curInt.x + curWall + R, curInt.x + curInt.w - curWall - R);
-      selfY = clamp(selfY + dy * SP * dt, curInt.y + curWall + R, curInt.y + curInt.h - curWall - R);
+      let nx = clamp(selfX + dx * SP * dt, curInt.x + curWall + R, curInt.x + curInt.w - curWall - R);
+      let ny = clamp(selfY + dy * SP * dt, curInt.y + curWall + R, curInt.y + curInt.h - curWall - R);
+      // the clubhouse has furniture you bump into — slide per-axis against its prop rects
+      if (inClub && clubIntColliders.length) {
+        if (!clubIntColliders.some((b) => nx > b.x - R && nx < b.x + b.w + R && selfY > b.y - R && selfY < b.y + b.h + R)) selfX = nx;
+        if (!clubIntColliders.some((b) => selfX > b.x - R && selfX < b.x + b.w + R && ny > b.y - R && ny < b.y + b.h + R)) selfY = ny;
+      } else { selfX = nx; selfY = ny; }
       stepSound();
       return;
     }
@@ -9986,7 +10030,7 @@ export function startWorld(net: WorldNet): void {
       const a = others.find((o) => o.id === nearNetizen);
       prompt.textContent = `💬 Talk to ${a?.name ?? 'Netizen'}`;
     } else if (nearNpc) {
-      prompt.textContent = nearNpc.def.id === 'bartender' ? '🍺 Order from the Barkeep' : nearNpc.def.id === 'mc-cashier' ? '🍔 Order from Mac' : nearNpc.def.id === 'club-sterling' ? '🥃 A word with Sterling' : nearNpc.def.friendKey ? `💕 Chat with ${nearNpc.def.name}` : `💬 Talk to ${nearNpc.def.name}`;
+      prompt.textContent = nearNpc.def.id === 'bartender' ? '🍺 Order from the Barkeep' : nearNpc.def.id === 'mc-cashier' ? '🍔 Order from Mac' : nearNpc.def.id === 'club-sterling' ? '🥃 A word with Sterling' : nearNpc.def.id === 'club-commodore' && !net.owns('club-member') ? '🎩 Apply for Membership' : nearNpc.def.friendKey ? `💕 Chat with ${nearNpc.def.name}` : `💬 Talk to ${nearNpc.def.name}`;
     } else if (nearExit) {
       prompt.textContent = inDungeon ? '🚪 Leave the Ruins' : inTemple ? '🚪 Leave the Temple' : inMcdonald ? "🍔 Leave McDonald's" : inCasino ? '🎰 Leave the Casino' : inVault ? '🚪 Back through the bookcase' : inClub ? '🚪 Leave the Clubhouse' : '🚪 Leave the Tavern';
     } else if (nearClubSpot) {
@@ -13339,6 +13383,7 @@ export function startWorld(net: WorldNet): void {
       safeStep('swamp', () => updateSwamp(now, dt));
       safeStep('east', () => updateEast(now, dt));
       safeStep('mobs', () => updateMobs(now, dt));
+      safeStep('ocean', () => updateOcean(now, dt));
       safeStep('biome', () => updateBiome());
       safeStep('nearBuilding', () => updateNearBuilding());
       safeStep('sendMove', () => maybeSendMove(now));
@@ -13785,7 +13830,6 @@ export function startWorld(net: WorldNet): void {
       spawnSparks(n.x, n.y, 0x8ef0ff);
     }
     for (const m of mobs) {                                                // the beam skewers mobs too (2 dmg)
-      if (m.dead) continue;
       const b = mobBody(m);
       if (distToSegment(b.cx, b.cy, x, y, ex, ey) > LASER_HIT_R + b.rad) continue;
       hitMobs(b.cx, b.cy, 4, 2);
@@ -14879,6 +14923,13 @@ export function startWorld(net: WorldNet): void {
       for (const bx2 of [-150, 150]) {
         sc.add.image(CH.x + bx2, CH.y + 92, 'townFrames', TT.bush).setScale(TEXEL * 1.2).setOrigin(0.5, 0.92).setDepth(CH.y + 92);
       }
+      // solid walls so you bump into the clubhouse like any other building — a doorway gap in the
+      // front-centre is left open so you can walk up to the door and go in.
+      extraColliders.push(
+        { x: CH.x - 150, y: CH.y - 50, w: 300, h: 44 },   // back wall (stops you exiting north through it)
+        { x: CH.x - 150, y: CH.y - 50, w: 118, h: 140 },  // left wall
+        { x: CH.x + 32, y: CH.y - 50, w: 118, h: 140 },   // right wall (the CH.x±32 gap is the door)
+      );
     }
     // the gate: two proud stone posts, finials, one plaque, zero fence problems solved
     for (const gx of [2380, 2520]) {
@@ -14924,29 +14975,34 @@ export function startWorld(net: WorldNet): void {
     if (net.owns('club-member') && Math.hypot(selfX - CLUBHOUSE.x, selfY - (CLUBHOUSE.y + 40)) < 60) {
       enterClubhouse(); return true;
     }
-    // The gate: the only part of the property a non-member can physically reach. Applications
-    // (and the Commodore) are handled right here.
+    // The gate: the only part of the property a non-member can physically reach.
     if (Math.hypot(selfX - CLUB_GATE.x, selfY - CLUB_GATE.y) < 70) {
-      if (net.owns('club-member')) { showToast('🏛️ The gate creaks. It always creaks. Walk on up to the clubhouse.'); return true; }
-      const coins = net.stats().coins;
-      const rich = coins >= 1_000_000;
-      openDialog('⛳ Tsong Country Club',
-        rich
-          ? 'The Commodore appears from nowhere, produces a ledger, and runs a finger down it. "…Everything checks out. Distressingly. The initiation fee is one million coins. Payable now, discussed never."'
-          : `The Commodore appears from nowhere and looks at you the way one looks at weather. "The initiation fee is one million coins. You have ${Math.floor(coins).toLocaleString()}. Mathematics can be so cruel to the aspirational."`,
-        [
-          { label: '🏛️ Pay the initiation — 1,000,000🪙', onPick: () => { closeDialog(); net.joinClub(); } },
-          { label: 'Absolutely not', onPick: () => { closeDialog(); showToast('🏛️ The Commodore nods, as if he expected nothing more.'); } },
-        ]);
+      offerClubMembership();
       return true;
     }
     return false;
+  }
+  // The Commodore's membership pitch — reached at the gate OR by talking to the Commodore himself
+  // (he handles the money; you actually pay through him). No-op-ish once you're already in.
+  function offerClubMembership() {
+    if (net.owns('club-member')) { showToast('🏛️ "A pleasure as always. Do go in — the door\'s expecting you." — The Commodore'); return; }
+    const coins = net.stats().coins;
+    const rich = coins >= 1_000_000;
+    openDialog('🎩 The Commodore',
+      rich
+        ? '"Membership? Ordinarily I\'d demur, but…" He produces a ledger and runs a finger down it. "…your finances check out. Distressingly. The initiation is one million coins — I take it here and now, and we never speak of money again."'
+        : `"Membership is one million coins, payable to me directly." He glances at your purse. "You have ${Math.floor(coins).toLocaleString()}. Mathematics can be so cruel to the aspirational. Come back when the sums improve."`,
+      [
+        ...(rich ? [{ label: '🎩 Pay the Commodore — 1,000,000🪙', onPick: () => { closeDialog(); net.joinClub(); } }] : []),
+        { label: rich ? 'On second thought, no' : 'Understood', onPick: () => { closeDialog(); showToast('🎩 The Commodore nods, as if he expected nothing more.'); } },
+      ]);
   }
 
   // --- The clubhouse INTERIOR: mahogany, quiet money, and at least one load-bearing secret.
   // Same walkable-room machinery as the Tavern/Temple (curInt/curWall/curZoom swap). Members only —
   // the door outside checks net.owns('club-member') before calling enterClubhouse().
   let clubBuilt = false, vaultBuilt = false;
+  const clubIntColliders: Rect[] = []; // clubhouse furniture you bump into (world-space, in CLUB_INT)
   let founderPupils: Phaser.GameObjects.Arc[] = [];
   let clubFireGlow: Phaser.GameObjects.Arc | null = null;
   let loungeTimer = 0;
@@ -14963,6 +15019,8 @@ export function startWorld(net: WorldNet): void {
   // checks against the handful of spots in whatever biome you're actually in.
   function biomeSpotPrompt(): string {
     if (inInterior || inDungeon || driving) return '';
+    // The Damp
+    if (selfY > WORLD.h && Math.hypot(selfX - SWAMP_SPOTS.frograce.x, selfY - SWAMP_SPOTS.frograce.y) < 70) return '🐸 Grandmaw\'s Frog Race';
     // Frostreach
     if (selfX > WORLD.w) {
       for (const h of FISH_HOLES) if (Math.hypot(selfX - h.x, selfY - h.y) < 48) return '🎣 Ice-fish here';
@@ -15123,6 +15181,11 @@ export function startWorld(net: WorldNet): void {
     prop('w-club-clock', CLUB_SPOTS.clock.x, CLUB_SPOTS.clock.y, CLUB_SPOTS.clock.y).setScale(TEXEL * 1.3);
     // the 19th Hole Lounge: brass-railed bar along the right wall (Sterling stands behind it)
     tile('w-club-bar', ix + iw - 340, iy + 200, 300, 30, iy + 246);
+    // furniture you bump into (the long bar + the card table) — the rest hugs the walls
+    if (!clubIntColliders.length) clubIntColliders.push(
+      { x: ix + iw - 340, y: iy + 196, w: 300, h: 40 },  // the bar counter
+      { x: cx + 40 - 26, y: iy + 448, w: 52, h: 26 },    // the card/chess table
+    );
     tile('w-tav-shelf', ix + iw - 330, iy + 130, 280, 32, iy + 140);       // the good bottles (reused shelf)
     prop('w-tav-stool', ix + iw - 300, iy + 280); prop('w-tav-stool', ix + iw - 120, iy + 280);
     // reading corner: wing chairs facing the hearth + a card table on the rug
@@ -15861,6 +15924,7 @@ export function startWorld(net: WorldNet): void {
     bell: { x: 3620, y: 4060 },
     bottle: { x: SWAMP_PIER_X, y: SWAMP_SHORE_Y + 330 },
     gator: { x: 1900, y: 2680 },
+    frograce: { x: 1550, y: 3560 }, // Grandmaw's frog-racing track, just off her porch
   } as const;
 
   function makeSwamp(sc: Phaser.Scene) {
@@ -16121,6 +16185,20 @@ export function startWorld(net: WorldNet): void {
       const b = sc.add.circle(SWAMP_SPOTS.cauldron.x + (i - 1) * 7, SWAMP_SPOTS.cauldron.y - 22, 2.4, 0x8ae87a, 0.8).setDepth(SWAMP_SPOTS.cauldron.y + 2);
       sc.tweens.add({ targets: b, y: SWAMP_SPOTS.cauldron.y - 44, alpha: 0, duration: 1700, delay: i * 560, repeat: -1, ease: 'Sine.easeOut' });
     }
+    // the frog-racing track: a little reedy pool with a row of lily pads + a sign
+    {
+      const F = SWAMP_SPOTS.frograce;
+      sc.add.ellipse(F.x, F.y + 10, 260, 90, 0x27403c).setDepth(-25);
+      sc.add.ellipse(F.x, F.y + 10, 230, 72, 0x2e4a44).setDepth(-24);
+      for (let i = 0; i < 6; i++) sc.add.image(F.x - 100 + i * 40, F.y + 6 + (i % 2) * 10, 'w-sw-lily').setScale(TEXEL * 1.2).setDepth(-23);
+      for (let i = 0; i < 3; i++) { // a couple of frogs loafing at the start line, waiting to race
+        sc.add.image(F.x - 90 + i * 24, F.y - 4 + (i % 2) * 8, 'w-sw-frog').setScale(TEXEL * 1.2).setOrigin(0.5, 1).setDepth(F.y);
+      }
+      sc.add.text(F.x, F.y - 40, '🐸 FROG RACING', {
+        fontFamily: 'ui-monospace, monospace', fontSize: '10px', color: '#e8e4d0', backgroundColor: '#3a5a24',
+        padding: { x: 5, y: 3 }, resolution: 2,
+      }).setOrigin(0.5, 1).setAngle(-3).setDepth(F.y + 2);
+    }
     // Gary's estate: two shacks, three jars, one dream
     sc.add.image(2700, 2950, 'w-sw-shack').setScale(TEXEL * 2.2).setOrigin(0.5, 1).setDepth(2950);
     sc.add.image(2860, 3060, 'w-sw-shack').setScale(TEXEL * 1.8).setOrigin(0.5, 1).setDepth(3060).setFlipX(true);
@@ -16312,6 +16390,12 @@ export function startWorld(net: WorldNet): void {
 
   function swampInteract(): boolean {
     const near = (s: { x: number; y: number }, r = 55) => Math.hypot(selfX - s.x, selfY - s.y) < r;
+    if (near(SWAMP_SPOTS.frograce, 70)) {
+      openDialog('🐸 Grandmaw\'s Frog Race',
+        'Grandmaw keeps a stable of racing frogs and a book that\'s older than the swamp. Ante up, pick a hopper, and out-leap the field to the far bank — the sweeter your timing, the bigger the jump.',
+        [{ label: '🐸 Step up to the book', onPick: () => { pause(false); net.openFeature('frograce'); } }]);
+      return true;
+    }
     if (near(SWAMP_SPOTS.cauldron)) {
       tone(120, 0.3, 'sine', 0.04, 90);
       showToast(pick2([
@@ -16415,31 +16499,69 @@ export function startWorld(net: WorldNet): void {
   // The four diagonal corners between the frontiers (NW of the desert / west of the club, etc.) are
   // awkward unreachable void. Fill them with ocean — deep water with a few wave strokes and a
   // shoreline — so the world reads as an island of land ringed by sea instead of empty gaps.
+  // A seamless 128×128 tile of open water: layered blue troughs + foam wave-crests drawn with an
+  // integer number of sine periods across the tile so the left/right and top/bottom edges match —
+  // it repeats forever without a visible seam. Two of these, scrolling at different speeds, make the
+  // sea genuinely move.
+  function makeOceanTexture(sc: Phaser.Scene) {
+    if (sc.textures.exists('w-ocean-tex')) return;
+    const S = 128;
+    const g = sc.add.graphics();
+    g.fillStyle(0x17405f, 1); g.fillRect(0, 0, S, S);                 // base water
+    for (let i = 0; i < 4; i++) { g.fillStyle(0x113451, 0.32); g.fillRect(0, i * 32 + 18, S, 14); } // troughs
+    const crests: [number, number, number, number, number][] = [
+      // y, periods across the tile, amplitude, colour, alpha
+      [12, 3, 3, 0x2f5f80, 0.5], [44, 2, 4, 0x3a6f92, 0.45], [76, 4, 2, 0x2f5f80, 0.5], [108, 3, 3, 0x4a80a0, 0.4],
+    ];
+    for (const [cy, k, amp, c, a] of crests) {
+      g.lineStyle(2, c, a); g.beginPath();
+      for (let x = 0; x <= S; x++) { const yy = cy + Math.sin((x / S) * Math.PI * 2 * k) * amp; x === 0 ? g.moveTo(x, yy) : g.lineTo(x, yy); }
+      g.strokePath();
+      g.lineStyle(1, 0xbfe0ee, a * 0.55); g.beginPath();               // a bright foam highlight riding the crest
+      for (let x = 0; x <= S; x++) { const yy = cy - 1.5 + Math.sin((x / S) * Math.PI * 2 * k) * amp; x === 0 ? g.moveTo(x, yy) : g.lineTo(x, yy); }
+      g.strokePath();
+    }
+    g.generateTexture('w-ocean-tex', S, S);
+    g.destroy();
+  }
+
+  // Each animated ocean layer: a big TileSprite whose UVs we scroll every frame (sx,sy px/s), with a
+  // gentle cross-swell added so the water heaves instead of sliding in a straight line.
+  interface OceanLayer { spr: Phaser.GameObjects.TileSprite; sx: number; sy: number; sway: number; }
+  let oceanLayers: OceanLayer[] = [];
   function makeCornerOceans(sc: Phaser.Scene) {
-    const OCEAN = 0x1c3f5c, OCEAN_D = 0x12304a, FOAM = 0x3a6f92;
+    makeOceanTexture(sc);
+    oceanLayers = [];
     const corners: [number, number, number, number][] = [
       [-DESERT.w, -CLUB.h, DESERT.w, CLUB.h],                 // NW
       [WORLD.w, -CLUB.h, EAST.w, CLUB.h],                     // NE
       [-DESERT.w, WORLD.h, DESERT.w, SOUTH.h],               // SW
       [WORLD.w, WORLD.h, EAST.w, SOUTH.h],                   // SE
     ];
-    const wave = sc.add.graphics().setDepth(-9998);
+    const foam = sc.add.graphics().setDepth(-9997);
     for (const [x, y, w, h] of corners) {
-      sc.add.rectangle(x, y, w, h, OCEAN).setOrigin(0, 0).setDepth(-9999);
-      // depth gradient toward the far edges
-      sc.add.rectangle(x, y, w, h, OCEAN_D, 0.5).setOrigin(0, 0).setDepth(-9998);
-      // static wave crests (a calm sea; cheap — a few strokes per corner)
-      wave.lineStyle(2, FOAM, 0.3);
-      const rr = mulberry32(((x & 0xffff) ^ (y & 0xffff)) >>> 0);
-      for (let i = 0; i < 60; i++) {
-        const wx = x + rr() * w, wy = y + rr() * h, wl = 20 + rr() * 40;
-        wave.beginPath(); wave.moveTo(wx, wy);
-        wave.lineTo(wx + wl, wy + Math.sin(wx) * 2); wave.strokePath();
-      }
+      // deepest water underneath (flat, so gaps never show through)
+      sc.add.rectangle(x, y, w, h, 0x12304a).setOrigin(0, 0).setDepth(-9999);
+      // two scrolling wave sheets: a slow base swell + a faster, lighter surface shimmer drifting the
+      // other way. Their interference reads as living, rolling water.
+      const base = sc.add.tileSprite(x, y, w, h, 'w-ocean-tex').setOrigin(0, 0).setDepth(-9998).setTileScale(2, 2);
+      const top = sc.add.tileSprite(x, y, w, h, 'w-ocean-tex').setOrigin(0, 0).setDepth(-9998).setTileScale(3.1, 3.1).setAlpha(0.4);
+      oceanLayers.push({ spr: base, sx: 9, sy: 4, sway: 7 });
+      oceanLayers.push({ spr: top, sx: -6, sy: 6, sway: 11 });
       // a foamy shoreline where the ocean meets the land edges of this corner
-      wave.lineStyle(4, 0xbfe0ee, 0.5);
-      if (x < 0) wave.lineBetween(0, Math.max(y, 0), 0, y + h);     // east edge (against land)
-      if (x >= WORLD.w) wave.lineBetween(WORLD.w, Math.max(y, 0), WORLD.w, y + h);
+      foam.lineStyle(4, 0xbfe0ee, 0.5);
+      if (x < 0) foam.lineBetween(0, Math.max(y, 0), 0, y + h);     // east edge (against land)
+      if (x >= WORLD.w) foam.lineBetween(WORLD.w, Math.max(y, 0), WORLD.w, y + h);
+    }
+  }
+  // Scroll every ocean layer's UVs → the sea rolls. Cheap: just nudges tilePosition on a handful of
+  // TileSprites (all the wave shape lives in the texture + GPU UV-wrap).
+  function updateOcean(now: number, dt: number) {
+    if (!oceanLayers.length) return;
+    const t = now / 1000;
+    for (const L of oceanLayers) {
+      L.spr.tilePositionX += L.sx * dt + Math.sin(t * 0.6) * L.sway * dt;
+      L.spr.tilePositionY += L.sy * dt + Math.cos(t * 0.47) * L.sway * 0.5 * dt;
     }
   }
 
@@ -16991,11 +17113,16 @@ export function startWorld(net: WorldNet): void {
   // reported to the server (net.mobKill) which pays a small, rate-limited bounty.
   // ============================================================================================
   type MobKind = 'scorpion' | 'rattler' | 'buzzard' | 'mosquito' | 'slime' | 'toad' | 'wolf' | 'snowman' | 'yeti';
+  // MMO mobs: the SERVER owns every mob — its position, HP, AI, spawning, and the bounty. Two
+  // players in the same biome see and fight the SAME mob. The client renders what the server
+  // broadcasts (interpolating between updates), reports its own hits (net.mobHit), and resolves
+  // damage-to-self locally (each client feels its own bites/projectiles). `x,y` is the rendered
+  // (smoothed) position; `tx,ty` is the latest server position we're easing toward.
   interface Mob {
+    id: number;
     spr: Phaser.GameObjects.Image; bar: Phaser.GameObjects.Graphics;
     kind: MobKind; biome: string; x: number; y: number; tx: number; ty: number;
-    hp: number; maxHp: number; hitUntil: number; state: number; busyUntil: number;
-    homeX: number; homeY: number; ph: number; dead: boolean; nextShotAt: number;
+    hp: number; maxHp: number; hitUntil: number; ph: number; nextShotAt: number;
   }
   interface MobSpec {
     biome: string; hp: number; speed: number; aggro: number; scale: number; label: string; emoji: string;
@@ -17014,19 +17141,20 @@ export function startWorld(net: WorldNet): void {
     buzzard:  { biome: 'desert', hp: 3, speed: 60, aggro: 300, scale: TEXEL * 1.9, label: 'Buzzard', emoji: '🦅', dmg: 500, barW: 22, fly: true,
       ranged: { range: 300, cooldownMs: 3400, projSpeed: 260, projTex: 'w-proj-rock' } },
     // --- swamp (medium) ---
-    mosquito: { biome: 'swamp', hp: 3, speed: 62, aggro: 260, scale: TEXEL * 1.8, label: 'Bog Skeeter', emoji: '🦟', dmg: 650, barW: 22, fly: true },
-    slime:    { biome: 'swamp', hp: 6, speed: 30, aggro: 240, scale: TEXEL * 2.2, label: 'Bog Slime', emoji: '🟢', dmg: 800, barW: 30 },
-    toad:     { biome: 'swamp', hp: 4, speed: 40, aggro: 320, scale: TEXEL * 2.0, label: 'Spitter Toad', emoji: '🐸', dmg: 700, barW: 26,
-      ranged: { range: 320, cooldownMs: 2600, projSpeed: 300, projTex: 'w-proj-venom' } },
-    // --- snow (hardest) ---
-    wolf:     { biome: 'snow', hp: 5, speed: 66, aggro: 320, scale: TEXEL * 2.0, label: 'Frost Wolf', emoji: '🐺', dmg: 850, barW: 26 },
-    snowman:  { biome: 'snow', hp: 6, speed: 24, aggro: 380, scale: TEXEL * 2.3, label: 'Evil Snowman', emoji: '⛄', dmg: 1000, barW: 32,
-      ranged: { range: 380, cooldownMs: 1900, projSpeed: 320, projTex: 'w-proj-snow' } },
-    yeti:     { biome: 'snow', hp: 12, speed: 46, aggro: 340, scale: TEXEL * 2.8, label: 'Yeti', emoji: '👹', dmg: 1300, barW: 44 },
+    mosquito: { biome: 'swamp', hp: 3, speed: 74, aggro: 340, scale: TEXEL * 1.8, label: 'Bog Skeeter', emoji: '🦟', dmg: 700, barW: 22, fly: true },
+    slime:    { biome: 'swamp', hp: 6, speed: 38, aggro: 300, scale: TEXEL * 2.2, label: 'Bog Slime', emoji: '🟢', dmg: 850, barW: 30 },
+    toad:     { biome: 'swamp', hp: 4, speed: 48, aggro: 380, scale: TEXEL * 2.0, label: 'Spitter Toad', emoji: '🐸', dmg: 750, barW: 26,
+      ranged: { range: 360, cooldownMs: 2000, projSpeed: 320, projTex: 'w-proj-venom' } },
+    // --- snow (hardest — fast, far-sighted, relentless) ---
+    wolf:     { biome: 'snow', hp: 6, speed: 92, aggro: 480, scale: TEXEL * 2.0, label: 'Frost Wolf', emoji: '🐺', dmg: 950, barW: 26 },
+    snowman:  { biome: 'snow', hp: 7, speed: 30, aggro: 520, scale: TEXEL * 2.3, label: 'Evil Snowman', emoji: '⛄', dmg: 1150, barW: 32,
+      ranged: { range: 460, cooldownMs: 1200, projSpeed: 380, projTex: 'w-proj-snow' } },
+    yeti:     { biome: 'snow', hp: 15, speed: 60, aggro: 500, scale: TEXEL * 2.8, label: 'Yeti', emoji: '👹', dmg: 1450, barW: 44 },
   };
   interface MobProj { spr: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number; t: number; dmg: number; }
   let mobProjectiles: MobProj[] = [];
   let mobs: Mob[] = [];
+  const mobById = new Map<number, Mob>();
   let mobScene: Phaser.Scene | null = null;
 
   function makeMobTextures(sc: Phaser.Scene) {
@@ -17164,33 +17292,41 @@ export function startWorld(net: WorldNet): void {
     g.destroy();
   }
 
-  function spawnMob(sc: Phaser.Scene, kind: MobKind, x: number, y: number) {
-    const spec = MOB_SPECS[kind];
-    const spr = sc.add.image(x, y, `w-mob-${kind}`).setScale(spec.scale).setOrigin(0.5, 1).setDepth(y);
-    const bar = sc.add.graphics().setDepth(y + 1).setVisible(false);
-    mobs.push({ spr, bar, kind, biome: spec.biome, x, y, tx: x, ty: y, hp: spec.hp, maxHp: spec.hp, hitUntil: 0, state: 0, busyUntil: 0, homeX: x, homeY: y, ph: Math.random() * 9, dead: false, nextShotAt: 0 });
-  }
-
-  // Pick a random roam point inside a mob's biome (used for spawns + respawns).
-  function mobBiomeSpot(kind: MobKind, rnd: () => number): { x: number; y: number } {
-    const b = MOB_SPECS[kind].biome;
-    if (b === 'desert') return { x: -400 - rnd() * 9000, y: 120 + rnd() * (WORLD.h - 240) };
-    if (b === 'swamp') return { x: 120 + rnd() * (WORLD.w - 240), y: WORLD.h + 240 + rnd() * (SWAMP_SHORE_Y - WORLD.h - 360) };
-    return { x: WORLD.w + 300 + rnd() * (EAST.w - 600), y: 120 + rnd() * (WORLD.h - 240) };
-  }
   function makeMobs(sc: Phaser.Scene) {
+    // No local spawning any more — the server owns the horde. We just latch the scene + textures
+    // so feedMobs() can build sprites for whatever the server broadcasts.
     mobScene = sc;
     makeMobTextures(sc);
-    const rnd = mulberry32(0x30B5);
-    // Each biome gets a mix of its species (commons more numerous than the tanky bosses).
-    const ROSTER: [MobKind, number][] = [
-      ['scorpion', 8], ['rattler', 6], ['buzzard', 5],   // desert — many, weak
-      ['mosquito', 7], ['toad', 5], ['slime', 4],         // swamp — medium
-      ['wolf', 6], ['snowman', 4], ['yeti', 3],           // snow — fewer, brutal
-    ];
-    for (const [kind, n] of ROSTER) {
-      for (let i = 0; i < n; i++) { const s = mobBiomeSpot(kind, rnd); spawnMob(sc, kind, s.x, s.y); }
+  }
+
+  // The server broadcast (`worldMobs`) arrived — reconcile our sprite pool against it, keyed by the
+  // authoritative mob id: spawn a sprite for any new mob, retarget existing ones, and retire any the
+  // server no longer reports. HP/maxHp come straight from the server (the shared, real value).
+  function feedMobs(list: WorldMob[]) {
+    const sc = mobScene; if (!sc) return;
+    const alive = new Set<number>();
+    for (const w of list) {
+      alive.add(w.i);
+      const kind = w.k as MobKind;
+      const spec = MOB_SPECS[kind];
+      if (!spec) continue;
+      let m = mobById.get(w.i);
+      if (!m) {
+        const spr = sc.add.image(w.x, w.y, `w-mob-${kind}`).setScale(spec.scale).setOrigin(0.5, 1).setDepth(w.y);
+        const bar = sc.add.graphics().setDepth(w.y + 1).setVisible(false);
+        m = { id: w.i, spr, bar, kind, biome: spec.biome, x: w.x, y: w.y, tx: w.x, ty: w.y, hp: w.h, maxHp: w.m, hitUntil: 0, ph: (w.i * 2.399963) % 9, nextShotAt: 0 };
+        mobById.set(w.i, m);
+        mobs.push(m);
+      } else {
+        m.tx = w.x; m.ty = w.y; m.hp = w.h; m.maxHp = w.m;
+      }
     }
+    // retire mobs the server dropped (culled for population, out of our biome, etc.)
+    for (const m of mobs) {
+      if (alive.has(m.id)) continue;
+      m.spr.destroy(); m.bar.destroy(); mobById.delete(m.id);
+    }
+    if (mobs.length !== alive.size) mobs = mobs.filter((m) => alive.has(m.id));
   }
 
   // Apply `dmg` to any mobs within `r` of (x,y). Returns true if at least one was hit. Called from
@@ -17206,30 +17342,28 @@ export function startWorld(net: WorldNet): void {
   // Is (x,y) inside a live mob's body? (Used so a rocket detonates when it flies into one.)
   function mobAt(x: number, y: number): boolean {
     for (const m of mobs) {
-      if (m.dead) continue;
       const b = mobBody(m);
       if (Math.hypot(b.cx - x, b.cy - y) <= b.rad) return true;
     }
     return false;
   }
+  // A weapon connected with one or more mobs. We DON'T apply HP locally — the server owns it. We
+  // report the hit (net.mobHit) so the server resolves damage/death/bounty authoritatively, and play
+  // an immediate optimistic flash + damage number + little knockback so it feels responsive. The
+  // real HP arrives on the next `worldMobs` broadcast; death arrives as `mobDead`.
   function hitMobs(x: number, y: number, r: number, dmg: number): boolean {
     const now = performance.now();
     let any = false;
     for (const m of mobs) {
-      if (m.dead) continue;
       const b = mobBody(m);
       if (Math.hypot(b.cx - x, b.cy - y) > r + b.rad) continue;
       any = true;
-      m.hp -= dmg;
       m.hitUntil = now + 140;
-      // knockback away from the blast
       const a = Math.atan2(b.cy - y, b.cx - x);
-      m.x += Math.cos(a) * 14; m.y += Math.sin(a) * 14;
-      m.state = 1; // aggro/flee after being hit
-      m.busyUntil = now + 400;
+      m.x += Math.cos(a) * 8; m.y += Math.sin(a) * 8; // cosmetic nudge; server snaps it back
       spawnDamageNumber(b.cx, b.cy - 8, dmg);
       hitMobSound();
-      if (m.hp <= 0) killMob(m);
+      net.mobHit(m.id, dmg); // server applies the damage; last hit takes the bounty
     }
     return any;
   }
@@ -17241,34 +17375,32 @@ export function startWorld(net: WorldNet): void {
     sc.tweens.add({ targets: t, y: y - 26, alpha: 0, duration: 620, ease: 'Quad.easeOut', onComplete: () => t.destroy() });
   }
 
-  function killMob(m: Mob) {
-    if (m.dead) return;
-    m.dead = true;
-    const spec = MOB_SPECS[m.kind];
-    const sc = mobScene;
-    net.mobKill(m.kind); // server adds the species bounty to your at-risk purse + grants XP
-    bumpMobsKilled();     // lifetime kill tally → the "cull 50 critters" objective
-    if (sc) {
-      // death puff
-      for (let i = 0; i < 10; i++) {
-        const a = (i / 10) * Math.PI * 2;
-        const p = sc.add.circle(m.x, m.y - 6, 3, m.biome === 'snow' ? 0xe8f0f4 : m.biome === 'swamp' ? 0x4a5e34 : 0x8a3826).setDepth(999997);
-        sc.tweens.add({ targets: p, x: m.x + Math.cos(a) * 30, y: m.y - 6 + Math.sin(a) * 22, alpha: 0, duration: 500, ease: 'Quad.easeOut', onComplete: () => p.destroy() });
-      }
+  // The server says a shared mob died (`mobDead`) — everyone in-world plays the death FX here.
+  // `mine` = WE landed the killing blow, so coins fly to us and it counts toward our kill objective;
+  // `potion` = the server rolled a potion drop, so we scatter one at the death spot. (Bounty + XP
+  // themselves ride the server-held purse via the separate `mobLoot` message.)
+  function feedMobDead(id: number, x: number, y: number, kind: string, mine: boolean, potion: boolean) {
+    const m = mobById.get(id);
+    if (m) { m.spr.destroy(); m.bar.destroy(); mobById.delete(id); mobs = mobs.filter((o) => o.id !== id); }
+    const sc = mobScene; if (!sc) return;
+    const biome = MOB_SPECS[kind as MobKind]?.biome ?? 'desert';
+    // death puff
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2;
+      const p = sc.add.circle(x, y - 6, 3, biome === 'snow' ? 0xe8f0f4 : biome === 'swamp' ? 0x4a5e34 : 0x8a3826).setDepth(999997);
+      sc.tweens.add({ targets: p, x: x + Math.cos(a) * 30, y: y - 6 + Math.sin(a) * 22, alpha: 0, duration: 500, ease: 'Quad.easeOut', onComplete: () => p.destroy() });
+    }
+    if (mine) {
+      bumpMobsKilled();   // lifetime kill tally → the "cull 50 critters" objective
       // coins burst toward you (the real payout is the server-held purse)
       for (let i = 0; i < 4; i++) {
-        const coin = sc.add.text(m.x + (Math.random() * 24 - 12), m.y - 10, '🪙', { fontSize: '14px' }).setOrigin(0.5).setDepth(999999);
+        const coin = sc.add.text(x + (Math.random() * 24 - 12), y - 10, '🪙', { fontSize: '14px' }).setOrigin(0.5).setDepth(999999);
         sc.tweens.add({ targets: coin, x: selfX, y: selfY - 16, alpha: 0.2, duration: 520 + i * 80, delay: i * 55, ease: 'Quad.easeIn', onComplete: () => coin.destroy() });
       }
-      // some mobs occasionally drop a healing potion — the tanky/dangerous ones more often
-      const potionChance = m.kind === 'yeti' ? 0.6 : m.kind === 'slime' || m.kind === 'snowman' ? 0.35 : m.biome === 'snow' ? 0.22 : m.biome === 'swamp' ? 0.15 : 0.08;
-      if (Math.random() < potionChance) dropPotion(sc, m.x, m.y);
-      m.spr.destroy(); m.bar.destroy();
     }
+    // the server decided whether a potion dropped (shared, so two hunters can't both grab one)
+    if (potion) dropPotion(sc, x, y);
     killMobSound();
-    // respawn a fresh one of the same species elsewhere in the biome after a while
-    window.setTimeout(() => respawnMob(m.kind), 14000 + Math.random() * 14000);
-    void spec;
   }
 
   // A healing potion pickup — bobs on the ground until you walk over it, then heals + is banked.
@@ -17280,21 +17412,15 @@ export function startWorld(net: WorldNet): void {
     potionDrops.push({ spr, x, y, born: performance.now() });
   }
 
-  function respawnMob(kind: MobKind) {
-    const sc = mobScene; if (!sc || !game) return;
-    const s = mobBiomeSpot(kind, Math.random);
-    spawnMob(sc, kind, s.x, s.y);
-  }
-
-  // Drink a held potion (H key) → +40 HP. Lost on death, so hoard at your peril.
+  // Drink a held potion (H key) → +10 HP. Lost on death, so hoard at your peril.
   function drinkPotion() {
     if (playerDead || fieldPotions <= 0) { if (fieldPotions <= 0) flashHelp('🧪 No potions — down a biome mob to find one.'); return; }
     if (playerHp >= PLAYER_MAX_HP) { flashHelp('❤️ Already at full health.'); return; }
     fieldPotions--;
-    playerHp = Math.min(PLAYER_MAX_HP, playerHp + 40);
+    playerHp = Math.min(PLAYER_MAX_HP, playerHp + 10);
     updateHealthHud();
     tone(520, 0.1, 'sine', 0.05, 780); window.setTimeout(() => tone(780, 0.12, 'sine', 0.05, 1040), 90);
-    showToast('🧪 <i>glug.</i> +40 HP.');
+    showToast('🧪 <i>glug.</i> +10 HP.');
   }
 
   // The player took a hit from a mob (contact or projectile). Damage scales with biome difficulty
@@ -17308,7 +17434,6 @@ export function startWorld(net: WorldNet): void {
     // dmg came in as a "stun ms" figure historically; convert to HP loss (roughly 1 HP per 45ms).
     const hpLoss = Math.max(4, Math.round(dmg / 45));
     playerHp = Math.max(0, playerHp - hpLoss);
-    lastDamagedAt = now;
     stunnedUntil = now + Math.min(500, dmg * 0.35); keys.clear();
     // knockback
     const a = Math.atan2(selfY - srcY, selfX - srcX);
@@ -17396,57 +17521,42 @@ export function startWorld(net: WorldNet): void {
         if (!playerDead && Math.hypot(p.x - selfX, p.y - selfY) < R + 14) {
           fieldPotions++;
           updateHealthHud();
-          showToast(`🧪 Picked up a potion (${fieldPotions} held) — press <b>H</b> to drink (+40 HP).`);
+          showToast(`🧪 Picked up a potion (${fieldPotions} held) — press <b>H</b> to drink (+10 HP).`);
           tone(660, 0.1, 'sine', 0.05, 990);
           p.spr.destroy(); potionDrops.splice(i, 1); continue;
         }
         if (now - p.born > 45000) { p.spr.destroy(); potionDrops.splice(i, 1); }
       }
     }
-    // out-of-combat regen + bank the purse when you're safe in town
-    if (!playerDead && now - lastDamagedAt > 5000 && playerHp < PLAYER_MAX_HP) {
-      playerHp = Math.min(PLAYER_MAX_HP, playerHp + 6 * dt);
-      updateHealthHud();
-    }
+    // No passive regen — health only comes back from a potion (H) or from returning to town.
     maybeBankPurse();
     if (!mobs.length) return;
-    if (mobs.some((m) => m.dead)) mobs = mobs.filter((m) => !m.dead);
     const active = !inInterior && !inDungeon && !playerDead;
     for (const m of mobs) {
       const spec = MOB_SPECS[m.kind];
       const near = Math.hypot(m.x - selfX, m.y - selfY) < 1400;
+      // --- interpolate our rendered position toward the server's latest (tx,ty) ---
+      const dx = m.tx - m.x, dy = m.ty - m.y, mag = Math.hypot(dx, dy);
+      let moving = false;
+      if (mag > 1) {
+        // ease ~18%/frame, but never lag more than ~1 tick behind; snap if it teleported far
+        if (mag > 260) { m.x = m.tx; m.y = m.ty; }
+        else { const k = Math.min(1, 14 * dt); m.x += dx * k; m.y += dy * k; }
+        moving = mag > 3;
+        if (Math.abs(dx) > 1) m.spr.setFlipX(dx < 0);
+      }
+      // --- damage-to-self is resolved locally (each client feels its own bites/projectiles) ---
       if (active && near) {
         const distToSelf = Math.hypot(selfX - m.x, selfY - m.y);
-        const aggro = distToSelf < spec.aggro && (m.hp < m.maxHp || distToSelf < spec.aggro * 0.55);
-        // ranged mobs hold their ground and lob projectiles; melee mobs close in
+        const aggro = distToSelf < spec.aggro;
         if (spec.ranged && aggro && distToSelf < spec.ranged.range) {
-          // keep some distance, then fire on cooldown
-          if (distToSelf < spec.ranged.range * 0.55) { m.tx = m.x - (selfX - m.x); m.ty = m.y - (selfY - m.y); }
-          else { m.tx = m.x; m.ty = m.y; }
-          m.state = 1;
           if (now >= m.nextShotAt) { m.nextShotAt = now + spec.ranged.cooldownMs; launchMobProjectile(m, spec); }
-        } else if (aggro) {
-          m.tx = selfX; m.ty = selfY; m.state = 1;
-        } else if (now >= m.busyUntil) {
-          const a = Math.random() * Math.PI * 2, d = 40 + Math.random() * 90;
-          m.tx = clamp(m.homeX + Math.cos(a) * d, m.homeX - 180, m.homeX + 180);
-          m.ty = m.homeY + Math.sin(a) * d;
-          m.busyUntil = now + 1200 + Math.random() * 2600;
-          m.state = 0;
-        }
-        const dx = m.tx - m.x, dy = m.ty - m.y, mag = Math.hypot(dx, dy);
-        if (mag > 2) {
-          const sp = spec.speed * (m.state === 1 ? 1.5 : 1) * dt;
-          m.x += (dx / mag) * sp; m.y += (dy / mag) * sp;
-          if (Math.abs(dx) > 1) m.spr.setFlipX(dx < 0);
-        }
-        // melee contact → real HP damage, on foot OR in a car (i-frames handled in damagePlayer)
-        if (!spec.ranged && distToSelf < (driving ? CAR_LEN * 0.5 : R + 10)) {
+        } else if (!spec.ranged && distToSelf < (driving ? CAR_LEN * 0.5 : R + 10)) {
+          // melee contact → real HP damage, on foot OR in a car (i-frames handled in damagePlayer)
           damagePlayer(spec.dmg, m.x, m.y, spec.label);
         }
       }
       // --- animation: give each mob some life instead of sliding stiffly ---
-      const moving = Math.hypot(m.tx - m.x, m.ty - m.y) > 3 && (m.state === 1 || m.busyUntil > now);
       let bob = 0;
       if (spec.fly) {
         // wings: fast vertical bob + a scaleY flap
@@ -17469,7 +17579,7 @@ export function startWorld(net: WorldNet): void {
       if (now < m.hitUntil) m.spr.setTintFill(0xffffff); else m.spr.clearTint();
       // health bar — ALWAYS shown above a mob near the player (so you always know it's a hostile),
       // its width scaling with max HP so tanky ones wear a visibly bigger bar.
-      if (!m.dead && near) {
+      if (near) {
         m.bar.setVisible(true).clear();
         const frac = Math.max(0, m.hp / m.maxHp);
         const bw = spec.barW, bx = m.x - bw / 2, by = m.y + bob - m.spr.displayHeight - 8;
@@ -17484,11 +17594,15 @@ export function startWorld(net: WorldNet): void {
     }
   }
 
-  // Bank the at-risk mob purse the moment you step back onto safe town ground.
+  // Step back onto safe town ground → bank the at-risk mob purse AND recover to full health
+  // (town is the only place you heal for free — out in the wild it's potions or nothing).
   let wasInFrontier = false;
   function maybeBankPurse() {
     const inTown = selfX >= 0 && selfX <= WORLD.w && selfY >= 0 && selfY <= WORLD.h;
-    if (inTown && wasInFrontier && fieldPurse > 0) { net.worldBank(); }
+    if (inTown && wasInFrontier) {
+      if (fieldPurse > 0) net.worldBank();
+      if (playerHp < PLAYER_MAX_HP) { playerHp = PLAYER_MAX_HP; updateHealthHud(); showToast('🏥 Back in town — patched up to full health.'); }
+    }
     wasInFrontier = !inTown && !inInterior && !inDungeon;
   }
 
@@ -18171,6 +18285,8 @@ export function startWorld(net: WorldNet): void {
       if (banked && banked > 0) showToast(`🏦 Banked <b>${banked.toLocaleString()}🪙</b> of mob loot. Safe now.`);
       else if (gained && gained > 0) showToast(`💰 +${gained.toLocaleString()}🪙 held — bank it in town (lose it if you die).`);
     },
+    feedMobs(list: WorldMob[]) { feedMobs(list); },
+    feedMobDead(id: number, x: number, y: number, kind: string, mine: boolean, potion: boolean) { feedMobDead(id, x, y, kind, mine, potion); },
     feedCortisol() { updateCortHud(); },
     feedNews() { if (newsDialogOpen) { const list = dialogBox.querySelector<HTMLDivElement>('#newsWorldList'); if (list) renderNewsWorldList(list); } },
     feedLoan() {
