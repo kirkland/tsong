@@ -100,6 +100,7 @@ import {
   LOOT_TABLE,
   type BgLobbyMsg,
   type GolfScoreRow,
+  type WorldMob,
   levelForXp,
 } from '../shared/types';
 import { drawCosmeticPreview, drawLegendIcon } from './render';
@@ -271,7 +272,7 @@ export interface WorldNet {
   fishKing(): { name: string; lb: number } | null;     // biggest catch on record (billboard)
   ghKing(): { name: string; score: number } | null;    // top Tsong Hero score (billboard)
   wish(): void;                                        // toss 10 coins into the fountain
-  mobKill(kind: string): void;                         // downed a biome critter → coins into the at-risk purse + XP
+  mobHit(id: number, dmg: number): void;               // dealt damage to a shared server-owned mob (server resolves HP/death/bounty)
   worldBank(): void;                                   // reached town alive → bank the at-risk mob purse
   worldDied(): void;                                   // died in the wild → forfeit the unbanked purse
   owns(id: string): boolean;                           // do we own this cosmetic/item id? (wallet.owned)
@@ -330,6 +331,8 @@ interface Controller {
   feedWallet(): void;                                // the wallet changed (buy/equip/spin settled) — re-render the shop dialog if it's open
   completeSkiObjective(): void;                       // a Frostreach ski race finished → mark the objective
   feedMobLoot(purse: number, gained?: number, banked?: number): void; // the at-risk mob-loot purse changed
+  feedMobs(list: WorldMob[]): void;                    // server's authoritative mob roster → reconcile our sprites
+  feedMobDead(id: number, x: number, y: number, kind: string, mine: boolean, potion: boolean): void; // a shared mob died → FX
   feedCortisol(): void;                               // the "Cortisol" board updated — refresh the top-bar cortisol gauge
   feedNews(): void;                                  // a new news item published — re-render the news dialog if it's open
   feedLoan(): void;                                  // the loan changed (taken/repaid/collected/countdown tick) — re-render the loan dialog if it's open
@@ -398,6 +401,16 @@ export function feedWallet(): void {
 /** The server-held at-risk mob-loot purse changed (a kill added to it, or it banked/forfeited). */
 export function feedMobLoot(purse: number, gained?: number, banked?: number): void {
   controller?.feedMobLoot(purse, gained, banked);
+}
+
+/** The server's authoritative shared-mob roster (a `worldMobs` broadcast) → reconcile our sprites. */
+export function feedMobs(list: WorldMob[]): void {
+  controller?.feedMobs(list);
+}
+
+/** A shared mob died (`mobDead`) → play the death FX for everyone; `mine` = we landed the kill. */
+export function feedMobDead(id: number, x: number, y: number, kind: string, mine: boolean, potion: boolean): void {
+  controller?.feedMobDead(id, x, y, kind, mine, potion);
 }
 
 /** The "Cortisol" board updated — refresh the World top-bar cortisol gauge. */
@@ -13816,7 +13829,6 @@ export function startWorld(net: WorldNet): void {
       spawnSparks(n.x, n.y, 0x8ef0ff);
     }
     for (const m of mobs) {                                                // the beam skewers mobs too (2 dmg)
-      if (m.dead) continue;
       const b = mobBody(m);
       if (distToSegment(b.cx, b.cy, x, y, ex, ey) > LASER_HIT_R + b.rad) continue;
       hitMobs(b.cx, b.cy, 4, 2);
@@ -17062,11 +17074,16 @@ export function startWorld(net: WorldNet): void {
   // reported to the server (net.mobKill) which pays a small, rate-limited bounty.
   // ============================================================================================
   type MobKind = 'scorpion' | 'rattler' | 'buzzard' | 'mosquito' | 'slime' | 'toad' | 'wolf' | 'snowman' | 'yeti';
+  // MMO mobs: the SERVER owns every mob — its position, HP, AI, spawning, and the bounty. Two
+  // players in the same biome see and fight the SAME mob. The client renders what the server
+  // broadcasts (interpolating between updates), reports its own hits (net.mobHit), and resolves
+  // damage-to-self locally (each client feels its own bites/projectiles). `x,y` is the rendered
+  // (smoothed) position; `tx,ty` is the latest server position we're easing toward.
   interface Mob {
+    id: number;
     spr: Phaser.GameObjects.Image; bar: Phaser.GameObjects.Graphics;
     kind: MobKind; biome: string; x: number; y: number; tx: number; ty: number;
-    hp: number; maxHp: number; hitUntil: number; state: number; busyUntil: number;
-    homeX: number; homeY: number; ph: number; dead: boolean; nextShotAt: number;
+    hp: number; maxHp: number; hitUntil: number; ph: number; nextShotAt: number;
   }
   interface MobSpec {
     biome: string; hp: number; speed: number; aggro: number; scale: number; label: string; emoji: string;
@@ -17098,6 +17115,7 @@ export function startWorld(net: WorldNet): void {
   interface MobProj { spr: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number; t: number; dmg: number; }
   let mobProjectiles: MobProj[] = [];
   let mobs: Mob[] = [];
+  const mobById = new Map<number, Mob>();
   let mobScene: Phaser.Scene | null = null;
 
   function makeMobTextures(sc: Phaser.Scene) {
@@ -17235,33 +17253,41 @@ export function startWorld(net: WorldNet): void {
     g.destroy();
   }
 
-  function spawnMob(sc: Phaser.Scene, kind: MobKind, x: number, y: number) {
-    const spec = MOB_SPECS[kind];
-    const spr = sc.add.image(x, y, `w-mob-${kind}`).setScale(spec.scale).setOrigin(0.5, 1).setDepth(y);
-    const bar = sc.add.graphics().setDepth(y + 1).setVisible(false);
-    mobs.push({ spr, bar, kind, biome: spec.biome, x, y, tx: x, ty: y, hp: spec.hp, maxHp: spec.hp, hitUntil: 0, state: 0, busyUntil: 0, homeX: x, homeY: y, ph: Math.random() * 9, dead: false, nextShotAt: 0 });
-  }
-
-  // Pick a random roam point inside a mob's biome (used for spawns + respawns).
-  function mobBiomeSpot(kind: MobKind, rnd: () => number): { x: number; y: number } {
-    const b = MOB_SPECS[kind].biome;
-    if (b === 'desert') return { x: -400 - rnd() * 9000, y: 120 + rnd() * (WORLD.h - 240) };
-    if (b === 'swamp') return { x: 120 + rnd() * (WORLD.w - 240), y: WORLD.h + 240 + rnd() * (SWAMP_SHORE_Y - WORLD.h - 360) };
-    return { x: WORLD.w + 300 + rnd() * (EAST.w - 600), y: 120 + rnd() * (WORLD.h - 240) };
-  }
   function makeMobs(sc: Phaser.Scene) {
+    // No local spawning any more — the server owns the horde. We just latch the scene + textures
+    // so feedMobs() can build sprites for whatever the server broadcasts.
     mobScene = sc;
     makeMobTextures(sc);
-    const rnd = mulberry32(0x30B5);
-    // Each biome gets a mix of its species (commons more numerous than the tanky bosses).
-    const ROSTER: [MobKind, number][] = [
-      ['scorpion', 10], ['rattler', 8], ['buzzard', 6],   // desert — many, weak
-      ['mosquito', 11], ['toad', 8], ['slime', 6],         // swamp — medium, thicker
-      ['wolf', 14], ['snowman', 9], ['yeti', 6],           // snow — a proper gauntlet
-    ];
-    for (const [kind, n] of ROSTER) {
-      for (let i = 0; i < n; i++) { const s = mobBiomeSpot(kind, rnd); spawnMob(sc, kind, s.x, s.y); }
+  }
+
+  // The server broadcast (`worldMobs`) arrived — reconcile our sprite pool against it, keyed by the
+  // authoritative mob id: spawn a sprite for any new mob, retarget existing ones, and retire any the
+  // server no longer reports. HP/maxHp come straight from the server (the shared, real value).
+  function feedMobs(list: WorldMob[]) {
+    const sc = mobScene; if (!sc) return;
+    const alive = new Set<number>();
+    for (const w of list) {
+      alive.add(w.i);
+      const kind = w.k as MobKind;
+      const spec = MOB_SPECS[kind];
+      if (!spec) continue;
+      let m = mobById.get(w.i);
+      if (!m) {
+        const spr = sc.add.image(w.x, w.y, `w-mob-${kind}`).setScale(spec.scale).setOrigin(0.5, 1).setDepth(w.y);
+        const bar = sc.add.graphics().setDepth(w.y + 1).setVisible(false);
+        m = { id: w.i, spr, bar, kind, biome: spec.biome, x: w.x, y: w.y, tx: w.x, ty: w.y, hp: w.h, maxHp: w.m, hitUntil: 0, ph: (w.i * 2.399963) % 9, nextShotAt: 0 };
+        mobById.set(w.i, m);
+        mobs.push(m);
+      } else {
+        m.tx = w.x; m.ty = w.y; m.hp = w.h; m.maxHp = w.m;
+      }
     }
+    // retire mobs the server dropped (culled for population, out of our biome, etc.)
+    for (const m of mobs) {
+      if (alive.has(m.id)) continue;
+      m.spr.destroy(); m.bar.destroy(); mobById.delete(m.id);
+    }
+    if (mobs.length !== alive.size) mobs = mobs.filter((m) => alive.has(m.id));
   }
 
   // Apply `dmg` to any mobs within `r` of (x,y). Returns true if at least one was hit. Called from
@@ -17277,30 +17303,28 @@ export function startWorld(net: WorldNet): void {
   // Is (x,y) inside a live mob's body? (Used so a rocket detonates when it flies into one.)
   function mobAt(x: number, y: number): boolean {
     for (const m of mobs) {
-      if (m.dead) continue;
       const b = mobBody(m);
       if (Math.hypot(b.cx - x, b.cy - y) <= b.rad) return true;
     }
     return false;
   }
+  // A weapon connected with one or more mobs. We DON'T apply HP locally — the server owns it. We
+  // report the hit (net.mobHit) so the server resolves damage/death/bounty authoritatively, and play
+  // an immediate optimistic flash + damage number + little knockback so it feels responsive. The
+  // real HP arrives on the next `worldMobs` broadcast; death arrives as `mobDead`.
   function hitMobs(x: number, y: number, r: number, dmg: number): boolean {
     const now = performance.now();
     let any = false;
     for (const m of mobs) {
-      if (m.dead) continue;
       const b = mobBody(m);
       if (Math.hypot(b.cx - x, b.cy - y) > r + b.rad) continue;
       any = true;
-      m.hp -= dmg;
       m.hitUntil = now + 140;
-      // knockback away from the blast
       const a = Math.atan2(b.cy - y, b.cx - x);
-      m.x += Math.cos(a) * 14; m.y += Math.sin(a) * 14;
-      m.state = 1; // aggro/flee after being hit
-      m.busyUntil = now + 400;
+      m.x += Math.cos(a) * 8; m.y += Math.sin(a) * 8; // cosmetic nudge; server snaps it back
       spawnDamageNumber(b.cx, b.cy - 8, dmg);
       hitMobSound();
-      if (m.hp <= 0) killMob(m);
+      net.mobHit(m.id, dmg); // server applies the damage; last hit takes the bounty
     }
     return any;
   }
@@ -17312,36 +17336,32 @@ export function startWorld(net: WorldNet): void {
     sc.tweens.add({ targets: t, y: y - 26, alpha: 0, duration: 620, ease: 'Quad.easeOut', onComplete: () => t.destroy() });
   }
 
-  function killMob(m: Mob) {
-    if (m.dead) return;
-    m.dead = true;
-    const spec = MOB_SPECS[m.kind];
-    const sc = mobScene;
-    net.mobKill(m.kind); // server adds the species bounty to your at-risk purse + grants XP
-    bumpMobsKilled();     // lifetime kill tally → the "cull 50 critters" objective
-    if (sc) {
-      // death puff
-      for (let i = 0; i < 10; i++) {
-        const a = (i / 10) * Math.PI * 2;
-        const p = sc.add.circle(m.x, m.y - 6, 3, m.biome === 'snow' ? 0xe8f0f4 : m.biome === 'swamp' ? 0x4a5e34 : 0x8a3826).setDepth(999997);
-        sc.tweens.add({ targets: p, x: m.x + Math.cos(a) * 30, y: m.y - 6 + Math.sin(a) * 22, alpha: 0, duration: 500, ease: 'Quad.easeOut', onComplete: () => p.destroy() });
-      }
+  // The server says a shared mob died (`mobDead`) — everyone in-world plays the death FX here.
+  // `mine` = WE landed the killing blow, so coins fly to us and it counts toward our kill objective;
+  // `potion` = the server rolled a potion drop, so we scatter one at the death spot. (Bounty + XP
+  // themselves ride the server-held purse via the separate `mobLoot` message.)
+  function feedMobDead(id: number, x: number, y: number, kind: string, mine: boolean, potion: boolean) {
+    const m = mobById.get(id);
+    if (m) { m.spr.destroy(); m.bar.destroy(); mobById.delete(id); mobs = mobs.filter((o) => o.id !== id); }
+    const sc = mobScene; if (!sc) return;
+    const biome = MOB_SPECS[kind as MobKind]?.biome ?? 'desert';
+    // death puff
+    for (let i = 0; i < 10; i++) {
+      const a = (i / 10) * Math.PI * 2;
+      const p = sc.add.circle(x, y - 6, 3, biome === 'snow' ? 0xe8f0f4 : biome === 'swamp' ? 0x4a5e34 : 0x8a3826).setDepth(999997);
+      sc.tweens.add({ targets: p, x: x + Math.cos(a) * 30, y: y - 6 + Math.sin(a) * 22, alpha: 0, duration: 500, ease: 'Quad.easeOut', onComplete: () => p.destroy() });
+    }
+    if (mine) {
+      bumpMobsKilled();   // lifetime kill tally → the "cull 50 critters" objective
       // coins burst toward you (the real payout is the server-held purse)
       for (let i = 0; i < 4; i++) {
-        const coin = sc.add.text(m.x + (Math.random() * 24 - 12), m.y - 10, '🪙', { fontSize: '14px' }).setOrigin(0.5).setDepth(999999);
+        const coin = sc.add.text(x + (Math.random() * 24 - 12), y - 10, '🪙', { fontSize: '14px' }).setOrigin(0.5).setDepth(999999);
         sc.tweens.add({ targets: coin, x: selfX, y: selfY - 16, alpha: 0.2, duration: 520 + i * 80, delay: i * 55, ease: 'Quad.easeIn', onComplete: () => coin.destroy() });
       }
-      // some mobs occasionally drop a healing potion — the tanky/dangerous ones more often
-      const potionChance = m.kind === 'yeti' ? 0.6 : m.kind === 'slime' || m.kind === 'snowman' ? 0.35 : m.biome === 'snow' ? 0.22 : m.biome === 'swamp' ? 0.15 : 0.08;
-      if (Math.random() < potionChance) dropPotion(sc, m.x, m.y);
-      m.spr.destroy(); m.bar.destroy();
     }
+    // the server decided whether a potion dropped (shared, so two hunters can't both grab one)
+    if (potion) dropPotion(sc, x, y);
     killMobSound();
-    // respawn a fresh one of the same species elsewhere in the biome after a while
-    // snow mobs come back fast (the Frostreach never really thins out); others a touch slower
-    const respawnMs = (m.biome === 'snow' ? 5000 : 8000) + Math.random() * 8000;
-    window.setTimeout(() => respawnMob(m.kind), respawnMs);
-    void spec;
   }
 
   // A healing potion pickup — bobs on the ground until you walk over it, then heals + is banked.
@@ -17351,12 +17371,6 @@ export function startWorld(net: WorldNet): void {
     const spr = sc.add.text(x, y, '🧪', { fontSize: '18px' }).setOrigin(0.5, 1).setDepth(y + 2);
     sc.tweens.add({ targets: spr, y: y - 6, duration: 700, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
     potionDrops.push({ spr, x, y, born: performance.now() });
-  }
-
-  function respawnMob(kind: MobKind) {
-    const sc = mobScene; if (!sc || !game) return;
-    const s = mobBiomeSpot(kind, Math.random);
-    spawnMob(sc, kind, s.x, s.y);
   }
 
   // Drink a held potion (H key) → +10 HP. Lost on death, so hoard at your peril.
@@ -17478,45 +17492,32 @@ export function startWorld(net: WorldNet): void {
     // No passive regen — health only comes back from a potion (H) or from returning to town.
     maybeBankPurse();
     if (!mobs.length) return;
-    if (mobs.some((m) => m.dead)) mobs = mobs.filter((m) => !m.dead);
     const active = !inInterior && !inDungeon && !playerDead;
     for (const m of mobs) {
       const spec = MOB_SPECS[m.kind];
       const near = Math.hypot(m.x - selfX, m.y - selfY) < 1400;
+      // --- interpolate our rendered position toward the server's latest (tx,ty) ---
+      const dx = m.tx - m.x, dy = m.ty - m.y, mag = Math.hypot(dx, dy);
+      let moving = false;
+      if (mag > 1) {
+        // ease ~18%/frame, but never lag more than ~1 tick behind; snap if it teleported far
+        if (mag > 260) { m.x = m.tx; m.y = m.ty; }
+        else { const k = Math.min(1, 14 * dt); m.x += dx * k; m.y += dy * k; }
+        moving = mag > 3;
+        if (Math.abs(dx) > 1) m.spr.setFlipX(dx < 0);
+      }
+      // --- damage-to-self is resolved locally (each client feels its own bites/projectiles) ---
       if (active && near) {
         const distToSelf = Math.hypot(selfX - m.x, selfY - m.y);
-        // Aggressive on sight: anything within its (now generous) aggro range comes for you,
-        // no need to shoot it first. Snow mobs see the furthest and never let up.
         const aggro = distToSelf < spec.aggro;
-        // ranged mobs hold their ground and lob projectiles; melee mobs close in
         if (spec.ranged && aggro && distToSelf < spec.ranged.range) {
-          // keep some distance, then fire on cooldown
-          if (distToSelf < spec.ranged.range * 0.55) { m.tx = m.x - (selfX - m.x); m.ty = m.y - (selfY - m.y); }
-          else { m.tx = m.x; m.ty = m.y; }
-          m.state = 1;
           if (now >= m.nextShotAt) { m.nextShotAt = now + spec.ranged.cooldownMs; launchMobProjectile(m, spec); }
-        } else if (aggro) {
-          m.tx = selfX; m.ty = selfY; m.state = 1;
-        } else if (now >= m.busyUntil) {
-          const a = Math.random() * Math.PI * 2, d = 40 + Math.random() * 90;
-          m.tx = clamp(m.homeX + Math.cos(a) * d, m.homeX - 180, m.homeX + 180);
-          m.ty = m.homeY + Math.sin(a) * d;
-          m.busyUntil = now + 1200 + Math.random() * 2600;
-          m.state = 0;
-        }
-        const dx = m.tx - m.x, dy = m.ty - m.y, mag = Math.hypot(dx, dy);
-        if (mag > 2) {
-          const sp = spec.speed * (m.state === 1 ? 1.5 : 1) * dt;
-          m.x += (dx / mag) * sp; m.y += (dy / mag) * sp;
-          if (Math.abs(dx) > 1) m.spr.setFlipX(dx < 0);
-        }
-        // melee contact → real HP damage, on foot OR in a car (i-frames handled in damagePlayer)
-        if (!spec.ranged && distToSelf < (driving ? CAR_LEN * 0.5 : R + 10)) {
+        } else if (!spec.ranged && distToSelf < (driving ? CAR_LEN * 0.5 : R + 10)) {
+          // melee contact → real HP damage, on foot OR in a car (i-frames handled in damagePlayer)
           damagePlayer(spec.dmg, m.x, m.y, spec.label);
         }
       }
       // --- animation: give each mob some life instead of sliding stiffly ---
-      const moving = Math.hypot(m.tx - m.x, m.ty - m.y) > 3 && (m.state === 1 || m.busyUntil > now);
       let bob = 0;
       if (spec.fly) {
         // wings: fast vertical bob + a scaleY flap
@@ -17539,7 +17540,7 @@ export function startWorld(net: WorldNet): void {
       if (now < m.hitUntil) m.spr.setTintFill(0xffffff); else m.spr.clearTint();
       // health bar — ALWAYS shown above a mob near the player (so you always know it's a hostile),
       // its width scaling with max HP so tanky ones wear a visibly bigger bar.
-      if (!m.dead && near) {
+      if (near) {
         m.bar.setVisible(true).clear();
         const frac = Math.max(0, m.hp / m.maxHp);
         const bw = spec.barW, bx = m.x - bw / 2, by = m.y + bob - m.spr.displayHeight - 8;
@@ -18245,6 +18246,8 @@ export function startWorld(net: WorldNet): void {
       if (banked && banked > 0) showToast(`🏦 Banked <b>${banked.toLocaleString()}🪙</b> of mob loot. Safe now.`);
       else if (gained && gained > 0) showToast(`💰 +${gained.toLocaleString()}🪙 held — bank it in town (lose it if you die).`);
     },
+    feedMobs(list: WorldMob[]) { feedMobs(list); },
+    feedMobDead(id: number, x: number, y: number, kind: string, mine: boolean, potion: boolean) { feedMobDead(id, x, y, kind, mine, potion); },
     feedCortisol() { updateCortHud(); },
     feedNews() { if (newsDialogOpen) { const list = dialogBox.querySelector<HTMLDivElement>('#newsWorldList'); if (list) renderNewsWorldList(list); } },
     feedLoan() {

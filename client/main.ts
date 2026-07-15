@@ -960,6 +960,10 @@ const net = connect(
       celebrateLevelUp(msg.level, msg.reward);
     } else if (msg.type === 'mobLoot') {
       worldMod?.feedMobLoot(msg.purse, msg.gained, msg.banked);
+    } else if (msg.type === 'worldMobs') {
+      worldMod?.feedMobs(msg.mobs);
+    } else if (msg.type === 'mobDead') {
+      worldMod?.feedMobDead(msg.id, msg.x, msg.y, msg.kind, msg.mine, msg.potion);
     } else if (msg.type === 'frogResult') {
       frogMod?.feedResult(msg.stage, msg.prize);
     } else if (msg.type === 'matchStats') {
@@ -2719,7 +2723,7 @@ worldBtn.addEventListener('click', async () => {
         return best;
       },
       wish: () => net.send({ type: 'fountainWish' }),
-      mobKill: (kind: string) => net.send({ type: 'mobKill', kind }),
+      mobHit: (id: number, dmg: number) => net.send({ type: 'mobHit', id, dmg }),
       worldBank: () => net.send({ type: 'worldBank' }),
       worldDied: () => net.send({ type: 'worldDied' }),
       owns: (id: string) => wallet.owned.includes(id),
