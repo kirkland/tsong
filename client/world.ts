@@ -11203,6 +11203,22 @@ export function startWorld(net: WorldNet): void {
       px(10, 7, 11, 1, 0xffffff); px(10, 16, 11, 1, 0xffffff); // roll bars
       g.generateTexture('w-monster-roof', 34, 24);
     }
+    // --- GOLF CART (the Course's own prize) — top-down, pointing +x, 24×14 texels: smaller than
+    //     a car, a slim open deck with small wheel nubs peeking out both sides, a tall rear bag
+    //     rack, and a compact front-only canopy (not a full cabin) — reads as a cart at a glance,
+    //     not a recolored coupe. ---
+    {
+      g.clear();
+      px(1, 5, 15, 4, 0xffffff);                                // low open deck
+      px(0, 6, 2, 2, 0xffffff);                                 // blunt nose
+      px(16, 2, 5, 10, 0xffffff);                               // tall rear bag rack
+      px(2, 2, 2, 2, 0xffffff); px(2, 10, 2, 2, 0xffffff);      // front wheel nubs, poking out past the deck
+      px(12, 2, 2, 2, 0xffffff); px(12, 10, 2, 2, 0xffffff);    // rear wheel nubs
+      g.generateTexture('w-golfcart-body', 24, 14);
+      g.clear();
+      px(3, 4, 8, 6, 0xffffff);                                 // a small flat canopy, front-and-center only
+      g.generateTexture('w-golfcart-roof', 24, 14);
+    }
     // --- speech-bubble panel: a rounded rect drawn on a 2D canvas (which anti-aliases properly,
     // unlike Phaser's pixel-art Graphics) and used as a LINEAR-filtered 9-slice. That keeps the
     // corners smooth at any bubble size and any camera zoom, instead of the chunky vector jaggies. ---
@@ -13863,10 +13879,11 @@ export function startWorld(net: WorldNet): void {
       const spec = carById(vehicleId);
       const monster = spec?.id === 'car-monster';
       const boat = spec?.id === 'car-boat';
+      const golfcart = spec?.id === 'car-golfcart';
       const paint = boat ? null : carColorById(carColor);
       av.carWheels.setVisible(monster);
-      av.carBody.setTexture(monster ? 'w-monster-body' : boat ? 'w-boat-body' : 'w-car-body');
-      av.carRoof.setTexture(monster ? 'w-monster-roof' : boat ? 'w-boat-roof' : 'w-car-roof');
+      av.carBody.setTexture(monster ? 'w-monster-body' : boat ? 'w-boat-body' : golfcart ? 'w-golfcart-body' : 'w-car-body');
+      av.carRoof.setTexture(monster ? 'w-monster-roof' : boat ? 'w-boat-roof' : golfcart ? 'w-golfcart-roof' : 'w-car-roof');
       // The yacht is painted in full colour, so render it untinted; cars tint to their paint job
       // (an equipped carcolor overrides the car's own stock body/accent when present).
       av.carBody.setTint(boat ? 0xffffff : paint ? carPaintTint(paint, false) : spec ? hexToInt(spec.body) : tint);
@@ -14982,7 +14999,7 @@ export function startWorld(net: WorldNet): void {
   let golfBallPos: { x: number; y: number } | null = null; // MY ball's current world position
   let golfBallSpr: Phaser.GameObjects.Arc | null = null;
   let golfMeter: Phaser.GameObjects.Graphics | null = null;
-  let golfCharging = false, golfBusy = false, golfPhase = 0;
+  let golfCharging = false, golfBusy = false, golfPhase = 0, golfSwingSpeed = 2.2;
   let nearGolfTee = false;  // standing at hole 1's tee — offer to start/manage a round
   let nearGolfBall = false; // standing at the live ball mid-round — offer to swing
 
@@ -15019,36 +15036,55 @@ export function startWorld(net: WorldNet): void {
     return '🙈 Chaos.';
   }
 
+  // The needle's sweet zone — narrow on purpose: this is the whole skill test, and it's timed by
+  // an eye, not a ruler. Each swing also gets its own random needle speed (see startGolfSwing) so
+  // there's no single mental count that always lands you in it.
+  const GOLF_SWEET_LO = 0.79, GOLF_SWEET_HI = 0.87;
+  // A single swing can only cover so much ground, however well it's struck — a par 5 needs at
+  // least two good ones to reach the green, same as it would for an actual golfer.
+  const GOLF_SWING_RANGE = 320;
+
   // Pure outcome math: given where the sinusoid needle froze (p, 0..1) and where the ball sits,
   // decide where it ends up. On the green, the sweet zone sinks it (or rolls it most of the way
-  // there on a long green); off the green, the sweet zone flies it onto the green outright.
-  // A missed swing always still advances toward the pin — the round is guaranteed to end — except
-  // for a rare shank on a full-length shot, which sends the ball over the fence (a stroke, and a
-  // nod to the joke tee this course grew out of) back to this hole's tee.
+  // there on a long green); off the green, the sweet zone drives it up to GOLF_SWING_RANGE toward
+  // the pin — enough to reach the green outright on a short hole (and, on a rare well-struck,
+  // well-timed shot, the cup itself: a real hole-in-one), but a longer hole needs another swing.
+  // A missed swing always still advances toward the pin (short of what a good swing would cover)
+  // — the round is guaranteed to end — except for a rare shank on a full-length shot, which sends
+  // the ball over the fence (a stroke, and a nod to the joke tee this course grew out of) back to
+  // this hole's tee.
   function computeGolfSwingOutcome(p: number, hole: GolfHole, from: { x: number; y: number }): { toX: number; toY: number; holedOut: boolean; lost: boolean } {
     const remaining = Math.hypot(from.x - hole.green.x, from.y - hole.green.y);
     const onGreen = remaining <= hole.greenR;
-    const sweet = p >= 0.68 && p <= 0.90;
+    const sweet = p >= GOLF_SWEET_LO && p <= GOLF_SWEET_HI;
+    const ux = (hole.green.x - from.x) / (remaining || 1), uy = (hole.green.y - from.y) / (remaining || 1);
     if (onGreen) {
       if (sweet) {
-        if (remaining < 45) return { toX: hole.green.x, toY: hole.green.y, holedOut: true, lost: false };
-        const frac = 0.85;
+        if (remaining < 22) return { toX: hole.green.x, toY: hole.green.y, holedOut: true, lost: false };
+        const frac = 0.8;
         return { toX: from.x + (hole.green.x - from.x) * frac, toY: from.y + (hole.green.y - from.y) * frac, holedOut: false, lost: false };
       }
-      const frac = 0.3 + p * 0.35;
-      const toX = from.x + (hole.green.x - from.x) * frac + (Math.random() - 0.5) * 22;
-      const toY = from.y + (hole.green.y - from.y) * frac + (Math.random() - 0.5) * 14;
-      const holedOut = Math.hypot(toX - hole.green.x, toY - hole.green.y) < 16; // a lucky tap-in
+      const frac = 0.25 + p * 0.3;
+      const toX = from.x + (hole.green.x - from.x) * frac + (Math.random() - 0.5) * 24;
+      const toY = from.y + (hole.green.y - from.y) * frac + (Math.random() - 0.5) * 16;
+      const holedOut = Math.hypot(toX - hole.green.x, toY - hole.green.y) < 12; // a lucky tap-in
       return { toX, toY, holedOut, lost: false };
     }
     if (sweet) {
-      const ang = Math.random() * Math.PI * 2, r = Math.random() * hole.greenR * 0.35;
-      return { toX: hole.green.x + Math.cos(ang) * r, toY: hole.green.y + Math.sin(ang) * r, holedOut: false, lost: false };
+      const travel = Math.min(remaining, GOLF_SWING_RANGE) * (0.93 + Math.random() * 0.07);
+      const spread = remaining > GOLF_SWING_RANGE ? 30 : 20; // still needs to be struck true, even within range
+      const toX = from.x + ux * travel + (Math.random() - 0.5) * spread;
+      const toY = from.y + uy * travel + (Math.random() - 0.5) * spread * 0.4;
+      // an actual hole-in-one: only possible within one swing's range, and only when the scatter
+      // happens to land it right in the cup — rare, and worth the toast when it happens.
+      const holedOut = remaining <= GOLF_SWING_RANGE && Math.hypot(toX - hole.green.x, toY - hole.green.y) < 14;
+      return { toX, toY, holedOut, lost: false };
     }
     if (remaining > 300 && Math.random() < 0.05) return { toX: hole.tee.x, toY: hole.tee.y, holedOut: false, lost: true };
-    const frac = 0.35 + p * 0.4;
-    const toX = from.x + (hole.green.x - from.x) * frac + (Math.random() - 0.5) * 90;
-    const toY = from.y + (hole.green.y - from.y) * frac;
+    const capped = Math.min(remaining, GOLF_SWING_RANGE);
+    const travel = capped * (0.3 + p * 0.35); // always short of what a well-timed swing would cover
+    const toX = from.x + ux * travel + (Math.random() - 0.5) * 90;
+    const toY = from.y + uy * travel + (Math.random() - 0.5) * 40;
     return { toX, toY, holedOut: false, lost: false };
   }
 
@@ -15080,6 +15116,7 @@ export function startWorld(net: WorldNet): void {
     if (golfBusy || golfCharging || golfMode === 'off') return;
     if (golfMode === 'pvp' && golfPvpTurnSlot !== golfPvpMySlot) { showToast('⛳ Not your shot yet.'); return; }
     golfCharging = true; golfPhase = 0;
+    golfSwingSpeed = 1.7 + Math.random() * 1.6; // a fresh tempo every swing — no counting your way into the sweet zone
   }
   function cancelGolfSwing() {
     golfCharging = false; golfBusy = false;
@@ -15274,14 +15311,14 @@ export function startWorld(net: WorldNet): void {
     if (golfMode === 'off' || !golfMeter) return;
     if (golfCharging && golfBallPos && Math.hypot(selfX - golfBallPos.x, selfY - golfBallPos.y) > 70) cancelGolfSwing(); // wandered off mid-swing
     if (golfCharging) {
-      golfPhase += dt * 2.2;
+      golfPhase += dt * golfSwingSpeed;
       const p = Math.abs(Math.sin(golfPhase));
       const bx = golfBallPos?.x ?? selfX, by = (golfBallPos?.y ?? selfY) - 40;
       const mx = bx - 44, my = by - 16, mw = 88, mh = 9;
       golfMeter.clear();
       golfMeter.fillStyle(0x0a1410, 0.85); golfMeter.fillRect(mx - 2, my - 2, mw + 4, mh + 4);
       golfMeter.fillStyle(0x2a4a2a, 1); golfMeter.fillRect(mx, my, mw, mh);
-      golfMeter.fillStyle(0xd8c088, 0.9); golfMeter.fillRect(mx + mw * 0.68, my, mw * 0.22, mh); // the sweet zone
+      golfMeter.fillStyle(0xd8c088, 0.9); golfMeter.fillRect(mx + mw * GOLF_SWEET_LO, my, mw * (GOLF_SWEET_HI - GOLF_SWEET_LO), mh); // the sweet zone
       golfMeter.fillStyle(0xffffff, 1); golfMeter.fillRect(mx + p * (mw - 2), my - 1, 2, mh + 2); // the needle
     } else if (!golfBusy) {
       golfMeter.clear();
