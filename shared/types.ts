@@ -1140,6 +1140,8 @@ export type ClientMsg =
   | { type: 'mobKill'; kind: string } // downed a biome critter → coins + XP by species (server owns the reward table), rate-limited
   | { type: 'worldBank' } // reached town alive → bank the at-risk mob-loot purse into the wallet
   | { type: 'worldDied' } // died out in the wild → forfeit the unbanked purse
+  | { type: 'frogEnter'; frog: string } // ante into Grandmaw's frog race (server charges the entry fee)
+  | { type: 'frogFinish'; won: boolean } // report the race result (won = your frog placed 1st) → prize on a win
   | { type: 'clubJoin' } // apply to the Country Club (server validates the 1,000,000🪙 initiation fee)
   | { type: 'clubDrink'; tier: number } // order off the 19th Hole's menu (1=House Pour, 2='52 Reserve, 3=Founder's Vintage; server charges, effects mirror buyBeer)
   | { type: 'bgJoin'; game: string } // take a seat at a board-game table (chess/morris/billiards; 2 seats, PvP only)
@@ -1741,6 +1743,7 @@ export type ServerMsg =
   | BgLobbyMsg
   | BgRelayMsg
   | WishResultMsg
+  | FrogResultMsg
   | GhLeaderboardMsg
   | TntLobbyMsg
   | TntRelayMsg
@@ -2559,6 +2562,13 @@ export interface WaRelayMsg {
   data: unknown;
 }
 // A fountain wish landed: the town's all-time wish count (and whether the fountain granted a title).
+// Result of a frog race: the entry was charged (ok=true) or refused (can't afford), and on a win
+// `prize` coins were paid. Drives the client's payout toast.
+export interface FrogResultMsg {
+  type: 'frogResult';
+  stage: 'entered' | 'won' | 'lost' | 'broke';
+  prize?: number; // coins paid on a win
+}
 export interface WishResultMsg {
   type: 'wishResult';
   total: number;

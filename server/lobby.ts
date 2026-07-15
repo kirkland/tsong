@@ -2668,6 +2668,46 @@ export class Lobby {
     this.tell(ws, { type: 'mobLoot', purse, gained });
     void this.awardXp(conn.pid, conn.nickname, reward.xp);
   }
+  // --- Grandmaw's Frog Race: ante an entry fee, race your frog (a skill minigame on the client),
+  // and take a House-funded prize if it places first. The prize is fixed per frog (harder frogs
+  // pay more — the "odds"), server-owned, and rate-limited so a tampered client can't farm it. ---
+  private frogRuns = new Map<string, { frog: string; at: number }>(); // pid → active race
+  private frogWins = new Map<string, number[]>(); // pid → recent paid-win timestamps
+  private static readonly FROG_ENTRY = 200;
+  private static readonly FROG_PRIZE: Record<string, number> = { reliable: 800, hopscotch: 1400, lightning: 2600 };
+  private static readonly FROG_MAX_WINS_PER_MIN = 12;
+  frogEnter(ws: WebSocket, frog: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    if (!(frog in Lobby.FROG_PRIZE)) return;
+    spendCoins(conn.pid, Lobby.FROG_ENTRY)
+      .then((w) => {
+        if (!w) { this.tell(ws, { type: 'frogResult', stage: 'broke' }); return; }
+        this.frogRuns.set(conn.pid!, { frog, at: Date.now() });
+        this.houseCredit(Lobby.FROG_ENTRY).catch(() => {}); // the ante goes into the pot (a sink)
+        this.sendWallet(ws);
+        this.tell(ws, { type: 'frogResult', stage: 'entered' });
+      })
+      .catch((e) => console.error('frog entry failed:', e));
+  }
+  frogFinish(ws: WebSocket, won: boolean) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    const run = this.frogRuns.get(conn.pid);
+    if (!run) return;                       // no active race (already settled / never entered)
+    this.frogRuns.delete(conn.pid);
+    if (!won) { this.tell(ws, { type: 'frogResult', stage: 'lost' }); return; }
+    const now = Date.now();
+    const wins = (this.frogWins.get(conn.pid) ?? []).filter((t) => now - t < 60_000);
+    if (wins.length >= Lobby.FROG_MAX_WINS_PER_MIN) { this.frogWins.set(conn.pid, wins); this.tell(ws, { type: 'frogResult', stage: 'lost' }); return; }
+    wins.push(now); this.frogWins.set(conn.pid, wins);
+    const prize = Lobby.FROG_PRIZE[run.frog] ?? 800;
+    this.housePay(conn.pid, conn.nickname, prize)
+      .then((paid) => { this.sendWallet(ws); this.tell(ws, { type: 'frogResult', stage: 'won', prize: paid }); })
+      .catch((e) => console.error('frog prize failed:', e));
+    void this.awardXp(conn.pid, conn.nickname, 20);
+  }
+
   /** Reached town alive → move the at-risk purse into the wallet (House-funded, so it's conserved). */
   worldBankPurse(ws: WebSocket) {
     const conn = this.conns.get(ws);

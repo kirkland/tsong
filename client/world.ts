@@ -235,7 +235,7 @@ export interface WorldNet {
   marketList(instanceId: number, ask: number): void;
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' | 'monsterjam' | 'chess' | 'morris' | 'ski' | 'billiards'): void; // open a DOOM/Fishing/Arcade/Bowling feature — every Casino game + Notice-Board panel is a native World dialog now
+  openFeature(feature: 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' | 'monsterjam' | 'chess' | 'morris' | 'ski' | 'billiards' | 'frograce'): void; // open a DOOM/Fishing/Arcade/Bowling feature — every Casino game + Notice-Board panel is a native World dialog now
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   openRename(): void;            // World's own 👤 button → reopen the nickname/color picker
   muted(): boolean;              // is game sound currently muted?
@@ -14963,6 +14963,8 @@ export function startWorld(net: WorldNet): void {
   // checks against the handful of spots in whatever biome you're actually in.
   function biomeSpotPrompt(): string {
     if (inInterior || inDungeon || driving) return '';
+    // The Damp
+    if (selfY > WORLD.h && Math.hypot(selfX - SWAMP_SPOTS.frograce.x, selfY - SWAMP_SPOTS.frograce.y) < 70) return '🐸 Grandmaw\'s Frog Race';
     // Frostreach
     if (selfX > WORLD.w) {
       for (const h of FISH_HOLES) if (Math.hypot(selfX - h.x, selfY - h.y) < 48) return '🎣 Ice-fish here';
@@ -15861,6 +15863,7 @@ export function startWorld(net: WorldNet): void {
     bell: { x: 3620, y: 4060 },
     bottle: { x: SWAMP_PIER_X, y: SWAMP_SHORE_Y + 330 },
     gator: { x: 1900, y: 2680 },
+    frograce: { x: 1550, y: 3560 }, // Grandmaw's frog-racing track, just off her porch
   } as const;
 
   function makeSwamp(sc: Phaser.Scene) {
@@ -16121,6 +16124,20 @@ export function startWorld(net: WorldNet): void {
       const b = sc.add.circle(SWAMP_SPOTS.cauldron.x + (i - 1) * 7, SWAMP_SPOTS.cauldron.y - 22, 2.4, 0x8ae87a, 0.8).setDepth(SWAMP_SPOTS.cauldron.y + 2);
       sc.tweens.add({ targets: b, y: SWAMP_SPOTS.cauldron.y - 44, alpha: 0, duration: 1700, delay: i * 560, repeat: -1, ease: 'Sine.easeOut' });
     }
+    // the frog-racing track: a little reedy pool with a row of lily pads + a sign
+    {
+      const F = SWAMP_SPOTS.frograce;
+      sc.add.ellipse(F.x, F.y + 10, 260, 90, 0x27403c).setDepth(-25);
+      sc.add.ellipse(F.x, F.y + 10, 230, 72, 0x2e4a44).setDepth(-24);
+      for (let i = 0; i < 6; i++) sc.add.image(F.x - 100 + i * 40, F.y + 6 + (i % 2) * 10, 'w-sw-lily').setScale(TEXEL * 1.2).setDepth(-23);
+      for (let i = 0; i < 3; i++) { // a couple of frogs loafing at the start line, waiting to race
+        sc.add.image(F.x - 90 + i * 24, F.y - 4 + (i % 2) * 8, 'w-sw-frog').setScale(TEXEL * 1.2).setOrigin(0.5, 1).setDepth(F.y);
+      }
+      sc.add.text(F.x, F.y - 40, '🐸 FROG RACING', {
+        fontFamily: 'ui-monospace, monospace', fontSize: '10px', color: '#e8e4d0', backgroundColor: '#3a5a24',
+        padding: { x: 5, y: 3 }, resolution: 2,
+      }).setOrigin(0.5, 1).setAngle(-3).setDepth(F.y + 2);
+    }
     // Gary's estate: two shacks, three jars, one dream
     sc.add.image(2700, 2950, 'w-sw-shack').setScale(TEXEL * 2.2).setOrigin(0.5, 1).setDepth(2950);
     sc.add.image(2860, 3060, 'w-sw-shack').setScale(TEXEL * 1.8).setOrigin(0.5, 1).setDepth(3060).setFlipX(true);
@@ -16312,6 +16329,12 @@ export function startWorld(net: WorldNet): void {
 
   function swampInteract(): boolean {
     const near = (s: { x: number; y: number }, r = 55) => Math.hypot(selfX - s.x, selfY - s.y) < r;
+    if (near(SWAMP_SPOTS.frograce, 70)) {
+      openDialog('🐸 Grandmaw\'s Frog Race',
+        'Grandmaw keeps a stable of racing frogs and a book that\'s older than the swamp. Ante up, pick a hopper, and out-leap the field to the far bank — the sweeter your timing, the bigger the jump.',
+        [{ label: '🐸 Step up to the book', onPick: () => { pause(false); net.openFeature('frograce'); } }]);
+      return true;
+    }
     if (near(SWAMP_SPOTS.cauldron)) {
       tone(120, 0.3, 'sine', 0.04, 90);
       showToast(pick2([

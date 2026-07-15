@@ -531,6 +531,12 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'worldDied':
         lobby.worldForfeitPurse(ws);
         break;
+      case 'frogEnter':
+        if (typeof msg.frog === 'string') lobby.frogEnter(ws, msg.frog);
+        break;
+      case 'frogFinish':
+        if (typeof msg.won === 'boolean') lobby.frogFinish(ws, msg.won);
+        break;
       case 'clubJoin':
         lobby.clubJoin(ws).catch((e) => console.error('club join failed:', e));
         break;
