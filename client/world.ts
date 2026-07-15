@@ -16858,20 +16858,20 @@ export function startWorld(net: WorldNet): void {
   // server-side (Lobby.MOB_REWARDS) and mirror this ordering.
   const MOB_SPECS: Record<MobKind, MobSpec> = {
     // --- desert (easiest) ---
-    scorpion: { biome: 'desert', hp: 3, speed: 44, aggro: 220, scale: TEXEL * 1.15, label: 'Sand Scorpion', emoji: '🦂', dmg: 450, barW: 20 },
-    rattler:  { biome: 'desert', hp: 2, speed: 78, aggro: 240, scale: TEXEL * 1.15, label: 'Rattlesnake', emoji: '🐍', dmg: 500, barW: 18 },
-    buzzard:  { biome: 'desert', hp: 3, speed: 60, aggro: 300, scale: TEXEL * 1.2, label: 'Buzzard', emoji: '🦅', dmg: 500, barW: 22, fly: true,
+    scorpion: { biome: 'desert', hp: 3, speed: 44, aggro: 220, scale: TEXEL * 1.9, label: 'Sand Scorpion', emoji: '🦂', dmg: 450, barW: 20 },
+    rattler:  { biome: 'desert', hp: 2, speed: 78, aggro: 240, scale: TEXEL * 1.9, label: 'Rattlesnake', emoji: '🐍', dmg: 500, barW: 18 },
+    buzzard:  { biome: 'desert', hp: 3, speed: 60, aggro: 300, scale: TEXEL * 1.9, label: 'Buzzard', emoji: '🦅', dmg: 500, barW: 22, fly: true,
       ranged: { range: 300, cooldownMs: 3400, projSpeed: 260, projTex: 'w-proj-rock' } },
     // --- swamp (medium) ---
-    mosquito: { biome: 'swamp', hp: 3, speed: 62, aggro: 260, scale: TEXEL * 1.1, label: 'Bog Skeeter', emoji: '🦟', dmg: 650, barW: 22, fly: true },
-    slime:    { biome: 'swamp', hp: 6, speed: 30, aggro: 240, scale: TEXEL * 1.35, label: 'Bog Slime', emoji: '🟢', dmg: 800, barW: 30 },
-    toad:     { biome: 'swamp', hp: 4, speed: 40, aggro: 320, scale: TEXEL * 1.25, label: 'Spitter Toad', emoji: '🐸', dmg: 700, barW: 26,
+    mosquito: { biome: 'swamp', hp: 3, speed: 62, aggro: 260, scale: TEXEL * 1.8, label: 'Bog Skeeter', emoji: '🦟', dmg: 650, barW: 22, fly: true },
+    slime:    { biome: 'swamp', hp: 6, speed: 30, aggro: 240, scale: TEXEL * 2.2, label: 'Bog Slime', emoji: '🟢', dmg: 800, barW: 30 },
+    toad:     { biome: 'swamp', hp: 4, speed: 40, aggro: 320, scale: TEXEL * 2.0, label: 'Spitter Toad', emoji: '🐸', dmg: 700, barW: 26,
       ranged: { range: 320, cooldownMs: 2600, projSpeed: 300, projTex: 'w-proj-venom' } },
     // --- snow (hardest) ---
-    wolf:     { biome: 'snow', hp: 5, speed: 66, aggro: 320, scale: TEXEL * 1.2, label: 'Frost Wolf', emoji: '🐺', dmg: 850, barW: 26 },
-    snowman:  { biome: 'snow', hp: 6, speed: 24, aggro: 380, scale: TEXEL * 1.5, label: 'Evil Snowman', emoji: '⛄', dmg: 1000, barW: 32,
+    wolf:     { biome: 'snow', hp: 5, speed: 66, aggro: 320, scale: TEXEL * 2.0, label: 'Frost Wolf', emoji: '🐺', dmg: 850, barW: 26 },
+    snowman:  { biome: 'snow', hp: 6, speed: 24, aggro: 380, scale: TEXEL * 2.3, label: 'Evil Snowman', emoji: '⛄', dmg: 1000, barW: 32,
       ranged: { range: 380, cooldownMs: 1900, projSpeed: 320, projTex: 'w-proj-snow' } },
-    yeti:     { biome: 'snow', hp: 12, speed: 46, aggro: 340, scale: TEXEL * 1.9, label: 'Yeti', emoji: '👹', dmg: 1300, barW: 44 },
+    yeti:     { biome: 'snow', hp: 12, speed: 46, aggro: 340, scale: TEXEL * 2.8, label: 'Yeti', emoji: '👹', dmg: 1300, barW: 44 },
   };
   interface MobProj { spr: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number; t: number; dmg: number; }
   let mobProjectiles: MobProj[] = [];
@@ -17198,8 +17198,24 @@ export function startWorld(net: WorldNet): void {
     void now;
   }
 
+  let playerHpBar: Phaser.GameObjects.Graphics | null = null;
+  function drawPlayerHpBar() {
+    const sc = mobScene; if (!sc) return;
+    if (!playerHpBar) playerHpBar = sc.add.graphics();
+    playerHpBar.clear();
+    // shown floating over your head whenever you're out in a biome (a danger zone) and alive
+    if (currentBiome() === null || playerDead || driving) return;
+    const frac = Math.max(0, playerHp / PLAYER_MAX_HP);
+    const bw = 40, bx = selfX - bw / 2, by = selfY - R - 44;
+    playerHpBar.fillStyle(0x000000, 0.5); playerHpBar.fillRect(bx - 2, by - 2, bw + 4, 8);
+    playerHpBar.fillStyle(0x2a0c0c, 1); playerHpBar.fillRect(bx, by, bw, 5);
+    playerHpBar.fillStyle(frac > 0.5 ? 0x5ae05a : frac > 0.25 ? 0xffd23f : 0xff3a3a, 1);
+    playerHpBar.fillRect(bx, by, bw * frac, 5);
+    playerHpBar.setDepth(selfY + 5000);
+  }
   function updateMobs(now: number, dt: number) {
     updateHealthHud();
+    drawPlayerHpBar();
     updateMobProjectiles(dt);
     // potion pickups (walk over → heal + carry). Time out after a while so the world doesn't litter.
     if (potionDrops.length) {
@@ -17257,17 +17273,39 @@ export function startWorld(net: WorldNet): void {
           damagePlayer(spec.dmg, m.x, m.y, spec.label);
         }
       }
-      const bob = spec.fly ? Math.sin(now / 160 + m.ph) * 3 : 0;
+      // --- animation: give each mob some life instead of sliding stiffly ---
+      const moving = Math.hypot(m.tx - m.x, m.ty - m.y) > 3 && (m.state === 1 || m.busyUntil > now);
+      let bob = 0;
+      if (spec.fly) {
+        // wings: fast vertical bob + a scaleY flap
+        bob = Math.sin(now / 120 + m.ph) * 4;
+        m.spr.setScale(spec.scale, spec.scale * (1 + Math.sin(now / 70 + m.ph) * 0.14));
+      } else if (m.kind === 'slime') {
+        // gelatinous breathe (squash/stretch), harder while hopping toward you
+        const amp = moving ? 0.14 : 0.07;
+        const b = Math.sin(now / (moving ? 220 : 520)) * amp;
+        m.spr.setScale(spec.scale * (1 + b), spec.scale * (1 - b));
+        bob = moving ? Math.abs(Math.sin(now / 220)) * -5 : 0; // little hops
+      } else if (m.kind === 'snowman') {
+        m.spr.setRotation(Math.sin(now / 400 + m.ph) * 0.05); // menacing sway
+      } else {
+        // legged walkers: a springy hop-bob + a slight lean while on the move
+        if (moving) { bob = Math.abs(Math.sin(now / 110 + m.ph)) * -(m.kind === 'yeti' ? 5 : 3); m.spr.setRotation(Math.sin(now / 110 + m.ph) * 0.05); }
+        else { m.spr.setRotation(0); m.spr.setScale(spec.scale); }
+      }
       m.spr.setPosition(m.x, m.y + bob).setDepth(m.y);
       if (now < m.hitUntil) m.spr.setTintFill(0xffffff); else m.spr.clearTint();
-      // health bar — width scales with the mob's max HP, so tanky ones wear a visibly bigger bar
-      if (m.hp < m.maxHp && !m.dead) {
+      // health bar — ALWAYS shown above a mob near the player (so you always know it's a hostile),
+      // its width scaling with max HP so tanky ones wear a visibly bigger bar.
+      if (!m.dead && near) {
         m.bar.setVisible(true).clear();
-        const bw = spec.barW, bx = m.x - bw / 2, by = m.y - m.spr.displayHeight - 6;
-        m.bar.fillStyle(0x1a1006, 0.85); m.bar.fillRect(bx - 1, by - 1, bw + 2, 5);
-        m.bar.fillStyle(0x3a1010, 1); m.bar.fillRect(bx, by, bw, 3);
-        m.bar.fillStyle(0xff5a4a, 1); m.bar.fillRect(bx, by, bw * (m.hp / m.maxHp), 3);
-        m.bar.setDepth(m.y + 1);
+        const frac = Math.max(0, m.hp / m.maxHp);
+        const bw = spec.barW, bx = m.x - bw / 2, by = m.y + bob - m.spr.displayHeight - 8;
+        m.bar.fillStyle(0x000000, 0.5); m.bar.fillRect(bx - 2, by - 2, bw + 4, 7);       // outline
+        m.bar.fillStyle(0x2a0c0c, 1); m.bar.fillRect(bx, by, bw, 4);                       // empty track
+        m.bar.fillStyle(frac > 0.5 ? 0x5ae05a : frac > 0.25 ? 0xffd23f : 0xff3a3a, 1);     // green→amber→red
+        m.bar.fillRect(bx, by, bw * frac, 4);
+        m.bar.setDepth(m.y + 2);
       } else if (m.bar.visible) {
         m.bar.setVisible(false);
       }
