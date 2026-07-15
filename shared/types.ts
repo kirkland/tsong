@@ -1137,7 +1137,9 @@ export type ClientMsg =
   | { type: 'waEnd'; winner: number; winner2?: number } // (host only) winning slot(s) — two for 2v2 team wins (-1 = nobody paid)
   | { type: 'waRelay'; data: unknown } // forward an opaque Artillery payload to all other players
   | { type: 'fountainWish' } // toss 10 coins in the plaza fountain (tiny chance of the Wisher title)
-  | { type: 'mobKill'; biome: string } // downed a biome critter (desert/swamp/snow) → coins + XP, server-rate-limited
+  | { type: 'mobKill'; kind: string } // downed a biome critter → coins + XP by species (server owns the reward table), rate-limited
+  | { type: 'worldBank' } // reached town alive → bank the at-risk mob-loot purse into the wallet
+  | { type: 'worldDied' } // died out in the wild → forfeit the unbanked purse
   | { type: 'clubJoin' } // apply to the Country Club (server validates the 1,000,000🪙 initiation fee)
   | { type: 'clubDrink'; tier: number } // order off the 19th Hole's menu (1=House Pour, 2='52 Reserve, 3=Founder's Vintage; server charges, effects mirror buyBeer)
   | { type: 'bgJoin'; game: string } // take a seat at a board-game table (chess/morris/billiards; 2 seats, PvP only)
@@ -1739,6 +1741,7 @@ export type ServerMsg =
   | GolfLeaderboardMsg
   | WalletMsg
   | LevelUpMsg
+  | MobLootMsg
   | StockMsg
   | LoanMsg
   | SpinResultMsg
@@ -2009,6 +2012,14 @@ export interface LevelUpMsg {
   type: 'levelUp';
   level: number;
   reward: number;
+}
+// The at-risk mob-loot purse total after a kill/bank/forfeit. Coins from biome mobs accumulate
+// here (server-held) and only reach the wallet once you bank them safely in town; dying forfeits them.
+export interface MobLootMsg {
+  type: 'mobLoot';
+  purse: number;   // current unbanked coins
+  gained?: number; // coins just added by a kill (for the floating "+N" on the client)
+  banked?: number; // coins just moved into the wallet (for a "banked N" toast)
 }
 export interface WalletMsg {
   type: 'wallet';

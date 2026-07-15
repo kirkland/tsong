@@ -2614,29 +2614,57 @@ export class Lobby {
   // low enough that a tampered client can't farm meaningfully. Coins come from the House (a sink,
   // so no minting), plus a little XP toward the account level.
   private mobKills = new Map<string, number[]>(); // pid → recent kill timestamps (ms)
+  private mobPurse = new Map<string, number>();   // pid → unbanked mob coins (banked in town, forfeit on death)
   private static readonly MOB_WINDOW_MS = 60_000;
   private static readonly MOB_MAX_PER_WINDOW = 40; // hard cap on paid kills/minute
+  // Reward per SPECIES — the server owns this table (a tampered client can only pick a valid
+  // species string, and the rate-limit + house throttle cap total payout regardless). Coins scale
+  // ~1k (weakest desert) → ~5k (the yeti) with difficulty; the tanky bosses pay the most.
   private static readonly MOB_REWARDS: Record<string, { coins: number; xp: number }> = {
-    desert: { coins: 30, xp: 10 },
-    swamp: { coins: 30, xp: 10 },
-    snow: { coins: 35, xp: 12 },
+    // desert (easiest) — ~1k–1.5k
+    scorpion: { coins: 1000, xp: 8 }, rattler: { coins: 1100, xp: 8 }, buzzard: { coins: 1400, xp: 10 },
+    // swamp (medium) — ~2k–3k
+    mosquito: { coins: 2000, xp: 16 }, toad: { coins: 2600, xp: 18 }, slime: { coins: 3000, xp: 22 },
+    // snow (hardest) — ~3.5k–5k
+    wolf: { coins: 3500, xp: 26 }, snowman: { coins: 4200, xp: 32 }, yeti: { coins: 5000, xp: 48 },
   };
-  mobKilled(ws: WebSocket, biome: string) {
+  /** A biome mob went down. XP is granted immediately (progression, never lost). Coins go into an
+   *  at-risk purse — you only get them once you bank them in town, and you forfeit them if you die
+   *  out in the wild. */
+  mobKilled(ws: WebSocket, kind: string) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.pid || !conn.nickname) return;
-    const reward = Lobby.MOB_REWARDS[biome];
+    const reward = Lobby.MOB_REWARDS[kind];
     if (!reward) return;
     const now = Date.now();
     const arr = (this.mobKills.get(conn.pid) ?? []).filter((t) => now - t < Lobby.MOB_WINDOW_MS);
-    if (arr.length >= Lobby.MOB_MAX_PER_WINDOW) { this.mobKills.set(conn.pid, arr); return; } // capped — no reward, silently
+    if (arr.length >= Lobby.MOB_MAX_PER_WINDOW) { this.mobKills.set(conn.pid, arr); return; } // capped — silently
     arr.push(now);
     this.mobKills.set(conn.pid, arr);
-    // small House-funded bounty (± a little variety) + XP
-    const coins = reward.coins + Math.floor(Math.random() * 16);
-    this.housePay(conn.pid, conn.nickname, coins) // housePay also grants its own dampened XP
-      .then((paid) => { if (paid > 0) this.sendWallet(ws); })
-      .catch((e) => console.error('mob bounty failed:', e));
+    const gained = reward.coins + Math.floor(Math.random() * (reward.coins * 0.2)); // a little variety
+    const purse = (this.mobPurse.get(conn.pid) ?? 0) + gained;
+    this.mobPurse.set(conn.pid, purse);
+    this.tell(ws, { type: 'mobLoot', purse, gained });
     void this.awardXp(conn.pid, conn.nickname, reward.xp);
+  }
+  /** Reached town alive → move the at-risk purse into the wallet (House-funded, so it's conserved). */
+  worldBankPurse(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    const purse = this.mobPurse.get(conn.pid) ?? 0;
+    if (purse <= 0) return;
+    this.mobPurse.set(conn.pid, 0);
+    this.housePay(conn.pid, conn.nickname, purse)
+      .then((paid) => { this.sendWallet(ws); this.tell(ws, { type: 'mobLoot', purse: 0, banked: paid }); })
+      .catch((e) => { this.mobPurse.set(conn.pid, purse); console.error('purse bank failed:', e); });
+  }
+  /** Died in the wild → the unbanked purse is forfeit (the promised House coins simply never move). */
+  worldForfeitPurse(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    if (!(this.mobPurse.get(conn.pid) ?? 0)) return;
+    this.mobPurse.set(conn.pid, 0);
+    this.tell(ws, { type: 'mobLoot', purse: 0 });
   }
 
   /** Country Club initiation: 1,000,000🪙 into the House, membership (a title) into the wallet.

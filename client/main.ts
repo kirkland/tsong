@@ -954,6 +954,8 @@ const net = connect(
       if (!rouletteHandle.isSpinning()) refreshWallet();
     } else if (msg.type === 'levelUp') {
       celebrateLevelUp(msg.level, msg.reward);
+    } else if (msg.type === 'mobLoot') {
+      worldMod?.feedMobLoot(msg.purse, msg.gained, msg.banked);
     } else if (msg.type === 'matchStats') {
       matchStats = msg;
       updateUI();
@@ -2693,7 +2695,9 @@ worldBtn.addEventListener('click', async () => {
         return best;
       },
       wish: () => net.send({ type: 'fountainWish' }),
-      mobKill: (biome: string) => net.send({ type: 'mobKill', biome }),
+      mobKill: (kind: string) => net.send({ type: 'mobKill', kind }),
+      worldBank: () => net.send({ type: 'worldBank' }),
+      worldDied: () => net.send({ type: 'worldDied' }),
       owns: (id: string) => wallet.owned.includes(id),
       joinClub: () => net.send({ type: 'clubJoin' }),
       clubDrink: (tier) => net.send({ type: 'clubDrink', tier }),
