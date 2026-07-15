@@ -12457,6 +12457,23 @@ export function startWorld(net: WorldNet): void {
   let game: Phaser.Game | null = null;
   let mainCam: Phaser.Cameras.Scene2D.Camera | null = null; // for screen→world hit-testing on tap
 
+  // An uncaught exception anywhere in update() escapes Phaser's rAF loop and Phaser never
+  // schedules another frame after that — the ENTIRE World freezes solid (no more movement,
+  // no more animation) from a single bad frame in a single subsystem. safeStep isolates each
+  // per-frame subsystem so the rest of the game keeps running; it logs each failing subsystem
+  // once (not every frame) so a real bug is still loud in the console without spamming it.
+  const safeStepFailed = new Set<string>();
+  function safeStep(name: string, fn: () => void) {
+    try {
+      fn();
+    } catch (e) {
+      if (!safeStepFailed.has(name)) {
+        safeStepFailed.add(name);
+        console.error(`[world] ${name} threw — isolated, the rest of the game keeps running:`, e);
+      }
+    }
+  }
+
   const scene = {
     preload(this: Phaser.Scene) {
       // The Kenney "Tiny Town" sheet, served from client/public. Loaded both as a tilemap tileset
@@ -13009,26 +13026,33 @@ export function startWorld(net: WorldNet): void {
       }
 
       if (!dialogOpen && !talkOpen && now >= stunnedUntil) {
-        const boat = boating ? myBoat() : null;
-        const car = !boating && driving ? myCar() : null;
-        if (boat) stepBoat(boat, dt);
-        else if (boating) { boating = false; boatWater = null; } // lost the boat — bail out of the mode
-        else if (car) stepCar(car, dt);
-        else stepFoot(dt);
+        safeStep('movement', () => {
+          const boat = boating ? myBoat() : null;
+          const car = !boating && driving ? myCar() : null;
+          if (boat) stepBoat(boat, dt);
+          else if (boating) { boating = false; boatWater = null; } // lost the boat — bail out of the mode
+          else if (car) stepCar(car, dt);
+          else stepFoot(dt);
+        });
       }
 
-      checkCarCrash(now);
-      updateNpcs(now, dt);
-      updateRex(now, dt);
-      updateTownLife(now, dt);
-      updateDesert(now, dt);
-      updateClub(now);
-      updateClubhouse(now, dt);
-      updateGolf(dt);
-      updateSwamp(now, dt);
-      updateEast(now, dt);
-      updateNearBuilding();
-      maybeSendMove(now);
+      // Each per-frame subsystem update is isolated: an uncaught exception anywhere in here
+      // would otherwise escape Phaser's scene.update() and silently kill the WHOLE render
+      // loop (Phaser never schedules the next frame after an update() throws) — the entire
+      // World would freeze solid for one bad frame in one feature. safeStep logs once per
+      // subsystem instead of spamming, and lets every other system keep running.
+      safeStep('carCrash', () => checkCarCrash(now));
+      safeStep('npcs', () => updateNpcs(now, dt));
+      safeStep('rex', () => updateRex(now, dt));
+      safeStep('townLife', () => updateTownLife(now, dt));
+      safeStep('desert', () => updateDesert(now, dt));
+      safeStep('club', () => updateClub(now));
+      safeStep('clubhouse', () => updateClubhouse(now, dt));
+      safeStep('golf', () => updateGolf(dt));
+      safeStep('swamp', () => updateSwamp(now, dt));
+      safeStep('east', () => updateEast(now, dt));
+      safeStep('nearBuilding', () => updateNearBuilding());
+      safeStep('sendMove', () => maybeSendMove(now));
 
       // show the touch fire button + weapon rack only out in the open world
       const armed = !inInterior && !inDungeon && !boating && !net.amJailed();
