@@ -45,6 +45,7 @@ import {
   rouletteWins,
   BJ_MAX_BET,
   BjAction,
+  BjOutcome,
   BjStateMsg,
   BjResultMsg,
   CRAPS_MAX_BET,
@@ -160,10 +161,13 @@ function isValidReaction(emoji: string): boolean {
 }
 
 interface BjHand {
-  playerCards: string[];
+  playerCards: string[]; // seat 0's cards
   dealerCards: string[]; // both cards held server-side; second one revealed at showdown
-  bet: number;           // current wager (doubled if player doubled down)
+  bet: number;           // seat 0's wager (doubled if player doubled down)
   shoe: string[];        // remaining shoe to draw from
+  // Split state (set when an opening pair is split): seat 1's cards + stake. One split max.
+  split?: { cards: string[]; bet: number };
+  active: 0 | 1;         // seat the player's actions apply to (always 0 until a split)
 }
 
 interface Conn {
@@ -299,6 +303,7 @@ const CORTISOL_MATCH_WIN = 15;      // winning a match — a rush of relief, cor
 const CORTISOL_MATCH_LOSS = 15;     // losing stings — cortisol climbs
 const CORTISOL_BET_WIN = 8;         // a wager cashes in — sweet relief
 const CORTISOL_BET_LOSS = 10;       // a wager busts — ouch
+const CORTISOL_GAMBLE_LOSS = 8;     // the casino keeps your coins — every losing settle stings a little
 const CORTISOL_LOAN_TAKE = 12;      // going into debt to Davis is stressful
 const CORTISOL_LOAN_REPAY = 12;     // clearing the debt is a weight off your shoulders
 const CORTISOL_JAIL = 25;           // getting slammed in the drunk tank spikes it hard
@@ -4005,6 +4010,7 @@ export class Lobby {
         // Pay winnings from the House. Report the CREDITED amount so the client never shows a
         // payout the House couldn't fund.
         const payout = want > 0 ? await this.housePay(conn.pid, conn.nickname, want) : 0;
+        if (payout < total) this.bumpCortisol(conn, CORTISOL_GAMBLE_LOSS); // the wheel is cruel
         this.tell(ws, { type: 'rouletteResult', number: win, staked: total, payout });
         this.sendWallet(ws);
       })
@@ -4032,6 +4038,7 @@ export class Lobby {
             dealerCards: [bjDeal(shoe), bjDeal(shoe)],
             bet: amount,
             shoe,
+            active: 0,
           };
           conn.bjHand = hand;
           const pt = bjTotal(hand.playerCards);
@@ -4047,8 +4054,8 @@ export class Lobby {
             this.sendWallet(ws);
             return;
           }
-          const state: BjStateMsg = { type: 'bjState', playerCards: hand.playerCards, dealerCard: hand.dealerCards[0], playerTotal: pt, canDouble: true, status: 'playing' };
-          this.tell(ws, state);
+          // canSplit only when the second stake is actually affordable (w = wallet post-deduction).
+          this.bjSendState(ws, hand, w.coins >= amount);
           this.sendWallet(ws);
         })
         .catch((e) => console.error('blackjack bet failed:', e));
@@ -4060,61 +4067,132 @@ export class Lobby {
     const conn = this.conns.get(ws);
     if (!conn || !conn.bjHand || !conn.pid || !conn.nickname) return;
     const hand = conn.bjHand;
-    if (action === 'double') {
-      if (hand.playerCards.length !== 2) return;
+    // The seat the action applies to (seat 1 only exists after a split).
+    const cards = hand.active === 1 && hand.split ? hand.split.cards : hand.playerCards;
+    if (action === 'split') {
+      // Opening pair only (same rank — 'T'/'J'/'Q'/'K' are distinct ranks), one split max.
+      if (hand.split || hand.playerCards.length !== 2 || hand.playerCards[0][0] !== hand.playerCards[1][0]) return;
       spendCoins(conn.pid, hand.bet)
+        .then(async (w) => {
+          if (!w) { this.bjSendState(ws, hand, false); return; } // can't afford the second stake
+          await this.houseCredit(hand.bet);
+          // Each seat keeps one of the pair and draws a fresh card. (House rule: split aces
+          // play on like any hand, and a 21 after a split pays 1:1, not 3:2.)
+          hand.split = { cards: [hand.playerCards.pop()!, bjDeal(hand.shoe)], bet: hand.bet };
+          hand.playerCards.push(bjDeal(hand.shoe));
+          hand.active = 0;
+          this.bjSendState(ws, hand, false);
+          this.sendWallet(ws);
+        })
+        .catch((e) => console.error('blackjack split failed:', e));
+      return;
+    }
+    if (action === 'double') {
+      if (cards.length !== 2) return;
+      const seat = hand.active === 1 && hand.split ? hand.split : hand;
+      spendCoins(conn.pid, seat.bet)
         .then(async (w) => {
           if (!w) {
             // Can't afford double — treat as hit
-            hand.playerCards.push(bjDeal(hand.shoe));
-            await this.bjFinishOrContinue(ws, conn, hand, false);
+            cards.push(bjDeal(hand.shoe));
+            await this.bjAfterAction(ws, conn, hand, false);
             return;
           }
-          await this.houseCredit(hand.bet);
-          hand.bet *= 2;
-          hand.playerCards.push(bjDeal(hand.shoe));
-          await this.bjStandAndSettle(ws, conn, hand);
+          await this.houseCredit(seat.bet);
+          seat.bet *= 2;
+          cards.push(bjDeal(hand.shoe));
+          await this.bjAfterAction(ws, conn, hand, true); // double takes one card and ends the seat
         })
         .catch((e) => console.error('blackjack double failed:', e));
       return;
     }
     if (action === 'hit') {
-      hand.playerCards.push(bjDeal(hand.shoe));
-      this.bjFinishOrContinue(ws, conn, hand, false).catch((e) => console.error('blackjack hit failed:', e));
+      cards.push(bjDeal(hand.shoe));
+      this.bjAfterAction(ws, conn, hand, false).catch((e) => console.error('blackjack hit failed:', e));
       return;
     }
     if (action === 'stand') {
-      this.bjStandAndSettle(ws, conn, hand).catch((e) => console.error('blackjack stand failed:', e));
+      this.bjAfterAction(ws, conn, hand, true).catch((e) => console.error('blackjack stand failed:', e));
     }
   }
 
-  private async bjFinishOrContinue(ws: WebSocket, conn: Conn, hand: BjHand, canDouble: boolean) {
-    const pt = bjTotal(hand.playerCards);
-    if (pt > 21) {
-      conn.bjHand = undefined;
-      const msg: BjResultMsg = { type: 'bjResult', playerCards: hand.playerCards, dealerCards: hand.dealerCards, playerTotal: pt, dealerTotal: bjTotal(hand.dealerCards), outcome: 'lose', bet: hand.bet, payout: 0 };
-      this.tell(ws, msg);
-      this.sendWallet(ws);
+  /** After a card lands (or a stand): keep playing this seat, move to the split seat, or go
+   *  to showdown. `seatEnds` = the action itself finishes the seat (stand / double). */
+  private async bjAfterAction(ws: WebSocket, conn: Conn, hand: BjHand, seatEnds: boolean) {
+    const cards = hand.active === 1 && hand.split ? hand.split.cards : hand.playerCards;
+    if (!seatEnds && bjTotal(cards) <= 21) {
+      this.bjSendState(ws, hand, false);
       return;
     }
-    const state: BjStateMsg = { type: 'bjState', playerCards: hand.playerCards, dealerCard: hand.dealerCards[0], playerTotal: pt, canDouble, status: 'playing' };
-    this.tell(ws, state);
+    if (hand.split && hand.active === 0) {
+      // Seat 0 is finished (stood, doubled, or busted) — busts don't settle yet, the split
+      // seat still gets its turn. Seat 1 opens on two cards, so doubling is offered again.
+      hand.active = 1;
+      this.bjSendState(ws, hand, false);
+      return;
+    }
+    await this.bjSettle(ws, conn, hand);
   }
 
-  private async bjStandAndSettle(ws: WebSocket, conn: Conn, hand: BjHand) {
-    while (bjTotal(hand.dealerCards) < 17) hand.dealerCards.push(bjDeal(hand.shoe));
-    const pt = bjTotal(hand.playerCards);
+  /** Showdown: dealer draws (unless every seat busted), each seat settles against the same
+   *  dealer hand, one result message carries the whole round. */
+  private async bjSettle(ws: WebSocket, conn: Conn, hand: BjHand) {
+    const seats = [{ cards: hand.playerCards, bet: hand.bet }, ...(hand.split ? [hand.split] : [])];
+    if (seats.some((s) => bjTotal(s.cards) <= 21)) {
+      while (bjTotal(hand.dealerCards) < 17) hand.dealerCards.push(bjDeal(hand.shoe));
+    }
     const dt = bjTotal(hand.dealerCards);
-    let outcome: 'win' | 'push' | 'lose';
-    let want: number;
-    if (dt > 21 || pt > dt) { outcome = 'win'; want = hand.bet * 2; }
-    else if (pt === dt) { outcome = 'push'; want = hand.bet; }
-    else { outcome = 'lose'; want = 0; }
+    const results = seats.map((s) => {
+      const total = bjTotal(s.cards);
+      let outcome: BjOutcome; let want: number;
+      if (total > 21) { outcome = 'lose'; want = 0; }
+      else if (dt > 21 || total > dt) { outcome = 'win'; want = s.bet * 2; }
+      else if (total === dt) { outcome = 'push'; want = s.bet; }
+      else { outcome = 'lose'; want = 0; }
+      return { cards: s.cards, total, outcome, bet: s.bet, want };
+    });
     conn.bjHand = undefined;
-    const payout = want > 0 ? await this.housePay(conn.pid!, conn.nickname!, want) : 0;
-    const msg: BjResultMsg = { type: 'bjResult', playerCards: hand.playerCards, dealerCards: hand.dealerCards, playerTotal: pt, dealerTotal: dt, outcome, bet: hand.bet, payout };
+    const totalBet = results.reduce((a, r) => a + r.bet, 0);
+    const totalWant = results.reduce((a, r) => a + r.want, 0);
+    const payout = totalWant > 0 ? await this.housePay(conn.pid!, conn.nickname!, totalWant) : 0;
+    // Per-seat payout display scales with what the House actually paid (it can throttle).
+    const scale = totalWant > 0 ? payout / totalWant : 0;
+    const outcome: BjOutcome = hand.split
+      ? payout > totalBet ? 'win' : payout === totalBet ? 'push' : 'lose'
+      : results[0].outcome;
+    if (payout < totalBet) this.bumpCortisol(conn, CORTISOL_GAMBLE_LOSS); // the table stings
+    const msg: BjResultMsg = {
+      type: 'bjResult',
+      playerCards: results[0].cards, dealerCards: hand.dealerCards,
+      playerTotal: results[0].total, dealerTotal: dt,
+      outcome, bet: totalBet, payout,
+      hands: hand.split ? results.map((r) => ({ cards: r.cards, total: r.total, outcome: r.outcome, bet: r.bet, payout: Math.floor(r.want * scale) })) : undefined,
+    };
     this.tell(ws, msg);
     this.sendWallet(ws);
+  }
+
+  /** Snapshot the live round for the client: the active seat's cards up front, the other
+   *  seat riding along once a split exists. */
+  private bjSendState(ws: WebSocket, hand: BjHand, canSplit: boolean) {
+    const cards = hand.active === 1 && hand.split ? hand.split.cards : hand.playerCards;
+    const other = hand.split
+      ? hand.active === 1
+        ? { cards: hand.playerCards, total: bjTotal(hand.playerCards), done: true }
+        : { cards: hand.split.cards, total: bjTotal(hand.split.cards), done: false }
+      : undefined;
+    const state: BjStateMsg = {
+      type: 'bjState',
+      playerCards: cards,
+      dealerCard: hand.dealerCards[0],
+      playerTotal: bjTotal(cards),
+      canDouble: cards.length === 2,
+      canSplit: canSplit && !hand.split && cards.length === 2 && cards[0][0] === cards[1][0],
+      activeHand: hand.split ? hand.active : undefined,
+      otherHand: other,
+      status: 'playing',
+    };
+    this.tell(ws, state);
   }
 
   // --- Street Craps ---
@@ -4165,6 +4243,8 @@ export class Lobby {
         }
         const passPayout = passWant > 0 ? await this.housePay(conn.pid!, conn.nickname!, passWant) : 0;
         const dontPassPayout = dontWant > 0 ? await this.housePay(conn.pid!, conn.nickname!, dontWant) : 0;
+        // A resolved roll that returns less than the stakes is a loss ('point' = bets still ride).
+        if (outcome !== 'point' && passPayout + dontPassPayout < pass + dontPass) this.bumpCortisol(conn, CORTISOL_GAMBLE_LOSS);
         const msg: CrapsResultMsg = { type: 'crapsResult', dice: [d1, d2], total: sum, prevPoint, newPoint, outcome, push12, passPayout, dontPassPayout };
         this.tell(ws, msg);
         this.sendWallet(ws);
@@ -4199,6 +4279,7 @@ export class Lobby {
         const win = (a === b && b === c) ? a : null;
         const want = win ? amount * SLOTS_PAYOUTS[win] : 0;
         const payout = want > 0 ? await this.housePay(conn.pid!, conn.nickname!, want) : 0;
+        if (payout < amount) this.bumpCortisol(conn, CORTISOL_GAMBLE_LOSS); // so close to three 7s…
         const msg: SlotsResultMsg = { type: 'slotsResult', reels, win, bet: amount, payout };
         this.tell(ws, msg);
         this.sendWallet(ws);
@@ -4224,6 +4305,7 @@ export class Lobby {
         const multiplier = PLINKO_PAYOUTS[slot];
         const want = Math.floor(bet * multiplier);
         const payout = want > 0 ? await this.housePay(conn.pid!, conn.nickname!, want) : 0;
+        if (payout < bet) this.bumpCortisol(conn, CORTISOL_GAMBLE_LOSS); // bounced the wrong way
         const msg: PlinkoResultMsg = { type: 'plinkoResult', path, slot, multiplier, bet, payout };
         this.tell(ws, msg);
         this.sendWallet(ws);
@@ -4269,6 +4351,7 @@ export class Lobby {
         const won = winner === horse;
         const want = won ? Math.floor(amount * horses[horse].odds) : 0;
         const payout = want > 0 ? await this.housePay(conn.pid!, conn.nickname!, want) : 0;
+        if (payout < amount) this.bumpCortisol(conn, CORTISOL_GAMBLE_LOSS); // wrong horse
         const msg: HorseResultMsg = { type: 'horseResult', horses, winner, horse, bet: amount, payout };
         this.tell(ws, msg);
         this.sendWallet(ws);
@@ -4313,6 +4396,7 @@ export class Lobby {
     const correct = (guess === 'hi' && nextCard > hand.card) || (guess === 'lo' && nextCard < hand.card);
     if (!correct) {
       conn.hiloHand = undefined;
+      this.bumpCortisol(conn, CORTISOL_GAMBLE_LOSS); // guessed wrong, lost the ladder
       const msg: HiLoResultMsg = { type: 'hiloResult', won: false, newCard: nextCard, payout: 0, net: -hand.bet };
       this.tell(ws, msg);
       // Wallet already spent — no extra update needed; re-push so client sees current balance
@@ -4389,6 +4473,7 @@ export class Lobby {
     hand.revealed[cell] = true;
     if (hand.grid[cell]) {
       conn.minesHand = undefined;
+      this.bumpCortisol(conn, CORTISOL_GAMBLE_LOSS); // 💥
       const minePositions = hand.grid.reduce<number[]>((a, m, i) => (m ? [...a, i] : a), []);
       const result: MinesResultMsg = { type: 'minesResult', won: false, hitCell: cell, minePositions, payout: 0, net: -hand.bet };
       this.tell(ws, result);
@@ -4496,6 +4581,12 @@ export class Lobby {
       if (this.crashTicks >= this.crashTicksNeeded) {
         this.crashPhase = 'ended';
         this.crashPhaseStart = now;
+        // Everyone still riding when it crashed just lost their stake.
+        for (const b of this.crashBets) {
+          if (b.cashedAt !== null) continue;
+          const rider = this.conns.get(b.ws);
+          if (rider) this.bumpCortisol(rider, CORTISOL_GAMBLE_LOSS);
+        }
         this.crashBroadcastAll();
         return;
       }

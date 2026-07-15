@@ -190,7 +190,7 @@ export interface WorldNet {
   crapsRoll(pass: number, dontPass: number): void;
   // Blackjack — same reasoning (client/blackjack.ts).
   bjBet(amount: number): void;
-  bjAction(action: 'hit' | 'stand' | 'double'): void;
+  bjAction(action: 'hit' | 'stand' | 'double' | 'split'): void;
   // Hi-Lo — same reasoning (client/hilo.ts).
   hiloBet(amount: number): void;
   hiloGuess(guess: 'hi' | 'lo'): void;
@@ -6634,7 +6634,12 @@ export function startWorld(net: WorldNet): void {
     doubleBtn.disabled = true;
     doubleBtn.style.cssText = btnStyle;
     doubleBtn.onclick = () => net.bjAction('double');
-    actionRow.append(hitBtn, standBtn, doubleBtn);
+    const splitBtn = document.createElement('button');
+    splitBtn.id = 'bjWorldSplit'; splitBtn.type = 'button'; splitBtn.textContent = 'Split';
+    splitBtn.disabled = true;
+    splitBtn.style.cssText = btnStyle;
+    splitBtn.onclick = () => net.bjAction('split');
+    actionRow.append(hitBtn, standBtn, doubleBtn, splitBtn);
     dialogBox.appendChild(actionRow);
 
     const close = document.createElement('button');
@@ -6644,17 +6649,25 @@ export function startWorld(net: WorldNet): void {
     close.onclick = closeDialog;
     dialogBox.appendChild(close);
   }
-  function bjSetActionBtns(playing: boolean, canDouble = false) {
+  function bjSetActionBtns(playing: boolean, canDouble = false, canSplit = false) {
     const hitBtn = dialogBox.querySelector<HTMLButtonElement>('#bjWorldHit');
     const standBtn = dialogBox.querySelector<HTMLButtonElement>('#bjWorldStand');
     const doubleBtn = dialogBox.querySelector<HTMLButtonElement>('#bjWorldDouble');
+    const splitBtn = dialogBox.querySelector<HTMLButtonElement>('#bjWorldSplit');
     const dealBtn = dialogBox.querySelector<HTMLButtonElement>('#bjWorldDeal');
     const betInput = dialogBox.querySelector<HTMLInputElement>('#bjWorldBet');
     if (hitBtn) hitBtn.disabled = !playing;
     if (standBtn) standBtn.disabled = !playing;
     if (doubleBtn) doubleBtn.disabled = !playing || !canDouble;
+    if (splitBtn) splitBtn.disabled = !playing || !canSplit;
     if (dealBtn) dealBtn.disabled = playing;
     if (betInput) betInput.disabled = playing;
+  }
+  // One seat of a split round: cards with a caption, dimmed when it's not the seat in play.
+  function bjSeatHtml(cards: string[], caption: string, opts: { dim?: boolean; gold?: boolean } = {}): string {
+    return `<div style="display:inline-block;vertical-align:top;margin:0 8px;${opts.dim ? 'opacity:0.45;' : ''}">` +
+      cards.map((c) => bjCardHtml(c)).join('') +
+      `<div style="font-size:11px;margin-top:2px;color:${opts.gold ? '#ffd166' : '#9fb0d8'};font-weight:700;">${caption}</div></div>`;
   }
   function bjDoDeal() {
     const betInput = dialogBox.querySelector<HTMLInputElement>('#bjWorldBet');
@@ -6678,10 +6691,18 @@ export function startWorld(net: WorldNet): void {
     const statusEl = dialogBox.querySelector<HTMLDivElement>('#bjWorldStatus');
     const resultEl = dialogBox.querySelector<HTMLDivElement>('#bjWorldResult');
     if (!playerArea || !dealerArea || !statusEl || !resultEl) return;
-    bjRenderCards(playerArea, msg.playerCards);
+    if (msg.otherHand && msg.activeHand !== undefined) {
+      // Split round: both seats side by side, the one being played lit up.
+      const mine = bjSeatHtml(msg.playerCards, `▶ Hand ${msg.activeHand + 1} · ${msg.playerTotal}`, { gold: true });
+      const theirs = bjSeatHtml(msg.otherHand.cards, `Hand ${msg.activeHand === 0 ? 2 : 1} · ${msg.otherHand.total}`, { dim: true });
+      playerArea.innerHTML = msg.activeHand === 0 ? mine + theirs : theirs + mine;
+      statusEl.textContent = `Playing hand ${msg.activeHand + 1} of 2`;
+    } else {
+      bjRenderCards(playerArea, msg.playerCards);
+      statusEl.textContent = `Your total: ${msg.playerTotal}`;
+    }
     dealerArea.innerHTML = bjCardHtml(msg.dealerCard) + bjCardHtml('', true);
-    statusEl.textContent = `Your total: ${msg.playerTotal}`;
-    bjSetActionBtns(true, msg.canDouble);
+    bjSetActionBtns(true, msg.canDouble, !!msg.canSplit);
     resultEl.textContent = '';
     casinoClearDelta('bjWorldCoins');
     casinoRefreshCoins('bjWorldCoins');
@@ -6692,9 +6713,18 @@ export function startWorld(net: WorldNet): void {
     const statusEl = dialogBox.querySelector<HTMLDivElement>('#bjWorldStatus');
     const resultEl = dialogBox.querySelector<HTMLDivElement>('#bjWorldResult');
     if (!playerArea || !dealerArea || !statusEl || !resultEl) return;
-    bjRenderCards(playerArea, msg.playerCards);
+    if (msg.hands) {
+      // Split showdown: each seat with its own verdict under it.
+      const icon = (o: string) => o === 'win' ? '✅' : o === 'push' ? '🤝' : '❌';
+      playerArea.innerHTML = msg.hands
+        .map((h, i) => bjSeatHtml(h.cards, `Hand ${i + 1} · ${h.total} ${icon(h.outcome)}`, { dim: h.outcome === 'lose' }))
+        .join('');
+      statusEl.textContent = `Dealer: ${msg.dealerTotal}`;
+    } else {
+      bjRenderCards(playerArea, msg.playerCards);
+      statusEl.textContent = `You: ${msg.playerTotal} · Dealer: ${msg.dealerTotal}`;
+    }
     bjRenderCards(dealerArea, msg.dealerCards);
-    statusEl.textContent = `You: ${msg.playerTotal} · Dealer: ${msg.dealerTotal}`;
     bjSetActionBtns(false);
     const netAmt = msg.payout - msg.bet;
     if (msg.outcome === 'blackjack') {

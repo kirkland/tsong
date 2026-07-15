@@ -23,16 +23,18 @@ export function initBlackjack(opts: {
   const hitBtn = document.getElementById('bjHit') as HTMLButtonElement;
   const standBtn = document.getElementById('bjStand') as HTMLButtonElement;
   const doubleBtn = document.getElementById('bjDouble') as HTMLButtonElement;
+  const splitBtn = document.getElementById('bjSplit') as HTMLButtonElement;
   const playerArea = document.getElementById('bjPlayerCards') as HTMLDivElement;
   const dealerArea = document.getElementById('bjDealerCards') as HTMLDivElement;
   const resultEl = document.getElementById('bjResult') as HTMLDivElement;
   const statusEl = document.getElementById('bjStatus') as HTMLDivElement;
   let coins = 0;
 
-  function setActionBtns(playing: boolean, canDouble = false) {
+  function setActionBtns(playing: boolean, canDouble = false, canSplit = false) {
     hitBtn.disabled = !playing;
     standBtn.disabled = !playing;
     doubleBtn.disabled = !playing || !canDouble;
+    splitBtn.disabled = !playing || !canSplit;
     dealBtn.disabled = playing;
     betInput.disabled = playing;
   }
@@ -50,6 +52,12 @@ export function initBlackjack(opts: {
   function renderCards(el: HTMLDivElement, cards: string[], hideSecond = false) {
     el.innerHTML = cards.map((c, i) => cardHtml(c, hideSecond && i === 1)).join('');
   }
+  // One seat of a split round: cards + a caption, dimmed when it's not the seat in play.
+  function seatHtml(cards: string[], caption: string, opts: { dim?: boolean; gold?: boolean } = {}): string {
+    return `<div style="display:inline-block;vertical-align:top;margin:0 6px;${opts.dim ? 'opacity:0.45;' : ''}">` +
+      cards.map((c) => cardHtml(c)).join('') +
+      `<div style="font-size:11px;margin-top:2px;font-weight:700;color:${opts.gold ? '#ffd166' : '#9fb0d8'};">${caption}</div></div>`;
+  }
 
   dealBtn.addEventListener('click', () => {
     const min = minBet(coins);
@@ -64,6 +72,7 @@ export function initBlackjack(opts: {
   hitBtn.addEventListener('click', () => opts.send('bjAction', { action: 'hit' }));
   standBtn.addEventListener('click', () => opts.send('bjAction', { action: 'stand' }));
   doubleBtn.addEventListener('click', () => opts.send('bjAction', { action: 'double' }));
+  splitBtn.addEventListener('click', () => opts.send('bjAction', { action: 'split' }));
 
   btn.addEventListener('click', () => {
     const open = panel.hidden;
@@ -81,17 +90,34 @@ export function initBlackjack(opts: {
   return {
     setCoins(n: number) { coins = n; coinsEl.textContent = `${n} 🪙 (min ${minBet(n)})`; },
     onState(msg: BjStateMsg) {
-      renderCards(playerArea, msg.playerCards);
+      if (msg.otherHand && msg.activeHand !== undefined) {
+        // Split round: both seats side by side, the one being played lit up.
+        const mine = seatHtml(msg.playerCards, `▶ Hand ${msg.activeHand + 1} · ${msg.playerTotal}`, { gold: true });
+        const theirs = seatHtml(msg.otherHand.cards, `Hand ${msg.activeHand === 0 ? 2 : 1} · ${msg.otherHand.total}`, { dim: true });
+        playerArea.innerHTML = msg.activeHand === 0 ? mine + theirs : theirs + mine;
+        statusEl.textContent = `Playing hand ${msg.activeHand + 1} of 2`;
+      } else {
+        renderCards(playerArea, msg.playerCards);
+        statusEl.textContent = `Your total: ${msg.playerTotal}`;
+      }
       dealerArea.innerHTML = cardHtml(msg.dealerCard) + cardHtml('', true);
-      statusEl.textContent = `Your total: ${msg.playerTotal}`;
-      setActionBtns(true, msg.canDouble);
+      setActionBtns(true, msg.canDouble, !!msg.canSplit);
       resultEl.textContent = '';
       resultEl.className = '';
     },
     onResult(msg: BjResultMsg) {
-      renderCards(playerArea, msg.playerCards);
+      if (msg.hands) {
+        // Split showdown: each seat with its own verdict under it.
+        const icon = (o: string) => o === 'win' ? '✅' : o === 'push' ? '🤝' : '❌';
+        playerArea.innerHTML = msg.hands
+          .map((h, i) => seatHtml(h.cards, `Hand ${i + 1} · ${h.total} ${icon(h.outcome)}`, { dim: h.outcome === 'lose' }))
+          .join('');
+        statusEl.textContent = `Dealer: ${msg.dealerTotal}`;
+      } else {
+        renderCards(playerArea, msg.playerCards);
+        statusEl.textContent = `You: ${msg.playerTotal} · Dealer: ${msg.dealerTotal}`;
+      }
       renderCards(dealerArea, msg.dealerCards);
-      statusEl.textContent = `You: ${msg.playerTotal} · Dealer: ${msg.dealerTotal}`;
       setActionBtns(false);
       const net = msg.payout - msg.bet;
       if (msg.outcome === 'blackjack') {

@@ -2271,16 +2271,23 @@ export interface RouletteResultMsg {
 // Six-deck shoe. Cards as rank+suit strings: A2–9TJQK + SHDC (e.g. 'AS', 'TD', 'KH').
 // Server is authoritative: it holds the shoe, deals, resolves, and settles the wallet.
 export const BJ_MAX_BET = 50_000;
-export type BjAction = 'hit' | 'stand' | 'double';
+export type BjAction = 'hit' | 'stand' | 'double' | 'split';
 export type BjOutcome = 'blackjack' | 'win' | 'push' | 'lose';
 export interface BjStateMsg {
   type: 'bjState';
-  playerCards: string[]; // e.g. ['AS', 'TD']
+  playerCards: string[]; // the hand being acted on (after a split: the ACTIVE seat's cards)
   dealerCard: string;    // face-up card (hidden one not revealed until stand / double)
   playerTotal: number;   // best soft/hard total ≤ 21 (busted = bust total)
   canDouble: boolean;    // true only before the first hit
+  canSplit?: boolean;    // opening pair (same rank), not yet split, funds for the second stake
+  // Present once the player has split: which seat the actions apply to, plus the OTHER
+  // seat's cards so the client can draw both hands. One split max (no re-splitting).
+  activeHand?: 0 | 1;
+  otherHand?: { cards: string[]; total: number; done: boolean };
   status: 'playing';
 }
+// One seat's showdown line in a split round.
+export interface BjHandResult { cards: string[]; total: number; outcome: BjOutcome; bet: number; payout: number; }
 export interface BjResultMsg {
   type: 'bjResult';
   playerCards: string[];
@@ -2290,6 +2297,10 @@ export interface BjResultMsg {
   outcome: BjOutcome;   // 'blackjack'=3:2, 'win'=1:1, 'push'=even, 'lose'=0
   bet: number;
   payout: number;        // coins returned (0=lose, bet=push, bet×2=win, floor(bet×2.5)=BJ)
+  // Split rounds only: the per-seat breakdown, in seat order. The top-level fields then
+  // aggregate — playerCards/playerTotal mirror seat 1, bet/payout are round totals, and
+  // outcome is the round's NET result (win = came out ahead, push = broke even).
+  hands?: BjHandResult[];
 }
 
 // --- Street Craps ---
