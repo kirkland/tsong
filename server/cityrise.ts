@@ -1219,16 +1219,53 @@ export class CityRiseManager {
     this.stepBotTrades(room, now);
   }
 
-  /** Bots don't evaluate trade math — they mull an incoming offer over for a moment and pass,
-   *  so a trade aimed at a bot doesn't just sit in the log forever. */
+  /** Bots mull an incoming offer over for a moment, then weigh it on actual trade math — so a
+   *  trade aimed at a bot doesn't just sit in the log forever, but also isn't a guaranteed no. */
   private stepBotTrades(room: CrRoom, now: number): void {
     for (const trade of [...room.trades]) {
       const bot = room.players.find((x) => x.pid === trade.toPid && x.bot);
       if (!bot) continue;
+      const other = room.players.find((x) => x.pid === trade.fromPid);
+      if (!other) continue;
       if (trade.botRespondAt === 0) { trade.botRespondAt = now + 1000 + Math.random() * 2000; continue; }
       if (now < trade.botRespondAt) continue;
-      this.resolveTrade(room, trade, false);
+      this.resolveTrade(room, trade, this.botAcceptsTrade(bot, other, trade));
     }
+  }
+
+  private readonly JAIL_FREE_VALUE = 50; // rough parity with the real bail cost
+
+  /** What a position is worth to `recipient` if they end up owning it — sticker price, boosted
+   *  when it would complete (or nearly complete) one of their colour groups, since a monopoly's
+   *  real value is in the rent multiplier, not the lot itself. */
+  private tradePropValue(pos: number, recipient: CrPlayer): number {
+    const space = BOARD[pos];
+    let v = space.price ?? 0;
+    if (space.kind === 'property' && space.group) {
+      const grp = GROUPS[space.group];
+      const have = grp.filter((q) => recipient.owned.includes(q)).length;
+      if (have >= grp.length - 1) v *= 2.2;      // this lot completes the set
+      else if (grp.length > 2 && have >= grp.length - 2) v *= 1.3; // gets them a step closer
+    }
+    return v;
+  }
+
+  /** Deterministic per-bot dealmaking personality (same bot always haggles the same way,
+   *  instead of a coinflip on an identical offer) — derived from its pid, ranges ~0.90x
+   *  (a bit generous) to ~1.10x (wants a real premium) the fair-value bar to accept. */
+  private botGreed(bot: CrPlayer): number {
+    let h = 0;
+    for (let i = 0; i < bot.pid.length; i++) h = (h * 31 + bot.pid.charCodeAt(i)) >>> 0;
+    return 0.90 + (h % 21) / 100;
+  }
+
+  private botAcceptsTrade(bot: CrPlayer, other: CrPlayer, trade: CrTrade): boolean {
+    if (bot.money - trade.wantCash < 100) return false; // don't trade into a cash crunch
+    const incoming = trade.offerProps.reduce((s, pos) => s + this.tradePropValue(pos, bot), 0)
+      + trade.offerCash + trade.offerJailFree * this.JAIL_FREE_VALUE;
+    const outgoing = trade.wantProps.reduce((s, pos) => s + this.tradePropValue(pos, other), 0)
+      + trade.wantCash + trade.wantJailFree * this.JAIL_FREE_VALUE;
+    return incoming >= outgoing * this.botGreed(bot);
   }
 
   /** What a bot should do right now, or null if it has nothing pending this tick. */
