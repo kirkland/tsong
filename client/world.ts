@@ -649,6 +649,9 @@ const JAIL_WALLS: Rect[] = [
   { x: JAIL.x + JAIL.w - JAIL_WALL, y: JAIL.y, w: JAIL_WALL, h: JAIL.h },  // right
   { x: JAIL.x, y: JAIL.y + JAIL.h - JAIL_WALL, w: JAIL.w, h: JAIL_WALL },  // front bars
 ];
+// Solid rects registered at build time (the clubhouse footprint, …) that aren't WORLD_BUILDINGS —
+// resolveCollisions pushes the avatar out of them just like a building. Populated in makeClub.
+const extraColliders: Rect[] = [];
 // The Tavern interior lives OFF the playable map. It used to sit at x:4200, but Robville widened
 // the world to 4800, so it was relocated east of the new bounds to stay out of sight.
 const TAVERN_INT = { x: 40000, y: 300, w: 880, h: 560 };
@@ -3614,6 +3617,27 @@ export function startWorld(net: WorldNet): void {
     }
     // ...and the jail's solid walls/bars (same circle-vs-rect pushout)
     for (const b of JAIL_WALLS) {
+      const nx = clamp(x, b.x, b.x + b.w);
+      const ny = clamp(y, b.y, b.y + b.h);
+      const dx = x - nx, dy = y - ny;
+      const d2 = dx * dx + dy * dy;
+      if (d2 >= rad * rad) continue;
+      hit = true;
+      if (d2 > 0.0001) {
+        const d = Math.sqrt(d2);
+        x = nx + (dx / d) * rad;
+        y = ny + (dy / d) * rad;
+      } else {
+        const left = x - b.x, right = b.x + b.w - x, top = y - b.y, bottom = b.y + b.h - y;
+        const m = Math.min(left, right, top, bottom);
+        if (m === left) x = b.x - rad;
+        else if (m === right) x = b.x + b.w + rad;
+        else if (m === top) y = b.y - rad;
+        else y = b.y + b.h + rad;
+      }
+    }
+    // extra solid rects registered at build time (the clubhouse footprint, etc.) — same pushout
+    for (const b of extraColliders) {
       const nx = clamp(x, b.x, b.x + b.w);
       const ny = clamp(y, b.y, b.y + b.h);
       const dx = x - nx, dy = y - ny;
@@ -9251,6 +9275,7 @@ export function startWorld(net: WorldNet): void {
     if (nearNpc && nearNpc.def.id === 'mc-cashier') { orderMcFood(); return; }
     // Sterling pours, quietly.
     if (nearNpc && nearNpc.def.id === 'club-sterling') { orderClubPour(); return; }
+    if (nearNpc && nearNpc.def.id === 'club-commodore' && !net.owns('club-member')) { offerClubMembership(); return; }
     if (nearNpc) { startTalk(nearNpc); return; }
     if (nearExit) { if (inDungeon) leaveDungeon(); else if (inTemple) leaveTemple(); else if (inMcdonald) leaveMcdonald(); else if (inCasino) leaveCasino(); else if (inVault) leaveVault(); else if (inClub) leaveClubhouse(); else leaveTavern(); return; }
     if (nearClubSpot) { clubSpotInteract(nearClubSpot); return; }
@@ -9556,6 +9581,8 @@ export function startWorld(net: WorldNet): void {
         nearNpc = n;
         if (n.def.id === 'bartender') { orderBeer(); return; }
         if (n.def.id === 'mc-cashier') { orderMcFood(); return; }
+        if (n.def.id === 'club-sterling') { orderClubPour(); return; }
+        if (n.def.id === 'club-commodore' && !net.owns('club-member')) { offerClubMembership(); return; }
         startTalk(n);
         return;
       }
@@ -9665,8 +9692,13 @@ export function startWorld(net: WorldNet): void {
     const SP = SPEED * blessMul() * (handbrake ? SPRINT_MULT : 1); // the Blessing of the Ball quickens your step (decays to 1×)
     if (inInterior) {
       // inside a room (Tavern/Temple): no town collision, just clamp to the inset play area
-      selfX = clamp(selfX + dx * SP * dt, curInt.x + curWall + R, curInt.x + curInt.w - curWall - R);
-      selfY = clamp(selfY + dy * SP * dt, curInt.y + curWall + R, curInt.y + curInt.h - curWall - R);
+      let nx = clamp(selfX + dx * SP * dt, curInt.x + curWall + R, curInt.x + curInt.w - curWall - R);
+      let ny = clamp(selfY + dy * SP * dt, curInt.y + curWall + R, curInt.y + curInt.h - curWall - R);
+      // the clubhouse has furniture you bump into — slide per-axis against its prop rects
+      if (inClub && clubIntColliders.length) {
+        if (!clubIntColliders.some((b) => nx > b.x - R && nx < b.x + b.w + R && selfY > b.y - R && selfY < b.y + b.h + R)) selfX = nx;
+        if (!clubIntColliders.some((b) => selfX > b.x - R && selfX < b.x + b.w + R && ny > b.y - R && ny < b.y + b.h + R)) selfY = ny;
+      } else { selfX = nx; selfY = ny; }
       stepSound();
       return;
     }
@@ -9985,7 +10017,7 @@ export function startWorld(net: WorldNet): void {
       const a = others.find((o) => o.id === nearNetizen);
       prompt.textContent = `💬 Talk to ${a?.name ?? 'Netizen'}`;
     } else if (nearNpc) {
-      prompt.textContent = nearNpc.def.id === 'bartender' ? '🍺 Order from the Barkeep' : nearNpc.def.id === 'mc-cashier' ? '🍔 Order from Mac' : nearNpc.def.id === 'club-sterling' ? '🥃 A word with Sterling' : nearNpc.def.friendKey ? `💕 Chat with ${nearNpc.def.name}` : `💬 Talk to ${nearNpc.def.name}`;
+      prompt.textContent = nearNpc.def.id === 'bartender' ? '🍺 Order from the Barkeep' : nearNpc.def.id === 'mc-cashier' ? '🍔 Order from Mac' : nearNpc.def.id === 'club-sterling' ? '🥃 A word with Sterling' : nearNpc.def.id === 'club-commodore' && !net.owns('club-member') ? '🎩 Apply for Membership' : nearNpc.def.friendKey ? `💕 Chat with ${nearNpc.def.name}` : `💬 Talk to ${nearNpc.def.name}`;
     } else if (nearExit) {
       prompt.textContent = inDungeon ? '🚪 Leave the Ruins' : inTemple ? '🚪 Leave the Temple' : inMcdonald ? "🍔 Leave McDonald's" : inCasino ? '🎰 Leave the Casino' : inVault ? '🚪 Back through the bookcase' : inClub ? '🚪 Leave the Clubhouse' : '🚪 Leave the Tavern';
     } else if (nearClubSpot) {
@@ -14878,6 +14910,13 @@ export function startWorld(net: WorldNet): void {
       for (const bx2 of [-150, 150]) {
         sc.add.image(CH.x + bx2, CH.y + 92, 'townFrames', TT.bush).setScale(TEXEL * 1.2).setOrigin(0.5, 0.92).setDepth(CH.y + 92);
       }
+      // solid walls so you bump into the clubhouse like any other building — a doorway gap in the
+      // front-centre is left open so you can walk up to the door and go in.
+      extraColliders.push(
+        { x: CH.x - 150, y: CH.y - 50, w: 300, h: 44 },   // back wall (stops you exiting north through it)
+        { x: CH.x - 150, y: CH.y - 50, w: 118, h: 140 },  // left wall
+        { x: CH.x + 32, y: CH.y - 50, w: 118, h: 140 },   // right wall (the CH.x±32 gap is the door)
+      );
     }
     // the gate: two proud stone posts, finials, one plaque, zero fence problems solved
     for (const gx of [2380, 2520]) {
@@ -14923,29 +14962,34 @@ export function startWorld(net: WorldNet): void {
     if (net.owns('club-member') && Math.hypot(selfX - CLUBHOUSE.x, selfY - (CLUBHOUSE.y + 40)) < 60) {
       enterClubhouse(); return true;
     }
-    // The gate: the only part of the property a non-member can physically reach. Applications
-    // (and the Commodore) are handled right here.
+    // The gate: the only part of the property a non-member can physically reach.
     if (Math.hypot(selfX - CLUB_GATE.x, selfY - CLUB_GATE.y) < 70) {
-      if (net.owns('club-member')) { showToast('🏛️ The gate creaks. It always creaks. Walk on up to the clubhouse.'); return true; }
-      const coins = net.stats().coins;
-      const rich = coins >= 1_000_000;
-      openDialog('⛳ Tsong Country Club',
-        rich
-          ? 'The Commodore appears from nowhere, produces a ledger, and runs a finger down it. "…Everything checks out. Distressingly. The initiation fee is one million coins. Payable now, discussed never."'
-          : `The Commodore appears from nowhere and looks at you the way one looks at weather. "The initiation fee is one million coins. You have ${Math.floor(coins).toLocaleString()}. Mathematics can be so cruel to the aspirational."`,
-        [
-          { label: '🏛️ Pay the initiation — 1,000,000🪙', onPick: () => { closeDialog(); net.joinClub(); } },
-          { label: 'Absolutely not', onPick: () => { closeDialog(); showToast('🏛️ The Commodore nods, as if he expected nothing more.'); } },
-        ]);
+      offerClubMembership();
       return true;
     }
     return false;
+  }
+  // The Commodore's membership pitch — reached at the gate OR by talking to the Commodore himself
+  // (he handles the money; you actually pay through him). No-op-ish once you're already in.
+  function offerClubMembership() {
+    if (net.owns('club-member')) { showToast('🏛️ "A pleasure as always. Do go in — the door\'s expecting you." — The Commodore'); return; }
+    const coins = net.stats().coins;
+    const rich = coins >= 1_000_000;
+    openDialog('🎩 The Commodore',
+      rich
+        ? '"Membership? Ordinarily I\'d demur, but…" He produces a ledger and runs a finger down it. "…your finances check out. Distressingly. The initiation is one million coins — I take it here and now, and we never speak of money again."'
+        : `"Membership is one million coins, payable to me directly." He glances at your purse. "You have ${Math.floor(coins).toLocaleString()}. Mathematics can be so cruel to the aspirational. Come back when the sums improve."`,
+      [
+        ...(rich ? [{ label: '🎩 Pay the Commodore — 1,000,000🪙', onPick: () => { closeDialog(); net.joinClub(); } }] : []),
+        { label: rich ? 'On second thought, no' : 'Understood', onPick: () => { closeDialog(); showToast('🎩 The Commodore nods, as if he expected nothing more.'); } },
+      ]);
   }
 
   // --- The clubhouse INTERIOR: mahogany, quiet money, and at least one load-bearing secret.
   // Same walkable-room machinery as the Tavern/Temple (curInt/curWall/curZoom swap). Members only —
   // the door outside checks net.owns('club-member') before calling enterClubhouse().
   let clubBuilt = false, vaultBuilt = false;
+  const clubIntColliders: Rect[] = []; // clubhouse furniture you bump into (world-space, in CLUB_INT)
   let founderPupils: Phaser.GameObjects.Arc[] = [];
   let clubFireGlow: Phaser.GameObjects.Arc | null = null;
   let loungeTimer = 0;
@@ -15124,6 +15168,11 @@ export function startWorld(net: WorldNet): void {
     prop('w-club-clock', CLUB_SPOTS.clock.x, CLUB_SPOTS.clock.y, CLUB_SPOTS.clock.y).setScale(TEXEL * 1.3);
     // the 19th Hole Lounge: brass-railed bar along the right wall (Sterling stands behind it)
     tile('w-club-bar', ix + iw - 340, iy + 200, 300, 30, iy + 246);
+    // furniture you bump into (the long bar + the card table) — the rest hugs the walls
+    if (!clubIntColliders.length) clubIntColliders.push(
+      { x: ix + iw - 340, y: iy + 196, w: 300, h: 40 },  // the bar counter
+      { x: cx + 40 - 26, y: iy + 448, w: 52, h: 26 },    // the card/chess table
+    );
     tile('w-tav-shelf', ix + iw - 330, iy + 130, 280, 32, iy + 140);       // the good bottles (reused shelf)
     prop('w-tav-stool', ix + iw - 300, iy + 280); prop('w-tav-stool', ix + iw - 120, iy + 280);
     // reading corner: wing chairs facing the hearth + a card table on the rug
@@ -17310,15 +17359,15 @@ export function startWorld(net: WorldNet): void {
     spawnMob(sc, kind, s.x, s.y);
   }
 
-  // Drink a held potion (H key) → +40 HP. Lost on death, so hoard at your peril.
+  // Drink a held potion (H key) → +10 HP. Lost on death, so hoard at your peril.
   function drinkPotion() {
     if (playerDead || fieldPotions <= 0) { if (fieldPotions <= 0) flashHelp('🧪 No potions — down a biome mob to find one.'); return; }
     if (playerHp >= PLAYER_MAX_HP) { flashHelp('❤️ Already at full health.'); return; }
     fieldPotions--;
-    playerHp = Math.min(PLAYER_MAX_HP, playerHp + 40);
+    playerHp = Math.min(PLAYER_MAX_HP, playerHp + 10);
     updateHealthHud();
     tone(520, 0.1, 'sine', 0.05, 780); window.setTimeout(() => tone(780, 0.12, 'sine', 0.05, 1040), 90);
-    showToast('🧪 <i>glug.</i> +40 HP.');
+    showToast('🧪 <i>glug.</i> +10 HP.');
   }
 
   // The player took a hit from a mob (contact or projectile). Damage scales with biome difficulty
@@ -17419,7 +17468,7 @@ export function startWorld(net: WorldNet): void {
         if (!playerDead && Math.hypot(p.x - selfX, p.y - selfY) < R + 14) {
           fieldPotions++;
           updateHealthHud();
-          showToast(`🧪 Picked up a potion (${fieldPotions} held) — press <b>H</b> to drink (+40 HP).`);
+          showToast(`🧪 Picked up a potion (${fieldPotions} held) — press <b>H</b> to drink (+10 HP).`);
           tone(660, 0.1, 'sine', 0.05, 990);
           p.spr.destroy(); potionDrops.splice(i, 1); continue;
         }
