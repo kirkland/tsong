@@ -2693,6 +2693,7 @@ worldBtn.addEventListener('click', async () => {
         return best;
       },
       wish: () => net.send({ type: 'fountainWish' }),
+      mobKill: (biome: string) => net.send({ type: 'mobKill', biome }),
       owns: (id: string) => wallet.owned.includes(id),
       joinClub: () => net.send({ type: 'clubJoin' }),
       clubDrink: (tier) => net.send({ type: 'clubDrink', tier }),

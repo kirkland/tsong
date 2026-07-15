@@ -522,6 +522,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'fountainWish':
         lobby.fountainWish(ws).catch((e) => console.error('fountain wish failed:', e));
         break;
+      case 'mobKill':
+        if (typeof msg.biome === 'string') lobby.mobKilled(ws, msg.biome);
+        break;
       case 'clubJoin':
         lobby.clubJoin(ws).catch((e) => console.error('club join failed:', e));
         break;

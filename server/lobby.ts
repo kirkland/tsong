@@ -2609,6 +2609,36 @@ export class Lobby {
     this.tell(ws, { type: 'wishResult', total, title: granted });
   }
 
+  // Biome-critter kills. Mobs are client-simulated (like NPCs), so the reward is deliberately
+  // small and rate-limited (a rolling window per player) — enough to make hunting worth it, capped
+  // low enough that a tampered client can't farm meaningfully. Coins come from the House (a sink,
+  // so no minting), plus a little XP toward the account level.
+  private mobKills = new Map<string, number[]>(); // pid → recent kill timestamps (ms)
+  private static readonly MOB_WINDOW_MS = 60_000;
+  private static readonly MOB_MAX_PER_WINDOW = 40; // hard cap on paid kills/minute
+  private static readonly MOB_REWARDS: Record<string, { coins: number; xp: number }> = {
+    desert: { coins: 30, xp: 10 },
+    swamp: { coins: 30, xp: 10 },
+    snow: { coins: 35, xp: 12 },
+  };
+  mobKilled(ws: WebSocket, biome: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    const reward = Lobby.MOB_REWARDS[biome];
+    if (!reward) return;
+    const now = Date.now();
+    const arr = (this.mobKills.get(conn.pid) ?? []).filter((t) => now - t < Lobby.MOB_WINDOW_MS);
+    if (arr.length >= Lobby.MOB_MAX_PER_WINDOW) { this.mobKills.set(conn.pid, arr); return; } // capped — no reward, silently
+    arr.push(now);
+    this.mobKills.set(conn.pid, arr);
+    // small House-funded bounty (± a little variety) + XP
+    const coins = reward.coins + Math.floor(Math.random() * 16);
+    this.housePay(conn.pid, conn.nickname, coins) // housePay also grants its own dampened XP
+      .then((paid) => { if (paid > 0) this.sendWallet(ws); })
+      .catch((e) => console.error('mob bounty failed:', e));
+    void this.awardXp(conn.pid, conn.nickname, reward.xp);
+  }
+
   /** Country Club initiation: 1,000,000🪙 into the House, membership (a title) into the wallet.
    *  The whole town hears about it — nobody quietly spends a million coins. */
   async clubJoin(ws: WebSocket) {

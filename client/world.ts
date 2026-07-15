@@ -270,6 +270,7 @@ export interface WorldNet {
   fishKing(): { name: string; lb: number } | null;     // biggest catch on record (billboard)
   ghKing(): { name: string; score: number } | null;    // top Tsong Hero score (billboard)
   wish(): void;                                        // toss 10 coins into the fountain
+  mobKill(biome: string): void;                        // downed a biome critter → server pays coins + XP (rate-limited)
   owns(id: string): boolean;                           // do we own this cosmetic/item id? (wallet.owned)
   joinClub(): void;                                    // apply to the Country Club (server validates the 1,000,000🪙 fee)
   clubDrink(tier: number): void;                       // order off the 19th Hole's menu (server charges)
@@ -2521,6 +2522,7 @@ export function startWorld(net: WorldNet): void {
   let handbrake = false; // hold Shift (or the on-screen DRIFT button) → break the rear loose and slide
   let lastSkidMarkAt = 0; // throttle for laying rubber on the ground while drifting
   let stunnedUntil = 0;   // ms; knocked off your feet by a blast — can't move until then
+  let mobBiteCooldown = 0; // ms; throttles biome-mob contact nips so they don't chain-stun
 
   // --- arsenal state: what you're holding, what's left in it, and whether the trigger is down ---
   const ammo = Object.fromEntries(WEAPONS.map((w) => [w.id, w.start])) as Record<WorldWeapon, number>;
@@ -9950,6 +9952,13 @@ export function startWorld(net: WorldNet): void {
     noise(0.2, 0.24, 360);                    // wet splat
     window.setTimeout(() => tone(950, 0.05, 'square', 0.08, 1500), 55); // cartoon squeak
   }
+  // A biome mob taking a hit — a short crunchy thwack.
+  function hitMobSound() { tone(300, 0.06, 'square', 0.05, 180); noise(0.05, 0.06, 900); }
+  // A biome mob going down — a little descending death warble + a coin chime.
+  function killMobSound() {
+    tone(220, 0.14, 'sawtooth', 0.06, 90);
+    window.setTimeout(() => tone(880, 0.1, 'sine', 0.05, 1200), 90); // the coin ping
+  }
   // The dust-yourself-off "pop" as a flattened townsperson springs back upright.
   function getUpSound() { tone(280, 0.13, 'square', 0.1, 660); }
   // Tyre screech while drifting — a thin high noise burst, throttled so it reads as a continuous skid.
@@ -12796,6 +12805,7 @@ export function startWorld(net: WorldNet): void {
       makeClub(sc);
       makeSwamp(sc);
       makeEast(sc);
+      makeMobs(sc);
 
       // --- ammo crates scattered over the open ground ---
       buildCrates(sc);
@@ -13146,6 +13156,7 @@ export function startWorld(net: WorldNet): void {
       safeStep('golf', () => updateGolf(dt));
       safeStep('swamp', () => updateSwamp(now, dt));
       safeStep('east', () => updateEast(now, dt));
+      safeStep('mobs', () => updateMobs(now, dt));
       safeStep('nearBuilding', () => updateNearBuilding());
       safeStep('sendMove', () => maybeSendMove(now));
 
@@ -13440,6 +13451,7 @@ export function startWorld(net: WorldNet): void {
       n.getUpUntil = 0; n.walking = false; n.label.setText('💫');
       squishSound();
     }
+    if (mine) hitMobs(x, y, r, 3); // only OUR blasts hurt biome mobs (avoid double-credit from relayed booms)
     if (Math.hypot(selfX - x, selfY - y) <= r) {
       if (driving) {
         if (blowUpMyCar('💥 Your car took a direct hit — summon a fresh one anytime.')) net.blownUp(true, mine, mine ? undefined : shooterPid);
@@ -13543,6 +13555,9 @@ export function startWorld(net: WorldNet): void {
       const spent = b.t >= MG_LIFE;
       const wall = !spent && hitsWorld(b.x, b.y);
       if (b.ghost) { if (spent || wall) { b.spr.destroy(); bullets.splice(i, 1); } continue; }
+      // a mob standing in the round's path takes 1 damage and stops the bullet
+      const mobHit = !spent && !wall ? hitMobs(b.x, b.y, 6, 1) : false;
+      if (mobHit) { spawnSparks(b.x, b.y, 0xff9a5a); b.spr.destroy(); bullets.splice(i, 1); continue; }
       const npc = !spent && !wall ? npcAt(b.x, b.y, now) : null;
       const victim = !spent && !wall && !npc ? playerAt(b.x, b.y) : null;
       if (!spent && !wall && !npc && !victim) continue;
@@ -13584,6 +13599,12 @@ export function startWorld(net: WorldNet): void {
       if (distToSegment(n.x, n.y, x, y, ex, ey) > LASER_HIT_R + R * 0.5) continue;
       squishNpc(n, now);
       spawnSparks(n.x, n.y, 0x8ef0ff);
+    }
+    for (const m of mobs) {                                                // the beam skewers mobs too (2 dmg)
+      if (m.dead) continue;
+      if (distToSegment(m.x, m.y, x, y, ex, ey) > LASER_HIT_R + R * 0.5) continue;
+      hitMobs(m.x, m.y, 4, 2);
+      spawnSparks(m.x, m.y, 0x8ef0ff);
     }
     const selfId = net.selfId();
     let zapped = 0;
@@ -16730,6 +16751,229 @@ export function startWorld(net: WorldNet): void {
       return true;
     }
     return false;
+  }
+
+  // ============================================================================================
+  // BIOME MOBS — hostile-ish critters that roam the frontiers, take weapon damage, and drop
+  // coins + XP when downed. One species per biome (desert scorpion, swamp mosquito, frost wolf),
+  // rendered as detailed px sprites (same house style as the penguins/huskies) with a hit-flash,
+  // a health pip bar, damage numbers, and a death puff that scatters coins toward you. Kills are
+  // reported to the server (net.mobKill) which pays a small, rate-limited bounty.
+  // ============================================================================================
+  type MobKind = 'scorpion' | 'mosquito' | 'wolf';
+  interface Mob {
+    spr: Phaser.GameObjects.Image; bar: Phaser.GameObjects.Graphics;
+    kind: MobKind; biome: string; x: number; y: number; tx: number; ty: number;
+    hp: number; maxHp: number; hitUntil: number; state: number; busyUntil: number;
+    homeX: number; homeY: number; ph: number; dead: boolean;
+  }
+  const MOB_SPECS: Record<MobKind, { biome: string; hp: number; speed: number; aggro: number; scale: number; label: string }> = {
+    scorpion: { biome: 'desert', hp: 3, speed: 44, aggro: 220, scale: TEXEL * 1.15, label: 'Sand Scorpion' },
+    mosquito: { biome: 'swamp', hp: 2, speed: 62, aggro: 260, scale: TEXEL * 1.1, label: 'Bog Skeeter' },
+    wolf: { biome: 'snow', hp: 4, speed: 54, aggro: 300, scale: TEXEL * 1.2, label: 'Frost Wolf' },
+  };
+  let mobs: Mob[] = [];
+  let mobScene: Phaser.Scene | null = null;
+
+  function makeMobTextures(sc: Phaser.Scene) {
+    if (sc.textures.exists('w-mob-scorpion')) return;
+    const g = sc.add.graphics();
+    const px2 = (x: number, y: number, w: number, h: number, c: number) => { g.fillStyle(c, 1); g.fillRect(x, y, w, h); };
+    { // desert scorpion (20×14), faces right — dark carapace, raised stinger tail, pincers
+      const C = 0x6a2a1e, C2 = 0x8a3826, DK = 0x431409, EYE = 0xffd23f;
+      g.clear();
+      px2(5, 6, 9, 5, C); px2(6, 5, 7, 1, C2);                 // body segments
+      px2(7, 7, 1, 3, DK); px2(9, 7, 1, 3, DK); px2(11, 7, 1, 3, DK); // segment lines
+      // legs
+      px2(5, 11, 1, 3, DK); px2(8, 11, 1, 3, DK); px2(11, 11, 1, 3, DK);
+      px2(5, 4, 1, 2, DK); px2(8, 4, 1, 2, DK); px2(11, 4, 1, 2, DK);
+      // head + pincers (right)
+      px2(13, 6, 3, 4, C2); px2(16, 5, 2, 1, C); px2(16, 9, 2, 1, C); px2(18, 4, 1, 2, DK); px2(18, 9, 1, 2, DK);
+      px2(14, 7, 1, 1, EYE);                                    // eye
+      // curling tail up-and-over from the left, ending in a stinger
+      px2(4, 5, 2, 2, C); px2(3, 3, 2, 2, C); px2(3, 1, 2, 2, C2); px2(4, 0, 2, 1, DK); px2(5, 0, 1, 1, 0xff5a4a); // stinger
+      g.generateTexture('w-mob-scorpion', 20, 14);
+    }
+    { // bog skeeter (16×14), faces right — fat body, long proboscis, translucent wings
+      const B = 0x3a4a2a, B2 = 0x4a5e34, WING = 0xbfe0d8, PROB = 0x2a1a12, EYE = 0xc0392b;
+      g.clear();
+      px2(5, 6, 6, 5, B); px2(6, 5, 4, 1, B2);                 // abdomen
+      px2(10, 5, 3, 4, B2);                                     // thorax
+      px2(12, 5, 2, 2, 0x2a3a1e); px2(13, 5, 1, 1, EYE);       // head + red eye
+      px2(14, 6, 2, 1, PROB);                                   // proboscis (the bite)
+      px2(3, 6, 2, 3, B);                                       // rear
+      // wings (up), light and glassy
+      px2(6, 1, 5, 4, WING); px2(5, 2, 1, 2, WING); px2(11, 2, 1, 2, WING);
+      // dangly legs
+      px2(6, 11, 1, 3, PROB); px2(9, 11, 1, 3, PROB); px2(11, 10, 1, 3, PROB);
+      g.generateTexture('w-mob-mosquito', 16, 14);
+    }
+    { // frost wolf (22×15), faces right — grey-white, hunched, glowing ice-blue eyes
+      const F = 0xbcc6d0, F2 = 0x9aa6b4, DK = 0x5a6472, EYE = 0x6ad0ff, MAW = 0x2a2e36;
+      g.clear();
+      px2(3, 6, 13, 6, F); px2(3, 10, 13, 2, F2);              // body
+      px2(2, 5, 3, 4, F2);                                      // haunch (rear, left)
+      px2(1, 4, 2, 3, F); px2(0, 3, 1, 2, DK);                 // tail up
+      px2(15, 4, 5, 5, F); px2(19, 6, 2, 3, F2);               // head + snout (right)
+      px2(20, 7, 1, 2, MAW);                                    // muzzle tip
+      px2(18, 8, 3, 1, MAW);                                    // jaw line
+      px2(17, 6, 2, 1, EYE);                                    // the eye, glowing
+      px2(15, 2, 2, 3, F2); px2(18, 2, 2, 3, F2);              // ears
+      px2(14, 3, 1, 2, DK); px2(20, 3, 1, 2, DK);
+      // legs
+      px2(4, 12, 2, 3, DK); px2(8, 12, 2, 3, DK); px2(12, 12, 2, 3, DK); px2(15, 12, 2, 3, DK);
+      // a frosty back ruff
+      px2(6, 5, 1, 1, 0xffffff); px2(9, 4, 1, 1, 0xffffff); px2(12, 5, 1, 1, 0xffffff);
+      g.generateTexture('w-mob-wolf', 22, 15);
+    }
+    g.destroy();
+  }
+
+  function spawnMob(sc: Phaser.Scene, kind: MobKind, x: number, y: number) {
+    const spec = MOB_SPECS[kind];
+    const spr = sc.add.image(x, y, `w-mob-${kind}`).setScale(spec.scale).setOrigin(0.5, 1).setDepth(y);
+    const bar = sc.add.graphics().setDepth(y + 1).setVisible(false);
+    mobs.push({ spr, bar, kind, biome: spec.biome, x, y, tx: x, ty: y, hp: spec.hp, maxHp: spec.hp, hitUntil: 0, state: 0, busyUntil: 0, homeX: x, homeY: y, ph: Math.random() * 9, dead: false });
+  }
+
+  function makeMobs(sc: Phaser.Scene) {
+    mobScene = sc;
+    makeMobTextures(sc);
+    const rnd = mulberry32(0x30B5);
+    // desert: scorpions scattered through the first several chunks (where players actually roam)
+    for (let i = 0; i < 14; i++) {
+      const x = -400 - rnd() * 9000, y = 120 + rnd() * (WORLD.h - 240);
+      spawnMob(sc, 'scorpion', x, y);
+    }
+    // swamp: skeeters over the bog (clear of the deep bayou)
+    for (let i = 0; i < 14; i++) {
+      const x = 120 + rnd() * (WORLD.w - 240), y = WORLD.h + 240 + rnd() * (SWAMP_SHORE_Y - WORLD.h - 360);
+      spawnMob(sc, 'mosquito', x, y);
+    }
+    // frostreach: wolves prowling the snowfield
+    for (let i = 0; i < 14; i++) {
+      const x = WORLD.w + 300 + rnd() * (EAST.w - 600), y = 120 + rnd() * (WORLD.h - 240);
+      spawnMob(sc, 'wolf', x, y);
+    }
+  }
+
+  // Apply `dmg` to any mobs within `r` of (x,y). Returns true if at least one was hit. Called from
+  // the weapon-impact paths (rockets/void blasts, bullets, the laser beam).
+  function hitMobs(x: number, y: number, r: number, dmg: number): boolean {
+    const now = performance.now();
+    let any = false;
+    for (const m of mobs) {
+      if (m.dead) continue;
+      if (Math.hypot(m.x - x, m.y - y) > r + 12) continue;
+      any = true;
+      m.hp -= dmg;
+      m.hitUntil = now + 140;
+      // knockback away from the blast
+      const a = Math.atan2(m.y - y, m.x - x);
+      m.x += Math.cos(a) * 14; m.y += Math.sin(a) * 14;
+      m.state = 1; // aggro/flee after being hit
+      m.busyUntil = now + 400;
+      spawnDamageNumber(m.x, m.y - 18, dmg);
+      hitMobSound();
+      if (m.hp <= 0) killMob(m);
+    }
+    return any;
+  }
+
+  function spawnDamageNumber(x: number, y: number, dmg: number) {
+    const sc = mobScene; if (!sc) return;
+    const t = sc.add.text(x, y, `-${dmg}`, { fontFamily: 'ui-monospace, monospace', fontSize: '13px', fontStyle: 'bold', color: '#ffd23f', stroke: '#1a1006', strokeThickness: 3, resolution: 2 })
+      .setOrigin(0.5, 1).setDepth(999998);
+    sc.tweens.add({ targets: t, y: y - 26, alpha: 0, duration: 620, ease: 'Quad.easeOut', onComplete: () => t.destroy() });
+  }
+
+  function killMob(m: Mob) {
+    if (m.dead) return;
+    m.dead = true;
+    const sc = mobScene;
+    net.mobKill(m.biome); // server pays a small, rate-limited coin + XP bounty
+    if (sc) {
+      // death puff
+      for (let i = 0; i < 8; i++) {
+        const a = (i / 8) * Math.PI * 2;
+        const p = sc.add.circle(m.x, m.y - 6, 3, m.kind === 'wolf' ? 0xe8f0f4 : m.kind === 'mosquito' ? 0x4a5e34 : 0x8a3826).setDepth(999997);
+        sc.tweens.add({ targets: p, x: m.x + Math.cos(a) * 26, y: m.y - 6 + Math.sin(a) * 20, alpha: 0, duration: 480, ease: 'Quad.easeOut', onComplete: () => p.destroy() });
+      }
+      // a couple of coins arc toward the player, then vanish (the real payout is server-side)
+      for (let i = 0; i < 3; i++) {
+        const coin = sc.add.text(m.x + (Math.random() * 20 - 10), m.y - 10, '🪙', { fontSize: '13px' }).setOrigin(0.5).setDepth(999999);
+        sc.tweens.add({ targets: coin, x: selfX, y: selfY - 16, alpha: 0.2, duration: 520 + i * 90, delay: i * 60, ease: 'Quad.easeIn', onComplete: () => coin.destroy() });
+      }
+      m.spr.destroy(); m.bar.destroy();
+    }
+    killMobSound();
+    // respawn a fresh one of the same species elsewhere in the biome after a while
+    window.setTimeout(() => respawnMob(m.kind), 14000 + Math.random() * 14000);
+  }
+
+  function respawnMob(kind: MobKind) {
+    const sc = mobScene; if (!sc || !game) return;
+    const rnd = Math.random;
+    let x = 0, y = 0;
+    if (kind === 'scorpion') { x = -400 - rnd() * 9000; y = 120 + rnd() * (WORLD.h - 240); }
+    else if (kind === 'mosquito') { x = 120 + rnd() * (WORLD.w - 240); y = WORLD.h + 240 + rnd() * (SWAMP_SHORE_Y - WORLD.h - 360); }
+    else { x = WORLD.w + 300 + rnd() * (EAST.w - 600); y = 120 + rnd() * (WORLD.h - 240); }
+    spawnMob(sc, kind, x, y);
+  }
+
+  function updateMobs(now: number, dt: number) {
+    if (!mobs.length) return;
+    // prune destroyed mobs (dead ones are removed once their sprite is gone)
+    if (mobs.some((m) => m.dead)) mobs = mobs.filter((m) => !m.dead);
+    const active = !inInterior && !inDungeon;
+    for (const m of mobs) {
+      const spec = MOB_SPECS[m.kind];
+      // Only tick mobs near the player (perf) — but always keep them positioned.
+      const near = Math.hypot(m.x - selfX, m.y - selfY) < 1400;
+      if (active && near) {
+        const distToSelf = Math.hypot(selfX - m.x, selfY - m.y);
+        if (m.hp < m.maxHp && distToSelf < spec.aggro) {
+          // aggravated: skeeters + wolves close in; scorpions scuttle at you too
+          m.tx = selfX; m.ty = selfY;
+          m.state = 1;
+        } else if (now >= m.busyUntil) {
+          // idle wander around home
+          const a = Math.random() * Math.PI * 2, d = 40 + Math.random() * 90;
+          m.tx = clamp(m.homeX + Math.cos(a) * d, m.homeX - 160, m.homeX + 160);
+          m.ty = m.homeY + Math.sin(a) * d;
+          m.busyUntil = now + 1200 + Math.random() * 2600;
+        }
+        const dx = m.tx - m.x, dy = m.ty - m.y, mag = Math.hypot(dx, dy);
+        if (mag > 2) {
+          const sp = spec.speed * (m.state === 1 ? 1.5 : 1) * dt;
+          m.x += (dx / mag) * sp; m.y += (dy / mag) * sp;
+          if (Math.abs(dx) > 1) m.spr.setFlipX(dx < 0);
+        }
+        // contact nip: brush the player → a small stun (no real damage; keeps them a nuisance)
+        if (distToSelf < R + 8 && now >= stunnedUntil && !driving && now >= mobBiteCooldown) {
+          mobBiteCooldown = now + 1500;
+          stunnedUntil = now + 500; keys.clear();
+          flashHelp(`${m.kind === 'wolf' ? '🐺' : m.kind === 'mosquito' ? '🦟' : '🦂'} ${spec.label} got a bite in!`);
+          bumpSound(false);
+        }
+      }
+      // flight bob for the flying skeeter
+      const bob = m.kind === 'mosquito' ? Math.sin(now / 160 + m.ph) * 3 : 0;
+      m.spr.setPosition(m.x, m.y + bob).setDepth(m.y);
+      // hit flash (white tint) then clear
+      if (now < m.hitUntil) m.spr.setTintFill(0xffffff); else m.spr.clearTint();
+      // health pips above, only while damaged
+      if (m.hp < m.maxHp && !m.dead) {
+        m.bar.setVisible(true).clear();
+        const bw = 22, bx = m.x - bw / 2, by = m.y - m.spr.displayHeight - 6;
+        m.bar.fillStyle(0x1a1006, 0.85); m.bar.fillRect(bx - 1, by - 1, bw + 2, 5);
+        m.bar.fillStyle(0x3a1010, 1); m.bar.fillRect(bx, by, bw, 3);
+        m.bar.fillStyle(0xff5a4a, 1); m.bar.fillRect(bx, by, bw * (m.hp / m.maxHp), 3);
+        m.bar.setDepth(m.y + 1);
+      } else if (m.bar.visible) {
+        m.bar.setVisible(false);
+      }
+    }
   }
 
   // --- town life: statue of the #1, live billboard, fountain wishes, critters ---
