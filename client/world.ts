@@ -243,6 +243,7 @@ export interface WorldNet {
   leaderboard(): { name: string; wins: number; losses: number; elo: number; title?: string | null }[]; // live pong standings (pre-ranked)
   netWorth(): { name: string; net: number; coins: number; loan: number; title?: string | null }[];     // live net-worth board (pre-ranked)
   cortisolBoard(): { name: string; cortisol: number; title?: string | null }[];                        // live Cortisol board (pre-ranked low→high)
+  levelBoard(): { name: string; xp: number; title?: string | null }[];                                  // live Levels board (pre-ranked by lifetime XP)
   // Our own rank + stat when we're NOT already in the visible top-N above (mirrors the toolbar
   // boards' pinned self-row) — null once we're already shown in leaderboard()/netWorth().
   selfLbRow(): { rank: number; elo: number } | null;
@@ -3935,6 +3936,31 @@ export function startWorld(net: WorldNet): void {
       e.style.cssText = 'color:#6b7796;font-size:12px;padding:4px 8px;text-align:left;';
       list.appendChild(e);
     };
+
+    // ⭐ Levels — top players by lifetime XP
+    const lvlList = buildSection('⭐ Levels', '#ffd23f');
+    const lvb = net.levelBoard().slice(0, 8);
+    if (!lvb.length) emptyRow(lvlList, 'No XP earned yet — go win something.');
+    lvb.forEach((r, i) => {
+      const self = r.name === myName;
+      const bg = self ? '#0a1020' : i % 2 ? '#18203a' : 'transparent';
+      const row = document.createElement('div');
+      row.style.cssText = rowStyle(bg, self).replace('cursor:pointer;', 'cursor:default;');
+      hoverable(row, bg);
+      const rank = document.createElement('span');
+      rank.textContent = `${i + 1}`;
+      rank.style.cssText = 'color:#6b7796;width:18px;flex-shrink:0;font-size:13px;';
+      const name = document.createElement('span');
+      name.textContent = r.name;
+      name.style.cssText = `flex:1;font-size:13px;color:${self ? '#b8c8e8' : '#cdd7f5'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
+      const { level } = levelForXp(r.xp);
+      const val = document.createElement('span');
+      val.textContent = `Lv ${level} · ${Math.round(r.xp).toLocaleString()} XP`;
+      val.style.cssText = `font-size:12px;color:${self ? '#ffd23f' : '#e8b84b'};font-variant-numeric:tabular-nums;flex-shrink:0;`;
+      const tag = titleFlairTag(r.title);
+      row.append(rank, name, ...(tag ? [tag] : []), val);
+      lvlList.appendChild(row);
+    });
 
     // 🏓 Leaderboard
     const lbList = buildSection('🏓 Pong Leaderboard', '#7da2ff');
@@ -16858,20 +16884,20 @@ export function startWorld(net: WorldNet): void {
   // server-side (Lobby.MOB_REWARDS) and mirror this ordering.
   const MOB_SPECS: Record<MobKind, MobSpec> = {
     // --- desert (easiest) ---
-    scorpion: { biome: 'desert', hp: 3, speed: 44, aggro: 220, scale: TEXEL * 1.15, label: 'Sand Scorpion', emoji: '🦂', dmg: 450, barW: 20 },
-    rattler:  { biome: 'desert', hp: 2, speed: 78, aggro: 240, scale: TEXEL * 1.15, label: 'Rattlesnake', emoji: '🐍', dmg: 500, barW: 18 },
-    buzzard:  { biome: 'desert', hp: 3, speed: 60, aggro: 300, scale: TEXEL * 1.2, label: 'Buzzard', emoji: '🦅', dmg: 500, barW: 22, fly: true,
+    scorpion: { biome: 'desert', hp: 3, speed: 44, aggro: 220, scale: TEXEL * 1.9, label: 'Sand Scorpion', emoji: '🦂', dmg: 450, barW: 20 },
+    rattler:  { biome: 'desert', hp: 2, speed: 78, aggro: 240, scale: TEXEL * 1.9, label: 'Rattlesnake', emoji: '🐍', dmg: 500, barW: 18 },
+    buzzard:  { biome: 'desert', hp: 3, speed: 60, aggro: 300, scale: TEXEL * 1.9, label: 'Buzzard', emoji: '🦅', dmg: 500, barW: 22, fly: true,
       ranged: { range: 300, cooldownMs: 3400, projSpeed: 260, projTex: 'w-proj-rock' } },
     // --- swamp (medium) ---
-    mosquito: { biome: 'swamp', hp: 3, speed: 62, aggro: 260, scale: TEXEL * 1.1, label: 'Bog Skeeter', emoji: '🦟', dmg: 650, barW: 22, fly: true },
-    slime:    { biome: 'swamp', hp: 6, speed: 30, aggro: 240, scale: TEXEL * 1.35, label: 'Bog Slime', emoji: '🟢', dmg: 800, barW: 30 },
-    toad:     { biome: 'swamp', hp: 4, speed: 40, aggro: 320, scale: TEXEL * 1.25, label: 'Spitter Toad', emoji: '🐸', dmg: 700, barW: 26,
+    mosquito: { biome: 'swamp', hp: 3, speed: 62, aggro: 260, scale: TEXEL * 1.8, label: 'Bog Skeeter', emoji: '🦟', dmg: 650, barW: 22, fly: true },
+    slime:    { biome: 'swamp', hp: 6, speed: 30, aggro: 240, scale: TEXEL * 2.2, label: 'Bog Slime', emoji: '🟢', dmg: 800, barW: 30 },
+    toad:     { biome: 'swamp', hp: 4, speed: 40, aggro: 320, scale: TEXEL * 2.0, label: 'Spitter Toad', emoji: '🐸', dmg: 700, barW: 26,
       ranged: { range: 320, cooldownMs: 2600, projSpeed: 300, projTex: 'w-proj-venom' } },
     // --- snow (hardest) ---
-    wolf:     { biome: 'snow', hp: 5, speed: 66, aggro: 320, scale: TEXEL * 1.2, label: 'Frost Wolf', emoji: '🐺', dmg: 850, barW: 26 },
-    snowman:  { biome: 'snow', hp: 6, speed: 24, aggro: 380, scale: TEXEL * 1.5, label: 'Evil Snowman', emoji: '⛄', dmg: 1000, barW: 32,
+    wolf:     { biome: 'snow', hp: 5, speed: 66, aggro: 320, scale: TEXEL * 2.0, label: 'Frost Wolf', emoji: '🐺', dmg: 850, barW: 26 },
+    snowman:  { biome: 'snow', hp: 6, speed: 24, aggro: 380, scale: TEXEL * 2.3, label: 'Evil Snowman', emoji: '⛄', dmg: 1000, barW: 32,
       ranged: { range: 380, cooldownMs: 1900, projSpeed: 320, projTex: 'w-proj-snow' } },
-    yeti:     { biome: 'snow', hp: 12, speed: 46, aggro: 340, scale: TEXEL * 1.9, label: 'Yeti', emoji: '👹', dmg: 1300, barW: 44 },
+    yeti:     { biome: 'snow', hp: 12, speed: 46, aggro: 340, scale: TEXEL * 2.8, label: 'Yeti', emoji: '👹', dmg: 1300, barW: 44 },
   };
   interface MobProj { spr: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number; t: number; dmg: number; }
   let mobProjectiles: MobProj[] = [];
@@ -17128,16 +17154,20 @@ export function startWorld(net: WorldNet): void {
   }
 
   // The player took a hit from a mob (contact or projectile). Damage scales with biome difficulty
-  // (already baked into spec.dmg). Drives the health bar; at 0 you die.
+  // (already baked into spec.dmg). You take hits on foot OR in a car — the car is a little armor,
+  // not immunity (a big enough hit can still blow it up). Drives the health bar; at 0 you die.
   function damagePlayer(dmg: number, srcX: number, srcY: number, label: string) {
     const now = performance.now();
-    if (playerDead || driving || inInterior || inDungeon) return;
+    if (playerDead || inInterior || inDungeon) return;
     if (now < mobBiteCooldown) return; // brief i-frames so you're not chain-shredded
     mobBiteCooldown = now + 650;
-    // dmg came in as a "stun ms" figure historically; convert to HP loss (roughly 1 HP per 50ms)
-    const hpLoss = Math.max(4, Math.round(dmg / 45));
+    // dmg came in as a "stun ms" figure historically; convert to HP loss (roughly 1 HP per 45ms).
+    // A car soaks ~40% of the blow (you're behind metal) but still takes the rest.
+    const hpLoss = Math.max(4, Math.round((dmg / 45) * (driving ? 0.6 : 1)));
     playerHp = Math.max(0, playerHp - hpLoss);
     lastDamagedAt = now;
+    // a hard enough hit while driving wrecks the car (and knocks you out of it)
+    if (driving && hpLoss >= 14) { if (blowUpMyCar('💥 A mob wrecked your car!')) net.blownUp(true, true); }
     stunnedUntil = now + Math.min(500, dmg * 0.35); keys.clear();
     // knockback
     const a = Math.atan2(selfY - srcY, selfX - srcX);
@@ -17191,15 +17221,32 @@ export function startWorld(net: WorldNet): void {
       p.t += dt;
       p.x += p.vx * dt; p.y += p.vy * dt;
       p.spr.setPosition(p.x, p.y).setRotation(p.spr.rotation + dt * 8);
-      const hitSelf = !playerDead && !driving && Math.hypot(p.x - selfX, p.y - (selfY - 14)) < R + 6;
+      const reach = driving ? CAR_LEN * 0.5 : R + 6;
+      const hitSelf = !playerDead && Math.hypot(p.x - selfX, p.y - (selfY - 14)) < reach;
       if (hitSelf) { damagePlayer(p.dmg, p.x, p.y, 'A ranged hit'); p.spr.destroy(); mobProjectiles.splice(i, 1); continue; }
       if (p.t > 2.4 || hitsWorld(p.x, p.y)) { p.spr.destroy(); mobProjectiles.splice(i, 1); }
     }
     void now;
   }
 
+  let playerHpBar: Phaser.GameObjects.Graphics | null = null;
+  function drawPlayerHpBar() {
+    const sc = mobScene; if (!sc) return;
+    if (!playerHpBar) playerHpBar = sc.add.graphics();
+    playerHpBar.clear();
+    // shown floating over your head whenever you're out in a biome (a danger zone) and alive
+    if (currentBiome() === null || playerDead) return;
+    const frac = Math.max(0, playerHp / PLAYER_MAX_HP);
+    const bw = 40, bx = selfX - bw / 2, by = selfY - R - 44;
+    playerHpBar.fillStyle(0x000000, 0.5); playerHpBar.fillRect(bx - 2, by - 2, bw + 4, 8);
+    playerHpBar.fillStyle(0x2a0c0c, 1); playerHpBar.fillRect(bx, by, bw, 5);
+    playerHpBar.fillStyle(frac > 0.5 ? 0x5ae05a : frac > 0.25 ? 0xffd23f : 0xff3a3a, 1);
+    playerHpBar.fillRect(bx, by, bw * frac, 5);
+    playerHpBar.setDepth(selfY + 5000);
+  }
   function updateMobs(now: number, dt: number) {
     updateHealthHud();
+    drawPlayerHpBar();
     updateMobProjectiles(dt);
     // potion pickups (walk over → heal + carry). Time out after a while so the world doesn't litter.
     if (potionDrops.length) {
@@ -17252,22 +17299,44 @@ export function startWorld(net: WorldNet): void {
           m.x += (dx / mag) * sp; m.y += (dy / mag) * sp;
           if (Math.abs(dx) > 1) m.spr.setFlipX(dx < 0);
         }
-        // melee contact → real HP damage (i-frames handled in damagePlayer)
-        if (!spec.ranged && distToSelf < R + 10 && now >= stunnedUntil && !driving) {
+        // melee contact → real HP damage, on foot OR in a car (i-frames handled in damagePlayer)
+        if (!spec.ranged && distToSelf < (driving ? CAR_LEN * 0.5 : R + 10)) {
           damagePlayer(spec.dmg, m.x, m.y, spec.label);
         }
       }
-      const bob = spec.fly ? Math.sin(now / 160 + m.ph) * 3 : 0;
+      // --- animation: give each mob some life instead of sliding stiffly ---
+      const moving = Math.hypot(m.tx - m.x, m.ty - m.y) > 3 && (m.state === 1 || m.busyUntil > now);
+      let bob = 0;
+      if (spec.fly) {
+        // wings: fast vertical bob + a scaleY flap
+        bob = Math.sin(now / 120 + m.ph) * 4;
+        m.spr.setScale(spec.scale, spec.scale * (1 + Math.sin(now / 70 + m.ph) * 0.14));
+      } else if (m.kind === 'slime') {
+        // gelatinous breathe (squash/stretch), harder while hopping toward you
+        const amp = moving ? 0.14 : 0.07;
+        const b = Math.sin(now / (moving ? 220 : 520)) * amp;
+        m.spr.setScale(spec.scale * (1 + b), spec.scale * (1 - b));
+        bob = moving ? Math.abs(Math.sin(now / 220)) * -5 : 0; // little hops
+      } else if (m.kind === 'snowman') {
+        m.spr.setRotation(Math.sin(now / 400 + m.ph) * 0.05); // menacing sway
+      } else {
+        // legged walkers: a springy hop-bob + a slight lean while on the move
+        if (moving) { bob = Math.abs(Math.sin(now / 110 + m.ph)) * -(m.kind === 'yeti' ? 5 : 3); m.spr.setRotation(Math.sin(now / 110 + m.ph) * 0.05); }
+        else { m.spr.setRotation(0); m.spr.setScale(spec.scale); }
+      }
       m.spr.setPosition(m.x, m.y + bob).setDepth(m.y);
       if (now < m.hitUntil) m.spr.setTintFill(0xffffff); else m.spr.clearTint();
-      // health bar — width scales with the mob's max HP, so tanky ones wear a visibly bigger bar
-      if (m.hp < m.maxHp && !m.dead) {
+      // health bar — ALWAYS shown above a mob near the player (so you always know it's a hostile),
+      // its width scaling with max HP so tanky ones wear a visibly bigger bar.
+      if (!m.dead && near) {
         m.bar.setVisible(true).clear();
-        const bw = spec.barW, bx = m.x - bw / 2, by = m.y - m.spr.displayHeight - 6;
-        m.bar.fillStyle(0x1a1006, 0.85); m.bar.fillRect(bx - 1, by - 1, bw + 2, 5);
-        m.bar.fillStyle(0x3a1010, 1); m.bar.fillRect(bx, by, bw, 3);
-        m.bar.fillStyle(0xff5a4a, 1); m.bar.fillRect(bx, by, bw * (m.hp / m.maxHp), 3);
-        m.bar.setDepth(m.y + 1);
+        const frac = Math.max(0, m.hp / m.maxHp);
+        const bw = spec.barW, bx = m.x - bw / 2, by = m.y + bob - m.spr.displayHeight - 8;
+        m.bar.fillStyle(0x000000, 0.5); m.bar.fillRect(bx - 2, by - 2, bw + 4, 7);       // outline
+        m.bar.fillStyle(0x2a0c0c, 1); m.bar.fillRect(bx, by, bw, 4);                       // empty track
+        m.bar.fillStyle(frac > 0.5 ? 0x5ae05a : frac > 0.25 ? 0xffd23f : 0xff3a3a, 1);     // green→amber→red
+        m.bar.fillRect(bx, by, bw * frac, 4);
+        m.bar.setDepth(m.y + 2);
       } else if (m.bar.visible) {
         m.bar.setVisible(false);
       }

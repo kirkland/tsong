@@ -118,7 +118,7 @@ import {
   WORLD_BUILDINGS,
 } from '../shared/types';
 import { track } from './analytics';
-import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSelfElo, getSelfNetWorth, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
+import { getEloBoard, getLevelBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSelfElo, getSelfNetWorth, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   setCortisol, getCortisolBoard, getSelfCortisol,
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
@@ -456,6 +456,8 @@ export class Lobby {
   private netWorth: NetWorthRow[] = []; // cached net-worth board (coins + holdings − debt)
   private netWorthPids: string[] = []; // pid per net-worth row (server-only; resolves a rank → player)
   private eloPids: string[] = []; // pid per Elo leaderboard row (server-only; resolves a rank → player)
+  private levelBoard: import('../shared/types').LevelRow[] = []; // cached Levels board (by lifetime XP)
+  private levelPids: string[] = []; // pid per level row (resolves a rank → player)
   private cortisol: CortisolRow[] = []; // cached "Calmest" board (cortisol low→high)
   private cortisolPids: string[] = []; // pid per cortisol row (server-only; resolves a rank → player)
   private cortisolTick = 0; // counts sync() ticks; drives the periodic cortisol flush + rebroadcast
@@ -763,6 +765,7 @@ export class Lobby {
     this.tell(ws, { type: 'leaderboard', rows: this.leaderboard });
     this.tell(ws, { type: 'netWorth', rows: this.netWorth });
     this.tell(ws, { type: 'cortisol', rows: this.cortisol });
+    this.tell(ws, { type: 'levelBoard', rows: this.levelBoard });
     this.tell(ws, { type: 'doomLeaderboard', solo: this.doomBoards.solo, coop: this.doomBoards.coop });
     this.tell(ws, { type: 'tdLeaderboard', rows: this.tdBoard });
     this.tell(ws, { type: 'campaignLeaderboard', rows: this.campaignBoard });
@@ -6907,8 +6910,31 @@ export class Lobby {
       const extra = await this.selfEloData(ws);
       ws.send(JSON.stringify({ type: 'leaderboard', rows: this.leaderboard, ...extra }));
     }
-    // Net worth tracks the same population, so refresh it on the same beat.
+    // Net worth + levels track the same population, so refresh them on the same beat.
     this.refreshNetWorth().catch((e) => console.error('net worth update failed:', e));
+    this.refreshLevelBoard().catch((e) => console.error('level board update failed:', e));
+  }
+
+  /** Recompute the Levels board (top players by lifetime XP) and push it to everyone, pinning each
+   *  recipient's own row when they fall below the visible top-N. */
+  async refreshLevelBoard() {
+    const full = await getLevelBoard();
+    this.levelPids = full.map((r) => r.pid);
+    this.levelBoard = full.map(({ pid: _pid, ...row }) => row);
+    for (const ws of this.conns.keys()) {
+      if (ws.readyState !== ws.OPEN) continue;
+      ws.send(JSON.stringify({ type: 'levelBoard', rows: this.levelBoard, ...(await this.selfLevelData(ws)) }));
+    }
+  }
+  private async selfLevelData(ws: WebSocket): Promise<{ selfXp?: number; selfRank?: number }> {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return {};
+    const idx = this.levelPids.indexOf(conn.pid);
+    if (idx !== -1) return { selfXp: this.levelBoard[idx]?.xp, selfRank: idx + 1 };
+    // below the visible board — look up the wallet's xp + a field-wide rank
+    const w = await getWallet(conn.pid).catch(() => null);
+    if (!w || !w.xp) return {};
+    return { selfXp: w.xp }; // rank omitted (rare, and the board still shows them their level)
   }
 
   /** Produce `selfElo` / `selfRank` for a single connection so the client can always pin the
@@ -6945,6 +6971,8 @@ export class Lobby {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'netWorth', rows: this.netWorth, ...nw }));
     const cort = await this.selfCortisolData(ws);
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'cortisol', rows: this.cortisol, ...cort }));
+    const lvl = await this.selfLevelData(ws);
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'levelBoard', rows: this.levelBoard, ...lvl }));
   }
 
   /** Recompute the Net Worth board (coins + live holdings − debt) and push it to everyone.

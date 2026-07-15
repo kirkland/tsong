@@ -2407,6 +2407,16 @@ export async function getEloBoard(): Promise<(LeaderboardRow & { pid: string })[
   }));
 }
 
+/** Top players by lifetime XP (→ account level), for the Hall of Fame's Levels board. */
+export async function getLevelBoard(): Promise<{ pid: string; name: string; xp: number; title: string | null }[]> {
+  if (!pool) return [];
+  const { rows } = await pool.query(
+    `SELECT id AS pid, name, xp, title FROM players WHERE xp > 0 ORDER BY xp DESC, name ASC LIMIT $1`,
+    [LEADERBOARD_SIZE],
+  );
+  return rows.map((r) => ({ pid: r.pid, name: r.name, xp: Number(r.xp) || 0, title: r.title ?? null }));
+}
+
 /** This player's own Elo standing across the WHOLE field (not just the visible top-N), so
  *  the client can pin their row to the board even when they sit below the cutoff. null if
  *  they haven't played / no DB. Rank ordering mirrors getEloBoard exactly. */
