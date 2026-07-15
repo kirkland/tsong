@@ -328,6 +328,7 @@ interface Controller {
   feedEloProfile(msg: EloProfileMsg): void;         // server's answer to an eloProfileReq fired from the Hall of Fame
   feedBalanceSheet(msg: BalanceSheetMsg): void;     // server's answer to a balanceSheetReq fired from the Hall of Fame
   feedWallet(): void;                                // the wallet changed (buy/equip/spin settled) — re-render the shop dialog if it's open
+  completeSkiObjective(): void;                       // a Frostreach ski race finished → mark the objective
   feedMobLoot(purse: number, gained?: number, banked?: number): void; // the at-risk mob-loot purse changed
   feedCortisol(): void;                               // the "Cortisol" board updated — refresh the top-bar cortisol gauge
   feedNews(): void;                                  // a new news item published — re-render the news dialog if it's open
@@ -358,6 +359,11 @@ let _resumeWorld: (() => void) | null = null;
 
 export function isWorldOpen(): boolean {
   return controller !== null;
+}
+
+/** A Frostreach ski race finished → complete the ski objective (once). No-op if World is closed. */
+export function completeSkiObjective(): void {
+  controller?.completeSkiObjective();
 }
 
 /** Tear down the world overlay if it's open. No-op if already closed. */
@@ -1386,7 +1392,7 @@ const NPCS: NpcDef[] = [
     ask: {
       q: 'BA-NA-NA?!',
       choices: [
-        { label: '🍌 Banana!', reply: 'BANANAAAAAA! *happy minion noises*', claim: 'give-banana' },
+        { label: '🍌 Banana!', reply: 'BANANAAAAAA! *happy minion noises*' },
         { label: 'No thanks', reply: '...Poopaye. (he looks devastated)' },
       ],
     },
@@ -8775,12 +8781,21 @@ export function startWorld(net: WorldNet): void {
   // --- weekly objectives (top-left panel + reward toast) ---
   // `progress` (optional) returns "[done, total]" for objectives that count toward a goal (e.g.
   // winning 10 games) so the panel can show "(7/10)".
-  interface Objective { id: string; label: string; reward: number; done: boolean; progress?: () => [number, number]; hideProgress?: boolean }
+  interface Objective { id: string; label: string; reward: number; done: boolean; progress?: () => [number, number]; hideProgress?: boolean; xp?: number }
   const PONG_WINS_KEY = 'tsong.world.pongWins'; // bumped by main.ts on each match win
   const pongWins = () => { try { return parseInt(localStorage.getItem(PONG_WINS_KEY) || '0', 10) || 0; } catch { return 0; } };
+  const MOBS_KILLED_KEY = 'tsong.world.mobsKilled'; // lifetime biome-critter kills (drives the cull objective)
+  const mobsKilled = () => { try { return parseInt(localStorage.getItem(MOBS_KILLED_KEY) || '0', 10) || 0; } catch { return 0; } };
+  function bumpMobsKilled() {
+    let n = mobsKilled() + 1;
+    try { localStorage.setItem(MOBS_KILLED_KEY, String(n)); } catch { /* ignore */ }
+    if (n >= 50) completeObjective('kill-50-mobs');
+  }
   const objectives: Objective[] = [
     { id: 'find-waldo', label: 'Find Waldo', reward: 400, done: false },
-    { id: 'give-banana', label: 'Give Kevin a banana', reward: 400, done: false },
+    { id: 'ski-race', label: 'Finish a Frostreach ski race', reward: 0, xp: 250, done: false, hideProgress: true },
+    { id: 'ice-skate', label: 'Skate on the frozen pond', reward: 0, xp: 150, done: false, hideProgress: true },
+    { id: 'kill-50-mobs', label: 'Cull 50 biome critters', reward: 0, xp: 500, done: false, progress: () => [Math.min(mobsKilled(), 50), 50] },
     { id: 'win-ten', label: 'Win 10 tsong games', reward: 1000, done: false, progress: () => [Math.min(pongWins(), 10), 10] },
     { id: 'ruins-chests', label: 'Open every chest in the Ruins', reward: 50000, done: false, progress: () => [chestsFound(), DUNGEON_TOTAL_CHESTS], hideProgress: true },
     { id: 'gas-station', label: 'Find the gas station in the Nothing', reward: 0, done: false, hideProgress: true },
@@ -8805,8 +8820,8 @@ export function startWorld(net: WorldNet): void {
       lab.style.cssText = 'min-width:0;flex:1 1 auto;';
       if (o.done) lab.style.textDecoration = 'line-through';
       const rew = document.createElement('span');
-      rew.textContent = `+${o.reward}🪙`;
-      rew.style.cssText = 'margin-left:auto;font-size:11px;opacity:.7;flex-shrink:0;';
+      rew.textContent = o.xp ? `+${o.xp} XP` : `+${o.reward}🪙`;
+      rew.style.cssText = `margin-left:auto;font-size:11px;opacity:.7;flex-shrink:0;${o.xp ? 'color:#ffd23f;' : ''}`;
       row.append(box, lab, rew);
       objList.appendChild(row);
     }
@@ -8831,11 +8846,13 @@ export function startWorld(net: WorldNet): void {
     o.done = true;
     try { localStorage.setItem(questKey(id), '1'); } catch { /* ignore */ }
     renderObjectives();
-    net.claimQuest(id);                                   // server grants the coins (once)
+    net.claimQuest(id);                                   // server grants the reward (once)
     try { chaching.muted = net.muted(); chaching.currentTime = 0; void chaching.play(); } catch { /* ignore */ }
-    showToast(o.reward > 0
-      ? `✅ Objective complete!<br><b>${o.label}</b> &nbsp;<span style="color:#ffe14d">+${o.reward} 🪙</span>`
-      : `✅ Objective complete!<br><b>${o.label}</b>`);
+    showToast(o.xp
+      ? `✅ Objective complete!<br><b>${o.label}</b> &nbsp;<span style="color:#ffd23f">+${o.xp} XP</span>`
+      : o.reward > 0
+        ? `✅ Objective complete!<br><b>${o.label}</b> &nbsp;<span style="color:#ffe14d">+${o.reward} 🪙</span>`
+        : `✅ Objective complete!<br><b>${o.label}</b>`);
   }
   renderObjectives();
   checkProgressObjectives(); // claim "win 10 games" if you finished it before coming back to town
@@ -9267,6 +9284,11 @@ export function startWorld(net: WorldNet): void {
     if (nearClubDoor) { clubInteract(); return; } // the exterior clubhouse door (join / enter)
     if (nearGolfTee) { openGolfStartDialog(); return; }
     if (nearGolfBall) { startGolfSwing(); return; }
+    // Frontier activity spots (ice fishing, the ski lift, the lodge, …) — also reachable on
+    // Space/Enter/E, not just the X key, so they work like every other building.
+    if (selfY < 60 && clubInteract()) return;
+    if (selfY > WORLD.h - 60 && swampInteract()) return;
+    if (selfX > WORLD.w - 60 && eastInteract()) return;
     if (nearParcel) openLandDialog(nearParcel); // walk onto a Robville lot → buy/sell it
   }
 
@@ -9613,6 +9635,18 @@ export function startWorld(net: WorldNet): void {
       const jx = joyCX - joyOX, jy = joyCY - joyOY;
       if (Math.hypot(jx, jy) > JOY_DEADZONE) { dx = jx; dy = jy; }
     }
+    // --- ⛸️ ice skating: on the frozen pond you don't walk, you glide. Input nudges your momentum,
+    // the ice keeps most of it, and you coast (and drift) even after you let go. ---
+    if (!inInterior && !inDungeon && onIce(selfX, selfY)) { skate(dt, dx, dy); return; }
+    // bleeding off skating momentum just after you leave the ice (a short carry, then normal walk)
+    if (skVx || skVy) {
+      const sp = Math.hypot(skVx, skVy);
+      if (sp > 6) {
+        const m = resolveCollisions(selfX + skVx * dt, selfY + skVy * dt, R);
+        selfX = m.x; selfY = m.y;
+        const f = Math.pow(0.02, dt); skVx *= f; skVy *= f; // grass grabs the blades fast
+      } else { skVx = 0; skVy = 0; }
+    }
     const mag = Math.hypot(dx, dy);
     if (mag === 0) return;
     dx /= mag; dy /= mag;
@@ -9674,6 +9708,29 @@ export function startWorld(net: WorldNet): void {
     selfX = moved.x; selfY = moved.y;
     if (moved.hit) bumpSound(false);
     else stepSound();
+  }
+
+  // ⛸️ Skate on the frozen pond: momentum + low friction. `ix,iy` is the raw input (may be 0 —
+  // you keep gliding). You accelerate toward your input, top out at a brisk glide, and coast.
+  let skateStepAt = 0;
+  function skate(dt: number, ix: number, iy: number) {
+    if (isEncounterOpen()) return;
+    const im = Math.hypot(ix, iy);
+    if (im > 0) { ix /= im; iy /= im; }
+    const ACCEL = SPEED * 3.4 * (handbrake ? 1.4 : 1);
+    const FRICT = Math.pow(0.5, dt);   // slippery — keeps ~half its speed per second with no input
+    const MAXV = SPEED * 1.5;
+    skVx = (skVx + ix * ACCEL * dt) * FRICT;
+    skVy = (skVy + iy * ACCEL * dt) * FRICT;
+    const sp = Math.hypot(skVx, skVy);
+    if (sp > MAXV) { skVx = (skVx / sp) * MAXV; skVy = (skVy / sp) * MAXV; }
+    if (sp > 8) facing = Math.atan2(skVy, skVx);
+    const moved = resolveCollisions(selfX + skVx * dt, selfY + skVy * dt, R);
+    if (moved.hit) { skVx *= -0.35; skVy *= -0.35; bumpSound(false); } // bank off the bank
+    selfX = moved.x; selfY = moved.y;
+    // a rhythmic blade-scrape while you're actually moving
+    const now = performance.now();
+    if (sp > 40 && now - skateStepAt > 260) { skateStepAt = now; noise(0.06, 0.02, 3200); completeObjective('ice-skate'); }
   }
 
   // Drive: arcade physics with drift. Throttle accelerates along the heading; steering rotates the
@@ -9903,6 +9960,7 @@ export function startWorld(net: WorldNet): void {
     nearClubDoor = !best && !nearNpc && !nearNetizen && !inInterior
       && (Math.hypot(selfX - CLUBHOUSE.x, selfY - (CLUBHOUSE.y + 40)) < 60
         || Math.hypot(selfX - CLUB_GATE.x, selfY - CLUB_GATE.y) < 70);
+    nearBiomeSpot = (!best && !nearNpc && !nearNetizen) ? biomeSpotPrompt() : '';
     // The Course: the live ball mid-round (swing) wins over hole 1's tee (manage/start a round) —
     // they sit in the same spot at the start of hole 1, and a round in progress there should
     // always let you swing rather than re-opening the start/abandon menu.
@@ -9977,8 +10035,10 @@ export function startWorld(net: WorldNet): void {
       prompt.textContent = `🔓 Bail out ${nearJailed.name} (${BAIL_COST}🪙)`;
     } else if (nearParcel) {
       prompt.textContent = parcelPrompt(nearParcel);
+    } else if (nearBiomeSpot) {
+      prompt.textContent = nearBiomeSpot;
     }
-    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearBook || nearCasinoGame || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDungeonImp2 || nearDyingMan || nearRob || nearJailed || nearParcel) && !dialogOpen && !talkOpen ? 'block' : 'none';
+    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearBook || nearCasinoGame || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDungeonImp2 || nearDyingMan || nearRob || nearJailed || nearParcel || nearBiomeSpot) && !dialogOpen && !talkOpen ? 'block' : 'none';
     // Boat affordance: dock while afloat, or board when standing by the water with a boat.
     const boatable = boating || !!boardableWater();
     if (boatable && !dialogOpen && !talkOpen) {
@@ -14898,6 +14958,20 @@ export function startWorld(net: WorldNet): void {
   let puttStreakTxt: Phaser.GameObjects.Text | null = null;
   let nearClubSpot: 'putt' | 'registry' | 'trophies' | 'portrait' | 'candle' | 'games' | 'wall' | 'jukebox' | 'clock' | null = null;
   let nearClubDoor = false; // standing at the exterior clubhouse door (join / enter)
+  let nearBiomeSpot = ''; // a frontier activity spot within reach (ice fishing / ski lift / …) — a prompt string, '' if none
+  // Which frontier activity you're standing at (drives the discoverability prompt). Cheap distance
+  // checks against the handful of spots in whatever biome you're actually in.
+  function biomeSpotPrompt(): string {
+    if (inInterior || inDungeon || driving) return '';
+    // Frostreach
+    if (selfX > WORLD.w) {
+      for (const h of FISH_HOLES) if (Math.hypot(selfX - h.x, selfY - h.y) < 48) return '🎣 Ice-fish here';
+      if (Math.hypot(selfX - EAST_SPOTS.lift.x, selfY - EAST_SPOTS.lift.y) < 92) return '🚡 Frostreach Downhill — ski race';
+      if (Math.hypot(selfX - EAST_SPOTS.lodge.x, selfY - EAST_SPOTS.lodge.y) < 82) return '🏠 The Thawless Lodge — warm up';
+      if (onIce(selfX, selfY)) return '⛸️ Skate! (arrows / WASD to glide)';
+    }
+    return '';
+  }
   let nearTavernMorris = false; // standing at the Tavern's corner board
   let vaultSwan: { spr: Phaser.GameObjects.Image; x: number; y: number; tx: number; ty: number } | null = null;
   let nearSwan = false;
@@ -17173,6 +17247,7 @@ export function startWorld(net: WorldNet): void {
     const spec = MOB_SPECS[m.kind];
     const sc = mobScene;
     net.mobKill(m.kind); // server adds the species bounty to your at-risk purse + grants XP
+    bumpMobsKilled();     // lifetime kill tally → the "cull 50 critters" objective
     if (sc) {
       // death puff
       for (let i = 0; i < 10; i++) {
@@ -18089,6 +18164,7 @@ export function startWorld(net: WorldNet): void {
     feedEloProfile(msg) { renderEloProfile(msg); },
     feedBalanceSheet(msg) { renderBalanceSheet(msg); },
     feedWallet() { updateCoinsHud(); updateLevelHud(); if (shopDialogOpen) renderShopDialog(); },
+    completeSkiObjective() { completeObjective('ski-race'); },
     feedMobLoot(purse: number, gained?: number, banked?: number) {
       fieldPurse = purse;
       updateHealthHud();

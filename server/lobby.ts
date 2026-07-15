@@ -1229,6 +1229,15 @@ export class Lobby {
         .catch((e) => { this.claimedQuests.delete(vkey); console.error('club vault grant failed:', e); });
       return;
     }
+    // Frostreach objectives pay XP toward your account level, not coins.
+    const xpReward = Lobby.QUEST_XP[quest];
+    if (xpReward) {
+      const xkey = `${conn.pid}:${quest}`;
+      if (this.claimedQuests.has(xkey)) return;
+      this.claimedQuests.add(xkey);
+      void this.awardXp(conn.pid, conn.nickname, xpReward);
+      return;
+    }
     const reward = Lobby.QUEST_REWARDS[quest];
     if (!reward) return;
     const key = `${conn.pid}:${quest}`;
@@ -1238,6 +1247,7 @@ export class Lobby {
       .then(() => this.sendWallet(ws))
       .catch((e) => { this.claimedQuests.delete(key); console.error('quest reward failed:', e); });
   }
+  private static QUEST_XP: Record<string, number> = { 'ski-race': 250, 'ice-skate': 150, 'kill-50-mobs': 500 };
 
   // --- The Ruins dungeon: the server owns all coin awards (paid from the House → conserved) and
   // tracks which chests each account has opened (in-memory, like quests), so chests can't be
@@ -1915,7 +1925,10 @@ export class Lobby {
     const r = this.bgRooms.get(game);
     if (!r || r.slots[0] !== ws) return; // host only
     if (r.status === 'playing') return;
-    if (r.slots.length < 2) return;      // PvP only — the club does not stock bots
+    // Board games are strictly PvP (chess/morris need an opponent). Ski is a race, so it also
+    // works solo as a time trial against the course + the yeti — a lone host may drop in.
+    const minSeats = game === 'ski' ? 1 : 2;
+    if (r.slots.length < minSeats) return;
     r.escrow = [];
     if (r.stake > 0) {
       const taken: { pid: string; nick: string; sock: WebSocket }[] = [];
