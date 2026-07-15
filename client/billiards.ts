@@ -31,6 +31,7 @@ interface ShotResult {
   final: Ball[];
   potted: number[]; // ids newly potted this shot (0 = the cue ball, i.e. a scratch)
   cueScratched: boolean;
+  firstContact: number | null; // id of the first ball the cue ball touches this shot, or null if it touches nothing
 }
 
 // --- table geometry (table-space units; scaled to the canvas at render time) ---
@@ -65,13 +66,13 @@ const RACK_ROWS: number[][] = [
 
 // --- physics --- tuned toward "arcade-forgiving": generous pocket mouths, rails that don't stay
 // lively for long, so a miss dies down near a pocket instead of caroming around the whole table.
-const FRICTION = 560;      // units/s² deceleration
+const FRICTION = 420;      // units/s² deceleration — tuned so a full-power shot can cross the whole table, corner to corner, with a rail bounce to spare
 const RESTITUTION = 0.72;  // rail bounce energy retention
 const STOP_EPS = 6;        // units/s below which a ball is treated as at rest
 const SIM_DT = 1 / 240;
 const MAX_STEPS = 240 * 8; // 8s hard ceiling per shot
 const SNAP_EVERY = 6;      // record a path point roughly every 40Hz
-const MIN_SPEED = 170, MAX_SPEED = 980;
+const MIN_SPEED = 170, MAX_SPEED = 1250;
 const MAX_DRAG = 145;      // table units of pointer pull-back for full power
 
 function freshBalls(): Ball[] {
@@ -100,6 +101,7 @@ function simulateShot(startBalls: Ball[], angle: number, power01: number): ShotR
   const wasPotted = new Set(startBalls.filter((b) => b.potted).map((b) => b.id));
   const path: Record<number, { x: number; y: number }[]> = {};
   for (const b of balls) path[b.id] = [{ x: b.x, y: b.y }];
+  let firstContact: number | null = null;
   let step = 0;
   for (; step < MAX_STEPS; step++) {
     let moving = false;
@@ -133,6 +135,10 @@ function simulateShot(startBalls: Ball[], angle: number, power01: number): ShotR
         const dx = c.x - a.x, dy = c.y - a.y;
         const dist = Math.hypot(dx, dy);
         if (dist > 0 && dist < BALL_R * 2) {
+          if (firstContact === null) {
+            if (a.id === 0) firstContact = c.id;
+            else if (c.id === 0) firstContact = a.id;
+          }
           const nx = dx / dist, ny = dy / dist;
           const overlap = BALL_R * 2 - dist;
           a.x -= nx * overlap / 2; a.y -= ny * overlap / 2;
@@ -151,7 +157,7 @@ function simulateShot(startBalls: Ball[], angle: number, power01: number): ShotR
     if (!p.some((pt) => Math.hypot(pt.x - p[0].x, pt.y - p[0].y) > 1)) delete path[b.id];
   }
   const potted = balls.filter((b) => b.potted && !wasPotted.has(b.id)).map((b) => b.id);
-  return { path, final: balls, potted, cueScratched: potted.includes(0) };
+  return { path, final: balls, potted, cueScratched: potted.includes(0), firstContact };
 }
 
 /** Places the cue ball at the head spot (or the nearest clear space around it) — used at rack
@@ -253,6 +259,8 @@ let animT = 0;
 let animDoneCb: (() => void) | null = null;
 let aiming = false;
 let aimAngle = 0, aimPower = 0;
+let ballInHand = false;  // true from a foul until the receiving player finalizes a cue-ball placement
+let placingCue = false;  // true while a pointer is actively dragging the cue ball into place
 let viewScale = 1, viewOffX = 0, viewOffY = 0;
 let lastPointer = { x: 0, y: 0 };
 let botShotTimer = 0;
@@ -267,7 +275,7 @@ export function openBilliards(n: BgNet) {
   screen = 'mode';
   lobby = { status: 'waiting', slot: 0, players: [], stake: 0 };
   over = null; gameN = 0; balls = []; playerGroup = ['open', 'open']; busy = false;
-  rematchMine = false; rematchTheirs = false;
+  rematchMine = false; rematchTheirs = false; ballInHand = false; placingCue = false;
   root = document.createElement('div');
   root.id = 'billiardsOverlay';
   root.style.cssText =
@@ -305,7 +313,7 @@ function startRack() {
   balls = freshBalls();
   playerGroup = ['open', 'open'];
   shotCount = 0;
-  over = null; busy = false; aiming = false;
+  over = null; busy = false; aiming = false; ballInHand = false; placingCue = false;
   rematchMine = false; rematchTheirs = false;
   turnSlot = gameN % 2 === 0 ? 0 : 1; // breaker alternates on a rematch
   renderGame();
@@ -341,7 +349,7 @@ export function feedLobby(msg: LobbyView) {
 
 export function feedRelay(data: unknown) {
   if (!open || vsBot) return;
-  const d = data as { k?: string; angle?: number; power?: number; potted?: number[]; cueScratched?: boolean; path?: unknown; final?: Ball[]; re?: boolean };
+  const d = data as { k?: string; angle?: number; power?: number; potted?: number[]; cueScratched?: boolean; path?: unknown; final?: Ball[]; firstContact?: number | null; x?: number; y?: number; re?: boolean };
   if (!d || typeof d !== 'object') return;
   if (d.k === 'aim' && isHost() && typeof d.angle === 'number' && typeof d.power === 'number') {
     // A guest's turn — only the host actually runs physics.
@@ -350,7 +358,15 @@ export function feedRelay(data: unknown) {
     return;
   }
   if (d.k === 'result' && !isHost() && d.final && d.potted) {
-    applyResult({ path: (d.path as Record<number, { x: number; y: number }[]>) ?? {}, final: d.final, potted: d.potted, cueScratched: !!d.cueScratched });
+    applyResult({ path: (d.path as Record<number, { x: number; y: number }[]>) ?? {}, final: d.final, potted: d.potted, cueScratched: !!d.cueScratched, firstContact: d.firstContact ?? null });
+    return;
+  }
+  if (d.k === 'place' && typeof d.x === 'number' && typeof d.y === 'number') {
+    // The opponent finalized a ball-in-hand placement — mirror the cue ball locally.
+    const cue = balls.find((b) => b.id === 0);
+    if (cue) { cue.x = d.x; cue.y = d.y; cue.potted = false; }
+    ballInHand = false;
+    renderGame();
     return;
   }
   if (d.k === 're?') {
@@ -376,7 +392,7 @@ function attemptShot(angle: number, power: number) {
 /** Runs on whichever client is authoritative for this shot (host in PvP, sole client in bot mode). */
 function runShotAsAuthority(angle: number, power: number) {
   const result = simulateShot(balls, angle, power);
-  if (!vsBot) net?.relay({ k: 'result', potted: result.potted, cueScratched: result.cueScratched, final: result.final, path: result.path });
+  if (!vsBot) net?.relay({ k: 'result', potted: result.potted, cueScratched: result.cueScratched, final: result.final, path: result.path, firstContact: result.firstContact });
   applyResult(result);
 }
 
@@ -387,22 +403,24 @@ function applyResult(result: ShotResult) {
   busy = true;
   const shooter = turnSlot;
   const wasBreak = shotCount === 0;
+  const groupWasClear = playerGroup[shooter] !== 'open' && remainingOf(playerGroup[shooter]) === 0;
   shotCount++;
   playPath(result.path, () => {
     balls = result.final;
     if (result.cueScratched) sndScratch();
     else if (result.potted.length) sndPot();
-    resolveShot(shooter, result.potted, result.cueScratched, wasBreak);
+    resolveShot(shooter, result.potted, result.cueScratched, wasBreak, result.firstContact, groupWasClear);
   });
 }
 
-function resolveShot(shooter: number, potted: number[], cueScratched: boolean, wasBreak: boolean) {
+function resolveShot(shooter: number, potted: number[], cueScratched: boolean, wasBreak: boolean, firstContact: number | null, groupWasClear: boolean) {
   const potNonEight = potted.filter((id) => id !== 0 && id !== 8);
   const potEight = potted.includes(8);
+  const preGroup = playerGroup[shooter]; // group status entering this shot — needed below, before assignment can change it
 
   // Group assignment: the first legal, non-break shot that pots a ball decides it — whichever
   // group that ball belongs to goes to its shooter, the other group to the opponent.
-  if (playerGroup[shooter] === 'open' && !wasBreak && potNonEight.length > 0) {
+  if (preGroup === 'open' && !wasBreak && potNonEight.length > 0) {
     const g = groupOf(potNonEight[0]) as 'solid' | 'stripe';
     playerGroup[shooter] = g;
     playerGroup[1 - shooter] = g === 'solid' ? 'stripe' : 'solid';
@@ -416,8 +434,20 @@ function resolveShot(shooter: number, potted: number[], cueScratched: boolean, w
     return;
   }
 
+  // Fouls: potting the cue ball, the cue ball touching nothing at all, or (once groups are
+  // assigned) the cue ball's first contact being the opponent's group instead of your own.
+  const noContactFoul = !wasBreak && firstContact === null;
+  const wrongGroupFoul = !wasBreak && preGroup !== 'open' && firstContact !== null
+    && groupOf(firstContact) !== preGroup
+    && !(groupOf(firstContact) === 'eight' && groupWasClear);
+  const foul = cueScratched || noContactFoul || wrongGroupFoul;
+
   const ownGroupPotted = playerGroup[shooter] !== 'open' && potNonEight.some((id) => groupOf(id) === playerGroup[shooter]);
-  if (cueScratched) { turnSlot = 1 - shooter; respotCue(balls); }
+  if (foul) {
+    turnSlot = 1 - shooter;
+    if (cueScratched) respotCue(balls); // cue ball needs *some* on-table spot before it can be dragged into place
+    ballInHand = true;
+  }
   else if (wasBreak) { turnSlot = potNonEight.length > 0 ? shooter : 1 - shooter; }
   else if (ownGroupPotted) { turnSlot = shooter; } // keep shooting
   else { turnSlot = 1 - shooter; }
@@ -437,6 +467,7 @@ function finish(winnerSlot: number, text: string, sub: string) {
 
 function maybeBotTurn() {
   if (!vsBot || over || turnSlot !== 1) return;
+  if (ballInHand) { respotCue(balls); ballInHand = false; renderGame(); } // the House just places it back and plays on
   botShotTimer = window.setTimeout(() => {
     botShotTimer = 0;
     if (!open || over || turnSlot !== 1) return;
@@ -485,12 +516,30 @@ function tableFromClient(clientX: number, clientY: number): { x: number; y: numb
   return { x: (clientX - viewOffX) / viewScale, y: (clientY - viewOffY) / viewScale };
 }
 
+/** Ball-in-hand placement is only legal on the felt, clear of every other ball, and clear of the
+ *  pocket mouths — same spirit as respotCue's clash test, but for an arbitrary drag target. */
+function validCuePlacement(x: number, y: number): boolean {
+  if (x < BALL_R || x > TW - BALL_R || y < BALL_R || y > TH - BALL_R) return false;
+  for (const b of balls) { if (b.id !== 0 && !b.potted && Math.hypot(b.x - x, b.y - y) < BALL_R * 2) return false; }
+  for (const p of POCKETS) { if (Math.hypot(p.x - x, p.y - y) < p.r + BALL_R * 0.5) return false; }
+  return true;
+}
+
 function onPointerDown(e: PointerEvent) {
   if (busy || over || screen !== 'game') return;
   if (turnSlot !== mySlot) return;
   const cue = balls.find((b) => b.id === 0);
   if (!cue) return;
   const p = tableFromClient(e.clientX, e.clientY);
+  if (ballInHand) {
+    placingCue = true;
+    if (validCuePlacement(p.x, p.y)) { cue.x = p.x; cue.y = p.y; }
+    lastPointer = p;
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    renderGame();
+    return;
+  }
   if (Math.hypot(p.x - cue.x, p.y - cue.y) > BALL_R * 6) return; // click near the cue ball to address it
   aiming = true;
   lastPointer = p;
@@ -499,6 +548,13 @@ function onPointerDown(e: PointerEvent) {
   renderGame();
 }
 function onPointerMove(e: PointerEvent) {
+  if (placingCue) {
+    lastPointer = tableFromClient(e.clientX, e.clientY);
+    const cue = balls.find((b) => b.id === 0);
+    if (cue && validCuePlacement(lastPointer.x, lastPointer.y)) { cue.x = lastPointer.x; cue.y = lastPointer.y; }
+    renderGame();
+    return;
+  }
   if (!aiming) return;
   lastPointer = tableFromClient(e.clientX, e.clientY);
   const cue = balls.find((b) => b.id === 0);
@@ -511,6 +567,16 @@ function onPointerMove(e: PointerEvent) {
   renderGame();
 }
 function onPointerUp() {
+  if (placingCue) {
+    placingCue = false;
+    ballInHand = false;
+    window.removeEventListener('pointermove', onPointerMove);
+    window.removeEventListener('pointerup', onPointerUp);
+    const cue = balls.find((b) => b.id === 0);
+    if (cue && !vsBot) net?.relay({ k: 'place', x: cue.x, y: cue.y });
+    renderGame();
+    return;
+  }
   if (!aiming) return;
   aiming = false;
   window.removeEventListener('pointermove', onPointerMove);
@@ -682,6 +748,17 @@ function renderGame() {
   for (let i = 0; i < 5; i++) c.fillRect(toX(0), toY(0) + (TH * viewScale * i) / 5, TW * viewScale, (TH * viewScale) / 10);
   // pockets
   for (const p of POCKETS) { c.beginPath(); c.arc(toX(p.x), toY(p.y), p.r * viewScale, 0, Math.PI * 2); c.fillStyle = '#0a0806'; c.fill(); }
+  // ball-in-hand: a dashed halo around the cue ball while it's mine to place
+  if (ballInHand && turnSlot === mySlot) {
+    const cue = balls.find((b) => b.id === 0);
+    if (cue) {
+      c.setLineDash([5, 5]);
+      c.strokeStyle = placingCue && !validCuePlacement(cue.x, cue.y) ? '#e05a4a' : '#e8c86a';
+      c.lineWidth = 2;
+      c.beginPath(); c.arc(toX(cue.x), toY(cue.y), BALL_R * viewScale * 1.8, 0, Math.PI * 2); c.stroke();
+      c.setLineDash([]);
+    }
+  }
   // aim line + stick, while charging
   if (aiming) {
     const cue = balls.find((b) => b.id === 0);
@@ -729,8 +806,13 @@ function renderHud() {
   let extra = '';
   if (!over) {
     extra = busy ? '<div style="margin-top:6px;font-size:12px;color:#9ab8a0;font-style:italic;">the balls are still rolling…</div>'
-      : turnSlot === mySlot ? '<div style="margin-top:6px;font-size:12px;color:#e8c86a;">Your shot — drag back from the cue ball, release to strike.</div>'
-      : '<div style="margin-top:6px;font-size:12px;color:#9ab8a0;font-style:italic;">Their shot.</div>';
+      : turnSlot === mySlot
+        ? (ballInHand
+          ? '<div style="margin-top:6px;font-size:12px;color:#e8c86a;">Foul — ball in hand. Drag the cue ball anywhere on the felt, then address it to shoot.</div>'
+          : '<div style="margin-top:6px;font-size:12px;color:#e8c86a;">Your shot — drag back from the cue ball, release to strike.</div>')
+      : (ballInHand
+          ? '<div style="margin-top:6px;font-size:12px;color:#9ab8a0;font-style:italic;">Foul — they have ball in hand.</div>'
+          : '<div style="margin-top:6px;font-size:12px;color:#9ab8a0;font-style:italic;">Their shot.</div>');
   }
   let overRow = '';
   if (over) {
