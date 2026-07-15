@@ -14321,6 +14321,8 @@ export function startWorld(net: WorldNet): void {
   // --- Tsong Country Club: grounds, windmill, and the eternal war against the bunker ------
   let windmillBlades: Phaser.GameObjects.Container | null = null;
   let clubSprinklers: { x: number; y: number; g: Phaser.GameObjects.Graphics }[] = [];
+  let golfStartGlow: Phaser.GameObjects.Arc | null = null;
+  let golfStartSign: Phaser.GameObjects.Text | null = null;
   const CLUBHOUSE = { x: 2450, y: -300 };
   const CLUB_GATE = { x: 2450, y: -30 }; // the actual gate posts — where non-members apply (the only part of the property they can reach)
 
@@ -14389,15 +14391,26 @@ export function startWorld(net: WorldNet): void {
     // (flags y-sort with avatars, same as the old decorative ones did.)
     for (const gh of GOLF_HOLES) {
       const { x: fx, y: ty } = gh.tee, { x: gx, y: gy } = gh.green;
+      const first = gh.n === 1;
       // fairway: a mown strip running tee → green (this grid's fairways are always vertical)
       sc.add.rectangle(fx, (ty + gy) / 2, 200, Math.abs(ty - gy) + 20, 0x4fae4d).setDepth(GD + 2);
-      // tee box
-      sc.add.rectangle(fx, ty, 70, 40, 0x5fc25c).setStrokeStyle(2, 0x35722f).setDepth(GD + 4);
+      // tee box — hole 1's gets a gold border and its own glow/banner (see below): the round always
+      // starts here, so it needs to read as different from the other 17 at a glance, not just up close.
+      if (first) {
+        golfStartGlow = sc.add.circle(fx, ty, 56, 0xffd76a, 0.28).setBlendMode(Phaser.BlendModes.ADD).setDepth(GD + 3);
+      }
+      sc.add.rectangle(fx, ty, 70, 40, 0x5fc25c).setStrokeStyle(first ? 3 : 2, first ? 0xe8c05a : 0x35722f).setDepth(GD + 4);
       sc.add.rectangle(fx - 16, ty - 4, 3, 10, 0xffffff).setDepth(GD + 5);
       sc.add.rectangle(fx + 16, ty - 4, 3, 10, 0xffffff).setDepth(GD + 5);
       sc.add.text(fx, ty + 26, `⛳ HOLE ${gh.n} · PAR ${gh.par}`, {
         fontFamily: 'ui-monospace, monospace', fontSize: '8px', color: '#e8f4e8', resolution: 2,
       }).setOrigin(0.5, 0).setAlpha(0.85).setDepth(GD + 5);
+      if (first) {
+        golfStartSign = sc.add.text(fx, ty - 54, '🏁 START HERE', {
+          fontFamily: 'ui-monospace, monospace', fontSize: '13px', fontStyle: 'bold', color: '#ffe066',
+          stroke: '#1a3a1f', strokeThickness: 4, resolution: 2,
+        }).setOrigin(0.5, 1).setDepth(GD + 6);
+      }
       // green: fringe ring + putting surface + cup + numbered flag
       sc.add.ellipse(gx, gy, 214, 112, 0x4da24b).setDepth(GD + 3);        // fringe
       sc.add.ellipse(gx, gy, 190, 96, 0x5fc25c).setDepth(GD + 4);         // the green
@@ -14528,6 +14541,8 @@ export function startWorld(net: WorldNet): void {
 
   function updateClub(now: number) {
     if (windmillBlades) windmillBlades.setRotation(now / 900); // regulation speed
+    if (golfStartGlow) golfStartGlow.setAlpha(0.2 + Math.abs(Math.sin(now / 500)) * 0.22).setRadius(52 + Math.sin(now / 500) * 8);
+    if (golfStartSign) golfStartSign.setScale(1 + Math.sin(now / 450) * 0.04); // a gentle breathing pulse, so it catches the eye from a distance
     for (let i = 0; i < clubSprinklers.length; i++) {
       const sp = clubSprinklers[i];
       sp.g.clear();
@@ -15179,7 +15194,7 @@ export function startWorld(net: WorldNet): void {
     golfMode = 'solo';
     golfScorecard = [];
     startGolfHole(0);
-    showToast('⛳ Round started — Hole 1. Walk to your ball and press X to swing.');
+    showToast('⛳ Round started — Hole 1. Walk to your ball and press Space to swing.');
   }
   function finishGolfSolo() {
     const total = golfScorecard.reduce((a, b) => a + b, 0);
