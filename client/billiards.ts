@@ -13,16 +13,18 @@
 // deriving checkmate locally). In solo mode there's no relay at all: the single client is always
 // the physics authority for both the human's shots and the bot's.
 //
-// Rules (a simplified "money ball" variant — no stripes/solids split, since there are only 6
-// object balls to go around): sink any of the 6 numbered balls on your shot and you keep shooting;
-// miss (or scratch) and the turn passes. First player to have personally sunk 3 object balls may
-// legally pot the money ball (the black 7) to win; potting it early, or scratching while potting
-// it, is an instant loss. If all 6 object balls are gone and the player to shoot hasn't reached 3,
-// they can never qualify — the table closes and the other player wins outright.
+// Rules: classic 8-ball. Fifteen object balls (1–7 solid, 9–15 stripe) plus the black 8. The table
+// is "open" until the first legal, non-break shot pots a ball — whichever group that ball belongs
+// to is assigned to its shooter, the other group to the opponent. Pot a ball from your own group
+// and you keep shooting; miss, foul, or pot the opponent's ball and the turn passes. Once your
+// group is completely cleared, potting the 8 legally wins; potting it early, or scratching while
+// potting it, is an instant loss.
 
 import type { BgNet } from './chess';
 
 export interface Ball { id: number; x: number; y: number; vx: number; vy: number; potted: boolean }
+type Group = 'solid' | 'stripe' | 'eight' | 'cue';
+type Assign = 'open' | 'solid' | 'stripe';
 interface LobbyView { status: 'waiting' | 'playing' | 'ended'; slot: number; players: { name: string; slot: number }[]; stake: number }
 interface ShotResult {
   path: Record<number, { x: number; y: number }[]>;
@@ -32,37 +34,58 @@ interface ShotResult {
 }
 
 // --- table geometry (table-space units; scaled to the canvas at render time) ---
-const TW = 900, TH = 450;           // playable felt, rail to rail
+const TW = 1000, TH = 500;          // playable felt, rail to rail — sized for a full 15-ball rack
 const BALL_R = 13;
 const HEAD = { x: TW * 0.22, y: TH / 2 };  // cue ball's start / re-spot point
-const FOOT = { x: TW * 0.78, y: TH / 2 };  // rack center
+const FOOT = { x: TW * 0.78, y: TH / 2 };  // rack apex
 const POCKETS: { x: number; y: number; r: number }[] = [
-  { x: 0, y: 0, r: 25 }, { x: TW / 2, y: 0, r: 22 }, { x: TW, y: 0, r: 25 },
-  { x: 0, y: TH, r: 25 }, { x: TW / 2, y: TH, r: 22 }, { x: TW, y: TH, r: 25 },
+  { x: 0, y: 0, r: 32 }, { x: TW / 2, y: 0, r: 28 }, { x: TW, y: 0, r: 32 },
+  { x: 0, y: TH, r: 32 }, { x: TW / 2, y: TH, r: 28 }, { x: TW, y: TH, r: 32 },
 ];
-const BALL_COLOR: Record<number, string> = {
-  0: '#f8f4ea', 1: '#c0392b', 2: '#e08a2a', 3: '#e0c62a', 4: '#3a9a4a', 5: '#3a6fd8', 6: '#8a3ad8', 7: '#161616',
+// Standard pool coloring: 1–7 solids, 9–15 the same seven hues striped, 8 black.
+const BALL_HUE: Record<number, string> = {
+  1: '#e0c62a', 2: '#3a6fd8', 3: '#c0392b', 4: '#8a3ad8', 5: '#e08a2a', 6: '#3a9a4a', 7: '#7a2e22', 8: '#161616',
 };
-const QUALIFY = 3; // object balls you must personally sink before the money ball is a legal (winning) shot
+function hueOf(id: number): string { return BALL_HUE[id === 8 ? 8 : id <= 7 ? id : id - 8] ?? '#fff'; }
+function groupOf(id: number): Group {
+  if (id === 0) return 'cue';
+  if (id === 8) return 'eight';
+  return id <= 7 ? 'solid' : 'stripe';
+}
 
-// --- physics ---
-const FRICTION = 480;      // units/s² deceleration
-const RESTITUTION = 0.92;  // rail bounce energy retention
+// Standard triangle rack, apex toward the cue ball: row 0 (1 ball, nearest the break) … row 4 (5
+// balls, the base). The 8 sits dead center (row 2); the back corners split solid/stripe.
+const RACK_ROWS: number[][] = [
+  [1],
+  [9, 2],
+  [10, 8, 3],
+  [11, 4, 12, 5],
+  [13, 7, 14, 15, 6],
+];
+
+// --- physics --- tuned toward "arcade-forgiving": generous pocket mouths, rails that don't stay
+// lively for long, so a miss dies down near a pocket instead of caroming around the whole table.
+const FRICTION = 560;      // units/s² deceleration
+const RESTITUTION = 0.72;  // rail bounce energy retention
 const STOP_EPS = 6;        // units/s below which a ball is treated as at rest
 const SIM_DT = 1 / 240;
 const MAX_STEPS = 240 * 8; // 8s hard ceiling per shot
 const SNAP_EVERY = 6;      // record a path point roughly every 40Hz
 const MIN_SPEED = 170, MAX_SPEED = 980;
-const MAX_DRAG = 130;      // table units of pointer pull-back for full power
+const MAX_DRAG = 145;      // table units of pointer pull-back for full power
 
 function freshBalls(): Ball[] {
   const balls: Ball[] = [{ id: 0, x: HEAD.x, y: HEAD.y, vx: 0, vy: 0, potted: false }];
-  const ringR = BALL_R * 2 + 0.6;
-  for (let k = 0; k < 6; k++) {
-    const a = (Math.PI / 3) * k;
-    balls.push({ id: k + 1, x: FOOT.x + Math.cos(a) * ringR, y: FOOT.y + Math.sin(a) * ringR, vx: 0, vy: 0, potted: false });
+  const rowDX = BALL_R * 2 * Math.cos(Math.PI / 6); // hex-packed row-to-row spacing
+  const rowDY = BALL_R * 2;
+  for (let r = 0; r < RACK_ROWS.length; r++) {
+    const row = RACK_ROWS[r];
+    const x = FOOT.x + r * rowDX;
+    for (let c = 0; c < row.length; c++) {
+      const y = FOOT.y + (c - (row.length - 1) / 2) * rowDY;
+      balls.push({ id: row[c], x, y, vx: 0, vy: 0, potted: false });
+    }
   }
-  balls.push({ id: 7, x: FOOT.x, y: FOOT.y, vx: 0, vy: 0, potted: false });
   return balls;
 }
 
@@ -131,23 +154,37 @@ function simulateShot(startBalls: Ball[], angle: number, power01: number): ShotR
   return { path, final: balls, potted, cueScratched: potted.includes(0) };
 }
 
-/** Nudge the cue ball to the head spot, sliding it clear of anything already resting there. */
+/** Places the cue ball at the head spot (or the nearest clear space around it) — used at rack
+ *  start and after every scratch. A ring search rather than a single line: with up to 15 balls
+ *  still on the table, a straight line out from the head spot can plausibly stay blocked. */
 function respotCue(balls: Ball[]): void {
   const cue = balls.find((b) => b.id === 0);
   if (!cue) return;
-  let x = HEAD.x, y = HEAD.y, tries = 0;
-  while (balls.some((b) => b.id !== 0 && !b.potted && Math.hypot(b.x - x, b.y - y) < BALL_R * 2.1) && tries < 8) {
-    x -= BALL_R * 2; tries++;
+  const clampX = (v: number) => Math.max(BALL_R, Math.min(TW - BALL_R, v));
+  const clampY = (v: number) => Math.max(BALL_R, Math.min(TH - BALL_R, v));
+  const clash = (x: number, y: number) => balls.some((b) => b.id !== 0 && !b.potted && Math.hypot(b.x - x, b.y - y) < BALL_R * 2.1);
+  const place = (x: number, y: number) => { cue.x = x; cue.y = y; cue.vx = 0; cue.vy = 0; cue.potted = false; };
+  if (!clash(HEAD.x, HEAD.y)) { place(HEAD.x, HEAD.y); return; }
+  const step = BALL_R * 2.2;
+  for (let ring = 1; ring <= 6; ring++) {
+    for (let a = 0; a < 8; a++) {
+      const ang = (Math.PI / 4) * a;
+      const x = clampX(HEAD.x + Math.cos(ang) * step * ring), y = clampY(HEAD.y + Math.sin(ang) * step * ring);
+      if (!clash(x, y)) { place(x, y); return; }
+    }
   }
-  cue.x = Math.max(BALL_R * 2, x); cue.y = y; cue.vx = 0; cue.vy = 0; cue.potted = false;
+  place(HEAD.x, HEAD.y); // give up (essentially impossible with 16 balls on a table this size) — just place it
 }
 
 // --- bot AI: a simple "ghost ball" aimer with imperfect execution ---
-function chooseBotShot(balls: Ball[], botPotCount: number): { angle: number; power: number } {
+function chooseBotShot(balls: Ball[], myGroup: Assign): { angle: number; power: number } {
   const cue = balls.find((b) => b.id === 0);
-  const targets = botPotCount >= QUALIFY
-    ? balls.filter((b) => b.id === 7 && !b.potted)
-    : balls.filter((b) => b.id >= 1 && b.id <= 6 && !b.potted);
+  let targets: Ball[];
+  if (myGroup === 'open') targets = balls.filter((b) => !b.potted && b.id !== 0 && b.id !== 8);
+  else {
+    const mine = balls.filter((b) => !b.potted && groupOf(b.id) === myGroup);
+    targets = mine.length ? mine : balls.filter((b) => !b.potted && b.id === 8);
+  }
   let best: { angle: number; power: number; score: number } | null = null;
   if (cue) {
     for (const t of targets) {
@@ -204,7 +241,8 @@ let lobby: LobbyView = { status: 'waiting', slot: 0, players: [], stake: 0 };
 let mySlot = 0;
 let gameN = 0;         // rematch counter — who breaks alternates
 let balls: Ball[] = [];
-let potCount: [number, number] = [0, 0];
+let playerGroup: [Assign, Assign] = ['open', 'open'];
+let shotCount = 0;     // shots taken this rack — 0 means the next shot is the break
 let turnSlot = 0;
 let busy = false;      // a shot is animating / awaiting a relayed result — input locked
 let over: { text: string; sub: string } | null = null;
@@ -228,7 +266,7 @@ export function openBilliards(n: BgNet) {
   joined = false; vsBot = false;
   screen = 'mode';
   lobby = { status: 'waiting', slot: 0, players: [], stake: 0 };
-  over = null; gameN = 0; balls = []; potCount = [0, 0]; busy = false;
+  over = null; gameN = 0; balls = []; playerGroup = ['open', 'open']; busy = false;
   rematchMine = false; rematchTheirs = false;
   root = document.createElement('div');
   root.id = 'billiardsOverlay';
@@ -256,12 +294,17 @@ function nameOf(slot: number): string {
   if (vsBot) return slot === 0 ? (net?.name() || 'You') : 'The House';
   return lobby.players.find((p) => p.slot === slot)?.name ?? (slot === mySlot ? (net?.name() || 'You') : '…');
 }
+function remainingOf(g: Assign): number {
+  if (g === 'open') return 7;
+  return balls.filter((b) => !b.potted && groupOf(b.id) === g).length;
+}
 
 // --- lifecycle ---
 
 function startRack() {
   balls = freshBalls();
-  potCount = [0, 0];
+  playerGroup = ['open', 'open'];
+  shotCount = 0;
   over = null; busy = false; aiming = false;
   rematchMine = false; rematchTheirs = false;
   turnSlot = gameN % 2 === 0 ? 0 : 1; // breaker alternates on a rematch
@@ -343,33 +386,42 @@ function runShotAsAuthority(angle: number, power: number) {
 function applyResult(result: ShotResult) {
   busy = true;
   const shooter = turnSlot;
+  const wasBreak = shotCount === 0;
+  shotCount++;
   playPath(result.path, () => {
     balls = result.final;
     if (result.cueScratched) sndScratch();
     else if (result.potted.length) sndPot();
-    resolveShot(shooter, result.potted, result.cueScratched);
+    resolveShot(shooter, result.potted, result.cueScratched, wasBreak);
   });
 }
 
-function resolveShot(shooter: number, potted: number[], cueScratched: boolean) {
-  const potObj = potted.filter((id) => id >= 1 && id <= 6);
-  const potMoney = potted.includes(7);
-  potCount[shooter] += potObj.length;
-  if (potMoney) {
-    const legal = potCount[shooter] >= QUALIFY && !cueScratched;
+function resolveShot(shooter: number, potted: number[], cueScratched: boolean, wasBreak: boolean) {
+  const potNonEight = potted.filter((id) => id !== 0 && id !== 8);
+  const potEight = potted.includes(8);
+
+  // Group assignment: the first legal, non-break shot that pots a ball decides it — whichever
+  // group that ball belongs to goes to its shooter, the other group to the opponent.
+  if (playerGroup[shooter] === 'open' && !wasBreak && potNonEight.length > 0) {
+    const g = groupOf(potNonEight[0]) as 'solid' | 'stripe';
+    playerGroup[shooter] = g;
+    playerGroup[1 - shooter] = g === 'solid' ? 'stripe' : 'solid';
+  }
+
+  if (potEight) {
+    const legal = playerGroup[shooter] !== 'open' && remainingOf(playerGroup[shooter]) === 0 && !cueScratched;
     finish(legal ? shooter : 1 - shooter,
-      legal ? `${nameOf(shooter)} pots the money ball. Game.` : `${nameOf(shooter)} pots the money ball ${cueScratched ? 'on a scratch' : `early (only ${potCount[shooter]} down)`}.`,
+      legal ? `${nameOf(shooter)} pots the 8-ball. Game.` : `${nameOf(shooter)} pots the 8-ball ${cueScratched ? 'on a scratch' : 'early'}.`,
       legal ? 'The house nods, once.' : 'House rules: that\'s a loss, member or not.');
     return;
   }
+
+  const ownGroupPotted = playerGroup[shooter] !== 'open' && potNonEight.some((id) => groupOf(id) === playerGroup[shooter]);
   if (cueScratched) { turnSlot = 1 - shooter; respotCue(balls); }
-  else if (potObj.length > 0) { turnSlot = shooter; } // keep shooting
+  else if (wasBreak) { turnSlot = potNonEight.length > 0 ? shooter : 1 - shooter; }
+  else if (ownGroupPotted) { turnSlot = shooter; } // keep shooting
   else { turnSlot = 1 - shooter; }
-  const objLeft = balls.filter((b) => !b.potted && b.id >= 1 && b.id <= 6).length;
-  if (objLeft === 0 && potCount[turnSlot] < QUALIFY) {
-    finish(1 - turnSlot, 'The last object ball drops.', `${nameOf(turnSlot)} never reached ${QUALIFY} — the table closes.`);
-    return;
-  }
+
   busy = false;
   renderGame();
   maybeBotTurn();
@@ -388,7 +440,7 @@ function maybeBotTurn() {
   botShotTimer = window.setTimeout(() => {
     botShotTimer = 0;
     if (!open || over || turnSlot !== 1) return;
-    const shot = chooseBotShot(balls, potCount[1]);
+    const shot = chooseBotShot(balls, playerGroup[1]);
     attemptShot(shot.angle, shot.power);
   }, 900 + Math.random() * 700);
 }
@@ -479,7 +531,7 @@ function renderModeSelect() {
   const panel = document.createElement('div');
   panel.style.cssText = 'text-align:center;background:#1c130d33;border:1px solid #4a3320;border-radius:16px;padding:36px 48px;box-shadow:0 20px 60px #000a;max-width:420px;';
   panel.innerHTML = '<div style="font-size:30px;letter-spacing:3px;color:#e8c86a;margin-bottom:4px;">🎱 THE 19TH HOLE TABLE</div>' +
-    '<div style="font-style:italic;color:#c8a878;font-size:13px;margin-bottom:26px;">Six balls, one money ball, and a felt older than most members.</div>';
+    '<div style="font-style:italic;color:#c8a878;font-size:13px;margin-bottom:26px;">Fifteen balls, one black 8, and a felt older than most members.</div>';
   const row = document.createElement('div');
   row.style.cssText = 'display:flex;flex-direction:column;gap:12px;';
   const bot = document.createElement('button');
@@ -505,7 +557,7 @@ function renderLobby() {
   const panel = document.createElement('div');
   panel.style.cssText = 'text-align:center;background:#1c130d33;border:1px solid #4a3320;border-radius:16px;padding:36px 48px;box-shadow:0 20px 60px #000a;';
   panel.innerHTML = '<div style="font-size:28px;letter-spacing:3px;color:#e8c86a;margin-bottom:4px;">🎱 THE TABLE</div>' +
-    '<div style="font-style:italic;color:#c8a878;font-size:13px;margin-bottom:24px;">First to three, then the money ball.</div>';
+    '<div style="font-style:italic;color:#c8a878;font-size:13px;margin-bottom:24px;">Clear your group, then the 8-ball.</div>';
   const seats = document.createElement('div');
   seats.style.cssText = 'display:flex;gap:18px;justify-content:center;margin-bottom:24px;';
   for (const slot of [0, 1]) {
@@ -587,16 +639,23 @@ function ensureCanvas() {
 }
 
 function ballDot(c: CanvasRenderingContext2D, sx: number, sy: number, r: number, id: number) {
+  const stripe = id >= 9 && id <= 15;
+  const hue = hueOf(id);
+  c.save();
+  c.beginPath(); c.arc(sx, sy, r, 0, Math.PI * 2); c.clip();
+  c.fillStyle = stripe ? '#f8f4ea' : (id === 0 ? '#f8f4ea' : hue);
+  c.fillRect(sx - r, sy - r, r * 2, r * 2);
+  if (stripe) { c.fillStyle = hue; c.fillRect(sx - r, sy - r * 0.46, r * 2, r * 0.92); }
+  c.restore();
   c.beginPath(); c.arc(sx, sy, r, 0, Math.PI * 2);
-  c.fillStyle = BALL_COLOR[id] ?? '#fff'; c.fill();
-  if (id === 7) { c.strokeStyle = '#c8a84a'; c.lineWidth = Math.max(1, r * 0.14); c.stroke(); }
-  else { c.strokeStyle = '#00000055'; c.lineWidth = 1; c.stroke(); }
+  c.strokeStyle = id === 8 ? '#c8a84a' : '#00000055'; c.lineWidth = id === 8 ? Math.max(1, r * 0.14) : 1; c.stroke();
   c.beginPath(); c.arc(sx - r * 0.32, sy - r * 0.32, r * 0.28, 0, Math.PI * 2);
   c.fillStyle = '#ffffff55'; c.fill();
-  if (id >= 1 && id <= 6) {
-    c.fillStyle = '#00000088'; c.beginPath(); c.arc(sx, sy, r * 0.42, 0, Math.PI * 2); c.fill();
-    c.fillStyle = '#fff'; c.font = `bold ${Math.round(r * 0.62)}px ui-monospace,monospace`; c.textAlign = 'center'; c.textBaseline = 'middle';
-    c.fillText(String(id), sx, sy + 0.5);
+  if (id >= 1 && id <= 15) {
+    const label = String(id), small = label.length > 1;
+    c.fillStyle = '#ffffffe0'; c.beginPath(); c.arc(sx, sy, r * 0.44, 0, Math.PI * 2); c.fill();
+    c.fillStyle = '#101010'; c.font = `bold ${Math.round(r * (small ? 0.46 : 0.58))}px ui-monospace,monospace`; c.textAlign = 'center'; c.textBaseline = 'middle';
+    c.fillText(label, sx, sy + 0.5);
   }
 }
 
@@ -642,9 +701,9 @@ function renderGame() {
     if (b.potted) continue;
     ballDot(c, toX(b.x), toY(b.y), BALL_R * viewScale, b.id);
   }
-  // potted tray, top-left — every object ball sunk so far (who sunk it is tracked in the HUD dots)
-  const tray = balls.filter((b) => b.potted && b.id >= 1 && b.id <= 6);
-  tray.forEach((b, i) => ballDot(c, toX(24 + i * 34), toY(-38), BALL_R * viewScale * 0.7, b.id));
+  // potted tray, top-left — two rows of up to 8, every object ball sunk so far
+  const tray = balls.filter((b) => b.potted && b.id !== 0);
+  tray.forEach((b, i) => ballDot(c, toX(24 + (i % 8) * 30), toY(-46 + Math.floor(i / 8) * 26), BALL_R * viewScale * 0.6, b.id));
   // end-of-game veil
   if (over) {
     c.fillStyle = '#0a0806cc'; c.fillRect(0, 0, W, H);
@@ -660,10 +719,12 @@ function renderHud() {
   if (!hud) return;
   const plate = (slot: number) => {
     const toMove = turnSlot === slot && !over && !busy;
-    const dots = Array.from({ length: QUALIFY }, (_, i) => (i < potCount[slot] ? '●' : '○')).join('');
+    const g = playerGroup[slot];
+    const groupLabel = g === 'open' ? 'open table' : g === 'solid' ? '● solids' : '◐ stripes';
+    const remain = g === 'open' ? '' : ` · ${remainingOf(g)} left`;
     return `<div style="display:inline-block;margin:0 10px;padding:6px 14px;border-radius:10px;border:1px solid ${toMove ? '#c8a84a' : '#3a2c1c'};background:#160f0acc;${toMove ? 'box-shadow:0 0 10px #c8a84a44;' : ''}">` +
       `<span style="font-size:14px;color:#e8dcc0;">${nameOf(slot)}${slot === mySlot ? ' (you)' : ''}</span>` +
-      `<span style="margin-left:8px;font-size:13px;color:#e8c86a;letter-spacing:2px;">${dots}</span></div>`;
+      `<span style="margin-left:8px;font-size:12px;color:#e8c86a;">${groupLabel}${remain}</span></div>`;
   };
   let extra = '';
   if (!over) {

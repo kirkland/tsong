@@ -14780,6 +14780,22 @@ export function startWorld(net: WorldNet): void {
     // the Member Registry on its lectern by the door
     prop('w-tmp-book', CLUB_SPOTS.registry.x, CLUB_SPOTS.registry.y + 14);
     sc.add.circle(CLUB_SPOTS.registry.x, CLUB_SPOTS.registry.y - 6, 15, 0xffe9a0, 0.10).setBlendMode(ADD).setDepth(iy - 600);
+    // Floating tags over every interactive spot — same idiom as the Casino's cabinet labels, so a
+    // first-time member can see what the room offers at a glance instead of bumping into furniture.
+    // The candle stays untagged on purpose: some things are still meant to be found, not read.
+    const tag = (x: number, y: number, text: string) => sc.add.text(x, y, text, {
+      fontFamily: 'system-ui, sans-serif', fontSize: '11px', fontStyle: 'bold',
+      color: '#ffe9c0', stroke: '#1a0f08', strokeThickness: 3, resolution: 2,
+    }).setOrigin(0.5, 1).setAlpha(0.88).setDepth(y + 3);
+    tag(CLUB_SPOTS.putt.x, CLUB_SPOTS.putt.y - 30, '⛳ Putting Green');
+    tag(CLUB_SPOTS.registry.x, CLUB_SPOTS.registry.y - 40, '📖 Registry');
+    tag(CLUB_SPOTS.trophies.x, CLUB_SPOTS.trophies.y - 46, '🏆 Trophies');
+    tag(CLUB_SPOTS.portrait.x, CLUB_SPOTS.portrait.y - 60, '🖼️ The Founder');
+    tag(CLUB_SPOTS.games.x, CLUB_SPOTS.games.y - 40, '🎱 Game Room');
+    tag(CLUB_SPOTS.wall.x, CLUB_SPOTS.wall.y - 46, '🏆 Wall of Fame');
+    tag(CLUB_SPOTS.jukebox.x, CLUB_SPOTS.jukebox.y - 76, '🎵 Gramophone');
+    tag(CLUB_SPOTS.clock.x, CLUB_SPOTS.clock.y - 118, '🕰️ Clock');
+    tag(ix + iw - 210, iy + 176, '🥃 The 19th Hole');
     // exit mat by the door
     tile('w-club-rug', cx - 70, iy + ih - T - 70, 140, 60, iy - 870);
     sc.add.text(cx, iy + ih - T - 38, '🚪 EXIT', { fontFamily: 'system-ui, sans-serif', fontSize: '16px', fontStyle: 'bold', color: '#ffe2b0', stroke: '#1a0f08', strokeThickness: 4 })
