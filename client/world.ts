@@ -13383,6 +13383,7 @@ export function startWorld(net: WorldNet): void {
       safeStep('swamp', () => updateSwamp(now, dt));
       safeStep('east', () => updateEast(now, dt));
       safeStep('mobs', () => updateMobs(now, dt));
+      safeStep('ocean', () => updateOcean(now, dt));
       safeStep('biome', () => updateBiome());
       safeStep('nearBuilding', () => updateNearBuilding());
       safeStep('sendMove', () => maybeSendMove(now));
@@ -16498,31 +16499,69 @@ export function startWorld(net: WorldNet): void {
   // The four diagonal corners between the frontiers (NW of the desert / west of the club, etc.) are
   // awkward unreachable void. Fill them with ocean — deep water with a few wave strokes and a
   // shoreline — so the world reads as an island of land ringed by sea instead of empty gaps.
+  // A seamless 128×128 tile of open water: layered blue troughs + foam wave-crests drawn with an
+  // integer number of sine periods across the tile so the left/right and top/bottom edges match —
+  // it repeats forever without a visible seam. Two of these, scrolling at different speeds, make the
+  // sea genuinely move.
+  function makeOceanTexture(sc: Phaser.Scene) {
+    if (sc.textures.exists('w-ocean-tex')) return;
+    const S = 128;
+    const g = sc.add.graphics();
+    g.fillStyle(0x17405f, 1); g.fillRect(0, 0, S, S);                 // base water
+    for (let i = 0; i < 4; i++) { g.fillStyle(0x113451, 0.32); g.fillRect(0, i * 32 + 18, S, 14); } // troughs
+    const crests: [number, number, number, number, number][] = [
+      // y, periods across the tile, amplitude, colour, alpha
+      [12, 3, 3, 0x2f5f80, 0.5], [44, 2, 4, 0x3a6f92, 0.45], [76, 4, 2, 0x2f5f80, 0.5], [108, 3, 3, 0x4a80a0, 0.4],
+    ];
+    for (const [cy, k, amp, c, a] of crests) {
+      g.lineStyle(2, c, a); g.beginPath();
+      for (let x = 0; x <= S; x++) { const yy = cy + Math.sin((x / S) * Math.PI * 2 * k) * amp; x === 0 ? g.moveTo(x, yy) : g.lineTo(x, yy); }
+      g.strokePath();
+      g.lineStyle(1, 0xbfe0ee, a * 0.55); g.beginPath();               // a bright foam highlight riding the crest
+      for (let x = 0; x <= S; x++) { const yy = cy - 1.5 + Math.sin((x / S) * Math.PI * 2 * k) * amp; x === 0 ? g.moveTo(x, yy) : g.lineTo(x, yy); }
+      g.strokePath();
+    }
+    g.generateTexture('w-ocean-tex', S, S);
+    g.destroy();
+  }
+
+  // Each animated ocean layer: a big TileSprite whose UVs we scroll every frame (sx,sy px/s), with a
+  // gentle cross-swell added so the water heaves instead of sliding in a straight line.
+  interface OceanLayer { spr: Phaser.GameObjects.TileSprite; sx: number; sy: number; sway: number; }
+  let oceanLayers: OceanLayer[] = [];
   function makeCornerOceans(sc: Phaser.Scene) {
-    const OCEAN = 0x1c3f5c, OCEAN_D = 0x12304a, FOAM = 0x3a6f92;
+    makeOceanTexture(sc);
+    oceanLayers = [];
     const corners: [number, number, number, number][] = [
       [-DESERT.w, -CLUB.h, DESERT.w, CLUB.h],                 // NW
       [WORLD.w, -CLUB.h, EAST.w, CLUB.h],                     // NE
       [-DESERT.w, WORLD.h, DESERT.w, SOUTH.h],               // SW
       [WORLD.w, WORLD.h, EAST.w, SOUTH.h],                   // SE
     ];
-    const wave = sc.add.graphics().setDepth(-9998);
+    const foam = sc.add.graphics().setDepth(-9997);
     for (const [x, y, w, h] of corners) {
-      sc.add.rectangle(x, y, w, h, OCEAN).setOrigin(0, 0).setDepth(-9999);
-      // depth gradient toward the far edges
-      sc.add.rectangle(x, y, w, h, OCEAN_D, 0.5).setOrigin(0, 0).setDepth(-9998);
-      // static wave crests (a calm sea; cheap — a few strokes per corner)
-      wave.lineStyle(2, FOAM, 0.3);
-      const rr = mulberry32(((x & 0xffff) ^ (y & 0xffff)) >>> 0);
-      for (let i = 0; i < 60; i++) {
-        const wx = x + rr() * w, wy = y + rr() * h, wl = 20 + rr() * 40;
-        wave.beginPath(); wave.moveTo(wx, wy);
-        wave.lineTo(wx + wl, wy + Math.sin(wx) * 2); wave.strokePath();
-      }
+      // deepest water underneath (flat, so gaps never show through)
+      sc.add.rectangle(x, y, w, h, 0x12304a).setOrigin(0, 0).setDepth(-9999);
+      // two scrolling wave sheets: a slow base swell + a faster, lighter surface shimmer drifting the
+      // other way. Their interference reads as living, rolling water.
+      const base = sc.add.tileSprite(x, y, w, h, 'w-ocean-tex').setOrigin(0, 0).setDepth(-9998).setTileScale(2, 2);
+      const top = sc.add.tileSprite(x, y, w, h, 'w-ocean-tex').setOrigin(0, 0).setDepth(-9998).setTileScale(3.1, 3.1).setAlpha(0.4);
+      oceanLayers.push({ spr: base, sx: 9, sy: 4, sway: 7 });
+      oceanLayers.push({ spr: top, sx: -6, sy: 6, sway: 11 });
       // a foamy shoreline where the ocean meets the land edges of this corner
-      wave.lineStyle(4, 0xbfe0ee, 0.5);
-      if (x < 0) wave.lineBetween(0, Math.max(y, 0), 0, y + h);     // east edge (against land)
-      if (x >= WORLD.w) wave.lineBetween(WORLD.w, Math.max(y, 0), WORLD.w, y + h);
+      foam.lineStyle(4, 0xbfe0ee, 0.5);
+      if (x < 0) foam.lineBetween(0, Math.max(y, 0), 0, y + h);     // east edge (against land)
+      if (x >= WORLD.w) foam.lineBetween(WORLD.w, Math.max(y, 0), WORLD.w, y + h);
+    }
+  }
+  // Scroll every ocean layer's UVs → the sea rolls. Cheap: just nudges tilePosition on a handful of
+  // TileSprites (all the wave shape lives in the texture + GPU UV-wrap).
+  function updateOcean(now: number, dt: number) {
+    if (!oceanLayers.length) return;
+    const t = now / 1000;
+    for (const L of oceanLayers) {
+      L.spr.tilePositionX += L.sx * dt + Math.sin(t * 0.6) * L.sway * dt;
+      L.spr.tilePositionY += L.sy * dt + Math.cos(t * 0.47) * L.sway * 0.5 * dt;
     }
   }
 
