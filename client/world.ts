@@ -2545,6 +2545,9 @@ export function startWorld(net: WorldNet): void {
   let weapon: WorldWeapon = 'rocket';
   let lastShotAt = 0;     // per-weapon cooldown clock (reset on every shot, whatever the weapon)
   let firing = false;     // R (or the fire button) is held — the update loop pulls the trigger
+  // Mouse click-to-shoot: while the left button is held, aim at the cursor + autofire. Its pointer
+  // id is tracked so a second finger / release only cancels the right one.
+  let mouseAim = false, mouseAimSX = 0, mouseAimSY = 0, mouseAimId = -1;
 
   // --- Road Rage PvP event ---
   let rrActive = false, rrEndsAt = 0;
@@ -3760,7 +3763,7 @@ export function startWorld(net: WorldNet): void {
       return;
     }
     const boatHint = boardableWater() ? ' · <b>B</b> board boat' : '';
-    const gun = `<b>R</b> fire ${WEAPON_BY_ID[weapon].emoji} · <b>1-4</b>/<b>Q</b> weapon`;
+    const gun = `<b>R</b>/<b>click</b> fire ${WEAPON_BY_ID[weapon].emoji} · <b>1-4</b>/<b>Q</b> weapon`;
     help.innerHTML = driving
       ? `W/S or ↑/↓ throttle · A/D or ←/→ steer · <b>Shift</b> drift · ${gun} · <b>F</b> get out · <b>T</b> chat`
       : `WASD / arrows or drag to walk · <b>F</b> drive${boatHint} · ${gun} · <b>Space</b> enter · <b>T</b> chat`;
@@ -9536,9 +9539,23 @@ export function startWorld(net: WorldNet): void {
         return;
       }
     }
+    // Click-to-shoot (mouse): hold the left button to aim at the cursor and autofire. Movement is
+    // WASD/arrows on desktop, so the mouse is free to aim. Touch keeps drag-to-walk (below).
+    if (e.pointerType === 'mouse' && e.button === 0 && canFire()) {
+      mouseAim = true; mouseAimId = e.pointerId; mouseAimSX = e.clientX; mouseAimSY = e.clientY;
+      firing = true; if (!driving) aimAtScreen(e.clientX, e.clientY); fireWeapon(); // driving fires forward
+      return;
+    }
     joyActive = true;
     joyOX = joyCX = e.clientX;
     joyOY = joyCY = e.clientY;
+  }
+  // Point `facing` at a screen coordinate (for click-to-shoot). No-op without the camera.
+  function aimAtScreen(sx: number, sy: number) {
+    if (!mainCam) return;
+    const wp = mainCam.getWorldPoint(sx, sy);
+    const a = Math.atan2(wp.y - selfY, wp.x - selfX);
+    if (Number.isFinite(a)) facing = a;
   }
   function onPointerMove(e: PointerEvent) {
     if (paused) return;
@@ -9550,11 +9567,13 @@ export function startWorld(net: WorldNet): void {
       pinchDist = d;
       return;
     }
+    if (mouseAim && e.pointerId === mouseAimId) { mouseAimSX = e.clientX; mouseAimSY = e.clientY; return; }
     if (!joyActive) return;
     joyCX = e.clientX; joyCY = e.clientY;
   }
   function onPointerUp(e?: PointerEvent) {
     if (paused) return;
+    if (e && mouseAim && e.pointerId === mouseAimId) { mouseAim = false; mouseAimId = -1; firing = false; }
     if (e) pointers.delete(e.pointerId);
     if (pointers.size < 2) pinchDist = 0;
     if (pointers.size === 0) joyActive = false;
@@ -13270,8 +13289,9 @@ export function startWorld(net: WorldNet): void {
         fireBtnShown = armed;
         fireBtn.style.display = armed ? 'block' : 'none';
         rack.style.display = armed ? 'flex' : 'none';
-        if (!armed) firing = false;
+        if (!armed) { firing = false; mouseAim = false; }
       }
+      if (mouseAim && !driving) aimAtScreen(mouseAimSX, mouseAimSY); // keep the shot pointed at the cursor (on foot)
       if (firing) fireWeapon();  // held trigger — the weapon's own cooldown paces it
       updateCrates(now);
 
@@ -13635,7 +13655,7 @@ export function startWorld(net: WorldNet): void {
       // Ghost (remote) rockets never detonate or deal a blast — they just fly until they hit a
       // wall/edge/fuel-out, then vanish (the firer's own worldBoom drives the actual explosion).
       if (rk.ghost) { if (hit) { rk.spr.destroy(); rockets.splice(i, 1); } continue; }
-      if (!hit) hit = hitsBody(rk.x, rk.y, now);                           // a car or a person downrange
+      if (!hit) hit = hitsBody(rk.x, rk.y, now) || mobAt(rk.x, rk.y);       // a car, a person, or a biome mob downrange
       if (hit) { rk.spr.destroy(); rockets.splice(i, 1); detonateRocket(rk.x, rk.y); }
     }
   }
@@ -13706,9 +13726,10 @@ export function startWorld(net: WorldNet): void {
     }
     for (const m of mobs) {                                                // the beam skewers mobs too (2 dmg)
       if (m.dead) continue;
-      if (distToSegment(m.x, m.y, x, y, ex, ey) > LASER_HIT_R + R * 0.5) continue;
-      hitMobs(m.x, m.y, 4, 2);
-      spawnSparks(m.x, m.y, 0x8ef0ff);
+      const b = mobBody(m);
+      if (distToSegment(b.cx, b.cy, x, y, ex, ey) > LASER_HIT_R + b.rad) continue;
+      hitMobs(b.cx, b.cy, 4, 2);
+      spawnSparks(b.cx, b.cy, 0x8ef0ff);
     }
     const selfId = net.selfId();
     let zapped = 0;
@@ -17100,21 +17121,39 @@ export function startWorld(net: WorldNet): void {
 
   // Apply `dmg` to any mobs within `r` of (x,y). Returns true if at least one was hit. Called from
   // the weapon-impact paths (rockets/void blasts, bullets, the laser beam).
+  // The mob's hittable BODY: sprites are anchored at the feet (origin bottom-centre), so the
+  // visible body sits a full sprite-height ABOVE m.y — for a big mob (the yeti) that's ~100px.
+  // Aim at the centre of the drawn body, with a radius covering the sprite, so shooting what you
+  // see actually connects.
+  function mobBody(m: Mob): { cx: number; cy: number; rad: number } {
+    const h = m.spr.displayHeight, w = m.spr.displayWidth;
+    return { cx: m.x, cy: m.y - h * 0.5, rad: Math.max(w, h) * 0.5 };
+  }
+  // Is (x,y) inside a live mob's body? (Used so a rocket detonates when it flies into one.)
+  function mobAt(x: number, y: number): boolean {
+    for (const m of mobs) {
+      if (m.dead) continue;
+      const b = mobBody(m);
+      if (Math.hypot(b.cx - x, b.cy - y) <= b.rad) return true;
+    }
+    return false;
+  }
   function hitMobs(x: number, y: number, r: number, dmg: number): boolean {
     const now = performance.now();
     let any = false;
     for (const m of mobs) {
       if (m.dead) continue;
-      if (Math.hypot(m.x - x, m.y - y) > r + 12) continue;
+      const b = mobBody(m);
+      if (Math.hypot(b.cx - x, b.cy - y) > r + b.rad) continue;
       any = true;
       m.hp -= dmg;
       m.hitUntil = now + 140;
       // knockback away from the blast
-      const a = Math.atan2(m.y - y, m.x - x);
+      const a = Math.atan2(b.cy - y, b.cx - x);
       m.x += Math.cos(a) * 14; m.y += Math.sin(a) * 14;
       m.state = 1; // aggro/flee after being hit
       m.busyUntil = now + 400;
-      spawnDamageNumber(m.x, m.y - 18, dmg);
+      spawnDamageNumber(b.cx, b.cy - 8, dmg);
       hitMobSound();
       if (m.hp <= 0) killMob(m);
     }
@@ -17184,20 +17223,17 @@ export function startWorld(net: WorldNet): void {
   }
 
   // The player took a hit from a mob (contact or projectile). Damage scales with biome difficulty
-  // (already baked into spec.dmg). You take hits on foot OR in a car — the car is a little armor,
-  // not immunity (a big enough hit can still blow it up). Drives the health bar; at 0 you die.
+  // (already baked into spec.dmg). You take the SAME hit on foot or in a car — the car is no
+  // armor. Drives the health bar; at 0 you die.
   function damagePlayer(dmg: number, srcX: number, srcY: number, label: string) {
     const now = performance.now();
     if (playerDead || inInterior || inDungeon) return;
     if (now < mobBiteCooldown) return; // brief i-frames so you're not chain-shredded
     mobBiteCooldown = now + 650;
     // dmg came in as a "stun ms" figure historically; convert to HP loss (roughly 1 HP per 45ms).
-    // A car soaks ~40% of the blow (you're behind metal) but still takes the rest.
-    const hpLoss = Math.max(4, Math.round((dmg / 45) * (driving ? 0.6 : 1)));
+    const hpLoss = Math.max(4, Math.round(dmg / 45));
     playerHp = Math.max(0, playerHp - hpLoss);
     lastDamagedAt = now;
-    // a hard enough hit while driving wrecks the car (and knocks you out of it)
-    if (driving && hpLoss >= 14) { if (blowUpMyCar('💥 A mob wrecked your car!')) net.blownUp(true, true); }
     stunnedUntil = now + Math.min(500, dmg * 0.35); keys.clear();
     // knockback
     const a = Math.atan2(selfY - srcY, selfX - srcX);
