@@ -14,6 +14,7 @@ export interface BgNet {
   relay(data: unknown): void;
   name(): string;
   muted(): boolean;
+  onFinish?(): void; // (ski) a race finished — lets the World mark its objective
 }
 
 interface LobbyView { status: 'waiting' | 'playing' | 'ended'; slot: number; players: { name: string; slot: number }[]; stake: number }

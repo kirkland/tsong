@@ -2427,7 +2427,7 @@ async function openSkiGame(): Promise<void> {
   try {
     skiMod = await import('./ski');
     if (skiMod.isSkiOpen()) return;
-    skiMod.openSki(bgNetFor('ski'));
+    skiMod.openSki({ ...bgNetFor('ski'), onFinish: () => worldMod?.completeSkiObjective() });
   } catch (e) { console.error('Ski failed to load:', e); }
 }
 async function openBilliardsGame(): Promise<void> {

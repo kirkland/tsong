@@ -186,6 +186,7 @@ function showResults() {
   for (const r of racers) if (!finishOrder.includes(r.slot)) podium.push({ slot: r.slot, time: r.time });
   over = { text: podium[0]?.slot === mySlot ? 'You win the downhill! 🏆' : `${nameOf(podium[0]?.slot ?? 0)} takes it.`, podium };
   if (isHost() && podium.length) net?.result(podium[0].slot); // winner slot → server settles the pot
+  net?.onFinish?.(); // you finished a race → the World's ski objective can complete
   cancelAnimationFrame(raf);
   renderRace();
 }
@@ -232,9 +233,9 @@ function renderLobby() {
   row.style.cssText = 'display:flex;gap:10px;justify-content:center;';
   if (isHost()) {
     const start = document.createElement('button');
-    start.textContent = 'Drop the gate';
-    start.style.cssText = btn(false) + (lobby.players.length >= 2 ? '' : 'opacity:0.4;cursor:default;');
-    start.disabled = lobby.players.length < 2;
+    // Solo is fine — a lone racer runs it as a time trial against the yeti. 2+ is a real race.
+    start.textContent = lobby.players.length >= 2 ? 'Drop the gate' : 'Solo time trial ▶';
+    start.style.cssText = btn(true);
     start.onclick = () => net?.start();
     row.appendChild(start);
   } else {
