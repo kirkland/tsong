@@ -2714,6 +2714,8 @@ worldBtn.addEventListener('click', async () => {
       selfCortisolRow: () => (lastCortisolSelf !== undefined && lastCortisolSelfRank !== undefined)
         ? { rank: lastCortisolSelfRank, cortisol: lastCortisolSelf } : null,
       stress: (amount: number) => net.send({ type: 'stress', amount }),
+      // Usage-analytics breadcrumb (building/room walk-ins) — server-validated + rate-limited.
+      track: (name: string) => net.send({ type: 'track', name }),
       eloProfileReq: (rank, self) => net.send({ type: 'eloProfileReq', rank: rank ?? 0, self: self ? true : undefined }),
       balanceSheetReq: (rank, self) => net.send({ type: 'balanceSheetReq', rank, self }),
 

@@ -551,7 +551,7 @@ export function petById(id: string | null | undefined) {
 
 // What entering a building does (the client maps each `kind` to an action). Add a kind here
 // and a handler on the client to introduce a new venue.
-export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament' | 'arcade' | 'dungeon' | 'temple' | 'bowling' | 'mcdonald' | 'shop' | 'hall' | 'noticeboard';
+export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament' | 'arcade' | 'dungeon' | 'temple' | 'bowling' | 'mcdonald' | 'shop' | 'hall' | 'noticeboard' | 'observatory';
 // A venue's footprint on the map. The rectangle (top-left origin, world units) is solid —
 // avatars collide with it — and an apron just outside the door is the entry trigger zone.
 export interface WorldBuilding {
@@ -618,7 +618,34 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
   // Tournament bracket, the Season Pass, the Power-ups reference, and the Changelog — informational
   // panels that otherwise have no walk-up home once the toolbar is hidden behind World.
   { id: 'noticeboard', kind: 'noticeboard', name: 'NOTICE BOARD', emoji: '📌', x: 2700, y: 420, w: 260, h: 180, color: '#5a6a8a' },
+  // The Observatory — a domed institute east of the Hall of Fame, on the grassy rise between
+  // The Lake (ends y550) and Maple Court's lot ring (nearest lot starts y993 / x3192; the
+  // footprint below clears it on y by ~50). The astronomers long ago swiveled the telescope
+  // down at the town itself: walk in to browse live usage charts — who's on, what's being
+  // played, where people go.
+  { id: 'observatory', kind: 'observatory', name: 'THE OBSERVATORY', emoji: '🔭', x: 3120, y: 720, w: 280, h: 220, color: '#2e3d5c' },
 ] as const;
+
+// --- Usage analytics ---------------------------------------------------------------------
+// The payload of GET /api/usage, rendered by the Observatory's charts. Assembled in
+// server/analytics.ts from the events table (or, without a DATABASE_URL, from the in-memory
+// ring — 'memory' source, stats since boot only). Times are epoch ms; series are pre-bucketed
+// server-side so the client just draws.
+export interface UsageStats {
+  generatedAt: number;
+  source: 'db' | 'memory';
+  onlineNow: number;                 // sockets currently connected
+  players24h: number;                // distinct identities seen in the last 24h
+  events24h: number;                 // tracked actions in the last 24h
+  games24h: number;                  // game.* events in the last 24h
+  hourly: { t: number; events: number; players: number }[];       // last 48 h, one point per hour
+  daily: { day: string; players: number; events: number }[];      // last 14 days ('YYYY-MM-DD')
+  games7d: { game: string; plays: number }[];                     // top games, last 7 days
+  visits7d: { building: string; visits: number }[];               // top buildings walked into, last 7 days
+  actions7d: { name: string; count: number }[];                   // top raw event names, last 7 days
+  feed: { t: number; who: string; name: string }[];               // most recent events, newest first
+  starOfWeek: { who: string; events: number } | null;             // busiest player of the last 7 days
+}
 
 // --- The Ruins dungeon economy: SERVER-AUTHORITATIVE so a tampered client can't mint coins. ---
 // Chests keyed by 'floor:col,row'. The server pays a chest's coins (from the House) the first time
@@ -1020,6 +1047,10 @@ export type ClientMsg =
   // User settings (mute, chat toggles, boss-key target…) to persist on the account. Partial:
   // only the changed keys are sent; the server merges them into the stored set.
   | { type: 'prefs'; prefs: Record<string, string> }
+  // Usage analytics breadcrumb for a client-side-only action (walking into a building, an
+  // interior room…). The server namespaces it under 'visit.' — a client can't spoof the
+  // server-authoritative event names — rate-limits it, and drops anything malformed.
+  | { type: 'track'; name: string }
   | { type: 'claim'; side?: Side } // preferred side; omitted = auto-assign to the smaller team
   | { type: 'paddle'; y: number; x?: number } // desired paddle center Y (and optional roam inset X), in court units
   | { type: 'chat'; text: string }

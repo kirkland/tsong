@@ -26,6 +26,7 @@
 // the real ESM, finds no default, and the World chunk fails to instantiate (button does nothing).
 import * as Phaser from 'phaser';
 import { startEncounter, DUNGEON_MOBS, isEncounterOpen } from './dungeon-battle';
+import { renderObservatoryInto } from './observatory';
 import {
   WORLD,
   WORLD_AVATAR,
@@ -247,6 +248,9 @@ export interface WorldNet {
   selfCortisolRow(): { rank: number; cortisol: number } | null;
   // Report a stressful moment (a bad friend-sim interaction) so the server bumps our cortisol.
   stress(amount: number): void;
+  // Usage-analytics breadcrumb: a client-side-only action worth counting (walking into a
+  // building / interior room). The server namespaces + rate-limits it; fire-and-forget.
+  track(name: string): void;
   eloProfileReq(rank?: number, self?: boolean): void;    // drill into a leaderboard row (index into leaderboard(), or self) → opens the real Elo profile modal
   balanceSheetReq(rank?: number, self?: boolean): void;  // drill into a net-worth row (index into netWorth(), or self) → opens the real balance-sheet modal
   claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
@@ -609,6 +613,11 @@ const ROADS: Rect[] = [
   { x: 605, y: 1490, w: 110, h: 330 },   // spur further south, Casino → the General Store
   { x: 2595, y: 900, w: 110, h: 80 },    // spur east off the Pet-shack road → Hall of Fame
   { x: 2595, y: 470, w: 110, h: 80 },    // spur east off the Pet-shack road → the Notice Board
+  // The Observatory (x3120-3400, y720-940): a footpath east past the Hall of Fame, then a short
+  // stub north to the door. Runs at y860-940 — under the Hall (ends x2980), over Maple Court's
+  // nearest lot (starts y993).
+  { x: 2980, y: 860, w: 280, h: 80 },    // path: Hall of Fame → the Observatory's rise
+  { x: 3205, y: 900, w: 110, h: 40 },    // stub up to the Observatory door
 ];
 const PLAZA = { x: 1600, y: 1100, r: 240 }; // paved circle + fountain at town center
 // The Tavern's INTERIOR lives off the main map. When you step inside, the camera bounds switch to
@@ -3689,10 +3698,14 @@ export function startWorld(net: WorldNet): void {
       case 'shop': return '🛍️ Enter the General Store';
       case 'hall': return '🏆 Enter the Hall of Fame';
       case 'noticeboard': return '📌 Check the Notice Board';
+      case 'observatory': return '🔭 Enter the Observatory — the town watches itself';
     }
   }
   function enterBuilding(kind: WorldBuildingKind) {
     enterChime();
+    // Usage analytics: every walk-in counts (this is how the Observatory's own "Where people
+    // go" chart is fed — including, recursively, visits to the Observatory itself).
+    net.track(kind);
     // Pause (not exit) — same idiom as every other delegated feature. main.ts's state handler
     // watches for this player's match to hit 'over' and resumes World the instant it does; the
     // worldBtn click handler is also wired to resume a paused World as a manual fallback (e.g.
@@ -3732,6 +3745,7 @@ export function startWorld(net: WorldNet): void {
     // The General Store — same walk-straight-in idiom as the Pet Shop.
     if (kind === 'shop') { openShop(); return; }
     if (kind === 'hall') { enterHallOfFame(); return; }
+    if (kind === 'observatory') { openObservatoryDialog(); return; }
     if (kind === 'noticeboard') {
       openDialog('📌 Notice Board', 'Pinned announcements, curling at the edges.', [
         { label: '🏆 Tournament',   onPick: openTourneyDialog },
@@ -8297,6 +8311,39 @@ export function startWorld(net: WorldNet): void {
     } catch {
       body.innerHTML = '<div class="changelog-empty">Could not load changelog.</div>';
     }
+  }
+
+  // --- The Observatory — usage charts over GET /api/usage (same direct-fetch idiom as the
+  // Changelog: load-once data, no websocket round-trip). Drawing lives in observatory.ts. ---
+  function openObservatoryDialog() {
+    dialogOpen = true;
+    keys.clear(); joyActive = false;
+    dialogBox.replaceChildren();
+    const h = document.createElement('div');
+    h.textContent = '🔭 The Observatory';
+    h.style.cssText = 'font-size:22px;color:#e8eefc;margin-bottom:2px;text-align:center;';
+    dialogBox.appendChild(h);
+    const sub = document.createElement('div');
+    sub.textContent = 'The telescope points down at the town. It sees everything.';
+    sub.style.cssText = 'font-size:12px;color:#7c8ab5;margin-bottom:12px;text-align:center;';
+    dialogBox.appendChild(sub);
+    const body = document.createElement('div');
+    body.style.cssText = 'min-width:300px;';
+    body.innerHTML = '<div style="color:#7c8ab5;font-size:13px;padding:20px 0;">Focusing the lens…</div>';
+    dialogBox.appendChild(body);
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;margin-top:10px;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    dialogBox.appendChild(close);
+    dialog.style.display = 'flex';
+    fetch('/api/usage')
+      .then((res) => res.json())
+      .then((stats) => { if (dialogOpen) renderObservatoryInto(body, stats); })
+      .catch(() => {
+        body.innerHTML = '<div style="color:#7c8ab5;font-size:13px;padding:20px 0;">The lens is fogged up. Try again in a bit.</div>';
+      });
   }
 
   // --- Lootbox — request/response via net.lootBoxOpen() + Controller.feedLootResult(), reusing
@@ -14860,6 +14907,7 @@ export function startWorld(net: WorldNet): void {
 
   function enterClubhouse() {
     const sc = petScene; if (!sc) return;
+    net.track('clubhouse'); // usage analytics: interior rooms count as walk-ins too
     buildClubhouse(sc);
     enterChime();
     inInterior = true; inClub = true; inVault = false;

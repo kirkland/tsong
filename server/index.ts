@@ -11,6 +11,7 @@ import { BOT_LEVELS, BotLevel, ClientMsg, CrTradeOffer, TICK_MS, TickHealth, WOR
 import { Game, GameSnapshot } from './game';
 import { Lobby, LobbySnapshot } from './lobby';
 import { initDb, migratePlayer } from './db';
+import { flushAnalytics, usageStats } from './analytics';
 import { getChangelog } from './changelog';
 import { loadSnapshot, saveSnapshot } from './persist';
 import {
@@ -72,6 +73,21 @@ const server = http.createServer((req, res) => {
       });
     return;
   }
+  // Usage analytics aggregates for the Observatory's charts (same direct-fetch idiom as the
+  // changelog — load-once data, no websocket round-trip).
+  if (req.url === '/api/usage') {
+    usageStats(lobby.onlineCount())
+      .then((stats) => {
+        res.setHeader('content-type', 'application/json');
+        res.setHeader('cache-control', 'no-cache');
+        res.end(JSON.stringify(stats));
+      })
+      .catch(() => {
+        res.statusCode = 500;
+        res.end('{}');
+      });
+    return;
+  }
   if (req.url === '/auth/google') { handleAuthGoogle(req, res); return; }
   if (req.url === '/auth/me')     { handleAuthMe(req, res);     return; }
   if (req.url === '/auth/logout') { handleLogout(req, res);     return; }
@@ -128,6 +144,75 @@ function parseCrTradeOffer(raw: unknown): CrTradeOffer | null {
   };
 }
 
+// --- usage analytics: message-type → event-name map --------------------------------------
+// The interesting slice of the ~180 message types, stamped as one usage event each right at
+// the dispatch (one hook point instead of edits scattered through lobby.ts). Server-settled
+// outcomes (pong/arena/tournament matches, session joins) are tracked inside lobby.ts instead,
+// where the authority lives. High-frequency stream types (paddle, relays, worldMove…) stay out.
+const TRACKED_MSG: Partial<Record<ClientMsg['type'], string>> = {
+  // games — one event per play/start (relay games' *Start fires once per match, host-only)
+  tournamentJoin: 'game.tournament.join',
+  doomJoin: 'game.doom.play',
+  ntStart: 'game.nuketown.play',
+  srStart: 'game.streetdemons.play',
+  sbStart: 'game.superbros.play',
+  trnStart: 'game.tron.play',
+  waStart: 'game.artillery.play',
+  tntStart: 'game.tnt.play',
+  mjStart: 'game.monsterjam.play',
+  bgStart: 'game.boardgame.play',
+  tdStart: 'game.typeordie.play',
+  bowlJoin: 'game.bowling.play',
+  crJoin: 'game.citytycoon.play',
+  ghScore: 'game.tsonghero.play',
+  golfScore: 'game.golf.play',
+  campaignScore: 'game.campaign.play',
+  fishCatch: 'game.fishing.catch',
+  nomPropose: 'game.nomic.propose',
+  nomVote: 'game.nomic.vote',
+  dungeonChest: 'game.dungeon.chest',
+  dungeonWin: 'game.dungeon.fight',
+  // casino — one event per bet/roll/spin
+  roulette: 'casino.roulette',
+  bjBet: 'casino.blackjack',
+  crapsRoll: 'casino.craps',
+  crashBet: 'casino.crash',
+  slotsSpin: 'casino.slots',
+  plinko: 'casino.plinko',
+  horseBet: 'casino.horse',
+  hiloBet: 'casino.hilo',
+  minesBet: 'casino.mines',
+  bet: 'casino.matchbet',
+  // economy
+  shopBuy: 'economy.shop',
+  lootBoxOpen: 'economy.lootbox',
+  dailySpin: 'economy.dailyspin',
+  stockInvest: 'economy.stock',
+  stockCashOut: 'economy.stock',
+  getLoan: 'economy.loan',
+  repayLoan: 'economy.loan',
+  marketList: 'economy.market',
+  marketBuy: 'economy.market',
+  landBuyBank: 'economy.land',
+  landBuy: 'economy.land',
+  houseBuild: 'economy.house',
+  bondBuy: 'economy.bond',
+  auctionBid: 'economy.auction',
+  tip: 'economy.tip',
+  placeBounty: 'economy.bounty',
+  buyBeer: 'economy.beer',
+  buyMcFood: 'economy.mcfood',
+  clubJoin: 'economy.clubjoin',
+  clubDrink: 'economy.clubdrink',
+  fountainWish: 'economy.wish',
+  // social + overworld
+  chat: 'social.chat',
+  worldChat: 'social.chat',
+  reaction: 'social.reaction',
+  worldEnter: 'world.enter',
+  worldRoadRage: 'world.roadrage',
+};
+
 const wss = new WebSocketServer({ server, path: '/ws' });
 
 // Authenticated sessions keyed by socket (auto-cleaned when the socket is GC'd).
@@ -145,7 +230,15 @@ wss.on('connection', (ws: WebSocket, req) => {
     } catch {
       return; // ignore malformed input
     }
+    // Usage analytics: stamp curated message types as events before dispatch (only msg.type is
+    // read here, so validation order doesn't matter; the payload is still validated per-case).
+    const trackedName = msg?.type ? TRACKED_MSG[msg.type] : undefined;
+    if (trackedName) lobby.trackAction(ws, trackedName);
     switch (msg?.type) {
+      case 'track':
+        // Client-reported place visit — validated, namespaced, and rate-limited in the lobby.
+        if (typeof msg.name === 'string') lobby.trackVisit(ws, msg.name);
+        break;
       case 'join':
         if (typeof msg.nickname === 'string' && typeof msg.pid === 'string') {
           // Authenticated users get their stable Google pid regardless of what the client sends.
@@ -847,7 +940,11 @@ async function shutdown(signal: string) {
   // stall the deploy — the bets Map is cleared synchronously, so nothing double-settles even if
   // a refund write times out.
   await Promise.race([
-    lobby.refundOpenBets().catch((e) => console.error('bet refund on shutdown failed:', e)),
+    Promise.all([
+      lobby.refundOpenBets().catch((e) => console.error('bet refund on shutdown failed:', e)),
+      // Best-effort: land the last few seconds of usage events before the process dies.
+      flushAnalytics().catch((e) => console.error('analytics flush on shutdown failed:', e)),
+    ]),
     new Promise((resolve) => setTimeout(resolve, 800).unref()),
   ]);
   saveSnapshot(game.serialize(), lobby.serialize());

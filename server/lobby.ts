@@ -116,6 +116,7 @@ import {
   type WorldFx,
   WORLD_BUILDINGS,
 } from '../shared/types';
+import { track } from './analytics';
 import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSelfElo, getSelfNetWorth, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   setCortisol, getCortisolBoard, getSelfCortisol,
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
@@ -276,6 +277,9 @@ const POLY_OVER_SECS = 5; // how long the arena win screen lingers before the ne
 const RESUME_GRACE = 45; // seconds a resumed match waits for seated players to reconnect
 const TOURNEY_INTER_MS = 5000; // pause between tournament matches so the result can be read
 const TOURNEY_DONE_MS = 12000; // how long the champion screen lingers before the tournament tears down
+const VISITS_PER_MINUTE = 30; // per-socket cap on client-reported {type:'track'} visit events
+// Rate-limit state for trackVisit(), keyed by socket (auto-cleaned when the socket is GC'd).
+const visitBudgets = new WeakMap<WebSocket, { n: number; resetAt: number }>();
 const MAX_TIP = 1_000_000; // sanity cap on a single /tip (balance is the real limit)
 const MAX_BOUNTY = 1_000_000; // sanity cap on a single bounty contribution (balance is the real limit)
 // --- Cortisol (stress gauge) tuning ---
@@ -3242,6 +3246,7 @@ export class Lobby {
           .then(() => { this.refreshLeaderboard(); this.refreshWalletsFor(winners); })
           .catch((e) => console.error('leaderboard update failed:', e));
         this.mintMatchHouse(); // pong mines coins for the treasury
+        track(winRefs[0].pid, winRefs[0].name, 'game.tournament.match'); // one usage event per bracket match
       }
       this.settleBets(winnerSide); // pay out spectator wagers on this match
       // Winning the championship pays 100 coins per player in the field (400 or 800),
@@ -3415,8 +3420,10 @@ export class Lobby {
   join(ws: WebSocket, nickname: string, pid: string, color?: string) {
     const conn = this.conns.get(ws);
     if (!conn) return;
+    const firstJoin = !conn.pid; // re-joins on the same socket are renames/reconnect races
     conn.pid = pid.slice(0, 64);
     conn.nickname = nickname.slice(0, 20).trim() || 'anon';
+    if (firstJoin) track(conn.pid, conn.nickname, 'session.join');
     if (color) conn.color = color;
     // Reclaim a seat / king / queue spot this identity held before a restart, if any.
     this.reattach(ws, conn);
@@ -3444,6 +3451,36 @@ export class Lobby {
     // Now that we know who they are, re-send the standings pinned with their own row even if
     // they're below the visible top-N.
     this.sendBoardsTo(ws).catch((e) => console.error('board personalise failed:', e));
+  }
+
+  /** Usage analytics: stamp a server-observed action against whoever this socket is. Called by
+   *  index.ts's dispatch for the curated message-type → event-name map. */
+  trackAction(ws: WebSocket, name: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    track(conn.pid, conn.nickname, name);
+  }
+
+  /** Usage analytics: a client-reported place visit ({type:'track'}). The name is validated and
+   *  prefixed 'visit.' so a tampered client can't forge server-authoritative event names, and
+   *  rate-limited per socket so it can't flood the events table. */
+  trackVisit(ws: WebSocket, name: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    if (!/^[a-z0-9_-]{1,32}$/.test(name)) return;
+    const now = Date.now();
+    const budget = visitBudgets.get(ws);
+    if (!budget || now > budget.resetAt) visitBudgets.set(ws, { n: 1, resetAt: now + 60_000 });
+    else if (++budget.n > VISITS_PER_MINUTE) return;
+    track(conn.pid, conn.nickname, `visit.${name}`);
+  }
+
+  /** Human sockets currently connected (the Observatory's "online now" tile). Bot seats use a
+   *  synthetic closed socket (makeBotSocket's readyState 3), so filtering on OPEN skips them. */
+  onlineCount(): number {
+    let n = 0;
+    for (const ws of this.conns.keys()) if (ws.readyState === ws.OPEN) n++;
+    return n;
   }
 
   /** Push this player's stored settings to them (so they sync across devices on sign-in). */
@@ -6583,6 +6620,7 @@ export class Lobby {
         .then(() => { this.refreshLeaderboard(); this.refreshWalletsFor(winnerConns); })
         .catch((e) => console.error('leaderboard update failed:', e));
       this.mintMatchHouse(); // pong mines coins for the treasury
+      track(winners[0].pid, winners[0].name, 'game.arena.match'); // one usage event per arena round
     }
   }
 
@@ -6675,6 +6713,7 @@ export class Lobby {
             .then(() => { this.refreshLeaderboard(); this.refreshWalletsFor(winners); })
             .catch((e) => console.error('leaderboard update failed:', e));
           this.mintMatchHouse(); // pong mines coins for the treasury
+          track(winRefs[0].pid, winRefs[0].name, 'game.pong.match'); // one usage event per settled duel
         }
         this.settleBets(winnerSide); // pay out spectator wagers on this match
         this.settleBounty(winners, losers); // pay any bounty on the loser to the winner

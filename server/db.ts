@@ -3,7 +3,7 @@
 // simply empty, so the rest of the app runs unchanged.
 
 import pg from 'pg';
-import { LeaderboardRow, NetWorthRow, CortisolRow, LEADERBOARD_SIZE, CORTISOL_MAX, CORTISOL_START, CampaignScoreRow, GolfScoreRow, StockSide, StockTf, positionWorth, EXCLUSIVES, isExclusive, WORLD_PARCELS } from '../shared/types';
+import { LeaderboardRow, NetWorthRow, CortisolRow, LEADERBOARD_SIZE, CORTISOL_MAX, CORTISOL_START, CampaignScoreRow, GolfScoreRow, StockSide, StockTf, positionWorth, EXCLUSIVES, isExclusive, WORLD_PARCELS, UsageStats } from '../shared/types';
 import type { NomicSnapshot } from './nomic';
 
 // Economy Overhaul: the House treasury is seeded ONCE with a genesis allocation. This is the
@@ -686,8 +686,105 @@ export async function initDb(): Promise<void> {
   for (const p of WORLD_PARCELS) {
     await pool.query(`INSERT INTO land_parcels (id) VALUES ($1) ON CONFLICT (id) DO NOTHING`, [p.id]);
   }
+  // Usage analytics: one row per tracked player action (see server/analytics.ts for the event
+  // taxonomy — 'game.*', 'casino.*', 'economy.*', 'visit.*', …). Append-only; the Observatory's
+  // charts aggregate it. `who` denormalizes the display name so the live feed needs no join.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS events (
+      id   BIGSERIAL PRIMARY KEY,
+      ts   TIMESTAMPTZ NOT NULL DEFAULT now(),
+      pid  TEXT NOT NULL DEFAULT '',
+      who  TEXT NOT NULL DEFAULT '',
+      name TEXT NOT NULL
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS events_ts_idx ON events (ts)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS events_name_ts_idx ON events (name, ts)`);
+  // Retention: the charts look back 14 days at most; keep a generous 90 and prune on boot.
+  await pool.query(`DELETE FROM events WHERE ts < now() - interval '90 days'`);
   await ensureNetizenChallengesTable();
   console.log('leaderboard DB ready');
+}
+
+// --- Usage analytics ---------------------------------------------------------------------
+
+// Bulk-append a flushed batch of tracked events (see analytics.ts's buffer). One UNNEST insert
+// per batch, not one round-trip per event.
+export async function insertUsageEvents(rows: { ts: number; pid: string; who: string; name: string }[]): Promise<void> {
+  if (!pool || !rows.length) return;
+  await pool.query(
+    `INSERT INTO events (ts, pid, who, name)
+       SELECT to_timestamp(t / 1000.0), pid, who, name
+       FROM UNNEST($1::double precision[], $2::text[], $3::text[], $4::text[]) AS u(t, pid, who, name)`,
+    [rows.map((r) => r.ts), rows.map((r) => r.pid), rows.map((r) => r.who), rows.map((r) => r.name)],
+  );
+}
+
+// Everything the Observatory charts need, in one round-trip's worth of aggregate queries.
+// Returns null without a DB so analytics.ts can fall back to its in-memory ring.
+export async function getUsageStatsFromDb(): Promise<Omit<UsageStats, 'generatedAt' | 'source' | 'onlineNow'> | null> {
+  if (!pool) return null;
+  const [tiles, hourly, daily, games, visits, actions, feed, star] = await Promise.all([
+    pool.query(
+      `SELECT count(*)::bigint AS events,
+              count(DISTINCT pid) FILTER (WHERE pid <> '')::bigint AS players,
+              count(*) FILTER (WHERE name LIKE 'game.%')::bigint AS games
+         FROM events WHERE ts > now() - interval '24 hours'`,
+    ),
+    pool.query(
+      `SELECT extract(epoch FROM date_trunc('hour', ts)) * 1000 AS t,
+              count(*)::bigint AS events,
+              count(DISTINCT pid) FILTER (WHERE pid <> '')::bigint AS players
+         FROM events WHERE ts > now() - interval '48 hours'
+         GROUP BY 1 ORDER BY 1`,
+    ),
+    pool.query(
+      `SELECT to_char(date_trunc('day', ts), 'YYYY-MM-DD') AS day,
+              count(DISTINCT pid) FILTER (WHERE pid <> '')::bigint AS players,
+              count(*)::bigint AS events
+         FROM events WHERE ts > now() - interval '14 days'
+         GROUP BY 1 ORDER BY 1`,
+    ),
+    pool.query(
+      `SELECT split_part(name, '.', 2) AS game, count(*)::bigint AS plays
+         FROM events WHERE ts > now() - interval '7 days' AND name LIKE 'game.%'
+         GROUP BY 1 ORDER BY 2 DESC, 1 ASC LIMIT 10`,
+    ),
+    pool.query(
+      `SELECT split_part(name, '.', 2) AS building, count(*)::bigint AS visits
+         FROM events WHERE ts > now() - interval '7 days' AND name LIKE 'visit.%'
+         GROUP BY 1 ORDER BY 2 DESC, 1 ASC LIMIT 10`,
+    ),
+    pool.query(
+      `SELECT name, count(*)::bigint AS count
+         FROM events WHERE ts > now() - interval '7 days'
+         GROUP BY 1 ORDER BY 2 DESC, 1 ASC LIMIT 10`,
+    ),
+    pool.query(
+      `SELECT extract(epoch FROM ts) * 1000 AS t, who, name
+         FROM events ORDER BY id DESC LIMIT 14`,
+    ),
+    pool.query(
+      `SELECT max(who) AS who, count(*)::bigint AS events
+         FROM events WHERE ts > now() - interval '7 days' AND pid <> ''
+         GROUP BY pid ORDER BY 2 DESC LIMIT 1`,
+    ),
+  ]);
+  const t = tiles.rows[0] ?? {};
+  return {
+    players24h: Number(t.players ?? 0),
+    events24h: Number(t.events ?? 0),
+    games24h: Number(t.games ?? 0),
+    hourly: hourly.rows.map((r) => ({ t: Number(r.t), events: Number(r.events), players: Number(r.players) })),
+    daily: daily.rows.map((r) => ({ day: r.day, players: Number(r.players), events: Number(r.events) })),
+    games7d: games.rows.map((r) => ({ game: r.game, plays: Number(r.plays) })),
+    visits7d: visits.rows.map((r) => ({ building: r.building, visits: Number(r.visits) })),
+    actions7d: actions.rows.map((r) => ({ name: r.name, count: Number(r.count) })),
+    feed: feed.rows.map((r) => ({ t: Number(r.t), who: r.who, name: r.name })),
+    starOfWeek: star.rows.length && star.rows[0].who
+      ? { who: star.rows[0].who, events: Number(star.rows[0].events) }
+      : null,
+  };
 }
 
 export interface DoomScoreRow { name: string; round: number; }
