@@ -12634,9 +12634,18 @@ export function startWorld(net: WorldNet): void {
         for (let r = 0; r < swampRows; r++) for (let c = 0; c < COLS; c++) {
           const h = hash(c + 613, r + 4409);
           const t = swampLayer.putTileAt(h > 0.95 ? TT.grass[2] : h > 0.5 ? TT.grass[1] : TT.grass[0], c, r);
-          // the murk rises with every step south — neutral at the town line, bog-dark by the bayou
-          const murk = Math.min(1, (r / swampRows) * 1.7) * (0.92 + hash(c * 7 + 1, r * 3 + 1) * 0.16);
-          t.tint = mixTint(Math.min(1, murk) * 0.62, 106, 138, 104);
+          // Boggy, not grassy: even the town line is already a dark sickly olive, and it sinks
+          // toward near-black peat by the bayou. Per-tile jitter keeps it wet and uneven, never lawn.
+          const depthF = Math.min(1, (r / swampRows) * 1.5);
+          const jit = hash(c * 7 + 1, r * 3 + 1);
+          // two moods mixed per tile: sickly olive-green and muddy brown, both dark
+          const olive = mixTint(0.55 + depthF * 0.4, 78, 96, 52);
+          const oliveR = (olive >> 16) & 255, oliveG = (olive >> 8) & 255, oliveB = olive & 255;
+          const mud = 0x4a3c26;
+          const k = jit > 0.62 ? 0.5 : 0; // muddy patches
+          t.tint = (Math.round(oliveR + (((mud >> 16) & 255) - oliveR) * k) << 16)
+            | (Math.round(oliveG + (((mud >> 8) & 255) - oliveG) * k) << 8)
+            | Math.round(oliveB + ((mud & 255) - oliveB) * k);
         }
       }
       {
@@ -12646,7 +12655,7 @@ export function startWorld(net: WorldNet): void {
         for (let r = 0; r < ROWS; r++) for (let c = 0; c < DSTRIP; c++) {
           // easternmost column keeps its grass fringe (the dirt autotile's right-border frame)
           const t = edgeLayer.putTileAt(c === DSTRIP - 1 ? TT.dirt[5] : TT.dirt[4], c, r);
-          t.tint = mixTint(((DSTRIP - 1 - c) / DSTRIP) * 0.9, 252, 200, 142); // warming toward the NA sand
+          t.tint = mixTint(((DSTRIP - 1 - c) / DSTRIP) * 0.9, 230, 193, 132); // warming toward the smooth sand (0xe6c184)
         }
       }
 
@@ -14171,25 +14180,28 @@ export function startWorld(net: WorldNet): void {
     // real Ninja Adventure sand tiles when they've loaded, with ragged wind-pans, ridge rings and
     // mounds cut from the same sheet — the flat rect + doodles only remain as a fallback.
     const fw = ci === 0 ? CHUNK_W - 256 : CHUNK_W;
-    if (sc.textures.exists('na-sand-field')) {
-      const floor = sc.add.tileSprite(x0, 0, fw, WORLD.h, 'na-sand-field').setOrigin(0, 0).setTileScale(2, 2).setDepth(-10);
+    if (sc.textures.exists('w-desert-sand')) {
+      const floor = sc.add.tileSprite(x0, 0, fw, WORLD.h, 'w-desert-sand').setOrigin(0, 0).setDepth(-10);
       c.add(floor);
-      for (let i = 0; i < 3; i++) { // wind-pans: ragged ridge-rimmed depressions
-        const pw = 150 + rnd() * 200;
-        const pan = sc.add.image(x0 + rnd() * (CHUNK_W - 200) + 100, 160 + rnd() * (WORLD.h - 380), 'na-sand-pan')
-          .setDisplaySize(pw, pw * (0.62 + rnd() * 0.25)).setDepth(-9);
-        c.add(pan);
+      // soft dune shading: broad translucent light/shadow lobes for gentle relief (no hard rings)
+      const dg = sc.add.graphics().setDepth(-9);
+      for (let i = 0; i < 6; i++) {
+        const dx = x0 + rnd() * CHUNK_W, dy = 120 + rnd() * (WORLD.h - 240);
+        const dw = 220 + rnd() * 360, dh = 90 + rnd() * 150;
+        dg.fillStyle(rnd() > 0.5 ? 0xf2d49a : 0xcea46a, 0.16); // sun-lit crest / shaded trough
+        dg.fillEllipse(dx, dy, dw, dh);
       }
-      for (let i = 0; i < 2; i++) { // small ridge rings
-        const ring = sc.add.image(x0 + rnd() * (CHUNK_W - 120) + 60, 140 + rnd() * (WORLD.h - 320), 'na-sand-ring')
-          .setScale(1.6 + rnd() * 1.2).setDepth(-9);
-        c.add(ring);
+      c.add(dg);
+      // a few darker wind-scour streaks, long and low, following the dune lines
+      const wg = sc.add.graphics().setDepth(-9);
+      wg.lineStyle(2, 0xc49a64, 0.28);
+      for (let i = 0; i < 4; i++) {
+        const sy = 120 + rnd() * (WORLD.h - 240), sx = x0 + rnd() * (CHUNK_W - 300);
+        wg.beginPath();
+        for (let x = 0; x <= 280; x += 8) wg.lineTo(sx + x, sy + Math.sin(x / 40 + i) * 10);
+        wg.strokePath();
       }
-      for (let i = 0; i < 3; i++) { // mounds
-        const m = sc.add.image(x0 + rnd() * (CHUNK_W - 80) + 40, 120 + rnd() * (WORLD.h - 280), 'na-sand-mound')
-          .setScale(1.4 + rnd() * 1.2).setDepth(-9);
-        c.add(m);
-      }
+      c.add(wg);
     } else {
       const floor = sc.add.rectangle(x0 + fw / 2, WORLD.h / 2, fw, WORLD.h, 0xf8c586).setDepth(-10);
       c.add(floor);
@@ -14236,6 +14248,34 @@ export function startWorld(net: WorldNet): void {
 
   function makeDesert(sc: Phaser.Scene) {
     desertSc = sc;
+    // A clean, smooth procedural sand tile — warm, soft, low-contrast speckle only, no busy
+    // repeating pattern (the old asset tiled like brickwork). Seamless: speckle wraps, so a
+    // tileSprite of it reads as an endless calm dune field. Generated once, reused per chunk.
+    if (!sc.textures.exists('w-desert-sand')) {
+      const S = 64, cv = document.createElement('canvas'); cv.width = S; cv.height = S;
+      const cx = cv.getContext('2d');
+      if (cx) {
+        // warm base gradient (very subtle) so it isn't a dead flat fill
+        cx.fillStyle = '#e6c184'; cx.fillRect(0, 0, S, S);
+        // fine speckle, low contrast, tinted warm — a couple hundred soft dots
+        const sr = mulberry32(0x5A11D);
+        for (let i = 0; i < 900; i++) {
+          const x = sr() * S, y = sr() * S, r = 0.5 + sr() * 1.2;
+          const up = sr() > 0.5;
+          cx.fillStyle = up ? `rgba(245,225,180,${0.25 + sr() * 0.3})` : `rgba(198,158,104,${0.18 + sr() * 0.28})`;
+          cx.beginPath(); cx.arc(x, y, r, 0, 7); cx.fill();
+        }
+        // a few gentle wind ripples (soft translucent arcs), drawn wrapping so they tile
+        cx.strokeStyle = 'rgba(206,168,112,0.35)'; cx.lineWidth = 1.2;
+        for (let i = 0; i < 5; i++) {
+          const y0 = sr() * S;
+          cx.beginPath();
+          for (let x = 0; x <= S; x += 4) cx.lineTo(x, (y0 + Math.sin(x / 9 + i) * 3 + S) % S);
+          cx.stroke();
+        }
+      }
+      sc.textures.addCanvas('w-desert-sand', cv);
+    }
     // runtime-load the Kenney cacti (chunks built before they land use px props; later chunks mix)
     sc.load.image('d-cactus1', '/desert/cactus-hex1.png');
     sc.load.image('d-cactus2', '/desert/cactus-hex2.png');
@@ -15720,12 +15760,30 @@ export function startWorld(net: WorldNet): void {
     }
     g.destroy();
 
-    // --- ground: the tile lawn continues from town, tinted murkier per-tile the deeper south
-    // you go (see the swampGround tilemap layer). Here we just lay wet mottle over it.
-    const mott = sc.add.graphics().setDepth(-29);
-    for (let i = 0; i < 90; i++) {
-      mott.fillStyle(rnd() > 0.5 ? 0x2c3d28 : 0x3a4c34, 0.32);
-      mott.fillEllipse(rnd() * WORLD.w, top + 300 + rnd() * (SOUTH.h - 400), 80 + rnd() * 160, 30 + rnd() * 60);
+    // --- ground: the dark boggy tilemap (see swampGround) gets a proper swamp dressing on top —
+    // sheets of standing murk-water, big mud flats, and wet mottle, so it never reads as lawn. ---
+    const naMudBase = sc.textures.exists('na-mud-field');
+    // broad muddy flats: real Ninja Adventure mud, murk-tinted, scattered thickly across the bog
+    if (naMudBase) {
+      for (let i = 0; i < 34; i++) {
+        const mw = 200 + rnd() * 420, mh = 120 + rnd() * 220;
+        const mx = rnd() * WORLD.w, my = top + 160 + rnd() * (SWAMP_SHORE_Y - top - 260);
+        sc.add.tileSprite(mx - mw / 2, my - mh / 2, mw, mh, 'na-mud-field').setTileScale(2, 2)
+          .setTint(0x6a5a3e).setAlpha(0.5 + rnd() * 0.3).setDepth(-27);
+      }
+    }
+    // standing water: dark sheets of still murk, with a faint algal sheen
+    for (let i = 0; i < 26; i++) {
+      const ww = 180 + rnd() * 340, wh = 90 + rnd() * 150;
+      const wx = rnd() * WORLD.w, wy = top + 220 + rnd() * (SWAMP_SHORE_Y - top - 340);
+      sc.add.ellipse(wx, wy, ww, wh, 0x243a30, 0.55).setDepth(-27);
+      sc.add.ellipse(wx, wy, ww * 0.8, wh * 0.8, 0x2e4a3a, 0.4).setDepth(-26);
+      sc.add.ellipse(wx - ww * 0.12, wy - wh * 0.14, ww * 0.4, wh * 0.28, 0x4a7a5a, 0.22).setDepth(-26); // algal glint
+    }
+    const mott = sc.add.graphics().setDepth(-25);
+    for (let i = 0; i < 150; i++) {
+      mott.fillStyle(rnd() > 0.5 ? 0x1f2c1a : 0x3a2e1c, 0.28);
+      mott.fillEllipse(rnd() * WORLD.w, top + 200 + rnd() * (SOUTH.h - 300), 50 + rnd() * 120, 22 + rnd() * 46);
     }
     // --- the Endless Bayou along the bottom (the pier is the only way out over it) ---
     const naMud = sc.textures.exists('na-mud-field');
