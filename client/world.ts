@@ -243,6 +243,7 @@ export interface WorldNet {
   leaderboard(): { name: string; wins: number; losses: number; elo: number; title?: string | null }[]; // live pong standings (pre-ranked)
   netWorth(): { name: string; net: number; coins: number; loan: number; title?: string | null }[];     // live net-worth board (pre-ranked)
   cortisolBoard(): { name: string; cortisol: number; title?: string | null }[];                        // live Cortisol board (pre-ranked low→high)
+  levelBoard(): { name: string; xp: number; title?: string | null }[];                                  // live Levels board (pre-ranked by lifetime XP)
   // Our own rank + stat when we're NOT already in the visible top-N above (mirrors the toolbar
   // boards' pinned self-row) — null once we're already shown in leaderboard()/netWorth().
   selfLbRow(): { rank: number; elo: number } | null;
@@ -3935,6 +3936,31 @@ export function startWorld(net: WorldNet): void {
       e.style.cssText = 'color:#6b7796;font-size:12px;padding:4px 8px;text-align:left;';
       list.appendChild(e);
     };
+
+    // ⭐ Levels — top players by lifetime XP
+    const lvlList = buildSection('⭐ Levels', '#ffd23f');
+    const lvb = net.levelBoard().slice(0, 8);
+    if (!lvb.length) emptyRow(lvlList, 'No XP earned yet — go win something.');
+    lvb.forEach((r, i) => {
+      const self = r.name === myName;
+      const bg = self ? '#0a1020' : i % 2 ? '#18203a' : 'transparent';
+      const row = document.createElement('div');
+      row.style.cssText = rowStyle(bg, self).replace('cursor:pointer;', 'cursor:default;');
+      hoverable(row, bg);
+      const rank = document.createElement('span');
+      rank.textContent = `${i + 1}`;
+      rank.style.cssText = 'color:#6b7796;width:18px;flex-shrink:0;font-size:13px;';
+      const name = document.createElement('span');
+      name.textContent = r.name;
+      name.style.cssText = `flex:1;font-size:13px;color:${self ? '#b8c8e8' : '#cdd7f5'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`;
+      const { level } = levelForXp(r.xp);
+      const val = document.createElement('span');
+      val.textContent = `Lv ${level} · ${Math.round(r.xp).toLocaleString()} XP`;
+      val.style.cssText = `font-size:12px;color:${self ? '#ffd23f' : '#e8b84b'};font-variant-numeric:tabular-nums;flex-shrink:0;`;
+      const tag = titleFlairTag(r.title);
+      row.append(rank, name, ...(tag ? [tag] : []), val);
+      lvlList.appendChild(row);
+    });
 
     // 🏓 Leaderboard
     const lbList = buildSection('🏓 Pong Leaderboard', '#7da2ff');
@@ -17128,16 +17154,20 @@ export function startWorld(net: WorldNet): void {
   }
 
   // The player took a hit from a mob (contact or projectile). Damage scales with biome difficulty
-  // (already baked into spec.dmg). Drives the health bar; at 0 you die.
+  // (already baked into spec.dmg). You take hits on foot OR in a car — the car is a little armor,
+  // not immunity (a big enough hit can still blow it up). Drives the health bar; at 0 you die.
   function damagePlayer(dmg: number, srcX: number, srcY: number, label: string) {
     const now = performance.now();
-    if (playerDead || driving || inInterior || inDungeon) return;
+    if (playerDead || inInterior || inDungeon) return;
     if (now < mobBiteCooldown) return; // brief i-frames so you're not chain-shredded
     mobBiteCooldown = now + 650;
-    // dmg came in as a "stun ms" figure historically; convert to HP loss (roughly 1 HP per 50ms)
-    const hpLoss = Math.max(4, Math.round(dmg / 45));
+    // dmg came in as a "stun ms" figure historically; convert to HP loss (roughly 1 HP per 45ms).
+    // A car soaks ~40% of the blow (you're behind metal) but still takes the rest.
+    const hpLoss = Math.max(4, Math.round((dmg / 45) * (driving ? 0.6 : 1)));
     playerHp = Math.max(0, playerHp - hpLoss);
     lastDamagedAt = now;
+    // a hard enough hit while driving wrecks the car (and knocks you out of it)
+    if (driving && hpLoss >= 14) { if (blowUpMyCar('💥 A mob wrecked your car!')) net.blownUp(true, true); }
     stunnedUntil = now + Math.min(500, dmg * 0.35); keys.clear();
     // knockback
     const a = Math.atan2(selfY - srcY, selfX - srcX);
@@ -17191,7 +17221,8 @@ export function startWorld(net: WorldNet): void {
       p.t += dt;
       p.x += p.vx * dt; p.y += p.vy * dt;
       p.spr.setPosition(p.x, p.y).setRotation(p.spr.rotation + dt * 8);
-      const hitSelf = !playerDead && !driving && Math.hypot(p.x - selfX, p.y - (selfY - 14)) < R + 6;
+      const reach = driving ? CAR_LEN * 0.5 : R + 6;
+      const hitSelf = !playerDead && Math.hypot(p.x - selfX, p.y - (selfY - 14)) < reach;
       if (hitSelf) { damagePlayer(p.dmg, p.x, p.y, 'A ranged hit'); p.spr.destroy(); mobProjectiles.splice(i, 1); continue; }
       if (p.t > 2.4 || hitsWorld(p.x, p.y)) { p.spr.destroy(); mobProjectiles.splice(i, 1); }
     }
@@ -17204,7 +17235,7 @@ export function startWorld(net: WorldNet): void {
     if (!playerHpBar) playerHpBar = sc.add.graphics();
     playerHpBar.clear();
     // shown floating over your head whenever you're out in a biome (a danger zone) and alive
-    if (currentBiome() === null || playerDead || driving) return;
+    if (currentBiome() === null || playerDead) return;
     const frac = Math.max(0, playerHp / PLAYER_MAX_HP);
     const bw = 40, bx = selfX - bw / 2, by = selfY - R - 44;
     playerHpBar.fillStyle(0x000000, 0.5); playerHpBar.fillRect(bx - 2, by - 2, bw + 4, 8);
@@ -17268,8 +17299,8 @@ export function startWorld(net: WorldNet): void {
           m.x += (dx / mag) * sp; m.y += (dy / mag) * sp;
           if (Math.abs(dx) > 1) m.spr.setFlipX(dx < 0);
         }
-        // melee contact → real HP damage (i-frames handled in damagePlayer)
-        if (!spec.ranged && distToSelf < R + 10 && now >= stunnedUntil && !driving) {
+        // melee contact → real HP damage, on foot OR in a car (i-frames handled in damagePlayer)
+        if (!spec.ranged && distToSelf < (driving ? CAR_LEN * 0.5 : R + 10)) {
           damagePlayer(spec.dmg, m.x, m.y, spec.label);
         }
       }

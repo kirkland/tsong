@@ -30,6 +30,7 @@ import {
   LeaderboardRow,
   NetWorthRow,
   CortisolRow,
+  LevelRow,
   CORTISOL_MAX,
   BalanceSheetMsg,
   EloProfileMsg,
@@ -416,6 +417,7 @@ let dayNightOffset = 0; // ms offset for the day/night clock, randomized per ser
 let lastLbRows: LeaderboardRow[] = [];
 let lastNwRows: NetWorthRow[] = [];
 let lastCortisolRows: CortisolRow[] = [];
+let lastLevelRows: LevelRow[] = [];
 // Cached "self" pin-rows so plain re-renders (e.g. on a bounty update) keep showing the
 // player's own row when they're below the visible top-N.
 let lastLbSelfElo: number | undefined;
@@ -788,6 +790,8 @@ const net = connect(
       renderNetWorth(msg.rows, msg.selfRow, msg.selfRank);
     } else if (msg.type === 'cortisol') {
       renderCortisol(msg.rows, msg.selfCortisol, msg.selfRank);
+    } else if (msg.type === 'levelBoard') {
+      lastLevelRows = msg.rows;
     } else if (msg.type === 'balanceSheet') {
       // A World Hall of Fame row may have fired this — if World's still open, render it there
       // instead of the toolbar modal (which would be hidden behind World's overlay anyway).
@@ -2716,6 +2720,7 @@ worldBtn.addEventListener('click', async () => {
       leaderboard: () => lastLbRows,
       netWorth: () => lastNwRows,
       cortisolBoard: () => lastCortisolRows,
+      levelBoard: () => lastLevelRows,
       selfLbRow: () => (lastLbSelfElo !== undefined && lastLbSelfRank !== undefined)
         ? { rank: lastLbSelfRank, elo: lastLbSelfElo } : null,
       selfNwRow: () => (lastNwSelfRow !== undefined && lastNwSelfRank !== undefined)

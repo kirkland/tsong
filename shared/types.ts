@@ -1582,6 +1582,20 @@ export interface CortisolMsg {
   selfRank?: number;
 }
 
+// The Levels board (Hall of Fame): top players by lifetime XP. The client derives the level +
+// progress from `xp` via levelForXp. `selfXp`/`selfRank` pin the recipient when below the top-N.
+export interface LevelRow {
+  name: string;
+  xp: number;
+  title?: string | null;
+}
+export interface LevelBoardMsg {
+  type: 'levelBoard';
+  rows: LevelRow[];
+  selfXp?: number;
+  selfRank?: number;
+}
+
 // One line item on a player's balance sheet: an open stock position valued live.
 export interface BalanceSheetHolding {
   coin: string;       // display name (e.g. "Davis Clarke Coin")
@@ -1785,6 +1799,7 @@ export type ServerMsg =
   | NomStateMsg
   | EloProfileMsg
   | CortisolMsg
+  | LevelBoardMsg
   | SeasonPassMsg
   | MatchStatsMsg
   // --- Bolwoing Alley server→client messages ---
