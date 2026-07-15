@@ -100,6 +100,7 @@ import {
   LOOT_TABLE,
   type BgLobbyMsg,
   type GolfScoreRow,
+  levelForXp,
 } from '../shared/types';
 import { drawCosmeticPreview, drawLegendIcon } from './render';
 
@@ -116,6 +117,7 @@ export interface WorldWallet {
   bets: { side: Side; amount: number; odds: number }[];
   nextSpinAt: number;
   bonusSpins: number;
+  xp: number;
 }
 // Live-betting section state for World's shop dialog (mirrors main.ts's syncBetSection() inputs).
 export interface WorldBetInfo {
@@ -2771,6 +2773,43 @@ export function startWorld(net: WorldNet): void {
     'border-radius:8px;padding:6px 11px;font-size:13px;font-weight:700;text-shadow:0 1px 3px #000a;';
   function updateCoinsHud() { coinsHud.textContent = `🪙 ${Math.round(net.wallet().coins).toLocaleString()}`; }
   updateCoinsHud();
+  // Account level + XP bar, right by the coins. Earned by winning matches, minigames, fishing,
+  // the dungeon, blasting biome critters, and generally doing things.
+  const lvlHud = document.createElement('div');
+  lvlHud.style.cssText =
+    'pointer-events:none;background:#1b2542;border:1px solid #2c3a63;border-radius:8px;' +
+    'padding:6px 10px;display:flex;align-items:center;gap:7px;text-shadow:0 1px 3px #000a;';
+  const lvlHudTxt = document.createElement('span');
+  lvlHudTxt.style.cssText = 'color:#ffd23f;font-size:12px;font-weight:800;letter-spacing:.3px;';
+  const lvlHudTrack = document.createElement('div');
+  lvlHudTrack.style.cssText = 'width:52px;height:8px;background:#11182c;border-radius:5px;overflow:hidden;';
+  const lvlHudFill = document.createElement('div');
+  lvlHudFill.style.cssText = 'height:100%;width:0%;border-radius:5px;background:linear-gradient(90deg,#ffd23f,#ff8a3f);transition:width .3s ease;';
+  lvlHudTrack.appendChild(lvlHudFill);
+  lvlHud.append(lvlHudTxt, lvlHudTrack);
+  let lastLevel = -1;
+  function updateLevelHud() {
+    const { level, into, need } = levelForXp(net.wallet().xp ?? 0);
+    lvlHudTxt.textContent = `Lv ${level}`;
+    lvlHudFill.style.width = `${Math.max(0, Math.min(100, Math.round((into / Math.max(1, need)) * 100)))}%`;
+    if (lastLevel >= 0 && level > lastLevel) worldLevelUp(level);
+    lastLevel = level;
+  }
+  // A small in-World celebration when you cross a level boundary (the toolbar's own confetti is
+  // hidden behind the World overlay, so the World throws its own).
+  function worldLevelUp(level: number) {
+    showToast(`⭐ <b>LEVEL ${level}!</b>`);
+    const sc = lifeSc;
+    if (sc) {
+      for (let i = 0; i < 14; i++) {
+        const st = sc.add.text(selfX, selfY - 20, '⭐', { fontSize: `${12 + Math.random() * 12}px` }).setOrigin(0.5).setDepth(999999);
+        const a = Math.random() * Math.PI * 2, d = 40 + Math.random() * 90;
+        sc.tweens.add({ targets: st, x: selfX + Math.cos(a) * d, y: selfY - 20 + Math.sin(a) * d, alpha: 0, duration: 900 + Math.random() * 500, ease: 'Quad.easeOut', onComplete: () => st.destroy() });
+      }
+    }
+    tone(660, 0.15, 'square', 0.05, 990); window.setTimeout(() => tone(880, 0.2, 'sine', 0.05, 1320), 120);
+  }
+  updateLevelHud();
   // Cortisol gauge, right next to the coins — a small labelled bar (no number), green (calm) → red
   // (maxed). Kept in sync by updateCortHud(), called here and whenever the "Cortisol" board updates.
   const cortHud = document.createElement('div');
@@ -2822,7 +2861,7 @@ export function startWorld(net: WorldNet): void {
   backBtn.style.cssText =
     'pointer-events:auto;cursor:pointer;background:#1b2542;color:#cdd8f5;' +
     'border:1px solid #2c3a63;border-radius:8px;padding:7px 12px;font-size:13px;';
-  topbar.append(title, coinsHud, cortHud, count, muteBtn, renameBtn, driveBtn, backBtn);
+  topbar.append(title, coinsHud, lvlHud, cortHud, count, muteBtn, renameBtn, driveBtn, backBtn);
   overlay.appendChild(topbar);
 
   // Weekly objectives panel (top-left, under the title). Its `top` is recomputed from the
@@ -17254,7 +17293,7 @@ export function startWorld(net: WorldNet): void {
     },
     feedEloProfile(msg) { renderEloProfile(msg); },
     feedBalanceSheet(msg) { renderBalanceSheet(msg); },
-    feedWallet() { updateCoinsHud(); if (shopDialogOpen) renderShopDialog(); },
+    feedWallet() { updateCoinsHud(); updateLevelHud(); if (shopDialogOpen) renderShopDialog(); },
     feedCortisol() { updateCortHud(); },
     feedNews() { if (newsDialogOpen) { const list = dialogBox.querySelector<HTMLDivElement>('#newsWorldList'); if (list) renderNewsWorldList(list); } },
     feedLoan() {

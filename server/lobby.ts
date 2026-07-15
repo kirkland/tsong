@@ -37,6 +37,7 @@ import {
   Side,
   SPIN_SEGMENTS,
   COIN_SCALE,
+  levelForXp,
   ROULETTE_PAYOUTS,
   ROULETTE_MAX_TOTAL,
   RouletteBet,
@@ -125,7 +126,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   recordGolfScore, getGolfLeaderboard,
   recordGhScore, getGhLeaderboard, GhScoreRow,
   bumpCounter,
-  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS, getAssessableWealth, stampActivity, getJailed, setJailed,
+  getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS, getAssessableWealth, stampActivity, getJailed, setJailed, grantXp,
   getOpenedChests, addOpenedChests,
   getHoldings, investStock, closePosition, getStockPrices, saveStockPrices, getStockHistory, saveStockHistory,
   setStockCrashAt, getMarketInstability, setMarketInstability,
@@ -3536,7 +3537,7 @@ export class Lobby {
         c.song = w.song;
         c.balltrail = w.balltrail;
         c.goalcelebr = w.goalcelebr;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, boat: w.boat, pet: w.pet, balltrail: w.balltrail, goalcelebr: w.goalcelebr, carcolor: w.carcolor, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, boat: w.boat, pet: w.pet, balltrail: w.balltrail, goalcelebr: w.goalcelebr, carcolor: w.carcolor, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins, xp: w.xp });
       })
       .catch((e) => console.error('wallet load failed:', e));
   }
@@ -3550,7 +3551,7 @@ export class Lobby {
         const c = this.conns.get(ws);
         if (!c) return;
         c.hat = w.hat; c.skin = w.skin; c.trail = w.trail; c.title = w.title; c.song = w.song; c.balltrail = w.balltrail; c.goalcelebr = w.goalcelebr;
-        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, boat: w.boat, pet: w.pet, balltrail: w.balltrail, goalcelebr: w.goalcelebr, carcolor: w.carcolor, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins });
+        this.tell(ws, { type: 'wallet', coins: w.coins, owned: w.owned, hat: w.hat, skin: w.skin, trail: w.trail, title: w.title, song: w.song, car: w.car, boat: w.boat, pet: w.pet, balltrail: w.balltrail, goalcelebr: w.goalcelebr, carcolor: w.carcolor, exclusives: w.exclusives, bets: this.betsView(ws), nextSpinAt: nextSpinAt(w.lastSpin), bonusSpins: w.bonusSpins, xp: w.xp });
       })
       .catch((e) => console.error('wallet send failed:', e));
   }
@@ -4516,7 +4517,40 @@ export class Lobby {
     this.houseBalance = after;
     await addCoins(pid, name, pay);
     this.broadcastHouse();
+    // Every House-funded reward (pong wins, minigame wins, the dungeon, quests, fishing, …) also
+    // earns account XP — dampened + capped so one big payout can't trivialize leveling, and small
+    // wins still count. Gambling payouts go through addCoins, NOT here, so they don't grant XP.
+    void this.awardXp(pid, name, Math.min(150, Math.max(1, Math.round(requested / 40))));
     return pay;
+  }
+
+  // Grant account XP and, if it crosses one or more level boundaries, celebrate: a small
+  // House-minted coin bonus, a levelUp message (client throws confetti), a notify, and a fresh
+  // wallet push so the HUD's level badge/bar updates immediately. Fire-and-forget; never throws.
+  private async awardXp(pid: string, name: string, amount: number): Promise<void> {
+    if (!pid || !(amount > 0)) return;
+    try {
+      const res = await grantXp(pid, name, amount);
+      if (!res) return;
+      const before = levelForXp(res.before).level;
+      const now = levelForXp(res.xp).level;
+      const ws = this.wsOfPid(pid);
+      if (now > before) {
+        // A modest, scaling level-up bonus, minted fresh (not from the House, so an empty House
+        // never denies the reward). Capped so a huge single grant that skips levels stays sane.
+        const levels = Math.min(now, before + 5);
+        let reward = 0;
+        for (let L = before + 1; L <= levels; L++) reward += 200 + L * 40;
+        await addCoins(pid, name, reward).catch(() => {});
+        if (ws) {
+          this.tell(ws, { type: 'levelUp', level: now, reward });
+          this.notify(ws, `⭐ LEVEL ${now}! +${reward.toLocaleString()}🪙`);
+        }
+      }
+      if (ws) this.sendWallet(ws);
+    } catch (e) {
+      console.error('awardXp failed:', e);
+    }
   }
 
   /** Push coins INTO the House (a sink: roulette stakes, lost bets, loot-box price, commission,
@@ -6714,6 +6748,10 @@ export class Lobby {
             .catch((e) => console.error('leaderboard update failed:', e));
           this.mintMatchHouse(); // pong mines coins for the treasury
           track(winRefs[0].pid, winRefs[0].name, 'game.pong.match'); // one usage event per settled duel
+          // Pong is the core loop and mints its coins outside housePay, so grant its XP directly:
+          // a solid chunk for the win, a consolation for the loss (showing up still counts).
+          for (const r of winRefs) void this.awardXp(r.pid, r.name, 45);
+          for (const r of loseRefs) void this.awardXp(r.pid, r.name, 15);
         }
         this.settleBets(winnerSide); // pay out spectator wagers on this match
         this.settleBounty(winners, losers); // pay any bounty on the loser to the winner
