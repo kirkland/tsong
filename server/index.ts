@@ -433,7 +433,7 @@ wss.on('connection', (ws: WebSocket, req) => {
         lobby.clubJoin(ws).catch((e) => console.error('club join failed:', e));
         break;
       case 'clubDrink':
-        lobby.clubDrink(ws);
+        if (typeof msg.tier === 'number') lobby.clubDrink(ws, msg.tier);
         break;
       case 'bgJoin':
         if (typeof msg.game === 'string') lobby.bgJoin(ws, msg.game);

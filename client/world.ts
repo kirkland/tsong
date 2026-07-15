@@ -232,7 +232,7 @@ export interface WorldNet {
   marketList(instanceId: number, ask: number): void;
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' | 'monsterjam' | 'chess' | 'morris' | 'ski'): void; // open a DOOM/Fishing/Arcade/Bowling feature — every Casino game + Notice-Board panel is a native World dialog now
+  openFeature(feature: 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' | 'monsterjam' | 'chess' | 'morris' | 'ski' | 'billiards'): void; // open a DOOM/Fishing/Arcade/Bowling feature — every Casino game + Notice-Board panel is a native World dialog now
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   openRename(): void;            // World's own 👤 button → reopen the nickname/color picker
   muted(): boolean;              // is game sound currently muted?
@@ -266,7 +266,7 @@ export interface WorldNet {
   wish(): void;                                        // toss 10 coins into the fountain
   owns(id: string): boolean;                           // do we own this cosmetic/item id? (wallet.owned)
   joinClub(): void;                                    // apply to the Country Club (server validates the 1,000,000🪙 fee)
-  clubDrink(): void;                                   // order the '52 Reserve at the 19th Hole (server charges)
+  clubDrink(tier: number): void;                       // order off the 19th Hole's menu (server charges)
   // The Course — 2-4 player PvP rounds ride the same bg-relay room shape as chess/morris/ski
   // (game key 'golf'), just fed straight back into World instead of a lazy-loaded overlay, since
   // golf is played in-place on the grounds rather than in a teleported-away minigame.
@@ -659,8 +659,11 @@ const CLUB_SPOTS = {
   trophies: { x: CLUB_INT.x + CLUB_INT.w / 2 + 280, y: CLUB_INT.y + 140 },
   portrait: { x: CLUB_INT.x + CLUB_INT.w / 2, y: CLUB_INT.y + 150 },
   candle:   { x: CLUB_INT.x + 470, y: CLUB_INT.y + 140 },  // the suspiciously polished one
-  games:    { x: CLUB_INT.x + CLUB_INT.w / 2 + 40, y: CLUB_INT.y + 470 }, // the game table (chess + morris)
+  games:    { x: CLUB_INT.x + CLUB_INT.w / 2 + 40, y: CLUB_INT.y + 470 }, // the game table (chess + morris + billiards)
   fire:     { x: CLUB_INT.x + 330, y: CLUB_INT.y + 120 },  // hearth centre
+  wall:     { x: CLUB_INT.x + 170, y: CLUB_INT.y + 140 },  // the Wall of Fame — real names, real strokes
+  jukebox:  { x: CLUB_INT.x + CLUB_INT.w - 100, y: CLUB_INT.y + 560 }, // the lounge's one indulgence
+  clock:    { x: CLUB_INT.x + CLUB_INT.w - 100, y: CLUB_INT.y + 710 }, // the grandfather clock, always exactly on time
 } as const;
 // Every casino game gets its own walk-up cabinet on the gaming floor. `feature` is the same key
 // net.openFeature() already understands (these games already work via the exterior building's
@@ -9619,7 +9622,7 @@ export function startWorld(net: WorldNet): void {
     nearClubSpot = null;
     if (inClub && !nearExit && !nearNpc) {
       let cd = 52;
-      for (const key of ['putt', 'registry', 'trophies', 'portrait', 'candle', 'games'] as const) {
+      for (const key of ['putt', 'registry', 'trophies', 'portrait', 'candle', 'games', 'wall', 'jukebox', 'clock'] as const) {
         const s = CLUB_SPOTS[key];
         const d = Math.hypot(selfX - s.x, selfY - s.y);
         if (d < cd) { cd = d; nearClubSpot = key; }
@@ -9725,6 +9728,9 @@ export function startWorld(net: WorldNet): void {
         : nearClubSpot === 'trophies' ? '🏆 Examine the trophies'
         : nearClubSpot === 'portrait' ? '🖼️ Regard The Founder'
         : nearClubSpot === 'games' ? '♟️ The game table (PvP)'
+        : nearClubSpot === 'wall' ? '🏆 The Wall of Fame'
+        : nearClubSpot === 'jukebox' ? '🎵 The gramophone'
+        : nearClubSpot === 'clock' ? '🕰️ The grandfather clock'
         : '🕯️ A suspiciously polished candlestick';
     } else if (nearTavernMorris) {
       prompt.textContent = "⊞ Nine Men's Morris (PvP)";
@@ -14588,11 +14594,13 @@ export function startWorld(net: WorldNet): void {
   let founderPupils: Phaser.GameObjects.Arc[] = [];
   let clubFireGlow: Phaser.GameObjects.Arc | null = null;
   let loungeTimer = 0;
+  let loungeStyle = 0; // which LOUNGE_STYLES entry the gramophone is currently playing
+  let lastClockChime = 0;
   let puttBall: Phaser.GameObjects.Arc | null = null;
   let puttMeter: Phaser.GameObjects.Graphics | null = null;
   let puttCharging = false, puttBusy = false, puttPhase = 0, puttStreak = 0;
   let puttStreakTxt: Phaser.GameObjects.Text | null = null;
-  let nearClubSpot: 'putt' | 'registry' | 'trophies' | 'portrait' | 'candle' | 'games' | null = null;
+  let nearClubSpot: 'putt' | 'registry' | 'trophies' | 'portrait' | 'candle' | 'games' | 'wall' | 'jukebox' | 'clock' | null = null;
   let nearClubDoor = false; // standing at the exterior clubhouse door (join / enter)
   let nearTavernMorris = false; // standing at the Tavern's corner board
   let vaultSwan: { spr: Phaser.GameObjects.Image; x: number; y: number; tx: number; ty: number } | null = null;
@@ -14676,6 +14684,33 @@ export function startWorld(net: WorldNet): void {
       px2(4, 14, 18, 2, AU_D);
       g.generateTexture('w-club-gold', 26, 16);
     }
+    { // the Wall of Fame: a brass-plated board, three nameplate rows waiting for real names, 26×22
+      const WD = 0x4a2c16, WD_D = 0x33200f, BRASS = 0xd8a83a, BRASS_D = 0xa87820, PLATE = 0x1f1a14;
+      g.clear();
+      px2(0, 0, 26, 22, WD); px2(1, 1, 24, 20, WD_D);
+      px2(3, 3, 20, 3, BRASS); px2(3, 5, 20, 1, BRASS_D); // header plate
+      for (const ry of [8, 13, 18]) { px2(4, ry, 18, 3, PLATE); px2(4, ry, 18, 1, BRASS); }
+      g.generateTexture('w-club-wallfame', 26, 22);
+    }
+    { // the gramophone: brass horn on a walnut cabinet, 20×26
+      const WD = 0x4a2c16, WD_D = 0x33200f, BRASS = 0xc8a04a, BRASS_L = 0xe8c060, DISC = 0x1a1410;
+      g.clear();
+      px2(3, 16, 14, 10, WD); px2(3, 16, 14, 2, WD_D);      // cabinet base
+      px2(7, 12, 6, 5, DISC);                                // turntable
+      px2(8, 2, 4, 10, BRASS); px2(2, 0, 16, 6, BRASS_L);     // the flaring horn
+      px2(2, 0, 16, 2, BRASS);
+      g.generateTexture('w-club-gramo', 20, 26);
+    }
+    { // the grandfather clock: tall walnut case, brass face, pendulum door, 18×46
+      const WD = 0x4a2c16, WD_D = 0x33200f, FACE = 0xe8dcc0, BRASS = 0xc8a04a, HAND = 0x1a1410;
+      g.clear();
+      px2(1, 0, 16, 46, WD); px2(2, 1, 14, 44, WD_D);
+      px2(3, 3, 12, 12, FACE);
+      px2(8, 5, 1, 5, HAND); px2(8, 9, 4, 1, HAND);           // hands frozen at a respectable hour
+      px2(3, 16, 12, 1, BRASS);
+      px2(5, 18, 8, 24, WD_D); px2(6, 19, 6, 22, 0x140c06);   // the pendulum door's glass
+      g.generateTexture('w-club-clock', 18, 46);
+    }
     g.destroy();
 
     const tile = (key: string, x: number, y: number, w: number, h: number, depth: number) =>
@@ -14710,6 +14745,12 @@ export function startWorld(net: WorldNet): void {
     ];
     // trophy cabinet on the back wall, right of the portrait
     sc.add.image(CLUB_SPOTS.trophies.x, iy + 88, 'w-club-trophy').setScale(TEXEL).setOrigin(0.5, 1).setDepth(iy - 795);
+    // the Wall of Fame: back wall, left of the hearth — real names off the golf leaderboard
+    sc.add.image(CLUB_SPOTS.wall.x, iy + 88, 'w-club-wallfame').setScale(TEXEL).setOrigin(0.5, 1).setDepth(iy - 795);
+    sc.add.circle(CLUB_SPOTS.wall.x, iy + 70, 12, 0xffe9a0, 0.14).setBlendMode(ADD).setDepth(iy - 794);
+    // the gramophone + grandfather clock, tucked against the right wall past the bar
+    prop('w-club-gramo', CLUB_SPOTS.jukebox.x, CLUB_SPOTS.jukebox.y, CLUB_SPOTS.jukebox.y).setScale(TEXEL * 1.3);
+    prop('w-club-clock', CLUB_SPOTS.clock.x, CLUB_SPOTS.clock.y, CLUB_SPOTS.clock.y).setScale(TEXEL * 1.3);
     // the 19th Hole Lounge: brass-railed bar along the right wall (Sterling stands behind it)
     tile('w-club-bar', ix + iw - 340, iy + 200, 300, 30, iy + 246);
     tile('w-tav-shelf', ix + iw - 330, iy + 130, 280, 32, iy + 140);       // the good bottles (reused shelf)
@@ -14825,30 +14866,47 @@ export function startWorld(net: WorldNet): void {
     tone(60, 0.5, 'sawtooth', 0.06, 40);
   }
 
-  // Soft lounge jazz, synthesized: a slow ii–V–I that has been playing since before you were born.
-  function loungeChord(root: number, third: number, seventh: number) {
+  // The gramophone's whole record collection, synthesized: three loops, one needle. Jazz has been
+  // playing since before you were born; the other two are what happens when a member gets bored
+  // and Sterling is too polite to say no.
+  const LOUNGE_STYLES: { name: string; prog: [number, number, number][]; ms: number; hat: number; wave: OscillatorType }[] = [
+    {
+      name: 'Soft Jazz (the usual)', ms: 2600, hat: 6800, wave: 'sine',
+      prog: [[98.00, 293.66, 349.23], [130.81, 329.63, 466.16], [174.61, 261.63, 329.63], [146.83, 349.23, 440.00]], // Gm7 C9 Fmaj7 Dm7
+    },
+    {
+      name: 'Ragtime (Chip requested this)', ms: 1500, hat: 5200, wave: 'triangle',
+      prog: [[130.81, 164.81, 196.00], [174.61, 220.00, 261.63], [196.00, 246.94, 293.66], [130.81, 164.81, 196.00]], // C F G C, brighter/faster
+    },
+    {
+      name: 'Bar Blues (after midnight only)', ms: 3200, hat: 4200, wave: 'sawtooth',
+      prog: [[110.00, 130.81, 164.81], [146.83, 174.61, 220.00], [110.00, 130.81, 164.81], [82.41, 98.00, 123.47]], // Am D Am Em, slow and a little sour
+    },
+  ];
+  function loungeChord(root: number, third: number, seventh: number, wave: OscillatorType) {
     tone(root, 2.3, 'sine', 0.045);
-    tone(third, 2.0, 'triangle', 0.026);
-    tone(seventh, 2.0, 'triangle', 0.022);
+    tone(third, 2.0, wave, 0.026);
+    tone(seventh, 2.0, wave, 0.022);
   }
   function startLounge() {
     if (loungeTimer) return;
-    const prog: [number, number, number][] = [
-      [98.00, 293.66, 349.23],   // Gm7
-      [130.81, 329.63, 466.16],  // C9
-      [174.61, 261.63, 329.63],  // Fmaj7
-      [146.83, 349.23, 440.00],  // Dm7
-    ];
+    const style = LOUNGE_STYLES[loungeStyle];
     let i = 0;
-    loungeChord(...prog[0]);
+    loungeChord(...style.prog[0], style.wave);
     loungeTimer = window.setInterval(() => {
-      i = (i + 1) % prog.length;
-      loungeChord(...prog[i]);
-      noise(0.06, 0.012, 6800); // brushed hats, barely
-    }, 2600);
+      i = (i + 1) % style.prog.length;
+      loungeChord(...style.prog[i], style.wave);
+      noise(0.06, 0.012, style.hat); // brushed hats, barely
+    }, style.ms);
   }
   function stopLounge() {
     if (loungeTimer) { window.clearInterval(loungeTimer); loungeTimer = 0; }
+  }
+  function nextLoungeStyle() {
+    loungeStyle = (loungeStyle + 1) % LOUNGE_STYLES.length;
+    stopLounge(); startLounge();
+    tone(880, 0.05, 'square', 0.05, 1320); // the needle drops
+    showToast(`🎵 now playing: ${LOUNGE_STYLES[loungeStyle].name}`);
   }
 
   // The practice green: press once to address the ball (the meter starts swinging), press again to
@@ -14930,15 +14988,41 @@ export function startWorld(net: WorldNet): void {
       return;
     }
     if (spot === 'games') {
-      openDialog('♞ The Game Room', 'Two boards are maintained in tournament condition. The club recognizes victory, defeat, and — reluctantly — draws. Wagers are held by the house and paid in full.', [
+      openDialog('♞ The Game Room', 'Two boards and a table are maintained in tournament condition. The club recognizes victory, defeat, and — reluctantly — draws. Wagers are held by the house and paid in full.', [
         { label: '♟️ Chess (2-player PvP)', onPick: () => { pause(false); net.openFeature('chess'); } },
         { label: "⊞ Nine Men's Morris (2-player PvP)", onPick: () => { pause(false); net.openFeature('morris'); } },
+        { label: '🎱 Billiards (solo vs. the House, or PvP)', onPick: () => { pause(false); net.openFeature('billiards'); } },
       ]);
       return;
     }
     if (spot === 'candle') {
       tone(90, 0.15, 'square', 0.04);
       enterVault();
+      return;
+    }
+    if (spot === 'wall') {
+      const rows = golfLeaderboardRows.slice(0, 8);
+      const body = rows.length
+        ? 'Engraved as scores are reported — nobody\'s hand-carved anything since the Founder died, it just… updates.\n\n'
+          + rows.map((r, i) => `${i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `${i + 1}.`} ${r.name} — ${r.strokes} strokes`).join('\n')
+        : 'The plate is blank. Polished, brass, and utterly blank. Play a round and be the first name on it.';
+      openDialog('🏆 The Wall of Fame', body, [
+        { label: '⛳ Go play the Course', onPick: () => { closeDialog(); showToast('⛳ Out the front door and follow the cart path.'); } },
+        { label: 'Close', onPick: () => closeDialog() },
+      ]);
+      return;
+    }
+    if (spot === 'jukebox') { nextLoungeStyle(); return; }
+    if (spot === 'clock') {
+      tone(660, 0.06, 'triangle', 0.05, 440);
+      const t = new Date();
+      const hh = t.getHours() % 12 || 12, mm = String(t.getMinutes()).padStart(2, '0');
+      showToast(pick2([
+        `🕰️ ${hh}:${mm}. The clock has never once been wrong. It has also never once been checked.`,
+        '🕰️ the pendulum swings. it has always swung. it will always swing.',
+        `🕰️ ${hh}:${mm}, allegedly. Sterling sets it by the sun, the sun sets by Sterling.`,
+        '🕰️ a small brass plate reads "A GIFT, NOT A REGIFT — THE FOUNDER, PROBABLY."',
+      ]));
       return;
     }
   }
@@ -14958,12 +15042,14 @@ export function startWorld(net: WorldNet): void {
     if (dialogOpen || talkOpen) return;
     const quips = [
       '"Good evening. The usual? You don\'t have a usual. You do now."',
-      '"The \'52 Reserve. Laid down before the town had a name. Or laws."',
+      '"We keep three bottles behind this rail. I\'m only permitted to discuss two of them."',
       '"Some members drink to remember, some to forget. At these prices, most drink to invest."',
-      '"I recommend the \'52. I always recommend the \'52. We only have the \'52."',
+      '"I recommend the \'52. I always recommend the \'52. There is, notably, more than the \'52."',
     ];
     openDialog('🥃 Sterling', quips[Math.floor(Math.random() * quips.length)], [
-      { label: "🥃 The '52 Reserve — 5,000🪙", onPick: () => { closeDialog(); net.clubDrink(); } },
+      { label: '🍺 The House Pour — 1,000🪙', onPick: () => { closeDialog(); net.clubDrink(1); } },
+      { label: "🥃 The '52 Reserve — 5,000🪙", onPick: () => { closeDialog(); net.clubDrink(2); } },
+      { label: "🍾 The Founder's Vintage — 50,000🪙", onPick: () => { closeDialog(); net.clubDrink(3); } },
       { label: '💧 Just water, please', onPick: () => { closeDialog(); showToast('💧 It is, admittedly, exceptional water.'); } },
     ]);
   }
@@ -14974,6 +15060,12 @@ export function startWorld(net: WorldNet): void {
       if (clubFireGlow) {
         const f = 0.18 + Math.abs(Math.sin(now / 190)) * 0.10 + Math.abs(Math.sin(now / 77)) * 0.04;
         clubFireGlow.setAlpha(f).setRadius(30 + Math.sin(now / 240) * 5);
+      }
+      // The grandfather clock strikes on its own schedule, which is not any schedule you'd recognize.
+      if (lastClockChime === 0) lastClockChime = now;
+      if (now - lastClockChime > 240_000) {
+        lastClockChime = now;
+        for (let i = 0; i < 3; i++) window.setTimeout(() => tone(523.25, 0.5, 'triangle', 0.05, 392), i * 550);
       }
       // The Founder's pupils track you across the room. It's probably a mechanism. Probably.
       for (let i = 0; i < founderPupils.length; i++) {

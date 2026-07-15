@@ -1833,7 +1833,7 @@ export class Lobby {
   // start (all-or-nothing, refunds on failure), and the pot settles on the first bgResult —
   // draws refund, a mid-match leaver forfeits the pot to whoever stayed.
   private bgRooms = new Map<string, { slots: WebSocket[]; status: 'waiting' | 'playing'; stake: number; escrow: { pid: string; nick: string; sock: WebSocket }[] }>();
-  private static readonly BG_CAPS: Record<string, number> = { chess: 2, morris: 2, ski: 4, golf: 4 };
+  private static readonly BG_CAPS: Record<string, number> = { chess: 2, morris: 2, ski: 4, golf: 4, billiards: 2 };
   private static readonly BG_MAX_STAKE = 10_000_000;
 
   private bgRoom(game: string) {
@@ -2632,26 +2632,35 @@ export class Lobby {
     }
   }
 
-  /** The 19th Hole pour: 5,000🪙 for "the '52 Reserve". Its effects are, chemically speaking,
-   *  indistinguishable from the Tavern's 20🪙 beer. Nobody at the club has ever said this aloud. */
-  clubDrink(ws: WebSocket) {
+  // The 19th Hole's menu, such as it is — three pours, three price tiers. Effects are, chemically
+  // speaking, indistinguishable from the Tavern's 20🪙 beer at any tier. Nobody has said this aloud.
+  private static readonly CLUB_DRINKS: Record<number, { price: number; label: string; relief: number; line: string }> = {
+    1: { price: 1_000, label: 'the House Pour', relief: 6,
+      line: '🥃 A perfectly serviceable well drink, poured with the faint disappointment of a bartender who deserves better.' },
+    2: { price: 5_000, label: "the '52 Reserve", relief: 10,
+      line: '🥃 Notes of oak, heritage, and generational wealth. It tastes exactly like the Tavern\'s 20🪙 beer. Exactly.' },
+    3: { price: 50_000, label: "the Founder's Vintage", relief: 18,
+      line: '🥃 Sterling produces a bottle with no label, from a shelf that officially does not exist. You are asked, politely, never to describe the taste to anyone.' },
+  };
+  clubDrink(ws: WebSocket, tier: number) {
     const conn = this.conns.get(ws);
     if (!conn || !conn.nickname || !conn.pid) return;
+    const drink = Lobby.CLUB_DRINKS[tier];
+    if (!drink) return;
     if (conn.drunkLevel >= DRUNK_MAX) {
       this.notify(ws, '🥃 Sterling polishes a glass and does not pour. "Perhaps some water, sir."');
       return;
     }
-    const POUR = 5000;
-    spendCoins(conn.pid, POUR)
+    spendCoins(conn.pid, drink.price)
       .then(async (w) => {
-        if (!w) { this.notify(ws, `🥃 "I'm afraid the '52 Reserve is ${POUR.toLocaleString()}🪙. Per pour."`); this.sendWallet(ws); return; }
-        await this.houseCredit(POUR);
+        if (!w) { this.notify(ws, `🥃 "I'm afraid ${drink.label} is ${drink.price.toLocaleString()}🪙. Per pour."`); this.sendWallet(ws); return; }
+        await this.houseCredit(drink.price);
         conn.drunkLevel++;
         conn.drunkUntil = Date.now() + DRUNK_MS;
-        this.bumpCortisol(conn, -CORTISOL_BEER_RELIEF);
+        this.bumpCortisol(conn, -drink.relief);
         this.sendWallet(ws);
         this.tell(ws, { type: 'drunk', level: conn.drunkLevel });
-        this.notify(ws, '🥃 Notes of oak, heritage, and generational wealth. It tastes exactly like the Tavern\'s 20🪙 beer. Exactly.');
+        this.notify(ws, drink.line);
       })
       .catch((e) => console.error('club pour failed:', e));
   }

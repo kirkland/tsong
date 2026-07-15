@@ -1087,8 +1087,8 @@ export type ClientMsg =
   | { type: 'waRelay'; data: unknown } // forward an opaque Artillery payload to all other players
   | { type: 'fountainWish' } // toss 10 coins in the plaza fountain (tiny chance of the Wisher title)
   | { type: 'clubJoin' } // apply to the Country Club (server validates the 1,000,000🪙 initiation fee)
-  | { type: 'clubDrink' } // order the good stuff at the 19th Hole (server charges; effects mirror buyBeer)
-  | { type: 'bgJoin'; game: string } // take a seat at a board-game table (chess/morris; 2 seats, PvP only)
+  | { type: 'clubDrink'; tier: number } // order off the 19th Hole's menu (1=House Pour, 2='52 Reserve, 3=Founder's Vintage; server charges, effects mirror buyBeer)
+  | { type: 'bgJoin'; game: string } // take a seat at a board-game table (chess/morris/billiards; 2 seats, PvP only)
   | { type: 'bgLeave'; game: string } // leave the board-game lobby / match
   | { type: 'bgStake'; game: string; stake: number } // (host only, pre-start) set the winner-takes-all stake
   | { type: 'bgStart'; game: string } // (host only) start — requires all seats consented; server escrows the stake

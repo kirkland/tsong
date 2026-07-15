@@ -853,11 +853,13 @@ const net = connect(
       else if (msg.game === 'morris') morrisMod?.feedLobby(msg);
       else if (msg.game === 'ski') skiMod?.feedLobby(msg);
       else if (msg.game === 'golf') worldMod?.feedGolfLobby(msg);
+      else if (msg.game === 'billiards') billiardsMod?.feedLobby(msg);
     } else if (msg.type === 'bgRelay') {
       if (msg.game === 'chess') chessMod?.feedRelay(msg.data);
       else if (msg.game === 'morris') morrisMod?.feedRelay(msg.data);
       else if (msg.game === 'ski') skiMod?.feedRelay(msg.data);
       else if (msg.game === 'golf') worldMod?.feedGolfRelay(msg.data);
+      else if (msg.game === 'billiards') billiardsMod?.feedRelay(msg.data);
     } else if (msg.type === 'ghLeaderboard') {
       ghScores = msg.rows;
     } else if (msg.type === 'wishResult') {
@@ -2378,12 +2380,14 @@ async function openBowling(): Promise<void> {
   }
 }
 
-// --- Board games (chess / Nine Men's Morris): 2-player PvP tables at the Club and the Tavern ---
-// One `bg` relay serves both — game-keyed rooms server-side, one net-hook shape client-side.
+// --- Board games (chess / Nine Men's Morris / Billiards): 2-player PvP tables at the Club and the
+// Tavern --- One `bg` relay serves all of them — game-keyed rooms server-side, one net-hook shape
+// client-side.
 let chessMod: typeof import('./chess') | null = null;
 let morrisMod: typeof import('./morris') | null = null;
 let skiMod: typeof import('./ski') | null = null;
-function bgNetFor(game: 'chess' | 'morris' | 'ski') {
+let billiardsMod: typeof import('./billiards') | null = null;
+function bgNetFor(game: 'chess' | 'morris' | 'ski' | 'billiards') {
   return {
     join:   () => net.send({ type: 'bgJoin', game }),
     leave:  () => net.send({ type: 'bgLeave', game }),
@@ -2415,6 +2419,13 @@ async function openSkiGame(): Promise<void> {
     if (skiMod.isSkiOpen()) return;
     skiMod.openSki(bgNetFor('ski'));
   } catch (e) { console.error('Ski failed to load:', e); }
+}
+async function openBilliardsGame(): Promise<void> {
+  try {
+    billiardsMod = await import('./billiards');
+    if (billiardsMod.isBilliardsOpen()) return;
+    billiardsMod.openBilliards(bgNetFor('billiards'));
+  } catch (e) { console.error('Billiards failed to load:', e); }
 }
 
 // --- City Tycoon: 2–8 player Monopoly-style board game, entered from the arcade cabinet ---
@@ -2471,6 +2482,7 @@ const WORLD_DELEGATE_CHECK: Record<string, () => boolean> = {
   chess: overlayVisibleCheck('#chessOverlay'),
   morris: overlayVisibleCheck('#morrisOverlay'),
   ski: overlayVisibleCheck('#skiOverlay'),
+  billiards: overlayVisibleCheck('#billiardsOverlay'),
   rename: overlayVisibleCheck('#overlay'),
 };
 // Polls (rAF) until the delegated panel/minigame that World just handed off to has opened AND
@@ -2635,6 +2647,10 @@ worldBtn.addEventListener('click', async () => {
           setTimeout(() => { void openSkiGame(); }, 0);
           return;
         }
+        if (feature === 'billiards') {
+          setTimeout(() => { void openBilliardsGame(); }, 0);
+          return;
+        }
         // Arcade cabinets launch the solo/co-op minigames via their toolbar buttons.
         if (feature === 'campaign' || feature === 'typedie' || feature === 'racing' || feature === 'superbros' || feature === 'nuketown' || feature === 'citytycoon' || feature === 'tnt' || feature === 'monsterjam' || feature === 'tron' || feature === 'guitarhero' || feature === 'artillery') {
           const btn = feature === 'campaign' ? campaignBtn
@@ -2675,7 +2691,7 @@ worldBtn.addEventListener('click', async () => {
       wish: () => net.send({ type: 'fountainWish' }),
       owns: (id: string) => wallet.owned.includes(id),
       joinClub: () => net.send({ type: 'clubJoin' }),
-      clubDrink: () => net.send({ type: 'clubDrink' }),
+      clubDrink: (tier) => net.send({ type: 'clubDrink', tier }),
       // The Course — same bg-relay room shape as chess/morris/ski (game key 'golf'), fed straight
       // back into World (worldMod.feedGolfLobby/feedGolfRelay below) instead of a lazy-loaded
       // overlay module, since golf plays out on the grounds rather than in a teleported-away game.
