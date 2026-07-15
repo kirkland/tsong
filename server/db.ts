@@ -3,7 +3,7 @@
 // simply empty, so the rest of the app runs unchanged.
 
 import pg from 'pg';
-import { LeaderboardRow, NetWorthRow, CortisolRow, LEADERBOARD_SIZE, CORTISOL_MAX, CORTISOL_START, CampaignScoreRow, StockSide, StockTf, positionWorth, EXCLUSIVES, isExclusive, WORLD_PARCELS } from '../shared/types';
+import { LeaderboardRow, NetWorthRow, CortisolRow, LEADERBOARD_SIZE, CORTISOL_MAX, CORTISOL_START, CampaignScoreRow, GolfScoreRow, StockSide, StockTf, positionWorth, EXCLUSIVES, isExclusive, WORLD_PARCELS } from '../shared/types';
 import type { NomicSnapshot } from './nomic';
 
 // Economy Overhaul: the House treasury is seeded ONCE with a genesis allocation. This is the
@@ -237,6 +237,14 @@ export async function initDb(): Promise<void> {
       pid     TEXT PRIMARY KEY,
       name    TEXT NOT NULL,
       best_lb DOUBLE PRECISION NOT NULL DEFAULT 0
+    )
+  `);
+  // The Course (18-hole golf) — lowest total strokes for a full round, one row per player.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS golf_scores (
+      pid          TEXT PRIMARY KEY,
+      name         TEXT NOT NULL,
+      best_strokes INTEGER NOT NULL
     )
   `);
   // Tsong Hero rhythm game — best score per player per song per difficulty.
@@ -765,6 +773,26 @@ export async function getFishingLeaderboard(): Promise<FishingScoreRow[]> {
     `SELECT name, best_lb FROM fishing_scores ORDER BY best_lb DESC, name ASC LIMIT 10`,
   );
   return rows.map((r) => ({ name: r.name, lb: Number(r.best_lb) }));
+}
+
+// Record a finished round of golf: keep only each player's lowest total strokes across all 18.
+export async function recordGolfScore(pid: string, name: string, strokes: number): Promise<void> {
+  if (!pool || !pid || !Number.isInteger(strokes) || strokes < 18) return;
+  await pool.query(
+    `INSERT INTO golf_scores (pid, name, best_strokes) VALUES ($1, $2, $3)
+       ON CONFLICT (pid) DO UPDATE
+       SET best_strokes = LEAST(golf_scores.best_strokes, EXCLUDED.best_strokes), name = EXCLUDED.name`,
+    [pid, name, strokes],
+  );
+}
+
+// Lowest total strokes across all golfers (top N by best round).
+export async function getGolfLeaderboard(): Promise<GolfScoreRow[]> {
+  if (!pool) return [];
+  const { rows } = await pool.query(
+    `SELECT name, best_strokes FROM golf_scores ORDER BY best_strokes ASC, name ASC LIMIT 10`,
+  );
+  return rows.map((r) => ({ name: r.name, strokes: Number(r.best_strokes) }));
 }
 
 export interface TypeDieScoreRow { name: string; wave: number; }

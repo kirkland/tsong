@@ -1111,6 +1111,7 @@ export type ClientMsg =
   | { type: 'tdKill'; id: number } // claim a kill: you finished typing this monster's word
   | { type: 'campaignScore'; score: number; stage: number; won: boolean } // record a campaign run (arcade score, furthest stage, whether Davis fell)
   | { type: 'fishCatch'; tier: string; sizeLb: number } // landed a fish — server picks the House-funded coin reward by tier (client never sends coins)
+  | { type: 'golfScore'; strokes: number } // finished all 18 holes (solo or PvP) — server keeps each player's best total for the course leaderboard
   | { type: 'shopBuy'; item: string } // buy a cosmetic from the shop
   | { type: 'shopEquip'; slot: 'hat' | 'skin' | 'trail' | 'balltrail' | 'goalcelebr' | 'title' | 'song' | 'car' | 'boat' | 'pet' | 'carcolor'; item: string | null } // equip (item) or unequip (null) a cosmetic
   | { type: 'bet'; side: Side; amount: number } // spectator wagers coins on a side of the live duel
@@ -1683,6 +1684,7 @@ export type ServerMsg =
   | CampaignLeaderboardMsg
   | FishRewardMsg
   | FishLeaderboardMsg
+  | GolfLeaderboardMsg
   | WalletMsg
   | StockMsg
   | LoanMsg
@@ -2578,6 +2580,14 @@ export interface FishLeaderboardRow { name: string; lb: number; }
 export interface FishLeaderboardMsg {
   type: 'fishLeaderboard';
   rows: FishLeaderboardRow[];
+}
+
+// The Course's leaderboard — lowest total strokes across all 18 holes, best round kept per
+// player (solo or PvP both count), pushed whenever anyone finishes a round.
+export interface GolfScoreRow { name: string; strokes: number; }
+export interface GolfLeaderboardMsg {
+  type: 'golfLeaderboard';
+  rows: GolfScoreRow[];
 }
 
 // --- Netizen Challenge (Plan 10) ---

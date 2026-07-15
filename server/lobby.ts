@@ -89,6 +89,7 @@ import {
   TEAM_MAX,
   WalletMsg,
   CampaignScoreRow,
+  GolfScoreRow,
   WC_COUNTRIES,
   EXCLUSIVES,
   isExclusive,
@@ -120,6 +121,7 @@ import { getEloBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSel
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
   recordFishCatch, getFishingLeaderboard, FishingScoreRow,
+  recordGolfScore, getGolfLeaderboard,
   recordGhScore, getGhLeaderboard, GhScoreRow,
   bumpCounter,
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS, getAssessableWealth, stampActivity, getJailed, setJailed,
@@ -760,6 +762,7 @@ export class Lobby {
     this.tell(ws, { type: 'tdLeaderboard', rows: this.tdBoard });
     this.tell(ws, { type: 'campaignLeaderboard', rows: this.campaignBoard });
     this.tell(ws, { type: 'fishLeaderboard', rows: this.fishBoard });
+    this.tell(ws, { type: 'golfLeaderboard', rows: this.golfBoard });
     this.tell(ws, { type: 'ghLeaderboard', rows: this.ghBoard });
     if (this.chatLog.length) this.tell(ws, { type: 'chat', lines: this.chatLog });
     this.tell(ws, this.buildCrashState(ws));
@@ -2520,6 +2523,7 @@ export class Lobby {
   private doomBoards: { solo: DoomScoreRow[]; coop: DoomScoreRow[] } = { solo: [], coop: [] };
   private campaignBoard: CampaignScoreRow[] = [];
   private fishBoard: FishingScoreRow[] = [];
+  private golfBoard: GolfScoreRow[] = [];
   // Anti-abuse: last fishing payout time per pid (ms). Claims faster than FISH_COOLDOWN_MS are
   // ignored, so a scripted client can't spam the House for coins.
   private lastFishAt = new Map<string, number>();
@@ -2755,6 +2759,26 @@ export class Lobby {
     } else {
       finish();
     }
+  }
+
+  /** Reload the golf leaderboard (lowest total strokes) from the DB and push it to everyone. */
+  async refreshGolfLeaderboard() {
+    this.golfBoard = await getGolfLeaderboard();
+    const msg = JSON.stringify({ type: 'golfLeaderboard', rows: this.golfBoard });
+    for (const sock of this.conns.keys()) {
+      if (sock.readyState === sock.OPEN) sock.send(msg);
+    }
+  }
+
+  /** A finished round of golf (solo or PvP) — every finisher reports their own total; the board
+   *  keeps each player's lowest. No payout here (that's the one-time golf-18 quest claim). */
+  golfScore(ws: WebSocket, strokes: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    if (!Number.isInteger(strokes) || strokes < 18 || strokes > 500) return; // 18 holes, 1 stroke minimum each
+    recordGolfScore(conn.pid, conn.nickname, strokes)
+      .then(() => this.refreshGolfLeaderboard())
+      .catch((e) => console.error('golf score save failed:', e));
   }
 
   // --- "Type or Die" co-op arena ---

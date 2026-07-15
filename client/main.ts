@@ -894,6 +894,8 @@ const net = connect(
     } else if (msg.type === 'fishLeaderboard') {
       fishScores = msg.rows;
       fishingMod?.feedFishLeaderboard(msg.rows);
+    } else if (msg.type === 'golfLeaderboard') {
+      worldMod?.feedGolfLeaderboard(msg.rows);
     } else if (msg.type === 'fishReward') {
       fishingMod?.feedFishReward(msg.coins, msg.item);
     } else if (msg.type === 'netizenInfo') {
@@ -2683,6 +2685,7 @@ worldBtn.addEventListener('click', async () => {
       golfStart: () => net.send({ type: 'bgStart', game: 'golf' }),
       golfResult: (winner) => net.send({ type: 'bgResult', game: 'golf', winner }),
       golfRelay: (data) => net.send({ type: 'bgRelay', game: 'golf', data }),
+      golfScore: (strokes) => net.send({ type: 'golfScore', strokes }),
       muted: () => muted,
       toggleMute: () => { muted = !muted; prefSet('muted', muted ? '1' : '0'); applyMute(); },
       leaderboard: () => lastLbRows,

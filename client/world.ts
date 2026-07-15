@@ -98,6 +98,7 @@ import {
   type MarketItemView,
   LOOT_TABLE,
   type BgLobbyMsg,
+  type GolfScoreRow,
 } from '../shared/types';
 import { drawCosmeticPreview, drawLegendIcon } from './render';
 
@@ -275,6 +276,7 @@ export interface WorldNet {
   golfStart(): void;
   golfResult(winner: number): void;
   golfRelay(data: unknown): void;
+  golfScore(strokes: number): void; // finished all 18 (solo or PvP) — server keeps your best for the course leaderboard
   jail(): void;                  // self-report a drunk-drive attempt (server jails you if 2+ beers in)
   bail(targetId: string): void;  // pay 500🪙 to bail a jailed avatar out (id; may be your own)
   amJailed(): boolean;           // are WE currently locked in the jail cell?
@@ -518,6 +520,13 @@ const GOLF_PARS: readonly number[] = [4, 3, 5, 4, 3, 4, 5, 3, 4, 4, 5, 3, 4, 4, 
 const GOLF_COLS_X: readonly number[] = [420, 1170, 1920, 2670, 3420, 4170];
 const GOLF_ROW_GAP = 220; // cart-path breathing room between one row's deepest green and the next row's tee line
 const GOLF_DIST_BY_PAR: Record<number, number> = { 3: 260, 4: 420, 5: 580 };
+// Hole 4's column (x 2670, row 0) sits close enough to the clubhouse (centered x 2450, footprint
+// out to x≈2615 at the roofline) that its fairway clipped straight through the building. Row 0 is
+// the only row anywhere near the clubhouse's y-band, and hole 4 is the only hole whose column
+// lands in its footprint — nudge that one hole into the gap between the clubhouse and the pond
+// (x≈2615..2890) rather than touching the shared column grid every other hole (and two other
+// rows' holes) reads from.
+const GOLF_HOLE_X_OVERRIDE: Record<number, number> = { 4: 2750 };
 export interface GolfHole { n: number; par: number; tee: { x: number; y: number }; green: { x: number; y: number }; greenR: number }
 function buildGolfHoles(): GolfHole[] {
   const holes: GolfHole[] = [];
@@ -529,7 +538,7 @@ function buildGolfHoles(): GolfHole[] {
       const n = row * 6 + k + 1;
       const par = GOLF_PARS[n - 1];
       const dist = GOLF_DIST_BY_PAR[par];
-      const x = GOLF_COLS_X[colOrder[k]];
+      const x = GOLF_HOLE_X_OVERRIDE[n] ?? GOLF_COLS_X[colOrder[k]];
       const greenY = rowTeeY - dist;
       holes.push({ n, par, tee: { x, y: rowTeeY }, green: { x, y: greenY }, greenR: 95 });
       deepestGreenY = Math.min(deepestGreenY, greenY);
@@ -2480,6 +2489,8 @@ let golfLobbyHandler: ((msg: BgLobbyMsg) => void) | null = null;
 let golfRelayHandler: ((data: unknown) => void) | null = null;
 export function feedGolfLobby(msg: BgLobbyMsg): void { golfLobbyHandler?.(msg); }
 export function feedGolfRelay(data: unknown): void { golfRelayHandler?.(data); }
+let golfLeaderboardRows: GolfScoreRow[] = [];
+export function feedGolfLeaderboard(rows: GolfScoreRow[]): void { golfLeaderboardRows = rows; }
 
 export function startWorld(net: WorldNet): void {
   if (controller) return; // already open
@@ -15178,6 +15189,7 @@ export function startWorld(net: WorldNet): void {
     golfMode = 'off';
     golfBallSpr?.setVisible(false);
     net.claimQuest('golf-18');
+    net.golfScore(total);
     openDialog('⛳ Round Complete', `${rows}\n\nTotal: ${total} (${diff > 0 ? '+' : ''}${diff} to par)`, [
       { label: 'Nice.', onPick: () => closeDialog() },
     ]);
@@ -15253,6 +15265,8 @@ export function startWorld(net: WorldNet): void {
     const winner = totals[0];
     const rows = totals.map((t, i) => `${i === 0 ? '🏆' : `${i + 1}.`} ${t.name} — ${t.total}`).join('\n');
     if (winner) net.golfResult(winner.slot);
+    const mine = totals.find((t) => t.slot === golfPvpMySlot);
+    if (mine) net.golfScore(mine.total); // every finisher reports their own total, not just the winner
     golfMode = 'off';
     golfBallSpr?.setVisible(false);
     removeGolfPvpHud();
@@ -15304,6 +15318,15 @@ export function startWorld(net: WorldNet): void {
     openDialog('⛳ The Course', "Eighteen holes, a par of 72, and the club's good name riding on every stroke. How would you like to play?", [
       { label: '🏌️ Solo Round', onPick: () => { closeDialog(); startGolfSolo(); } },
       { label: '🏆 Multiplayer Round (2-4, PvP)', onPick: () => { closeDialog(); openGolfPvpLobby(); } },
+      { label: '📋 Course Leaderboard', onPick: () => { closeDialog(); openGolfLeaderboardDialog(); } },
+    ]);
+  }
+  function openGolfLeaderboardDialog() {
+    const rows = golfLeaderboardRows.length
+      ? golfLeaderboardRows.map((r, i) => `${i === 0 ? '🏆' : `${i + 1}.`} ${r.name} — ${r.strokes}`).join('\n')
+      : 'No rounds recorded yet — be the first!';
+    openDialog('📋 Course Leaderboard', `Best 18-hole rounds, lowest strokes first:\n\n${rows}`, [
+      { label: 'Back', onPick: () => { closeDialog(); openGolfStartDialog(); } },
     ]);
   }
 
