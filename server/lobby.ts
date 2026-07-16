@@ -2570,7 +2570,7 @@ export class Lobby {
     }
     // shared biome mobs: tick their AI every frame, broadcast on the same ~15Hz cadence as avatars
     this.tickWorldMobs(dt);
-    this.tickRaid(now); // the Frostreach raid boss state machine + mechanic scheduler
+    this.tickRaid(now, dt); // the Frostreach raid boss state machine + mechanic scheduler
     if (++this.worldBcTick % Lobby.WORLD_BROADCAST_EVERY !== 0) return;
     const data = JSON.stringify({ type: 'world', avatars: this.worldAvatars() });
     for (const ws of this.world.sockets()) {
@@ -2852,10 +2852,14 @@ export class Lobby {
   private raidPhase: RaidPhase = 'idle';
   private raidBoss: { hp: number; maxHp: number; x: number; y: number } | null = null;
   private raidBossPhase = 1;
+  private raidBossTx = RAID_ARENA.x;   // where the boss is lumbering toward
+  private raidBossTy = RAID_ARENA.y - 40;
+  private raidBossRetargetAt = 0;
   private raidSummonEndsAt = 0;
   private raidCooldownEndsAt = 0;
   private raidEnrageAt = 0;
   private raidNextMechAt = 0;
+  private raidNextAmmoAt = 0;           // next supply-crate scatter
   private raidLastPresentAt = 0;
   private raidParticipants = new Set<string>();       // pids that dealt damage from inside the arena
   private raidCastSeq = 1;
@@ -2881,7 +2885,7 @@ export class Lobby {
   }
 
   /** Drive the raid state machine + mechanic scheduler. Called every tick from broadcastWorld(). */
-  private tickRaid(now: number) {
+  private tickRaid(now: number, dt: number) {
     const inArena = this.raidPlayersInArena();
     const present = inArena.length;
     const onDais = this.raidPlayersOnPlatform(); // the trigger: bodies on the summoning platform
@@ -2893,13 +2897,16 @@ export class Lobby {
       case 'summoning':
         if (onDais < RAID_MIN_PLAYERS) { this.raidPhase = 'idle'; break; } // stepped off the dais — channel breaks
         if (now >= this.raidSummonEndsAt) {
-          // A proper raid healthbar — tuned so a coordinated group needs a few minutes, not seconds.
+          // A proper raid healthbar — tuned so a coordinated group needs a couple of minutes.
           // Scales with the raid size (bigger group → tankier boss, but faster combined DPS).
-          const maxHp = 16000 + 5000 * present;
+          const maxHp = 12000 + 3750 * present;
           this.raidBoss = { hp: maxHp, maxHp, x: RAID_ARENA.x, y: RAID_ARENA.y - 40 };
           this.raidBossPhase = 1;
+          this.raidBossTx = RAID_ARENA.x; this.raidBossTy = RAID_ARENA.y - 40;
+          this.raidBossRetargetAt = now + 2000;
           this.raidEnrageAt = now + Lobby.RAID_ENRAGE_MS;
           this.raidNextMechAt = now + 3200;
+          this.raidNextAmmoAt = now + 16000; // first supply scatter ~16s in
           this.raidLastPresentAt = now;
           this.raidParticipants.clear();
           this.raidPhase = 'active';
@@ -2915,11 +2922,31 @@ export class Lobby {
         const frac = boss.hp / boss.maxHp;
         this.raidBossPhase = frac > 0.66 ? 1 : frac > 0.33 ? 2 : 3;
         const enraged = now >= this.raidEnrageAt;
+        // --- the Warden stalks the arena: roams toward the raid, retargeting every few seconds ---
+        if (now >= this.raidBossRetargetAt && present > 0) {
+          const cx = inArena.reduce((s, p) => s + p.x, 0) / present, cy = inArena.reduce((s, p) => s + p.y, 0) / present;
+          const ang = Math.random() * Math.PI * 2, rr = RAID_ARENA.r * (0.15 + Math.random() * 0.35);
+          this.raidBossTx = 0.55 * cx + 0.45 * (RAID_ARENA.x + Math.cos(ang) * rr);
+          this.raidBossTy = 0.55 * cy + 0.45 * (RAID_ARENA.y + Math.sin(ang) * rr);
+          this.raidBossRetargetAt = now + 2600 + Math.random() * 2600;
+        }
+        { // ease toward the target, clamped to the arena core so it never wanders off the floor
+          const bx = boss.x, by = boss.y, dx = this.raidBossTx - bx, dy = this.raidBossTy - by, mag = Math.hypot(dx, dy);
+          const sp = (enraged ? 130 : 84) * dt;
+          if (mag > 2) { boss.x = bx + (dx / mag) * Math.min(mag, sp); boss.y = by + (dy / mag) * Math.min(mag, sp); }
+          const R = RAID_ARENA.r * 0.66, ddx = boss.x - RAID_ARENA.x, ddy = boss.y - RAID_ARENA.y, dd = Math.hypot(ddx, ddy);
+          if (dd > R) { boss.x = RAID_ARENA.x + (ddx / dd) * R; boss.y = RAID_ARENA.y + (ddy / dd) * R; }
+        }
         // schedule the next telegraphed attack
         if (now >= this.raidNextMechAt && present > 0) {
           this.castRaidMechanic(inArena, enraged);
           const gap = enraged ? 1400 : this.raidBossPhase === 3 ? 2600 : this.raidBossPhase === 2 ? 3200 : 4200;
           this.raidNextMechAt = now + gap;
+        }
+        // periodically fling supply crates so nobody runs dry mid-fight
+        if (now >= this.raidNextAmmoAt && present > 0) {
+          this.scatterRaidAmmo(present);
+          this.raidNextAmmoAt = now + 17000;
         }
         break;
       }
@@ -2951,28 +2978,44 @@ export class Lobby {
     let cast: RaidCastMsg;
     const id = this.raidCastSeq++;
     if (kind === 'breath') {
-      // a wide freezing cone from the boss, aimed at the raid's centre of mass
-      const a = Math.atan2(centroid.y - (A.y - 40), centroid.x - A.x);
-      cast = { type: 'raidCast', id, kind, castMs: 2200, dmg: dmgBase, x: A.x, y: A.y - 40, r: A.r * 1.25, a, spread: 0.5 };
+      // a wide freezing cone FROM THE BOSS (wherever it's roamed to), aimed at the raid's centre of mass
+      const bx = this.raidBoss?.x ?? A.x, by = this.raidBoss?.y ?? A.y - 40;
+      const a = Math.atan2(centroid.y - by, centroid.x - bx);
+      cast = { type: 'raidCast', id, kind, castMs: 2200, dmg: dmgBase, x: bx, y: by, r: A.r * 1.4, a, spread: 0.62 };
     } else if (kind === 'comets') {
       // ice comets drop on a few players (stack markers) — move out of the circle
       const n = Math.min(inArena.length, phase >= 3 ? 5 : 3) || 3;
       const picks = [...inArena].sort(() => Math.random() - 0.5).slice(0, n);
-      const spots = (picks.length ? picks : [centroid]).map((p) => ({ x: p.x, y: p.y, r: 150 }));
+      const spots = (picks.length ? picks : [centroid]).map((p) => ({ x: p.x, y: p.y, r: 200 }));
       cast = { type: 'raidCast', id, kind, castMs: 1900, dmg: dmgBase, x: A.x, y: A.y, spots };
     } else if (kind === 'donut') {
-      // blizzard ring: safe in the eye of the storm (run IN)
-      cast = { type: 'raidCast', id, kind, castMs: 2400, dmg: dmgBase, x: A.x, y: A.y, r: A.r, innerR: 260 };
+      // blizzard ring: safe in the eye of the storm (run IN) — wider danger band
+      cast = { type: 'raidCast', id, kind, castMs: 2400, dmg: dmgBase, x: A.x, y: A.y, r: A.r, innerR: 220 };
     } else if (kind === 'spears') {
-      // rime spears erupt along a line across the arena
+      // rime spears erupt along a wide line across the arena
       const a = Math.random() * Math.PI;
-      cast = { type: 'raidCast', id, kind, castMs: 1800, dmg: dmgBase, x: A.x, y: A.y, r: A.r * 1.3, a, spread: 90 };
+      cast = { type: 'raidCast', id, kind, castMs: 1800, dmg: dmgBase, x: A.x, y: A.y, r: A.r * 1.4, a, spread: 120 };
     } else {
       // frost nova: the whole floor detonates except a small safe pocket by the boss's flank
       const sa = Math.random() * Math.PI * 2, sr = A.r * 0.62;
-      cast = { type: 'raidCast', id, kind: 'nova', castMs: enraged ? 1600 : 2600, dmg: dmgBase, x: A.x, y: A.y, r: A.r * 1.15, innerR: 200, spots: [{ x: A.x + Math.cos(sa) * sr, y: A.y + Math.sin(sa) * sr, r: 200 }] };
+      cast = { type: 'raidCast', id, kind: 'nova', castMs: enraged ? 1600 : 2600, dmg: dmgBase, x: A.x, y: A.y, r: A.r * 1.25, innerR: 200, spots: [{ x: A.x + Math.cos(sa) * sr, y: A.y + Math.sin(sa) * sr, r: 210 }] };
     }
     const data = JSON.stringify(cast);
+    for (const ws of this.world.sockets()) if (ws.readyState === ws.OPEN) ws.send(data);
+  }
+
+  /** Scatter supply crates across the arena so a long fight doesn't run the raid dry. Count scales
+   *  with the party; every client spawns the pickups and grabs its own (like the town crates). */
+  private scatterRaidAmmo(present: number) {
+    const A = RAID_ARENA;
+    const kinds: WorldWeapon[] = ['mg', 'mg', 'rocket', 'laser', 'void']; // mostly bullets, the odd heavy
+    const n = Math.min(10, Math.ceil(present / 2) + 2);
+    const drops: { x: number; y: number; w: WorldWeapon }[] = [];
+    for (let i = 0; i < n; i++) {
+      const ang = Math.random() * Math.PI * 2, rr = A.r * (0.2 + Math.random() * 0.7);
+      drops.push({ x: Math.round(A.x + Math.cos(ang) * rr), y: Math.round(A.y + Math.sin(ang) * rr), w: kinds[Math.floor(Math.random() * kinds.length)] });
+    }
+    const data = JSON.stringify({ type: 'raidAmmo', drops });
     for (const ws of this.world.sockets()) if (ws.readyState === ws.OPEN) ws.send(data);
   }
 

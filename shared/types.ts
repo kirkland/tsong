@@ -1772,6 +1772,7 @@ export type ServerMsg =
   | RaidStateMsg
   | RaidCastMsg
   | RaidEndMsg
+  | RaidAmmoMsg
   | StockMsg
   | LoanMsg
   | SpinResultMsg
@@ -2112,6 +2113,12 @@ export interface RaidEndMsg {
   result: 'kill' | 'wipe';
   reward: number;        // coins paid to THIS player (0 if they weren't a participant)
   pet?: string;          // trophy pet id granted on a kill (participants only)
+}
+// The Warden periodically flings supply crates across the arena so a long fight doesn't run you dry.
+// Every client spawns a pickup at each spot; grabbing one tops up that weapon locally (like town crates).
+export interface RaidAmmoMsg {
+  type: 'raidAmmo';
+  drops: { x: number; y: number; w: WorldWeapon }[];
 }
 export const RAID_REWARD = 25000;      // coins per participant on a kill
 export const RAID_MIN_PLAYERS = 4;     // champions needed to wake the Warden

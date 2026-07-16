@@ -352,6 +352,7 @@ interface Controller {
   feedRaidState(msg: RaidStateMsg): void;              // raid boss heartbeat (HP/phase/position/timers)
   feedRaidCast(msg: RaidCastMsg): void;                // a telegraphed raid attack began casting
   feedRaidEnd(msg: RaidEndMsg): void;                  // the raid ended (kill → reward + trophy pet, or wipe)
+  feedRaidAmmo(drops: { x: number; y: number; w: WorldWeapon }[]): void; // the boss flung supply crates
   feedCortisol(): void;                               // the "Cortisol" board updated — refresh the top-bar cortisol gauge
   feedNews(): void;                                  // a new news item published — re-render the news dialog if it's open
   feedLoan(): void;                                  // the loan changed (taken/repaid/collected/countdown tick) — re-render the loan dialog if it's open
@@ -445,6 +446,11 @@ export function feedRaidCast(msg: RaidCastMsg): void {
 /** The raid ended (`raidEnd`) → kill FX + reward toast, or the wipe message. */
 export function feedRaidEnd(msg: RaidEndMsg): void {
   controller?.feedRaidEnd(msg);
+}
+
+/** The boss flung supply crates (`raidAmmo`) → spawn the pickups in the arena. */
+export function feedRaidAmmo(drops: { x: number; y: number; w: WorldWeapon }[]): void {
+  controller?.feedRaidAmmo(drops);
 }
 
 /** The "Cortisol" board updated — refresh the World top-bar cortisol gauge. */
@@ -13774,7 +13780,9 @@ export function startWorld(net: WorldNet): void {
       squishSound();
     }
     if (mine) { hitMobs(x, y, r, 3); hitRaidBoss(x, y, r, 3); } // only OUR blasts hurt mobs/boss (avoid double-credit from relayed booms)
-    if (Math.hypot(selfX - x, selfY - y) <= r) {
+    // Raids are PvE: no friendly fire in the arena. Player blasts (and bullet splash, which routes
+    // through here too) never knock allies — or you — around while the Warden is up.
+    if (!inRaidFight() && Math.hypot(selfX - x, selfY - y) <= r) {
       if (driving) {
         if (blowUpMyCar('💥 Your car took a direct hit — summon a fresh one anytime.')) net.blownUp(true, mine, mine ? undefined : shooterPid);
       } else if (now >= stunnedUntil && !inInterior && !inDungeon) {
@@ -18252,6 +18260,8 @@ export function startWorld(net: WorldNet): void {
   let raidBossX = RAID_ARENA.x, raidBossY = RAID_ARENA.y;     // interpolated render position
   let raidBossHitUntil = 0;
   let raidTelegraphs: RaidTelegraph[] = [];
+  interface RaidAmmoPickup { box: Phaser.GameObjects.Image; icon: Phaser.GameObjects.Text; x: number; y: number; w: WorldWeapon; born: number; }
+  let raidAmmoDrops: RaidAmmoPickup[] = [];
   let raidHudMade = false;
   let raidHudBar: Phaser.GameObjects.Graphics | null = null;
   let raidHudText: Phaser.GameObjects.Text | null = null;
@@ -18414,6 +18424,21 @@ export function startWorld(net: WorldNet): void {
     }
     if (raidBossSpr) raidBossSpr.setVisible(false);
     if (raidAura) raidAura.setVisible(false);
+    for (const d of raidAmmoDrops) { d.box.destroy(); d.icon.destroy(); }
+    raidAmmoDrops = [];
+  }
+
+  // The Warden flung supply crates across the arena — spawn a pickup at each spot (uses the same
+  // town-crate art). Grabbing one tops up that weapon locally, exactly like the town crates.
+  function feedRaidAmmo(drops: { x: number; y: number; w: WorldWeapon }[]) {
+    const sc = raidScene; if (!sc) return;
+    for (const d of drops) {
+      const spec = WEAPON_BY_ID[d.w];
+      const box = sc.add.image(d.x, d.y, 'w-crate').setScale(TEXEL * 1.15).setTint(spec.tint).setDepth(d.y);
+      const icon = sc.add.text(d.x, d.y - 20, spec.emoji, { fontSize: '15px' }).setOrigin(0.5).setDepth(d.y + 1);
+      raidAmmoDrops.push({ box, icon, x: d.x, y: d.y, w: d.w, born: performance.now() });
+    }
+    tone(300, 0.12, 'square', 0.03, 200); // a supply-drop chime
   }
 
   // Is the local player standing in a telegraph's danger zone at resolve time?
@@ -18557,6 +18582,26 @@ export function startWorld(net: WorldNet): void {
       } else if (raidTelegraphs.length && !nearArena) {
         // still expire them even if we can't see them (we walked off)
         raidTelegraphs = raidTelegraphs.filter((t) => now - t.start < t.castMs + 300);
+      }
+    }
+    // --- supply crates the boss flung: bob, walk-over to loot, time out after a while ---
+    if (raidAmmoDrops.length) {
+      for (let i = raidAmmoDrops.length - 1; i >= 0; i--) {
+        const d = raidAmmoDrops[i];
+        const bob = Math.sin(now / 360 + d.x) * 3;
+        d.box.setY(d.y + bob); d.icon.setY(d.y - 20 + bob);
+        if (!playerDead && Math.hypot(selfX - d.x, selfY - d.y) < R + 24) {
+          const spec = WEAPON_BY_ID[d.w];
+          const had = ammo[d.w];
+          ammo[d.w] = Math.min(spec.max, had + spec.perCrate);
+          pickupSound();
+          spawnSparks(d.x, d.y, spec.tint);
+          if (ammo[d.w] > had) flashHelp(`${spec.emoji} +${ammo[d.w] - had} ${spec.name} (${ammo[d.w]})`);
+          if (ammo[weapon] <= 0 && spec.id !== weapon) { weapon = d.w; updateHelp(); }
+          updateWeaponHud();
+          d.box.destroy(); d.icon.destroy(); raidAmmoDrops.splice(i, 1); continue;
+        }
+        if (now - d.born > 40000) { d.box.destroy(); d.icon.destroy(); raidAmmoDrops.splice(i, 1); }
       }
     }
     updateRaidHud(nearArena);
@@ -19338,6 +19383,7 @@ export function startWorld(net: WorldNet): void {
     feedRaidState(msg: RaidStateMsg) { feedRaidState(msg); },
     feedRaidCast(msg: RaidCastMsg) { feedRaidCast(msg); },
     feedRaidEnd(msg: RaidEndMsg) { feedRaidEnd(msg); },
+    feedRaidAmmo(drops: { x: number; y: number; w: WorldWeapon }[]) { feedRaidAmmo(drops); },
     feedCortisol() { updateCortHud(); },
     feedNews() { if (newsDialogOpen) { const list = dialogBox.querySelector<HTMLDivElement>('#newsWorldList'); if (list) renderNewsWorldList(list); } },
     feedLoan() {

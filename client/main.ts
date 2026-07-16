@@ -973,6 +973,8 @@ const net = connect(
       worldMod?.feedRaidCast(msg);
     } else if (msg.type === 'raidEnd') {
       worldMod?.feedRaidEnd(msg);
+    } else if (msg.type === 'raidAmmo') {
+      worldMod?.feedRaidAmmo(msg.drops);
     } else if (msg.type === 'frogResult') {
       frogMod?.feedResult(msg.stage, msg.prize);
     } else if (msg.type === 'matchStats') {
