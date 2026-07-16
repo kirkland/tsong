@@ -18034,14 +18034,20 @@ export function startWorld(net: WorldNet): void {
   }
 
   // Drink a held potion (H key) → +10 HP. Lost on death, so hoard at your peril.
+  // The Warden's arena juices your potions: +15 HP in a live raid vs +10 in the wild — a small
+  // reward for fighting it on its own ground.
+  function inRaidFight(): boolean {
+    return !!raidState && raidState.phase === 'active' && Math.hypot(selfX - RAID_ARENA.x, selfY - RAID_ARENA.y) <= RAID_ARENA.r;
+  }
   function drinkPotion() {
     if (playerDead || fieldPotions <= 0) { if (fieldPotions <= 0) flashHelp('🧪 No potions — down a biome mob to find one.'); return; }
     if (playerHp >= PLAYER_MAX_HP) { flashHelp('❤️ Already at full health.'); return; }
+    const heal = inRaidFight() ? 15 : 10;
     fieldPotions--;
-    playerHp = Math.min(PLAYER_MAX_HP, playerHp + 10);
+    playerHp = Math.min(PLAYER_MAX_HP, playerHp + heal);
     updateHealthHud();
     tone(520, 0.1, 'sine', 0.05, 780); window.setTimeout(() => tone(780, 0.12, 'sine', 0.05, 1040), 90);
-    showToast('🧪 <i>glug.</i> +10 HP.');
+    showToast(`🧪 <i>glug.</i> +${heal} HP.`);
   }
 
   // The player took a hit from a mob (contact or projectile). Damage scales with biome difficulty
