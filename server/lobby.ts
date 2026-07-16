@@ -2847,7 +2847,7 @@ export class Lobby {
   private static readonly RAID_NAME = 'Rimefang, the Frozen Warden';
   private static readonly RAID_SUMMON_MS = 6000;      // dramatic wake-up countdown
   private static readonly RAID_COOLDOWN_MS = 90_000;  // rest before it can be pulled again
-  private static readonly RAID_ENRAGE_MS = 360_000;   // 6-minute soft enrage (a wipe timer)
+  private static readonly RAID_ENRAGE_MS = 480_000;   // 8-minute soft enrage (a wipe timer)
   private static readonly RAID_WIPE_GRACE_MS = 14_000;// empty arena this long during a fight → wipe
   private raidPhase: RaidPhase = 'idle';
   private raidBoss: { hp: number; maxHp: number; x: number; y: number } | null = null;
@@ -2893,7 +2893,9 @@ export class Lobby {
       case 'summoning':
         if (onDais < RAID_MIN_PLAYERS) { this.raidPhase = 'idle'; break; } // stepped off the dais — channel breaks
         if (now >= this.raidSummonEndsAt) {
-          const maxHp = 5000 + 1400 * present;            // scales with the raid size
+          // A proper raid healthbar — tuned so a coordinated group needs a few minutes, not seconds.
+          // Scales with the raid size (bigger group → tankier boss, but faster combined DPS).
+          const maxHp = 16000 + 5000 * present;
           this.raidBoss = { hp: maxHp, maxHp, x: RAID_ARENA.x, y: RAID_ARENA.y - 40 };
           this.raidBossPhase = 1;
           this.raidEnrageAt = now + Lobby.RAID_ENRAGE_MS;

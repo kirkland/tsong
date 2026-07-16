@@ -18243,7 +18243,7 @@ export function startWorld(net: WorldNet): void {
   let raidBossX = RAID_ARENA.x, raidBossY = RAID_ARENA.y;     // interpolated render position
   let raidBossHitUntil = 0;
   let raidTelegraphs: RaidTelegraph[] = [];
-  let raidHud: Phaser.GameObjects.Container | null = null;
+  let raidHudMade = false;
   let raidHudBar: Phaser.GameObjects.Graphics | null = null;
   let raidHudText: Phaser.GameObjects.Text | null = null;
   let raidHudSub: Phaser.GameObjects.Text | null = null;
@@ -18556,22 +18556,24 @@ export function startWorld(net: WorldNet): void {
   // The raid HUD: a big boss health bar pinned to the top of the screen while you're at the arena,
   // plus a gather-prompt when it's asleep and the wipe/summon timers while it's live.
   function ensureRaidHud(sc: Phaser.Scene) {
-    if (raidHud) return;
-    raidHudBar = sc.add.graphics();
-    raidHudText = sc.add.text(0, 0, '', { fontFamily: 'ui-monospace, monospace', fontSize: '17px', fontStyle: 'bold', color: '#eaf6ff', stroke: '#0a2036', strokeThickness: 4, resolution: 2 }).setOrigin(0.5, 0.5);
-    raidHudSub = sc.add.text(0, 0, '', { fontFamily: 'ui-monospace, monospace', fontSize: '13px', color: '#bfe0ff', stroke: '#0a2036', strokeThickness: 3, resolution: 2 }).setOrigin(0.5, 0.5);
-    raidHud = sc.add.container(0, 0, [raidHudBar, raidHudText, raidHudSub]).setScrollFactor(0).setDepth(200500).setVisible(false);
+    if (raidHudMade) return;
+    // Three independent screen-pinned objects (no container) so the text always paints on top of
+    // the bar regardless of camera/transform quirks. Depth is above the world, below toasts.
+    raidHudBar = sc.add.graphics().setScrollFactor(0).setDepth(200500).setVisible(false);
+    raidHudText = sc.add.text(0, 0, '', { fontFamily: 'ui-monospace, monospace', fontSize: '17px', fontStyle: 'bold', color: '#eaf6ff', stroke: '#0a2036', strokeThickness: 4, resolution: 2 }).setOrigin(0.5, 0.5).setScrollFactor(0).setDepth(200502).setVisible(false);
+    raidHudSub = sc.add.text(0, 0, '', { fontFamily: 'ui-monospace, monospace', fontSize: '13px', color: '#bfe0ff', stroke: '#0a2036', strokeThickness: 3, resolution: 2 }).setOrigin(0.5, 0.5).setScrollFactor(0).setDepth(200502).setVisible(false);
+    raidHudMade = true;
   }
   function updateRaidHud(nearArena: boolean) {
     const sc = raidScene; if (!sc) return;
     ensureRaidHud(sc);
     const st = raidState, cam = mainCam;
-    if (!raidHud || !raidHudBar || !raidHudText || !raidHudSub || !cam) return;
+    if (!raidHudBar || !raidHudText || !raidHudSub || !cam) return;
     const inArena = selfX > WORLD.w && Math.hypot(selfX - RAID_ARENA.x, selfY - RAID_ARENA.y) <= RAID_ARENA.r;
     const active = st && (st.phase === 'active' || st.phase === 'summoning' || st.phase === 'dying');
     const showGather = st && (st.phase === 'idle' || st.phase === 'cooldown') && inArena;
-    if (!st || (!active && !showGather) || (active && !nearArena)) { raidHud.setVisible(false); return; }
-    raidHud.setVisible(true);
+    if (!st || (!active && !showGather) || (active && !nearArena)) { raidHudBar.setVisible(false); raidHudText.setVisible(false); raidHudSub.setVisible(false); return; }
+    raidHudBar.setVisible(true); raidHudText.setVisible(true); raidHudSub.setVisible(true);
     const W = Math.min(620, cam.width * 0.82), H = 26, cx = cam.width / 2, top = 48;
     raidHudBar.clear();
     raidHudBar.fillStyle(0x0a1626, 0.82); raidHudBar.fillRoundedRect(cx - W / 2 - 10, top - 20, W + 20, H + 46, 8);
