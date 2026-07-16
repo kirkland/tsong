@@ -10050,7 +10050,7 @@ export function startWorld(net: WorldNet): void {
     } else if (nearGolfTee) {
       prompt.textContent = golfMode === 'off' ? '⛳ Play the Course' : '⛳ The Course (manage round)';
     } else if (nearGolfBall) {
-      prompt.textContent = golfCharging ? '⛳ Strike!' : golfMode === 'pvp' && golfPvpTurnSlot !== golfPvpMySlot ? '⛳ Waiting for your turn…' : '⛳ Swing';
+      prompt.textContent = golfCharging ? '⛳ Strike!' : (golfMode === 'pvp' || golfMode === 'bots') && golfPvpTurnSlot !== golfPvpMySlot ? '⛳ Waiting for your turn…' : '⛳ Swing';
     } else if (nearSwan) {
       prompt.textContent = '🦢 Bartholomew';
     } else if (nearBook) {
@@ -15559,7 +15559,7 @@ export function startWorld(net: WorldNet): void {
   // clubhouse's practice green; Multiplayer rides the same bg-relay room shape as chess/morris/ski
   // (game key 'golf') but every client runs identical logic and trusts the shot that comes over
   // the relay, exactly like chess trusts a move — there's no "host simulates" step to keep in sync.
-  type GolfMode = 'off' | 'solo' | 'pvp';
+  type GolfMode = 'off' | 'solo' | 'pvp' | 'bots';
   let golfMode: GolfMode = 'off';
   let golfHoleIdx = 0;                    // solo: 0-based index into GOLF_HOLES
   let golfStrokesThisHole = 0;            // solo
@@ -15571,6 +15571,45 @@ export function startWorld(net: WorldNet): void {
   let nearGolfTee = false;  // standing at hole 1's tee — offer to start/manage a round
   let nearGolfBall = false; // standing at the live ball mid-round — offer to swing
 
+  // --- hole randomization: a toggle in the start dialog (and, for PvP, the host-only lobby)
+  // that swaps every hole's green for a seeded, offset one — varied length (shorter/longer than
+  // the regulation distance for that par) and a lateral "dogleg" so it isn't dead straight. Tee
+  // positions and the world's painted course art never move (repainting the shared, persistent
+  // course for one round isn't in scope) — a temporary pin marker (see showGolfPin) shows where
+  // the ball is actually playing to for the hole in progress, since it may not sit on the
+  // permanent green art. `null` means the regulation course; PvP syncs the seed via golfRelay so
+  // every seated player computes the identical layout.
+  let golfActiveGreens: { x: number; y: number }[] | null = null;
+  let golfPinMarkers: Phaser.GameObjects.GameObject[] = [];
+  function buildRandomGreens(seed: number): { x: number; y: number }[] {
+    const rnd = mulberry32(seed);
+    return GOLF_HOLES.map((h) => {
+      const baseDist = GOLF_DIST_BY_PAR[h.par] ?? 420;
+      const dist = baseDist * (0.75 + rnd() * 0.4);                          // 75%-115% of the usual distance
+      const lateral = (rnd() - 0.5) * 2 * Math.min(150, dist * 0.5);         // a dogleg, scaled to the hole's own length
+      return { x: h.tee.x + lateral, y: h.tee.y - dist };
+    });
+  }
+  /** The hole as actually being played this round — regulation, or with a randomized green. */
+  function playedHole(idx: number): GolfHole {
+    const h = GOLF_HOLES[idx];
+    const g = golfActiveGreens?.[idx];
+    return g ? { ...h, green: g } : h;
+  }
+  function clearGolfPin() { for (const o of golfPinMarkers) o.destroy(); golfPinMarkers = []; }
+  function showGolfPin(idx: number) {
+    clearGolfPin();
+    if (!golfActiveGreens) return;
+    const sc = petScene; if (!sc) return;
+    const g = golfActiveGreens[idx];
+    golfPinMarkers.push(
+      sc.add.circle(g.x, g.y, 42, 0xffe066, 0.16).setBlendMode(Phaser.BlendModes.ADD).setDepth(g.y - 2),
+      sc.add.circle(g.x, g.y, 6, 0x1a2410).setDepth(g.y - 1),
+      sc.add.rectangle(g.x, g.y - 26, 2, 40, 0xe8e0d0).setDepth(g.y),
+      sc.add.triangle(g.x + 9, g.y - 40, 0, 0, 16, 5, 0, 10, 0xffe066).setDepth(g.y),
+    );
+  }
+
   interface GolfPvpPlayer { slot: number; name: string; strokes: number[]; curStrokes: number; ballX: number; ballY: number; holedOut: boolean }
   let golfLobbyView: { status: 'waiting' | 'playing' | 'ended'; slot: number; players: { name: string; slot: number }[]; stake: number } = { status: 'waiting', slot: 0, players: [], stake: 0 };
   let golfPvpPlayers: GolfPvpPlayer[] = [];
@@ -15578,6 +15617,7 @@ export function startWorld(net: WorldNet): void {
   let golfPvpTurnSlot = 0;
   let golfPvpMySlot = 0;
   let golfPvpHud: HTMLDivElement | null = null;
+  let golfHudRefreshAt = 0; // throttles the live "walk toward your ball" distance readout
   let golfShowingResults = false; // a "Round Complete" dialog is up — don't let a rematch-lobby broadcast steal it
 
   function ensureGolfBall() {
@@ -15682,7 +15722,7 @@ export function startWorld(net: WorldNet): void {
 
   function startGolfSwing() {
     if (golfBusy || golfCharging || golfMode === 'off') return;
-    if (golfMode === 'pvp' && golfPvpTurnSlot !== golfPvpMySlot) { showToast('⛳ Not your shot yet.'); return; }
+    if ((golfMode === 'pvp' || golfMode === 'bots') && golfPvpTurnSlot !== golfPvpMySlot) { showToast('⛳ Not your shot yet.'); return; }
     golfCharging = true; golfPhase = 0;
     golfSwingSpeed = 1.7 + Math.random() * 1.6; // a fresh tempo every swing — no counting your way into the sweet zone
   }
@@ -15694,7 +15734,7 @@ export function startWorld(net: WorldNet): void {
     if (!golfCharging || !golfBallPos) return;
     golfCharging = false; golfBusy = true;
     golfMeter?.clear();
-    const hole = GOLF_HOLES[golfMode === 'pvp' ? golfPvpHoleIdx : golfHoleIdx];
+    const hole = playedHole(golfMode === 'solo' ? golfHoleIdx : golfPvpHoleIdx);
     const p = Math.abs(Math.sin(golfPhase));
     const from = { ...golfBallPos };
     const outcome = computeGolfSwingOutcome(p, hole, from);
@@ -15713,10 +15753,11 @@ export function startWorld(net: WorldNet): void {
           if (golfHoleIdx >= GOLF_HOLES.length - 1) finishGolfSolo();
           else startGolfHole(golfHoleIdx + 1);
         }
-      } else if (golfMode === 'pvp') {
+      } else if (golfMode === 'pvp' || golfMode === 'bots') {
         const mine = golfPvpPlayers.find((pl) => pl.slot === golfPvpMySlot);
         const strokes = (mine?.curStrokes ?? 0) + 1;
-        net.golfRelay({ slot: golfPvpMySlot, holeIdx: golfPvpHoleIdx, toX: outcome.toX, toY: outcome.toY, holedOut: outcome.holedOut, strokes });
+        // Bots mode never touches the server — there's no bg room, no other real player to sync with.
+        if (golfMode === 'pvp') net.golfRelay({ slot: golfPvpMySlot, holeIdx: golfPvpHoleIdx, toX: outcome.toX, toY: outcome.toY, holedOut: outcome.holedOut, strokes });
         commitGolfPvpShot(golfPvpMySlot, { toX: outcome.toX, toY: outcome.toY, holedOut: outcome.holedOut, strokes });
       }
       golfBusy = false;
@@ -15731,6 +15772,7 @@ export function startWorld(net: WorldNet): void {
     golfBallPos = { x: t.x, y: t.y };
     ensureGolfBall();
     golfBallSpr?.setPosition(t.x, t.y).setVisible(true);
+    showGolfPin(idx);
   }
   function startGolfSolo() {
     golfMode = 'solo';
@@ -15745,6 +15787,7 @@ export function startWorld(net: WorldNet): void {
     const rows = GOLF_HOLES.map((h, i) => `${h.n}: ${golfScorecard[i]} (par ${h.par})`).join('\n');
     golfMode = 'off';
     golfBallSpr?.setVisible(false);
+    clearGolfPin();
     net.claimQuest('golf-18');
     net.golfScore(total);
     openDialog('⛳ Round Complete', `${rows}\n\nTotal: ${total} (${diff > 0 ? '+' : ''}${diff} to par)`, [
@@ -15753,10 +15796,68 @@ export function startWorld(net: WorldNet): void {
   }
   function abandonGolfRound() {
     if (golfMode === 'pvp') net.golfLeave();
+    if (golfBotShotTimer) { window.clearTimeout(golfBotShotTimer); golfBotShotTimer = 0; }
     golfMode = 'off';
     golfBallSpr?.setVisible(false);
+    clearGolfPin();
     removeGolfPvpHud();
     showToast('⛳ Round abandoned.');
+  }
+
+  // --- Practice vs. Bots — reuses the PvP turn/scoring machinery (golfPvpPlayers etc.) below
+  // wholesale, entirely client-side: no bg room, no relay, no stakes. The `bg` system is PvP-only
+  // (the club does not stock server-side bots — see lobby.ts), so a bot opponent has to live here
+  // instead, as a locally-simulated GolfPvpPlayer whose "shots" the host computes and commits
+  // directly, same shape as a relayed human shot minus the network hop. ---
+  const GOLF_BOT_NAMES = ['Bot Chip', 'Bot Sterling', 'Bot Commodore'];
+  let golfBotShotTimer = 0;
+  function startGolfBots(n: number) {
+    golfMode = 'bots';
+    const t = GOLF_HOLES[0].tee;
+    golfPvpMySlot = 0;
+    const human: GolfPvpPlayer = { slot: 0, name: net.name() || 'You', strokes: [], curStrokes: 0, ballX: t.x, ballY: t.y, holedOut: false };
+    const bots: GolfPvpPlayer[] = Array.from({ length: n }, (_, i) => ({
+      slot: i + 1, name: GOLF_BOT_NAMES[i] ?? `Bot ${i + 1}`, strokes: [], curStrokes: 0, ballX: t.x, ballY: t.y, holedOut: false,
+    }));
+    golfPvpPlayers = [human, ...bots];
+    golfPvpHoleIdx = 0;
+    golfPvpTurnSlot = 0;
+    golfBallPos = { x: t.x, y: t.y };
+    ensureGolfBall();
+    golfBallSpr?.setPosition(t.x, t.y).setVisible(true);
+    showGolfPin(0);
+    showToast(`⛳ Round started vs. ${n} bot${n > 1 ? 's' : ''} — Hole 1. Walk to your ball and press Space to swing.`);
+    updateGolfPvpHud();
+  }
+  function openGolfBotPicker() {
+    openDialog('🤖 Practice vs. Bots', 'How many bots would you like at the tee? Bots play locally — no stakes, no leaderboard rivals, just company.', [
+      { label: '1 Bot', onPick: () => { closeDialog(); startGolfBots(1); } },
+      { label: '2 Bots', onPick: () => { closeDialog(); startGolfBots(2); } },
+      { label: '3 Bots', onPick: () => { closeDialog(); startGolfBots(3); } },
+    ]);
+  }
+  // If it's now a bot's turn, has that bot take its shot after a short "thinking" pause. The swing
+  // timing (p) is biased toward — but not locked onto — the sweet zone, so bots play competently
+  // without being unbeatable or robotic.
+  function maybeGolfBotTurn() {
+    if (golfMode !== 'bots' || golfPvpTurnSlot === golfPvpMySlot) return;
+    const bot = golfPvpPlayers.find((pl) => pl.slot === golfPvpTurnSlot);
+    if (!bot || bot.holedOut) return;
+    golfBotShotTimer = window.setTimeout(() => {
+      golfBotShotTimer = 0;
+      if (golfMode !== 'bots' || golfPvpTurnSlot !== bot.slot) return;
+      const hole = playedHole(golfPvpHoleIdx);
+      const from = { x: bot.ballX, y: bot.ballY };
+      const p = Math.random() < 0.62
+        ? GOLF_SWEET_LO - 0.04 + Math.random() * (GOLF_SWEET_HI - GOLF_SWEET_LO + 0.08)
+        : Math.random();
+      const outcome = computeGolfSwingOutcome(p, hole, from);
+      const strokes = bot.curStrokes + 1;
+      playGolfShot(from, { x: outcome.toX, y: outcome.toY }, outcome.lost, () => {
+        if (outcome.holedOut) tone(880, 0.12, 'sine', 0.06, 660); else tone(140, 0.15, 'sine', 0.05, 100);
+        commitGolfPvpShot(bot.slot, { toX: outcome.toX, toY: outcome.toY, holedOut: outcome.holedOut, strokes });
+      });
+    }, 1100 + Math.random() * 900);
   }
 
   // --- Multiplayer round (2-4, PvP) — lobby via the shared bg-relay room (game key 'golf') ---
@@ -15774,16 +15875,32 @@ export function startWorld(net: WorldNet): void {
     if (isHost && golfLobbyView.players.length >= 2) {
       choices.push({ label: `🏁 Start Round (${golfLobbyView.players.length} players)`, onPick: () => net.golfStart() });
     }
+    if (isHost) {
+      choices.push({
+        label: golfActiveGreens ? '🎲 Randomized holes: ON (tap to reroll)' : '🎲 Randomize holes: OFF',
+        onPick: () => { toggleGolfRandomizeHost(); renderGolfLobbyDialog(); },
+      });
+    }
     choices.push({ label: '🚪 Leave lobby', onPick: () => { closeDialog(); net.golfLeave(); } });
     const stakeLine = golfLobbyView.stake > 0 ? `${golfLobbyView.stake.toLocaleString()}🪙 winner takes all` : 'Friendly (no stake)';
+    const randLine = golfActiveGreens ? '\nHoles: randomized (host\'s roll)' : '';
     openDialog('🏆 Multiplayer Round — Lobby',
-      `Players seated (2-4): ${names}\nStake: ${stakeLine}\n${isHost ? 'You are the host — start once 2+ players are seated.' : "Waiting for the host to start…"}`,
+      `Players seated (2-4): ${names}\nStake: ${stakeLine}${randLine}\n${isHost ? 'You are the host — start once 2+ players are seated.' : "Waiting for the host to start…"}`,
       choices);
   }
   function openGolfPvpLobby() {
     golfLobbyView = { status: 'waiting', slot: 0, players: [], stake: 0 };
+    golfActiveGreens = null; // a fresh lobby starts regulation; only THIS host's own toggle turns it on
     net.golfJoin();
     renderGolfLobbyDialog();
+  }
+  // Host-only: reroll (or clear) the randomized layout and relay the seed to every seated player,
+  // so the whole table computes the identical holes before the round even starts.
+  function toggleGolfRandomizeHost() {
+    if (golfActiveGreens) { golfActiveGreens = null; net.golfRelay({ k: 'seed', seed: 0 }); return; }
+    const seed = Math.floor(Math.random() * 1e9) || 1;
+    golfActiveGreens = buildRandomGreens(seed);
+    net.golfRelay({ k: 'seed', seed });
   }
   function beginGolfPvpRound(players: { name: string; slot: number }[]) {
     golfMode = 'pvp';
@@ -15794,6 +15911,7 @@ export function startWorld(net: WorldNet): void {
     golfBallPos = { x: t.x, y: t.y };
     ensureGolfBall();
     golfBallSpr?.setPosition(t.x, t.y).setVisible(true);
+    showGolfPin(0);
     showToast(`🏆 Round started! Hole 1 — ${nameForGolfSlot(golfPvpTurnSlot)} tees off first.`);
     updateGolfPvpHud();
   }
@@ -15814,18 +15932,22 @@ export function startWorld(net: WorldNet): void {
     golfPvpTurnSlot = golfPvpPlayers[0]?.slot ?? 0;
     golfBallPos = { x: t.x, y: t.y };
     golfBallSpr?.setPosition(t.x, t.y);
+    showGolfPin(golfPvpHoleIdx);
     showToast(`⛳ Hole ${golfPvpHoleIdx + 1} — Par ${GOLF_HOLES[golfPvpHoleIdx].par}. ${nameForGolfSlot(golfPvpTurnSlot)} is up.`);
+    maybeGolfBotTurn();
   }
   function finishGolfPvpRound() {
     const totals = golfPvpPlayers.map((p) => ({ slot: p.slot, name: p.name, total: p.strokes.reduce((a, b) => a + b, 0) }));
     totals.sort((a, b) => a.total - b.total);
     const winner = totals[0];
     const rows = totals.map((t, i) => `${i === 0 ? '🏆' : `${i + 1}.`} ${t.name} — ${t.total}`).join('\n');
-    if (winner) net.golfResult(winner.slot);
+    if (winner && golfMode === 'pvp') net.golfResult(winner.slot); // bots mode has no server room/pot to settle
     const mine = totals.find((t) => t.slot === golfPvpMySlot);
     if (mine) net.golfScore(mine.total); // every finisher reports their own total, not just the winner
+    if (golfBotShotTimer) { window.clearTimeout(golfBotShotTimer); golfBotShotTimer = 0; }
     golfMode = 'off';
     golfBallSpr?.setVisible(false);
+    clearGolfPin();
     removeGolfPvpHud();
     golfShowingResults = true; // the table stays seated for a rematch — don't let that lobby refresh steal this dialog
     openDialog('🏆 Round Complete', rows, [{ label: 'Nice.', onPick: () => { golfShowingResults = false; closeDialog(); } }]);
@@ -15843,14 +15965,22 @@ export function startWorld(net: WorldNet): void {
     if (golfPvpPlayers.every((p) => p.holedOut)) maybeAdvanceGolfPvpHole();
     else advanceGolfPvpTurn();
     updateGolfPvpHud();
+    maybeGolfBotTurn();
   }
   function removeGolfPvpHud() { golfPvpHud?.remove(); golfPvpHud = null; }
+  // A rough compass from here to there — dy<0/dx<0 is north/west (matches the world's coordinate
+  // convention: the Club sits north of town at negative y).
+  function compassTo(dx: number, dy: number): string {
+    const ns = dy < -20 ? 'N' : dy > 20 ? 'S' : '';
+    const ew = dx < -20 ? 'W' : dx > 20 ? 'E' : '';
+    return (ns + ew) || 'right here';
+  }
   function updateGolfPvpHud() {
-    if (golfMode !== 'pvp') { removeGolfPvpHud(); return; }
+    if (golfMode !== 'pvp' && golfMode !== 'bots') { removeGolfPvpHud(); return; }
     if (!golfPvpHud) {
       golfPvpHud = document.createElement('div');
       golfPvpHud.id = 'golfPvpHud';
-      golfPvpHud.style.cssText = 'position:fixed;top:12px;right:12px;z-index:9999;background:rgba(10,20,10,0.82);border:2px solid #4da24b;border-radius:8px;padding:8px 12px;color:#fff;font:13px/1.5 system-ui;min-width:180px;pointer-events:none;';
+      golfPvpHud.style.cssText = 'position:fixed;top:12px;right:12px;z-index:9999;background:rgba(10,20,10,0.82);border:2px solid #4da24b;border-radius:8px;padding:8px 12px;color:#fff;font:13px/1.5 system-ui;min-width:200px;pointer-events:none;';
       document.body.appendChild(golfPvpHud);
     }
     const hole = GOLF_HOLES[golfPvpHoleIdx];
@@ -15861,22 +15991,45 @@ export function startWorld(net: WorldNet): void {
       return `<div style="display:flex;justify-content:space-between;gap:12px">`
         + `<span>${turn}${p.name}${p.slot === golfPvpMySlot ? ' (you)' : ''}</span><span>${total}${live}</span></div>`;
     }).join('');
-    golfPvpHud.innerHTML = `<div style="color:#8ee88a;font-weight:700;margin-bottom:4px">⛳ HOLE ${hole.n}/18 · PAR ${hole.par}</div>${rows}`;
+    // A proactive turn signal — without this, a player who's wandered off between shots has no
+    // way to know it's their turn (or where their ball even is) short of walking the whole course.
+    const myTurn = golfPvpTurnSlot === golfPvpMySlot;
+    let banner: string;
+    if (myTurn) {
+      const dist = golfBallPos ? Math.hypot(selfX - golfBallPos.x, selfY - golfBallPos.y) : 0;
+      banner = dist > 70 && golfBallPos
+        ? `<div style="margin-top:6px;color:#ffe066;font-weight:700;">🔔 YOUR TURN — ball's ${Math.round(dist)}u ${compassTo(golfBallPos.x - selfX, golfBallPos.y - selfY)} of you</div>`
+        : `<div style="margin-top:6px;color:#ffe066;font-weight:700;">🔔 YOUR TURN — press Space to swing</div>`;
+    } else {
+      banner = `<div style="margin-top:6px;color:#9ab8a0;font-style:italic;">⏳ waiting on ${nameForGolfSlot(golfPvpTurnSlot)}…</div>`;
+    }
+    golfPvpHud.innerHTML = `<div style="color:#8ee88a;font-weight:700;margin-bottom:4px">⛳ HOLE ${hole.n}/18 · PAR ${hole.par}</div>${rows}${banner}`;
   }
 
   function openGolfStartDialog() {
     if (golfMode !== 'off') {
-      const hole = GOLF_HOLES[golfMode === 'pvp' ? golfPvpHoleIdx : golfHoleIdx];
+      const hole = GOLF_HOLES[golfMode === 'solo' ? golfHoleIdx : golfPvpHoleIdx];
       openDialog('⛳ The Course', `Round in progress — Hole ${hole.n}. Your ball is out on the course.`, [
         { label: 'Abandon round', onPick: () => { closeDialog(); abandonGolfRound(); } },
       ]);
       return;
     }
-    openDialog('⛳ The Course', "Eighteen holes, a par of 72, and the club's good name riding on every stroke. How would you like to play?", [
+    const randLabel = golfActiveGreens ? '🎲 Randomized holes: ON (tap to reroll)' : '🎲 Randomize holes: OFF';
+    const randSub = golfActiveGreens ? ' Holes are randomized for solo/bots rounds — tee boxes stay put, but green length and line vary; watch for the temporary pin.' : '';
+    openDialog('⛳ The Course', `Eighteen holes, a par of 72, and the club's good name riding on every stroke. How would you like to play?${randSub}`, [
       { label: '🏌️ Solo Round', onPick: () => { closeDialog(); startGolfSolo(); } },
+      { label: '🤖 Practice vs. Bots', onPick: () => { closeDialog(); openGolfBotPicker(); } },
       { label: '🏆 Multiplayer Round (2-4, PvP)', onPick: () => { closeDialog(); openGolfPvpLobby(); } },
+      { label: randLabel, onPick: () => { toggleGolfRandomizeSolo(); openGolfStartDialog(); } },
       { label: '📋 Course Leaderboard', onPick: () => { closeDialog(); openGolfLeaderboardDialog(); } },
     ]);
+  }
+  // Solo/bots-facing toggle — no relay needed, since only this client plays on the result.
+  function toggleGolfRandomizeSolo() {
+    if (golfActiveGreens) { golfActiveGreens = null; showToast('🎲 Course reset to the regulation layout.'); return; }
+    const seed = Math.floor(Math.random() * 1e9) || 1;
+    golfActiveGreens = buildRandomGreens(seed);
+    showToast('🎲 Holes randomized — tee boxes stay put, lengths and lines vary.');
   }
   function openGolfLeaderboardDialog() {
     const rows = golfLeaderboardRows.length
@@ -15902,6 +16055,11 @@ export function startWorld(net: WorldNet): void {
       golfMeter.fillStyle(0xffffff, 1); golfMeter.fillRect(mx + p * (mw - 2), my - 1, 2, mh + 2); // the needle
     } else if (!golfBusy) {
       golfMeter.clear();
+    }
+    // Live-refresh the "walk toward your ball" HUD readout while it's your turn — see updateGolfPvpHud.
+    if ((golfMode === 'pvp' || golfMode === 'bots') && golfPvpTurnSlot === golfPvpMySlot) {
+      golfHudRefreshAt += dt;
+      if (golfHudRefreshAt > 0.4) { golfHudRefreshAt = 0; updateGolfPvpHud(); }
     }
   }
 
@@ -17748,8 +17906,16 @@ export function startWorld(net: WorldNet): void {
       if (dialogOpen && golfMode === 'off' && !golfShowingResults) renderGolfLobbyDialog(); // live-update the seated list
     };
     golfRelayHandler = (data) => {
-      const d = data as { slot?: number; holeIdx?: number; toX?: number; toY?: number; holedOut?: boolean; strokes?: number };
-      if (!d || typeof d.slot !== 'number' || typeof d.toX !== 'number' || typeof d.toY !== 'number' || typeof d.holeIdx !== 'number') return;
+      const d = data as { k?: string; seed?: number; slot?: number; holeIdx?: number; toX?: number; toY?: number; holedOut?: boolean; strokes?: number };
+      if (!d || typeof d !== 'object') return;
+      // The host's randomize toggle, relayed pre-start so every seated player computes the same
+      // holes (seed 0 = back to the regulation course).
+      if (d.k === 'seed' && typeof d.seed === 'number') {
+        golfActiveGreens = d.seed > 0 ? buildRandomGreens(d.seed) : null;
+        if (dialogOpen && golfMode === 'off' && !golfShowingResults) renderGolfLobbyDialog();
+        return;
+      }
+      if (typeof d.slot !== 'number' || typeof d.toX !== 'number' || typeof d.toY !== 'number' || typeof d.holeIdx !== 'number') return;
       if (golfMode !== 'pvp' || d.holeIdx !== golfPvpHoleIdx) return; // stale/out-of-sync — ignore
       const pl = golfPvpPlayers.find((p) => p.slot === d.slot);
       if (!pl) return;
