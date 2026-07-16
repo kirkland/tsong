@@ -1020,20 +1020,23 @@ interface WeaponSpec {
   tint: number;     // crate tint (Phaser)
   css: string;      // HUD accent
 }
+// Ammo caps are generous on purpose — you should be able to stock a proper loadout in town before a
+// long fight (a Frostreach raid can run several minutes). perCrate scales up to match so filling the
+// bigger pools doesn't mean a hundred crate-runs.
 const WEAPONS: readonly WeaponSpec[] = [
   { id: 'rocket', name: 'Rocket Launcher',    emoji: '🚀', blurb: 'Slow, loud, and it flattens a whole street corner.',
-    cooldown: 850,  perCrate: 3,  max: 12,  start: 5, weight: 34, tint: 0xff8a8a, css: '#ff6a6a' },
+    cooldown: 850,  perCrate: 6,   max: 40,   start: 5, weight: 34, tint: 0xff8a8a, css: '#ff6a6a' },
   { id: 'mg',     name: 'Machine Gun',        emoji: '🔫', blurb: 'Hold R and paint the town.',
-    cooldown: 80,   perCrate: 80, max: 300, start: 0, weight: 30, tint: 0xf2dd7a, css: '#f2dd7a' },
+    cooldown: 80,   perCrate: 160, max: 1200, start: 0, weight: 30, tint: 0xf2dd7a, css: '#f2dd7a' },
   { id: 'laser',  name: 'Laser Rifle',        emoji: '⚡', blurb: 'A beam that punches straight through everything in line.',
-    cooldown: 340,  perCrate: 12, max: 48,  start: 0, weight: 24, tint: 0x8ef0ff, css: '#7ee8f6' },
+    cooldown: 340,  perCrate: 24,  max: 200,  start: 0, weight: 24, tint: 0x8ef0ff, css: '#7ee8f6' },
   { id: 'void',   name: 'Singularity Cannon', emoji: '🕳️', blurb: 'Opens a black hole. Do not stand near the black hole.',
-    cooldown: 2400, perCrate: 1,  max: 3,   start: 0, weight: 10, tint: 0xc79bff, css: '#c79bff' },
+    cooldown: 2400, perCrate: 2,   max: 12,   start: 0, weight: 10, tint: 0xc79bff, css: '#c79bff' },
 ];
 const WEAPON_BY_ID = Object.fromEntries(WEAPONS.map((w) => [w.id, w])) as Record<WorldWeapon, WeaponSpec>;
 const WEAPON_ORDER: readonly WorldWeapon[] = WEAPONS.map((w) => w.id);
 
-const CRATE_RESPAWN_MS = 22_000; // how long a looted crate stays gone
+const CRATE_RESPAWN_MS = 12_000; // how long a looted crate stays gone (quick, so you can top up before a run)
 
 // Where the crates sit. Seeded PRNG (not Math.random) so every client lands on the same 36 spots
 // without the server having to say a word about them — crates are a purely local, cosmetic layer
@@ -1059,11 +1062,11 @@ const CRATE_SPOTS: readonly CrateSpot[] = (() => {
   };
   // Rejection-sample open ground: off building footprints (ponds included), out of the jail, and
   // clear of Robville's lots. Spread them so no two crates sit within sight of each other.
-  for (let tries = 0; tries < 6000 && spots.length < 36; tries++) {
+  for (let tries = 0; tries < 9000 && spots.length < 54; tries++) {
     const x = 140 + rnd() * (WORLD.w - 280);
     const y = 140 + rnd() * (WORLD.h - 280);
     if (inAnyBuilding(x, y, 46) || inJail(x, y, 70) || onParcel(x, y, 18)) continue;
-    if (spots.some((s) => Math.hypot(s.x - x, s.y - y) < 250)) continue;
+    if (spots.some((s) => Math.hypot(s.x - x, s.y - y) < 200)) continue;
     spots.push({ x, y, w: rollWeapon() });
   }
   return spots;
@@ -14113,7 +14116,7 @@ export function startWorld(net: WorldNet): void {
   }
 
   // ============================================================================================
-  // AMMO CRATES 📦 — 36 of them, on the fixed spots CRATE_SPOTS picked from a seeded PRNG, so every
+  // AMMO CRATES 📦 — on the fixed spots CRATE_SPOTS picked from a seeded PRNG, so every
   // client draws them in the same places without a byte of server traffic. Walk over one to load up.
   // Looting is local: a crate you take goes away for you and comes back 22 seconds later, and
   // everyone else can still grab their own. Nobody races anybody to a box.
