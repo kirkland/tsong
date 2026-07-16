@@ -17,8 +17,9 @@
 // is "open" until the first legal, non-break shot pots a ball — whichever group that ball belongs
 // to is assigned to its shooter, the other group to the opponent. Pot a ball from your own group
 // and you keep shooting; miss, foul, or pot the opponent's ball and the turn passes. Once your
-// group is completely cleared, potting the 8 legally wins; potting it early, or scratching while
-// potting it, is an instant loss.
+// group is completely cleared, you must call a pocket before every shot (there's nothing else left
+// to legally aim at) — potting the 8 in the called pocket wins; potting it in the wrong pocket,
+// potting it early, or scratching while potting it, is an instant loss.
 
 import type { BgNet } from './chess';
 
@@ -32,6 +33,7 @@ interface ShotResult {
   potted: number[]; // ids newly potted this shot (0 = the cue ball, i.e. a scratch)
   cueScratched: boolean;
   firstContact: number | null; // id of the first ball the cue ball touches this shot, or null if it touches nothing
+  pottedInto: Record<number, number>; // ball id -> POCKETS index, for every ball newly potted this shot
 }
 
 // --- table geometry (table-space units; scaled to the canvas at render time) ---
@@ -102,6 +104,7 @@ function simulateShot(startBalls: Ball[], angle: number, power01: number): ShotR
   const path: Record<number, { x: number; y: number }[]> = {};
   for (const b of balls) path[b.id] = [{ x: b.x, y: b.y }];
   let firstContact: number | null = null;
+  const pottedInto: Record<number, number> = {};
   let step = 0;
   for (; step < MAX_STEPS; step++) {
     let moving = false;
@@ -117,8 +120,9 @@ function simulateShot(startBalls: Ball[], angle: number, power01: number): ShotR
     }
     for (const b of balls) { // pocket capture
       if (b.potted) continue;
-      for (const p of POCKETS) {
-        if (Math.hypot(b.x - p.x, b.y - p.y) < p.r) { b.potted = true; b.vx = 0; b.vy = 0; break; }
+      for (let pi = 0; pi < POCKETS.length; pi++) {
+        const p = POCKETS[pi];
+        if (Math.hypot(b.x - p.x, b.y - p.y) < p.r) { b.potted = true; b.vx = 0; b.vy = 0; pottedInto[b.id] = pi; break; }
       }
     }
     for (const b of balls) { // rail bounce
@@ -157,7 +161,7 @@ function simulateShot(startBalls: Ball[], angle: number, power01: number): ShotR
     if (!p.some((pt) => Math.hypot(pt.x - p[0].x, pt.y - p[0].y) > 1)) delete path[b.id];
   }
   const potted = balls.filter((b) => b.potted && !wasPotted.has(b.id)).map((b) => b.id);
-  return { path, final: balls, potted, cueScratched: potted.includes(0), firstContact };
+  return { path, final: balls, potted, cueScratched: potted.includes(0), firstContact, pottedInto };
 }
 
 /** Places the cue ball at the head spot (or the nearest clear space around it) — used at rack
@@ -183,18 +187,21 @@ function respotCue(balls: Ball[]): void {
 }
 
 // --- bot AI: a simple "ghost ball" aimer with imperfect execution ---
-function chooseBotShot(balls: Ball[], myGroup: Assign): { angle: number; power: number } {
+function chooseBotShot(balls: Ball[], myGroup: Assign): { angle: number; power: number; calledPocket: number | null } {
   const cue = balls.find((b) => b.id === 0);
   let targets: Ball[];
+  let onEight = false;
   if (myGroup === 'open') targets = balls.filter((b) => !b.potted && b.id !== 0 && b.id !== 8);
   else {
     const mine = balls.filter((b) => !b.potted && groupOf(b.id) === myGroup);
     targets = mine.length ? mine : balls.filter((b) => !b.potted && b.id === 8);
+    onEight = !mine.length;
   }
-  let best: { angle: number; power: number; score: number } | null = null;
+  let best: { angle: number; power: number; score: number; pocket: number } | null = null;
   if (cue) {
     for (const t of targets) {
-      for (const p of POCKETS) {
+      for (let pi = 0; pi < POCKETS.length; pi++) {
+        const p = POCKETS[pi];
         const tp = Math.hypot(p.x - t.x, p.y - t.y);
         if (tp < 1) continue;
         const ux = (p.x - t.x) / tp, uy = (p.y - t.y) / tp;
@@ -206,14 +213,26 @@ function chooseBotShot(balls: Ball[], myGroup: Assign): { angle: number; power: 
         if (cut < 0.28) continue;
         const score = cut * 2 - (cg + tp) / 600;
         if (!best || score > best.score) {
-          best = { angle: Math.atan2(ghost.y - cue.y, ghost.x - cue.x), power: Math.max(0.32, Math.min(0.95, (cg + tp) / 700)), score };
+          best = { angle: Math.atan2(ghost.y - cue.y, ghost.x - cue.x), power: Math.max(0.32, Math.min(0.95, (cg + tp) / 700)), score, pocket: pi };
         }
       }
     }
   }
   const skillJitter = (Math.random() - 0.5) * 0.09; // the House is good, not perfect
-  if (best) return { angle: best.angle + skillJitter, power: Math.max(0.15, Math.min(1, best.power + (Math.random() - 0.5) * 0.12)) };
-  return { angle: Math.random() * Math.PI * 2, power: 0.5 }; // nothing on: a safe-ish poke
+  if (best) {
+    return {
+      angle: best.angle + skillJitter,
+      power: Math.max(0.15, Math.min(1, best.power + (Math.random() - 0.5) * 0.12)),
+      calledPocket: onEight ? best.pocket : null,
+    };
+  }
+  // nothing on: a safe-ish poke — if it's the bot's turn to be "on" the 8, it still has to call
+  // something, so it names whichever pocket is nearest the 8 ball.
+  const eight = balls.find((b) => b.id === 8 && !b.potted);
+  const fallbackPocket = onEight && eight
+    ? POCKETS.reduce((bi, p, pi) => (Math.hypot(p.x - eight.x, p.y - eight.y) < Math.hypot(POCKETS[bi].x - eight.x, POCKETS[bi].y - eight.y) ? pi : bi), 0)
+    : null;
+  return { angle: Math.random() * Math.PI * 2, power: 0.5, calledPocket: fallbackPocket };
 }
 
 // --- audio ---
@@ -232,6 +251,7 @@ function tone(freq: number, dur: number, type: OscillatorType, vol: number, slid
 const sndClick = () => tone(180, 0.05, 'square', 0.06);
 const sndPot = () => { tone(660, 0.08, 'sine', 0.06, 990); tone(880, 0.1, 'sine', 0.04, 1320); };
 const sndScratch = () => tone(140, 0.3, 'sawtooth', 0.05, 70);
+const sndCall = () => tone(440, 0.06, 'triangle', 0.05, 660);
 const sndEnd = () => { tone(392, 0.35, 'sine', 0.06); setTimeout(() => tone(494, 0.35, 'sine', 0.05), 130); setTimeout(() => tone(587, 0.55, 'sine', 0.05), 260); };
 
 // --- module state ---
@@ -261,6 +281,7 @@ let aiming = false;
 let aimAngle = 0, aimPower = 0;
 let ballInHand = false;  // true from a foul until the receiving player finalizes a cue-ball placement
 let placingCue = false;  // true while a pointer is actively dragging the cue ball into place
+let calledPocket: number | null = null; // POCKETS index called for the 8-ball, required once qualified
 let viewScale = 1, viewOffX = 0, viewOffY = 0;
 let lastPointer = { x: 0, y: 0 };
 let botShotTimer = 0;
@@ -275,7 +296,7 @@ export function openBilliards(n: BgNet) {
   screen = 'mode';
   lobby = { status: 'waiting', slot: 0, players: [], stake: 0 };
   over = null; gameN = 0; balls = []; playerGroup = ['open', 'open']; busy = false;
-  rematchMine = false; rematchTheirs = false; ballInHand = false; placingCue = false;
+  rematchMine = false; rematchTheirs = false; ballInHand = false; placingCue = false; calledPocket = null;
   root = document.createElement('div');
   root.id = 'billiardsOverlay';
   root.style.cssText =
@@ -306,6 +327,14 @@ function remainingOf(g: Assign): number {
   if (g === 'open') return 7;
   return balls.filter((b) => !b.potted && groupOf(b.id) === g).length;
 }
+/** True once `slot`'s own group is fully cleared — the only legal target left is the 8-ball,
+ *  which means every shot from here on has to name a pocket before it can be struck. */
+function qualified(slot: number): boolean {
+  return playerGroup[slot] !== 'open' && remainingOf(playerGroup[slot]) === 0;
+}
+function needsCall(): boolean {
+  return qualified(mySlot) && calledPocket === null;
+}
 
 // --- lifecycle ---
 
@@ -313,7 +342,7 @@ function startRack() {
   balls = freshBalls();
   playerGroup = ['open', 'open'];
   shotCount = 0;
-  over = null; busy = false; aiming = false; ballInHand = false; placingCue = false;
+  over = null; busy = false; aiming = false; ballInHand = false; placingCue = false; calledPocket = null;
   rematchMine = false; rematchTheirs = false;
   turnSlot = gameN % 2 === 0 ? 0 : 1; // breaker alternates on a rematch
   renderGame();
@@ -349,16 +378,19 @@ export function feedLobby(msg: LobbyView) {
 
 export function feedRelay(data: unknown) {
   if (!open || vsBot) return;
-  const d = data as { k?: string; angle?: number; power?: number; potted?: number[]; cueScratched?: boolean; path?: unknown; final?: Ball[]; firstContact?: number | null; x?: number; y?: number; re?: boolean };
+  const d = data as { k?: string; angle?: number; power?: number; potted?: number[]; cueScratched?: boolean; path?: unknown; final?: Ball[]; firstContact?: number | null; pottedInto?: Record<number, number>; calledPocket?: number | null; x?: number; y?: number; re?: boolean };
   if (!d || typeof d !== 'object') return;
   if (d.k === 'aim' && isHost() && typeof d.angle === 'number' && typeof d.power === 'number') {
     // A guest's turn — only the host actually runs physics.
     if (over || busy || turnSlot !== 1) return;
-    runShotAsAuthority(d.angle, d.power);
+    runShotAsAuthority(d.angle, d.power, d.calledPocket ?? null);
     return;
   }
   if (d.k === 'result' && !isHost() && d.final && d.potted) {
-    applyResult({ path: (d.path as Record<number, { x: number; y: number }[]>) ?? {}, final: d.final, potted: d.potted, cueScratched: !!d.cueScratched, firstContact: d.firstContact ?? null });
+    applyResult(
+      { path: (d.path as Record<number, { x: number; y: number }[]>) ?? {}, final: d.final, potted: d.potted, cueScratched: !!d.cueScratched, firstContact: d.firstContact ?? null, pottedInto: d.pottedInto ?? {} },
+      d.calledPocket ?? null,
+    );
     return;
   }
   if (d.k === 'place' && typeof d.x === 'number' && typeof d.y === 'number') {
@@ -380,26 +412,28 @@ export function feedRelay(data: unknown) {
 // --- shot orchestration ---
 
 /** My input, from the UI. In PvP, only the host runs physics locally — a guest's turn asks the host. */
-function attemptShot(angle: number, power: number) {
+function attemptShot(angle: number, power: number, calledOverride?: number | null) {
   if (busy || over) return;
   if (turnSlot !== mySlot && !vsBot) return;
+  const called = calledOverride !== undefined ? calledOverride : calledPocket;
+  calledPocket = null; // a call is good for one shot — qualified and still shooting next time, call again
   busy = true;
   sndClick();
-  if (vsBot || isHost()) { runShotAsAuthority(angle, power); return; }
-  net?.relay({ k: 'aim', angle, power });
+  if (vsBot || isHost()) { runShotAsAuthority(angle, power, called); return; }
+  net?.relay({ k: 'aim', angle, power, calledPocket: called });
 }
 
 /** Runs on whichever client is authoritative for this shot (host in PvP, sole client in bot mode). */
-function runShotAsAuthority(angle: number, power: number) {
+function runShotAsAuthority(angle: number, power: number, called: number | null) {
   const result = simulateShot(balls, angle, power);
-  if (!vsBot) net?.relay({ k: 'result', potted: result.potted, cueScratched: result.cueScratched, final: result.final, path: result.path, firstContact: result.firstContact });
-  applyResult(result);
+  if (!vsBot) net?.relay({ k: 'result', potted: result.potted, cueScratched: result.cueScratched, final: result.final, path: result.path, firstContact: result.firstContact, pottedInto: result.pottedInto, calledPocket: called });
+  applyResult(result, called);
 }
 
 /** Plays back the shot (both the client that computed it and the one that received it), then
  *  resolves scoring/turn order from the shared facts — the same "derive the same verdict locally"
  *  pattern chess uses for check/checkmate, just fed by a relayed physics outcome instead of a move. */
-function applyResult(result: ShotResult) {
+function applyResult(result: ShotResult, called: number | null) {
   busy = true;
   const shooter = turnSlot;
   const wasBreak = shotCount === 0;
@@ -409,11 +443,12 @@ function applyResult(result: ShotResult) {
     balls = result.final;
     if (result.cueScratched) sndScratch();
     else if (result.potted.length) sndPot();
-    resolveShot(shooter, result.potted, result.cueScratched, wasBreak, result.firstContact, groupWasClear);
+    const eightPocketOk = called === null || result.pottedInto[8] === undefined || result.pottedInto[8] === called;
+    resolveShot(shooter, result.potted, result.cueScratched, wasBreak, result.firstContact, groupWasClear, eightPocketOk);
   });
 }
 
-function resolveShot(shooter: number, potted: number[], cueScratched: boolean, wasBreak: boolean, firstContact: number | null, groupWasClear: boolean) {
+function resolveShot(shooter: number, potted: number[], cueScratched: boolean, wasBreak: boolean, firstContact: number | null, groupWasClear: boolean, eightPocketOk: boolean) {
   const potNonEight = potted.filter((id) => id !== 0 && id !== 8);
   const potEight = potted.includes(8);
   const preGroup = playerGroup[shooter]; // group status entering this shot — needed below, before assignment can change it
@@ -427,9 +462,10 @@ function resolveShot(shooter: number, potted: number[], cueScratched: boolean, w
   }
 
   if (potEight) {
-    const legal = playerGroup[shooter] !== 'open' && remainingOf(playerGroup[shooter]) === 0 && !cueScratched;
+    const legal = playerGroup[shooter] !== 'open' && remainingOf(playerGroup[shooter]) === 0 && !cueScratched && eightPocketOk;
     finish(legal ? shooter : 1 - shooter,
-      legal ? `${nameOf(shooter)} pots the 8-ball. Game.` : `${nameOf(shooter)} pots the 8-ball ${cueScratched ? 'on a scratch' : 'early'}.`,
+      legal ? `${nameOf(shooter)} calls it and pots the 8-ball. Game.`
+        : `${nameOf(shooter)} pots the 8-ball ${cueScratched ? 'on a scratch' : !eightPocketOk ? 'in the wrong pocket' : 'early'}.`,
       legal ? 'The house nods, once.' : 'House rules: that\'s a loss, member or not.');
     return;
   }
@@ -472,7 +508,7 @@ function maybeBotTurn() {
     botShotTimer = 0;
     if (!open || over || turnSlot !== 1) return;
     const shot = chooseBotShot(balls, playerGroup[1]);
-    attemptShot(shot.angle, shot.power);
+    attemptShot(shot.angle, shot.power, shot.calledPocket);
   }, 900 + Math.random() * 700);
 }
 
@@ -537,6 +573,15 @@ function onPointerDown(e: PointerEvent) {
     lastPointer = p;
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
+    renderGame();
+    return;
+  }
+  if (needsCall()) {
+    // Nothing legal left to hit but the 8 — name a pocket before the cue ball can even be addressed.
+    const pi = POCKETS.findIndex((pk) => Math.hypot(pk.x - p.x, pk.y - p.y) < pk.r + 16);
+    if (pi === -1) return; // clicked the felt, not a pocket — the HUD line keeps reminding them
+    calledPocket = pi;
+    sndCall();
     renderGame();
     return;
   }
@@ -746,8 +791,18 @@ function renderGame() {
   c.fillRect(toX(0), toY(0), TW * viewScale, TH * viewScale);
   c.fillStyle = '#ffffff08';
   for (let i = 0; i < 5; i++) c.fillRect(toX(0), toY(0) + (TH * viewScale * i) / 5, TW * viewScale, (TH * viewScale) / 10);
-  // pockets
-  for (const p of POCKETS) { c.beginPath(); c.arc(toX(p.x), toY(p.y), p.r * viewScale, 0, Math.PI * 2); c.fillStyle = '#0a0806'; c.fill(); }
+  // pockets — pulse all six when a pocket call is owed, ring the one already called in solid gold
+  const callPending = turnSlot === mySlot && !over && !busy && needsCall();
+  POCKETS.forEach((p, pi) => {
+    c.beginPath(); c.arc(toX(p.x), toY(p.y), p.r * viewScale, 0, Math.PI * 2); c.fillStyle = '#0a0806'; c.fill();
+    if (calledPocket === pi) {
+      c.beginPath(); c.arc(toX(p.x), toY(p.y), (p.r + 6) * viewScale, 0, Math.PI * 2);
+      c.strokeStyle = '#ffe066'; c.lineWidth = 3; c.stroke();
+    } else if (callPending) {
+      c.beginPath(); c.arc(toX(p.x), toY(p.y), (p.r + 4) * viewScale, 0, Math.PI * 2);
+      c.strokeStyle = '#ffe06688'; c.lineWidth = 2; c.stroke();
+    }
+  });
   // ball-in-hand: a dashed halo around the cue ball while it's mine to place
   if (ballInHand && turnSlot === mySlot) {
     const cue = balls.find((b) => b.id === 0);
@@ -809,7 +864,11 @@ function renderHud() {
       : turnSlot === mySlot
         ? (ballInHand
           ? '<div style="margin-top:6px;font-size:12px;color:#e8c86a;">Foul — ball in hand. Drag the cue ball anywhere on the felt, then address it to shoot.</div>'
-          : '<div style="margin-top:6px;font-size:12px;color:#e8c86a;">Your shot — drag back from the cue ball, release to strike.</div>')
+          : needsCall()
+            ? '<div style="margin-top:6px;font-size:12px;color:#ffe066;">🎱 Call your pocket for the 8-ball — click one of the six.</div>'
+            : calledPocket !== null
+              ? '<div style="margin-top:6px;font-size:12px;color:#e8c86a;">Called — now drag back from the cue ball, release to strike.</div>'
+              : '<div style="margin-top:6px;font-size:12px;color:#e8c86a;">Your shot — drag back from the cue ball, release to strike.</div>')
       : (ballInHand
           ? '<div style="margin-top:6px;font-size:12px;color:#9ab8a0;font-style:italic;">Foul — they have ball in hand.</div>'
           : '<div style="margin-top:6px;font-size:12px;color:#9ab8a0;font-style:italic;">Their shot.</div>');
