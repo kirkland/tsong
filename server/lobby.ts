@@ -7416,8 +7416,11 @@ export class Lobby {
     }
     const profile = await getPlayerProfile(pid);
     if (!profile) return;
+    // getRival already returns null when comparing a player against themself, so this is safe
+    // to attempt unconditionally — no need to gate on `rank`, which is unreliable here anyway:
+    // self-view requests always pass rank 0 as a placeholder regardless of actual leaderboard spot.
     let rival: { name: string; wins: number; losses: number } | null = null;
-    if (rank !== 0 && this.eloPids.length > 1) {
+    if (this.eloPids.length > 1) {
       rival = await getRival(pid, this.eloPids[0]);
     }
     this.tell(ws, {
