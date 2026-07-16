@@ -17501,9 +17501,12 @@ export function startWorld(net: WorldNet): void {
   function updateEast(now: number, dt: number) {
     if (!snowFlakes.length) return;
     const here = selfX > WORLD.w - 700 && !inInterior && !inDungeon;
-    // snowballs restock wherever there's snow to pack
-    if (selfX > WORLD.w + 30 && !inInterior && !inDungeon && ammo.snow < WEAPON_BY_ID.snow.max) {
-      ammo.snow = WEAPON_BY_ID.snow.max;
+    // snowballs restock wherever there's snow to pack (guarded: the snowball weapon spec may be
+    // absent, and dereferencing it here used to throw every frame inside the biome — which froze
+    // the snowfall below, since updateEast bailed before ever animating the flakes)
+    const snowMax = WEAPON_BY_ID.snow?.max;
+    if (snowMax !== undefined && selfX > WORLD.w + 30 && !inInterior && !inDungeon && ammo.snow < snowMax) {
+      ammo.snow = snowMax;
       updateWeaponHud();
       if (!snowPacked) { snowPacked = true; showToast('❄️ You pack some snowballs. For science. (weapon rack: ❄️)'); }
     }
@@ -18628,6 +18631,7 @@ export function startWorld(net: WorldNet): void {
       }
     }
     updateRaidHud(nearArena);
+    updateRaidMusic(nearArena);
   }
 
   // The raid HUD: a big boss health bar pinned to the top of the screen while you're at the arena,
@@ -18651,7 +18655,8 @@ export function startWorld(net: WorldNet): void {
     const showGather = st && (st.phase === 'idle' || st.phase === 'cooldown') && inArena;
     if (!st || (!active && !showGather) || (active && !nearArena)) { raidHudBar.setVisible(false); raidHudText.setVisible(false); raidHudSub.setVisible(false); return; }
     raidHudBar.setVisible(true); raidHudText.setVisible(true); raidHudSub.setVisible(true);
-    const W = Math.min(620, cam.width * 0.82), H = 26, cx = cam.width / 2, top = 48;
+    // Sit clear of the DOM top bar (coins/level, ~52px tall) so the boss bar isn't hidden behind it.
+    const W = Math.min(620, cam.width * 0.82), H = 26, cx = cam.width / 2, top = 92;
     raidHudBar.clear();
     raidHudBar.fillStyle(0x0a1626, 0.82); raidHudBar.fillRoundedRect(cx - W / 2 - 10, top - 20, W + 20, H + 46, 8);
     if (showGather) {
@@ -18712,6 +18717,34 @@ export function startWorld(net: WorldNet): void {
       biomeMusic.loop = true; biomeMusic.volume = 0.32; biomeMusic.muted = net.muted();
       biomeMusic.play().catch(() => { /* needs a gesture; walking in usually follows one */ });
     }
+  }
+
+  // --- raid music: while the Warden is up, cycle the encounter → battle themes instead of the
+  // biome anthem. Each track plays once then hands off to the next (looping the set), so a long
+  // fight rolls through a whole soundtrack. Leaving the arena / the raid ending restores the biome. ---
+  const RAID_PLAYLIST = ['/encounter.mp3', '/encounter2.mp3', '/encounter3.mp3', '/encounter4.mp3', '/battle.mp3', '/davis-battle.mp3'];
+  let raidMusic: HTMLAudioElement | null = null;
+  let raidMusicOn = false;
+  let raidMusicIdx = 0;
+  function playRaidTrack() {
+    if (raidMusic) { raidMusic.onended = null; raidMusic.pause(); }
+    raidMusic = new Audio(RAID_PLAYLIST[raidMusicIdx % RAID_PLAYLIST.length]);
+    raidMusic.loop = false; raidMusic.volume = 0.4; raidMusic.muted = net.muted();
+    raidMusic.onended = () => { raidMusicIdx++; if (raidMusicOn) playRaidTrack(); }; // roll to the next theme
+    raidMusic.play().catch(() => { /* needs a gesture; combat input provides one */ });
+  }
+  function updateRaidMusic(nearArena: boolean) {
+    const want = !!raidState && (raidState.phase === 'active' || raidState.phase === 'summoning') && nearArena;
+    if (want && !raidMusicOn) {
+      raidMusicOn = true; raidMusicIdx = 0;
+      if (biomeMusic) biomeMusic.pause();          // duck the biome anthem (keep its key so we can restore it)
+      playRaidTrack();
+    } else if (!want && raidMusicOn) {
+      raidMusicOn = false;
+      if (raidMusic) { raidMusic.onended = null; raidMusic.pause(); raidMusic = null; }
+      const key = biomeMusicKey; biomeMusicKey = ''; setBiomeMusic(key || null); // restore the biome track fresh
+    }
+    if (raidMusicOn && raidMusic) raidMusic.muted = net.muted();
   }
   function updateBiome() {
     const b = currentBiome();
@@ -19249,6 +19282,7 @@ export function startWorld(net: WorldNet): void {
     setDungeonMusic(false); dungeonMusic = null; inDungeon = false;
     setTavernMusic(false); tavernMusic = null;
     setBiomeMusic(null); curBiome = null;
+    if (raidMusic) { raidMusic.onended = null; raidMusic.pause(); raidMusic = null; } raidMusicOn = false;
     stopChant(); inInterior = false; inTemple = false; inMcdonald = false; inCasino = false;
     stopLounge(); inClub = false; inVault = false; clubBuilt = false; vaultBuilt = false; vaultSwan = null;
     founderPupils = []; clubFireGlow = null; puttBall = null; puttMeter = null; puttStreakTxt = null;
