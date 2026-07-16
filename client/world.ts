@@ -236,7 +236,7 @@ export interface WorldNet {
   marketList(instanceId: number, ask: number): void;
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' | 'monsterjam' | 'chess' | 'morris' | 'ski' | 'billiards' | 'frograce'): void; // open a DOOM/Fishing/Arcade/Bowling feature — every Casino game + Notice-Board panel is a native World dialog now
+  openFeature(feature: 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' | 'monsterjam' | 'chess' | 'morris' | 'ski' | 'billiards' | 'frograce' | 'hockey'): void; // open a DOOM/Fishing/Arcade/Bowling feature — every Casino game + Notice-Board panel is a native World dialog now
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   openRename(): void;            // World's own 👤 button → reopen the nickname/color picker
   muted(): boolean;              // is game sound currently muted?
@@ -17192,6 +17192,12 @@ export function startWorld(net: WorldNet): void {
     if (near2(EAST_SPOTS.lift, 90)) {
       openDialog('🚡 Frostreach Downhill', 'The chairlift rattles up into weather that hasn\'t been named yet. At the top: one course, no rules, and — according to the footprints — at least one prior contestant who never checked back in.', [
         { label: '⛷️ Race (2–4 players, PvP)', onPick: () => { pause(false); net.openFeature('ski'); } },
+      ]);
+      return true;
+    }
+    if (near2(EAST_SPOTS.goal, 90)) {
+      openDialog('🏒 The Frostreach Rink', 'A real net, freshly painted lines, and boards that have absorbed more checks than complaints. Somebody\'s zamboni tracks circle the ice like a crop pattern.', [
+        { label: '🏒 Play Hockey (2v2)', onPick: () => { pause(false); net.openFeature('hockey'); } },
       ]);
       return true;
     }

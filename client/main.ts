@@ -859,12 +859,14 @@ const net = connect(
       else if (msg.game === 'ski') skiMod?.feedLobby(msg);
       else if (msg.game === 'golf') worldMod?.feedGolfLobby(msg);
       else if (msg.game === 'billiards') billiardsMod?.feedLobby(msg);
+      else if (msg.game === 'hockey') hockeyMod?.feedLobby(msg);
     } else if (msg.type === 'bgRelay') {
       if (msg.game === 'chess') chessMod?.feedRelay(msg.data);
       else if (msg.game === 'morris') morrisMod?.feedRelay(msg.data);
       else if (msg.game === 'ski') skiMod?.feedRelay(msg.data);
       else if (msg.game === 'golf') worldMod?.feedGolfRelay(msg.data);
       else if (msg.game === 'billiards') billiardsMod?.feedRelay(msg.data);
+      else if (msg.game === 'hockey') hockeyMod?.feedRelay(msg.data);
     } else if (msg.type === 'ghLeaderboard') {
       ghScores = msg.rows;
     } else if (msg.type === 'wishResult') {
@@ -2403,7 +2405,8 @@ let chessMod: typeof import('./chess') | null = null;
 let morrisMod: typeof import('./morris') | null = null;
 let skiMod: typeof import('./ski') | null = null;
 let billiardsMod: typeof import('./billiards') | null = null;
-function bgNetFor(game: 'chess' | 'morris' | 'ski' | 'billiards') {
+let hockeyMod: typeof import('./hockey') | null = null;
+function bgNetFor(game: 'chess' | 'morris' | 'ski' | 'billiards' | 'hockey') {
   return {
     join:   () => net.send({ type: 'bgJoin', game }),
     leave:  () => net.send({ type: 'bgLeave', game }),
@@ -2455,6 +2458,13 @@ async function openBilliardsGame(): Promise<void> {
     if (billiardsMod.isBilliardsOpen()) return;
     billiardsMod.openBilliards(bgNetFor('billiards'));
   } catch (e) { console.error('Billiards failed to load:', e); }
+}
+async function openHockeyGame(): Promise<void> {
+  try {
+    hockeyMod = await import('./hockey');
+    if (hockeyMod.isHockeyOpen()) return;
+    hockeyMod.openHockey(bgNetFor('hockey'));
+  } catch (e) { console.error('Hockey failed to load:', e); }
 }
 
 // --- City Tycoon: 2–8 player Monopoly-style board game, entered from the arcade cabinet ---
@@ -2513,6 +2523,7 @@ const WORLD_DELEGATE_CHECK: Record<string, () => boolean> = {
   ski: overlayVisibleCheck('#skiOverlay'),
   frograce: overlayVisibleCheck('#frogOverlay'),
   billiards: overlayVisibleCheck('#billiardsOverlay'),
+  hockey: overlayVisibleCheck('#hockeyOverlay'),
   rename: overlayVisibleCheck('#overlay'),
 };
 // Polls (rAF) until the delegated panel/minigame that World just handed off to has opened AND
@@ -2683,6 +2694,10 @@ worldBtn.addEventListener('click', async () => {
         }
         if (feature === 'billiards') {
           setTimeout(() => { void openBilliardsGame(); }, 0);
+          return;
+        }
+        if (feature === 'hockey') {
+          setTimeout(() => { void openHockeyGame(); }, 0);
           return;
         }
         // Arcade cabinets launch the solo/co-op minigames via their toolbar buttons.

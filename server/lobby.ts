@@ -1856,7 +1856,7 @@ export class Lobby {
   // start (all-or-nothing, refunds on failure), and the pot settles on the first bgResult —
   // draws refund, a mid-match leaver forfeits the pot to whoever stayed.
   private bgRooms = new Map<string, { slots: WebSocket[]; status: 'waiting' | 'playing'; stake: number; escrow: { pid: string; nick: string; sock: WebSocket }[] }>();
-  private static readonly BG_CAPS: Record<string, number> = { chess: 2, morris: 2, ski: 4, golf: 4, billiards: 2 };
+  private static readonly BG_CAPS: Record<string, number> = { chess: 2, morris: 2, ski: 4, golf: 4, billiards: 2, hockey: 4 };
   private static readonly BG_MAX_STAKE = 10_000_000;
 
   private bgRoom(game: string) {
