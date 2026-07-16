@@ -2055,7 +2055,7 @@ export interface MobLootMsg {
 }
 // One server-owned biome mob in a broadcast snapshot. Compact keys (sent ~10Hz to everyone in the
 // world). The client renders these instead of simulating its own — so every player sees the SAME mob.
-export interface WorldMob { i: number; k: string; x: number; y: number; h: number; m: number }
+export interface WorldMob { i: number; k: string; x: number; y: number; h: number; m: number; r?: number }
 export interface WorldMobsMsg {
   type: 'worldMobs';
   mobs: WorldMob[];
@@ -2091,6 +2091,7 @@ export interface RaidStateMsg {
   need: number;          // how many are needed to wake it (4)
   summonMs?: number;     // ms left on the wake-up countdown (phase 'summoning')
   enrageMs?: number;     // ms left before the soft enrage
+  shielded?: boolean;    // immune while its summoned adds are alive — clear them first
 }
 // One telegraphed attack, fired once when it begins casting. Clients draw the growing warning for
 // `castMs`, then flash + apply `dmg` to the local player if they're standing in the danger zone.

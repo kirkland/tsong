@@ -17752,6 +17752,7 @@ export function startWorld(net: WorldNet): void {
     spr: Phaser.GameObjects.Image; bar: Phaser.GameObjects.Graphics;
     kind: MobKind; biome: string; x: number; y: number; tx: number; ty: number;
     hp: number; maxHp: number; hitUntil: number; ph: number; nextShotAt: number;
+    raid?: boolean; // a Warden-summoned add (tinted so you know which yetis to clear)
   }
   interface MobSpec {
     biome: string; hp: number; speed: number; aggro: number; scale: number; label: string; emoji: string;
@@ -17943,11 +17944,11 @@ export function startWorld(net: WorldNet): void {
       if (!m) {
         const spr = sc.add.image(w.x, w.y, `w-mob-${kind}`).setScale(spec.scale).setOrigin(0.5, 1).setDepth(w.y);
         const bar = sc.add.graphics().setDepth(w.y + 1).setVisible(false);
-        m = { id: w.i, spr, bar, kind, biome: spec.biome, x: w.x, y: w.y, tx: w.x, ty: w.y, hp: w.h, maxHp: w.m, hitUntil: 0, ph: (w.i * 2.399963) % 9, nextShotAt: 0 };
+        m = { id: w.i, spr, bar, kind, biome: spec.biome, x: w.x, y: w.y, tx: w.x, ty: w.y, hp: w.h, maxHp: w.m, hitUntil: 0, ph: (w.i * 2.399963) % 9, nextShotAt: 0, raid: !!w.r };
         mobById.set(w.i, m);
         mobs.push(m);
       } else {
-        m.tx = w.x; m.ty = w.y; m.hp = w.h; m.maxHp = w.m;
+        m.tx = w.x; m.ty = w.y; m.hp = w.h; m.maxHp = w.m; m.raid = !!w.r;
       }
     }
     // retire mobs the server dropped (culled for population, out of our biome, etc.)
@@ -18211,7 +18212,7 @@ export function startWorld(net: WorldNet): void {
         else { m.spr.setRotation(0); m.spr.setScale(spec.scale); }
       }
       m.spr.setPosition(m.x, m.y + bob).setDepth(m.y);
-      if (now < m.hitUntil) m.spr.setTintFill(0xffffff); else m.spr.clearTint();
+      if (now < m.hitUntil) m.spr.setTintFill(0xffffff); else if (m.raid) m.spr.setTint(0xff8a6a); else m.spr.clearTint();
       // health bar — ALWAYS shown above a mob near the player (so you always know it's a hostile),
       // its width scaling with max HP so tanky ones wear a visibly bigger bar.
       if (near) {
@@ -18267,6 +18268,7 @@ export function startWorld(net: WorldNet): void {
   let raidHudText: Phaser.GameObjects.Text | null = null;
   let raidHudSub: Phaser.GameObjects.Text | null = null;
   let raidPrevPhase: RaidPhase = 'idle';
+  let raidPrevShielded = false;
   let raidHitReport = 0; // throttle so a continuous laser doesn't spam the socket
 
   function makeRaidTextures(sc: Phaser.Scene) {
@@ -18370,6 +18372,11 @@ export function startWorld(net: WorldNet): void {
     const b = raidBossBody(); if (!b) return false;
     if (Math.hypot(b.cx - x, b.cy - y) > r + b.rad) return false;
     const now = performance.now();
+    // Immune during the add phase — shots just spark off the shield (no damage, no report).
+    if (raidState?.shielded) {
+      if (now >= raidHitReport) { raidHitReport = now + 120; spawnSparks(b.cx + (Math.random() * 30 - 15), b.cy - 10, 0x9fe4ff); }
+      return true;
+    }
     raidBossHitUntil = now + 110;
     if (now >= raidHitReport) { raidHitReport = now + 40; net.raidHit(dmg); } // ~25/s cap per client
     spawnDamageNumber(b.cx + (Math.random() * 40 - 20), b.cy - 10, dmg);
@@ -18391,6 +18398,15 @@ export function startWorld(net: WorldNet): void {
       showToast('❄️ <b>The ice splits.</b> Something vast is waking beneath the arena…');
       tone(70, 1.4, 'sawtooth', 0.06, 42);
     }
+    // add phase: shield goes up / comes down
+    if (msg.shielded && !raidPrevShielded) {
+      showToast('🛡️ <b>Rimefang raises a frost ward</b> and summons its brood — <b>clear the yetis!</b>');
+      tone(120, 0.6, 'sawtooth', 0.06, 90);
+    } else if (!msg.shielded && raidPrevShielded && msg.phase === 'active') {
+      showToast('💥 <b>The ward shatters!</b> Back on the boss.');
+      tone(420, 0.3, 'sine', 0.06, 620);
+    }
+    raidPrevShielded = !!msg.shielded;
     raidPrevPhase = msg.phase;
   }
 
@@ -18552,13 +18568,20 @@ export function startWorld(net: WorldNet): void {
       const rise = st.phase === 'summoning' ? Math.max(0, 1 - (st.summonMs ?? 0) / 6000) : 1; // heave up out of the ice
       raidBossSpr.setScale(TEXEL * 3.6 * (1 + breathe), TEXEL * 3.6 * (1 - breathe) * (0.5 + 0.5 * rise))
         .setPosition(raidBossX, raidBossY + Math.sin(now / 1400) * 3).setDepth(raidBossY);
-      if (now < raidBossHitUntil) raidBossSpr.setTintFill(0xffffff); else raidBossSpr.clearTint();
+      if (st.shielded) raidBossSpr.setTint(0x9fc4e6); else if (now < raidBossHitUntil) raidBossSpr.setTintFill(0xffffff); else raidBossSpr.clearTint();
       // cold aura ring, pulsing; angrier tint by phase
       if (raidAura) {
         raidAura.clear();
         const pr = RAID_ARENA.r * (0.2 + 0.03 * Math.sin(now / 400));
         const auraC = st.bossPhase >= 3 ? 0x9a6aff : st.bossPhase >= 2 ? 0x6fb8ff : 0x8fe0ff;
         raidAura.fillStyle(auraC, 0.08); raidAura.fillCircle(raidBossX, raidBossY - 6, pr);
+        // frost ward while immune: a bright shimmering bubble around the boss
+        if (st.shielded) {
+          const bh = raidBossSpr.displayHeight, rr = Math.max(raidBossSpr.displayWidth, bh) * 0.62;
+          const sa = 0.35 + 0.2 * Math.sin(now / 160);
+          raidAura.lineStyle(4, 0xbfe8ff, sa); raidAura.strokeCircle(raidBossX, raidBossY - bh * 0.5, rr);
+          raidAura.fillStyle(0x8fc4ff, 0.1 + 0.05 * Math.sin(now / 200)); raidAura.fillCircle(raidBossX, raidBossY - bh * 0.5, rr);
+        }
         raidAura.setDepth(raidBossY - 2);
       }
     }
@@ -18641,17 +18664,18 @@ export function startWorld(net: WorldNet): void {
     }
     // active/summoning/dying → the boss bar
     const frac = st.maxHp > 0 ? Math.max(0, st.hp / st.maxHp) : 0;
-    const phaseTag = st.phase === 'summoning' ? '  ⟳ AWAKENING' : st.phase === 'dying' ? '  ☠ DEFEATED' : ['', ' ‹I›', ' ‹II›', ' ‹III›'][st.bossPhase] ?? '';
+    const phaseTag = st.shielded ? '  🛡 WARDED' : st.phase === 'summoning' ? '  ⟳ AWAKENING' : st.phase === 'dying' ? '  ☠ DEFEATED' : ['', ' ‹I›', ' ‹II›', ' ‹III›'][st.bossPhase] ?? '';
     raidHudText.setText(`${st.name}${phaseTag}`).setPosition(cx, top - 6);
     // the bar
     raidHudBar.fillStyle(0x2a0c14, 1); raidHudBar.fillRoundedRect(cx - W / 2, top + 8, W, H, 5);
-    const barC = st.bossPhase >= 3 ? 0xb04aff : st.bossPhase >= 2 ? 0x4a9aff : 0x6fd0ff;
+    const barC = st.shielded ? 0x8899aa : st.bossPhase >= 3 ? 0xb04aff : st.bossPhase >= 2 ? 0x4a9aff : 0x6fd0ff;
     raidHudBar.fillStyle(barC, 1); raidHudBar.fillRoundedRect(cx - W / 2, top + 8, W * frac, H, 5);
     raidHudBar.lineStyle(2, 0x9fe4ff, 0.6); raidHudBar.strokeRoundedRect(cx - W / 2, top + 8, W, H, 5);
     // phase divider ticks at 66% and 33%
     for (const f of [0.66, 0.33]) { raidHudBar.fillStyle(0x0a1626, 0.9); raidHudBar.fillRect(cx - W / 2 + W * f, top + 8, 2, H); }
     let sub = '';
-    if (st.phase === 'summoning') sub = `The Warden wakes in ${Math.ceil((st.summonMs ?? 0) / 1000)}…`;
+    if (st.shielded) sub = '🛡 IMMUNE — clear the summoned yetis to drop the ward!';
+    else if (st.phase === 'summoning') sub = `The Warden wakes in ${Math.ceil((st.summonMs ?? 0) / 1000)}…`;
     else if (st.phase === 'active') {
       const secs = Math.ceil((st.enrageMs ?? 0) / 1000);
       const mm = Math.floor(secs / 60), ss = String(secs % 60).padStart(2, '0');
