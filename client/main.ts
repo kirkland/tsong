@@ -64,6 +64,7 @@ import {
   SeasonChallenge,
   MatchStatsMsg,
   levelForXp,
+  BG_GAME_LABEL,
 } from '../shared/types';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -6706,10 +6707,30 @@ window.addEventListener('keydown', (e) => {
 
 // --- Elo profile modal (opened by clicking a leaderboard row) ---
 
+/** Build the "Personal Bests" line list for a profile card — one line per minigame this
+ *  player has actually played, in a fixed display order. Empty if they've played none. */
+function profileBestLines(b: EloProfileMsg['bests']): string[] {
+  const lines: string[] = [];
+  if (b.golfStrokes != null) lines.push(row('⛳ Golf — best round', `${b.golfStrokes} strokes`));
+  if (b.fishingLb != null) lines.push(row('🎣 Fishing — biggest catch', `${b.fishingLb} lb`));
+  if (b.doomSolo != null) lines.push(row('🔫 Tsong Doom — best solo', `round ${b.doomSolo}`));
+  if (b.doomCoop != null) lines.push(row('🔫 Tsong Doom — best co-op', `round ${b.doomCoop}`));
+  if (b.campaignScore != null) lines.push(row('🏛️ Davis Collects — best run', `${b.campaignScore.toLocaleString()}${b.campaignWon ? ' 🏆' : ''}`));
+  if (b.typedieWave != null) lines.push(row('⌨️ Type or Die — best wave', `${b.typedieWave}`));
+  if (b.ghBest != null) lines.push(row('🎸 Tsong Hero — best score', b.ghBest.toLocaleString()));
+  return lines;
+  function row(label: string, val: string): string {
+    return `<div class="bs-row"><span class="bs-label">${label}</span><span class="bs-val">${val}</span></div>`;
+  }
+}
+
 function showEloProfile(msg: EloProfileMsg) {
-  eloNameEl.textContent = `🏓 ${msg.name}`;
+  eloNameEl.textContent = `👤 ${msg.name}`;
   const total = msg.wins + msg.losses;
   const lines: string[] = [];
+  const sub = [`Level ${msg.level}`, msg.title].filter(Boolean).join(' · ');
+  lines.push(`<div class="bs-row"><span class="bs-label">${escapeHtml(sub)}</span></div>`);
+  lines.push(`<div class="bs-section">🏓 Pong</div>`);
   lines.push(
     `<div class="bs-row"><span class="bs-label">Wins</span><span class="bs-val">${msg.wins}</span></div>`,
     `<div class="bs-row"><span class="bs-label">Losses</span><span class="bs-val">${msg.losses}</span></div>`,
@@ -6725,6 +6746,19 @@ function showEloProfile(msg: EloProfileMsg) {
     lines.push(
       `<div class="bs-row"><span class="bs-label">Record</span><span class="bs-val">${r.wins}–${r.losses}</span></div>`,
     );
+  }
+  if (msg.bg.length) {
+    lines.push(`<hr class="bs-divider" />`);
+    lines.push(`<div class="bs-section">🎲 Board Games</div>`);
+    for (const g of msg.bg) {
+      lines.push(`<div class="bs-row"><span class="bs-label">${escapeHtml(BG_GAME_LABEL[g.game] ?? g.game)}</span><span class="bs-val">${g.wins}W ${g.losses}L</span></div>`);
+    }
+  }
+  const bestLines = profileBestLines(msg.bests);
+  if (bestLines.length) {
+    lines.push(`<hr class="bs-divider" />`);
+    lines.push(`<div class="bs-section">🏅 Personal Bests</div>`);
+    lines.push(...bestLines);
   }
   eloBody.innerHTML = lines.join('');
   eloModal.hidden = false;

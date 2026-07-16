@@ -60,6 +60,7 @@ import {
   EXCLUSIVES,
   type ChatLine,
   type EloProfileMsg,
+  BG_GAME_LABEL,
   type BalanceSheetMsg,
   type Side,
   type NewsItem,
@@ -4224,6 +4225,19 @@ export function startWorld(net: WorldNet): void {
     row.append(l, v);
     list.appendChild(row);
   }
+  // An uppercase section header (with a divider above it, except the first section in a list),
+  // shared by the profile drill-down's sub-sections.
+  function statSection(list: HTMLDivElement, text: string, divider = true) {
+    if (divider) {
+      const hr = document.createElement('div');
+      hr.style.cssText = 'border-top:1px solid #2c3a63;margin:8px 0 6px;';
+      list.appendChild(hr);
+    }
+    const h = document.createElement('div');
+    h.textContent = text;
+    h.style.cssText = 'font-size:11px;letter-spacing:0.5px;text-transform:uppercase;color:#7da2ff;margin-bottom:4px;';
+    list.appendChild(h);
+  }
   function fmtLastPlayedWorld(ts: number | null): string {
     if (!ts) return 'Never';
     const diff = Date.now() - ts;
@@ -4235,20 +4249,26 @@ export function startWorld(net: WorldNet): void {
     return `${Math.floor(hrs / 24)}d ago`;
   }
 
-  // The Elo profile drill-down — same fields as the toolbar's leaderboard-row modal, rendered
-  // in-World so clicking a Hall of Fame row never has to leave the World overlay.
+  // The player profile drill-down — same fields as the toolbar's leaderboard-row modal, rendered
+  // in-World so clicking a Hall of Fame row never has to leave the World overlay. Pulls together
+  // Pong's record, every board game's win/loss record, and every minigame's personal best.
   function renderEloProfile(msg: EloProfileMsg) {
     dialogOpen = true;
     keys.clear(); joyActive = false;
     dialogBox.replaceChildren();
     const h = document.createElement('div');
-    h.textContent = `🏓 ${msg.name}`;
-    h.style.cssText = 'font-size:20px;color:#e8eefc;margin-bottom:14px;text-align:center;';
+    h.textContent = `👤 ${msg.name}`;
+    h.style.cssText = 'font-size:20px;color:#e8eefc;margin-bottom:4px;text-align:center;';
     dialogBox.appendChild(h);
+    const sub = document.createElement('div');
+    sub.textContent = [`Level ${msg.level}`, msg.title].filter(Boolean).join(' · ');
+    sub.style.cssText = 'font-size:12px;color:#9fb0d8;margin-bottom:14px;text-align:center;';
+    dialogBox.appendChild(sub);
 
     const list = document.createElement('div');
     list.style.cssText = 'display:flex;flex-direction:column;gap:2px;min-width:280px;text-align:left;';
     dialogBox.appendChild(list);
+    statSection(list, '🏓 Pong', false);
     statRow(list, 'Wins', String(msg.wins));
     statRow(list, 'Losses', String(msg.losses));
     statRow(list, 'Games', String(msg.wins + msg.losses));
@@ -4256,14 +4276,25 @@ export function startWorld(net: WorldNet): void {
     statRow(list, 'Win rate', `${msg.winPct}%`);
     statRow(list, 'Last played', fmtLastPlayedWorld(msg.lastPlayed));
     if (msg.rival) {
-      const hr = document.createElement('div');
-      hr.style.cssText = 'border-top:1px solid #2c3a63;margin:8px 0 6px;';
-      list.appendChild(hr);
-      const rh = document.createElement('div');
-      rh.textContent = `Head-to-head vs ${msg.rival.name}`;
-      rh.style.cssText = 'font-size:11px;letter-spacing:0.5px;text-transform:uppercase;color:#7da2ff;margin-bottom:4px;';
-      list.appendChild(rh);
+      statSection(list, `Head-to-head vs ${msg.rival.name}`);
       statRow(list, 'Record', `${msg.rival.wins}–${msg.rival.losses}`);
+    }
+    if (msg.bg.length) {
+      statSection(list, '🎲 Board Games');
+      for (const g of msg.bg) statRow(list, BG_GAME_LABEL[g.game] ?? g.game, `${g.wins}W ${g.losses}L`);
+    }
+    const b = msg.bests;
+    const bestRows: [string, string][] = [];
+    if (b.golfStrokes != null) bestRows.push(['⛳ Golf — best round', `${b.golfStrokes} strokes`]);
+    if (b.fishingLb != null) bestRows.push(['🎣 Fishing — biggest catch', `${b.fishingLb} lb`]);
+    if (b.doomSolo != null) bestRows.push(['🔫 Tsong Doom — best solo', `round ${b.doomSolo}`]);
+    if (b.doomCoop != null) bestRows.push(['🔫 Tsong Doom — best co-op', `round ${b.doomCoop}`]);
+    if (b.campaignScore != null) bestRows.push(['🏛️ Davis Collects — best run', `${b.campaignScore.toLocaleString()}${b.campaignWon ? ' 🏆' : ''}`]);
+    if (b.typedieWave != null) bestRows.push(['⌨️ Type or Die — best wave', String(b.typedieWave)]);
+    if (b.ghBest != null) bestRows.push(['🎸 Tsong Hero — best score', b.ghBest.toLocaleString()]);
+    if (bestRows.length) {
+      statSection(list, '🏅 Personal Bests');
+      for (const [label, val] of bestRows) statRow(list, label, val);
     }
     appendDialogBackFooter(enterHallOfFame);
     dialog.style.display = 'flex';

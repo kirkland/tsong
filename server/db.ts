@@ -3,7 +3,7 @@
 // simply empty, so the rest of the app runs unchanged.
 
 import pg from 'pg';
-import { LeaderboardRow, NetWorthRow, CortisolRow, LEADERBOARD_SIZE, CORTISOL_MAX, CORTISOL_START, CampaignScoreRow, GolfScoreRow, BgScoreRow, StockSide, StockTf, positionWorth, EXCLUSIVES, isExclusive, WORLD_PARCELS, UsageStats } from '../shared/types';
+import { LeaderboardRow, NetWorthRow, CortisolRow, LEADERBOARD_SIZE, CORTISOL_MAX, CORTISOL_START, CampaignScoreRow, GolfScoreRow, BgScoreRow, PlayerBgRecord, PlayerBests, levelForXp, StockSide, StockTf, positionWorth, EXCLUSIVES, isExclusive, WORLD_PARCELS, UsageStats } from '../shared/types';
 import type { NomicSnapshot } from './nomic';
 
 // Economy Overhaul: the House treasury is seeded ONCE with a genesis allocation. This is the
@@ -2567,32 +2567,63 @@ export async function getSelfNetWorth(pid: string): Promise<(NetWorthRow & { ran
   };
 }
 
-/** A player's public profile for the Elo drilldown. Returns null when the player
+/** A player's full public profile — Pong record, every board game's win/loss record, and
+ *  every solo/co-op minigame's personal best, all in one card. Returns null when the player
  *  doesn't exist (or there's no DB). */
 export interface PlayerProfile {
   name: string;
+  title: string | null;
+  level: number;
   wins: number;
   losses: number;
   elo: number;
   winPct: number;
   lastPlayed: number | null;
+  bg: PlayerBgRecord[];
+  bests: PlayerBests;
 }
 export async function getPlayerProfile(pid: string): Promise<PlayerProfile | null> {
   if (!pool || !pid) return null;
   const { rows } = await pool.query(
-    `SELECT name, wins, losses, elo, last_played FROM players WHERE id = $1`,
+    `SELECT name, wins, losses, elo, last_played, title, xp FROM players WHERE id = $1`,
     [pid],
   );
   if (!rows.length) return null;
   const r = rows[0];
   const total = Number(r.wins) + Number(r.losses);
+
+  const [bg, golf, fishing, doom, campaign, typedie, gh] = await Promise.all([
+    pool.query(`SELECT game, wins, losses FROM bg_wins WHERE pid = $1 ORDER BY wins DESC`, [pid]),
+    pool.query(`SELECT best_strokes FROM golf_scores WHERE pid = $1`, [pid]),
+    pool.query(`SELECT best_lb FROM fishing_scores WHERE pid = $1`, [pid]),
+    pool.query(`SELECT coop, round FROM doom_scores WHERE pid = $1`, [pid]),
+    pool.query(`SELECT score, won FROM campaign_scores WHERE pid = $1`, [pid]),
+    pool.query(`SELECT wave FROM typedie_scores WHERE pid = $1`, [pid]),
+    pool.query(`SELECT MAX(score) AS best FROM gh_scores WHERE pid = $1`, [pid]),
+  ]);
+  const doomSolo = doom.rows.find((d) => !d.coop);
+  const doomCoop = doom.rows.find((d) => d.coop);
+
   return {
     name: r.name,
+    title: r.title ?? null,
+    level: levelForXp(Number(r.xp ?? 0)).level,
     wins: Number(r.wins),
     losses: Number(r.losses),
     elo: Number(r.elo),
     winPct: total > 0 ? Math.round((Number(r.wins) / total) * 100) : 0,
     lastPlayed: r.last_played ? Number(r.last_played) : null,
+    bg: bg.rows.map((b) => ({ game: String(b.game), wins: Number(b.wins), losses: Number(b.losses) })),
+    bests: {
+      golfStrokes: golf.rows[0] ? Number(golf.rows[0].best_strokes) : null,
+      fishingLb: fishing.rows[0] ? Number(fishing.rows[0].best_lb) : null,
+      doomSolo: doomSolo ? Number(doomSolo.round) : null,
+      doomCoop: doomCoop ? Number(doomCoop.round) : null,
+      campaignScore: campaign.rows[0] ? Number(campaign.rows[0].score) : null,
+      campaignWon: campaign.rows[0] ? !!campaign.rows[0].won : false,
+      typedieWave: typedie.rows[0] ? Number(typedie.rows[0].wave) : null,
+      ghBest: gh.rows[0]?.best != null ? Number(gh.rows[0].best) : null,
+    },
   };
 }
 

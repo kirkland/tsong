@@ -1622,17 +1622,23 @@ export interface BalanceSheetMsg {
   net: number;                      // coins + stockValue − loan
 }
 
-// Server → client: an Elo leaderboard drill-down card (mirrors the net-worth balance sheet).
+// Server → client: a full player profile card (mirrors the net-worth balance sheet). Started
+// as a Pong-only Elo drill-down; now the one place that pulls a player's whole record together —
+// Pong, every board game's win/loss record, and every solo/co-op minigame's personal best.
 export interface EloProfileMsg {
   type: 'eloProfile';
   rank: number;
   name: string;
+  title: string | null;
+  level: number;
   wins: number;
   losses: number;
   elo: number;
   winPct: number;
   lastPlayed: number | null;
   rival: { name: string; wins: number; losses: number } | null;
+  bg: PlayerBgRecord[];
+  bests: PlayerBests;
 }
 
 export interface ChatLine {
@@ -2567,6 +2573,33 @@ export interface BgLobbyMsg {
 // Career win/loss record for one board game (chess/morris/ski/golf/billiards/hockey each keep
 // their own — separate from the classic Pong ELO leaderboard).
 export interface BgScoreRow { name: string; wins: number; losses: number; }
+
+// Display name for each board game, used anywhere a bare game key needs a friendly label
+// (the player profile card, board-game lobbies).
+export const BG_GAME_LABEL: Record<string, string> = {
+  chess: '♞ Chess',
+  morris: "🔴 Nine Men's Morris",
+  ski: '⛷️ Ski',
+  golf: '⛳ Golf',
+  billiards: '🎱 Billiards',
+  hockey: '🏒 Hockey',
+};
+
+// One player's win/loss record in a single board game — part of the player profile card.
+export interface PlayerBgRecord { game: string; wins: number; losses: number; }
+
+// One player's best-ever result in each of the solo/co-op minigames that keep a personal
+// best rather than a win/loss record. Any field is null if that player has never played it.
+export interface PlayerBests {
+  golfStrokes: number | null;   // The Course — lowest total strokes across 18 holes
+  fishingLb: number | null;     // biggest catch ever landed
+  doomSolo: number | null;      // Tsong Doom — best solo round reached
+  doomCoop: number | null;      // Tsong Doom — best co-op round reached
+  campaignScore: number | null; // Davis Collects — best score
+  campaignWon: boolean;         // Davis Collects — ever cleared it
+  typedieWave: number | null;   // Type or Die — best wave reached
+  ghBest: number | null;        // Tsong Hero — best score across every song/difficulty
+}
 export interface BgRelayMsg {
   type: 'bgRelay';
   game: string;

@@ -7389,9 +7389,10 @@ export class Lobby {
     });
   }
 
-  /** Build and send the Elo profile for the player at `rank` on the current leaderboard,
-   *  or for the requesting player when `self` is true. Sends record, ELO, win%, last played,
-   *  plus head-to-head against the #1 player (if not yourself). */
+  /** Build and send the full player profile for the player at `rank` on the current
+   *  leaderboard, or for the requesting player when `self` is true. Sends Pong record, ELO,
+   *  win%, last played, head-to-head against the #1 player (if not yourself), every board
+   *  game's win/loss record, and every solo/co-op minigame's personal best. */
   async sendEloProfile(ws: WebSocket, rank: number, self?: boolean) {
     let pid: string;
     if (self) {
@@ -7412,12 +7413,16 @@ export class Lobby {
       type: 'eloProfile',
       rank,
       name: profile.name,
+      title: profile.title,
+      level: profile.level,
       wins: profile.wins,
       losses: profile.losses,
       elo: profile.elo,
       winPct: profile.winPct,
       lastPlayed: profile.lastPlayed,
       rival,
+      bg: profile.bg,
+      bests: profile.bests,
     });
   }
 
