@@ -5,7 +5,7 @@
 
 import type { BgNet } from './chess';
 
-interface LobbyView { status: 'waiting' | 'playing' | 'ended'; slot: number; players: { name: string; slot: number }[]; stake: number }
+interface LobbyView { status: 'waiting' | 'playing' | 'ended'; slot: number; players: { name: string; slot: number }[]; stake: number; board?: { name: string; wins: number; losses: number }[] }
 
 // The 24 points, as (x,y) on a 6×6 grid (0..6), classic three-square layout.
 const PTS: [number, number][] = [
@@ -317,6 +317,13 @@ function renderLobby() {
   leave.onclick = () => shut();
   row.appendChild(leave);
   panel.appendChild(row);
+  if (lobby.board && lobby.board.length) {
+    const board = document.createElement('div');
+    board.style.cssText = 'margin-top:22px;padding-top:16px;border-top:1px solid #4a3218;';
+    board.innerHTML = '<div style="font-size:11px;letter-spacing:1px;color:#9ab8a0;margin-bottom:6px;">🏆 MILL RECORD</div>' +
+      lobby.board.slice(0, 5).map((r, i) => `<div style="font-size:12px;color:#c8a878;">${i === 0 ? '🥇' : `${i + 1}.`} ${r.name} — ${r.wins}W ${r.losses}L</div>`).join('');
+    panel.appendChild(board);
+  }
   root.appendChild(panel);
 }
 

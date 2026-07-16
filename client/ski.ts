@@ -7,7 +7,7 @@
 
 import type { BgNet } from './chess';
 
-interface LobbyView { status: 'waiting' | 'playing' | 'ended'; slot: number; players: { name: string; slot: number }[]; stake: number }
+interface LobbyView { status: 'waiting' | 'playing' | 'ended'; slot: number; players: { name: string; slot: number }[]; stake: number; board?: { name: string; wins: number; losses: number }[] }
 
 const COURSE_LEN = 6000;        // world units of vertical descent
 const TRACK_W = 900;            // half-width of the piste
@@ -245,6 +245,13 @@ function renderLobby() {
   const leave = document.createElement('button'); leave.textContent = 'Leave'; leave.style.cssText = btn(false); leave.onclick = () => shut();
   row.appendChild(leave);
   panel.appendChild(row);
+  if (lobby.board && lobby.board.length) {
+    const board = document.createElement('div');
+    board.style.cssText = 'margin-top:20px;padding-top:14px;border-top:1px solid #c4d4e0;';
+    board.innerHTML = '<div style="font-size:11px;letter-spacing:1px;color:#90a4b4;margin-bottom:6px;">🏆 HILL RECORD</div>' +
+      lobby.board.slice(0, 5).map((r, i) => `<div style="font-size:12px;color:#4a6478;">${i === 0 ? '🥇' : `${i + 1}.`} ${r.name} — ${r.wins}W ${r.losses}L</div>`).join('');
+    panel.appendChild(board);
+  }
   root.appendChild(panel);
 }
 function btn(active: boolean) {

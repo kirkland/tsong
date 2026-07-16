@@ -2561,7 +2561,12 @@ export interface BgLobbyMsg {
   slot: number; // this client's seat (0 = host)
   players: { name: string; slot: number }[];
   stake: number; // winner-takes-all stake per player (0 = friendly game); escrowed by the server at start
+  board?: BgScoreRow[]; // this game's career win/loss leaderboard, top 8 by wins
 }
+
+// Career win/loss record for one board game (chess/morris/ski/golf/billiards/hockey each keep
+// their own — separate from the classic Pong ELO leaderboard).
+export interface BgScoreRow { name: string; wins: number; losses: number; }
 export interface BgRelayMsg {
   type: 'bgRelay';
   game: string;

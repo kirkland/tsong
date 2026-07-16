@@ -41,7 +41,8 @@ if (snap) {
 // Bring up the leaderboard DB and prime the cache. The server starts serving
 // immediately; standings populate once the DB is ready (no-op without DATABASE_URL).
 initDb()
-  .then(() => Promise.all([lobby.refreshLeaderboard(), lobby.refreshDoomLeaderboards(), lobby.refreshCampaignLeaderboards(), lobby.refreshGhLeaderboard(), lobby.refreshGolfLeaderboard(), lobby.loadStockPrices(), lobby.loadModes(), lobby.loadNomicState()]))
+  .then(() => Promise.all([lobby.refreshLeaderboard(), lobby.refreshDoomLeaderboards(), lobby.refreshCampaignLeaderboards(), lobby.refreshGhLeaderboard(), lobby.refreshGolfLeaderboard(), lobby.loadStockPrices(), lobby.loadModes(), lobby.loadNomicState(),
+    ...['chess', 'morris', 'ski', 'golf', 'billiards', 'hockey'].map((g) => lobby.refreshBgLeaderboard(g))]))
   .catch((e) => console.error('DB init failed:', e));
 
 // Static client (only exists after `npm run build`; harmless in dev where Vite serves it).

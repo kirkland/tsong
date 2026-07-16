@@ -3,7 +3,7 @@
 // simply empty, so the rest of the app runs unchanged.
 
 import pg from 'pg';
-import { LeaderboardRow, NetWorthRow, CortisolRow, LEADERBOARD_SIZE, CORTISOL_MAX, CORTISOL_START, CampaignScoreRow, GolfScoreRow, StockSide, StockTf, positionWorth, EXCLUSIVES, isExclusive, WORLD_PARCELS, UsageStats } from '../shared/types';
+import { LeaderboardRow, NetWorthRow, CortisolRow, LEADERBOARD_SIZE, CORTISOL_MAX, CORTISOL_START, CampaignScoreRow, GolfScoreRow, BgScoreRow, StockSide, StockTf, positionWorth, EXCLUSIVES, isExclusive, WORLD_PARCELS, UsageStats } from '../shared/types';
 import type { NomicSnapshot } from './nomic';
 
 // Economy Overhaul: the House treasury is seeded ONCE with a genesis allocation. This is the
@@ -246,6 +246,18 @@ export async function initDb(): Promise<void> {
       pid          TEXT PRIMARY KEY,
       name         TEXT NOT NULL,
       best_strokes INTEGER NOT NULL
+    )
+  `);
+  // Board-game table (chess / morris / ski / golf / billiards / hockey) career record —
+  // one row per player per game, independent of the classic Pong ELO/leaderboard.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS bg_wins (
+      game   TEXT NOT NULL,
+      pid    TEXT NOT NULL,
+      name   TEXT NOT NULL,
+      wins   INTEGER NOT NULL DEFAULT 0,
+      losses INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (game, pid)
     )
   `);
   // Tsong Hero rhythm game — best score per player per song per difficulty.
@@ -891,6 +903,36 @@ export async function getGolfLeaderboard(): Promise<GolfScoreRow[]> {
     `SELECT name, best_strokes FROM golf_scores ORDER BY best_strokes ASC, name ASC LIMIT 10`,
   );
   return rows.map((r) => ({ name: r.name, strokes: Number(r.best_strokes) }));
+}
+
+// Record a finished board-game match: every winner's win and every loser's loss for
+// this specific game (chess/morris/ski/golf/billiards/hockey each keep their own record).
+export async function recordBgResult(game: string, winners: PlayerRef[], losers: PlayerRef[]): Promise<void> {
+  if (!pool) return;
+  for (const w of winners) {
+    await pool.query(
+      `INSERT INTO bg_wins (game, pid, name, wins, losses) VALUES ($1, $2, $3, 1, 0)
+         ON CONFLICT (game, pid) DO UPDATE SET wins = bg_wins.wins + 1, name = EXCLUDED.name`,
+      [game, w.pid, w.name],
+    );
+  }
+  for (const l of losers) {
+    await pool.query(
+      `INSERT INTO bg_wins (game, pid, name, wins, losses) VALUES ($1, $2, $3, 0, 1)
+         ON CONFLICT (game, pid) DO UPDATE SET losses = bg_wins.losses + 1, name = EXCLUDED.name`,
+      [game, l.pid, l.name],
+    );
+  }
+}
+
+// Career win/loss record for one board game, top N by wins.
+export async function getBgLeaderboard(game: string): Promise<BgScoreRow[]> {
+  if (!pool) return [];
+  const { rows } = await pool.query(
+    `SELECT name, wins, losses FROM bg_wins WHERE game = $1 ORDER BY wins DESC, losses ASC, name ASC LIMIT 8`,
+    [game],
+  );
+  return rows.map((r) => ({ name: r.name, wins: Number(r.wins), losses: Number(r.losses) }));
 }
 
 export interface TypeDieScoreRow { name: string; wave: number; }

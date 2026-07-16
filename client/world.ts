@@ -99,6 +99,7 @@ import {
   type MarketItemView,
   LOOT_TABLE,
   type BgLobbyMsg,
+  type BgScoreRow,
   type GolfScoreRow,
   type WorldMob,
   levelForXp,
@@ -15624,7 +15625,7 @@ export function startWorld(net: WorldNet): void {
   }
 
   interface GolfPvpPlayer { slot: number; name: string; strokes: number[]; curStrokes: number; ballX: number; ballY: number; holedOut: boolean }
-  let golfLobbyView: { status: 'waiting' | 'playing' | 'ended'; slot: number; players: { name: string; slot: number }[]; stake: number } = { status: 'waiting', slot: 0, players: [], stake: 0 };
+  let golfLobbyView: { status: 'waiting' | 'playing' | 'ended'; slot: number; players: { name: string; slot: number }[]; stake: number; board?: BgScoreRow[] } = { status: 'waiting', slot: 0, players: [], stake: 0 };
   let golfPvpPlayers: GolfPvpPlayer[] = [];
   let golfPvpHoleIdx = 0;
   let golfPvpTurnSlot = 0;
@@ -15897,8 +15898,11 @@ export function startWorld(net: WorldNet): void {
     choices.push({ label: '🚪 Leave lobby', onPick: () => { closeDialog(); net.golfLeave(); } });
     const stakeLine = golfLobbyView.stake > 0 ? `${golfLobbyView.stake.toLocaleString()}🪙 winner takes all` : 'Friendly (no stake)';
     const randLine = golfActiveGreens ? '\nHoles: randomized (host\'s roll)' : '';
+    const boardLine = golfLobbyView.board?.length
+      ? '\n\n🏆 PvP record: ' + golfLobbyView.board.slice(0, 5).map((r) => `${r.name} (${r.wins}W ${r.losses}L)`).join(', ')
+      : '';
     openDialog('🏆 Multiplayer Round — Lobby',
-      `Players seated (2-4): ${names}\nStake: ${stakeLine}${randLine}\n${isHost ? 'You are the host — start once 2+ players are seated.' : "Waiting for the host to start…"}`,
+      `Players seated (2-4): ${names}\nStake: ${stakeLine}${randLine}\n${isHost ? 'You are the host — start once 2+ players are seated.' : "Waiting for the host to start…"}${boardLine}`,
       choices);
   }
   function openGolfPvpLobby() {
@@ -16911,8 +16915,11 @@ export function startWorld(net: WorldNet): void {
       choices.push({ label: `🥅 Drop the puck (${hockeyLobbyView.players.length} skaters)`, onPick: () => net.hockeyStart() });
     }
     choices.push({ label: '🚪 Leave the rink', onPick: () => { closeDialog(); net.hockeyLeave(); } });
+    const boardLine = hockeyLobbyView.board?.length
+      ? '\n\n🏆 Rink record: ' + hockeyLobbyView.board.slice(0, 5).map((r) => `${r.name} (${r.wins}W ${r.losses}L)`).join(', ')
+      : '';
     openDialog('🏒 2v2 PvP — Lobby',
-      `Skaters seated (2-4): ${names}\nTeams alternate Red/Blue as skaters sit down. A friendly game — no stake.\n${isHost ? 'You are the host — start once 2+ are seated.' : 'Waiting for the host to drop the puck…'}`,
+      `Skaters seated (2-4): ${names}\nTeams alternate Red/Blue as skaters sit down. A friendly game — no stake.\n${isHost ? 'You are the host — start once 2+ are seated.' : 'Waiting for the host to drop the puck…'}${boardLine}`,
       choices);
   }
   function openHockeyPvpLobby() {

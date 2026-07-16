@@ -92,6 +92,7 @@ import {
   WalletMsg,
   CampaignScoreRow,
   GolfScoreRow,
+  BgScoreRow,
   WC_COUNTRIES,
   EXCLUSIVES,
   isExclusive,
@@ -125,6 +126,7 @@ import { getEloBoard, getLevelBoard, getPlayerProfile, getRival, getNetWorthLead
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
   recordFishCatch, getFishingLeaderboard, FishingScoreRow,
   recordGolfScore, getGolfLeaderboard,
+  recordBgResult, getBgLeaderboard,
   recordGhScore, getGhLeaderboard, GhScoreRow,
   bumpCounter,
   getWallet, buyItem, equipItem, addCoins, spendCoins, claimSpin, grantItem, getElos, addBonusSpin, useBonusSpin, findPlayerByName, DAILY_SPIN_MS, getAssessableWealth, stampActivity, getJailed, setJailed, grantXp,
@@ -1855,13 +1857,21 @@ export class Lobby {
   // winner-takes-all: the host sets one pre-start, the server escrows it from EVERY seat at
   // start (all-or-nothing, refunds on failure), and the pot settles on the first bgResult —
   // draws refund, a mid-match leaver forfeits the pot to whoever stayed.
-  private bgRooms = new Map<string, { slots: WebSocket[]; status: 'waiting' | 'playing'; stake: number; escrow: { pid: string; nick: string; sock: WebSocket }[] }>();
+  private bgRooms = new Map<string, { slots: WebSocket[]; status: 'waiting' | 'playing'; stake: number; escrow: { pid: string; nick: string; sock: WebSocket }[]; startedAt: number }>();
   private static readonly BG_CAPS: Record<string, number> = { chess: 2, morris: 2, ski: 4, golf: 4, billiards: 2, hockey: 4 };
   private static readonly BG_MAX_STAKE = 10_000_000;
+  private static readonly BG_MIN_MATCH_MS = 5_000; // floor before a result counts toward the career record (blocks instant-report farming)
+  private bgBoards = new Map<string, BgScoreRow[]>();
+
+  /** Reload one board game's career win/loss leaderboard from the DB and push it to its table. */
+  async refreshBgLeaderboard(game: string) {
+    this.bgBoards.set(game, await getBgLeaderboard(game));
+    this.broadcastBgLobby(game);
+  }
 
   private bgRoom(game: string) {
     let r = this.bgRooms.get(game);
-    if (!r) { r = { slots: [], status: 'waiting', stake: 0, escrow: [] }; this.bgRooms.set(game, r); }
+    if (!r) { r = { slots: [], status: 'waiting', stake: 0, escrow: [], startedAt: 0 }; this.bgRooms.set(game, r); }
     return r;
   }
 
@@ -1949,6 +1959,7 @@ export class Lobby {
       r.escrow = taken;
     }
     r.status = 'playing';
+    r.startedAt = Date.now();
     this.broadcastBgLobby(game);
   }
 
@@ -1982,6 +1993,23 @@ export class Lobby {
     const winSock = r.slots[winner];
     const winEntry = winSock ? r.escrow.find((e) => e.sock === winSock) ?? null : null;
     void this.bgSettlePot(r, winEntry, winEntry ? 'win' : 'refund');
+
+    // Career win/loss record — every seated player, not just those who staked a wager.
+    // Gated by a short minimum match length so a spammed start/result pair can't farm free wins.
+    // Hockey is 2v2: teammates share a slot parity (see hockeyTeamOf), so both win/lose together.
+    if (winSock && Date.now() - r.startedAt >= Lobby.BG_MIN_MATCH_MS) {
+      const seated = r.slots
+        .map((sock, slot) => ({ slot, conn: this.conns.get(sock) }))
+        .filter((s): s is { slot: number; conn: Conn } => !!s.conn && !!s.conn.pid);
+      const onWinningSide = (slot: number) => game === 'hockey' ? slot % 2 === winner % 2 : slot === winner;
+      const winRefs = seated.filter((s) => onWinningSide(s.slot)).map((s) => ({ pid: s.conn.pid, name: s.conn.nickname }));
+      const loseRefs = seated.filter((s) => !onWinningSide(s.slot)).map((s) => ({ pid: s.conn.pid, name: s.conn.nickname }));
+      if (winRefs.length && loseRefs.length) {
+        recordBgResult(game, winRefs, loseRefs)
+          .then(() => this.refreshBgLeaderboard(game))
+          .catch((e) => console.error('bg career record failed:', e));
+      }
+    }
     this.broadcastBgLobby(game);
   }
 
@@ -1996,8 +2024,9 @@ export class Lobby {
   private broadcastBgLobby(game: string) {
     const r = this.bgRoom(game);
     const players = r.slots.map((sock, slot) => ({ name: this.conns.get(sock)?.nickname ?? `P${slot}`, slot }));
+    const board = this.bgBoards.get(game);
     r.slots.forEach((sock, slot) => {
-      this.tell(sock, { type: 'bgLobby', game, status: r.status, slot, players, stake: r.stake });
+      this.tell(sock, { type: 'bgLobby', game, status: r.status, slot, players, stake: r.stake, board });
     });
   }
 
