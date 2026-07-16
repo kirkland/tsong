@@ -2707,7 +2707,7 @@ export class Lobby {
   private static readonly MOB_DENSITY: Record<'desert' | 'swamp' | 'snow', { base: number; per: number; max: number }> = {
     desert: { base: 8, per: 4, max: 26 }, swamp: { base: 8, per: 4, max: 26 }, snow: { base: 12, per: 5, max: 40 },
   };
-  private worldMobs: { id: number; kind: string; biome: 'desert' | 'swamp' | 'snow'; x: number; y: number; hp: number; maxHp: number; tx: number; ty: number; homeX: number; homeY: number; wanderUntil: number; lastHit: string | null }[] = [];
+  private worldMobs: { id: number; kind: string; biome: 'desert' | 'swamp' | 'snow'; x: number; y: number; hp: number; maxHp: number; tx: number; ty: number; homeX: number; homeY: number; wanderUntil: number; lastHit: string | null; raid?: boolean }[] = [];
   private mobIdSeq = 1;
 
   private static mobBiomeOf(x: number, y: number): 'desert' | 'swamp' | 'snow' | null {
@@ -2745,7 +2745,7 @@ export class Lobby {
       const n = players[biome].length;
       const d = Lobby.MOB_DENSITY[biome];
       const target = n === 0 ? 0 : Math.min(d.max, d.base + d.per * (n - 1));
-      const live = this.worldMobs.filter((m) => m.biome === biome);
+      const live = this.worldMobs.filter((m) => m.biome === biome && !m.raid); // raid-summoned adds are managed by the raid, not density
       if (live.length < target) {
         for (let i = live.length; i < target; i++) {
           const kinds = Lobby.MOB_ROSTER[biome];
@@ -2805,7 +2805,7 @@ export class Lobby {
   }
   private broadcastWorldMobs() {
     if (this.world.size === 0) { if (this.worldMobs.length) this.worldMobs = []; return; }
-    const mobs = this.worldMobs.map((m) => ({ i: m.id, k: m.kind, x: Math.round(m.x), y: Math.round(m.y), h: m.hp, m: m.maxHp }));
+    const mobs = this.worldMobs.map((m) => ({ i: m.id, k: m.kind, x: Math.round(m.x), y: Math.round(m.y), h: m.hp, m: m.maxHp, ...(m.raid ? { r: 1 } : {}) }));
     const data = JSON.stringify({ type: 'worldMobs', mobs });
     for (const ws of this.world.sockets()) if (ws.readyState === ws.OPEN) ws.send(data);
   }
@@ -2852,6 +2852,8 @@ export class Lobby {
   private raidPhase: RaidPhase = 'idle';
   private raidBoss: { hp: number; maxHp: number; x: number; y: number } | null = null;
   private raidBossPhase = 1;
+  private raidShielded = false;        // immune while its adds are alive (the 50% add phase)
+  private raidAddsSpawned = false;     // the 50% add phase only triggers once per pull
   private raidBossTx = RAID_ARENA.x;   // where the boss is lumbering toward
   private raidBossTy = RAID_ARENA.y - 40;
   private raidBossRetargetAt = 0;
@@ -2902,6 +2904,7 @@ export class Lobby {
           const maxHp = 12000 + 3750 * present;
           this.raidBoss = { hp: maxHp, maxHp, x: RAID_ARENA.x, y: RAID_ARENA.y - 40 };
           this.raidBossPhase = 1;
+          this.raidShielded = false; this.raidAddsSpawned = false;
           this.raidBossTx = RAID_ARENA.x; this.raidBossTy = RAID_ARENA.y - 40;
           this.raidBossRetargetAt = now + 2000;
           this.raidEnrageAt = now + Lobby.RAID_ENRAGE_MS;
@@ -2922,6 +2925,21 @@ export class Lobby {
         const frac = boss.hp / boss.maxHp;
         this.raidBossPhase = frac > 0.66 ? 1 : frac > 0.33 ? 2 : 3;
         const enraged = now >= this.raidEnrageAt;
+        // --- 50% ADD PHASE: the Warden shields itself and summons a pack of yetis; it's immune
+        // until every add is cleared, then drops the shield and the fight resumes ---
+        if (!this.raidAddsSpawned && frac <= 0.5 && present > 0) {
+          this.raidAddsSpawned = true;
+          this.raidShielded = true;
+          const count = Math.min(6, 2 + Math.floor(present / 2)); // scales with the party
+          for (let i = 0; i < count; i++) {
+            const ang = (i / count) * Math.PI * 2, rr = RAID_ARENA.r * (0.35 + Math.random() * 0.25);
+            const x = RAID_ARENA.x + Math.cos(ang) * rr, y = RAID_ARENA.y + Math.sin(ang) * rr;
+            const hp = Lobby.MOB_AI.yeti.hp;
+            this.worldMobs.push({ id: this.mobIdSeq++, kind: 'yeti', biome: 'snow', x, y, hp, maxHp: hp, tx: x, ty: y, homeX: x, homeY: y, wanderUntil: 0, lastHit: null, raid: true });
+          }
+        }
+        // shield holds until the adds are gone (mob deaths remove them from worldMobs)
+        if (this.raidShielded && !this.worldMobs.some((m) => m.raid)) this.raidShielded = false;
         // --- the Warden stalks the arena: roams toward the raid, retargeting every few seconds ---
         if (now >= this.raidBossRetargetAt && present > 0) {
           const cx = inArena.reduce((s, p) => s + p.x, 0) / present, cy = inArena.reduce((s, p) => s + p.y, 0) / present;
@@ -3025,6 +3043,7 @@ export class Lobby {
     const conn = this.conns.get(ws);
     if (!conn || !conn.pid || !conn.nickname) return;
     if (this.raidPhase !== 'active' || !this.raidBoss) return;
+    if (this.raidShielded) return;      // immune during the add phase — clear the yetis first
     if (!(dmg > 0) || dmg > 6) return;
     const p = this.world.positionOf(ws);
     if (!p || Math.hypot(p.x - RAID_ARENA.x, p.y - RAID_ARENA.y) > RAID_ARENA.r) return; // must be in the fight
@@ -3038,6 +3057,8 @@ export class Lobby {
   private endRaid(result: 'kill' | 'wipe', now: number) {
     this.raidPhase = 'dying';
     this.raidCooldownEndsAt = now + Lobby.RAID_COOLDOWN_MS;
+    this.raidShielded = false;
+    if (this.worldMobs.some((m) => m.raid)) this.worldMobs = this.worldMobs.filter((m) => !m.raid); // despawn leftover adds
     const participants = new Set(this.raidParticipants);
     this.raidParticipants.clear();
     if (result === 'wipe') {
@@ -3082,6 +3103,7 @@ export class Lobby {
       need: RAID_MIN_PLAYERS,
       summonMs: this.raidPhase === 'summoning' ? Math.max(0, this.raidSummonEndsAt - now) : undefined,
       enrageMs: this.raidPhase === 'active' ? Math.max(0, this.raidEnrageAt - now) : undefined,
+      shielded: this.raidShielded,
     };
     const data = JSON.stringify(msg);
     for (const ws of this.world.sockets()) if (ws.readyState === ws.OPEN) ws.send(data);
