@@ -236,7 +236,7 @@ export interface WorldNet {
   marketList(instanceId: number, ask: number): void;
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
-  openFeature(feature: 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' | 'monsterjam' | 'chess' | 'morris' | 'ski' | 'billiards' | 'frograce' | 'hockey'): void; // open a DOOM/Fishing/Arcade/Bowling feature — every Casino game + Notice-Board panel is a native World dialog now
+  openFeature(feature: 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' | 'monsterjam' | 'chess' | 'morris' | 'ski' | 'billiards' | 'frograce'): void; // open a DOOM/Fishing/Arcade/Bowling feature — every Casino game + Notice-Board panel is a native World dialog now
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   openRename(): void;            // World's own 👤 button → reopen the nickname/color picker
   muted(): boolean;              // is game sound currently muted?
@@ -288,6 +288,13 @@ export interface WorldNet {
   golfResult(winner: number): void;
   golfRelay(data: unknown): void;
   golfScore(strokes: number): void; // finished all 18 (solo or PvP) — server keeps your best for the course leaderboard
+  // Frostreach Hockey — same bg-relay room shape as golf (game key 'hockey'), but real-time and
+  // friendly-only (no stake): see the hockey section below for how movement/physics is split.
+  hockeyJoin(): void;
+  hockeyLeave(): void;
+  hockeyStart(): void;
+  hockeyResult(winner: number): void;
+  hockeyRelay(data: unknown): void;
   jail(): void;                  // self-report a drunk-drive attempt (server jails you if 2+ beers in)
   bail(targetId: string): void;  // pay 500🪙 to bail a jailed avatar out (id; may be your own)
   amJailed(): boolean;           // are WE currently locked in the jail cell?
@@ -2537,6 +2544,10 @@ export function feedGolfLobby(msg: BgLobbyMsg): void { golfLobbyHandler?.(msg); 
 export function feedGolfRelay(data: unknown): void { golfRelayHandler?.(data); }
 let golfLeaderboardRows: GolfScoreRow[] = [];
 export function feedGolfLeaderboard(rows: GolfScoreRow[]): void { golfLeaderboardRows = rows; }
+let hockeyLobbyHandler: ((msg: BgLobbyMsg) => void) | null = null;
+let hockeyRelayHandler: ((data: unknown) => void) | null = null;
+export function feedHockeyLobby(msg: BgLobbyMsg): void { hockeyLobbyHandler?.(msg); }
+export function feedHockeyRelay(data: unknown): void { hockeyRelayHandler?.(data); }
 
 export function startWorld(net: WorldNet): void {
   if (controller) return; // already open
@@ -9276,6 +9287,7 @@ export function startWorld(net: WorldNet): void {
     if (dialogOpen || talkOpen) return;
     if (puttCharging) { strikePutt(); return; } // mid-swing: the button IS the putter
     if (golfCharging) { strikeGolfSwing(); return; } // mid-swing on the Course: same idea
+    if (hockeyMode !== 'off') { hockeyDash(); return; } // mid-match: the button IS the dash/shot
     if (nearNetizen) {
       const a = others.find((o) => o.id === nearNetizen);
       if (!a) return;
@@ -13382,6 +13394,7 @@ export function startWorld(net: WorldNet): void {
       safeStep('golf', () => updateGolf(dt));
       safeStep('swamp', () => updateSwamp(now, dt));
       safeStep('east', () => updateEast(now, dt));
+      safeStep('hockey', () => updateHockey(dt));
       safeStep('mobs', () => updateMobs(now, dt));
       safeStep('ocean', () => updateOcean(now, dt));
       safeStep('biome', () => updateBiome());
@@ -16654,6 +16667,324 @@ export function startWorld(net: WorldNet): void {
   let poleLicked = 0;
   let springSighAt = 0;
 
+  // --- Frostreach Hockey: real 2v2, played right here on the pond. You control your own avatar
+  // exactly as normal (skate() already takes over on ice) — a "match" is really just: a puck
+  // exists, two goals exist, and either 3 bots or (PvP) other real players already visible on the
+  // same ice chase it too. Space is a short dash — both your shot power and your check — the same
+  // way golf intercepts Space mid-swing (see triggerNear). Reuses the exact ice-friction/rim-bounce
+  // math the ambient pond puck above already uses; only the goal/score/win bookkeeping is new.
+  //
+  // PvP rides the same bg-relay room shape as golf (game key 'hockey'), but there's no "host
+  // simulates everyone" step: every participant already sees every other real player's live avatar
+  // for free via the normal world avatar sync, so there's nothing to relay for movement. The only
+  // thing that needs one source of truth is the shared puck: the host (slot 0) runs its physics and
+  // broadcasts snapshots; every participant (including the host) independently pushes the puck the
+  // instant their OWN avatar touches it (immediate local feel), and non-host participants also
+  // relay that touch to the host so its authoritative copy picks it up too — the host's next
+  // snapshot then reconciles everyone back to the same state.
+  type HockeyMode = 'off' | 'bots' | 'pvp';
+  let hockeyMode: HockeyMode = 'off';
+  const HOCKEY_GOAL_A = EAST_SPOTS.goal;                          // existing east net
+  const HOCKEY_GOAL_B = { x: POND_ICE.x - 560, y: POND_ICE.y };   // mirrored west net
+  const HOCKEY_GOAL_MOUTH = 44;
+  const HOCKEY_GOALS_TO_WIN = 3;
+  const HOCKEY_DASH_KICK = 460, HOCKEY_DASH_MS = 650;
+  const HOCKEY_TEAM_COLOR = ['#e0503a', '#3a8ee0'];
+  const HOCKEY_TEAM_NAME = ['Red', 'Blue'];
+  const HOCKEY_BOT_NAMES = ['Coach Chilly', 'Blizzard Bill', 'Ice Golem'];
+  interface HockeyBot { av: Av; x: number; y: number; vx: number; vy: number; team: 0 | 1; lane: 0 | 1; name: string; dashCd: number; faceX: number; faceY: number }
+  let hockeyBots: HockeyBot[] = [];
+  let hockeyPuckSpr: Phaser.GameObjects.Arc | null = null;
+  let hockeyGoalBSpr: Phaser.GameObjects.Graphics | null = null;
+  let hockeyPuck = { x: POND_ICE.x, y: POND_ICE.y, vx: 0, vy: 0 };
+  let hockeyScore = [0, 0];
+  let hockeyOver: { team: number } | null = null;
+  let hockeyGoalPauseUntil = 0;
+  let hockeyDashCd = 0;
+  let hockeyHud: HTMLDivElement | null = null;
+  let hockeyMySlot = 0;
+  let hockeyLobbyView: BgLobbyMsg = { type: 'bgLobby', game: 'hockey', status: 'waiting', slot: 0, players: [], stake: 0 };
+  let hockeyActiveSlots: number[] = [];
+  let hockeyIncomingTouches: { x: number; y: number; vx: number; vy: number }[] = [];
+
+  function hockeyTeamOf(slot: number): 0 | 1 { return (slot % 2) as 0 | 1; }
+
+  function ensureHockeyPuckSpr() {
+    const sc = petScene;
+    if (!sc || hockeyPuckSpr) return;
+    hockeyPuckSpr = sc.add.circle(hockeyPuck.x, hockeyPuck.y, 9, 0x141414).setStrokeStyle(2, 0xffffff88).setDepth(999997);
+  }
+
+  /** Nudges the shared puck if (x,y) — an avatar's own position — is close enough to touch it.
+   *  Same push shape as the ambient pond puck's "kick it by skating through it". */
+  function hockeyApplyTouch(x: number, y: number, vx: number, vy: number): boolean {
+    const dx = hockeyPuck.x - x, dy = hockeyPuck.y - y, dist = Math.hypot(dx, dy);
+    const minD = R + 9;
+    if (dist <= 0 || dist >= minD) return false;
+    const nx = dx / dist, ny = dy / dist, overlap = minD - dist;
+    hockeyPuck.x += nx * overlap; hockeyPuck.y += ny * overlap;
+    const spd = Math.hypot(vx, vy);
+    const kick = 130 + spd * 1.1;
+    hockeyPuck.vx = nx * kick + vx * 0.4;
+    hockeyPuck.vy = ny * kick + vy * 0.4;
+    return true;
+  }
+
+  /** The puck's own physics for one frame — identical shape to the ambient pond puck (friction,
+   *  elliptical rim bounce) — plus the real goal/score/win check the ambient puck doesn't have. */
+  function stepHockeyPuck(dt: number) {
+    const p = hockeyPuck;
+    const speed = Math.hypot(p.vx, p.vy);
+    if (speed > 1) {
+      p.x += p.vx * dt; p.y += p.vy * dt;
+      const keep = Math.pow(onIce(p.x, p.y) ? 0.5 : 0.02, dt);
+      p.vx *= keep; p.vy *= keep;
+      const ex = (p.x - POND_ICE.x) / POND_ICE.rx, ey = (p.y - POND_ICE.y) / POND_ICE.ry;
+      if (ex * ex + ey * ey > 1) {
+        const nx2 = ex / POND_ICE.rx, ny2 = ey / POND_ICE.ry;
+        const nl = Math.hypot(nx2, ny2) || 1;
+        const dot = (p.vx * nx2 + p.vy * ny2) / nl;
+        p.vx -= 2 * dot * (nx2 / nl); p.vy -= 2 * dot * (ny2 / nl);
+        p.vx *= 0.7; p.vy *= 0.7;
+        const scale = 0.995 / Math.sqrt(ex * ex + ey * ey);
+        p.x = POND_ICE.x + (p.x - POND_ICE.x) * scale;
+        p.y = POND_ICE.y + (p.y - POND_ICE.y) * scale;
+      }
+    }
+    hockeyPuckSpr?.setPosition(p.x, p.y).setDepth(p.y);
+  }
+  function checkHockeyGoal() {
+    const p = hockeyPuck;
+    if (Math.abs(p.x - HOCKEY_GOAL_A.x) < 14 && Math.abs(p.y - HOCKEY_GOAL_A.y) < HOCKEY_GOAL_MOUTH && p.vx > 40) { hockeyScoreGoal(1); return; }
+    if (Math.abs(p.x - HOCKEY_GOAL_B.x) < 14 && Math.abs(p.y - HOCKEY_GOAL_B.y) < HOCKEY_GOAL_MOUTH && p.vx < -40) { hockeyScoreGoal(0); return; }
+  }
+  function hockeyScoreGoal(team: number) {
+    if (hockeyOver || Date.now() < hockeyGoalPauseUntil) return;
+    hockeyScore[team]++;
+    tone(392, 0.5, 'sawtooth', 0.06); window.setTimeout(() => tone(392, 0.8, 'sawtooth', 0.05), 550);
+    showToast(`🚨 GOAL! ${HOCKEY_TEAM_NAME[team]} ${hockeyScore[0]}–${hockeyScore[1]}`);
+    if (hockeyScore[team] >= HOCKEY_GOALS_TO_WIN) { hockeyFinish(team); return; }
+    hockeyPuck.x = POND_ICE.x; hockeyPuck.y = POND_ICE.y; hockeyPuck.vx = 0; hockeyPuck.vy = 0;
+    resetHockeyFormation();
+    hockeyGoalPauseUntil = Date.now() + 1400;
+    updateHockeyHud();
+  }
+  function hockeyFinish(team: number) {
+    hockeyOver = { team };
+    tone(392, 0.3, 'sine', 0.06); setTimeout(() => tone(494, 0.3, 'sine', 0.05), 130); setTimeout(() => tone(659, 0.5, 'sine', 0.05), 260);
+    if (hockeyMode === 'pvp') {
+      const winSlot = hockeyActiveSlots.find((s) => hockeyTeamOf(s) === team) ?? 0;
+      net.hockeyResult(winSlot);
+    }
+    updateHockeyHud();
+  }
+  function resetHockeyFormation() {
+    for (const b of hockeyBots) {
+      b.x = b.team === 0 ? POND_ICE.x + 260 : POND_ICE.x - 260;
+      b.y = POND_ICE.y + (b.lane === 0 ? -120 : 120);
+      b.vx = 0; b.vy = 0; b.dashCd = 0;
+    }
+  }
+  function hockeyDash() {
+    if (hockeyOver || Date.now() < hockeyGoalPauseUntil || hockeyDashCd > 0) return;
+    const sp = Math.hypot(skVx, skVy);
+    const fx = sp > 8 ? skVx / sp : Math.cos(facing), fy = sp > 8 ? skVy / sp : Math.sin(facing);
+    skVx += fx * HOCKEY_DASH_KICK; skVy += fy * HOCKEY_DASH_KICK;
+    hockeyDashCd = HOCKEY_DASH_MS;
+    tone(340, 0.08, 'sawtooth', 0.05, 180);
+  }
+
+  // --- bot AI: chase if you're the closest on your team, otherwise support or fall back. The
+  // "amClosest" branch approaches the puck from the DEFENSIVE side (behind it, relative to the
+  // opponent's goal) so contact always shoves it forward — and once adjacent, the target becomes
+  // the opponent's goal itself rather than the puck's exact spot, so the bot never "arrives" and
+  // stalls. (An earlier version aimed past the puck toward the goal, which meant bots often ended
+  // up approaching from the boards side — pinning the puck against the rail in a corner and then
+  // just idling there, since their target and the puck's position had converged.)
+  function hockeySkaterPositions(): { x: number; y: number; team: 0 | 1 }[] {
+    const list: { x: number; y: number; team: 0 | 1 }[] = [{ x: selfX, y: selfY, team: 0 }];
+    for (const b of hockeyBots) list.push({ x: b.x, y: b.y, team: b.team });
+    return list;
+  }
+  function hockeyBotTarget(b: HockeyBot): { tx: number; ty: number } {
+    const oppGoal = b.team === 0 ? HOCKEY_GOAL_B : HOCKEY_GOAL_A;
+    const ownGoal = b.team === 0 ? HOCKEY_GOAL_A : HOCKEY_GOAL_B;
+    const puck = hockeyPuck;
+    const mates = hockeySkaterPositions().filter((s) => s.team === b.team);
+    const myDist = Math.hypot(puck.x - b.x, puck.y - b.y);
+    let closestOwn = Infinity;
+    for (const m of mates) closestOwn = Math.min(closestOwn, Math.hypot(puck.x - m.x, puck.y - m.y));
+    const amClosest = myDist <= closestOwn + 0.5;
+    if (amClosest) {
+      if (myDist > 34) {
+        return { tx: puck.x - Math.sign(oppGoal.x - puck.x) * 26, ty: puck.y - Math.sign(oppGoal.y - puck.y) * 10 };
+      }
+      return { tx: oppGoal.x, ty: oppGoal.y }; // close enough to be driving it — keep skating through toward their net
+    }
+    let teammateHasIt = false;
+    for (const m of mates) {
+      if (m.x === b.x && m.y === b.y) continue;
+      if (Math.hypot(puck.x - m.x, puck.y - m.y) <= closestOwn + 0.5) teammateHasIt = true;
+    }
+    if (teammateHasIt) return { tx: (oppGoal.x + puck.x) / 2, ty: (oppGoal.y + puck.y) / 2 + (b.lane === 0 ? -70 : 70) };
+    const t = 0.45;
+    return { tx: ownGoal.x + (puck.x - ownGoal.x) * t, ty: ownGoal.y + (puck.y - ownGoal.y) * t };
+  }
+  function stepHockeyBot(b: HockeyBot, dt: number) {
+    const { tx, ty } = hockeyBotTarget(b);
+    const dx = tx - b.x, dy = ty - b.y, d = Math.hypot(dx, dy);
+    const ix = d > 4 ? dx / d : 0, iy = d > 4 ? dy / d : 0;
+    if (d > 0.01) { b.faceX = ix; b.faceY = iy; }
+    b.dashCd = Math.max(0, b.dashCd - dt * 1000);
+    const puckDist = Math.hypot(hockeyPuck.x - b.x, hockeyPuck.y - b.y);
+    if (puckDist < 90 && b.dashCd <= 0 && Math.random() < 0.05) {
+      b.vx += b.faceX * HOCKEY_DASH_KICK; b.vy += b.faceY * HOCKEY_DASH_KICK; b.dashCd = HOCKEY_DASH_MS;
+    }
+    const ACCEL = SPEED * 3.0, MAXV = SPEED * 1.5;
+    b.vx += ix * ACCEL * dt; b.vy += iy * ACCEL * dt;
+    const keep = Math.pow(0.5, dt);
+    b.vx *= keep; b.vy *= keep;
+    const sp = Math.hypot(b.vx, b.vy);
+    if (sp > MAXV) { b.vx = (b.vx / sp) * MAXV; b.vy = (b.vy / sp) * MAXV; }
+    let nx = b.x + b.vx * dt, ny = b.y + b.vy * dt;
+    const ex = (nx - POND_ICE.x) / POND_ICE.rx, ey = (ny - POND_ICE.y) / POND_ICE.ry;
+    if (ex * ex + ey * ey > 0.94) { // stay on the ice — soft bounce off the rim, same shape as the puck's
+      const scale = Math.sqrt(0.94) / Math.sqrt(ex * ex + ey * ey);
+      nx = POND_ICE.x + (nx - POND_ICE.x) * scale; ny = POND_ICE.y + (ny - POND_ICE.y) * scale;
+      b.vx *= 0.4; b.vy *= 0.4;
+    }
+    b.x = nx; b.y = ny;
+    hockeyApplyTouch(b.x, b.y, b.vx, b.vy);
+    placeAvatar(b.av, b.x, b.y, Math.atan2(b.faceY, b.faceX), null, HOCKEY_TEAM_COLOR[b.team], b.name);
+  }
+
+  function startHockeyBots() {
+    hockeyMode = 'bots';
+    hockeyScore = [0, 0]; hockeyOver = null; hockeyGoalPauseUntil = 0; hockeyDashCd = 0;
+    hockeyPuck = { x: POND_ICE.x, y: POND_ICE.y, vx: 0, vy: 0 };
+    ensureHockeyPuckSpr();
+    hockeyPuckSpr?.setPosition(hockeyPuck.x, hockeyPuck.y).setVisible(true);
+    for (const b of hockeyBots) b.av.c.destroy();
+    hockeyBots = [];
+    const sc = petScene;
+    if (sc) {
+      const specs: { team: 0 | 1; lane: 0 | 1; name: string }[] = [
+        { team: 0, lane: 0, name: HOCKEY_BOT_NAMES[0] },
+        { team: 1, lane: 0, name: HOCKEY_BOT_NAMES[1] },
+        { team: 1, lane: 1, name: HOCKEY_BOT_NAMES[2] },
+      ];
+      for (const s of specs) {
+        const av = makeAvatar(sc, s.name, HOCKEY_TEAM_COLOR[s.team]);
+        hockeyBots.push({ av, x: POND_ICE.x, y: POND_ICE.y, vx: 0, vy: 0, team: s.team, lane: s.lane, name: s.name, dashCd: 0, faceX: 1, faceY: 0 });
+      }
+    }
+    resetHockeyFormation();
+    showToast('🏒 2v2 vs. bots — you\'re on Team Red. Skate into the puck, Space to dash/shoot. First to 3.');
+    updateHockeyHud();
+  }
+  function abandonHockeyMatch() {
+    if (hockeyMode === 'pvp') net.hockeyLeave();
+    hockeyMode = 'off';
+    hockeyPuckSpr?.setVisible(false);
+    for (const b of hockeyBots) b.av.c.destroy();
+    hockeyBots = [];
+    removeHockeyHud();
+    showToast('🏒 Left the game.');
+  }
+
+  // --- PvP lobby (2-4, same bg-relay room shape as golf, game key 'hockey') ---
+  function renderHockeyLobbyDialog() {
+    const isHost = hockeyLobbyView.slot === 0;
+    const names = hockeyLobbyView.players.map((p) => `${p.name} (${HOCKEY_TEAM_NAME[hockeyTeamOf(p.slot)]})`).join(', ') || '…';
+    const choices: { label: string; onPick: () => void }[] = [];
+    if (isHost && hockeyLobbyView.players.length >= 2) {
+      choices.push({ label: `🥅 Drop the puck (${hockeyLobbyView.players.length} skaters)`, onPick: () => net.hockeyStart() });
+    }
+    choices.push({ label: '🚪 Leave the rink', onPick: () => { closeDialog(); net.hockeyLeave(); } });
+    openDialog('🏒 2v2 PvP — Lobby',
+      `Skaters seated (2-4): ${names}\nTeams alternate Red/Blue as skaters sit down. A friendly game — no stake.\n${isHost ? 'You are the host — start once 2+ are seated.' : 'Waiting for the host to drop the puck…'}`,
+      choices);
+  }
+  function openHockeyPvpLobby() {
+    hockeyLobbyView = { type: 'bgLobby', game: 'hockey', status: 'waiting', slot: 0, players: [], stake: 0 };
+    net.hockeyJoin();
+    renderHockeyLobbyDialog();
+  }
+  function beginHockeyPvpMatch(players: { name: string; slot: number }[]) {
+    hockeyMode = 'pvp';
+    hockeyActiveSlots = players.map((p) => p.slot).sort((a, b) => a - b);
+    for (const b of hockeyBots) b.av.c.destroy();
+    hockeyBots = [];
+    hockeyScore = [0, 0]; hockeyOver = null; hockeyGoalPauseUntil = 0; hockeyDashCd = 0; hockeyIncomingTouches = [];
+    hockeyPuck = { x: POND_ICE.x, y: POND_ICE.y, vx: 0, vy: 0 };
+    ensureHockeyPuckSpr();
+    hockeyPuckSpr?.setPosition(hockeyPuck.x, hockeyPuck.y).setVisible(true);
+    const myTeam = hockeyTeamOf(hockeyMySlot);
+    const laneMates = hockeyActiveSlots.filter((s) => hockeyTeamOf(s) === myTeam);
+    const myLane = laneMates.indexOf(hockeyMySlot);
+    selfX = myTeam === 0 ? POND_ICE.x + 260 : POND_ICE.x - 260;
+    selfY = POND_ICE.y + (myLane === 0 ? -120 : 120);
+    showToast(`🏒 2v2 started — you're on Team ${HOCKEY_TEAM_NAME[myTeam]}. Skate into the puck, Space to dash/shoot. First to 3.`);
+    updateHockeyHud();
+  }
+
+  function removeHockeyHud() { hockeyHud?.remove(); hockeyHud = null; }
+  function updateHockeyHud() {
+    if (hockeyMode === 'off') { removeHockeyHud(); return; }
+    if (!hockeyHud) {
+      hockeyHud = document.createElement('div');
+      hockeyHud.id = 'hockeyHud';
+      hockeyHud.style.cssText = 'position:fixed;top:12px;right:12px;z-index:9999;background:rgba(10,25,40,0.85);border:2px solid #3a7ea8;border-radius:8px;padding:8px 12px;color:#fff;font:13px/1.5 system-ui;min-width:190px;';
+      document.body.appendChild(hockeyHud);
+    }
+    const scoreLine = `<div style="font-weight:700;">${HOCKEY_TEAM_NAME[0]} <span style="color:${HOCKEY_TEAM_COLOR[0]}">${hockeyScore[0]}</span> – <span style="color:${HOCKEY_TEAM_COLOR[1]}">${hockeyScore[1]}</span> ${HOCKEY_TEAM_NAME[1]}</div>`;
+    let sub: string;
+    if (hockeyOver) {
+      sub = `<div style="color:${HOCKEY_TEAM_COLOR[hockeyOver.team]};margin-top:4px;">${HOCKEY_TEAM_NAME[hockeyOver.team]} wins! 🏆</div>` +
+        `<div style="margin-top:6px;"><button id="hkAgainBtn" style="cursor:pointer;background:#153a54;color:#dceaf5;border:1px solid #3a7ea8;border-radius:6px;padding:4px 10px;font-size:12px;">${hockeyMode === 'bots' ? 'Rematch' : 'Leave the rink'}</button></div>`;
+    } else {
+      sub = '<div style="font-size:11px;color:#a8c8dc;margin-top:2px;">Space to dash · walk to a net &amp; interact to leave</div>';
+    }
+    hockeyHud.innerHTML = scoreLine + sub;
+    const again = document.getElementById('hkAgainBtn');
+    if (again) again.onclick = () => { if (hockeyMode === 'bots') startHockeyBots(); else abandonHockeyMatch(); };
+  }
+
+  function updateHockey(dt: number) {
+    if (hockeyMode === 'off') return;
+    hockeyDashCd = Math.max(0, hockeyDashCd - dt * 1000);
+    if (hockeyOver) return;
+    if (Date.now() < hockeyGoalPauseUntil) { hockeyPuckSpr?.setPosition(hockeyPuck.x, hockeyPuck.y).setDepth(hockeyPuck.y); return; }
+    for (let i = 0; i < hockeyBots.length; i++) { // bot-bot separation, so they don't stack
+      for (let j = i + 1; j < hockeyBots.length; j++) {
+        const a = hockeyBots[i], c = hockeyBots[j];
+        const dx = c.x - a.x, dy = c.y - a.y, dist = Math.hypot(dx, dy);
+        const minD = R * 2;
+        if (dist > 0 && dist < minD) {
+          const nx = dx / dist, ny = dy / dist, overlap = minD - dist;
+          a.x -= nx * overlap / 2; a.y -= ny * overlap / 2; c.x += nx * overlap / 2; c.y += ny * overlap / 2;
+        }
+      }
+    }
+    for (const b of hockeyBots) stepHockeyBot(b, dt);
+    if (!driving) hockeyApplyTouch(selfX, selfY, skVx, skVy);
+    if (hockeyMode === 'bots') {
+      stepHockeyPuck(dt);
+      checkHockeyGoal();
+    } else if (hockeyMode === 'pvp') {
+      if (hockeyMySlot === 0) {
+        for (const t of hockeyIncomingTouches) hockeyApplyTouch(t.x, t.y, t.vx, t.vy);
+        hockeyIncomingTouches = [];
+        stepHockeyPuck(dt);
+        checkHockeyGoal();
+        net.hockeyRelay({ k: 'snap', puck: hockeyPuck, score: hockeyScore, over: hockeyOver, pauseUntil: hockeyGoalPauseUntil });
+      } else {
+        net.hockeyRelay({ k: 'touch', x: selfX, y: selfY, vx: skVx, vy: skVy });
+        hockeyPuckSpr?.setPosition(hockeyPuck.x, hockeyPuck.y).setDepth(hockeyPuck.y);
+      }
+    }
+  }
+
   // The four diagonal corners between the frontiers (NW of the desert / west of the club, etc.) are
   // awkward unreachable void. Fill them with ocean — deep water with a few wave strokes and a
   // shoreline — so the world reads as an island of land ringed by sea instead of empty gaps.
@@ -16832,6 +17163,15 @@ export function startWorld(net: WorldNet): void {
       const puckX = POND_ICE.x - 200 + i * 90, puckY = POND_ICE.y - 40 + i * 60;
       pucks.push({ spr: sc.add.circle(puckX, puckY, 7, 0x14181e).setStrokeStyle(2, 0x2e3640).setDepth(puckY), x: puckX, y: puckY, vx: 0, vy: 0 });
     }
+    // the second, mirrored net for real 2v2 matches (the goal above + ambient pucks are just the
+    // "kick it around" easter egg — a real match keeps score between this pair of nets instead)
+    hockeyGoalBSpr = sc.add.graphics().setDepth(HOCKEY_GOAL_B.y + 40);
+    hockeyGoalBSpr.lineStyle(4, 0x3a6ad0, 1);
+    hockeyGoalBSpr.strokeRect(HOCKEY_GOAL_B.x - 6, HOCKEY_GOAL_B.y - 46, 12, 92);
+    hockeyGoalBSpr.lineStyle(1.5, 0xdfe8f0, 0.9);
+    for (let i = 0; i < 5; i++) hockeyGoalBSpr.lineBetween(HOCKEY_GOAL_B.x - 4 + i * 2, HOCKEY_GOAL_B.y - 44, HOCKEY_GOAL_B.x - 4 + i * 2, HOCKEY_GOAL_B.y + 44);
+    ensureHockeyPuckSpr();
+    hockeyPuckSpr?.setVisible(false);
     // --- the Thawless Lodge ---
     {
       const L = EAST_SPOTS.lodge;
@@ -17195,10 +17535,17 @@ export function startWorld(net: WorldNet): void {
       ]);
       return true;
     }
-    if (near2(EAST_SPOTS.goal, 90)) {
-      openDialog('🏒 The Frostreach Rink', 'A real net, freshly painted lines, and boards that have absorbed more checks than complaints. Somebody\'s zamboni tracks circle the ice like a crop pattern.', [
-        { label: '🏒 Play Hockey (2v2)', onPick: () => { pause(false); net.openFeature('hockey'); } },
-      ]);
+    if (near2(EAST_SPOTS.goal, 90) || near2(HOCKEY_GOAL_B, 90)) {
+      if (hockeyMode !== 'off') {
+        openDialog('🏒 The Frostreach Rink', `${HOCKEY_TEAM_NAME[0]} ${hockeyScore[0]} – ${hockeyScore[1]} ${HOCKEY_TEAM_NAME[1]}`, [
+          { label: '🚪 Leave the game', onPick: () => { closeDialog(); abandonHockeyMatch(); } },
+        ]);
+      } else {
+        openDialog('🏒 The Frostreach Rink', 'A real net, freshly painted lines, and boards that have absorbed more checks than complaints. A second net waits across the ice.', [
+          { label: '🤖 Practice (2v2 vs. Bots)', onPick: () => { closeDialog(); startHockeyBots(); } },
+          { label: '🥅 Challenge others (2v2 PvP)', onPick: () => { closeDialog(); openHockeyPvpLobby(); } },
+        ]);
+      }
       return true;
     }
     if (near2(EAST_SPOTS.lodge, 80)) {
@@ -17929,6 +18276,36 @@ export function startWorld(net: WorldNet): void {
       playGolfShot(from, { x: d.toX, y: d.toY }, false, () => {
         commitGolfPvpShot(d.slot!, { toX: d.toX!, toY: d.toY!, holedOut: !!d.holedOut, strokes: d.strokes ?? pl.curStrokes + 1 });
       });
+    };
+    hockeyLobbyHandler = (msg) => {
+      const wasPlaying = hockeyLobbyView.status === 'playing';
+      hockeyLobbyView = msg;
+      hockeyMySlot = msg.slot;
+      if (msg.status === 'ended') {
+        if (hockeyMode === 'pvp') { showToast('🏒 The game broke up — a player left.'); hockeyMode = 'off'; hockeyPuckSpr?.setVisible(false); removeHockeyHud(); }
+        else if (dialogOpen) closeDialog();
+        return;
+      }
+      if (msg.status === 'playing' && !wasPlaying) { closeDialog(); beginHockeyPvpMatch(msg.players); return; }
+      if (dialogOpen && hockeyMode === 'off') renderHockeyLobbyDialog(); // live-update the seated list
+    };
+    hockeyRelayHandler = (data) => {
+      const d = data as { k?: string; x?: number; y?: number; vx?: number; vy?: number; puck?: { x: number; y: number; vx: number; vy: number }; score?: number[]; over?: { team: number } | null; pauseUntil?: number };
+      if (!d || typeof d !== 'object') return;
+      if (d.k === 'touch' && hockeyMySlot === 0 && typeof d.x === 'number' && typeof d.y === 'number') {
+        hockeyIncomingTouches.push({ x: d.x, y: d.y, vx: d.vx ?? 0, vy: d.vy ?? 0 });
+        return;
+      }
+      if (d.k === 'snap' && hockeyMySlot !== 0 && d.puck && d.score) {
+        hockeyPuck = d.puck;
+        hockeyScore = d.score;
+        if (d.over !== undefined && !hockeyOver && d.over) { tone(392, 0.3, 'sine', 0.06); setTimeout(() => tone(494, 0.3, 'sine', 0.05), 130); setTimeout(() => tone(659, 0.5, 'sine', 0.05), 260); }
+        if (d.over !== undefined) hockeyOver = d.over;
+        if (typeof d.pauseUntil === 'number') hockeyGoalPauseUntil = d.pauseUntil;
+        hockeyPuckSpr?.setPosition(hockeyPuck.x, hockeyPuck.y).setDepth(hockeyPuck.y);
+        updateHockeyHud();
+        return;
+      }
     };
   }
 
