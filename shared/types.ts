@@ -554,7 +554,7 @@ export function carColorById(id: string | null | undefined): CarColorSpec | null
 // follows you around (unlike a car, which replaces/IS the avatar while driving). A pet id
 // matches a COSMETICS entry with slot 'pet'. `kind` selects the custom drawn sprite in the
 // World renderer; `emoji` is just the small shop-tile preview glyph.
-export type PetKind = 'rock' | 'pikachu' | 'pacman' | 'slime' | 'dragon' | 'tumbleweed' | 'swan';
+export type PetKind = 'rock' | 'pikachu' | 'pacman' | 'slime' | 'dragon' | 'tumbleweed' | 'swan' | 'yeti';
 export const PETS: readonly { id: string; emoji: string; kind: PetKind }[] = [
   { id: 'pet-rock', emoji: '🪨', kind: 'rock' },       // a googly-eyed rock
   { id: 'pet-pikachu', emoji: '⚡', kind: 'pikachu' },  // Pikachu
@@ -563,6 +563,7 @@ export const PETS: readonly { id: string; emoji: string; kind: PetKind }[] = [
   { id: 'pet-dragon', emoji: '🐉', kind: 'dragon' },   // a dragon that flies around you (Rob boss prize),
   { id: 'pet-tumbleweed', emoji: '🌵', kind: 'tumbleweed' },
   { id: 'pet-swan', emoji: '🦢', kind: 'swan' },
+  { id: 'pet-yeti', emoji: '👹', kind: 'yeti' },       // a tamed frost-yeti — the Frostreach raid trophy
 ];
 export function petById(id: string | null | undefined) {
   if (!id) return null;
@@ -1138,6 +1139,7 @@ export type ClientMsg =
   | { type: 'waRelay'; data: unknown } // forward an opaque Artillery payload to all other players
   | { type: 'fountainWish' } // toss 10 coins in the plaza fountain (tiny chance of the Wisher title)
   | { type: 'mobHit'; id: number; dmg: number } // dealt damage to a server-owned biome mob (server resolves HP/death/bounty)
+  | { type: 'raidHit'; dmg: number } // dealt damage to the Frostreach raid boss (server owns its HP + reward)
   | { type: 'worldBank' } // reached town alive → bank the at-risk mob-loot purse into the wallet
   | { type: 'worldDied' } // died out in the wild → forfeit the unbanked purse
   | { type: 'frogEnter'; frog: string } // ante into Grandmaw's frog race (server charges the entry fee)
@@ -1767,6 +1769,9 @@ export type ServerMsg =
   | MobLootMsg
   | WorldMobsMsg
   | MobDeadMsg
+  | RaidStateMsg
+  | RaidCastMsg
+  | RaidEndMsg
   | StockMsg
   | LoanMsg
   | SpinResultMsg
@@ -2065,6 +2070,55 @@ export interface MobDeadMsg {
   mine: boolean;
   potion: boolean; // this mob dropped a potion at (x,y)
 }
+// --- The Frostreach Raid: "Rimefang, the Frozen Warden" ---
+// A server-authoritative raid boss at the far east of the snow biome. It wakes when 4+ players
+// gather in its arena, cycles telegraphed spatial attacks (FF14/WoW style), and pays every
+// participant a fat bounty + a trophy pet on the kill. The server owns the boss's HP, phase, and
+// position; clients render it, report their own weapon hits (raidHit), and resolve the telegraphed
+// AoE damage against themselves locally (same model as the shared mobs).
+export type RaidPhase = 'idle' | 'summoning' | 'active' | 'dying' | 'cooldown';
+export interface RaidStateMsg {
+  type: 'raidState';
+  phase: RaidPhase;
+  name: string;
+  hp: number;
+  maxHp: number;
+  bossPhase: number;     // 1..3 — escalates as HP drops (drives the music/mechanic density)
+  x: number;
+  y: number;
+  present: number;       // players currently standing in the arena
+  need: number;          // how many are needed to wake it (4)
+  summonMs?: number;     // ms left on the wake-up countdown (phase 'summoning')
+  enrageMs?: number;     // ms left before the soft enrage
+}
+// One telegraphed attack, fired once when it begins casting. Clients draw the growing warning for
+// `castMs`, then flash + apply `dmg` to the local player if they're standing in the danger zone.
+export interface RaidCastMsg {
+  type: 'raidCast';
+  id: number;
+  kind: 'breath' | 'comets' | 'donut' | 'nova' | 'spears';
+  castMs: number;        // telegraph duration before it detonates
+  dmg: number;
+  x: number;             // boss/arena origin
+  y: number;
+  r?: number;            // primary radius (cone reach / nova radius / donut outer)
+  innerR?: number;       // donut safe radius (inside this is safe)
+  a?: number;            // facing (cone direction / spear axis), radians
+  spread?: number;       // cone half-width, radians
+  spots?: { x: number; y: number; r: number }[]; // comet impact circles / spear anchor points
+}
+export interface RaidEndMsg {
+  type: 'raidEnd';
+  result: 'kill' | 'wipe';
+  reward: number;        // coins paid to THIS player (0 if they weren't a participant)
+  pet?: string;          // trophy pet id granted on a kill (participants only)
+}
+export const RAID_REWARD = 25000;      // coins per participant on a kill
+export const RAID_MIN_PLAYERS = 4;     // champions needed to wake the Warden
+export const RAID_PET = 'pet-yeti';    // the trophy: a (recoloured) yeti that trails you home
+// The arena: a circle at the far east edge of the Frostreach (snow biome runs x∈[4800,14400]).
+export const RAID_ARENA = { x: 12900, y: 1100, r: 950 };
+
 export interface WalletMsg {
   type: 'wallet';
   coins: number;

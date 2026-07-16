@@ -151,6 +151,7 @@ import { getEloBoard, getLevelBoard, getPlayerProfile, getRival, getNetWorthLead
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR, DUNGEON_CHEST_CONTENTS, DUNGEON_TIER_COINS, DUNGEON_FLOOR_TIERS } from '../shared/types';
 import { WORLD_PARCELS, BANK_PARCEL_CAP, PARCEL_PRICE, LandParcelView, WORLD_SAY_MAX, HOUSE_BY_ID } from '../shared/types';
+import { RAID_ARENA, RAID_REWARD, RAID_MIN_PLAYERS, RAID_PET, type RaidPhase, type RaidCastMsg } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
 // emoji code points (pictographs, components, ZWJ, variation selectors, flags).
@@ -2569,12 +2570,14 @@ export class Lobby {
     }
     // shared biome mobs: tick their AI every frame, broadcast on the same ~15Hz cadence as avatars
     this.tickWorldMobs(dt);
+    this.tickRaid(now); // the Frostreach raid boss state machine + mechanic scheduler
     if (++this.worldBcTick % Lobby.WORLD_BROADCAST_EVERY !== 0) return;
     const data = JSON.stringify({ type: 'world', avatars: this.worldAvatars() });
     for (const ws of this.world.sockets()) {
       if (ws.readyState === ws.OPEN) ws.send(data);
     }
     this.broadcastWorldMobs();
+    if (++this.raidBcTick % 2 === 0) this.broadcastRaid(); // boss heartbeat ~7Hz
   }
 
   // DOOM high-round leaderboards (solo + co-op), cached and pushed to clients.
@@ -2834,6 +2837,198 @@ export class Lobby {
       sock.send(JSON.stringify({ ...dead, mine: sock === ws }));
     }
   }
+
+  // ===================== The Frostreach Raid: "Rimefang, the Frozen Warden" =====================
+  // A server-authoritative raid boss. It sleeps until RAID_MIN_PLAYERS champions gather in the
+  // arena at the far east of the snow biome, then wakes, cycles telegraphed spatial attacks, and
+  // pays every participant RAID_REWARD coins + a trophy yeti pet on the kill. The server owns the
+  // boss's HP / phase / position and schedules the mechanics; clients render it, report their own
+  // weapon hits (raidHit), and resolve the telegraphed AoE damage against themselves locally.
+  private static readonly RAID_NAME = 'Rimefang, the Frozen Warden';
+  private static readonly RAID_SUMMON_MS = 6000;      // dramatic wake-up countdown
+  private static readonly RAID_COOLDOWN_MS = 90_000;  // rest before it can be pulled again
+  private static readonly RAID_ENRAGE_MS = 360_000;   // 6-minute soft enrage (a wipe timer)
+  private static readonly RAID_WIPE_GRACE_MS = 14_000;// empty arena this long during a fight → wipe
+  private raidPhase: RaidPhase = 'idle';
+  private raidBoss: { hp: number; maxHp: number; x: number; y: number } | null = null;
+  private raidBossPhase = 1;
+  private raidSummonEndsAt = 0;
+  private raidCooldownEndsAt = 0;
+  private raidEnrageAt = 0;
+  private raidNextMechAt = 0;
+  private raidLastPresentAt = 0;
+  private raidParticipants = new Set<string>();       // pids that dealt damage from inside the arena
+  private raidCastSeq = 1;
+  private raidBcTick = 0;
+
+  private raidPlayersInArena(): { ws: WebSocket; x: number; y: number }[] {
+    const out: { ws: WebSocket; x: number; y: number }[] = [];
+    for (const ws of this.world.sockets()) {
+      const p = this.world.positionOf(ws);
+      if (!p) continue;
+      if (Math.hypot(p.x - RAID_ARENA.x, p.y - RAID_ARENA.y) <= RAID_ARENA.r) out.push({ ws, x: p.x, y: p.y });
+    }
+    return out;
+  }
+
+  /** Drive the raid state machine + mechanic scheduler. Called every tick from broadcastWorld(). */
+  private tickRaid(now: number) {
+    const inArena = this.raidPlayersInArena();
+    const present = inArena.length;
+
+    switch (this.raidPhase) {
+      case 'idle':
+        if (present >= RAID_MIN_PLAYERS) { this.raidPhase = 'summoning'; this.raidSummonEndsAt = now + Lobby.RAID_SUMMON_MS; }
+        break;
+      case 'summoning':
+        if (present < RAID_MIN_PLAYERS) { this.raidPhase = 'idle'; break; } // champions bailed — go back to sleep
+        if (now >= this.raidSummonEndsAt) {
+          const maxHp = 5000 + 1400 * present;            // scales with the raid size
+          this.raidBoss = { hp: maxHp, maxHp, x: RAID_ARENA.x, y: RAID_ARENA.y - 40 };
+          this.raidBossPhase = 1;
+          this.raidEnrageAt = now + Lobby.RAID_ENRAGE_MS;
+          this.raidNextMechAt = now + 3200;
+          this.raidLastPresentAt = now;
+          this.raidParticipants.clear();
+          this.raidPhase = 'active';
+        }
+        break;
+      case 'active': {
+        const boss = this.raidBoss;
+        if (!boss) { this.raidPhase = 'idle'; break; }
+        if (present > 0) this.raidLastPresentAt = now;
+        // everyone left or wiped for too long → the Warden resets
+        if (now - this.raidLastPresentAt > Lobby.RAID_WIPE_GRACE_MS) { this.endRaid('wipe', now); break; }
+        // phase escalates as its health drops (drives mechanic density + the client's music/tint)
+        const frac = boss.hp / boss.maxHp;
+        this.raidBossPhase = frac > 0.66 ? 1 : frac > 0.33 ? 2 : 3;
+        const enraged = now >= this.raidEnrageAt;
+        // schedule the next telegraphed attack
+        if (now >= this.raidNextMechAt && present > 0) {
+          this.castRaidMechanic(inArena, enraged);
+          const gap = enraged ? 1400 : this.raidBossPhase === 3 ? 2600 : this.raidBossPhase === 2 ? 3200 : 4200;
+          this.raidNextMechAt = now + gap;
+        }
+        break;
+      }
+      case 'dying':
+        // brief death throes, then rest
+        if (now >= this.raidCooldownEndsAt) this.raidPhase = 'cooldown';
+        break;
+      case 'cooldown':
+        if (now >= this.raidCooldownEndsAt) { this.raidPhase = 'idle'; this.raidBoss = null; }
+        break;
+    }
+  }
+
+  /** Pick + broadcast one telegraphed spatial attack. Geometry is aimed using the live positions of
+   *  the players in the arena, so the mechanics actually chase the raid. */
+  private castRaidMechanic(inArena: { x: number; y: number }[], enraged: boolean) {
+    const A = RAID_ARENA;
+    const phase = this.raidBossPhase;
+    const rand = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
+    // menu grows with the phase
+    const menu: RaidCastMsg['kind'][] = ['breath', 'comets'];
+    if (phase >= 2) menu.push('donut', 'spears');
+    if (phase >= 3 || enraged) menu.push('nova');
+    const kind = enraged && Math.random() < 0.5 ? 'nova' : rand(menu);
+    const dmgBase = enraged ? 999 : phase === 3 ? 34 : phase === 2 ? 26 : 20;
+    const centroid = inArena.length
+      ? { x: inArena.reduce((s, p) => s + p.x, 0) / inArena.length, y: inArena.reduce((s, p) => s + p.y, 0) / inArena.length }
+      : { x: A.x, y: A.y };
+    let cast: RaidCastMsg;
+    const id = this.raidCastSeq++;
+    if (kind === 'breath') {
+      // a wide freezing cone from the boss, aimed at the raid's centre of mass
+      const a = Math.atan2(centroid.y - (A.y - 40), centroid.x - A.x);
+      cast = { type: 'raidCast', id, kind, castMs: 2200, dmg: dmgBase, x: A.x, y: A.y - 40, r: A.r * 1.25, a, spread: 0.5 };
+    } else if (kind === 'comets') {
+      // ice comets drop on a few players (stack markers) — move out of the circle
+      const n = Math.min(inArena.length, phase >= 3 ? 5 : 3) || 3;
+      const picks = [...inArena].sort(() => Math.random() - 0.5).slice(0, n);
+      const spots = (picks.length ? picks : [centroid]).map((p) => ({ x: p.x, y: p.y, r: 150 }));
+      cast = { type: 'raidCast', id, kind, castMs: 1900, dmg: dmgBase, x: A.x, y: A.y, spots };
+    } else if (kind === 'donut') {
+      // blizzard ring: safe in the eye of the storm (run IN)
+      cast = { type: 'raidCast', id, kind, castMs: 2400, dmg: dmgBase, x: A.x, y: A.y, r: A.r, innerR: 260 };
+    } else if (kind === 'spears') {
+      // rime spears erupt along a line across the arena
+      const a = Math.random() * Math.PI;
+      cast = { type: 'raidCast', id, kind, castMs: 1800, dmg: dmgBase, x: A.x, y: A.y, r: A.r * 1.3, a, spread: 90 };
+    } else {
+      // frost nova: the whole floor detonates except a small safe pocket by the boss's flank
+      const sa = Math.random() * Math.PI * 2, sr = A.r * 0.62;
+      cast = { type: 'raidCast', id, kind: 'nova', castMs: enraged ? 1600 : 2600, dmg: dmgBase, x: A.x, y: A.y, r: A.r * 1.15, innerR: 200, spots: [{ x: A.x + Math.cos(sa) * sr, y: A.y + Math.sin(sa) * sr, r: 200 }] };
+    }
+    const data = JSON.stringify(cast);
+    for (const ws of this.world.sockets()) if (ws.readyState === ws.OPEN) ws.send(data);
+  }
+
+  /** A client's weapon connected with the boss. Apply it (server owns HP); record the hitter as a
+   *  participant if they're in the arena; on death, roll into the reward phase. */
+  raidHit(ws: WebSocket, dmg: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    if (this.raidPhase !== 'active' || !this.raidBoss) return;
+    if (!(dmg > 0) || dmg > 6) return;
+    const p = this.world.positionOf(ws);
+    if (!p || Math.hypot(p.x - RAID_ARENA.x, p.y - RAID_ARENA.y) > RAID_ARENA.r) return; // must be in the fight
+    this.raidParticipants.add(conn.pid);
+    this.raidBoss.hp -= dmg;
+    if (this.raidBoss.hp <= 0) { this.raidBoss.hp = 0; this.endRaid('kill', Date.now()); }
+  }
+
+  /** Settle a raid: on a kill, pay every participant + grant the trophy pet; on a wipe, just reset.
+   *  Either way the boss enters its death/cooldown so it can't be re-pulled instantly. */
+  private endRaid(result: 'kill' | 'wipe', now: number) {
+    this.raidPhase = 'dying';
+    this.raidCooldownEndsAt = now + Lobby.RAID_COOLDOWN_MS;
+    const participants = new Set(this.raidParticipants);
+    this.raidParticipants.clear();
+    if (result === 'wipe') {
+      this.raidBoss = null;
+      for (const ws of this.world.sockets()) if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'raidEnd', result: 'wipe', reward: 0 }));
+      return;
+    }
+    // KILL — reward each participant (minted trophy payout + the yeti pet)
+    for (const ws of this.world.sockets()) {
+      const conn = this.conns.get(ws);
+      const won = !!(conn && conn.pid && participants.has(conn.pid));
+      if (won && conn) {
+        const pid = conn.pid, nick = conn.nickname;
+        addCoins(pid, nick, RAID_REWARD)
+          .then(() => grantItem(pid, nick, RAID_PET))
+          .then(() => { const s = this.wsOfPid(pid); if (s) this.sendWallet(s); })
+          .catch((e) => console.error('raid reward failed:', e));
+        void this.awardXp(pid, nick, 400); // a hefty chunk of XP too
+      }
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'raidEnd', result: 'kill', reward: won ? RAID_REWARD : 0, pet: won ? RAID_PET : undefined }));
+    }
+  }
+
+  /** Broadcast the boss heartbeat (HP / phase / position / timers) to everyone in the world. */
+  private broadcastRaid() {
+    if (this.world.size === 0) return;
+    const present = this.raidPlayersInArena().length;
+    const now = Date.now();
+    const msg = {
+      type: 'raidState' as const,
+      phase: this.raidPhase,
+      name: Lobby.RAID_NAME,
+      hp: this.raidBoss?.hp ?? 0,
+      maxHp: this.raidBoss?.maxHp ?? 0,
+      bossPhase: this.raidBossPhase,
+      x: this.raidBoss?.x ?? RAID_ARENA.x,
+      y: this.raidBoss?.y ?? RAID_ARENA.y,
+      present,
+      need: RAID_MIN_PLAYERS,
+      summonMs: this.raidPhase === 'summoning' ? Math.max(0, this.raidSummonEndsAt - now) : undefined,
+      enrageMs: this.raidPhase === 'active' ? Math.max(0, this.raidEnrageAt - now) : undefined,
+    };
+    const data = JSON.stringify(msg);
+    for (const ws of this.world.sockets()) if (ws.readyState === ws.OPEN) ws.send(data);
+  }
+
   // --- Grandmaw's Frog Race: ante an entry fee, race your frog (a skill minigame on the client),
   // and take a House-funded prize if it places first. The prize is fixed per frog (harder frogs
   // pay more — the "odds"), server-owned, and rate-limited so a tampered client can't farm it. ---

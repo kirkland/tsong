@@ -103,6 +103,11 @@ import {
   type BgScoreRow,
   type GolfScoreRow,
   type WorldMob,
+  type RaidStateMsg,
+  type RaidCastMsg,
+  type RaidEndMsg,
+  type RaidPhase,
+  RAID_ARENA,
   levelForXp,
 } from '../shared/types';
 import { drawCosmeticPreview, drawLegendIcon } from './render';
@@ -275,6 +280,7 @@ export interface WorldNet {
   ghKing(): { name: string; score: number } | null;    // top Tsong Hero score (billboard)
   wish(): void;                                        // toss 10 coins into the fountain
   mobHit(id: number, dmg: number): void;               // dealt damage to a shared server-owned mob (server resolves HP/death/bounty)
+  raidHit(dmg: number): void;                           // dealt damage to the Frostreach raid boss (server owns its HP + reward)
   worldBank(): void;                                   // reached town alive → bank the at-risk mob purse
   worldDied(): void;                                   // died in the wild → forfeit the unbanked purse
   owns(id: string): boolean;                           // do we own this cosmetic/item id? (wallet.owned)
@@ -342,6 +348,9 @@ interface Controller {
   feedMobLoot(purse: number, gained?: number, banked?: number): void; // the at-risk mob-loot purse changed
   feedMobs(list: WorldMob[]): void;                    // server's authoritative mob roster → reconcile our sprites
   feedMobDead(id: number, x: number, y: number, kind: string, mine: boolean, potion: boolean): void; // a shared mob died → FX
+  feedRaidState(msg: RaidStateMsg): void;              // raid boss heartbeat (HP/phase/position/timers)
+  feedRaidCast(msg: RaidCastMsg): void;                // a telegraphed raid attack began casting
+  feedRaidEnd(msg: RaidEndMsg): void;                  // the raid ended (kill → reward + trophy pet, or wipe)
   feedCortisol(): void;                               // the "Cortisol" board updated — refresh the top-bar cortisol gauge
   feedNews(): void;                                  // a new news item published — re-render the news dialog if it's open
   feedLoan(): void;                                  // the loan changed (taken/repaid/collected/countdown tick) — re-render the loan dialog if it's open
@@ -420,6 +429,21 @@ export function feedMobs(list: WorldMob[]): void {
 /** A shared mob died (`mobDead`) → play the death FX for everyone; `mine` = we landed the kill. */
 export function feedMobDead(id: number, x: number, y: number, kind: string, mine: boolean, potion: boolean): void {
   controller?.feedMobDead(id, x, y, kind, mine, potion);
+}
+
+/** The Frostreach raid boss heartbeat (`raidState`) → drive the boss render + HUD. */
+export function feedRaidState(msg: RaidStateMsg): void {
+  controller?.feedRaidState(msg);
+}
+
+/** A telegraphed raid attack began (`raidCast`) → draw the warning + resolve it locally. */
+export function feedRaidCast(msg: RaidCastMsg): void {
+  controller?.feedRaidCast(msg);
+}
+
+/** The raid ended (`raidEnd`) → kill FX + reward toast, or the wipe message. */
+export function feedRaidEnd(msg: RaidEndMsg): void {
+  controller?.feedRaidEnd(msg);
 }
 
 /** The "Cortisol" board updated — refresh the World top-bar cortisol gauge. */
@@ -11701,6 +11725,24 @@ export function startWorld(net: WorldNet): void {
     bakePac('w-pet-pacman-1', 0.38); // half-open
     bakePac('w-pet-pacman-2', 0.72); // wide-open
 
+    // Trophy YETI pet (24×22) — the same shaggy bruiser as the Frostreach mob, but recoloured a
+    // regal amethyst-frost so it reads as "tamed champion" rather than "wild yeti". Rendered big
+    // (about the world-yeti size) so your prize is unmistakable trailing you home.
+    {
+      const Y = 0x9a7cd8, Y2 = 0x7a5cc0, FACE = 0xbfe0ff, DK = 0x5a3f96, EYE = 0x1a1030, FANG = 0xffffff, GLOW = 0xcaa8ff;
+      g.clear();
+      px(3, 8, 18, 12, Y); px(3, 17, 18, 3, Y2);            // shaggy torso
+      px(1, 9, 3, 7, Y); px(20, 9, 3, 7, Y);               // big arms
+      px(0, 14, 3, 3, Y2); px(21, 14, 3, 3, Y2);           // fists
+      px(7, 2, 10, 8, Y); px(7, 2, 10, 1, Y2);             // head
+      px(9, 4, 6, 5, FACE);                                  // frost face
+      px(10, 5, 1, 2, EYE); px(13, 5, 1, 2, EYE);          // eyes
+      px(10, 8, 4, 1, DK); px(10, 8, 1, 1, FANG); px(13, 8, 1, 1, FANG); // mouth + fangs
+      px(4, 10, 1, 1, GLOW); px(18, 12, 1, 1, GLOW); px(8, 15, 1, 1, GLOW); px(15, 16, 1, 1, GLOW); // magic flecks
+      px(6, 20, 3, 2, Y2); px(15, 20, 3, 2, Y2);           // feet
+      g.generateTexture('w-pet-yeti', 24, 22);
+    }
+
     // --- DOOM flame tongues: two teardrop shapes (orange outer, yellow core) baked at 8×12 texels.
     // The renderer scatters a handful of these around the portal and update() jitters them so they
     // flicker like fire. Two variants give the flame field a bit of organic variety. ---
@@ -13076,6 +13118,7 @@ export function startWorld(net: WorldNet): void {
       makeEast(sc);
       makeCornerOceans(sc);
       makeMobs(sc);
+      makeRaid(sc);
 
       // --- ammo crates scattered over the open ground ---
       buildCrates(sc);
@@ -13428,6 +13471,7 @@ export function startWorld(net: WorldNet): void {
       safeStep('east', () => updateEast(now, dt));
       safeStep('hockey', () => updateHockey(dt));
       safeStep('mobs', () => updateMobs(now, dt));
+      safeStep('raid', () => updateRaid(now, dt));
       safeStep('ocean', () => updateOcean(now, dt));
       safeStep('biome', () => updateBiome());
       safeStep('nearBuilding', () => updateNearBuilding());
@@ -13725,7 +13769,7 @@ export function startWorld(net: WorldNet): void {
       n.getUpUntil = 0; n.walking = false; n.label.setText('💫');
       squishSound();
     }
-    if (mine) hitMobs(x, y, r, 3); // only OUR blasts hurt biome mobs (avoid double-credit from relayed booms)
+    if (mine) { hitMobs(x, y, r, 3); hitRaidBoss(x, y, r, 3); } // only OUR blasts hurt mobs/boss (avoid double-credit from relayed booms)
     if (Math.hypot(selfX - x, selfY - y) <= r) {
       if (driving) {
         if (blowUpMyCar('💥 Your car took a direct hit — summon a fresh one anytime.')) net.blownUp(true, mine, mine ? undefined : shooterPid);
@@ -13805,7 +13849,7 @@ export function startWorld(net: WorldNet): void {
       // Ghost (remote) rockets never detonate or deal a blast — they just fly until they hit a
       // wall/edge/fuel-out, then vanish (the firer's own worldBoom drives the actual explosion).
       if (rk.ghost) { if (hit) { rk.spr.destroy(); rockets.splice(i, 1); } continue; }
-      if (!hit) hit = hitsBody(rk.x, rk.y, now) || mobAt(rk.x, rk.y);       // a car, a person, or a biome mob downrange
+      if (!hit) hit = hitsBody(rk.x, rk.y, now) || mobAt(rk.x, rk.y) || raidBossAt(rk.x, rk.y); // a car, a person, a biome mob, or the raid boss downrange
       if (hit) { rk.spr.destroy(); rockets.splice(i, 1); detonateRocket(rk.x, rk.y); }
     }
   }
@@ -13829,8 +13873,8 @@ export function startWorld(net: WorldNet): void {
       const spent = b.t >= MG_LIFE;
       const wall = !spent && hitsWorld(b.x, b.y);
       if (b.ghost) { if (spent || wall) { b.spr.destroy(); bullets.splice(i, 1); } continue; }
-      // a mob standing in the round's path takes 1 damage and stops the bullet
-      const mobHit = !spent && !wall ? hitMobs(b.x, b.y, 6, 1) : false;
+      // a mob (or the raid boss) standing in the round's path takes 1 damage and stops the bullet
+      const mobHit = !spent && !wall ? (hitMobs(b.x, b.y, 6, 1) || hitRaidBoss(b.x, b.y, 6, 1)) : false;
       if (mobHit) { spawnSparks(b.x, b.y, 0xff9a5a); b.spr.destroy(); bullets.splice(i, 1); continue; }
       const npc = !spent && !wall ? npcAt(b.x, b.y, now) : null;
       const victim = !spent && !wall && !npc ? playerAt(b.x, b.y) : null;
@@ -13879,6 +13923,10 @@ export function startWorld(net: WorldNet): void {
       if (distToSegment(b.cx, b.cy, x, y, ex, ey) > LASER_HIT_R + b.rad) continue;
       hitMobs(b.cx, b.cy, 4, 2);
       spawnSparks(b.cx, b.cy, 0x8ef0ff);
+    }
+    { // the beam melts the raid boss too
+      const rb = raidBossBody();
+      if (rb && distToSegment(rb.cx, rb.cy, x, y, ex, ey) <= LASER_HIT_R + rb.rad) { hitRaidBoss(rb.cx, rb.cy, 6, 2); spawnSparks(rb.cx, rb.cy, 0x8ef0ff); }
     }
     const selfId = net.selfId();
     let zapped = 0;
@@ -14191,8 +14239,9 @@ export function startWorld(net: WorldNet): void {
       if (!ps || ps.id !== petId) {
         // First sight of this owner's pet (or it changed) — (re)create the custom sprite.
         if (ps) ps.sprite.destroy();
-        const tex = pet.kind === 'rock' ? 'w-pet-rock' : pet.kind === 'pikachu' ? 'w-pet-pikachu' : pet.kind === 'slime' ? 'w-pet-slime' : pet.kind === 'dragon' ? 'w-pet-dragon' : pet.kind === 'tumbleweed' ? 'w-pet-tumbleweed' : pet.kind === 'swan' ? 'w-pet-swan' : 'w-pet-pacman-0';
-        const sprite = sc.add.image(ox, oy, tex).setScale(TEXEL).setOrigin(0.5, 0.6);
+        const tex = pet.kind === 'rock' ? 'w-pet-rock' : pet.kind === 'pikachu' ? 'w-pet-pikachu' : pet.kind === 'slime' ? 'w-pet-slime' : pet.kind === 'dragon' ? 'w-pet-dragon' : pet.kind === 'tumbleweed' ? 'w-pet-tumbleweed' : pet.kind === 'swan' ? 'w-pet-swan' : pet.kind === 'yeti' ? 'w-pet-yeti' : 'w-pet-pacman-0';
+        // the trophy yeti lumbers along at nearly its wild size; other pets are pocket-sized
+        const sprite = sc.add.image(ox, oy, tex).setScale(pet.kind === 'yeti' ? TEXEL * 2.4 : TEXEL).setOrigin(0.5, pet.kind === 'yeti' ? 0.9 : 0.6);
         ps = { sprite, id: petId, kind: pet.kind, x: ox, y: oy, lastX: ox, lastY: oy, chomp: 0 };
         petSprites.set(a.id, ps);
       }
@@ -14233,6 +14282,11 @@ export function startWorld(net: WorldNet): void {
         // A stately glide: face the way he's going, bob as if on invisible water.
         if (Math.abs(pvx) > 0.5) ps.sprite.setFlipX(pvx < 0);
         ps.sprite.setY(ps.y + Math.sin(performance.now() / 640) * 1.6);
+      } else if (ps.kind === 'yeti') {
+        // A big lumbering trophy: face the way it walks + a heavy shoulder-roll bob.
+        if (Math.abs(pvx) > 0.5) ps.sprite.setFlipX(pvx > 0); // mob art faces right → flip when heading right
+        const lumber = Math.abs(Math.sin(performance.now() / 220)) * (Math.hypot(pvx, pvy) > 0.5 ? 2.4 : 0.8);
+        ps.sprite.setY(ps.y - lumber);
       }
     }
     // Tear down pets whose owner left the world or unequipped.
@@ -18169,6 +18223,352 @@ export function startWorld(net: WorldNet): void {
     wasInFrontier = !inTown && !inInterior && !inDungeon;
   }
 
+  // ============================ THE FROSTREACH RAID ============================================
+  // "Rimefang, the Frozen Warden" — a server-authoritative raid boss at the far east edge of the
+  // snow. It wakes when RAID_MIN_PLAYERS champions stand in its arena, then cycles telegraphed
+  // spatial attacks (FF14/WoW style). The server owns HP/phase/position + schedules the mechanics;
+  // this client renders the boss + telegraphs, reports its own weapon hits (net.raidHit), and
+  // resolves the AoE damage against the local player. Kill it → 25,000🪙 + a trophy yeti pet.
+  const RAID_MECH_NAME: Record<RaidCastMsg['kind'], string> = {
+    breath: 'Glacial Breath', comets: 'Ice Comet', donut: 'Blizzard', spears: 'Rime Spears', nova: 'Frost Nova',
+  };
+  interface RaidTelegraph extends RaidCastMsg { start: number; fired: boolean; }
+  let raidScene: Phaser.Scene | null = null;
+  let raidState: RaidStateMsg | null = null;
+  let raidBossSpr: Phaser.GameObjects.Image | null = null;
+  let raidAura: Phaser.GameObjects.Graphics | null = null;
+  let raidFx: Phaser.GameObjects.Graphics | null = null;      // world-space telegraph decals
+  let raidBossX = RAID_ARENA.x, raidBossY = RAID_ARENA.y;     // interpolated render position
+  let raidBossHitUntil = 0;
+  let raidTelegraphs: RaidTelegraph[] = [];
+  let raidHud: Phaser.GameObjects.Container | null = null;
+  let raidHudBar: Phaser.GameObjects.Graphics | null = null;
+  let raidHudText: Phaser.GameObjects.Text | null = null;
+  let raidHudSub: Phaser.GameObjects.Text | null = null;
+  let raidPrevPhase: RaidPhase = 'idle';
+  let raidHitReport = 0; // throttle so a continuous laser doesn't spam the socket
+
+  function makeRaidTextures(sc: Phaser.Scene) {
+    if (sc.textures.exists('w-raid-boss')) return;
+    const g = sc.add.graphics();
+    const p = (x: number, y: number, w: number, h: number, c: number) => { g.fillStyle(c, 1); g.fillRect(x, y, w, h); };
+    // Rimefang (60×78) — a towering ice colossus: shaggy rimed hide, crystalline pauldrons, a jagged
+    // ice crown, a glacial-blue face with burning cyan eyes, huge clawed fists.
+    {
+      const ICE = 0xdce9f4, ICE2 = 0xbcd2e6, ICE3 = 0x9ab6d0, DK = 0x6a86a4, DEEP = 0x46617e;
+      const FACE = 0x8fbfe4, EYE = 0x7ff0ff, EYEG = 0xd8ffff, MAW = 0x22303e, FANG = 0xffffff, CRY = 0xaad8ff, CRYL = 0xe6f6ff, GOLD = 0xe8d27a;
+      g.clear();
+      // legs + feet
+      p(16, 62, 11, 14, ICE2); p(33, 62, 11, 14, ICE2); p(14, 74, 15, 4, DK); p(31, 74, 15, 4, DK);
+      p(18, 64, 7, 10, ICE); p(35, 64, 7, 10, ICE);
+      // broad torso
+      p(14, 34, 32, 30, ICE); p(14, 52, 32, 12, ICE2); p(20, 34, 20, 2, ICE3);
+      p(22, 40, 16, 18, ICE2); p(26, 44, 8, 12, DEEP);                    // frozen chestplate hollow
+      p(24, 42, 12, 2, CRYL);                                             // ice sheen
+      // arms + clawed fists
+      p(4, 34, 12, 26, ICE); p(44, 34, 12, 26, ICE); p(4, 34, 12, 3, ICE3); p(44, 34, 12, 3, ICE3);
+      p(2, 56, 14, 12, ICE2); p(44, 56, 14, 12, ICE2);                    // fists
+      for (const fx of [2, 6, 10]) { p(fx, 66, 3, 5, ICE); p(45 + (fx - 2), 66, 3, 5, ICE); } // claws
+      p(3, 67, 2, 4, CRYL); p(52, 67, 2, 4, CRYL);
+      // crystalline pauldrons (jagged shards)
+      p(2, 28, 16, 8, ICE3); p(42, 28, 16, 8, ICE3);
+      for (const [sx] of [[4], [9], [14]] as const) { g.fillStyle(CRY, 1); g.fillTriangle(sx, 30, sx + 5, 30, sx + 2, 20); }
+      for (const [sx] of [[42], [47], [52]] as const) { g.fillStyle(CRY, 1); g.fillTriangle(sx, 30, sx + 5, 30, sx + 2, 20); }
+      p(6, 26, 2, 4, CRYL); p(50, 26, 2, 4, CRYL);                        // shard glints
+      // head + glacial face
+      p(20, 12, 20, 22, ICE); p(20, 12, 20, 2, ICE3); p(20, 30, 20, 4, ICE2);
+      p(23, 16, 14, 13, FACE);                                            // face
+      p(25, 20, 4, 4, EYE); p(31, 20, 4, 4, EYE); p(26, 21, 2, 2, EYEG); p(32, 21, 2, 2, EYEG); // burning eyes
+      g.fillStyle(EYE, 0.5); g.fillRect(24, 19, 6, 6); g.fillRect(30, 19, 6, 6);                 // eye glow bleed
+      p(25, 28, 10, 2, MAW);                                              // maw
+      p(25, 27, 1, 3, FANG); p(28, 28, 1, 3, FANG); p(31, 27, 1, 3, FANG); p(34, 28, 1, 3, FANG); // fangs
+      // jagged ice crown / horns
+      for (const [hx, hh] of [[19, 12], [25, 16], [30, 18], [35, 15], [40, 11]] as const) {
+        g.fillStyle(CRY, 1); g.fillTriangle(hx, 14, hx + 5, 14, hx + 2, 14 - hh);
+        g.fillStyle(CRYL, 1); g.fillRect(hx + 1, 14 - hh + 1, 1, Math.max(1, hh - 3));
+      }
+      p(28, 10, 6, 2, GOLD);                                              // a circlet of frost-gold
+      // rimed fur flecks
+      for (const [fxx, fyy] of [[17, 40], [43, 46], [22, 56], [38, 58], [30, 50]] as const) p(fxx, fyy, 1, 1, CRYL);
+      g.generateTexture('w-raid-boss', 60, 78);
+    }
+    g.destroy();
+  }
+
+  function makeRaid(sc: Phaser.Scene) {
+    raidScene = sc;
+    makeRaidTextures(sc);
+    // Permanent arena marker on the ground so players know where to gather — a great frozen sigil
+    // with a stone altar and a warning sign, drawn once.
+    const A = RAID_ARENA;
+    const ring = sc.add.graphics().setDepth(4);
+    ring.fillStyle(0x0a1a2e, 0.28); ring.fillCircle(A.x, A.y, A.r);                     // shadowed floor
+    ring.lineStyle(6, 0x6fd0ff, 0.5); ring.strokeCircle(A.x, A.y, A.r);                 // glowing rim
+    ring.lineStyle(3, 0x9fe4ff, 0.35); ring.strokeCircle(A.x, A.y, A.r - 16);
+    ring.lineStyle(3, 0x6fd0ff, 0.3); ring.strokeCircle(A.x, A.y, A.r * 0.5);           // inner rune ring
+    for (let i = 0; i < 12; i++) { const a = (i / 12) * Math.PI * 2; ring.fillStyle(0x9fe4ff, 0.4); ring.fillCircle(A.x + Math.cos(a) * A.r * 0.5, A.y + Math.sin(a) * A.r * 0.5, 5); }
+    // a cracked ice altar at the centre-north
+    sc.add.rectangle(A.x, A.y - 40, 90, 40, 0x8fb6d6).setStrokeStyle(3, 0x5a7e9e).setDepth(A.y - 40);
+    sc.add.rectangle(A.x, A.y - 58, 70, 14, 0xbfe0f4).setDepth(A.y - 40);
+    const sign = sc.add.text(A.x, A.y + A.r - 40, '❄ THE WARDEN’S REST ❄\nGather 4 champions to wake it', {
+      fontFamily: 'ui-monospace, monospace', fontSize: '20px', fontStyle: 'bold', color: '#dff2ff', align: 'center', stroke: '#0a2036', strokeThickness: 5, resolution: 2,
+    }).setOrigin(0.5).setDepth(A.y + A.r - 40);
+    void sign;
+    // world-space telegraph layer + boss aura + boss sprite (hidden until it wakes)
+    raidFx = sc.add.graphics().setDepth(6);
+    raidAura = sc.add.graphics().setDepth(Math.round(A.y) - 2).setVisible(false);
+    raidBossSpr = sc.add.image(A.x, A.y - 40, 'w-raid-boss').setOrigin(0.5, 1).setScale(TEXEL * 3.6).setDepth(A.y).setVisible(false);
+    raidBossX = A.x; raidBossY = A.y - 40;
+  }
+
+  // The boss's hittable BODY (sprite is anchored at the feet). Aim at the drawn mass.
+  function raidBossBody(): { cx: number; cy: number; rad: number } | null {
+    if (!raidBossSpr || !raidBossSpr.visible || !raidState || raidState.phase !== 'active') return null;
+    const h = raidBossSpr.displayHeight, w = raidBossSpr.displayWidth;
+    return { cx: raidBossX, cy: raidBossY - h * 0.5, rad: Math.max(w, h) * 0.42 };
+  }
+  function raidBossAt(x: number, y: number): boolean {
+    const b = raidBossBody(); if (!b) return false;
+    return Math.hypot(b.cx - x, b.cy - y) <= b.rad;
+  }
+  // A weapon connected with the boss → optimistic flash + report to the server (it owns the HP).
+  function hitRaidBoss(x: number, y: number, r: number, dmg: number): boolean {
+    const b = raidBossBody(); if (!b) return false;
+    if (Math.hypot(b.cx - x, b.cy - y) > r + b.rad) return false;
+    const now = performance.now();
+    raidBossHitUntil = now + 110;
+    if (now >= raidHitReport) { raidHitReport = now + 40; net.raidHit(dmg); } // ~25/s cap per client
+    spawnDamageNumber(b.cx + (Math.random() * 40 - 20), b.cy - 10, dmg);
+    return true;
+  }
+
+  function feedRaidState(msg: RaidStateMsg) {
+    raidState = msg;
+    if (raidBossSpr) {
+      const show = (msg.phase === 'active' || msg.phase === 'summoning' || msg.phase === 'dying');
+      raidBossSpr.setVisible(show);
+      if (raidAura) raidAura.setVisible(show);
+      // jump-cut the render position if we just started (avoid a slide from a stale spot)
+      if (msg.phase === 'summoning' && raidPrevPhase !== 'summoning') { raidBossX = msg.x; raidBossY = msg.y; }
+    }
+    if (msg.phase !== 'active' && msg.phase !== 'summoning') raidTelegraphs = [];
+    // phase transitions → drama
+    if (msg.phase === 'summoning' && raidPrevPhase === 'idle') {
+      showToast('❄️ <b>The ice splits.</b> Something vast is waking beneath the arena…');
+      tone(70, 1.4, 'sawtooth', 0.06, 42);
+    }
+    raidPrevPhase = msg.phase;
+  }
+
+  function feedRaidCast(msg: RaidCastMsg) {
+    raidTelegraphs.push({ ...msg, start: performance.now(), fired: false });
+    tone(230, 0.14, 'square', 0.03, 150); // a warning chime as the cast begins
+  }
+
+  function feedRaidEnd(msg: RaidEndMsg) {
+    const sc = raidScene;
+    raidTelegraphs = [];
+    if (msg.result === 'kill') {
+      if (sc && raidBossSpr && raidBossSpr.visible) {
+        // shatter: a burst of ice shards + a screen flash
+        for (let i = 0; i < 40; i++) {
+          const a = Math.random() * Math.PI * 2, sp = 60 + Math.random() * 220;
+          const shard = sc.add.rectangle(raidBossX, raidBossY - 90, 5, 12, Math.random() < 0.5 ? 0xdff2ff : 0x9fe4ff).setDepth(999998).setAngle(Math.random() * 360);
+          sc.tweens.add({ targets: shard, x: raidBossX + Math.cos(a) * sp, y: raidBossY - 90 + Math.sin(a) * sp, alpha: 0, angle: shard.angle + 240, duration: 900 + Math.random() * 500, ease: 'Quad.easeOut', onComplete: () => shard.destroy() });
+        }
+      }
+      mainCam?.flash(500, 220, 240, 255);
+      mainCam?.shake(600, 0.012);
+      tone(320, 0.5, 'sine', 0.06, 640); window.setTimeout(() => tone(520, 0.6, 'sine', 0.06, 780), 160);
+      if (msg.reward > 0) {
+        showToast(`🏆 <b>RIMEFANG FALLS!</b><br>+${msg.reward.toLocaleString()}🪙 and a <b>trophy yeti pet</b> 👹 — equip it in your Locker.`);
+      } else {
+        showToast('🏆 <b>Rimefang falls!</b> (You need to land a hit inside the arena to share the spoils.)');
+      }
+    } else {
+      showToast('💀 <b>The Warden returns to its slumber.</b> The raid wiped — regroup and try again.');
+    }
+    if (raidBossSpr) raidBossSpr.setVisible(false);
+    if (raidAura) raidAura.setVisible(false);
+  }
+
+  // Is the local player standing in a telegraph's danger zone at resolve time?
+  function inRaidDanger(t: RaidTelegraph, x: number, y: number): boolean {
+    if (t.kind === 'breath') {
+      const d = Math.hypot(x - t.x, y - t.y); if (d > (t.r ?? 0)) return false;
+      let da = Math.abs(Math.atan2(y - t.y, x - t.x) - (t.a ?? 0)); if (da > Math.PI) da = Math.PI * 2 - da;
+      return da <= (t.spread ?? 0.5);
+    }
+    if (t.kind === 'comets') return (t.spots ?? []).some((s) => Math.hypot(x - s.x, y - s.y) <= s.r);
+    if (t.kind === 'donut') { const d = Math.hypot(x - t.x, y - t.y); return d >= (t.innerR ?? 0) && d <= (t.r ?? 0); }
+    if (t.kind === 'spears') {
+      const d = Math.hypot(x - t.x, y - t.y); if (d > (t.r ?? 0)) return false;
+      const nx = Math.cos((t.a ?? 0) + Math.PI / 2), ny = Math.sin((t.a ?? 0) + Math.PI / 2); // line normal
+      return Math.abs((x - t.x) * nx + (y - t.y) * ny) <= (t.spread ?? 90);
+    }
+    // nova: the whole arena detonates except inside a safe pocket
+    const inArena = Math.hypot(x - t.x, y - t.y) <= (t.r ?? 0);
+    if (!inArena) return false;
+    return !(t.spots ?? []).some((s) => Math.hypot(x - s.x, y - s.y) <= s.r);
+  }
+
+  // Take a raid-mechanic hit: direct HP (the `dmg` is HP, not the mobs' stun-ms unit). Brutal on
+  // purpose — dodge the telegraphs.
+  function raidDamageSelf(hpLoss: number, label: string) {
+    if (playerDead || inInterior || inDungeon) return;
+    playerHp = Math.max(0, playerHp - hpLoss);
+    keys.clear(); stunnedUntil = performance.now() + 200;
+    if (mainCam) mainCam.shake(240, 0.014);
+    bumpSound(true);
+    spawnDamageNumber(selfX, selfY - 30, hpLoss);
+    updateHealthHud();
+    if (playerHp <= 0) playerDie(label);
+    else if (playerHp <= 30) flashHelp(`❤️ ${playerHp} HP — mind the telegraphs!`);
+  }
+
+  function drawRaidTelegraph(g: Phaser.GameObjects.Graphics, t: RaidTelegraph, frac: number, flash: number) {
+    // frac 0→1 during the cast; flash>0 for the brief detonation. Warning reddens as it ripens.
+    const warnA = 0.1 + frac * 0.26;
+    const lineC = 0xff6a3a, fillC = 0xff3a2a;
+    const detA = flash;              // 0..0.6
+    const drawSpot = (cx: number, cy: number, r: number) => {
+      g.fillStyle(fillC, warnA); g.fillCircle(cx, cy, r);
+      g.lineStyle(3, lineC, 0.5 + frac * 0.4); g.strokeCircle(cx, cy, r);
+      g.lineStyle(2, lineC, 0.6); g.strokeCircle(cx, cy, r * frac); // filling inner ring
+      if (detA > 0) { g.fillStyle(0xcaf0ff, detA); g.fillCircle(cx, cy, r); }
+    };
+    if (t.kind === 'comets') {
+      for (const s of t.spots ?? []) drawSpot(s.x, s.y, s.r);
+    } else if (t.kind === 'breath') {
+      const a0 = (t.a ?? 0) - (t.spread ?? 0.5), a1 = (t.a ?? 0) + (t.spread ?? 0.5), r = t.r ?? 0;
+      g.beginPath(); g.moveTo(t.x, t.y);
+      for (let i = 0; i <= 20; i++) { const a = a0 + (a1 - a0) * (i / 20); g.lineTo(t.x + Math.cos(a) * r, t.y + Math.sin(a) * r); }
+      g.closePath(); g.fillStyle(fillC, warnA); g.fillPath();
+      g.lineStyle(3, lineC, 0.5 + frac * 0.4); g.strokePath();
+      if (detA > 0) { g.fillStyle(0xcaf0ff, detA); g.fillPath(); }
+    } else if (t.kind === 'donut') {
+      const mid = ((t.innerR ?? 0) + (t.r ?? 0)) / 2, band = (t.r ?? 0) - (t.innerR ?? 0);
+      g.lineStyle(band, fillC, warnA); g.strokeCircle(t.x, t.y, mid);
+      g.lineStyle(3, lineC, 0.6); g.strokeCircle(t.x, t.y, t.r ?? 0); g.strokeCircle(t.x, t.y, t.innerR ?? 0);
+      g.lineStyle(3, 0x6fe08a, 0.5); g.strokeCircle(t.x, t.y, (t.innerR ?? 0) - 4); // green "safe eye" hint
+      if (detA > 0) { g.lineStyle(band, 0xcaf0ff, detA); g.strokeCircle(t.x, t.y, mid); }
+    } else if (t.kind === 'spears') {
+      const dx = Math.cos(t.a ?? 0), dy = Math.sin(t.a ?? 0), r = t.r ?? 0, hw = t.spread ?? 90;
+      const nx = Math.cos((t.a ?? 0) + Math.PI / 2), ny = Math.sin((t.a ?? 0) + Math.PI / 2);
+      const corners = [
+        [t.x - dx * r + nx * hw, t.y - dy * r + ny * hw], [t.x + dx * r + nx * hw, t.y + dy * r + ny * hw],
+        [t.x + dx * r - nx * hw, t.y + dy * r - ny * hw], [t.x - dx * r - nx * hw, t.y - dy * r - ny * hw],
+      ];
+      g.fillStyle(fillC, warnA); g.beginPath(); g.moveTo(corners[0][0], corners[0][1]);
+      for (let i = 1; i < 4; i++) g.lineTo(corners[i][0], corners[i][1]); g.closePath(); g.fillPath();
+      g.lineStyle(3, lineC, 0.5 + frac * 0.4); g.strokePath();
+      if (detA > 0) { g.fillStyle(0xcaf0ff, detA); g.fillPath(); }
+    } else { // nova — whole arena, with a green safe pocket
+      g.fillStyle(fillC, warnA); g.fillCircle(t.x, t.y, t.r ?? 0);
+      g.lineStyle(3, lineC, 0.5 + frac * 0.4); g.strokeCircle(t.x, t.y, t.r ?? 0);
+      for (const s of t.spots ?? []) { g.fillStyle(0x2a6a3a, 0.32); g.fillCircle(s.x, s.y, s.r); g.lineStyle(3, 0x6fe08a, 0.7); g.strokeCircle(s.x, s.y, s.r); }
+      if (detA > 0) { g.fillStyle(0xcaf0ff, detA); g.fillCircle(t.x, t.y, t.r ?? 0); }
+    }
+  }
+
+  function updateRaid(now: number, dt: number) {
+    const st = raidState;
+    const nearArena = selfX > WORLD.w && Math.hypot(selfX - RAID_ARENA.x, selfY - RAID_ARENA.y) < RAID_ARENA.r + 1700;
+    // --- boss render (interpolate toward the server position) ---
+    if (st && raidBossSpr && raidBossSpr.visible) {
+      raidBossX += (st.x - raidBossX) * Math.min(1, 8 * dt);
+      raidBossY += (st.y - raidBossY) * Math.min(1, 8 * dt);
+      const breathe = Math.sin(now / 900) * 0.03;
+      const rise = st.phase === 'summoning' ? Math.max(0, 1 - (st.summonMs ?? 0) / 6000) : 1; // heave up out of the ice
+      raidBossSpr.setScale(TEXEL * 3.6 * (1 + breathe), TEXEL * 3.6 * (1 - breathe) * (0.5 + 0.5 * rise))
+        .setPosition(raidBossX, raidBossY + Math.sin(now / 1400) * 3).setDepth(raidBossY);
+      if (now < raidBossHitUntil) raidBossSpr.setTintFill(0xffffff); else raidBossSpr.clearTint();
+      // cold aura ring, pulsing; angrier tint by phase
+      if (raidAura) {
+        raidAura.clear();
+        const pr = RAID_ARENA.r * (0.2 + 0.03 * Math.sin(now / 400));
+        const auraC = st.bossPhase >= 3 ? 0x9a6aff : st.bossPhase >= 2 ? 0x6fb8ff : 0x8fe0ff;
+        raidAura.fillStyle(auraC, 0.08); raidAura.fillCircle(raidBossX, raidBossY - 6, pr);
+        raidAura.setDepth(raidBossY - 2);
+      }
+    }
+    // --- telegraphs ---
+    if (raidFx) {
+      raidFx.clear();
+      if (nearArena && raidTelegraphs.length) {
+        for (const t of raidTelegraphs) {
+          const elapsed = now - t.start, frac = Math.min(1, elapsed / t.castMs);
+          const sinceFire = elapsed - t.castMs;
+          const flash = sinceFire >= 0 ? Math.max(0, 0.6 * (1 - sinceFire / 260)) : 0;
+          drawRaidTelegraph(raidFx, t, frac, flash);
+          if (!t.fired && elapsed >= t.castMs) {
+            t.fired = true;
+            // resolve damage against the local player if they're in the zone AND in the arena
+            const inArena = Math.hypot(selfX - RAID_ARENA.x, selfY - RAID_ARENA.y) <= RAID_ARENA.r;
+            if (inArena && !playerDead && inRaidDanger(t, selfX, selfY)) raidDamageSelf(t.dmg, `Rimefang’s ${RAID_MECH_NAME[t.kind]}`);
+          }
+        }
+        raidTelegraphs = raidTelegraphs.filter((t) => now - t.start < t.castMs + 300);
+      } else if (raidTelegraphs.length && !nearArena) {
+        // still expire them even if we can't see them (we walked off)
+        raidTelegraphs = raidTelegraphs.filter((t) => now - t.start < t.castMs + 300);
+      }
+    }
+    updateRaidHud(nearArena);
+  }
+
+  // The raid HUD: a big boss health bar pinned to the top of the screen while you're at the arena,
+  // plus a gather-prompt when it's asleep and the wipe/summon timers while it's live.
+  function ensureRaidHud(sc: Phaser.Scene) {
+    if (raidHud) return;
+    raidHudBar = sc.add.graphics();
+    raidHudText = sc.add.text(0, 0, '', { fontFamily: 'ui-monospace, monospace', fontSize: '17px', fontStyle: 'bold', color: '#eaf6ff', stroke: '#0a2036', strokeThickness: 4, resolution: 2 }).setOrigin(0.5, 0.5);
+    raidHudSub = sc.add.text(0, 0, '', { fontFamily: 'ui-monospace, monospace', fontSize: '13px', color: '#bfe0ff', stroke: '#0a2036', strokeThickness: 3, resolution: 2 }).setOrigin(0.5, 0.5);
+    raidHud = sc.add.container(0, 0, [raidHudBar, raidHudText, raidHudSub]).setScrollFactor(0).setDepth(200500).setVisible(false);
+  }
+  function updateRaidHud(nearArena: boolean) {
+    const sc = raidScene; if (!sc) return;
+    ensureRaidHud(sc);
+    const st = raidState, cam = mainCam;
+    if (!raidHud || !raidHudBar || !raidHudText || !raidHudSub || !cam) return;
+    const inArena = selfX > WORLD.w && Math.hypot(selfX - RAID_ARENA.x, selfY - RAID_ARENA.y) <= RAID_ARENA.r;
+    const active = st && (st.phase === 'active' || st.phase === 'summoning' || st.phase === 'dying');
+    const showGather = st && (st.phase === 'idle' || st.phase === 'cooldown') && inArena;
+    if (!st || (!active && !showGather) || (active && !nearArena)) { raidHud.setVisible(false); return; }
+    raidHud.setVisible(true);
+    const W = Math.min(620, cam.width * 0.82), H = 26, cx = cam.width / 2, top = 48;
+    raidHudBar.clear();
+    raidHudBar.fillStyle(0x0a1626, 0.82); raidHudBar.fillRoundedRect(cx - W / 2 - 10, top - 20, W + 20, H + 46, 8);
+    if (showGather) {
+      raidHudText.setText(`❄ ${st.name} slumbers`).setPosition(cx, top - 4);
+      raidHudSub.setText(`Gather ${st.need} champions to wake it  —  ${st.present}/${st.need} in the arena`).setPosition(cx, top + 18);
+      // little pips for who's here
+      raidHudBar.fillStyle(0x14263c, 1); raidHudBar.fillRoundedRect(cx - W / 2, top + 30, W, 8, 4);
+      raidHudBar.fillStyle(0x6fd0ff, 1); raidHudBar.fillRoundedRect(cx - W / 2, top + 30, W * Math.min(1, st.present / st.need), 8, 4);
+      return;
+    }
+    // active/summoning/dying → the boss bar
+    const frac = st.maxHp > 0 ? Math.max(0, st.hp / st.maxHp) : 0;
+    const phaseTag = st.phase === 'summoning' ? '  ⟳ AWAKENING' : st.phase === 'dying' ? '  ☠ DEFEATED' : ['', ' ‹I›', ' ‹II›', ' ‹III›'][st.bossPhase] ?? '';
+    raidHudText.setText(`${st.name}${phaseTag}`).setPosition(cx, top - 6);
+    // the bar
+    raidHudBar.fillStyle(0x2a0c14, 1); raidHudBar.fillRoundedRect(cx - W / 2, top + 8, W, H, 5);
+    const barC = st.bossPhase >= 3 ? 0xb04aff : st.bossPhase >= 2 ? 0x4a9aff : 0x6fd0ff;
+    raidHudBar.fillStyle(barC, 1); raidHudBar.fillRoundedRect(cx - W / 2, top + 8, W * frac, H, 5);
+    raidHudBar.lineStyle(2, 0x9fe4ff, 0.6); raidHudBar.strokeRoundedRect(cx - W / 2, top + 8, W, H, 5);
+    // phase divider ticks at 66% and 33%
+    for (const f of [0.66, 0.33]) { raidHudBar.fillStyle(0x0a1626, 0.9); raidHudBar.fillRect(cx - W / 2 + W * f, top + 8, 2, H); }
+    let sub = '';
+    if (st.phase === 'summoning') sub = `The Warden wakes in ${Math.ceil((st.summonMs ?? 0) / 1000)}…`;
+    else if (st.phase === 'active') {
+      const secs = Math.ceil((st.enrageMs ?? 0) / 1000);
+      const mm = Math.floor(secs / 60), ss = String(secs % 60).padStart(2, '0');
+      const cur = raidTelegraphs.filter((t) => performance.now() - t.start < t.castMs).slice(-1)[0];
+      sub = `${Math.ceil(st.hp).toLocaleString()} / ${st.maxHp.toLocaleString()} HP   ·   enrage ${mm}:${ss}` + (cur ? `   ·   ⚠ ${RAID_MECH_NAME[cur.kind]}!` : '');
+    }
+    raidHudSub.setText(sub).setPosition(cx, top + 8 + H + 12);
+  }
+
   // --- biome ambience: each frontier has its own anthem + an entry banner ---
   // Desert → Heart-Shaped Box · Swamp → Everlong · Snow → In The End. The track loops while you're
   // in the biome and fades when you leave; crossing in also flashes a title card.
@@ -18888,6 +19288,9 @@ export function startWorld(net: WorldNet): void {
     },
     feedMobs(list: WorldMob[]) { feedMobs(list); },
     feedMobDead(id: number, x: number, y: number, kind: string, mine: boolean, potion: boolean) { feedMobDead(id, x, y, kind, mine, potion); },
+    feedRaidState(msg: RaidStateMsg) { feedRaidState(msg); },
+    feedRaidCast(msg: RaidCastMsg) { feedRaidCast(msg); },
+    feedRaidEnd(msg: RaidEndMsg) { feedRaidEnd(msg); },
     feedCortisol() { updateCortHud(); },
     feedNews() { if (newsDialogOpen) { const list = dialogBox.querySelector<HTMLDivElement>('#newsWorldList'); if (list) renderNewsWorldList(list); } },
     feedLoan() {
