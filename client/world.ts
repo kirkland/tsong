@@ -14068,7 +14068,9 @@ export function startWorld(net: WorldNet): void {
           n.squishedUntil = now + 3200; n.getUpUntil = 0; n.walking = false; n.label.setText('💫');
         }
       }
-      if (!inInterior && !inDungeon && !boating) {
+      // In a live raid, no friendly interference: a black hole (yours or a teammate's) never drags
+      // you around the arena — the fight is PvE, and being yanked into a telegraph isn't fair play.
+      if (!inInterior && !inDungeon && !boating && !inRaidFight()) {
         const p = drag(selfX, selfY, driving ? 190 : 260);                 // a car's mass fights it a bit
         if (p.x !== selfX || p.y !== selfY) {
           const rc = resolveCollisions(p.x, p.y, driving ? CAR_WID * 0.5 : R);
