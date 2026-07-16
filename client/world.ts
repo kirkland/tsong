@@ -18652,7 +18652,8 @@ export function startWorld(net: WorldNet): void {
     const showGather = st && (st.phase === 'idle' || st.phase === 'cooldown') && inArena;
     if (!st || (!active && !showGather) || (active && !nearArena)) { raidHudBar.setVisible(false); raidHudText.setVisible(false); raidHudSub.setVisible(false); return; }
     raidHudBar.setVisible(true); raidHudText.setVisible(true); raidHudSub.setVisible(true);
-    const W = Math.min(620, cam.width * 0.82), H = 26, cx = cam.width / 2, top = 48;
+    // Sit clear of the DOM top bar (coins/level, ~52px tall) so the boss bar isn't hidden behind it.
+    const W = Math.min(620, cam.width * 0.82), H = 26, cx = cam.width / 2, top = 92;
     raidHudBar.clear();
     raidHudBar.fillStyle(0x0a1626, 0.82); raidHudBar.fillRoundedRect(cx - W / 2 - 10, top - 20, W + 20, H + 46, 8);
     if (showGather) {
