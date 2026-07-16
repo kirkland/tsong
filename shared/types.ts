@@ -2118,6 +2118,9 @@ export const RAID_MIN_PLAYERS = 4;     // champions needed to wake the Warden
 export const RAID_PET = 'pet-yeti';    // the trophy: a (recoloured) yeti that trails you home
 // The arena: a circle at the far east edge of the Frostreach (snow biome runs x∈[4800,14400]).
 export const RAID_ARENA = { x: 12900, y: 1100, r: 950 };
+// The summoning dais at the arena's heart — you physically stand on THIS (with 4+ champions) to
+// wake the Warden. The fight itself then happens across the whole arena.
+export const RAID_PLATFORM = { x: 12900, y: 1100, r: 260 };
 
 export interface WalletMsg {
   type: 'wallet';

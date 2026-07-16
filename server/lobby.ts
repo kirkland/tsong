@@ -151,7 +151,7 @@ import { getEloBoard, getLevelBoard, getPlayerProfile, getRival, getNetWorthLead
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR, DUNGEON_CHEST_CONTENTS, DUNGEON_TIER_COINS, DUNGEON_FLOOR_TIERS } from '../shared/types';
 import { WORLD_PARCELS, BANK_PARCEL_CAP, PARCEL_PRICE, LandParcelView, WORLD_SAY_MAX, HOUSE_BY_ID } from '../shared/types';
-import { RAID_ARENA, RAID_REWARD, RAID_MIN_PLAYERS, RAID_PET, type RaidPhase, type RaidCastMsg } from '../shared/types';
+import { RAID_ARENA, RAID_PLATFORM, RAID_REWARD, RAID_MIN_PLAYERS, RAID_PET, type RaidPhase, type RaidCastMsg } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
 // emoji code points (pictographs, components, ZWJ, variation selectors, flags).
@@ -2870,18 +2870,28 @@ export class Lobby {
     }
     return out;
   }
+  /** How many players are standing on the summoning dais right now (the trigger zone). */
+  private raidPlayersOnPlatform(): number {
+    let n = 0;
+    for (const ws of this.world.sockets()) {
+      const p = this.world.positionOf(ws);
+      if (p && Math.hypot(p.x - RAID_PLATFORM.x, p.y - RAID_PLATFORM.y) <= RAID_PLATFORM.r) n++;
+    }
+    return n;
+  }
 
   /** Drive the raid state machine + mechanic scheduler. Called every tick from broadcastWorld(). */
   private tickRaid(now: number) {
     const inArena = this.raidPlayersInArena();
     const present = inArena.length;
+    const onDais = this.raidPlayersOnPlatform(); // the trigger: bodies on the summoning platform
 
     switch (this.raidPhase) {
       case 'idle':
-        if (present >= RAID_MIN_PLAYERS) { this.raidPhase = 'summoning'; this.raidSummonEndsAt = now + Lobby.RAID_SUMMON_MS; }
+        if (onDais >= RAID_MIN_PLAYERS) { this.raidPhase = 'summoning'; this.raidSummonEndsAt = now + Lobby.RAID_SUMMON_MS; }
         break;
       case 'summoning':
-        if (present < RAID_MIN_PLAYERS) { this.raidPhase = 'idle'; break; } // champions bailed — go back to sleep
+        if (onDais < RAID_MIN_PLAYERS) { this.raidPhase = 'idle'; break; } // stepped off the dais — channel breaks
         if (now >= this.raidSummonEndsAt) {
           const maxHp = 5000 + 1400 * present;            // scales with the raid size
           this.raidBoss = { hp: maxHp, maxHp, x: RAID_ARENA.x, y: RAID_ARENA.y - 40 };
@@ -3009,7 +3019,10 @@ export class Lobby {
   /** Broadcast the boss heartbeat (HP / phase / position / timers) to everyone in the world. */
   private broadcastRaid() {
     if (this.world.size === 0) return;
-    const present = this.raidPlayersInArena().length;
+    // while it sleeps, report the dais count (the trigger-relevant number for the gather prompt);
+    // once it's live, report the arena count.
+    const present = (this.raidPhase === 'idle' || this.raidPhase === 'summoning' || this.raidPhase === 'cooldown')
+      ? this.raidPlayersOnPlatform() : this.raidPlayersInArena().length;
     const now = Date.now();
     const msg = {
       type: 'raidState' as const,

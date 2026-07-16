@@ -108,6 +108,7 @@ import {
   type RaidEndMsg,
   type RaidPhase,
   RAID_ARENA,
+  RAID_PLATFORM,
   levelForXp,
 } from '../shared/types';
 import { drawCosmeticPreview, drawLegendIcon } from './render';
@@ -18238,6 +18239,7 @@ export function startWorld(net: WorldNet): void {
   let raidBossSpr: Phaser.GameObjects.Image | null = null;
   let raidAura: Phaser.GameObjects.Graphics | null = null;
   let raidFx: Phaser.GameObjects.Graphics | null = null;      // world-space telegraph decals
+  let raidDaisGlow: Phaser.GameObjects.Graphics | null = null; // pulsing summon glow on the dais
   let raidBossX = RAID_ARENA.x, raidBossY = RAID_ARENA.y;     // interpolated render position
   let raidBossHitUntil = 0;
   let raidTelegraphs: RaidTelegraph[] = [];
@@ -18307,10 +18309,23 @@ export function startWorld(net: WorldNet): void {
     ring.lineStyle(3, 0x9fe4ff, 0.35); ring.strokeCircle(A.x, A.y, A.r - 16);
     ring.lineStyle(3, 0x6fd0ff, 0.3); ring.strokeCircle(A.x, A.y, A.r * 0.5);           // inner rune ring
     for (let i = 0; i < 12; i++) { const a = (i / 12) * Math.PI * 2; ring.fillStyle(0x9fe4ff, 0.4); ring.fillCircle(A.x + Math.cos(a) * A.r * 0.5, A.y + Math.sin(a) * A.r * 0.5, 5); }
-    // a cracked ice altar at the centre-north
-    sc.add.rectangle(A.x, A.y - 40, 90, 40, 0x8fb6d6).setStrokeStyle(3, 0x5a7e9e).setDepth(A.y - 40);
-    sc.add.rectangle(A.x, A.y - 58, 70, 14, 0xbfe0f4).setDepth(A.y - 40);
-    const sign = sc.add.text(A.x, A.y + A.r - 40, '❄ THE WARDEN’S REST ❄\nGather 4 champions to wake it', {
+    // The SUMMONING DAIS at the heart of the arena — a raised stone-and-ice platform you physically
+    // stand on (with 4 champions) to wake the Warden. Drawn with a little height so it reads as a
+    // step-up pad, ringed with runes that we later light up as champions gather.
+    const P = RAID_PLATFORM;
+    const dais = sc.add.graphics().setDepth(5);
+    dais.fillStyle(0x3a5570, 1); dais.fillEllipse(P.x, P.y + 20, P.r * 2 + 20, P.r * 0.9);        // shadowed side (height)
+    dais.fillStyle(0x6f93b4, 1); dais.fillEllipse(P.x, P.y + 8, P.r * 2 + 12, P.r * 0.82);          // riser
+    dais.fillStyle(0xaecbe4, 1); dais.fillEllipse(P.x, P.y, P.r * 2, P.r * 0.8);                     // top face
+    dais.fillStyle(0xc9e2f4, 1); dais.fillEllipse(P.x, P.y - 3, P.r * 1.7, P.r * 0.66);              // inlaid ice
+    dais.lineStyle(4, 0x7ff0ff, 0.6); dais.strokeEllipse(P.x, P.y, P.r * 1.9, P.r * 0.76);           // glowing rune rim
+    dais.lineStyle(2, 0x9fe4ff, 0.5); dais.strokeEllipse(P.x, P.y, P.r * 1.2, P.r * 0.48);
+    for (let i = 0; i < 4; i++) { const a = Math.PI / 4 + (i / 4) * Math.PI * 2; dais.fillStyle(0x8fd6ff, 0.8); dais.fillCircle(P.x + Math.cos(a) * P.r * 0.85, P.y + Math.sin(a) * P.r * 0.36, 8); } // 4 champion runes
+    raidDaisGlow = sc.add.graphics().setDepth(5);
+    // a cracked ice altar behind the dais
+    sc.add.rectangle(A.x, A.y - 150, 90, 40, 0x8fb6d6).setStrokeStyle(3, 0x5a7e9e).setDepth(A.y - 150);
+    sc.add.rectangle(A.x, A.y - 168, 70, 14, 0xbfe0f4).setDepth(A.y - 150);
+    const sign = sc.add.text(A.x, A.y + A.r - 40, '❄ THE WARDEN’S REST ❄\nStand on the dais with 4 champions to wake it', {
       fontFamily: 'ui-monospace, monospace', fontSize: '20px', fontStyle: 'bold', color: '#dff2ff', align: 'center', stroke: '#0a2036', strokeThickness: 5, resolution: 2,
     }).setOrigin(0.5).setDepth(A.y + A.r - 40);
     void sign;
@@ -18474,6 +18489,27 @@ export function startWorld(net: WorldNet): void {
   function updateRaid(now: number, dt: number) {
     const st = raidState;
     const nearArena = selfX > WORLD.w && Math.hypot(selfX - RAID_ARENA.x, selfY - RAID_ARENA.y) < RAID_ARENA.r + 1700;
+    // --- summoning dais: light it up as champions gather, blaze during the wake-up channel ---
+    if (raidDaisGlow) {
+      raidDaisGlow.clear();
+      const P = RAID_PLATFORM;
+      const asleep = !st || st.phase === 'idle' || st.phase === 'cooldown';
+      const channeling = st?.phase === 'summoning';
+      if ((asleep || channeling) && nearArena) {
+        const need = st?.need ?? 4, gathered = st?.present ?? 0;
+        const fill = channeling ? 1 : Math.min(1, gathered / need);
+        const pulse = 0.5 + 0.5 * Math.sin(now / (channeling ? 90 : 320));
+        const a = (channeling ? 0.5 : 0.12 + fill * 0.3) * pulse;
+        raidDaisGlow.fillStyle(channeling ? 0x9fe4ff : 0x7ff0ff, a);
+        raidDaisGlow.fillEllipse(P.x, P.y, P.r * 1.9, P.r * 0.76);
+        // a rune pip lights per champion present
+        for (let i = 0; i < need; i++) {
+          const ang = Math.PI / 4 + (i / need) * Math.PI * 2;
+          raidDaisGlow.fillStyle(i < gathered ? 0xdffbff : 0x2a4256, i < gathered ? 0.9 : 0.5);
+          raidDaisGlow.fillCircle(P.x + Math.cos(ang) * P.r * 0.85, P.y + Math.sin(ang) * P.r * 0.36, i < gathered ? 10 : 6);
+        }
+      }
+    }
     // --- boss render (interpolate toward the server position) ---
     if (st && raidBossSpr && raidBossSpr.visible) {
       raidBossX += (st.x - raidBossX) * Math.min(1, 8 * dt);
@@ -18541,7 +18577,7 @@ export function startWorld(net: WorldNet): void {
     raidHudBar.fillStyle(0x0a1626, 0.82); raidHudBar.fillRoundedRect(cx - W / 2 - 10, top - 20, W + 20, H + 46, 8);
     if (showGather) {
       raidHudText.setText(`❄ ${st.name} slumbers`).setPosition(cx, top - 4);
-      raidHudSub.setText(`Gather ${st.need} champions to wake it  —  ${st.present}/${st.need} in the arena`).setPosition(cx, top + 18);
+      raidHudSub.setText(`Stand on the dais with ${st.need} champions  —  ${st.present}/${st.need} on the platform`).setPosition(cx, top + 18);
       // little pips for who's here
       raidHudBar.fillStyle(0x14263c, 1); raidHudBar.fillRoundedRect(cx - W / 2, top + 30, W, 8, 4);
       raidHudBar.fillStyle(0x6fd0ff, 1); raidHudBar.fillRoundedRect(cx - W / 2, top + 30, W * Math.min(1, st.present / st.need), 8, 4);
