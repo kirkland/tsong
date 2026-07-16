@@ -526,6 +526,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'mobHit':
         if (typeof msg.id === 'number' && typeof msg.dmg === 'number') lobby.mobHit(ws, msg.id, msg.dmg);
         break;
+      case 'raidHit':
+        if (typeof msg.dmg === 'number') lobby.raidHit(ws, msg.dmg);
+        break;
       case 'worldBank':
         lobby.worldBankPurse(ws);
         break;

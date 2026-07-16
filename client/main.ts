@@ -967,6 +967,12 @@ const net = connect(
       worldMod?.feedMobs(msg.mobs);
     } else if (msg.type === 'mobDead') {
       worldMod?.feedMobDead(msg.id, msg.x, msg.y, msg.kind, msg.mine, msg.potion);
+    } else if (msg.type === 'raidState') {
+      worldMod?.feedRaidState(msg);
+    } else if (msg.type === 'raidCast') {
+      worldMod?.feedRaidCast(msg);
+    } else if (msg.type === 'raidEnd') {
+      worldMod?.feedRaidEnd(msg);
     } else if (msg.type === 'frogResult') {
       frogMod?.feedResult(msg.stage, msg.prize);
     } else if (msg.type === 'matchStats') {
@@ -2727,6 +2733,7 @@ worldBtn.addEventListener('click', async () => {
       },
       wish: () => net.send({ type: 'fountainWish' }),
       mobHit: (id: number, dmg: number) => net.send({ type: 'mobHit', id, dmg }),
+      raidHit: (dmg: number) => net.send({ type: 'raidHit', dmg }),
       worldBank: () => net.send({ type: 'worldBank' }),
       worldDied: () => net.send({ type: 'worldDied' }),
       owns: (id: string) => wallet.owned.includes(id),
