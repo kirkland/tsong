@@ -16702,17 +16702,26 @@ export function startWorld(net: WorldNet): void {
   let hockeyGoalPauseUntil = 0;
   let hockeyDashCd = 0;
   let hockeyHud: HTMLDivElement | null = null;
+  let hockeyMyRing: Phaser.GameObjects.Arc | null = null; // a team-colored ring around your own avatar — the HUD score is easy to miss mid-scrum
   let hockeyMySlot = 0;
   let hockeyLobbyView: BgLobbyMsg = { type: 'bgLobby', game: 'hockey', status: 'waiting', slot: 0, players: [], stake: 0 };
   let hockeyActiveSlots: number[] = [];
   let hockeyIncomingTouches: { x: number; y: number; vx: number; vy: number }[] = [];
 
   function hockeyTeamOf(slot: number): 0 | 1 { return (slot % 2) as 0 | 1; }
+  function hockeyMyTeam(): 0 | 1 { return hockeyMode === 'pvp' ? hockeyTeamOf(hockeyMySlot) : 0; }
 
   function ensureHockeyPuckSpr() {
     const sc = petScene;
     if (!sc || hockeyPuckSpr) return;
     hockeyPuckSpr = sc.add.circle(hockeyPuck.x, hockeyPuck.y, 9, 0x141414).setStrokeStyle(2, 0xffffff88).setDepth(999997);
+  }
+  /** A ring around your own avatar in your team's color — always visible even in a scrum, unlike
+   *  the corner HUD, so "which team am I on" never requires a glance away from your own character. */
+  function ensureHockeyMyRing() {
+    const sc = petScene;
+    if (!sc || hockeyMyRing) return;
+    hockeyMyRing = sc.add.circle(selfX, selfY, R + 7, 0x000000, 0).setStrokeStyle(3, 0xffffff).setDepth(999996);
   }
 
   /** Nudges the shared puck if (x,y) — an avatar's own position — is close enough to touch it.
@@ -16886,6 +16895,7 @@ export function startWorld(net: WorldNet): void {
     if (hockeyMode === 'pvp') net.hockeyLeave();
     hockeyMode = 'off';
     hockeyPuckSpr?.setVisible(false);
+    hockeyMyRing?.destroy(); hockeyMyRing = null;
     for (const b of hockeyBots) b.av.c.destroy();
     hockeyBots = [];
     removeHockeyHud();
@@ -16937,7 +16947,9 @@ export function startWorld(net: WorldNet): void {
       hockeyHud.style.cssText = 'position:fixed;top:12px;right:12px;z-index:9999;background:rgba(10,25,40,0.85);border:2px solid #3a7ea8;border-radius:8px;padding:8px 12px;color:#fff;font:13px/1.5 system-ui;min-width:190px;';
       document.body.appendChild(hockeyHud);
     }
-    const scoreLine = `<div style="font-weight:700;">${HOCKEY_TEAM_NAME[0]} <span style="color:${HOCKEY_TEAM_COLOR[0]}">${hockeyScore[0]}</span> – <span style="color:${HOCKEY_TEAM_COLOR[1]}">${hockeyScore[1]}</span> ${HOCKEY_TEAM_NAME[1]}</div>`;
+    const myTeam = hockeyMyTeam();
+    const youLine = `<div style="font-size:12px;font-weight:700;color:${HOCKEY_TEAM_COLOR[myTeam]};">● YOU: TEAM ${HOCKEY_TEAM_NAME[myTeam].toUpperCase()}</div>`;
+    const scoreLine = `<div style="font-weight:700;margin-top:2px;">${HOCKEY_TEAM_NAME[0]} <span style="color:${HOCKEY_TEAM_COLOR[0]}">${hockeyScore[0]}</span> – <span style="color:${HOCKEY_TEAM_COLOR[1]}">${hockeyScore[1]}</span> ${HOCKEY_TEAM_NAME[1]} <span style="font-size:11px;color:#a8c8dc;font-weight:400;">(first to ${HOCKEY_GOALS_TO_WIN})</span></div>`;
     let sub: string;
     if (hockeyOver) {
       sub = `<div style="color:${HOCKEY_TEAM_COLOR[hockeyOver.team]};margin-top:4px;">${HOCKEY_TEAM_NAME[hockeyOver.team]} wins! 🏆</div>` +
@@ -16945,13 +16957,15 @@ export function startWorld(net: WorldNet): void {
     } else {
       sub = '<div style="font-size:11px;color:#a8c8dc;margin-top:2px;">Space to dash · walk to a net &amp; interact to leave</div>';
     }
-    hockeyHud.innerHTML = scoreLine + sub;
+    hockeyHud.innerHTML = youLine + scoreLine + sub;
     const again = document.getElementById('hkAgainBtn');
     if (again) again.onclick = () => { if (hockeyMode === 'bots') startHockeyBots(); else abandonHockeyMatch(); };
   }
 
   function updateHockey(dt: number) {
     if (hockeyMode === 'off') return;
+    ensureHockeyMyRing();
+    hockeyMyRing?.setPosition(selfX, selfY).setDepth(selfY - 1).setStrokeStyle(3, hexToInt(HOCKEY_TEAM_COLOR[hockeyMyTeam()]));
     hockeyDashCd = Math.max(0, hockeyDashCd - dt * 1000);
     if (hockeyOver) return;
     if (Date.now() < hockeyGoalPauseUntil) { hockeyPuckSpr?.setPosition(hockeyPuck.x, hockeyPuck.y).setDepth(hockeyPuck.y); return; }

@@ -2664,6 +2664,14 @@ export class Lobby {
   private static readonly SWAMP_SHORE = 2200 + 4200 - 520;
   private static readonly EAST_W = 9600;
   private static readonly DESERT_W = 24000;
+  // Mirrors client/world.ts's POND_ICE — mobs shouldn't spawn on, or wander/chase onto, the
+  // hockey rink. A little slack (1.15×) beyond the rim so they don't spawn hugging the boards either.
+  private static readonly POND_ICE = { x: 4800 + 3400, y: 1150, rx: 760, ry: 420 };
+  private static inPondIce(x: number, y: number): boolean {
+    const p = Lobby.POND_ICE;
+    const ex = (x - p.x) / p.rx, ey = (y - p.y) / p.ry;
+    return ex * ex + ey * ey < 1.15;
+  }
   private static readonly MOB_DENSITY: Record<'desert' | 'swamp' | 'snow', { base: number; per: number; max: number }> = {
     desert: { base: 8, per: 4, max: 26 }, swamp: { base: 8, per: 4, max: 26 }, snow: { base: 12, per: 5, max: 40 },
   };
@@ -2680,7 +2688,13 @@ export class Lobby {
     const r = Math.random;
     if (biome === 'desert') return { x: -400 - r() * (Lobby.DESERT_W - 800), y: 120 + r() * (Lobby.W_H - 240) };
     if (biome === 'swamp') return { x: 120 + r() * (Lobby.W_W - 240), y: Lobby.W_H + 240 + r() * (Lobby.SWAMP_SHORE - Lobby.W_H - 360) };
-    return { x: Lobby.W_W + 300 + r() * (Lobby.EAST_W - 600), y: 120 + r() * (Lobby.W_H - 240) };
+    let x = 0, y = 0;
+    for (let tries = 0; tries < 12; tries++) { // reroll off the hockey rink
+      x = Lobby.W_W + 300 + r() * (Lobby.EAST_W - 600);
+      y = 120 + r() * (Lobby.W_H - 240);
+      if (!Lobby.inPondIce(x, y)) break;
+    }
+    return { x, y };
   }
 
   /** Tick the shared mob horde: adjust each biome's population to the live player count, then move
@@ -2732,7 +2746,18 @@ export class Lobby {
       }
       // clamp to the biome so nothing wanders into town/void
       if (m.biome === 'desert') { m.x = Math.max(-Lobby.DESERT_W + 40, Math.min(-40, m.x)); m.y = Math.max(40, Math.min(Lobby.W_H - 40, m.y)); }
-      else if (m.biome === 'snow') { m.x = Math.max(Lobby.W_W + 40, Math.min(Lobby.W_W + Lobby.EAST_W - 40, m.x)); m.y = Math.max(40, Math.min(Lobby.W_H - 40, m.y)); }
+      else if (m.biome === 'snow') {
+        m.x = Math.max(Lobby.W_W + 40, Math.min(Lobby.W_W + Lobby.EAST_W - 40, m.x));
+        m.y = Math.max(40, Math.min(Lobby.W_H - 40, m.y));
+        // keep the hockey rink clear — push back out to the pond's rim, even mid-chase
+        const p = Lobby.POND_ICE;
+        const ex = (m.x - p.x) / p.rx, ey = (m.y - p.y) / p.ry;
+        const ed = ex * ex + ey * ey;
+        if (ed < 1) {
+          const scale = 1 / Math.sqrt(ed || 1e-6);
+          m.x = p.x + (m.x - p.x) * scale; m.y = p.y + (m.y - p.y) * scale;
+        }
+      }
       else { m.x = Math.max(40, Math.min(Lobby.W_W - 40, m.x)); m.y = Math.max(Lobby.W_H + 40, Math.min(Lobby.SWAMP_SHORE - 40, m.y)); }
     }
   }
