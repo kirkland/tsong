@@ -120,7 +120,7 @@ import {
   WORLD_BUILDINGS,
 } from '../shared/types';
 import { track } from './analytics';
-import { getEloBoard, getLevelBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSelfElo, getSelfNetWorth, recordResult, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
+import { getEloBoard, getLevelBoard, getPlayerProfile, getRival, getNetWorthLeaderboard, getSelfElo, getSelfNetWorth, recordResult, PONG_WIN_REWARD, updateName, recordDoomScore, getDoomLeaderboards, DoomScoreRow,
   setCortisol, getCortisolBoard, getSelfCortisol,
   recordTypeDieScore, getTypeDieLeaderboard, TypeDieScoreRow,
   recordCampaignScore, getCampaignLeaderboard, awardTitle,
@@ -312,9 +312,9 @@ const CORTISOL_JAIL = 25;           // getting slammed in the drunk tank spikes 
 const CORTISOL_BAIL = 20;           // walking free brings it back down
 const CORTISOL_TIP_RECV = 6;        // a surprise tip brightens your day
 // Pong is the economy's faucet. Each recorded PvP match MINTS fresh coins: the winner already gets
-// their WIN_REWARD minted by recordResult(), and we mint the SAME amount again into the House — so
-// every match nets the treasury +MATCH_HOUSE_MINT (think "200 minted, 100 to the winner, 100 kept").
-const MATCH_HOUSE_MINT = 100; // matches the per-win reward minted in db.recordResult()
+// PONG_WIN_REWARD minted by recordResult(), and we mint the SAME amount again into the House — so
+// every match nets the treasury +MATCH_HOUSE_MINT (think "600 minted, 300 to the winner, 300 kept").
+const MATCH_HOUSE_MINT = PONG_WIN_REWARD; // kept in lockstep with db.recordResult()'s own reward
 const BEER_COST = 20;         // coins per beer at the Tavern (a sink → the House)
 const DRUNK_MAX = 6;          // the bartender cuts you off at six
 const DRUNK_MS = 180_000;     // each drunkenness level lasts 3 minutes
@@ -6510,9 +6510,20 @@ export class Lobby {
         this.readyTimer = 0;
       } else if (this.game.status === 'waiting') {
         this.game.start();
+        if (!this.bot) this.announceMatchStart();
       }
     }
     this.refreshPause();
+  }
+
+  /** A fresh human-vs-human duel just kicked off (no bot on either side) — let the rest of
+   *  the site know with a small toast, so people off in a minigame or World know the court
+   *  is live and come watch or queue up. */
+  private announceMatchStart() {
+    const l = this.conns.get(this.teams.left[0])?.nickname;
+    const r = this.conns.get(this.teams.right[0])?.nickname;
+    if (!l || !r) return;
+    this.announce(`🏓 ${l} vs ${r} — a real match just started at the Pong table. Come watch or queue up!`, true);
   }
 
   /** Blaster: fire a projectile from this player's paddle at the given aim angle. */

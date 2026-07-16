@@ -1031,6 +1031,12 @@ function expectedScore(ratingA: number, ratingB: number): number {
   return 1 / (1 + Math.pow(10, (ratingB - ratingA) / 400));
 }
 
+// Reward for winning a Pong match (classic duel, tournament, or Arena) — minted fresh, not
+// transferred. Originally 1 win-unit (100 = COIN_SCALE); bumped to 3 units so Pong's payout is
+// competitive with the newer World minigames, which range 600–10,000 coins per win. The House
+// mints an equal amount alongside it (see MATCH_HOUSE_MINT in lobby.ts) — keep the two in sync.
+export const PONG_WIN_REWARD = 300;
+
 // Record a finished match: every player on the winning team gets a win, every player
 // on the losing team a loss (a 1v1 is just the one-per-side case).
 // ELO is calculated using team-average ratings and applied to each player individually.
@@ -1039,13 +1045,12 @@ export async function recordResult(winners: PlayerRef[], losers: PlayerRef[]): P
 
   const allPids = [...winners, ...losers].map((p) => p.pid);
 
-  // Upsert all players so they exist before we read ELO. Each winner also earns 100 coins
-  // (1 win reward × COIN_SCALE — the whole economy is scaled ×100).
+  // Upsert all players so they exist before we read ELO. Each winner also earns PONG_WIN_REWARD coins.
   const now = Date.now();
   for (const w of winners) {
     await pool.query(
-      `INSERT INTO players (id, name, wins, coins, last_played) VALUES ($1, $2, 1, 100, $3)
-         ON CONFLICT (id) DO UPDATE SET wins = players.wins + 1, coins = players.coins + 100, name = EXCLUDED.name, last_played = EXCLUDED.last_played`,
+      `INSERT INTO players (id, name, wins, coins, last_played) VALUES ($1, $2, 1, ${PONG_WIN_REWARD}, $3)
+         ON CONFLICT (id) DO UPDATE SET wins = players.wins + 1, coins = players.coins + ${PONG_WIN_REWARD}, name = EXCLUDED.name, last_played = EXCLUDED.last_played`,
       [w.pid, w.name, now],
     );
   }
