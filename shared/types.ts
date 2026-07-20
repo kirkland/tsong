@@ -1344,6 +1344,7 @@ export type ClientMsg =
   | { type: 'retroDelete'; id: number } // peel off a sticky you authored
   | { type: 'retroWrap' } // wrap the retro: summary to town chat, board cleared (seated only)
   | { type: 'seaChest'; chest: string } // plunder a sea island's treasure chest (server pays its coins once per account)
+  | { type: 'seaBounty' } // report sinking a hostile NPC ship → server pays a rate-limited bounty
   // --- Robville land (the suburban neighborhood) ---
   | { type: 'landReq' } // request the current Robville parcel ownership/market book
   | { type: 'landBuyBank'; id: string } // buy an empty lot from the bank for PARCEL_PRICE (subject to BANK_PARCEL_CAP)

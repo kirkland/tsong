@@ -2388,6 +2388,28 @@ export class Lobby {
       .catch((e) => { this.seaChestsOpened.delete(key); console.error('sea chest plunder failed:', e); });
   }
 
+  // Bounty for sinking a hostile NPC ship. Enemy ships are simulated client-side (like townsfolk), so
+  // the kill is client-reported — same trust model as dungeon/mob kills — but rate-limited here so it
+  // can't be spammed into a coin faucet: at most one bounty every few seconds per account.
+  private lastSeaBountyAt = new Map<string, number>();
+  seaBounty(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    if (!this.world.has(ws)) return;                       // must actually be out in the world
+    const now = Date.now();
+    if (now - (this.lastSeaBountyAt.get(conn.pid) ?? 0) < 3000) return; // ≤ 1 bounty / 3s
+    this.lastSeaBountyAt.set(conn.pid, now);
+    const pid = conn.pid, nick = conn.nickname;
+    const coins = 500 + Math.floor(Math.random() * 900);   // 500–1400🪙 a hull
+    this.housePay(pid, nick, coins)
+      .then(() => {
+        this.sendWallet(ws);
+        this.notify(ws, `🏴‍☠️ Enemy ship sunk — ${coins.toLocaleString()}🪙 bounty!`);
+        return this.refreshNetWorth().catch(() => {});
+      })
+      .catch((e) => console.error('sea bounty failed:', e));
+  }
+
   /** Step a player out of the world map. */
   worldLeave(ws: WebSocket) {
     this.retroStand(ws); // leaving the World vacates your conference chair (if this socket held one)

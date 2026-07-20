@@ -2731,6 +2731,7 @@ worldBtn.addEventListener('click', async () => {
       dungeonSync: () => net.send({ type: 'dungeonSync' }),
       dungeonChest: (chest, captured) => net.send({ type: 'dungeonChest', chest, captured }),
       seaChest: (chest) => net.send({ type: 'seaChest', chest }),
+      seaBounty: () => net.send({ type: 'seaBounty' }),
       dungeonWin: (floor, tier) => net.send({ type: 'dungeonWin', floor, tier }),
       dungeonTakeKey: () => net.send({ type: 'dungeonTakeKey' }),
       dungeonExit: (escaped) => net.send({ type: 'dungeonExit', escaped }),

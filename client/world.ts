@@ -284,6 +284,7 @@ export interface WorldNet {
   dungeonSync(): void;             // entering the Ruins → ask which chests we've opened
   dungeonChest(chest: string, captured?: boolean): void; // open a chest ('B1:col,row') → server pays coins / grants prize (once). captured=true → a monster box caught (grant the pet)
   seaChest(chest: string): void;   // plunder a sea-island treasure chest → server pays its coins (once per account)
+  seaBounty(): void;               // report sinking a hostile NPC ship → server pays a bounty (rate-limited)
   dungeonWin(floor: string, tier: number): void; // won an encounter → adds a TIER-ranged amount to the run purse
   dungeonTakeKey(): void; // took the key from the dying B3 adventurer (server marks the run-key)
   dungeonExit(escaped: boolean): void; // left the Ruins (escaped → server pays the run purse from the House)
@@ -14174,6 +14175,7 @@ export function startWorld(net: WorldNet): void {
       makeEast(sc);
       makeCornerOceans(sc);
       makeIslands(sc);
+      spawnEnemyFleet(sc);
       makeMobs(sc);
       makeRaid(sc);
 
@@ -14531,6 +14533,7 @@ export function startWorld(net: WorldNet): void {
       safeStep('mobs', () => updateMobs(now, dt));
       safeStep('raid', () => updateRaid(now, dt));
       safeStep('ocean', () => updateOcean(now, dt));
+      safeStep('enemyShips', () => updateEnemyShips(dt));
       safeStep('biome', () => updateBiome());
       safeStep('nearBuilding', () => updateNearBuilding());
       safeStep('sendMove', () => maybeSendMove(now));
@@ -14731,7 +14734,7 @@ export function startWorld(net: WorldNet): void {
   // ============================================================================================
   // `ghost` projectiles are other players' shots, mirrored from a `worldRocket` broadcast — purely
   // cosmetic (they fly and trail but never detonate or deal a blast; the firer owns that).
-  interface Shot { spr: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number; t: number; ghost: boolean; }
+  interface Shot { spr: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number; t: number; ghost: boolean; enemy?: boolean; }
   const rockets: Shot[] = [];
   const bullets: Shot[] = [];
   const cannonballs: Shot[] = []; // broadside cannon fire (naval)
@@ -14848,10 +14851,11 @@ export function startWorld(net: WorldNet): void {
     cannonFireSound();
     mainCam?.shake(140, 0.006);
   }
-  function spawnCannonball(x: number, y: number, a: number, ghost: boolean) {
+  function spawnCannonball(x: number, y: number, a: number, ghost: boolean, enemy = false) {
     const sc = petScene; if (!sc) return;
     const spr = sc.add.image(x, y, 'w-cannonball').setScale(TEXEL * 1.1).setDepth(y + 40);
-    cannonballs.push({ spr, x, y, vx: Math.cos(a) * CANNON_SPEED, vy: Math.sin(a) * CANNON_SPEED, t: 0, ghost });
+    if (enemy) spr.setTint(0x3a1a1a);
+    cannonballs.push({ spr, x, y, vx: Math.cos(a) * CANNON_SPEED, vy: Math.sin(a) * CANNON_SPEED, t: 0, ghost, enemy });
   }
   function updateCannonballs(dt: number) {
     const sc = petScene; if (!sc) return;
@@ -14864,7 +14868,19 @@ export function startWorld(net: WorldNet): void {
       const arc = 1 + Math.sin(Math.min(1, cb.t / CANNON_LIFE) * Math.PI) * 0.5;
       cb.spr.setPosition(cb.x, cb.y).setScale(TEXEL * 1.1 * arc).setDepth(cb.y + 40);
       const spent = cb.t >= CANNON_LIFE;
+      // ENEMY-fired ball: purely local — it only threatens YOUR hull, and it splashes otherwise.
+      if (cb.enemy) {
+        const onMe = shipSpec && boating && Math.hypot(selfX - cb.x, selfY - cb.y) < SHIP_LEN * 0.4;
+        if (onMe) { spawnExplosion(cb.x, cb.y, 0.8); damageMyShip(); cb.spr.destroy(); cannonballs.splice(i, 1); continue; }
+        if (spent) { spawnSplash(cb.x, cb.y); cb.spr.destroy(); cannonballs.splice(i, 1); }
+        continue;
+      }
       if (cb.ghost) { if (spent) { spawnSplash(cb.x, cb.y); cb.spr.destroy(); cannonballs.splice(i, 1); } continue; }
+      // OUR ball: a hostile NPC ship first (local kill), then any networked body/mob (broadcast blast).
+      const foe = enemyShipAt(cb.x, cb.y);
+      if (foe) {
+        spawnExplosion(cb.x, cb.y, 0.8); damageEnemyShip(foe); cb.spr.destroy(); cannonballs.splice(i, 1); continue;
+      }
       const target = hitsBody(cb.x, cb.y, now) || mobAt(cb.x, cb.y) || raidBossAt(cb.x, cb.y);
       if (target) {
         spawnExplosion(cb.x, cb.y, 0.8);
@@ -14911,6 +14927,119 @@ export function startWorld(net: WorldNet): void {
     net.seaChest(is.id);
     tone(660, 0.1, 'square', 0.05, 300);
     flashHelp(`🏴‍☠️ Prying open ${is.name}…`);
+  }
+
+  // --- ⚔️ hostile NPC ships -----------------------------------------------------------------------
+  // Client-local pirate raiders roaming each corner sea (like the town's client-simulated townsfolk,
+  // not the server-authoritative biome MMO mobs). They wander until a player ship sails into range,
+  // then give chase, wheel to present a broadside, and open fire — health bar over each hull. Their
+  // cannonballs only threaten YOUR hull (local); sink one and the server pays a bounty.
+  interface EnemyShip {
+    hull: Phaser.GameObjects.Image; flag: Phaser.GameObjects.Text; bar: Phaser.GameObjects.Graphics;
+    sea: WaterRegion; spec: ShipSpec;
+    x: number; y: number; a: number; vx: number; vy: number;
+    hp: number; maxHp: number; nextShotAt: number; hitUntil: number; wanderA: number; reA: number;
+  }
+  let enemyShips: EnemyShip[] = [];
+  const ENEMY_CLASSES = ['ship-brig', 'ship-sloop', 'ship-frigate'];
+  const ENEMY_AGGRO = 1500, ENEMY_STANDOFF = 380, ENEMY_FIRE_RANGE = 640, ENEMY_SEE = 1700;
+  function spawnEnemyFleet(sc: Phaser.Scene) {
+    for (const e of enemyShips) { e.hull.destroy(); e.flag.destroy(); e.bar.destroy(); }
+    enemyShips = [];
+    for (const w of SEA) for (let i = 0; i < 2; i++) spawnEnemyShip(sc, w);
+  }
+  function spawnEnemyShip(sc: Phaser.Scene, w: WaterRegion) {
+    const spec = shipById(ENEMY_CLASSES[Math.floor(Math.random() * ENEMY_CLASSES.length)]) ?? SHIPS[0];
+    let x = w.cx, y = w.cy;
+    for (let tries = 0; tries < 24; tries++) {
+      x = w.rect.x + SEA_SHORE + Math.random() * (w.rect.w - SEA_SHORE * 2);
+      y = w.rect.y + SEA_SHORE + Math.random() * (w.rect.h - SEA_SHORE * 2);
+      if (!shoveOffIslands(x, y, SHIP_WID).hit) break;
+    }
+    const hull = sc.add.image(x, y, `w-${spec.id}`).setScale(TEXEL).setTint(0xc98a8a).setDepth(y);
+    const flag = sc.add.text(x, y - 40, '☠️', { fontSize: '16px' }).setOrigin(0.5, 1).setDepth(y + 400);
+    const bar = sc.add.graphics().setDepth(y + 2);
+    enemyShips.push({ hull, flag, bar, sea: w, spec, x, y, a: Math.random() * Math.PI * 2, vx: 0, vy: 0,
+      hp: spec.hp, maxHp: spec.hp, nextShotAt: 0, hitUntil: 0, wanderA: Math.random() * Math.PI * 2, reA: 0 });
+  }
+  function enemyShipAt(x: number, y: number): EnemyShip | null {
+    for (const e of enemyShips) if (Math.hypot(e.x - x, e.y - y) < SHIP_LEN * 0.44) return e;
+    return null;
+  }
+  function damageEnemyShip(e: EnemyShip) {
+    e.hp--; e.hitUntil = performance.now() + 120;
+    spawnSparks(e.x, e.y, 0xffb020);
+    tone(150, 0.1, 'square', 0.04, 90);
+    if (e.hp <= 0) sinkEnemyShip(e);
+  }
+  function sinkEnemyShip(e: EnemyShip) {
+    spawnExplosion(e.x, e.y, 1.4); spawnSplash(e.x, e.y);
+    e.hull.destroy(); e.flag.destroy(); e.bar.destroy();
+    enemyShips = enemyShips.filter((s) => s !== e);
+    net.seaBounty();
+    tone(90, 0.5, 'sawtooth', 0.06, 60);
+    const w = e.sea;
+    window.setTimeout(() => { if (petScene) spawnEnemyShip(petScene, w); }, 14000); // the sea restocks its raiders
+  }
+  function fireEnemyBroadside(e: EnemyShip, toPlayer: number) {
+    const s = angDelta(e.a, toPlayer) > 0 ? 1 : -1;                 // fire the beam facing the player
+    const hx = Math.cos(e.a), hy = Math.sin(e.a), bx = -hy * s, by = hx * s, dir = Math.atan2(by, bx);
+    for (let k = 0; k < e.spec.guns; k++) {
+      const t = e.spec.guns === 1 ? 0 : (k / (e.spec.guns - 1) - 0.5);
+      const along = t * SHIP_LEN * 0.78;
+      const mx = e.x + hx * along + bx * (SHIP_WID * 0.5 + 6), my = e.y + hy * along + by * (SHIP_WID * 0.5 + 6);
+      spawnCannonball(mx, my, dir + (Math.random() - 0.5) * 2 * CANNON_SPREAD, false, true);
+      spawnMuzzleSmoke(mx, my);
+    }
+    if (Math.hypot(selfX - e.x, selfY - e.y) < 900) cannonFireSound();
+  }
+  function updateEnemyShips(dt: number) {
+    if (inInterior || inDungeon) return;
+    const now = performance.now();
+    const huntable = boating && !!shipSpec; // they only hunt a player who's actually at sea in a ship
+    for (const e of enemyShips) {
+      const dP = Math.hypot(selfX - e.x, selfY - e.y);
+      const aggro = huntable && dP < ENEMY_AGGRO;
+      let desired: number;
+      if (aggro) {
+        const toP = Math.atan2(selfY - e.y, selfX - e.x);
+        if (dP > ENEMY_STANDOFF * 1.3) desired = toP;                 // close the distance
+        else if (dP < ENEMY_STANDOFF * 0.7) desired = toP + Math.PI;  // too close — peel off
+        else desired = toP + Math.PI / 2;                             // circle to present a beam
+      } else {
+        if (now >= e.reA) { e.wanderA += (Math.random() - 0.5) * 1.4; e.reA = now + 1500 + Math.random() * 2200; }
+        desired = e.wanderA;
+      }
+      e.a += clamp(angDelta(e.a, desired), -e.spec.turn * dt, e.spec.turn * dt);
+      const sp = e.spec.speed * (aggro ? 0.7 : 0.4);
+      e.vx += (Math.cos(e.a) * sp - e.vx) * Math.min(1, dt * 1.6);
+      e.vy += (Math.sin(e.a) * sp - e.vy) * Math.min(1, dt * 1.6);
+      let nx = e.x + e.vx * dt, ny = e.y + e.vy * dt;
+      const minx = e.sea.rect.x + SEA_SHORE, maxx = e.sea.rect.x + e.sea.rect.w - SEA_SHORE;
+      const miny = e.sea.rect.y + SEA_SHORE, maxy = e.sea.rect.y + e.sea.rect.h - SEA_SHORE;
+      if (nx < minx || nx > maxx) { e.wanderA = Math.PI - e.wanderA; nx = clamp(nx, minx, maxx); }
+      if (ny < miny || ny > maxy) { e.wanderA = -e.wanderA; ny = clamp(ny, miny, maxy); }
+      const sh = shoveOffIslands(nx, ny, SHIP_WID * 0.5);
+      if (sh.hit) { nx = sh.x; ny = sh.y; e.wanderA += Math.PI / 2; }
+      e.x = nx; e.y = ny;
+      if (aggro && dP < ENEMY_FIRE_RANGE && now >= e.nextShotAt) {
+        const toP = Math.atan2(selfY - e.y, selfX - e.x), rel = Math.abs(angDelta(e.a, toP));
+        if (rel > 0.7 && rel < Math.PI - 0.7) { fireEnemyBroadside(e, toP); e.nextShotAt = now + 1700 + Math.random() * 800; }
+      }
+      // render + health bar
+      e.hull.setPosition(e.x, e.y).setRotation(e.a).setDepth(e.y);
+      if (now < e.hitUntil) e.hull.setTintFill(0xffffff); else e.hull.setTint(0xc98a8a);
+      const seen = dP < ENEMY_SEE;
+      e.flag.setPosition(e.x, e.y - 40).setVisible(seen).setDepth(e.y + 400); // fixed offset (rotation-agnostic)
+      if (seen) {
+        e.bar.setVisible(true).clear();
+        const frac = Math.max(0, e.hp / e.maxHp), bw = 46, bx = e.x - bw / 2, by = e.y - 54;
+        e.bar.fillStyle(0x000000, 0.5); e.bar.fillRect(bx - 2, by - 2, bw + 4, 7);
+        e.bar.fillStyle(0x2a0c0c, 1); e.bar.fillRect(bx, by, bw, 4);
+        e.bar.fillStyle(frac > 0.5 ? 0x5ae05a : frac > 0.25 ? 0xffd23f : 0xff3a3a, 1); e.bar.fillRect(bx, by, bw * frac, 4);
+        e.bar.setDepth(e.y + 2);
+      } else if (e.bar.visible) e.bar.setVisible(false);
+    }
   }
 
   // A remote player's shot (from a `worldRocket` broadcast) — mirror it onto our screen. Cosmetic

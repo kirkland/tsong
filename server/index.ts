@@ -174,6 +174,7 @@ const TRACKED_MSG: Partial<Record<ClientMsg['type'], string>> = {
   dungeonChest: 'game.dungeon.chest',
   dungeonWin: 'game.dungeon.fight',
   seaChest: 'world.plunder',
+  seaBounty: 'world.seabounty',
   // casino — one event per bet/roll/spin
   roulette: 'casino.roulette',
   bjBet: 'casino.blackjack',
@@ -729,6 +730,9 @@ wss.on('connection', (ws: WebSocket, req) => {
         break;
       case 'seaChest':
         if (typeof msg.chest === 'string') lobby.seaChest(ws, msg.chest);
+        break;
+      case 'seaBounty':
+        lobby.seaBounty(ws);
         break;
       case 'worldLeave':
         lobby.worldLeave(ws);
