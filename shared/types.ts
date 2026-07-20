@@ -555,6 +555,58 @@ export function shipById(id: string | null | undefined): ShipSpec | null {
   return SHIPS.find((s) => s.id === id) ?? null;
 }
 
+// --- Sea islands (naval treasure) --------------------------------------------------------
+// Round sandbars scattered across the four corner seas, each with a buried treasure chest. Sail
+// your ship up alongside one and plunder it (Ruins-chest rules: the server pays out its coins once
+// per account and remembers it forever, so a looted island stays looted). Coords sit well inside
+// the sea rectangles (see SEA_RECTS in client/world.ts). `r` is the beach radius ships shove off.
+// A `feature` is a decorative prop (a landmark) built on the island; `quip` (if set) plants a
+// marooned character there who mutters those lines from a floating bubble — the "NPCs here and
+// there." Coords are spread across the four vast corner seas to reward exploring every direction.
+export type SeaFeature =
+  | 'skull' | 'volcano' | 'tiki' | 'tikibar' | 'wreck' | 'kraken' | 'wilson' | 'ducks' | 'snowman'
+  | 'monolith' | 'cannon' | 'mermaid' | 'castaway' | 'rum' | 'bottle' | 'flamingo' | 'xmarks' | 'party';
+export interface SeaIsland {
+  id: string; x: number; y: number; r: number; name: string; coins: number;
+  feature?: SeaFeature;
+  quip?: readonly string[];
+}
+export const SEA_ISLANDS: readonly SeaIsland[] = [
+  // --- NW sea (the vast north-west) ---
+  { id: 'nw-skull',   x: -2400,  y: -1400, r: 250, name: 'Skull Cove',        coins: 6000,  feature: 'skull' },
+  { id: 'nw-cast',    x: -5800,  y: -850,  r: 230, name: 'Castaway Key',      coins: 8000,  feature: 'castaway',
+    quip: ['Six years on this rock. SIX.', "You have a BOAT. Take me — no? …fine.", "I've named every crab. That one's Gerald.", 'Is it still Tuesday out there?', 'I would trade my soul for a sandwich.'] },
+  { id: 'nw-volcano', x: -9400,  y: -1900, r: 280, name: 'Mount Kaboom',      coins: 13000, feature: 'volcano' },
+  { id: 'nw-wilson',  x: -12900, y: -950,  r: 220, name: 'HELP Island',       coins: 5000,  feature: 'wilson',
+    quip: ['WILSON! …oh. You\'re real.', 'Do NOT touch Wilson.', 'Wilson says hi. Wilson says a lot, actually.'] },
+  { id: 'nw-tiki',    x: -16400, y: -1850, r: 260, name: 'Tiki Hollow',       coins: 14000, feature: 'tiki' },
+  { id: 'nw-ducks',   x: -19900, y: -1050, r: 240, name: 'Rubber Duck Reef',  coins: 7000,  feature: 'ducks' },
+  { id: 'nw-mono',    x: -22700, y: -1850, r: 250, name: 'The Monolith',      coins: 16000, feature: 'monolith' },
+  // --- SW sea (the vast south-west) ---
+  { id: 'sw-mermaid', x: -2600,  y: 3200,  r: 250, name: 'Mermaid Bar',       coins: 9000,  feature: 'mermaid',
+    quip: ['A tail? Rude to ask. But yes.', "The bar's dry. It's a pun. Get it? …get out.", 'I sank three ships this morning. Bad singing. Mine.'] },
+  { id: 'sw-party',   x: -6200,  y: 5100,  r: 250, name: 'Rave Rock',         coins: 8500,  feature: 'party' },
+  { id: 'sw-snowman', x: -9800,  y: 3500,  r: 230, name: 'Wrong Beach',       coins: 7500,  feature: 'snowman',
+    quip: ["I'm not supposed to be here.", '*dripping* This is fine. This is FINE.'] },
+  { id: 'sw-wreck',   x: -13300, y: 5300,  r: 270, name: 'Wreckers Reef',     coins: 13000, feature: 'wreck' },
+  { id: 'sw-cannon',  x: -16800, y: 3400,  r: 240, name: 'Cannon Cay',        coins: 10000, feature: 'cannon' },
+  { id: 'sw-kraken',  x: -20400, y: 5200,  r: 280, name: 'Kraken Deep',       coins: 17000, feature: 'kraken' },
+  { id: 'sw-rum',     x: -22900, y: 3400,  r: 240, name: 'Rum Runner Rock',   coins: 8000,  feature: 'rum',
+    quip: ['*hic* welcome to my ROCK', 'The rum went where? The rum is GONE?', "One more barrel won't— *hic* —hurt"] },
+  // --- NE sea (east, north of the Frostreach) ---
+  { id: 'ne-palm',    x: 6800,   y: -1400, r: 230, name: 'Palm Isle',         coins: 7000 },
+  { id: 'ne-flam',    x: 10000,  y: -900,  r: 230, name: 'Flamingo Flats',    coins: 8000,  feature: 'flamingo' },
+  { id: 'ne-bottle',  x: 13000,  y: -1850, r: 250, name: 'Message in a Bottle', coins: 9000, feature: 'bottle' },
+  // --- SE sea (east, south of the Frostreach) ---
+  { id: 'se-tikibar', x: 6800,   y: 3000,  r: 260, name: 'The Salty Coconut', coins: 5000,  feature: 'tikibar' },
+  { id: 'se-xmarks',  x: 10200,  y: 5200,  r: 250, name: "X Marks the Spot",  coins: 15000, feature: 'xmarks' },
+  { id: 'se-gold',    x: 13000,  y: 3600,  r: 270, name: 'Gold Doubloon Isle', coins: 22000, feature: 'skull' },
+] as const;
+export function seaIslandByChest(id: string | null | undefined): SeaIsland | null {
+  if (!id) return null;
+  return SEA_ISLANDS.find((s) => s.id === id) ?? null;
+}
+
 // --- Car colors ---------------------------------------------------------------------------
 // An optional repaint layered over whichever car you've equipped (slot 'carcolor', separate
 // from the 'car' slot itself) — body/accent here override the CarSpec's defaults when equipped.
@@ -1291,6 +1343,7 @@ export type ClientMsg =
   | { type: 'retroVote'; id: number } // toggle your +1 on a sticky (seated only)
   | { type: 'retroDelete'; id: number } // peel off a sticky you authored
   | { type: 'retroWrap' } // wrap the retro: summary to town chat, board cleared (seated only)
+  | { type: 'seaChest'; chest: string } // plunder a sea island's treasure chest (server pays its coins once per account)
   // --- Robville land (the suburban neighborhood) ---
   | { type: 'landReq' } // request the current Robville parcel ownership/market book
   | { type: 'landBuyBank'; id: string } // buy an empty lot from the bank for PARCEL_PRICE (subject to BANK_PARCEL_CAP)
@@ -1883,6 +1936,8 @@ export type ServerMsg =
   | { type: 'dungeonChestOpened'; chest: string; coins: number; potions: number; spin?: boolean; prize?: string; prizes?: string[] } // a chest open was accepted (prize/prizes = display names of cosmetic rewards)
   | { type: 'dungeonSpin'; chest: string; segment: number; reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string } } // a spin chest: play the wheel, reward goes to run loot
   | { type: 'dungeonPurse'; coins: number } // current run-purse total (paid out only on a clean escape)
+  | { type: 'seaChests'; opened: string[] } // island treasure chests this account has already plundered (sent on world enter)
+  | { type: 'seaChestOpened'; chest: string; coins: number } // a sea chest was plundered → coins paid, mark it emptied
   | LandMsg
   | WorldSayMsg
   | WorldBoomMsg

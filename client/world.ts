@@ -55,6 +55,7 @@ import {
   ShipSpec,
   shipById,
   SHIPS,
+  SEA_ISLANDS,
   carColorById,
   petById,
   type PetKind,
@@ -282,6 +283,7 @@ export interface WorldNet {
   claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
   dungeonSync(): void;             // entering the Ruins → ask which chests we've opened
   dungeonChest(chest: string, captured?: boolean): void; // open a chest ('B1:col,row') → server pays coins / grants prize (once). captured=true → a monster box caught (grant the pet)
+  seaChest(chest: string): void;   // plunder a sea-island treasure chest → server pays its coins (once per account)
   dungeonWin(floor: string, tier: number): void; // won an encounter → adds a TIER-ranged amount to the run purse
   dungeonTakeKey(): void; // took the key from the dying B3 adventurer (server marks the run-key)
   dungeonExit(escaped: boolean): void; // left the Ruins (escaped → server pays the run purse from the House)
@@ -355,6 +357,8 @@ interface Controller {
   reenter(): void; // re-send worldEnter after a socket reconnect (server forgot us on drop)
   dungeonChests(opened: string[]): void;                          // server's list of chests we've opened
   chestAccepted(chest: string, coins: number, potions: number, spin?: boolean, prize?: string, prizes?: string[]): void; // server accepted a chest open (prize/prizes = cosmetic names)
+  seaChests(opened: string[]): void;                              // island treasure chests we've already plundered
+  seaChestOpened(chest: string, coins: number): void;             // a sea chest paid out → mark it emptied + celebrate
   dungeonSpinLoot(reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string }): void; // a spin chest's reward → run loot
   dungeonPurse(coins: number): void;                              // current run-purse total from the server
   feedEloProfile(msg: EloProfileMsg): void;         // server's answer to an eloProfileReq fired from the Hall of Fame
@@ -426,6 +430,16 @@ export function feedWorld(avatars: WorldAvatar[]): void {
 /** The server's list of dungeon chests this player has already opened (reply to dungeonSync). */
 export function feedDungeonChests(opened: string[]): void {
   controller?.dungeonChests(opened);
+}
+
+/** The island treasure chests this account has already plundered (sent on world enter). */
+export function feedSeaChests(opened: string[]): void {
+  controller?.seaChests(opened);
+}
+
+/** A sea-island chest paid out its coins → mark it emptied + celebrate. */
+export function feedSeaChestOpened(chest: string, coins: number): void {
+  controller?.seaChestOpened(chest, coins);
 }
 
 /** The wallet changed (buy/equip/daily-spin settled) — re-render the shop dialog if it's open. */
@@ -2728,10 +2742,11 @@ export function startWorld(net: WorldNet): void {
     { x: WORLD.w,   y: WORLD.h, w: EAST.w,   h: SOUTH.h },  // SE
   ];
   const SEA: WaterRegion[] = SEA_RECTS.map((r) => ({ rect: r, cx: r.x + r.w / 2, cy: r.y + r.h / 2, rx: r.w / 2, ry: r.h / 2, sea: true }));
-  // Islands dotted around the seas — round sandbars with a palm and a treasure chest (Phase 3 fills
-  // this in). Ships shove off their beaches; you disembark onto them to loot the chest.
-  interface Island { x: number; y: number; r: number; name: string; }
-  const ISLANDS: Island[] = [];
+  // Islands dotted around the seas — round sandbars, each with a palm and a buried treasure chest.
+  // Ships shove off their beaches; sail up alongside one and plunder the chest for coins.
+  interface Island { id: string; x: number; y: number; r: number; name: string; coins: number; feature?: string; quip?: readonly string[]; }
+  const ISLANDS: Island[] = SEA_ISLANDS.map((s) => ({ id: s.id, x: s.x, y: s.y, r: s.r, name: s.name, coins: s.coins, feature: s.feature, quip: s.quip }));
+  const seaChestsOpened = new Set<string>(); // island ids whose treasure we've already plundered
   // Push a point out of the first island beach it overlaps (circle pushout). margin = the hull/foot
   // half-width kept clear of the sand. No-op until ISLANDS is populated.
   function shoveOffIslands(x: number, y: number, margin: number): { x: number; y: number; hit: boolean } {
@@ -2825,6 +2840,8 @@ export function startWorld(net: WorldNet): void {
   const dungeonChestSprites: Record<string, Phaser.GameObjects.Image> = {}; // 'c,r' → sprite (to swap on open)
   const dungeonLockSprites: Record<string, Phaser.GameObjects.Image> = {};   // 'c,r' → locked-door sprite (to remove on unlock)
   let nearChestCell: { c: number; r: number } | null = null; // unopened chest within reach (→ Open prompt)
+  let nearIslandChest: Island | null = null; // an unplundered sea-island chest a ship is alongside (→ Plunder prompt)
+  let nearTikiBar: Island | null = null;     // the tiki-bar island a ship is alongside (→ order drinks)
   let nearStairs: { dir: 'down' | 'up'; to: string } | null = null; // a stair tile within reach (→ descend/ascend)
   let nearBossStairs = false; // standing on the deepest floor's '>' (the boss stairwell — sealed until the boss floor exists)
   let nearLockedDoor: { c: number; r: number } | null = null; // an 'L' locked door within reach (→ "needs a key")
@@ -3139,6 +3156,46 @@ export function startWorld(net: WorldNet): void {
   driftBtn.addEventListener('pointerup', releaseDrift);
   driftBtn.addEventListener('pointercancel', releaseDrift);
   driftBtn.addEventListener('pointerleave', releaseDrift);
+
+  // 🪗 Sea-shanty jukebox — only shown while crewing a ship. Tapping cycles off → the three Black-Flag
+  // shanties → off, looping the chosen one. (Downloaded from Matt's collection; a proper crew sings.)
+  const SHANTIES: { src: string; name: string }[] = [
+    { src: '/shanty-drunken-sailor.mp3', name: 'Drunken Sailor' },
+    { src: '/shanty-leave-her-johnny.mp3', name: 'Leave Her Johnny' },
+    { src: '/shanty-susianah.mp3', name: 'Way Me Susianah' },
+  ];
+  let shantyMusic: HTMLAudioElement | null = null;
+  let shantyIdx = -1; // -1 = silent
+  function setShanty(idx: number) {
+    if (shantyMusic) { shantyMusic.pause(); shantyMusic = null; }
+    shantyIdx = idx;
+    if (idx < 0) return;
+    const s = SHANTIES[idx];
+    shantyMusic = new Audio(s.src);
+    shantyMusic.loop = true; shantyMusic.volume = 0.55; shantyMusic.muted = net.muted();
+    shantyMusic.play().catch(() => { /* needs a gesture; the tap that got here IS one */ });
+    flashHelp(`🪗 Shanty: ${s.name}`);
+  }
+  function cycleShanty() {
+    unlockAudio();
+    setShanty(shantyIdx + 1 >= SHANTIES.length ? -1 : shantyIdx + 1);
+    updateShantyBtn();
+  }
+  function stopShanty() { if (shantyIdx >= 0) setShanty(-1); updateShantyBtn(); }
+  const shantyBtn = document.createElement('button');
+  shantyBtn.type = 'button';
+  shantyBtn.textContent = '🪗';
+  shantyBtn.style.cssText =
+    'position:absolute;right:20px;bottom:84px;display:none;pointer-events:auto;cursor:pointer;z-index:5;' +
+    'width:86px;height:86px;border-radius:50%;background:#24406b;color:#dfeefc;border:2px solid #4f79b0;' +
+    'font-size:30px;touch-action:none;user-select:none;box-shadow:0 4px 14px #0008;';
+  overlay.appendChild(shantyBtn);
+  shantyBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); cycleShanty(); });
+  function updateShantyBtn() {
+    shantyBtn.style.display = shipSpec ? 'block' : 'none';
+    shantyBtn.style.background = shantyIdx >= 0 ? '#2f6aa8' : '#24406b';
+    shantyBtn.textContent = shantyIdx >= 0 ? '🎵' : '🪗';
+  }
 
   // Fire button (bottom-right, above the drift button) for touch — keyboard players hold R. It's a
   // HOLD button, not a tap: the update loop pulls the trigger every frame while it's down, so the
@@ -3994,6 +4051,8 @@ export function startWorld(net: WorldNet): void {
     driftBtn.style.display = boating ? 'none' : 'block'; // drift behind the wheel, sprint on foot
     driftBtn.textContent = driving ? '🌀 DRIFT' : '🏃 SPRINT';
     if (!driving) { handbrake = false; driftBtn.style.background = '#4a2a6b'; }
+    if (!shipSpec && shantyIdx >= 0) stopShanty(); // off the ship → the crew stops singing
+    updateShantyBtn();
     updateHelp();
   }
 
@@ -9515,6 +9574,8 @@ export function startWorld(net: WorldNet): void {
     if (puttCharging) { strikePutt(); return; } // mid-swing: the button IS the putter
     if (golfCharging) { strikeGolfSwing(); return; } // mid-swing on the Course: same idea
     if (hockeyMode !== 'off') { hockeyDash(); return; } // mid-match: the button IS the dash/shot
+    if (nearTikiBar) { openTikiBar(nearTikiBar); return; }             // sail up to the tiki bar
+    if (nearIslandChest) { plunderIsland(nearIslandChest); return; }   // sail up to a treasure island
     if (nearNetizen) {
       const a = others.find((o) => o.id === nearNetizen);
       if (!a) return;
@@ -9588,6 +9649,30 @@ export function startWorld(net: WorldNet): void {
     ];
     openDialog('🍺 Barkeep', quips[Math.floor(Math.random() * quips.length)], [
       { label: '🍺 Buy a beer (20🪙)', onPick: () => { closeDialog(); net.buyBeer(); showToast('🍺 *glug glug glug*'); } },
+    ]);
+  }
+
+  // The Salty Coconut — a tiki bar on its own island. Same drink/drunk plumbing as the Tavern
+  // (net.buyBeer), so tropical rounds get you sloshed — and a drunk captain sails a weaving ship.
+  function openTikiBar(is: Island) {
+    if (dialogOpen || talkOpen) return;
+    keys.clear(); joyActive = false;
+    if (net.drunkLevel() >= 6) {
+      openDialog('🍹 ' + is.name, '"Whoa there, sailor. The sea\'s spinnin\' enough without me helpin\'. Sleep it off on the sand."', []);
+      return;
+    }
+    const quips = [
+      '"Ahoy! Only bar for a thousand leagues. Lucky you."',
+      '"Fresh coconuts, questionable rum. This is paradise, technically."',
+      '"You sailed all the way out here? Respect. First one\'s still full price though."',
+      '"Drinkin\' and sailin\' don\'t mix. That\'s what makes it fun."',
+    ];
+    const drink = (emoji: string, sfx: string) => { closeDialog(); net.buyBeer(); showToast(`${emoji} ${sfx}`); };
+    openDialog('🍹 ' + is.name, quips[Math.floor(Math.random() * quips.length)], [
+      { label: '🍹 Painkiller (20🪙)', onPick: () => drink('🍹', '*tropical glug*') },
+      { label: '🥥 Rum Coconut (20🪙)', onPick: () => drink('🥥', '*thwack… slurp*') },
+      { label: '🍸 Grog (20🪙)', onPick: () => drink('🍸', '*the good burn*') },
+      ...(seaChestsOpened.has(is.id) ? [] : [{ label: '🏴‍☠️ Plunder the chest behind the bar', onPick: () => { closeDialog(); plunderIsland(is); } }]),
     ]);
   }
 
@@ -10293,6 +10378,18 @@ export function startWorld(net: WorldNet): void {
         if (d < pD) { pD = d; nearParcel = p.id; }
       }
     }
+    // A treasure island your ship is alongside → plunder prompt (or, at the tiki bar, the drinks
+    // menu). Only while sailing. The tiki bar stays interactable even after its chest is plundered.
+    nearIslandChest = null; nearTikiBar = null;
+    if (boating && shipSpec) {
+      let iD = Infinity, tD = Infinity;
+      for (const is of ISLANDS) {
+        const d = Math.hypot(is.x - selfX, is.y - selfY);
+        if (d >= is.r + SHIP_WID + 70) continue;
+        if (is.feature === 'tikibar') { if (d < tD) { tD = d; nearTikiBar = is; } continue; }
+        if (!seaChestsOpened.has(is.id) && d < iD) { iD = d; nearIslandChest = is; }
+      }
+    }
     if (best) {
       const b = WORLD_BUILDINGS.find((x) => x.id === best)!;
       prompt.textContent = labelFor(b.kind);
@@ -10342,6 +10439,10 @@ export function startWorld(net: WorldNet): void {
       prompt.textContent = nearStairs.dir === 'down' ? `⬇️ Descend to ${nearStairs.to}` : `⬆️ Climb up to ${nearStairs.to}`;
     } else if (nearBossStairs) {
       prompt.textContent = '⬇️ A stairwell into the black';
+    } else if (nearTikiBar) {
+      prompt.textContent = `🍹 ${nearTikiBar.name} — order a drink`;
+    } else if (nearIslandChest) {
+      prompt.textContent = `🏴‍☠️ Plunder ${nearIslandChest.name}`;
     } else if (nearChestCell) {
       prompt.textContent = '📦 Open the chest';
     } else if (nearLockedDoor) {
@@ -10363,7 +10464,7 @@ export function startWorld(net: WorldNet): void {
     } else if (nearBiomeSpot) {
       prompt.textContent = nearBiomeSpot;
     }
-    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || seatedAt || nearOfficeChair || nearOfficeSpot || nearClubSpot || nearTavernMorris || nearClubDoor || nearGolfTee || nearGolfBall || nearSwan || nearBook || nearCasinoGame || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDungeonImp2 || nearDyingMan || nearRob || nearJailed || nearParcel || nearBiomeSpot) && !dialogOpen && !talkOpen ? 'block' : 'none';
+    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || seatedAt || nearOfficeChair || nearOfficeSpot || nearClubSpot || nearTavernMorris || nearClubDoor || nearGolfTee || nearGolfBall || nearSwan || nearBook || nearCasinoGame || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDungeonImp2 || nearDyingMan || nearRob || nearJailed || nearParcel || nearBiomeSpot || nearIslandChest || nearTikiBar) && !dialogOpen && !talkOpen ? 'block' : 'none';
     // Boat affordance: dock while afloat, or board when standing by the water with a boat.
     const board = boating ? null : boardable();
     const boatable = boating || !!board;
@@ -11904,6 +12005,81 @@ export function startWorld(net: WorldNet): void {
       px(2, 1, 4, 6, 0x2a2a30); px(1, 2, 6, 4, 0x2a2a30);
       px(2, 2, 3, 2, 0x4a4a52); px(2, 2, 1, 1, 0x9a9aa2); // highlight
       g.generateTexture('w-cannonball', 8, 8);
+    }
+
+    // --- ISLAND LANDMARKS — little pixel-art props that give each treasure island a personality.
+    //     All face-on (not top-down), planted origin at their base. ---
+    {
+      // Volcano (26×24): a grey-brown cone with a dark crater and lava streaks.
+      g.clear();
+      px(4, 20, 18, 4, 0x5a4632); px(6, 14, 14, 7, 0x6b5540); px(9, 8, 8, 7, 0x7a6248);   // cone
+      px(9, 6, 8, 3, 0x2a2018);                                                              // crater mouth
+      px(10, 4, 2, 3, 0xff6a1a); px(13, 3, 2, 4, 0xffb020); px(15, 5, 2, 2, 0xff6a1a);       // lava spurts
+      px(11, 9, 2, 11, 0xd23b1a); px(14, 12, 1, 8, 0xff7a2a);                                 // lava down the side
+      g.generateTexture('w-isle-volcano', 26, 24);
+      // Tiki totem (12×24): stacked carved heads.
+      g.clear();
+      px(3, 2, 6, 22, 0x6a4a28); px(2, 4, 8, 4, 0x7a5630); px(2, 12, 8, 4, 0x7a5630);         // trunk + head bands
+      px(3, 5, 2, 2, 0x140d06); px(7, 5, 2, 2, 0x140d06); px(4, 8, 4, 1, 0x140d06);            // top face
+      px(3, 13, 2, 2, 0x140d06); px(7, 13, 2, 2, 0x140d06); px(4, 16, 4, 1, 0xd23b1a);         // bottom face + mouth
+      g.generateTexture('w-isle-tiki', 12, 24);
+      // Thatched tiki BAR hut (30×22): bamboo counter under a big palm-thatch roof.
+      g.clear();
+      px(2, 8, 26, 3, 0x8a6a3a); px(3, 11, 24, 8, 0xb9905a); px(3, 11, 24, 1, 0x8a6a3a);       // counter + posts base
+      px(5, 12, 3, 7, 0x8a6a3a); px(22, 12, 3, 7, 0x8a6a3a);                                    // support posts
+      px(0, 4, 30, 5, 0x4f7a3a); px(2, 2, 26, 3, 0x5f8f45); px(6, 0, 18, 3, 0x6fa050);          // thatch roof (layered)
+      px(1, 8, 30, 1, 0x3a5a2a);                                                                 // roof shadow
+      px(10, 13, 2, 3, 0xff5ea6); px(14, 13, 2, 3, 0x39d0ff); px(18, 13, 2, 3, 0xffd23f);        // colourful bottles on the bar
+      g.generateTexture('w-isle-tikibar', 30, 22);
+      // Shipwreck (32×20): a broken hull tilted on the sand with a snapped mast.
+      g.clear();
+      px(3, 12, 24, 6, 0x5a3a22); px(3, 12, 24, 1, 0x6f4a2a); px(5, 10, 18, 2, 0x4a2f1c);        // hull
+      px(2, 13, 1, 4, 0x4a2f1c); px(27, 11, 3, 5, 0x5a3a22);                                     // stern + bow stump
+      px(12, 2, 2, 10, 0x6f4a2a); px(9, 4, 8, 1, 0x8a6a3a); px(10, 3, 5, 4, 0xcfc3a8);           // snapped mast + torn sail
+      g.generateTexture('w-isle-wreck', 32, 20);
+      // Kraken tentacle (18×28): a green limb curling up out of the water, suckers down one side.
+      g.clear();
+      px(6, 22, 6, 6, 0x2f6a4a); px(5, 15, 6, 8, 0x3a7d56); px(6, 8, 6, 8, 0x2f6a4a);            // rising limb
+      px(7, 2, 5, 7, 0x3a7d56); px(9, 0, 4, 4, 0x2f6a4a);                                         // curling tip
+      px(6, 18, 1, 1, 0xbfe0c8); px(6, 13, 1, 1, 0xbfe0c8); px(7, 9, 1, 1, 0xbfe0c8); px(8, 5, 1, 1, 0xbfe0c8); // suckers
+      g.generateTexture('w-isle-tentacle', 18, 28);
+      // Wilson: a stake with a face-painted volleyball (10×22).
+      g.clear();
+      px(4, 8, 2, 14, 0x8a6a3a);                                                                 // the stake
+      px(2, 0, 6, 8, 0xe8e0d0); px(1, 2, 8, 4, 0xe8e0d0);                                         // ball
+      px(3, 2, 1, 2, 0x8a2a1a); px(6, 2, 1, 2, 0x8a2a1a); px(3, 5, 4, 1, 0x8a2a1a);               // bloody face
+      g.generateTexture('w-isle-wilson', 10, 22);
+      // Cannon on wheels (18×12), facing right.
+      g.clear();
+      px(2, 3, 12, 5, 0x2a2a30); px(13, 4, 4, 3, 0x2a2a30); px(1, 4, 2, 3, 0x141418);            // barrel + breech
+      px(3, 8, 3, 3, 0x3a2a1a); px(9, 8, 3, 3, 0x3a2a1a);                                         // wheels
+      g.generateTexture('w-isle-cannon', 18, 12);
+      // Message in a bottle (20×12), lying on its side with a rolled scroll inside.
+      g.clear();
+      px(2, 3, 14, 6, 0x6fbfd0, 0.85); px(2, 3, 14, 1, 0xbfe8f0); px(16, 4, 3, 4, 0x5a9aa8);      // glass body + neck
+      px(19, 4, 1, 4, 0xd8b46a);                                                                  // cork
+      px(5, 5, 7, 3, 0xe8dcc0); px(5, 5, 7, 1, 0xd8c9a0);                                          // scroll
+      g.generateTexture('w-isle-bottle', 20, 12);
+      // Flamingo (10×20): a pink bird on one leg.
+      g.clear();
+      px(3, 12, 4, 4, 0xff8fb8); px(2, 10, 5, 3, 0xff9ec2);                                        // body
+      px(6, 4, 2, 8, 0xff8fb8); px(6, 2, 3, 3, 0xff9ec2); px(8, 3, 2, 1, 0x1a1a1a);                // neck + head + beak tip
+      px(4, 16, 1, 4, 0xe86a9a);                                                                    // leg
+      g.generateTexture('w-isle-flamingo', 10, 20);
+      // Marooned castaway (12×20): a ragged, bearded sailor. A person, not a prop.
+      g.clear();
+      px(4, 2, 4, 4, 0xe0b48a); px(4, 1, 4, 2, 0x5a4a3a);                                          // head + scruffy hair
+      px(4, 5, 4, 3, 0xcfc3a8);                                                                     // wild beard
+      px(3, 8, 6, 8, 0x8a7a5a); px(3, 8, 6, 1, 0x6f5f45);                                           // ragged tunic
+      px(2, 9, 1, 5, 0xe0b48a); px(9, 9, 1, 5, 0xe0b48a);                                           // arms
+      px(4, 16, 2, 4, 0x4a3a2a); px(6, 16, 2, 4, 0x4a3a2a);                                         // legs
+      g.generateTexture('w-isle-castaway', 12, 20);
+      // Mermaid (14×16): sitting, green tail, hair.
+      g.clear();
+      px(5, 1, 4, 4, 0xe8c49a); px(4, 0, 6, 2, 0xc0392b); px(3, 2, 2, 5, 0xc0392b); px(9, 2, 2, 5, 0xc0392b); // head + red hair
+      px(5, 5, 4, 4, 0xe8c49a);                                                                     // torso
+      px(4, 8, 7, 4, 0x2fae7a); px(3, 11, 9, 3, 0x27946a); px(1, 12, 4, 3, 0x2fae7a); px(9, 12, 4, 3, 0x2fae7a); // tail + fluke
+      g.generateTexture('w-isle-mermaid', 14, 16);
     }
     // --- speech-bubble panel: a rounded rect drawn on a 2D canvas (which anti-aliases properly,
     // unlike Phaser's pixel-art Graphics) and used as a LINEAR-filtered 9-slice. That keeps the
@@ -13997,6 +14173,7 @@ export function startWorld(net: WorldNet): void {
       makeSwamp(sc);
       makeEast(sc);
       makeCornerOceans(sc);
+      makeIslands(sc);
       makeMobs(sc);
       makeRaid(sc);
 
@@ -14157,6 +14334,7 @@ export function startWorld(net: WorldNet): void {
       // them until the next time each track happens to (re)start.
       if (dungeonMusic) dungeonMusic.muted = net.muted();
       if (tavernMusic) tavernMusic.muted = net.muted();
+      if (shantyMusic) shantyMusic.muted = net.muted();
 
       // --- day/night: derive purely from the wall clock so every client's sky matches ---
       {
@@ -14328,7 +14506,7 @@ export function startWorld(net: WorldNet): void {
           const boat = boating ? currentBoatSpec() : null;
           const car = !boating && driving ? myCar() : null;
           if (boat) stepBoat(boat, dt);
-          else if (boating) { boating = false; boatWater = null; shipSpec = null; shipHp = 0; } // lost the boat — bail out of the mode
+          else if (boating) { boating = false; boatWater = null; shipSpec = null; shipHp = 0; stopShanty(); } // lost the boat — bail out of the mode
           else if (car) stepCar(car, dt);
           else stepFoot(dt);
         });
@@ -14717,6 +14895,22 @@ export function startWorld(net: WorldNet): void {
     const sc = petScene; if (!sc || smokePuffs.length >= 120) return;
     smokePuffs.push({ spr: sc.add.image(x, y, 'w-smoke').setScale(0.5).setTint(0xf0f0f0).setAlpha(0.6).setDepth(y + 42),
       t: 0, max: 0.5, vx: (Math.random() - 0.5) * 40, vy: (Math.random() - 0.5) * 40 });
+  }
+  // A fountain of gold coins bursting up off a plundered chest.
+  function spawnGoldBurst(x: number, y: number) {
+    const sc = petScene; if (!sc) return;
+    for (let i = 0; i < 16; i++) {
+      const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.6, sp = 90 + Math.random() * 170;
+      const spr = sc.add.image(x, y, 'w-fireball').setDepth(y + 300).setBlendMode(Phaser.BlendModes.ADD).setTint(0xffd23f);
+      boomParts.push({ spr, t: 0, max: 0.4 + Math.random() * 0.35, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, kind: 'fire', r0: 0.5, r1: 0.05 });
+    }
+  }
+  // Plunder the treasure chest on an island our ship is alongside → ask the server for the payout.
+  function plunderIsland(is: Island) {
+    if (seaChestsOpened.has(is.id)) return;
+    net.seaChest(is.id);
+    tone(660, 0.1, 'square', 0.05, 300);
+    flashHelp(`🏴‍☠️ Prying open ${is.name}…`);
   }
 
   // A remote player's shot (from a `worldRocket` broadcast) — mirror it onto our screen. Cosmetic
@@ -18206,6 +18400,89 @@ export function startWorld(net: WorldNet): void {
       if (x >= WORLD.w) foam.lineBetween(WORLD.w, Math.max(y, 0), WORLD.w, y + h);
     }
   }
+  // Treasure islands: round sandbars with palms and a chest, dotted across the corner seas. Each is
+  // a baked pixel-art texture in the same idiom as buildPond (concentric ellipses: a foamy surf ring,
+  // wet then dry sand, a grassy crown, scattered shells) so it reads like overworld terrain, not a
+  // flat disc. The palms reuse the desert's w-palm; the chest reuses the Ruins' w-chest sprites.
+  const islandChestSprites: Record<string, Phaser.GameObjects.Image> = {};
+  function makeIslands(sc: Phaser.Scene) {
+    for (const is of ISLANDS) buildIsland(sc, is);
+  }
+  function buildIsland(sc: Phaser.Scene, is: Island) {
+    const R = is.r / TEXEL, M = 16, S = Math.ceil(R * 2 + M * 2), c = S / 2;
+    const FOAM = 0xbfe0ee, WET = 0xb39b73, SAND = 0xcdb892, SAND_L = 0xe6d29a, GRASS_D = 0x6c9a4f, GRASS = 0x86b566;
+    const g = sc.make.graphics({ x: 0, y: 0 }, false);
+    g.fillStyle(FOAM, 0.42); g.fillEllipse(c, c + 3, S - 2, S - 8);              // outer surf foam
+    g.fillStyle(FOAM, 0.30); g.fillEllipse(c, c + 3, S - 8, S - 14);            // inner surf ring
+    g.fillStyle(WET, 1);     g.fillEllipse(c, c + 2, R * 2 + 5, R * 2 + 1);      // wet-sand waterline
+    g.fillStyle(SAND, 1);    g.fillEllipse(c, c, R * 2 - 6, R * 2 - 8);          // dry beach
+    g.fillStyle(SAND_L, 0.5); g.fillEllipse(c - R * 0.22, c - R * 0.24, R * 0.85, R * 0.55); // sunlit sand
+    g.fillStyle(GRASS_D, 1); g.fillEllipse(c, c - R * 0.05, R * 1.2, R * 0.98);  // grass shadow
+    g.fillStyle(GRASS, 1);   g.fillEllipse(c, c - R * 0.12, R * 1.08, R * 0.84); // grass crown
+    let seed = 0; for (const ch of is.id) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
+    const rnd = mulberry32(seed || 1);
+    for (let i = 0; i < 12; i++) {                                              // shells / pebbles on the sand ring
+      const a = rnd() * Math.PI * 2, rr = R * 0.78 + rnd() * R * 0.16;
+      g.fillStyle(rnd() < 0.5 ? WET : SAND_L, 0.85);
+      g.fillRect(Math.round(c + Math.cos(a) * rr), Math.round(c + Math.sin(a) * rr), 1, 1);
+    }
+    // 'X marks the spot': two crossed strokes scratched into the sand.
+    if (is.feature === 'xmarks') {
+      g.lineStyle(4, 0x8a3a1a, 0.9);
+      g.beginPath(); g.moveTo(c - R * 0.4, c - R * 0.1); g.lineTo(c + R * 0.4, c + R * 0.5); g.moveTo(c + R * 0.4, c - R * 0.1); g.lineTo(c - R * 0.4, c + R * 0.5); g.strokePath();
+    }
+    const key = `w-island-${is.id}`;
+    g.generateTexture(key, S, S);
+    g.destroy();
+    sc.add.image(is.x, is.y, key).setOrigin(0.5, 0.5).setScale(TEXEL).setDepth(is.y - is.r);
+
+    // A palm or two on the grassy crown (skip where a big landmark owns the centre).
+    const bigCentre = is.feature === 'volcano' || is.feature === 'tikibar' || is.feature === 'monolith' || is.feature === 'wreck';
+    sc.add.image(is.x - is.r * 0.34, is.y - is.r * 0.20, 'w-palm').setOrigin(0.5, 1).setScale(TEXEL * 2.4).setDepth(is.y - is.r * 0.20);
+    if (!bigCentre) sc.add.image(is.x + is.r * 0.32, is.y - is.r * 0.40, 'w-palm').setOrigin(0.5, 1).setScale(TEXEL * 1.8).setDepth(is.y - is.r * 0.40);
+
+    // The island's landmark prop(s) + any marooned character. `at(dx,dy,tex,scale)` plants a sprite
+    // at a spot on the island, base-anchored, depth-sorted so a passing hull can overlap it.
+    const at = (dx: number, dy: number, tex: string, sc2 = 2.4, ox = 0.5, oy = 1) =>
+      sc.add.image(is.x + is.r * dx, is.y + is.r * dy, tex).setOrigin(ox, oy).setScale(TEXEL * sc2).setDepth(is.y + is.r * dy + 1);
+    switch (is.feature) {
+      case 'volcano':  at(0, 0.28, 'w-isle-volcano', 3.4); islandSmokers.push({ x: is.x, y: is.y - is.r * 0.55 }); break;
+      case 'tiki':     at(0.12, 0.05, 'w-isle-tiki', 2.6); break;
+      case 'tikibar':  at(0, 0.24, 'w-isle-tikibar', 3.2); break;
+      case 'wreck':    at(0, 0.12, 'w-isle-wreck', 3.2); break;
+      case 'kraken':   at(0.9, 0.15, 'w-isle-tentacle', 3.0); at(-0.7, 0.5, 'w-isle-tentacle', 2.0); break;
+      case 'wilson':   at(0.2, 0.1, 'w-isle-wilson', 2.4); break;
+      case 'cannon':   at(0.1, 0.1, 'w-isle-cannon', 2.4); at(-0.2, 0.2, 'w-cannonball', 1.6); at(-0.05, 0.24, 'w-cannonball', 1.6); break;
+      case 'bottle':   at(0, 0.1, 'w-isle-bottle', 3.2); break;
+      case 'flamingo': at(0.15, 0.05, 'w-isle-flamingo', 2.2); at(-0.25, 0.18, 'w-isle-flamingo', 1.8); break;
+      case 'skull':    at(0.05, 0.08, 'w-skullcow', 3.4); break;
+      case 'snowman':  at(0.05, 0.12, 'w-snowman', 2.2); break;
+      case 'ducks':    for (let i = 0; i < 5; i++) at(-0.4 + i * 0.2, 0.28 + (i % 2) * 0.06, i % 2 ? 'w-duckling' : 'w-duck', 1.8); break;
+      case 'monolith': sc.add.rectangle(is.x, is.y - is.r * 0.1, is.r * 0.24, is.r * 1.0, 0x0a0a12).setOrigin(0.5, 1).setDepth(is.y).setStrokeStyle(2, 0x2a2a3a); break;
+      case 'party':    at(0, 0.05, 'w-tav-barrel', 2.0); at(0.3, 0.12, 'w-isle-flamingo', 1.6); break;
+      case 'mermaid':  at(0.15, 0.14, 'w-isle-mermaid', 2.6); break;
+      case 'castaway': case 'rum': at(0.1, 0.12, is.feature === 'rum' ? 'w-isle-castaway' : 'w-isle-castaway', 2.4); if (is.feature === 'rum') { at(-0.25, 0.2, 'w-tav-barrel', 1.8); at(-0.05, 0.26, 'w-tav-barrel', 1.6); } break;
+    }
+    // A marooned character muttering: a floating, cycling quip bubble (the "NPC here and there").
+    if (is.quip && is.quip.length) {
+      const label = sc.add.text(is.x + is.r * 0.1, is.y - is.r * 0.55, is.quip[0], {
+        fontFamily: 'system-ui, sans-serif', fontSize: '13px', color: '#ffe08a',
+        stroke: '#0b1020', strokeThickness: 4, align: 'center', wordWrap: { width: 190 },
+      }).setOrigin(0.5, 1).setDepth(is.y + 400);
+      islandQuips.push({ x: is.x + is.r * 0.1, y: is.y - is.r * 0.55, lines: is.quip, label, nextAt: 0, idx: 0 });
+    }
+
+    const chest = sc.add.image(is.x + is.r * 0.04, is.y + is.r * 0.30, seaChestsOpened.has(is.id) ? 'w-chest-open' : 'w-chest')
+      .setOrigin(0.5, 0.8).setScale(TEXEL * 2.6).setDepth(is.y + is.r * 0.30 + 2);
+    islandChestSprites[is.id] = chest;
+  }
+  // Cycling quip bubbles + volcano smokers, ticked from updateOcean while you're near.
+  const islandQuips: { x: number; y: number; lines: readonly string[]; label: Phaser.GameObjects.Text; nextAt: number; idx: number }[] = [];
+  const islandSmokers: { x: number; y: number }[] = [];
+  // Reflect an island's plundered state onto its chest sprite.
+  function refreshIslandChest(id: string) {
+    islandChestSprites[id]?.setTexture(seaChestsOpened.has(id) ? 'w-chest-open' : 'w-chest');
+  }
   // Scroll every ocean layer's UVs → the sea rolls. Cheap: just nudges tilePosition on a handful of
   // TileSprites (all the wave shape lives in the texture + GPU UV-wrap).
   function updateOcean(now: number, dt: number) {
@@ -18214,6 +18491,25 @@ export function startWorld(net: WorldNet): void {
     for (const L of oceanLayers) {
       L.spr.tilePositionX += L.sx * dt + Math.sin(t * 0.6) * L.sway * dt;
       L.spr.tilePositionY += L.sy * dt + Math.cos(t * 0.47) * L.sway * 0.5 * dt;
+    }
+    // Marooned characters mutter their next line every few seconds when you're within earshot.
+    for (const q of islandQuips) {
+      const near = Math.hypot(q.x - selfX, q.y - selfY) < 1100;
+      q.label.setVisible(near);
+      if (near && now >= q.nextAt) {
+        q.idx = (q.idx + Math.floor(1 + Math.random() * q.lines.length)) % q.lines.length;
+        q.label.setText(q.lines[q.idx]);
+        q.nextAt = now + 3600 + Math.random() * 2600;
+      }
+    }
+    // Volcanoes puff smoke when you're nearby (cheap: reuse the smoke-puff pool, throttled).
+    const sc = petScene;
+    if (sc && smokePuffs.length < 100) for (const v of islandSmokers) {
+      if (Math.hypot(v.x - selfX, v.y - selfY) > 1400) continue;
+      if (Math.random() < dt * 3) {
+        smokePuffs.push({ spr: sc.add.image(v.x + (Math.random() - 0.5) * 20, v.y, 'w-smoke').setScale(0.9).setTint(0x6a6a6a).setAlpha(0.55).setDepth(v.y + 500),
+          t: 0, max: 1.8, vx: (Math.random() - 0.3) * 20, vy: -30 - Math.random() * 30 });
+      }
     }
   }
 
@@ -20404,6 +20700,20 @@ export function startWorld(net: WorldNet): void {
       if (reward.kind === 'item') { lootItems.push({ item: reward.item, name: reward.name }); }
       // coins from the spin flow in via the dungeonPurse message; just refresh the panel if open
       renderLootPanel();
+    },
+    seaChests(opened) {
+      seaChestsOpened.clear();
+      for (const id of opened) seaChestsOpened.add(id);
+      for (const id in islandChestSprites) refreshIslandChest(id);
+    },
+    seaChestOpened(chest, coins) {
+      seaChestsOpened.add(chest);
+      refreshIslandChest(chest);
+      const is = ISLANDS.find((i) => i.id === chest);
+      showToast(`🏴‍☠️ Plundered ${is?.name ?? 'the treasure'}: <b>${coins.toLocaleString()}🪙</b>!`);
+      try { chaching.muted = net.muted(); chaching.currentTime = 0; void chaching.play(); } catch { /* ignore */ }
+      // a burst of gold coins bickering up off the chest
+      if (is) spawnGoldBurst(is.x + is.r * 0.04, is.y + is.r * 0.1);
     },
     dungeonPurse(coins) { dungeonPurseDisplay = coins; updateDungeonHud(); renderLootPanel(); },
     feedLand(parcels, bankBought, bankCap) {

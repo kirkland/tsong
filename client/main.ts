@@ -919,6 +919,10 @@ const net = connect(
       worldMod?.feedWorld(msg.avatars);
     } else if (msg.type === 'dungeonChests') {
       worldMod?.feedDungeonChests(msg.opened);
+    } else if (msg.type === 'seaChests') {
+      worldMod?.feedSeaChests(msg.opened);
+    } else if (msg.type === 'seaChestOpened') {
+      worldMod?.feedSeaChestOpened(msg.chest, msg.coins);
     } else if (msg.type === 'dungeonChestOpened') {
       worldMod?.dungeonChestAccepted(msg.chest, msg.coins, msg.potions, msg.spin, msg.prize, msg.prizes);
     } else if (msg.type === 'dungeonSpin') {
@@ -2726,6 +2730,7 @@ worldBtn.addEventListener('click', async () => {
       claimQuest: (quest) => net.send({ type: 'questClaim', quest }),
       dungeonSync: () => net.send({ type: 'dungeonSync' }),
       dungeonChest: (chest, captured) => net.send({ type: 'dungeonChest', chest, captured }),
+      seaChest: (chest) => net.send({ type: 'seaChest', chest }),
       dungeonWin: (floor, tier) => net.send({ type: 'dungeonWin', floor, tier }),
       dungeonTakeKey: () => net.send({ type: 'dungeonTakeKey' }),
       dungeonExit: (escaped) => net.send({ type: 'dungeonExit', escaped }),
