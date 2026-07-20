@@ -2743,18 +2743,33 @@ export function startWorld(net: WorldNet): void {
     { x: WORLD.w,   y: WORLD.h, w: EAST.w,   h: SOUTH.h },  // SE
   ];
   const SEA: WaterRegion[] = SEA_RECTS.map((r) => ({ rect: r, cx: r.x + r.w / 2, cy: r.y + r.h / 2, rx: r.w / 2, ry: r.h / 2, sea: true }));
-  // Islands dotted around the seas — round sandbars, each with a palm and a buried treasure chest.
-  // Ships shove off their beaches; sail up alongside one and plunder the chest for coins.
-  interface Island { id: string; x: number; y: number; r: number; name: string; coins: number; feature?: string; quip?: readonly string[]; }
-  const ISLANDS: Island[] = SEA_ISLANDS.map((s) => ({ id: s.id, x: s.x, y: s.y, r: s.r, name: s.name, coins: s.coins, feature: s.feature, quip: s.quip }));
+  // Islands dotted around the seas — sandbars with a palm and a buried treasure chest. Each has a
+  // procedurally-generated coastline: `mul(t)` is the radius fraction (of r) at bearing t, a closed
+  // radial-noise curve in ~[0.62, 1] so islands are organic (coves, spits) rather than plain discs.
+  // The SAME curve drives both the drawn shape AND collision (ship shove-off + on-foot beach limit),
+  // so the walkable sand matches what you see. Coordinates + r come from shared SEA_ISLANDS.
+  interface Island { id: string; x: number; y: number; r: number; name: string; coins: number; feature?: string; quip?: readonly string[]; mul: (t: number) => number; }
+  const ISLANDS: Island[] = SEA_ISLANDS.map((s) => {
+    let seed = 0; for (const ch of s.id) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
+    const rnd = mulberry32(seed || 1);
+    const terms = ([[2, 0.18], [3, 0.14], [5, 0.09], [7, 0.05]] as [number, number][]).map(([k, amax]) => ({ k, a: (rnd() * 2 - 1) * amax, p: rnd() * Math.PI * 2 }));
+    // centred at 0.8, floor at 0.5 (no pinch), no upper clamp → organic bulges up to ~1.1 with no flat arcs
+    const mul = (t: number) => { let m = 0; for (const T of terms) m += T.a * Math.sin(T.k * t + T.p); return Math.max(0.5, 0.8 + m); };
+    return { id: s.id, x: s.x, y: s.y, r: s.r, name: s.name, coins: s.coins, feature: s.feature, quip: s.quip, mul };
+  });
   const seaChestsOpened = new Set<string>(); // island ids whose treasure we've already plundered
-  // Keep an on-foot walker inside an island's beach disk (so you can roam ashore but not stroll onto
-  // the open sea). Returns hit=true when clamped to the waterline.
+  // The island coastline radius (world units) at the bearing from its centre to (x,y) — the same
+  // organic curve that's drawn. `frac` scales it (e.g. the walkable beach sits a touch inside).
+  function islandRadiusToward(is: Island, x: number, y: number, frac = 1): number {
+    return is.r * frac * is.mul(Math.atan2(y - is.y, x - is.x));
+  }
+  // Keep an on-foot walker inside an island's beach (so you can roam ashore but not stroll onto the
+  // open sea). Follows the drawn coastline, kept a touch inside so you stay on sand. hit=true when clamped.
   function confineToIslandFoot(x: number, y: number, is: Island): { x: number; y: number; hit: boolean } {
-    const dx = x - is.x, dy = y - is.y, rr = is.r - 6;
-    const d = Math.hypot(dx, dy);
+    const dx = x - is.x, dy = y - is.y, d = Math.hypot(dx, dy);
+    const rr = islandRadiusToward(is, x, y, 0.9) - 6;
     if (d <= rr) return { x, y, hit: false };
-    const s = rr / d;
+    const s = rr / Math.max(d, 0.001);
     return { x: is.x + dx * s, y: is.y + dy * s, hit: true };
   }
   // The island a ship is currently alongside (close enough to step ashore), if any.
@@ -2762,13 +2777,13 @@ export function startWorld(net: WorldNet): void {
     for (const is of ISLANDS) if (Math.hypot(is.x - selfX, is.y - selfY) < is.r + SHIP_WID + 100) return is;
     return null;
   }
-  // Push a point out of the first island beach it overlaps (circle pushout). margin = the hull/foot
-  // half-width kept clear of the sand. No-op until ISLANDS is populated.
+  // Push a point out of the first island it overlaps, following the drawn coastline. margin = the
+  // hull/foot half-width kept clear of the sand. No-op until ISLANDS is populated.
   function shoveOffIslands(x: number, y: number, margin: number): { x: number; y: number; hit: boolean } {
     for (const is of ISLANDS) {
-      const rr = is.r + margin;
       let dx = x - is.x, dy = y - is.y;
       const d = Math.hypot(dx, dy);
+      const rr = islandRadiusToward(is, x, y) + margin;
       if (d >= rr) continue;
       if (d < 0.001) { dx = 1; dy = 0; } else { dx /= d; dy /= d; }
       return { x: is.x + dx * rr, y: is.y + dy * rr, hit: true };
@@ -10436,11 +10451,11 @@ export function startWorld(net: WorldNet): void {
     // stays interactable even after its chest is plundered.
     nearIslandChest = null; nearTikiBar = null;
     if (boating && shipSpec) {
-      let iD = Infinity, tD = Infinity;
+      let iD = Infinity;
       for (const is of ISLANDS) {
+        if (is.feature === 'tikibar') continue;           // the tiki bar is a land establishment — go ashore (B)
         const d = Math.hypot(is.x - selfX, is.y - selfY);
         if (d >= is.r + SHIP_WID + 70) continue;
-        if (is.feature === 'tikibar') { if (d < tD) { tD = d; nearTikiBar = is; } continue; }
         if (!seaChestsOpened.has(is.id) && d < iD) { iD = d; nearIslandChest = is; }
       }
     } else if (onIsland) {
@@ -18611,35 +18626,48 @@ export function startWorld(net: WorldNet): void {
     for (const is of ISLANDS) buildIsland(sc, is);
   }
   function buildIsland(sc: Phaser.Scene, is: Island) {
-    const R = is.r / TEXEL, M = 24, S = Math.ceil(R * 2 + M * 2), c = S / 2;
-    const FOAM = 0xbfe0ee, WET = 0xb39b73, SAND = 0xcdb892, SAND_L = 0xe6d29a, GRASS_D = 0x6c9a4f, GRASS = 0x86b566;
+    const R = is.r / TEXEL, M = 40, S = Math.ceil(R * 2 + M * 2), c = S / 2;
+    const FOAM = 0xd6eef6, FOAM2 = 0xa9d4e6, WET = 0xb39b73, SAND = 0xcdb892, SAND_L = 0xe6d29a,
+          GRASS_D = 0x5f8f45, GRASS = 0x84b862, GRASS_L = 0x9fce78, ROCK = 0x8a8478, ROCK_D = 0x6a6558, LAGOON = 0x5bb6c9;
     const g = sc.make.graphics({ x: 0, y: 0 }, false);
     let seed = 0; for (const ch of is.id) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
     const rnd = mulberry32(seed || 1);
-    // An irregular coastline instead of a perfect disc: a base ellipse (its own aspect ratio) plus a
-    // handful of lobes budding off it — so every island has a distinct outline (peninsulas, coves).
-    // Everything stays within ~R so the round collision boundary still fits the sand.
-    const ax = 0.85 + rnd() * 0.2, ay = 0.85 + rnd() * 0.2;
-    const lobes: { lx: number; ly: number; lr: number }[] = [];
-    const nLobes = 3 + Math.floor(rnd() * 3);
-    for (let i = 0; i < nLobes; i++) {
-      const la = rnd() * Math.PI * 2, ld = R * (0.15 + rnd() * 0.2);
-      lobes.push({ lx: Math.cos(la) * ld, ly: Math.sin(la) * ld, lr: R * (0.3 + rnd() * 0.2) });
-    }
-    const blob = (k: number, col: number, alpha = 1, oy = 0) => {  // base ellipse + lobes at radial scale k
-      g.fillStyle(col, alpha);
-      g.fillEllipse(c, c + oy, R * 2 * ax * k, R * 2 * ay * k);
-      for (const L of lobes) g.fillEllipse(c + L.lx * k, c + L.ly * k + oy, L.lr * 2 * k, L.lr * 2 * k);
+    // The coastline is the island's own `mul(t)` curve (shared with collision, so the drawn sand is
+    // exactly what you can sail up to / walk on). A second, gentler local curve shapes the grassy
+    // interior so the greenery doesn't just mirror the sand outline.
+    const coast = is.mul;
+    const innerTerms = ([[2, 0.18], [3, 0.12], [4, 0.08]] as [number, number][]).map(([k, amax]) => ({ k, a: (rnd() * 2 - 1) * amax, p: rnd() * Math.PI * 2 }));
+    const inner = (t: number) => { let m = 1; for (const T of innerTerms) m += T.a * Math.sin(T.k * t + T.p); return Math.max(0.55, m); };
+    const N = 56;
+    const ring = (scale: number, nz: (t: number) => number, oy = 0) => {
+      const pts: Phaser.Math.Vector2[] = [];
+      for (let i = 0; i < N; i++) { const t = (i / N) * Math.PI * 2, rr = R * scale * nz(t); pts.push(new Phaser.Math.Vector2(c + Math.cos(t) * rr, c + Math.sin(t) * rr + oy)); }
+      return pts;
     };
-    blob(1.05, FOAM, 0.42, 3);                                                  // surf foam ring
-    blob(1.0, WET, 1, 2);                                                       // wet-sand waterline
-    blob(0.9, SAND, 1);                                                         // dry beach
-    g.fillStyle(SAND_L, 0.5); g.fillEllipse(c - R * 0.22, c - R * 0.24, R * 0.8, R * 0.5); // sunlit sand
-    blob(0.58, GRASS_D, 1, -R * 0.04);                                          // grass shadow
-    blob(0.5, GRASS, 1, -R * 0.1);                                              // grass crown
-    for (let i = 0; i < 12; i++) {                                              // shells / pebbles on the sand
-      const a = rnd() * Math.PI * 2, rr = R * (0.6 + rnd() * 0.22);
-      g.fillStyle(rnd() < 0.5 ? WET : SAND_L, 0.85);
+    // a soft drop shadow so the island sits ON the water instead of floating in it
+    g.fillStyle(0x0d2c40, 0.28); g.fillPoints(ring(1.0, coast, R * 0.1), true);
+    g.fillStyle(FOAM, 0.5);  g.fillPoints(ring(1.08, coast, 2), true);          // outer surf foam
+    g.fillStyle(FOAM2, 0.5); g.fillPoints(ring(1.03, coast, 2), true);          // inner surf ring
+    g.fillStyle(WET, 1);     g.fillPoints(ring(0.98, coast, 1), true);          // wet-sand waterline
+    g.fillStyle(SAND, 1);    g.fillPoints(ring(0.9, coast), true);              // dry beach
+    g.fillStyle(SAND_L, 0.55); g.fillEllipse(c - R * 0.2, c - R * 0.22, R * 0.78, R * 0.5); // sunlit sand
+    // grass keeps its own gentle outline but is clamped inside the dry sand so it never spills to sea
+    const grassOuter = (t: number) => Math.min(0.62 * inner(t), 0.82 * coast(t));
+    const grassInner = (t: number) => Math.min(0.55 * inner(t), 0.72 * coast(t));
+    g.fillStyle(GRASS_D, 1); g.fillPoints(ring(1, grassOuter, -R * 0.03), true); // grass shadow
+    g.fillStyle(GRASS, 1);   g.fillPoints(ring(1, grassInner, -R * 0.1), true);  // grass crown
+    g.fillStyle(GRASS_L, 0.5); g.fillEllipse(c - R * 0.12, c - R * 0.26, R * 0.5, R * 0.28); // sunlit grass
+    // some islands cradle a little turquoise lagoon
+    if (rnd() < 0.4) { g.fillStyle(LAGOON, 0.9); g.fillEllipse(c + R * 0.18, c + R * 0.14, R * 0.4, R * 0.26); g.fillStyle(0x3f97ab, 0.9); g.fillEllipse(c + R * 0.18, c + R * 0.16, R * 0.22, R * 0.13); }
+    // scattered rocks + shells on the sand ring
+    for (let i = 0; i < 5; i++) {
+      const a = rnd() * Math.PI * 2, rr = R * (0.62 + rnd() * 0.22), rx = c + Math.cos(a) * rr, ry = c + Math.sin(a) * rr, rs = 2 + rnd() * 3;
+      g.fillStyle(ROCK_D, 1); g.fillEllipse(rx, ry + 1, rs * 2, rs * 1.4);
+      g.fillStyle(ROCK, 1); g.fillEllipse(rx, ry, rs * 2, rs * 1.4);
+    }
+    for (let i = 0; i < 14; i++) {
+      const a = rnd() * Math.PI * 2, rr = R * (0.55 + rnd() * 0.3);
+      g.fillStyle(rnd() < 0.5 ? WET : SAND_L, 0.8);
       g.fillRect(Math.round(c + Math.cos(a) * rr), Math.round(c + Math.sin(a) * rr), 1, 1);
     }
     // 'X marks the spot': two crossed strokes scratched into the sand.
@@ -18664,7 +18692,7 @@ export function startWorld(net: WorldNet): void {
     switch (is.feature) {
       case 'volcano':  at(0, 0.28, 'w-isle-volcano', 3.4); islandSmokers.push({ x: is.x, y: is.y - is.r * 0.55 }); break;
       case 'tiki':     at(0.12, 0.05, 'w-isle-tiki', 2.6); break;
-      case 'tikibar':  at(0, 0.24, 'w-isle-tikibar', 3.2); break;
+      case 'tikibar':  at(0, 0.22, 'w-isle-tikibar', 2.0); break;
       case 'wreck':    at(0, 0.12, 'w-isle-wreck', 3.2); break;
       case 'kraken':   at(0.9, 0.15, 'w-isle-tentacle', 3.0); at(-0.7, 0.5, 'w-isle-tentacle', 2.0); break;
       case 'wilson':   at(0.2, 0.1, 'w-isle-wilson', 2.4); break;
