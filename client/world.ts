@@ -10453,19 +10453,10 @@ export function startWorld(net: WorldNet): void {
         if (d < pD) { pD = d; nearParcel = p.id; }
       }
     }
-    // A treasure island your ship is alongside → plunder prompt (or, at the tiki bar, the drinks
-    // menu). Works both from the ship (sailing) and on foot once you've stepped ashore. The tiki bar
-    // stays interactable even after its chest is plundered.
+    // Island interactions are ON FOOT only — you must step ashore (sail up, press B) and walk to the
+    // treasure chest (or the tiki bar). No plundering from the deck.
     nearIslandChest = null; nearTikiBar = null;
-    if (boating && shipSpec) {
-      let iD = Infinity;
-      for (const is of ISLANDS) {
-        if (is.feature === 'tikibar') continue;           // the tiki bar is a land establishment — go ashore (B)
-        const d = Math.hypot(is.x - selfX, is.y - selfY);
-        if (d >= is.r + SHIP_WID + 70) continue;
-        if (!seaChestsOpened.has(is.id) && d < iD) { iD = d; nearIslandChest = is; }
-      }
-    } else if (onIsland) {
+    if (onIsland) {
       const is = onIsland;
       const cx = is.x + is.r * 0.04, cy = is.y + is.r * 0.30;    // where the chest sprite sits
       if (!seaChestsOpened.has(is.id) && Math.hypot(selfX - cx, selfY - cy) < R + 46) nearIslandChest = is;
@@ -12147,20 +12138,7 @@ export function startWorld(net: WorldNet): void {
       px(6, 4, 2, 8, 0xff8fb8); px(6, 2, 3, 3, 0xff9ec2); px(8, 3, 2, 1, 0x1a1a1a);                // neck + head + beak tip
       px(4, 16, 1, 4, 0xe86a9a);                                                                    // leg
       g.generateTexture('w-isle-flamingo', 10, 20);
-      // Marooned castaway (12×20): a ragged, bearded sailor. A person, not a prop.
-      g.clear();
-      px(4, 2, 4, 4, 0xe0b48a); px(4, 1, 4, 2, 0x5a4a3a);                                          // head + scruffy hair
-      px(4, 5, 4, 3, 0xcfc3a8);                                                                     // wild beard
-      px(3, 8, 6, 8, 0x8a7a5a); px(3, 8, 6, 1, 0x6f5f45);                                           // ragged tunic
-      px(2, 9, 1, 5, 0xe0b48a); px(9, 9, 1, 5, 0xe0b48a);                                           // arms
-      px(4, 16, 2, 4, 0x4a3a2a); px(6, 16, 2, 4, 0x4a3a2a);                                         // legs
-      g.generateTexture('w-isle-castaway', 12, 20);
-      // Mermaid (14×16): sitting, green tail, hair.
-      g.clear();
-      px(5, 1, 4, 4, 0xe8c49a); px(4, 0, 6, 2, 0xc0392b); px(3, 2, 2, 5, 0xc0392b); px(9, 2, 2, 5, 0xc0392b); // head + red hair
-      px(5, 5, 4, 4, 0xe8c49a);                                                                     // torso
-      px(4, 8, 7, 4, 0x2fae7a); px(3, 11, 9, 3, 0x27946a); px(1, 12, 4, 3, 0x2fae7a); px(9, 12, 4, 3, 0x2fae7a); // tail + fluke
-      g.generateTexture('w-isle-mermaid', 14, 16);
+      // (Marooned islanders are drawn with the real townsfolk sprite — see addIslandPerson.)
     }
     // --- speech-bubble panel: a rounded rect drawn on a 2D canvas (which anti-aliases properly,
     // unlike Phaser's pixel-art Graphics) and used as a LINEAR-filtered 9-slice. That keeps the
@@ -15028,7 +15006,7 @@ export function startWorld(net: WorldNet): void {
   function spawnEnemyFleet(sc: Phaser.Scene) {
     for (const e of enemyShips) { e.hull.destroy(); e.flag.destroy(); e.bar.destroy(); }
     enemyShips = [];
-    for (const w of SEA) for (let i = 0; i < 2; i++) spawnEnemyShip(sc, w); // two raiders per sea
+    for (const w of SEA) for (let i = 0; i < 3; i++) spawnEnemyShip(sc, w); // three raiders per sea
   }
   function spawnEnemyShip(sc: Phaser.Scene, w: WaterRegion) {
     const spec = shipById(ENEMY_CLASSES[Math.floor(Math.random() * ENEMY_CLASSES.length)]) ?? SHIPS[0];
@@ -18629,6 +18607,33 @@ export function startWorld(net: WorldNet): void {
   // wet then dry sand, a grassy crown, scattered shells) so it reads like overworld terrain, not a
   // flat disc. The palms reuse the desert's w-palm; the chest reuses the Ruins' w-chest sprites.
   const islandChestSprites: Record<string, Phaser.GameObjects.Image> = {};
+  // Marooned islanders — rendered as ordinary overworld townsfolk (same layered person sprite),
+  // keyed by island id. dx/dy place them on the beach (fractions of r from the island centre).
+  interface IslandFolk { dx: number; dy: number; shirt: number; hair: number; skin?: number; hairStyle?: HairStyle; hat?: 'cap' | 'sun'; hatColor?: number; }
+  const ISLAND_FOLK: Record<string, IslandFolk> = {
+    'nw-cast':    { dx: 0.12,  dy: 0.14, shirt: 0x9a7b4a, hair: 0x4a3a2a, skin: SKINS[2], hairStyle: 'long' },   // the ragged castaway
+    'nw-wilson':  { dx: -0.06, dy: 0.16, shirt: 0xc8b48a, hair: 0x6a5636, skin: SKINS[1], hairStyle: 'short' }, // marooned, talks to a volleyball
+    'sw-mermaid': { dx: 0.18,  dy: 0.22, shirt: 0x2fae7a, hair: 0xc0392b, skin: SKINS[0], hairStyle: 'long' },  // sat by the water
+    'sw-rum':     { dx: 0.14,  dy: 0.14, shirt: 0x7a2a2a, hair: 0x2a1a12, skin: SKINS[1], hat: 'cap', hatColor: 0x1a1a1a }, // the island drunk
+  };
+  // Build a static townsperson at world (wx,wy) using the same layered sprite the overworld cast uses.
+  function addIslandPerson(sc: Phaser.Scene, wx: number, wy: number, look: IslandFolk) {
+    const layer = (key: string, tint?: number) => {
+      const im = sc.add.image(0, 0, key).setScale(TEXEL).setOrigin(0.5, 0.95);
+      if (tint !== undefined) im.setTint(tint);
+      return im;
+    };
+    const parts: Phaser.GameObjects.GameObject[] = [sc.add.image(0, 0, 'w-shadow').setScale(TEXEL * 1.05).setAlpha(0.4)];
+    parts.push(layer('w-npc-legs'));
+    parts.push(layer('w-npc-body', look.shirt));
+    parts.push(layer('w-npc-skin', look.skin ?? SKINS[1]));
+    parts.push(layer('w-npc-face'));
+    const style = look.hairStyle ?? 'short';
+    if (style !== 'bald') parts.push(layer(`w-hair-${style}`, look.hair));
+    if (look.hat === 'cap') parts.push(layer('w-npc-hat-cap', look.hatColor ?? 0xd23b3b));
+    else if (look.hat === 'sun') parts.push(layer('w-npc-hat-sun'));
+    sc.add.container(wx, wy, parts).setDepth(wy);
+  }
   function makeIslands(sc: Phaser.Scene) {
     for (const is of ISLANDS) buildIsland(sc, is);
   }
@@ -18711,16 +18716,25 @@ export function startWorld(net: WorldNet): void {
       case 'ducks':    for (let i = 0; i < 5; i++) at(-0.4 + i * 0.2, 0.28 + (i % 2) * 0.06, i % 2 ? 'w-duckling' : 'w-duck', 1.8); break;
       case 'monolith': sc.add.rectangle(is.x, is.y - is.r * 0.1, is.r * 0.24, is.r * 1.0, 0x0a0a12).setOrigin(0.5, 1).setDepth(is.y).setStrokeStyle(2, 0x2a2a3a); break;
       case 'party':    at(0, 0.05, 'w-tav-barrel', 2.0); at(0.3, 0.12, 'w-isle-flamingo', 1.6); break;
-      case 'mermaid':  at(0.15, 0.14, 'w-isle-mermaid', 2.6); break;
-      case 'castaway': case 'rum': at(0.1, 0.12, is.feature === 'rum' ? 'w-isle-castaway' : 'w-isle-castaway', 2.4); if (is.feature === 'rum') { at(-0.25, 0.2, 'w-tav-barrel', 1.8); at(-0.05, 0.26, 'w-tav-barrel', 1.6); } break;
+      case 'rum':      at(-0.28, 0.22, 'w-tav-barrel', 1.8); at(-0.08, 0.28, 'w-tav-barrel', 1.6); break; // the marooned drunk is a real NPC (below)
     }
-    // A marooned character muttering: a floating, cycling quip bubble (the "NPC here and there").
+    // Marooned characters are rendered as REAL overworld townsfolk (the same layered person sprite,
+    // not a bespoke blob), standing on the beach. `mul`-clamped so they stay on the sand.
+    const look = ISLAND_FOLK[is.id];
+    let bubbleX = is.x + is.r * 0.05, bubbleY = is.y - is.r * 0.35;
+    if (look) {
+      const px = is.x + is.r * look.dx, py = is.y + is.r * look.dy;
+      addIslandPerson(sc, px, py, look);
+      bubbleX = px; bubbleY = py - R * 1.4 - 8;
+    } else if (is.feature === 'snowman') { bubbleY = is.y + is.r * 0.12 - R * 1.6; bubbleX = is.x + is.r * 0.05; } // the snowman itself talks
+    else if (is.feature === 'wilson') { bubbleX = is.x + is.r * 0.2; bubbleY = is.y + is.r * 0.1 - R * 1.8; }      // Wilson the volleyball talks
+    // A cycling quip bubble floating just above the speaker (the "NPC here and there").
     if (is.quip && is.quip.length) {
-      const label = sc.add.text(is.x + is.r * 0.1, is.y - is.r * 0.55, is.quip[0], {
+      const label = sc.add.text(bubbleX, bubbleY, is.quip[0], {
         fontFamily: 'system-ui, sans-serif', fontSize: '13px', color: '#ffe08a',
         stroke: '#0b1020', strokeThickness: 4, align: 'center', wordWrap: { width: 190 },
       }).setOrigin(0.5, 1).setDepth(is.y + 400);
-      islandQuips.push({ x: is.x + is.r * 0.1, y: is.y - is.r * 0.55, lines: is.quip, label, nextAt: 0, idx: 0 });
+      islandQuips.push({ x: bubbleX, y: bubbleY, lines: is.quip, label, nextAt: 0, idx: 0 });
     }
 
     const chest = sc.add.image(is.x + is.r * 0.04, is.y + is.r * 0.30, seaChestsOpened.has(is.id) ? 'w-chest-open' : 'w-chest')
