@@ -15002,11 +15002,11 @@ export function startWorld(net: WorldNet): void {
   const ENEMY_CLASSES = ['ship-brig', 'ship-sloop', 'ship-frigate'];
   // Fire range sits INSIDE the cannonball's actual reach (CANNON_SPEED*CANNON_LIFE ≈ 442) so their
   // shots connect instead of splashing short, and they circle close enough to keep landing them.
-  const ENEMY_AGGRO = 1900, ENEMY_STANDOFF = 300, ENEMY_FIRE_RANGE = 400, ENEMY_SEE = 1800;
+  const ENEMY_AGGRO = 1050, ENEMY_STANDOFF = 300, ENEMY_FIRE_RANGE = 400, ENEMY_SEE = 1800;
   function spawnEnemyFleet(sc: Phaser.Scene) {
     for (const e of enemyShips) { e.hull.destroy(); e.flag.destroy(); e.bar.destroy(); }
     enemyShips = [];
-    for (const w of SEA) for (let i = 0; i < 3; i++) spawnEnemyShip(sc, w);
+    for (const w of SEA) spawnEnemyShip(sc, w); // one raider per sea — a rare threat, not a swarm
   }
   function spawnEnemyShip(sc: Phaser.Scene, w: WaterRegion) {
     const spec = shipById(ENEMY_CLASSES[Math.floor(Math.random() * ENEMY_CLASSES.length)]) ?? SHIPS[0];
@@ -15053,7 +15053,23 @@ export function startWorld(net: WorldNet): void {
     }
     if (Math.hypot(selfX - e.x, selfY - e.y) < 900) cannonFireSound();
   }
+  // A health bar over YOUR OWN ship while sailing (matches the enemy hull bars), so you always know
+  // how much fight your hull has left instead of only glimpsing it on the on-hit flash.
+  let selfShipBar: Phaser.GameObjects.Graphics | null = null;
+  function updateSelfShipBar() {
+    const sc = petScene; if (!sc) return;
+    if (!selfShipBar) selfShipBar = sc.add.graphics();
+    if (boating && shipSpec) {
+      selfShipBar.setVisible(true).clear();
+      const frac = Math.max(0, shipHp / shipSpec.hp), bw = 60, bx = selfX - bw / 2, by = selfY - 56;
+      selfShipBar.fillStyle(0x000000, 0.5); selfShipBar.fillRect(bx - 2, by - 2, bw + 4, 9);
+      selfShipBar.fillStyle(0x2a0c0c, 1); selfShipBar.fillRect(bx, by, bw, 5);
+      selfShipBar.fillStyle(frac > 0.5 ? 0x5ae05a : frac > 0.25 ? 0xffd23f : 0xff3a3a, 1); selfShipBar.fillRect(bx, by, bw * frac, 5);
+      selfShipBar.setDepth(selfY + 5);
+    } else if (selfShipBar.visible) selfShipBar.setVisible(false);
+  }
   function updateEnemyShips(dt: number) {
+    updateSelfShipBar();
     if (inInterior || inDungeon) return;
     const now = performance.now();
     const huntable = boating && !!shipSpec; // they only hunt a player who's actually at sea in a ship
@@ -15071,7 +15087,7 @@ export function startWorld(net: WorldNet): void {
         desired = e.wanderA;
       }
       e.a += clamp(angDelta(e.a, desired), -e.spec.turn * dt, e.spec.turn * dt);
-      const sp = e.spec.speed * (aggro ? 0.9 : 0.4); // hunt hard enough to keep pace with a fleeing player
+      const sp = e.spec.speed * (aggro ? 0.68 : 0.4); // hunts, but slow enough that you can outrun it
       e.vx += (Math.cos(e.a) * sp - e.vx) * Math.min(1, dt * 1.6);
       e.vy += (Math.sin(e.a) * sp - e.vy) * Math.min(1, dt * 1.6);
       let nx = e.x + e.vx * dt, ny = e.y + e.vy * dt;
@@ -15084,7 +15100,7 @@ export function startWorld(net: WorldNet): void {
       e.x = nx; e.y = ny;
       if (aggro && dP < ENEMY_FIRE_RANGE && now >= e.nextShotAt) {
         const toP = Math.atan2(selfY - e.y, selfX - e.x), rel = Math.abs(angDelta(e.a, toP));
-        if (rel > 0.45 && rel < Math.PI - 0.45) { fireEnemyBroadside(e, toP); e.nextShotAt = now + 1600 + Math.random() * 700; }
+        if (rel > 0.45 && rel < Math.PI - 0.45) { fireEnemyBroadside(e, toP); e.nextShotAt = now + 2800 + Math.random() * 1400; }
       }
       // render + health bar
       e.hull.setPosition(e.x, e.y).setRotation(e.a).setDepth(e.y);
@@ -18595,20 +18611,34 @@ export function startWorld(net: WorldNet): void {
     for (const is of ISLANDS) buildIsland(sc, is);
   }
   function buildIsland(sc: Phaser.Scene, is: Island) {
-    const R = is.r / TEXEL, M = 16, S = Math.ceil(R * 2 + M * 2), c = S / 2;
+    const R = is.r / TEXEL, M = 24, S = Math.ceil(R * 2 + M * 2), c = S / 2;
     const FOAM = 0xbfe0ee, WET = 0xb39b73, SAND = 0xcdb892, SAND_L = 0xe6d29a, GRASS_D = 0x6c9a4f, GRASS = 0x86b566;
     const g = sc.make.graphics({ x: 0, y: 0 }, false);
-    g.fillStyle(FOAM, 0.42); g.fillEllipse(c, c + 3, S - 2, S - 8);              // outer surf foam
-    g.fillStyle(FOAM, 0.30); g.fillEllipse(c, c + 3, S - 8, S - 14);            // inner surf ring
-    g.fillStyle(WET, 1);     g.fillEllipse(c, c + 2, R * 2 + 5, R * 2 + 1);      // wet-sand waterline
-    g.fillStyle(SAND, 1);    g.fillEllipse(c, c, R * 2 - 6, R * 2 - 8);          // dry beach
-    g.fillStyle(SAND_L, 0.5); g.fillEllipse(c - R * 0.22, c - R * 0.24, R * 0.85, R * 0.55); // sunlit sand
-    g.fillStyle(GRASS_D, 1); g.fillEllipse(c, c - R * 0.05, R * 1.2, R * 0.98);  // grass shadow
-    g.fillStyle(GRASS, 1);   g.fillEllipse(c, c - R * 0.12, R * 1.08, R * 0.84); // grass crown
     let seed = 0; for (const ch of is.id) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
     const rnd = mulberry32(seed || 1);
-    for (let i = 0; i < 12; i++) {                                              // shells / pebbles on the sand ring
-      const a = rnd() * Math.PI * 2, rr = R * 0.78 + rnd() * R * 0.16;
+    // An irregular coastline instead of a perfect disc: a base ellipse (its own aspect ratio) plus a
+    // handful of lobes budding off it — so every island has a distinct outline (peninsulas, coves).
+    // Everything stays within ~R so the round collision boundary still fits the sand.
+    const ax = 0.85 + rnd() * 0.2, ay = 0.85 + rnd() * 0.2;
+    const lobes: { lx: number; ly: number; lr: number }[] = [];
+    const nLobes = 3 + Math.floor(rnd() * 3);
+    for (let i = 0; i < nLobes; i++) {
+      const la = rnd() * Math.PI * 2, ld = R * (0.15 + rnd() * 0.2);
+      lobes.push({ lx: Math.cos(la) * ld, ly: Math.sin(la) * ld, lr: R * (0.3 + rnd() * 0.2) });
+    }
+    const blob = (k: number, col: number, alpha = 1, oy = 0) => {  // base ellipse + lobes at radial scale k
+      g.fillStyle(col, alpha);
+      g.fillEllipse(c, c + oy, R * 2 * ax * k, R * 2 * ay * k);
+      for (const L of lobes) g.fillEllipse(c + L.lx * k, c + L.ly * k + oy, L.lr * 2 * k, L.lr * 2 * k);
+    };
+    blob(1.05, FOAM, 0.42, 3);                                                  // surf foam ring
+    blob(1.0, WET, 1, 2);                                                       // wet-sand waterline
+    blob(0.9, SAND, 1);                                                         // dry beach
+    g.fillStyle(SAND_L, 0.5); g.fillEllipse(c - R * 0.22, c - R * 0.24, R * 0.8, R * 0.5); // sunlit sand
+    blob(0.58, GRASS_D, 1, -R * 0.04);                                          // grass shadow
+    blob(0.5, GRASS, 1, -R * 0.1);                                              // grass crown
+    for (let i = 0; i < 12; i++) {                                              // shells / pebbles on the sand
+      const a = rnd() * Math.PI * 2, rr = R * (0.6 + rnd() * 0.22);
       g.fillStyle(rnd() < 0.5 ? WET : SAND_L, 0.85);
       g.fillRect(Math.round(c + Math.cos(a) * rr), Math.round(c + Math.sin(a) * rr), 1, 1);
     }
@@ -18659,7 +18689,7 @@ export function startWorld(net: WorldNet): void {
     }
 
     const chest = sc.add.image(is.x + is.r * 0.04, is.y + is.r * 0.30, seaChestsOpened.has(is.id) ? 'w-chest-open' : 'w-chest')
-      .setOrigin(0.5, 0.8).setScale(TEXEL * 2.6).setDepth(is.y + is.r * 0.30 + 2);
+      .setOrigin(0.5, 0.8).setScale(TEXEL * 1.4).setDepth(is.y + is.r * 0.30 + 2);
     islandChestSprites[is.id] = chest;
   }
   // Cycling quip bubbles + volcano smokers, ticked from updateOcean while you're near.
