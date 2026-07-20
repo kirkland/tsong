@@ -15028,7 +15028,7 @@ export function startWorld(net: WorldNet): void {
   function spawnEnemyFleet(sc: Phaser.Scene) {
     for (const e of enemyShips) { e.hull.destroy(); e.flag.destroy(); e.bar.destroy(); }
     enemyShips = [];
-    for (const w of SEA) spawnEnemyShip(sc, w); // one raider per sea — a rare threat, not a swarm
+    for (const w of SEA) for (let i = 0; i < 2; i++) spawnEnemyShip(sc, w); // two raiders per sea
   }
   function spawnEnemyShip(sc: Phaser.Scene, w: WaterRegion) {
     const spec = shipById(ENEMY_CLASSES[Math.floor(Math.random() * ENEMY_CLASSES.length)]) ?? SHIPS[0];
