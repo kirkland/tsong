@@ -2748,6 +2748,20 @@ export function startWorld(net: WorldNet): void {
   interface Island { id: string; x: number; y: number; r: number; name: string; coins: number; feature?: string; quip?: readonly string[]; }
   const ISLANDS: Island[] = SEA_ISLANDS.map((s) => ({ id: s.id, x: s.x, y: s.y, r: s.r, name: s.name, coins: s.coins, feature: s.feature, quip: s.quip }));
   const seaChestsOpened = new Set<string>(); // island ids whose treasure we've already plundered
+  // Keep an on-foot walker inside an island's beach disk (so you can roam ashore but not stroll onto
+  // the open sea). Returns hit=true when clamped to the waterline.
+  function confineToIslandFoot(x: number, y: number, is: Island): { x: number; y: number; hit: boolean } {
+    const dx = x - is.x, dy = y - is.y, rr = is.r - 6;
+    const d = Math.hypot(dx, dy);
+    if (d <= rr) return { x, y, hit: false };
+    const s = rr / d;
+    return { x: is.x + dx * s, y: is.y + dy * s, hit: true };
+  }
+  // The island a ship is currently alongside (close enough to step ashore), if any.
+  function islandToBoard(): Island | null {
+    for (const is of ISLANDS) if (Math.hypot(is.x - selfX, is.y - selfY) < is.r + SHIP_WID + 100) return is;
+    return null;
+  }
   // Push a point out of the first island beach it overlaps (circle pushout). margin = the hull/foot
   // half-width kept clear of the sand. No-op until ISLANDS is populated.
   function shoveOffIslands(x: number, y: number, margin: number): { x: number; y: number; hit: boolean } {
@@ -2768,6 +2782,7 @@ export function startWorld(net: WorldNet): void {
   let boatEntry: { x: number; y: number } | null = null; // safe shore spot we launched from
   let shipSpec: ShipSpec | null = null;              // the ship we're sailing (null when on the yacht/on foot)
   let shipHp = 0;                                     // remaining hull integrity while sailing a ship
+  let onIsland: Island | null = null;                // the island we're ashore on, on foot (null otherwise)
 
   // --- input state ---
   const keys = new Set<string>();
@@ -3787,6 +3802,17 @@ export function startWorld(net: WorldNet): void {
     // the Damp: dwellings, the drowned church, the pier
     mark(1200, 3450, '🛖', iconPx); mark(2700, 2950, '🛖', iconPx); mark(3620, 4080, '⛪', iconPx);
     ctx.fillStyle = '#54381e'; ctx.fillRect(X(SWAMP_PIER_X - 26), Y(SWAMP_SHORE_Y - 20), Math.max(2, 52 * sx), 400 * sy);
+    // the seas: treasure islands (sand dot + a feature/loot icon) and the roaming enemy fleet
+    for (const is of ISLANDS) {
+      ctx.fillStyle = seaChestsOpened.has(is.id) ? '#c3b183' : '#e7d5a0';
+      ctx.beginPath(); ctx.arc(X(is.x), Y(is.y), Math.max(2, is.r * sx), 0, Math.PI * 2); ctx.fill();
+      const icon = is.feature === 'tikibar' ? '🍹' : is.feature === 'volcano' ? '🌋' : is.feature === 'monolith' ? '🗿'
+        : seaChestsOpened.has(is.id) ? '🏝️' : '💰';
+      mark(is.x, is.y, icon, full ? Math.max(8, Math.round(iconPx * 0.9)) : 11);
+      if (full && ww <= WORLD.w * 3) { ctx.fillStyle = '#fff'; ctx.font = '700 11px system-ui'; ctx.fillText(is.name, X(is.x), Y(is.y) + 16); }
+    }
+    ctx.fillStyle = '#ff5a5a';                            // enemy ships (live positions — a threat readout)
+    for (const e of enemyShips) { ctx.beginPath(); ctx.arc(X(e.x), Y(e.y), full ? 3.5 : 2.2, 0, Math.PI * 2); ctx.fill(); }
     if (full) {
       ctx.fillStyle = '#fff'; ctx.font = '700 13px system-ui';
       ctx.fillText('🏘️ ROBVILLE', X(3850), Y(1550));
@@ -3798,6 +3824,12 @@ export function startWorld(net: WorldNet): void {
       ctx.fillText('THE GREAT SOUTHERN DAMP', X(2400), Y(5300));
       ctx.fillStyle = '#9ab8d0';
       ctx.fillText('THE FROSTREACH', X(WORLD.w + EAST.w / 2), Y(200));
+      // the four corner seas
+      ctx.fillStyle = '#7fb4d8'; ctx.font = '700 12px ui-monospace,monospace';
+      ctx.fillText('⚓ THE SHATTERED SHOALS', X(-DESERT.w / 2), Y(-CLUB.h / 2));
+      ctx.fillText('⚓ THE FROZEN NARROWS', X(WORLD.w + EAST.w / 2), Y(-CLUB.h / 2));
+      ctx.fillText('⚓ THE CORSAIR DEEP', X(-DESERT.w / 2), Y(WORLD.h + SOUTH.h / 2));
+      ctx.fillText('⚓ THE SALT REACHES', X(WORLD.w + EAST.w / 2), Y(WORLD.h + SOUTH.h / 2));
     }
     for (const b of WORLD_BUILDINGS) {                    // buildings: footprint + emoji icon
       ctx.fillStyle = b.color;
@@ -4015,7 +4047,7 @@ export function startWorld(net: WorldNet): void {
     if (!boating) {
       const b = boardable();
       if (!b) { flashHelp('🚢 Walk up to the ocean (or the fishing pond) to set sail.'); return; }
-      boating = true; boatWater = b.w; driving = false; vx = vy = 0;
+      boating = true; boatWater = b.w; driving = false; onIsland = null; vx = vy = 0;
       boatEntry = { x: selfX, y: selfY };           // remember the launch spot for a safe fallback
       if (b.sea) {
         shipSpec = starterShip(); shipHp = shipSpec.hp;
@@ -4032,10 +4064,22 @@ export function startWorld(net: WorldNet): void {
     } else {
       const w = boatWater;
       const wasShip = !!shipSpec;
-      boating = false; boatWater = null; shipSpec = null; shipHp = 0; vx = vy = 0;
-      const back = w ? disembarkPoint(selfX, selfY, w.rect) : (boatEntry ?? { x: selfX, y: selfY });
-      const safe = resolveCollisions(back.x, back.y, R); // never disembark into a wall
-      selfX = safe.x; selfY = safe.y;
+      // A ship pulled up alongside an island → step ASHORE onto it (on foot) instead of sailing all
+      // the way back to the mainland coast. Walk the island, loot the chest, then B to sail off again.
+      const island = wasShip ? islandToBoard() : null;
+      boating = false; boatWater = null; shipSpec = null; shipHp = 0; vx = vy = 0; stopShanty();
+      if (island) {
+        onIsland = island;
+        const ang = Math.atan2(selfY - island.y, selfX - island.x);
+        selfX = island.x + Math.cos(ang) * (island.r - R - 10);
+        selfY = island.y + Math.sin(ang) * (island.r - R - 10);
+        flashHelp(`⚓ Ashore on ${island.name} — explore! Press B at the water to sail off.`);
+      } else {
+        onIsland = null;
+        const back = w ? disembarkPoint(selfX, selfY, w.rect) : (boatEntry ?? { x: selfX, y: selfY });
+        const safe = resolveCollisions(back.x, back.y, R); // never disembark into a wall
+        selfX = safe.x; selfY = safe.y;
+      }
       boatEntry = null;
       tone(wasShip ? 200 : 300, 0.16, 'sine', 0.05, 220);
     }
@@ -10080,6 +10124,14 @@ export function startWorld(net: WorldNet): void {
       }
       return;
     }
+    // Ashore on a sea island: free-roam the beach disk (the mainland boundary clamp doesn't apply out
+    // here), but you can't wade off into open water — walk to the edge and press B to sail off.
+    if (onIsland) {
+      const p = confineToIslandFoot(selfX + dx * SP * dt, selfY + dy * SP * dt, onIsland);
+      selfX = p.x; selfY = p.y;
+      if (p.hit) bumpSound(false); else stepSound();
+      return;
+    }
     const moved = resolveCollisions(selfX + dx * SP * dt, selfY + dy * SP * dt, R);
     selfX = moved.x; selfY = moved.y;
     if (moved.hit) bumpSound(false);
@@ -10380,7 +10432,8 @@ export function startWorld(net: WorldNet): void {
       }
     }
     // A treasure island your ship is alongside → plunder prompt (or, at the tiki bar, the drinks
-    // menu). Only while sailing. The tiki bar stays interactable even after its chest is plundered.
+    // menu). Works both from the ship (sailing) and on foot once you've stepped ashore. The tiki bar
+    // stays interactable even after its chest is plundered.
     nearIslandChest = null; nearTikiBar = null;
     if (boating && shipSpec) {
       let iD = Infinity, tD = Infinity;
@@ -10390,6 +10443,11 @@ export function startWorld(net: WorldNet): void {
         if (is.feature === 'tikibar') { if (d < tD) { tD = d; nearTikiBar = is; } continue; }
         if (!seaChestsOpened.has(is.id) && d < iD) { iD = d; nearIslandChest = is; }
       }
+    } else if (onIsland) {
+      const is = onIsland;
+      const cx = is.x + is.r * 0.04, cy = is.y + is.r * 0.30;    // where the chest sprite sits
+      if (!seaChestsOpened.has(is.id) && Math.hypot(selfX - cx, selfY - cy) < R + 46) nearIslandChest = is;
+      if (is.feature === 'tikibar' && Math.hypot(selfX - is.x, selfY - (is.y + is.r * 0.24)) < R + 70) nearTikiBar = is;
     }
     if (best) {
       const b = WORLD_BUILDINGS.find((x) => x.id === best)!;
@@ -14870,7 +14928,7 @@ export function startWorld(net: WorldNet): void {
       const spent = cb.t >= CANNON_LIFE;
       // ENEMY-fired ball: purely local — it only threatens YOUR hull, and it splashes otherwise.
       if (cb.enemy) {
-        const onMe = shipSpec && boating && Math.hypot(selfX - cb.x, selfY - cb.y) < SHIP_LEN * 0.4;
+        const onMe = shipSpec && boating && Math.hypot(selfX - cb.x, selfY - cb.y) < SHIP_LEN * 0.5;
         if (onMe) { spawnExplosion(cb.x, cb.y, 0.8); damageMyShip(); cb.spr.destroy(); cannonballs.splice(i, 1); continue; }
         if (spent) { spawnSplash(cb.x, cb.y); cb.spr.destroy(); cannonballs.splice(i, 1); }
         continue;
@@ -14942,11 +15000,13 @@ export function startWorld(net: WorldNet): void {
   }
   let enemyShips: EnemyShip[] = [];
   const ENEMY_CLASSES = ['ship-brig', 'ship-sloop', 'ship-frigate'];
-  const ENEMY_AGGRO = 1500, ENEMY_STANDOFF = 380, ENEMY_FIRE_RANGE = 640, ENEMY_SEE = 1700;
+  // Fire range sits INSIDE the cannonball's actual reach (CANNON_SPEED*CANNON_LIFE ≈ 442) so their
+  // shots connect instead of splashing short, and they circle close enough to keep landing them.
+  const ENEMY_AGGRO = 1900, ENEMY_STANDOFF = 300, ENEMY_FIRE_RANGE = 400, ENEMY_SEE = 1800;
   function spawnEnemyFleet(sc: Phaser.Scene) {
     for (const e of enemyShips) { e.hull.destroy(); e.flag.destroy(); e.bar.destroy(); }
     enemyShips = [];
-    for (const w of SEA) for (let i = 0; i < 2; i++) spawnEnemyShip(sc, w);
+    for (const w of SEA) for (let i = 0; i < 3; i++) spawnEnemyShip(sc, w);
   }
   function spawnEnemyShip(sc: Phaser.Scene, w: WaterRegion) {
     const spec = shipById(ENEMY_CLASSES[Math.floor(Math.random() * ENEMY_CLASSES.length)]) ?? SHIPS[0];
@@ -15011,7 +15071,7 @@ export function startWorld(net: WorldNet): void {
         desired = e.wanderA;
       }
       e.a += clamp(angDelta(e.a, desired), -e.spec.turn * dt, e.spec.turn * dt);
-      const sp = e.spec.speed * (aggro ? 0.7 : 0.4);
+      const sp = e.spec.speed * (aggro ? 0.9 : 0.4); // hunt hard enough to keep pace with a fleeing player
       e.vx += (Math.cos(e.a) * sp - e.vx) * Math.min(1, dt * 1.6);
       e.vy += (Math.sin(e.a) * sp - e.vy) * Math.min(1, dt * 1.6);
       let nx = e.x + e.vx * dt, ny = e.y + e.vy * dt;
@@ -15024,7 +15084,7 @@ export function startWorld(net: WorldNet): void {
       e.x = nx; e.y = ny;
       if (aggro && dP < ENEMY_FIRE_RANGE && now >= e.nextShotAt) {
         const toP = Math.atan2(selfY - e.y, selfX - e.x), rel = Math.abs(angDelta(e.a, toP));
-        if (rel > 0.7 && rel < Math.PI - 0.7) { fireEnemyBroadside(e, toP); e.nextShotAt = now + 1700 + Math.random() * 800; }
+        if (rel > 0.45 && rel < Math.PI - 0.45) { fireEnemyBroadside(e, toP); e.nextShotAt = now + 1600 + Math.random() * 700; }
       }
       // render + health bar
       e.hull.setPosition(e.x, e.y).setRotation(e.a).setDepth(e.y);
@@ -20170,6 +20230,7 @@ export function startWorld(net: WorldNet): void {
   let biomeMusicKey = '';
   function currentBiome(): string | null {
     if (inInterior || inDungeon) return null;
+    if (boating || onIsland) return null; // out at sea / ashore on an island — no desert/snow anthem
     if (selfX < 0) return 'desert';
     if (selfX > WORLD.w) return 'snow';
     if (selfY > WORLD.h && selfY < SWAMP_SHORE_Y) return 'swamp';
