@@ -523,6 +523,38 @@ export function carById(id: string | null | undefined): CarSpec | null {
   return CARS.find((c) => c.id === id) ?? null;
 }
 
+// --- Ships (naval) -----------------------------------------------------------------------
+// Big square-rigged sailing ships you crew out on the open ocean (the seas filling the corners
+// between the frontiers) — Assassin's-Creed-Black-Flag style. Unlike the little pond yacht
+// (a CarSpec in the 'boat' slot), a ship is heavy: slow to build speed, slow to turn, and it
+// GLIDES (very low grip) so it carries momentum through turns like a real hull cutting water.
+// It fires broadsides (cannon volleys out the port/starboard sides), not a forward weapon, and
+// it soaks multiple hits (hp) before it sinks instead of popping like a car. A ShipSpec is a
+// CarSpec (so it drops straight into stepVehicle) plus the naval bits. Boarding the ocean gives
+// everyone the free starter Brig; fancier hulls are unlockable prizes.
+export interface ShipSpec extends CarSpec {
+  hp: number;    // broadside hits the hull soaks before it sinks
+  guns: number;  // cannons per broadside (fired in one volley, spread along the hull)
+  klass: 'sloop' | 'brig' | 'frigate' | 'galleon' | 'manowar';
+  len: number;   // hull length in texels (drives the sprite + the broadside muzzle spread)
+}
+export const SHIPS: readonly ShipSpec[] = [
+  // The Brig — the free starter every sailor gets at the shore. Nimble-ish, three guns a side.
+  { id: 'ship-brig',    name: 'The Brig',      body: '#6b4a2a', accent: '#e8ddc0', speed: 360, accel: 230, turn: 1.05, grip: 0.30, hp: 6,  guns: 3, klass: 'brig',    len: 60 },
+  // The Sloop — a fast little cutter. Fewer guns, but it dances. (A shop/loot unlock.)
+  { id: 'ship-sloop',   name: 'The Sloop',     body: '#7a6a3a', accent: '#f0e8c8', speed: 430, accel: 300, turn: 1.35, grip: 0.34, hp: 5,  guns: 2, klass: 'sloop',   len: 50 },
+  // The Frigate — the balanced warship. A proper four-gun broadside.
+  { id: 'ship-frigate', name: 'The Frigate',   body: '#5a3a22', accent: '#d8c8a0', speed: 380, accel: 240, turn: 0.95, grip: 0.28, hp: 9,  guns: 4, klass: 'frigate', len: 72 },
+  // The Galleon — a slow treasure hauler. Heavy, tanky, five guns that hit like a wall.
+  { id: 'ship-galleon', name: 'The Galleon',   body: '#4a2f1c', accent: '#c9a86e', speed: 300, accel: 190, turn: 0.7,  grip: 0.24, hp: 12, guns: 5, klass: 'galleon', len: 84 },
+  // The Man-o'-War — the dreadnought. Ponderous, near-unsinkable, a devastating six-gun broadside.
+  { id: 'ship-manowar', name: "The Man-o'-War", body: '#3a2416', accent: '#b8985a', speed: 320, accel: 200, turn: 0.62, grip: 0.22, hp: 16, guns: 6, klass: 'manowar', len: 96 },
+] as const;
+export function shipById(id: string | null | undefined): ShipSpec | null {
+  if (!id) return null;
+  return SHIPS.find((s) => s.id === id) ?? null;
+}
+
 // --- Car colors ---------------------------------------------------------------------------
 // An optional repaint layered over whichever car you've equipped (slot 'carcolor', separate
 // from the 'car' slot itself) — body/accent here override the CarSpec's defaults when equipped.
@@ -1015,7 +1047,8 @@ export type WorldWeapon =
   | 'mg'      // 🔫 rapid-fire bullets, pinpoint hits
   | 'laser'   // ⚡ instant piercing beam
   | 'void'    // 🕳️ singularity — collapses everything inward, then detonates
-  | 'snow';   // ❄️ a lobbed snowball — harmless, humiliating (packed in the Frostreach)
+  | 'snow'    // ❄️ a lobbed snowball — harmless, humiliating (packed in the Frostreach)
+  | 'cannon'; // 💣 a ship's broadside — a volley of cannonballs out the port/starboard side (naval only)
 
 // How a receiver should draw an incoming WorldBoomMsg. Omitted = 'blast' (the classic fireball),
 // so old clients and car crashes keep their current look.
@@ -1024,11 +1057,12 @@ export type WorldFx =
   | 'hit'     // small spark — a machine-gun round landing
   | 'zap'     // laser scorch
   | 'void'    // a black hole opens, drags everything in, then blows
-  | 'snow';   // a snowball splat — knocks nobody's car out, ruins everybody's dignity
+  | 'snow'    // a snowball splat — knocks nobody's car out, ruins everybody's dignity
+  | 'splash'; // a cannonball plunging into the sea — a white spout, no damage
 
 // Runtime lists of the above, for validating what arrives off the wire.
-export const WORLD_WEAPONS: readonly WorldWeapon[] = ['rocket', 'mg', 'laser', 'void', 'snow'];
-export const WORLD_FX: readonly WorldFx[] = ['blast', 'hit', 'zap', 'void', 'snow'];
+export const WORLD_WEAPONS: readonly WorldWeapon[] = ['rocket', 'mg', 'laser', 'void', 'snow', 'cannon'];
+export const WORLD_FX: readonly WorldFx[] = ['blast', 'hit', 'zap', 'void', 'snow', 'splash'];
 
 // A car blew up (car-vs-car collision or a high-speed building crash) at this world point. Fanned
 // out to everyone else in the world so the fireball is visible to all, not just the crasher.

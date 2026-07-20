@@ -52,6 +52,9 @@ import {
   WorldBuildingKind,
   CarSpec,
   carById,
+  ShipSpec,
+  shipById,
+  SHIPS,
   carColorById,
   petById,
   type PetKind,
@@ -586,6 +589,8 @@ const TRIGGER_PAD = 34;     // how close (world units, beyond the wall) counts a
 const JOY_DEADZONE = 14;    // screen px of drag before the virtual joystick engages
 const CAR_LEN = 52;         // car body length, world units (for drawing + collision feel)
 const CAR_WID = 28;         // car body width, world units
+const SHIP_LEN = 190;       // a sailing ship's hull length, world units (broadside muzzle spread + feel)
+const SHIP_WID = 72;        // hull beam (width) — how wide the ship sits on the water
 
 // --- pixel-art scale knobs -------------------------------------------------------------------
 // Everything is authored in "texels". One texel = TEXEL world units; sprites are drawn at their
@@ -2702,16 +2707,51 @@ export function startWorld(net: WorldNet): void {
   // Water you can drive a boat on: each region is the ellipse of open water inside a pond building
   // (matching how buildPond draws it). Boats are confined to these ellipses; on foot or in a car the
   // pond rect stays solid, so you launch from the shore. Add water by adding pond buildings.
-  interface WaterRegion { rect: Rect; cx: number; cy: number; rx: number; ry: number }
+  //
+  // The OCEAN (sea=true) works the same way but is a big rectangle, not a pond ellipse: the four
+  // seas filling the diagonal corners between the frontiers (see makeCornerOceans). You crew a full
+  // sailing SHIP out there (not the little yacht), the sea rect stays solid on foot so you launch
+  // from any frontier shore, and ships are confined to the rect (inset so the long hull never
+  // overhangs the sand). SEA_SHORE is how far in from the visible edge a hull can sail.
+  interface WaterRegion { rect: Rect; cx: number; cy: number; rx: number; ry: number; sea?: boolean }
   // rx/ry are the *navigable* ellipse — inset well inside the visible water so the long boat hull
   // stays on the water instead of overhanging onto the sandy shore at the edges.
   const WATER: WaterRegion[] = (WORLD_BUILDINGS as readonly WorldBuilding[])
     .filter((b) => b.kind === 'pond')
     .map((b) => ({ rect: { x: b.x, y: b.y, w: b.w, h: b.h }, cx: b.x + b.w / 2, cy: b.y + b.h / 2, rx: b.w / 2 - 50, ry: b.h / 2 - 52 }));
+  const SEA_SHORE = 120; // how far in from a corner sea's edge a hull may sail (keeps it off the sand)
+  // The four corner seas. Coords mirror makeCornerOceans() exactly (an island of land ringed by sea).
+  const SEA_RECTS: Rect[] = [
+    { x: -DESERT.w, y: -CLUB.h, w: DESERT.w, h: CLUB.h },   // NW
+    { x: WORLD.w,   y: -CLUB.h, w: EAST.w,   h: CLUB.h },   // NE
+    { x: -DESERT.w, y: WORLD.h, w: DESERT.w, h: SOUTH.h },  // SW
+    { x: WORLD.w,   y: WORLD.h, w: EAST.w,   h: SOUTH.h },  // SE
+  ];
+  const SEA: WaterRegion[] = SEA_RECTS.map((r) => ({ rect: r, cx: r.x + r.w / 2, cy: r.y + r.h / 2, rx: r.w / 2, ry: r.h / 2, sea: true }));
+  // Islands dotted around the seas — round sandbars with a palm and a treasure chest (Phase 3 fills
+  // this in). Ships shove off their beaches; you disembark onto them to loot the chest.
+  interface Island { x: number; y: number; r: number; name: string; }
+  const ISLANDS: Island[] = [];
+  // Push a point out of the first island beach it overlaps (circle pushout). margin = the hull/foot
+  // half-width kept clear of the sand. No-op until ISLANDS is populated.
+  function shoveOffIslands(x: number, y: number, margin: number): { x: number; y: number; hit: boolean } {
+    for (const is of ISLANDS) {
+      const rr = is.r + margin;
+      let dx = x - is.x, dy = y - is.y;
+      const d = Math.hypot(dx, dy);
+      if (d >= rr) continue;
+      if (d < 0.001) { dx = 1; dy = 0; } else { dx /= d; dy /= d; }
+      return { x: is.x + dx * rr, y: is.y + dy * rr, hit: true };
+    }
+    return { x, y, hit: false };
+  }
   const BOAT_BOARD_PAD = 44; // how close to a pond's shore you can be to launch your boat (world units)
+  const SHIP_BOARD_PAD = 90; // ships launch from a wider apron — the shore is a coastline, not a rim
   let boating = false;
   let boatWater: WaterRegion | null = null;          // the water we're currently boating on
   let boatEntry: { x: number; y: number } | null = null; // safe shore spot we launched from
+  let shipSpec: ShipSpec | null = null;              // the ship we're sailing (null when on the yacht/on foot)
+  let shipHp = 0;                                     // remaining hull integrity while sailing a ship
 
   // --- input state ---
   const keys = new Set<string>();
@@ -3851,6 +3891,21 @@ export function startWorld(net: WorldNet): void {
   function myBoat(): CarSpec | null {
     return carById(net.boat());
   }
+  // The free starter every sailor gets at the coast — the Brig (fancier hulls come later as prizes).
+  function starterShip(): ShipSpec {
+    return shipById('ship-brig') ?? SHIPS[0];
+  }
+  // The watercraft we're on right now: a full sailing ship out at sea, else the equipped pond yacht.
+  function currentBoatSpec(): CarSpec | null {
+    return shipSpec ?? myBoat();
+  }
+  // The vehicle id to relay to other players / render on our avatar: the ship at sea, the yacht on a
+  // pond, the driven car on land, or null on foot.
+  function worldVehicleId(): string | null {
+    if (boating) return shipSpec ? shipSpec.id : net.boat();
+    if (driving) return net.car();
+    return null;
+  }
   // Pull a point inside a water ellipse (f<1 keeps it off the very edge). Returns hit=true if it had
   // to be clamped — the shared shape with resolveCollisions so stepVehicle can use either.
   function confineToWater(x: number, y: number, w: WaterRegion, f = 1): { x: number; y: number; hit: boolean } {
@@ -3860,17 +3915,34 @@ export function startWorld(net: WorldNet): void {
     const s = f / d;
     return { x: w.cx + dx * s, y: w.cy + dy * s, hit: true };
   }
-  // The water you could launch a boat onto right now (near a pond's shore, on foot, boat owned).
-  function boardableWater(): WaterRegion | null {
-    if (boating || driving || !myBoat() || inInterior || inDungeon) return null;
-    for (const w of WATER) {
+  // Keep a ship inside a corner sea: clamp to the rect, inset by the shore margin, and push it back
+  // out of any island it tries to sail into (islands are added in Phase 3 → ISLANDS).
+  function confineToSea(x: number, y: number, w: WaterRegion): { x: number; y: number; hit: boolean } {
+    const minx = w.rect.x + SEA_SHORE, maxx = w.rect.x + w.rect.w - SEA_SHORE;
+    const miny = w.rect.y + SEA_SHORE, maxy = w.rect.y + w.rect.h - SEA_SHORE;
+    let cx = clamp(x, minx, maxx), cy = clamp(y, miny, maxy);
+    let hit = cx !== x || cy !== y;
+    const shore = shoveOffIslands(cx, cy, SHIP_WID * 0.5);
+    if (shore.hit) { cx = shore.x; cy = shore.y; hit = true; }
+    return { x: cx, y: cy, hit };
+  }
+  // The water you could launch onto right now: a pond (needs the yacht) or a corner sea (free Brig).
+  // Returns the region + whether it's open ocean, so the caller knows which craft to crew.
+  function boardable(): { w: WaterRegion; sea: boolean } | null {
+    if (boating || driving || inInterior || inDungeon) return null;
+    for (const w of SEA) { // the ocean first — it's the bigger, more obvious coastline
       const nx = clamp(selfX, w.rect.x, w.rect.x + w.rect.w);
       const ny = clamp(selfY, w.rect.y, w.rect.y + w.rect.h);
-      if (Math.hypot(selfX - nx, selfY - ny) <= BOAT_BOARD_PAD) return w;
+      if (Math.hypot(selfX - nx, selfY - ny) <= SHIP_BOARD_PAD) return { w, sea: true };
+    }
+    if (myBoat()) for (const w of WATER) {
+      const nx = clamp(selfX, w.rect.x, w.rect.x + w.rect.w);
+      const ny = clamp(selfY, w.rect.y, w.rect.y + w.rect.h);
+      if (Math.hypot(selfX - nx, selfY - ny) <= BOAT_BOARD_PAD) return { w, sea: false };
     }
     return null;
   }
-  // Step out of the boat onto the nearest dry shore (just outside the pond rect, on grass).
+  // Step out onto the nearest dry shore (just outside the water rect, on land).
   function disembarkPoint(x: number, y: number, r: Rect): { x: number; y: number } {
     const pad = R + 6;
     const left = x - r.x, right = r.x + r.w - x, top = y - r.y, bottom = r.y + r.h - y;
@@ -3883,22 +3955,31 @@ export function startWorld(net: WorldNet): void {
   function toggleBoat() {
     if (inInterior || inDungeon || net.amJailed()) return;
     if (!boating) {
-      if (!myBoat()) { flashHelp('You don\'t own a boat — fish one up! (Shop → Vehicles → Boats)'); return; }
-      const w = boardableWater();
-      if (!w) { flashHelp('🛥️ Get next to the water (the fishing pond) to launch your boat.'); return; }
-      boating = true; boatWater = w; driving = false; vx = vy = 0;
-      boatEntry = { x: selfX, y: selfY };           // remember the dock for a safe fallback
-      const p = confineToWater(selfX, selfY, w, 0.82); // slide the boat onto the open water
-      selfX = p.x; selfY = p.y;
-      tone(360, 0.18, 'sine', 0.05, 520);           // little launch blip
+      const b = boardable();
+      if (!b) { flashHelp('🚢 Walk up to the ocean (or the fishing pond) to set sail.'); return; }
+      boating = true; boatWater = b.w; driving = false; vx = vy = 0;
+      boatEntry = { x: selfX, y: selfY };           // remember the launch spot for a safe fallback
+      if (b.sea) {
+        shipSpec = starterShip(); shipHp = shipSpec.hp;
+        const p = confineToSea(selfX, selfY, b.w);   // slide the hull off the sand onto open water
+        selfX = p.x; selfY = p.y;
+        flashHelp(`⚓ You crew ${shipSpec.name}. Aim to a side & fire a broadside!`);
+        tone(220, 0.3, 'sawtooth', 0.05, 150);       // a low, ropey ship's-horn honk
+      } else {
+        shipSpec = null; shipHp = 0;
+        const p = confineToWater(selfX, selfY, b.w, 0.82); // slide the boat onto the open water
+        selfX = p.x; selfY = p.y;
+        tone(360, 0.18, 'sine', 0.05, 520);          // little launch blip
+      }
     } else {
       const w = boatWater;
-      boating = false; boatWater = null; vx = vy = 0;
+      const wasShip = !!shipSpec;
+      boating = false; boatWater = null; shipSpec = null; shipHp = 0; vx = vy = 0;
       const back = w ? disembarkPoint(selfX, selfY, w.rect) : (boatEntry ?? { x: selfX, y: selfY });
       const safe = resolveCollisions(back.x, back.y, R); // never disembark into a wall
       selfX = safe.x; selfY = safe.y;
       boatEntry = null;
-      tone(300, 0.16, 'sine', 0.05, 220);
+      tone(wasShip ? 200 : 300, 0.16, 'sine', 0.05, 220);
     }
     syncDriveBtn();
   }
@@ -3923,10 +4004,13 @@ export function startWorld(net: WorldNet): void {
     const now = performance.now();
     if (helpFlash && now < helpFlashUntil) { help.innerHTML = `<span style="color:#ffd166">${helpFlash}</span>`; return; }
     if (boating) {
-      help.innerHTML = 'W/S or ↑/↓ throttle · A/D or ←/→ steer · drag to sail · <b>B</b> dock · <b>T</b> chat · <b>Y</b> say';
+      help.innerHTML = shipSpec
+        ? `W/S throttle · A/D steer · <b>R</b>/<b>click</b> fire broadside (aim to a side) · <b>B</b> anchor & go ashore · <b>T</b> chat`
+        : 'W/S or ↑/↓ throttle · A/D or ←/→ steer · drag to sail · <b>B</b> dock · <b>T</b> chat · <b>Y</b> say';
       return;
     }
-    const boatHint = boardableWater() ? ' · <b>B</b> board boat' : '';
+    const b = boardable();
+    const boatHint = b ? (b.sea ? ' · <b>B</b> board ship' : ' · <b>B</b> board boat') : '';
     const gun = `<b>R</b>/<b>click</b> fire ${WEAPON_BY_ID[weapon].emoji} · <b>1-4</b>/<b>Q</b> weapon`;
     help.innerHTML = driving
       ? `W/S or ↑/↓ throttle · A/D or ←/→ steer · <b>Shift</b> drift · ${gun} · <b>F</b> get out · <b>T</b> chat`
@@ -9764,7 +9848,7 @@ export function startWorld(net: WorldNet): void {
     // WASD/arrows on desktop, so the mouse is free to aim. Touch keeps drag-to-walk (below).
     if (e.pointerType === 'mouse' && e.button === 0 && canFire()) {
       mouseAim = true; mouseAimId = e.pointerId; mouseAimSX = e.clientX; mouseAimSY = e.clientY;
-      firing = true; if (!driving) aimAtScreen(e.clientX, e.clientY); fireWeapon(); // driving fires forward
+      firing = true; if (!driving && !boating) aimAtScreen(e.clientX, e.clientY); fireWeapon(); // driving/sailing steer their own heading; the cursor only picks the broadside side
       return;
     }
     joyActive = true;
@@ -9947,7 +10031,8 @@ export function startWorld(net: WorldNet): void {
     stepVehicle(car, dt, (x, y) => resolveCollisions(x, y, CAR_WID * 0.5));
   }
   function stepBoat(boat: CarSpec, dt: number) {
-    stepVehicle(boat, dt, (x, y) => boatWater ? confineToWater(x, y, boatWater, 1) : resolveCollisions(x, y, CAR_WID * 0.5));
+    const half = shipSpec ? SHIP_WID * 0.5 : CAR_WID * 0.5;
+    stepVehicle(boat, dt, (x, y) => boatWater ? (boatWater.sea ? confineToSea(x, y, boatWater) : confineToWater(x, y, boatWater, 1)) : resolveCollisions(x, y, half));
   }
   function stepVehicle(car: CarSpec, dt: number, confine: (x: number, y: number) => { x: number; y: number; hit: boolean }) {
     let throttle = 0, steer = 0;
@@ -10280,9 +10365,12 @@ export function startWorld(net: WorldNet): void {
     }
     prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || seatedAt || nearOfficeChair || nearOfficeSpot || nearClubSpot || nearTavernMorris || nearClubDoor || nearGolfTee || nearGolfBall || nearSwan || nearBook || nearCasinoGame || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDungeonImp2 || nearDyingMan || nearRob || nearJailed || nearParcel || nearBiomeSpot) && !dialogOpen && !talkOpen ? 'block' : 'none';
     // Boat affordance: dock while afloat, or board when standing by the water with a boat.
-    const boatable = boating || !!boardableWater();
+    const board = boating ? null : boardable();
+    const boatable = boating || !!board;
     if (boatable && !dialogOpen && !talkOpen) {
-      boatPrompt.textContent = boating ? '🚶 Dock the boat (B)' : '🛥️ Board the boat (B)';
+      boatPrompt.textContent = boating
+        ? (shipSpec ? '⚓ Go ashore (B)' : '🚶 Dock the boat (B)')
+        : (board!.sea ? '🚢 Board a ship (B)' : '🛥️ Board the boat (B)');
       boatPrompt.style.display = 'block';
     } else {
       boatPrompt.style.display = 'none';
@@ -10295,7 +10383,7 @@ export function startWorld(net: WorldNet): void {
     if (Math.abs(selfX - lastSentX) < 0.5 && Math.abs(selfY - lastSentY) < 0.5) return;
     lastSentX = selfX; lastSentY = selfY; lastSentAt = now;
     // Stream the boat id in the same field as the car id; others render it via carById (it's in CARS).
-    net.move(selfX, selfY, (driving || boating) ? facing : undefined, boating ? net.boat() : driving ? net.car() : null, net.pet(), net.carColor());
+    net.move(selfX, selfY, (driving || boating) ? facing : undefined, worldVehicleId(), net.pet(), net.carColor());
   }
 
   // ============================================================================================
@@ -10419,6 +10507,21 @@ export function startWorld(net: WorldNet): void {
     tone(2400, 0.07, 'square', 0.05, 900);
     noise(0.1, 0.05, 3200);
   }
+  // A broadside: a fat, gravelly BOOM — powder going off — with a punchy low thump under it.
+  let lastCannonSoundAt = 0;
+  function cannonFireSound() {
+    const now = performance.now();
+    if (now - lastCannonSoundAt < 40) return; // a whole volley fires at once; one crack is plenty
+    lastCannonSoundAt = now;
+    noise(0.34, 0.22, 620);
+    tone(90, 0.3, 'sawtooth', 0.18, 42);
+    tone(150, 0.14, 'square', 0.09, 60);
+  }
+  // A cannonball plunging into the sea: a short watery splat.
+  function splashSound() {
+    noise(0.16, 0.12, 1400);
+    tone(520, 0.1, 'sine', 0.05, 200);
+  }
   // Singularity launch: a low, wrong-sounding swell that slides *down* where a rocket slides up.
   function voidFireSound() {
     tone(320, 0.4, 'sine', 0.16, 70);
@@ -10524,6 +10627,7 @@ export function startWorld(net: WorldNet): void {
     carBody: Phaser.GameObjects.Image;
     carRoof: Phaser.GameObjects.Image;
     carWheels: Phaser.GameObjects.Image; // big untinted tires — only shown for the Monster Truck
+    ship: Phaser.GameObjects.Image;      // the sailing-ship hull — only shown out on the ocean
     smokeT: number; sx: number; sy: number; // exhaust-smoke emit cooldown + last position (movement gate)
     label: Phaser.GameObjects.Text;
     bubble: Phaser.GameObjects.Text;  // netizen speech bubble (hidden for humans)
@@ -11751,6 +11855,55 @@ export function startWorld(net: WorldNet): void {
       g.clear();
       px(3, 4, 8, 6, 0xffffff);                                 // a small flat canopy, front-and-center only
       g.generateTexture('w-golfcart-roof', 24, 14);
+    }
+    // --- SAILING SHIPS (naval) — top-down tall ships, painted in full colour (rendered untinted like
+    //     the yacht), pointing +x (east). One sprite per SHIPS class, sized to its hull length. A
+    //     pointed wooden hull with a planked deck, gunwale trim, a row of cannon ports down each
+    //     side (one per gun), two/three masts, and big cream square-rigged sails stretched across the
+    //     beam so the ship reads unmistakably as a Black-Flag brig from straight above. ---
+    {
+      const darken = (c: number, f: number) => {
+        const r = Math.min(255, ((c >> 16) & 255) * f | 0), gg = Math.min(255, ((c >> 8) & 255) * f | 0), b = Math.min(255, (c & 255) * f | 0);
+        return (r << 16) | (gg << 8) | b;
+      };
+      const SAIL = 0xf2ead6, SAIL_D = 0xd6ccb2, SAIL_E = 0xbfb59a, MAST = 0x4a3520, PORT = 0x140d06, TRIM = 0xf4ead0;
+      for (const spec of SHIPS) {
+        const W = spec.len, H = (Math.round(W * 0.4) | 1);      // beam ~40% of length, forced odd for a centreline
+        const midY = (H - 1) / 2;
+        const HULL = hexToInt(spec.body), HULL_D = darken(HULL, 0.66), DECK = hexToInt(spec.accent), DECK_D = darken(DECK, 0.8);
+        const bow = Math.round(W * 0.66);                       // where the pointed bow taper begins
+        g.clear();
+        // hull: squared stern (left) + long body, then a pointed bow taper to the right (+x)
+        px(1, 4, 1, H - 8, HULL_D);                             // transom shadow at the stern
+        px(2, 2, bow, H - 4, HULL);
+        for (let i = 0; i < W - bow; i++) {                     // bow narrows to a point
+          const inset = Math.round((i / (W - bow)) * (H / 2 - 0.5));
+          px(bow + i, 2 + inset, 1, Math.max(1, H - 4 - inset * 2), HULL);
+        }
+        px(2, 2, bow, 1, TRIM); px(2, H - 3, bow, 1, TRIM);     // bright gunwale rails down both sides
+        px(4, 4, bow - 3, H - 8, DECK);                        // planked deck inlay
+        px(4, midY, W - 8, 1, DECK_D);                          // centreline plank seam
+        // cannon ports: one dark square per gun down each side, evenly spaced along the gun deck
+        const span = bow - 8;
+        for (let k = 0; k < spec.guns; k++) {
+          const gx = 6 + Math.round(((k + 0.5) / spec.guns) * span);
+          px(gx, 1, 2, 1, PORT); px(gx, H - 2, 2, 1, PORT);
+        }
+        // masts + square sails: cream bars stretched across the beam (top-down rigging)
+        const masts = spec.klass === 'manowar' || spec.klass === 'galleon' ? 3 : spec.klass === 'frigate' ? 3 : 2;
+        for (let m = 0; m < masts; m++) {
+          const mx = 8 + Math.round(((m + 0.5) / masts) * (bow - 6));
+          px(mx - 2, 2, 4, H - 4, SAIL);
+          px(mx - 2, 2, 1, H - 4, SAIL_E); px(mx + 1, 2, 1, H - 4, SAIL_D); // luff/leech shading
+          px(mx, midY - 1, 1, 3, MAST);                          // the mast, poking through the canvas
+        }
+        g.generateTexture(`w-${spec.id}`, W, H);
+      }
+      // A cannonball: a small dark iron sphere with a glint (8×8).
+      g.clear();
+      px(2, 1, 4, 6, 0x2a2a30); px(1, 2, 6, 4, 0x2a2a30);
+      px(2, 2, 3, 2, 0x4a4a52); px(2, 2, 1, 1, 0x9a9aa2); // highlight
+      g.generateTexture('w-cannonball', 8, 8);
     }
     // --- speech-bubble panel: a rounded rect drawn on a 2D canvas (which anti-aliases properly,
     // unlike Phaser's pixel-art Graphics) and used as a LINEAR-filtered 9-slice. That keeps the
@@ -14172,10 +14325,10 @@ export function startWorld(net: WorldNet): void {
 
       if (!dialogOpen && !talkOpen && now >= stunnedUntil) {
         safeStep('movement', () => {
-          const boat = boating ? myBoat() : null;
+          const boat = boating ? currentBoatSpec() : null;
           const car = !boating && driving ? myCar() : null;
           if (boat) stepBoat(boat, dt);
-          else if (boating) { boating = false; boatWater = null; } // lost the boat — bail out of the mode
+          else if (boating) { boating = false; boatWater = null; shipSpec = null; shipHp = 0; } // lost the boat — bail out of the mode
           else if (car) stepCar(car, dt);
           else stepFoot(dt);
         });
@@ -14204,21 +14357,23 @@ export function startWorld(net: WorldNet): void {
       safeStep('nearBuilding', () => updateNearBuilding());
       safeStep('sendMove', () => maybeSendMove(now));
 
-      // show the touch fire button + weapon rack only out in the open world (and in the office,
-      // where weapons stay live)
-      const armed = (!inInterior || inOffice) && !inDungeon && !boating && !net.amJailed();
+      // show the touch fire button + weapon rack out in the open world (and in the office, where
+      // weapons stay live; and at sea on a ship — its broadside fires through the same button; the
+      // pond yacht stays unarmed)
+      const armed = (!inInterior || inOffice) && !inDungeon && (!boating || !!shipSpec) && !net.amJailed();
       if (fireBtnShown !== armed) {
         fireBtnShown = armed;
         fireBtn.style.display = armed ? 'block' : 'none';
-        rack.style.display = armed ? 'flex' : 'none';
+        rack.style.display = armed && !shipSpec ? 'flex' : 'none'; // no weapon rack at sea — just the broadside
         if (!armed) { firing = false; mouseAim = false; }
       }
-      if (mouseAim && !driving) aimAtScreen(mouseAimSX, mouseAimSY); // keep the shot pointed at the cursor (on foot)
+      fireBtn.textContent = shipSpec ? '💣' : WEAPON_BY_ID[weapon].emoji; // a ship's button fires the broadside
+      if (mouseAim && !driving && !boating) aimAtScreen(mouseAimSX, mouseAimSY); // keep the shot pointed at the cursor (on foot; a ship steers its own heading)
       if (firing) fireWeapon();  // held trigger — the weapon's own cooldown paces it
       updateCrates(now);
 
       // place our avatar straight from authoritative state (zero latency)
-      if (self) { placeAvatar(self, selfX, selfY, facing, boating ? net.boat() : driving ? net.car() : null, net.color(), net.name() || 'you', net.carColor()); applySay(self, net.selfId(), now); }
+      if (self) { placeAvatar(self, selfX, selfY, facing, worldVehicleId(), net.color(), net.name() || 'you', net.carColor()); applySay(self, net.selfId(), now); }
 
       // The Blessing of the Ball: a pulsing golden halo behind you + a draining HUD badge, both fading
       // as the swiftness wears off.
@@ -14401,6 +14556,7 @@ export function startWorld(net: WorldNet): void {
   interface Shot { spr: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number; t: number; ghost: boolean; }
   const rockets: Shot[] = [];
   const bullets: Shot[] = [];
+  const cannonballs: Shot[] = []; // broadside cannon fire (naval)
   const orbs: Shot[] = [];
   const ROCKET_SPEED = 640, ROCKET_LIFE = 1.7, BLAST_R = 96;
   const MG_SPEED = 1500, MG_LIFE = 0.5, MG_SPREAD = 0.045, MG_HIT_R = 22;
@@ -14424,10 +14580,11 @@ export function startWorld(net: WorldNet): void {
       if (ammo[id] > 0) { selectWeapon(id); return; }
     }
   }
-  // Everything that has to be true before any weapon will go off. Indoors is a no-fire zone —
-  // except Tsong Towers, where HR lost the weapons-policy argument years ago.
+  // Everything that has to be true before any weapon will go off. Indoors is a no-fire zone — except
+  // Tsong Towers, where HR lost the weapons-policy argument years ago. A ship at sea fires its
+  // broadside cannons (boating on a ship is allowed); the little pond yacht stays unarmed.
   function canFire(): boolean {
-    return (!inInterior || inOffice) && !inDungeon && !boating && !net.amJailed() && !talkOpen && !dialogOpen && !chatActive && !sayActive;
+    return (!inInterior || inOffice) && !inDungeon && (!boating || !!shipSpec) && !net.amJailed() && !talkOpen && !dialogOpen && !chatActive && !sayActive;
   }
 
   function fireWeapon() {
@@ -14435,6 +14592,7 @@ export function startWorld(net: WorldNet): void {
     const now = performance.now();
     if (!canFire()) return;
     if (now < stunnedUntil) return;                                        // can't fire while flattened
+    if (shipSpec) { fireBroadside(now); return; }                          // at sea: broadside, not a forward shot
     const spec = WEAPON_BY_ID[weapon];
     if (now - lastShotAt < spec.cooldown) return;                          // cooldown
     if (ammo[weapon] <= 0) {
@@ -14473,16 +14631,105 @@ export function startWorld(net: WorldNet): void {
     }
   }
 
+  // --- 🏴‍☠️ naval broadsides ---------------------------------------------------------------------
+  // A ship fires out its SIDES, Black-Flag style, not forward. Fire with the cursor to port or
+  // starboard and that broadside barks; fire with no cursor (keyboard R / mobile button) and BOTH
+  // sides let go in a full salvo. Each gun lobs a cannonball that flies a fixed range then either
+  // smashes a target (blast) or plunges into the sea (harmless splash).
+  const BROADSIDE_CD = 1050;                 // ms between broadsides (a gun crew needs to reload)
+  const CANNON_SPEED = 540, CANNON_LIFE = 0.82, CANNON_BLAST_R = 66, CANNON_SPREAD = 0.14;
+  let lastBroadsideAt = 0;
+  // Which beam the cursor is on: +1 starboard, -1 port, 0 = no cursor (fire both sides).
+  function aimSide(): number {
+    if (!mouseAim || !mainCam) return 0;
+    const wp = mainCam.getWorldPoint(mouseAimSX, mouseAimSY);
+    const cross = Math.cos(facing) * (wp.y - selfY) - Math.sin(facing) * (wp.x - selfX);
+    return Math.abs(cross) < 2 ? 0 : (cross > 0 ? 1 : -1);
+  }
+  function fireBroadside(now: number) {
+    const ship = shipSpec; if (!ship) return;
+    if (now - lastBroadsideAt < BROADSIDE_CD) return;
+    lastBroadsideAt = now;
+    const side = aimSide();
+    const sides = side === 0 ? [-1, 1] : [side];
+    const hx = Math.cos(facing), hy = Math.sin(facing);
+    for (const s of sides) {
+      const bx = -hy * s, by = hx * s;                     // outward beam normal for this side
+      const dir = Math.atan2(by, bx);
+      for (let k = 0; k < ship.guns; k++) {
+        const t = ship.guns === 1 ? 0 : (k / (ship.guns - 1) - 0.5); // -0.5..0.5 along the hull
+        const along = t * SHIP_LEN * 0.78;
+        const mx = selfX + hx * along + bx * (SHIP_WID * 0.5 + 6);
+        const my = selfY + hy * along + by * (SHIP_WID * 0.5 + 6);
+        const a = dir + (Math.random() - 0.5) * 2 * CANNON_SPREAD;
+        spawnCannonball(mx, my, a, false);
+        net.rocket(mx, my, a, 'cannon');
+        spawnMuzzleSmoke(mx, my);
+      }
+    }
+    cannonFireSound();
+    mainCam?.shake(140, 0.006);
+  }
+  function spawnCannonball(x: number, y: number, a: number, ghost: boolean) {
+    const sc = petScene; if (!sc) return;
+    const spr = sc.add.image(x, y, 'w-cannonball').setScale(TEXEL * 1.1).setDepth(y + 40);
+    cannonballs.push({ spr, x, y, vx: Math.cos(a) * CANNON_SPEED, vy: Math.sin(a) * CANNON_SPEED, t: 0, ghost });
+  }
+  function updateCannonballs(dt: number) {
+    const sc = petScene; if (!sc) return;
+    const now = performance.now();
+    for (let i = cannonballs.length - 1; i >= 0; i--) {
+      const cb = cannonballs[i];
+      cb.t += dt;
+      cb.x += cb.vx * dt; cb.y += cb.vy * dt;
+      // an arc: the ball rides up then settles as it nears the end of its range (drawn via scale)
+      const arc = 1 + Math.sin(Math.min(1, cb.t / CANNON_LIFE) * Math.PI) * 0.5;
+      cb.spr.setPosition(cb.x, cb.y).setScale(TEXEL * 1.1 * arc).setDepth(cb.y + 40);
+      const spent = cb.t >= CANNON_LIFE;
+      if (cb.ghost) { if (spent) { spawnSplash(cb.x, cb.y); cb.spr.destroy(); cannonballs.splice(i, 1); } continue; }
+      const target = hitsBody(cb.x, cb.y, now) || mobAt(cb.x, cb.y) || raidBossAt(cb.x, cb.y);
+      if (target) {
+        spawnExplosion(cb.x, cb.y, 0.8);
+        net.boom(cb.x, cb.y, CANNON_BLAST_R, 'blast');
+        applyBlast(cb.x, cb.y, CANNON_BLAST_R, true);
+        cb.spr.destroy(); cannonballs.splice(i, 1);
+        continue;
+      }
+      if (spent) {                                         // ran out of range → a harmless splash
+        spawnSplash(cb.x, cb.y);
+        net.boom(cb.x, cb.y, 0, 'splash');
+        cb.spr.destroy(); cannonballs.splice(i, 1);
+      }
+    }
+  }
+  // A white spout where a cannonball hits the water.
+  function spawnSplash(x: number, y: number) {
+    const sc = petScene; if (!sc) return;
+    for (let i = 0; i < 6; i++) {
+      const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.6, sp = 60 + Math.random() * 90;
+      sc.add.image(x, y, 'w-cannonball').setScale(TEXEL * 0.6).setTint(0xdff0f8).setAlpha(0.9).setDepth(y + 41);
+      spawnSparks(x, y, 0xcfe8f4);
+      void a; void sp;
+    }
+    splashSound();
+  }
+  function spawnMuzzleSmoke(x: number, y: number) {
+    const sc = petScene; if (!sc || smokePuffs.length >= 120) return;
+    smokePuffs.push({ spr: sc.add.image(x, y, 'w-smoke').setScale(0.5).setTint(0xf0f0f0).setAlpha(0.6).setDepth(y + 42),
+      t: 0, max: 0.5, vx: (Math.random() - 0.5) * 40, vy: (Math.random() - 0.5) * 40 });
+  }
+
   // A remote player's shot (from a `worldRocket` broadcast) — mirror it onto our screen. Cosmetic
   // only; the firer's own `worldBoom` is what actually hurts anybody.
   function feedShot(x: number, y: number, a: number, w: WorldWeapon, len?: number) {
     if (inInterior || inDungeon) return; // not visible from inside a room/the Ruins
     const near = Math.hypot(x - selfX, y - selfY) < 850; // only nearby shots are audible
     switch (w) {
-      case 'mg':    spawnBullet(x, y, a, true); if (near) mgSound(); break;
-      case 'laser': drawBeam(x, y, a, len ?? LASER_RANGE); if (near) laserSound(); break;
-      case 'void':  spawnOrb(x, y, a, true); if (near) voidFireSound(); break;
-      default:      spawnRocket(x, y, a, true); if (near) rocketLaunchSound(); break;
+      case 'mg':     spawnBullet(x, y, a, true); if (near) mgSound(); break;
+      case 'laser':  drawBeam(x, y, a, len ?? LASER_RANGE); if (near) laserSound(); break;
+      case 'void':   spawnOrb(x, y, a, true); if (near) voidFireSound(); break;
+      case 'cannon': spawnCannonball(x, y, a, true); if (near) cannonFireSound(); spawnMuzzleSmoke(x, y); break;
+      default:       spawnRocket(x, y, a, true); if (near) rocketLaunchSound(); break;
     }
   }
 
@@ -14503,8 +14750,12 @@ export function startWorld(net: WorldNet): void {
     if (inOffice && !printerDown && Math.hypot(OFFICE_SPOTS.printer.x - x, OFFICE_SPOTS.printer.y - y) <= r + 26) wreckPrinter();
     // Raids are PvE: no friendly fire in the arena. Player blasts (and bullet splash, which routes
     // through here too) never knock allies — or you — around while the Warden is up.
-    if (!inRaidFight() && Math.hypot(selfX - x, selfY - y) <= r) {
-      if (driving) {
+    // A ship is a big target: a hit anywhere along the hull counts, not just dead-centre.
+    const selfReach = r + (shipSpec ? SHIP_LEN * 0.4 : 0);
+    if (!inRaidFight() && Math.hypot(selfX - x, selfY - y) <= selfReach) {
+      if (shipSpec) {
+        if (!mine && damageMyShip()) net.blownUp(true, mine, shooterPid); // our own shots never scratch our hull
+      } else if (driving) {
         if (blowUpMyCar('💥 Your car took a direct hit — summon a fresh one anytime.')) net.blownUp(true, mine, mine ? undefined : shooterPid);
       } else if (now >= stunnedUntil && (!inInterior || inOffice) && !inDungeon) {
         stunnedUntil = now + 2300; keys.clear();
@@ -14526,12 +14777,14 @@ export function startWorld(net: WorldNet): void {
     for (const n of npcs) if (now >= n.squishedUntil && Math.hypot(n.x - x, n.y - y) < R + 4) return n;
     return null;
   }
-  // Another player (on foot or in a car) at (x,y). These hits DO have to be broadcast.
+  // Another player (on foot, in a car, or crewing a ship) at (x,y). These hits DO have to be
+  // broadcast. A ship is a big hull, so it catches shots along its whole length.
   function playerAt(x: number, y: number): WorldAvatar | null {
     const selfId = net.selfId();
     for (const a of others) {
       if (a.id === selfId) continue;
-      if (Math.hypot(a.x - x, a.y - y) < (a.car ? CAR_LEN * 0.5 : R * 1.3)) return a;
+      const reach = shipById(a.car) ? SHIP_LEN * 0.44 : a.car ? CAR_LEN * 0.5 : R * 1.3;
+      if (Math.hypot(a.x - x, a.y - y) < reach) return a;
     }
     return null;
   }
@@ -14850,6 +15103,7 @@ export function startWorld(net: WorldNet): void {
   function updateShots(dt: number) {
     updateRockets(dt);
     updateBullets(dt);
+    updateCannonballs(dt);
     updateBeams(dt);
     updateOrbs(dt);
     updateHoles(dt);
@@ -14957,6 +15211,43 @@ export function startWorld(net: WorldNet): void {
     flashHelp(reason);
     return true;
   }
+  // A cannonball caught our hull. Chip a hull point; when it hits zero the ship goes down. Returns
+  // true only on the sinking blow (so applyBlast hands out the kill). Each connecting ball counts —
+  // a tight broadside genuinely staggers you — but a tiny debounce stops one boom double-registering.
+  let lastHullHitAt = 0;
+  function damageMyShip(): boolean {
+    const now = performance.now();
+    if (!shipSpec || shipHp <= 0) return false;
+    if (now - lastHullHitAt < 60) return false;
+    lastHullHitAt = now;
+    shipHp--;
+    spawnSparks(selfX, selfY, 0xffb020);
+    spawnExplosion(selfX + (Math.random() - 0.5) * 40, selfY + (Math.random() - 0.5) * 40, 0.6);
+    mainCam?.shake(220, 0.012);
+    if (shipHp > 0) {
+      flashHelp(`💥 Hull hit! ${'🟩'.repeat(shipHp)}${'⬛'.repeat(Math.max(0, shipSpec.hp - shipHp))}`);
+      tone(150, 0.14, 'square', 0.05, 90);
+      return false;
+    }
+    sinkMyShip();
+    return true;
+  }
+  // The ship goes under: a big fireball + a spout, then you're spat out onto the nearest shore to
+  // crew a fresh one. (Ships are free at any coast — losing one costs you the fight, not the boat.)
+  function sinkMyShip() {
+    const w = boatWater;
+    spawnExplosion(selfX, selfY, 1.4);
+    spawnSplash(selfX, selfY);
+    net.boom(selfX, selfY, 0, 'splash');
+    net.boom(selfX, selfY);            // a shared fireball marking the wreck
+    boating = false; shipSpec = null; shipHp = 0; boatWater = null; vx = vy = 0;
+    const back = w ? disembarkPoint(selfX, selfY, w.rect) : { x: selfX, y: selfY };
+    const safe = resolveCollisions(back.x, back.y, R);
+    selfX = safe.x; selfY = safe.y;
+    flashHelp('🌊 Your ship went down! Reach the coast and crew another.');
+    tone(90, 0.6, 'sawtooth', 0.06, 60);
+    syncDriveBtn();
+  }
   // Two cars touching → BOTH explode. Detection is symmetric, so each client blows up its OWN car
   // (one fireball per car, every one of them broadcast) — net result: two fireballs, seen by all.
   function checkCarCrash(now: number) {
@@ -15062,7 +15353,8 @@ export function startWorld(net: WorldNet): void {
     const carWheels = sc.add.image(0, 0, 'w-monster-body-wheels').setScale(TEXEL).setVisible(false); // monster-truck tires (under the body)
     const carBody = sc.add.image(0, 0, 'w-car-body').setScale(TEXEL);
     const carRoof = sc.add.image(0, 0, 'w-car-roof').setScale(TEXEL);
-    const car = sc.add.container(0, 0, [carWheels, carBody, carRoof]).setVisible(false);
+    const ship = sc.add.image(0, 0, 'w-ship-brig').setScale(TEXEL).setVisible(false); // big hull, only afloat at sea
+    const car = sc.add.container(0, 0, [carWheels, carBody, carRoof, ship]).setVisible(false);
     const label = sc.add.text(0, -R - 14, name, NAME_STYLE).setOrigin(0.5, 1);
     // Rounded speech bubble: the smooth panel is the 'w-bubble' 9-slice (drawn behind the text);
     // the text just carries the words. drawBubbleBg() re-fits the panel to the text on each change.
@@ -15075,7 +15367,7 @@ export function startWorld(net: WorldNet): void {
       wordWrap: { width: 180 },
     }).setOrigin(0.5, 1).setVisible(false).setDepth(1);
     const c = sc.add.container(selfX, selfY, [shadow, car, person, label, bubbleBg, bubble]);
-    return { c, person, car, carBody, carRoof, carWheels, label, bubble, bubbleBg, bubbleNextAt: 0, rx: selfX, ry: selfY, ra: 0, smokeT: 0, sx: selfX, sy: selfY };
+    return { c, person, car, carBody, carRoof, carWheels, ship, label, bubble, bubbleBg, bubbleNextAt: 0, rx: selfX, ry: selfY, ra: 0, smokeT: 0, sx: selfX, sy: selfY };
   }
 
   // Re-fit the rounded panel to the bubble text (which already bakes in its padding). The 9-slice
@@ -15116,6 +15408,16 @@ export function startWorld(net: WorldNet): void {
     av.car.setVisible(inVehicle);
     if (inVehicle) {
       av.car.setRotation(a);
+      const ship = shipById(vehicleId);
+      if (ship) {
+        // A sailing ship: one painted hull sprite (masts + sails baked in), rendered untinted. Hide
+        // all the car layers. Origin sits at hull centre so it rotates about the waterline.
+        av.ship.setVisible(true).setTexture(`w-${ship.id}`).setTint(0xffffff);
+        av.carWheels.setVisible(false); av.carBody.setVisible(false); av.carRoof.setVisible(false);
+        return;
+      }
+      av.ship.setVisible(false);
+      av.carBody.setVisible(true); av.carRoof.setVisible(true);
       const spec = carById(vehicleId);
       const monster = spec?.id === 'car-monster';
       const boat = spec?.id === 'car-boat';
@@ -20124,6 +20426,7 @@ export function startWorld(net: WorldNet): void {
         spawnBlackHole(x, y, r ?? VOID_R, false, shooterPid); // the blast comes when it closes, VOID_HOLD later
         return;
       }
+      if (fx === 'splash') { spawnSplash(x, y); return; } // a cannonball hitting the sea — visual only
       if (fx === 'hit') spawnSparks(x, y, 0xff9a5a);
       else if (fx === 'zap') spawnZap(x, y);
       else spawnExplosion(x, y);
