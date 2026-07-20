@@ -15406,14 +15406,11 @@ export function startWorld(net: WorldNet): void {
     return true;
   }
   // A cannonball caught our hull. Chip a hull point; when it hits zero the ship goes down. Returns
-  // true only on the sinking blow (so applyBlast hands out the kill). Each connecting ball counts —
-  // a tight broadside genuinely staggers you — but a tiny debounce stops one boom double-registering.
-  let lastHullHitAt = 0;
+  // true only on the sinking blow (so applyBlast hands out the kill). EVERY connecting ball counts —
+  // a full enemy broadside landing at once genuinely staggers you (Black-Flag style), so no debounce
+  // here: N cannonballs = N hull points, which is exactly what makes broadsides matter in PvP.
   function damageMyShip(): boolean {
-    const now = performance.now();
     if (!shipSpec || shipHp <= 0) return false;
-    if (now - lastHullHitAt < 60) return false;
-    lastHullHitAt = now;
     shipHp--;
     spawnSparks(selfX, selfY, 0xffb020);
     spawnExplosion(selfX + (Math.random() - 0.5) * 40, selfY + (Math.random() - 0.5) * 40, 0.6);
