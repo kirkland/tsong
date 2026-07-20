@@ -1061,6 +1061,40 @@ export interface WorldRocketMsg {
   len?: number;    // laser only: how far the beam reached before it hit something
 }
 
+// --- Team Retro (Tsong Towers' conference room) -------------------------------------------
+// Sit in one of the eight conference chairs to join the standing retro. The board is one
+// shared, server-owned set of sticky notes in three columns; anyone seated can pin, vote,
+// and — when the room has said its piece — wrap the retro, which posts a summary to the
+// town chat and clears the board for next sprint. State is in-memory (a retro that doesn't
+// survive a server restart simply becomes a retro item for the next retro).
+export type RetroCol = 'well' | 'meh' | 'action';
+export const RETRO_COLS: readonly RetroCol[] = ['well', 'meh', 'action'];
+export const RETRO_CHAIR_COUNT = 8;  // seats around the conference table (client geometry: OFFICE_CHAIRS)
+export const RETRO_NOTE_MAX = 140;   // chars per sticky note
+export const RETRO_NOTES_CAP = 60;   // board-wide sticky cap — a retro with 61 items is a cry for help
+
+export interface RetroNote {
+  id: number;
+  col: RetroCol;
+  text: string;
+  author: string;  // nickname at the time of writing (display)
+  pid: string;     // author identity — grants delete rights + "mine" styling (pids already ride the wire, see WorldBoomMsg)
+  votes: string[]; // pids that +1'd this note (one vote per player per note, toggled)
+}
+export interface RetroSeat {
+  chair: number;   // 0..RETRO_CHAIR_COUNT-1, indexes the client's OFFICE_CHAIRS layout
+  pid: string;
+  name: string;
+  color: string;   // the player's paddle color — how colleagues render at the table
+}
+// Full-board snapshot, fanned to everyone in the World on any change (the board is tiny).
+export interface RetroStateMsg {
+  type: 'retro';
+  seats: RetroSeat[];
+  notes: RetroNote[];
+  startedAt: number; // epoch ms this board was opened (i.e. the last wrap)
+}
+
 // City Tycoon trade terms: properties + cash + jail-free cards offered in either direction.
 export interface CrTradeOffer {
   offerProps: number[]; offerCash: number; offerJailFree: number;
@@ -1216,6 +1250,13 @@ export type ClientMsg =
   | { type: 'worldRocket'; x: number; y: number; a: number; w?: WorldWeapon; len?: number } // we fired here, heading a → broadcast so others see the shot
   | { type: 'worldBlownUp'; car: boolean; self: boolean; killedBy?: string } // a blast got us; killedBy = shooter pid for Road Rage kill attribution
   | { type: 'worldRoadRage' } // start a Road Rage PvP event (any player can trigger; server enforces cooldown)
+  // --- Team Retro (Tsong Towers conference room) ---
+  | { type: 'retroSit'; chair: number } // take a conference chair (joins the retro; server rejects a taken chair)
+  | { type: 'retroStand' } // give up your chair
+  | { type: 'retroNote'; col: RetroCol; text: string } // pin a sticky note (seated only; sanitized + capped + rate-limited)
+  | { type: 'retroVote'; id: number } // toggle your +1 on a sticky (seated only)
+  | { type: 'retroDelete'; id: number } // peel off a sticky you authored
+  | { type: 'retroWrap' } // wrap the retro: summary to town chat, board cleared (seated only)
   // --- Robville land (the suburban neighborhood) ---
   | { type: 'landReq' } // request the current Robville parcel ownership/market book
   | { type: 'landBuyBank'; id: string } // buy an empty lot from the bank for PARCEL_PRICE (subject to BANK_PARCEL_CAP)
@@ -1730,6 +1771,7 @@ export const BALL_REACTION = 'ball';
 export type ServerMsg =
   | YouMsg
   | { type: 'prefs'; prefs: Record<string, string> } // the account's stored user settings, on join
+  | RetroStateMsg
   | StateMsg
   | LeaderboardMsg
   | NetWorthMsg

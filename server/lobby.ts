@@ -32,6 +32,12 @@ import {
   PowerupKind,
   PolyPlayer,
   PolyState,
+  RETRO_CHAIR_COUNT,
+  RETRO_NOTE_MAX,
+  RETRO_NOTES_CAP,
+  RetroCol,
+  RetroNote,
+  RetroStateMsg,
   Role,
   ServerMsg,
   Side,
@@ -621,6 +627,15 @@ export class Lobby {
   private rrEndsAt = 0;
   private rrKills = new Map<string, { name: string; kills: number }>(); // pid → stats
   private rrCooldownUntil = 0; // prevent back-to-back events
+
+  // --- Team Retro — the standing retro in Tsong Towers' conference room ---
+  // One shared board; seats keyed by pid so a reconnect (new socket, same identity) doesn't
+  // strand a phantom in the chair. In-memory by design: a lost board is next retro's first item.
+  private retroSeats = new Map<string, { chair: number; name: string; color: string; ws: WebSocket }>();
+  private retroNotes: RetroNote[] = [];
+  private retroNextNoteId = 1;
+  private retroStartedAt = Date.now();
+  private retroLastNoteAt = new Map<string, number>(); // pid → last pin time (rate limit)
 
   // --- Bolwoing Alley (PvP turn-based bowling) ---
   private bowlingManager: BowlingManager;
@@ -2322,6 +2337,9 @@ export class Lobby {
       for (const other of [...this.world.sockets()]) {
         if (other !== ws && this.conns.get(other)?.pid === conn.pid) this.world.leave(other);
       }
+      // A fresh entry spawns on foot at a door — any conference chair a previous session of
+      // this identity still held would render as a phantom colleague. Vacate it.
+      if (this.retroSeats.delete(conn.pid)) this.broadcastRetro();
     }
     this.world.enter(ws);
     if (conn.jailed) {
@@ -2331,10 +2349,12 @@ export class Lobby {
     }
     this.tell(ws, { type: 'world', avatars: this.worldAvatars() });
     this.sendLand(ws); // push the Robville land book so lots show their owners/for-sale signs
+    this.tell(ws, this.retroState()); // …and the conference-room retro (seats + board) for Tsong Towers
   }
 
   /** Step a player out of the world map. */
   worldLeave(ws: WebSocket) {
+    this.retroStand(ws); // leaving the World vacates your conference chair (if this socket held one)
     this.world.leave(ws);
   }
 
@@ -2413,6 +2433,107 @@ export class Lobby {
       ? (car ? `💥🚀 ${nick} blew up their own car! 🤦` : `💥🚀 ${nick} blew themselves up! 🤦`)
       : (car ? `💥🚀 ${nick}'s car got blown up!` : `💥🚀 ${nick} got blown up!`);
     this.botChat('🚀 KABOOM', text, '#ff8a4a');
+  }
+
+  // --- Team Retro (Tsong Towers conference room) ------------------------------------------
+
+  private retroState(): RetroStateMsg {
+    return {
+      type: 'retro',
+      seats: [...this.retroSeats.entries()].map(([pid, s]) => ({ chair: s.chair, pid, name: s.name, color: s.color })),
+      notes: this.retroNotes,
+      startedAt: this.retroStartedAt,
+    };
+  }
+
+  /** Fan the whole (tiny) board to everyone in the World — colleagues at the table render from it. */
+  private broadcastRetro() {
+    const data = JSON.stringify(this.retroState());
+    for (const sock of this.world.sockets()) if (sock.readyState === sock.OPEN) sock.send(data);
+  }
+
+  /** Take a conference chair. Rejects a chair someone else holds (first bottom wins the race). */
+  retroSit(ws: WebSocket, chair: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname || !this.world.has(ws)) return;
+    if (!Number.isInteger(chair) || chair < 0 || chair >= RETRO_CHAIR_COUNT) return;
+    const holder = [...this.retroSeats.entries()].find(([, s]) => s.chair === chair);
+    if (holder && holder[0] !== conn.pid) {
+      this.tell(ws, { type: 'announce', text: '🪑 Someone got that chair first — pick another.', toast: true });
+      this.tell(ws, this.retroState()); // resync so their client stands them back up
+      return;
+    }
+    this.retroSeats.set(conn.pid, { chair, name: conn.nickname, color: conn.color, ws });
+    this.broadcastRetro();
+  }
+
+  /** Give up your chair (walked off, blasted off, disconnected — all roads lead here). */
+  retroStand(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn?.pid) return;
+    // Only vacate if THIS socket holds the seat — an old zombie socket closing must not
+    // yank the chair out from under the same player's fresh connection.
+    const seat = this.retroSeats.get(conn.pid);
+    if (!seat || seat.ws !== ws) return;
+    this.retroSeats.delete(conn.pid);
+    this.broadcastRetro();
+  }
+
+  /** Pin a sticky note to the board. Seated only; sanitized, capped, rate-limited. */
+  retroNote(ws: WebSocket, col: RetroCol, text: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !this.retroSeats.has(conn.pid)) return; // no drive-by notes from the bullpen
+    const clean = text.replace(/\s+/g, ' ').trim().slice(0, RETRO_NOTE_MAX);
+    if (!clean) return;
+    const now = Date.now();
+    if (now - (this.retroLastNoteAt.get(conn.pid) ?? 0) < 1500) return; // one sticky per 1.5s per author
+    if (this.retroNotes.length >= RETRO_NOTES_CAP) {
+      this.tell(ws, { type: 'announce', text: '📋 The board is full. That is itself retro feedback.', toast: true });
+      return;
+    }
+    this.retroLastNoteAt.set(conn.pid, now);
+    this.retroNotes.push({ id: this.retroNextNoteId++, col, text: clean, author: conn.nickname || 'anon', pid: conn.pid, votes: [] });
+    this.broadcastRetro();
+  }
+
+  /** Toggle your +1 on a note. Seated only. */
+  retroVote(ws: WebSocket, id: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !this.retroSeats.has(conn.pid)) return;
+    const note = this.retroNotes.find((n) => n.id === id);
+    if (!note) return;
+    const i = note.votes.indexOf(conn.pid);
+    if (i >= 0) note.votes.splice(i, 1); else note.votes.push(conn.pid);
+    this.broadcastRetro();
+  }
+
+  /** Peel off a sticky you authored. */
+  retroDelete(ws: WebSocket, id: number) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !this.retroSeats.has(conn.pid)) return;
+    const i = this.retroNotes.findIndex((n) => n.id === id && n.pid === conn.pid);
+    if (i < 0) return;
+    this.retroNotes.splice(i, 1);
+    this.broadcastRetro();
+  }
+
+  /** Wrap the retro: post the summary to town chat, clear the board, start the next one. */
+  retroWrap(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !this.retroSeats.has(conn.pid)) return;
+    if (!this.retroNotes.length) {
+      this.tell(ws, { type: 'announce', text: '📋 Nothing on the board — nothing to wrap. Great sprint, everyone?', toast: true });
+      return;
+    }
+    const count = (c: RetroCol) => this.retroNotes.filter((n) => n.col === c).length;
+    const top = [...this.retroNotes].sort((a, b) => b.votes.length - a.votes.length)[0];
+    const bits = [`${count('well')}× went well`, `${count('meh')}× needs work`, `${count('action')} action item${count('action') === 1 ? '' : 's'}`];
+    const topBit = top.votes.length > 0 ? ` Top vote: “${top.text.slice(0, 60)}” (+${top.votes.length}).` : '';
+    this.botChat('📋 RETRO', `${conn.nickname} wrapped the retro — ${bits.join(', ')}.${topBit} Same table next sprint.`, '#8ad08a');
+    track(conn.pid, conn.nickname, 'game.retro.wrap');
+    this.retroNotes = [];
+    this.retroStartedAt = Date.now();
+    this.broadcastRetro();
   }
 
   /** Start a 3-minute Road Rage event. Any player can trigger it; 5-minute cooldown between events. */
@@ -7126,6 +7247,7 @@ export class Lobby {
     this.bowlLeave(ws); // drop out of any bowling room
     this.crLeave(ws);   // drop out of any City Tycoon game (holdings return to the bank)
     this.nomLeave(ws);  // drop out of the Parliament (Nomic) rotation
+    this.retroStand(ws); // vacate their conference chair (if this socket held one)
     this.world.leave(ws); // drop their avatar from the free-roam world map
     const leavingPid = this.conns.get(ws)?.pid ?? '';
     // Persist their final stress level before the connection is torn down.

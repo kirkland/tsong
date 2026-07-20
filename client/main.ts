@@ -933,6 +933,8 @@ const net = connect(
       applyPrefs();
     } else if (msg.type === 'land') {
       worldMod?.feedLand(msg.parcels, msg.bankBought, msg.bankCap);
+    } else if (msg.type === 'retro') {
+      worldMod?.feedRetro(msg);
     } else if (msg.type === 'worldSay') {
       worldMod?.feedSay(msg.id, msg.name, msg.text, msg.say === true);
     } else if (msg.type === 'worldBoom') {
@@ -2647,6 +2649,14 @@ worldBtn.addEventListener('click', async () => {
       onExit: () => worldBtn.setAttribute('aria-pressed', 'false'),
       // Walk into the Arena → hop into the play queue (you'll be seated when a spot opens).
       enterArena: () => net.send({ type: 'queueJoin' }),
+      // Team Retro (Tsong Towers conference room) — chair presence + the shared sticky board.
+      selfPid: () => myPid,
+      retroSit: (chair) => net.send({ type: 'retroSit', chair }),
+      retroStand: () => net.send({ type: 'retroStand' }),
+      retroNote: (col, text) => net.send({ type: 'retroNote', col, text }),
+      retroVote: (id) => net.send({ type: 'retroVote', id }),
+      retroDelete: (id) => net.send({ type: 'retroDelete', id }),
+      retroWrap: () => net.send({ type: 'retroWrap' }),
       // Casino/Bank choices open the existing feature panels by triggering their toolbar buttons.
       // Deferred to the next tick: the world tears down on this same click, and firing the button
       // synchronously let the originating click keep bubbling to the panel's "close on outside

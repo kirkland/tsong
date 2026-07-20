@@ -7,7 +7,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { WebSocketServer, WebSocket } from 'ws';
 import sirv from 'sirv';
-import { BOT_LEVELS, BotLevel, ClientMsg, CrTradeOffer, TICK_MS, TickHealth, WORLD_FX, WORLD_WEAPONS } from '../shared/types';
+import { BOT_LEVELS, BotLevel, ClientMsg, CrTradeOffer, RETRO_COLS, TICK_MS, TickHealth, WORLD_FX, WORLD_WEAPONS } from '../shared/types';
 import { Game, GameSnapshot } from './game';
 import { Lobby, LobbySnapshot } from './lobby';
 import { initDb, migratePlayer } from './db';
@@ -754,6 +754,24 @@ wss.on('connection', (ws: WebSocket, req) => {
         break;
       case 'worldRoadRage':
         lobby.startRoadRage(ws);
+        break;
+      case 'retroSit':
+        if (typeof msg.chair === 'number') lobby.retroSit(ws, msg.chair);
+        break;
+      case 'retroStand':
+        lobby.retroStand(ws);
+        break;
+      case 'retroNote':
+        if (typeof msg.text === 'string' && RETRO_COLS.includes(msg.col)) lobby.retroNote(ws, msg.col, msg.text);
+        break;
+      case 'retroVote':
+        if (typeof msg.id === 'number') lobby.retroVote(ws, msg.id);
+        break;
+      case 'retroDelete':
+        if (typeof msg.id === 'number') lobby.retroDelete(ws, msg.id);
+        break;
+      case 'retroWrap':
+        lobby.retroWrap(ws);
         break;
       case 'landReq':
         lobby.sendLand(ws);

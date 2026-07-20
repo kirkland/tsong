@@ -44,6 +44,9 @@ import {
   BAIL_COST,
   type WorldWeapon,
   type WorldFx,
+  RETRO_NOTE_MAX,
+  type RetroCol,
+  type RetroStateMsg,
   WorldAvatar,
   WorldBuilding,
   WorldBuildingKind,
@@ -244,6 +247,14 @@ export interface WorldNet {
   marketList(instanceId: number, ask: number): void;
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
+  // --- Team Retro (Tsong Towers conference room) — chair presence + the shared sticky board ---
+  selfPid(): string;             // our stable identity (matches RetroNote.pid / RetroSeat.pid)
+  retroSit(chair: number): void;    // take conference chair 0-7 (server rejects a taken one)
+  retroStand(): void;               // give up the chair
+  retroNote(col: RetroCol, text: string): void; // pin a sticky (seated only)
+  retroVote(id: number): void;      // toggle our +1 on a sticky (seated only)
+  retroDelete(id: number): void;    // peel off a sticky we authored
+  retroWrap(): void;                // wrap the retro (summary to chat, board cleared)
   openFeature(feature: 'doom' | 'fishing' | 'campaign' | 'typedie' | 'racing' | 'superbros' | 'tron' | 'guitarhero' | 'artillery' | 'bowling' | 'nuketown' | 'citytycoon' | 'tnt' | 'monsterjam' | 'chess' | 'morris' | 'ski' | 'billiards' | 'frograce'): void; // open a DOOM/Fishing/Arcade/Bowling feature — every Casino game + Notice-Board panel is a native World dialog now
   openParliament(): void;        // walk into the Parliament → open the Nomic rules game overlay
   openRename(): void;            // World's own 👤 button → reopen the nickname/color picker
@@ -336,6 +347,7 @@ interface Controller {
   feedRocket(x: number, y: number, a: number, w?: WorldWeapon, len?: number): void; // someone else fired → render their shot
   feedChat(line: ChatLine): void; // a new chat line (mirrors the main chat into the side feed)
   feedRoadRage(active: boolean, endsAt: number, standings: { name: string; kills: number }[]): void;
+  feedRetro(state: RetroStateMsg): void; // conference-room retro board + seat roster changed
   feedMcFood(item: string, granted: boolean, bonus?: number): void;
   reenter(): void; // re-send worldEnter after a socket reconnect (server forgot us on drop)
   dungeonChests(opened: string[]): void;                          // server's list of chests we've opened
@@ -546,6 +558,9 @@ export function reenterWorld(): void {
 }
 
 /** Handle a Road Rage event broadcast. */
+export function feedRetro(state: RetroStateMsg): void {
+  controller?.feedRetro(state);
+}
 export function feedRoadRage(active: boolean, endsAt: number, standings: { name: string; kills: number }[]): void {
   controller?.feedRoadRage(active, endsAt, standings);
 }
@@ -2824,6 +2839,14 @@ export function startWorld(net: WorldNet): void {
   let printerJams = 0;      // how many times the printer has eaten a page this session
   let printerDown = false;  // someone finally dealt with it (respawns eventually; HR restocks)
   let printerSpr: Phaser.GameObjects.Text | null = null;       // the printer's emoji sprite (swapped on demise)
+  // --- Team Retro state (server-authoritative; see RetroStateMsg) ---
+  let retroState: RetroStateMsg = { type: 'retro', seats: [], notes: [], startedAt: 0 };
+  let mySeatIdx: number | null = null; // OFFICE_CHAIRS index we hold at the conference table (null = not seated there)
+  // Colleagues at the table: everyone else's seat rendered as a colored avatar-blob + name tag.
+  const retroColleagues = new Map<string, { shadow: Phaser.GameObjects.Ellipse; body: Phaser.GameObjects.Arc; dome: Phaser.GameObjects.Arc; label: Phaser.GameObjects.Text }>();
+  let retroDuck: Phaser.GameObjects.Text | null = null;          // 🦆 the facilitation duck (appears at 6+ stickies)
+  let retroBoardCountTxt: Phaser.GameObjects.Text | null = null; // live tally under the wall board
+  let retroWrapArmed = 0;   // two-step wrap confirm: epoch ms of the first click (3s window)
   let nearBook = false;     // standing at the holy book's lectern (Enter → read it)
   let templeBookX = 0, templeBookY = 0; // world position of the lectern (set in buildTempleInterior)
   // Live world positions of each cabinet on the Casino floor (set in buildCasinoInterior).
@@ -9424,7 +9447,9 @@ export function startWorld(net: WorldNet): void {
     if (nearNpc) { startTalk(nearNpc); return; }
     if (nearExit) { if (inDungeon) leaveDungeon(); else if (inTemple) leaveTemple(); else if (inMcdonald) leaveMcdonald(); else if (inCasino) leaveCasino(); else if (inVault) leaveVault(); else if (inClub) leaveClubhouse(); else if (inOffice) leaveOffice(); else leaveTavern(); return; }
     if (nearClubSpot) { clubSpotInteract(nearClubSpot); return; }
-    if (seatedAt) { standUp(); return; }
+    // Seated at the conference table → Enter opens the retro board (movement stands you up, and
+    // the panel has its own Stand up button). A plaza bench keeps the old Enter-to-stand toggle.
+    if (seatedAt) { if (mySeatIdx !== null) openRetroPanel(); else standUp(); return; }
     if (nearOfficeChair) { sitDown(nearOfficeChair); return; }
     if (nearOfficeSpot) { officeSpotInteract(nearOfficeSpot); return; }
     if (nearTavernMorris) {
@@ -10090,7 +10115,10 @@ export function startWorld(net: WorldNet): void {
       if (!nearOfficeSpot && Math.hypot(selfX - OFFICE_SPOTS.pong.x, selfY - OFFICE_SPOTS.pong.y) < 112) nearOfficeSpot = 'pong';
       if (!nearOfficeSpot) {
         let cd = 46;
-        for (const c of OFFICE_CHAIRS) {
+        const taken = new Set(retroState.seats.filter((s) => s.pid !== net.selfPid()).map((s) => s.chair));
+        for (let ci = 0; ci < OFFICE_CHAIRS.length; ci++) {
+          if (taken.has(ci)) continue; // a colleague's in that one — no lap-sitting
+          const c = OFFICE_CHAIRS[ci];
           const d = Math.hypot(selfX - c.x, selfY - c.y);
           if (d < cd) { cd = d; nearOfficeChair = c; }
         }
@@ -10191,16 +10219,16 @@ export function startWorld(net: WorldNet): void {
     } else if (nearExit) {
       prompt.textContent = inDungeon ? '🚪 Leave the Ruins' : inTemple ? '🚪 Leave the Temple' : inMcdonald ? "🍔 Leave McDonald's" : inCasino ? '🎰 Leave the Casino' : inVault ? '🚪 Back through the bookcase' : inClub ? '🚪 Leave the Clubhouse' : inOffice ? '🏢 Clock out' : '🚪 Leave the Tavern';
     } else if (seatedAt) {
-      prompt.textContent = '🪑 Stand up';
+      prompt.textContent = mySeatIdx !== null ? '📋 Open the retro board' : '🪑 Stand up';
     } else if (nearOfficeChair) {
-      prompt.textContent = '🪑 Take a seat';
+      prompt.textContent = '🪑 Take a seat (join the retro)';
     } else if (nearOfficeSpot) {
       prompt.textContent = nearOfficeSpot === 'pong' ? '🏓 The break-room table — rally up'
         : nearOfficeSpot === 'coffee' ? '☕ The espresso machine'
         : nearOfficeSpot === 'fridge' ? '🧊 The communal fridge'
         : nearOfficeSpot === 'cooler' ? '💧 The water cooler'
         : nearOfficeSpot === 'printer' ? (printerDown ? '🖨️ What remains of the printer' : '🖨️ The printer')
-        : '📋 The retro board';
+        : retroState.notes.length ? `📋 The retro board (${retroState.notes.length} stick${retroState.notes.length === 1 ? 'y' : 'ies'})` : '📋 The retro board';
     } else if (nearClubSpot) {
       prompt.textContent = nearClubSpot === 'putt' ? (puttCharging ? '⛳ Strike!' : '⛳ Address the ball')
         : nearClubSpot === 'registry' ? '📖 The Member Registry'
@@ -12391,6 +12419,10 @@ export function startWorld(net: WorldNet): void {
     sc.add.rectangle(ix + 1213, iy + 534, 40, 10, 0xe8d080).setOrigin(0, 0).setDepth(iy - 299);  // action items
     sc.add.rectangle(ix + 1113, iy + 550, 140, 3, 0xb8b8c0).setOrigin(0, 0).setDepth(iy - 299);  // illegible marker
     tag(OFFICE_SPOTS.board.x, OFFICE_SPOTS.board.y - 44, '📋 Retro Board');
+    // live tally under the board — updated by updateRetroVisuals() on every retro broadcast
+    retroBoardCountTxt = sc.add.text(ix + 1195, iy + 572, retroTally(), {
+      fontFamily: 'ui-monospace, monospace', fontSize: '9px', color: '#cfe0f0', stroke: '#141a24', strokeThickness: 2, resolution: 2,
+    }).setOrigin(0.5, 0).setDepth(iy - 299);
 
     // everything solid, in one list — feet slide against it AND projectiles detonate on it
     officeColliders.push(
@@ -12427,6 +12459,7 @@ export function startWorld(net: WorldNet): void {
     selfX = OFFICE_INT.x + OFFICE_INT.w / 2;
     selfY = OFFICE_INT.y + OFFICE_INT.h - 180; // through the revolving door
     mainCam?.setBounds(OFFICE_INT.x, OFFICE_INT.y, OFFICE_INT.w, OFFICE_INT.h);
+    updateRetroVisuals(); // seat any colleagues already mid-retro (state arrived before we walked in)
   }
   function leaveOffice() {
     inInterior = false; inOffice = false;
@@ -12450,11 +12483,16 @@ export function startWorld(net: WorldNet): void {
     if (petScene && !seatBubble) { // the meeting-drowsiness bubble, same as a plaza bench nap
       seatBubble = petScene.add.text(0, 0, '💤', { fontSize: '11px', resolution: 2 }).setOrigin(0.5, 1).setDepth(999999);
     }
+    // Claim the chair with the server — that's what puts us "in the meeting" for everyone else.
+    const idx = OFFICE_CHAIRS.indexOf(c as (typeof OFFICE_CHAIRS)[number]);
+    if (idx >= 0) { mySeatIdx = idx; net.retroSit(idx); }
     selectBlip();
     if (!satBefore) { satBefore = true; showToast('🪑 Seated. This meeting could have been an email.'); }
+    flashHelp('📋 <b>Enter</b> opens the retro board · walk to stand up');
   }
   // Clear the seat everywhere it can end (Enter, a blast, a black hole, walking off, clocking out).
   function unseat() {
+    if (mySeatIdx !== null) { mySeatIdx = null; net.retroStand(); } // hand the chair back
     seatedAt = null;
     seatBubble?.destroy(); seatBubble = null;
   }
@@ -12509,9 +12547,7 @@ export function startWorld(net: WorldNet): void {
           : '🖨️ Jam #' + printerJams + '. You know… weapons DO work in this building.');
         return;
       case 'board':
-        openDialog('📋 Retro Board', 'Three columns: “went well”, “didn’t”, “action items”. Every marker is dry except the red one. Team retros convene here… soon.', [
-          { label: '👍 Noted', onPick: () => closeDialog() },
-        ]);
+        openRetroPanel(); // read-only from the wall; take a chair to participate
         return;
     }
   }
@@ -12528,6 +12564,259 @@ export function startWorld(net: WorldNet): void {
       printerSpr?.setText('🖨️');
       if (inOffice) showToast('🖨️ Facilities delivered a replacement printer. It is already out of toner.');
     }, 120_000);
+  }
+
+  // --- Team Retro: the conference room's shared sticky board -----------------------------------
+  // Server-owned (see lobby.ts retro* methods): sitting in a chair claims a seat, the board is a
+  // set of notes in three columns, and every change fans the full (tiny) state to the World.
+
+  function applyRetroState(state: RetroStateMsg) {
+    retroState = state;
+    // Seat reconcile. If we believe we're seated but the server disagrees, sort it out:
+    // someone else holds our chair → we lost the sit race (server already toasted), stand up.
+    // Nobody holds it and we're missing → the server forgot us (restart) — quietly re-sit.
+    if (mySeatIdx !== null) {
+      const me = state.seats.find((s) => s.pid === net.selfPid());
+      if (!me || me.chair !== mySeatIdx) {
+        if (state.seats.some((s) => s.chair === mySeatIdx && s.pid !== net.selfPid())) unseat();
+        else if (!me) net.retroSit(mySeatIdx);
+      }
+    }
+    updateRetroVisuals();
+    renderRetroPanel();
+  }
+
+  // Sync the world-side props to the current retro state: colleagues in chairs, the wall board's
+  // tally, and — at six or more stickies — the facilitation duck.
+  function updateRetroVisuals() {
+    const sc = petScene; if (!sc) return;
+    const want = new Map(retroState.seats.filter((s) => s.pid !== net.selfPid()).map((s) => [s.pid, s]));
+    for (const [pid, o] of retroColleagues) {
+      if (!want.has(pid)) {
+        o.shadow.destroy(); o.body.destroy(); o.dome.destroy(); o.label.destroy();
+        retroColleagues.delete(pid);
+      }
+    }
+    for (const [pid, s] of want) {
+      const c = OFFICE_CHAIRS[s.chair]; if (!c) continue;
+      const col = /^#[0-9a-f]{6}$/i.test(s.color || '') ? parseInt(s.color.slice(1), 16) : 0x8aa0d8;
+      let o = retroColleagues.get(pid);
+      if (!o) {
+        o = {
+          shadow: sc.add.ellipse(c.x, c.y + 8, 26, 10, 0x000000, 0.3),
+          body: sc.add.circle(c.x, c.y, 11, col),
+          dome: sc.add.circle(c.x - 3, c.y - 3, 4, 0xffffff, 0.35), // a little highlight so the blob reads as a person-ish
+          label: sc.add.text(c.x, c.y - 18, s.name, {
+            fontFamily: 'system-ui, sans-serif', fontSize: '10px', fontStyle: 'bold',
+            color: '#e8eefc', stroke: '#141a24', strokeThickness: 3, resolution: 2,
+          }).setOrigin(0.5, 1),
+        };
+        retroColleagues.set(pid, o);
+      }
+      o.shadow.setPosition(c.x, c.y + 8).setDepth(c.y - 1);
+      o.body.setPosition(c.x, c.y).setDepth(c.y).setFillStyle(col);
+      o.dome.setPosition(c.x - 3, c.y - 3).setDepth(c.y + 1);
+      o.label.setPosition(c.x, c.y - 18).setText(s.name).setDepth(c.y + 2);
+    }
+    const wantDuck = retroState.notes.length >= 6;
+    if (wantDuck && !retroDuck) {
+      retroDuck = sc.add.text(OFFICE_INT.x + 1250, OFFICE_INT.y + 682, '🦆', { fontSize: '15px' })
+        .setOrigin(0.5, 1).setDepth(OFFICE_INT.y + 753);
+      if (inOffice) showToast('🦆 Six stickies. The facilitation duck has arrived.');
+    } else if (!wantDuck && retroDuck) {
+      retroDuck.destroy(); retroDuck = null;
+    }
+    retroBoardCountTxt?.setText(retroTally());
+  }
+  function retroTally(): string {
+    const n = retroState.notes.length, s = retroState.seats.length;
+    if (!n && !s) return '';
+    return `${n} stick${n === 1 ? 'y' : 'ies'}${s ? ` · ${s} at the table` : ''}`;
+  }
+  function retroAgoText(t: number): string {
+    if (!t) return '';
+    const m = Math.max(0, Math.round((Date.now() - t) / 60000));
+    return m < 1 ? '· board opened just now' : m < 60 ? `· board open ${m}m` : `· board open ${Math.floor(m / 60)}h ${m % 60}m`;
+  }
+
+  // The retro panel — a native World dialog (same dialogBox machinery as the Hall of Fame).
+  // Live: every retro broadcast re-renders it in place, preserving the input's text and focus.
+  const RETRO_COL_META: { col: RetroCol; icon: string; label: string; accent: string; bg: string }[] = [
+    { col: 'well', icon: '🌤', label: 'Went well', accent: '#8ad08a', bg: '#152417' },
+    { col: 'meh', icon: '🌧', label: 'Needs work', accent: '#e89090', bg: '#261518' },
+    { col: 'action', icon: '🎯', label: 'Action items', accent: '#e8d080', bg: '#262112' },
+  ];
+  function openRetroPanel() {
+    if (dialogOpen || talkOpen) return;
+    dialogOpen = true;
+    keys.clear(); joyActive = false;
+    dialogBox.replaceChildren();
+    const root = document.createElement('div');
+    root.id = 'retroPanelRoot'; // marker: while this exists, retro broadcasts re-render in place
+    dialogBox.appendChild(root);
+    buildRetroPanelInto(root, '', false);
+    dialog.style.display = 'flex';
+  }
+  function renderRetroPanel() {
+    if (!dialogOpen) return;
+    const root = document.getElementById('retroPanelRoot');
+    if (!root) return; // some other dialog owns the box right now
+    const input = root.querySelector<HTMLInputElement>('#retroNoteInput');
+    buildRetroPanelInto(root, input?.value ?? '', !!input && document.activeElement === input);
+  }
+  function buildRetroPanelInto(root: HTMLElement, keepVal: string, refocus: boolean) {
+    root.replaceChildren();
+    root.style.cssText = 'text-align:left;width:min(760px,86vw);';
+    const seatedNow = mySeatIdx !== null;
+    const myPid = net.selfPid();
+
+    const h = document.createElement('div');
+    h.style.cssText = 'display:flex;align-items:baseline;gap:10px;margin-bottom:4px;';
+    const t = document.createElement('div');
+    t.textContent = '📋 Team Retro';
+    t.style.cssText = 'font-size:22px;color:#e8eefc;';
+    const sub = document.createElement('div');
+    sub.textContent = retroAgoText(retroState.startedAt);
+    sub.style.cssText = 'font-size:11px;color:#7c8ab5;';
+    h.append(t, sub);
+    root.appendChild(h);
+
+    const who = document.createElement('div');
+    who.style.cssText = 'font-size:12px;color:#8aa0d8;margin-bottom:12px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;';
+    who.append('At the table: ');
+    if (!retroState.seats.length) who.append('nobody — the chairs are right there.');
+    for (const s of [...retroState.seats].sort((a, b) => a.chair - b.chair)) {
+      const chip = document.createElement('span');
+      chip.style.cssText = 'display:inline-flex;align-items:center;gap:5px;background:#1a2440;border:1px solid #2c3a66;border-radius:999px;padding:2px 9px;color:#e8eefc;font-weight:600;';
+      const dot = document.createElement('span');
+      dot.style.cssText = `width:8px;height:8px;border-radius:50%;background:${/^#[0-9a-f]{6}$/i.test(s.color || '') ? s.color : '#8aa0d8'};`;
+      chip.append(dot, s.pid === myPid ? `${s.name} (you)` : s.name);
+      who.appendChild(chip);
+    }
+    root.appendChild(who);
+
+    const cols = document.createElement('div');
+    cols.style.cssText = 'display:flex;gap:8px;align-items:flex-start;max-height:44vh;overflow:auto;';
+    for (const meta of RETRO_COL_META) {
+      const colBox = document.createElement('div');
+      colBox.style.cssText = 'flex:1;min-width:0;background:#101830;border:1px solid #26335c;border-radius:10px;padding:8px;';
+      const head = document.createElement('div');
+      head.textContent = `${meta.icon} ${meta.label}`;
+      head.style.cssText = `font-size:12px;font-weight:700;color:${meta.accent};margin-bottom:6px;`;
+      colBox.appendChild(head);
+      const notes = retroState.notes.filter((n) => n.col === meta.col);
+      if (!notes.length) {
+        const empty = document.createElement('div');
+        empty.textContent = '—';
+        empty.style.cssText = 'color:#3c4a76;font-size:12px;padding:2px 0 6px;';
+        colBox.appendChild(empty);
+      }
+      for (const n of notes) {
+        const golden = /been an email/i.test(n.text); // the forbidden retro truth earns the gold sticky
+        const card = document.createElement('div');
+        card.style.cssText = `background:${golden ? '#3a3010' : meta.bg};border-left:3px solid ${golden ? '#ffd166' : meta.accent};border-radius:6px;padding:6px 8px;margin-bottom:6px;`;
+        const txt = document.createElement('div');
+        txt.textContent = (golden ? '✉️ ' : '') + n.text;
+        txt.style.cssText = `font-size:13px;color:${golden ? '#ffe9b0' : '#e8eefc'};overflow-wrap:break-word;`;
+        const metaRow = document.createElement('div');
+        metaRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-top:4px;';
+        const by = document.createElement('span');
+        by.textContent = `— ${n.author}`;
+        by.style.cssText = 'font-size:10px;color:#7c8ab5;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+        const vote = document.createElement('button');
+        vote.type = 'button';
+        const mineVote = n.votes.includes(myPid);
+        vote.textContent = `👍 ${n.votes.length}`;
+        vote.style.cssText = `cursor:${seatedNow ? 'pointer' : 'default'};background:${mineVote ? '#4a3d1c' : '#1a2440'};color:${mineVote ? '#ffd166' : '#8aa0d8'};border:1px solid ${mineVote ? '#7a6530' : '#2c3a66'};border-radius:6px;padding:1px 8px;font-size:11px;opacity:${seatedNow ? 1 : 0.55};`;
+        if (seatedNow) vote.onclick = () => net.retroVote(n.id);
+        metaRow.append(by, vote);
+        if (seatedNow && n.pid === myPid) {
+          const del = document.createElement('button');
+          del.type = 'button';
+          del.textContent = '✕';
+          del.title = 'peel this sticky off';
+          del.style.cssText = 'cursor:pointer;background:transparent;color:#7c8ab5;border:none;font-size:12px;padding:0 2px;';
+          del.onclick = () => net.retroDelete(n.id);
+          metaRow.appendChild(del);
+        }
+        card.append(txt, metaRow);
+        colBox.appendChild(card);
+      }
+      cols.appendChild(colBox);
+    }
+    root.appendChild(cols);
+
+    if (seatedNow) {
+      const addRow = document.createElement('div');
+      addRow.style.cssText = 'display:flex;gap:6px;margin-top:12px;';
+      const input = document.createElement('input');
+      input.id = 'retroNoteInput';
+      input.type = 'text';
+      input.maxLength = RETRO_NOTE_MAX;
+      input.placeholder = 'Add a sticky note…';
+      input.value = keepVal;
+      input.style.cssText = 'flex:1;min-width:0;background:#101830;color:#e8eefc;border:1px solid #2c3a66;border-radius:8px;padding:9px 10px;font-size:13px;';
+      const send = (col: RetroCol) => {
+        const text = input.value.trim();
+        if (!text) { input.focus(); return; }
+        net.retroNote(col, text);
+        input.value = '';
+        input.focus();
+        selectBlip();
+      };
+      input.addEventListener('keydown', (e) => {
+        e.stopPropagation(); // keep world hotkeys out of the meeting
+        if (e.key === 'Enter') send('well');
+      });
+      addRow.appendChild(input);
+      for (const meta of RETRO_COL_META) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = `+ ${meta.icon}`;
+        b.title = `File under “${meta.label}”`;
+        b.style.cssText = `cursor:pointer;background:#21305a;color:${meta.accent};border:1px solid #38508f;border-radius:8px;padding:0 12px;font-size:14px;font-weight:700;`;
+        b.onclick = () => send(meta.col);
+        addRow.appendChild(b);
+      }
+      root.appendChild(addRow);
+
+      const actRow = document.createElement('div');
+      actRow.style.cssText = 'display:flex;gap:8px;margin-top:10px;';
+      const stand = document.createElement('button');
+      stand.type = 'button';
+      stand.textContent = '🪑 Stand up';
+      stand.style.cssText = 'cursor:pointer;background:#1a2440;color:#8aa0d8;border:1px solid #2c3a66;border-radius:8px;padding:8px 12px;font-size:12px;';
+      stand.onclick = () => { closeDialog(); standUp(); };
+      const wrap = document.createElement('button');
+      wrap.type = 'button';
+      const armed = Date.now() - retroWrapArmed < 3000;
+      wrap.textContent = armed ? '⚠️ Really wrap? This clears the board' : '✅ Wrap up the retro';
+      wrap.style.cssText = `cursor:pointer;flex:1;background:${armed ? '#4a2020' : '#1c3a26'};color:${armed ? '#ffb0b0' : '#8ad08a'};border:1px solid ${armed ? '#7a3838' : '#2f5c3c'};border-radius:8px;padding:8px 12px;font-size:12px;font-weight:700;`;
+      wrap.onclick = () => {
+        if (Date.now() - retroWrapArmed < 3000) { retroWrapArmed = 0; net.retroWrap(); }
+        else {
+          retroWrapArmed = Date.now();
+          renderRetroPanel(); // arm: relabel the button
+          window.setTimeout(() => { if (Date.now() - retroWrapArmed >= 3000) renderRetroPanel(); }, 3200); // disarm quietly
+        }
+      };
+      actRow.append(stand, wrap);
+      root.appendChild(actRow);
+    } else {
+      const hint = document.createElement('div');
+      hint.textContent = '🪑 Take a seat at the conference table to add stickies, vote, and wrap the retro.';
+      hint.style.cssText = 'margin-top:12px;font-size:12px;color:#7c8ab5;';
+      root.appendChild(hint);
+    }
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = 'Close';
+    close.style.cssText = 'display:block;width:100%;margin-top:10px;cursor:pointer;background:transparent;color:#7c8ab5;border:none;padding:8px;font-size:13px;';
+    close.onclick = closeDialog;
+    root.appendChild(close);
+
+    if (refocus) root.querySelector<HTMLInputElement>('#retroNoteInput')?.focus();
   }
 
   // McDonald's interior: a bright fast-food dining room. Red walls, checkered floor, counter at back,
@@ -19842,6 +20131,7 @@ export function startWorld(net: WorldNet): void {
     },
     feedRocket(x, y, a, w, len) { feedShot(x, y, a, w ?? 'rocket', len); },
     feedChat(line) { pushChatLine(line); },
+    feedRetro(state) { applyRetroState(state); },
     feedRoadRage(active: boolean, endsAt: number, standings: { name: string; kills: number }[]) {
       const starting = active && !rrActive;
       rrActive = active; rrEndsAt = endsAt; rrStandings = standings;
