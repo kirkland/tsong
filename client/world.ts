@@ -19057,12 +19057,12 @@ export function startWorld(net: WorldNet): void {
 
   function updateEast(now: number, dt: number) {
     if (!snowFlakes.length) return;
-    const here = selfX > WORLD.w - 700 && !inInterior && !inDungeon;
+    const here = selfX > WORLD.w - 700 && !inInterior && !inDungeon && !boating && !onIsland; // no snow out on the open sea / islands
     // snowballs restock wherever there's snow to pack (guarded: the snowball weapon spec may be
     // absent, and dereferencing it here used to throw every frame inside the biome — which froze
     // the snowfall below, since updateEast bailed before ever animating the flakes)
     const snowMax = WEAPON_BY_ID.snow?.max;
-    if (snowMax !== undefined && selfX > WORLD.w + 30 && !inInterior && !inDungeon && ammo.snow < snowMax) {
+    if (snowMax !== undefined && selfX > WORLD.w + 30 && !inInterior && !inDungeon && !boating && !onIsland && ammo.snow < snowMax) {
       ammo.snow = snowMax;
       updateWeaponHud();
       if (!snowPacked) { snowPacked = true; showToast('❄️ You pack some snowballs. For science. (weapon rack: ❄️)'); }
