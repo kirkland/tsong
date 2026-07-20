@@ -2808,6 +2808,26 @@ export function startWorld(net: WorldNet): void {
   let shipHp = 0;                                     // remaining hull integrity while sailing a ship
   let onIsland: Island | null = null;                // the island we're ashore on, on foot (null otherwise)
 
+  // --- The Sirens (Homer's Odyssey) ------------------------------------------------------------
+  // Jagged rocks out in the corner seas where the Sirens sing. Sail a ship into earshot and their
+  // song rises, the screen swims rose, and your hull is drawn off-course toward the rocks — grind
+  // them and you wreck. The Odyssean out: the deaf can't be lured, so muting the game (🔇) is the
+  // wax in your crew's ears. Hear the whole song and sail on anyway and you've out-Odysseus'd
+  // Odysseus. Purely a client-side sea hazard — no coins, no chest, no server (like the raiders).
+  const SIREN_ROCKS: readonly { id: string; x: number; y: number; r: number }[] = [
+    { id: 'siren-nw', x: -7800, y: -900, r: 150 },  // the vast NW sea, between Castaway Key and Mount Kaboom
+    { id: 'siren-sw', x: -4800, y: 6000, r: 150 },  // the SW deep, downwind of the Mermaid Bar (she blames THEM)
+    { id: 'siren-se', x: 11200, y: 6000, r: 150 },  // the SE salt reaches, past X-Marks-the-Spot
+  ];
+  const SIREN_RANGE = 1600;   // how far the song carries (world units)
+  const SIREN_WRECK_R = 240;  // inside this the hull grinds the rocks
+  let sirenSong = 0;          // 0..1 enchantment strength — ramps with proximity while sailing, decays out of range
+  let sirenDeep = false;      // reached the depths of the song this encounter (arms the survival boast)
+  let sirenBoasted = false;   // told the "heard them and lived" line once (session-scoped)
+  let sirenLastVoiceAt = 0, sirenLastNoteAt = 0, sirenLastGrindAt = 0;
+  let sirenOverlay: Phaser.GameObjects.Rectangle | null = null;
+  const sirenFigures: { spr: Phaser.GameObjects.Image; x: number; y: number; phase: number }[] = [];
+
   // --- input state ---
   const keys = new Set<string>();
   let joyActive = false;
@@ -14384,6 +14404,7 @@ export function startWorld(net: WorldNet): void {
       makeEast(sc);
       makeCornerOceans(sc);
       makeIslands(sc);
+      buildSirens(sc);
       spawnEnemyFleet(sc);
       makeMobs(sc);
       makeRaid(sc);
@@ -14434,8 +14455,13 @@ export function startWorld(net: WorldNet): void {
         .setBlendMode(Phaser.BlendModes.MULTIPLY).setAlpha(0).setDepth(50004);
       drunkOverlay = booze;
 
+      // rose enchantment wash that blooms while the Sirens sing (SCREEN-blended so it glows, not dims)
+      const siren = sc.add.rectangle(0, 0, 10, 10, 0xff5c8a).setOrigin(0).setScrollFactor(0)
+        .setBlendMode(Phaser.BlendModes.SCREEN).setAlpha(0).setDepth(50003);
+      sirenOverlay = siren;
+
       const fitAtmo = (w: number, h: number) => {
-        warm.setSize(w, h); vig.setDisplaySize(w, h); night.setSize(w, h); booze.setSize(w, h);
+        warm.setSize(w, h); vig.setDisplaySize(w, h); night.setSize(w, h); booze.setSize(w, h); siren.setSize(w, h);
       };
       fitAtmo(sc.scale.width, sc.scale.height);
       sc.scale.on('resize', (gs: Phaser.Structs.Size) => fitAtmo(gs.width, gs.height));
@@ -14742,6 +14768,7 @@ export function startWorld(net: WorldNet): void {
       safeStep('mobs', () => updateMobs(now, dt));
       safeStep('raid', () => updateRaid(now, dt));
       safeStep('ocean', () => updateOcean(now, dt));
+      safeStep('sirens', () => updateSirens(now, dt));
       safeStep('enemyShips', () => updateEnemyShips(dt));
       safeStep('biome', () => updateBiome());
       safeStep('nearBuilding', () => updateNearBuilding());
@@ -18926,6 +18953,114 @@ export function startWorld(net: WorldNet): void {
       if (Math.random() < dt * 3) {
         smokePuffs.push({ spr: sc.add.image(v.x + (Math.random() - 0.5) * 20, v.y, 'w-smoke').setScale(0.9).setTint(0x6a6a6a).setAlpha(0.55).setDepth(v.y + 500),
           t: 0, max: 1.8, vx: (Math.random() - 0.3) * 20, vy: -30 - Math.random() * 30 });
+      }
+    }
+  }
+
+  // --- The Sirens: build the rocks + the singers, then lure any ship that sails too close ---------
+  function buildSirens(sc: Phaser.Scene) {
+    // A jagged black rock, baked once and reused for every siren islet.
+    if (!sc.textures.exists('w-siren-rock')) {
+      const g = sc.make.graphics({ x: 0, y: 0 }, false);
+      const S = 128, c = S / 2, rnd = mulberry32(0x51235);
+      const pts: Phaser.Math.Vector2[] = [];
+      const N = 16;
+      for (let i = 0; i < N; i++) { const t = (i / N) * Math.PI * 2, rr = S * 0.42 * (0.66 + rnd() * 0.34); pts.push(new Phaser.Math.Vector2(c + Math.cos(t) * rr, c + Math.sin(t) * rr * 0.78)); }
+      g.fillStyle(0x0e2536, 0.3); g.fillEllipse(c, c + 8, S * 0.9, S * 0.44);   // shadow on the water
+      g.fillStyle(0x2b3038, 1); g.fillPoints(pts, true);                        // rock mass
+      g.fillStyle(0x373d47, 0.8); g.fillEllipse(c - 8, c - 6, S * 0.34, S * 0.18); // top sheen
+      // a few sharp spikes reaching up (the teeth ships break on)
+      g.fillStyle(0x21262e, 1);
+      for (const [sx, sw, sh] of [[c - 26, 12, 40], [c + 4, 16, 52], [c + 30, 10, 34]] as [number, number, number][])
+        g.fillTriangle(sx, c, sx + sw, c, sx + sw / 2, c - sh);
+      g.lineStyle(3, 0xd6eef6, 0.45); g.strokeEllipse(c, c + 6, S * 0.52, S * 0.4); // surf foam
+      g.generateTexture('w-siren-rock', S, S); g.destroy();
+    }
+    // A siren: a pale figure with dark flowing hair and a teal tail, perched and singing.
+    if (!sc.textures.exists('w-siren')) {
+      const g = sc.make.graphics({ x: 0, y: 0 }, false);
+      const P = (x: number, y: number, w: number, h: number, col: number, a = 1) => { g.fillStyle(col, a); g.fillRect(x, y, w, h); };
+      const SKIN = 0xecc9a6, HAIR = 0x241a2a, TAIL = 0x2f8f93, TAIL_L = 0x49b3b0;
+      P(2, 12, 9, 5, TAIL); P(1, 15, 11, 3, TAIL_L);        // curled tail + fluke
+      P(4, 5, 4, 8, SKIN);                                   // torso
+      P(3, 0, 6, 6, HAIR); P(4, 3, 4, 3, SKIN);              // hair crown + face
+      P(2, 5, 2, 8, HAIR); P(9, 5, 2, 8, HAIR);              // long hair either side
+      P(3, 4, 1, 1, 0x101018); P(6, 4, 1, 1, 0x101018);      // eyes
+      g.generateTexture('w-siren', 12, 20); g.destroy();
+    }
+    for (const rk of SIREN_ROCKS) {
+      sc.add.ellipse(rk.x, rk.y + 6, rk.r * 2.6, rk.r * 1.3, 0xff5c8a, 0.08).setDepth(rk.y - rk.r - 2); // rose aura on the water
+      sc.add.image(rk.x, rk.y, 'w-siren-rock').setOrigin(0.5, 0.5).setScale(TEXEL * (rk.r / 46)).setDepth(rk.y);
+      // three singers perched around the crown, each on its own bob phase
+      const spots: [number, number][] = [[-0.32, -0.18], [0.06, -0.30], [0.36, -0.12]];
+      spots.forEach(([dx, dy], i) => {
+        const x = rk.x + rk.r * dx, y = rk.y + rk.r * dy;
+        const spr = sc.add.image(x, y, 'w-siren').setOrigin(0.5, 1).setScale(TEXEL * 2.2).setDepth(y + 1).setFlipX(i === 2);
+        sirenFigures.push({ spr, x, y, phase: i * 2.1 });
+      });
+    }
+  }
+
+  // A haunting siren call: two gliding voices a third apart plus a shimmer on top. `strength`
+  // (0..1) scales the volume so the song swells as the ship is drawn in. tone() honours mute,
+  // which is the whole Odyssean point — the deaf sail past unharmed.
+  function sirenVoice(strength: number) {
+    const v = 0.045 + strength * 0.06, base = 392; // ~G4
+    tone(base, 1.9, 'sine', v, base * 1.5);                                             // voice climbs a fifth
+    window.setTimeout(() => tone(base * 1.26, 1.6, 'sine', v * 0.8, base * 1.14), 320); // a third above, settling
+    window.setTimeout(() => tone(base * 1.5, 1.3, 'triangle', v * 0.45, base * 1.34), 880); // airy shimmer
+  }
+
+  function updateSirens(now: number, dt: number) {
+    const sc = petScene; if (!sc) return;
+    const sailing = boating && !!shipSpec && shipHp > 0;
+    // Bob the singers whenever the camera's in the neighbourhood (cheap; skipped far away).
+    for (const f of sirenFigures) {
+      if (Math.abs(f.x - selfX) > 2600 || Math.abs(f.y - selfY) > 2000) continue;
+      f.spr.setY(f.y + Math.sin(now / 520 + f.phase) * 3).setScale(TEXEL * (2.2 + Math.sin(now / 900 + f.phase) * 0.12));
+    }
+    // Nearest rock within earshot — only a ship can be lured (on foot you're on solid ground).
+    let target: (typeof SIREN_ROCKS)[number] | null = null, best = SIREN_RANGE;
+    if (sailing) for (const rk of SIREN_ROCKS) { const d = Math.hypot(rk.x - selfX, rk.y - selfY); if (d < best) { best = d; target = rk; } }
+    // Muting is wax in the crew's ears: the song can't take hold.
+    const wantSong = target && !net.muted() ? clamp(1 - best / SIREN_RANGE, 0, 1) : 0;
+    const k = Math.min(1, dt * (wantSong > sirenSong ? 0.9 : 0.5)); // swells faster than it fades
+    sirenSong += (wantSong - sirenSong) * k;
+    if (sirenSong < 0.02 && wantSong === 0) sirenSong = 0;
+    sirenOverlay?.setAlpha(sirenSong * 0.26 * (0.85 + 0.15 * Math.sin(now / 300))); // a slow shimmer
+
+    if (target && sirenSong > 0.02) {
+      const d = Math.max(1, best);
+      // THE LURE: drift the hull toward the rock, strength rising with the song squared. A brisk
+      // ship can still power away across it — idle in the song and you're on the teeth.
+      const pull = 300 * sirenSong * sirenSong * dt;
+      let nx = selfX + ((target.x - selfX) / d) * pull, ny = selfY + ((target.y - selfY) / d) * pull;
+      if (boatWater) { const cc = confineToSea(nx, ny, boatWater); nx = cc.x; ny = cc.y; }
+      selfX = nx; selfY = ny;
+      // drifting notes stream off the rock toward the ship
+      if (now - sirenLastNoteAt > 320 - sirenSong * 170) {
+        sirenLastNoteAt = now;
+        const gl = ['♪', '♫', '♩'][Math.floor(Math.random() * 3)];
+        const sx = target.x + (Math.random() - 0.5) * target.r, sy = target.y - target.r * 0.3;
+        const note = sc.add.text(sx, sy, gl, { fontSize: '15px', color: '#ffd0e4', stroke: '#5a1030', strokeThickness: 3 })
+          .setOrigin(0.5).setDepth(sy + 600).setAlpha(0.9);
+        sc.tweens.add({ targets: note, x: selfX + (Math.random() - 0.5) * 40, y: selfY - 30, alpha: 0, duration: 1600, ease: 'Sine.easeIn', onComplete: () => note.destroy() });
+      }
+      if (now - sirenLastVoiceAt > 2500) { sirenLastVoiceAt = now; sirenVoice(sirenSong); }
+      if (sirenSong > 0.75) sirenDeep = true;
+      // WRECK: grinding the rocks chews the hull; the sinking blow spits you back to shore.
+      if (best < SIREN_WRECK_R && now - sirenLastGrindAt > 500) {
+        sirenLastGrindAt = now;
+        bumpSound(true);
+        if (damageMyShip()) { sirenDeep = false; sirenSong = 0; showToast('🪨 The song ran your hull onto the Sirens\' rocks. The sea takes another.'); }
+      }
+    } else if (sirenDeep) {
+      // Out of the song with the ship still under you, after hearing it in full → the boast (once).
+      sirenDeep = false;
+      if (sailing && !sirenBoasted) {
+        sirenBoasted = true;
+        showToast('🪢 Lashed to the mast, you heard the Sirens\' song in full — and sailed on. Even Odysseus managed no more.');
+        tone(523, 0.16, 'triangle', 0.06, 784);
       }
     }
   }
