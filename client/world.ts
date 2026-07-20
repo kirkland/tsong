@@ -3937,18 +3937,25 @@ export function startWorld(net: WorldNet): void {
         else y = b.y + b.h + rad;
       }
     }
-    const inTownX = x >= 0 && x <= WORLD.w; // the club (N) and the Damp (S) open off TOWN only (not the frontiers)
-    // South: ground ends at the shore — except the pier, which you may walk to the end of. Carefully.
+    // The traversable overworld is a PLUS/CROSS, not a box: a HORIZONTAL arm (the Nothing → town →
+    // Frostreach band, at town latitude) and a VERTICAL arm (the Club → town → Damp column). The ocean
+    // fills the four DIAGONAL corners between the arms. A naïve box-clamp of x and y independently lets
+    // you "cut the corner" — walk out of the Damp sideways and the y-clamp yanks you up into the
+    // neighbouring frontier (Damp → Frostreach/snow to the east, → the Nothing to the west). Instead,
+    // clamp to whichever arm is NEAREST, so you slide along the shoreline and never teleport.
     const onPier = x > SWAMP_PIER_X - 26 && x < SWAMP_PIER_X + 26;
-    const southMax = inTownX ? (onPier ? SWAMP_SHORE_Y + 380 : SWAMP_SHORE_Y) - rad : WORLD.h - rad;
-    // The gate reads "MEMBERS ONLY" and means it: non-members are clamped at the property line
-    // (they can walk right up to the gate/plaque, just never past it onto the grounds proper).
-    const northMin = !inTownX ? rad : net.owns('club-member') ? -CLUB.h + rad : CLUB_GATE_Y;
-    return {
-      x: clamp(x, -DESERT.w + rad, WORLD.w + EAST.w - rad), // west into the Nothing, east into the Frostreach
-      y: clamp(y, northMin, southMax),
-      hit,
-    };
+    // horizontal arm: frontiers + town, confined to the town's north/south band
+    const hx = clamp(x, -DESERT.w + rad, WORLD.w + EAST.w - rad), hy = clamp(y, rad, WORLD.h - rad);
+    // vertical arm: the town column, Club to the north (members past the gate) and the Damp shore /
+    // pier to the south
+    const northMin = net.owns('club-member') ? -CLUB.h + rad : CLUB_GATE_Y;
+    const southMax = (onPier ? SWAMP_SHORE_Y + 380 : SWAMP_SHORE_Y) - rad;
+    const vx = clamp(x, rad, WORLD.w - rad), vy = clamp(y, northMin, southMax);
+    const dH = (x - hx) ** 2 + (y - hy) ** 2, dV = (x - vx) ** 2 + (y - vy) ** 2;
+    const useH = dH <= dV;
+    const bx = useH ? hx : vx, by = useH ? hy : vy;
+    if (bx !== x || by !== y) hit = true;
+    return { x: bx, y: by, hit };
   }
 
   function distToBuilding(b: WorldBuilding): number {
