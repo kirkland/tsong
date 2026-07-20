@@ -1060,6 +1060,7 @@ export interface WorldAvatar {
   pet?: string | null; // pet id trailing behind this avatar, or null/undefined when none
   bot?: boolean;       // true for netizen avatars
   jailed?: boolean;    // true while locked in the jail cell (others can pay to bail them out)
+  smoking?: boolean;   // true while mid-cigarette — receivers draw the little smoke puffs
 }
 export interface WorldMsg {
   type: 'world';
@@ -1146,6 +1147,14 @@ export interface WorldRocketMsg {
   w?: WorldWeapon; // which weapon; omitted = 'rocket' (what old clients send)
   len?: number;    // laser only: how far the beam reached before it hit something
 }
+
+// --- Smokes (the General Store's corner-shelf consumable) ----------------------------------
+// A pack of Tsong Lights: buy at the General Store (or find a crumpled pack around town),
+// light one with C. Purely a vibe item — a little cigarette-break stress relief (the server
+// applies a capped, rate-limited cortisol dip per cigarette, same idea as a Tavern pint) and
+// smoke-puff FX that everyone in the World can see. The pouch is session-scoped, like ammo.
+export const SMOKES_COST = 40;     // coins per pack at the General Store
+export const SMOKES_PER_PACK = 20; // cigarettes per pack
 
 // --- Team Retro (Tsong Towers' conference room) -------------------------------------------
 // Sit in one of the eight conference chairs to join the standing retro. The board is one
@@ -1330,12 +1339,14 @@ export type ClientMsg =
   | { type: 'loanBookReq' } // request the public open-loan book (for the clickable stability-bar modal)
   | { type: 'worldEnter' } // step into the free-roam world map (start sending/receiving avatar positions)
   | { type: 'worldLeave' } // leave the world map
-  | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null; pet?: string | null; carColor?: string | null } // client-authoritative avatar position (world units), heading + car when driving, pet trailing, car paint job
+  | { type: 'worldMove'; x: number; y: number; a?: number; car?: string | null; pet?: string | null; carColor?: string | null; smoking?: boolean } // client-authoritative avatar position (world units), heading + car when driving, pet trailing, car paint job, mid-cigarette flag
   | { type: 'worldChat'; text: string; say?: boolean } // say a line in the World — pops as a speech bubble over your avatar; say=true (the Y popup) renders it purple
   | { type: 'worldBoom'; x: number; y: number; r?: number; fx?: WorldFx } // an explosion here (car crash or weapon strike) — broadcast the effect; r>0 = a damaging blast
   | { type: 'worldRocket'; x: number; y: number; a: number; w?: WorldWeapon; len?: number } // we fired here, heading a → broadcast so others see the shot
   | { type: 'worldBlownUp'; car: boolean; self: boolean; killedBy?: string } // a blast got us; killedBy = shooter pid for Road Rage kill attribution
   | { type: 'worldRoadRage' } // start a Road Rage PvP event (any player can trigger; server enforces cooldown)
+  | { type: 'buySmokes' } // buy a pack of Tsong Lights at the General Store (server charges SMOKES_COST → House)
+  | { type: 'smoked' }    // lit a cigarette — server applies a capped, rate-limited cortisol dip (one per ~20s)
   // --- Team Retro (Tsong Towers conference room) ---
   | { type: 'retroSit'; chair: number } // take a conference chair (joins the retro; server rejects a taken chair)
   | { type: 'retroStand' } // give up your chair
@@ -1859,6 +1870,7 @@ export const BALL_REACTION = 'ball';
 export type ServerMsg =
   | YouMsg
   | { type: 'prefs'; prefs: Record<string, string> } // the account's stored user settings, on join
+  | { type: 'smokes'; count: number } // a pack purchased — add `count` cigarettes to the pouch
   | RetroStateMsg
   | StateMsg
   | LeaderboardMsg

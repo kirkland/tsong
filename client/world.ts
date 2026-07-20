@@ -47,6 +47,8 @@ import {
   RETRO_NOTE_MAX,
   type RetroCol,
   type RetroStateMsg,
+  SMOKES_COST,
+  SMOKES_PER_PACK,
   WorldAvatar,
   WorldBuilding,
   WorldBuildingKind,
@@ -155,7 +157,7 @@ export interface WorldMarket {
 export interface WorldNet {
   enter(): void;                 // tell the server we're now in the world
   leave(): void;                 // tell the server we've left
-  move(x: number, y: number, a?: number, car?: string | null, pet?: string | null, carColor?: string | null): void; // stream our state
+  move(x: number, y: number, a?: number, car?: string | null, pet?: string | null, carColor?: string | null, smoking?: boolean): void; // stream our state
   name(): string;                // our nickname (for our own label)
   color(): string;               // our avatar color
   needsCharacter(): boolean;      // true until a first-time visitor has confirmed a real name/color
@@ -251,6 +253,9 @@ export interface WorldNet {
   marketList(instanceId: number, ask: number): void;
   onExit(): void;                // the overlay closed (lets main.ts reset the toggle button)
   enterArena(): void;            // walk into the Arena → return to Pong + join the queue
+  // --- Smokes (the General Store's corner-shelf consumable) ---
+  buySmokes(): void;             // buy a pack of Tsong Lights (server charges SMOKES_COST)
+  smoked(): void;                // we lit one — server applies the capped cortisol dip
   // --- Team Retro (Tsong Towers conference room) — chair presence + the shared sticky board ---
   selfPid(): string;             // our stable identity (matches RetroNote.pid / RetroSeat.pid)
   retroSit(chair: number): void;    // take conference chair 0-7 (server rejects a taken one)
@@ -354,6 +359,7 @@ interface Controller {
   feedChat(line: ChatLine): void; // a new chat line (mirrors the main chat into the side feed)
   feedRoadRage(active: boolean, endsAt: number, standings: { name: string; kills: number }[]): void;
   feedRetro(state: RetroStateMsg): void; // conference-room retro board + seat roster changed
+  feedSmokes(count: number): void; // a pack of Tsong Lights arrived — add to the pouch
   feedMcFood(item: string, granted: boolean, bonus?: number): void;
   reenter(): void; // re-send worldEnter after a socket reconnect (server forgot us on drop)
   dungeonChests(opened: string[]): void;                          // server's list of chests we've opened
@@ -578,6 +584,9 @@ export function reenterWorld(): void {
 /** Handle a Road Rage event broadcast. */
 export function feedRetro(state: RetroStateMsg): void {
   controller?.feedRetro(state);
+}
+export function feedSmokes(count: number): void {
+  controller?.feedSmokes(count);
 }
 export function feedRoadRage(active: boolean, endsAt: number, standings: { name: string; kills: number }[]): void {
   controller?.feedRoadRage(active, endsAt, standings);
@@ -2935,6 +2944,24 @@ export function startWorld(net: WorldNet): void {
   let retroDuck: Phaser.GameObjects.Text | null = null;          // 🦆 the facilitation duck (appears at 6+ stickies)
   let retroBoardCountTxt: Phaser.GameObjects.Text | null = null; // live tally under the wall board
   let retroWrapArmed = 0;   // two-step wrap confirm: epoch ms of the first click (3s window)
+  // --- Smokes state (the pouch is session-scoped, like ammo) ---
+  const CIG_MS = 45_000;    // one cigarette burns ~45 seconds
+  let cigs = 0;             // cigarettes in the pouch
+  let cigUntil = 0;         // smoking while Date.now() < cigUntil
+  let lastSentSmoking = false; // last smoking flag streamed (so a stationary smoker still updates)
+  let lastSelfPuffAt = 0;   // paces our own drags
+  const lastPuffAtById = new Map<string, number>(); // paces remote smokers' puffs
+  let smokeIdleX = 0, smokeIdleY = 0, smokeLastMovedAt = 0, smokeLastRingAt = 0; // idle → smoke rings
+  // Crumpled packs hidden around town (and one in the office) — a few free cigarettes each,
+  // once per session per spot. Discovery, not economy.
+  const SMOKE_FINDS: { x: number; y: number; amt: number; flavor: string }[] = [
+    { x: 890, y: 1690, amt: 5, flavor: '🚬 A crumpled pack in the grass west of the Tavern — five left. The Barkeep "quit" again last Tuesday.' },
+    { x: 3480, y: 1770, amt: 4, flavor: '🚬 A pack dropped on the Robville verge, south of the connector. Someone\'s open house went badly.' },
+    { x: OFFICE_INT.x + 352, y: OFFICE_INT.y + 528, amt: 6, flavor: '🚬 A pack in a desk drawer at Tsong Towers, under a resignation letter dated three years ago.' },
+  ];
+  const smokeFindTaken = [false, false, false];
+  const smokeFindSprites: (Phaser.GameObjects.Text | null)[] = [null, null, null];
+  let nearSmokeFind = -1;   // index into SMOKE_FINDS within reach (Enter → pocket it)
   let nearBook = false;     // standing at the holy book's lectern (Enter → read it)
   let templeBookX = 0, templeBookY = 0; // world position of the lectern (set in buildTempleInterior)
   // Live world positions of each cabinet on the Casino floor (set in buildCasinoInterior).
@@ -4137,7 +4164,8 @@ export function startWorld(net: WorldNet): void {
     }
     const b = boardable();
     const boatHint = b ? (b.sea ? ' · <b>B</b> board ship' : ' · <b>B</b> board boat') : '';
-    const gun = `<b>R</b>/<b>click</b> fire ${WEAPON_BY_ID[weapon].emoji} · <b>1-4</b>/<b>Q</b> weapon`;
+    const gun = `<b>R</b>/<b>click</b> fire ${WEAPON_BY_ID[weapon].emoji} · <b>1-4</b>/<b>Q</b> weapon`
+      + (cigs > 0 || Date.now() < cigUntil ? ' · <b>C</b> 🚬' : ''); // only once you're carrying smokes
     help.innerHTML = driving
       ? `W/S or ↑/↓ throttle · A/D or ←/→ steer · <b>Shift</b> drift · ${gun} · <b>F</b> get out · <b>T</b> chat`
       : `WASD / arrows or drag to walk · <b>F</b> drive${boatHint} · ${gun} · <b>Space</b> enter · <b>T</b> chat`;
@@ -5849,6 +5877,27 @@ export function startWorld(net: WorldNet): void {
       'border:none;border-radius:10px;padding:11px;font-size:14px;font-weight:800;';
     spin.onclick = () => net.dailySpin();
     dialogBox.appendChild(spin);
+
+    // The corner shelf: the store's one consumable — a pack of smokes for the pouch (not a
+    // cosmetic, so it lives outside the tab/slot machinery; the count is session-scoped).
+    const smokesRow = document.createElement('div');
+    smokesRow.style.cssText = 'display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:8px 10px;border-radius:10px;background:#18203a;border:1px solid #2c3a63;text-align:left;';
+    const sInfo = document.createElement('div');
+    sInfo.style.cssText = 'flex:1;min-width:0;';
+    const sName = document.createElement('div');
+    sName.textContent = `🚬 Tsong Lights (pack of ${SMOKES_PER_PACK})`;
+    sName.style.cssText = 'font-size:13px;font-weight:700;color:#e8eefc;';
+    const sBlurb = document.createElement('div');
+    sBlurb.textContent = `Light one with C. Takes the edge off. Terrible idea.${cigs > 0 ? ` You're carrying ${cigs}.` : ''}`;
+    sBlurb.style.cssText = 'font-size:10px;color:#7c8ab5;';
+    sInfo.append(sName, sBlurb);
+    const sBuy = document.createElement('button');
+    sBuy.type = 'button';
+    sBuy.textContent = `${SMOKES_COST}🪙`;
+    sBuy.style.cssText = 'cursor:pointer;flex-shrink:0;background:#21305a;color:#ffd23f;border:1px solid #38508f;border-radius:8px;padding:7px 14px;font-size:13px;font-weight:700;';
+    sBuy.onclick = () => { selectBlip(); net.buySmokes(); };
+    smokesRow.append(sInfo, sBuy);
+    dialogBox.appendChild(smokesRow);
 
     const tabRow = document.createElement('div');
     tabRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;margin-bottom:10px;justify-content:center;';
@@ -9664,6 +9713,7 @@ export function startWorld(net: WorldNet): void {
     if (seatedAt) { if (mySeatIdx !== null) openRetroPanel(); else standUp(); return; }
     if (nearOfficeChair) { sitDown(nearOfficeChair); return; }
     if (nearOfficeSpot) { officeSpotInteract(nearOfficeSpot); return; }
+    if (nearSmokeFind >= 0) { pickupSmokes(nearSmokeFind); return; }
     if (nearTavernMorris) {
       openDialog("⊞ Nine Men's Morris", 'Three in a row makes a mill; a mill takes a stone. The board is older than the tavern. The grudges are older than the board.', [
         { label: '⊞ Play (2-player PvP)', onPick: () => { pause(false); net.openFeature('morris'); } },
@@ -9931,6 +9981,7 @@ export function startWorld(net: WorldNet): void {
     if (k === 'q') { e.preventDefault(); e.stopPropagation(); cycleWeapon(); return; }
     if (k === 'x') { if (townInteract()) { e.preventDefault(); e.stopPropagation(); return; } }
     if (k === 'h') { drinkPotion(); e.preventDefault(); e.stopPropagation(); return; } // drink a held potion
+    if (k === 'c') { toggleCig(); e.preventDefault(); e.stopPropagation(); return; }   // light up / stub out a cigarette
     if (k >= '1' && k <= '4') {
       const pick = WEAPON_ORDER[Number(k) - 1];
       if (pick) { e.preventDefault(); e.stopPropagation(); selectWeapon(pick); return; }
@@ -10369,6 +10420,17 @@ export function startWorld(net: WorldNet): void {
         }
       }
     }
+    // A crumpled pack of smokes within reach (the spots are scattered — town coords never
+    // collide with interior ones, so a plain distance check self-gates by room). A building's
+    // door prompt wins — otherwise the shown prompt and the Enter action would disagree.
+    nearSmokeFind = -1;
+    if (!nearId && !driving && !net.amJailed()) {
+      for (let i = 0; i < SMOKE_FINDS.length; i++) {
+        if (smokeFindTaken[i]) continue;
+        const f = SMOKE_FINDS[i];
+        if (Math.hypot(selfX - f.x, selfY - f.y) < 44) { nearSmokeFind = i; break; }
+      }
+    }
     // Inside the Tavern (the default interior): the corner morris board.
     nearTavernMorris = inInterior && !inTemple && !inMcdonald && !inCasino && !inClub && !inVault && !nearExit && !nearNpc
       && Math.hypot(selfX - (TAVERN_INT.x + TAVERN_INT.w * 0.72), selfY - (TAVERN_INT.y + TAVERN_INT.h - 165)) < 62;
@@ -10483,6 +10545,8 @@ export function startWorld(net: WorldNet): void {
         : nearOfficeSpot === 'cooler' ? '💧 The water cooler'
         : nearOfficeSpot === 'printer' ? (printerDown ? '🖨️ What remains of the printer' : '🖨️ The printer')
         : retroState.notes.length ? `📋 The retro board (${retroState.notes.length} stick${retroState.notes.length === 1 ? 'y' : 'ies'})` : '📋 The retro board';
+    } else if (nearSmokeFind >= 0) {
+      prompt.textContent = '🚬 A crumpled pack of smokes';
     } else if (nearClubSpot) {
       prompt.textContent = nearClubSpot === 'putt' ? (puttCharging ? '⛳ Strike!' : '⛳ Address the ball')
         : nearClubSpot === 'registry' ? '📖 The Member Registry'
@@ -10536,7 +10600,7 @@ export function startWorld(net: WorldNet): void {
     } else if (nearBiomeSpot) {
       prompt.textContent = nearBiomeSpot;
     }
-    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || seatedAt || nearOfficeChair || nearOfficeSpot || nearClubSpot || nearTavernMorris || nearClubDoor || nearGolfTee || nearGolfBall || nearSwan || nearBook || nearCasinoGame || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDungeonImp2 || nearDyingMan || nearRob || nearJailed || nearParcel || nearBiomeSpot || nearIslandChest || nearTikiBar) && !dialogOpen && !talkOpen ? 'block' : 'none';
+    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || seatedAt || nearOfficeChair || nearOfficeSpot || nearSmokeFind >= 0 || nearClubSpot || nearTavernMorris || nearClubDoor || nearGolfTee || nearGolfBall || nearSwan || nearBook || nearCasinoGame || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDungeonImp2 || nearDyingMan || nearRob || nearJailed || nearParcel || nearBiomeSpot || nearIslandChest || nearTikiBar) && !dialogOpen && !talkOpen ? 'block' : 'none';
     // Boat affordance: dock while afloat, or board when standing by the water with a boat.
     const board = boating ? null : boardable();
     const boatable = boating || !!board;
@@ -10553,10 +10617,13 @@ export function startWorld(net: WorldNet): void {
   function maybeSendMove(now: number) {
     if (inInterior || inDungeon) return; // don't stream off-map interior/dungeon coords — others see you parked at the door
     if (now - lastSentAt < 66) return; // ~15 Hz cap
-    if (Math.abs(selfX - lastSentX) < 0.5 && Math.abs(selfY - lastSentY) < 0.5) return;
-    lastSentX = selfX; lastSentY = selfY; lastSentAt = now;
+    const smoking = Date.now() < cigUntil;
+    // A stationary smoker still needs one send when the cigarette starts/ends — the position
+    // delta alone would swallow the flag change.
+    if (Math.abs(selfX - lastSentX) < 0.5 && Math.abs(selfY - lastSentY) < 0.5 && smoking === lastSentSmoking) return;
+    lastSentX = selfX; lastSentY = selfY; lastSentAt = now; lastSentSmoking = smoking;
     // Stream the boat id in the same field as the car id; others render it via carById (it's in CARS).
-    net.move(selfX, selfY, (driving || boating) ? facing : undefined, worldVehicleId(), net.pet(), net.carColor());
+    net.move(selfX, selfY, (driving || boating) ? facing : undefined, worldVehicleId(), net.pet(), net.carColor(), smoking);
   }
 
   // ============================================================================================
@@ -13207,6 +13274,90 @@ export function startWorld(net: WorldNet): void {
     if (refocus) root.querySelector<HTMLInputElement>('#retroNoteInput')?.focus();
   }
 
+  // --- Smokes: light one with C ------------------------------------------------------------------
+  // A pack is 40🪙 at the General Store (or found in a few crumpled packs around town). Smoking is
+  // a vibe: gray puffs everyone can see (the flag rides worldMove), a small server-side cortisol
+  // dip per cigarette, the occasional cough — and if you stand still long enough, smoke rings.
+
+  function toggleCig() {
+    const now = Date.now();
+    if (now < cigUntil) {
+      cigUntil = 0;
+      flashHelp('🚬 Stubbed out under a heel. Very cool. Still bad for you.');
+      updateHelp();
+      return;
+    }
+    if (cigs <= 0) {
+      dryFireSound();
+      flashHelp(`🚬 No smokes. The General Store sells packs (${SMOKES_COST}🪙) — or keep an eye out around town.`);
+      return;
+    }
+    cigs--;
+    cigUntil = now + CIG_MS;
+    net.smoked(); // the server grants one cigarette's worth of calm (capped + rate-limited)
+    noise(0.05, 0.02, 2400); window.setTimeout(() => tone(180, 0.08, 'square', 0.04), 60); // flint scratch, flame pop
+    flashHelp(cigs === 0 ? '🚬 Lit. That was the last one — savor it.' : `🚬 Lit. ${cigs} left in the pack.`);
+    if (inTemple) showToast('⛪ You light up in the nave. Somewhere above, the Eternal Volley misses a beat. The Order is too polite to say anything.');
+    updateHelp();
+  }
+
+  function puffAt(x: number, y: number) {
+    const sc = petScene; if (!sc || smokePuffs.length >= 90) return;
+    smokePuffs.push({
+      spr: sc.add.image(x, y, 'w-smoke').setScale(0.28).setTint(0xcfd4da).setAlpha(0.5).setDepth(y + 30),
+      t: 0, max: 1.6, vx: 6 + (Math.random() - 0.5) * 10, vy: -22 - Math.random() * 10,
+    });
+  }
+
+  // Per-frame: lazily place the hidden packs, drift our own drags upward, mirror everyone
+  // else's, and reward true idleness with smoke rings.
+  function updateSmoking() {
+    const sc = petScene; if (!sc) return;
+    const now = Date.now();
+    for (let i = 0; i < SMOKE_FINDS.length; i++) { // hidden packs (lazy — sc may not exist at init)
+      if (!smokeFindTaken[i] && !smokeFindSprites[i]) {
+        const f = SMOKE_FINDS[i];
+        smokeFindSprites[i] = sc.add.text(f.x, f.y, '🚬', { fontSize: '11px' })
+          .setOrigin(0.5, 0.8).setAlpha(0.9).setAngle(i * 40 - 35).setDepth(f.y);
+      }
+    }
+    if (Math.abs(selfX - smokeIdleX) > 1 || Math.abs(selfY - smokeIdleY) > 1) {
+      smokeIdleX = selfX; smokeIdleY = selfY; smokeLastMovedAt = now;
+    }
+    const meSmoking = now < cigUntil;
+    if (meSmoking && now - lastSelfPuffAt > 1400) {
+      lastSelfPuffAt = now;
+      puffAt(selfX + Math.cos(facing) * 10, selfY - 14);
+      if (Math.random() < 0.07) noise(0.09, 0.025, 700); // the occasional small cough. you know why.
+    }
+    // parked and puffing for 8+ seconds → you've clearly practiced this
+    if (meSmoking && now - smokeLastMovedAt > 8000 && now - smokeLastRingAt > 8000) {
+      smokeLastRingAt = now;
+      const ring = sc.add.circle(selfX + Math.cos(facing) * 14, selfY - 16, 3)
+        .setStrokeStyle(2, 0xd8dde4, 0.8).setDepth(selfY + 40);
+      sc.tweens.add({ targets: ring, y: ring.y - 34, radius: 11, alpha: 0, duration: 2600, ease: 'Sine.easeOut', onComplete: () => ring.destroy() });
+    }
+    for (const a of others) { // everyone else's cigarettes (the flag rides the world broadcast)
+      if (!a.smoking || a.id === net.selfId()) continue;
+      if (now - (lastPuffAtById.get(a.id) ?? 0) < 1400) continue;
+      lastPuffAtById.set(a.id, now);
+      puffAt(a.x, a.y - 14);
+    }
+  }
+
+  function pickupSmokes(i: number) {
+    if (smokeFindTaken[i]) return;
+    smokeFindTaken[i] = true;
+    const f = SMOKE_FINDS[i];
+    const spr = smokeFindSprites[i];
+    if (spr && petScene) petScene.tweens.add({ targets: spr, y: spr.y - 16, alpha: 0, duration: 500, onComplete: () => spr.destroy() });
+    smokeFindSprites[i] = null;
+    cigs += f.amt;
+    selectBlip();
+    showToast(`${f.flavor} <i>(+${f.amt} 🚬 — press C)</i>`);
+    updateHelp();
+  }
+
   // McDonald's interior: a bright fast-food dining room. Red walls, checkered floor, counter at back,
   // menu board above it, tables with chairs, and a McCafé corner. Cashier Mac, Grimace, and Ronald
   // are on duty. Exit via the door mat at the bottom center.
@@ -14594,6 +14745,7 @@ export function startWorld(net: WorldNet): void {
       safeStep('enemyShips', () => updateEnemyShips(dt));
       safeStep('biome', () => updateBiome());
       safeStep('nearBuilding', () => updateNearBuilding());
+      safeStep('smoking', () => updateSmoking());
       safeStep('sendMove', () => maybeSendMove(now));
 
       // show the touch fire button + weapon rack out in the open world (and in the office, where
@@ -21011,6 +21163,11 @@ export function startWorld(net: WorldNet): void {
     feedRocket(x, y, a, w, len) { feedShot(x, y, a, w ?? 'rocket', len); },
     feedChat(line) { pushChatLine(line); },
     feedRetro(state) { applyRetroState(state); },
+    feedSmokes(count) {
+      cigs += count;
+      showToast(`🚬 A fresh pack of Tsong Lights (+${count}). The Surgeon General of Robville would like a word. <i>Press C to light one.</i>`);
+      updateHelp();
+    },
     feedRoadRage(active: boolean, endsAt: number, standings: { name: string; kills: number }[]) {
       const starting = active && !rrActive;
       rrActive = active; rrEndsAt = endsAt; rrStandings = standings;

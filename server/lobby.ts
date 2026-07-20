@@ -35,6 +35,8 @@ import {
   RETRO_CHAIR_COUNT,
   RETRO_NOTE_MAX,
   RETRO_NOTES_CAP,
+  SMOKES_COST,
+  SMOKES_PER_PACK,
   RetroCol,
   RetroNote,
   RetroStateMsg,
@@ -305,6 +307,10 @@ const CORTISOL_FINAL_TWO_MULT = 2;  // …doubled when you're one of the last tw
 const CORTISOL_STRESS_MAX_MSG = 40; // cap on a single client-reported 'stress' bump (anti-tamper)
 const CORTISOL_FLUSH_TICKS = 600;   // flush live cortisol → DB + rebroadcast the board every ~10s (60Hz)
 const CORTISOL_BEER_RELIEF = 10;    // a pint takes the edge off — quiet liquid-courage stress relief
+const CORTISOL_SMOKE_RELIEF = 6;    // a cigarette takes less of the edge off than a pint. working as intended
+const SMOKE_RELIEF_COOLDOWN_MS = 20_000; // one cigarette's relief per 20s, whatever the client claims
+// Rate-limit state for smoked(), keyed by socket (auto-cleaned when the socket is GC'd).
+const smokedAt = new WeakMap<WebSocket, number>();
 // More things that move the needle (pong + open-world/economy — arcade minigames stay out of it).
 const CORTISOL_GOAL_FOR = 2;        // scoring a point in a duel eases you a touch
 const CORTISOL_GOAL_AGAINST = 3;    // conceding one ratchets you up
@@ -2417,15 +2423,43 @@ export class Lobby {
   }
 
   /** Record a client's self-reported avatar position. Jailed players are pinned to the cell. */
-  worldMove(ws: WebSocket, x: number, y: number, a?: number, car?: string | null, pet?: string | null, carColor?: string | null) {
+  worldMove(ws: WebSocket, x: number, y: number, a?: number, car?: string | null, pet?: string | null, carColor?: string | null, smoking?: boolean) {
     const conn = this.conns.get(ws);
     if (conn?.jailed) {
       const cx = Math.max(JAIL_CELL.x, Math.min(JAIL_CELL.x + JAIL_CELL.w, x));
       const cy = Math.max(JAIL_CELL.y, Math.min(JAIL_CELL.y + JAIL_CELL.h, y));
-      this.world.move(ws, cx, cy, a, null, pet); // no car (or paint job) while jailed
+      this.world.move(ws, cx, cy, a, null, pet, null, smoking); // no car (or paint job) while jailed — prison cigarettes, however, are canon
       return;
     }
-    this.world.move(ws, x, y, a, car, pet, carColor);
+    this.world.move(ws, x, y, a, car, pet, carColor, smoking);
+  }
+
+  /** Buy a pack of Tsong Lights at the General Store — same shape as a Tavern pint: coins →
+   *  House, effect granted, wallet refreshed. The pouch itself lives on the client (session-
+   *  scoped, like ammo); the server's job is the charge and the grant message. */
+  buySmokes(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !conn.pid) return;
+    spendCoins(conn.pid, SMOKES_COST)
+      .then(async (w) => {
+        if (!w) { this.notify(ws, `💸 A pack is ${SMOKES_COST}🪙. The clerk pretends not to notice you counting coins.`); this.sendWallet(ws); return; }
+        await this.houseCredit(SMOKES_COST); // the corner shelf's takings go to the House too
+        this.sendWallet(ws);
+        this.tell(ws, { type: 'smokes', count: SMOKES_PER_PACK });
+        this.notify(ws, '🚬 One pack of Tsong Lights. The clerk slides it over without judgment. (Some judgment.)');
+      })
+      .catch((e) => console.error('buy smokes failed:', e));
+  }
+
+  /** The client lit a cigarette. Grant the little cortisol dip — capped by a per-socket
+   *  cooldown so a message spammer gets exactly one cigarette's worth of calm per 20s. */
+  smoked(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid) return;
+    const now = Date.now();
+    if (now - (smokedAt.get(ws) ?? 0) < SMOKE_RELIEF_COOLDOWN_MS) return;
+    smokedAt.set(ws, now);
+    this.bumpCortisol(conn, -CORTISOL_SMOKE_RELIEF); // the unhealthiest coping mechanism in town
   }
 
   /** A player pressed '/' in the World and said a line — fan it out to everyone in the world as a
@@ -2647,7 +2681,7 @@ export class Lobby {
       const c = this.conns.get(ws);
       const p = this.world.positionOf(ws);
       if (!c || !p) continue;
-      out.push({ id: c.id, name: c.nickname || 'anon', color: c.color, x: p.x, y: p.y, a: p.a, car: p.car, carColor: p.carColor, pet: p.pet, jailed: c.jailed });
+      out.push({ id: c.id, name: c.nickname || 'anon', color: c.color, x: p.x, y: p.y, a: p.a, car: p.car, carColor: p.carColor, pet: p.pet, jailed: c.jailed, smoking: p.smoking || undefined });
     }
     // Append spawned netizen avatars.
     for (let i = 0; i < Lobby.NETIZEN_NAMES.length; i++) {

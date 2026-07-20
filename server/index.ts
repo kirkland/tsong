@@ -739,7 +739,7 @@ wss.on('connection', (ws: WebSocket, req) => {
         break;
       case 'worldMove':
         if (typeof msg.x === 'number' && typeof msg.y === 'number') {
-          lobby.worldMove(ws, msg.x, msg.y, typeof msg.a === 'number' ? msg.a : undefined, typeof msg.car === 'string' ? msg.car : null, typeof msg.pet === 'string' ? msg.pet : null, typeof msg.carColor === 'string' ? msg.carColor : null);
+          lobby.worldMove(ws, msg.x, msg.y, typeof msg.a === 'number' ? msg.a : undefined, typeof msg.car === 'string' ? msg.car : null, typeof msg.pet === 'string' ? msg.pet : null, typeof msg.carColor === 'string' ? msg.carColor : null, msg.smoking === true);
         }
         break;
       case 'worldChat':
@@ -762,6 +762,12 @@ wss.on('connection', (ws: WebSocket, req) => {
         break;
       case 'worldRoadRage':
         lobby.startRoadRage(ws);
+        break;
+      case 'buySmokes':
+        lobby.buySmokes(ws);
+        break;
+      case 'smoked':
+        lobby.smoked(ws);
         break;
       case 'retroSit':
         if (typeof msg.chair === 'number') lobby.retroSit(ws, msg.chair);

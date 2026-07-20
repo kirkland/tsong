@@ -18,6 +18,7 @@ interface WorldPos {
   car: string | null;
   carColor: string | null;
   pet: string | null;
+  smoking: boolean; // mid-cigarette — relayed so everyone renders the smoke puffs
 }
 
 export class World {
@@ -43,7 +44,7 @@ export class World {
 
   /** Drop a fresh avatar in at the central plaza spawn (no-op if already in the world). */
   enter(ws: WebSocket): void {
-    if (!this.pos.has(ws)) this.pos.set(ws, { x: WORLD.spawnX, y: WORLD.spawnY, a: 0, car: null, carColor: null, pet: null });
+    if (!this.pos.has(ws)) this.pos.set(ws, { x: WORLD.spawnX, y: WORLD.spawnY, a: 0, car: null, carColor: null, pet: null, smoking: false });
   }
 
   leave(ws: WebSocket): void {
@@ -53,7 +54,7 @@ export class World {
   /** Store a self-reported position (clamped to the map) plus heading + driven car (+ its paint
    *  job) + trailing pet. Ignores non-finite input and any client that isn't in the world (e.g.
    *  a stray late message). */
-  move(ws: WebSocket, x: number, y: number, a?: number, car?: string | null, pet?: string | null, carColor?: string | null): void {
+  move(ws: WebSocket, x: number, y: number, a?: number, car?: string | null, pet?: string | null, carColor?: string | null, smoking?: boolean): void {
     const p = this.pos.get(ws);
     if (!p) return;
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
@@ -65,5 +66,6 @@ export class World {
     p.car = typeof car === 'string' ? car : null;
     p.carColor = typeof carColor === 'string' ? carColor : null;
     p.pet = typeof pet === 'string' ? pet : null;
+    p.smoking = smoking === true;
   }
 }

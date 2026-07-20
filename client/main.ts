@@ -939,6 +939,8 @@ const net = connect(
       worldMod?.feedLand(msg.parcels, msg.bankBought, msg.bankCap);
     } else if (msg.type === 'retro') {
       worldMod?.feedRetro(msg);
+    } else if (msg.type === 'smokes') {
+      worldMod?.feedSmokes(msg.count);
     } else if (msg.type === 'worldSay') {
       worldMod?.feedSay(msg.id, msg.name, msg.text, msg.say === true);
     } else if (msg.type === 'worldBoom') {
@@ -2570,7 +2572,7 @@ worldBtn.addEventListener('click', async () => {
     worldMod.startWorld({
       enter: () => net.send({ type: 'worldEnter' }),
       leave: () => net.send({ type: 'worldLeave' }),
-      move: (x, y, a, car, pet, carColor) => net.send({ type: 'worldMove', x, y, a, car, pet, carColor }),
+      move: (x, y, a, car, pet, carColor, smoking) => net.send({ type: 'worldMove', x, y, a, car, pet, carColor, smoking }),
       name: () => myName,
       color: () => myColor,
       needsCharacter: () => needsCharacter,
@@ -2653,6 +2655,9 @@ worldBtn.addEventListener('click', async () => {
       onExit: () => worldBtn.setAttribute('aria-pressed', 'false'),
       // Walk into the Arena → hop into the play queue (you'll be seated when a spot opens).
       enterArena: () => net.send({ type: 'queueJoin' }),
+      // Smokes — the General Store's corner-shelf consumable.
+      buySmokes: () => net.send({ type: 'buySmokes' }),
+      smoked: () => net.send({ type: 'smoked' }),
       // Team Retro (Tsong Towers conference room) — chair presence + the shared sticky board.
       selfPid: () => myPid,
       retroSit: (chair) => net.send({ type: 'retroSit', chair }),
