@@ -689,6 +689,9 @@ const ROADS: Rect[] = [
   // nearest lot (starts y993).
   { x: 2980, y: 860, w: 280, h: 80 },    // path: Hall of Fame → the Observatory's rise
   { x: 3205, y: 900, w: 110, h: 40 },    // stub up to the Observatory door
+  // Tsong Towers (x2800-3140, y1830+): a short spur south off the Robville connector avenue
+  // (y1540-1660), centered on the tower's front door.
+  { x: 2915, y: 1660, w: 110, h: 170 },
 ];
 const PLAZA = { x: 1600, y: 1100, r: 240 }; // paved circle + fountain at town center
 // The Tavern's INTERIOR lives off the main map. When you step inside, the camera bounds switch to
@@ -734,6 +737,44 @@ const CLUB_ZOOM = 2.1;
 const VAULT_INT = { x: 40000, y: 4700, w: 560, h: 440 };
 const VAULT_WALL = 26;
 const VAULT_ZOOM = 3;
+// Tsong Towers' FLOOR 1 — off-map below the Vault block (which ends at y≈5140). One big rect,
+// partitioned into real rooms by interior walls (see OFFICE_WALLS): kitchen top-left, lounge
+// top-right (break-room ping pong), conference room bottom-right (sittable chairs, retro board),
+// open bullpen everywhere else. Uniquely among the interiors, weapons stay live in here — the
+// walls/partitions double as projectile colliders (see hitsWorld()).
+const OFFICE_INT = { x: 40000, y: 5400, w: 1460, h: 900 };
+const OFFICE_WALL = 30;
+const OFFICE_ZOOM = 1.7; // wide, like the Casino floor — several rooms should read at once
+// Interior partition walls (world coords). Solid to both feet and projectiles. Each room keeps a
+// door-sized gap: kitchen opens onto the bullpen at x150-250, the lounge at x1160-1260, and the
+// conference room through its left (glass) wall at y640-740.
+const OFFICE_WALLS: Rect[] = [
+  { x: OFFICE_INT.x + 470, y: OFFICE_INT.y, w: 14, h: 404 },          // kitchen right wall
+  { x: OFFICE_INT.x, y: OFFICE_INT.y + 390, w: 150, h: 14 },          // kitchen south wall (west of door)
+  { x: OFFICE_INT.x + 250, y: OFFICE_INT.y + 390, w: 234, h: 14 },    // kitchen south wall (east of door)
+  { x: OFFICE_INT.x + 976, y: OFFICE_INT.y, w: 14, h: 404 },          // lounge left wall
+  { x: OFFICE_INT.x + 976, y: OFFICE_INT.y + 390, w: 184, h: 14 },    // lounge south wall (west of door)
+  { x: OFFICE_INT.x + 1260, y: OFFICE_INT.y + 390, w: 200, h: 14 },   // lounge south wall (east of door)
+  { x: OFFICE_INT.x + 936, y: OFFICE_INT.y + 520, w: 524, h: 14 },    // conference north wall
+  { x: OFFICE_INT.x + 936, y: OFFICE_INT.y + 534, w: 14, h: 106 },    // conference west wall (above door)
+  { x: OFFICE_INT.x + 936, y: OFFICE_INT.y + 740, w: 14, h: 160 },    // conference west wall (below door)
+];
+// Walk-up hotspots on the office floor (world coords, derived from OFFICE_INT like CLUB_SPOTS).
+const OFFICE_SPOTS = {
+  pong:    { x: OFFICE_INT.x + 1210, y: OFFICE_INT.y + 215 },  // the break-room ping pong table
+  coffee:  { x: OFFICE_INT.x + 310,  y: OFFICE_INT.y + 130 },  // the espresso machine on the kitchen counter
+  fridge:  { x: OFFICE_INT.x + 426,  y: OFFICE_INT.y + 140 },  // the communal fridge (labeled lunches)
+  cooler:  { x: OFFICE_INT.x + 560,  y: OFFICE_INT.y + 480 },  // the water cooler (peak office culture)
+  printer: { x: OFFICE_INT.x + 880,  y: OFFICE_INT.y + 470 },  // the printer. it knows what it did.
+  board:   { x: OFFICE_INT.x + 1195, y: OFFICE_INT.y + 562 },  // the conference room's retro board
+} as const;
+// The conference table's eight seats — walk up, press Enter, and you're in the meeting.
+const OFFICE_CHAIRS: readonly { x: number; y: number }[] = [
+  { x: OFFICE_INT.x + 1115, y: OFFICE_INT.y + 622 }, { x: OFFICE_INT.x + 1195, y: OFFICE_INT.y + 622 },
+  { x: OFFICE_INT.x + 1275, y: OFFICE_INT.y + 622 }, { x: OFFICE_INT.x + 1115, y: OFFICE_INT.y + 778 },
+  { x: OFFICE_INT.x + 1195, y: OFFICE_INT.y + 778 }, { x: OFFICE_INT.x + 1275, y: OFFICE_INT.y + 778 },
+  { x: OFFICE_INT.x + 1035, y: OFFICE_INT.y + 700 }, { x: OFFICE_INT.x + 1355, y: OFFICE_INT.y + 700 },
+];
 // Walk-up hotspots on the clubhouse floor (world coords, derived from CLUB_INT so they move with it).
 const CLUB_SPOTS = {
   putt:     { x: CLUB_INT.x + 170, y: CLUB_INT.y + 610 },  // the practice green's ball spot
@@ -2695,6 +2736,7 @@ export function startWorld(net: WorldNet): void {
   let inCasino = false;     // sub-flag: the current interior is the Casino gaming floor
   let inClub = false;       // sub-flag: the current interior is the Country Club's clubhouse
   let inVault = false;      // sub-flag: the annex behind the clubhouse bookcase
+  let inOffice = false;     // sub-flag: the current interior is Tsong Towers (weapons stay LIVE in here)
   // The ACTIVE interior's geometry — swapped on entry so the movement clamp / exit mat / zoom all
   // read one rect instead of hard-coding the Tavern's. Defaults to the Tavern.
   let curInt = TAVERN_INT, curWall = TAVERN_WALL, curZoom = TAVERN_ZOOM;
@@ -2772,6 +2814,16 @@ export function startWorld(net: WorldNet): void {
   let templeBuilt = false;  // the Temple interior's props are lazily built on first entry
   let mcBuilt = false;      // the McDonald's interior props are lazily built on first entry
   let casinoBuilt = false;  // the Casino gaming floor's props are lazily built on first entry
+  let officeBuilt = false;  // Tsong Towers' floor props are lazily built on first entry
+  // --- Tsong Towers state ---
+  let nearOfficeSpot: keyof typeof OFFICE_SPOTS | null = null; // walk-up within reach (Enter → interact)
+  let nearOfficeChair: { x: number; y: number } | null = null; // a conference chair within reach (Enter → sit)
+  // (sitting reuses the plaza benches' `seatedAt`/`seatBubble` state — see the town-life section)
+  let coffeeUntil = 0;      // espresso jolt: brisk step until this epoch-ms (see coffeeMul)
+  const coffeeMul = () => (Date.now() < coffeeUntil ? 1.22 : 1); // on-foot speed multiplier while caffeinated
+  let printerJams = 0;      // how many times the printer has eaten a page this session
+  let printerDown = false;  // someone finally dealt with it (respawns eventually; HR restocks)
+  let printerSpr: Phaser.GameObjects.Text | null = null;       // the printer's emoji sprite (swapped on demise)
   let nearBook = false;     // standing at the holy book's lectern (Enter → read it)
   let templeBookX = 0, templeBookY = 0; // world position of the lectern (set in buildTempleInterior)
   // Live world positions of each cabinet on the Casino floor (set in buildCasinoInterior).
@@ -3878,6 +3930,7 @@ export function startWorld(net: WorldNet): void {
       case 'hall': return '🏆 Enter the Hall of Fame';
       case 'noticeboard': return '📌 Check the Notice Board';
       case 'observatory': return '🔭 Enter the Observatory — the town watches itself';
+      case 'office': return '🏢 Enter Tsong Towers';
     }
   }
   function enterBuilding(kind: WorldBuildingKind) {
@@ -3919,6 +3972,7 @@ export function startWorld(net: WorldNet): void {
     }
     if (kind === 'bar') { enterTavern(); return; }
     if (kind === 'mcdonald') { enterMcdonald(); return; }
+    if (kind === 'office') { enterOffice(); return; }
     if (kind === 'temple') { enterTemple(); return; }
     if (kind === 'dungeon') { enterDungeon(); return; }
     // The General Store — same walk-straight-in idiom as the Pet Shop.
@@ -9368,8 +9422,11 @@ export function startWorld(net: WorldNet): void {
     if (nearNpc && nearNpc.def.id === 'club-sterling') { orderClubPour(); return; }
     if (nearNpc && nearNpc.def.id === 'club-commodore' && !net.owns('club-member')) { offerClubMembership(); return; }
     if (nearNpc) { startTalk(nearNpc); return; }
-    if (nearExit) { if (inDungeon) leaveDungeon(); else if (inTemple) leaveTemple(); else if (inMcdonald) leaveMcdonald(); else if (inCasino) leaveCasino(); else if (inVault) leaveVault(); else if (inClub) leaveClubhouse(); else leaveTavern(); return; }
+    if (nearExit) { if (inDungeon) leaveDungeon(); else if (inTemple) leaveTemple(); else if (inMcdonald) leaveMcdonald(); else if (inCasino) leaveCasino(); else if (inVault) leaveVault(); else if (inClub) leaveClubhouse(); else if (inOffice) leaveOffice(); else leaveTavern(); return; }
     if (nearClubSpot) { clubSpotInteract(nearClubSpot); return; }
+    if (seatedAt) { standUp(); return; }
+    if (nearOfficeChair) { sitDown(nearOfficeChair); return; }
+    if (nearOfficeSpot) { officeSpotInteract(nearOfficeSpot); return; }
     if (nearTavernMorris) {
       openDialog("⊞ Nine Men's Morris", 'Three in a row makes a mill; a mill takes a stone. The board is older than the tavern. The grudges are older than the board.', [
         { label: '⊞ Play (2-player PvP)', onPick: () => { pause(false); net.openFeature('morris'); } },
@@ -9766,6 +9823,7 @@ export function startWorld(net: WorldNet): void {
     }
     const mag = Math.hypot(dx, dy);
     if (mag === 0) return;
+    if (seatedAt) unseat(); // any step out of a chair/bench stands you up
     dx /= mag; dy /= mag;
     // Drunk stagger: rotate your intended heading by a wandering angle that grows with the level, so
     // walking a straight line gets harder the more you've had.
@@ -9780,15 +9838,16 @@ export function startWorld(net: WorldNet): void {
     facing = Math.atan2(dy, dx);
     // stepFoot() only ever runs when neither driving nor boating (see the call site), so `handbrake`
     // — otherwise the car's drift key — is free to double as an on-foot sprint toggle here.
-    const SP = SPEED * blessMul() * (handbrake ? SPRINT_MULT : 1); // the Blessing of the Ball quickens your step (decays to 1×)
+    const SP = SPEED * blessMul() * coffeeMul() * (handbrake ? SPRINT_MULT : 1); // Blessing of the Ball + office espresso quicken your step
     if (inInterior) {
       // inside a room (Tavern/Temple): no town collision, just clamp to the inset play area
       let nx = clamp(selfX + dx * SP * dt, curInt.x + curWall + R, curInt.x + curInt.w - curWall - R);
       let ny = clamp(selfY + dy * SP * dt, curInt.y + curWall + R, curInt.y + curInt.h - curWall - R);
-      // the clubhouse has furniture you bump into — slide per-axis against its prop rects
-      if (inClub && clubIntColliders.length) {
-        if (!clubIntColliders.some((b) => nx > b.x - R && nx < b.x + b.w + R && selfY > b.y - R && selfY < b.y + b.h + R)) selfX = nx;
-        if (!clubIntColliders.some((b) => selfX > b.x - R && selfX < b.x + b.w + R && ny > b.y - R && ny < b.y + b.h + R)) selfY = ny;
+      // the clubhouse and the office have furniture/partitions you bump into — slide per-axis
+      const bumps = inClub ? clubIntColliders : inOffice ? officeColliders : [];
+      if (bumps.length) {
+        if (!bumps.some((b) => nx > b.x - R && nx < b.x + b.w + R && selfY > b.y - R && selfY < b.y + b.h + R)) selfX = nx;
+        if (!bumps.some((b) => selfX > b.x - R && selfX < b.x + b.w + R && ny > b.y - R && ny < b.y + b.h + R)) selfY = ny;
       } else { selfX = nx; selfY = ny; }
       stepSound();
       return;
@@ -10017,6 +10076,26 @@ export function startWorld(net: WorldNet): void {
       }
     }
     nearSwan = !!(inVault && !nearExit && vaultSwan && Math.hypot(selfX - vaultSwan.x, selfY - vaultSwan.y) < 64);
+    // Inside Tsong Towers: the nearest walk-up (ping pong table / kitchen gear / printer / retro
+    // board), then a free conference chair. Seated → everything yields to the "stand up" prompt.
+    nearOfficeSpot = null; nearOfficeChair = null;
+    if (inOffice && !nearExit && !seatedAt) {
+      let od = 58;
+      for (const key of ['coffee', 'fridge', 'cooler', 'printer', 'board'] as const) {
+        const s = OFFICE_SPOTS[key];
+        const d = Math.hypot(selfX - s.x, selfY - s.y);
+        if (d < od) { od = d; nearOfficeSpot = key; }
+      }
+      // the ping pong table is a big target — reachable from any side of it
+      if (!nearOfficeSpot && Math.hypot(selfX - OFFICE_SPOTS.pong.x, selfY - OFFICE_SPOTS.pong.y) < 112) nearOfficeSpot = 'pong';
+      if (!nearOfficeSpot) {
+        let cd = 46;
+        for (const c of OFFICE_CHAIRS) {
+          const d = Math.hypot(selfX - c.x, selfY - c.y);
+          if (d < cd) { cd = d; nearOfficeChair = c; }
+        }
+      }
+    }
     // Inside the Tavern (the default interior): the corner morris board.
     nearTavernMorris = inInterior && !inTemple && !inMcdonald && !inCasino && !inClub && !inVault && !nearExit && !nearNpc
       && Math.hypot(selfX - (TAVERN_INT.x + TAVERN_INT.w * 0.72), selfY - (TAVERN_INT.y + TAVERN_INT.h - 165)) < 62;
@@ -10110,7 +10189,18 @@ export function startWorld(net: WorldNet): void {
     } else if (nearNpc) {
       prompt.textContent = nearNpc.def.id === 'bartender' ? '🍺 Order from the Barkeep' : nearNpc.def.id === 'mc-cashier' ? '🍔 Order from Mac' : nearNpc.def.id === 'club-sterling' ? '🥃 A word with Sterling' : nearNpc.def.id === 'club-commodore' && !net.owns('club-member') ? '🎩 Apply for Membership' : nearNpc.def.friendKey ? `💕 Chat with ${nearNpc.def.name}` : `💬 Talk to ${nearNpc.def.name}`;
     } else if (nearExit) {
-      prompt.textContent = inDungeon ? '🚪 Leave the Ruins' : inTemple ? '🚪 Leave the Temple' : inMcdonald ? "🍔 Leave McDonald's" : inCasino ? '🎰 Leave the Casino' : inVault ? '🚪 Back through the bookcase' : inClub ? '🚪 Leave the Clubhouse' : '🚪 Leave the Tavern';
+      prompt.textContent = inDungeon ? '🚪 Leave the Ruins' : inTemple ? '🚪 Leave the Temple' : inMcdonald ? "🍔 Leave McDonald's" : inCasino ? '🎰 Leave the Casino' : inVault ? '🚪 Back through the bookcase' : inClub ? '🚪 Leave the Clubhouse' : inOffice ? '🏢 Clock out' : '🚪 Leave the Tavern';
+    } else if (seatedAt) {
+      prompt.textContent = '🪑 Stand up';
+    } else if (nearOfficeChair) {
+      prompt.textContent = '🪑 Take a seat';
+    } else if (nearOfficeSpot) {
+      prompt.textContent = nearOfficeSpot === 'pong' ? '🏓 The break-room table — rally up'
+        : nearOfficeSpot === 'coffee' ? '☕ The espresso machine'
+        : nearOfficeSpot === 'fridge' ? '🧊 The communal fridge'
+        : nearOfficeSpot === 'cooler' ? '💧 The water cooler'
+        : nearOfficeSpot === 'printer' ? (printerDown ? '🖨️ What remains of the printer' : '🖨️ The printer')
+        : '📋 The retro board';
     } else if (nearClubSpot) {
       prompt.textContent = nearClubSpot === 'putt' ? (puttCharging ? '⛳ Strike!' : '⛳ Address the ball')
         : nearClubSpot === 'registry' ? '📖 The Member Registry'
@@ -10160,7 +10250,7 @@ export function startWorld(net: WorldNet): void {
     } else if (nearBiomeSpot) {
       prompt.textContent = nearBiomeSpot;
     }
-    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || nearBook || nearCasinoGame || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDungeonImp2 || nearDyingMan || nearRob || nearJailed || nearParcel || nearBiomeSpot) && !dialogOpen && !talkOpen ? 'block' : 'none';
+    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || seatedAt || nearOfficeChair || nearOfficeSpot || nearClubSpot || nearTavernMorris || nearClubDoor || nearGolfTee || nearGolfBall || nearSwan || nearBook || nearCasinoGame || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDungeonImp2 || nearDyingMan || nearRob || nearJailed || nearParcel || nearBiomeSpot) && !dialogOpen && !talkOpen ? 'block' : 'none';
     // Boat affordance: dock while afloat, or board when standing by the water with a boat.
     const boatable = boating || !!boardableWater();
     if (boatable && !dialogOpen && !talkOpen) {
@@ -12103,6 +12193,343 @@ export function startWorld(net: WorldNet): void {
     }
   }
 
+  // Tsong Towers exterior: a modern glass-and-steel office block. A grid of curtain-wall windows
+  // (a few lit — someone is always on-call), a rooftop parapet with HVAC boxes, and a revolving
+  // door under a corporate awning at street level.
+  function buildOfficeTower(sc: Phaser.Scene, b: WorldBuilding) {
+    const W = Math.round(b.w / TEXEL), H = Math.round(b.h / TEXEL);
+    const depth = b.y + b.h;
+    const g = sc.make.graphics({ x: 0, y: 0 }, false);
+    const P = (x: number, y: number, w: number, h: number, c: number, a = 1) => px9(g, x, y, w, h, c, a);
+
+    const STEEL = 0x2f3a4c, DSTEEL = 0x1c2430, MULLION = 0x3d4a60;
+    const GLASS = 0x7ec8f0, DGLASS = 0x27415c, LIT = 0xffe9a0, TRIM = 0x9fb0c8;
+
+    // frame + curtain wall base
+    P(0, 0, W, H, DSTEEL);
+    P(1, 1, W - 2, H - 2, STEEL);
+    // rooftop parapet + HVAC boxes
+    P(0, 0, W, 3, DSTEEL);
+    P(Math.round(W * 0.18), 1, 6, 3, TRIM); P(Math.round(W * 0.62), 1, 8, 3, TRIM);
+    // window grid: floors of blue glass, a deterministic scatter of them lit warm
+    const lobbyTop = H - 15;
+    let wi = 0;
+    for (let wy = 6; wy + 6 < lobbyTop; wy += 8) {
+      for (let wx = 4; wx + 7 < W - 3; wx += 9, wi++) {
+        const litOne = (wi * 7 + wy) % 11 === 3; // scattered late-shift lights, same on every client
+        P(wx, wy, 7, 6, DSTEEL);
+        P(wx + 1, wy + 1, 5, 4, litOne ? LIT : DGLASS);
+        if (!litOne) P(wx + 1, wy + 1, 5, 1, GLASS, 0.55); // sky glint on the dark panes
+      }
+      P(2, wy + 7, W - 4, 1, MULLION); // floor slab line
+    }
+    // street level: a glass lobby band with a revolving door dead center
+    P(3, lobbyTop, W - 6, H - lobbyTop - 2, DGLASS);
+    P(3, lobbyTop, W - 6, 1, GLASS, 0.7);
+    const dw = 12, doorX = Math.round((W - dw) / 2);
+    P(doorX - 2, lobbyTop - 3, dw + 4, 3, TRIM);                    // awning
+    P(doorX, lobbyTop, dw, H - lobbyTop - 2, 0x101820);             // door recess
+    P(doorX + Math.round(dw / 2), lobbyTop, 1, H - lobbyTop - 2, TRIM); // revolving-door spindle
+    P(doorX + 1, lobbyTop + 1, 4, H - lobbyTop - 4, GLASS, 0.35);   // glass leaves
+    P(doorX + dw - 5, lobbyTop + 1, 4, H - lobbyTop - 4, GLASS, 0.35);
+    P(0, 0, 1, H, DSTEEL); P(W - 1, 0, 1, H, DSTEEL); P(0, H - 1, W, 1, DSTEEL);
+
+    g.generateTexture('w-office', W, H);
+    g.destroy();
+    sc.add.image(b.x, b.y, 'w-office').setOrigin(0, 0).setScale(TEXEL).setDepth(depth);
+
+    // one window flickers after hours — the on-call engineer's desk lamp
+    const fx = b.x + (4 + 9 * 3 + 1) * TEXEL, fy = b.y + (6 + 8 * 2 + 1) * TEXEL;
+    const lamp = sc.add.rectangle(fx, fy, 5 * TEXEL, 4 * TEXEL, LIT, 0.9).setOrigin(0, 0).setDepth(depth + 1);
+    sc.tweens.add({ targets: lamp, alpha: 0.15, duration: 1300, yoyo: true, repeat: -1, hold: 2200, repeatDelay: 900 });
+  }
+
+  // Tsong Towers interior — FLOOR 1. One big room partitioned into a kitchen (top-left), the
+  // lounge with the break-room ping pong table (top-right), a glass-walled conference room with
+  // eight sittable chairs (bottom-right), and an open bullpen of desks in between. The partition
+  // walls live in OFFICE_WALLS; everything solid lands in officeColliders, which also serves as
+  // the projectile collision map — weapons stay LIVE in this building (see canFire/hitsWorld).
+  const officeColliders: Rect[] = [];
+  function buildOfficeInterior(sc: Phaser.Scene) {
+    if (officeBuilt) return;
+    officeBuilt = true;
+    const T = OFFICE_WALL, ix = OFFICE_INT.x, iy = OFFICE_INT.y, iw = OFFICE_INT.w, ih = OFFICE_INT.h;
+    const cx = ix + iw / 2;
+
+    // dark surround so a big viewport never shows grass past the room's edges
+    sc.add.rectangle(ix - 900, iy - 900, iw + 1800, ih + 1800, 0x0c0f16).setOrigin(0, 0).setDepth(iy - 1000);
+    // corporate carpet: institutional blue-gray with a faint checker (the kind that hides coffee)
+    sc.add.rectangle(ix, iy, iw, ih, 0x5c6470).setOrigin(0, 0).setDepth(iy - 900);
+    const tileS = 52;
+    for (let ty2 = 0; ty2 < ih; ty2 += tileS) {
+      for (let tx2 = 0; tx2 < iw; tx2 += tileS) {
+        if (((Math.floor(tx2 / tileS) + Math.floor(ty2 / tileS)) % 2) === 0) {
+          sc.add.rectangle(ix + tx2, iy + ty2, tileS, tileS, 0xffffff, 0.03).setOrigin(0, 0).setDepth(iy - 899);
+        }
+      }
+    }
+    // per-room flooring: kitchen lino, lounge hardwood, conference navy
+    sc.add.rectangle(ix, iy, 484, 404, 0xd8d2c0).setOrigin(0, 0).setDepth(iy - 898);
+    sc.add.rectangle(ix + 990, iy, 470, 404, 0x6b5646).setOrigin(0, 0).setDepth(iy - 898);
+    sc.add.rectangle(ix + 950, iy + 534, 510, 366, 0x46506a).setOrigin(0, 0).setDepth(iy - 898);
+
+    // outer walls: slate, with a band of city-view windows across the back
+    sc.add.rectangle(ix, iy, iw, T + 10, 0x39424f).setOrigin(0, 0).setDepth(iy - 800);
+    sc.add.rectangle(ix, iy, T, ih, 0x39424f).setOrigin(0, 0).setDepth(iy - 800);
+    sc.add.rectangle(ix + iw - T, iy, T, ih, 0x39424f).setOrigin(0, 0).setDepth(iy - 800);
+    sc.add.rectangle(ix, iy + ih - T, iw, T, 0x2e3641).setOrigin(0, 0).setDepth(iy - 790);
+    for (let wx = 60; wx + 70 < iw - 60; wx += 130) { // the back wall's floor-to-ceiling windows
+      sc.add.rectangle(ix + wx, iy + 6, 70, 24, 0x8fc4e8, 0.85).setOrigin(0, 0).setDepth(iy - 799);
+      sc.add.rectangle(ix + wx, iy + 20, 70, 10, 0x27415c, 0.9).setOrigin(0, 0).setDepth(iy - 798); // skyline
+    }
+    sc.add.text(cx, iy + T * 0.62, '🏢 TSONG TOWERS — FLOOR 1', {
+      fontFamily: 'system-ui, sans-serif', fontSize: '19px', fontStyle: 'bold',
+      color: '#e8ecf4', stroke: '#141a24', strokeThickness: 5, resolution: 2,
+    }).setOrigin(0.5, 0.5).setDepth(iy - 700);
+
+    // interior partitions (the same rects feet and rockets collide with); the conference room's
+    // read as glass — a pale translucent strip down each slate wall
+    for (const wl of OFFICE_WALLS) {
+      sc.add.rectangle(wl.x, wl.y, wl.w, wl.h, 0x4a5568).setOrigin(0, 0).setDepth(wl.y + wl.h);
+      const glassy = wl.x >= ix + 936 && wl.y >= iy + 500; // the conference room's walls
+      if (glassy) sc.add.rectangle(wl.x + 3, wl.y + 3, Math.max(4, wl.w - 6), Math.max(4, wl.h - 6), 0xaad4f0, 0.4)
+        .setOrigin(0, 0).setDepth(wl.y + wl.h + 1);
+    }
+    // room signs over the doors
+    const roomSign = (x: number, y: number, text: string) => sc.add.text(x, y, text, {
+      fontFamily: 'system-ui, sans-serif', fontSize: '12px', fontStyle: 'bold',
+      color: '#cfe0f0', stroke: '#141a24', strokeThickness: 4, resolution: 2,
+    }).setOrigin(0.5, 1).setDepth(iy - 300);
+    roomSign(ix + 200, iy + 386, '🍳 KITCHEN');
+    roomSign(ix + 1210, iy + 386, '🛋️ LOUNGE');
+    roomSign(ix + 1195, iy + 516, '📋 CONFERENCE');
+
+    // floating tags over the walk-ups, same idiom as the Casino/Clubhouse labels
+    const tag = (x: number, y: number, text: string) => sc.add.text(x, y, text, {
+      fontFamily: 'system-ui, sans-serif', fontSize: '11px', fontStyle: 'bold',
+      color: '#ffe9c0', stroke: '#141a24', strokeThickness: 3, resolution: 2,
+    }).setOrigin(0.5, 1).setAlpha(0.88).setDepth(y + 3);
+
+    // --- KITCHEN: counter + sink + microwave, espresso machine, the communal fridge, an island ---
+    sc.add.rectangle(ix + 30, iy + 66, 356, 50, 0xd0c8b0).setOrigin(0, 0).setDepth(iy + 116);
+    sc.add.rectangle(ix + 30, iy + 66, 356, 8, 0xe4dcc8).setOrigin(0, 0).setDepth(iy + 117);   // counter sheen
+    sc.add.rectangle(ix + 150, iy + 76, 46, 28, 0x9aa4ae).setOrigin(0, 0).setDepth(iy + 118);  // sink
+    sc.add.circle(ix + 173, iy + 74, 3, 0xdde4ea).setDepth(iy + 119);                          // faucet
+    sc.add.rectangle(ix + 52, iy + 72, 38, 24, 0x2b2f36).setOrigin(0, 0).setDepth(iy + 118);   // microwave
+    sc.add.rectangle(ix + 56, iy + 76, 22, 16, 0x141a20).setOrigin(0, 0).setDepth(iy + 119);   // its window
+    sc.add.rectangle(ix + 294, iy + 68, 32, 36, 0x23272e).setOrigin(0, 0).setDepth(iy + 118);  // espresso machine
+    sc.add.text(ix + 310, iy + 84, '☕', { fontSize: '16px' }).setOrigin(0.5).setDepth(iy + 120);
+    sc.add.rectangle(ix + 396, iy + 40, 62, 78, 0xe8e8ec).setOrigin(0, 0).setDepth(iy + 118);  // the fridge
+    sc.add.rectangle(ix + 398, iy + 76, 58, 3, 0xb8bcc4).setOrigin(0, 0).setDepth(iy + 119);   // freezer seam
+    sc.add.rectangle(ix + 450, iy + 48, 4, 22, 0xb8bcc4).setOrigin(0, 0).setDepth(iy + 119);   // handle
+    for (const [mx2, my2, mc] of [[410, 52, 0xd05050], [424, 60, 0x50a0d0], [416, 92, 0xe8c050]] as [number, number, number][])
+      sc.add.circle(ix + mx2, iy + my2, 3, mc).setDepth(iy + 120); // fridge magnets
+    sc.add.rectangle(ix + 166, iy + 226, 128, 64, 0xc8bfa4).setOrigin(0, 0).setDepth(iy + 290); // island
+    sc.add.rectangle(ix + 172, iy + 232, 116, 52, 0xd6cdb2).setOrigin(0, 0).setDepth(iy + 291);
+    sc.add.text(ix + 230, iy + 254, '🍩', { fontSize: '14px' }).setOrigin(0.5).setDepth(iy + 292); // someone brought donuts
+    sc.add.image(ix + 60, iy + 340, 'w-plant').setScale(TEXEL * 1.2).setOrigin(0.5, 0.9).setDepth(iy + 340);
+    tag(OFFICE_SPOTS.coffee.x, OFFICE_SPOTS.coffee.y - 62, '☕ Espresso');
+
+    // --- RECEPTION (top middle): a walnut desk under the brass letters, flanked by plants ---
+    sc.add.rectangle(ix + 596, iy + 116, 228, 52, 0x6a4a2f).setOrigin(0, 0).setDepth(iy + 168);
+    sc.add.rectangle(ix + 602, iy + 122, 216, 40, 0x7a5636).setOrigin(0, 0).setDepth(iy + 169);
+    sc.add.text(ix + 690, iy + 140, '🔔', { fontSize: '13px' }).setOrigin(0.5).setDepth(iy + 170);
+    sc.add.image(ix + 560, iy + 190, 'w-plant').setScale(TEXEL * 1.3).setOrigin(0.5, 0.9).setDepth(iy + 190);
+    sc.add.image(ix + 860, iy + 190, 'w-plant').setScale(TEXEL * 1.3).setOrigin(0.5, 0.9).setDepth(iy + 190);
+
+    // --- BULLPEN: four desk+PC pods, swivel chairs, the water cooler, the printer, one cat poster ---
+    for (const [dx2, dy2] of [[170, 560], [340, 560], [170, 710], [340, 710]] as [number, number][]) {
+      sc.add.image(ix + dx2, iy + dy2, 'w-deskpc').setScale(TEXEL * 1.15).setOrigin(0.5, 0.9).setDepth(iy + dy2);
+      sc.add.circle(ix + dx2, iy + dy2 + 26, 11, 0x2a2f38).setDepth(iy + dy2 + 26); // swivel chair
+      sc.add.circle(ix + dx2, iy + dy2 + 26, 6, 0x3a4150).setDepth(iy + dy2 + 27);
+    }
+    sc.add.rectangle(ix + 36, iy + 470, 44, 58, 0xf0e0b8).setOrigin(0, 0).setDepth(iy - 300);   // the poster
+    sc.add.text(ix + 58, iy + 492, '🐱', { fontSize: '15px' }).setOrigin(0.5).setDepth(iy - 299);
+    sc.add.text(ix + 58, iy + 516, 'HANG IN\nTHERE', {
+      fontFamily: 'system-ui, sans-serif', fontSize: '7px', fontStyle: 'bold', color: '#8a6a3a', align: 'center', resolution: 2,
+    }).setOrigin(0.5).setDepth(iy - 299);
+    sc.add.rectangle(ix + 548, iy + 470, 24, 32, 0xbcc4cc).setOrigin(0, 0).setDepth(iy + 502);  // water cooler base
+    sc.add.rectangle(ix + 551, iy + 450, 18, 22, 0x7ec8f0, 0.85).setOrigin(0, 0).setDepth(iy + 503); // the jug
+    tag(OFFICE_SPOTS.cooler.x, OFFICE_SPOTS.cooler.y - 54, '💧 Water Cooler');
+    sc.add.rectangle(ix + 856, iy + 452, 48, 34, 0x8a8f99).setOrigin(0, 0).setDepth(iy + 486);  // printer stand
+    printerSpr = sc.add.text(ix + 880, iy + 458, '🖨️', { fontSize: '22px' }).setOrigin(0.5, 1).setDepth(iy + 488);
+    tag(OFFICE_SPOTS.printer.x, OFFICE_SPOTS.printer.y - 52, '🖨️ Printer');
+
+    // --- LOUNGE: the break-room ping pong table, a couch, a beanbag, a trophy shelf, darts ---
+    sc.add.rectangle(ix + 1116, iy + 166, 188, 98, 0x1e5c3a).setOrigin(0, 0).setDepth(iy + 264);
+    sc.add.rectangle(ix + 1122, iy + 172, 176, 86, 0x2d7a4f).setOrigin(0, 0).setDepth(iy + 265);
+    sc.add.rectangle(ix + 1122, iy + 172, 176, 3, 0xe8f0e8).setOrigin(0, 0).setDepth(iy + 266); // boundary lines
+    sc.add.rectangle(ix + 1122, iy + 255, 176, 3, 0xe8f0e8).setOrigin(0, 0).setDepth(iy + 266);
+    sc.add.rectangle(ix + 1208, iy + 170, 4, 90, 0xf4f8f4).setOrigin(0, 0).setDepth(iy + 267);  // the net
+    sc.add.circle(ix + 1152, iy + 200, 7, 0xc0392b).setDepth(iy + 268);                          // red paddle
+    sc.add.rectangle(ix + 1150, iy + 206, 4, 10, 0x8a6a3a).setOrigin(0.5, 0).setDepth(iy + 268);
+    sc.add.circle(ix + 1268, iy + 232, 7, 0x2860c8).setDepth(iy + 268);                          // blue paddle
+    sc.add.rectangle(ix + 1266, iy + 238, 4, 10, 0x8a6a3a).setOrigin(0.5, 0).setDepth(iy + 268);
+    sc.add.circle(ix + 1232, iy + 214, 3, 0xffffff).setDepth(iy + 268);                          // the ball
+    tag(OFFICE_SPOTS.pong.x, OFFICE_SPOTS.pong.y - 72, '🏓 Break-Room Table');
+    sc.add.rectangle(ix + 1390, iy + 134, 44, 180, 0x8a3a3a).setOrigin(0, 0).setDepth(iy + 314); // the couch
+    sc.add.rectangle(ix + 1394, iy + 146, 30, 156, 0xa04848).setOrigin(0, 0).setDepth(iy + 315);
+    sc.add.ellipse(ix + 1030, iy + 320, 56, 42, 0xd08a2e).setDepth(iy + 320);                    // beanbag
+    sc.add.tileSprite(ix + 1000, iy + 44, 200, 32, 'w-tav-shelf').setOrigin(0, 0).setTileScale(TEXEL, TEXEL).setDepth(iy + 60);
+    sc.add.text(ix + 1100, iy + 40, '🏆', { fontSize: '14px' }).setOrigin(0.5, 1).setDepth(iy + 61); // the interdepartmental cup
+    sc.add.circle(ix + 1340, iy + 62, 14, 0xe8e0d0).setDepth(iy - 300);                          // dartboard
+    sc.add.circle(ix + 1340, iy + 62, 9, 0xc03030).setDepth(iy - 299);
+    sc.add.circle(ix + 1340, iy + 62, 4, 0x184818).setDepth(iy - 298);
+
+    // --- CONFERENCE ROOM: the long table, eight chairs, and the retro board on the north wall ---
+    sc.add.rectangle(ix + 1081, iy + 651, 228, 98, 0x5a4030).setOrigin(0, 0).setDepth(iy + 749);
+    sc.add.rectangle(ix + 1087, iy + 657, 216, 86, 0x6a4a2f).setOrigin(0, 0).setDepth(iy + 750);
+    sc.add.rectangle(ix + 1087, iy + 657, 216, 8, 0x7a5636).setOrigin(0, 0).setDepth(iy + 751); // sheen
+    sc.add.text(ix + 1195, iy + 700, '🫗', { fontSize: '13px' }).setOrigin(0.5).setDepth(iy + 752); // the water pitcher nobody refills
+    for (const c of OFFICE_CHAIRS) {
+      sc.add.circle(c.x, c.y, 13, 0x2a2f38).setDepth(c.y - 6); // seat (under the avatar when sat in)
+      sc.add.circle(c.x, c.y, 8, 0x3a4150).setDepth(c.y - 5);
+    }
+    sc.add.rectangle(ix + 1105, iy + 528, 180, 38, 0xf4f4f0).setOrigin(0, 0).setDepth(iy - 300); // the retro board
+    sc.add.rectangle(ix + 1113, iy + 534, 40, 10, 0x8ad08a).setOrigin(0, 0).setDepth(iy - 299);  // went well
+    sc.add.rectangle(ix + 1163, iy + 534, 40, 10, 0xe89090).setOrigin(0, 0).setDepth(iy - 299);  // didn't
+    sc.add.rectangle(ix + 1213, iy + 534, 40, 10, 0xe8d080).setOrigin(0, 0).setDepth(iy - 299);  // action items
+    sc.add.rectangle(ix + 1113, iy + 550, 140, 3, 0xb8b8c0).setOrigin(0, 0).setDepth(iy - 299);  // illegible marker
+    tag(OFFICE_SPOTS.board.x, OFFICE_SPOTS.board.y - 44, '📋 Retro Board');
+
+    // everything solid, in one list — feet slide against it AND projectiles detonate on it
+    officeColliders.push(
+      ...OFFICE_WALLS,
+      { x: ix + 30, y: iy + 62, w: 356, h: 54 },    // kitchen counter
+      { x: ix + 396, y: iy + 36, w: 62, h: 82 },    // fridge
+      { x: ix + 166, y: iy + 226, w: 128, h: 64 },  // kitchen island
+      { x: ix + 596, y: iy + 116, w: 228, h: 52 },  // reception desk
+      { x: ix + 112, y: iy + 516, w: 116, h: 50 },  // desk pods
+      { x: ix + 282, y: iy + 516, w: 116, h: 50 },
+      { x: ix + 112, y: iy + 666, w: 116, h: 50 },
+      { x: ix + 282, y: iy + 666, w: 116, h: 50 },
+      { x: ix + 544, y: iy + 466, w: 32, h: 40 },   // water cooler
+      { x: ix + 852, y: iy + 448, w: 56, h: 42 },   // printer stand
+      { x: ix + 1116, y: iy + 166, w: 188, h: 98 }, // ping pong table
+      { x: ix + 1390, y: iy + 134, w: 44, h: 180 }, // couch
+      { x: ix + 1081, y: iy + 651, w: 228, h: 98 }, // conference table
+    );
+
+    // exit mat by the revolving door (bottom-center, where the generic exit detector looks)
+    sc.add.rectangle(cx - 70, iy + ih - T - 70, 140, 60, 0x9fb0c8, 0.4).setOrigin(0, 0).setDepth(iy - 870);
+    sc.add.text(cx, iy + ih - T - 38, '🚪 EXIT', { fontFamily: 'system-ui, sans-serif', fontSize: '16px', fontStyle: 'bold', color: '#dce6f2', stroke: '#141a24', strokeThickness: 4 })
+      .setOrigin(0.5).setDepth(iy - 200);
+  }
+
+  function enterOffice() {
+    const sc = petScene; if (!sc) return;
+    buildOfficeInterior(sc);
+    enterChime();
+    inInterior = true; inOffice = true;
+    curInt = OFFICE_INT; curWall = OFFICE_WALL; curZoom = OFFICE_ZOOM;
+    driving = false; vx = 0; vy = 0;
+    keys.clear(); joyActive = false;
+    selfX = OFFICE_INT.x + OFFICE_INT.w / 2;
+    selfY = OFFICE_INT.y + OFFICE_INT.h - 180; // through the revolving door
+    mainCam?.setBounds(OFFICE_INT.x, OFFICE_INT.y, OFFICE_INT.w, OFFICE_INT.h);
+  }
+  function leaveOffice() {
+    inInterior = false; inOffice = false;
+    nearExit = false; nearOfficeSpot = null; nearOfficeChair = null; unseat();
+    keys.clear(); joyActive = false;
+    mainCam?.setBounds(-DESERT.w, -CLUB.h, WORLD.w + DESERT.w + EAST.w, WORLD.h + CLUB.h + SOUTH.h);
+    const o = WORLD_BUILDINGS.find((b) => b.kind === 'office');
+    if (o) { selfX = o.x + o.w / 2; selfY = o.y + o.h + 44; } // back out onto the plaza
+    enterChime();
+  }
+
+  // Take a seat at the conference table. Reuses the plaza benches' seat state (updateTownLife
+  // pins you to the seat until you move), so the chair is a first-class perch — and the anchor
+  // the future team-retro feature will hang off. Any movement stands you back up.
+  let satBefore = false;
+  function sitDown(c: { x: number; y: number }) {
+    seatedAt = { x: c.x, y: c.y };
+    selfX = c.x; selfY = c.y;
+    keys.clear(); joyActive = false;
+    facing = Math.atan2((OFFICE_INT.y + 700) - c.y, (OFFICE_INT.x + 1195) - c.x); // face the table
+    if (petScene && !seatBubble) { // the meeting-drowsiness bubble, same as a plaza bench nap
+      seatBubble = petScene.add.text(0, 0, '💤', { fontSize: '11px', resolution: 2 }).setOrigin(0.5, 1).setDepth(999999);
+    }
+    selectBlip();
+    if (!satBefore) { satBefore = true; showToast('🪑 Seated. This meeting could have been an email.'); }
+  }
+  // Clear the seat everywhere it can end (Enter, a blast, a black hole, walking off, clocking out).
+  function unseat() {
+    seatedAt = null;
+    seatBubble?.destroy(); seatBubble = null;
+  }
+  function standUp() {
+    unseat();
+    selectBlip();
+  }
+
+  const FRIDGE_FINDS = [
+    '🧊 A tupperware labeled "DO NOT EAT — SANDRA". It has been here since before the building.',
+    '🧊 Forty-one condiment packets and a single unclaimed yogurt. The yogurt is watching you.',
+    '🧊 Someone\'s birthday cake, half-eaten. The birthday was apparently "revenge".',
+    '🧊 A bottle of hot sauce with a sticky note: "communal ❤️". The fridge\'s only act of kindness.',
+  ];
+  const COOLER_TALK = [
+    '💧 *glug glug* You linger by the cooler. Somewhere, productivity dips imperceptibly.',
+    '💧 The jug does the big bubble. Everyone in the office hears it. Nobody reacts.',
+    '💧 You overhear that the raid boss "has been carrying the whole town\'s KPIs". Huh.',
+    '💧 Cold water. Lukewarm gossip. The cooler provides.',
+  ];
+  let fridgeIdx = 0, coolerIdx = 0;
+  function officeSpotInteract(key: keyof typeof OFFICE_SPOTS) {
+    if (dialogOpen || talkOpen) return;
+    switch (key) {
+      case 'pong':
+        // The second-most competitive tsong venue in town. Same path as the Arena's front door:
+        // pause World and join the real queue; main.ts resumes World when the match ends.
+        openDialog('🏓 The Break-Room Table', 'Regulation table. Non-regulation stakes: pride, and the last cold brew in the fridge.', [
+          { label: '🏓 Rally up (play tsong)', onPick: () => { closeDialog(); pause(); net.enterArena(); } },
+        ]);
+        return;
+      case 'coffee': {
+        const again = Date.now() < coffeeUntil;
+        coffeeUntil = Date.now() + 45_000;
+        tone(880, 0.06, 'square', 0.05); window.setTimeout(() => tone(1320, 0.08, 'square', 0.05), 90);
+        mainCam?.shake(180, 0.003);
+        showToast(again ? '☕ Another double shot. The jitters are now load-bearing.' : '☕ Double shot espresso — your walk speed files a formal complaint and speeds up anyway.');
+        return;
+      }
+      case 'fridge':
+        showToast(FRIDGE_FINDS[fridgeIdx++ % FRIDGE_FINDS.length]);
+        return;
+      case 'cooler':
+        showToast(COOLER_TALK[coolerIdx++ % COOLER_TALK.length]);
+        return;
+      case 'printer':
+        if (printerDown) { showToast('🖨️ A scorch mark and a chalk outline. HR has been notified. The office has never been happier.'); return; }
+        printerJams++;
+        tone(160, 0.18, 'sawtooth', 0.05, 60);
+        showToast(printerJams === 1 ? '🖨️ PC LOAD LETTER. What does that even MEAN.'
+          : printerJams === 2 ? '🖨️ Paper jam in tray 2. There is no tray 2.'
+          : '🖨️ Jam #' + printerJams + '. You know… weapons DO work in this building.');
+        return;
+      case 'board':
+        openDialog('📋 Retro Board', 'Three columns: “went well”, “didn’t”, “action items”. Every marker is dry except the red one. Team retros convene here… soon.', [
+          { label: '👍 Noted', onPick: () => closeDialog() },
+        ]);
+        return;
+    }
+  }
+
+  // Office Space, achieved: any blast that catches the printer finishes it. It respawns —
+  // Facilities always finds another one — but for two glorious minutes, peace.
+  function wreckPrinter() {
+    printerDown = true;
+    printerJams = 0;
+    printerSpr?.setText('🪦');
+    showToast('🖨️💥 The printer is DOWN! Someone start the slow clap.');
+    window.setTimeout(() => {
+      printerDown = false;
+      printerSpr?.setText('🖨️');
+      if (inOffice) showToast('🖨️ Facilities delivered a replacement printer. It is already out of toner.');
+    }, 120_000);
+  }
+
   // McDonald's interior: a bright fast-food dining room. Red walls, checkered floor, counter at back,
   // menu board above it, tables with chairs, and a McCafé corner. Cashier Mac, Grimace, and Ronald
   // are on duty. Exit via the door mat at the bottom center.
@@ -13039,6 +13466,7 @@ export function startWorld(net: WorldNet): void {
         else if (b.kind === 'temple') buildTemple(sc, b);
         else if (b.kind === 'parliament') buildParliament(sc, b);
         else if (b.kind === 'mcdonald') buildMcDonald(sc, b);
+        else if (b.kind === 'office') buildOfficeTower(sc, b);
         else buildBuilding(sc, b);
         const sign = sc.add.text(b.x + b.w / 2, b.y - 6, b.name, {
           fontFamily: 'system-ui, sans-serif', fontSize: '15px', fontStyle: 'bold',
@@ -13487,8 +13915,9 @@ export function startWorld(net: WorldNet): void {
       safeStep('nearBuilding', () => updateNearBuilding());
       safeStep('sendMove', () => maybeSendMove(now));
 
-      // show the touch fire button + weapon rack only out in the open world
-      const armed = !inInterior && !inDungeon && !boating && !net.amJailed();
+      // show the touch fire button + weapon rack only out in the open world (and in the office,
+      // where weapons stay live)
+      const armed = (!inInterior || inOffice) && !inDungeon && !boating && !net.amJailed();
       if (fireBtnShown !== armed) {
         fireBtnShown = armed;
         fireBtn.style.display = armed ? 'block' : 'none';
@@ -13706,9 +14135,10 @@ export function startWorld(net: WorldNet): void {
       if (ammo[id] > 0) { selectWeapon(id); return; }
     }
   }
-  // Everything that has to be true before any weapon will go off.
+  // Everything that has to be true before any weapon will go off. Indoors is a no-fire zone —
+  // except Tsong Towers, where HR lost the weapons-policy argument years ago.
   function canFire(): boolean {
-    return !inInterior && !inDungeon && !boating && !net.amJailed() && !talkOpen && !dialogOpen && !chatActive && !sayActive;
+    return (!inInterior || inOffice) && !inDungeon && !boating && !net.amJailed() && !talkOpen && !dialogOpen && !chatActive && !sayActive;
   }
 
   function fireWeapon() {
@@ -13780,14 +14210,17 @@ export function startWorld(net: WorldNet): void {
       squishSound();
     }
     if (mine) { hitMobs(x, y, r, 3); hitRaidBoss(x, y, r, 3); } // only OUR blasts hurt mobs/boss (avoid double-credit from relayed booms)
+    // Office ordnance: a blast that catches the printer finally settles things, Office Space style.
+    if (inOffice && !printerDown && Math.hypot(OFFICE_SPOTS.printer.x - x, OFFICE_SPOTS.printer.y - y) <= r + 26) wreckPrinter();
     // Raids are PvE: no friendly fire in the arena. Player blasts (and bullet splash, which routes
     // through here too) never knock allies — or you — around while the Warden is up.
     if (!inRaidFight() && Math.hypot(selfX - x, selfY - y) <= r) {
       if (driving) {
         if (blowUpMyCar('💥 Your car took a direct hit — summon a fresh one anytime.')) net.blownUp(true, mine, mine ? undefined : shooterPid);
-      } else if (now >= stunnedUntil && !inInterior && !inDungeon) {
+      } else if (now >= stunnedUntil && (!inInterior || inOffice) && !inDungeon) {
         stunnedUntil = now + 2300; keys.clear();
         flashHelp('💥 Blown off your feet!');
+        if (seatedAt) unseat(); // blasted clean out of your seat
         net.blownUp(false, mine, mine ? undefined : shooterPid);
       }
     }
@@ -13826,6 +14259,14 @@ export function startWorld(net: WorldNet): void {
   // Off the map, or buried in a wall? (The frontiers count as ON the map — a rocket may sail
   // over the dunes, the fairways, and the bog just like it does over town.)
   function hitsWorld(x: number, y: number): boolean {
+    if (inOffice) {
+      // Indoors at Tsong Towers the architecture IS the office: the outer walls plus every
+      // partition/desk in officeColliders stop a shot. (Without this branch the off-map interior
+      // coords would read as "past the world's edge" and every shot would detonate at the muzzle.)
+      if (x < OFFICE_INT.x + OFFICE_WALL || x > OFFICE_INT.x + OFFICE_INT.w - OFFICE_WALL
+        || y < OFFICE_INT.y + OFFICE_WALL || y > OFFICE_INT.y + OFFICE_INT.h - OFFICE_WALL) return true;
+      return officeColliders.some((b) => x > b.x - 4 && x < b.x + b.w + 4 && y > b.y - 4 && y < b.y + b.h + 4);
+    }
     const inTownX = x >= 0 && x <= WORLD.w;
     const minY = inTownX ? -CLUB.h + 8 : 8;
     const maxY = inTownX ? WORLD.h + SOUTH.h - 8 : WORLD.h - 8;
@@ -14070,11 +14511,22 @@ export function startWorld(net: WorldNet): void {
       }
       // In a live raid, no friendly interference: a black hole (yours or a teammate's) never drags
       // you around the arena — the fight is PvE, and being yanked into a telegraph isn't fair play.
-      if (!inInterior && !inDungeon && !boating && !inRaidFight()) {
+      // (Indoors it only exists at the office, where it drags you around the bullpen instead.)
+      if ((!inInterior || inOffice) && !inDungeon && !boating && !inRaidFight()) {
         const p = drag(selfX, selfY, driving ? 190 : 260);                 // a car's mass fights it a bit
         if (p.x !== selfX || p.y !== selfY) {
-          const rc = resolveCollisions(p.x, p.y, driving ? CAR_WID * 0.5 : R);
-          selfX = rc.x; selfY = rc.y;
+          if (inOffice) {
+            // clamp to the room, slide against the office's own walls/furniture (resolveCollisions
+            // only knows the town), and no chair can save you from spacetime
+            if (seatedAt) unseat();
+            const nx = clamp(p.x, OFFICE_INT.x + OFFICE_WALL + R, OFFICE_INT.x + OFFICE_INT.w - OFFICE_WALL - R);
+            const ny = clamp(p.y, OFFICE_INT.y + OFFICE_WALL + R, OFFICE_INT.y + OFFICE_INT.h - OFFICE_WALL - R);
+            if (!officeColliders.some((b) => nx > b.x - R && nx < b.x + b.w + R && selfY > b.y - R && selfY < b.y + b.h + R)) selfX = nx;
+            if (!officeColliders.some((b) => selfX > b.x - R && selfX < b.x + b.w + R && ny > b.y - R && ny < b.y + b.h + R)) selfY = ny;
+          } else {
+            const rc = resolveCollisions(p.x, p.y, driving ? CAR_WID * 0.5 : R);
+            selfX = rc.x; selfY = rc.y;
+          }
         }
       }
 

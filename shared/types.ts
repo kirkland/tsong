@@ -572,7 +572,7 @@ export function petById(id: string | null | undefined) {
 
 // What entering a building does (the client maps each `kind` to an action). Add a kind here
 // and a handler on the client to introduce a new venue.
-export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament' | 'arcade' | 'dungeon' | 'temple' | 'bowling' | 'mcdonald' | 'shop' | 'hall' | 'noticeboard' | 'observatory';
+export type WorldBuildingKind = 'arena' | 'casino' | 'bank' | 'petshop' | 'doomportal' | 'pond' | 'bar' | 'parliament' | 'arcade' | 'dungeon' | 'temple' | 'bowling' | 'mcdonald' | 'shop' | 'hall' | 'noticeboard' | 'observatory' | 'office';
 // A venue's footprint on the map. The rectangle (top-left origin, world units) is solid —
 // avatars collide with it — and an apron just outside the door is the entry trigger zone.
 export interface WorldBuilding {
@@ -645,6 +645,12 @@ export const WORLD_BUILDINGS: readonly WorldBuilding[] = [
   // down at the town itself: walk in to browse live usage charts — who's on, what's being
   // played, where people go.
   { id: 'observatory', kind: 'observatory', name: 'THE OBSERVATORY', emoji: '🔭', x: 3120, y: 720, w: 280, h: 220, color: '#2e3d5c' },
+  // Tsong Towers — a glass-and-steel office building south of the Robville connector avenue,
+  // between McDonald's (ends x2310) and Willow Court's westernmost lots (start x≈3192). Walk in
+  // for a multi-room floor: kitchen, a lounge with the break-room ping pong table (the second
+  // most competitive tsong venue in town), and a conference room. HR has given up on the
+  // weapons-at-work policy entirely.
+  { id: 'office', kind: 'office', name: 'TSONG TOWERS', emoji: '🏢', x: 2800, y: 1830, w: 340, h: 250, color: '#3d5a80' },
 ] as const;
 
 // --- Usage analytics ---------------------------------------------------------------------
