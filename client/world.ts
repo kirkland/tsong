@@ -52,6 +52,10 @@ import {
   WorldBuildingKind,
   CarSpec,
   carById,
+  ShipSpec,
+  shipById,
+  SHIPS,
+  SEA_ISLANDS,
   carColorById,
   petById,
   type PetKind,
@@ -279,6 +283,8 @@ export interface WorldNet {
   claimQuest(quest: string): void; // tell the server to grant a World objective reward (once)
   dungeonSync(): void;             // entering the Ruins → ask which chests we've opened
   dungeonChest(chest: string, captured?: boolean): void; // open a chest ('B1:col,row') → server pays coins / grants prize (once). captured=true → a monster box caught (grant the pet)
+  seaChest(chest: string): void;   // plunder a sea-island treasure chest → server pays its coins (once per account)
+  seaBounty(): void;               // report sinking a hostile NPC ship → server pays a bounty (rate-limited)
   dungeonWin(floor: string, tier: number): void; // won an encounter → adds a TIER-ranged amount to the run purse
   dungeonTakeKey(): void; // took the key from the dying B3 adventurer (server marks the run-key)
   dungeonExit(escaped: boolean): void; // left the Ruins (escaped → server pays the run purse from the House)
@@ -352,6 +358,8 @@ interface Controller {
   reenter(): void; // re-send worldEnter after a socket reconnect (server forgot us on drop)
   dungeonChests(opened: string[]): void;                          // server's list of chests we've opened
   chestAccepted(chest: string, coins: number, potions: number, spin?: boolean, prize?: string, prizes?: string[]): void; // server accepted a chest open (prize/prizes = cosmetic names)
+  seaChests(opened: string[]): void;                              // island treasure chests we've already plundered
+  seaChestOpened(chest: string, coins: number): void;             // a sea chest paid out → mark it emptied + celebrate
   dungeonSpinLoot(reward: { kind: 'coins'; amount: number } | { kind: 'item'; item: string; name: string }): void; // a spin chest's reward → run loot
   dungeonPurse(coins: number): void;                              // current run-purse total from the server
   feedEloProfile(msg: EloProfileMsg): void;         // server's answer to an eloProfileReq fired from the Hall of Fame
@@ -423,6 +431,16 @@ export function feedWorld(avatars: WorldAvatar[]): void {
 /** The server's list of dungeon chests this player has already opened (reply to dungeonSync). */
 export function feedDungeonChests(opened: string[]): void {
   controller?.dungeonChests(opened);
+}
+
+/** The island treasure chests this account has already plundered (sent on world enter). */
+export function feedSeaChests(opened: string[]): void {
+  controller?.seaChests(opened);
+}
+
+/** A sea-island chest paid out its coins → mark it emptied + celebrate. */
+export function feedSeaChestOpened(chest: string, coins: number): void {
+  controller?.seaChestOpened(chest, coins);
 }
 
 /** The wallet changed (buy/equip/daily-spin settled) — re-render the shop dialog if it's open. */
@@ -586,6 +604,8 @@ const TRIGGER_PAD = 34;     // how close (world units, beyond the wall) counts a
 const JOY_DEADZONE = 14;    // screen px of drag before the virtual joystick engages
 const CAR_LEN = 52;         // car body length, world units (for drawing + collision feel)
 const CAR_WID = 28;         // car body width, world units
+const SHIP_LEN = 190;       // a sailing ship's hull length, world units (broadside muzzle spread + feel)
+const SHIP_WID = 72;        // hull beam (width) — how wide the ship sits on the water
 
 // --- pixel-art scale knobs -------------------------------------------------------------------
 // Everything is authored in "texels". One texel = TEXEL world units; sprites are drawn at their
@@ -2702,16 +2722,82 @@ export function startWorld(net: WorldNet): void {
   // Water you can drive a boat on: each region is the ellipse of open water inside a pond building
   // (matching how buildPond draws it). Boats are confined to these ellipses; on foot or in a car the
   // pond rect stays solid, so you launch from the shore. Add water by adding pond buildings.
-  interface WaterRegion { rect: Rect; cx: number; cy: number; rx: number; ry: number }
+  //
+  // The OCEAN (sea=true) works the same way but is a big rectangle, not a pond ellipse: the four
+  // seas filling the diagonal corners between the frontiers (see makeCornerOceans). You crew a full
+  // sailing SHIP out there (not the little yacht), the sea rect stays solid on foot so you launch
+  // from any frontier shore, and ships are confined to the rect (inset so the long hull never
+  // overhangs the sand). SEA_SHORE is how far in from the visible edge a hull can sail.
+  interface WaterRegion { rect: Rect; cx: number; cy: number; rx: number; ry: number; sea?: boolean }
   // rx/ry are the *navigable* ellipse — inset well inside the visible water so the long boat hull
   // stays on the water instead of overhanging onto the sandy shore at the edges.
   const WATER: WaterRegion[] = (WORLD_BUILDINGS as readonly WorldBuilding[])
     .filter((b) => b.kind === 'pond')
     .map((b) => ({ rect: { x: b.x, y: b.y, w: b.w, h: b.h }, cx: b.x + b.w / 2, cy: b.y + b.h / 2, rx: b.w / 2 - 50, ry: b.h / 2 - 52 }));
+  const SEA_SHORE = 120; // how far in from a corner sea's edge a hull may sail (keeps it off the sand)
+  // The four corner seas. Coords mirror makeCornerOceans() exactly (an island of land ringed by sea).
+  const SEA_RECTS: Rect[] = [
+    { x: -DESERT.w, y: -CLUB.h, w: DESERT.w, h: CLUB.h },   // NW
+    { x: WORLD.w,   y: -CLUB.h, w: EAST.w,   h: CLUB.h },   // NE
+    { x: -DESERT.w, y: WORLD.h, w: DESERT.w, h: SOUTH.h },  // SW
+    { x: WORLD.w,   y: WORLD.h, w: EAST.w,   h: SOUTH.h },  // SE
+  ];
+  const SEA: WaterRegion[] = SEA_RECTS.map((r) => ({ rect: r, cx: r.x + r.w / 2, cy: r.y + r.h / 2, rx: r.w / 2, ry: r.h / 2, sea: true }));
+  // Islands dotted around the seas — sandbars with a palm and a buried treasure chest. Each has a
+  // procedurally-generated coastline: `mul(t)` is the radius fraction (of r) at bearing t, a closed
+  // radial-noise curve in ~[0.62, 1] so islands are organic (coves, spits) rather than plain discs.
+  // The SAME curve drives both the drawn shape AND collision (ship shove-off + on-foot beach limit),
+  // so the walkable sand matches what you see. Coordinates + r come from shared SEA_ISLANDS.
+  interface Island { id: string; x: number; y: number; r: number; name: string; coins: number; feature?: string; quip?: readonly string[]; mul: (t: number) => number; }
+  const ISLANDS: Island[] = SEA_ISLANDS.map((s) => {
+    let seed = 0; for (const ch of s.id) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
+    const rnd = mulberry32(seed || 1);
+    const terms = ([[2, 0.18], [3, 0.14], [5, 0.09], [7, 0.05]] as [number, number][]).map(([k, amax]) => ({ k, a: (rnd() * 2 - 1) * amax, p: rnd() * Math.PI * 2 }));
+    // centred at 0.8, floor at 0.5 (no pinch), no upper clamp → organic bulges up to ~1.1 with no flat arcs
+    const mul = (t: number) => { let m = 0; for (const T of terms) m += T.a * Math.sin(T.k * t + T.p); return Math.max(0.5, 0.8 + m); };
+    return { id: s.id, x: s.x, y: s.y, r: s.r, name: s.name, coins: s.coins, feature: s.feature, quip: s.quip, mul };
+  });
+  const seaChestsOpened = new Set<string>(); // island ids whose treasure we've already plundered
+  // The island coastline radius (world units) at the bearing from its centre to (x,y) — the same
+  // organic curve that's drawn. `frac` scales it (e.g. the walkable beach sits a touch inside).
+  function islandRadiusToward(is: Island, x: number, y: number, frac = 1): number {
+    return is.r * frac * is.mul(Math.atan2(y - is.y, x - is.x));
+  }
+  // Keep an on-foot walker inside an island's beach (so you can roam ashore but not stroll onto the
+  // open sea). Follows the drawn coastline, kept a touch inside so you stay on sand. hit=true when clamped.
+  function confineToIslandFoot(x: number, y: number, is: Island): { x: number; y: number; hit: boolean } {
+    const dx = x - is.x, dy = y - is.y, d = Math.hypot(dx, dy);
+    const rr = islandRadiusToward(is, x, y, 0.9) - 6;
+    if (d <= rr) return { x, y, hit: false };
+    const s = rr / Math.max(d, 0.001);
+    return { x: is.x + dx * s, y: is.y + dy * s, hit: true };
+  }
+  // The island a ship is currently alongside (close enough to step ashore), if any.
+  function islandToBoard(): Island | null {
+    for (const is of ISLANDS) if (Math.hypot(is.x - selfX, is.y - selfY) < is.r + SHIP_WID + 100) return is;
+    return null;
+  }
+  // Push a point out of the first island it overlaps, following the drawn coastline. margin = the
+  // hull/foot half-width kept clear of the sand. No-op until ISLANDS is populated.
+  function shoveOffIslands(x: number, y: number, margin: number): { x: number; y: number; hit: boolean } {
+    for (const is of ISLANDS) {
+      let dx = x - is.x, dy = y - is.y;
+      const d = Math.hypot(dx, dy);
+      const rr = islandRadiusToward(is, x, y) + margin;
+      if (d >= rr) continue;
+      if (d < 0.001) { dx = 1; dy = 0; } else { dx /= d; dy /= d; }
+      return { x: is.x + dx * rr, y: is.y + dy * rr, hit: true };
+    }
+    return { x, y, hit: false };
+  }
   const BOAT_BOARD_PAD = 44; // how close to a pond's shore you can be to launch your boat (world units)
+  const SHIP_BOARD_PAD = 90; // ships launch from a wider apron — the shore is a coastline, not a rim
   let boating = false;
   let boatWater: WaterRegion | null = null;          // the water we're currently boating on
   let boatEntry: { x: number; y: number } | null = null; // safe shore spot we launched from
+  let shipSpec: ShipSpec | null = null;              // the ship we're sailing (null when on the yacht/on foot)
+  let shipHp = 0;                                     // remaining hull integrity while sailing a ship
+  let onIsland: Island | null = null;                // the island we're ashore on, on foot (null otherwise)
 
   // --- input state ---
   const keys = new Set<string>();
@@ -2785,6 +2871,8 @@ export function startWorld(net: WorldNet): void {
   const dungeonChestSprites: Record<string, Phaser.GameObjects.Image> = {}; // 'c,r' → sprite (to swap on open)
   const dungeonLockSprites: Record<string, Phaser.GameObjects.Image> = {};   // 'c,r' → locked-door sprite (to remove on unlock)
   let nearChestCell: { c: number; r: number } | null = null; // unopened chest within reach (→ Open prompt)
+  let nearIslandChest: Island | null = null; // an unplundered sea-island chest a ship is alongside (→ Plunder prompt)
+  let nearTikiBar: Island | null = null;     // the tiki-bar island a ship is alongside (→ order drinks)
   let nearStairs: { dir: 'down' | 'up'; to: string } | null = null; // a stair tile within reach (→ descend/ascend)
   let nearBossStairs = false; // standing on the deepest floor's '>' (the boss stairwell — sealed until the boss floor exists)
   let nearLockedDoor: { c: number; r: number } | null = null; // an 'L' locked door within reach (→ "needs a key")
@@ -3099,6 +3187,46 @@ export function startWorld(net: WorldNet): void {
   driftBtn.addEventListener('pointerup', releaseDrift);
   driftBtn.addEventListener('pointercancel', releaseDrift);
   driftBtn.addEventListener('pointerleave', releaseDrift);
+
+  // 🪗 Sea-shanty jukebox — only shown while crewing a ship. Tapping cycles off → the three Black-Flag
+  // shanties → off, looping the chosen one. (Downloaded from Matt's collection; a proper crew sings.)
+  const SHANTIES: { src: string; name: string }[] = [
+    { src: '/shanty-drunken-sailor.mp3', name: 'Drunken Sailor' },
+    { src: '/shanty-leave-her-johnny.mp3', name: 'Leave Her Johnny' },
+    { src: '/shanty-susianah.mp3', name: 'Way Me Susianah' },
+  ];
+  let shantyMusic: HTMLAudioElement | null = null;
+  let shantyIdx = -1; // -1 = silent
+  function setShanty(idx: number) {
+    if (shantyMusic) { shantyMusic.pause(); shantyMusic = null; }
+    shantyIdx = idx;
+    if (idx < 0) return;
+    const s = SHANTIES[idx];
+    shantyMusic = new Audio(s.src);
+    shantyMusic.loop = true; shantyMusic.volume = 0.55; shantyMusic.muted = net.muted();
+    shantyMusic.play().catch(() => { /* needs a gesture; the tap that got here IS one */ });
+    flashHelp(`🪗 Shanty: ${s.name}`);
+  }
+  function cycleShanty() {
+    unlockAudio();
+    setShanty(shantyIdx + 1 >= SHANTIES.length ? -1 : shantyIdx + 1);
+    updateShantyBtn();
+  }
+  function stopShanty() { if (shantyIdx >= 0) setShanty(-1); updateShantyBtn(); }
+  const shantyBtn = document.createElement('button');
+  shantyBtn.type = 'button';
+  shantyBtn.textContent = '🪗';
+  shantyBtn.style.cssText =
+    'position:absolute;right:20px;bottom:84px;display:none;pointer-events:auto;cursor:pointer;z-index:5;' +
+    'width:86px;height:86px;border-radius:50%;background:#24406b;color:#dfeefc;border:2px solid #4f79b0;' +
+    'font-size:30px;touch-action:none;user-select:none;box-shadow:0 4px 14px #0008;';
+  overlay.appendChild(shantyBtn);
+  shantyBtn.addEventListener('pointerdown', (e) => { e.preventDefault(); e.stopPropagation(); cycleShanty(); });
+  function updateShantyBtn() {
+    shantyBtn.style.display = shipSpec ? 'block' : 'none';
+    shantyBtn.style.background = shantyIdx >= 0 ? '#2f6aa8' : '#24406b';
+    shantyBtn.textContent = shantyIdx >= 0 ? '🎵' : '🪗';
+  }
 
   // Fire button (bottom-right, above the drift button) for touch — keyboard players hold R. It's a
   // HOLD button, not a tap: the update loop pulls the trigger every frame while it's down, so the
@@ -3689,6 +3817,17 @@ export function startWorld(net: WorldNet): void {
     // the Damp: dwellings, the drowned church, the pier
     mark(1200, 3450, '🛖', iconPx); mark(2700, 2950, '🛖', iconPx); mark(3620, 4080, '⛪', iconPx);
     ctx.fillStyle = '#54381e'; ctx.fillRect(X(SWAMP_PIER_X - 26), Y(SWAMP_SHORE_Y - 20), Math.max(2, 52 * sx), 400 * sy);
+    // the seas: treasure islands (sand dot + a feature/loot icon) and the roaming enemy fleet
+    for (const is of ISLANDS) {
+      ctx.fillStyle = seaChestsOpened.has(is.id) ? '#c3b183' : '#e7d5a0';
+      ctx.beginPath(); ctx.arc(X(is.x), Y(is.y), Math.max(2, is.r * sx), 0, Math.PI * 2); ctx.fill();
+      const icon = is.feature === 'tikibar' ? '🍹' : is.feature === 'volcano' ? '🌋' : is.feature === 'monolith' ? '🗿'
+        : seaChestsOpened.has(is.id) ? '🏝️' : '💰';
+      mark(is.x, is.y, icon, full ? Math.max(8, Math.round(iconPx * 0.9)) : 11);
+      if (full && ww <= WORLD.w * 3) { ctx.fillStyle = '#fff'; ctx.font = '700 11px system-ui'; ctx.fillText(is.name, X(is.x), Y(is.y) + 16); }
+    }
+    ctx.fillStyle = '#ff5a5a';                            // enemy ships (live positions — a threat readout)
+    for (const e of enemyShips) { ctx.beginPath(); ctx.arc(X(e.x), Y(e.y), full ? 3.5 : 2.2, 0, Math.PI * 2); ctx.fill(); }
     if (full) {
       ctx.fillStyle = '#fff'; ctx.font = '700 13px system-ui';
       ctx.fillText('🏘️ ROBVILLE', X(3850), Y(1550));
@@ -3700,6 +3839,12 @@ export function startWorld(net: WorldNet): void {
       ctx.fillText('THE GREAT SOUTHERN DAMP', X(2400), Y(5300));
       ctx.fillStyle = '#9ab8d0';
       ctx.fillText('THE FROSTREACH', X(WORLD.w + EAST.w / 2), Y(200));
+      // the four corner seas
+      ctx.fillStyle = '#7fb4d8'; ctx.font = '700 12px ui-monospace,monospace';
+      ctx.fillText('⚓ THE SHATTERED SHOALS', X(-DESERT.w / 2), Y(-CLUB.h / 2));
+      ctx.fillText('⚓ THE FROZEN NARROWS', X(WORLD.w + EAST.w / 2), Y(-CLUB.h / 2));
+      ctx.fillText('⚓ THE CORSAIR DEEP', X(-DESERT.w / 2), Y(WORLD.h + SOUTH.h / 2));
+      ctx.fillText('⚓ THE SALT REACHES', X(WORLD.w + EAST.w / 2), Y(WORLD.h + SOUTH.h / 2));
     }
     for (const b of WORLD_BUILDINGS) {                    // buildings: footprint + emoji icon
       ctx.fillStyle = b.color;
@@ -3792,18 +3937,25 @@ export function startWorld(net: WorldNet): void {
         else y = b.y + b.h + rad;
       }
     }
-    const inTownX = x >= 0 && x <= WORLD.w; // the club (N) and the Damp (S) open off TOWN only (not the frontiers)
-    // South: ground ends at the shore — except the pier, which you may walk to the end of. Carefully.
+    // The traversable overworld is a PLUS/CROSS, not a box: a HORIZONTAL arm (the Nothing → town →
+    // Frostreach band, at town latitude) and a VERTICAL arm (the Club → town → Damp column). The ocean
+    // fills the four DIAGONAL corners between the arms. A naïve box-clamp of x and y independently lets
+    // you "cut the corner" — walk out of the Damp sideways and the y-clamp yanks you up into the
+    // neighbouring frontier (Damp → Frostreach/snow to the east, → the Nothing to the west). Instead,
+    // clamp to whichever arm is NEAREST, so you slide along the shoreline and never teleport.
     const onPier = x > SWAMP_PIER_X - 26 && x < SWAMP_PIER_X + 26;
-    const southMax = inTownX ? (onPier ? SWAMP_SHORE_Y + 380 : SWAMP_SHORE_Y) - rad : WORLD.h - rad;
-    // The gate reads "MEMBERS ONLY" and means it: non-members are clamped at the property line
-    // (they can walk right up to the gate/plaque, just never past it onto the grounds proper).
-    const northMin = !inTownX ? rad : net.owns('club-member') ? -CLUB.h + rad : CLUB_GATE_Y;
-    return {
-      x: clamp(x, -DESERT.w + rad, WORLD.w + EAST.w - rad), // west into the Nothing, east into the Frostreach
-      y: clamp(y, northMin, southMax),
-      hit,
-    };
+    // horizontal arm: frontiers + town, confined to the town's north/south band
+    const hx = clamp(x, -DESERT.w + rad, WORLD.w + EAST.w - rad), hy = clamp(y, rad, WORLD.h - rad);
+    // vertical arm: the town column, Club to the north (members past the gate) and the Damp shore /
+    // pier to the south
+    const northMin = net.owns('club-member') ? -CLUB.h + rad : CLUB_GATE_Y;
+    const southMax = (onPier ? SWAMP_SHORE_Y + 380 : SWAMP_SHORE_Y) - rad;
+    const vx = clamp(x, rad, WORLD.w - rad), vy = clamp(y, northMin, southMax);
+    const dH = (x - hx) ** 2 + (y - hy) ** 2, dV = (x - vx) ** 2 + (y - vy) ** 2;
+    const useH = dH <= dV;
+    const bx = useH ? hx : vx, by = useH ? hy : vy;
+    if (bx !== x || by !== y) hit = true;
+    return { x: bx, y: by, hit };
   }
 
   function distToBuilding(b: WorldBuilding): number {
@@ -3851,6 +4003,21 @@ export function startWorld(net: WorldNet): void {
   function myBoat(): CarSpec | null {
     return carById(net.boat());
   }
+  // The free starter every sailor gets at the coast — the Brig (fancier hulls come later as prizes).
+  function starterShip(): ShipSpec {
+    return shipById('ship-brig') ?? SHIPS[0];
+  }
+  // The watercraft we're on right now: a full sailing ship out at sea, else the equipped pond yacht.
+  function currentBoatSpec(): CarSpec | null {
+    return shipSpec ?? myBoat();
+  }
+  // The vehicle id to relay to other players / render on our avatar: the ship at sea, the yacht on a
+  // pond, the driven car on land, or null on foot.
+  function worldVehicleId(): string | null {
+    if (boating) return shipSpec ? shipSpec.id : net.boat();
+    if (driving) return net.car();
+    return null;
+  }
   // Pull a point inside a water ellipse (f<1 keeps it off the very edge). Returns hit=true if it had
   // to be clamped — the shared shape with resolveCollisions so stepVehicle can use either.
   function confineToWater(x: number, y: number, w: WaterRegion, f = 1): { x: number; y: number; hit: boolean } {
@@ -3860,17 +4027,34 @@ export function startWorld(net: WorldNet): void {
     const s = f / d;
     return { x: w.cx + dx * s, y: w.cy + dy * s, hit: true };
   }
-  // The water you could launch a boat onto right now (near a pond's shore, on foot, boat owned).
-  function boardableWater(): WaterRegion | null {
-    if (boating || driving || !myBoat() || inInterior || inDungeon) return null;
-    for (const w of WATER) {
+  // Keep a ship inside a corner sea: clamp to the rect, inset by the shore margin, and push it back
+  // out of any island it tries to sail into (islands are added in Phase 3 → ISLANDS).
+  function confineToSea(x: number, y: number, w: WaterRegion): { x: number; y: number; hit: boolean } {
+    const minx = w.rect.x + SEA_SHORE, maxx = w.rect.x + w.rect.w - SEA_SHORE;
+    const miny = w.rect.y + SEA_SHORE, maxy = w.rect.y + w.rect.h - SEA_SHORE;
+    let cx = clamp(x, minx, maxx), cy = clamp(y, miny, maxy);
+    let hit = cx !== x || cy !== y;
+    const shore = shoveOffIslands(cx, cy, SHIP_WID * 0.5);
+    if (shore.hit) { cx = shore.x; cy = shore.y; hit = true; }
+    return { x: cx, y: cy, hit };
+  }
+  // The water you could launch onto right now: a pond (needs the yacht) or a corner sea (free Brig).
+  // Returns the region + whether it's open ocean, so the caller knows which craft to crew.
+  function boardable(): { w: WaterRegion; sea: boolean } | null {
+    if (boating || driving || inInterior || inDungeon) return null;
+    for (const w of SEA) { // the ocean first — it's the bigger, more obvious coastline
       const nx = clamp(selfX, w.rect.x, w.rect.x + w.rect.w);
       const ny = clamp(selfY, w.rect.y, w.rect.y + w.rect.h);
-      if (Math.hypot(selfX - nx, selfY - ny) <= BOAT_BOARD_PAD) return w;
+      if (Math.hypot(selfX - nx, selfY - ny) <= SHIP_BOARD_PAD) return { w, sea: true };
+    }
+    if (myBoat()) for (const w of WATER) {
+      const nx = clamp(selfX, w.rect.x, w.rect.x + w.rect.w);
+      const ny = clamp(selfY, w.rect.y, w.rect.y + w.rect.h);
+      if (Math.hypot(selfX - nx, selfY - ny) <= BOAT_BOARD_PAD) return { w, sea: false };
     }
     return null;
   }
-  // Step out of the boat onto the nearest dry shore (just outside the pond rect, on grass).
+  // Step out onto the nearest dry shore (just outside the water rect, on land).
   function disembarkPoint(x: number, y: number, r: Rect): { x: number; y: number } {
     const pad = R + 6;
     const left = x - r.x, right = r.x + r.w - x, top = y - r.y, bottom = r.y + r.h - y;
@@ -3883,22 +4067,43 @@ export function startWorld(net: WorldNet): void {
   function toggleBoat() {
     if (inInterior || inDungeon || net.amJailed()) return;
     if (!boating) {
-      if (!myBoat()) { flashHelp('You don\'t own a boat — fish one up! (Shop → Vehicles → Boats)'); return; }
-      const w = boardableWater();
-      if (!w) { flashHelp('🛥️ Get next to the water (the fishing pond) to launch your boat.'); return; }
-      boating = true; boatWater = w; driving = false; vx = vy = 0;
-      boatEntry = { x: selfX, y: selfY };           // remember the dock for a safe fallback
-      const p = confineToWater(selfX, selfY, w, 0.82); // slide the boat onto the open water
-      selfX = p.x; selfY = p.y;
-      tone(360, 0.18, 'sine', 0.05, 520);           // little launch blip
+      const b = boardable();
+      if (!b) { flashHelp('🚢 Walk up to the ocean (or the fishing pond) to set sail.'); return; }
+      boating = true; boatWater = b.w; driving = false; onIsland = null; vx = vy = 0;
+      boatEntry = { x: selfX, y: selfY };           // remember the launch spot for a safe fallback
+      if (b.sea) {
+        shipSpec = starterShip(); shipHp = shipSpec.hp;
+        const p = confineToSea(selfX, selfY, b.w);   // slide the hull off the sand onto open water
+        selfX = p.x; selfY = p.y;
+        flashHelp(`⚓ You crew ${shipSpec.name}. Aim to a side & fire a broadside!`);
+        tone(220, 0.3, 'sawtooth', 0.05, 150);       // a low, ropey ship's-horn honk
+      } else {
+        shipSpec = null; shipHp = 0;
+        const p = confineToWater(selfX, selfY, b.w, 0.82); // slide the boat onto the open water
+        selfX = p.x; selfY = p.y;
+        tone(360, 0.18, 'sine', 0.05, 520);          // little launch blip
+      }
     } else {
       const w = boatWater;
-      boating = false; boatWater = null; vx = vy = 0;
-      const back = w ? disembarkPoint(selfX, selfY, w.rect) : (boatEntry ?? { x: selfX, y: selfY });
-      const safe = resolveCollisions(back.x, back.y, R); // never disembark into a wall
-      selfX = safe.x; selfY = safe.y;
+      const wasShip = !!shipSpec;
+      // A ship pulled up alongside an island → step ASHORE onto it (on foot) instead of sailing all
+      // the way back to the mainland coast. Walk the island, loot the chest, then B to sail off again.
+      const island = wasShip ? islandToBoard() : null;
+      boating = false; boatWater = null; shipSpec = null; shipHp = 0; vx = vy = 0; stopShanty();
+      if (island) {
+        onIsland = island;
+        const ang = Math.atan2(selfY - island.y, selfX - island.x);
+        selfX = island.x + Math.cos(ang) * (island.r - R - 10);
+        selfY = island.y + Math.sin(ang) * (island.r - R - 10);
+        flashHelp(`⚓ Ashore on ${island.name} — explore! Press B at the water to sail off.`);
+      } else {
+        onIsland = null;
+        const back = w ? disembarkPoint(selfX, selfY, w.rect) : (boatEntry ?? { x: selfX, y: selfY });
+        const safe = resolveCollisions(back.x, back.y, R); // never disembark into a wall
+        selfX = safe.x; selfY = safe.y;
+      }
       boatEntry = null;
-      tone(300, 0.16, 'sine', 0.05, 220);
+      tone(wasShip ? 200 : 300, 0.16, 'sine', 0.05, 220);
     }
     syncDriveBtn();
   }
@@ -3913,6 +4118,8 @@ export function startWorld(net: WorldNet): void {
     driftBtn.style.display = boating ? 'none' : 'block'; // drift behind the wheel, sprint on foot
     driftBtn.textContent = driving ? '🌀 DRIFT' : '🏃 SPRINT';
     if (!driving) { handbrake = false; driftBtn.style.background = '#4a2a6b'; }
+    if (!shipSpec && shantyIdx >= 0) stopShanty(); // off the ship → the crew stops singing
+    updateShantyBtn();
     updateHelp();
   }
 
@@ -3923,10 +4130,13 @@ export function startWorld(net: WorldNet): void {
     const now = performance.now();
     if (helpFlash && now < helpFlashUntil) { help.innerHTML = `<span style="color:#ffd166">${helpFlash}</span>`; return; }
     if (boating) {
-      help.innerHTML = 'W/S or ↑/↓ throttle · A/D or ←/→ steer · drag to sail · <b>B</b> dock · <b>T</b> chat · <b>Y</b> say';
+      help.innerHTML = shipSpec
+        ? `W/S throttle · A/D steer · <b>R</b>/<b>click</b> fire broadside (aim to a side) · <b>B</b> anchor & go ashore · <b>T</b> chat`
+        : 'W/S or ↑/↓ throttle · A/D or ←/→ steer · drag to sail · <b>B</b> dock · <b>T</b> chat · <b>Y</b> say';
       return;
     }
-    const boatHint = boardableWater() ? ' · <b>B</b> board boat' : '';
+    const b = boardable();
+    const boatHint = b ? (b.sea ? ' · <b>B</b> board ship' : ' · <b>B</b> board boat') : '';
     const gun = `<b>R</b>/<b>click</b> fire ${WEAPON_BY_ID[weapon].emoji} · <b>1-4</b>/<b>Q</b> weapon`;
     help.innerHTML = driving
       ? `W/S or ↑/↓ throttle · A/D or ←/→ steer · <b>Shift</b> drift · ${gun} · <b>F</b> get out · <b>T</b> chat`
@@ -9431,6 +9641,8 @@ export function startWorld(net: WorldNet): void {
     if (puttCharging) { strikePutt(); return; } // mid-swing: the button IS the putter
     if (golfCharging) { strikeGolfSwing(); return; } // mid-swing on the Course: same idea
     if (hockeyMode !== 'off') { hockeyDash(); return; } // mid-match: the button IS the dash/shot
+    if (nearTikiBar) { openTikiBar(nearTikiBar); return; }             // sail up to the tiki bar
+    if (nearIslandChest) { plunderIsland(nearIslandChest); return; }   // sail up to a treasure island
     if (nearNetizen) {
       const a = others.find((o) => o.id === nearNetizen);
       if (!a) return;
@@ -9504,6 +9716,30 @@ export function startWorld(net: WorldNet): void {
     ];
     openDialog('🍺 Barkeep', quips[Math.floor(Math.random() * quips.length)], [
       { label: '🍺 Buy a beer (20🪙)', onPick: () => { closeDialog(); net.buyBeer(); showToast('🍺 *glug glug glug*'); } },
+    ]);
+  }
+
+  // The Salty Coconut — a tiki bar on its own island. Same drink/drunk plumbing as the Tavern
+  // (net.buyBeer), so tropical rounds get you sloshed — and a drunk captain sails a weaving ship.
+  function openTikiBar(is: Island) {
+    if (dialogOpen || talkOpen) return;
+    keys.clear(); joyActive = false;
+    if (net.drunkLevel() >= 6) {
+      openDialog('🍹 ' + is.name, '"Whoa there, sailor. The sea\'s spinnin\' enough without me helpin\'. Sleep it off on the sand."', []);
+      return;
+    }
+    const quips = [
+      '"Ahoy! Only bar for a thousand leagues. Lucky you."',
+      '"Fresh coconuts, questionable rum. This is paradise, technically."',
+      '"You sailed all the way out here? Respect. First one\'s still full price though."',
+      '"Drinkin\' and sailin\' don\'t mix. That\'s what makes it fun."',
+    ];
+    const drink = (emoji: string, sfx: string) => { closeDialog(); net.buyBeer(); showToast(`${emoji} ${sfx}`); };
+    openDialog('🍹 ' + is.name, quips[Math.floor(Math.random() * quips.length)], [
+      { label: '🍹 Painkiller (20🪙)', onPick: () => drink('🍹', '*tropical glug*') },
+      { label: '🥥 Rum Coconut (20🪙)', onPick: () => drink('🥥', '*thwack… slurp*') },
+      { label: '🍸 Grog (20🪙)', onPick: () => drink('🍸', '*the good burn*') },
+      ...(seaChestsOpened.has(is.id) ? [] : [{ label: '🏴‍☠️ Plunder the chest behind the bar', onPick: () => { closeDialog(); plunderIsland(is); } }]),
     ]);
   }
 
@@ -9764,7 +10000,7 @@ export function startWorld(net: WorldNet): void {
     // WASD/arrows on desktop, so the mouse is free to aim. Touch keeps drag-to-walk (below).
     if (e.pointerType === 'mouse' && e.button === 0 && canFire()) {
       mouseAim = true; mouseAimId = e.pointerId; mouseAimSX = e.clientX; mouseAimSY = e.clientY;
-      firing = true; if (!driving) aimAtScreen(e.clientX, e.clientY); fireWeapon(); // driving fires forward
+      firing = true; if (!driving && !boating) aimAtScreen(e.clientX, e.clientY); fireWeapon(); // driving/sailing steer their own heading; the cursor only picks the broadside side
       return;
     }
     joyActive = true;
@@ -9910,6 +10146,14 @@ export function startWorld(net: WorldNet): void {
       }
       return;
     }
+    // Ashore on a sea island: free-roam the beach disk (the mainland boundary clamp doesn't apply out
+    // here), but you can't wade off into open water — walk to the edge and press B to sail off.
+    if (onIsland) {
+      const p = confineToIslandFoot(selfX + dx * SP * dt, selfY + dy * SP * dt, onIsland);
+      selfX = p.x; selfY = p.y;
+      if (p.hit) bumpSound(false); else stepSound();
+      return;
+    }
     const moved = resolveCollisions(selfX + dx * SP * dt, selfY + dy * SP * dt, R);
     selfX = moved.x; selfY = moved.y;
     if (moved.hit) bumpSound(false);
@@ -9947,7 +10191,8 @@ export function startWorld(net: WorldNet): void {
     stepVehicle(car, dt, (x, y) => resolveCollisions(x, y, CAR_WID * 0.5));
   }
   function stepBoat(boat: CarSpec, dt: number) {
-    stepVehicle(boat, dt, (x, y) => boatWater ? confineToWater(x, y, boatWater, 1) : resolveCollisions(x, y, CAR_WID * 0.5));
+    const half = shipSpec ? SHIP_WID * 0.5 : CAR_WID * 0.5;
+    stepVehicle(boat, dt, (x, y) => boatWater ? (boatWater.sea ? confineToSea(x, y, boatWater) : confineToWater(x, y, boatWater, 1)) : resolveCollisions(x, y, half));
   }
   function stepVehicle(car: CarSpec, dt: number, confine: (x: number, y: number) => { x: number; y: number; hit: boolean }) {
     let throttle = 0, steer = 0;
@@ -10208,6 +10453,24 @@ export function startWorld(net: WorldNet): void {
         if (d < pD) { pD = d; nearParcel = p.id; }
       }
     }
+    // A treasure island your ship is alongside → plunder prompt (or, at the tiki bar, the drinks
+    // menu). Works both from the ship (sailing) and on foot once you've stepped ashore. The tiki bar
+    // stays interactable even after its chest is plundered.
+    nearIslandChest = null; nearTikiBar = null;
+    if (boating && shipSpec) {
+      let iD = Infinity;
+      for (const is of ISLANDS) {
+        if (is.feature === 'tikibar') continue;           // the tiki bar is a land establishment — go ashore (B)
+        const d = Math.hypot(is.x - selfX, is.y - selfY);
+        if (d >= is.r + SHIP_WID + 70) continue;
+        if (!seaChestsOpened.has(is.id) && d < iD) { iD = d; nearIslandChest = is; }
+      }
+    } else if (onIsland) {
+      const is = onIsland;
+      const cx = is.x + is.r * 0.04, cy = is.y + is.r * 0.30;    // where the chest sprite sits
+      if (!seaChestsOpened.has(is.id) && Math.hypot(selfX - cx, selfY - cy) < R + 46) nearIslandChest = is;
+      if (is.feature === 'tikibar' && Math.hypot(selfX - is.x, selfY - (is.y + is.r * 0.24)) < R + 70) nearTikiBar = is;
+    }
     if (best) {
       const b = WORLD_BUILDINGS.find((x) => x.id === best)!;
       prompt.textContent = labelFor(b.kind);
@@ -10257,6 +10520,10 @@ export function startWorld(net: WorldNet): void {
       prompt.textContent = nearStairs.dir === 'down' ? `⬇️ Descend to ${nearStairs.to}` : `⬆️ Climb up to ${nearStairs.to}`;
     } else if (nearBossStairs) {
       prompt.textContent = '⬇️ A stairwell into the black';
+    } else if (nearTikiBar) {
+      prompt.textContent = `🍹 ${nearTikiBar.name} — order a drink`;
+    } else if (nearIslandChest) {
+      prompt.textContent = `🏴‍☠️ Plunder ${nearIslandChest.name}`;
     } else if (nearChestCell) {
       prompt.textContent = '📦 Open the chest';
     } else if (nearLockedDoor) {
@@ -10278,11 +10545,14 @@ export function startWorld(net: WorldNet): void {
     } else if (nearBiomeSpot) {
       prompt.textContent = nearBiomeSpot;
     }
-    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || seatedAt || nearOfficeChair || nearOfficeSpot || nearClubSpot || nearTavernMorris || nearClubDoor || nearGolfTee || nearGolfBall || nearSwan || nearBook || nearCasinoGame || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDungeonImp2 || nearDyingMan || nearRob || nearJailed || nearParcel || nearBiomeSpot) && !dialogOpen && !talkOpen ? 'block' : 'none';
+    prompt.style.display = (nearId || nearNpc || nearNetizen || nearExit || seatedAt || nearOfficeChair || nearOfficeSpot || nearClubSpot || nearTavernMorris || nearClubDoor || nearGolfTee || nearGolfBall || nearSwan || nearBook || nearCasinoGame || nearStairs || nearBossStairs || nearChestCell || nearLockedDoor || nearSwitch || nearSwitchDoor || nearDungeonImp || nearDungeonImp2 || nearDyingMan || nearRob || nearJailed || nearParcel || nearBiomeSpot || nearIslandChest || nearTikiBar) && !dialogOpen && !talkOpen ? 'block' : 'none';
     // Boat affordance: dock while afloat, or board when standing by the water with a boat.
-    const boatable = boating || !!boardableWater();
+    const board = boating ? null : boardable();
+    const boatable = boating || !!board;
     if (boatable && !dialogOpen && !talkOpen) {
-      boatPrompt.textContent = boating ? '🚶 Dock the boat (B)' : '🛥️ Board the boat (B)';
+      boatPrompt.textContent = boating
+        ? (shipSpec ? '⚓ Go ashore (B)' : '🚶 Dock the boat (B)')
+        : (board!.sea ? '🚢 Board a ship (B)' : '🛥️ Board the boat (B)');
       boatPrompt.style.display = 'block';
     } else {
       boatPrompt.style.display = 'none';
@@ -10295,7 +10565,7 @@ export function startWorld(net: WorldNet): void {
     if (Math.abs(selfX - lastSentX) < 0.5 && Math.abs(selfY - lastSentY) < 0.5) return;
     lastSentX = selfX; lastSentY = selfY; lastSentAt = now;
     // Stream the boat id in the same field as the car id; others render it via carById (it's in CARS).
-    net.move(selfX, selfY, (driving || boating) ? facing : undefined, boating ? net.boat() : driving ? net.car() : null, net.pet(), net.carColor());
+    net.move(selfX, selfY, (driving || boating) ? facing : undefined, worldVehicleId(), net.pet(), net.carColor());
   }
 
   // ============================================================================================
@@ -10419,6 +10689,21 @@ export function startWorld(net: WorldNet): void {
     tone(2400, 0.07, 'square', 0.05, 900);
     noise(0.1, 0.05, 3200);
   }
+  // A broadside: a fat, gravelly BOOM — powder going off — with a punchy low thump under it.
+  let lastCannonSoundAt = 0;
+  function cannonFireSound() {
+    const now = performance.now();
+    if (now - lastCannonSoundAt < 40) return; // a whole volley fires at once; one crack is plenty
+    lastCannonSoundAt = now;
+    noise(0.34, 0.22, 620);
+    tone(90, 0.3, 'sawtooth', 0.18, 42);
+    tone(150, 0.14, 'square', 0.09, 60);
+  }
+  // A cannonball plunging into the sea: a short watery splat.
+  function splashSound() {
+    noise(0.16, 0.12, 1400);
+    tone(520, 0.1, 'sine', 0.05, 200);
+  }
   // Singularity launch: a low, wrong-sounding swell that slides *down* where a rocket slides up.
   function voidFireSound() {
     tone(320, 0.4, 'sine', 0.16, 70);
@@ -10524,6 +10809,7 @@ export function startWorld(net: WorldNet): void {
     carBody: Phaser.GameObjects.Image;
     carRoof: Phaser.GameObjects.Image;
     carWheels: Phaser.GameObjects.Image; // big untinted tires — only shown for the Monster Truck
+    ship: Phaser.GameObjects.Image;      // the sailing-ship hull — only shown out on the ocean
     smokeT: number; sx: number; sy: number; // exhaust-smoke emit cooldown + last position (movement gate)
     label: Phaser.GameObjects.Text;
     bubble: Phaser.GameObjects.Text;  // netizen speech bubble (hidden for humans)
@@ -11751,6 +12037,130 @@ export function startWorld(net: WorldNet): void {
       g.clear();
       px(3, 4, 8, 6, 0xffffff);                                 // a small flat canopy, front-and-center only
       g.generateTexture('w-golfcart-roof', 24, 14);
+    }
+    // --- SAILING SHIPS (naval) — top-down tall ships, painted in full colour (rendered untinted like
+    //     the yacht), pointing +x (east). One sprite per SHIPS class, sized to its hull length. A
+    //     pointed wooden hull with a planked deck, gunwale trim, a row of cannon ports down each
+    //     side (one per gun), two/three masts, and big cream square-rigged sails stretched across the
+    //     beam so the ship reads unmistakably as a Black-Flag brig from straight above. ---
+    {
+      const darken = (c: number, f: number) => {
+        const r = Math.min(255, ((c >> 16) & 255) * f | 0), gg = Math.min(255, ((c >> 8) & 255) * f | 0), b = Math.min(255, (c & 255) * f | 0);
+        return (r << 16) | (gg << 8) | b;
+      };
+      const SAIL = 0xf2ead6, SAIL_D = 0xd6ccb2, SAIL_E = 0xbfb59a, MAST = 0x4a3520, PORT = 0x140d06, TRIM = 0xf4ead0;
+      for (const spec of SHIPS) {
+        const W = spec.len, H = (Math.round(W * 0.4) | 1);      // beam ~40% of length, forced odd for a centreline
+        const midY = (H - 1) / 2;
+        const HULL = hexToInt(spec.body), HULL_D = darken(HULL, 0.66), DECK = hexToInt(spec.accent), DECK_D = darken(DECK, 0.8);
+        const bow = Math.round(W * 0.66);                       // where the pointed bow taper begins
+        g.clear();
+        // hull: squared stern (left) + long body, then a pointed bow taper to the right (+x)
+        px(1, 4, 1, H - 8, HULL_D);                             // transom shadow at the stern
+        px(2, 2, bow, H - 4, HULL);
+        for (let i = 0; i < W - bow; i++) {                     // bow narrows to a point
+          const inset = Math.round((i / (W - bow)) * (H / 2 - 0.5));
+          px(bow + i, 2 + inset, 1, Math.max(1, H - 4 - inset * 2), HULL);
+        }
+        px(2, 2, bow, 1, TRIM); px(2, H - 3, bow, 1, TRIM);     // bright gunwale rails down both sides
+        px(4, 4, bow - 3, H - 8, DECK);                        // planked deck inlay
+        px(4, midY, W - 8, 1, DECK_D);                          // centreline plank seam
+        // cannon ports: one dark square per gun down each side, evenly spaced along the gun deck
+        const span = bow - 8;
+        for (let k = 0; k < spec.guns; k++) {
+          const gx = 6 + Math.round(((k + 0.5) / spec.guns) * span);
+          px(gx, 1, 2, 1, PORT); px(gx, H - 2, 2, 1, PORT);
+        }
+        // masts + square sails: cream bars stretched across the beam (top-down rigging)
+        const masts = spec.klass === 'manowar' || spec.klass === 'galleon' ? 3 : spec.klass === 'frigate' ? 3 : 2;
+        for (let m = 0; m < masts; m++) {
+          const mx = 8 + Math.round(((m + 0.5) / masts) * (bow - 6));
+          px(mx - 2, 2, 4, H - 4, SAIL);
+          px(mx - 2, 2, 1, H - 4, SAIL_E); px(mx + 1, 2, 1, H - 4, SAIL_D); // luff/leech shading
+          px(mx, midY - 1, 1, 3, MAST);                          // the mast, poking through the canvas
+        }
+        g.generateTexture(`w-${spec.id}`, W, H);
+      }
+      // A cannonball: a small dark iron sphere with a glint (8×8).
+      g.clear();
+      px(2, 1, 4, 6, 0x2a2a30); px(1, 2, 6, 4, 0x2a2a30);
+      px(2, 2, 3, 2, 0x4a4a52); px(2, 2, 1, 1, 0x9a9aa2); // highlight
+      g.generateTexture('w-cannonball', 8, 8);
+    }
+
+    // --- ISLAND LANDMARKS — little pixel-art props that give each treasure island a personality.
+    //     All face-on (not top-down), planted origin at their base. ---
+    {
+      // Volcano (26×24): a grey-brown cone with a dark crater and lava streaks.
+      g.clear();
+      px(4, 20, 18, 4, 0x5a4632); px(6, 14, 14, 7, 0x6b5540); px(9, 8, 8, 7, 0x7a6248);   // cone
+      px(9, 6, 8, 3, 0x2a2018);                                                              // crater mouth
+      px(10, 4, 2, 3, 0xff6a1a); px(13, 3, 2, 4, 0xffb020); px(15, 5, 2, 2, 0xff6a1a);       // lava spurts
+      px(11, 9, 2, 11, 0xd23b1a); px(14, 12, 1, 8, 0xff7a2a);                                 // lava down the side
+      g.generateTexture('w-isle-volcano', 26, 24);
+      // Tiki totem (12×24): stacked carved heads.
+      g.clear();
+      px(3, 2, 6, 22, 0x6a4a28); px(2, 4, 8, 4, 0x7a5630); px(2, 12, 8, 4, 0x7a5630);         // trunk + head bands
+      px(3, 5, 2, 2, 0x140d06); px(7, 5, 2, 2, 0x140d06); px(4, 8, 4, 1, 0x140d06);            // top face
+      px(3, 13, 2, 2, 0x140d06); px(7, 13, 2, 2, 0x140d06); px(4, 16, 4, 1, 0xd23b1a);         // bottom face + mouth
+      g.generateTexture('w-isle-tiki', 12, 24);
+      // Thatched tiki BAR hut (30×22): bamboo counter under a big palm-thatch roof.
+      g.clear();
+      px(2, 8, 26, 3, 0x8a6a3a); px(3, 11, 24, 8, 0xb9905a); px(3, 11, 24, 1, 0x8a6a3a);       // counter + posts base
+      px(5, 12, 3, 7, 0x8a6a3a); px(22, 12, 3, 7, 0x8a6a3a);                                    // support posts
+      px(0, 4, 30, 5, 0x4f7a3a); px(2, 2, 26, 3, 0x5f8f45); px(6, 0, 18, 3, 0x6fa050);          // thatch roof (layered)
+      px(1, 8, 30, 1, 0x3a5a2a);                                                                 // roof shadow
+      px(10, 13, 2, 3, 0xff5ea6); px(14, 13, 2, 3, 0x39d0ff); px(18, 13, 2, 3, 0xffd23f);        // colourful bottles on the bar
+      g.generateTexture('w-isle-tikibar', 30, 22);
+      // Shipwreck (32×20): a broken hull tilted on the sand with a snapped mast.
+      g.clear();
+      px(3, 12, 24, 6, 0x5a3a22); px(3, 12, 24, 1, 0x6f4a2a); px(5, 10, 18, 2, 0x4a2f1c);        // hull
+      px(2, 13, 1, 4, 0x4a2f1c); px(27, 11, 3, 5, 0x5a3a22);                                     // stern + bow stump
+      px(12, 2, 2, 10, 0x6f4a2a); px(9, 4, 8, 1, 0x8a6a3a); px(10, 3, 5, 4, 0xcfc3a8);           // snapped mast + torn sail
+      g.generateTexture('w-isle-wreck', 32, 20);
+      // Kraken tentacle (18×28): a green limb curling up out of the water, suckers down one side.
+      g.clear();
+      px(6, 22, 6, 6, 0x2f6a4a); px(5, 15, 6, 8, 0x3a7d56); px(6, 8, 6, 8, 0x2f6a4a);            // rising limb
+      px(7, 2, 5, 7, 0x3a7d56); px(9, 0, 4, 4, 0x2f6a4a);                                         // curling tip
+      px(6, 18, 1, 1, 0xbfe0c8); px(6, 13, 1, 1, 0xbfe0c8); px(7, 9, 1, 1, 0xbfe0c8); px(8, 5, 1, 1, 0xbfe0c8); // suckers
+      g.generateTexture('w-isle-tentacle', 18, 28);
+      // Wilson: a stake with a face-painted volleyball (10×22).
+      g.clear();
+      px(4, 8, 2, 14, 0x8a6a3a);                                                                 // the stake
+      px(2, 0, 6, 8, 0xe8e0d0); px(1, 2, 8, 4, 0xe8e0d0);                                         // ball
+      px(3, 2, 1, 2, 0x8a2a1a); px(6, 2, 1, 2, 0x8a2a1a); px(3, 5, 4, 1, 0x8a2a1a);               // bloody face
+      g.generateTexture('w-isle-wilson', 10, 22);
+      // Cannon on wheels (18×12), facing right.
+      g.clear();
+      px(2, 3, 12, 5, 0x2a2a30); px(13, 4, 4, 3, 0x2a2a30); px(1, 4, 2, 3, 0x141418);            // barrel + breech
+      px(3, 8, 3, 3, 0x3a2a1a); px(9, 8, 3, 3, 0x3a2a1a);                                         // wheels
+      g.generateTexture('w-isle-cannon', 18, 12);
+      // Message in a bottle (20×12), lying on its side with a rolled scroll inside.
+      g.clear();
+      px(2, 3, 14, 6, 0x6fbfd0, 0.85); px(2, 3, 14, 1, 0xbfe8f0); px(16, 4, 3, 4, 0x5a9aa8);      // glass body + neck
+      px(19, 4, 1, 4, 0xd8b46a);                                                                  // cork
+      px(5, 5, 7, 3, 0xe8dcc0); px(5, 5, 7, 1, 0xd8c9a0);                                          // scroll
+      g.generateTexture('w-isle-bottle', 20, 12);
+      // Flamingo (10×20): a pink bird on one leg.
+      g.clear();
+      px(3, 12, 4, 4, 0xff8fb8); px(2, 10, 5, 3, 0xff9ec2);                                        // body
+      px(6, 4, 2, 8, 0xff8fb8); px(6, 2, 3, 3, 0xff9ec2); px(8, 3, 2, 1, 0x1a1a1a);                // neck + head + beak tip
+      px(4, 16, 1, 4, 0xe86a9a);                                                                    // leg
+      g.generateTexture('w-isle-flamingo', 10, 20);
+      // Marooned castaway (12×20): a ragged, bearded sailor. A person, not a prop.
+      g.clear();
+      px(4, 2, 4, 4, 0xe0b48a); px(4, 1, 4, 2, 0x5a4a3a);                                          // head + scruffy hair
+      px(4, 5, 4, 3, 0xcfc3a8);                                                                     // wild beard
+      px(3, 8, 6, 8, 0x8a7a5a); px(3, 8, 6, 1, 0x6f5f45);                                           // ragged tunic
+      px(2, 9, 1, 5, 0xe0b48a); px(9, 9, 1, 5, 0xe0b48a);                                           // arms
+      px(4, 16, 2, 4, 0x4a3a2a); px(6, 16, 2, 4, 0x4a3a2a);                                         // legs
+      g.generateTexture('w-isle-castaway', 12, 20);
+      // Mermaid (14×16): sitting, green tail, hair.
+      g.clear();
+      px(5, 1, 4, 4, 0xe8c49a); px(4, 0, 6, 2, 0xc0392b); px(3, 2, 2, 5, 0xc0392b); px(9, 2, 2, 5, 0xc0392b); // head + red hair
+      px(5, 5, 4, 4, 0xe8c49a);                                                                     // torso
+      px(4, 8, 7, 4, 0x2fae7a); px(3, 11, 9, 3, 0x27946a); px(1, 12, 4, 3, 0x2fae7a); px(9, 12, 4, 3, 0x2fae7a); // tail + fluke
+      g.generateTexture('w-isle-mermaid', 14, 16);
     }
     // --- speech-bubble panel: a rounded rect drawn on a 2D canvas (which anti-aliases properly,
     // unlike Phaser's pixel-art Graphics) and used as a LINEAR-filtered 9-slice. That keeps the
@@ -13844,6 +14254,8 @@ export function startWorld(net: WorldNet): void {
       makeSwamp(sc);
       makeEast(sc);
       makeCornerOceans(sc);
+      makeIslands(sc);
+      spawnEnemyFleet(sc);
       makeMobs(sc);
       makeRaid(sc);
 
@@ -14004,6 +14416,7 @@ export function startWorld(net: WorldNet): void {
       // them until the next time each track happens to (re)start.
       if (dungeonMusic) dungeonMusic.muted = net.muted();
       if (tavernMusic) tavernMusic.muted = net.muted();
+      if (shantyMusic) shantyMusic.muted = net.muted();
 
       // --- day/night: derive purely from the wall clock so every client's sky matches ---
       {
@@ -14172,10 +14585,10 @@ export function startWorld(net: WorldNet): void {
 
       if (!dialogOpen && !talkOpen && now >= stunnedUntil) {
         safeStep('movement', () => {
-          const boat = boating ? myBoat() : null;
+          const boat = boating ? currentBoatSpec() : null;
           const car = !boating && driving ? myCar() : null;
           if (boat) stepBoat(boat, dt);
-          else if (boating) { boating = false; boatWater = null; } // lost the boat — bail out of the mode
+          else if (boating) { boating = false; boatWater = null; shipSpec = null; shipHp = 0; stopShanty(); } // lost the boat — bail out of the mode
           else if (car) stepCar(car, dt);
           else stepFoot(dt);
         });
@@ -14200,25 +14613,28 @@ export function startWorld(net: WorldNet): void {
       safeStep('mobs', () => updateMobs(now, dt));
       safeStep('raid', () => updateRaid(now, dt));
       safeStep('ocean', () => updateOcean(now, dt));
+      safeStep('enemyShips', () => updateEnemyShips(dt));
       safeStep('biome', () => updateBiome());
       safeStep('nearBuilding', () => updateNearBuilding());
       safeStep('sendMove', () => maybeSendMove(now));
 
-      // show the touch fire button + weapon rack only out in the open world (and in the office,
-      // where weapons stay live)
-      const armed = (!inInterior || inOffice) && !inDungeon && !boating && !net.amJailed();
+      // show the touch fire button + weapon rack out in the open world (and in the office, where
+      // weapons stay live; and at sea on a ship — its broadside fires through the same button; the
+      // pond yacht stays unarmed)
+      const armed = (!inInterior || inOffice) && !inDungeon && (!boating || !!shipSpec) && !net.amJailed();
       if (fireBtnShown !== armed) {
         fireBtnShown = armed;
         fireBtn.style.display = armed ? 'block' : 'none';
-        rack.style.display = armed ? 'flex' : 'none';
+        rack.style.display = armed && !shipSpec ? 'flex' : 'none'; // no weapon rack at sea — just the broadside
         if (!armed) { firing = false; mouseAim = false; }
       }
-      if (mouseAim && !driving) aimAtScreen(mouseAimSX, mouseAimSY); // keep the shot pointed at the cursor (on foot)
+      fireBtn.textContent = shipSpec ? '💣' : WEAPON_BY_ID[weapon].emoji; // a ship's button fires the broadside
+      if (mouseAim && !driving && !boating) aimAtScreen(mouseAimSX, mouseAimSY); // keep the shot pointed at the cursor (on foot; a ship steers its own heading)
       if (firing) fireWeapon();  // held trigger — the weapon's own cooldown paces it
       updateCrates(now);
 
       // place our avatar straight from authoritative state (zero latency)
-      if (self) { placeAvatar(self, selfX, selfY, facing, boating ? net.boat() : driving ? net.car() : null, net.color(), net.name() || 'you', net.carColor()); applySay(self, net.selfId(), now); }
+      if (self) { placeAvatar(self, selfX, selfY, facing, worldVehicleId(), net.color(), net.name() || 'you', net.carColor()); applySay(self, net.selfId(), now); }
 
       // The Blessing of the Ball: a pulsing golden halo behind you + a draining HUD badge, both fading
       // as the swiftness wears off.
@@ -14398,9 +14814,10 @@ export function startWorld(net: WorldNet): void {
   // ============================================================================================
   // `ghost` projectiles are other players' shots, mirrored from a `worldRocket` broadcast — purely
   // cosmetic (they fly and trail but never detonate or deal a blast; the firer owns that).
-  interface Shot { spr: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number; t: number; ghost: boolean; }
+  interface Shot { spr: Phaser.GameObjects.Image; x: number; y: number; vx: number; vy: number; t: number; ghost: boolean; enemy?: boolean; }
   const rockets: Shot[] = [];
   const bullets: Shot[] = [];
+  const cannonballs: Shot[] = []; // broadside cannon fire (naval)
   const orbs: Shot[] = [];
   const ROCKET_SPEED = 640, ROCKET_LIFE = 1.7, BLAST_R = 96;
   const MG_SPEED = 1500, MG_LIFE = 0.5, MG_SPREAD = 0.045, MG_HIT_R = 22;
@@ -14424,10 +14841,11 @@ export function startWorld(net: WorldNet): void {
       if (ammo[id] > 0) { selectWeapon(id); return; }
     }
   }
-  // Everything that has to be true before any weapon will go off. Indoors is a no-fire zone —
-  // except Tsong Towers, where HR lost the weapons-policy argument years ago.
+  // Everything that has to be true before any weapon will go off. Indoors is a no-fire zone — except
+  // Tsong Towers, where HR lost the weapons-policy argument years ago. A ship at sea fires its
+  // broadside cannons (boating on a ship is allowed); the little pond yacht stays unarmed.
   function canFire(): boolean {
-    return (!inInterior || inOffice) && !inDungeon && !boating && !net.amJailed() && !talkOpen && !dialogOpen && !chatActive && !sayActive;
+    return (!inInterior || inOffice) && !inDungeon && (!boating || !!shipSpec) && !net.amJailed() && !talkOpen && !dialogOpen && !chatActive && !sayActive;
   }
 
   function fireWeapon() {
@@ -14435,6 +14853,7 @@ export function startWorld(net: WorldNet): void {
     const now = performance.now();
     if (!canFire()) return;
     if (now < stunnedUntil) return;                                        // can't fire while flattened
+    if (shipSpec) { fireBroadside(now); return; }                          // at sea: broadside, not a forward shot
     const spec = WEAPON_BY_ID[weapon];
     if (now - lastShotAt < spec.cooldown) return;                          // cooldown
     if (ammo[weapon] <= 0) {
@@ -14473,16 +14892,265 @@ export function startWorld(net: WorldNet): void {
     }
   }
 
+  // --- 🏴‍☠️ naval broadsides ---------------------------------------------------------------------
+  // A ship fires out its SIDES, Black-Flag style, not forward. Fire with the cursor to port or
+  // starboard and that broadside barks; fire with no cursor (keyboard R / mobile button) and BOTH
+  // sides let go in a full salvo. Each gun lobs a cannonball that flies a fixed range then either
+  // smashes a target (blast) or plunges into the sea (harmless splash).
+  const BROADSIDE_CD = 1050;                 // ms between broadsides (a gun crew needs to reload)
+  const CANNON_SPEED = 540, CANNON_LIFE = 0.82, CANNON_BLAST_R = 66, CANNON_SPREAD = 0.14;
+  let lastBroadsideAt = 0;
+  // Which beam the cursor is on: +1 starboard, -1 port, 0 = no cursor (fire both sides).
+  function aimSide(): number {
+    if (!mouseAim || !mainCam) return 0;
+    const wp = mainCam.getWorldPoint(mouseAimSX, mouseAimSY);
+    const cross = Math.cos(facing) * (wp.y - selfY) - Math.sin(facing) * (wp.x - selfX);
+    return Math.abs(cross) < 2 ? 0 : (cross > 0 ? 1 : -1);
+  }
+  function fireBroadside(now: number) {
+    const ship = shipSpec; if (!ship) return;
+    if (now - lastBroadsideAt < BROADSIDE_CD) return;
+    lastBroadsideAt = now;
+    const side = aimSide();
+    const sides = side === 0 ? [-1, 1] : [side];
+    const hx = Math.cos(facing), hy = Math.sin(facing);
+    for (const s of sides) {
+      const bx = -hy * s, by = hx * s;                     // outward beam normal for this side
+      const dir = Math.atan2(by, bx);
+      for (let k = 0; k < ship.guns; k++) {
+        const t = ship.guns === 1 ? 0 : (k / (ship.guns - 1) - 0.5); // -0.5..0.5 along the hull
+        const along = t * SHIP_LEN * 0.78;
+        const mx = selfX + hx * along + bx * (SHIP_WID * 0.5 + 6);
+        const my = selfY + hy * along + by * (SHIP_WID * 0.5 + 6);
+        const a = dir + (Math.random() - 0.5) * 2 * CANNON_SPREAD;
+        spawnCannonball(mx, my, a, false);
+        net.rocket(mx, my, a, 'cannon');
+        spawnMuzzleSmoke(mx, my);
+      }
+    }
+    cannonFireSound();
+    mainCam?.shake(140, 0.006);
+  }
+  function spawnCannonball(x: number, y: number, a: number, ghost: boolean, enemy = false) {
+    const sc = petScene; if (!sc) return;
+    const spr = sc.add.image(x, y, 'w-cannonball').setScale(TEXEL * 1.1).setDepth(y + 40);
+    if (enemy) spr.setTint(0x3a1a1a);
+    cannonballs.push({ spr, x, y, vx: Math.cos(a) * CANNON_SPEED, vy: Math.sin(a) * CANNON_SPEED, t: 0, ghost, enemy });
+  }
+  function updateCannonballs(dt: number) {
+    const sc = petScene; if (!sc) return;
+    const now = performance.now();
+    for (let i = cannonballs.length - 1; i >= 0; i--) {
+      const cb = cannonballs[i];
+      cb.t += dt;
+      cb.x += cb.vx * dt; cb.y += cb.vy * dt;
+      // an arc: the ball rides up then settles as it nears the end of its range (drawn via scale)
+      const arc = 1 + Math.sin(Math.min(1, cb.t / CANNON_LIFE) * Math.PI) * 0.5;
+      cb.spr.setPosition(cb.x, cb.y).setScale(TEXEL * 1.1 * arc).setDepth(cb.y + 40);
+      const spent = cb.t >= CANNON_LIFE;
+      // ENEMY-fired ball: purely local — it only threatens YOUR hull, and it splashes otherwise.
+      if (cb.enemy) {
+        const onMe = shipSpec && boating && Math.hypot(selfX - cb.x, selfY - cb.y) < SHIP_LEN * 0.5;
+        if (onMe) { spawnExplosion(cb.x, cb.y, 0.8); damageMyShip(); cb.spr.destroy(); cannonballs.splice(i, 1); continue; }
+        if (spent) { spawnSplash(cb.x, cb.y); cb.spr.destroy(); cannonballs.splice(i, 1); }
+        continue;
+      }
+      if (cb.ghost) { if (spent) { spawnSplash(cb.x, cb.y); cb.spr.destroy(); cannonballs.splice(i, 1); } continue; }
+      // OUR ball: a hostile NPC ship first (local kill), then any networked body/mob (broadcast blast).
+      const foe = enemyShipAt(cb.x, cb.y);
+      if (foe) {
+        spawnExplosion(cb.x, cb.y, 0.8); damageEnemyShip(foe); cb.spr.destroy(); cannonballs.splice(i, 1); continue;
+      }
+      const target = hitsBody(cb.x, cb.y, now) || mobAt(cb.x, cb.y) || raidBossAt(cb.x, cb.y);
+      if (target) {
+        spawnExplosion(cb.x, cb.y, 0.8);
+        net.boom(cb.x, cb.y, CANNON_BLAST_R, 'blast');
+        applyBlast(cb.x, cb.y, CANNON_BLAST_R, true);
+        cb.spr.destroy(); cannonballs.splice(i, 1);
+        continue;
+      }
+      if (spent) {                                         // ran out of range → a harmless splash
+        spawnSplash(cb.x, cb.y);
+        net.boom(cb.x, cb.y, 0, 'splash');
+        cb.spr.destroy(); cannonballs.splice(i, 1);
+      }
+    }
+  }
+  // A white spout where a cannonball hits the water.
+  function spawnSplash(x: number, y: number) {
+    const sc = petScene; if (!sc) return;
+    for (let i = 0; i < 6; i++) {
+      const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.6, sp = 60 + Math.random() * 90;
+      sc.add.image(x, y, 'w-cannonball').setScale(TEXEL * 0.6).setTint(0xdff0f8).setAlpha(0.9).setDepth(y + 41);
+      spawnSparks(x, y, 0xcfe8f4);
+      void a; void sp;
+    }
+    splashSound();
+  }
+  function spawnMuzzleSmoke(x: number, y: number) {
+    const sc = petScene; if (!sc || smokePuffs.length >= 120) return;
+    smokePuffs.push({ spr: sc.add.image(x, y, 'w-smoke').setScale(0.5).setTint(0xf0f0f0).setAlpha(0.6).setDepth(y + 42),
+      t: 0, max: 0.5, vx: (Math.random() - 0.5) * 40, vy: (Math.random() - 0.5) * 40 });
+  }
+  // A fountain of gold coins bursting up off a plundered chest.
+  function spawnGoldBurst(x: number, y: number) {
+    const sc = petScene; if (!sc) return;
+    for (let i = 0; i < 16; i++) {
+      const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.6, sp = 90 + Math.random() * 170;
+      const spr = sc.add.image(x, y, 'w-fireball').setDepth(y + 300).setBlendMode(Phaser.BlendModes.ADD).setTint(0xffd23f);
+      boomParts.push({ spr, t: 0, max: 0.4 + Math.random() * 0.35, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, kind: 'fire', r0: 0.5, r1: 0.05 });
+    }
+  }
+  // Plunder the treasure chest on an island our ship is alongside → ask the server for the payout.
+  function plunderIsland(is: Island) {
+    if (seaChestsOpened.has(is.id)) return;
+    net.seaChest(is.id);
+    tone(660, 0.1, 'square', 0.05, 300);
+    flashHelp(`🏴‍☠️ Prying open ${is.name}…`);
+  }
+
+  // --- ⚔️ hostile NPC ships -----------------------------------------------------------------------
+  // Client-local pirate raiders roaming each corner sea (like the town's client-simulated townsfolk,
+  // not the server-authoritative biome MMO mobs). They wander until a player ship sails into range,
+  // then give chase, wheel to present a broadside, and open fire — health bar over each hull. Their
+  // cannonballs only threaten YOUR hull (local); sink one and the server pays a bounty.
+  interface EnemyShip {
+    hull: Phaser.GameObjects.Image; flag: Phaser.GameObjects.Text; bar: Phaser.GameObjects.Graphics;
+    sea: WaterRegion; spec: ShipSpec;
+    x: number; y: number; a: number; vx: number; vy: number;
+    hp: number; maxHp: number; nextShotAt: number; hitUntil: number; wanderA: number; reA: number;
+  }
+  let enemyShips: EnemyShip[] = [];
+  const ENEMY_CLASSES = ['ship-brig', 'ship-sloop', 'ship-frigate'];
+  // Fire range sits INSIDE the cannonball's actual reach (CANNON_SPEED*CANNON_LIFE ≈ 442) so their
+  // shots connect instead of splashing short, and they circle close enough to keep landing them.
+  const ENEMY_AGGRO = 1050, ENEMY_STANDOFF = 300, ENEMY_FIRE_RANGE = 400, ENEMY_SEE = 1800;
+  function spawnEnemyFleet(sc: Phaser.Scene) {
+    for (const e of enemyShips) { e.hull.destroy(); e.flag.destroy(); e.bar.destroy(); }
+    enemyShips = [];
+    for (const w of SEA) for (let i = 0; i < 2; i++) spawnEnemyShip(sc, w); // two raiders per sea
+  }
+  function spawnEnemyShip(sc: Phaser.Scene, w: WaterRegion) {
+    const spec = shipById(ENEMY_CLASSES[Math.floor(Math.random() * ENEMY_CLASSES.length)]) ?? SHIPS[0];
+    let x = w.cx, y = w.cy;
+    for (let tries = 0; tries < 24; tries++) {
+      x = w.rect.x + SEA_SHORE + Math.random() * (w.rect.w - SEA_SHORE * 2);
+      y = w.rect.y + SEA_SHORE + Math.random() * (w.rect.h - SEA_SHORE * 2);
+      if (!shoveOffIslands(x, y, SHIP_WID).hit) break;
+    }
+    const hull = sc.add.image(x, y, `w-${spec.id}`).setScale(TEXEL).setTint(0xc98a8a).setDepth(y);
+    const flag = sc.add.text(x, y - 40, '☠️', { fontSize: '16px' }).setOrigin(0.5, 1).setDepth(y + 400);
+    const bar = sc.add.graphics().setDepth(y + 2);
+    enemyShips.push({ hull, flag, bar, sea: w, spec, x, y, a: Math.random() * Math.PI * 2, vx: 0, vy: 0,
+      hp: spec.hp, maxHp: spec.hp, nextShotAt: 0, hitUntil: 0, wanderA: Math.random() * Math.PI * 2, reA: 0 });
+  }
+  function enemyShipAt(x: number, y: number): EnemyShip | null {
+    for (const e of enemyShips) if (Math.hypot(e.x - x, e.y - y) < SHIP_LEN * 0.44) return e;
+    return null;
+  }
+  function damageEnemyShip(e: EnemyShip) {
+    e.hp--; e.hitUntil = performance.now() + 120;
+    spawnSparks(e.x, e.y, 0xffb020);
+    tone(150, 0.1, 'square', 0.04, 90);
+    if (e.hp <= 0) sinkEnemyShip(e);
+  }
+  function sinkEnemyShip(e: EnemyShip) {
+    spawnExplosion(e.x, e.y, 1.4); spawnSplash(e.x, e.y);
+    e.hull.destroy(); e.flag.destroy(); e.bar.destroy();
+    enemyShips = enemyShips.filter((s) => s !== e);
+    net.seaBounty();
+    tone(90, 0.5, 'sawtooth', 0.06, 60);
+    const w = e.sea;
+    window.setTimeout(() => { if (petScene) spawnEnemyShip(petScene, w); }, 14000); // the sea restocks its raiders
+  }
+  function fireEnemyBroadside(e: EnemyShip, toPlayer: number) {
+    const s = angDelta(e.a, toPlayer) > 0 ? 1 : -1;                 // fire the beam facing the player
+    const hx = Math.cos(e.a), hy = Math.sin(e.a), bx = -hy * s, by = hx * s, dir = Math.atan2(by, bx);
+    for (let k = 0; k < e.spec.guns; k++) {
+      const t = e.spec.guns === 1 ? 0 : (k / (e.spec.guns - 1) - 0.5);
+      const along = t * SHIP_LEN * 0.78;
+      const mx = e.x + hx * along + bx * (SHIP_WID * 0.5 + 6), my = e.y + hy * along + by * (SHIP_WID * 0.5 + 6);
+      spawnCannonball(mx, my, dir + (Math.random() - 0.5) * 2 * CANNON_SPREAD, false, true);
+      spawnMuzzleSmoke(mx, my);
+    }
+    if (Math.hypot(selfX - e.x, selfY - e.y) < 900) cannonFireSound();
+  }
+  // A health bar over YOUR OWN ship while sailing (matches the enemy hull bars), so you always know
+  // how much fight your hull has left instead of only glimpsing it on the on-hit flash.
+  let selfShipBar: Phaser.GameObjects.Graphics | null = null;
+  function updateSelfShipBar() {
+    const sc = petScene; if (!sc) return;
+    if (!selfShipBar) selfShipBar = sc.add.graphics();
+    if (boating && shipSpec) {
+      selfShipBar.setVisible(true).clear();
+      const frac = Math.max(0, shipHp / shipSpec.hp), bw = 60, bx = selfX - bw / 2, by = selfY - 56;
+      selfShipBar.fillStyle(0x000000, 0.5); selfShipBar.fillRect(bx - 2, by - 2, bw + 4, 9);
+      selfShipBar.fillStyle(0x2a0c0c, 1); selfShipBar.fillRect(bx, by, bw, 5);
+      selfShipBar.fillStyle(frac > 0.5 ? 0x5ae05a : frac > 0.25 ? 0xffd23f : 0xff3a3a, 1); selfShipBar.fillRect(bx, by, bw * frac, 5);
+      selfShipBar.setDepth(selfY + 5);
+    } else if (selfShipBar.visible) selfShipBar.setVisible(false);
+  }
+  function updateEnemyShips(dt: number) {
+    updateSelfShipBar();
+    if (inInterior || inDungeon) return;
+    const now = performance.now();
+    const huntable = boating && !!shipSpec; // they only hunt a player who's actually at sea in a ship
+    for (const e of enemyShips) {
+      const dP = Math.hypot(selfX - e.x, selfY - e.y);
+      const aggro = huntable && dP < ENEMY_AGGRO;
+      let desired: number;
+      if (aggro) {
+        const toP = Math.atan2(selfY - e.y, selfX - e.x);
+        if (dP > ENEMY_STANDOFF * 1.3) desired = toP;                 // close the distance
+        else if (dP < ENEMY_STANDOFF * 0.7) desired = toP + Math.PI;  // too close — peel off
+        else desired = toP + Math.PI / 2;                             // circle to present a beam
+      } else {
+        if (now >= e.reA) { e.wanderA += (Math.random() - 0.5) * 1.4; e.reA = now + 1500 + Math.random() * 2200; }
+        desired = e.wanderA;
+      }
+      e.a += clamp(angDelta(e.a, desired), -e.spec.turn * dt, e.spec.turn * dt);
+      const sp = e.spec.speed * (aggro ? 0.68 : 0.4); // hunts, but slow enough that you can outrun it
+      e.vx += (Math.cos(e.a) * sp - e.vx) * Math.min(1, dt * 1.6);
+      e.vy += (Math.sin(e.a) * sp - e.vy) * Math.min(1, dt * 1.6);
+      let nx = e.x + e.vx * dt, ny = e.y + e.vy * dt;
+      const minx = e.sea.rect.x + SEA_SHORE, maxx = e.sea.rect.x + e.sea.rect.w - SEA_SHORE;
+      const miny = e.sea.rect.y + SEA_SHORE, maxy = e.sea.rect.y + e.sea.rect.h - SEA_SHORE;
+      if (nx < minx || nx > maxx) { e.wanderA = Math.PI - e.wanderA; nx = clamp(nx, minx, maxx); }
+      if (ny < miny || ny > maxy) { e.wanderA = -e.wanderA; ny = clamp(ny, miny, maxy); }
+      const sh = shoveOffIslands(nx, ny, SHIP_WID * 0.5);
+      if (sh.hit) { nx = sh.x; ny = sh.y; e.wanderA += Math.PI / 2; }
+      e.x = nx; e.y = ny;
+      if (aggro && dP < ENEMY_FIRE_RANGE && now >= e.nextShotAt) {
+        const toP = Math.atan2(selfY - e.y, selfX - e.x), rel = Math.abs(angDelta(e.a, toP));
+        if (rel > 0.45 && rel < Math.PI - 0.45) { fireEnemyBroadside(e, toP); e.nextShotAt = now + 2800 + Math.random() * 1400; }
+      }
+      // render + health bar
+      e.hull.setPosition(e.x, e.y).setRotation(e.a).setDepth(e.y);
+      if (now < e.hitUntil) e.hull.setTintFill(0xffffff); else e.hull.setTint(0xc98a8a);
+      const seen = dP < ENEMY_SEE;
+      e.flag.setPosition(e.x, e.y - 40).setVisible(seen).setDepth(e.y + 400); // fixed offset (rotation-agnostic)
+      if (seen) {
+        e.bar.setVisible(true).clear();
+        const frac = Math.max(0, e.hp / e.maxHp), bw = 46, bx = e.x - bw / 2, by = e.y - 54;
+        e.bar.fillStyle(0x000000, 0.5); e.bar.fillRect(bx - 2, by - 2, bw + 4, 7);
+        e.bar.fillStyle(0x2a0c0c, 1); e.bar.fillRect(bx, by, bw, 4);
+        e.bar.fillStyle(frac > 0.5 ? 0x5ae05a : frac > 0.25 ? 0xffd23f : 0xff3a3a, 1); e.bar.fillRect(bx, by, bw * frac, 4);
+        e.bar.setDepth(e.y + 2);
+      } else if (e.bar.visible) e.bar.setVisible(false);
+    }
+  }
+
   // A remote player's shot (from a `worldRocket` broadcast) — mirror it onto our screen. Cosmetic
   // only; the firer's own `worldBoom` is what actually hurts anybody.
   function feedShot(x: number, y: number, a: number, w: WorldWeapon, len?: number) {
     if (inInterior || inDungeon) return; // not visible from inside a room/the Ruins
     const near = Math.hypot(x - selfX, y - selfY) < 850; // only nearby shots are audible
     switch (w) {
-      case 'mg':    spawnBullet(x, y, a, true); if (near) mgSound(); break;
-      case 'laser': drawBeam(x, y, a, len ?? LASER_RANGE); if (near) laserSound(); break;
-      case 'void':  spawnOrb(x, y, a, true); if (near) voidFireSound(); break;
-      default:      spawnRocket(x, y, a, true); if (near) rocketLaunchSound(); break;
+      case 'mg':     spawnBullet(x, y, a, true); if (near) mgSound(); break;
+      case 'laser':  drawBeam(x, y, a, len ?? LASER_RANGE); if (near) laserSound(); break;
+      case 'void':   spawnOrb(x, y, a, true); if (near) voidFireSound(); break;
+      case 'cannon': spawnCannonball(x, y, a, true); if (near) cannonFireSound(); spawnMuzzleSmoke(x, y); break;
+      default:       spawnRocket(x, y, a, true); if (near) rocketLaunchSound(); break;
     }
   }
 
@@ -14503,8 +15171,12 @@ export function startWorld(net: WorldNet): void {
     if (inOffice && !printerDown && Math.hypot(OFFICE_SPOTS.printer.x - x, OFFICE_SPOTS.printer.y - y) <= r + 26) wreckPrinter();
     // Raids are PvE: no friendly fire in the arena. Player blasts (and bullet splash, which routes
     // through here too) never knock allies — or you — around while the Warden is up.
-    if (!inRaidFight() && Math.hypot(selfX - x, selfY - y) <= r) {
-      if (driving) {
+    // A ship is a big target: a hit anywhere along the hull counts, not just dead-centre.
+    const selfReach = r + (shipSpec ? SHIP_LEN * 0.4 : 0);
+    if (!inRaidFight() && Math.hypot(selfX - x, selfY - y) <= selfReach) {
+      if (shipSpec) {
+        if (!mine && damageMyShip()) net.blownUp(true, mine, shooterPid); // our own shots never scratch our hull
+      } else if (driving) {
         if (blowUpMyCar('💥 Your car took a direct hit — summon a fresh one anytime.')) net.blownUp(true, mine, mine ? undefined : shooterPid);
       } else if (now >= stunnedUntil && (!inInterior || inOffice) && !inDungeon) {
         stunnedUntil = now + 2300; keys.clear();
@@ -14526,12 +15198,14 @@ export function startWorld(net: WorldNet): void {
     for (const n of npcs) if (now >= n.squishedUntil && Math.hypot(n.x - x, n.y - y) < R + 4) return n;
     return null;
   }
-  // Another player (on foot or in a car) at (x,y). These hits DO have to be broadcast.
+  // Another player (on foot, in a car, or crewing a ship) at (x,y). These hits DO have to be
+  // broadcast. A ship is a big hull, so it catches shots along its whole length.
   function playerAt(x: number, y: number): WorldAvatar | null {
     const selfId = net.selfId();
     for (const a of others) {
       if (a.id === selfId) continue;
-      if (Math.hypot(a.x - x, a.y - y) < (a.car ? CAR_LEN * 0.5 : R * 1.3)) return a;
+      const reach = shipById(a.car) ? SHIP_LEN * 0.44 : a.car ? CAR_LEN * 0.5 : R * 1.3;
+      if (Math.hypot(a.x - x, a.y - y) < reach) return a;
     }
     return null;
   }
@@ -14850,6 +15524,7 @@ export function startWorld(net: WorldNet): void {
   function updateShots(dt: number) {
     updateRockets(dt);
     updateBullets(dt);
+    updateCannonballs(dt);
     updateBeams(dt);
     updateOrbs(dt);
     updateHoles(dt);
@@ -14957,6 +15632,40 @@ export function startWorld(net: WorldNet): void {
     flashHelp(reason);
     return true;
   }
+  // A cannonball caught our hull. Chip a hull point; when it hits zero the ship goes down. Returns
+  // true only on the sinking blow (so applyBlast hands out the kill). EVERY connecting ball counts —
+  // a full enemy broadside landing at once genuinely staggers you (Black-Flag style), so no debounce
+  // here: N cannonballs = N hull points, which is exactly what makes broadsides matter in PvP.
+  function damageMyShip(): boolean {
+    if (!shipSpec || shipHp <= 0) return false;
+    shipHp--;
+    spawnSparks(selfX, selfY, 0xffb020);
+    spawnExplosion(selfX + (Math.random() - 0.5) * 40, selfY + (Math.random() - 0.5) * 40, 0.6);
+    mainCam?.shake(220, 0.012);
+    if (shipHp > 0) {
+      flashHelp(`💥 Hull hit! ${'🟩'.repeat(shipHp)}${'⬛'.repeat(Math.max(0, shipSpec.hp - shipHp))}`);
+      tone(150, 0.14, 'square', 0.05, 90);
+      return false;
+    }
+    sinkMyShip();
+    return true;
+  }
+  // The ship goes under: a big fireball + a spout, then you're spat out onto the nearest shore to
+  // crew a fresh one. (Ships are free at any coast — losing one costs you the fight, not the boat.)
+  function sinkMyShip() {
+    const w = boatWater;
+    spawnExplosion(selfX, selfY, 1.4);
+    spawnSplash(selfX, selfY);
+    net.boom(selfX, selfY, 0, 'splash');
+    net.boom(selfX, selfY);            // a shared fireball marking the wreck
+    boating = false; shipSpec = null; shipHp = 0; boatWater = null; vx = vy = 0;
+    const back = w ? disembarkPoint(selfX, selfY, w.rect) : { x: selfX, y: selfY };
+    const safe = resolveCollisions(back.x, back.y, R);
+    selfX = safe.x; selfY = safe.y;
+    flashHelp('🌊 Your ship went down! Reach the coast and crew another.');
+    tone(90, 0.6, 'sawtooth', 0.06, 60);
+    syncDriveBtn();
+  }
   // Two cars touching → BOTH explode. Detection is symmetric, so each client blows up its OWN car
   // (one fireball per car, every one of them broadcast) — net result: two fireballs, seen by all.
   function checkCarCrash(now: number) {
@@ -15062,7 +15771,8 @@ export function startWorld(net: WorldNet): void {
     const carWheels = sc.add.image(0, 0, 'w-monster-body-wheels').setScale(TEXEL).setVisible(false); // monster-truck tires (under the body)
     const carBody = sc.add.image(0, 0, 'w-car-body').setScale(TEXEL);
     const carRoof = sc.add.image(0, 0, 'w-car-roof').setScale(TEXEL);
-    const car = sc.add.container(0, 0, [carWheels, carBody, carRoof]).setVisible(false);
+    const ship = sc.add.image(0, 0, 'w-ship-brig').setScale(TEXEL).setVisible(false); // big hull, only afloat at sea
+    const car = sc.add.container(0, 0, [carWheels, carBody, carRoof, ship]).setVisible(false);
     const label = sc.add.text(0, -R - 14, name, NAME_STYLE).setOrigin(0.5, 1);
     // Rounded speech bubble: the smooth panel is the 'w-bubble' 9-slice (drawn behind the text);
     // the text just carries the words. drawBubbleBg() re-fits the panel to the text on each change.
@@ -15075,7 +15785,7 @@ export function startWorld(net: WorldNet): void {
       wordWrap: { width: 180 },
     }).setOrigin(0.5, 1).setVisible(false).setDepth(1);
     const c = sc.add.container(selfX, selfY, [shadow, car, person, label, bubbleBg, bubble]);
-    return { c, person, car, carBody, carRoof, carWheels, label, bubble, bubbleBg, bubbleNextAt: 0, rx: selfX, ry: selfY, ra: 0, smokeT: 0, sx: selfX, sy: selfY };
+    return { c, person, car, carBody, carRoof, carWheels, ship, label, bubble, bubbleBg, bubbleNextAt: 0, rx: selfX, ry: selfY, ra: 0, smokeT: 0, sx: selfX, sy: selfY };
   }
 
   // Re-fit the rounded panel to the bubble text (which already bakes in its padding). The 9-slice
@@ -15116,6 +15826,16 @@ export function startWorld(net: WorldNet): void {
     av.car.setVisible(inVehicle);
     if (inVehicle) {
       av.car.setRotation(a);
+      const ship = shipById(vehicleId);
+      if (ship) {
+        // A sailing ship: one painted hull sprite (masts + sails baked in), rendered untinted. Hide
+        // all the car layers. Origin sits at hull centre so it rotates about the waterline.
+        av.ship.setVisible(true).setTexture(`w-${ship.id}`).setTint(0xffffff);
+        av.carWheels.setVisible(false); av.carBody.setVisible(false); av.carRoof.setVisible(false);
+        return;
+      }
+      av.ship.setVisible(false);
+      av.carBody.setVisible(true); av.carRoof.setVisible(true);
       const spec = carById(vehicleId);
       const monster = spec?.id === 'car-monster';
       const boat = spec?.id === 'car-boat';
@@ -17904,6 +18624,116 @@ export function startWorld(net: WorldNet): void {
       if (x >= WORLD.w) foam.lineBetween(WORLD.w, Math.max(y, 0), WORLD.w, y + h);
     }
   }
+  // Treasure islands: round sandbars with palms and a chest, dotted across the corner seas. Each is
+  // a baked pixel-art texture in the same idiom as buildPond (concentric ellipses: a foamy surf ring,
+  // wet then dry sand, a grassy crown, scattered shells) so it reads like overworld terrain, not a
+  // flat disc. The palms reuse the desert's w-palm; the chest reuses the Ruins' w-chest sprites.
+  const islandChestSprites: Record<string, Phaser.GameObjects.Image> = {};
+  function makeIslands(sc: Phaser.Scene) {
+    for (const is of ISLANDS) buildIsland(sc, is);
+  }
+  function buildIsland(sc: Phaser.Scene, is: Island) {
+    const R = is.r / TEXEL, M = 40, S = Math.ceil(R * 2 + M * 2), c = S / 2;
+    const FOAM = 0xd6eef6, FOAM2 = 0xa9d4e6, WET = 0xb39b73, SAND = 0xcdb892, SAND_L = 0xe6d29a,
+          GRASS_D = 0x5f8f45, GRASS = 0x84b862, GRASS_L = 0x9fce78, ROCK = 0x8a8478, ROCK_D = 0x6a6558, LAGOON = 0x5bb6c9;
+    const g = sc.make.graphics({ x: 0, y: 0 }, false);
+    let seed = 0; for (const ch of is.id) seed = (seed * 31 + ch.charCodeAt(0)) >>> 0;
+    const rnd = mulberry32(seed || 1);
+    // The coastline is the island's own `mul(t)` curve (shared with collision, so the drawn sand is
+    // exactly what you can sail up to / walk on). A second, gentler local curve shapes the grassy
+    // interior so the greenery doesn't just mirror the sand outline.
+    const coast = is.mul;
+    const innerTerms = ([[2, 0.18], [3, 0.12], [4, 0.08]] as [number, number][]).map(([k, amax]) => ({ k, a: (rnd() * 2 - 1) * amax, p: rnd() * Math.PI * 2 }));
+    const inner = (t: number) => { let m = 1; for (const T of innerTerms) m += T.a * Math.sin(T.k * t + T.p); return Math.max(0.55, m); };
+    const N = 56;
+    const ring = (scale: number, nz: (t: number) => number, oy = 0) => {
+      const pts: Phaser.Math.Vector2[] = [];
+      for (let i = 0; i < N; i++) { const t = (i / N) * Math.PI * 2, rr = R * scale * nz(t); pts.push(new Phaser.Math.Vector2(c + Math.cos(t) * rr, c + Math.sin(t) * rr + oy)); }
+      return pts;
+    };
+    // a soft drop shadow so the island sits ON the water instead of floating in it
+    g.fillStyle(0x0d2c40, 0.28); g.fillPoints(ring(1.0, coast, R * 0.1), true);
+    g.fillStyle(FOAM, 0.5);  g.fillPoints(ring(1.08, coast, 2), true);          // outer surf foam
+    g.fillStyle(FOAM2, 0.5); g.fillPoints(ring(1.03, coast, 2), true);          // inner surf ring
+    g.fillStyle(WET, 1);     g.fillPoints(ring(0.98, coast, 1), true);          // wet-sand waterline
+    g.fillStyle(SAND, 1);    g.fillPoints(ring(0.9, coast), true);              // dry beach
+    g.fillStyle(SAND_L, 0.55); g.fillEllipse(c - R * 0.2, c - R * 0.22, R * 0.78, R * 0.5); // sunlit sand
+    // grass keeps its own gentle outline but is clamped inside the dry sand so it never spills to sea
+    const grassOuter = (t: number) => Math.min(0.62 * inner(t), 0.82 * coast(t));
+    const grassInner = (t: number) => Math.min(0.55 * inner(t), 0.72 * coast(t));
+    g.fillStyle(GRASS_D, 1); g.fillPoints(ring(1, grassOuter, -R * 0.03), true); // grass shadow
+    g.fillStyle(GRASS, 1);   g.fillPoints(ring(1, grassInner, -R * 0.1), true);  // grass crown
+    g.fillStyle(GRASS_L, 0.5); g.fillEllipse(c - R * 0.12, c - R * 0.26, R * 0.5, R * 0.28); // sunlit grass
+    // some islands cradle a little turquoise lagoon
+    if (rnd() < 0.4) { g.fillStyle(LAGOON, 0.9); g.fillEllipse(c + R * 0.18, c + R * 0.14, R * 0.4, R * 0.26); g.fillStyle(0x3f97ab, 0.9); g.fillEllipse(c + R * 0.18, c + R * 0.16, R * 0.22, R * 0.13); }
+    // scattered rocks + shells on the sand ring
+    for (let i = 0; i < 5; i++) {
+      const a = rnd() * Math.PI * 2, rr = R * (0.62 + rnd() * 0.22), rx = c + Math.cos(a) * rr, ry = c + Math.sin(a) * rr, rs = 2 + rnd() * 3;
+      g.fillStyle(ROCK_D, 1); g.fillEllipse(rx, ry + 1, rs * 2, rs * 1.4);
+      g.fillStyle(ROCK, 1); g.fillEllipse(rx, ry, rs * 2, rs * 1.4);
+    }
+    for (let i = 0; i < 14; i++) {
+      const a = rnd() * Math.PI * 2, rr = R * (0.55 + rnd() * 0.3);
+      g.fillStyle(rnd() < 0.5 ? WET : SAND_L, 0.8);
+      g.fillRect(Math.round(c + Math.cos(a) * rr), Math.round(c + Math.sin(a) * rr), 1, 1);
+    }
+    // 'X marks the spot': two crossed strokes scratched into the sand.
+    if (is.feature === 'xmarks') {
+      g.lineStyle(4, 0x8a3a1a, 0.9);
+      g.beginPath(); g.moveTo(c - R * 0.4, c - R * 0.1); g.lineTo(c + R * 0.4, c + R * 0.5); g.moveTo(c + R * 0.4, c - R * 0.1); g.lineTo(c - R * 0.4, c + R * 0.5); g.strokePath();
+    }
+    const key = `w-island-${is.id}`;
+    g.generateTexture(key, S, S);
+    g.destroy();
+    sc.add.image(is.x, is.y, key).setOrigin(0.5, 0.5).setScale(TEXEL).setDepth(is.y - is.r);
+
+    // A palm or two on the grassy crown (skip where a big landmark owns the centre).
+    const bigCentre = is.feature === 'volcano' || is.feature === 'tikibar' || is.feature === 'monolith' || is.feature === 'wreck';
+    sc.add.image(is.x - is.r * 0.34, is.y - is.r * 0.20, 'w-palm').setOrigin(0.5, 1).setScale(TEXEL * 2.4).setDepth(is.y - is.r * 0.20);
+    if (!bigCentre) sc.add.image(is.x + is.r * 0.32, is.y - is.r * 0.40, 'w-palm').setOrigin(0.5, 1).setScale(TEXEL * 1.8).setDepth(is.y - is.r * 0.40);
+
+    // The island's landmark prop(s) + any marooned character. `at(dx,dy,tex,scale)` plants a sprite
+    // at a spot on the island, base-anchored, depth-sorted so a passing hull can overlap it.
+    const at = (dx: number, dy: number, tex: string, sc2 = 2.4, ox = 0.5, oy = 1) =>
+      sc.add.image(is.x + is.r * dx, is.y + is.r * dy, tex).setOrigin(ox, oy).setScale(TEXEL * sc2).setDepth(is.y + is.r * dy + 1);
+    switch (is.feature) {
+      case 'volcano':  at(0, 0.28, 'w-isle-volcano', 3.4); islandSmokers.push({ x: is.x, y: is.y - is.r * 0.55 }); break;
+      case 'tiki':     at(0.12, 0.05, 'w-isle-tiki', 2.6); break;
+      case 'tikibar':  at(0, 0.22, 'w-isle-tikibar', 2.0); break;
+      case 'wreck':    at(0, 0.12, 'w-isle-wreck', 3.2); break;
+      case 'kraken':   at(0.9, 0.15, 'w-isle-tentacle', 3.0); at(-0.7, 0.5, 'w-isle-tentacle', 2.0); break;
+      case 'wilson':   at(0.2, 0.1, 'w-isle-wilson', 2.4); break;
+      case 'cannon':   at(0.1, 0.1, 'w-isle-cannon', 2.4); at(-0.2, 0.2, 'w-cannonball', 1.6); at(-0.05, 0.24, 'w-cannonball', 1.6); break;
+      case 'bottle':   at(0, 0.1, 'w-isle-bottle', 3.2); break;
+      case 'flamingo': at(0.15, 0.05, 'w-isle-flamingo', 2.2); at(-0.25, 0.18, 'w-isle-flamingo', 1.8); break;
+      case 'skull':    at(0.05, 0.08, 'w-skullcow', 3.4); break;
+      case 'snowman':  at(0.05, 0.12, 'w-snowman', 2.2); break;
+      case 'ducks':    for (let i = 0; i < 5; i++) at(-0.4 + i * 0.2, 0.28 + (i % 2) * 0.06, i % 2 ? 'w-duckling' : 'w-duck', 1.8); break;
+      case 'monolith': sc.add.rectangle(is.x, is.y - is.r * 0.1, is.r * 0.24, is.r * 1.0, 0x0a0a12).setOrigin(0.5, 1).setDepth(is.y).setStrokeStyle(2, 0x2a2a3a); break;
+      case 'party':    at(0, 0.05, 'w-tav-barrel', 2.0); at(0.3, 0.12, 'w-isle-flamingo', 1.6); break;
+      case 'mermaid':  at(0.15, 0.14, 'w-isle-mermaid', 2.6); break;
+      case 'castaway': case 'rum': at(0.1, 0.12, is.feature === 'rum' ? 'w-isle-castaway' : 'w-isle-castaway', 2.4); if (is.feature === 'rum') { at(-0.25, 0.2, 'w-tav-barrel', 1.8); at(-0.05, 0.26, 'w-tav-barrel', 1.6); } break;
+    }
+    // A marooned character muttering: a floating, cycling quip bubble (the "NPC here and there").
+    if (is.quip && is.quip.length) {
+      const label = sc.add.text(is.x + is.r * 0.1, is.y - is.r * 0.55, is.quip[0], {
+        fontFamily: 'system-ui, sans-serif', fontSize: '13px', color: '#ffe08a',
+        stroke: '#0b1020', strokeThickness: 4, align: 'center', wordWrap: { width: 190 },
+      }).setOrigin(0.5, 1).setDepth(is.y + 400);
+      islandQuips.push({ x: is.x + is.r * 0.1, y: is.y - is.r * 0.55, lines: is.quip, label, nextAt: 0, idx: 0 });
+    }
+
+    const chest = sc.add.image(is.x + is.r * 0.04, is.y + is.r * 0.30, seaChestsOpened.has(is.id) ? 'w-chest-open' : 'w-chest')
+      .setOrigin(0.5, 0.8).setScale(TEXEL * 1.4).setDepth(is.y + is.r * 0.30 + 2);
+    islandChestSprites[is.id] = chest;
+  }
+  // Cycling quip bubbles + volcano smokers, ticked from updateOcean while you're near.
+  const islandQuips: { x: number; y: number; lines: readonly string[]; label: Phaser.GameObjects.Text; nextAt: number; idx: number }[] = [];
+  const islandSmokers: { x: number; y: number }[] = [];
+  // Reflect an island's plundered state onto its chest sprite.
+  function refreshIslandChest(id: string) {
+    islandChestSprites[id]?.setTexture(seaChestsOpened.has(id) ? 'w-chest-open' : 'w-chest');
+  }
   // Scroll every ocean layer's UVs → the sea rolls. Cheap: just nudges tilePosition on a handful of
   // TileSprites (all the wave shape lives in the texture + GPU UV-wrap).
   function updateOcean(now: number, dt: number) {
@@ -17912,6 +18742,25 @@ export function startWorld(net: WorldNet): void {
     for (const L of oceanLayers) {
       L.spr.tilePositionX += L.sx * dt + Math.sin(t * 0.6) * L.sway * dt;
       L.spr.tilePositionY += L.sy * dt + Math.cos(t * 0.47) * L.sway * 0.5 * dt;
+    }
+    // Marooned characters mutter their next line every few seconds when you're within earshot.
+    for (const q of islandQuips) {
+      const near = Math.hypot(q.x - selfX, q.y - selfY) < 1100;
+      q.label.setVisible(near);
+      if (near && now >= q.nextAt) {
+        q.idx = (q.idx + Math.floor(1 + Math.random() * q.lines.length)) % q.lines.length;
+        q.label.setText(q.lines[q.idx]);
+        q.nextAt = now + 3600 + Math.random() * 2600;
+      }
+    }
+    // Volcanoes puff smoke when you're nearby (cheap: reuse the smoke-puff pool, throttled).
+    const sc = petScene;
+    if (sc && smokePuffs.length < 100) for (const v of islandSmokers) {
+      if (Math.hypot(v.x - selfX, v.y - selfY) > 1400) continue;
+      if (Math.random() < dt * 3) {
+        smokePuffs.push({ spr: sc.add.image(v.x + (Math.random() - 0.5) * 20, v.y, 'w-smoke').setScale(0.9).setTint(0x6a6a6a).setAlpha(0.55).setDepth(v.y + 500),
+          t: 0, max: 1.8, vx: (Math.random() - 0.3) * 20, vy: -30 - Math.random() * 30 });
+      }
     }
   }
 
@@ -18243,12 +19092,12 @@ export function startWorld(net: WorldNet): void {
 
   function updateEast(now: number, dt: number) {
     if (!snowFlakes.length) return;
-    const here = selfX > WORLD.w - 700 && !inInterior && !inDungeon;
+    const here = selfX > WORLD.w - 700 && !inInterior && !inDungeon && !boating && !onIsland; // no snow out on the open sea / islands
     // snowballs restock wherever there's snow to pack (guarded: the snowball weapon spec may be
     // absent, and dereferencing it here used to throw every frame inside the biome — which froze
     // the snowfall below, since updateEast bailed before ever animating the flakes)
     const snowMax = WEAPON_BY_ID.snow?.max;
-    if (snowMax !== undefined && selfX > WORLD.w + 30 && !inInterior && !inDungeon && ammo.snow < snowMax) {
+    if (snowMax !== undefined && selfX > WORLD.w + 30 && !inInterior && !inDungeon && !boating && !onIsland && ammo.snow < snowMax) {
       ammo.snow = snowMax;
       updateWeaponHud();
       if (!snowPacked) { snowPacked = true; showToast('❄️ You pack some snowballs. For science. (weapon rack: ❄️)'); }
@@ -19446,6 +20295,7 @@ export function startWorld(net: WorldNet): void {
   let biomeMusicKey = '';
   function currentBiome(): string | null {
     if (inInterior || inDungeon) return null;
+    if (boating || onIsland) return null; // out at sea / ashore on an island — no desert/snow anthem
     if (selfX < 0) return 'desert';
     if (selfX > WORLD.w) return 'snow';
     if (selfY > WORLD.h && selfY < SWAMP_SHORE_Y) return 'swamp';
@@ -20103,6 +20953,20 @@ export function startWorld(net: WorldNet): void {
       // coins from the spin flow in via the dungeonPurse message; just refresh the panel if open
       renderLootPanel();
     },
+    seaChests(opened) {
+      seaChestsOpened.clear();
+      for (const id of opened) seaChestsOpened.add(id);
+      for (const id in islandChestSprites) refreshIslandChest(id);
+    },
+    seaChestOpened(chest, coins) {
+      seaChestsOpened.add(chest);
+      refreshIslandChest(chest);
+      const is = ISLANDS.find((i) => i.id === chest);
+      showToast(`🏴‍☠️ Plundered ${is?.name ?? 'the treasure'}: <b>${coins.toLocaleString()}🪙</b>!`);
+      try { chaching.muted = net.muted(); chaching.currentTime = 0; void chaching.play(); } catch { /* ignore */ }
+      // a burst of gold coins bickering up off the chest
+      if (is) spawnGoldBurst(is.x + is.r * 0.04, is.y + is.r * 0.1);
+    },
     dungeonPurse(coins) { dungeonPurseDisplay = coins; updateDungeonHud(); renderLootPanel(); },
     feedLand(parcels, bankBought, bankCap) {
       land.clear();
@@ -20124,6 +20988,7 @@ export function startWorld(net: WorldNet): void {
         spawnBlackHole(x, y, r ?? VOID_R, false, shooterPid); // the blast comes when it closes, VOID_HOLD later
         return;
       }
+      if (fx === 'splash') { spawnSplash(x, y); return; } // a cannonball hitting the sea — visual only
       if (fx === 'hit') spawnSparks(x, y, 0xff9a5a);
       else if (fx === 'zap') spawnZap(x, y);
       else spawnExplosion(x, y);

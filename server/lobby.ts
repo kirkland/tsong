@@ -156,7 +156,7 @@ import { getEloBoard, getLevelBoard, getPlayerProfile, getRival, getNetWorthLead
   loadNomic, saveNomic, archiveNomicSeason } from './db';
 import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR, DUNGEON_CHEST_CONTENTS, DUNGEON_TIER_COINS, DUNGEON_FLOOR_TIERS } from '../shared/types';
-import { WORLD_PARCELS, BANK_PARCEL_CAP, PARCEL_PRICE, LandParcelView, WORLD_SAY_MAX, HOUSE_BY_ID } from '../shared/types';
+import { WORLD_PARCELS, BANK_PARCEL_CAP, PARCEL_PRICE, LandParcelView, WORLD_SAY_MAX, HOUSE_BY_ID, seaIslandByChest } from '../shared/types';
 import { RAID_ARENA, RAID_PLATFORM, RAID_REWARD, RAID_MIN_PLAYERS, RAID_PET, type RaidPhase, type RaidCastMsg } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
@@ -1275,6 +1275,9 @@ export class Lobby {
   // Die / bail → the run's chests roll back (re-lootable) along with the forfeited purse. So you can
   // never lose a chest's reward forever just because a mob got you on the way out.
   private dungeonOpenedChests = new Set<string>(); // `${pid}:${chest}` — COMMITTED (banked on escape)
+  // Sea-island treasure chests plundered per account — `${pid}:sea:${chest}`. Persisted in the same
+  // dungeon_opened table (prefixed 'sea:'), committed the instant you plunder (no run/escape dance).
+  private seaChestsOpened = new Set<string>();
   private dungeonRunChests = new Map<string, Set<string>>(); // pid → chests opened THIS run (provisional)
   private dungeonPurse = new Map<string, number>(); // pid → run-purse coins (paid out only on a clean escape)
   private dungeonRunItems = new Map<string, { item: string; name: string }[]>(); // pid → cosmetics won this run (granted on escape)
@@ -2350,6 +2353,61 @@ export class Lobby {
     this.tell(ws, { type: 'world', avatars: this.worldAvatars() });
     this.sendLand(ws); // push the Robville land book so lots show their owners/for-sale signs
     this.tell(ws, this.retroState()); // …and the conference-room retro (seats + board) for Tsong Towers
+    // Tell them which island treasure chests they've already plundered (so those render emptied).
+    if (conn.pid) {
+      const pid = conn.pid;
+      getOpenedChests(pid).then((banked) => {
+        const opened: string[] = [];
+        for (const chest of banked) if (chest.startsWith('sea:')) {
+          this.seaChestsOpened.add(`${pid}:${chest}`);
+          opened.push(chest.slice(4));
+        }
+        this.tell(ws, { type: 'seaChests', opened });
+      }).catch((e) => console.error('seaChest load failed:', e));
+    }
+  }
+
+  /** Plunder a sea-island treasure chest: pay its coins once per account, then remember it forever. */
+  seaChest(ws: WebSocket, chest: string) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    const island = seaIslandByChest(chest);
+    if (!island) return;                                   // unknown island → ignore
+    const key = `${conn.pid}:sea:${chest}`;
+    if (this.seaChestsOpened.has(key)) return;             // already plundered → no re-farm
+    this.seaChestsOpened.add(key);
+    const pid = conn.pid, nick = conn.nickname;
+    this.housePay(pid, nick, island.coins)
+      .then(() => {
+        this.sendWallet(ws);
+        this.tell(ws, { type: 'seaChestOpened', chest, coins: island.coins });
+        this.notify(ws, `🏴‍☠️ Plundered ${island.name}: ${island.coins.toLocaleString()}🪙!`);
+        return addOpenedChests(pid, [`sea:${chest}`]);     // bank it permanently
+      })
+      .then(() => this.refreshNetWorth().catch(() => {}))
+      .catch((e) => { this.seaChestsOpened.delete(key); console.error('sea chest plunder failed:', e); });
+  }
+
+  // Bounty for sinking a hostile NPC ship. Enemy ships are simulated client-side (like townsfolk), so
+  // the kill is client-reported — same trust model as dungeon/mob kills — but rate-limited here so it
+  // can't be spammed into a coin faucet: at most one bounty every few seconds per account.
+  private lastSeaBountyAt = new Map<string, number>();
+  seaBounty(ws: WebSocket) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.pid || !conn.nickname) return;
+    if (!this.world.has(ws)) return;                       // must actually be out in the world
+    const now = Date.now();
+    if (now - (this.lastSeaBountyAt.get(conn.pid) ?? 0) < 3000) return; // ≤ 1 bounty / 3s
+    this.lastSeaBountyAt.set(conn.pid, now);
+    const pid = conn.pid, nick = conn.nickname;
+    const coins = 500 + Math.floor(Math.random() * 900);   // 500–1400🪙 a hull
+    this.housePay(pid, nick, coins)
+      .then(() => {
+        this.sendWallet(ws);
+        this.notify(ws, `🏴‍☠️ Enemy ship sunk — ${coins.toLocaleString()}🪙 bounty!`);
+        return this.refreshNetWorth().catch(() => {});
+      })
+      .catch((e) => console.error('sea bounty failed:', e));
   }
 
   /** Step a player out of the world map. */
