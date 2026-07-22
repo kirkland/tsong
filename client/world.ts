@@ -14773,6 +14773,7 @@ export function startWorld(net: WorldNet): void {
       safeStep('biome', () => updateBiome());
       safeStep('nearBuilding', () => updateNearBuilding());
       safeStep('smoking', () => updateSmoking());
+      safeStep('boulder', () => updateBoulder(now, dt));
       safeStep('sendMove', () => maybeSendMove(now));
 
       // show the touch fire button + weapon rack out in the open world (and in the office, where
@@ -14917,6 +14918,123 @@ export function startWorld(net: WorldNet): void {
       if (k >= 1) { m.spr.destroy(); skidMarks.splice(i, 1); continue; }
       if (k > 0.6) m.spr.setAlpha(0.5 * (1 - (k - 0.6) / 0.4)); // hold, then fade over the last 40%
     }
+  }
+
+  // --- THE BOULDER: a big dumb rock on the town grass that you can shove around, Sisyphus-style.
+  // Client-local like skid marks and pets — your boulder is yours alone — and it stays where you
+  // left it (localStorage). Real stick-slip friction: lean on it to build force while it creaks
+  // and refuses, feel static friction give way with a lurch, grind along at a fraction of walk
+  // speed while you keep pushing, and the moment you ease off it re-sticks. ---
+  const BOULDER_R = 24; // collision radius, world units
+  const BOULDER_BREAK_T = 0.8; // seconds of sustained shoving before static friction gives
+  const BOULDER_SPEED = 92; // terminal grind speed once it's moving (walking is 280)
+  const BOULDER_SPOTS = [{ x: 1200, y: 900 }, { x: 2800, y: 900 }, { x: 1660, y: 1000 }];
+  let bldX = 0, bldY = 0;
+  let bldSpr: Phaser.GameObjects.Image | null = null;
+  let bldShadow: Phaser.GameObjects.Image | null = null;
+  let bldPushT = 0; // continuous shove time — the static-friction force meter
+  let bldGrace = 0; // seconds since last contact (re-stick timer)
+  let bldVel = 0; // current grind speed
+  let bldMoving = false;
+  let bldStrainAt = 0, bldGrindAt = 0, bldMarkAt = 0, bldDustAt = 0;
+  (() => {
+    try {
+      const s = localStorage.getItem('tsong.world.boulder');
+      if (s) {
+        const p = JSON.parse(s);
+        if (typeof p.x === 'number' && typeof p.y === 'number') { bldX = p.x; bldY = p.y; return; }
+      }
+    } catch { /* fresh boulder */ }
+    const pick = BOULDER_SPOTS[Math.floor(Math.random() * BOULDER_SPOTS.length)];
+    bldX = pick.x + (Math.random() - 0.5) * 120;
+    bldY = pick.y + (Math.random() - 0.5) * 80;
+    if (WORLD_BUILDINGS.some((b) => pointInRect(bldX, bldY, b, BOULDER_R))) { bldX = pick.x; bldY = pick.y; }
+  })();
+  function saveBoulder() {
+    try { localStorage.setItem('tsong.world.boulder', JSON.stringify({ x: Math.round(bldX), y: Math.round(bldY) })); } catch { /* ok */ }
+  }
+  function boulderDust(n: number, dirX: number, dirY: number) {
+    const sc = petScene; if (!sc || smokePuffs.length > 90) return;
+    for (let i = 0; i < n; i++) {
+      const spr = sc.add.image(bldX + (Math.random() - 0.5) * BOULDER_R * 1.6, bldY + BOULDER_R * 0.5, 'w-smoke')
+        .setScale(0.5).setTint(0xa9906b).setAlpha(0.5).setDepth(bldY - 3);
+      smokePuffs.push({ spr, t: 0, max: 0.5 + Math.random() * 0.4,
+        vx: -dirX * 22 + (Math.random() - 0.5) * 30, vy: -dirY * 22 - 8 + (Math.random() - 0.5) * 20 });
+    }
+  }
+  function updateBoulder(now: number, dt: number) {
+    // The boulder lives on the town grass — it doesn't exist indoors, underground, or at sea.
+    if (inInterior || inDungeon || onIsland || boating) { bldSpr?.setVisible(false); bldShadow?.setVisible(false); return; }
+    const sc = petScene; if (!sc) return;
+    if (!bldSpr) {
+      if (!sc.textures.exists('w-boulder')) {
+        const g = sc.add.graphics();
+        const px = (x: number, y: number, w: number, h: number, c: number) => { g.fillStyle(c, 1); g.fillRect(x, y, w, h); };
+        g.fillStyle(0x2b2e33, 1); g.fillEllipse(13, 12, 26, 20); // dark silhouette
+        g.fillStyle(0x6e747c, 1); g.fillEllipse(13, 12, 22, 16); // granite body
+        g.fillStyle(0x8b929b, 1); g.fillEllipse(10, 9, 12, 8); // top-left light
+        g.fillStyle(0x51565d, 1); g.fillEllipse(15, 16, 16, 7); // bottom shade
+        px(6, 12, 6, 1, 0x3a3e44); px(11, 13, 1, 3, 0x3a3e44); px(16, 7, 1, 4, 0x3a3e44); // cracks
+        px(15, 8, 3, 1, 0x3a3e44);
+        px(4, 15, 3, 2, 0x5d7a45); px(18, 17, 4, 2, 0x5d7a45); px(9, 18, 2, 1, 0x5d7a45); // moss
+        g.generateTexture('w-boulder', 26, 22);
+        g.destroy();
+      }
+      bldShadow = sc.add.image(bldX, bldY + BOULDER_R * 0.55, 'w-shadow')
+        .setScale(TEXEL * 2.4, TEXEL * 1.2).setAlpha(0.35).setDepth(2);
+      bldSpr = sc.add.image(bldX, bldY, 'w-boulder').setScale(TEXEL).setOrigin(0.5, 0.72);
+    }
+    bldSpr.setVisible(true); bldShadow?.setVisible(true);
+
+    // Contact: are we leaning on it? On foot only — the rock ignores cars out of self-respect.
+    let pushX = 0, pushY = 0, contact = false;
+    if (!driving) {
+      const ddx = bldX - selfX, ddy = bldY - selfY;
+      const dist = Math.hypot(ddx, ddy), minD = R + BOULDER_R;
+      if (dist > 0.001 && dist < minD) {
+        pushX = ddx / dist; pushY = ddy / dist;
+        selfX = bldX - pushX * minD; // the rim carries you — solid, no clipping in
+        selfY = bldY - pushY * minD;
+        contact = true;
+      }
+    }
+
+    if (contact) {
+      bldGrace = 0;
+      bldPushT += dt;
+      if (bldPushT < BOULDER_BREAK_T) {
+        // Static friction: it does not move. It creaks. You strain. Dust trickles.
+        if (now - bldStrainAt > 260) { bldStrainAt = now; tone(88, 0.14, 'sawtooth', 0.1, 70); }
+        if (now - bldDustAt > 300) { bldDustAt = now; boulderDust(1, pushX, pushY); }
+        bldVel = 0;
+      } else {
+        if (!bldMoving) { bldMoving = true; bldVel = 46; noise(0.3, 0.34, 260); boulderDust(6, pushX, pushY); } // breakaway lurch
+        bldVel = Math.min(BOULDER_SPEED, bldVel + 150 * dt);
+        const m = resolveCollisions(bldX + pushX * bldVel * dt, bldY + pushY * bldVel * dt, BOULDER_R);
+        bldX = m.x; bldY = m.y;
+        if (m.hit) {
+          // Shoved into a wall/pond/world edge: a dead thud, and it re-sticks.
+          tone(72, 0.16, 'square', 0.2, 40); boulderDust(3, pushX, pushY);
+          bldMoving = false; bldVel = 0; bldPushT = 0; saveBoulder();
+        } else {
+          if (now - bldGrindAt > 130) { bldGrindAt = now; noise(0.16, 0.1 + (bldVel / BOULDER_SPEED) * 0.12, 240); }
+          if (now - bldMarkAt > 60) { bldMarkAt = now; layRubber(bldX - pushX * BOULDER_R * 0.4, bldY + BOULDER_R * 0.45, Math.atan2(pushY, pushX)); }
+          if (now - bldDustAt > 90) { bldDustAt = now; boulderDust(1, pushX, pushY); }
+        }
+      }
+    } else {
+      bldGrace += dt;
+      if (bldGrace > 0.25 && (bldPushT > 0 || bldMoving)) {
+        if (bldMoving) { tone(80, 0.18, 'square', 0.16, 44); boulderDust(2, 0, 0); saveBoulder(); } // settle thud
+        bldMoving = false; bldVel = 0; bldPushT = 0;
+      }
+    }
+
+    // Strain wobble while force builds; settled otherwise. Depth sorts by the rock's visual base.
+    const strain = contact && !bldMoving && bldPushT > 0.15 ? Math.min(1, bldPushT / BOULDER_BREAK_T) : 0;
+    bldSpr.setPosition(bldX + (Math.random() - 0.5) * 1.6 * strain, bldY + (Math.random() - 0.5) * strain)
+      .setDepth(bldY + BOULDER_R * 0.5);
+    bldShadow?.setPosition(bldX, bldY + BOULDER_R * 0.55);
   }
 
   // --- CAR CRASH FIREBALL: a one-shot burst of additive fire particles, a bright central flash, and

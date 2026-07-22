@@ -23,6 +23,17 @@ const TRAVEL = 168; // how far it slides down to seat
 const SLOT_Y = 468; // top edge of the reactor port panel
 const LOCK_DEG = 90; // clockwise twist required
 const CROSS_MIN = -18; // how far the wrong way it'll go before grinding
+// Weight model: the core never tracks the pointer 1:1 — it chases it (lag), tops out
+// at a terminal drag speed (clamp), and the last inch before the seat fights back
+// until the latch grabs it and yanks it home.
+const LAG_K = 6; // how hard the core chases the pointer (lower = heavier)
+const MAX_V = 0.75; // terminal insertion speed, depth-units/s
+const RAMP_START = 0.86; // where seating resistance begins
+const RAMP_DRAG = 0.4; // speed multiplier inside the resistance zone
+const SNAP_AT = 0.945; // past this the latch pulls it the rest of the way
+const TWIST_LAG = 7; // handle chase rate
+const TWIST_MAX_V = 140; // terminal twist speed, deg/s
+const LOCK_SNAP = 82; // degrees at which the lock mechanism grabs the handle
 
 let active = false;
 
@@ -109,6 +120,12 @@ function powerUpWhine(): void {
   sweep('sine', 1600, 1602, 0.6, 0.05, 0.9); // steady-state shimmer
 }
 
+function strainCreak(): void {
+  // The sound of shoving against something that does not want to move.
+  sweep('sawtooth', 95, 68, 0.16, 0.09);
+  noiseBurst('bandpass', 420, 0.14, 0.1);
+}
+
 function grind(): void {
   sweep('sawtooth', 70, 55, 0.22, 0.3);
   noiseBurst('bandpass', 240, 0.22, 0.35);
@@ -162,8 +179,11 @@ export function openPowerCore(opts: PowerCoreOpts): void {
   window.addEventListener('resize', resize);
 
   let phase: 'insert' | 'twist' | 'locked' | 'closing' = 'insert';
-  let depth = 0; // 0 hovering → 1 fully seated
-  let angle = 0; // handle rotation in degrees, +clockwise
+  let depth = 0; // 0 hovering → 1 fully seated (actual position)
+  let pushTarget = 0; // where the player is trying to shove it (may overshoot past 1)
+  let angle = 0; // handle rotation in degrees, +clockwise (actual)
+  let targetAngle = 0; // where the player's hand is dragging the handle
+  let strainT = 0; // throttle for the straining-creak sound
   let grabbed = false;
   let twisting = false;
   let grabDY = 0;
@@ -261,6 +281,8 @@ export function openPowerCore(opts: PowerCoreOpts): void {
   function seat(): void {
     depth = 1;
     phase = 'twist';
+    targetAngle = 0;
+    lastClickDeg = 0;
     shake = 9;
     thunk();
     spawnSparks(CX, SLOT_Y, 10, ['#9fb6c9', '#e0ecf5']);
@@ -288,7 +310,9 @@ export function openPowerCore(opts: PowerCoreOpts): void {
       popOut();
       phase = 'insert';
       angle = 0;
+      targetAngle = 0;
       depth = 0.9; // launched back out; loop's spring-back handles the rest
+      pushTarget = 0;
       grabbed = false;
       twisting = false;
       crossThreads = 0;
@@ -333,12 +357,9 @@ export function openPowerCore(opts: PowerCoreOpts): void {
   function onPointerMove(e: PointerEvent): void {
     const p = toLogical(e);
     if (grabbed && phase === 'insert') {
-      const prev = depth;
-      depth = Math.min(1, Math.max(0, (p.y - grabDY - REST_BOTTOM) / TRAVEL));
-      if (scrapeGain && depth !== prev) {
-        scrapeGain.gain.value = Math.min(0.3, Math.abs(depth - prev) * 14);
-      }
-      if (depth >= 1) { grabbed = false; seat(); }
+      // The pointer only sets where you're *trying* to put it; the core itself
+      // chases that point in the step loop, with lag and a terminal speed.
+      pushTarget = Math.min(1.15, Math.max(0, (p.y - grabDY - REST_BOTTOM) / TRAVEL));
     } else if (twisting && phase === 'twist') {
       const d = (p.x - lastPX) * 0.55;
       lastPX = p.x;
@@ -354,15 +375,9 @@ export function openPowerCore(opts: PowerCoreOpts): void {
 
   function applyTwist(d: number): void {
     if (phase !== 'twist') return;
-    const prev = angle;
-    angle = Math.min(LOCK_DEG, Math.max(CROSS_MIN, angle + d));
-    // Ratchet clicks every 15 degrees of forward progress.
-    if (Math.floor(angle / 15) > Math.floor(lastClickDeg / 15) && angle > prev) {
-      ratchetClick();
-      lastClickDeg = angle;
-    }
-    if (angle <= CROSS_MIN && d < 0 && crossFlash <= 0) crossThread();
-    if (angle >= LOCK_DEG) lock();
+    // Player input moves the hand; the handle itself catches up in the step loop.
+    targetAngle = Math.min(LOCK_DEG + 20, Math.max(CROSS_MIN, targetAngle + d));
+    if (targetAngle <= CROSS_MIN && d < 0 && crossFlash <= 0) crossThread();
   }
 
   function onKeyDown(e: KeyboardEvent): void {
@@ -425,16 +440,41 @@ export function openPowerCore(opts: PowerCoreOpts): void {
     if (masterGain) masterGain.gain.value = opts.muted() ? 0 : 1;
     if (scrapeGain) scrapeGain.gain.value *= 0.8; // scrape dies out when the core stops moving
 
-    // Keyboard controls (accessibility + lazy-thumb mode).
-    if (phase === 'insert' && (held.has('arrowdown') || held.has('s'))) {
-      depth = Math.min(1, depth + dt * 0.85);
-      if (scrapeGain) scrapeGain.gain.value = 0.12;
-      if (depth >= 1) seat();
-    } else if (phase === 'insert' && !grabbed && depth > 0) {
-      depth = Math.max(0, depth - dt * 2.2); // springs back if you let go
-      if (scrapeGain) scrapeGain.gain.value = 0;
-    } else if (phase === 'twist' && (held.has('arrowright') || held.has('d'))) {
-      applyTwist(dt * 120);
+    // --- weight simulation ---
+    if (phase === 'insert') {
+      const pushingKey = held.has('arrowdown') || held.has('s');
+      if (pushingKey) pushTarget = Math.min(1.15, Math.max(pushTarget, depth) + dt * 0.9);
+      strainT += dt;
+      if (grabbed || pushingKey) {
+        // Chase the hand: lag toward pushTarget, clamped to a terminal speed.
+        const err = pushTarget - depth;
+        let step = Math.max(-MAX_V, Math.min(MAX_V, err * LAG_K)) * dt;
+        if (depth > RAMP_START && step > 0) {
+          step *= RAMP_DRAG; // the last inch fights back
+          if (err > 0.08 && strainT > 0.24) { strainCreak(); strainT = 0; }
+        }
+        depth = Math.max(0, depth + step);
+        if (scrapeGain && Math.abs(step) > 0.0004) {
+          scrapeGain.gain.value = Math.min(0.3, Math.abs(step / dt) * 0.35);
+        }
+        if (depth >= SNAP_AT) { grabbed = false; seat(); } // the latch grabs it
+      } else if (depth > 0) {
+        depth = Math.max(0, depth - dt * 2.2); // springs back if you let go
+        pushTarget = 0;
+      }
+    } else if (phase === 'twist') {
+      if (held.has('arrowright') || held.has('d')) applyTwist(dt * 120);
+      // The handle is stiff: it chases your hand, never keeps up with a yank.
+      const err = targetAngle - angle;
+      const prev = angle;
+      angle += Math.max(-TWIST_MAX_V, Math.min(TWIST_MAX_V, err * TWIST_LAG)) * dt;
+      angle = Math.max(CROSS_MIN, angle);
+      if (angle < lastClickDeg) lastClickDeg = angle; // backing off re-arms the ratchet
+      if (angle > prev && Math.floor(angle / 15) > Math.floor(lastClickDeg / 15)) {
+        ratchetClick();
+        lastClickDeg = angle;
+      }
+      if (angle >= LOCK_SNAP) lock(); // close enough — the mechanism yanks it home
     }
 
     if (whine && whineGain) {
