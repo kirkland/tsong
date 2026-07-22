@@ -1175,7 +1175,10 @@ export interface TugStateMsg {
 // The big dumb rock on the town grass. One boulder, shared by everyone: whoever is shoving it
 // runs the stick-slip physics locally and streams its position; the server clamps (in-world
 // pusher, standing at the rock, nudges only — no teleports) and fans it out to everyone else.
-export const BOULDER_HOME = { x: 2800, y: 900 }; // where it rests until somebody shoves it
+// Home: open ground a short walk south of spawn — verified clear of every building footprint
+// (the previous home, 2800,900, was inside the Hall of Fame, which made for a very well-hidden rock).
+export const BOULDER_HOME = { x: 1660, y: 1000 };
+export const BOULDER_R = 24; // collision radius, world units (shared: client physics + server placement guard)
 
 export interface WorldBoulderMsg {
   type: 'worldBoulder';

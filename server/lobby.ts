@@ -124,6 +124,7 @@ import {
   WORLD,
   WORLD_BOUNDS,
   BOULDER_HOME,
+  BOULDER_R,
   type WorldWeapon,
   type WorldFx,
   WORLD_BUILDINGS,
@@ -2828,9 +2829,16 @@ export class Lobby {
     return out;
   }
 
+  /** A boulder position is bogus if it overlaps any building footprint — honest clients can't
+   *  produce one (their collision pass prevents it), and a rock inside a wall is invisible. */
+  private static boulderBlocked(x: number, y: number): boolean {
+    return WORLD_BUILDINGS.some((b) =>
+      x > b.x - BOULDER_R && x < b.x + b.w + BOULDER_R && y > b.y - BOULDER_R && y < b.y + b.h + BOULDER_R);
+  }
+
   /** The town boulder: whoever's shoving it streams positions; everyone else watches it roll.
    *  Trust, but clamp: the sender must be in the world, standing at the rock, and moving it a
-   *  nudge at a time — anything else (teleports, remote shoves) is dropped on the floor. */
+   *  nudge at a time — anything else (teleports, remote shoves, in-wall spots) is dropped. */
   boulderMove(ws: WebSocket, x: number, y: number) {
     const pos = this.world.positionOf(ws);
     if (!pos) return; // not in the world → no hands on the rock
@@ -2838,6 +2846,7 @@ export class Lobby {
     if (now - this.lastBoulderMoveAt < 60) return; // ~16 Hz cap across all pushers
     if (Math.hypot(pos.x - this.boulderX, pos.y - this.boulderY) > 160) return; // not at the rock
     if (Math.hypot(x - this.boulderX, y - this.boulderY) > 90) return; // a shove, not a teleport
+    if (Lobby.boulderBlocked(x, y)) return; // never into (or under) a building
     this.boulderX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, x));
     this.boulderY = Math.max(WORLD_BOUNDS.minY, Math.min(WORLD_BOUNDS.maxY, y));
     this.lastBoulderMoveAt = now;
@@ -8637,7 +8646,9 @@ export class Lobby {
     this.winnerName = s.winnerName ?? null;
     this.overHandled = !!s.overHandled;
     this.chatLog = Array.isArray(s.chatLog) ? s.chatLog : [];
-    if (s.boulder && Number.isFinite(s.boulder.x) && Number.isFinite(s.boulder.y)) {
+    if (s.boulder && Number.isFinite(s.boulder.x) && Number.isFinite(s.boulder.y)
+        && !Lobby.boulderBlocked(s.boulder.x, s.boulder.y)) {
+      // (The blocked-check also re-homes a rock a pre-fix snapshot left inside the Hall of Fame.)
       this.boulderX = s.boulder.x;
       this.boulderY = s.boulder.y;
     }

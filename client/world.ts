@@ -32,6 +32,7 @@ import {
   WORLD_AVATAR,
   WORLD_BUILDINGS,
   BOULDER_HOME,
+  BOULDER_R,
   WORLD_PARCELS,
   ROBVILLE_BULBS,
   PARCEL_PRICE,
@@ -4070,6 +4071,7 @@ export function startWorld(net: WorldNet): void {
     }
     ctx.fillStyle = '#ff5a5a';                            // enemy ships (live positions — a threat readout)
     for (const e of enemyShips) { ctx.beginPath(); ctx.arc(X(e.x), Y(e.y), full ? 3.5 : 2.2, 0, Math.PI * 2); ctx.fill(); }
+    mark(bldX, bldY, '🪨', full ? Math.max(8, Math.round(iconPx * 0.8)) : 10); // the town boulder (live, shared)
     if (full) {
       ctx.fillStyle = '#fff'; ctx.font = '700 13px system-ui';
       ctx.fillText('🏘️ ROBVILLE', X(3850), Y(1550));
@@ -15155,7 +15157,6 @@ export function startWorld(net: WorldNet): void {
   // Real stick-slip friction: lean on it to build force while it creaks and refuses, feel
   // static friction give way with a lurch, grind along at a fraction of walk speed while you
   // keep pushing, and the moment you ease off it re-sticks. ---
-  const BOULDER_R = 24; // collision radius, world units
   const BOULDER_BREAK_T = 0.8; // seconds of sustained shoving before static friction gives
   const BOULDER_SPEED = 92; // terminal grind speed once it's moving (walking is 280)
   let bldX = BOULDER_HOME.x, bldY = BOULDER_HOME.y; // rendered/collided position
