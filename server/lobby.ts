@@ -123,6 +123,7 @@ import {
   FAST_SELL_BRACKETS,
   WORLD,
   WORLD_BOUNDS,
+  BOULDER_HOME,
   type WorldWeapon,
   type WorldFx,
   WORLD_BUILDINGS,
@@ -432,6 +433,7 @@ export interface LobbySnapshot {
   winnerName: string | null;
   overHandled: boolean;
   chatLog: ChatLine[];
+  boulder?: { x: number; y: number }; // where the town boulder was left (optional: older snapshots lack it)
 }
 
 // --- Season Pass ------------------------------------------------------------------
@@ -647,6 +649,13 @@ export class Lobby {
   private tugTeams = new Map<WebSocket, { side: TugSide; lastPullAt: number }>();
   private tugTimer: ReturnType<typeof setInterval> | null = null; // runs whenever phase !== 'idle'
   private tugDirty = false; // pull-broadcast throttle (heaves arrive far faster than 10 Hz)
+
+  // --- The Boulder — one shared rock for the whole town ---
+  // The active pusher runs the stick-slip physics client-side and streams positions here; the
+  // server is a clamp + fan-out (and the position survives deploys via the snapshot).
+  private boulderX = BOULDER_HOME.x;
+  private boulderY = BOULDER_HOME.y;
+  private lastBoulderMoveAt = 0; // stream rate cap
 
   // --- Team Retro — the standing retro in Tsong Towers' conference room ---
   // One shared board; seats keyed by pid so a reconnect (new socket, same identity) doesn't
@@ -2374,6 +2383,7 @@ export class Lobby {
     this.sendLand(ws); // push the Robville land book so lots show their owners/for-sale signs
     this.tell(ws, this.retroState()); // …and the conference-room retro (seats + board) for Tsong Towers
     if (this.tugTeams.size > 0) this.tell(ws, this.tugStateMsg()); // …and any tug of war at the pond
+    this.tell(ws, { type: 'worldBoulder', x: Math.round(this.boulderX), y: Math.round(this.boulderY) }); // …and where the boulder ended up
     // Tell them which island treasure chests they've already plundered (so those render emptied).
     if (conn.pid) {
       const pid = conn.pid;
@@ -2816,6 +2826,24 @@ export class Lobby {
       if (c) out.push({ id: c.id, name: c.nickname || 'anon', color: c.color });
     }
     return out;
+  }
+
+  /** The town boulder: whoever's shoving it streams positions; everyone else watches it roll.
+   *  Trust, but clamp: the sender must be in the world, standing at the rock, and moving it a
+   *  nudge at a time — anything else (teleports, remote shoves) is dropped on the floor. */
+  boulderMove(ws: WebSocket, x: number, y: number) {
+    const pos = this.world.positionOf(ws);
+    if (!pos) return; // not in the world → no hands on the rock
+    const now = Date.now();
+    if (now - this.lastBoulderMoveAt < 60) return; // ~16 Hz cap across all pushers
+    if (Math.hypot(pos.x - this.boulderX, pos.y - this.boulderY) > 160) return; // not at the rock
+    if (Math.hypot(x - this.boulderX, y - this.boulderY) > 90) return; // a shove, not a teleport
+    this.boulderX = Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, x));
+    this.boulderY = Math.max(WORLD_BOUNDS.minY, Math.min(WORLD_BOUNDS.maxY, y));
+    this.lastBoulderMoveAt = now;
+    const data = JSON.stringify({ type: 'worldBoulder', x: Math.round(this.boulderX), y: Math.round(this.boulderY) });
+    // The pusher owns its local sim — echoing back would only fight it. Everyone else syncs.
+    for (const sock of this.world.sockets()) if (sock !== ws && sock.readyState === sock.OPEN) sock.send(data);
   }
 
   private tugStateMsg(): TugStateMsg {
@@ -8586,6 +8614,7 @@ export class Lobby {
       winnerName: this.winnerName,
       overHandled: this.overHandled,
       chatLog: this.chatLog,
+      boulder: { x: Math.round(this.boulderX), y: Math.round(this.boulderY) },
     };
   }
 
@@ -8608,6 +8637,10 @@ export class Lobby {
     this.winnerName = s.winnerName ?? null;
     this.overHandled = !!s.overHandled;
     this.chatLog = Array.isArray(s.chatLog) ? s.chatLog : [];
+    if (s.boulder && Number.isFinite(s.boulder.x) && Number.isFinite(s.boulder.y)) {
+      this.boulderX = s.boulder.x;
+      this.boulderY = s.boulder.y;
+    }
     this.syncPowerupPool();
     // Give seated players a window to reconnect and reclaim their seats; if they don't,
     // expireResume() abandons the resume so the room isn't wedged on a frozen match.

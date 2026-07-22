@@ -31,6 +31,7 @@ import {
   WORLD,
   WORLD_AVATAR,
   WORLD_BUILDINGS,
+  BOULDER_HOME,
   WORLD_PARCELS,
   ROBVILLE_BULBS,
   PARCEL_PRICE,
@@ -264,6 +265,7 @@ export interface WorldNet {
   tugJoin(side: TugSide): void;  // grab the rope on that bank of the fishing pond
   tugPull(): void;               // one heave (a click during the live pull)
   tugLeave(): void;              // let go of the rope
+  boulderMove(x: number, y: number): void; // stream the town boulder's position while we're the one shoving it
   // --- Team Retro (Tsong Towers conference room) — chair presence + the shared sticky board ---
   selfPid(): string;             // our stable identity (matches RetroNote.pid / RetroSeat.pid)
   retroSit(chair: number): void;    // take conference chair 0-7 (server rejects a taken one)
@@ -367,6 +369,7 @@ interface Controller {
   feedChat(line: ChatLine): void; // a new chat line (mirrors the main chat into the side feed)
   feedRoadRage(active: boolean, endsAt: number, standings: { name: string; kills: number }[]): void;
   feedTug(msg: TugStateMsg): void; // the fishing-pond tug of war changed (roster / rope / finale)
+  feedBoulder(x: number, y: number): void; // the shared town boulder moved (or initial sync on enter)
   feedRetro(state: RetroStateMsg): void; // conference-room retro board + seat roster changed
   feedSmokes(count: number): void; // a pack of Tsong Lights arrived — add to the pouch
   feedMcFood(item: string, granted: boolean, bonus?: number): void;
@@ -603,6 +606,11 @@ export function feedRoadRage(active: boolean, endsAt: number, standings: { name:
 /** Handle a fishing-pond tug-of-war broadcast. */
 export function feedTug(msg: TugStateMsg): void {
   controller?.feedTug(msg);
+}
+
+/** Handle a shared-boulder position broadcast. */
+export function feedBoulder(x: number, y: number): void {
+  controller?.feedBoulder(x, y);
 }
 
 /** Handle a McDonald's food result from the server. */
@@ -15142,37 +15150,35 @@ export function startWorld(net: WorldNet): void {
   }
 
   // --- THE BOULDER: a big dumb rock on the town grass that you can shove around, Sisyphus-style.
-  // Client-local like skid marks and pets — your boulder is yours alone — and it stays where you
-  // left it (localStorage). Real stick-slip friction: lean on it to build force while it creaks
-  // and refuses, feel static friction give way with a lurch, grind along at a fraction of walk
-  // speed while you keep pushing, and the moment you ease off it re-sticks. ---
+  // ONE boulder, shared by everyone (server-synced, like tug of war): whoever has hands on it
+  // runs the stick-slip physics locally and streams positions; everyone else watches it roll.
+  // Real stick-slip friction: lean on it to build force while it creaks and refuses, feel
+  // static friction give way with a lurch, grind along at a fraction of walk speed while you
+  // keep pushing, and the moment you ease off it re-sticks. ---
   const BOULDER_R = 24; // collision radius, world units
   const BOULDER_BREAK_T = 0.8; // seconds of sustained shoving before static friction gives
   const BOULDER_SPEED = 92; // terminal grind speed once it's moving (walking is 280)
-  const BOULDER_SPOTS = [{ x: 1200, y: 900 }, { x: 2800, y: 900 }, { x: 1660, y: 1000 }];
-  let bldX = 0, bldY = 0;
+  let bldX = BOULDER_HOME.x, bldY = BOULDER_HOME.y; // rendered/collided position
+  let bldTX = BOULDER_HOME.x, bldTY = BOULDER_HOME.y; // server-synced target (a remote pusher's stream)
   let bldSpr: Phaser.GameObjects.Image | null = null;
   let bldShadow: Phaser.GameObjects.Image | null = null;
   let bldPushT = 0; // continuous shove time — the static-friction force meter
   let bldGrace = 0; // seconds since last contact (re-stick timer)
   let bldVel = 0; // current grind speed
   let bldMoving = false;
-  let bldStrainAt = 0, bldGrindAt = 0, bldMarkAt = 0, bldDustAt = 0;
-  (() => {
-    try {
-      const s = localStorage.getItem('tsong.world.boulder');
-      if (s) {
-        const p = JSON.parse(s);
-        if (typeof p.x === 'number' && typeof p.y === 'number') { bldX = p.x; bldY = p.y; return; }
-      }
-    } catch { /* fresh boulder */ }
-    const pick = BOULDER_SPOTS[Math.floor(Math.random() * BOULDER_SPOTS.length)];
-    bldX = pick.x + (Math.random() - 0.5) * 120;
-    bldY = pick.y + (Math.random() - 0.5) * 80;
-    if (WORLD_BUILDINGS.some((b) => pointInRect(bldX, bldY, b, BOULDER_R))) { bldX = pick.x; bldY = pick.y; }
-  })();
-  function saveBoulder() {
-    try { localStorage.setItem('tsong.world.boulder', JSON.stringify({ x: Math.round(bldX), y: Math.round(bldY) })); } catch { /* ok */ }
+  let bldStrainAt = 0, bldGrindAt = 0, bldMarkAt = 0, bldDustAt = 0, bldSendAt = 0;
+  function feedBoulderPos(x: number, y: number) {
+    bldTX = x; bldTY = y;
+    // While OUR hands are on the rock, our sim is the truth — the server never echoes our own
+    // stream back, so anything arriving here mid-push is a second pusher; ignore it and let
+    // last-write-wins sort the rock out once somebody lets go.
+    if (bldPushT > 0 || bldMoving) return;
+    if (Math.hypot(x - bldX, y - bldY) > 400) { bldX = x; bldY = y; } // initial sync / big correction → snap
+  }
+  function sendBoulder(now: number, force = false) {
+    if (!force && now - bldSendAt < 100) return; // ~10 Hz stream while grinding
+    bldSendAt = now;
+    net.boulderMove(Math.round(bldX), Math.round(bldY));
   }
   function boulderDust(n: number, dirX: number, dirY: number) {
     const sc = petScene; if (!sc || smokePuffs.length > 90) return;
@@ -15233,11 +15239,13 @@ export function startWorld(net: WorldNet): void {
         bldVel = Math.min(BOULDER_SPEED, bldVel + 150 * dt);
         const m = resolveCollisions(bldX + pushX * bldVel * dt, bldY + pushY * bldVel * dt, BOULDER_R);
         bldX = m.x; bldY = m.y;
+        bldTX = bldX; bldTY = bldY; // we're the pusher: our sim leads, the stream follows
         if (m.hit) {
           // Shoved into a wall/pond/world edge: a dead thud, and it re-sticks.
           tone(72, 0.16, 'square', 0.2, 40); boulderDust(3, pushX, pushY);
-          bldMoving = false; bldVel = 0; bldPushT = 0; saveBoulder();
+          bldMoving = false; bldVel = 0; bldPushT = 0; sendBoulder(now, true);
         } else {
+          sendBoulder(now);
           if (now - bldGrindAt > 130) { bldGrindAt = now; noise(0.16, 0.1 + (bldVel / BOULDER_SPEED) * 0.12, 240); }
           if (now - bldMarkAt > 60) { bldMarkAt = now; layRubber(bldX - pushX * BOULDER_R * 0.4, bldY + BOULDER_R * 0.45, Math.atan2(pushY, pushX)); }
           if (now - bldDustAt > 90) { bldDustAt = now; boulderDust(1, pushX, pushY); }
@@ -15246,8 +15254,20 @@ export function startWorld(net: WorldNet): void {
     } else {
       bldGrace += dt;
       if (bldGrace > 0.25 && (bldPushT > 0 || bldMoving)) {
-        if (bldMoving) { tone(80, 0.18, 'square', 0.16, 44); boulderDust(2, 0, 0); saveBoulder(); } // settle thud
+        if (bldMoving) { tone(80, 0.18, 'square', 0.16, 44); boulderDust(2, 0, 0); sendBoulder(now, true); } // settle thud + final position
         bldMoving = false; bldVel = 0; bldPushT = 0;
+      }
+      // Somebody ELSE is shoving it: roll toward their streamed position with the same grind,
+      // dust, and scrape trail — just softer, because it's their rock problem, not ours.
+      const rdx = bldTX - bldX, rdy = bldTY - bldY;
+      const rd = Math.hypot(rdx, rdy);
+      if (rd > 0.5) {
+        const sp = Math.min(rd * 8, BOULDER_SPEED * 1.4);
+        bldX += (rdx / rd) * sp * dt;
+        bldY += (rdy / rd) * sp * dt;
+        if (now - bldGrindAt > 150) { bldGrindAt = now; noise(0.14, 0.07, 240); }
+        if (now - bldMarkAt > 70) { bldMarkAt = now; layRubber(bldX, bldY + BOULDER_R * 0.45, Math.atan2(rdy, rdx)); }
+        if (now - bldDustAt > 130) { bldDustAt = now; boulderDust(1, rdx / rd, rdy / rd); }
       }
     }
 
@@ -21645,6 +21665,7 @@ export function startWorld(net: WorldNet): void {
       updateHelp();
     },
     feedTug(msg) { feedTugState(msg); },
+    feedBoulder(x, y) { feedBoulderPos(x, y); },
     feedRoadRage(active: boolean, endsAt: number, standings: { name: string; kills: number }[]) {
       const starting = active && !rrActive;
       rrActive = active; rrEndsAt = endsAt; rrStandings = standings;

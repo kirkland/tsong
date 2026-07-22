@@ -773,6 +773,9 @@ wss.on('connection', (ws: WebSocket, req) => {
       case 'tugLeave':
         lobby.tugLeave(ws);
         break;
+      case 'boulderMove':
+        if (Number.isFinite(msg.x) && Number.isFinite(msg.y)) lobby.boulderMove(ws, msg.x, msg.y);
+        break;
       case 'buySmokes':
         lobby.buySmokes(ws);
         break;

@@ -1171,6 +1171,18 @@ export interface TugStateMsg {
   winner?: TugSide | null; // done only; null = a dead-even bell — the rope snaps and dunks everyone
 }
 
+// --- The Boulder ----------------------------------------------------------------------------
+// The big dumb rock on the town grass. One boulder, shared by everyone: whoever is shoving it
+// runs the stick-slip physics locally and streams its position; the server clamps (in-world
+// pusher, standing at the rock, nudges only — no teleports) and fans it out to everyone else.
+export const BOULDER_HOME = { x: 2800, y: 900 }; // where it rests until somebody shoves it
+
+export interface WorldBoulderMsg {
+  type: 'worldBoulder';
+  x: number;
+  y: number;
+}
+
 // A player fired a weapon from (x,y) heading at angle a — fanned out so everyone watches the shot.
 // Damage is authoritative on the firer and arrives separately as a WorldBoomMsg; what receivers
 // draw from this message is purely cosmetic.
@@ -1383,6 +1395,7 @@ export type ClientMsg =
   | { type: 'tugJoin'; side: TugSide } // grab the tug-of-war rope on that bank of the fishing pond
   | { type: 'tugPull' } // one heave on the rope (a click during the live pull; rate-limited server-side)
   | { type: 'tugLeave' } // let go of the rope / step off the bank
+  | { type: 'boulderMove'; x: number; y: number } // we're shoving the town boulder — stream where it is (server clamps + rebroadcasts)
   | { type: 'buySmokes' } // buy a pack of Tsong Lights at the General Store (server charges SMOKES_COST → House)
   | { type: 'smoked' }    // lit a cigarette — server applies a capped, rate-limited cortisol dip (one per ~20s)
   // --- Team Retro (Tsong Towers conference room) ---
@@ -1995,6 +2008,7 @@ export type ServerMsg =
   | WorldRocketMsg
   | WorldRoadRageMsg
   | TugStateMsg
+  | WorldBoulderMsg
   | HouseMsg
   | HouseStateMsg
   | NetizenInfoMsg
