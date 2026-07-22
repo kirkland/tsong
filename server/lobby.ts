@@ -160,6 +160,7 @@ import { blendElo, perPointProb, liveOdds } from './odds';
 import { READY_TIMEOUT, CAPTURE_TIMEOUT, TICK_MS, PINATA, SECTORS, NETIZEN_CHALLENGE_MAX_FRAC, NETIZEN_CHALLENGE_HARDEST_REACT, NETIZEN_CHALLENGE_HARDEST_ERROR, NETIZEN_CHALLENGE_EASIEST_REACT, NETIZEN_CHALLENGE_EASIEST_ERROR, DUNGEON_CHEST_CONTENTS, DUNGEON_TIER_COINS, DUNGEON_FLOOR_TIERS } from '../shared/types';
 import { WORLD_PARCELS, BANK_PARCEL_CAP, PARCEL_PRICE, LandParcelView, WORLD_SAY_MAX, HOUSE_BY_ID, seaIslandByChest } from '../shared/types';
 import { RAID_ARENA, RAID_PLATFORM, RAID_REWARD, RAID_MIN_PLAYERS, RAID_PET, type RaidPhase, type RaidCastMsg } from '../shared/types';
+import { TUG_GATHER_MS, TUG_WIN_OFFSET, TUG_PULL_STEP, TUG_MAX_MS, TUG_PRIZE, TUG_TEAM_CAP, type TugSide, type TugPhase, type TugPuller, type TugStateMsg } from '../shared/types';
 
 // A reaction is valid if it's the ball sentinel or a short string made only of
 // emoji code points (pictographs, components, ZWJ, variation selectors, flags).
@@ -633,6 +634,19 @@ export class Lobby {
   private rrEndsAt = 0;
   private rrKills = new Map<string, { name: string; kills: number }>(); // pid → stats
   private rrCooldownUntil = 0; // prevent back-to-back events
+
+  // --- Tug of War — the fishing pond's shore-vs-shore mash-off ---
+  // idle = rope on the ground (either bank may be partially manned, waiting for an opponent);
+  // gather = both banks manned, countdown running; live = clicking; done = finale (roster frozen
+  // so clients can animate the losing team's dunk), auto-resets a few seconds later.
+  private tugPhase: TugPhase = 'idle';
+  private tugStartsAt = 0; // gather → live at this ms epoch
+  private tugEndsAt = 0;   // live time-limit bell
+  private tugOffset = 0;   // rope offset: negative = pulled WEST (west winning), positive = EAST
+  private tugWinner: TugSide | null = null; // set for the 'done' finale broadcast
+  private tugTeams = new Map<WebSocket, { side: TugSide; lastPullAt: number }>();
+  private tugTimer: ReturnType<typeof setInterval> | null = null; // runs whenever phase !== 'idle'
+  private tugDirty = false; // pull-broadcast throttle (heaves arrive far faster than 10 Hz)
 
   // --- Team Retro — the standing retro in Tsong Towers' conference room ---
   // One shared board; seats keyed by pid so a reconnect (new socket, same identity) doesn't
@@ -2359,6 +2373,7 @@ export class Lobby {
     this.tell(ws, { type: 'world', avatars: this.worldAvatars() });
     this.sendLand(ws); // push the Robville land book so lots show their owners/for-sale signs
     this.tell(ws, this.retroState()); // …and the conference-room retro (seats + board) for Tsong Towers
+    if (this.tugTeams.size > 0) this.tell(ws, this.tugStateMsg()); // …and any tug of war at the pond
     // Tell them which island treasure chests they've already plundered (so those render emptied).
     if (conn.pid) {
       const pid = conn.pid;
@@ -2419,6 +2434,7 @@ export class Lobby {
   /** Step a player out of the world map. */
   worldLeave(ws: WebSocket) {
     this.retroStand(ws); // leaving the World vacates your conference chair (if this socket held one)
+    this.tugLeave(ws);   // …and lets go of the tug-of-war rope
     this.world.leave(ws);
   }
 
@@ -2672,6 +2688,152 @@ export class Lobby {
     const msg = JSON.stringify({ type: 'worldRoadRage', active: this.rrActive, endsAt: this.rrEndsAt, standings });
     // Send to ALL connected clients, not just world sockets — everyone sees the HUD.
     for (const sock of this.conns.keys()) if (sock.readyState === sock.OPEN) sock.send(msg);
+  }
+
+  // --- Tug of War (the fishing pond) --------------------------------------------------------
+
+  /** Grab the rope on `side`'s bank. Joining is open right up until the finale — latecomers can
+   *  pile onto a live pull (that's tug of war: recruit or lose). Re-joining switches banks, but
+   *  only before the rope goes taut. */
+  tugJoin(ws: WebSocket, side: TugSide) {
+    const conn = this.conns.get(ws);
+    if (!conn || !conn.nickname || !this.world.has(ws)) return;
+    if (this.tugPhase === 'done') { this.tell(ws, { type: 'announce', text: '🪢 The rope is being fished back out of the pond — one moment.', toast: true }); return; }
+    const existing = this.tugTeams.get(ws);
+    if (existing) {
+      if (existing.side === side || this.tugPhase === 'live') return; // no mid-pull defections
+      existing.side = side;
+    } else {
+      if (this.tugRoster(side).length >= TUG_TEAM_CAP) { this.tell(ws, { type: 'announce', text: `🪢 The ${side} bank is full — grab the other end!`, toast: true }); return; }
+      this.tugTeams.set(ws, { side, lastPullAt: 0 });
+    }
+    if (this.tugPhase === 'idle' && this.tugRoster('west').length > 0 && this.tugRoster('east').length > 0) {
+      this.tugPhase = 'gather';
+      this.tugStartsAt = Date.now() + TUG_GATHER_MS;
+      this.announce(`🪢 A tug of war is forming across the fishing pond! Pick a bank and grab the rope — the pull starts in ${Math.round(TUG_GATHER_MS / 1000)}s. Winners take ${TUG_PRIZE}🪙; losers take a swim.`);
+    }
+    this.tugEnsureTimer();
+    this.tugBroadcast();
+  }
+
+  /** One heave (one click). Rate-limited per puller so autoclickers just get rope burn. */
+  tugPull(ws: WebSocket) {
+    if (this.tugPhase !== 'live') return;
+    const m = this.tugTeams.get(ws);
+    if (!m) return;
+    const now = Date.now();
+    if (now - m.lastPullAt < 70) return; // ~14 heaves/sec ceiling — near the limit of human clicking
+    m.lastPullAt = now;
+    this.tugOffset += m.side === 'west' ? -TUG_PULL_STEP : TUG_PULL_STEP;
+    this.tugDirty = true;
+    if (Math.abs(this.tugOffset) >= TUG_WIN_OFFSET) this.tugFinish(this.tugOffset < 0 ? 'west' : 'east');
+  }
+
+  /** Let go of the rope (explicit, walked away, left the World, or disconnected). If a whole
+   *  bank lets go mid-pull, the other side wins by walkover. */
+  tugLeave(ws: WebSocket) {
+    if (!this.tugTeams.delete(ws)) return;
+    if (this.tugPhase === 'done') return; // finale roster is already frozen in the last broadcast
+    const west = this.tugRoster('west').length, east = this.tugRoster('east').length;
+    if (this.tugPhase === 'live') {
+      if (west === 0 && east === 0) { this.tugReset(); return; }
+      if (west === 0) { this.tugFinish('east'); return; }
+      if (east === 0) { this.tugFinish('west'); return; }
+    } else if (this.tugPhase === 'gather' && (west === 0 || east === 0)) {
+      // An opponent bank emptied out — stand down to waiting (remaining pullers keep hold).
+      this.tugPhase = 'idle';
+      this.tugStartsAt = 0;
+    }
+    if (this.tugPhase === 'idle' && this.tugTeams.size === 0) this.tugStopTimer();
+    this.tugBroadcast();
+  }
+
+  /** 10 Hz heartbeat while a game exists: fires the gather→live transition, the time-limit
+   *  bell, and flushes pull-throttled broadcasts. */
+  private tugTick() {
+    const now = Date.now();
+    if (this.tugPhase === 'gather' && now >= this.tugStartsAt) {
+      this.tugPhase = 'live';
+      this.tugEndsAt = now + TUG_MAX_MS;
+      this.tugOffset = 0;
+      this.tugDirty = true;
+      this.announce('🪢 HEAVE! The tug of war is ON — click for your lives!');
+    } else if (this.tugPhase === 'live' && now >= this.tugEndsAt) {
+      // The bell: whoever holds the advantage wins. A dead heat snaps the rope — everyone swims.
+      this.tugFinish(this.tugOffset < 0 ? 'west' : this.tugOffset > 0 ? 'east' : null);
+    }
+    if (this.tugDirty) { this.tugDirty = false; this.tugBroadcast(); }
+  }
+
+  private tugFinish(winner: TugSide | null) {
+    if (this.tugPhase !== 'live') return;
+    this.tugPhase = 'done';
+    this.tugWinner = winner;
+    // Snap the rope marker to the winning extreme so every client's finale reads the same.
+    if (winner) this.tugOffset = winner === 'west' ? -TUG_WIN_OFFSET : TUG_WIN_OFFSET;
+    if (winner) {
+      const losers = this.tugRoster(winner === 'west' ? 'east' : 'west').length;
+      const fate = losers > 0
+        ? `${losers} puller${losers === 1 ? '' : 's'} dragged into the pond! 💦`
+        : 'the other bank dropped the rope and fled! 🏃'; // walkover — nobody left to dunk
+      this.announce(`🪢 The ${winner.toUpperCase()} bank wins the tug of war — ${fate} (+${TUG_PRIZE}🪙 each to the winners)`);
+      for (const [wws, m] of this.tugTeams) {
+        if (m.side !== winner) continue;
+        const c = this.conns.get(wws);
+        if (c?.pid) this.housePay(c.pid, c.nickname, TUG_PRIZE).then(() => this.sendWallet(wws)).catch(() => {});
+      }
+    } else {
+      this.announce('🪢 The rope SNAPPED — both teams tumble into the pond! 💦 Nobody wins. Everybody swims.');
+    }
+    this.tugBroadcast(); // roster still populated → clients animate the dunk finale
+    setTimeout(() => this.tugReset(), 6000);
+  }
+
+  private tugReset() {
+    this.tugPhase = 'idle';
+    this.tugStartsAt = 0;
+    this.tugEndsAt = 0;
+    this.tugOffset = 0;
+    this.tugWinner = null;
+    this.tugTeams.clear();
+    this.tugStopTimer();
+    this.tugBroadcast();
+  }
+
+  private tugEnsureTimer() {
+    if (!this.tugTimer) this.tugTimer = setInterval(() => this.tugTick(), 100);
+  }
+
+  private tugStopTimer() {
+    if (this.tugTimer) { clearInterval(this.tugTimer); this.tugTimer = null; }
+  }
+
+  private tugRoster(side: TugSide): TugPuller[] {
+    const out: TugPuller[] = [];
+    for (const [ws, m] of this.tugTeams) {
+      if (m.side !== side) continue;
+      const c = this.conns.get(ws);
+      if (c) out.push({ id: c.id, name: c.nickname || 'anon', color: c.color });
+    }
+    return out;
+  }
+
+  private tugStateMsg(): TugStateMsg {
+    return {
+      type: 'tugState',
+      phase: this.tugPhase,
+      startsAt: this.tugStartsAt,
+      endsAt: this.tugEndsAt,
+      offset: Math.round(this.tugOffset),
+      west: this.tugRoster('west'),
+      east: this.tugRoster('east'),
+      ...(this.tugPhase === 'done' ? { winner: this.tugWinner } : {}),
+    };
+  }
+
+  private tugBroadcast() {
+    const data = JSON.stringify(this.tugStateMsg());
+    for (const sock of this.world.sockets()) if (sock.readyState === sock.OPEN) sock.send(data);
   }
 
   /** Snapshot every in-world avatar (human + netizen). */
@@ -7340,6 +7502,7 @@ export class Lobby {
     this.crLeave(ws);   // drop out of any City Tycoon game (holdings return to the bank)
     this.nomLeave(ws);  // drop out of the Parliament (Nomic) rotation
     this.retroStand(ws); // vacate their conference chair (if this socket held one)
+    this.tugLeave(ws);  // let go of the tug-of-war rope (a walkover if their bank empties)
     this.world.leave(ws); // drop their avatar from the free-roam world map
     const leavingPid = this.conns.get(ws)?.pid ?? '';
     // Persist their final stress level before the connection is torn down.

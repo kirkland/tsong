@@ -49,6 +49,10 @@ import {
   type RetroStateMsg,
   SMOKES_COST,
   SMOKES_PER_PACK,
+  TUG_WIN_OFFSET,
+  TUG_PRIZE,
+  type TugSide,
+  type TugStateMsg,
   WorldAvatar,
   WorldBuilding,
   WorldBuildingKind,
@@ -256,6 +260,10 @@ export interface WorldNet {
   // --- Smokes (the General Store's corner-shelf consumable) ---
   buySmokes(): void;             // buy a pack of Tsong Lights (server charges SMOKES_COST)
   smoked(): void;                // we lit one — server applies the capped cortisol dip
+  // --- Tug of War (the fishing pond's shore-vs-shore mash-off) ---
+  tugJoin(side: TugSide): void;  // grab the rope on that bank of the fishing pond
+  tugPull(): void;               // one heave (a click during the live pull)
+  tugLeave(): void;              // let go of the rope
   // --- Team Retro (Tsong Towers conference room) — chair presence + the shared sticky board ---
   selfPid(): string;             // our stable identity (matches RetroNote.pid / RetroSeat.pid)
   retroSit(chair: number): void;    // take conference chair 0-7 (server rejects a taken one)
@@ -358,6 +366,7 @@ interface Controller {
   feedRocket(x: number, y: number, a: number, w?: WorldWeapon, len?: number): void; // someone else fired → render their shot
   feedChat(line: ChatLine): void; // a new chat line (mirrors the main chat into the side feed)
   feedRoadRage(active: boolean, endsAt: number, standings: { name: string; kills: number }[]): void;
+  feedTug(msg: TugStateMsg): void; // the fishing-pond tug of war changed (roster / rope / finale)
   feedRetro(state: RetroStateMsg): void; // conference-room retro board + seat roster changed
   feedSmokes(count: number): void; // a pack of Tsong Lights arrived — add to the pouch
   feedMcFood(item: string, granted: boolean, bonus?: number): void;
@@ -590,6 +599,10 @@ export function feedSmokes(count: number): void {
 }
 export function feedRoadRage(active: boolean, endsAt: number, standings: { name: string; kills: number }[]): void {
   controller?.feedRoadRage(active, endsAt, standings);
+}
+/** Handle a fishing-pond tug-of-war broadcast. */
+export function feedTug(msg: TugStateMsg): void {
+  controller?.feedTug(msg);
 }
 
 /** Handle a McDonald's food result from the server. */
@@ -2724,6 +2737,180 @@ export function startWorld(net: WorldNet): void {
     rrHud.innerHTML = `<div style="color:#ff3333;font-weight:700;letter-spacing:1px;margin-bottom:4px">💥 ROAD RAGE ${m}:${s}</div>${rows}`;
   }
   setInterval(updateRoadRageHud, 1000); // keep the countdown ticking
+
+  // --- Tug of War — the fishing pond's shore-vs-shore mash-off ---
+  // The server owns the rope (phase machine + offset); this side renders it, pins our avatar to
+  // our rope slot, turns clicks into heaves while the pull is live, and — when our bank loses —
+  // yanks us into the pond. Everyone else's dunk arrives for free through normal worldMove relay
+  // (each losing client animates its own avatar into the water).
+  const TUG_POND = (WORLD_BUILDINGS as readonly WorldBuilding[]).find((b) => b.id === 'pond')!;
+  const TUG_ROPE_Y = TUG_POND.y + TUG_POND.h / 2;         // the rope crosses the water mid-pond
+  const TUG_ANCHOR_W = TUG_POND.x - 16;                   // west rope end, just off the bank
+  const TUG_ANCHOR_E = TUG_POND.x + TUG_POND.w + 16;      // east rope end
+  const TUG_SLOT_GAP = 30;                                // spacing between pullers on a bank
+  let tug: TugStateMsg = { type: 'tugState', phase: 'idle', startsAt: 0, endsAt: 0, offset: 0, west: [], east: [] };
+  let tugSide: TugSide | null = null;  // OUR grip on the rope (null = not playing); optimistic on join
+  let tugLean = 0;                     // heave-lean impulse (each click jolts us back; decays fast)
+  let tugLastClickAt = 0;              // local click throttle (server enforces its own)
+  let tugGfx: Phaser.GameObjects.Graphics | null = null;
+  let tugHud: HTMLDivElement | null = null;
+  let tugHudHtml = '';                 // last-rendered HUD markup (skip identical re-renders)
+  // The finale: t runs 0→1 while we're dragged from `from` to the splash point `to`.
+  let tugDunk: { t: number; fromX: number; fromY: number; toX: number; toY: number; splashed: boolean } | null = null;
+
+  // What the pond's bottom yields to the freshly dunked. Mostly mud.
+  const TUG_POND_FINDS = [
+    '💦 SPLASH! Straight into the drink.',
+    '💦 SPLASH! You surface clutching a very old boot. 🥾',
+    '💦 SPLASH! A startled trout leaps into your arms, reconsiders, and leaves. 🐟',
+    '💦 SPLASH! You come up wearing a lily pad as a hat. 🪷',
+    '💦 SPLASH! Somewhere below, a fish applauds. 👏',
+  ];
+
+  /** Our rope slot (world coords) — join-order index along our bank, shifted by the live rope
+   *  offset so a losing line-up visibly slides toward the water. */
+  function tugSlot(side: TugSide, idx: number): { x: number; y: number } {
+    const x = side === 'west'
+      ? TUG_ANCHOR_W - 26 - idx * TUG_SLOT_GAP + tug.offset
+      : TUG_ANCHOR_E + 26 + idx * TUG_SLOT_GAP + tug.offset;
+    return { x, y: TUG_ROPE_Y };
+  }
+
+  function feedTugState(msg: TugStateMsg) {
+    const prev = tug.phase;
+    tug = msg;
+    // The roster is the truth about which end (if any) we're holding. An optimistic just-clicked
+    // join can flicker off for one stale broadcast; the server's confirm re-sets it right after.
+    const me = net.selfId();
+    tugSide = msg.west.some((p) => p.id === me) ? 'west' : msg.east.some((p) => p.id === me) ? 'east' : null;
+    if (msg.phase === 'live' && prev !== 'live') {
+      tone(196, 0.3, 'sawtooth', 0.06, 130); // the starting horn
+      if (tugSide) flashHelp('🪢 HEAVE! Click as fast as you can!');
+    }
+    if (msg.phase === 'done' && prev !== 'done') {
+      const iLost = tugSide && (msg.winner === null || (msg.winner && msg.winner !== tugSide));
+      if (iLost) {
+        // Dragged off the bank: ease-in yank from wherever we stand to open water on our side.
+        const toX = TUG_POND.x + TUG_POND.w / 2 + (tugSide === 'west' ? -TUG_POND.w * 0.22 : TUG_POND.w * 0.22);
+        tugDunk = { t: 0, fromX: selfX, fromY: selfY, toX, toY: TUG_ROPE_Y, splashed: false };
+        stunnedUntil = performance.now() + 2600; // no wriggling free mid-yank
+      } else if (tugSide && msg.winner === tugSide) {
+        tone(523, 0.12, 'square', 0.05); tone(659, 0.12, 'square', 0.05); tone(784, 0.2, 'square', 0.05); // victory arpeggio
+        flashHelp(`🪢 Your bank wins! +${TUG_PRIZE}🪙 — the other team goes for a swim.`);
+      }
+    }
+    if (msg.phase === 'idle' && prev !== 'idle') { tugSide = null; tugDunk = null; }
+  }
+
+  /** Per-frame: pin roped avatars, animate the dunk, redraw the rope, refresh the HUD. */
+  function updateTug(now: number, dt: number) {
+    // The finale yank: ease-in drag into the pond, one big splash, then wade back ashore.
+    if (tugDunk) {
+      tugDunk.t = Math.min(1, tugDunk.t + dt / 0.9);
+      const e = tugDunk.t * tugDunk.t; // ease-in — it accelerates as the rope wins
+      selfX = tugDunk.fromX + (tugDunk.toX - tugDunk.fromX) * e;
+      selfY = tugDunk.fromY + (tugDunk.toY - tugDunk.fromY) * e;
+      if (tugDunk.t >= 1 && !tugDunk.splashed) {
+        tugDunk.splashed = true;
+        spawnSplash(selfX, selfY);
+        flashHelp(TUG_POND_FINDS[Math.random() < 0.5 ? 0 : 1 + Math.floor(Math.random() * (TUG_POND_FINDS.length - 1))]);
+        const side = tugSide; // wade out to our own bank after a beat in the water
+        setTimeout(() => {
+          if (!controller) return;
+          selfX = side === 'east' ? TUG_ANCHOR_E + 40 : TUG_ANCHOR_W - 40;
+          selfY = TUG_ROPE_Y;
+          spawnSplash(selfX, selfY);
+          tugDunk = null;
+          tugSide = null;
+        }, 1400);
+      }
+    } else if (tugSide && tug.phase !== 'done') {
+      // Roped: our avatar stands at its slot. Any walk input (or hopping in a car/boat) lets go.
+      if (keys.size > 0 || joyActive || driving || boating) {
+        net.tugLeave();
+        tugSide = null;
+      } else {
+        const roster = tugSide === 'west' ? tug.west : tug.east;
+        const idx = Math.max(0, roster.findIndex((p) => p.id === net.selfId()));
+        const slot = tugSlot(tugSide, idx);
+        const dir = tugSide === 'west' ? -1 : 1; // heaves lean AWAY from the pond
+        const strain = tug.phase === 'live' ? Math.sin(now / 90 + idx) * 1.5 : 0;
+        selfX = slot.x + dir * (tugLean * 7 + Math.max(0, strain));
+        selfY = slot.y;
+        facing = tugSide === 'west' ? 0 : Math.PI; // face the water (and the enemy)
+        vx = vy = 0;
+      }
+    }
+    tugLean = Math.max(0, tugLean - dt * 5);
+
+    // --- the rope itself ---
+    const sc = petScene;
+    const roped = tug.west.length + tug.east.length > 0 && tug.phase !== 'idle';
+    if (sc && !tugGfx) tugGfx = sc.add.graphics().setDepth(TUG_ROPE_Y + 6);
+    if (tugGfx) {
+      tugGfx.clear();
+      if (roped || (tug.phase === 'idle' && tug.west.length + tug.east.length > 0)) {
+        const markerX = TUG_POND.x + TUG_POND.w / 2 + tug.offset;
+        const endW = tug.west.length ? tugSlot('west', tug.west.length - 1).x : TUG_ANCHOR_W + tug.offset;
+        const endE = tug.east.length ? tugSlot('east', tug.east.length - 1).x : TUG_ANCHOR_E + tug.offset;
+        const sag = tug.phase === 'live' ? 3 : 10; // taut when live, slack while gathering
+        tugGfx.lineStyle(3, 0x8a6a3f, 1);
+        tugGfx.beginPath();
+        tugGfx.moveTo(endW, TUG_ROPE_Y);
+        // two gentle quadratic spans meeting at the marker, sagging over the water
+        for (let i = 0; i <= 16; i++) {
+          const t = i / 16;
+          const x = endW + (markerX - endW) * t;
+          tugGfx.lineTo(x, TUG_ROPE_Y + Math.sin(t * Math.PI) * sag);
+        }
+        for (let i = 0; i <= 16; i++) {
+          const t = i / 16;
+          const x = markerX + (endE - markerX) * t;
+          tugGfx.lineTo(x, TUG_ROPE_Y + Math.sin(t * Math.PI) * sag);
+        }
+        tugGfx.strokePath();
+        // the centre ribbon: red marker that everyone is fighting over
+        tugGfx.fillStyle(0xff3b30, 1);
+        tugGfx.fillRect(markerX - 2, TUG_ROPE_Y - 9, 4, 14);
+        tugGfx.fillTriangle(markerX + 2, TUG_ROPE_Y - 9, markerX + 2, TUG_ROPE_Y - 2, markerX + 12, TUG_ROPE_Y - 5.5);
+        // centre-line tick on the water so drift is readable
+        tugGfx.lineStyle(1, 0xffffff, 0.35);
+        tugGfx.lineBetween(TUG_POND.x + TUG_POND.w / 2, TUG_ROPE_Y - 14, TUG_POND.x + TUG_POND.w / 2, TUG_ROPE_Y + 14);
+      }
+    }
+
+    // --- HUD banner (top-centre; only while a game exists) ---
+    const wantHud = tug.phase !== 'idle' || tug.west.length + tug.east.length > 0;
+    if (!wantHud) {
+      if (tugHud) { tugHud.remove(); tugHud = null; tugHudHtml = ''; }
+      return;
+    }
+    if (!tugHud) {
+      tugHud = document.createElement('div');
+      tugHud.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:9999;background:rgba(6,26,40,0.85);border:2px solid #2a6f97;border-radius:10px;padding:7px 14px;color:#fff;font:13px/1.45 system-ui;text-align:center;min-width:230px;pointer-events:none;';
+      overlay.appendChild(tugHud);
+    }
+    const W = tug.west.length, E = tug.east.length;
+    let html = '';
+    if (tug.phase === 'gather') {
+      const secs = Math.max(0, Math.ceil((tug.startsAt - Date.now()) / 1000));
+      html = `<b>🪢 TUG OF WAR</b> — rope goes taut in <b>${secs}s</b><br>WEST ${W} 🆚 ${E} EAST` + (tugSide ? '' : '<br><span style="opacity:.75">grab the rope at the Fishing Pond banks!</span>');
+    } else if (tug.phase === 'live') {
+      const frac = clamp(0.5 + tug.offset / (TUG_WIN_OFFSET * 2), 0, 1); // 0 = west winning edge
+      html = `<b>🪢 TUG OF WAR</b> ${tugSide ? '— <span style="color:#ffd166">CLICK AS FAST AS YOU CAN!</span>' : `— WEST ${W} 🆚 ${E} EAST`}`
+        + `<div style="margin-top:5px;height:10px;border-radius:5px;background:linear-gradient(90deg,#3d8bfd 49.5%,#fff 49.5%,#fff 50.5%,#ff8a4a 50.5%);position:relative">`
+        + `<span style="position:absolute;left:${(frac * 100).toFixed(1)}%;top:-3px;width:6px;height:16px;margin-left:-3px;background:#ff3b30;border-radius:2px;display:block"></span></div>`
+        + `<div style="display:flex;justify-content:space-between;font-size:11px;opacity:.8"><span>◀ WEST wins</span><span>EAST wins ▶</span></div>`;
+    } else if (tug.phase === 'done') {
+      html = tug.winner
+        ? `<b>🪢 ${tug.winner.toUpperCase()} BANK WINS!</b> 💦 The other team is in the pond.`
+        : '<b>🪢 THE ROPE SNAPPED!</b> 💦 Everybody swims.';
+    } else {
+      html = `<b>🪢 TUG OF WAR</b> — waiting for the other bank… WEST ${W} 🆚 ${E} EAST`;
+    }
+    if (html !== tugHudHtml) { tugHudHtml = html; tugHud.innerHTML = html; }
+  }
+
   let userZoom = 1;       // overworld zoom multiplier (±/wheel/pinch); applied on top of the base ZOOM
   function adjustZoom(factor: number) { userZoom = clamp(userZoom * factor, 0.6, 1.9); }
 
@@ -4246,8 +4433,27 @@ export function startWorld(net: WorldNet): void {
       return;
     }
     if (kind === 'pond') {
-      openDialog('🎣 Fishing Pond', 'The water is calm. A good day for fishing.', [
+      // Tug of war: you join whichever bank you're standing on — walk around the pond to
+      // pick the other team.
+      const bank: TugSide = selfX < TUG_POND.x + TUG_POND.w / 2 ? 'west' : 'east';
+      const blurb = tug.phase === 'gather' || tug.phase === 'live'
+        ? `A tug of war rages across the water! WEST ${tug.west.length} 🆚 ${tug.east.length} EAST.`
+        : tug.west.length + tug.east.length > 0
+          ? 'A rope lies across the water — one bank is waiting for challengers.'
+          : 'The water is calm. A good day for fishing.';
+      openDialog('🎣 Fishing Pond', blurb, [
         { label: '🎣 Fish', onPick: () => { pause(false); net.openFeature('fishing'); } },
+        tugSide
+          ? { label: '🪢 Let go of the rope', onPick: () => { closeDialog(); net.tugLeave(); tugSide = null; } }
+          : {
+              label: `🪢 Tug of War — grab the ${bank.toUpperCase()} rope`,
+              onPick: () => {
+                closeDialog(); // back to the world — clicks need to land on the rope, not this box
+                net.tugJoin(bank);
+                tugSide = bank; // optimistic grip — the server's next broadcast confirms it
+                flashHelp(tug.phase === 'live' ? '🪢 You pile on! CLICK as fast as you can!' : '🪢 You grab the rope. Once both banks are manned, the pull begins — clicks win it.');
+              },
+            },
       ]);
       return;
     }
@@ -10043,6 +10249,20 @@ export function startWorld(net: WorldNet): void {
       pinchDist = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y);
       return;
     }
+    // Holding the tug-of-war rope: every click/tap is a HEAVE (and nothing else — no walking
+    // off, no firing a rocket point-blank at the opposing bank, tempting as that is).
+    if (tugSide && !tugDunk) {
+      if (tug.phase === 'live') {
+        const nowMs = performance.now();
+        if (nowMs - tugLastClickAt >= 55) { // let genuinely fast clickers through; the server paces the rest
+          tugLastClickAt = nowMs;
+          tugLean = 1;
+          net.tugPull();
+          tone(180 + Math.random() * 60, 0.04, 'square', 0.03); // grunt-adjacent creak
+        }
+      }
+      return;
+    }
     // Tapped a netizen avatar? → fire the challenge hook instead of starting to walk.
     if (mainCam && net.onNetizenClick) {
       const wp = mainCam.getWorldPoint(e.clientX, e.clientY);
@@ -14774,6 +14994,7 @@ export function startWorld(net: WorldNet): void {
       safeStep('nearBuilding', () => updateNearBuilding());
       safeStep('smoking', () => updateSmoking());
       safeStep('boulder', () => updateBoulder(now, dt));
+      safeStep('tug', () => updateTug(now, dt)); // after movement: a roped avatar's slot pin wins
       safeStep('sendMove', () => maybeSendMove(now));
 
       // show the touch fire button + weapon rack out in the open world (and in the office, where
@@ -21302,7 +21523,9 @@ export function startWorld(net: WorldNet): void {
     rex?.img.destroy(); rex?.nametag.destroy(); rex = null;
     try { void actx?.close(); } catch { /* ignore */ }
     actx = null;
-    overlay.remove();
+    if (tugSide) net.tugLeave(); // let go of the rope on the way out (server also catches worldLeave)
+    tugSide = null; tugDunk = null; tugGfx = null; // gfx dies with the Phaser game
+    overlay.remove(); // tugHud lives inside the overlay — gone with it
     rrHud?.remove(); rrHud = null;
     controller = null;
     _exitWorld = null;
@@ -21421,6 +21644,7 @@ export function startWorld(net: WorldNet): void {
       showToast(`🚬 A fresh pack of Tsong Lights (+${count}). The Surgeon General of Robville would like a word. <i>Press C to light one.</i>`);
       updateHelp();
     },
+    feedTug(msg) { feedTugState(msg); },
     feedRoadRage(active: boolean, endsAt: number, standings: { name: string; kills: number }[]) {
       const starting = active && !rrActive;
       rrActive = active; rrEndsAt = endsAt; rrStandings = standings;

@@ -1136,6 +1136,41 @@ export interface WorldRoadRageMsg {
   standings: { name: string; kills: number }[];
 }
 
+// --- Tug of War (the Fishing Pond's shore-vs-shore mash-off) -------------------------------
+// Two teams line up on the WEST and EAST banks of the fishing pond with a rope strung across
+// the water between them. Once both banks have at least one puller, a short countdown arms the
+// rope — then it's pure clicking: every click is a heave, and the rope creeps toward the faster
+// team until the slower one is dragged off its bank and into the drink. The server owns the rope
+// (phase machine + offset in lobby.ts); clients just heave and render.
+export type TugSide = 'west' | 'east';
+export type TugPhase = 'idle' | 'gather' | 'live' | 'done';
+export const TUG_GATHER_MS = 15_000; // both banks manned → the rope goes taut in this long
+export const TUG_WIN_OFFSET = 130;   // rope travel (world px) that dunks the losing team
+export const TUG_PULL_STEP = 3;      // px of rope one heave (one click) moves
+export const TUG_MAX_MS = 90_000;    // live cap — at the bell, whoever holds the advantage wins
+export const TUG_PRIZE = 40;         // coins per winning puller
+export const TUG_TEAM_CAP = 8;       // pullers per bank
+
+export interface TugPuller {
+  id: string; // connection id (matches WorldAvatar.id) — lets each client spot itself in the roster
+  name: string;
+  color: string;
+}
+
+// The whole game in one broadcast, fanned to everyone in the World on every change (pulls are
+// throttled to ~10 Hz server-side). Roster order is join order — it doubles as each puller's
+// rope-slot index on the client, so everyone renders the same line-up.
+export interface TugStateMsg {
+  type: 'tugState';
+  phase: TugPhase;
+  startsAt: number; // gather: ms epoch when the pull goes live (0 otherwise)
+  endsAt: number;   // live: ms epoch of the time-limit bell (0 otherwise)
+  offset: number;   // rope offset from centre: negative = pulled WEST (west winning), positive = EAST
+  west: TugPuller[];
+  east: TugPuller[];
+  winner?: TugSide | null; // done only; null = a dead-even bell — the rope snaps and dunks everyone
+}
+
 // A player fired a weapon from (x,y) heading at angle a — fanned out so everyone watches the shot.
 // Damage is authoritative on the firer and arrives separately as a WorldBoomMsg; what receivers
 // draw from this message is purely cosmetic.
@@ -1345,6 +1380,9 @@ export type ClientMsg =
   | { type: 'worldRocket'; x: number; y: number; a: number; w?: WorldWeapon; len?: number } // we fired here, heading a → broadcast so others see the shot
   | { type: 'worldBlownUp'; car: boolean; self: boolean; killedBy?: string } // a blast got us; killedBy = shooter pid for Road Rage kill attribution
   | { type: 'worldRoadRage' } // start a Road Rage PvP event (any player can trigger; server enforces cooldown)
+  | { type: 'tugJoin'; side: TugSide } // grab the tug-of-war rope on that bank of the fishing pond
+  | { type: 'tugPull' } // one heave on the rope (a click during the live pull; rate-limited server-side)
+  | { type: 'tugLeave' } // let go of the rope / step off the bank
   | { type: 'buySmokes' } // buy a pack of Tsong Lights at the General Store (server charges SMOKES_COST → House)
   | { type: 'smoked' }    // lit a cigarette — server applies a capped, rate-limited cortisol dip (one per ~20s)
   // --- Team Retro (Tsong Towers conference room) ---
@@ -1956,6 +1994,7 @@ export type ServerMsg =
   | WorldBoomMsg
   | WorldRocketMsg
   | WorldRoadRageMsg
+  | TugStateMsg
   | HouseMsg
   | HouseStateMsg
   | NetizenInfoMsg

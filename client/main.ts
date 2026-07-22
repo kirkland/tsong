@@ -949,6 +949,8 @@ const net = connect(
       worldMod?.feedRocket(msg.x, msg.y, msg.a, msg.w, msg.len);
     } else if (msg.type === 'worldRoadRage') {
       worldMod?.feedRoadRage(msg.active, msg.endsAt, msg.standings ?? []);
+    } else if (msg.type === 'tugState') {
+      worldMod?.feedTug(msg);
     } else if (msg.type === 'wallet') {
       wallet = { coins: msg.coins, owned: msg.owned, hat: msg.hat, skin: msg.skin, trail: msg.trail, title: msg.title, song: msg.song, car: msg.car, boat: msg.boat, pet: msg.pet, balltrail: msg.balltrail ?? null, goalcelebr: msg.goalcelebr ?? null, carcolor: msg.carcolor ?? null, exclusives: msg.exclusives, bets: msg.bets, nextSpinAt: msg.nextSpinAt, bonusSpins: msg.bonusSpins, xp: msg.xp ?? 0 };
       renderLevelHud();
@@ -2678,6 +2680,10 @@ worldBtn.addEventListener('click', async () => {
       // Smokes — the General Store's corner-shelf consumable.
       buySmokes: () => net.send({ type: 'buySmokes' }),
       smoked: () => net.send({ type: 'smoked' }),
+      // Tug of War — the fishing pond's shore-vs-shore mash-off.
+      tugJoin: (side) => net.send({ type: 'tugJoin', side }),
+      tugPull: () => net.send({ type: 'tugPull' }),
+      tugLeave: () => net.send({ type: 'tugLeave' }),
       // Team Retro (Tsong Towers conference room) — chair presence + the shared sticky board.
       selfPid: () => myPid,
       retroSit: (chair) => net.send({ type: 'retroSit', chair }),

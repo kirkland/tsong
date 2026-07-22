@@ -214,6 +214,7 @@ const TRACKED_MSG: Partial<Record<ClientMsg['type'], string>> = {
   reaction: 'social.reaction',
   worldEnter: 'world.enter',
   worldRoadRage: 'world.roadrage',
+  tugJoin: 'world.tug', // tugPull is a high-frequency stream — joins are the countable event
 };
 
 const wss = new WebSocketServer({ server, path: '/ws' });
@@ -762,6 +763,15 @@ wss.on('connection', (ws: WebSocket, req) => {
         break;
       case 'worldRoadRage':
         lobby.startRoadRage(ws);
+        break;
+      case 'tugJoin':
+        if (msg.side === 'west' || msg.side === 'east') lobby.tugJoin(ws, msg.side);
+        break;
+      case 'tugPull':
+        lobby.tugPull(ws);
+        break;
+      case 'tugLeave':
+        lobby.tugLeave(ws);
         break;
       case 'buySmokes':
         lobby.buySmokes(ws);
