@@ -15157,8 +15157,8 @@ export function startWorld(net: WorldNet): void {
   // Real stick-slip friction: lean on it to build force while it creaks and refuses, feel
   // static friction give way with a lurch, grind along at a fraction of walk speed while you
   // keep pushing, and the moment you ease off it re-sticks. ---
-  const BOULDER_BREAK_T = 0.8; // seconds of sustained shoving before static friction gives
-  const BOULDER_SPEED = 92; // terminal grind speed once it's moving (walking is 280)
+  const BOULDER_BREAK_T = 0.95; // seconds of sustained shoving before static friction gives (big rock, big commitment)
+  const BOULDER_SPEED = 84; // terminal grind speed once it's moving (walking is 280)
   let bldX = BOULDER_HOME.x, bldY = BOULDER_HOME.y; // rendered/collided position
   let bldTX = BOULDER_HOME.x, bldTY = BOULDER_HOME.y; // server-synced target (a remote pusher's stream)
   let bldSpr: Phaser.GameObjects.Image | null = null;
@@ -15199,18 +15199,18 @@ export function startWorld(net: WorldNet): void {
       if (!sc.textures.exists('w-boulder')) {
         const g = sc.add.graphics();
         const px = (x: number, y: number, w: number, h: number, c: number) => { g.fillStyle(c, 1); g.fillRect(x, y, w, h); };
-        g.fillStyle(0x2b2e33, 1); g.fillEllipse(13, 12, 26, 20); // dark silhouette
-        g.fillStyle(0x6e747c, 1); g.fillEllipse(13, 12, 22, 16); // granite body
-        g.fillStyle(0x8b929b, 1); g.fillEllipse(10, 9, 12, 8); // top-left light
-        g.fillStyle(0x51565d, 1); g.fillEllipse(15, 16, 16, 7); // bottom shade
-        px(6, 12, 6, 1, 0x3a3e44); px(11, 13, 1, 3, 0x3a3e44); px(16, 7, 1, 4, 0x3a3e44); // cracks
-        px(15, 8, 3, 1, 0x3a3e44);
-        px(4, 15, 3, 2, 0x5d7a45); px(18, 17, 4, 2, 0x5d7a45); px(9, 18, 2, 1, 0x5d7a45); // moss
-        g.generateTexture('w-boulder', 26, 22);
+        g.fillStyle(0x2b2e33, 1); g.fillEllipse(20, 17, 40, 31); // dark silhouette
+        g.fillStyle(0x6e747c, 1); g.fillEllipse(20, 17, 34, 25); // granite body
+        g.fillStyle(0x8b929b, 1); g.fillEllipse(15, 12, 18, 12); // top-left light
+        g.fillStyle(0x51565d, 1); g.fillEllipse(23, 24, 24, 11); // bottom shade
+        px(9, 18, 10, 1, 0x3a3e44); px(17, 20, 1, 5, 0x3a3e44); px(25, 10, 1, 6, 0x3a3e44); // cracks
+        px(23, 12, 5, 1, 0x3a3e44); px(12, 25, 6, 1, 0x3a3e44);
+        px(6, 23, 5, 3, 0x5d7a45); px(28, 26, 6, 3, 0x5d7a45); px(14, 29, 3, 2, 0x5d7a45); // moss
+        g.generateTexture('w-boulder', 40, 34);
         g.destroy();
       }
       bldShadow = sc.add.image(bldX, bldY + BOULDER_R * 0.55, 'w-shadow')
-        .setScale(TEXEL * 2.4, TEXEL * 1.2).setAlpha(0.35).setDepth(2);
+        .setScale(TEXEL * 3.6, TEXEL * 1.8).setAlpha(0.35).setDepth(2);
       bldSpr = sc.add.image(bldX, bldY, 'w-boulder').setScale(TEXEL).setOrigin(0.5, 0.72);
     }
     bldSpr.setVisible(true); bldShadow?.setVisible(true);
@@ -15247,11 +15247,11 @@ export function startWorld(net: WorldNet): void {
       bldPushT += dt;
       if (bldPushT < BOULDER_BREAK_T) {
         // Static friction: it does not move. It creaks. You strain. Dust trickles.
-        if (now - bldStrainAt > 260) { bldStrainAt = now; tone(88, 0.14, 'sawtooth', 0.1, 70); }
+        if (now - bldStrainAt > 260) { bldStrainAt = now; tone(70, 0.16, 'sawtooth', 0.11, 54); } // deeper creak — it's a big rock
         if (now - bldDustAt > 300) { bldDustAt = now; boulderDust(1, pushX, pushY); }
         bldVel = 0;
       } else {
-        if (!bldMoving) { bldMoving = true; bldVel = 46; noise(0.3, 0.34, 260); boulderDust(6, pushX, pushY); } // breakaway lurch
+        if (!bldMoving) { bldMoving = true; bldVel = 40; noise(0.34, 0.36, 210); boulderDust(8, pushX, pushY); } // breakaway lurch
         bldVel = Math.min(BOULDER_SPEED, bldVel + 150 * dt);
         const m = resolveCollisions(bldX + pushX * bldVel * dt, bldY + pushY * bldVel * dt, BOULDER_R);
         bldX = m.x; bldY = m.y;
