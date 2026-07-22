@@ -15168,6 +15168,7 @@ export function startWorld(net: WorldNet): void {
   let bldVel = 0; // current grind speed
   let bldMoving = false;
   let bldStrainAt = 0, bldGrindAt = 0, bldMarkAt = 0, bldDustAt = 0, bldSendAt = 0;
+  let bldPrevSX = 0, bldPrevSY = 0; // player pos last frame — to tell walking from standing
   function feedBoulderPos(x: number, y: number) {
     bldTX = x; bldTY = y;
     // While OUR hands are on the rock, our sim is the truth — the server never echoes our own
@@ -15216,16 +15217,30 @@ export function startWorld(net: WorldNet): void {
 
     // Contact: are we leaning on it? On foot only — the rock ignores cars out of self-respect.
     let pushX = 0, pushY = 0, contact = false;
+    const walking = Math.hypot(selfX - bldPrevSX, selfY - bldPrevSY) > 12 * dt; // moved this frame?
     if (!driving) {
       const ddx = bldX - selfX, ddy = bldY - selfY;
       const dist = Math.hypot(ddx, ddy), minD = R + BOULDER_R;
       if (dist > 0.001 && dist < minD) {
         pushX = ddx / dist; pushY = ddy / dist;
+        // Grip assist: a perfectly round rock is unpushable head-on — any off-center contact
+        // slides you off the side. So while you're walking INTO it, swing the contact normal
+        // toward your walk direction: you settle into the pocket dead-center behind the rock
+        // and stay locked on. Walking across/past it skips the assist, so you can still
+        // brush around the rim without getting glued.
+        const wx = Math.cos(facing), wy = Math.sin(facing);
+        if (walking && wx * pushX + wy * pushY > 0.25) {
+          const k = Math.min(1, dt * 8);
+          const nx = pushX + (wx - pushX) * k, ny = pushY + (wy - pushY) * k;
+          const nm = Math.hypot(nx, ny) || 1;
+          pushX = nx / nm; pushY = ny / nm;
+        }
         selfX = bldX - pushX * minD; // the rim carries you — solid, no clipping in
         selfY = bldY - pushY * minD;
         contact = true;
       }
     }
+    bldPrevSX = selfX; bldPrevSY = selfY;
 
     if (contact) {
       bldGrace = 0;
