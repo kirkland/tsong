@@ -1332,9 +1332,29 @@ closingModeEl.addEventListener('change', () =>
 gravityModeEl.addEventListener('change', () =>
   net.send({ type: 'mode', gravity: gravityModeEl.checked }),
 );
-turboModeEl.addEventListener('change', () =>
-  net.send({ type: 'mode', turbo: turboModeEl.checked }),
-);
+// Turbo is reactor-powered: flicking the switch opens the TSONG REACTOR, where you
+// push the glowy power cylinder into its slot and twist the handle to lock. Only a
+// locked core engages turbo; backing out (Esc) leaves the mode off. Switching it off
+// ejects the core with a hiss. (Lazy-loaded, same pattern as the minigames.)
+turboModeEl.addEventListener('change', () => {
+  if (turboModeEl.checked) {
+    turboModeEl.checked = false;
+    turboModeEl.blur();
+    void import('./powercore').then((m) =>
+      m.openPowerCore({
+        muted: () => muted,
+        onLocked: () => {
+          turboModeEl.checked = true;
+          net.send({ type: 'mode', turbo: true });
+        },
+      }),
+    );
+  } else {
+    turboModeEl.blur();
+    void import('./powercore').then((m) => m.powerCoreEject(muted));
+    net.send({ type: 'mode', turbo: false });
+  }
+});
 streamerModeEl.addEventListener('change', () =>
   net.send({ type: 'mode', streamer: streamerModeEl.checked }),
 );
