@@ -1100,6 +1100,7 @@ export type WorldWeapon =
   | 'mg'      // 🔫 rapid-fire bullets, pinpoint hits
   | 'laser'   // ⚡ instant piercing beam
   | 'void'    // 🕳️ singularity — collapses everything inward, then detonates
+  | 'pipes'   // 🎶 the War Pipes — a droning fan of weaponized folk music; knocks bodies flat
   | 'snow'    // ❄️ a lobbed snowball — harmless, humiliating (packed in the Frostreach)
   | 'cannon'; // 💣 a ship's broadside — a volley of cannonballs out the port/starboard side (naval only)
 
@@ -1110,12 +1111,13 @@ export type WorldFx =
   | 'hit'     // small spark — a machine-gun round landing
   | 'zap'     // laser scorch
   | 'void'    // a black hole opens, drags everything in, then blows
+  | 'skirl'   // a chord of musical notes blown outward — a War Pipes note landing at full volume
   | 'snow'    // a snowball splat — knocks nobody's car out, ruins everybody's dignity
   | 'splash'; // a cannonball plunging into the sea — a white spout, no damage
 
 // Runtime lists of the above, for validating what arrives off the wire.
-export const WORLD_WEAPONS: readonly WorldWeapon[] = ['rocket', 'mg', 'laser', 'void', 'snow', 'cannon'];
-export const WORLD_FX: readonly WorldFx[] = ['blast', 'hit', 'zap', 'void', 'snow', 'splash'];
+export const WORLD_WEAPONS: readonly WorldWeapon[] = ['rocket', 'mg', 'laser', 'void', 'pipes', 'snow', 'cannon'];
+export const WORLD_FX: readonly WorldFx[] = ['blast', 'hit', 'zap', 'void', 'skirl', 'snow', 'splash'];
 
 // A car blew up (car-vs-car collision or a high-speed building crash) at this world point. Fanned
 // out to everyone else in the world so the fireball is visible to all, not just the crasher.

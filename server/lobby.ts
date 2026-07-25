@@ -3438,7 +3438,7 @@ export class Lobby {
    *  with the party; every client spawns the pickups and grabs its own (like the town crates). */
   private scatterRaidAmmo(present: number) {
     const A = RAID_ARENA;
-    const kinds: WorldWeapon[] = ['mg', 'mg', 'rocket', 'laser', 'void']; // mostly bullets, the odd heavy
+    const kinds: WorldWeapon[] = ['mg', 'mg', 'rocket', 'laser', 'void', 'pipes']; // mostly bullets, the odd heavy (or musical)
     const n = Math.min(10, Math.ceil(present / 2) + 2);
     const drops: { x: number; y: number; w: WorldWeapon }[] = [];
     for (let i = 0; i < n; i++) {

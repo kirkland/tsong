@@ -1118,7 +1118,7 @@ function hash(i: number, j: number): number {
 // -----------------------------------------------------------------------------------------------
 // Four weapons, each with its own ammo pool. You spawn with a handful of rockets and nothing else;
 // everything past that comes out of supply crates that respawn around the map. Pick a weapon with
-// 1–4 (or Q to cycle, or by tapping the on-screen rack); hold R to fire.
+// 1–5 (or Q to cycle, or by tapping the on-screen rack); hold R to fire.
 // ===============================================================================================
 interface WeaponSpec {
   id: WorldWeapon;
@@ -1145,6 +1145,8 @@ const WEAPONS: readonly WeaponSpec[] = [
     cooldown: 340,  perCrate: 24,  max: 200,  start: 0, weight: 24, tint: 0x8ef0ff, css: '#7ee8f6' },
   { id: 'void',   name: 'Singularity Cannon', emoji: '🕳️', blurb: 'Opens a black hole. Do not stand near the black hole.',
     cooldown: 2400, perCrate: 2,   max: 12,   start: 0, weight: 10, tint: 0xc79bff, css: '#c79bff' },
+  { id: 'pipes',  name: 'War Pipes',          emoji: '🎶', blurb: 'Weaponized Scotland. Hold R long enough and it plays a whole tune.',
+    cooldown: 620,  perCrate: 30,  max: 240,  start: 0, weight: 14, tint: 0x8fe08a, css: '#8fe08a' },
 ];
 const WEAPON_BY_ID = Object.fromEntries(WEAPONS.map((w) => [w.id, w])) as Record<WorldWeapon, WeaponSpec>;
 const WEAPON_ORDER: readonly WorldWeapon[] = WEAPONS.map((w) => w.id);
@@ -3491,7 +3493,7 @@ export function startWorld(net: WorldNet): void {
   let fireBtnShown = false;
 
   // Weapon rack (right edge, above the fire button) — one chip per weapon showing its emoji and how
-  // many rounds are left. Tap a chip to equip it; keyboard players press 1–4 or cycle with Q. Chips
+  // many rounds are left. Tap a chip to equip it; keyboard players press 1–5 or cycle with Q. Chips
   // for weapons you have no ammo for are dimmed, and can't be equipped.
   const rack = document.createElement('div');
   rack.style.cssText =
@@ -4381,7 +4383,7 @@ export function startWorld(net: WorldNet): void {
     }
     const b = boardable();
     const boatHint = b ? (b.sea ? ' · <b>B</b> board ship' : ' · <b>B</b> board boat') : '';
-    const gun = `<b>R</b>/<b>click</b> fire ${WEAPON_BY_ID[weapon].emoji} · <b>1-4</b>/<b>Q</b> weapon`
+    const gun = `<b>R</b>/<b>click</b> fire ${WEAPON_BY_ID[weapon].emoji} · <b>1-5</b>/<b>Q</b> weapon`
       + (cigs > 0 || Date.now() < cigUntil ? ' · <b>C</b> 🚬' : ''); // only once you're carrying smokes
     help.innerHTML = driving
       ? `W/S or ↑/↓ throttle · A/D or ←/→ steer · <b>Shift</b> drift · ${gun} · <b>F</b> get out · <b>T</b> chat`
@@ -10212,13 +10214,13 @@ export function startWorld(net: WorldNet): void {
     if (dialogOpen) return;
     if (k === 'f') { e.preventDefault(); e.stopPropagation(); toggleDrive(); return; }
     if (k === 'b') { e.preventDefault(); e.stopPropagation(); toggleBoat(); return; } // board/dock a boat on water
-    // Hold R to fire the equipped weapon; 1–4 equip directly, Q cycles to the next loaded one.
+    // Hold R to fire the equipped weapon; 1–5 equip directly, Q cycles to the next loaded one.
     if (k === 'r') { e.preventDefault(); e.stopPropagation(); firing = true; fireWeapon(); return; }
     if (k === 'q') { e.preventDefault(); e.stopPropagation(); cycleWeapon(); return; }
     if (k === 'x') { if (townInteract()) { e.preventDefault(); e.stopPropagation(); return; } }
     if (k === 'h') { drinkPotion(); e.preventDefault(); e.stopPropagation(); return; } // drink a held potion
     if (k === 'c') { toggleCig(); e.preventDefault(); e.stopPropagation(); return; }   // light up / stub out a cigarette
-    if (k >= '1' && k <= '4') {
+    if (k >= '1' && k <= '9') {
       const pick = WEAPON_ORDER[Number(k) - 1];
       if (pick) { e.preventDefault(); e.stopPropagation(); selectWeapon(pick); return; }
     }
@@ -11024,6 +11026,22 @@ export function startWorld(net: WorldNet): void {
     tone(70, 1.9, 'sawtooth', 0.08, 300);
     noise(1.6, 0.09, 180);
   }
+  // The War Pipes: two sawtooth drones on A (one honestly, one slightly flat — that's what makes it
+  // pipes) under a squealing square chanter. The chanter doesn't play a random note: every trigger-
+  // pull advances one step through a wee Highland air, so holding R doesn't just fire — it PERFORMS.
+  // Nobody asked for this. That's rather the point.
+  const PIPE_TUNE = [440, 440, 554, 659, 554, 494, 440, 494, 554, 494, 440, 370, 330, 370, 440, 440]; // A major, chanter range
+  let pipeTuneAt = 0;
+  function pipesSound() {
+    tone(110, 0.6, 'sawtooth', 0.05);          // bass drone
+    tone(220, 0.6, 'sawtooth', 0.04);          // tenor drone
+    tone(221.5, 0.6, 'sawtooth', 0.03);        // the flat one
+    const f = PIPE_TUNE[pipeTuneAt++ % PIPE_TUNE.length];
+    tone(f * 2, 0.05, 'square', 0.05);         // grace note on the way in
+    window.setTimeout(() => tone(f, 0.34, 'square', 0.085), 45);
+  }
+  // A note landing at full volume: a short two-step squeal where the skirl connects.
+  function skirlHitSound() { tone(659, 0.12, 'square', 0.06, 494); }
   // The empty click when you pull the trigger on nothing.
   function dryFireSound() { tone(150, 0.05, 'square', 0.07, 80); }
   // Crate grabbed: a bright three-note pickup arpeggio.
@@ -15331,13 +15349,14 @@ export function startWorld(net: WorldNet): void {
   }
 
   // ============================================================================================
-  // THE ARSENAL 🚀 🔫 ⚡ 🕳️ — hold R (or the on-screen button) to fire whatever you have equipped.
+  // THE ARSENAL 🚀 🔫 ⚡ 🕳️ 🎶 — hold R (or the on-screen button) to fire whatever you have equipped.
   // Every weapon draws from its own ammo pool; run one dry and you go looking for a crate.
   //
   //   🚀 Rocket Launcher    a missile that detonates on the first thing it touches
   //   🔫 Machine Gun        a stream of tracers; each round pops whatever it lands on
   //   ⚡ Laser Rifle        an instant beam that pierces every body in a straight line
   //   🕳️ Singularity Cannon a slug that tears open a black hole, then closes it — violently
+  //   🎶 War Pipes          a droning fan of musical notes; anyone one lands on is floored by volume
   //
   // Damage is authoritative on the FIRER. Everything a shot does to the shared world (blowing up a
   // car, knocking someone down) is fanned out as a `worldBoom`, which every receiver resolves
@@ -15351,10 +15370,14 @@ export function startWorld(net: WorldNet): void {
   const bullets: Shot[] = [];
   const cannonballs: Shot[] = []; // broadside cannon fire (naval)
   const orbs: Shot[] = [];
+  // War Pipes notes are Text glyphs (♪ ♫ ♬), not generated textures, so they get their own list.
+  interface NoteShot { spr: Phaser.GameObjects.Text; x: number; y: number; vx: number; vy: number; t: number; ghost: boolean; phase: number; }
+  const notes: NoteShot[] = [];
   const ROCKET_SPEED = 640, ROCKET_LIFE = 1.7, BLAST_R = 96;
   const MG_SPEED = 1500, MG_LIFE = 0.5, MG_SPREAD = 0.045, MG_HIT_R = 22;
   const LASER_RANGE = 900, LASER_HIT_R = 20, LASER_STEP = 8;
   const VOID_SPEED = 300, VOID_LIFE = 2.4, VOID_R = 200, VOID_HOLD = 2.0;
+  const PIPE_SPEED = 430, PIPE_LIFE = 1.0, PIPE_HIT_R = 46, PIPE_SPREAD = 0.22;
 
   // --- weapon selection ------------------------------------------------------------------------
   function selectWeapon(id: WorldWeapon) {
@@ -15420,6 +15443,11 @@ export function startWorld(net: WorldNet): void {
         spawnOrb(x, y, facing, false);
         net.rocket(x, y, facing, 'void');
         voidFireSound();
+        break;
+      case 'pipes':
+        spawnNoteFan(x, y, facing, false);
+        net.rocket(x, y, facing, 'pipes');
+        pipesSound();
         break;
     }
   }
@@ -15681,6 +15709,7 @@ export function startWorld(net: WorldNet): void {
       case 'mg':     spawnBullet(x, y, a, true); if (near) mgSound(); break;
       case 'laser':  drawBeam(x, y, a, len ?? LASER_RANGE); if (near) laserSound(); break;
       case 'void':   spawnOrb(x, y, a, true); if (near) voidFireSound(); break;
+      case 'pipes':  spawnNoteFan(x, y, a, true); if (near) pipesSound(); break; // you hear THEIR tune too
       case 'cannon': spawnCannonball(x, y, a, true); if (near) cannonFireSound(); spawnMuzzleSmoke(x, y); break;
       default:       spawnRocket(x, y, a, true); if (near) rocketLaunchSound(); break;
     }
@@ -15906,6 +15935,63 @@ export function startWorld(net: WorldNet): void {
     }
   }
 
+  // --- 🎶 war pipes -----------------------------------------------------------------------------
+  // Three musical notes fan out downrange, warbling like a melody walking home from the pub. A body
+  // one lands on is blown clean off its feet by sheer volume (a small `skirl` blast). And the
+  // chanter walks one note further through its tune with every trigger-pull — see pipesSound().
+  function spawnNoteFan(x: number, y: number, a: number, ghost: boolean) {
+    const sc = petScene; if (!sc) return;
+    const glyphs = ['♪', '♫', '♬'];
+    for (let i = -1; i <= 1; i++) {
+      const ang = a + i * PIPE_SPREAD;
+      const spr = sc.add.text(x, y, glyphs[i + 1], { fontSize: '15px', color: '#bff0b2', stroke: '#123312', strokeThickness: 3 })
+        .setOrigin(0.5).setDepth(y + 9);
+      notes.push({ spr, x, y, vx: Math.cos(ang) * PIPE_SPEED, vy: Math.sin(ang) * PIPE_SPEED, t: 0, ghost, phase: Math.random() * Math.PI * 2 });
+    }
+  }
+  // The `skirl` effect: a chord of notes blown outward from the impact — the sound made visible.
+  // The escaping notes are spawned as ghosts, so the existing updater flies them and nothing collides.
+  function spawnNoteBurst(x: number, y: number) {
+    const sc = petScene; if (!sc) return;
+    for (let i = 0; i < 6; i++) {
+      const ang = (i / 6) * Math.PI * 2 + Math.random() * 0.6;
+      const spr = sc.add.text(x, y, i % 2 ? '♪' : '♫', { fontSize: '13px', color: '#d8f7cf', stroke: '#123312', strokeThickness: 3 })
+        .setOrigin(0.5).setDepth(y + 9);
+      notes.push({ spr, x, y, vx: Math.cos(ang) * 150, vy: Math.sin(ang) * 150, t: PIPE_LIFE * 0.45, ghost: true, phase: Math.random() * Math.PI * 2 });
+    }
+    if (Math.hypot(x - selfX, y - selfY) < 850) skirlHitSound();
+  }
+  function updateNotes(dt: number) {
+    const now = performance.now();
+    for (let i = notes.length - 1; i >= 0; i--) {
+      const n = notes[i];
+      n.t += dt;
+      n.x += n.vx * dt; n.y += n.vy * dt;
+      // drawn with a warble perpendicular to flight — the note literally wavers off pitch
+      const sp = Math.hypot(n.vx, n.vy) || 1, wob = Math.sin(n.t * 16 + n.phase) * 7;
+      n.spr.setPosition(n.x - (n.vy / sp) * wob, n.y + (n.vx / sp) * wob)
+        .setDepth(n.y + 9).setAlpha(1 - (n.t / PIPE_LIFE) * 0.7);
+      const spent = n.t >= PIPE_LIFE;
+      const wall = !spent && hitsWorld(n.x, n.y);
+      if (n.ghost) { if (spent || wall) { n.spr.destroy(); notes.splice(i, 1); } continue; }
+      // a mob (or the raid boss) hears it point-blank: 1 damage, same as a bullet
+      const mobHit = !spent && !wall ? (hitMobs(n.x, n.y, 8, 1) || hitRaidBoss(n.x, n.y, 8, 1)) : false;
+      if (mobHit) { spawnNoteBurst(n.x, n.y); n.spr.destroy(); notes.splice(i, 1); continue; }
+      const npc = !spent && !wall ? npcAt(n.x, n.y, now) : null;
+      const victim = !spent && !wall && !npc ? playerAt(n.x, n.y) : null;
+      if (!spent && !wall && !npc && !victim) continue;
+      n.spr.destroy(); notes.splice(i, 1);
+      if (spent) continue;                                                 // out of breath — the tune trails off
+      spawnNoteBurst(n.x, n.y);
+      if (wall) continue;                                                  // pure reverb off the brickwork
+      if (npc) squishNpc(npc, now);                                        // settled locally — see npcAt()
+      else if (victim) {
+        net.boom(n.x, n.y, PIPE_HIT_R, 'skirl');                           // their client resolves the knockdown
+        applyBlast(n.x, n.y, PIPE_HIT_R, true);                            // …and we eat the volume if we're close
+      }
+    }
+  }
+
   // --- 🕳️ singularity cannon --------------------------------------------------------------------
   // A slow violet slug. Where it lands, spacetime gives up: a black hole opens, drags every loose
   // body (townsfolk, you, your car) into its throat for two seconds, and then collapses into the
@@ -16059,6 +16145,7 @@ export function startWorld(net: WorldNet): void {
     updateCannonballs(dt);
     updateBeams(dt);
     updateOrbs(dt);
+    updateNotes(dt);
     updateHoles(dt);
   }
 
@@ -16070,6 +16157,10 @@ export function startWorld(net: WorldNet): void {
         const s = list[i];
         if (s.ghost && Math.hypot(s.x - x, s.y - y) <= r + 40) { s.spr.destroy(); list.splice(i, 1); }
       }
+    }
+    for (let i = notes.length - 1; i >= 0; i--) { // notes too (their sprites are Text, hence the separate list)
+      const s = notes[i];
+      if (s.ghost && Math.hypot(s.x - x, s.y - y) <= r + 40) { s.spr.destroy(); notes.splice(i, 1); }
     }
   }
 
@@ -21669,6 +21760,7 @@ export function startWorld(net: WorldNet): void {
       if (fx === 'splash') { spawnSplash(x, y); return; } // a cannonball hitting the sea — visual only
       if (fx === 'hit') spawnSparks(x, y, 0xff9a5a);
       else if (fx === 'zap') spawnZap(x, y);
+      else if (fx === 'skirl') spawnNoteBurst(x, y);
       else spawnExplosion(x, y);
       if (r && r > 0) { clearGhostShotsNear(x, y, r); applyBlast(x, y, r, false, shooterPid); }
     },
