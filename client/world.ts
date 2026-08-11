@@ -26,6 +26,7 @@
 // the real ESM, finds no default, and the World chunk fails to instantiate (button does nothing).
 import * as Phaser from 'phaser';
 import { startEncounter, DUNGEON_MOBS, isEncounterOpen } from './dungeon-battle';
+import type { TempleAvatar, TempleRenderer } from './temple3d'; // types only — the module itself lazy-loads
 import { renderObservatoryInto } from './observatory';
 import {
   WORLD,
@@ -784,6 +785,19 @@ const TAVERN_ZOOM = 3;  // zoom in while inside so the small cozy room fills the
 const TEMPLE_INT = { x: 40000, y: 1120, w: 920, h: 700 };
 const TEMPLE_WALL = 34;  // thick stone walls (play area is inset by this)
 const TEMPLE_ZOOM = 2.4; // a touch wider than the Tavern — let the lofty nave breathe
+// Solid furnishings inside the nave (feet bump + slide per-axis, like the clubhouse). Kept a
+// touch smaller than the sprites so the aisles stay easy to walk — and so the 3D nave
+// (temple3d.ts) never has you clipping through a pew.
+const TEMPLE_COLLIDERS: Rect[] = (() => {
+  const ix = TEMPLE_INT.x, iy = TEMPLE_INT.y, iw = TEMPLE_INT.w, cx = ix + iw / 2;
+  const list: Rect[] = [{ x: cx - 40, y: iy + 156, w: 80, h: 44 }]; // the altar
+  for (const cy0 of [iy + 250, iy + 386, iy + 522])
+    for (const colX of [ix + 118, ix + iw - 118]) list.push({ x: colX - 12, y: cy0 - 18, w: 24, h: 18 }); // colonnade
+  for (let r = 0; r < 4; r++)
+    for (const px of [cx - 150, cx + 150]) list.push({ x: px - 44, y: iy + 336 + r * 82 - 26, w: 88, h: 24 }); // pews
+  list.push({ x: cx - 15, y: iy + 288, w: 30, h: 12 }); // the lectern (the book stays in reading reach)
+  return list;
+})();
 // McDonald's INTERIOR — off-map below the Temple block (which ends at y≈1820)
 const MC_INT = { x: 40000, y: 2100, w: 780, h: 500 };
 const MC_WALL = 26;
@@ -5188,6 +5202,38 @@ export function startWorld(net: WorldNet): void {
     sc.add.text(cx, iy + ih - T - 46, '🚪 EXIT', { fontFamily: 'system-ui, sans-serif', fontSize: '16px', fontStyle: 'bold', color: '#ffe2b0', stroke: '#1a0f08', strokeThickness: 4 })
       .setOrigin(0.5).setDepth(iy - 200);
   }
+  // --- ⛪ the nave in three dimensions ---------------------------------------------------
+  // Stepping through the Temple's door quietly trades the top-down pixel view for a real
+  // first-person cathedral (temple3d.ts). Pure presentation: the Phaser sim keeps running
+  // underneath with its canvas hidden — movement, the exit mat, the holy book and the chant
+  // all work exactly as in 2D. Loaded lazily off the same CDN pattern as render3d.ts; if the
+  // import fails (offline dev), the Temple simply stays 2D and nobody's pilgrimage suffers.
+  let temple3d: TempleRenderer | null = null;
+  let temple3dLoading = false;
+  function syncTemple3d() {
+    const on = inTemple && !!temple3d;
+    temple3d?.setVisible(on);
+    if (game?.canvas) game.canvas.style.visibility = on ? 'hidden' : '';
+  }
+  function ensureTemple3d() {
+    if (temple3d || temple3dLoading) { syncTemple3d(); return; }
+    temple3dLoading = true;
+    import('./temple3d')
+      .then((mod) => {
+        temple3dLoading = false;
+        if (!controller) return; // the World was torn down while Three.js loaded
+        temple3d = mod.createTempleRenderer(gameHost, {
+          int: TEMPLE_INT, wall: TEMPLE_WALL, bookX: templeBookX, bookY: templeBookY,
+          tex: (key) => {
+            const img = petScene?.textures.get(key)?.getSourceImage();
+            return img instanceof HTMLCanvasElement || img instanceof HTMLImageElement ? img : null;
+          },
+        });
+        syncTemple3d();
+      })
+      .catch(() => { temple3dLoading = false; }); // CDN hiccup → stay 2D, don't retry-spam
+  }
+
   function enterTemple() {
     const sc = petScene; if (!sc) return;
     buildTempleInterior(sc);
@@ -5200,6 +5246,7 @@ export function startWorld(net: WorldNet): void {
     selfY = TEMPLE_INT.y + TEMPLE_INT.h - 180; // by the door, facing up the nave
     mainCam?.setBounds(TEMPLE_INT.x, TEMPLE_INT.y, TEMPLE_INT.w, TEMPLE_INT.h);
     startChant();
+    ensureTemple3d(); // the surprise: this one room is a first-person cathedral
   }
   function leaveTemple() {
     inInterior = false; inTemple = false;
@@ -5210,6 +5257,7 @@ export function startWorld(net: WorldNet): void {
     if (t) { selfX = t.x + t.w / 2; selfY = t.y + t.h + 44; } // step back out the door
     stopChant();
     enterChime();
+    syncTemple3d(); // back to the flat world: hide the 3D nave, unhide Phaser's canvas
   }
 
   // Reading the holy book: a gothic scripture of the Eternal Volley, page by page. The last page
@@ -10407,8 +10455,8 @@ export function startWorld(net: WorldNet): void {
       // inside a room (Tavern/Temple): no town collision, just clamp to the inset play area
       let nx = clamp(selfX + dx * SP * dt, curInt.x + curWall + R, curInt.x + curInt.w - curWall - R);
       let ny = clamp(selfY + dy * SP * dt, curInt.y + curWall + R, curInt.y + curInt.h - curWall - R);
-      // the clubhouse and the office have furniture/partitions you bump into — slide per-axis
-      const bumps = inClub ? clubIntColliders : inOffice ? officeColliders : [];
+      // the clubhouse, office and temple have furniture/partitions you bump into — slide per-axis
+      const bumps = inClub ? clubIntColliders : inOffice ? officeColliders : inTemple ? TEMPLE_COLLIDERS : [];
       if (bumps.length) {
         if (!bumps.some((b) => nx > b.x - R && nx < b.x + b.w + R && selfY > b.y - R && selfY < b.y + b.h + R)) selfX = nx;
         if (!bumps.some((b) => selfX > b.x - R && selfX < b.x + b.w + R && ny > b.y - R && ny < b.y + b.h + R)) selfY = ny;
@@ -15084,6 +15132,22 @@ export function startWorld(net: WorldNet): void {
       }
       // drop avatars that left
       for (const [id, av] of remote) if (!seen.has(id)) { av.c.destroy(); remote.delete(id); }
+
+      // ⛪ inside the Temple the 3D nave (if loaded) draws the frame — the Phaser canvas is
+      // hidden but keeps simulating underneath (movement, prompts, the chant, the book)
+      safeStep('temple3d', () => {
+        if (!inTemple || !temple3d) return;
+        const inNave: TempleAvatar[] = [];
+        for (const a of others) {
+          if (a.id === selfId) continue;
+          const av = remote.get(a.id);
+          const ax = av ? av.rx : a.x, ay = av ? av.ry : a.y; // lerped position when we have it
+          if (ax > TEMPLE_INT.x && ax < TEMPLE_INT.x + TEMPLE_INT.w && ay > TEMPLE_INT.y && ay < TEMPLE_INT.y + TEMPLE_INT.h)
+            inNave.push({ id: a.id, x: ax, y: ay, name: a.name, color: a.color });
+        }
+        const moving = joyActive || keys.size > 0; // `keys` only ever holds movement keys
+        temple3d.render({ selfX, selfY, facing, moving, time, dt, avatars: inNave });
+      });
 
       updatePets(dt);
       updateSmoke(dt);
@@ -21638,6 +21702,7 @@ export function startWorld(net: WorldNet): void {
     window.removeEventListener('pointercancel', onPointerUp);
     game?.destroy(true);
     game = null;
+    temple3d?.dispose(); temple3d = null; temple3dLoading = false; // free the 3D nave's GL context
     if (inDungeon) net.dungeonExit(false); // bailed out of the World mid-dungeon → forfeit the run purse
     setDungeonMusic(false); dungeonMusic = null; inDungeon = false;
     setTavernMusic(false); tavernMusic = null;
