@@ -411,7 +411,7 @@ export function createTempleRenderer(container: HTMLElement, cfg: TempleConfig):
     // Camera: your eyes, easing around to face the way you walk. A touch of gaze-lift so the
     // windows and the vault are always half in view — this room was built to be looked up at.
     if (snapCam) { camYaw = f.facing; snapCam = false; }
-    else camYaw += angDelta(camYaw, f.facing) * Math.min(1, f.dt * 5.5);
+    else camYaw += angDelta(camYaw, f.facing) * Math.min(1, f.dt * 9); // tight enough to track a held turn key without lagging
     const bobTarget = f.moving ? Math.sin(t / 130) * 1.5 : 0;
     bob += (bobTarget - bob) * Math.min(1, f.dt * 8);
     const px = X(f.selfX), pz = Z(f.selfY);

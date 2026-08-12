@@ -10412,6 +10412,25 @@ export function startWorld(net: WorldNet): void {
   // Walk: 8-direction movement at a constant speed.
   function stepFoot(dt: number) {
     if (isEncounterOpen()) return; // frozen while a battle overlay is up
+    // ⛪ Tank controls in the 3D nave: W/S walk forward/back along your gaze, A/D turn you.
+    // Compass-WASD feels wrong when the camera looks where you walk. Keyboard only — the
+    // joystick keeps its usual behavior below (a stick direction already IS a heading), and
+    // the 2D fallback (CDN failed → no temple3d) keeps the classic top-down controls.
+    if (inTemple && temple3d && !joyActive) {
+      const turn = (keys.has('d') || keys.has('arrowright') ? 1 : 0) - (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
+      const fwd = (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
+      if (turn) facing += turn * 3.0 * dt; // ~1s for an about-face
+      if (!fwd) return;
+      // backpedaling is reverent (and keeps you from blindly moonwalking into the altar)
+      const SP = SPEED * blessMul() * coffeeMul() * (handbrake ? SPRINT_MULT : 1) * (fwd < 0 ? 0.65 : 1);
+      const dx3 = Math.cos(facing) * fwd, dy3 = Math.sin(facing) * fwd;
+      const nx = clamp(selfX + dx3 * SP * dt, curInt.x + curWall + R, curInt.x + curInt.w - curWall - R);
+      const ny = clamp(selfY + dy3 * SP * dt, curInt.y + curWall + R, curInt.y + curInt.h - curWall - R);
+      if (!TEMPLE_COLLIDERS.some((b) => nx > b.x - R && nx < b.x + b.w + R && selfY > b.y - R && selfY < b.y + b.h + R)) selfX = nx;
+      if (!TEMPLE_COLLIDERS.some((b) => selfX > b.x - R && selfX < b.x + b.w + R && ny > b.y - R && ny < b.y + b.h + R)) selfY = ny;
+      stepSound();
+      return;
+    }
     let dx = 0, dy = 0;
     if (keys.has('a') || keys.has('arrowleft')) dx -= 1;
     if (keys.has('d') || keys.has('arrowright')) dx += 1;
@@ -15145,7 +15164,8 @@ export function startWorld(net: WorldNet): void {
           if (ax > TEMPLE_INT.x && ax < TEMPLE_INT.x + TEMPLE_INT.w && ay > TEMPLE_INT.y && ay < TEMPLE_INT.y + TEMPLE_INT.h)
             inNave.push({ id: a.id, x: ax, y: ay, name: a.name, color: a.color });
         }
-        const moving = joyActive || keys.size > 0; // `keys` only ever holds movement keys
+        // tank controls: only forward/back motion bobs the head — turning in place doesn't
+        const moving = joyActive || ['w', 's', 'arrowup', 'arrowdown'].some((k) => keys.has(k));
         temple3d.render({ selfX, selfY, facing, moving, time, dt, avatars: inNave });
       });
 
